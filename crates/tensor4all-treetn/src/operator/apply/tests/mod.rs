@@ -3,9 +3,14 @@ use crate::random::{random_treetn, LinkSpace};
 use crate::SiteIndexNetwork;
 use std::collections::{HashMap, HashSet};
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::{SvdTruncationPolicy, TensorDynLen};
+use tensor4all_core::{ColMajorArrayRef, StorageKind, SvdTruncationPolicy, TensorDynLen};
 
 type DynIndex = Index<DynId, TagSet>;
+type ChainStateAndIdentity = (
+    TreeTN<TensorDynLen, String>,
+    LinearOperator<TensorDynLen, String>,
+    Vec<(String, DynIndex)>,
+);
 
 fn make_index(dim: usize) -> DynIndex {
     Index::new_dyn(dim)
@@ -76,6 +81,80 @@ fn build_bonded_identity_operator(
                     internal_input.clone(),
                 ],
                 vec![1.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap()
+        };
+
+        mpo.add_tensor(name.clone(), tensor).unwrap();
+        input_mapping.insert(
+            name.clone(),
+            IndexMapping {
+                true_index: true_index.clone(),
+                internal_index: internal_input,
+            },
+        );
+        output_mapping.insert(
+            name.clone(),
+            IndexMapping {
+                true_index: true_index.clone(),
+                internal_index: internal_output,
+            },
+        );
+    }
+
+    let n0 = mpo.node_index(&sites[0].0).unwrap();
+    let n1 = mpo.node_index(&sites[1].0).unwrap();
+    mpo.connect(n0, &bond, n1, &bond).unwrap();
+
+    LinearOperator::new(mpo, input_mapping, output_mapping)
+}
+
+fn build_redundant_bonded_identity_operator(
+    sites: &[(String, DynIndex)],
+    mpo_bond_dim: usize,
+) -> LinearOperator<TensorDynLen, String> {
+    assert_eq!(sites.len(), 2);
+
+    let mut mpo = TreeTN::new();
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+    let bond = make_index(mpo_bond_dim);
+
+    for (site_pos, (name, true_index)) in sites.iter().enumerate() {
+        let internal_input = make_index(true_index.dim());
+        let internal_output = make_index(true_index.dim());
+        let dim = true_index.dim();
+        let tensor = if site_pos == 0 {
+            let mut data = vec![0.0; dim * dim * mpo_bond_dim];
+            for bond_value in 0..mpo_bond_dim {
+                for site_value in 0..dim {
+                    data[site_value + dim * (site_value + dim * bond_value)] = 1.0;
+                }
+            }
+            TensorDynLen::from_dense(
+                vec![
+                    internal_output.clone(),
+                    internal_input.clone(),
+                    bond.clone(),
+                ],
+                data,
+            )
+            .unwrap()
+        } else {
+            let mut data = vec![0.0; mpo_bond_dim * dim * dim];
+            for bond_value in 0..mpo_bond_dim {
+                for site_value in 0..dim {
+                    data[bond_value + mpo_bond_dim * (site_value + dim * site_value)] =
+                        1.0 / mpo_bond_dim as f64;
+                }
+            }
+            TensorDynLen::from_dense(
+                vec![
+                    bond.clone(),
+                    internal_output.clone(),
+                    internal_input.clone(),
+                ],
+                data,
             )
             .unwrap()
         };
@@ -185,6 +264,107 @@ fn build_tree_state() -> (TreeTN<TensorDynLen, String>, Vec<(String, DynIndex)>)
             ("D".to_string(), s_d),
             ("E".to_string(), s_e),
         ],
+    )
+}
+
+fn build_uniform_chain_state_and_identity_operator(
+    length: usize,
+    state_bond_dim: usize,
+    mpo_bond_dim: usize,
+) -> ChainStateAndIdentity {
+    let site_indices: Vec<_> = (0..length).map(|_| make_index(2)).collect();
+    let state_bonds: Vec<_> = (0..length.saturating_sub(1))
+        .map(|_| make_index(state_bond_dim))
+        .collect();
+    let mpo_bonds: Vec<_> = (0..length.saturating_sub(1))
+        .map(|_| make_index(mpo_bond_dim))
+        .collect();
+
+    let mut state_tensors = Vec::with_capacity(length);
+    let mut mpo_tensors = Vec::with_capacity(length);
+    let mut node_names = Vec::with_capacity(length);
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+
+    for site in 0..length {
+        let name = format!("site{site}");
+        node_names.push(name.clone());
+
+        let mut state_indices = Vec::new();
+        if site > 0 {
+            state_indices.push(state_bonds[site - 1].clone());
+        }
+        state_indices.push(site_indices[site].clone());
+        if site + 1 < length {
+            state_indices.push(state_bonds[site].clone());
+        }
+        let state_len = state_indices.iter().map(|idx| idx.dim()).product();
+        state_tensors.push(TensorDynLen::from_dense(state_indices, vec![1.0; state_len]).unwrap());
+
+        let internal_input = make_index(2);
+        let internal_output = make_index(2);
+        let mut mpo_indices = Vec::new();
+        if site > 0 {
+            mpo_indices.push(mpo_bonds[site - 1].clone());
+        }
+        mpo_indices.push(internal_output.clone());
+        mpo_indices.push(internal_input.clone());
+        if site + 1 < length {
+            mpo_indices.push(mpo_bonds[site].clone());
+        }
+
+        let mpo_len = mpo_indices.iter().map(|idx| idx.dim()).product();
+        let mut mpo_data = vec![0.0; mpo_len];
+        let left_dim = if site > 0 { mpo_bond_dim } else { 1 };
+        let right_dim = if site + 1 < length { mpo_bond_dim } else { 1 };
+        for left in 0..left_dim {
+            for output in 0..2 {
+                for input in 0..2 {
+                    for right in 0..right_dim {
+                        if output == input {
+                            let offset = if site == 0 {
+                                output + 2 * (input + 2 * right)
+                            } else if site + 1 == length {
+                                left + left_dim * (output + 2 * input)
+                            } else {
+                                left + left_dim * (output + 2 * (input + 2 * right))
+                            };
+                            mpo_data[offset] = 1.0 / mpo_bond_dim as f64;
+                        }
+                    }
+                }
+            }
+        }
+        mpo_tensors.push(TensorDynLen::from_dense(mpo_indices, mpo_data).unwrap());
+
+        input_mapping.insert(
+            name.clone(),
+            IndexMapping {
+                true_index: site_indices[site].clone(),
+                internal_index: internal_input,
+            },
+        );
+        output_mapping.insert(
+            name,
+            IndexMapping {
+                true_index: site_indices[site].clone(),
+                internal_index: internal_output,
+            },
+        );
+    }
+
+    let state = TreeTN::from_tensors(state_tensors, node_names.clone()).unwrap();
+    let mpo = TreeTN::from_tensors(mpo_tensors, node_names).unwrap();
+    let sites = site_indices
+        .into_iter()
+        .enumerate()
+        .map(|(i, idx)| (format!("site{i}"), idx))
+        .collect();
+
+    (
+        state,
+        LinearOperator::new(mpo, input_mapping, output_mapping),
+        sites,
     )
 }
 
@@ -410,6 +590,131 @@ fn test_apply_linear_operator_full_coverage() {
 
     let result_naive = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
     assert_eq!(result_naive.node_count(), 2);
+}
+
+#[test]
+fn naive_apply_preserves_product_link_space_for_redundant_mpo_bond() {
+    let s0 = make_index(2);
+    let s1 = make_index(2);
+    let state_bond = make_index(2);
+    let state = TreeTN::from_tensors(
+        vec![
+            TensorDynLen::from_dense(
+                vec![s0.clone(), state_bond.clone()],
+                vec![1.0, 3.0, 2.0, 5.0],
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(
+                vec![state_bond.clone(), s1.clone()],
+                vec![7.0, 11.0, 13.0, 17.0],
+            )
+            .unwrap(),
+        ],
+        vec!["site0".to_string(), "site1".to_string()],
+    )
+    .unwrap();
+    let operator = build_redundant_bonded_identity_operator(
+        &[
+            ("site0".to_string(), s0.clone()),
+            ("site1".to_string(), s1.clone()),
+        ],
+        3,
+    );
+
+    let result = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+
+    assert_eq!(result.node_count(), 2);
+    assert_eq!(result.edge_count(), 1);
+    let edge = result
+        .edge_between(&"site0".to_string(), &"site1".to_string())
+        .unwrap();
+    assert_eq!(result.bond_index(edge).unwrap().dim(), 2 * 3);
+
+    let result_dense = result.to_dense().unwrap();
+    let state_dense = state.to_dense().unwrap();
+    assert!((&result_dense - &state_dense).maxabs() < 1e-10);
+}
+
+#[test]
+fn naive_apply_full_product_identity_embeds_on_state_topology() {
+    let (state, sites) = build_chain_state();
+    let operator = build_identity_operator(&sites);
+
+    let result = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+
+    assert_eq!(result.node_count(), state.node_count());
+    assert_eq!(result.edge_count(), state.edge_count());
+
+    let result_dense = result.to_dense().unwrap();
+    let state_dense = state.to_dense().unwrap();
+    assert!((&result_dense - &state_dense).maxabs() < 1e-10);
+}
+
+#[test]
+fn naive_apply_noncontiguous_bonded_identity_uses_compact_bridge_delta() {
+    let (state, sites) = build_chain_state();
+    let operator =
+        build_redundant_bonded_identity_operator(&[sites[0].clone(), sites[2].clone()], 2);
+
+    let extended = extend_operator_to_full_space(&operator, &state).unwrap();
+    let middle = extended.mpo.node_index(&sites[1].0).unwrap();
+    let middle_tensor = extended.mpo.tensor(middle).unwrap();
+
+    assert_eq!(
+        middle_tensor.storage().storage_kind(),
+        StorageKind::Structured
+    );
+    assert_eq!(middle_tensor.storage().payload_dims(), &[2, 2]);
+    assert_eq!(middle_tensor.storage().axis_classes(), &[0, 0, 1, 1]);
+
+    let result = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+    let result_dense = result.to_dense().unwrap();
+    let state_dense = state.to_dense().unwrap();
+    assert!((&result_dense - &state_dense).maxabs() < 1e-10);
+}
+
+#[test]
+fn naive_apply_long_identity_chain_keeps_local_bonds_bounded() {
+    // Keep this large enough that dense materialization would be infeasible,
+    // while local exact apply remains linear in the chain length.
+    let length = 24;
+    let state_bond_dim = 2;
+    let mpo_bond_dim = 1;
+    let (state, operator, sites) =
+        build_uniform_chain_state_and_identity_operator(length, state_bond_dim, mpo_bond_dim);
+
+    let result = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+
+    assert_eq!(result.node_count(), state.node_count());
+    assert_eq!(result.edge_count(), state.edge_count());
+    let mut edges: Vec<_> = result.site_index_network().edges().collect();
+    edges.sort();
+    for (left, right) in edges {
+        let edge = result.edge_between(&left, &right).unwrap();
+        assert!(
+            result.bond_index(edge).unwrap().dim() <= state_bond_dim * mpo_bond_dim,
+            "unexpected bond dimension on edge {left:?}-{right:?}"
+        );
+    }
+
+    let site_indices: Vec<_> = sites.into_iter().map(|(_, idx)| idx).collect();
+    let sample_points = [
+        vec![0; length],
+        vec![1; length],
+        (0..length).map(|i| i % 2).collect::<Vec<_>>(),
+    ];
+    let mut values = Vec::with_capacity(length * sample_points.len());
+    for point in &sample_points {
+        values.extend(point.iter().copied());
+    }
+    let shape = [length, sample_points.len()];
+    let value_ref = ColMajorArrayRef::new(&values, &shape);
+    let state_values = state.evaluate_at(&site_indices, value_ref).unwrap();
+    let result_values = result.evaluate_at(&site_indices, value_ref).unwrap();
+
+    for (state_value, result_value) in state_values.iter().zip(result_values.iter()) {
+        assert!((state_value.real() - result_value.real()).abs() < 1e-10);
+    }
 }
 
 #[test]

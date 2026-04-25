@@ -797,8 +797,12 @@ pub enum ContractionMethod {
     Zipup,
     /// Fit/variational contraction (iterative optimization).
     Fit,
-    /// Naive contraction: contract to full tensor, then decompose back to TreeTN.
-    /// Useful for debugging and testing, but O(exp(n)) in memory.
+    /// Generic dense/reference contraction: contract to a full tensor, then
+    /// decompose back to TreeTN.
+    ///
+    /// Useful for small debugging cases, but O(exp(n)) in memory. This variant
+    /// is not the algorithm used by `apply_linear_operator(...,
+    /// ApplyOptions::naive())`, which has a dedicated local exact apply path.
     Naive,
 }
 

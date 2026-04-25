@@ -9,8 +9,8 @@
 //! 1. **Partial Site Handling**: If the operator only covers some nodes of the state,
 //!    use `compose_exclusive_linear_operators` to fill gaps with identity operators.
 //! 2. **Index Transformation**: Replace state's site indices with operator's input indices.
-//! 3. **Contraction**: Contract the transformed state with the operator using
-//!    `contract_zipup`, `contract_fit`, or `contract_naive` depending on options.
+//! 3. **Application**: Apply the operator using ZipUp, Fit, or local exact naive
+//!    apply depending on options.
 //! 4. **Output Transformation**: Replace operator's output indices with true output indices.
 //!
 //! # Example
@@ -69,7 +69,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::{IndexLike, SvdTruncationPolicy, TensorIndex, TensorLike};
+use tensor4all_core::{
+    AllowedPairs, IndexLike, LinearizationOrder, SvdTruncationPolicy, TensorIndex, TensorLike,
+};
 
 use super::index_mapping::IndexMapping;
 use super::linear_operator::LinearOperator;
@@ -82,8 +84,14 @@ use crate::treetn::TreeTN;
 
 /// Options for [`apply_linear_operator`].
 ///
-/// Controls the contraction algorithm, truncation parameters, and
+/// Controls the apply algorithm, truncation parameters, and
 /// iterative sweep settings.
+///
+/// [`ApplyOptions::naive`] uses a dedicated local exact apply path: it contracts
+/// each state tensor with the corresponding operator tensor and fuses each
+/// state/operator link pair into one product link. It does not materialize the
+/// full state or operator tensor. Truncation fields such as `max_rank`,
+/// `svd_policy`, and `qr_rtol` are ignored by the naive path.
 ///
 /// # Defaults
 ///
@@ -115,7 +123,7 @@ use crate::treetn::TreeTN;
 /// let opts = ApplyOptions::fit().with_nfullsweeps(3).with_max_rank(20);
 /// assert_eq!(opts.nfullsweeps, 3);
 ///
-/// // Naive contraction (exact, no truncation)
+/// // Local exact naive apply: no truncation and no full dense tensor.
 /// let opts = ApplyOptions::naive();
 /// assert_eq!(opts.max_rank, None);
 /// ```
@@ -164,7 +172,13 @@ impl ApplyOptions {
         }
     }
 
-    /// Create options with Naive method.
+    /// Create options with the local exact Naive apply method.
+    ///
+    /// For [`apply_linear_operator`], this method contracts matching state and
+    /// operator site tensors locally, then fuses each state/operator bond pair
+    /// into a product link. It preserves exactness without full dense
+    /// materialization, but output bond dimensions can grow as products of the
+    /// input state and operator bond dimensions.
     pub fn naive() -> Self {
         Self {
             method: ContractionMethod::Naive,
@@ -202,7 +216,12 @@ impl ApplyOptions {
 /// This function handles:
 /// - Partial operators (fills gaps with identity via compose_exclusive_linear_operators)
 /// - Index transformations (input/output mappings)
-/// - Multiple contraction algorithms (ZipUp, Fit, Naive)
+/// - Multiple apply algorithms (ZipUp, Fit, local exact Naive)
+///
+/// With [`ApplyOptions::naive`], this function uses a dedicated local exact
+/// apply path instead of the generic dense [`ContractionMethod::Naive`] TreeTN
+/// contraction. No full state/operator tensor is materialized; bonds may grow
+/// as state/operator product links.
 ///
 /// # Arguments
 ///
@@ -289,8 +308,12 @@ where
     let op_nodes: HashSet<V> = operator.node_names();
 
     let full_operator = if op_nodes == state_nodes {
-        // Operator covers all nodes - use directly
-        operator.clone()
+        if options.method == ContractionMethod::Naive {
+            embed_full_operator_on_state_topology_for_naive(operator, state)?
+        } else {
+            // Operator covers all nodes - use directly
+            operator.clone()
+        }
     } else if op_nodes.is_subset(&state_nodes) {
         // Partial operator - need to compose with identity on gaps
         extend_operator_to_full_space(operator, state)?
@@ -323,16 +346,205 @@ where
         ..Default::default()
     };
 
-    let contracted = contract(
-        &transformed_state,
-        full_operator.mpo(),
-        center,
-        contraction_options,
-    )
-    .context("Failed to contract state with operator")?;
+    let contracted = if options.method == ContractionMethod::Naive {
+        apply_linear_operator_naive_local(&full_operator, &transformed_state, center)
+            .context("Failed to locally apply state with operator")?
+    } else {
+        contract(
+            &transformed_state,
+            full_operator.mpo(),
+            center,
+            contraction_options,
+        )
+        .context("Failed to contract state with operator")?
+    };
 
     // 4. Transform operator's output indices to true output indices
     let result = transform_output_to_true(&full_operator, contracted)?;
+
+    Ok(result)
+}
+
+/// Embed a full-coverage operator MPO on the state's topology for local exact apply.
+///
+/// The local naive apply fuses one state bond and one MPO bond per state edge, so
+/// full-coverage product operators still need dimension-1 structural MPO links.
+fn embed_full_operator_on_state_topology_for_naive<T, V>(
+    operator: &LinearOperator<T, V>,
+    state: &TreeTN<T, V>,
+) -> Result<LinearOperator<T, V>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    if operator.mpo().same_topology(state) {
+        return Ok(operator.clone());
+    }
+
+    let gap_site_indices = HashMap::new();
+    let normalized = compose_operator_along_state_paths(
+        operator,
+        state.site_index_network(),
+        &gap_site_indices,
+        operator.input_mapping.clone(),
+        operator.output_mapping.clone(),
+    )
+    .context(
+        "ApplyOptions::naive could not embed the full-coverage operator MPO on the state topology",
+    )?;
+
+    if !normalized.mpo().same_topology(state) {
+        return Err(anyhow::anyhow!(
+            "ApplyOptions::naive requires an operator MPO topology that can be represented on the state topology for local exact apply (state: {} nodes, {} edges; normalized operator: {} nodes, {} edges)",
+            state.node_count(),
+            state.edge_count(),
+            normalized.mpo().node_count(),
+            normalized.mpo().edge_count()
+        ));
+    }
+
+    Ok(normalized)
+}
+
+fn apply_linear_operator_naive_local<T, V>(
+    operator: &LinearOperator<T, V>,
+    transformed_state: &TreeTN<T, V>,
+    center: &V,
+) -> Result<TreeTN<T, V>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let mpo = operator.mpo();
+    if !transformed_state.same_topology(mpo) {
+        return Err(anyhow::anyhow!(
+            "apply_linear_operator_naive_local: state and operator topologies differ (state: {} nodes, {} edges; operator: {} nodes, {} edges)",
+            transformed_state.node_count(),
+            transformed_state.edge_count(),
+            mpo.node_count(),
+            mpo.edge_count()
+        ));
+    }
+
+    let state = transformed_state.sim_internal_inds();
+    let mpo = mpo.sim_internal_inds();
+
+    let mut node_names = state.node_names();
+    node_names.sort();
+
+    let mut tensors_by_node: HashMap<V, T> = HashMap::with_capacity(node_names.len());
+    for node in &node_names {
+        let state_node = state.node_index(node).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing state node {:?}",
+                node
+            )
+        })?;
+        let mpo_node = mpo.node_index(node).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing operator node {:?}",
+                node
+            )
+        })?;
+        let state_tensor = state.tensor(state_node).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing state tensor at {:?}",
+                node
+            )
+        })?;
+        let mpo_tensor = mpo.tensor(mpo_node).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing operator tensor at {:?}",
+                node
+            )
+        })?;
+
+        let contracted = T::contract(&[state_tensor, mpo_tensor], AllowedPairs::All)
+            .with_context(|| format!("apply_linear_operator_naive_local: failed at {:?}", node))?;
+        tensors_by_node.insert(node.clone(), contracted);
+    }
+
+    let mut edges: Vec<(V, V)> = state.site_index_network().edges().collect();
+    edges.sort();
+    for (node_a, node_b) in edges {
+        let state_edge = state.edge_between(&node_a, &node_b).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing state edge {:?}-{:?}",
+                node_a,
+                node_b
+            )
+        })?;
+        let mpo_edge = mpo.edge_between(&node_a, &node_b).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing operator edge {:?}-{:?}",
+                node_a,
+                node_b
+            )
+        })?;
+        let state_bond = state.bond_index(state_edge).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing state bond {:?}-{:?}",
+                node_a,
+                node_b
+            )
+        })?;
+        let mpo_bond = mpo.bond_index(mpo_edge).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing operator bond {:?}-{:?}",
+                node_a,
+                node_b
+            )
+        })?;
+        let old_indices = [state_bond.clone(), mpo_bond.clone()];
+        let product_link = T::Index::product_link(&old_indices).with_context(|| {
+            format!(
+                "apply_linear_operator_naive_local: failed to create product link for {:?}-{:?}",
+                node_a, node_b
+            )
+        })?;
+
+        for node in [&node_a, &node_b] {
+            let tensor = tensors_by_node.get_mut(node).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "apply_linear_operator_naive_local: missing contracted tensor at {:?}",
+                    node
+                )
+            })?;
+            *tensor = tensor
+                .fuse_indices(
+                    &old_indices,
+                    product_link.clone(),
+                    LinearizationOrder::ColumnMajor,
+                )
+                .with_context(|| {
+                    format!(
+                        "apply_linear_operator_naive_local: failed to fuse product link at {:?}",
+                        node
+                    )
+                })?;
+        }
+    }
+
+    let tensors = node_names
+        .iter()
+        .map(|node| {
+            tensors_by_node.remove(node).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "apply_linear_operator_naive_local: missing result tensor for {:?}",
+                    node
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut result = TreeTN::from_tensors(tensors, node_names)
+        .context("apply_linear_operator_naive_local: failed to build result TreeTN")?;
+    result
+        .set_canonical_region(std::iter::once(center.clone()))
+        .context("apply_linear_operator_naive_local: failed to set canonical center")?;
 
     Ok(result)
 }
@@ -427,12 +639,16 @@ where
         compose_exclusive_linear_operators(state_network, &[operator], &gap_site_indices)
             .context("Failed to compose operator with identity gaps")?
     } else {
+        let mut input_mappings = operator.input_mapping.clone();
+        input_mappings.extend(gap_input_mappings.clone());
+        let mut output_mappings = operator.output_mapping.clone();
+        output_mappings.extend(gap_output_mappings.clone());
         compose_operator_along_state_paths(
             operator,
             state_network,
             &gap_site_indices,
-            gap_input_mappings.clone(),
-            gap_output_mappings.clone(),
+            input_mappings,
+            output_mappings,
         )
         .context("Failed to compose operator along state paths")?
     };

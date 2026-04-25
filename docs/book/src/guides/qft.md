@@ -89,13 +89,13 @@ for i in 0..r {
     state = state.replaceind(&site_indices[i], &op_input).unwrap();
 }
 
-// Apply the QFT (naive method for exact result)
+// Apply the QFT with local exact naive apply.
 let result = apply_linear_operator(&qft_op, &state, ApplyOptions::naive()).unwrap();
 
 // The result should exist and have the same number of nodes
 assert_eq!(result.node_count(), r);
 
-// Contract to dense tensor and verify uniform magnitude
+// This example is small, so dense verification is acceptable.
 let dense = result.contract_to_tensor().unwrap();
 let data = dense.to_vec::<Complex64>().unwrap();
 

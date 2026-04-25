@@ -1,6 +1,6 @@
 # Agent Guidelines for tensor4all-rs
 
-Read `README.md` before starting work.
+Read `README.md` and `REPOSITORY_RULES.md` before starting work.
 
 ## Development Stage
 
@@ -187,6 +187,17 @@ Tensor4all.jl should link the related Julia-side issue.
 ## Git Workflow
 
 **Never push/create PR without user approval.**
+
+### Base Branch Synchronization
+
+- At the start of work, run `git fetch origin` and branch from `origin/main`
+  rather than a stale local `main`.
+- Before treating PR checks as final, fetch `origin` and verify that the PR
+  branch contains the current `origin/main`.
+- If a PR is behind `main`, update the PR branch from `origin/main` before
+  relying on checks, enabling auto-merge, or declaring it ready to merge.
+- After updating from `origin/main`, re-monitor CI; earlier green checks do not
+  prove the synchronized branch is green.
 
 ### Pre-PR Checks
 

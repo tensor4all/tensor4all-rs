@@ -11,7 +11,7 @@ use std::ops::Range;
 use tensor4all_core::{common_inds, hascommoninds, DynIndex, IndexLike};
 use tensor4all_core::{
     AllowedPairs, AnyScalar, CommonScalar, DirectSumResult, FactorizeError, FactorizeOptions,
-    FactorizeResult, TensorDynLen, TensorElement, TensorIndex, TensorLike,
+    FactorizeResult, LinearizationOrder, TensorDynLen, TensorElement, TensorIndex, TensorLike,
 };
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
@@ -1307,6 +1307,15 @@ impl TensorLike for TensorTrain {
 
     fn permuteinds(&self, _new_order: &[Self::Index]) -> anyhow::Result<Self> {
         anyhow::bail!("TensorTrain does not support permuteinds")
+    }
+
+    fn fuse_indices(
+        &self,
+        _old_indices: &[Self::Index],
+        _new_index: Self::Index,
+        _order: LinearizationOrder,
+    ) -> anyhow::Result<Self> {
+        anyhow::bail!("TensorTrain does not support TensorLike::fuse_indices")
     }
 
     fn diagonal(input: &Self::Index, output: &Self::Index) -> anyhow::Result<Self> {
