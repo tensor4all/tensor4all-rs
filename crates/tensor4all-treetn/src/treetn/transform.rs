@@ -592,6 +592,15 @@ where
         // Collect all site index IDs to distinguish inherited bond indices
         let all_site_ids: HashSet<_> = partition.values().flatten().cloned().collect();
 
+        // Record original tensor index IDs to distinguish inherited bonds
+        // (created by QR during the split) from original current-tree bonds
+        // (present on the original tensor before any QR factorization).
+        let original_index_ids: HashSet<_> = tensor
+            .external_indices()
+            .iter()
+            .map(|idx| idx.id().clone())
+            .collect();
+
         // Sort target names for deterministic processing
         let mut target_names: Vec<TargetV> = partition.keys().cloned().collect();
         target_names.sort();
@@ -621,13 +630,18 @@ where
                 .cloned()
                 .collect();
 
-            // Include inherited bond indices so they are forwarded to the
-            // current target instead of accumulating on the last target.
+            // Include inherited bond indices created by previous QR steps.
+            // Exclude original current-tree bonds — they are routed via the
+            // boundary_indices mechanism when target edges are present, and
+            // should be left on the remaining tensor otherwise.
             left_inds.extend(
                 remaining_tensor
                     .external_indices()
                     .iter()
-                    .filter(|idx| !all_site_ids.contains(idx.id()))
+                    .filter(|idx| {
+                        let id = idx.id();
+                        !all_site_ids.contains(id) && !original_index_ids.contains(id)
+                    })
                     .cloned(),
             );
 
