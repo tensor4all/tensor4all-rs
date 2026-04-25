@@ -199,14 +199,16 @@ Tensor4all.jl should link the related Julia-side issue.
 - After updating from `origin/main`, re-monitor CI; earlier green checks do not
   prove the synchronized branch is green.
 
-### Pre-PR Checks
+### Pre-PR Checks (matches CI)
 
-Before creating a PR, always run lint checks locally:
+Run before pushing. CI runs the same checks, but local = faster feedback:
 
 ```bash
-cargo fmt --all                        # Format all code
-cargo clippy --workspace               # Check for common issues
-cargo nextest run --release --workspace # Run all tests
+cargo fmt --all                        # Auto-fix formatting
+cargo fmt --all -- --check             # Dry-run (matches CI)
+cargo clippy --workspace --all-targets -- -D warnings   # Matches CI
+cargo test -p <changed-crate>          # Quick check first
+cargo nextest run --release --workspace # Full test suite
 cargo doc --workspace --no-deps        # Build rustdoc
 ```
 
