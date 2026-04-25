@@ -16,6 +16,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
+use crate::named_graph::NamedGraph;
 use crate::node_name_network::NodeNameNetwork;
 use anyhow::{bail, Context, Result};
 use petgraph::stable_graph::NodeIndex;
@@ -231,6 +232,7 @@ fn target_nodes_span_connected_currents<T, CurrentV, TargetV>(
     current: &SiteIndexNetwork<CurrentV, T::Index>,
     target: &SiteIndexNetwork<TargetV, T::Index>,
     site_to_current: &HashMap<<T::Index as IndexLike>::Id, CurrentV>,
+    full_graph: &NamedGraph<CurrentV, T, T::Index>,
 ) -> Result<bool>
 where
     T: TensorLike,
@@ -245,25 +247,49 @@ where
                 target_node_name
             )
         })?;
-        let current_nodes: HashSet<_> = site_space
+        let current_names: HashSet<CurrentV> = site_space
             .iter()
             .map(|site_idx| {
-                let current_name = site_to_current.get(site_idx.id()).ok_or_else(|| {
+                site_to_current.get(site_idx.id()).cloned().ok_or_else(|| {
                     anyhow::anyhow!(
                         "restructure_to: site index {:?} is present in the target but missing from the current network",
                         site_idx.id()
                     )
-                })?;
-                current.node_index(current_name).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "restructure_to: current node {:?} is missing from the topology",
-                        current_name
-                    )
                 })
             })
             .collect::<Result<_>>()?;
-        if !current.is_connected_subset(&current_nodes) {
+        // Check connectivity through the full graph. Nodes that are connected
+        // through internal nodes (nodes with empty site space) are considered
+        // connected — those internals will be pulled in during contraction.
+        let full_node_indices: HashSet<NodeIndex> = current_names
+            .iter()
+            .filter_map(|n| full_graph.node_index(n))
+            .collect();
+        if full_node_indices.is_empty() {
             return Ok(false);
+        }
+        // Compute Steiner tree spanning these indices in the full graph.
+        let terms: Vec<NodeIndex> = full_node_indices.iter().copied().collect();
+        let root = terms[0];
+        let g = full_graph.graph();
+        let mut steiner = full_node_indices.clone();
+        for &term in &terms[1..] {
+            if let Some((_, path)) =
+                petgraph::algo::astar(g, root, |n| n == term, |_| 1usize, |_| 0usize)
+            {
+                steiner.extend(path);
+            }
+        }
+        // Any extra node beyond the original set must be internal
+        // (empty site space in the SiteIndexNetwork).
+        for &idx in &steiner {
+            if !full_node_indices.contains(&idx) {
+                if let Some(name) = full_graph.node_name(idx) {
+                    if current.site_space(name).is_some_and(|s| !s.is_empty()) {
+                        return Ok(false);
+                    }
+                }
+            }
         }
     }
 
@@ -314,6 +340,7 @@ fn build_split_then_fuse_target<T, CurrentV, TargetV>(
     target: &SiteIndexNetwork<TargetV, T::Index>,
     site_to_target: &HashMap<<T::Index as IndexLike>::Id, TargetV>,
     site_to_current: &HashMap<<T::Index as IndexLike>::Id, CurrentV>,
+    full_graph: &NamedGraph<CurrentV, T, T::Index>,
 ) -> Result<Option<SplitThenFuseTarget<CurrentV, TargetV, T::Index>>>
 where
     T: TensorLike,
@@ -325,6 +352,7 @@ where
         current,
         target,
         site_to_current,
+        full_graph,
     )? {
         return Ok(None);
     }
@@ -842,6 +870,7 @@ where
 fn build_plan<T, CurrentV, TargetV>(
     current: &SiteIndexNetwork<CurrentV, T::Index>,
     target: &SiteIndexNetwork<TargetV, T::Index>,
+    full_graph: &NamedGraph<CurrentV, T, T::Index>,
 ) -> Result<RestructurePlan<CurrentV, TargetV, T::Index>>
 where
     T: TensorLike,
@@ -863,6 +892,7 @@ where
             current,
             target,
             &site_to_current,
+            full_graph,
         )? {
             return Ok(RestructurePlan {
                 kind: RestructurePlanKind::FuseOnly,
@@ -898,6 +928,7 @@ where
         target,
         &site_to_target,
         &site_to_current,
+        full_graph,
     )? {
         return Ok(RestructurePlan {
             kind: RestructurePlanKind::SplitThenFuse {
@@ -1049,7 +1080,7 @@ where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
-        let plan = build_plan::<T, V, TargetV>(self.site_index_network(), target)
+        let plan = build_plan::<T, V, TargetV>(self.site_index_network(), target, &self.graph)
             .context("restructure_to: build plan")?;
         execute_plan(self, plan, target, options).context("restructure_to: execute plan")
     }
@@ -1444,6 +1475,229 @@ mod tests {
         );
         assert!((&dense_actual - &dense_expected).maxabs() < 1e-10);
 
+        Ok(())
+    }
+
+    // ========================================================================
+    // Y-shape branching topology tests for restructure_to
+    // ========================================================================
+
+    /// Create a Y-shape TreeTN with site indices on every node:
+    ///     A (site_a)
+    ///     |
+    ///     B (site_b)
+    ///    / \
+    ///   C   D
+    /// (site_c) (site_d)
+    fn y_shape_treetn() -> anyhow::Result<(
+        TreeTN<TensorDynLen, String>,
+        DynIndex,
+        DynIndex,
+        DynIndex,
+        DynIndex,
+    )> {
+        let mut tn = TreeTN::<TensorDynLen, String>::new();
+        let site_a = DynIndex::new_dyn(2);
+        let site_b = DynIndex::new_dyn(2);
+        let site_c = DynIndex::new_dyn(2);
+        let site_d = DynIndex::new_dyn(2);
+        let bond_ab = DynIndex::new_dyn(3);
+        let bond_bc = DynIndex::new_dyn(3);
+        let bond_bd = DynIndex::new_dyn(3);
+        let tensor_a =
+            TensorDynLen::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6])?;
+        tn.add_tensor("A".to_string(), tensor_a).unwrap();
+        let tensor_b = TensorDynLen::from_dense(
+            vec![
+                bond_ab.clone(),
+                bond_bc.clone(),
+                bond_bd.clone(),
+                site_b.clone(),
+            ],
+            vec![1.0; 54],
+        )?;
+        tn.add_tensor("B".to_string(), tensor_b).unwrap();
+        let tensor_c =
+            TensorDynLen::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6])?;
+        tn.add_tensor("C".to_string(), tensor_c).unwrap();
+        let tensor_d =
+            TensorDynLen::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6])?;
+        tn.add_tensor("D".to_string(), tensor_d).unwrap();
+        let n_a = tn.node_index(&"A".to_string()).unwrap();
+        let n_b = tn.node_index(&"B".to_string()).unwrap();
+        let n_c = tn.node_index(&"C".to_string()).unwrap();
+        let n_d = tn.node_index(&"D".to_string()).unwrap();
+        tn.connect(n_a, &bond_ab, n_b, &bond_ab).unwrap();
+        tn.connect(n_b, &bond_bc, n_c, &bond_bc).unwrap();
+        tn.connect(n_b, &bond_bd, n_d, &bond_bd).unwrap();
+        Ok((tn, site_a, site_b, site_c, site_d))
+    }
+
+    #[test]
+    fn test_restructure_to_y_shape_fuse_subtree() -> anyhow::Result<()> {
+        let (tn, site_a, site_b, site_c, site_d) = y_shape_treetn()?;
+
+        let mut target: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
+        target
+            .add_node("A".to_string(), HashSet::from([site_a]))
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_node("BCD".to_string(), HashSet::from([site_b, site_c, site_d]))
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_edge(&"A".to_string(), &"BCD".to_string())
+            .map_err(anyhow::Error::msg)?;
+
+        let result = tn.restructure_to(&target, &RestructureOptions::default())?;
+        assert_eq!(result.node_count(), 2);
+        assert_eq!(result.edge_count(), 1);
+        assert!(
+            result
+                .site_index_network()
+                .share_equivalent_site_index_network(&target),
+            "Y-shape fused to chain must match target"
+        );
+        let dense_expected = tn.contract_to_tensor()?;
+        let dense_actual = result.contract_to_tensor()?;
+        assert!((&dense_actual - &dense_expected).maxabs() < 1e-12);
+        Ok(())
+    }
+
+    #[test]
+    fn test_restructure_to_y_shape_swap_only() -> anyhow::Result<()> {
+        // Build a Y-shape with all bonds visible
+        let mut tn = TreeTN::<TensorDynLen, String>::new();
+        let site_a = DynIndex::new_dyn(2);
+        let site_b = DynIndex::new_dyn(2);
+        let site_c = DynIndex::new_dyn(2);
+        let site_d = DynIndex::new_dyn(2);
+        let bond_ab = DynIndex::new_dyn(3);
+        let bond_bc = DynIndex::new_dyn(3);
+        let bond_bd = DynIndex::new_dyn(3);
+
+        let tensor_a =
+            TensorDynLen::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6])?;
+        tn.add_tensor("A".to_string(), tensor_a)?;
+        let tensor_b = TensorDynLen::from_dense(
+            vec![
+                bond_ab.clone(),
+                bond_bc.clone(),
+                bond_bd.clone(),
+                site_b.clone(),
+            ],
+            vec![1.0; 54],
+        )?;
+        tn.add_tensor("B".to_string(), tensor_b)?;
+        let tensor_c =
+            TensorDynLen::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6])?;
+        tn.add_tensor("C".to_string(), tensor_c)?;
+        let tensor_d =
+            TensorDynLen::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6])?;
+        tn.add_tensor("D".to_string(), tensor_d)?;
+
+        let n_a = tn.node_index(&"A".to_string()).unwrap();
+        let n_b = tn.node_index(&"B".to_string()).unwrap();
+        let n_c = tn.node_index(&"C".to_string()).unwrap();
+        let n_d = tn.node_index(&"D".to_string()).unwrap();
+        tn.connect(n_a, &bond_ab, n_b, &bond_ab)?;
+        tn.connect(n_b, &bond_bc, n_c, &bond_bc)?;
+        tn.connect(n_b, &bond_bd, n_d, &bond_bd)?;
+
+        // SwapOnly: reassign site a→X, b→Y, c→Z, d→W, same Y topology
+        let mut target: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
+        target
+            .add_node("X".to_string(), HashSet::from([site_a]))
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_node("Y".to_string(), HashSet::from([site_b]))
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_node("Z".to_string(), HashSet::from([site_c]))
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_node("W".to_string(), HashSet::from([site_d]))
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_edge(&"X".to_string(), &"Y".to_string())
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_edge(&"Y".to_string(), &"Z".to_string())
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_edge(&"Y".to_string(), &"W".to_string())
+            .map_err(anyhow::Error::msg)?;
+
+        let result = tn.restructure_to(&target, &RestructureOptions::default())?;
+        assert_eq!(result.node_count(), 4);
+        assert_eq!(result.edge_count(), 3);
+        assert!(
+            result
+                .site_index_network()
+                .share_equivalent_site_index_network(&target),
+            "Y-shape swapped must match target"
+        );
+        let dense_expected = tn.contract_to_tensor()?;
+        let dense_actual = result.contract_to_tensor()?;
+        assert!((&dense_actual - &dense_expected).maxabs() < 1e-12);
+        Ok(())
+    }
+
+    #[test]
+    fn test_restructure_to_y_shape_internal_center() -> anyhow::Result<()> {
+        // Y-shape with internal center (B has no site indices after connection):
+        //     A(site_a)
+        //       |
+        //     B(no site)
+        //      / \
+        // C(site_c) D(site_d)
+        let mut tn = TreeTN::<TensorDynLen, String>::new();
+        let site_a = DynIndex::new_dyn(2);
+        let site_c = DynIndex::new_dyn(2);
+        let site_d = DynIndex::new_dyn(2);
+        let bond_ab = DynIndex::new_dyn(3);
+        let bond_bc = DynIndex::new_dyn(3);
+        let bond_bd = DynIndex::new_dyn(3);
+
+        let tensor_a =
+            TensorDynLen::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6])?;
+        tn.add_tensor("A".to_string(), tensor_a)?;
+        let tensor_b = TensorDynLen::from_dense(
+            vec![bond_ab.clone(), bond_bc.clone(), bond_bd.clone()],
+            vec![1.0; 27],
+        )?;
+        tn.add_tensor("B".to_string(), tensor_b)?;
+        let tensor_c =
+            TensorDynLen::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6])?;
+        tn.add_tensor("C".to_string(), tensor_c)?;
+        let tensor_d =
+            TensorDynLen::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6])?;
+        tn.add_tensor("D".to_string(), tensor_d)?;
+
+        let n_a = tn.node_index(&"A".to_string()).unwrap();
+        let n_b = tn.node_index(&"B".to_string()).unwrap();
+        let n_c = tn.node_index(&"C".to_string()).unwrap();
+        let n_d = tn.node_index(&"D".to_string()).unwrap();
+        tn.connect(n_a, &bond_ab, n_b, &bond_ab)?;
+        tn.connect(n_b, &bond_bc, n_c, &bond_bc)?;
+        tn.connect(n_b, &bond_bd, n_d, &bond_bd)?;
+
+        // Restructure: fuse C+D into one node (B is internal, pulled in)
+        let mut target: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
+        target
+            .add_node("A".to_string(), HashSet::from([site_a]))
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_node("CD".to_string(), HashSet::from([site_c, site_d]))
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_edge(&"A".to_string(), &"CD".to_string())
+            .map_err(anyhow::Error::msg)?;
+
+        let result = tn.restructure_to(&target, &RestructureOptions::default())?;
+        assert_eq!(result.node_count(), 2);
+        let dense_expected = tn.contract_to_tensor()?;
+        let dense_actual = result.contract_to_tensor()?;
+        assert!((&dense_actual - &dense_expected).maxabs() < 1e-12);
         Ok(())
     }
 }
