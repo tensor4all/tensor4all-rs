@@ -2967,6 +2967,150 @@ impl TensorDynLen {
         Self::from_diag_any(indices, data)
     }
 
+    /// Replace multiple tensor indices with one fused index using an exact local reshape.
+    ///
+    /// The indices in `old_indices` identify the axes to fuse by ID and also
+    /// define the coordinate order used inside `new_index`. The new fused index
+    /// is inserted at the earliest axis position among the fused axes; all
+    /// other axes keep their original relative order. Use
+    /// [`LinearizationOrder::ColumnMajor`] to match tensor4all's dense vector
+    /// layout, or [`LinearizationOrder::RowMajor`] when interoperating with
+    /// row-major fused coordinates.
+    ///
+    /// # Arguments
+    /// * `old_indices` - Non-empty list of existing tensor indices to replace.
+    ///   Each index is matched by ID, must appear exactly once in the tensor,
+    ///   and must not be duplicated in this list.
+    /// * `new_index` - Replacement index whose dimension must equal the product
+    ///   of the dimensions in `old_indices`.
+    /// * `order` - Linearization convention used to encode the old coordinates
+    ///   into the single coordinate of `new_index`.
+    ///
+    /// # Returns
+    /// A tensor with the same element type and values, but with `old_indices`
+    /// replaced by `new_index`.
+    ///
+    /// # Errors
+    /// Returns an error if `old_indices` is empty, contains duplicate IDs,
+    /// references an index not present in the tensor, if the fused dimension
+    /// does not match the product of the old dimensions, if the replacement
+    /// would duplicate a kept index, or if the dense reshape cannot be
+    /// represented without overflow.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen, TensorLike};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(2);
+    /// let fused = DynIndex::new_link(4).unwrap();
+    /// let tensor = TensorDynLen::from_dense(
+    ///     vec![i.clone(), j.clone()],
+    ///     vec![1.0, 2.0, 3.0, 4.0],
+    /// ).unwrap();
+    ///
+    /// let fused_tensor = tensor
+    ///     .fuse_indices(&[i.clone(), j.clone()], fused.clone(), LinearizationOrder::ColumnMajor)
+    ///     .unwrap();
+    /// assert_eq!(fused_tensor.dims(), vec![4]);
+    ///
+    /// let roundtrip = fused_tensor
+    ///     .unfuse_index(&fused, &[i, j], LinearizationOrder::ColumnMajor)
+    ///     .unwrap();
+    /// assert!(roundtrip.isapprox(&tensor, 1e-12, 0.0));
+    /// ```
+    pub fn fuse_indices(
+        &self,
+        old_indices: &[DynIndex],
+        new_index: DynIndex,
+        order: LinearizationOrder,
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            !old_indices.is_empty(),
+            "fuse_indices requires at least one index to fuse"
+        );
+
+        let mut seen_ids = HashSet::new();
+        let mut old_axes = Vec::with_capacity(old_indices.len());
+        for old_index in old_indices {
+            anyhow::ensure!(
+                seen_ids.insert(*old_index.id()),
+                "duplicate index in old_indices"
+            );
+            let axis = self
+                .indices
+                .iter()
+                .position(|idx| idx.id() == old_index.id())
+                .ok_or_else(|| anyhow::anyhow!("index {:?} not found in tensor", old_index.id()))?;
+            old_axes.push(axis);
+        }
+
+        let fused_dims: Vec<usize> = old_indices.iter().map(DynIndex::dim).collect();
+        let fused_product = checked_product(&fused_dims)?;
+        anyhow::ensure!(
+            fused_product == new_index.dim(),
+            "product of old index dimensions must match the replacement index dimension"
+        );
+
+        let insertion_axis =
+            old_axes.iter().copied().min().ok_or_else(|| {
+                anyhow::anyhow!("fuse_indices requires at least one index to fuse")
+            })?;
+        let old_axis_set: HashSet<usize> = old_axes.iter().copied().collect();
+
+        let mut result_indices =
+            Vec::with_capacity(self.indices.len() - old_indices.len() + 1usize);
+        for (axis, index) in self.indices.iter().enumerate() {
+            if axis == insertion_axis {
+                result_indices.push(new_index.clone());
+            }
+            if !old_axis_set.contains(&axis) {
+                result_indices.push(index.clone());
+            }
+        }
+        let mut result_seen = HashSet::new();
+        for index in &result_indices {
+            anyhow::ensure!(
+                result_seen.insert(index.clone()),
+                "fuse_indices result would contain duplicate index"
+            );
+        }
+        Self::validate_indices(&result_indices);
+
+        let old_dims = self.dims();
+        let mut new_dims = Vec::with_capacity(old_dims.len() - old_indices.len() + 1usize);
+        for (axis, dim) in old_dims.iter().copied().enumerate() {
+            if axis == insertion_axis {
+                new_dims.push(new_index.dim());
+            }
+            if !old_axis_set.contains(&axis) {
+                new_dims.push(dim);
+            }
+        }
+
+        let old_data = self.to_vec_any()?;
+        let mut new_data = vec![AnyScalar::new_real(0.0); old_data.len()];
+        for (old_linear, value) in old_data.into_iter().enumerate() {
+            let old_multi = decode_col_major_linear(old_linear, &old_dims)?;
+            let fused_multi: Vec<usize> = old_axes.iter().map(|&axis| old_multi[axis]).collect();
+            let fused_linear = encode_linear_with_order(&fused_multi, &fused_dims, order)?;
+
+            let mut new_multi = Vec::with_capacity(new_dims.len());
+            for (axis, old_coord) in old_multi.iter().copied().enumerate() {
+                if axis == insertion_axis {
+                    new_multi.push(fused_linear);
+                }
+                if !old_axis_set.contains(&axis) {
+                    new_multi.push(old_coord);
+                }
+            }
+            let new_linear = encode_col_major_linear(&new_multi, &new_dims)?;
+            new_data[new_linear] = value;
+        }
+
+        Self::from_dense_any(result_indices, new_data)
+    }
+
     /// Replace one fused index with multiple indices using an exact reshape.
     ///
     /// The caller must specify how the old fused index should be decoded into
@@ -3279,4 +3423,37 @@ fn decode_linear_with_order(
         }
     }
     Ok(out)
+}
+
+fn encode_linear_with_order(
+    indices: &[usize],
+    dims: &[usize],
+    order: LinearizationOrder,
+) -> Result<usize> {
+    match order {
+        LinearizationOrder::ColumnMajor => encode_col_major_linear(indices, dims),
+        LinearizationOrder::RowMajor => {
+            anyhow::ensure!(
+                indices.len() == dims.len(),
+                "index rank {} does not match dims {:?}",
+                indices.len(),
+                dims
+            );
+            let mut linear = 0usize;
+            let mut stride = 1usize;
+            for (&index, &dim) in indices.iter().rev().zip(dims.iter().rev()) {
+                anyhow::ensure!(
+                    index < dim,
+                    "index {} out of bounds for dimension {}",
+                    index,
+                    dim
+                );
+                linear += index * stride;
+                stride = stride
+                    .checked_mul(dim)
+                    .ok_or_else(|| anyhow::anyhow!("stride overflow"))?;
+            }
+            Ok(linear)
+        }
+    }
 }
