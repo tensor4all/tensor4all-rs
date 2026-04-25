@@ -9,8 +9,8 @@
 //! 1. **Partial Site Handling**: If the operator only covers some nodes of the state,
 //!    use `compose_exclusive_linear_operators` to fill gaps with identity operators.
 //! 2. **Index Transformation**: Replace state's site indices with operator's input indices.
-//! 3. **Contraction**: Contract the transformed state with the operator using
-//!    `contract_zipup`, `contract_fit`, or local exact naive apply depending on options.
+//! 3. **Application**: Apply the operator using ZipUp, Fit, or local exact naive
+//!    apply depending on options.
 //! 4. **Output Transformation**: Replace operator's output indices with true output indices.
 //!
 //! # Example
@@ -84,8 +84,14 @@ use crate::treetn::TreeTN;
 
 /// Options for [`apply_linear_operator`].
 ///
-/// Controls the contraction algorithm, truncation parameters, and
+/// Controls the apply algorithm, truncation parameters, and
 /// iterative sweep settings.
+///
+/// [`ApplyOptions::naive`] uses a dedicated local exact apply path: it contracts
+/// each state tensor with the corresponding operator tensor and fuses each
+/// state/operator link pair into one product link. It does not materialize the
+/// full state or operator tensor. Truncation fields such as `max_rank`,
+/// `svd_policy`, and `qr_rtol` are ignored by the naive path.
 ///
 /// # Defaults
 ///
@@ -117,7 +123,7 @@ use crate::treetn::TreeTN;
 /// let opts = ApplyOptions::fit().with_nfullsweeps(3).with_max_rank(20);
 /// assert_eq!(opts.nfullsweeps, 3);
 ///
-/// // Naive contraction (exact, no truncation)
+/// // Local exact naive apply: no truncation and no full dense tensor.
 /// let opts = ApplyOptions::naive();
 /// assert_eq!(opts.max_rank, None);
 /// ```
@@ -167,6 +173,12 @@ impl ApplyOptions {
     }
 
     /// Create options with the local exact Naive apply method.
+    ///
+    /// For [`apply_linear_operator`], this method contracts matching state and
+    /// operator site tensors locally, then fuses each state/operator bond pair
+    /// into a product link. It preserves exactness without full dense
+    /// materialization, but output bond dimensions can grow as products of the
+    /// input state and operator bond dimensions.
     pub fn naive() -> Self {
         Self {
             method: ContractionMethod::Naive,
@@ -204,7 +216,12 @@ impl ApplyOptions {
 /// This function handles:
 /// - Partial operators (fills gaps with identity via compose_exclusive_linear_operators)
 /// - Index transformations (input/output mappings)
-/// - Multiple contraction algorithms (ZipUp, Fit, Naive)
+/// - Multiple apply algorithms (ZipUp, Fit, local exact Naive)
+///
+/// With [`ApplyOptions::naive`], this function uses a dedicated local exact
+/// apply path instead of the generic dense [`ContractionMethod::Naive`] TreeTN
+/// contraction. No full state/operator tensor is materialized; bonds may grow
+/// as state/operator product links.
 ///
 /// # Arguments
 ///

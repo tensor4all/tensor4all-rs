@@ -250,11 +250,9 @@ fn tensorlike_delta_two_pairs_preserves_independent_copy_structure() {
     let i2 = Index::new_dyn(3);
     let o2 = Index::new_dyn(3);
 
-    let delta = <TensorDynLen as TensorLike>::delta(
-        &[i1.clone(), i2.clone()],
-        &[o1.clone(), o2.clone()],
-    )
-    .unwrap();
+    let delta =
+        <TensorDynLen as TensorLike>::delta(&[i1.clone(), i2.clone()], &[o1.clone(), o2.clone()])
+            .unwrap();
 
     assert_eq!(delta.dims(), vec![2, 2, 3, 3]);
     assert_eq!(delta.storage().storage_kind(), StorageKind::Structured);
@@ -263,9 +261,7 @@ fn tensorlike_delta_two_pairs_preserves_independent_copy_structure() {
 
     let expected = TensorDynLen::from_diag(vec![i1, o1], vec![1.0_f64, 1.0])
         .unwrap()
-        .outer_product(
-            &TensorDynLen::from_diag(vec![i2, o2], vec![1.0_f64, 1.0, 1.0]).unwrap(),
-        )
+        .outer_product(&TensorDynLen::from_diag(vec![i2, o2], vec![1.0_f64, 1.0, 1.0]).unwrap())
         .unwrap();
     assert!(delta.isapprox(&expected, 1e-12, 0.0));
 }
