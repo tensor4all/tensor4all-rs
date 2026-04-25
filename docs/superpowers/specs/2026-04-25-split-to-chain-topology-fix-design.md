@@ -28,27 +28,39 @@ accumulate on the final target node, creating a star topology.
 
 ## Fix
 
-In `split_tensor_for_targets`, include inherited bond indices (indices not
-belonging to any target's site space) in `left_inds` for each QR step. This
-ensures each inherited bond is forwarded to the correct intermediate target,
-not accumulated on the final target.
+In `split_tensor_for_targets`, include **QR-created inherited bond** indices
+in `left_inds` for each QR step. These are indices on the remaining tensor that
+were not present in the original tensor (i.e., created by previous QR steps).
+Original current-tree bonds (present before any QR) are excluded — they are
+routed via the `boundary_indices` mechanism when target edges are present,
+and should be left on the remaining tensor otherwise. This ensures each
+inherited bond is forwarded to the correct intermediate target, not
+accumulated on the final target.
 
 ### Code change
 
 `crates/tensor4all-treetn/src/treetn/transform.rs`:
 
-1. Precompute the set of all site index IDs:
+1. Precompute the set of all site index IDs and original tensor index IDs:
    ```rust
    let all_site_ids: HashSet<_> = partition.values().flatten().cloned().collect();
+   let original_index_ids: HashSet<_> = tensor
+       .external_indices()
+       .iter()
+       .map(|idx| idx.id().clone())
+       .collect();
    ```
 
-2. In the loop, extend `left_inds` with inherited bond indices:
+2. In the loop, extend `left_inds` with QR-created inherited bond indices only:
    ```rust
    left_inds.extend(
        remaining_tensor
            .external_indices()
            .iter()
-           .filter(|idx| !all_site_ids.contains(idx.id()))
+           .filter(|idx| {
+               let id = idx.id();
+               !all_site_ids.contains(id) && !original_index_ids.contains(id)
+           })
            .cloned(),
    );
    ```
