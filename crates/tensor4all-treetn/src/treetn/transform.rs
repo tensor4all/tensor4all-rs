@@ -613,7 +613,7 @@ where
         // to be on the root so the original bond connects correctly).
         let root = if let Some(bi) = boundary_indices {
             if let Some((name, _)) = bi.iter().max_by_key(|(_, ids)| ids.len()) {
-                if fragment_target.node_names().iter().any(|n| *n == name) {
+                if fragment_target.node_names().contains(&name) {
                     name.clone()
                 } else {
                     target_names[0].clone()
