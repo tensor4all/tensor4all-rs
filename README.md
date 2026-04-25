@@ -14,11 +14,19 @@ A Rust implementation of tensor networks: TCI, Quantics Tensor Train, and Tree T
 
 ## Quick Start
 
-Add to your `Cargo.toml`:
+The crates are not published to crates.io yet. Use git dependencies from an
+external project:
 
 ```toml
 [dependencies]
-tensor4all-simplett = "0.1"
+tensor4all-simplett = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-simplett" }
+```
+
+When working from a local checkout, use a path dependency instead:
+
+```toml
+[dependencies]
+tensor4all-simplett = { path = "../tensor4all-rs/crates/tensor4all-simplett" }
 ```
 
 ```rust
