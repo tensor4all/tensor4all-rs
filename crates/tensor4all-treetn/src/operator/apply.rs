@@ -292,7 +292,7 @@ where
 
     let full_operator = if op_nodes == state_nodes {
         if options.method == ContractionMethod::Naive {
-            normalize_full_operator_to_state_topology_for_naive(operator, state)?
+            embed_full_operator_on_state_topology_for_naive(operator, state)?
         } else {
             // Operator covers all nodes - use directly
             operator.clone()
@@ -348,7 +348,11 @@ where
     Ok(result)
 }
 
-fn normalize_full_operator_to_state_topology_for_naive<T, V>(
+/// Embed a full-coverage operator MPO on the state's topology for local exact apply.
+///
+/// The local naive apply fuses one state bond and one MPO bond per state edge, so
+/// full-coverage product operators still need dimension-1 structural MPO links.
+fn embed_full_operator_on_state_topology_for_naive<T, V>(
     operator: &LinearOperator<T, V>,
     state: &TreeTN<T, V>,
 ) -> Result<LinearOperator<T, V>>
