@@ -10,7 +10,7 @@
 //!    use `compose_exclusive_linear_operators` to fill gaps with identity operators.
 //! 2. **Index Transformation**: Replace state's site indices with operator's input indices.
 //! 3. **Contraction**: Contract the transformed state with the operator using
-//!    `contract_zipup`, `contract_fit`, or `contract_naive` depending on options.
+//!    `contract_zipup`, `contract_fit`, or local exact naive apply depending on options.
 //! 4. **Output Transformation**: Replace operator's output indices with true output indices.
 //!
 //! # Example
@@ -69,7 +69,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::{IndexLike, SvdTruncationPolicy, TensorIndex, TensorLike};
+use tensor4all_core::{
+    AllowedPairs, IndexLike, LinearizationOrder, SvdTruncationPolicy, TensorIndex, TensorLike,
+};
 
 use super::index_mapping::IndexMapping;
 use super::linear_operator::LinearOperator;
@@ -164,7 +166,7 @@ impl ApplyOptions {
         }
     }
 
-    /// Create options with Naive method.
+    /// Create options with the local exact Naive apply method.
     pub fn naive() -> Self {
         Self {
             method: ContractionMethod::Naive,
@@ -323,16 +325,162 @@ where
         ..Default::default()
     };
 
-    let contracted = contract(
-        &transformed_state,
-        full_operator.mpo(),
-        center,
-        contraction_options,
-    )
-    .context("Failed to contract state with operator")?;
+    let contracted = if options.method == ContractionMethod::Naive {
+        apply_linear_operator_naive_local(&full_operator, &transformed_state, center)
+            .context("Failed to locally apply state with operator")?
+    } else {
+        contract(
+            &transformed_state,
+            full_operator.mpo(),
+            center,
+            contraction_options,
+        )
+        .context("Failed to contract state with operator")?
+    };
 
     // 4. Transform operator's output indices to true output indices
     let result = transform_output_to_true(&full_operator, contracted)?;
+
+    Ok(result)
+}
+
+fn apply_linear_operator_naive_local<T, V>(
+    operator: &LinearOperator<T, V>,
+    transformed_state: &TreeTN<T, V>,
+    center: &V,
+) -> Result<TreeTN<T, V>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let mpo = operator.mpo();
+    if !transformed_state.same_topology(mpo) {
+        return Err(anyhow::anyhow!(
+            "apply_linear_operator_naive_local: state and operator topologies differ (state: {} nodes, {} edges; operator: {} nodes, {} edges)",
+            transformed_state.node_count(),
+            transformed_state.edge_count(),
+            mpo.node_count(),
+            mpo.edge_count()
+        ));
+    }
+
+    let state = transformed_state.sim_internal_inds();
+    let mpo = mpo.sim_internal_inds();
+
+    let mut node_names = state.node_names();
+    node_names.sort();
+
+    let mut tensors_by_node: HashMap<V, T> = HashMap::with_capacity(node_names.len());
+    for node in &node_names {
+        let state_node = state.node_index(node).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing state node {:?}",
+                node
+            )
+        })?;
+        let mpo_node = mpo.node_index(node).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing operator node {:?}",
+                node
+            )
+        })?;
+        let state_tensor = state.tensor(state_node).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing state tensor at {:?}",
+                node
+            )
+        })?;
+        let mpo_tensor = mpo.tensor(mpo_node).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing operator tensor at {:?}",
+                node
+            )
+        })?;
+
+        let contracted = T::contract(&[state_tensor, mpo_tensor], AllowedPairs::All)
+            .with_context(|| format!("apply_linear_operator_naive_local: failed at {:?}", node))?;
+        tensors_by_node.insert(node.clone(), contracted);
+    }
+
+    let mut edges: Vec<(V, V)> = state.site_index_network().edges().collect();
+    edges.sort();
+    for (node_a, node_b) in edges {
+        let state_edge = state.edge_between(&node_a, &node_b).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing state edge {:?}-{:?}",
+                node_a,
+                node_b
+            )
+        })?;
+        let mpo_edge = mpo.edge_between(&node_a, &node_b).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing operator edge {:?}-{:?}",
+                node_a,
+                node_b
+            )
+        })?;
+        let state_bond = state.bond_index(state_edge).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing state bond {:?}-{:?}",
+                node_a,
+                node_b
+            )
+        })?;
+        let mpo_bond = mpo.bond_index(mpo_edge).ok_or_else(|| {
+            anyhow::anyhow!(
+                "apply_linear_operator_naive_local: missing operator bond {:?}-{:?}",
+                node_a,
+                node_b
+            )
+        })?;
+        let old_indices = [state_bond.clone(), mpo_bond.clone()];
+        let product_link = T::Index::product_link(&old_indices).with_context(|| {
+            format!(
+                "apply_linear_operator_naive_local: failed to create product link for {:?}-{:?}",
+                node_a, node_b
+            )
+        })?;
+
+        for node in [&node_a, &node_b] {
+            let tensor = tensors_by_node.get_mut(node).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "apply_linear_operator_naive_local: missing contracted tensor at {:?}",
+                    node
+                )
+            })?;
+            *tensor = tensor
+                .fuse_indices(
+                    &old_indices,
+                    product_link.clone(),
+                    LinearizationOrder::ColumnMajor,
+                )
+                .with_context(|| {
+                    format!(
+                        "apply_linear_operator_naive_local: failed to fuse product link at {:?}",
+                        node
+                    )
+                })?;
+        }
+    }
+
+    let tensors = node_names
+        .iter()
+        .map(|node| {
+            tensors_by_node.remove(node).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "apply_linear_operator_naive_local: missing result tensor for {:?}",
+                    node
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut result = TreeTN::from_tensors(tensors, node_names)
+        .context("apply_linear_operator_naive_local: failed to build result TreeTN")?;
+    result
+        .set_canonical_region(std::iter::once(center.clone()))
+        .context("apply_linear_operator_naive_local: failed to set canonical center")?;
 
     Ok(result)
 }
