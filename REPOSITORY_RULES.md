@@ -149,3 +149,14 @@
 
 - Prefer `mdarray` for arrays and `mdarray-linalg` for linear algebra.
 - SVD singular values use `s[[0, i]]`, not `s[[i, i]]`.
+
+## Graph Algorithms
+
+- Always use `petgraph` for graph traversals (DFS, BFS, topological sort, post-order),
+  connectivity checks, path finding, and tree structure queries.
+- Do **not** write manual `O(N)` graph algorithms with raw adjacency lists
+  or hand-rolled recursion. `petgraph` provides efficient, tested, and audited
+  implementations.
+- For tree-specific operations (children, parent, subtree), delegate to
+  `node_name_network::NodeNameNetwork` or `site_index_network::SiteIndexNetwork`
+  which wrap `petgraph`.
