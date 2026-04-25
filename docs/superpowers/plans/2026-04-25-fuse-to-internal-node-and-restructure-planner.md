@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Fix `contract_node_group` to use the full tree graph instead of `SiteIndexNetwork` for connectivity and edge ordering; fix `fuse_to` to skip internal nodes in validation and expand groups via Steiner tree; fix `restructure_to` planner to use full graph connectivity.
+**Goal:** Fix `contract_node_group` to use the full tree graph instead of `SiteIndexNetwork` for connectivity and edge ordering with automatic Steiner tree expansion; relax `fuse_to` validation for internal nodes; fix `restructure_to` planner to use full graph connectivity.
 
-**Architecture:** Both bugs stem from `SiteIndexNetwork` being an incomplete graph (omits internal nodes with bond-only indices). Fix `contract_node_group` to query `self.graph` (full `NamedGraph`) for connectivity checks and parent-edge ordering. In `fuse_to`, relax validation and expand target groups to include internal connector nodes. Thread the full graph through the `restructure_to` planner.
+**Architecture:** Both bugs stem from `SiteIndexNetwork` being an incomplete graph (omits internal nodes with bond-only indices). Fix `contract_node_group` to (a) query `self.graph` (full `NamedGraph`) for connectivity checks and parent-edge ordering, and (b) automatically expand the contracted node set to include internal connector nodes via Steiner tree — no expansion logic needed in `fuse_to`. Thread the full graph through the `restructure_to` planner.
 
 **Tech Stack:** Rust, petgraph (StableGraph, Bfs, DfsPostOrder, astar), tensor4all-core
 
@@ -17,7 +17,13 @@
 
 - [ ] **Step 1: Add `steiner_tree_indices` helper function**
 
-Insert after the existing `contract_node_group` method (before line 250), at module level in `transform.rs`:
+Insert at the top of `transform.rs`, after the existing imports:
+
+```rust
+use petgraph::stable_graph::{NodeIndex, StableGraph};
+```
+
+Add after the `use` block, as a module-level helper:
 
 ```rust
 /// Compute the Steiner tree in the full graph spanning a set of terminal nodes.
@@ -50,13 +56,7 @@ fn steiner_tree_indices(
 }
 ```
 
-Requires adding these imports at the top of `transform.rs`:
-```rust
-use petgraph::stable_graph::{NodeIndex, StableGraph};
-use std::collections::{HashMap, HashSet};
-```
-
-(Verify: `use std::collections::{HashMap, HashSet}` already exists at line 4 of transform.rs. Check if `NodeIndex`, `StableGraph`, and `petgraph` imports are available.)
+(Verify: `use std::collections::{HashMap, HashSet}` already exists in transform.rs.)
 
 - [ ] **Step 2: Verify compilation**
 
@@ -68,17 +68,42 @@ Expected: compiles without errors.
 
 ---
 
-### Task 2: Fix `contract_node_group` to use full graph
+### Task 2: Fix `contract_node_group` to use full graph + auto-expand via Steiner tree
 
 **Files:**
 - Modify: `crates/tensor4all-treetn/src/treetn/transform.rs:167-249`
 
-- [ ] **Step 1: Replace connectivity check with full-graph BFS**
+- [ ] **Step 1: Add Steiner tree expansion + replace connectivity check**
 
-Replace lines 199-204 (the connectivity validation block):
+Before the connectivity validation block (around line 199), insert Steiner tree expansion.
+Replace the existing `node_indices` setup and connectivity check:
 
-Old:
+Old (lines 175-204):
 ```rust
+        // Convert node names to NodeIndex
+        let node_indices: HashSet<NodeIndex> = nodes
+            .iter()
+            .filter_map(|name| self.graph.node_index(name))
+            .collect();
+
+        if node_indices.len() != nodes.len() {
+            return Err(anyhow::anyhow!(
+                "Some nodes not found in graph: expected {} nodes, found {}",
+                nodes.len(),
+                node_indices.len()
+            ));
+        }
+
+        // Single node case: just clone the tensor
+        if nodes.len() == 1 {
+            let node_name = nodes.iter().next().unwrap();
+            let node_idx = self.graph.node_index(node_name).unwrap();
+            return self
+                .tensor(node_idx)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_name));
+        }
+
         // Validate connectivity
         if !self.site_index_network.is_connected_subset(&node_indices) {
             return Err(anyhow::anyhow!(
@@ -89,9 +114,30 @@ Old:
 
 New:
 ```rust
-        // Validate connectivity on the full graph (includes internal nodes
-        // that have no site indices)
+        // Convert node names to NodeIndex in the full graph
+        let seed_indices: HashSet<NodeIndex> = nodes
+            .iter()
+            .filter_map(|name| self.graph.node_index(name))
+            .collect();
+
+        if seed_indices.len() != nodes.len() {
+            return Err(anyhow::anyhow!(
+                "Some nodes not found in graph: expected {} nodes, found {}",
+                nodes.len(),
+                seed_indices.len()
+            ));
+        }
+
+        // Auto-expand to include internal connector nodes via Steiner tree.
+        // This ensures internal nodes (no site indices) are naturally included.
         let g = self.graph.graph();
+        let node_indices = if seed_indices.len() <= 1 {
+            seed_indices
+        } else {
+            steiner_tree_indices(g, &seed_indices)
+        };
+
+        // Validate connectivity on the full graph (includes internal nodes)
         if !is_connected_subset_on_graph(g, &node_indices) {
             return Err(anyhow::anyhow!(
                 "Nodes to contract do not form a connected subtree"
@@ -149,14 +195,14 @@ Old:
 
 New:
 ```rust
-        // Get edges within the group, ordered from leaves to root
-        // Use the full graph (includes internal nodes without site indices)
+        // Get edges within the group, ordered from leaves to root.
+        // Use the full graph (includes internal nodes).
         let g = self.graph.graph();
         let post_order: Vec<NodeIndex> =
             petgraph::visit::DfsPostOrder::new(g, root_idx)
                 .iter(g)
                 .collect();
-        let mut parent = HashMap::new();
+        let mut parent: HashMap<NodeIndex, NodeIndex> = HashMap::new();
         let mut bfs = petgraph::visit::Bfs::new(g, root_idx);
         while let Some(node) = bfs.next(g) {
             for neighbor in g.neighbors(node) {
@@ -195,7 +241,7 @@ Expected: all 298 tests pass.
 
 ---
 
-### Task 3: Fix `fuse_to` to skip internal nodes and expand groups
+### Task 3: Fix `fuse_to` to skip internal nodes in validation
 
 **Files:**
 - Modify: `crates/tensor4all-treetn/src/treetn/transform.rs:61-160`
@@ -222,7 +268,7 @@ New:
 ```rust
         // Check all current nodes are accounted for.
         // Nodes without site indices (internal bonding nodes) are skipped —
-        // they will be implicitly included during group contraction.
+        // `contract_node_group` auto-expands via Steiner tree to include them.
         for current_name in self.node_names() {
             if !current_to_target.contains_key(&current_name) {
                 // Only flag as missing if the node has site indices
@@ -237,30 +283,7 @@ New:
         }
 ```
 
-- [ ] **Step 2: Expand target groups to include internal connector nodes**
-
-Insert after the validation loop (after line 131) and before step 4 (line 133):
-
-```rust
-        // Expand each target group to include internal nodes on Steiner tree
-        // paths between the site-bearing members, so contract_node_group
-        // operates on a connected subset in the full graph.
-        let full_graph = self.graph.graph();
-        for current_nodes in target_to_current.values_mut() {
-            let seed_indices: HashSet<NodeIndex> = current_nodes
-                .iter()
-                .filter_map(|name| self.graph.node_index(name))
-                .collect();
-            let steiner = steiner_tree_indices(full_graph, &seed_indices);
-            for idx in &steiner {
-                if let Some(name) = self.graph.node_name(*idx) {
-                    current_nodes.insert(name.clone());
-                }
-            }
-        }
-```
-
-- [ ] **Step 3: Verify compilation**
+- [ ] **Step 2: Verify compilation**
 
 ```bash
 cargo build -p tensor4all-treetn
@@ -268,7 +291,7 @@ cargo build -p tensor4all-treetn
 
 Expected: compiles without errors.
 
-- [ ] **Step 4: Run existing tests**
+- [ ] **Step 3: Run existing tests**
 
 ```bash
 cargo test -p tensor4all-treetn
