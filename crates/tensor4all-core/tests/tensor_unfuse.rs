@@ -1,4 +1,5 @@
-use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen, TensorLike};
+use num_complex::Complex64;
+use tensor4all_core::{DynIndex, IndexLike, LinearizationOrder, TensorDynLen, TensorLike};
 
 #[test]
 fn unfuse_index_column_major_preserves_column_major_layout() {
@@ -105,6 +106,30 @@ fn fuse_indices_row_major_roundtrips_unfuse_index() {
 }
 
 #[test]
+fn fuse_indices_preserves_complex_payload_roundtrip() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let fused = DynIndex::new_link(6).unwrap();
+    let data: Vec<Complex64> = (0..6)
+        .map(|x| Complex64::new(x as f64, -(x as f64)))
+        .collect();
+    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data.clone()).unwrap();
+
+    let roundtrip = tensor
+        .fuse_indices(
+            &[i.clone(), j.clone()],
+            fused.clone(),
+            LinearizationOrder::ColumnMajor,
+        )
+        .unwrap()
+        .unfuse_index(&fused, &[i, j], LinearizationOrder::ColumnMajor)
+        .unwrap();
+
+    assert!(roundtrip.is_complex());
+    assert_eq!(roundtrip.to_vec::<Complex64>().unwrap(), data);
+}
+
+#[test]
 fn fuse_indices_supports_non_adjacent_axes() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(3);
@@ -197,6 +222,31 @@ fn fuse_indices_rejects_dimension_mismatch() {
 }
 
 #[test]
+fn fuse_indices_rejects_same_id_with_wrong_dimension() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let same_id_wrong_dim = DynIndex::new(*i.id(), 3);
+    let fused = DynIndex::new_link(9).unwrap();
+    let tensor = TensorDynLen::from_dense(
+        vec![i.clone(), j.clone()],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    )
+    .unwrap();
+
+    let err = tensor
+        .fuse_indices(
+            &[same_id_wrong_dim, j],
+            fused,
+            LinearizationOrder::ColumnMajor,
+        )
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("old index dimension does not match tensor axis dimension"));
+}
+
+#[test]
 fn fuse_indices_rejects_duplicate_result_index() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(2);
@@ -210,4 +260,20 @@ fn fuse_indices_rejects_duplicate_result_index() {
     assert!(err
         .to_string()
         .contains("fuse_indices result would contain duplicate index"));
+}
+
+#[test]
+fn fuse_indices_rejects_duplicate_result_id_from_primed_index() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+    let tensor =
+        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+
+    let err = tensor
+        .fuse_indices(&[i], j.prime(), LinearizationOrder::ColumnMajor)
+        .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("fuse_indices result would contain duplicate index ID"));
 }

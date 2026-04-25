@@ -2980,7 +2980,8 @@ impl TensorDynLen {
     /// # Arguments
     /// * `old_indices` - Non-empty list of existing tensor indices to replace.
     ///   Each index is matched by ID, must appear exactly once in the tensor,
-    ///   and must not be duplicated in this list.
+    ///   must have the same dimension as the matched tensor axis, and must not
+    ///   be duplicated in this list.
     /// * `new_index` - Replacement index whose dimension must equal the product
     ///   of the dimensions in `old_indices`.
     /// * `order` - Linearization convention used to encode the old coordinates
@@ -3030,6 +3031,7 @@ impl TensorDynLen {
             "fuse_indices requires at least one index to fuse"
         );
 
+        let old_dims = self.dims();
         let mut seen_ids = HashSet::new();
         let mut old_axes = Vec::with_capacity(old_indices.len());
         for old_index in old_indices {
@@ -3042,10 +3044,14 @@ impl TensorDynLen {
                 .iter()
                 .position(|idx| idx.id() == old_index.id())
                 .ok_or_else(|| anyhow::anyhow!("index {:?} not found in tensor", old_index.id()))?;
+            anyhow::ensure!(
+                old_index.dim() == old_dims[axis],
+                "old index dimension does not match tensor axis dimension"
+            );
             old_axes.push(axis);
         }
 
-        let fused_dims: Vec<usize> = old_indices.iter().map(DynIndex::dim).collect();
+        let fused_dims: Vec<usize> = old_axes.iter().map(|&axis| old_dims[axis]).collect();
         let fused_product = checked_product(&fused_dims)?;
         anyhow::ensure!(
             fused_product == new_index.dim(),
@@ -3071,13 +3077,12 @@ impl TensorDynLen {
         let mut result_seen = HashSet::new();
         for index in &result_indices {
             anyhow::ensure!(
-                result_seen.insert(index.clone()),
-                "fuse_indices result would contain duplicate index"
+                result_seen.insert(*index.id()),
+                "fuse_indices result would contain duplicate index ID"
             );
         }
         Self::validate_indices(&result_indices);
 
-        let old_dims = self.dims();
         let mut new_dims = Vec::with_capacity(old_dims.len() - old_indices.len() + 1usize);
         for (axis, dim) in old_dims.iter().copied().enumerate() {
             if axis == insertion_axis {
