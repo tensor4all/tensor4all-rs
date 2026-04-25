@@ -263,6 +263,19 @@ mod tests {
     struct TestIndex {
         id: u64,
         dim: usize,
+        state: ConjState,
+    }
+
+    fn test_index(id: u64, dim: usize) -> TestIndex {
+        TestIndex {
+            id,
+            dim,
+            state: ConjState::Undirected,
+        }
+    }
+
+    fn directed_test_index(id: u64, dim: usize, state: ConjState) -> TestIndex {
+        TestIndex { id, dim, state }
     }
 
     impl IndexLike for TestIndex {
@@ -277,22 +290,30 @@ mod tests {
         }
 
         fn conj_state(&self) -> ConjState {
-            ConjState::Undirected
+            self.state
         }
 
         fn conj(&self) -> Self {
-            self.clone()
+            let state = match self.state {
+                ConjState::Undirected => ConjState::Undirected,
+                ConjState::Ket => ConjState::Bra,
+                ConjState::Bra => ConjState::Ket,
+            };
+            TestIndex {
+                state,
+                ..self.clone()
+            }
         }
 
         fn sim(&self) -> Self {
             TestIndex {
                 id: self.id + 1000,
-                dim: self.dim,
+                ..self.clone()
             }
         }
 
         fn create_dummy_link_pair() -> (Self, Self) {
-            (TestIndex { id: 0, dim: 1 }, TestIndex { id: 0, dim: 1 })
+            (test_index(0, 1), test_index(0, 1))
         }
 
         fn product_link(indices: &[Self]) -> anyhow::Result<Self> {
@@ -304,36 +325,88 @@ mod tests {
                 acc.checked_mul(idx.dim)
                     .ok_or_else(|| anyhow::anyhow!("product link dimension overflow"))
             })?;
-            Ok(TestIndex { id: 9999, dim })
+            Ok(test_index(9999, dim))
         }
     }
 
     #[test]
     fn test_default_plev_is_zero() {
-        let idx = TestIndex { id: 1, dim: 3 };
+        let idx = test_index(1, 3);
         assert_eq!(idx.plev(), 0);
     }
 
     #[test]
     fn test_default_is_contractable_with_plev() {
-        let a = TestIndex { id: 1, dim: 3 };
-        let b = TestIndex { id: 1, dim: 3 };
+        let a = test_index(1, 3);
+        let b = test_index(1, 3);
         // Same id, dim, and default plev=0: contractable
         assert!(a.is_contractable(&b));
     }
 
     #[test]
+    fn test_default_is_contractable_rejects_id_and_dim_mismatch() {
+        let a = test_index(1, 3);
+        let different_id = test_index(2, 3);
+        let different_dim = test_index(1, 4);
+
+        assert!(!a.is_contractable(&different_id));
+        assert!(!a.is_contractable(&different_dim));
+    }
+
+    #[test]
+    fn test_default_is_contractable_supports_directed_pairs_only() {
+        let ket = directed_test_index(1, 3, ConjState::Ket);
+        let bra = directed_test_index(1, 3, ConjState::Bra);
+        let undirected = test_index(1, 3);
+
+        assert!(ket.is_contractable(&bra));
+        assert!(bra.is_contractable(&ket));
+        assert!(!ket.is_contractable(&undirected));
+        assert!(!undirected.is_contractable(&bra));
+    }
+
+    #[test]
+    fn test_default_link_helpers_preserve_expected_structure() {
+        let idx = directed_test_index(7, 5, ConjState::Ket);
+        let conjugated = idx.conj();
+        assert_eq!(conjugated.conj_state(), ConjState::Bra);
+        assert_eq!(conjugated.id(), idx.id());
+        assert_eq!(conjugated.dim(), idx.dim());
+
+        let similar = idx.sim();
+        assert_eq!(similar.dim(), idx.dim());
+        assert_eq!(similar.conj_state(), idx.conj_state());
+        assert_ne!(similar.id(), idx.id());
+
+        let (left, right) = TestIndex::create_dummy_link_pair();
+        assert_eq!(left.dim(), 1);
+        assert!(left.is_contractable(&right));
+    }
+
+    #[test]
+    fn test_product_link_helper_checks_empty_and_overflow_inputs() {
+        let a = test_index(1, 2);
+        let b = test_index(2, 3);
+        let product = TestIndex::product_link(&[a, b]).unwrap();
+        assert_eq!(product.dim(), 6);
+        assert_eq!(product.conj_state(), ConjState::Undirected);
+
+        assert!(TestIndex::product_link(&[]).is_err());
+        assert!(TestIndex::product_link(&[test_index(1, usize::MAX), test_index(2, 2)]).is_err());
+    }
+
+    #[test]
     fn test_default_same_id() {
-        let a = TestIndex { id: 1, dim: 3 };
-        let b = TestIndex { id: 1, dim: 5 };
-        let c = TestIndex { id: 2, dim: 3 };
+        let a = test_index(1, 3);
+        let b = test_index(1, 5);
+        let c = test_index(2, 3);
         assert!(a.same_id(&b));
         assert!(!a.same_id(&c));
     }
 
     #[test]
     fn test_default_has_id() {
-        let a = TestIndex { id: 42, dim: 3 };
+        let a = test_index(42, 3);
         assert!(a.has_id(&42));
         assert!(!a.has_id(&99));
     }

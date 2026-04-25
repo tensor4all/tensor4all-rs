@@ -6,6 +6,11 @@ use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::{ColMajorArrayRef, StorageKind, SvdTruncationPolicy, TensorDynLen};
 
 type DynIndex = Index<DynId, TagSet>;
+type ChainStateAndIdentity = (
+    TreeTN<TensorDynLen, String>,
+    LinearOperator<TensorDynLen, String>,
+    Vec<(String, DynIndex)>,
+);
 
 fn make_index(dim: usize) -> DynIndex {
     Index::new_dyn(dim)
@@ -266,11 +271,7 @@ fn build_uniform_chain_state_and_identity_operator(
     length: usize,
     state_bond_dim: usize,
     mpo_bond_dim: usize,
-) -> (
-    TreeTN<TensorDynLen, String>,
-    LinearOperator<TensorDynLen, String>,
-    Vec<(String, DynIndex)>,
-) {
+) -> ChainStateAndIdentity {
     let site_indices: Vec<_> = (0..length).map(|_| make_index(2)).collect();
     let state_bonds: Vec<_> = (0..length.saturating_sub(1))
         .map(|_| make_index(state_bond_dim))
