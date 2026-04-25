@@ -762,6 +762,34 @@ pub trait TensorLike: TensorIndex {
     /// - An index ID in `new_order` is not found in the tensor
     fn permuteinds(&self, new_order: &[<Self as TensorIndex>::Index]) -> Result<Self>;
 
+    /// Fuse local tensor indices into one replacement index.
+    ///
+    /// This is a local axis fusion operation: it reshapes the tensor so
+    /// `old_indices` are replaced by `new_index` using `order` for
+    /// linearization. Tensor types that cannot support local fusion return an
+    /// error.
+    ///
+    /// # Arguments
+    ///
+    /// * `old_indices` - Existing local indices to fuse
+    /// * `new_index` - Replacement index whose dimension is the fused product
+    /// * `order` - Linearization order for mapping old coordinates to the fused axis
+    ///
+    /// # Returns
+    ///
+    /// A new tensor with `old_indices` replaced by `new_index`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the indices are invalid, dimensions do not match,
+    /// or the tensor type cannot support local axis fusion.
+    fn fuse_indices(
+        &self,
+        old_indices: &[<Self as TensorIndex>::Index],
+        new_index: <Self as TensorIndex>::Index,
+        order: LinearizationOrder,
+    ) -> Result<Self>;
+
     /// Contract multiple tensors over their contractable indices.
     ///
     /// This method contracts 2 or more tensors. Pairs of indices that satisfy

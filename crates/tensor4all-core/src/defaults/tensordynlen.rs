@@ -2628,6 +2628,15 @@ impl TensorLike for TensorDynLen {
         Ok(TensorDynLen::permute_indices(self, new_order))
     }
 
+    fn fuse_indices(
+        &self,
+        old_indices: &[DynIndex],
+        new_index: DynIndex,
+        order: LinearizationOrder,
+    ) -> Result<Self> {
+        TensorDynLen::fuse_indices(self, old_indices, new_index, order)
+    }
+
     fn contract(tensors: &[&Self], allowed: crate::AllowedPairs<'_>) -> Result<Self> {
         // Delegate to contract_multi which handles disconnected components
         super::contract::contract_multi(tensors, allowed)

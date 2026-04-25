@@ -35,7 +35,8 @@ use crate::any_scalar::AnyScalar;
 use crate::index_like::IndexLike;
 use crate::tensor_index::TensorIndex;
 use crate::tensor_like::{
-    AllowedPairs, DirectSumResult, FactorizeError, FactorizeOptions, FactorizeResult, TensorLike,
+    AllowedPairs, DirectSumResult, FactorizeError, FactorizeOptions, FactorizeResult,
+    LinearizationOrder, TensorLike,
 };
 use anyhow::Result;
 
@@ -513,6 +514,23 @@ impl<T: TensorLike> TensorLike for BlockTensor<T> {
 
     fn permuteinds(&self, _new_order: &[<Self as TensorIndex>::Index]) -> Result<Self> {
         anyhow::bail!("BlockTensor does not support permuteinds")
+    }
+
+    fn fuse_indices(
+        &self,
+        old_indices: &[Self::Index],
+        new_index: Self::Index,
+        order: LinearizationOrder,
+    ) -> Result<Self> {
+        let blocks: Result<Vec<T>> = self
+            .blocks
+            .iter()
+            .map(|block| block.fuse_indices(old_indices, new_index.clone(), order))
+            .collect();
+        Ok(Self {
+            blocks: blocks?,
+            shape: self.shape,
+        })
     }
 
     fn contract(_tensors: &[&Self], _allowed: AllowedPairs<'_>) -> Result<Self> {
