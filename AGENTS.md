@@ -1,6 +1,6 @@
 # Agent Guidelines for tensor4all-rs
 
-Read `README.md` before starting work.
+Read `README.md` and `REPOSITORY_RULES.md` before starting work.
 
 ## Development Stage
 
