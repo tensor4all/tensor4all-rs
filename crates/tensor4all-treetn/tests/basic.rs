@@ -893,6 +893,84 @@ fn test_truncate_with_svd_policy() {
     );
 }
 
+#[test]
+fn test_truncate_y_shape() {
+    // Create a Y-shape TreeTN:
+    //     A     (bond_ab)
+    //     |
+    //     B     (bond_bc, bond_bd)
+    //    / \
+    //   C   D
+    let mut tn = TreeTN::<TensorDynLen, NodeIndex>::new();
+
+    let site_a = DynIndex::new_dyn(2);
+    let bond_ab = DynIndex::new_dyn(6);
+    let bond_bc = DynIndex::new_dyn(6);
+    let bond_bd = DynIndex::new_dyn(6);
+    let site_c = DynIndex::new_dyn(2);
+    let site_d = DynIndex::new_dyn(2);
+
+    let tensor_a =
+        TensorDynLen::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 12]).unwrap();
+    let n_a = tn.add_tensor_auto_name(tensor_a);
+
+    let tensor_b = TensorDynLen::from_dense(
+        vec![bond_ab.clone(), bond_bc.clone(), bond_bd.clone()],
+        vec![1.0; 216],
+    )
+    .unwrap();
+    let n_b = tn.add_tensor_auto_name(tensor_b);
+
+    let tensor_c =
+        TensorDynLen::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 12]).unwrap();
+    let n_c = tn.add_tensor_auto_name(tensor_c);
+
+    let tensor_d =
+        TensorDynLen::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 12]).unwrap();
+    let n_d = tn.add_tensor_auto_name(tensor_d);
+
+    tn.connect(n_a, &bond_ab, n_b, &bond_ab).unwrap();
+    tn.connect(n_b, &bond_bc, n_c, &bond_bc).unwrap();
+    tn.connect(n_b, &bond_bd, n_d, &bond_bd).unwrap();
+
+    // All bonds are dimension 6 before truncation
+    let e_ab = tn.edge_between(&n_a, &n_b).unwrap();
+    let e_bc = tn.edge_between(&n_b, &n_c).unwrap();
+    let e_bd = tn.edge_between(&n_b, &n_d).unwrap();
+    assert_eq!(tn.bond_index(e_ab).unwrap().size(), 6);
+    assert_eq!(tn.bond_index(e_bc).unwrap().size(), 6);
+    assert_eq!(tn.bond_index(e_bd).unwrap().size(), 6);
+
+    // Truncate towards center (n_b) with max_rank = 3
+    let truncated = tn
+        .truncate(
+            std::iter::once(n_b),
+            TruncationOptions::default().with_max_rank(3),
+        )
+        .unwrap();
+
+    // All bonds should now be at most 3
+    let new_e_ab = truncated.edge_between(&n_a, &n_b).unwrap();
+    let new_e_bc = truncated.edge_between(&n_b, &n_c).unwrap();
+    let new_e_bd = truncated.edge_between(&n_b, &n_d).unwrap();
+    assert!(
+        truncated.bond_index(new_e_ab).unwrap().size() <= 3,
+        "bond_ab size should be <= 3 after truncation"
+    );
+    assert!(
+        truncated.bond_index(new_e_bc).unwrap().size() <= 3,
+        "bond_bc size should be <= 3 after truncation"
+    );
+    assert!(
+        truncated.bond_index(new_e_bd).unwrap().size() <= 3,
+        "bond_bd size should be <= 3 after truncation"
+    );
+
+    // Structure preserved: still 4 nodes, 3 edges
+    assert_eq!(truncated.node_count(), 4);
+    assert_eq!(truncated.edge_count(), 3);
+}
+
 // ============================================================================
 // sim_internal_inds Tests
 // ============================================================================

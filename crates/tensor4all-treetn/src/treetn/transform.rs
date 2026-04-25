@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 use anyhow::{Context, Result};
-use petgraph::stable_graph::NodeIndex;
+use petgraph::stable_graph::{NodeIndex, StableGraph};
 
 use tensor4all_core::{
     index_ops, AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
@@ -19,6 +19,54 @@ use crate::options::SplitOptions;
 use crate::site_index_network::SiteIndexNetwork;
 
 type SplitBoundaryIndices<V, TargetV, Id> = HashMap<V, HashMap<TargetV, HashSet<Id>>>;
+
+/// Compute the Steiner tree in the full graph spanning a set of terminal nodes.
+///
+/// For tree graphs, the Steiner tree is the union of unique shortest paths
+/// from one terminal node to every other terminal node.
+fn steiner_tree_indices<T: TensorLike>(
+    graph: &StableGraph<T, T::Index, petgraph::Undirected>,
+    terminals: &HashSet<NodeIndex>,
+) -> HashSet<NodeIndex> {
+    if terminals.len() <= 1 {
+        return terminals.clone();
+    }
+    let terms: Vec<NodeIndex> = terminals.iter().copied().collect();
+    let root = terms[0];
+    let mut result = HashSet::new();
+    result.insert(root);
+    for &term in &terms[1..] {
+        if let Some((_, path)) =
+            petgraph::algo::astar(graph, root, |n| n == term, |_| 1usize, |_| 0usize)
+        {
+            result.extend(path);
+        }
+    }
+    result
+}
+
+/// Check if nodes form a connected induced subgraph in the given graph.
+/// DFS restricted to edges where both endpoints are in `nodes`.
+fn is_connected_subset_on_graph<T: TensorLike>(
+    graph: &StableGraph<T, T::Index, petgraph::Undirected>,
+    nodes: &HashSet<NodeIndex>,
+) -> bool {
+    if nodes.is_empty() || nodes.len() == 1 {
+        return true;
+    }
+    let start = *nodes.iter().next().unwrap();
+    let mut seen = HashSet::new();
+    let mut stack = vec![start];
+    seen.insert(start);
+    while let Some(v) = stack.pop() {
+        for nb in graph.neighbors(v) {
+            if nodes.contains(&nb) && seen.insert(nb) {
+                stack.push(nb);
+            }
+        }
+    }
+    seen.len() == nodes.len()
+}
 
 impl<T, V> TreeTN<T, V>
 where
@@ -119,18 +167,47 @@ where
             }
         }
 
-        // Check all current nodes are accounted for
+        // Check all current nodes are accounted for.
+        // Nodes without site indices (internal bonding nodes) are skipped —
+        // contract_node_group auto-expands via Steiner tree to include them.
         for current_name in self.node_names() {
-            if !current_to_target.contains_key(&current_name) {
+            if !current_to_target.contains_key(&current_name)
+                && self
+                    .site_space(&current_name)
+                    .is_some_and(|s| !s.is_empty())
+            {
                 return Err(anyhow::anyhow!(
-                    "Current node {:?} has no corresponding target node",
+                    "Current node {:?} has site indices but no corresponding target node",
                     current_name
                 ))
                 .context("fuse_to: missing target for current node");
             }
         }
 
-        // Step 4: For each target node, contract all its current nodes into one tensor
+        // Step 4: Expand target groups to include internal connector nodes
+        // (nodes without site indices that serve as connectors between site-bearing members).
+        let g = self.graph.graph();
+        for current_nodes in target_to_current.values_mut() {
+            let seed_indices: HashSet<NodeIndex> = current_nodes
+                .iter()
+                .filter_map(|name| self.graph.node_index(name))
+                .collect();
+            if seed_indices.len() <= 1 {
+                continue;
+            }
+            let steiner = steiner_tree_indices(g, &seed_indices);
+            for idx in &steiner {
+                if let Some(name) = self.graph.node_name(*idx) {
+                    // Only include internal nodes (no private site indices) —
+                    // site-bearing nodes belong to their own target group.
+                    if self.site_space(name).is_none_or(|s| s.is_empty()) {
+                        current_nodes.insert(name.clone());
+                    }
+                }
+            }
+        }
+
+        // Step 5: For each target node, contract all its current nodes into one tensor
         let mut result_tensors: HashMap<TargetV, T> = HashMap::new();
 
         for (target_name, current_nodes) in &target_to_current {
@@ -186,18 +263,9 @@ where
             ));
         }
 
-        // Single node case: just clone the tensor
-        if nodes.len() == 1 {
-            let node_name = nodes.iter().next().unwrap();
-            let node_idx = self.graph.node_index(node_name).unwrap();
-            return self
-                .tensor(node_idx)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_name));
-        }
-
-        // Validate connectivity
-        if !self.site_index_network.is_connected_subset(&node_indices) {
+        // Validate connectivity on the full graph (includes internal nodes)
+        let g = self.graph.graph();
+        if !is_connected_subset_on_graph(g, &node_indices) {
             return Err(anyhow::anyhow!(
                 "Nodes to contract do not form a connected subtree"
             ));
@@ -207,16 +275,32 @@ where
         let root_name = nodes.iter().min().unwrap();
         let root_idx = self.graph.node_index(root_name).unwrap();
 
-        // Get edges within the group, ordered from leaves to root
-        let edges = self
-            .site_index_network
-            .edges_to_canonicalize(None, root_idx);
-
-        // Filter to only edges within our group
-        let internal_edges: Vec<(NodeIndex, NodeIndex)> = edges
+        // Get edges within the group, ordered from leaves to root.
+        let mut dfs = petgraph::visit::DfsPostOrder::new(g, root_idx);
+        let mut post_order = Vec::new();
+        while let Some(n) = dfs.next(g) {
+            post_order.push(n);
+        }
+        let mut parent: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+        let mut bfs = petgraph::visit::Bfs::new(g, root_idx);
+        while let Some(node) = bfs.next(g) {
+            for neighbor in g.neighbors(node) {
+                if neighbor != root_idx {
+                    parent.entry(neighbor).or_insert(node);
+                }
+            }
+        }
+        let internal_edges: Vec<(NodeIndex, NodeIndex)> = post_order
             .iter()
-            .filter(|(from, to)| node_indices.contains(from) && node_indices.contains(to))
-            .cloned()
+            .filter(|&&node| node != root_idx && node_indices.contains(&node))
+            .filter_map(|&node| {
+                let p = parent.get(&node)?;
+                if node_indices.contains(p) {
+                    Some((node, *p))
+                } else {
+                    None
+                }
+            })
             .collect();
 
         // Initialize with cloned tensors

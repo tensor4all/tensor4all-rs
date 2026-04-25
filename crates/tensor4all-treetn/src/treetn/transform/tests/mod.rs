@@ -724,3 +724,230 @@ fn test_split_to_y_shape_across_original_bond() {
     let split_full = split.contract_to_tensor().unwrap();
     assert!(full.distance(&split_full) < 1e-12);
 }
+
+// ============================================================================
+// Y-shape branching topology tests for fuse_to
+// ============================================================================
+
+/// Create a Y-shape TreeTN with a site index on each node:
+///     A (site_a)
+///     |
+///     B (site_b)
+///    / \
+///   C   D
+/// (site_c) (site_d)
+fn make_y_shape_treetn() -> (
+    TreeTN<TensorDynLen, String>,
+    DynIndex, // site_a
+    DynIndex, // site_b
+    DynIndex, // site_c
+    DynIndex, // site_d
+) {
+    let mut tn = TreeTN::<TensorDynLen, String>::new();
+
+    let site_a = DynIndex::new_dyn(2);
+    let site_b = DynIndex::new_dyn(2);
+    let site_c = DynIndex::new_dyn(2);
+    let site_d = DynIndex::new_dyn(2);
+    let bond_ab = DynIndex::new_dyn(3);
+    let bond_bc = DynIndex::new_dyn(3);
+    let bond_bd = DynIndex::new_dyn(3);
+
+    let tensor_a =
+        TensorDynLen::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6]).unwrap();
+    tn.add_tensor("A".to_string(), tensor_a).unwrap();
+
+    let tensor_b = TensorDynLen::from_dense(
+        vec![
+            bond_ab.clone(),
+            bond_bc.clone(),
+            bond_bd.clone(),
+            site_b.clone(),
+        ],
+        vec![1.0; 54],
+    )
+    .unwrap();
+    tn.add_tensor("B".to_string(), tensor_b).unwrap();
+
+    let tensor_c =
+        TensorDynLen::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6]).unwrap();
+    tn.add_tensor("C".to_string(), tensor_c).unwrap();
+
+    let tensor_d =
+        TensorDynLen::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6]).unwrap();
+    tn.add_tensor("D".to_string(), tensor_d).unwrap();
+
+    let n_a = tn.node_index(&"A".to_string()).unwrap();
+    let n_b = tn.node_index(&"B".to_string()).unwrap();
+    let n_c = tn.node_index(&"C".to_string()).unwrap();
+    let n_d = tn.node_index(&"D".to_string()).unwrap();
+
+    tn.connect(n_a, &bond_ab, n_b, &bond_ab).unwrap();
+    tn.connect(n_b, &bond_bc, n_c, &bond_bc).unwrap();
+    tn.connect(n_b, &bond_bd, n_d, &bond_bd).unwrap();
+
+    (tn, site_a, site_b, site_c, site_d)
+}
+
+#[test]
+fn test_fuse_to_y_shape_fuse_subtree() {
+    let (tn, site_a, site_b, site_c, site_d) = make_y_shape_treetn();
+
+    // Fuse B+C+D into one node, keep A separate
+    let mut target = SiteIndexNetwork::<String, DynIndex>::new();
+    target
+        .add_node("A".to_string(), HashSet::from([site_a.clone()]))
+        .unwrap();
+    target
+        .add_node(
+            "BCD".to_string(),
+            HashSet::from([site_b.clone(), site_c.clone(), site_d.clone()]),
+        )
+        .unwrap();
+    target
+        .add_edge(&"A".to_string(), &"BCD".to_string())
+        .unwrap();
+
+    let fused = tn.fuse_to(&target).unwrap();
+    assert_eq!(fused.node_count(), 2);
+
+    let orig_full = tn.contract_to_tensor().unwrap();
+    let fused_full = fused.contract_to_tensor().unwrap();
+    assert!(
+        orig_full.distance(&fused_full) < 1e-12,
+        "fused Y-shape branch should match original contraction"
+    );
+}
+
+#[test]
+fn test_fuse_to_y_shape_all_into_one() {
+    let (tn, site_a, site_b, site_c, site_d) = make_y_shape_treetn();
+
+    // Fuse all 4 nodes into 1
+    let mut target = SiteIndexNetwork::<String, DynIndex>::new();
+    target
+        .add_node(
+            "ABCD".to_string(),
+            HashSet::from([
+                site_a.clone(),
+                site_b.clone(),
+                site_c.clone(),
+                site_d.clone(),
+            ]),
+        )
+        .unwrap();
+
+    let fused = tn.fuse_to(&target).unwrap();
+    assert_eq!(fused.node_count(), 1);
+
+    let orig_full = tn.contract_to_tensor().unwrap();
+    let fused_full = fused.contract_to_tensor().unwrap();
+    assert!(
+        orig_full.distance(&fused_full) < 1e-12,
+        "fused entire Y-shape should match original contraction"
+    );
+}
+
+#[test]
+fn test_fuse_to_y_shape_identity() {
+    let (tn, site_a, site_b, site_c, site_d) = make_y_shape_treetn();
+
+    // Identity mapping: each current node → same target (no actual fusion)
+    let mut target = SiteIndexNetwork::<String, DynIndex>::new();
+    target
+        .add_node("A".to_string(), HashSet::from([site_a.clone()]))
+        .unwrap();
+    target
+        .add_node("B".to_string(), HashSet::from([site_b.clone()]))
+        .unwrap();
+    target
+        .add_node("C".to_string(), HashSet::from([site_c.clone()]))
+        .unwrap();
+    target
+        .add_node("D".to_string(), HashSet::from([site_d.clone()]))
+        .unwrap();
+    target.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    target.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+    target.add_edge(&"B".to_string(), &"D".to_string()).unwrap();
+
+    let fused = tn.fuse_to(&target).unwrap();
+    assert_eq!(fused.node_count(), 4);
+
+    let orig_full = tn.contract_to_tensor().unwrap();
+    let fused_full = fused.contract_to_tensor().unwrap();
+    assert!(
+        orig_full.distance(&fused_full) < 1e-12,
+        "identity fuse on Y-shape should match original contraction"
+    );
+}
+
+#[test]
+fn test_fuse_to_y_shape_internal_center_node() {
+    // Y-shape where center node B has NO site index:
+    //     A(site_a)
+    //       |
+    //     B(no site)   <-- internal node, only bonds
+    //      / \
+    // C(site_c) D(site_d)
+    let mut tn = TreeTN::<TensorDynLen, String>::new();
+
+    let site_a = DynIndex::new_dyn(2);
+    let site_c = DynIndex::new_dyn(2);
+    let site_d = DynIndex::new_dyn(2);
+    let bond_ab = DynIndex::new_dyn(3);
+    let bond_bc = DynIndex::new_dyn(3);
+    let bond_bd = DynIndex::new_dyn(3);
+
+    let tensor_a =
+        TensorDynLen::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6]).unwrap();
+    tn.add_tensor("A".to_string(), tensor_a).unwrap();
+
+    // B has NO site index -- only bond indices
+    let tensor_b = TensorDynLen::from_dense(
+        vec![bond_ab.clone(), bond_bc.clone(), bond_bd.clone()],
+        vec![1.0; 27],
+    )
+    .unwrap();
+    tn.add_tensor("B".to_string(), tensor_b).unwrap();
+
+    let tensor_c =
+        TensorDynLen::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6]).unwrap();
+    tn.add_tensor("C".to_string(), tensor_c).unwrap();
+
+    let tensor_d =
+        TensorDynLen::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6]).unwrap();
+    tn.add_tensor("D".to_string(), tensor_d).unwrap();
+
+    let n_a = tn.node_index(&"A".to_string()).unwrap();
+    let n_b = tn.node_index(&"B".to_string()).unwrap();
+    let n_c = tn.node_index(&"C".to_string()).unwrap();
+    let n_d = tn.node_index(&"D".to_string()).unwrap();
+    tn.connect(n_a, &bond_ab, n_b, &bond_ab).unwrap();
+    tn.connect(n_b, &bond_bc, n_c, &bond_bc).unwrap();
+    tn.connect(n_b, &bond_bd, n_d, &bond_bd).unwrap();
+
+    // Fuse C+D into one node (B is internal, pulled in automatically)
+    let mut target = SiteIndexNetwork::<String, DynIndex>::new();
+    target
+        .add_node("A".to_string(), HashSet::from([site_a.clone()]))
+        .unwrap();
+    target
+        .add_node(
+            "CD".to_string(),
+            HashSet::from([site_c.clone(), site_d.clone()]),
+        )
+        .unwrap();
+    target
+        .add_edge(&"A".to_string(), &"CD".to_string())
+        .unwrap();
+
+    let fused = tn.fuse_to(&target).unwrap();
+    assert_eq!(fused.node_count(), 2);
+
+    let orig_full = tn.contract_to_tensor().unwrap();
+    let fused_full = fused.contract_to_tensor().unwrap();
+    assert!(
+        orig_full.distance(&fused_full) < 1e-12,
+        "fused Y-shape with internal center should match original contraction"
+    );
+}

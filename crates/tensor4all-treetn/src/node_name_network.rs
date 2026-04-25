@@ -10,7 +10,7 @@
 use crate::named_graph::NamedGraph;
 use petgraph::algo::astar;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex, StableGraph};
-use petgraph::visit::DfsPostOrder;
+use petgraph::visit::{Bfs, DfsPostOrder};
 use petgraph::Undirected;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Debug;
@@ -321,7 +321,9 @@ where
 
         let g = self.graph.graph();
 
-        // Start DFS from any node in the subset
+        // DFS within the subset only: petgraph's Dfs visits all reachable
+        // nodes, but we must restrict traversal to edges whose both endpoints
+        // are in the subset.
         let start = *nodes.iter().next().unwrap();
         let mut seen = HashSet::new();
         let mut stack = vec![start];
@@ -329,14 +331,12 @@ where
 
         while let Some(v) = stack.pop() {
             for nb in g.neighbors(v) {
-                // Only follow edges within the subset
                 if nodes.contains(&nb) && seen.insert(nb) {
                     stack.push(nb);
                 }
             }
         }
 
-        // Connected if we reached all nodes
         seen.len() == nodes.len()
     }
 
@@ -473,16 +473,11 @@ where
 
         // Build parent map using BFS from root
         let mut parent: HashMap<NodeIndex, NodeIndex> = HashMap::new();
-        let mut visited = HashSet::new();
-        let mut queue = VecDeque::new();
-        queue.push_back(root);
-        visited.insert(root);
-
-        while let Some(node) = queue.pop_front() {
+        let mut bfs = Bfs::new(g, root);
+        while let Some(node) = bfs.next(g) {
             for neighbor in g.neighbors(node) {
-                if visited.insert(neighbor) {
-                    parent.insert(neighbor, node);
-                    queue.push_back(neighbor);
+                if neighbor != root {
+                    parent.entry(neighbor).or_insert(node);
                 }
             }
         }
