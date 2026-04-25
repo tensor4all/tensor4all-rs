@@ -211,6 +211,40 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     fn create_dummy_link_pair() -> (Self, Self)
     where
         Self: Sized;
+
+    /// Create a fresh link index whose dimension is the product of input dimensions.
+    ///
+    /// This is used when multiple existing link indices need to be represented by one
+    /// generic link index without depending on a concrete index implementation.
+    ///
+    /// # Arguments
+    /// * `indices` - Non-empty input indices whose dimensions are multiplied. Typical inputs
+    ///   are link or bond indices being fused into one link.
+    ///
+    /// # Returns
+    /// A new index with fresh identity and dimension equal to the checked product of all input
+    /// dimensions.
+    ///
+    /// # Errors
+    /// Returns an error when `indices` is empty or when the product dimension overflows `usize`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IndexLike, TagSetLike};
+    ///
+    /// let a = DynIndex::new_link(2).unwrap();
+    /// let b = DynIndex::new_link(3).unwrap();
+    /// let product = DynIndex::product_link(&[a.clone(), b.clone()]).unwrap();
+    ///
+    /// assert_eq!(product.dim(), 6);
+    /// assert!(product.tags().has_tag("Link"));
+    /// assert_ne!(product.id(), a.id());
+    /// assert_ne!(product.id(), b.id());
+    /// ```
+    fn product_link(indices: &[Self]) -> anyhow::Result<Self>
+    where
+        Self: Sized;
 }
 
 #[cfg(test)]
@@ -253,6 +287,18 @@ mod tests {
 
         fn create_dummy_link_pair() -> (Self, Self) {
             (TestIndex { id: 0, dim: 1 }, TestIndex { id: 0, dim: 1 })
+        }
+
+        fn product_link(indices: &[Self]) -> anyhow::Result<Self> {
+            anyhow::ensure!(
+                !indices.is_empty(),
+                "product_link requires at least one index"
+            );
+            let dim = indices.iter().try_fold(1usize, |acc, idx| {
+                acc.checked_mul(idx.dim)
+                    .ok_or_else(|| anyhow::anyhow!("product link dimension overflow"))
+            })?;
+            Ok(TestIndex { id: 9999, dim })
         }
     }
 

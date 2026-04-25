@@ -485,6 +485,18 @@ impl IndexLike for DynIndex {
         };
         (idx1, idx2)
     }
+
+    fn product_link(indices: &[Self]) -> Result<Self> {
+        anyhow::ensure!(
+            !indices.is_empty(),
+            "product_link requires at least one index"
+        );
+        let dim = indices.iter().try_fold(1usize, |acc, idx| {
+            acc.checked_mul(idx.dim())
+                .ok_or_else(|| anyhow::anyhow!("product link dimension overflow"))
+        })?;
+        DynIndex::new_bond(dim)
+    }
 }
 
 impl DynIndex {

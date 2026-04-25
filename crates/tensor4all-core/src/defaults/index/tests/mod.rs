@@ -116,6 +116,25 @@ fn test_new_bond() {
 }
 
 #[test]
+fn test_product_link_uses_product_dimension_and_fresh_id() {
+    let a = DynIndex::new_link(2).unwrap();
+    let b = DynIndex::new_link(3).unwrap();
+
+    let product = DynIndex::product_link(&[a.clone(), b.clone()]).unwrap();
+
+    assert_eq!(product.dim(), 6);
+    assert!(product.tags().has_tag("Link"));
+    assert_ne!(product.id(), a.id());
+    assert_ne!(product.id(), b.id());
+}
+
+#[test]
+fn test_product_link_rejects_empty_input() {
+    let result = DynIndex::product_link(&[]);
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_sim() {
     let tags = TagSet::from_str("Site,x=1").unwrap();
     let i1 = Index::<DynId>::new_dyn_with_tags(5, tags);
