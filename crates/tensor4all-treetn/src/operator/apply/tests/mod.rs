@@ -3,7 +3,7 @@ use crate::random::{random_treetn, LinkSpace};
 use crate::SiteIndexNetwork;
 use std::collections::{HashMap, HashSet};
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::{ColMajorArrayRef, SvdTruncationPolicy, TensorDynLen};
+use tensor4all_core::{ColMajorArrayRef, StorageKind, SvdTruncationPolicy, TensorDynLen};
 
 type DynIndex = Index<DynId, TagSet>;
 
@@ -644,6 +644,28 @@ fn naive_apply_full_product_identity_embeds_on_state_topology() {
     assert_eq!(result.node_count(), state.node_count());
     assert_eq!(result.edge_count(), state.edge_count());
 
+    let result_dense = result.to_dense().unwrap();
+    let state_dense = state.to_dense().unwrap();
+    assert!((&result_dense - &state_dense).maxabs() < 1e-10);
+}
+
+#[test]
+fn naive_apply_noncontiguous_bonded_identity_uses_compact_bridge_delta() {
+    let (state, sites) = build_chain_state();
+    let operator = build_redundant_bonded_identity_operator(
+        &[sites[0].clone(), sites[2].clone()],
+        2,
+    );
+
+    let extended = extend_operator_to_full_space(&operator, &state).unwrap();
+    let middle = extended.mpo.node_index(&sites[1].0).unwrap();
+    let middle_tensor = extended.mpo.tensor(middle).unwrap();
+
+    assert_eq!(middle_tensor.storage().storage_kind(), StorageKind::Structured);
+    assert_eq!(middle_tensor.storage().payload_dims(), &[2, 2]);
+    assert_eq!(middle_tensor.storage().axis_classes(), &[0, 0, 1, 1]);
+
+    let result = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
     let result_dense = result.to_dense().unwrap();
     let state_dense = state.to_dense().unwrap();
     assert!((&result_dense - &state_dense).maxabs() < 1e-10);

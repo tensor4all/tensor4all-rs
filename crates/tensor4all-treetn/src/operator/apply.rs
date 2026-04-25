@@ -622,12 +622,16 @@ where
         compose_exclusive_linear_operators(state_network, &[operator], &gap_site_indices)
             .context("Failed to compose operator with identity gaps")?
     } else {
+        let mut input_mappings = operator.input_mapping.clone();
+        input_mappings.extend(gap_input_mappings.clone());
+        let mut output_mappings = operator.output_mapping.clone();
+        output_mappings.extend(gap_output_mappings.clone());
         compose_operator_along_state_paths(
             operator,
             state_network,
             &gap_site_indices,
-            gap_input_mappings.clone(),
-            gap_output_mappings.clone(),
+            input_mappings,
+            output_mappings,
         )
         .context("Failed to compose operator along state paths")?
     };
