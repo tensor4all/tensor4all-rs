@@ -587,13 +587,7 @@ fn test_fuse_identity_mapping() {
     assert!(orig_full.distance(&fused_full) < 1e-12);
 }
 
-fn make_four_site_fused_node() -> (
-    TreeTN<TensorDynLen, String>,
-    DynIndex,
-    DynIndex,
-    DynIndex,
-    DynIndex,
-) {
+fn make_four_site_fused_node() -> (TreeTN<TensorDynLen, String>, DynIndex, DynIndex, DynIndex, DynIndex) {
     let s_a = DynIndex::new_dyn(2);
     let s_b = DynIndex::new_dyn(2);
     let s_c = DynIndex::new_dyn(2);
@@ -613,28 +607,18 @@ fn test_split_to_y_shape() {
     let (tn, s_a, s_b, s_c, s_d) = make_four_site_fused_node();
 
     let mut target = SiteIndexNetwork::<String, DynIndex>::new();
-    target
-        .add_node("A".to_string(), HashSet::from([s_a.clone()]))
-        .unwrap();
-    target
-        .add_node("B".to_string(), HashSet::from([s_b.clone()]))
-        .unwrap();
-    target
-        .add_node("C".to_string(), HashSet::from([s_c.clone()]))
-        .unwrap();
-    target
-        .add_node("D".to_string(), HashSet::from([s_d.clone()]))
-        .unwrap();
+    target.add_node("A".to_string(), HashSet::from([s_a.clone()])).unwrap();
+    target.add_node("B".to_string(), HashSet::from([s_b.clone()])).unwrap();
+    target.add_node("C".to_string(), HashSet::from([s_c.clone()])).unwrap();
+    target.add_node("D".to_string(), HashSet::from([s_d.clone()])).unwrap();
     target.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
     target.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
     target.add_edge(&"B".to_string(), &"D".to_string()).unwrap();
-
+ 
     let split = tn.split_to(&target, &SplitOptions::default()).unwrap();
     assert_eq!(split.node_count(), 4);
     assert!(
-        split
-            .site_index_network()
-            .share_equivalent_site_index_network(&target),
+        split.site_index_network().share_equivalent_site_index_network(&target),
         "Y-shape topology must be preserved",
     );
 
@@ -648,28 +632,18 @@ fn test_split_to_nested_tree() {
     let (tn, s_a, s_b, s_c, s_d) = make_four_site_fused_node();
 
     let mut target = SiteIndexNetwork::<String, DynIndex>::new();
-    target
-        .add_node("A".to_string(), HashSet::from([s_a.clone()]))
-        .unwrap();
-    target
-        .add_node("B".to_string(), HashSet::from([s_b.clone()]))
-        .unwrap();
-    target
-        .add_node("C".to_string(), HashSet::from([s_c.clone()]))
-        .unwrap();
-    target
-        .add_node("D".to_string(), HashSet::from([s_d.clone()]))
-        .unwrap();
+    target.add_node("A".to_string(), HashSet::from([s_a.clone()])).unwrap();
+    target.add_node("B".to_string(), HashSet::from([s_b.clone()])).unwrap();
+    target.add_node("C".to_string(), HashSet::from([s_c.clone()])).unwrap();
+    target.add_node("D".to_string(), HashSet::from([s_d.clone()])).unwrap();
     target.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
     target.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
     target.add_edge(&"C".to_string(), &"D".to_string()).unwrap();
-
+ 
     let split = tn.split_to(&target, &SplitOptions::default()).unwrap();
     assert_eq!(split.node_count(), 4);
     assert!(
-        split
-            .site_index_network()
-            .share_equivalent_site_index_network(&target),
+        split.site_index_network().share_equivalent_site_index_network(&target),
         "nested tree topology must be preserved"
     );
 
@@ -684,29 +658,17 @@ fn test_split_to_y_shape_across_original_bond() {
 
     // Fuse both nodes into one first
     let mut fuse_target = SiteIndexNetwork::<String, DynIndex>::new();
-    fuse_target
-        .add_node(
-            "F".to_string(),
-            HashSet::from([x0.clone(), x1.clone(), y0.clone(), y1.clone()]),
-        )
-        .unwrap();
+    fuse_target.add_node("F".to_string(),
+        HashSet::from([x0.clone(), x1.clone(), y0.clone(), y1.clone()])).unwrap();
     let fused = tn.fuse_to(&fuse_target).unwrap();
 
     // Y-shape: A(x0)--B(x1)--C(y0)--D(y1) → chain is just chain, not Y
     // Let's do: A(x0)-B(x1), B(x1)-C(y0), B(x1)-D(y1) with all sites in one node first
     let mut target = SiteIndexNetwork::<String, DynIndex>::new();
-    target
-        .add_node("A".to_string(), HashSet::from([x0.clone()]))
-        .unwrap();
-    target
-        .add_node("B".to_string(), HashSet::from([x1.clone()]))
-        .unwrap();
-    target
-        .add_node("C".to_string(), HashSet::from([y0.clone()]))
-        .unwrap();
-    target
-        .add_node("D".to_string(), HashSet::from([y1.clone()]))
-        .unwrap();
+    target.add_node("A".to_string(), HashSet::from([x0.clone()])).unwrap();
+    target.add_node("B".to_string(), HashSet::from([x1.clone()])).unwrap();
+    target.add_node("C".to_string(), HashSet::from([y0.clone()])).unwrap();
+    target.add_node("D".to_string(), HashSet::from([y1.clone()])).unwrap();
     target.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
     target.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
     target.add_edge(&"B".to_string(), &"D".to_string()).unwrap();
@@ -714,9 +676,7 @@ fn test_split_to_y_shape_across_original_bond() {
     let split = fused.split_to(&target, &SplitOptions::default()).unwrap();
     assert_eq!(split.node_count(), 4);
     assert!(
-        split
-            .site_index_network()
-            .share_equivalent_site_index_network(&target),
+        split.site_index_network().share_equivalent_site_index_network(&target),
         "Y-shape from fused node must be preserved"
     );
 

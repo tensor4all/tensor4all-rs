@@ -401,7 +401,10 @@ where
                 result_tensors.push((target_name, tensor.clone()));
             } else {
                 // Need to split this node
-                let fragment_target = build_fragment_sub_target(target, targets_for_node)?;
+                let fragment_target = build_fragment_sub_target(
+                    target,
+                    targets_for_node,
+                )?;
                 let split_tensors = self
                     .split_tensor_for_targets(
                         tensor,
@@ -591,20 +594,8 @@ where
             }
         }
 
-        // Collect all site index IDs to distinguish inherited bond indices
-        let all_site_ids: HashSet<_> = partition.values().flatten().cloned().collect();
-
-        // Record original tensor index IDs to distinguish inherited bonds
-        // (created by QR during the split) from original current-tree bonds
-        // (present on the original tensor before any QR factorization).
-        let original_index_ids: HashSet<_> = tensor
-            .external_indices()
-            .iter()
-            .map(|idx| idx.id().clone())
-            .collect();
-
-        // Sort target names for deterministic processing
-        let mut target_names: Vec<TargetV> = partition.keys().cloned().collect();
+        let mut target_names: Vec<TargetV> = fragment_target.node_names()
+            .into_iter().cloned().collect();
         target_names.sort();
 
         if target_names.len() <= 1 {
@@ -670,28 +661,22 @@ where
             let node_ids = partition.get(node).cloned().unwrap_or_default();
             let current_indices = remaining_tensor.external_indices();
 
-            // Find site indices for this target
-            let mut left_inds: Vec<_> = remaining_tensor
-                .external_indices()
+            // Build set of desired index IDs: this node's site+boundary indices
+            // plus bonds from already-processed children.
+            let mut desired_ids = node_ids;
+            if let Some(children) = children_by_parent.get(node) {
+                for child in children {
+                    if let Some(bond_id) = child_bonds.get(child) {
+                        desired_ids.insert(bond_id.clone());
+                    }
+                }
+            }
+
+            let left_inds: Vec<_> = current_indices
                 .iter()
                 .filter(|idx| desired_ids.contains(idx.id()))
                 .cloned()
                 .collect();
-
-            // Include inherited bond indices created by previous QR steps.
-            // Exclude original current-tree bonds — they are routed via the
-            // boundary_indices mechanism when target edges are present, and
-            // should be left on the remaining tensor otherwise.
-            left_inds.extend(
-                remaining_tensor
-                    .external_indices()
-                    .iter()
-                    .filter(|idx| {
-                        let id = idx.id();
-                        !all_site_ids.contains(id) && !original_index_ids.contains(id)
-                    })
-                    .cloned(),
-            );
 
             if left_inds.is_empty() {
                 continue;
@@ -799,9 +784,9 @@ where
 {
     let mut sub = SiteIndexNetwork::with_capacity(fragment_names.len(), 0);
     for name in fragment_names {
-        let site_space = target
-            .site_space(name)
-            .ok_or_else(|| anyhow::anyhow!("Fragment node {:?} not found in target", name))?;
+        let site_space = target.site_space(name).ok_or_else(|| {
+            anyhow::anyhow!("Fragment node {:?} not found in target", name)
+        })?;
         sub.add_node(name.clone(), site_space.clone())
             .map_err(anyhow::Error::msg)?;
     }
