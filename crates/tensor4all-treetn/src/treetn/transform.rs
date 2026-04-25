@@ -401,10 +401,7 @@ where
                 result_tensors.push((target_name, tensor.clone()));
             } else {
                 // Need to split this node
-                let fragment_target = build_fragment_sub_target(
-                    target,
-                    targets_for_node,
-                )?;
+                let fragment_target = build_fragment_sub_target(target, targets_for_node)?;
                 let split_tensors = self
                     .split_tensor_for_targets(
                         tensor,
@@ -594,8 +591,8 @@ where
             }
         }
 
-        let mut target_names: Vec<TargetV> = fragment_target.node_names()
-            .into_iter().cloned().collect();
+        let mut target_names: Vec<TargetV> =
+            fragment_target.node_names().into_iter().cloned().collect();
         target_names.sort();
 
         if target_names.len() <= 1 {
@@ -784,9 +781,9 @@ where
 {
     let mut sub = SiteIndexNetwork::with_capacity(fragment_names.len(), 0);
     for name in fragment_names {
-        let site_space = target.site_space(name).ok_or_else(|| {
-            anyhow::anyhow!("Fragment node {:?} not found in target", name)
-        })?;
+        let site_space = target
+            .site_space(name)
+            .ok_or_else(|| anyhow::anyhow!("Fragment node {:?} not found in target", name))?;
         sub.add_node(name.clone(), site_space.clone())
             .map_err(anyhow::Error::msg)?;
     }
