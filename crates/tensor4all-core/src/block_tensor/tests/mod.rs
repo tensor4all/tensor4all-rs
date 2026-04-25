@@ -68,6 +68,39 @@ fn test_inner_product_shape_mismatch() {
     assert!(result.is_err());
 }
 
+#[test]
+fn test_fuse_indices_delegates_to_blocks_and_preserves_shape() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+    let fused = DynIndex::new_dyn(4);
+    let block_a =
+        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let block_b =
+        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![5.0, 6.0, 7.0, 8.0]).unwrap();
+    let block = BlockTensor::new(vec![block_a, block_b], (1, 2));
+
+    let fused_block = <BlockTensor<TensorDynLen> as crate::tensor_like::TensorLike>::fuse_indices(
+        &block,
+        &[i, j],
+        fused,
+        crate::tensor_like::LinearizationOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    assert_eq!(fused_block.shape(), (1, 2));
+    assert_eq!(fused_block.num_blocks(), 2);
+    assert_eq!(fused_block.get(0, 0).dims(), vec![4]);
+    assert_eq!(fused_block.get(0, 1).dims(), vec![4]);
+    assert_eq!(
+        fused_block.get(0, 0).to_vec::<f64>().unwrap(),
+        vec![1.0, 2.0, 3.0, 4.0]
+    );
+    assert_eq!(
+        fused_block.get(0, 1).to_vec::<f64>().unwrap(),
+        vec![5.0, 6.0, 7.0, 8.0]
+    );
+}
+
 // ========================================================================
 // Test 1: Identity operator GMRES
 // ========================================================================

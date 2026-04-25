@@ -1,5 +1,5 @@
 use super::*;
-use tensor4all_core::{DynId, Index};
+use tensor4all_core::{DynId, Index, LinearizationOrder, TensorLike};
 
 /// Helper to create a simple tensor for testing
 fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
@@ -32,6 +32,26 @@ fn test_single_site_tt() {
     assert_eq!(tt.len(), 1);
     assert!(!tt.isortho());
     assert_eq!(tt.bond_dims(), Vec::<usize>::new());
+}
+
+#[test]
+fn test_fuse_indices_trait_dispatch_returns_unsupported_error() {
+    let i = idx(0, 2);
+    let fused = idx(1, 2);
+    let tensor = make_tensor(vec![i.clone()]);
+    let tt = TensorTrain::new(vec![tensor]).unwrap();
+
+    let err = <TensorTrain as TensorLike>::fuse_indices(
+        &tt,
+        &[i],
+        fused,
+        LinearizationOrder::ColumnMajor,
+    )
+    .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("TensorTrain does not support TensorLike::fuse_indices"));
 }
 
 #[test]

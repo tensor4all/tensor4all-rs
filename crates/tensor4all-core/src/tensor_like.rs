@@ -765,15 +765,22 @@ pub trait TensorLike: TensorIndex {
     /// Fuse local tensor indices into one replacement index.
     ///
     /// This is a local axis fusion operation: it reshapes the tensor so
-    /// `old_indices` are replaced by `new_index` using `order` for
-    /// linearization. Tensor types that cannot support local fusion return an
-    /// error.
+    /// `old_indices` are replaced by `new_index`. Indices are matched by ID,
+    /// and `old_indices` must be non-empty. The order of `old_indices` defines
+    /// the fused coordinate linearization, while `order` defines how those
+    /// coordinates map to the replacement axis. `new_index.dim()` must equal
+    /// the product of the matched axis dimensions. The replacement index is
+    /// inserted at the earliest fused axis position, and the remaining indices
+    /// retain their relative order.
+    ///
+    /// Implementations should return `Err` if this operation is unsupported or
+    /// if exact local fusion cannot be represented by the tensor type.
     ///
     /// # Arguments
     ///
-    /// * `old_indices` - Existing local indices to fuse
-    /// * `new_index` - Replacement index whose dimension is the fused product
-    /// * `order` - Linearization order for mapping old coordinates to the fused axis
+    /// * `old_indices` - Existing local indices to fuse, matched by ID. Must be non-empty.
+    /// * `new_index` - Replacement index whose dimension is the fused product.
+    /// * `order` - Linearization order for mapping old coordinates to the fused axis.
     ///
     /// # Returns
     ///
@@ -781,8 +788,45 @@ pub trait TensorLike: TensorIndex {
     ///
     /// # Errors
     ///
-    /// Returns an error if the indices are invalid, dimensions do not match,
-    /// or the tensor type cannot support local axis fusion.
+    /// Returns an error if:
+    /// - `old_indices` is empty
+    /// - Any requested index ID is missing from the tensor
+    /// - The replacement dimension does not match the product of fused axis dimensions
+    /// - The tensor type does not support local axis fusion
+    /// - Exact local fusion cannot be represented by the tensor type
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{
+    ///     DynIndex, IndexLike, LinearizationOrder, TensorDynLen, TensorLike,
+    /// };
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(3);
+    /// let k = DynIndex::new_dyn(2);
+    /// let fused = DynIndex::new_link(6)?;
+    /// let data: Vec<f64> = (0..12).map(|value| value as f64).collect();
+    /// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone(), k.clone()], data)?;
+    ///
+    /// let fused_tensor = <TensorDynLen as TensorLike>::fuse_indices(
+    ///     &tensor,
+    ///     &[j.clone(), i.clone()],
+    ///     fused.clone(),
+    ///     LinearizationOrder::ColumnMajor,
+    /// )?;
+    ///
+    /// assert_eq!(fused_tensor.indices(), &[fused.clone(), k.clone()]);
+    /// assert_eq!(fused_tensor.dims(), vec![6, 2]);
+    ///
+    /// let roundtrip = fused_tensor
+    ///     .unfuse_index(&fused, &[j, i], LinearizationOrder::ColumnMajor)?
+    ///     .permuteinds(tensor.indices())?;
+    /// assert!(roundtrip.isapprox(&tensor, 1e-12, 0.0));
+    /// # Ok(())
+    /// # }
+    /// ```
     fn fuse_indices(
         &self,
         old_indices: &[<Self as TensorIndex>::Index],

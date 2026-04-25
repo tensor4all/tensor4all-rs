@@ -82,6 +82,34 @@ fn fuse_indices_column_major_roundtrips_unfuse_index() {
 }
 
 #[test]
+fn fuse_indices_trait_dispatch_on_tensordynlen_uses_old_index_order() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let k = DynIndex::new_dyn(2);
+    let fused = DynIndex::new_link(6).unwrap();
+    let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
+    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone(), k.clone()], data).unwrap();
+
+    let fused_tensor = <TensorDynLen as TensorLike>::fuse_indices(
+        &tensor,
+        &[j.clone(), i.clone()],
+        fused.clone(),
+        LinearizationOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    assert_eq!(fused_tensor.indices(), &[fused.clone(), k.clone()]);
+    assert_eq!(fused_tensor.dims(), vec![6, 2]);
+
+    let roundtrip = fused_tensor
+        .unfuse_index(&fused, &[j, i], LinearizationOrder::ColumnMajor)
+        .unwrap()
+        .permuteinds(tensor.indices())
+        .unwrap();
+    assert!(roundtrip.isapprox(&tensor, 1e-12, 0.0));
+}
+
+#[test]
 fn fuse_indices_row_major_roundtrips_unfuse_index() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(3);
