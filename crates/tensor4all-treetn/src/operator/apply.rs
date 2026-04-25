@@ -291,8 +291,12 @@ where
     let op_nodes: HashSet<V> = operator.node_names();
 
     let full_operator = if op_nodes == state_nodes {
-        // Operator covers all nodes - use directly
-        operator.clone()
+        if options.method == ContractionMethod::Naive {
+            normalize_full_operator_to_state_topology_for_naive(operator, state)?
+        } else {
+            // Operator covers all nodes - use directly
+            operator.clone()
+        }
     } else if op_nodes.is_subset(&state_nodes) {
         // Partial operator - need to compose with identity on gaps
         extend_operator_to_full_space(operator, state)?
@@ -342,6 +346,45 @@ where
     let result = transform_output_to_true(&full_operator, contracted)?;
 
     Ok(result)
+}
+
+fn normalize_full_operator_to_state_topology_for_naive<T, V>(
+    operator: &LinearOperator<T, V>,
+    state: &TreeTN<T, V>,
+) -> Result<LinearOperator<T, V>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    if operator.mpo().same_topology(state) {
+        return Ok(operator.clone());
+    }
+
+    let gap_site_indices = HashMap::new();
+    let normalized = compose_operator_along_state_paths(
+        operator,
+        state.site_index_network(),
+        &gap_site_indices,
+        operator.input_mapping.clone(),
+        operator.output_mapping.clone(),
+    )
+    .context(
+        "ApplyOptions::naive could not embed the full-coverage operator MPO on the state topology",
+    )?;
+
+    if !normalized.mpo().same_topology(state) {
+        return Err(anyhow::anyhow!(
+            "ApplyOptions::naive requires an operator MPO topology that can be represented on the state topology for local exact apply (state: {} nodes, {} edges; normalized operator: {} nodes, {} edges)",
+            state.node_count(),
+            state.edge_count(),
+            normalized.mpo().node_count(),
+            normalized.mpo().edge_count()
+        ));
+    }
+
+    Ok(normalized)
 }
 
 fn apply_linear_operator_naive_local<T, V>(

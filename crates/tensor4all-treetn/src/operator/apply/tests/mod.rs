@@ -635,8 +635,25 @@ fn naive_apply_preserves_product_link_space_for_redundant_mpo_bond() {
 }
 
 #[test]
+fn naive_apply_full_product_identity_embeds_on_state_topology() {
+    let (state, sites) = build_chain_state();
+    let operator = build_identity_operator(&sites);
+
+    let result = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+
+    assert_eq!(result.node_count(), state.node_count());
+    assert_eq!(result.edge_count(), state.edge_count());
+
+    let result_dense = result.to_dense().unwrap();
+    let state_dense = state.to_dense().unwrap();
+    assert!((&result_dense - &state_dense).maxabs() < 1e-10);
+}
+
+#[test]
 fn naive_apply_long_identity_chain_keeps_local_bonds_bounded() {
-    let length = 12;
+    // Keep this large enough that dense materialization would be infeasible,
+    // while local exact apply remains linear in the chain length.
+    let length = 24;
     let state_bond_dim = 2;
     let mpo_bond_dim = 1;
     let (state, operator, sites) =
