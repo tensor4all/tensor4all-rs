@@ -427,7 +427,29 @@ where
         let result = TreeTN::<T, TargetV>::from_tensors(tensors, names)
             .context("split_to: failed to build result TreeTN")?;
 
-        // Step 5: Phase 2 - Optional truncation sweep
+        // Step 5: Validate result topology matches target
+        // Skip validation if target has no edges (caller doesn't care about topology)
+        if target.edge_count() > 0
+            && !result
+                .site_index_network()
+                .share_equivalent_site_index_network(target)
+        {
+            return Err(anyhow::anyhow!(
+                "split_to: result topology does not match target: \
+                 expected edges {:?}, got {:?}",
+                target
+                    .edges()
+                    .map(|(a, b)| (a.clone(), b.clone()))
+                    .collect::<Vec<_>>(),
+                result
+                    .site_index_network()
+                    .edges()
+                    .map(|(a, b)| (a.clone(), b.clone()))
+                    .collect::<Vec<_>>(),
+            ));
+        }
+
+        // Step 6: Phase 2 - Optional truncation sweep
         if options.final_sweep {
             // Find a center node for truncation
             let center = result.node_names().into_iter().min().ok_or_else(|| {
