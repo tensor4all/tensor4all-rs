@@ -212,21 +212,27 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     where
         Self: Sized;
 
-    /// Create a fresh link index whose dimension is the product of input dimensions.
+    /// Create a fresh link index representing the tensor-product space of input indices.
     ///
-    /// This is used when multiple existing link indices need to be represented by one
-    /// generic link index without depending on a concrete index implementation.
+    /// Generic algorithms may use this to replace multiple local bond legs by one fused
+    /// leg without depending on a concrete index implementation. The returned link must
+    /// have a fresh identity and represent the exact tensor-product basis of `indices`.
+    ///
+    /// Implementations with symmetry or sector metadata should preserve the tensor-product
+    /// basis and charge structure when possible. They should return `Err` if the fused
+    /// product link cannot be represented exactly.
     ///
     /// # Arguments
-    /// * `indices` - Non-empty input indices whose dimensions are multiplied. Typical inputs
-    ///   are link or bond indices being fused into one link.
+    /// * `indices` - Non-empty input indices whose tensor-product space is represented by
+    ///   the output. Typical inputs are link or bond indices being fused into one link.
     ///
     /// # Returns
     /// A new index with fresh identity and dimension equal to the checked product of all input
     /// dimensions.
     ///
     /// # Errors
-    /// Returns an error when `indices` is empty or when the product dimension overflows `usize`.
+    /// Returns an error when `indices` is empty, when the product dimension overflows `usize`,
+    /// or when the implementation cannot represent the exact product-link structure.
     ///
     /// # Examples
     ///

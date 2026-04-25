@@ -135,6 +135,16 @@ fn test_product_link_rejects_empty_input() {
 }
 
 #[test]
+fn test_product_link_rejects_dimension_overflow() {
+    let a = DynIndex::new(DynId(1), usize::MAX);
+    let b = DynIndex::new(DynId(2), 2);
+
+    let result = DynIndex::product_link(&[a, b]);
+
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_sim() {
     let tags = TagSet::from_str("Site,x=1").unwrap();
     let i1 = Index::<DynId>::new_dyn_with_tags(5, tags);
