@@ -57,6 +57,21 @@ fn new_index(dim: usize, tags: Option<&str>, plev: i64) -> *mut t4a_index {
     out
 }
 
+fn new_index_with_id(dim: usize, id: u64, tags: Option<&str>, plev: i64) -> *mut t4a_index {
+    let tags = tags.map(|s| CString::new(s).unwrap());
+    let mut out = std::ptr::null_mut();
+    let status = t4a_index_new_with_id(
+        dim,
+        id,
+        tags.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+        plev,
+        &mut out,
+    );
+    assert_eq!(status, T4A_SUCCESS);
+    assert!(!out.is_null());
+    out
+}
+
 fn index_equal(a: *const t4a_index, b: *const t4a_index) -> bool {
     let mut equal = -1i32;
     assert_eq!(t4a_index_equal(a, b, &mut equal), T4A_SUCCESS);
@@ -67,6 +82,12 @@ fn index_hash(index: *const t4a_index) -> u64 {
     let mut hash = 0u64;
     assert_eq!(t4a_index_hash(index, &mut hash), T4A_SUCCESS);
     hash
+}
+
+fn index_id(index: *const t4a_index) -> u64 {
+    let mut id = 0u64;
+    assert_eq!(t4a_index_id(index, &mut id), T4A_SUCCESS);
+    id
 }
 
 #[test]
@@ -149,6 +170,29 @@ fn test_index_clone_preserves_metadata() {
 
     t4a_index_release(cloned);
     t4a_index_release(index);
+}
+
+#[test]
+fn test_index_new_with_id_roundtrips_identity() {
+    let a = new_index_with_id(5, 42, Some("Left,Link"), 7);
+    let b = new_index_with_id(5, 42, Some("Left,Link"), 7);
+    let different_plev = new_index_with_id(5, 42, Some("Left,Link"), 8);
+    let different_tags = new_index_with_id(5, 42, Some("Left,Other"), 7);
+    let different_id = new_index_with_id(5, 43, Some("Left,Link"), 7);
+
+    assert_eq!(index_id(a), 42);
+    assert_eq!(index_id(b), 42);
+    assert!(index_equal(a, b));
+    assert_eq!(index_hash(a), index_hash(b));
+    assert!(!index_equal(a, different_plev));
+    assert!(!index_equal(a, different_tags));
+    assert!(!index_equal(a, different_id));
+
+    t4a_index_release(different_id);
+    t4a_index_release(different_tags);
+    t4a_index_release(different_plev);
+    t4a_index_release(b);
+    t4a_index_release(a);
 }
 
 #[test]

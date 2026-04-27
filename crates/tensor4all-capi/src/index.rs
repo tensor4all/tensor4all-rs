@@ -11,7 +11,7 @@ use crate::{
     set_last_error, CapiResult, StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR,
     T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
 };
-use tensor4all_core::index::Index;
+use tensor4all_core::index::{DynId, Index, TagSet};
 
 /// Release an index handle.
 #[unsafe(no_mangle)]
@@ -72,6 +72,38 @@ fn build_index(
     Ok(index.set_plev(plev))
 }
 
+fn build_index_with_id(
+    dim: usize,
+    id: u64,
+    tags_csv: *const c_char,
+    plev: i64,
+) -> Result<InternalIndex, (StatusCode, String)> {
+    if dim == 0 {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            "dim must be greater than zero",
+        ));
+    }
+    if plev < 0 {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            "plev must be greater than or equal to zero",
+        ));
+    }
+
+    let id = DynId(id);
+    let tags = read_optional_tags_csv(tags_csv)?;
+    let index = match tags {
+        Some(tags) => {
+            let tags = TagSet::from_str(&tags).map_err(|e| capi_error(T4A_INVALID_ARGUMENT, e))?;
+            Index::new_with_tags(id, dim, tags)
+        }
+        None => Index::new(id, dim),
+    };
+
+    Ok(index.set_plev(plev))
+}
+
 fn require_index<'a>(ptr: *const t4a_index, what: &str) -> CapiResult<&'a InternalIndex> {
     if ptr.is_null() {
         return Err(capi_error(T4A_NULL_POINTER, format!("{what} is null")));
@@ -117,6 +149,20 @@ pub extern "C" fn t4a_index_new(
     })
 }
 
+/// Create a new index with explicit identity, tags, and prime level.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_index_new_with_id(
+    dim: usize,
+    id: u64,
+    tags_csv: *const c_char,
+    plev: i64,
+    out: *mut *mut t4a_index,
+) -> StatusCode {
+    run_catching(out, || {
+        Ok(t4a_index::new(build_index_with_id(dim, id, tags_csv, plev)?))
+    })
+}
+
 /// Get the dimension of an index.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_index_dim(ptr: *const t4a_index, out_dim: *mut usize) -> StatusCode {
@@ -130,6 +176,15 @@ pub extern "C" fn t4a_index_dim(ptr: *const t4a_index, out_dim: *mut usize) -> S
     }));
 
     crate::unwrap_catch(result)
+}
+
+/// Get the explicit identity of an index.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_index_id(ptr: *const t4a_index, out_id: *mut u64) -> StatusCode {
+    run_value(out_id, || {
+        let index = require_index(ptr, "index")?;
+        Ok(index.id.0)
+    })
 }
 
 /// Compare two full index handles for equality.

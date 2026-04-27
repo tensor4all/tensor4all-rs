@@ -406,9 +406,23 @@ StatusCode t4a_index_hash(const struct t4a_index *ptr, uint64_t *out_hash);
 int32_t t4a_index_is_assigned(const struct t4a_index *obj);
 
 /**
+ * Get the explicit identity of an index.
+ */
+StatusCode t4a_index_id(const struct t4a_index *ptr, uint64_t *out_id);
+
+/**
  * Create a new index with explicit tags and prime level.
  */
 StatusCode t4a_index_new(size_t dim, const char *tags_csv, int64_t plev, struct t4a_index **out);
+
+/**
+ * Create a new index with explicit identity, tags, and prime level.
+ */
+StatusCode t4a_index_new_with_id(size_t dim,
+                                 uint64_t id,
+                                 const char *tags_csv,
+                                 int64_t plev,
+                                 struct t4a_index **out);
 
 /**
  * Return a new index handle with prime level reset to zero.
