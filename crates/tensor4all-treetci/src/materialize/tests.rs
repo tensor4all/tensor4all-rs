@@ -7,7 +7,7 @@ use crate::{
 use anyhow::Result;
 use num_complex::Complex64;
 use std::collections::HashMap as StdHashMap;
-use tensor4all_core::{ColMajorArray, ColMajorArrayRef, IndexLike};
+use tensor4all_core::{ColMajorArray, ColMajorArrayRef};
 
 fn two_site_graph() -> TreeTciGraph {
     TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap()
@@ -42,23 +42,29 @@ fn to_treetn_preserves_two_site_identity_evaluations() {
 
     let tn = to_treetn(&tci, batch_eval, Some(0)).unwrap();
 
-    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
+    let (indices, _vertices) = tn.all_site_indices().unwrap();
     let pos0 = {
-        let site_id = *tn.site_space(&0usize).unwrap().iter().next().unwrap().id();
-        index_ids.iter().position(|id| *id == site_id).unwrap()
+        let site_index = tn.site_space(&0usize).unwrap().iter().next().unwrap();
+        indices
+            .iter()
+            .position(|index| index == site_index)
+            .unwrap()
     };
     let pos1 = {
-        let site_id = *tn.site_space(&1usize).unwrap().iter().next().unwrap().id();
-        index_ids.iter().position(|id| *id == site_id).unwrap()
+        let site_index = tn.site_space(&1usize).unwrap().iter().next().unwrap();
+        indices
+            .iter()
+            .position(|index| index == site_index)
+            .unwrap()
     };
 
     let eval = |i: usize, j: usize| -> f64 {
-        let mut data = vec![0usize; index_ids.len()];
+        let mut data = vec![0usize; indices.len()];
         data[pos0] = i;
         data[pos1] = j;
-        let shape = [index_ids.len(), 1];
+        let shape = [indices.len(), 1];
         let values = ColMajorArrayRef::new(&data, &shape);
-        tn.evaluate(&index_ids, values).unwrap()[0].real()
+        tn.evaluate(&indices, values).unwrap()[0].real()
     };
 
     assert_scalar_close(eval(0, 0), 1.0, 1.0, 1e-12);

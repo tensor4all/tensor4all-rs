@@ -207,9 +207,15 @@ fn test_index_ops_distinguish_same_id_prime_pair() {
     assert!(hasind(&indices, &i));
     assert!(hasind(&indices, &i_prime));
     assert!(hasinds(&indices, &[i.clone(), i_prime.clone()]));
-    assert!(!hascommoninds(&[i.clone()], &[i_prime.clone()]));
-    assert!(common_inds(&[i.clone()], &[i_prime.clone()]).is_empty());
-    assert_eq!(unique_inds(&indices, &[i_prime.clone()]), vec![i.clone()]);
+    assert!(!hascommoninds(
+        std::slice::from_ref(&i),
+        std::slice::from_ref(&i_prime)
+    ));
+    assert!(common_inds(std::slice::from_ref(&i), std::slice::from_ref(&i_prime)).is_empty());
+    assert_eq!(
+        unique_inds(&indices, std::slice::from_ref(&i_prime)),
+        vec![i.clone()]
+    );
 
     let replaced = replaceinds(indices, &[(i_prime.clone(), replacement.clone())]).unwrap();
     assert_eq!(replaced, vec![i, replacement]);
