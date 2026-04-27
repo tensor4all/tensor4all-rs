@@ -656,6 +656,58 @@ pub trait TensorLike: TensorIndex {
         options: &FactorizeOptions,
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
 
+    /// Factorize this tensor without applying truncation controls.
+    ///
+    /// Use this for exact tensor rewrites such as canonicalization, where the
+    /// contracted factors must preserve the represented tensor up to numerical
+    /// roundoff. Unlike [`Self::factorize`], this method must not consult global
+    /// SVD/QR/LU truncation defaults or apply maximum-rank limits.
+    ///
+    /// # Arguments
+    /// * `left_inds` - Indices to place on the left side.
+    /// * `alg` - Decomposition algorithm to use.
+    /// * `canonical` - Which factor should carry the canonical form.
+    ///
+    /// # Returns
+    /// A `FactorizeResult` containing the left and right factors, bond index,
+    /// singular values for SVD, and retained exact numerical rank.
+    ///
+    /// # Errors
+    /// Returns [`FactorizeError`] if:
+    /// - the storage type is not supported,
+    /// - the requested canonical direction is unsupported for the algorithm, or
+    /// - the underlying decomposition fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{
+    ///     Canonical, DynIndex, FactorizeAlg, TensorDynLen, TensorLike,
+    /// };
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(
+    ///     vec![i.clone(), j.clone()],
+    ///     vec![1.0_f64, 0.0, 0.0, 1.0e-16],
+    /// )?;
+    ///
+    /// let result = tensor.factorize_full_rank(
+    ///     std::slice::from_ref(&i),
+    ///     FactorizeAlg::QR,
+    ///     Canonical::Left,
+    /// )?;
+    /// let reconstructed = result.left.contract(&result.right);
+    /// assert!((tensor - reconstructed).maxabs() < 1.0e-18);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn factorize_full_rank(
+        &self,
+        left_inds: &[<Self as TensorIndex>::Index],
+        alg: FactorizeAlg,
+        canonical: Canonical,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
+
     /// Tensor conjugate operation.
     ///
     /// This is a generalized conjugate operation that depends on the tensor type:

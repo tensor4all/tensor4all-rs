@@ -8,7 +8,7 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 
 use crate::algorithm::CanonicalForm;
-use tensor4all_core::{Canonical, FactorizeAlg, FactorizeOptions, TensorLike};
+use tensor4all_core::{Canonical, FactorizeAlg, TensorLike};
 
 use super::TreeTN;
 use crate::options::CanonicalizationOptions;
@@ -138,18 +138,9 @@ where
             None => return Ok(()),
         };
 
-        // Set up factorization options (no truncation for canonicalization)
-        let factorize_options = FactorizeOptions {
-            alg,
-            canonical: Canonical::Left,
-            max_rank: None,
-            svd_policy: None,
-            qr_rtol: None,
-        };
-
         // Process edges in order (leaves towards center)
         for (src, dst) in &sweep_ctx.edges {
-            self.sweep_edge(*src, *dst, &factorize_options, context_name)?;
+            self.sweep_edge_full_rank(*src, *dst, alg, Canonical::Left, context_name)?;
         }
 
         // Set the canonical form

@@ -97,6 +97,74 @@ pub fn factorize(
     }
 }
 
+/// Factorize a tensor without applying algorithm-specific truncation options.
+///
+/// This path is intended for canonicalization and other exact tensor-network
+/// rewrites where the decomposition must preserve the represented tensor rather
+/// than obey global SVD/QR/LU rank-dropping defaults.
+///
+/// # Arguments
+/// * `t` - Input tensor.
+/// * `left_inds` - Indices to place on the left side.
+/// * `alg` - Decomposition algorithm to use.
+/// * `canonical` - Which factor should carry the canonical form.
+///
+/// # Returns
+/// A factorization whose contracted factors reconstruct `t` up to numerical
+/// roundoff, with no tolerance-based or maximum-rank truncation applied.
+///
+/// # Errors
+/// Returns [`FactorizeError`] if the storage type is unsupported, the canonical
+/// direction is unsupported for the selected algorithm, or the underlying
+/// decomposition fails.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{
+///     factorize_full_rank, Canonical, DynIndex, FactorizeAlg, TensorDynLen, TensorLike,
+/// };
+///
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+/// let tensor = TensorDynLen::from_dense(
+///     vec![i.clone(), j.clone()],
+///     vec![1.0_f64, 0.0, 0.0, 1.0e-16],
+/// )?;
+///
+/// let result = factorize_full_rank(
+///     &tensor,
+///     std::slice::from_ref(&i),
+///     FactorizeAlg::QR,
+///     Canonical::Left,
+/// )?;
+/// let reconstructed = result.left.contract(&result.right);
+/// assert!((tensor - reconstructed).maxabs() < 1.0e-18);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn factorize_full_rank(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    alg: FactorizeAlg,
+    canonical: Canonical,
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+    if t.is_diag() {
+        return Err(FactorizeError::UnsupportedStorage(
+            "Diagonal storage not supported for factorize",
+        ));
+    }
+
+    if t.is_f64() {
+        factorize_impl_f64_full_rank(t, left_inds, alg, canonical)
+    } else if t.is_complex() {
+        factorize_impl_c64_full_rank(t, left_inds, alg, canonical)
+    } else {
+        Err(FactorizeError::UnsupportedStorage(
+            "factorize currently supports only f64 and Complex64 tensors",
+        ))
+    }
+}
+
 fn factorize_impl_f64(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
@@ -110,6 +178,20 @@ fn factorize_impl_f64(
     }
 }
 
+fn factorize_impl_f64_full_rank(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    alg: FactorizeAlg,
+    canonical: Canonical,
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+    match alg {
+        FactorizeAlg::SVD => factorize_svd_full_rank(t, left_inds, canonical),
+        FactorizeAlg::QR => factorize_qr_full_rank(t, left_inds, canonical),
+        FactorizeAlg::LU => factorize_lu_full_rank::<f64>(t, left_inds, canonical),
+        FactorizeAlg::CI => factorize_ci_full_rank::<f64>(t, left_inds, canonical),
+    }
+}
+
 fn factorize_impl_c64(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
@@ -120,6 +202,20 @@ fn factorize_impl_c64(
         FactorizeAlg::QR => factorize_qr(t, left_inds, options),
         FactorizeAlg::LU => factorize_lu::<Complex64>(t, left_inds, options),
         FactorizeAlg::CI => factorize_ci::<Complex64>(t, left_inds, options),
+    }
+}
+
+fn factorize_impl_c64_full_rank(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    alg: FactorizeAlg,
+    canonical: Canonical,
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+    match alg {
+        FactorizeAlg::SVD => factorize_svd_full_rank(t, left_inds, canonical),
+        FactorizeAlg::QR => factorize_qr_full_rank(t, left_inds, canonical),
+        FactorizeAlg::LU => factorize_lu_full_rank::<Complex64>(t, left_inds, canonical),
+        FactorizeAlg::CI => factorize_ci_full_rank::<Complex64>(t, left_inds, canonical),
     }
 }
 
@@ -137,7 +233,25 @@ fn factorize_svd(
         svd_options = svd_options.with_max_rank(max_rank);
     }
 
-    let result = svd_for_factorize(t, left_inds, &svd_options)?;
+    factorize_svd_with_options(t, left_inds, options.canonical, &svd_options)
+}
+
+fn factorize_svd_full_rank(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    canonical: Canonical,
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+    let svd_options = SvdOptions::full_rank();
+    factorize_svd_with_options(t, left_inds, canonical, &svd_options)
+}
+
+fn factorize_svd_with_options(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    canonical: Canonical,
+    svd_options: &SvdOptions,
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+    let result = svd_for_factorize(t, left_inds, svd_options)?;
     let u = result.u;
     let s = result.s;
     let vh = result.vh;
@@ -146,7 +260,7 @@ fn factorize_svd(
     let rank = result.rank;
     let sim_bond_index = s.indices[1].clone();
 
-    match options.canonical {
+    match canonical {
         Canonical::Left => {
             // L = U (orthogonal), R = S * V^H
             let right_contracted = s.contract(&vh);
@@ -192,7 +306,29 @@ fn factorize_qr(
         QrOptions::new()
     };
 
-    let (q, r) = qr_with::<f64>(t, left_inds, &qr_options)?;
+    factorize_qr_with_options(t, left_inds, &qr_options)
+}
+
+fn factorize_qr_full_rank(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    canonical: Canonical,
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+    if canonical == Canonical::Right {
+        return Err(FactorizeError::UnsupportedCanonical(
+            "QR only supports Canonical::Left (would need LQ for right)",
+        ));
+    }
+
+    factorize_qr_with_options(t, left_inds, &QrOptions::full_rank())
+}
+
+fn factorize_qr_with_options(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    qr_options: &QrOptions,
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+    let (q, r) = qr_with::<f64>(t, left_inds, qr_options)?;
 
     // Get bond index from Q tensor (last index)
     let bond_index = q.indices.last().unwrap().clone();
@@ -226,6 +362,52 @@ where
     <T as ComplexFloat>::Real: Into<f64> + 'static,
     tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
+    factorize_lu_with_options::<T>(
+        t,
+        left_inds,
+        options.canonical,
+        options.max_rank.unwrap_or(usize::MAX),
+        1e-14,
+    )
+}
+
+fn factorize_lu_full_rank<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    canonical: Canonical,
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
+where
+    T: TensorElement
+        + ComplexFloat
+        + Default
+        + From<<T as ComplexFloat>::Real>
+        + MatrixScalar
+        + tensor4all_tcicore::MatrixLuciScalar
+        + 'static,
+    <T as ComplexFloat>::Real: Into<f64> + 'static,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+{
+    factorize_lu_with_options::<T>(t, left_inds, canonical, usize::MAX, 0.0)
+}
+
+fn factorize_lu_with_options<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    canonical: Canonical,
+    max_rank: usize,
+    rel_tol: f64,
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
+where
+    T: TensorElement
+        + ComplexFloat
+        + Default
+        + From<<T as ComplexFloat>::Real>
+        + MatrixScalar
+        + tensor4all_tcicore::MatrixLuciScalar
+        + 'static,
+    <T as ComplexFloat>::Real: Into<f64> + 'static,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+{
     // Unfold tensor into matrix
     let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
@@ -234,10 +416,10 @@ where
     let a_matrix = native_tensor_to_matrix::<T>(&a_tensor, m, n)?;
 
     // Set up LU options
-    let left_orthogonal = options.canonical == Canonical::Left;
+    let left_orthogonal = canonical == Canonical::Left;
     let lu_options = RrLUOptions {
-        max_rank: options.max_rank.unwrap_or(usize::MAX),
-        rel_tol: 1e-14,
+        max_rank,
+        rel_tol,
         abs_tol: 0.0,
         left_orthogonal,
     };
@@ -294,6 +476,52 @@ where
     <T as ComplexFloat>::Real: Into<f64> + 'static,
     tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
+    factorize_ci_with_options::<T>(
+        t,
+        left_inds,
+        options.canonical,
+        options.max_rank.unwrap_or(usize::MAX),
+        1e-14,
+    )
+}
+
+fn factorize_ci_full_rank<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    canonical: Canonical,
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
+where
+    T: TensorElement
+        + ComplexFloat
+        + Default
+        + From<<T as ComplexFloat>::Real>
+        + MatrixScalar
+        + tensor4all_tcicore::MatrixLuciScalar
+        + 'static,
+    <T as ComplexFloat>::Real: Into<f64> + 'static,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+{
+    factorize_ci_with_options::<T>(t, left_inds, canonical, usize::MAX, 0.0)
+}
+
+fn factorize_ci_with_options<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    canonical: Canonical,
+    max_rank: usize,
+    rel_tol: f64,
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
+where
+    T: TensorElement
+        + ComplexFloat
+        + Default
+        + From<<T as ComplexFloat>::Real>
+        + MatrixScalar
+        + tensor4all_tcicore::MatrixLuciScalar
+        + 'static,
+    <T as ComplexFloat>::Real: Into<f64> + 'static,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+{
     // Unfold tensor into matrix
     let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
@@ -302,10 +530,10 @@ where
     let a_matrix = native_tensor_to_matrix::<T>(&a_tensor, m, n)?;
 
     // Set up LU options for CI
-    let left_orthogonal = options.canonical == Canonical::Left;
+    let left_orthogonal = canonical == Canonical::Left;
     let lu_options = RrLUOptions {
-        max_rank: options.max_rank.unwrap_or(usize::MAX),
-        rel_tol: 1e-14,
+        max_rank,
+        rel_tol,
         abs_tol: 0.0,
         left_orthogonal,
     };

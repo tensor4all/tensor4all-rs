@@ -54,20 +54,31 @@ pub enum SvdError {
 /// assert_eq!(u.dims()[0], 3);
 /// assert_eq!(s.dims().len(), 2);
 /// ```
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct SvdOptions {
     /// Maximum retained rank after policy-based truncation.
     pub max_rank: Option<usize>,
     /// Per-call SVD truncation policy.
     /// If `None`, the global default policy is used.
     pub policy: Option<SvdTruncationPolicy>,
+    truncate: bool,
+}
+
+impl Default for SvdOptions {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SvdOptions {
     /// Create new SVD options with no overrides.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            max_rank: None,
+            policy: None,
+            truncate: true,
+        }
     }
 
     /// Set the maximum retained rank.
@@ -82,6 +93,14 @@ impl SvdOptions {
     pub fn with_policy(mut self, policy: SvdTruncationPolicy) -> Self {
         self.policy = Some(policy);
         self
+    }
+
+    pub(crate) fn full_rank() -> Self {
+        Self {
+            max_rank: None,
+            policy: None,
+            truncate: false,
+        }
     }
 }
 
@@ -237,9 +256,6 @@ fn svd_truncated_native(
     left_inds: &[DynIndex],
     options: &SvdOptions,
 ) -> Result<SvdTruncatedNativeResult, SvdError> {
-    let policy = options.policy.unwrap_or_else(default_svd_truncation_policy);
-    validate_svd_truncation_policy(policy).map_err(|e| SvdError::InvalidThreshold(e.0))?;
-
     let (matrix_native, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
         .map_err(SvdError::ComputationError)?;
@@ -248,11 +264,19 @@ fn svd_truncated_native(
     let (mut u_native, mut s_native, mut vt_native) =
         svd_native_tensor(&matrix_native).map_err(SvdError::ComputationError)?;
     let s_full = singular_values_from_native(&s_native)?;
-    let mut r = compute_retained_rank(&s_full, &policy);
-    if let Some(max_rank) = options.max_rank {
-        r = r.min(max_rank);
-    }
-    r = r.max(1);
+    let mut r = if options.truncate {
+        let policy = options.policy.unwrap_or_else(default_svd_truncation_policy);
+        validate_svd_truncation_policy(policy).map_err(|e| SvdError::InvalidThreshold(e.0))?;
+
+        let mut retained = compute_retained_rank(&s_full, &policy);
+        if let Some(max_rank) = options.max_rank {
+            retained = retained.min(max_rank);
+        }
+        retained.max(1)
+    } else {
+        k.max(1)
+    };
+    r = r.min(s_full.len());
     if r < k {
         match u_native.dtype() {
             DType::F64 => {

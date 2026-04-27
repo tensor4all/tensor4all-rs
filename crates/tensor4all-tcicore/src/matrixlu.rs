@@ -499,8 +499,15 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
             break;
         }
 
-        // Guard against near-zero pivot to prevent NaN from division
-        if pivot_abs < f64::EPSILON {
+        // Guard against tiny pivots to prevent NaN from division. A caller that
+        // sets both tolerances to zero is requesting a non-truncating
+        // decomposition, so only an exactly zero pivot stops the factorization.
+        let min_pivot_abs = if opts.rel_tol == 0.0 && opts.abs_tol == 0.0 {
+            0.0
+        } else {
+            f64::EPSILON
+        };
+        if pivot_abs <= min_pivot_abs {
             if lu.n_pivot == 0 {
                 // First pivot is near-zero: the matrix is effectively zero
                 lu.error = pivot_abs;
