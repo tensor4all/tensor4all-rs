@@ -1,11 +1,15 @@
 //! C API for immutable `Index` handles.
 
+use std::collections::hash_map::DefaultHasher;
 use std::ffi::{c_char, CStr};
+use std::hash::{Hash, Hasher};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::types::{t4a_index, InternalIndex};
 use crate::{
-    capi_error, clone_opaque, is_assigned_opaque, release_opaque, run_catching, StatusCode,
-    T4A_BUFFER_TOO_SMALL, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
+    capi_error, clone_opaque, is_assigned_opaque, panic_message, release_opaque, run_catching,
+    set_last_error, CapiResult, StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR,
+    T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
 };
 use tensor4all_core::index::Index;
 
@@ -68,6 +72,38 @@ fn build_index(
     Ok(index.set_plev(plev))
 }
 
+fn require_index<'a>(ptr: *const t4a_index, what: &str) -> CapiResult<&'a InternalIndex> {
+    if ptr.is_null() {
+        return Err(capi_error(T4A_NULL_POINTER, format!("{what} is null")));
+    }
+    Ok(unsafe { &*ptr }.inner())
+}
+
+fn run_value<T: Copy, F>(out: *mut T, f: F) -> StatusCode
+where
+    F: FnOnce() -> CapiResult<T>,
+{
+    if out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(Ok(value)) => {
+            unsafe { *out = value };
+            T4A_SUCCESS
+        }
+        Ok(Err((code, msg))) => {
+            set_last_error(&msg);
+            code
+        }
+        Err(panic) => {
+            let msg = panic_message(&*panic);
+            set_last_error(&msg);
+            T4A_INTERNAL_ERROR
+        }
+    }
+}
+
 /// Create a new index with explicit tags and prime level.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_index_new(
@@ -78,40 +114,6 @@ pub extern "C" fn t4a_index_new(
 ) -> StatusCode {
     run_catching(out, || {
         Ok(t4a_index::new(build_index(dim, tags_csv, plev)?))
-    })
-}
-
-/// Create a new index with an explicit 64-bit ID.
-#[unsafe(no_mangle)]
-pub extern "C" fn t4a_index_new_with_id(
-    dim: usize,
-    id: u64,
-    tags_csv: *const c_char,
-    plev: i64,
-    out: *mut *mut t4a_index,
-) -> StatusCode {
-    if dim == 0 {
-        return crate::err_status("dim must be greater than zero", T4A_INVALID_ARGUMENT);
-    }
-    if plev < 0 {
-        return crate::err_status(
-            "plev must be greater than or equal to zero",
-            T4A_INVALID_ARGUMENT,
-        );
-    }
-
-    use tensor4all_core::index::{DynId, TagSet};
-
-    run_catching(out, || {
-        let tags = match read_optional_tags_csv(tags_csv)? {
-            Some(tags) => {
-                TagSet::from_str(&tags).map_err(|e| capi_error(T4A_INVALID_ARGUMENT, e))?
-            }
-            None => TagSet::new(),
-        };
-
-        let index = Index::new_with_size_and_tags(DynId(id), dim, tags).set_plev(plev);
-        Ok(t4a_index::new(index))
     })
 }
 
@@ -130,19 +132,29 @@ pub extern "C" fn t4a_index_dim(ptr: *const t4a_index, out_dim: *mut usize) -> S
     crate::unwrap_catch(result)
 }
 
-/// Get the 64-bit ID of an index.
+/// Compare two full index handles for equality.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_index_id(ptr: *const t4a_index, out_id: *mut u64) -> StatusCode {
-    if ptr.is_null() || out_id.is_null() {
-        return T4A_NULL_POINTER;
-    }
+pub extern "C" fn t4a_index_equal(
+    lhs: *const t4a_index,
+    rhs: *const t4a_index,
+    out_equal: *mut i32,
+) -> StatusCode {
+    run_value(out_equal, || {
+        let lhs = require_index(lhs, "lhs")?;
+        let rhs = require_index(rhs, "rhs")?;
+        Ok((lhs == rhs) as i32)
+    })
+}
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        *out_id = (*ptr).inner().id.0;
-        T4A_SUCCESS
-    }));
-
-    crate::unwrap_catch(result)
+/// Hash the full index value for process-local hash tables.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_index_hash(ptr: *const t4a_index, out_hash: *mut u64) -> StatusCode {
+    run_value(out_hash, || {
+        let index = require_index(ptr, "index")?;
+        let mut hasher = DefaultHasher::new();
+        index.hash(&mut hasher);
+        Ok(hasher.finish())
+    })
 }
 
 /// Get the prime level of an index.
@@ -158,6 +170,43 @@ pub extern "C" fn t4a_index_plev(ptr: *const t4a_index, out_plev: *mut i64) -> S
     }));
 
     crate::unwrap_catch(result)
+}
+
+/// Return a new index handle with prime level incremented by one.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_index_prime(ptr: *const t4a_index, out: *mut *mut t4a_index) -> StatusCode {
+    run_catching(out, || {
+        let index = require_index(ptr, "index")?;
+        Ok(t4a_index::new(index.prime()))
+    })
+}
+
+/// Return a new index handle with prime level reset to zero.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_index_noprime(ptr: *const t4a_index, out: *mut *mut t4a_index) -> StatusCode {
+    run_catching(out, || {
+        let index = require_index(ptr, "index")?;
+        Ok(t4a_index::new(index.noprime()))
+    })
+}
+
+/// Return a new index handle with an explicit prime level.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_index_set_plev(
+    ptr: *const t4a_index,
+    plev: i64,
+    out: *mut *mut t4a_index,
+) -> StatusCode {
+    run_catching(out, || {
+        if plev < 0 {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "plev must be greater than or equal to zero",
+            ));
+        }
+        let index = require_index(ptr, "index")?;
+        Ok(t4a_index::new(index.set_plev(plev)))
+    })
 }
 
 /// Copy tags as a comma-separated UTF-8 string.

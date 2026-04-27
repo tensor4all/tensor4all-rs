@@ -227,11 +227,7 @@ where
                     Some(b) => b.clone(),
                     None => continue,
                 };
-                if contracted
-                    .external_indices()
-                    .iter()
-                    .any(|i| i.id() == bra_bond.id())
-                {
+                if contracted.external_indices().iter().any(|i| i == &bra_bond) {
                     contracted = contracted.replaceind(&bra_bond, &ket_bond)?;
                 }
             }
@@ -240,9 +236,11 @@ where
         // Align result to v's index order
         let v_inds = v.external_indices();
         let res_inds = contracted.external_indices();
-        let v_ids: std::collections::HashSet<_> = v_inds.iter().map(|i| i.id()).collect();
-        let res_ids: std::collections::HashSet<_> = res_inds.iter().map(|i| i.id()).collect();
-        if v_ids == res_ids && v_inds.len() == res_inds.len() {
+        let v_index_keys: std::collections::HashSet<_> =
+            v_inds.iter().map(|i| (i.clone(), i.dim())).collect();
+        let res_index_keys: std::collections::HashSet<_> =
+            res_inds.iter().map(|i| (i.clone(), i.dim())).collect();
+        if v_index_keys == res_index_keys && v_inds.len() == res_inds.len() {
             contracted = contracted.permuteinds(&v_inds)?;
         }
 

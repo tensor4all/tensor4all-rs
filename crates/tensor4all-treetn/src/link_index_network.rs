@@ -83,21 +83,9 @@ where
         self.index_to_edge.get(index).copied()
     }
 
-    /// Find the edge containing an index by ID.
-    pub fn find_edge_by_id(&self, id: &I::Id) -> Option<EdgeIndex> {
-        self.index_to_edge
-            .iter()
-            .find_map(|(index, edge)| (index.id() == id).then_some(*edge))
-    }
-
     /// Check if an index is registered.
     pub fn contains(&self, index: &I) -> bool {
         self.index_to_edge.contains_key(index)
-    }
-
-    /// Check if an index ID is registered.
-    pub fn contains_id(&self, id: &I::Id) -> bool {
-        self.index_to_edge.keys().any(|index| index.id() == id)
     }
 
     /// Update the index for an edge (e.g., after SVD creates new bond index).

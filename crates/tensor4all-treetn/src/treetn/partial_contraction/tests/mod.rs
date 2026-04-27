@@ -561,9 +561,9 @@ fn test_partial_contract_matches_dense_reference_for_cross_topology_chain() {
 
     let topology_a = TreeTopology::new(
         [
-            (0usize, vec![*x_a.id()]),
-            (1usize, vec![*w_a.id()]),
-            (2usize, vec![*i_a.id()]),
+            (0usize, vec![x_a.clone()]),
+            (1usize, vec![w_a.clone()]),
+            (2usize, vec![i_a.clone()]),
         ]
         .into_iter()
         .collect(),
@@ -571,11 +571,11 @@ fn test_partial_contract_matches_dense_reference_for_cross_topology_chain() {
     );
     let topology_b = TreeTopology::new(
         [
-            (0usize, vec![*x_b.id()]),
-            (1usize, vec![*w_b.id()]),
-            (2usize, vec![*z_b.id()]),
-            (3usize, vec![*i_b.id()]),
-            (4usize, vec![*j_b.id()]),
+            (0usize, vec![x_b.clone()]),
+            (1usize, vec![w_b.clone()]),
+            (2usize, vec![z_b.clone()]),
+            (3usize, vec![i_b.clone()]),
+            (4usize, vec![j_b.clone()]),
         ]
         .into_iter()
         .collect(),

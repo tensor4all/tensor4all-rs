@@ -125,6 +125,10 @@
   edge, topology assignment, replacement target, split/fuse target, or
   restructure target must accept the full `Index` value, not an index ID. Shape
   APIs around index identity so callers can pass the index they mean.
+- C API and language-binding-facing APIs must follow the same rule: accept
+  `Index` handles for concrete index selection, expose full-index
+  equality/hash helpers when bindings need map keys, and do not expose ID-only
+  constructors, selectors, or identity getters as public API.
 - Pure ID comparisons are allowed only inside implementation details that are
   explicitly about logical-site lookup, compatibility, or contraction pairing.
   Do not expose ID-based public APIs for selecting concrete indices. If a

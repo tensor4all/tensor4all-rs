@@ -1,7 +1,7 @@
 //! Site index swap: reorder which node holds which site index.
 //!
 //! Implements swapping site indices between adjacent nodes along the tree
-//! so that the network reaches a target assignment (index id -> node name).
+//! so that the network reaches a target assignment (index -> node name).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
@@ -146,9 +146,9 @@ pub struct SwapOptions {
 /// assert!(step.b_side_sites.contains("s0"));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScheduledSwapStep<V, Id>
+pub struct ScheduledSwapStep<V, K>
 where
-    Id: Eq + Hash,
+    K: Eq + Hash,
 {
     /// Path to transport the canonical center before the swap.
     ///
@@ -160,9 +160,9 @@ where
     /// The second node in the directed sweep edge.
     pub node_b: V,
     /// Site index keys that should live on `node_a`'s side after this step.
-    pub a_side_sites: HashSet<Id>,
+    pub a_side_sites: HashSet<K>,
     /// Site index keys that should live on `node_b`'s side after this step.
-    pub b_side_sites: HashSet<Id>,
+    pub b_side_sites: HashSet<K>,
 }
 
 // ============================================================================
@@ -203,20 +203,20 @@ where
 /// assert_eq!(schedule.steps[0].node_b, "B");
 /// ```
 #[derive(Debug, Clone)]
-pub struct SwapSchedule<V, Id>
+pub struct SwapSchedule<V, K>
 where
-    Id: Eq + Hash,
+    K: Eq + Hash,
 {
     /// Root used for the base Euler sweep and initial canonicalization.
     pub root: V,
     /// Fully expanded sequence of swap steps.
-    pub steps: Vec<ScheduledSwapStep<V, Id>>,
+    pub steps: Vec<ScheduledSwapStep<V, K>>,
 }
 
-impl<V, Id> SwapSchedule<V, Id>
+impl<V, K> SwapSchedule<V, K>
 where
     V: Clone + Hash + Eq + std::fmt::Debug + Send + Sync,
-    Id: Clone + Hash + Eq + std::fmt::Debug,
+    K: Clone + Hash + Eq + std::fmt::Debug,
 {
     /// Build a swap schedule from topology plus current and target assignments.
     ///
@@ -241,8 +241,8 @@ where
     /// the requested target assignment within the tree-diameter pass bound.
     pub fn build(
         topology: &NodeNameNetwork<V>,
-        current_assignment: &HashMap<Id, V>,
-        target_assignment: &HashMap<Id, V>,
+        current_assignment: &HashMap<K, V>,
+        target_assignment: &HashMap<K, V>,
         root: &V,
     ) -> Result<Self> {
         if !topology.has_node(root) {
@@ -252,28 +252,28 @@ where
             ));
         }
 
-        for (index_id, current_node) in current_assignment {
+        for (index, current_node) in current_assignment {
             if !topology.has_node(current_node) {
                 return Err(anyhow::anyhow!(
                     "SwapSchedule::build: current node {:?} for index {:?} is not in the topology",
                     current_node,
-                    index_id
+                    index
                 ));
             }
         }
 
-        for (index_id, target_node) in target_assignment {
-            if !current_assignment.contains_key(index_id) {
+        for (index, target_node) in target_assignment {
+            if !current_assignment.contains_key(index) {
                 return Err(anyhow::anyhow!(
-                    "SwapSchedule::build: target_assignment contains index id {:?} which is not in the network",
-                    index_id
+                    "SwapSchedule::build: target_assignment contains index {:?} which is not in the network",
+                    index
                 ));
             }
             if !topology.has_node(target_node) {
                 return Err(anyhow::anyhow!(
                     "SwapSchedule::build: target node {:?} for index {:?} is not in the topology",
                     target_node,
-                    index_id
+                    index
                 ));
             }
         }
@@ -307,29 +307,29 @@ where
                 let mut any_crossing = false;
                 let mut any_site_on_edge = false;
 
-                for (index_id, current_node) in &position {
+                for (index, current_node) in &position {
                     if current_node != &node_a && current_node != &node_b {
                         continue;
                     }
 
                     any_site_on_edge = true;
 
-                    if let Some(target_node) = target_assignment.get(index_id) {
+                    if let Some(target_node) = target_assignment.get(index) {
                         if oracle.is_target_on_a_side(&node_a, &node_b, target_node) {
-                            a_side_sites.insert(index_id.clone());
+                            a_side_sites.insert(index.clone());
                             if current_node == &node_b {
                                 any_crossing = true;
                             }
                         } else {
-                            b_side_sites.insert(index_id.clone());
+                            b_side_sites.insert(index.clone());
                             if current_node == &node_a {
                                 any_crossing = true;
                             }
                         }
                     } else if current_node == &node_a {
-                        a_side_sites.insert(index_id.clone());
+                        a_side_sites.insert(index.clone());
                     } else {
-                        b_side_sites.insert(index_id.clone());
+                        b_side_sites.insert(index.clone());
                     }
                 }
 
@@ -351,11 +351,11 @@ where
                     b_side_sites: b_side_sites.clone(),
                 });
 
-                for index_id in &a_side_sites {
-                    position.insert(index_id.clone(), node_a.clone());
+                for index in &a_side_sites {
+                    position.insert(index.clone(), node_a.clone());
                 }
-                for index_id in &b_side_sites {
-                    position.insert(index_id.clone(), node_b.clone());
+                for index in &b_side_sites {
+                    position.insert(index.clone(), node_b.clone());
                 }
 
                 center = node_b;
@@ -381,19 +381,17 @@ where
     }
 }
 
-fn positions_satisfy_targets<V, Id>(
-    position: &HashMap<Id, V>,
-    target_assignment: &HashMap<Id, V>,
+fn positions_satisfy_targets<V, K>(
+    position: &HashMap<K, V>,
+    target_assignment: &HashMap<K, V>,
 ) -> bool
 where
     V: Eq,
-    Id: Hash + Eq,
+    K: Hash + Eq,
 {
-    target_assignment.iter().all(|(index_id, target_node)| {
-        position
-            .get(index_id)
-            .is_some_and(|node| node == target_node)
-    })
+    target_assignment
+        .iter()
+        .all(|(index, target_node)| position.get(index).is_some_and(|node| node == target_node))
 }
 
 fn tree_path<V>(topology: &NodeNameNetwork<V>, from: &V, to: &V) -> Result<Vec<V>>

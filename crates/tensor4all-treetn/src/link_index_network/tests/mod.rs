@@ -51,36 +51,6 @@ fn test_remove() {
 }
 
 #[test]
-fn test_find_edge_by_id() {
-    let mut network: LinkIndexNetwork<DynIndex> = LinkIndexNetwork::new();
-
-    let idx = DynIndex::new_dyn(4);
-    let edge = EdgeIndex::new(0);
-
-    network.insert(edge, &idx);
-    assert_eq!(network.find_edge_by_id(idx.id()), Some(edge));
-
-    // Non-existent ID
-    let other = DynIndex::new_dyn(4);
-    assert_eq!(network.find_edge_by_id(other.id()), None);
-}
-
-#[test]
-fn test_contains_id() {
-    let mut network: LinkIndexNetwork<DynIndex> = LinkIndexNetwork::new();
-
-    let idx = DynIndex::new_dyn(4);
-    let edge = EdgeIndex::new(0);
-
-    assert!(!network.contains_id(idx.id()));
-    network.insert(edge, &idx);
-    assert!(network.contains_id(idx.id()));
-
-    let other = DynIndex::new_dyn(4);
-    assert!(!network.contains_id(other.id()));
-}
-
-#[test]
 fn test_with_capacity() {
     let network: LinkIndexNetwork<DynIndex> = LinkIndexNetwork::with_capacity(10);
     assert!(network.is_empty());

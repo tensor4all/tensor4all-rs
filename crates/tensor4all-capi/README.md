@@ -5,7 +5,7 @@ minimal Julia-facing surface.
 
 ## Features
 
-- **Index API**: Immutable index handles with constructor/getter-only access
+- **Index API**: Immutable index handles with full-index equality, hashing, and prime-level transforms
 - **Tensor API**: Dense, diagonal, and structured `f64` / `Complex64` construction, payload export, dense export, and contraction
 - **TreeTN API**: General tree tensor network accessors and core operations
 - **QTT layout API**: Canonical binary QTT layout descriptors for transform materialization

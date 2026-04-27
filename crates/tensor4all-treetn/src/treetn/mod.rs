@@ -1520,60 +1520,21 @@ where
         Ok(())
     }
 
-    /// Reorder site indices so that each index id ends up at the target node.
-    ///
-    /// This is an ID-based convenience API. If multiple current site indices
-    /// share the requested ID, use [`swap_site_indices_by_index`](Self::swap_site_indices_by_index)
-    /// so the target is identified by full index metadata.
+    /// Reorder site indices so that each full index ends up at the target node.
     ///
     /// Builds a pre-computed schedule from the topology plus current and target
     /// site assignments, canonicalizes the network to the schedule root, then
-    /// executes the scheduled transport and swap steps.
-    /// Partial assignment is supported: indices not listed in
-    /// `target_assignment` stay on their current side of every visited edge.
+    /// executes the scheduled transport and swap steps. Partial assignment is
+    /// supported: indices not listed in `target_assignment` stay on their
+    /// current side of every visited edge.
     ///
     /// # Arguments
-    /// * `target_assignment` - Map from site index id to target node name.
+    /// * `target_assignment` - Map from full site index to target node name.
     /// * `options` - Truncation options for each SVD (default: no truncation, exact).
     ///
     /// # Errors
-    /// Returns an error if target nodes are missing, an index id is unknown, or sweep fails.
+    /// Returns an error if target nodes are missing, an index is unknown, or sweep fails.
     pub fn swap_site_indices(
-        &mut self,
-        target_assignment: &HashMap<<T::Index as IndexLike>::Id, V>,
-        options: &swap::SwapOptions,
-    ) -> Result<()>
-    where
-        <T::Index as IndexLike>::Id:
-            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
-        V: Ord,
-    {
-        let current = swap::current_site_assignment(self);
-        let mut target_by_index = HashMap::with_capacity(target_assignment.len());
-        for (target_id, target_node) in target_assignment {
-            let mut matches = current
-                .keys()
-                .filter(|index| index.id() == target_id)
-                .cloned();
-            let Some(index) = matches.next() else {
-                return Err(anyhow::anyhow!(
-                    "swap_site_indices: target_assignment contains index id {:?} which is not in the network",
-                    target_id
-                ));
-            };
-            if matches.next().is_some() {
-                return Err(anyhow::anyhow!(
-                    "swap_site_indices: index id {:?} is ambiguous; use swap_site_indices_by_index",
-                    target_id
-                ));
-            }
-            target_by_index.insert(index, target_node.clone());
-        }
-
-        self.swap_site_indices_by_index(&target_by_index, options)
-    }
-
-    fn swap_site_indices_exact(
         &mut self,
         target_assignment: &HashMap<T::Index, V>,
         options: &swap::SwapOptions,
@@ -1593,14 +1554,14 @@ where
             .node_names()
             .into_iter()
             .min()
-            .ok_or_else(|| anyhow::anyhow!("swap_site_indices_by_index: empty network"))?;
+            .ok_or_else(|| anyhow::anyhow!("swap_site_indices: empty network"))?;
         let schedule = swap::SwapSchedule::build(
             self.site_index_network().topology(),
             &current,
             target_assignment,
             &root,
         )
-        .context("swap_site_indices_by_index: build schedule")?;
+        .context("swap_site_indices: build schedule")?;
 
         if schedule.steps.is_empty() {
             return Ok(());
@@ -1610,7 +1571,7 @@ where
             std::iter::once(schedule.root.clone()),
             crate::options::CanonicalizationOptions::default(),
         )
-        .context("swap_site_indices_by_index: canonicalize")?;
+        .context("swap_site_indices: canonicalize")?;
 
         let mut swap_factorize_options = FactorizeOptions::svd().with_canonical(Canonical::Left);
         if let Some(mr) = options.max_rank {
@@ -1627,16 +1588,10 @@ where
                 let src_name = &edge[0];
                 let dst_name = &edge[1];
                 let src_idx = self.node_index(src_name).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "swap_site_indices_by_index: transport node {:?} not found",
-                        src_name
-                    )
+                    anyhow::anyhow!("swap_site_indices: transport node {:?} not found", src_name)
                 })?;
                 let dst_idx = self.node_index(dst_name).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "swap_site_indices_by_index: transport node {:?} not found",
-                        dst_name
-                    )
+                    anyhow::anyhow!("swap_site_indices: transport node {:?} not found", dst_name)
                 })?;
                 self.sweep_edge(
                     src_idx,
@@ -1644,20 +1599,14 @@ where
                     &transport_factorize_options,
                     "swap_transport",
                 )
-                .context("swap_site_indices_by_index: transport")?;
+                .context("swap_site_indices: transport")?;
             }
 
             let a_idx = self.node_index(&step.node_a).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "swap_site_indices_by_index: node {:?} not found",
-                    step.node_a
-                )
+                anyhow::anyhow!("swap_site_indices: node {:?} not found", step.node_a)
             })?;
             let b_idx = self.node_index(&step.node_b).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "swap_site_indices_by_index: node {:?} not found",
-                    step.node_b
-                )
+                anyhow::anyhow!("swap_site_indices: node {:?} not found", step.node_b)
             })?;
             self.swap_on_edge(
                 a_idx,
@@ -1666,9 +1615,9 @@ where
                 &step.b_side_sites,
                 &swap_factorize_options,
             )
-            .context("swap_site_indices_by_index: swap_on_edge")?;
+            .context("swap_site_indices: swap_on_edge")?;
             self.set_canonical_region([step.node_b.clone()])
-                .context("swap_site_indices_by_index: set_canonical_region")?;
+                .context("swap_site_indices: set_canonical_region")?;
         }
 
         Ok(())
@@ -1676,8 +1625,7 @@ where
 
     /// Reorder site indices so that each index ends up at the target node.
     ///
-    /// Index-based version of [`swap_site_indices`](Self::swap_site_indices).
-    /// Accepts `T::Index` keys instead of `T::Index::Id`.
+    /// Alias for [`swap_site_indices`](Self::swap_site_indices).
     ///
     /// # Examples
     ///
@@ -1703,7 +1651,7 @@ where
     /// let mut target = HashMap::new();
     /// target.insert(idx_a.clone(), node_name_b.clone());
     ///
-    /// treetn.swap_site_indices_by_index(&target, &SwapOptions::default())?;
+    /// treetn.swap_site_indices(&target, &SwapOptions::default())?;
     ///
     /// assert_eq!(
     ///     treetn
@@ -1727,7 +1675,7 @@ where
         T::Index: Hash + Eq,
         V: Ord,
     {
-        self.swap_site_indices_exact(target_assignment, options)
+        self.swap_site_indices(target_assignment, options)
     }
 
     /// Verify internal data consistency by checking structural invariants and reconstructing the TreeTN.

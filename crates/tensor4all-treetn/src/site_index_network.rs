@@ -159,16 +159,6 @@ where
         self.index_to_node.get(index)
     }
 
-    /// Find the node containing an index by ID.
-    pub fn find_node_by_index_id(&self, id: &I::Id) -> Option<&NodeName> {
-        self.site_spaces.iter().find_map(|(node_name, site_space)| {
-            site_space
-                .iter()
-                .any(|index| index.id() == id)
-                .then_some(node_name)
-        })
-    }
-
     /// Check if a site index is registered.
     pub fn contains_index(&self, index: &I) -> bool {
         self.index_to_node.contains_key(index)

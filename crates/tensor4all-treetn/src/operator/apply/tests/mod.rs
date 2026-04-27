@@ -449,6 +449,10 @@ fn test_linear_operator_tensor_index() {
     let new_idx = make_index(2);
     let replaced = lin_op.replaceind(&true_s0, &new_idx).unwrap();
     assert!(replaced.get_input_mapping(&"N0".to_string()).is_some());
+
+    let same_id_prime = true_s0.prime();
+    let wrong_prime = lin_op.replaceind(&same_id_prime, &make_index(2));
+    assert!(wrong_prime.is_err());
 }
 
 #[test]
@@ -900,9 +904,9 @@ fn test_apply_linear_operator_partial_shift_factorized_rooted_state_intermediate
     .unwrap();
 
     let mut nodes = HashMap::new();
-    nodes.insert(0usize, vec![*s0.id()]);
-    nodes.insert(1usize, vec![*s1.id()]);
-    nodes.insert(2usize, vec![*spectator.id()]);
+    nodes.insert(0usize, vec![s0.clone()]);
+    nodes.insert(1usize, vec![s1.clone()]);
+    nodes.insert(2usize, vec![spectator.clone()]);
     let topology = crate::TreeTopology::new(nodes, vec![(0usize, 1usize), (1usize, 2usize)]);
     let state = crate::factorize_tensor_to_treetn(&dense, &topology, &2usize).unwrap();
     let mut state_edges = state.site_index_network().edges().collect::<Vec<_>>();

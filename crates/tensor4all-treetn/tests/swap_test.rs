@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use num_complex::Complex64;
-use tensor4all_core::{IndexLike, TensorDynLen, TensorElement};
+use tensor4all_core::{TensorDynLen, TensorElement};
 use tensor4all_treetn::{SwapOptions, TreeTN};
 
 // ============================================================================
@@ -265,102 +265,60 @@ fn y_shape_tree<T: TensorElement + From<f64>>() -> (
 fn test_swap_two_node_chain_generic<T: TensorElement + From<f64>>() {
     let (mut tn, s0, s1) = two_node_chain::<T>();
     let net = tn.site_index_network();
-    assert_eq!(
-        net.find_node_by_index_id(s0.id()).map(|n| n.as_str()),
-        Some("A")
-    );
-    assert_eq!(
-        net.find_node_by_index_id(s1.id()).map(|n| n.as_str()),
-        Some("B")
-    );
+    assert_eq!(net.find_node_by_index(&s0).map(|n| n.as_str()), Some("A"));
+    assert_eq!(net.find_node_by_index(&s1).map(|n| n.as_str()), Some("B"));
 
     let mut target = HashMap::new();
-    target.insert(s0.id().to_owned(), "B".to_string());
-    target.insert(s1.id().to_owned(), "A".to_string());
+    target.insert(s0.clone(), "B".to_string());
+    target.insert(s1.clone(), "A".to_string());
 
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
 
     let net = tn.site_index_network();
-    assert_eq!(
-        net.find_node_by_index_id(s0.id()).map(|n| n.as_str()),
-        Some("B")
-    );
-    assert_eq!(
-        net.find_node_by_index_id(s1.id()).map(|n| n.as_str()),
-        Some("A")
-    );
+    assert_eq!(net.find_node_by_index(&s0).map(|n| n.as_str()), Some("B"));
+    assert_eq!(net.find_node_by_index(&s1).map(|n| n.as_str()), Some("A"));
 }
 
 fn test_swap_three_node_chain_generic<T: TensorElement + From<f64>>() {
     let (mut tn, s0, s1, s2) = three_node_chain::<T>();
     let net = tn.site_index_network();
-    assert_eq!(
-        net.find_node_by_index_id(s0.id()).map(|n| n.as_str()),
-        Some("0")
-    );
-    assert_eq!(
-        net.find_node_by_index_id(s1.id()).map(|n| n.as_str()),
-        Some("1")
-    );
-    assert_eq!(
-        net.find_node_by_index_id(s2.id()).map(|n| n.as_str()),
-        Some("2")
-    );
+    assert_eq!(net.find_node_by_index(&s0).map(|n| n.as_str()), Some("0"));
+    assert_eq!(net.find_node_by_index(&s1).map(|n| n.as_str()), Some("1"));
+    assert_eq!(net.find_node_by_index(&s2).map(|n| n.as_str()), Some("2"));
 
     // Swap so that s0->"2", s1->"0", s2->"1"
     let mut target = HashMap::new();
-    target.insert(s0.id().to_owned(), "2".to_string());
-    target.insert(s1.id().to_owned(), "0".to_string());
-    target.insert(s2.id().to_owned(), "1".to_string());
+    target.insert(s0.clone(), "2".to_string());
+    target.insert(s1.clone(), "0".to_string());
+    target.insert(s2.clone(), "1".to_string());
 
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
 
     let net = tn.site_index_network();
-    assert_eq!(
-        net.find_node_by_index_id(s0.id()).map(|n| n.as_str()),
-        Some("2")
-    );
-    assert_eq!(
-        net.find_node_by_index_id(s1.id()).map(|n| n.as_str()),
-        Some("0")
-    );
-    assert_eq!(
-        net.find_node_by_index_id(s2.id()).map(|n| n.as_str()),
-        Some("1")
-    );
+    assert_eq!(net.find_node_by_index(&s0).map(|n| n.as_str()), Some("2"));
+    assert_eq!(net.find_node_by_index(&s1).map(|n| n.as_str()), Some("0"));
+    assert_eq!(net.find_node_by_index(&s2).map(|n| n.as_str()), Some("1"));
 }
 
 fn test_swap_four_node_chain_generic<T: TensorElement + From<f64>>() {
     let (mut tn, s0, s1, s2, s3) = four_node_chain::<T>();
     // Swap adjacent pairs: (0,1) and (2,3) so s0<->s1, s2<->s3
     let mut target = HashMap::new();
-    target.insert(s0.id().to_owned(), "1".to_string());
-    target.insert(s1.id().to_owned(), "0".to_string());
-    target.insert(s2.id().to_owned(), "3".to_string());
-    target.insert(s3.id().to_owned(), "2".to_string());
+    target.insert(s0.clone(), "1".to_string());
+    target.insert(s1.clone(), "0".to_string());
+    target.insert(s2.clone(), "3".to_string());
+    target.insert(s3.clone(), "2".to_string());
 
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
 
     let net = tn.site_index_network();
-    assert_eq!(
-        net.find_node_by_index_id(s0.id()).map(|n| n.as_str()),
-        Some("1")
-    );
-    assert_eq!(
-        net.find_node_by_index_id(s1.id()).map(|n| n.as_str()),
-        Some("0")
-    );
-    assert_eq!(
-        net.find_node_by_index_id(s2.id()).map(|n| n.as_str()),
-        Some("3")
-    );
-    assert_eq!(
-        net.find_node_by_index_id(s3.id()).map(|n| n.as_str()),
-        Some("2")
-    );
+    assert_eq!(net.find_node_by_index(&s0).map(|n| n.as_str()), Some("1"));
+    assert_eq!(net.find_node_by_index(&s1).map(|n| n.as_str()), Some("0"));
+    assert_eq!(net.find_node_by_index(&s2).map(|n| n.as_str()), Some("3"));
+    assert_eq!(net.find_node_by_index(&s3).map(|n| n.as_str()), Some("2"));
 }
 
 fn test_swap_2r_interleave_generic<T: TensorElement + From<f64>>() {
@@ -369,31 +327,19 @@ fn test_swap_2r_interleave_generic<T: TensorElement + From<f64>>() {
 
     // Target: x0 at "0", y0 at "1", x1 at "2", y1 at "3" (interleaved)
     let mut target = HashMap::new();
-    target.insert(x0.id().to_owned(), "0".to_string());
-    target.insert(y0.id().to_owned(), "1".to_string());
-    target.insert(x1.id().to_owned(), "2".to_string());
-    target.insert(y1.id().to_owned(), "3".to_string());
+    target.insert(x0.clone(), "0".to_string());
+    target.insert(y0.clone(), "1".to_string());
+    target.insert(x1.clone(), "2".to_string());
+    target.insert(y1.clone(), "3".to_string());
 
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
 
     let net = tn.site_index_network();
-    assert_eq!(
-        net.find_node_by_index_id(x0.id()).map(|n| n.as_str()),
-        Some("0")
-    );
-    assert_eq!(
-        net.find_node_by_index_id(y0.id()).map(|n| n.as_str()),
-        Some("1")
-    );
-    assert_eq!(
-        net.find_node_by_index_id(x1.id()).map(|n| n.as_str()),
-        Some("2")
-    );
-    assert_eq!(
-        net.find_node_by_index_id(y1.id()).map(|n| n.as_str()),
-        Some("3")
-    );
+    assert_eq!(net.find_node_by_index(&x0).map(|n| n.as_str()), Some("0"));
+    assert_eq!(net.find_node_by_index(&y0).map(|n| n.as_str()), Some("1"));
+    assert_eq!(net.find_node_by_index(&x1).map(|n| n.as_str()), Some("2"));
+    assert_eq!(net.find_node_by_index(&y1).map(|n| n.as_str()), Some("3"));
 
     let after = tn.contract_to_tensor().unwrap();
     let diff = &before - &after;
@@ -408,25 +354,16 @@ fn test_swap_y_shape_generic<T: TensorElement + From<f64>>() {
     let (mut tn, s0, s1, s2) = y_shape_tree::<T>();
     // Swap s0 and s1 between L0 and L1 (path crosses center)
     let mut target = HashMap::new();
-    target.insert(s0.id().to_owned(), "L1".to_string());
-    target.insert(s1.id().to_owned(), "L0".to_string());
+    target.insert(s0.clone(), "L1".to_string());
+    target.insert(s1.clone(), "L0".to_string());
 
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
 
     let net = tn.site_index_network();
-    assert_eq!(
-        net.find_node_by_index_id(s0.id()).map(|n| n.as_str()),
-        Some("L1")
-    );
-    assert_eq!(
-        net.find_node_by_index_id(s1.id()).map(|n| n.as_str()),
-        Some("L0")
-    );
-    assert_eq!(
-        net.find_node_by_index_id(s2.id()).map(|n| n.as_str()),
-        Some("L2")
-    );
+    assert_eq!(net.find_node_by_index(&s0).map(|n| n.as_str()), Some("L1"));
+    assert_eq!(net.find_node_by_index(&s1).map(|n| n.as_str()), Some("L0"));
+    assert_eq!(net.find_node_by_index(&s2).map(|n| n.as_str()), Some("L2"));
 }
 
 fn test_swap_y_shape_contract_and_canonical_form_generic<T: TensorElement + From<f64>>() {
@@ -434,8 +371,8 @@ fn test_swap_y_shape_contract_and_canonical_form_generic<T: TensorElement + From
     let before = tn.contract_to_tensor().unwrap();
 
     let mut target = HashMap::new();
-    target.insert(s0.id().to_owned(), "L1".to_string());
-    target.insert(s1.id().to_owned(), "L0".to_string());
+    target.insert(s0.clone(), "L1".to_string());
+    target.insert(s1.clone(), "L0".to_string());
 
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
@@ -455,8 +392,8 @@ fn test_swap_correctness_contract_generic<T: TensorElement + From<f64>>() {
     let before = tn.contract_to_tensor().unwrap();
 
     let mut target = HashMap::new();
-    target.insert(s0.id().to_owned(), "B".to_string());
-    target.insert(s1.id().to_owned(), "A".to_string());
+    target.insert(s0.clone(), "B".to_string());
+    target.insert(s1.clone(), "A".to_string());
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
 
@@ -469,15 +406,10 @@ fn test_swap_correctness_contract_generic<T: TensorElement + From<f64>>() {
     );
 }
 
-fn test_swap_by_index_matches_id_based_generic<T: TensorElement + From<f64>>() {
+fn test_swap_by_index_alias_matches_swap_site_indices_generic<T: TensorElement + From<f64>>() {
     let (tn, s0, s1, s2) = three_node_chain::<T>();
-    let mut tn_by_id = tn.clone();
+    let mut tn_primary = tn.clone();
     let mut tn_by_index = tn;
-
-    let mut target_by_id = HashMap::new();
-    target_by_id.insert(s0.id().to_owned(), "2".to_string());
-    target_by_id.insert(s1.id().to_owned(), "0".to_string());
-    target_by_id.insert(s2.id().to_owned(), "1".to_string());
 
     let mut target_by_index = HashMap::new();
     target_by_index.insert(s0.clone(), "2".to_string());
@@ -485,12 +417,14 @@ fn test_swap_by_index_matches_id_based_generic<T: TensorElement + From<f64>>() {
     target_by_index.insert(s2.clone(), "1".to_string());
 
     let options = SwapOptions::default();
-    tn_by_id.swap_site_indices(&target_by_id, &options).unwrap();
+    tn_primary
+        .swap_site_indices(&target_by_index, &options)
+        .unwrap();
     tn_by_index
         .swap_site_indices_by_index(&target_by_index, &options)
         .unwrap();
 
-    assert!(tn_by_id.same_appearance(&tn_by_index));
+    assert!(tn_primary.same_appearance(&tn_by_index));
 
     let net = tn_by_index.site_index_network();
     assert_eq!(net.find_node_by_index(&s0).map(|n| n.as_str()), Some("2"));
@@ -530,33 +464,6 @@ fn test_swap_by_index_distinguishes_same_id_prime_pair() {
     );
 }
 
-#[test]
-fn test_swap_by_id_rejects_ambiguous_same_id_prime_pair() {
-    let mut tn = TreeTN::<TensorDynLen, String>::new();
-    let s = tensor4all_core::DynIndex::new_dyn(2);
-    let s_prime = s.prime();
-    let bond = tensor4all_core::DynIndex::new_dyn(1);
-    let a = TensorDynLen::from_dense(
-        vec![s.clone(), s_prime, bond.clone()],
-        vec![1.0, 2.0, 3.0, 4.0],
-    )
-    .unwrap();
-    let b = TensorDynLen::from_dense(vec![bond.clone()], vec![1.0]).unwrap();
-    tn.add_tensor("A".to_string(), a).unwrap();
-    tn.add_tensor("B".to_string(), b).unwrap();
-    let na = tn.node_index(&"A".to_string()).unwrap();
-    let nb = tn.node_index(&"B".to_string()).unwrap();
-    tn.connect(na, &bond, nb, &bond).unwrap();
-
-    let mut target = HashMap::new();
-    target.insert(s.id().to_owned(), "B".to_string());
-    let err = tn
-        .swap_site_indices(&target, &SwapOptions::default())
-        .unwrap_err();
-
-    assert!(err.to_string().contains("ambiguous"));
-}
-
 // ============================================================================
 // f64 tests
 // ============================================================================
@@ -579,18 +486,12 @@ fn test_swap_partial() {
     let (mut tn, s0, s1) = two_node_chain::<f64>();
     // Only move s0 to B; s1 is not targeted and stays on its current side.
     let mut target = HashMap::new();
-    target.insert(s0.id().to_owned(), "B".to_string());
+    target.insert(s0.clone(), "B".to_string());
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
     let net = tn.site_index_network();
-    assert_eq!(
-        net.find_node_by_index_id(s0.id()).map(|n| n.as_str()),
-        Some("B")
-    );
-    assert_eq!(
-        net.find_node_by_index_id(s1.id()).map(|n| n.as_str()),
-        Some("B")
-    );
+    assert_eq!(net.find_node_by_index(&s0).map(|n| n.as_str()), Some("B"));
+    assert_eq!(net.find_node_by_index(&s1).map(|n| n.as_str()), Some("B"));
 }
 
 #[test]
@@ -619,8 +520,8 @@ fn test_swap_correctness_contract() {
 }
 
 #[test]
-fn test_swap_by_index_matches_id_based() {
-    test_swap_by_index_matches_id_based_generic::<f64>();
+fn test_swap_by_index_alias_matches_swap_site_indices() {
+    test_swap_by_index_alias_matches_swap_site_indices_generic::<f64>();
 }
 
 #[test]
@@ -675,7 +576,7 @@ fn test_swap_y_shape_contract_and_canonical_form_c64() {
 fn test_swap_invalid_target_nonexistent_node() {
     let (mut tn, s0, _s1) = two_node_chain::<f64>();
     let mut target = HashMap::new();
-    target.insert(s0.id().to_owned(), "Z".to_string()); // "Z" does not exist
+    target.insert(s0.clone(), "Z".to_string()); // "Z" does not exist
     let result = tn.swap_site_indices(&target, &SwapOptions::default());
     assert!(
         result.is_err(),
@@ -684,14 +585,14 @@ fn test_swap_invalid_target_nonexistent_node() {
 }
 
 #[test]
-fn test_swap_invalid_target_unknown_index_id() {
+fn test_swap_invalid_target_unknown_index() {
     let (mut tn, _s0, _s1) = two_node_chain::<f64>();
-    let unknown_id = tensor4all_core::DynIndex::new_dyn(2).id().to_owned();
+    let unknown_index = tensor4all_core::DynIndex::new_dyn(2);
     let mut target = HashMap::new();
-    target.insert(unknown_id, "A".to_string());
+    target.insert(unknown_index, "A".to_string());
     let result = tn.swap_site_indices(&target, &SwapOptions::default());
     assert!(
         result.is_err(),
-        "swap_site_indices must fail for unknown index id"
+        "swap_site_indices must fail for unknown index"
     );
 }
