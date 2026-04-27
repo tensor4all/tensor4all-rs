@@ -159,7 +159,9 @@ pub extern "C" fn t4a_index_new_with_id(
     out: *mut *mut t4a_index,
 ) -> StatusCode {
     run_catching(out, || {
-        Ok(t4a_index::new(build_index_with_id(dim, id, tags_csv, plev)?))
+        Ok(t4a_index::new(build_index_with_id(
+            dim, id, tags_csv, plev,
+        )?))
     })
 }
 
