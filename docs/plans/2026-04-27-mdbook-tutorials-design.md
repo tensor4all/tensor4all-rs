@@ -3,23 +3,22 @@
 ## Goal
 
 Add a "Tutorials" section to the mdBook documentation at
-`docs/book/src/tutorials/` with 9 adapted tutorial pages from the playground
-repo `sdirnboeck/rust-Tensor4all`. The tutorials show concrete, runnable
-quantics tensor train examples with plots; the full executable projects remain
-in the playground repo.
+`docs/book/src/tutorials/` with adapted tutorial pages from the reference repo
+[sdirnboeck/rust-Tensor4all](https://github.com/sdirnboeck/rust-Tensor4all).
+The tutorials show concrete quantics tensor train examples with plots; the
+full executable projects remain in the reference repo.
 
 ## Context
 
 The mdBook currently has `[Guides]()` which explain concepts and APIs.
 Tutorials are a distinct section: they show end-to-end examples without
-duplicating the executable code in this repo. Each tutorial page links to the
-corresponding source file in the playground repo.
+duplicating the executable code in this repo.
 
 Source materials:
 
 - **Tutorial Markdown**: `docs/tutorials/` in
   [sdirnboeck/rust-Tensor4all](https://github.com/sdirnboeck/rust-Tensor4all)
-  (9 `.md` files, raw URLs under `docs/tutorials/`)
+  (`.md` files, raw URLs under `docs/tutorials/`)
 - **Plots**: `docs/plots/` in the same repo (`.png` files, raw URLs under
   `docs/plots/`)
 - **Existing mdBook**: `docs/book/src/` with `SUMMARY.md` navigation
@@ -80,7 +79,7 @@ docs/book/src/tutorials/
 ### Naming
 
 - Markdown files: kebab-case (matches existing guides like `tensor-basics.md`).
-- Plot files: use the original underscore names from the playground repo
+- Plot files: use the original underscore names from the reference repo
   (e.g., `qtt_function_vs_qtt.png`).
 
 ### SUMMARY.md Placement
@@ -282,17 +281,6 @@ The visible lines show the key API calls; the hidden lines provide the
 imports and scaffolding needed for compilation. The web-based play button
 will fail (same as existing guides, since dependencies aren't on the Rust
 Playground), but CI's `mdbook test` compiles and validates them locally.
-
-## Source Code Links
-
-Each tutorial page has a "Source code" section linking to the playground repo:
-
-```markdown
-## Source code
-
-The complete runnable project for this tutorial is available at:
-<https://github.com/sdirnboeck/rust-Tensor4all/tree/main/src/bin/qtt_function.rs>
-```
 
 ## Cross-References to Guides
 

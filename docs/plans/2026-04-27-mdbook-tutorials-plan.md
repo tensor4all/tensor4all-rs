@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a "Tutorials" section to the mdBook documentation with 9 adapted tutorial pages and their plots.
+**Goal:** Add a "Tutorials" section to the mdBook documentation with adapted tutorial pages and their plots.
 
-**Architecture:** New `docs/book/src/tutorials/` directory with two subdirectories (`quantics-basics/`, `computations-with-qtt/`), each containing adapted `.md` files and `.png` plots. Updated `SUMMARY.md` adds a `[Tutorials]()` section parallel to `[Guides]()`.
+**Architecture:** New `docs/book/src/tutorials/` directory with two subdirectories (`quantics-basics/`, `computations-with-qtt/`), each containing adapted `.md` files and `.png` plots. Updated `SUMMARY.md` adds a `[Tutorials]()` section parallel to `[Guides]()`. Exact number of tutorials may change based on feedback.
 
 **Tech Stack:** mdBook 0.5.2, Markdown, full ` ```rust ` blocks with hidden lines, PNG plots.
 
@@ -55,6 +55,7 @@ curl -sS "$BASE/qtt_multivariate_bond_dims.png"     -o "$DST/qtt_multivariate_bo
 - [ ] **Step 3: Download computations-with-qtt plots**
 
 ```bash
+BASE="https://raw.githubusercontent.com/sdirnboeck/rust-Tensor4all/main/docs/plots"
 DST="docs/book/src/tutorials/computations-with-qtt"
 curl -sS "$BASE/qtt_elementwise_product_factors.png"    -o "$DST/qtt_elementwise_product_factors.png"
 curl -sS "$BASE/qtt_elementwise_product_product.png"    -o "$DST/qtt_elementwise_product_product.png"
@@ -218,7 +219,15 @@ mdbook build docs/book
 
 Expected: no errors, output in `docs/book/book/`
 
-- [ ] **Step 2: Verify the build output**
+- [ ] **Step 2: Run mdBook tests (CI equivalent)**
+
+```bash
+./scripts/test-mdbook.sh
+```
+
+Expected: all Rust code blocks compile and assertions pass.
+
+- [ ] **Step 3: Verify the build output**
 
 ```bash
 ls docs/book/book/tutorials/quantics-basics/
@@ -266,15 +275,16 @@ gh pr create \
   --body "$(cat <<'EOF'
 ## Summary
 
-Adds a new "Tutorials" section to the mdBook documentation with 9 tutorial
-pages covering Quantics Basics and Computations with QTT.
+Adds a new "Tutorials" section to the mdBook documentation covering
+Quantics Basics and Computations with QTT.
 
 ## Changes
 
 - New `docs/book/src/tutorials/` directory with two subsections:
-  - `quantics-basics/` (5 tutorials + 11 plots)
-  - `computations-with-qtt/` (4 tutorials + 13 plots)
+  - `quantics-basics/` — tutorials and plots
+  - `computations-with-qtt/` — tutorials and plots
 - Updated `SUMMARY.md` with Tutorials section
+
 ## Notes
 
 - Tutorials show full ` ```rust ` code blocks with hidden lines, compilable via `mdbook test`
