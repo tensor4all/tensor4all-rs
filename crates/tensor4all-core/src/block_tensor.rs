@@ -499,6 +499,17 @@ impl<T: TensorLike> TensorLike for BlockTensor<T> {
         )))
     }
 
+    fn factorize_full_rank(
+        &self,
+        _left_inds: &[<Self as TensorIndex>::Index],
+        _alg: crate::FactorizeAlg,
+        _canonical: crate::Canonical,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        Err(FactorizeError::ComputationError(anyhow::anyhow!(
+            "BlockTensor does not support factorize_full_rank"
+        )))
+    }
+
     fn direct_sum(
         &self,
         _other: &Self,

@@ -10,8 +10,9 @@ use num_complex::Complex64;
 use std::ops::Range;
 use tensor4all_core::{common_inds, hascommoninds, DynIndex, IndexLike};
 use tensor4all_core::{
-    AllowedPairs, AnyScalar, CommonScalar, DirectSumResult, FactorizeError, FactorizeOptions,
-    FactorizeResult, LinearizationOrder, TensorDynLen, TensorElement, TensorIndex, TensorLike,
+    AllowedPairs, AnyScalar, Canonical, CommonScalar, DirectSumResult, FactorizeAlg,
+    FactorizeError, FactorizeOptions, FactorizeResult, LinearizationOrder, TensorDynLen,
+    TensorElement, TensorIndex, TensorLike,
 };
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
@@ -1282,6 +1283,17 @@ impl TensorLike for TensorTrain {
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
         Err(FactorizeError::UnsupportedStorage(
             "TensorTrain does not support factorize; use orthogonalize() instead",
+        ))
+    }
+
+    fn factorize_full_rank(
+        &self,
+        _left_inds: &[Self::Index],
+        _alg: FactorizeAlg,
+        _canonical: Canonical,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        Err(FactorizeError::UnsupportedStorage(
+            "TensorTrain does not support factorize_full_rank; use orthogonalize() instead",
         ))
     }
 

@@ -2592,6 +2592,15 @@ impl TensorLike for TensorDynLen {
         crate::factorize::factorize(self, left_inds, options)
     }
 
+    fn factorize_full_rank(
+        &self,
+        left_inds: &[DynIndex],
+        alg: crate::FactorizeAlg,
+        canonical: crate::Canonical,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        crate::factorize::factorize_full_rank(self, left_inds, alg, canonical)
+    }
+
     fn conj(&self) -> Self {
         // Delegate to the inherent method (complex conjugate for dense tensors)
         TensorDynLen::conj(self)

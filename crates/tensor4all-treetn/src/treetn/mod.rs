@@ -30,7 +30,9 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 
 use crate::algorithm::CanonicalForm;
-use tensor4all_core::{AllowedPairs, Canonical, FactorizeOptions, IndexLike, TensorLike};
+use tensor4all_core::{
+    AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
+};
 
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
@@ -49,6 +51,14 @@ pub use partial_contraction::{partial_contract, PartialContractionSpec};
 
 // Re-export swap types
 pub use swap::{ScheduledSwapStep, SwapOptions, SwapSchedule};
+
+enum SweepFactorization<'a> {
+    Options(&'a FactorizeOptions),
+    FullRank {
+        alg: FactorizeAlg,
+        canonical: Canonical,
+    },
+}
 
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
 ///
@@ -571,6 +581,42 @@ where
         factorize_options: &FactorizeOptions,
         context_name: &str,
     ) -> Result<()> {
+        self.sweep_edge_impl(
+            src,
+            dst,
+            SweepFactorization::Options(factorize_options),
+            context_name,
+        )
+    }
+
+    /// Process one edge during an exact sweep operation.
+    ///
+    /// This is the canonicalization variant of [`Self::sweep_edge`]. It uses
+    /// the requested decomposition algorithm without passing truncation controls
+    /// or consulting global rank-dropping defaults.
+    pub(crate) fn sweep_edge_full_rank(
+        &mut self,
+        src: NodeIndex,
+        dst: NodeIndex,
+        alg: FactorizeAlg,
+        canonical: Canonical,
+        context_name: &str,
+    ) -> Result<()> {
+        self.sweep_edge_impl(
+            src,
+            dst,
+            SweepFactorization::FullRank { alg, canonical },
+            context_name,
+        )
+    }
+
+    fn sweep_edge_impl(
+        &mut self,
+        src: NodeIndex,
+        dst: NodeIndex,
+        factorization: SweepFactorization<'_>,
+        context_name: &str,
+    ) -> Result<()> {
         // Find edge between src and dst
         let edge = {
             let g = self.graph.graph();
@@ -656,10 +702,14 @@ where
         }
 
         // Perform factorization
-        let factorize_result = tensor_src
-            .factorize(&left_inds, factorize_options)
-            .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
-            .with_context(|| format!("{}: factorization failed", context_name))?;
+        let factorize_result = match factorization {
+            SweepFactorization::Options(options) => tensor_src.factorize(&left_inds, options),
+            SweepFactorization::FullRank { alg, canonical } => {
+                tensor_src.factorize_full_rank(&left_inds, alg, canonical)
+            }
+        }
+        .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
+        .with_context(|| format!("{}: factorization failed", context_name))?;
 
         let left_tensor = factorize_result.left;
         let right_tensor = factorize_result.right;

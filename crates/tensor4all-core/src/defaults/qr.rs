@@ -45,18 +45,28 @@ pub enum QrError {
 /// let recovered = q.contract(&r);
 /// assert!(tensor.distance(&recovered) < 1e-12);
 /// ```
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct QrOptions {
     /// Relative tolerance for QR row-norm truncation.
     /// If `None`, uses the global default.
     pub rtol: Option<f64>,
+    truncate: bool,
+}
+
+impl Default for QrOptions {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl QrOptions {
     /// Create new QR options with no overrides.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            rtol: None,
+            truncate: true,
+        }
     }
 
     /// Set the QR truncation tolerance.
@@ -64,6 +74,13 @@ impl QrOptions {
     pub fn with_rtol(mut self, rtol: f64) -> Self {
         self.rtol = Some(rtol);
         self
+    }
+
+    pub(crate) fn full_rank() -> Self {
+        Self {
+            rtol: None,
+            truncate: false,
+        }
     }
 }
 
@@ -259,12 +276,6 @@ pub fn qr_with<T>(
     left_inds: &[DynIndex],
     options: &QrOptions,
 ) -> Result<(TensorDynLen, TensorDynLen), QrError> {
-    // Determine rtol to use
-    let rtol = options.rtol.unwrap_or(default_qr_rtol());
-    if !rtol.is_finite() || rtol < 0.0 {
-        return Err(QrError::InvalidRtol(rtol));
-    }
-
     // Unfold tensor into a native rank-2 tensor.
     let (matrix_native, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
@@ -272,22 +283,33 @@ pub fn qr_with<T>(
     let k = m.min(n);
     let (mut q_native, mut r_native) =
         qr_native_tensor(&matrix_native).map_err(QrError::ComputationError)?;
-    let r = match r_native.dtype() {
-        DType::F64 => {
-            let values = native_tensor_primal_to_dense_f64_col_major(&r_native)
-                .map_err(QrError::ComputationError)?;
-            compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
+
+    let r = if options.truncate {
+        // Determine rtol to use
+        let rtol = options.rtol.unwrap_or(default_qr_rtol());
+        if !rtol.is_finite() || rtol < 0.0 {
+            return Err(QrError::InvalidRtol(rtol));
         }
-        DType::C64 => {
-            let values = native_tensor_primal_to_dense_c64_col_major(&r_native)
-                .map_err(QrError::ComputationError)?;
-            compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
+
+        match r_native.dtype() {
+            DType::F64 => {
+                let values = native_tensor_primal_to_dense_f64_col_major(&r_native)
+                    .map_err(QrError::ComputationError)?;
+                compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
+            }
+            DType::C64 => {
+                let values = native_tensor_primal_to_dense_c64_col_major(&r_native)
+                    .map_err(QrError::ComputationError)?;
+                compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
+            }
+            other => {
+                return Err(QrError::ComputationError(anyhow::anyhow!(
+                    "native QR returned unsupported scalar type {other:?}"
+                )));
+            }
         }
-        other => {
-            return Err(QrError::ComputationError(anyhow::anyhow!(
-                "native QR returned unsupported scalar type {other:?}"
-            )));
-        }
+    } else {
+        k
     };
     if r < k {
         match q_native.dtype() {
