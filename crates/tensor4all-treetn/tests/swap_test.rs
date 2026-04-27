@@ -498,6 +498,65 @@ fn test_swap_by_index_matches_id_based_generic<T: TensorElement + From<f64>>() {
     assert_eq!(net.find_node_by_index(&s2).map(|n| n.as_str()), Some("1"));
 }
 
+#[test]
+fn test_swap_by_index_distinguishes_same_id_prime_pair() {
+    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let s = tensor4all_core::DynIndex::new_dyn(2);
+    let s_prime = s.prime();
+    let t = tensor4all_core::DynIndex::new_dyn(2);
+    let bond = tensor4all_core::DynIndex::new_dyn(1);
+    let a = TensorDynLen::from_dense(
+        vec![s.clone(), s_prime.clone(), bond.clone()],
+        vec![1.0, 2.0, 3.0, 4.0],
+    )
+    .unwrap();
+    let b = TensorDynLen::from_dense(vec![bond.clone(), t.clone()], vec![1.0, 1.0]).unwrap();
+    tn.add_tensor("A".to_string(), a).unwrap();
+    tn.add_tensor("B".to_string(), b).unwrap();
+    let na = tn.node_index(&"A".to_string()).unwrap();
+    let nb = tn.node_index(&"B".to_string()).unwrap();
+    tn.connect(na, &bond, nb, &bond).unwrap();
+
+    let mut target = HashMap::new();
+    target.insert(s_prime.clone(), "B".to_string());
+    tn.swap_site_indices_by_index(&target, &SwapOptions::default())
+        .unwrap();
+
+    let net = tn.site_index_network();
+    assert_eq!(net.find_node_by_index(&s).map(|n| n.as_str()), Some("A"));
+    assert_eq!(
+        net.find_node_by_index(&s_prime).map(|n| n.as_str()),
+        Some("B")
+    );
+}
+
+#[test]
+fn test_swap_by_id_rejects_ambiguous_same_id_prime_pair() {
+    let mut tn = TreeTN::<TensorDynLen, String>::new();
+    let s = tensor4all_core::DynIndex::new_dyn(2);
+    let s_prime = s.prime();
+    let bond = tensor4all_core::DynIndex::new_dyn(1);
+    let a = TensorDynLen::from_dense(
+        vec![s.clone(), s_prime, bond.clone()],
+        vec![1.0, 2.0, 3.0, 4.0],
+    )
+    .unwrap();
+    let b = TensorDynLen::from_dense(vec![bond.clone()], vec![1.0]).unwrap();
+    tn.add_tensor("A".to_string(), a).unwrap();
+    tn.add_tensor("B".to_string(), b).unwrap();
+    let na = tn.node_index(&"A".to_string()).unwrap();
+    let nb = tn.node_index(&"B".to_string()).unwrap();
+    tn.connect(na, &bond, nb, &bond).unwrap();
+
+    let mut target = HashMap::new();
+    target.insert(s.id().to_owned(), "B".to_string());
+    let err = tn
+        .swap_site_indices(&target, &SwapOptions::default())
+        .unwrap_err();
+
+    assert!(err.to_string().contains("ambiguous"));
+}
+
 // ============================================================================
 // f64 tests
 // ============================================================================

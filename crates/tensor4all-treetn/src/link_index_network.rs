@@ -1,6 +1,6 @@
 //! Link Index Network for bond/link index management.
 //!
-//! Provides efficient reverse lookup from index ID to edge.
+//! Provides efficient reverse lookup from full index metadata to edge.
 //! This complements `SiteIndexNetwork` (which handles site/physical indices)
 //! by handling link/bond indices between nodes.
 
@@ -11,7 +11,7 @@ use tensor4all_core::IndexLike;
 
 /// Link Index Network: manages bond/link indices with reverse lookup.
 ///
-/// Provides O(1) lookup from index ID to the edge containing that index.
+/// Provides O(1) lookup from an index to the edge containing that index.
 /// This is essential for efficient `replaceind` operations on TreeTN.
 ///
 /// # Type Parameters
@@ -21,8 +21,8 @@ pub struct LinkIndexNetwork<I>
 where
     I: IndexLike,
 {
-    /// Reverse lookup: index ID → edge containing this index
-    index_to_edge: HashMap<I::Id, EdgeIndex>,
+    /// Reverse lookup: full index metadata → edge containing this index.
+    index_to_edge: HashMap<I, EdgeIndex>,
 }
 
 impl<I> Default for LinkIndexNetwork<I>
@@ -58,7 +58,7 @@ where
     /// * `edge` - The edge index
     /// * `index` - The link index on this edge
     pub fn insert(&mut self, edge: EdgeIndex, index: &I) {
-        self.index_to_edge.insert(index.id().clone(), edge);
+        self.index_to_edge.insert(index.clone(), edge);
     }
 
     /// Remove a link index registration.
@@ -69,7 +69,7 @@ where
     /// # Returns
     /// The edge that was associated with this index, if any.
     pub fn remove(&mut self, index: &I) -> Option<EdgeIndex> {
-        self.index_to_edge.remove(index.id())
+        self.index_to_edge.remove(index)
     }
 
     /// Find the edge containing a given index.
@@ -80,22 +80,24 @@ where
     /// # Returns
     /// The edge containing this index, or None if not found.
     pub fn find_edge(&self, index: &I) -> Option<EdgeIndex> {
-        self.index_to_edge.get(index.id()).copied()
+        self.index_to_edge.get(index).copied()
     }
 
     /// Find the edge containing an index by ID.
     pub fn find_edge_by_id(&self, id: &I::Id) -> Option<EdgeIndex> {
-        self.index_to_edge.get(id).copied()
+        self.index_to_edge
+            .iter()
+            .find_map(|(index, edge)| (index.id() == id).then_some(*edge))
     }
 
     /// Check if an index is registered.
     pub fn contains(&self, index: &I) -> bool {
-        self.index_to_edge.contains_key(index.id())
+        self.index_to_edge.contains_key(index)
     }
 
     /// Check if an index ID is registered.
     pub fn contains_id(&self, id: &I::Id) -> bool {
-        self.index_to_edge.contains_key(id)
+        self.index_to_edge.keys().any(|index| index.id() == id)
     }
 
     /// Update the index for an edge (e.g., after SVD creates new bond index).
@@ -113,17 +115,17 @@ where
         new_index: &I,
         edge: EdgeIndex,
     ) -> Result<(), String> {
-        match self.index_to_edge.remove(old_index.id()) {
+        match self.index_to_edge.remove(old_index) {
             Some(old_edge) => {
                 if old_edge != edge {
                     // Restore and return error
-                    self.index_to_edge.insert(old_index.id().clone(), old_edge);
+                    self.index_to_edge.insert(old_index.clone(), old_edge);
                     return Err(format!(
                         "Edge mismatch: old_index was on edge {:?}, not {:?}",
                         old_edge, edge
                     ));
                 }
-                self.index_to_edge.insert(new_index.id().clone(), edge);
+                self.index_to_edge.insert(new_index.clone(), edge);
                 Ok(())
             }
             None => Err(format!(
@@ -148,8 +150,8 @@ where
         self.index_to_edge.clear();
     }
 
-    /// Iterate over all (index_id, edge) pairs.
-    pub fn iter(&self) -> impl Iterator<Item = (&I::Id, &EdgeIndex)> {
+    /// Iterate over all (index, edge) pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&I, &EdgeIndex)> {
         self.index_to_edge.iter()
     }
 }

@@ -123,8 +123,8 @@ fn test_iter() {
     assert_eq!(items.len(), 2);
 
     // Verify both entries are present
-    let has_idx1 = items.iter().any(|(id, &e)| *id == idx1.id() && e == edge1);
-    let has_idx2 = items.iter().any(|(id, &e)| *id == idx2.id() && e == edge2);
+    let has_idx1 = items.iter().any(|(idx, &e)| *idx == &idx1 && e == edge1);
+    let has_idx2 = items.iter().any(|(idx, &e)| *idx == &idx2 && e == edge2);
     assert!(has_idx1);
     assert!(has_idx2);
 }

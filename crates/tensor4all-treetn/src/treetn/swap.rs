@@ -159,9 +159,9 @@ where
     pub node_a: V,
     /// The second node in the directed sweep edge.
     pub node_b: V,
-    /// Site index IDs that should live on `node_a`'s side after this step.
+    /// Site index keys that should live on `node_a`'s side after this step.
     pub a_side_sites: HashSet<Id>,
-    /// Site index IDs that should live on `node_b`'s side after this step.
+    /// Site index keys that should live on `node_b`'s side after this step.
     pub b_side_sites: HashSet<Id>,
 }
 
@@ -227,7 +227,7 @@ where
     ///
     /// # Arguments
     /// * `topology` - Tree topology whose nodes are named by `V`.
-    /// * `current_assignment` - Current node for every site index ID in the network.
+    /// * `current_assignment` - Current node for every site index key in the network.
     /// * `target_assignment` - Partial target map; indices not listed keep their current side.
     /// * `root` - Sweep root and assumed initial canonical center.
     ///
@@ -235,7 +235,7 @@ where
     /// A [`SwapSchedule`] containing the ordered local updates needed to realize `target_assignment`.
     ///
     /// # Errors
-    /// Returns an error if `root` is missing, an index ID in `target_assignment`
+    /// Returns an error if `root` is missing, an index key in `target_assignment`
     /// is unknown, a referenced node is missing from `topology`, no tree path
     /// exists between required nodes, or the simulated sweeps fail to satisfy
     /// the requested target assignment within the tree-diameter pass bound.
@@ -470,19 +470,18 @@ where
 // Helpers: current assignment
 // ============================================================================
 
-/// Build index id -> node name from a TreeTN (all site indices).
-pub(crate) fn current_site_assignment<T, V>(
-    treetn: &TreeTN<T, V>,
-) -> HashMap<<T::Index as IndexLike>::Id, V>
+/// Build full site index -> node name from a TreeTN (all site indices).
+pub(crate) fn current_site_assignment<T, V>(treetn: &TreeTN<T, V>) -> HashMap<T::Index, V>
 where
     T: TensorLike,
+    T::Index: Hash + Eq,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
-    let mut out: HashMap<<T::Index as IndexLike>::Id, V> = HashMap::new();
+    let mut out: HashMap<T::Index, V> = HashMap::new();
     for node_name in treetn.node_names() {
         if let Some(site_space) = treetn.site_space(&node_name) {
             for idx in site_space {
-                out.insert(idx.id().to_owned(), node_name.clone());
+                out.insert(idx.clone(), node_name.clone());
             }
         }
     }
