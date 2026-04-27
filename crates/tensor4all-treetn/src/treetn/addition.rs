@@ -45,7 +45,9 @@ where
         indices.sort_by(|left, right| {
             left.dim()
                 .cmp(&right.dim())
+                .then_with(|| left.plev().cmp(&right.plev()))
                 .then_with(|| left.id().cmp(right.id()))
+                .then_with(|| format!("{left:?}").cmp(&format!("{right:?}")))
         });
         indices
     }

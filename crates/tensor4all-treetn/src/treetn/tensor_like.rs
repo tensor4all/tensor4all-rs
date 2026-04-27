@@ -98,7 +98,7 @@ where
             let old_in_tensor = tensor
                 .external_indices()
                 .iter()
-                .find(|idx| idx.id() == old_index.id())
+                .find(|idx| *idx == old_index)
                 .ok_or_else(|| {
                     anyhow::anyhow!("Index not found in tensor at node {:?}", node_name)
                 })?
@@ -135,7 +135,7 @@ where
                 let old_in_tensor = tensor
                     .external_indices()
                     .iter()
-                    .find(|idx| idx.id() == old_index.id())
+                    .find(|idx| *idx == old_index)
                     .ok_or_else(|| anyhow::anyhow!("Bond index not found in endpoint tensor"))?
                     .clone();
                 let new_tensor = tensor.replaceind(&old_in_tensor, new_index)?;

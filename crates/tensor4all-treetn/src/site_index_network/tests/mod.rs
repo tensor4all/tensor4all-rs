@@ -465,16 +465,6 @@ fn test_site_space_mut() {
 }
 
 #[test]
-fn test_find_node_by_index_id() {
-    let mut net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
-    let idx = DynIndex::new_dyn(2);
-    net.add_node("A".to_string(), HashSet::from([idx.clone()]))
-        .unwrap();
-
-    assert_eq!(net.find_node_by_index_id(idx.id()).unwrap(), "A");
-}
-
-#[test]
 fn test_edges_iterator() {
     let mut net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
     let empty: HashSet<DynIndex> = HashSet::new();

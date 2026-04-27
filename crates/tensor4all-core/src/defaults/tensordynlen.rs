@@ -410,7 +410,7 @@ impl TensorDynLen {
         for idx in indices {
             assert!(
                 seen.insert(idx.clone()),
-                "Tensor indices must all be unique (no duplicate IDs)"
+                "Tensor indices must all be unique"
             );
         }
     }
@@ -3038,18 +3038,18 @@ impl TensorDynLen {
         );
 
         let old_dims = self.dims();
-        let mut seen_ids = HashSet::new();
+        let mut seen_indices = HashSet::new();
         let mut old_axes = Vec::with_capacity(old_indices.len());
         for old_index in old_indices {
             anyhow::ensure!(
-                seen_ids.insert(*old_index.id()),
+                seen_indices.insert(old_index),
                 "duplicate index in old_indices"
             );
             let axis = self
                 .indices
                 .iter()
-                .position(|idx| idx.id() == old_index.id())
-                .ok_or_else(|| anyhow::anyhow!("index {:?} not found in tensor", old_index.id()))?;
+                .position(|idx| idx == old_index)
+                .ok_or_else(|| anyhow::anyhow!("index {:?} not found in tensor", old_index))?;
             anyhow::ensure!(
                 old_index.dim() == old_dims[axis],
                 "old index dimension does not match tensor axis dimension"
@@ -3083,8 +3083,8 @@ impl TensorDynLen {
         let mut result_seen = HashSet::new();
         for index in &result_indices {
             anyhow::ensure!(
-                result_seen.insert(*index.id()),
-                "fuse_indices result would contain duplicate index ID"
+                result_seen.insert(index),
+                "fuse_indices result would contain duplicate index"
             );
         }
         Self::validate_indices(&result_indices);
@@ -3157,8 +3157,8 @@ impl TensorDynLen {
         let axis = self
             .indices
             .iter()
-            .position(|idx| idx.id() == old_index.id())
-            .ok_or_else(|| anyhow::anyhow!("index {:?} not found in tensor", old_index.id()))?;
+            .position(|idx| idx == old_index)
+            .ok_or_else(|| anyhow::anyhow!("index {:?} not found in tensor", old_index))?;
 
         let replacement_dims: Vec<usize> = new_indices.iter().map(DynIndex::dim).collect();
         let replacement_product = checked_product(&replacement_dims)?;

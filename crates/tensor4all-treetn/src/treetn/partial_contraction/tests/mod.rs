@@ -1,6 +1,7 @@
 use super::*;
 use crate::treetn::contraction::{ContractionMethod, ContractionOptions};
 use crate::{factorize_tensor_to_treetn, TreeTopology};
+use num_complex::Complex64;
 use tensor4all_core::{DynIndex, TensorDynLen};
 
 struct PartialContractionInputs {
@@ -191,6 +192,68 @@ fn test_partial_contract_rejects_index_not_in_network() {
 }
 
 #[test]
+fn test_partial_contract_rejects_index_not_in_second_network() {
+    let PartialContractionInputs {
+        tn_a,
+        tn_b,
+        s_contract_a,
+        ..
+    } = make_partial_contraction_inputs();
+
+    let unknown = DynIndex::new_dyn(2);
+    let spec = PartialContractionSpec {
+        contract_pairs: vec![(s_contract_a, unknown)],
+        diagonal_pairs: vec![],
+        output_order: None,
+    };
+    let result = partial_contract(
+        &tn_a,
+        &tn_b,
+        &spec,
+        &"A".to_string(),
+        ContractionOptions::default(),
+    );
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("not found in second TreeTN"));
+}
+
+#[test]
+fn test_partial_contract_rejects_duplicate_second_index_usage() {
+    let PartialContractionInputs {
+        tn_a,
+        tn_b,
+        s_contract_a,
+        s_contract_b,
+        s_multiply_a,
+        ..
+    } = make_partial_contraction_inputs();
+
+    let spec = PartialContractionSpec {
+        contract_pairs: vec![
+            (s_contract_a, s_contract_b.clone()),
+            (s_multiply_a, s_contract_b),
+        ],
+        diagonal_pairs: vec![],
+        output_order: None,
+    };
+    let result = partial_contract(
+        &tn_a,
+        &tn_b,
+        &spec,
+        &"A".to_string(),
+        ContractionOptions::default(),
+    );
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("second TreeTN index"));
+}
+
+#[test]
 fn test_partial_contract_contract_only() {
     // Contract s_contract pair, no multiply. Sites on different nodes.
     let s_a = DynIndex::new_dyn(3);
@@ -254,6 +317,71 @@ fn test_partial_contract_empty_spec() {
 
     // Both s_a and s_b remain as external
     assert_eq!(result.external_indices().len(), 2);
+}
+
+#[test]
+fn test_partial_contract_rejects_bad_output_order_length() {
+    let s_a = DynIndex::new_dyn(2);
+    let s_b = DynIndex::new_dyn(3);
+
+    let t_a = TensorDynLen::from_dense(vec![s_a.clone()], vec![1.0; 2]).unwrap();
+    let t_b = TensorDynLen::from_dense(vec![s_b], vec![2.0; 3]).unwrap();
+
+    let tn_a =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let tn_b =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
+
+    let spec = PartialContractionSpec {
+        contract_pairs: vec![],
+        diagonal_pairs: vec![],
+        output_order: Some(vec![s_a]),
+    };
+    let result = partial_contract(
+        &tn_a,
+        &tn_b,
+        &spec,
+        &"A".to_string(),
+        ContractionOptions::new(ContractionMethod::Naive),
+    );
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("output_order length"));
+}
+
+#[test]
+fn test_partial_contract_rejects_unknown_output_order_index() {
+    let s_a = DynIndex::new_dyn(2);
+    let s_b = DynIndex::new_dyn(3);
+    let unknown = DynIndex::new_dyn(3);
+
+    let t_a = TensorDynLen::from_dense(vec![s_a.clone()], vec![1.0; 2]).unwrap();
+    let t_b = TensorDynLen::from_dense(vec![s_b], vec![2.0; 3]).unwrap();
+
+    let tn_a =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let tn_b =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
+
+    let spec = PartialContractionSpec {
+        contract_pairs: vec![],
+        diagonal_pairs: vec![],
+        output_order: Some(vec![s_a, unknown]),
+    };
+    let result = partial_contract(
+        &tn_a,
+        &tn_b,
+        &spec,
+        &"A".to_string(),
+        ContractionOptions::new(ContractionMethod::Naive),
+    );
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("output_order must contain exactly"));
 }
 
 #[test]
@@ -403,6 +531,43 @@ fn test_partial_contract_rejects_incompatible_topology_union() {
 }
 
 #[test]
+fn test_partial_contract_mismatched_topology_scalar_result() {
+    let s_a = DynIndex::new_dyn(2);
+    let s_b = DynIndex::new_dyn(2);
+    let bond_b = DynIndex::new_dyn(1);
+
+    let t_a = TensorDynLen::from_dense(vec![s_a.clone()], vec![1.0, 2.0]).unwrap();
+    let tn_a =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+
+    let t_b0 = TensorDynLen::from_dense(vec![s_b.clone(), bond_b.clone()], vec![3.0, 4.0]).unwrap();
+    let t_b1 = TensorDynLen::from_dense(vec![bond_b], vec![1.0]).unwrap();
+    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![t_b0, t_b1],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+
+    let spec = PartialContractionSpec {
+        contract_pairs: vec![(s_a, s_b)],
+        diagonal_pairs: vec![],
+        output_order: None,
+    };
+    let result = partial_contract(
+        &tn_a,
+        &tn_b,
+        &spec,
+        &"A".to_string(),
+        ContractionOptions::default(),
+    )
+    .unwrap();
+
+    assert!(result.external_indices().is_empty());
+    let dense = result.contract_to_tensor().unwrap();
+    assert_eq!(dense.as_slice_f64().unwrap(), vec![11.0]);
+}
+
+#[test]
 fn test_partial_contract_honors_output_order() {
     let a0 = DynIndex::new_dyn(2);
     let a1 = DynIndex::new_dyn(2);
@@ -469,6 +634,50 @@ fn test_partial_contract_honors_output_order() {
     assert_eq!(indices.len(), 2);
     assert_eq!(indices[0].id(), a2.id());
     assert_eq!(indices[1].id(), a0.id());
+}
+
+#[test]
+fn test_partial_contract_complex_diagonal_pair_keeps_left_leg() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+
+    let a = TensorDynLen::from_dense(
+        vec![i.clone()],
+        vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, -1.0)],
+    )
+    .unwrap();
+    let b = TensorDynLen::from_dense(
+        vec![j.clone()],
+        vec![Complex64::new(3.0, 0.5), Complex64::new(-1.0, 4.0)],
+    )
+    .unwrap();
+
+    let tn_a =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![a], vec!["A".to_string()]).unwrap();
+    let tn_b =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![b], vec!["A".to_string()]).unwrap();
+
+    let spec = PartialContractionSpec {
+        contract_pairs: vec![],
+        diagonal_pairs: vec![(i.clone(), j.clone())],
+        output_order: Some(vec![i.clone()]),
+    };
+    let result = partial_contract(
+        &tn_a,
+        &tn_b,
+        &spec,
+        &"A".to_string(),
+        ContractionOptions::default(),
+    )
+    .unwrap();
+
+    let dense = result.contract_to_tensor().unwrap();
+    let expected = TensorDynLen::from_dense(
+        vec![i],
+        vec![Complex64::new(2.5, 3.5), Complex64::new(2.0, 9.0)],
+    )
+    .unwrap();
+    assert!(dense.isapprox(&expected, 1e-12, 0.0));
 }
 
 #[test]
@@ -561,9 +770,9 @@ fn test_partial_contract_matches_dense_reference_for_cross_topology_chain() {
 
     let topology_a = TreeTopology::new(
         [
-            (0usize, vec![*x_a.id()]),
-            (1usize, vec![*w_a.id()]),
-            (2usize, vec![*i_a.id()]),
+            (0usize, vec![x_a.clone()]),
+            (1usize, vec![w_a.clone()]),
+            (2usize, vec![i_a.clone()]),
         ]
         .into_iter()
         .collect(),
@@ -571,11 +780,11 @@ fn test_partial_contract_matches_dense_reference_for_cross_topology_chain() {
     );
     let topology_b = TreeTopology::new(
         [
-            (0usize, vec![*x_b.id()]),
-            (1usize, vec![*w_b.id()]),
-            (2usize, vec![*z_b.id()]),
-            (3usize, vec![*i_b.id()]),
-            (4usize, vec![*j_b.id()]),
+            (0usize, vec![x_b.clone()]),
+            (1usize, vec![w_b.clone()]),
+            (2usize, vec![z_b.clone()]),
+            (3usize, vec![i_b.clone()]),
+            (4usize, vec![j_b.clone()]),
         ]
         .into_iter()
         .collect(),

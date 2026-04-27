@@ -1,7 +1,7 @@
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index_ops::{
-    common_inds, hascommoninds, hasind, hasinds, noncommon_inds, replaceinds, replaceinds_in_place,
-    union_inds, unique_inds, ReplaceIndsError,
+    common_inds, hascommoninds, hasind, hasinds, noncommon_inds, prepare_contraction_pairs,
+    replaceinds, replaceinds_in_place, union_inds, unique_inds, ReplaceIndsError,
 };
 use tensor4all_core::IndexLike;
 
@@ -195,6 +195,48 @@ fn test_common_inds_integration() {
 
     // Verify hascommoninds matches
     assert!(hascommoninds(&indices_a, &indices_b));
+}
+
+#[test]
+fn test_index_ops_distinguish_same_id_prime_pair() {
+    let i = Index::new_dyn(2);
+    let i_prime = i.prime();
+    let replacement = i_prime.sim();
+    let indices = vec![i.clone(), i_prime.clone()];
+
+    assert!(hasind(&indices, &i));
+    assert!(hasind(&indices, &i_prime));
+    assert!(hasinds(&indices, &[i.clone(), i_prime.clone()]));
+    assert!(!hascommoninds(
+        std::slice::from_ref(&i),
+        std::slice::from_ref(&i_prime)
+    ));
+    assert!(common_inds(std::slice::from_ref(&i), std::slice::from_ref(&i_prime)).is_empty());
+    assert_eq!(
+        unique_inds(&indices, std::slice::from_ref(&i_prime)),
+        vec![i.clone()]
+    );
+
+    let replaced = replaceinds(indices, &[(i_prime.clone(), replacement.clone())]).unwrap();
+    assert_eq!(replaced, vec![i, replacement]);
+}
+
+#[test]
+fn test_prepare_contraction_pairs_selects_exact_same_id_prime_index() {
+    let i = Index::new_dyn(2);
+    let i_prime = i.prime();
+    let spec = prepare_contraction_pairs(
+        &[i.clone(), i_prime.clone()],
+        &[2, 2],
+        std::slice::from_ref(&i_prime),
+        &[2],
+        &[(i_prime.clone(), i_prime.clone())],
+    )
+    .unwrap();
+
+    assert_eq!(spec.axes_a, vec![1]);
+    assert_eq!(spec.axes_b, vec![0]);
+    assert_eq!(spec.result_indices, vec![i]);
 }
 
 #[test]

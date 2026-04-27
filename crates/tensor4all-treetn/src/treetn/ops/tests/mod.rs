@@ -1,5 +1,5 @@
 use num_complex::Complex64;
-use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
+use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex, TensorDynLen};
 
 use crate::TreeTN;
 
@@ -66,4 +66,27 @@ fn test_inner_preserves_complex_phase() {
 
     assert!((inner.real() + 5.0).abs() < 1.0e-10);
     assert!((inner.imag() - 2.0).abs() < 1.0e-10);
+}
+
+#[test]
+fn test_evaluate_accepts_full_indices_for_same_id_prime_pair() {
+    let input = DynIndex::new_dyn(2);
+    let output = input.prime();
+    let tensor = TensorDynLen::from_dense(
+        vec![input.clone(), output.clone()],
+        vec![10.0, 20.0, 30.0, 40.0],
+    )
+    .unwrap();
+    let tn = TreeTN::from_tensors(vec![tensor], vec![0usize]).unwrap();
+
+    let indices = vec![input, output];
+    let values = [0usize, 0usize, 1usize, 1usize];
+    let shape = [2usize, 2usize];
+    let result = tn
+        .evaluate(&indices, ColMajorArrayRef::new(&values, &shape))
+        .unwrap();
+
+    assert_eq!(result.len(), 2);
+    assert!((result[0].real() - 10.0).abs() < 1.0e-10);
+    assert!((result[1].real() - 40.0).abs() < 1.0e-10);
 }

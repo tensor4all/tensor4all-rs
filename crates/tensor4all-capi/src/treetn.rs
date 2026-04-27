@@ -218,7 +218,7 @@ fn collect_target_assignment(
     assignment_target_vertices: *const libc::size_t,
     n_assignments: usize,
     what: &str,
-) -> CapiResult<HashMap<<InternalIndex as IndexLike>::Id, usize>> {
+) -> CapiResult<HashMap<InternalIndex, usize>> {
     let siteinds = collect_indices(
         assignment_siteinds,
         n_assignments,
@@ -231,13 +231,12 @@ fn collect_target_assignment(
     )?;
     let mut target_assignment = HashMap::with_capacity(n_assignments);
     for (siteind, target_vertex) in siteinds.into_iter().zip(target_vertices) {
-        let site_id = *siteind.id();
-        if let Some(previous_target) = target_assignment.insert(site_id, target_vertex) {
+        if let Some(previous_target) = target_assignment.insert(siteind.clone(), target_vertex) {
             return Err(capi_error(
                 T4A_INVALID_ARGUMENT,
                 format!(
                     "{what}: duplicate site index assignment for {:?}: {} and {}",
-                    site_id, previous_target, target_vertex
+                    siteind, previous_target, target_vertex
                 ),
             ));
         }
@@ -284,8 +283,7 @@ fn build_target_network(
     )?;
 
     let mut network = SiteIndexNetwork::with_capacity(n_target_vertices, n_target_edges);
-    let mut seen_siteinds: HashMap<<InternalIndex as IndexLike>::Id, usize> =
-        HashMap::with_capacity(total_siteinds);
+    let mut seen_siteinds: HashMap<InternalIndex, usize> = HashMap::with_capacity(total_siteinds);
     let mut offset = 0usize;
     for (slot, &vertex) in vertices.iter().enumerate() {
         let len = siteind_lens[slot];
@@ -297,13 +295,12 @@ fn build_target_network(
         }
         let mut site_space = HashSet::with_capacity(len);
         for siteind in &flat_siteinds[offset..offset + len] {
-            let site_id = *siteind.id();
-            if let Some(previous_vertex) = seen_siteinds.insert(site_id, vertex) {
+            if let Some(previous_vertex) = seen_siteinds.insert(siteind.clone(), vertex) {
                 return Err(capi_error(
                     T4A_INVALID_ARGUMENT,
                     format!(
                         "{what}: duplicate site index {:?} appears in target vertices {} and {}",
-                        site_id, previous_vertex, vertex
+                        siteind, previous_vertex, vertex
                     ),
                 ));
             }

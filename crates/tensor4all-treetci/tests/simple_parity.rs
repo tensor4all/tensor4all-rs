@@ -3,7 +3,7 @@ mod common;
 use anyhow::Result;
 use common::{assert_complex_samples_close, assert_real_samples_close};
 use num_complex::Complex64;
-use tensor4all_core::{ColMajorArrayRef, IndexLike};
+use tensor4all_core::ColMajorArrayRef;
 use tensor4all_treetci::{
     crossinterpolate2, DefaultProposer, GlobalIndexBatch, SimpleProposer, TreeTciEdge,
     TreeTciGraph, TreeTciOptions,
@@ -63,23 +63,26 @@ fn simple_tree_parity_matches_reference_points() {
     )
     .unwrap();
 
-    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
-    // Build position map: vertex -> position in index_ids
+    let (indices, _vertices) = tn.all_site_indices().unwrap();
+    // Build position map: vertex -> position in indices
     let pos: Vec<usize> = (0..7)
         .map(|v| {
-            let site_id = *tn.site_space(&v).unwrap().iter().next().unwrap().id();
-            index_ids.iter().position(|id| *id == site_id).unwrap()
+            let site_index = tn.site_space(&v).unwrap().iter().next().unwrap();
+            indices
+                .iter()
+                .position(|index| index == site_index)
+                .unwrap()
         })
         .collect();
 
     let eval = |point: [usize; 7]| -> f64 {
-        let mut data = vec![0usize; index_ids.len()];
+        let mut data = vec![0usize; indices.len()];
         for (v, &val) in point.iter().enumerate() {
             data[pos[v]] = val;
         }
-        let shape = [index_ids.len(), 1];
+        let shape = [indices.len(), 1];
         let values = ColMajorArrayRef::new(&data, &shape);
-        tn.evaluate(&index_ids, values).unwrap()[0].real()
+        tn.evaluate(&indices, values).unwrap()[0].real()
     };
 
     let got = [
@@ -116,22 +119,25 @@ fn simple_tree_product_function_is_exact_on_branching_tree() {
     )
     .unwrap();
 
-    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
+    let (indices, _vertices) = tn.all_site_indices().unwrap();
     let pos: Vec<usize> = (0..7)
         .map(|v| {
-            let site_id = *tn.site_space(&v).unwrap().iter().next().unwrap().id();
-            index_ids.iter().position(|id| *id == site_id).unwrap()
+            let site_index = tn.site_space(&v).unwrap().iter().next().unwrap();
+            indices
+                .iter()
+                .position(|index| index == site_index)
+                .unwrap()
         })
         .collect();
 
     let eval = |point: [usize; 7]| -> f64 {
-        let mut data = vec![0usize; index_ids.len()];
+        let mut data = vec![0usize; indices.len()];
         for (v, &val) in point.iter().enumerate() {
             data[pos[v]] = val;
         }
-        let shape = [index_ids.len(), 1];
+        let shape = [indices.len(), 1];
         let values = ColMajorArrayRef::new(&data, &shape);
-        tn.evaluate(&index_ids, values).unwrap()[0].real()
+        tn.evaluate(&indices, values).unwrap()[0].real()
     };
 
     let got = [
@@ -172,22 +178,25 @@ fn simple_tree_complex_product_function_is_exact_on_branching_tree() {
     )
     .unwrap();
 
-    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
+    let (indices, _vertices) = tn.all_site_indices().unwrap();
     let pos: Vec<usize> = (0..7)
         .map(|v| {
-            let site_id = *tn.site_space(&v).unwrap().iter().next().unwrap().id();
-            index_ids.iter().position(|id| *id == site_id).unwrap()
+            let site_index = tn.site_space(&v).unwrap().iter().next().unwrap();
+            indices
+                .iter()
+                .position(|index| index == site_index)
+                .unwrap()
         })
         .collect();
 
     let eval = |point: [usize; 7]| {
-        let mut data = vec![0usize; index_ids.len()];
+        let mut data = vec![0usize; indices.len()];
         for (v, &val) in point.iter().enumerate() {
             data[pos[v]] = val;
         }
-        let shape = [index_ids.len(), 1];
+        let shape = [indices.len(), 1];
         let values = ColMajorArrayRef::new(&data, &shape);
-        tn.evaluate(&index_ids, values)
+        tn.evaluate(&indices, values)
             .unwrap()
             .into_iter()
             .next()
@@ -236,25 +245,28 @@ fn simple_tree_complex_product_function_is_exact_on_two_site_tree() {
     )
     .unwrap();
 
-    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
+    let (indices, _vertices) = tn.all_site_indices().unwrap();
     let pos: Vec<usize> = (0..2)
         .map(|v| {
-            let site_id = *tn.site_space(&v).unwrap().iter().next().unwrap().id();
-            index_ids.iter().position(|id| *id == site_id).unwrap()
+            let site_index = tn.site_space(&v).unwrap().iter().next().unwrap();
+            indices
+                .iter()
+                .position(|index| index == site_index)
+                .unwrap()
         })
         .collect();
 
     let got = [[0, 0], [0, 1], [1, 0], [1, 1]]
         .into_iter()
         .map(|point| {
-            let mut data = vec![0usize; index_ids.len()];
+            let mut data = vec![0usize; indices.len()];
             for (v, &val) in point.iter().enumerate() {
                 data[pos[v]] = val;
             }
-            let shape = [index_ids.len(), 1];
+            let shape = [indices.len(), 1];
             let values = ColMajorArrayRef::new(&data, &shape);
             let value = tn
-                .evaluate(&index_ids, values)
+                .evaluate(&indices, values)
                 .unwrap()
                 .into_iter()
                 .next()

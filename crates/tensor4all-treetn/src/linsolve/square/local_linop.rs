@@ -116,12 +116,8 @@ where
                         None => continue,
                     };
 
-                    // Only replace if hx actually contains the bra bond
-                    if hx
-                        .external_indices()
-                        .iter()
-                        .any(|idx| idx.id() == bra_bond.id())
-                    {
+                    // Only replace if hx actually contains the exact bra bond.
+                    if hx.external_indices().iter().any(|idx| idx == bra_bond) {
                         hx = hx.replaceind(bra_bond, ket_bond)?;
                     }
                 }
@@ -133,25 +129,27 @@ where
             return hx.scale(self.a1.clone());
         }
 
-        // Align hx indices to match x's index order for axpby
-        // Check that hx and x have the same index structure (by ID and count)
+        // Align hx indices to match x's index order for axpby.
+        // Check that hx and x have the same full index structure.
         let x_indices = x.external_indices();
         let hx_indices = hx.external_indices();
-        let x_ids: std::collections::HashSet<_> = x_indices.iter().map(|i| i.id()).collect();
-        let hx_ids: std::collections::HashSet<_> = hx_indices.iter().map(|i| i.id()).collect();
+        let x_index_keys: std::collections::HashSet<_> =
+            x_indices.iter().map(|i| (i.clone(), i.dim())).collect();
+        let hx_index_keys: std::collections::HashSet<_> =
+            hx_indices.iter().map(|i| (i.clone(), i.dim())).collect();
 
-        let hx_aligned = if x_ids == hx_ids && x_indices.len() == hx_indices.len() {
+        let hx_aligned = if x_index_keys == hx_index_keys && x_indices.len() == hx_indices.len() {
             // Same index set and count - permute to match order
             hx.permuteinds(&x_indices)?
         } else {
             return Err(anyhow::anyhow!(
-                "LocalLinOp::apply: index structure mismatch between operator output (hx) and input (x):\n  x has {} indices: {:?}\n  hx has {} indices: {:?}\n  x IDs: {:?}\n  hx IDs: {:?}\n\nThis suggests the projected operator application produced output with different index structure than expected.",
+                "LocalLinOp::apply: index structure mismatch between operator output (hx) and input (x):\n  x has {} indices: {:?}\n  hx has {} indices: {:?}\n  x index keys: {:?}\n  hx index keys: {:?}\n\nThis suggests the projected operator application produced output with different index structure than expected.",
                 x_indices.len(),
                 x_indices.iter().map(|i| format!("{:?}:{}", i.id(), i.dim())).collect::<Vec<_>>(),
                 hx_indices.len(),
                 hx_indices.iter().map(|i| format!("{:?}:{}", i.id(), i.dim())).collect::<Vec<_>>(),
-                x_ids.iter().collect::<Vec<_>>(),
-                hx_ids.iter().collect::<Vec<_>>(),
+                x_index_keys.iter().map(|(i, dim)| format!("{i:?}:{dim}")).collect::<Vec<_>>(),
+                hx_index_keys.iter().map(|(i, dim)| format!("{i:?}:{dim}")).collect::<Vec<_>>(),
             ));
         };
 

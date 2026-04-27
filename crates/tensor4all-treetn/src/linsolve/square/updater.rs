@@ -372,30 +372,30 @@ where
 
     /// Build TreeTopology for the subtree region from the solved tensor.
     ///
-    /// Maps each node to the index IDs belonging to it in the solved tensor.
+    /// Maps each node to the indices belonging to it in the solved tensor.
     fn build_subtree_topology(
         &self,
         solved_tensor: &T,
         region: &[V],
         full_treetn: &TreeTN<T, V>,
-    ) -> Result<TreeTopology<V, <T::Index as IndexLike>::Id>> {
+    ) -> Result<TreeTopology<V, T::Index>> {
         use std::collections::HashMap;
 
-        let mut nodes: HashMap<V, Vec<<T::Index as IndexLike>::Id>> = HashMap::new();
+        let mut nodes: HashMap<V, Vec<T::Index>> = HashMap::new();
         let mut edges: Vec<(V, V)> = Vec::new();
 
         let solved_indices = solved_tensor.external_indices();
 
-        // For each node in the region, find which index IDs belong to it
+        // For each node in the region, find which indices belong to it.
         for node in region {
-            let mut ids = Vec::new();
+            let mut indices = Vec::new();
 
             // Get site indices for this node
             if let Some(site_indices) = full_treetn.site_space(node) {
                 for site_idx in site_indices {
-                    // Verify the index exists in solved_tensor and collect its ID
-                    if solved_indices.iter().any(|idx| idx.id() == site_idx.id()) {
-                        ids.push(site_idx.id().clone());
+                    // Verify the index exists in solved_tensor and collect it.
+                    if solved_indices.iter().any(|idx| idx == site_idx) {
+                        indices.push(site_idx.clone());
                     }
                 }
             }
@@ -406,15 +406,15 @@ where
                     // This is an external neighbor - the bond belongs to this node
                     if let Some(edge) = full_treetn.edge_between(node, &neighbor) {
                         if let Some(bond) = full_treetn.bond_index(edge) {
-                            if solved_indices.iter().any(|idx| idx.id() == bond.id()) {
-                                ids.push(bond.id().clone());
+                            if solved_indices.iter().any(|idx| idx == bond) {
+                                indices.push(bond.clone());
                             }
                         }
                     }
                 }
             }
 
-            nodes.insert(node.clone(), ids);
+            nodes.insert(node.clone(), indices);
         }
 
         // Build edges between nodes in the region
@@ -439,10 +439,10 @@ where
     ) -> Result<()> {
         use std::collections::HashMap;
 
-        // Phase 1: Build a mapping from decomposed bond IDs to new bond indices
+        // Phase 1: Build a mapping from decomposed bonds to new bond indices
         // For internal bonds, we create a single new bond index that will be used
         // for both nodes sharing that edge
-        let mut bond_mapping: HashMap<<T::Index as IndexLike>::Id, T::Index> = HashMap::new();
+        let mut bond_mapping: HashMap<T::Index, T::Index> = HashMap::new();
 
         for (i, node_a) in region.iter().enumerate() {
             for node_b in region.iter().skip(i + 1) {
@@ -453,7 +453,7 @@ where
                         // Use sim() once for this edge to avoid ID collisions.
                         if let Some(orig_edge) = subtree.edge_between(node_a, node_b) {
                             let new_bond = decomp_bond.sim();
-                            bond_mapping.insert(decomp_bond.id().clone(), new_bond.clone());
+                            bond_mapping.insert(decomp_bond.clone(), new_bond.clone());
 
                             // Update the edge bond in subtree
                             subtree.replace_edge_bond(orig_edge, new_bond)?;
@@ -479,7 +479,7 @@ where
                     // Internal bond - use the mapped bond
                     if let Some(decomp_edge) = decomposed.edge_between(node, &neighbor) {
                         if let Some(decomp_bond) = decomposed.bond_index(decomp_edge) {
-                            if let Some(new_bond) = bond_mapping.get(decomp_bond.id()) {
+                            if let Some(new_bond) = bond_mapping.get(decomp_bond) {
                                 new_tensor = new_tensor.replaceind(decomp_bond, new_bond)?;
                             }
                         }
@@ -514,20 +514,20 @@ where
         // the current `state`. For GMRES operations (like b - A*x), they must match.
         //
         // For MPO cases, external indices should match (validated earlier), but the order
-        // may differ. We use ID-based matching to align them.
+        // may differ. Use full index matching to align them.
         let init_indices = init.external_indices();
         let rhs_indices = rhs_local_raw.external_indices();
 
         let rhs_local = if self.index_sets_match(&init_indices, &rhs_indices) {
-            // Same set of indices (by ID) and same count - check if order matches
+            // Same set of indices and same count - check if order matches
             let indices_match = init_indices
                 .iter()
                 .zip(rhs_indices.iter())
-                .all(|(ii, ri)| ii.id() == ri.id() && ii.dim() == ri.dim());
+                .all(|(ii, ri)| ii == ri && ii.dim() == ri.dim());
             if indices_match {
                 rhs_local_raw
             } else {
-                // Permute RHS indices to init index order (matched by ID)
+                // Permute RHS indices to init index order.
                 // Note: permuteinds requires same length, which we've already checked
                 rhs_local_raw.permuteinds(&init_indices)?
             }
@@ -588,13 +588,12 @@ where
         // Extract updated region from ket_state
         let ket_region = ket_state.extract_subtree(&step.nodes)?;
 
-        // Build mapping from ket bond IDs to reference bond indices for *all* bonds incident to the region.
+        // Build mapping from ket bonds to reference bond indices for *all* bonds incident to the region.
         //
-        // Important: reference_state bond IDs must remain stable across steps, even when an edge alternates
+        // Important: reference_state bonds must remain stable across steps, even when an edge alternates
         // between being a boundary edge and an internal edge in different steps (as happens in sweeps).
-        // Therefore, we always reuse the current reference_state bond indices, and never create fresh IDs here.
-        let mut ket_to_ref_bond_map: HashMap<<T::Index as IndexLike>::Id, T::Index> =
-            HashMap::new();
+        // Therefore, we always reuse the current reference_state bond indices, and never create fresh bonds here.
+        let mut ket_to_ref_bond_map: HashMap<T::Index, T::Index> = HashMap::new();
 
         // Populate mapping for all edges incident to region nodes.
         // - Boundary edges (region ↔ outside): use reference_state's existing bond IDs for cache stability
@@ -626,7 +625,7 @@ where
                         None => continue,
                     }
                 };
-                ket_to_ref_bond_map.insert(ket_bond.id().clone(), ref_bond);
+                ket_to_ref_bond_map.insert(ket_bond.clone(), ref_bond);
             }
         }
 
@@ -660,7 +659,7 @@ where
             for neighbor in neighbors {
                 if let Some(edge) = ref_region.edge_between(node, &neighbor) {
                     if let Some(bond) = ref_region.bond_index(edge) {
-                        if let Some(new_bond) = ket_to_ref_bond_map.get(bond.id()) {
+                        if let Some(new_bond) = ket_to_ref_bond_map.get(bond) {
                             edges_to_update.push((node.clone(), neighbor, new_bond.clone()));
                         }
                     }
@@ -683,10 +682,10 @@ where
 
                     for ket_idx in &tensor_indices {
                         // Replace if this index is one of the region's bond indices (internal or boundary)
-                        if let Some(ref_bond) = ket_to_ref_bond_map.get(ket_idx.id()) {
+                        if let Some(ref_bond) = ket_to_ref_bond_map.get(ket_idx) {
                             new_tensor = new_tensor.replaceind(ket_idx, ref_bond)?;
                         }
-                        // Site indices are kept as-is (same IDs in reference and ket)
+                        // Site indices are kept as-is.
                     }
 
                     ref_region.replace_tensor(node_idx, new_tensor)?;
@@ -821,9 +820,11 @@ where
         if init_indices.len() != rhs_indices.len() {
             return false;
         }
-        let init_ids: std::collections::HashSet<_> = init_indices.iter().map(|i| i.id()).collect();
-        let rhs_ids: std::collections::HashSet<_> = rhs_indices.iter().map(|i| i.id()).collect();
-        init_ids == rhs_ids
+        let init_keys: std::collections::HashSet<_> =
+            init_indices.iter().map(|i| (i.clone(), i.dim())).collect();
+        let rhs_keys: std::collections::HashSet<_> =
+            rhs_indices.iter().map(|i| (i.clone(), i.dim())).collect();
+        init_keys == rhs_keys
     }
 
     fn index_structure_mismatch_message(
@@ -833,27 +834,17 @@ where
         header: &str,
         footer: &str,
     ) -> String {
-        let init_ids: std::collections::HashSet<_> = init_indices.iter().map(|i| i.id()).collect();
-        let rhs_ids: std::collections::HashSet<_> = rhs_indices.iter().map(|i| i.id()).collect();
-        let extra_in_rhs: Vec<_> = rhs_ids
-            .difference(&init_ids)
-            .map(|id| {
-                rhs_indices
-                    .iter()
-                    .find(|i| i.id() == *id)
-                    .map(|i| format!("{:?}:{}", id, i.dim()))
-                    .unwrap_or_else(|| format!("{:?}:?", id))
-            })
+        let init_keys: std::collections::HashSet<_> =
+            init_indices.iter().map(|i| (i.clone(), i.dim())).collect();
+        let rhs_keys: std::collections::HashSet<_> =
+            rhs_indices.iter().map(|i| (i.clone(), i.dim())).collect();
+        let extra_in_rhs: Vec<_> = rhs_keys
+            .difference(&init_keys)
+            .map(|(idx, dim)| format!("{idx:?}:{dim}"))
             .collect();
-        let missing_in_rhs: Vec<_> = init_ids
-            .difference(&rhs_ids)
-            .map(|id| {
-                init_indices
-                    .iter()
-                    .find(|i| i.id() == *id)
-                    .map(|i| format!("{:?}:{}", id, i.dim()))
-                    .unwrap_or_else(|| format!("{:?}:?", id))
-            })
+        let missing_in_rhs: Vec<_> = init_keys
+            .difference(&rhs_keys)
+            .map(|(idx, dim)| format!("{idx:?}:{dim}"))
             .collect();
 
         format!(
@@ -988,5 +979,26 @@ where
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tensor4all_core::{DynIndex, TensorDynLen};
+
+    use super::*;
+
+    #[test]
+    fn index_sets_match_distinguishes_same_id_prime_pair() {
+        let updater = SquareLinsolveUpdater::<TensorDynLen, usize>::new(
+            TreeTN::new(),
+            TreeTN::new(),
+            LinsolveOptions::default(),
+        );
+        let i = DynIndex::new_dyn(2);
+        let i_prime = i.prime();
+
+        assert!(updater.index_sets_match(std::slice::from_ref(&i), std::slice::from_ref(&i)));
+        assert!(!updater.index_sets_match(&[i], &[i_prime]));
     }
 }

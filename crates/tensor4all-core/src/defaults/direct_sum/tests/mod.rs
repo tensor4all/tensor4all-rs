@@ -78,6 +78,41 @@ fn test_direct_sum_multiple_pairs() {
 }
 
 #[test]
+fn test_direct_sum_preserves_same_id_prime_pair_common_indices() {
+    let i = DynIndex::new_dyn(2);
+    let i_prime = i.prime();
+    let j_a = DynIndex::new_dyn(2);
+    let j_b = DynIndex::new_dyn(3);
+
+    let a = TensorDynLen::from_dense(
+        vec![i.clone(), i_prime.clone(), j_a.clone()],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+    )
+    .unwrap();
+    let b = TensorDynLen::from_dense(
+        vec![i.clone(), i_prime.clone(), j_b.clone()],
+        vec![
+            10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 110.0, 120.0,
+        ],
+    )
+    .unwrap();
+
+    let (result, new_indices) = direct_sum(&a, &b, &[(j_a, j_b)]).unwrap();
+
+    assert_eq!(result.indices()[0], i);
+    assert_eq!(result.indices()[1], i_prime);
+    assert_eq!(result.indices()[2], new_indices[0]);
+    assert_eq!(result.dims(), vec![2, 2, 5]);
+
+    let data = result.to_vec::<f64>().unwrap();
+    assert_eq!(&data[0..8], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+    assert_eq!(
+        &data[8..],
+        &[10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 110.0, 120.0]
+    );
+}
+
+#[test]
 fn test_direct_sum_c64() {
     // Test the complex64 code path
     let i = DynIndex::new_dyn(2);

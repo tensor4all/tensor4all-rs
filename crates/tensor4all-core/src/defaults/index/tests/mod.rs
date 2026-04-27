@@ -62,6 +62,52 @@ fn test_index_like_basic() {
 }
 
 #[test]
+fn test_tagset_wrapper_trait_methods() {
+    let mut tags = TagSet::new();
+    assert!(tags.is_empty());
+    assert_eq!(std::sync::Arc::strong_count(tags.inner()), 1);
+    assert_eq!(TagSetLike::len(&tags), 0);
+    assert_eq!(TagSetLike::capacity(&tags), 4);
+    assert_eq!(TagSetLike::get(&tags, 0), None);
+
+    TagSetLike::add_tag(&mut tags, "Site").unwrap();
+    TagSetLike::add_tag(&mut tags, "Link").unwrap();
+
+    assert!(!tags.is_empty());
+    assert_eq!(TagSetLike::len(&tags), 2);
+    assert!(TagSetLike::has_tag(&tags, "Site"));
+    assert_eq!(TagSetLike::get(&tags, 0), Some("Link".to_string()));
+    assert_eq!(
+        TagSetLike::iter(&tags).collect::<Vec<_>>(),
+        vec!["Link".to_string(), "Site".to_string()]
+    );
+    assert!(TagSetLike::remove_tag(&mut tags, "Site"));
+    assert!(!TagSetLike::remove_tag(&mut tags, "Missing"));
+    assert!(!TagSetLike::has_tag(&tags, "Site"));
+}
+
+#[test]
+fn test_index_generic_constructors_with_tags() {
+    let tags = TagSet::from_tags(&["Site", "Link"]).unwrap();
+
+    let with_tags = Index::new_with_tags(DynId(11), 4, tags.clone());
+    assert_eq!(with_tags.id, DynId(11));
+    assert_eq!(with_tags.size(), 4);
+    assert_eq!(with_tags.plev(), 0);
+    assert_eq!(with_tags.tags(), &tags);
+
+    let with_size = Index::<DynId>::new_with_size(DynId(12), 5);
+    assert_eq!(with_size.id, DynId(12));
+    assert_eq!(with_size.size(), 5);
+    assert!(with_size.tags().is_empty());
+
+    let with_size_and_tags = Index::new_with_size_and_tags(DynId(13), 6, tags.clone());
+    assert_eq!(with_size_and_tags.id, DynId(13));
+    assert_eq!(with_size_and_tags.size(), 6);
+    assert_eq!(with_size_and_tags.tags(), &tags);
+}
+
+#[test]
 fn test_index_like_id_methods() {
     let i1: DynIndex = Index::new_dyn(5);
     let i2 = i1.clone();

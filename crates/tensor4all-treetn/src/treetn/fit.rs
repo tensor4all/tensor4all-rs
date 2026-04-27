@@ -653,7 +653,7 @@ where
             .iter()
             .filter(|idx| {
                 // Keep site indices of u and link indices to u's other neighbors
-                site_c_u.iter().any(|s| s.same_id(*idx))
+                site_c_u.contains(*idx)
                     || full_treetn
                         .site_index_network()
                         .neighbors(node_u)
@@ -662,7 +662,7 @@ where
                             full_treetn
                                 .edge_between(node_u, &neighbor)
                                 .and_then(|e| full_treetn.bond_index(e))
-                                .map(|b| b.same_id(*idx))
+                                .map(|b| b == *idx)
                                 .unwrap_or(false)
                         })
             })

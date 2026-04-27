@@ -767,19 +767,15 @@ where
 // Helper functions
 // ============================================================================
 
-/// Find common indices between two tensors (by ID).
+/// Find common indices between two tensors by exact index identity.
 fn find_common_indices<T: TensorLike>(a: &T, b: &T) -> Vec<T::Index>
 where
-    <T::Index as IndexLike>::Id: Eq + std::hash::Hash,
+    T::Index: Eq + std::hash::Hash,
 {
-    let a_ids: HashSet<_> = a
-        .external_indices()
-        .iter()
-        .map(|i| i.id().clone())
-        .collect();
+    let a_indices: HashSet<_> = a.external_indices().into_iter().collect();
     b.external_indices()
         .into_iter()
-        .filter(|i| a_ids.contains(i.id()))
+        .filter(|i| a_indices.contains(i))
         .collect()
 }
 
@@ -988,28 +984,25 @@ where
     // 2. Build topology from tn_a's structure and decompose
     use super::decompose::factorize_tensor_to_treetn_with;
 
-    // Build topology using index IDs (not positions).
+    // Build topology using full indices (not positions).
     // Consider site indices from BOTH tn_a and tn_b, since the contracted result
     // may contain indices from either network (non-contracted ones remain).
-    let mut nodes: HashMap<V, Vec<<T::Index as IndexLike>::Id>> = HashMap::new();
+    let mut nodes: HashMap<V, Vec<T::Index>> = HashMap::new();
     let contracted_indices = contracted_tensor.external_indices();
-    let contracted_ids: HashSet<_> = contracted_indices
-        .iter()
-        .map(|ci| ci.id().clone())
-        .collect();
+    let contracted_index_set: HashSet<_> = contracted_indices.iter().cloned().collect();
 
     // Collect node names in sorted order for deterministic assignment
     let mut node_names: Vec<_> = tn_a.node_names();
     node_names.sort();
 
     for node_name in &node_names {
-        let mut ids: Vec<<T::Index as IndexLike>::Id> = Vec::new();
+        let mut indices: Vec<T::Index> = Vec::new();
 
         // Collect remaining site indices from tn_a at this node
         if let Some(site_space_a) = tn_a.site_index_network.site_space(node_name) {
             for site_idx in site_space_a {
-                if contracted_ids.contains(site_idx.id()) {
-                    ids.push(site_idx.id().clone());
+                if contracted_index_set.contains(site_idx) {
+                    indices.push(site_idx.clone());
                 }
             }
         }
@@ -1017,13 +1010,13 @@ where
         // Also collect remaining site indices from tn_b at the same node
         if let Some(site_space_b) = tn_b.site_index_network.site_space(node_name) {
             for site_idx in site_space_b {
-                if contracted_ids.contains(site_idx.id()) && !ids.contains(site_idx.id()) {
-                    ids.push(site_idx.id().clone());
+                if contracted_index_set.contains(site_idx) && !indices.contains(site_idx) {
+                    indices.push(site_idx.clone());
                 }
             }
         }
 
-        nodes.insert(node_name.clone(), ids);
+        nodes.insert(node_name.clone(), indices);
     }
 
     // Get edges from the graph

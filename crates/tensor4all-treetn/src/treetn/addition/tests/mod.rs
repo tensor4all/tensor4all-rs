@@ -88,6 +88,51 @@ fn make_two_matching_treetns_different_site_ids(
     (tn_a, tn_b)
 }
 
+fn make_same_id_prime_pair_mpo_like_indices() -> (Vec<DynIndex>, Vec<DynIndex>, Vec<DynIndex>) {
+    let inputs: Vec<_> = (0..3).map(|_| DynIndex::new_dyn(3)).collect();
+    let outputs: Vec<_> = inputs.iter().map(DynIndex::prime).collect();
+    let links = vec![
+        DynIndex::new_link(2).unwrap(),
+        DynIndex::new_link(2).unwrap(),
+    ];
+    (inputs, outputs, links)
+}
+
+fn scaled_sequence(scale: f64, len: usize) -> Vec<f64> {
+    (1..=len).map(|n| scale * n as f64).collect()
+}
+
+fn make_same_id_prime_pair_mpo_like_treetn(
+    scale: f64,
+    inputs: &[DynIndex],
+    outputs: &[DynIndex],
+    links: &[DynIndex],
+) -> TreeTN<TensorDynLen, usize> {
+    let tensors = vec![
+        TensorDynLen::from_dense(
+            vec![inputs[0].clone(), outputs[0].clone(), links[0].clone()],
+            scaled_sequence(scale, 18),
+        )
+        .unwrap(),
+        TensorDynLen::from_dense(
+            vec![
+                links[0].clone(),
+                inputs[1].clone(),
+                outputs[1].clone(),
+                links[1].clone(),
+            ],
+            scaled_sequence(scale, 36),
+        )
+        .unwrap(),
+        TensorDynLen::from_dense(
+            vec![links[1].clone(), inputs[2].clone(), outputs[2].clone()],
+            scaled_sequence(scale, 18),
+        )
+        .unwrap(),
+    ];
+    TreeTN::<TensorDynLen, usize>::from_tensors(tensors, vec![0, 1, 2]).unwrap()
+}
+
 #[test]
 fn test_compute_merged_bond_indices() {
     let (tn_a, tn_b, _s0, _s1) = make_two_matching_treetns();
@@ -230,5 +275,46 @@ fn test_add_aligned_accepts_equivalent_site_space_with_different_ids() {
         dense_sum.isapprox(&dense_expected, 1e-10, 0.0),
         "add_aligned failed: maxabs diff = {}",
         (&dense_sum - &dense_expected).maxabs()
+    );
+}
+
+#[test]
+fn test_add_preserves_same_id_prime_pair_site_indices() {
+    let (inputs, outputs, links) = make_same_id_prime_pair_mpo_like_indices();
+    let tn_a = make_same_id_prime_pair_mpo_like_treetn(1.0, &inputs, &outputs, &links);
+    let tn_b = make_same_id_prime_pair_mpo_like_treetn(-0.5, &inputs, &outputs, &links);
+
+    for site in 0..3 {
+        let site_space = tn_a.site_space(&site).unwrap();
+        assert_eq!(site_space.len(), 2);
+        assert!(site_space.contains(&inputs[site]));
+        assert!(site_space.contains(&outputs[site]));
+    }
+
+    let result = tn_a.add(&tn_b).unwrap();
+
+    assert_eq!(result.node_count(), 3);
+    assert_eq!(result.edge_count(), 2);
+    for site in 0..3 {
+        let site_space = result.site_space(&site).unwrap();
+        assert_eq!(site_space.len(), 2);
+        assert!(site_space.contains(&inputs[site]));
+        assert!(site_space.contains(&outputs[site]));
+    }
+
+    let dense_result = result.contract_to_tensor().unwrap();
+    let dense_expected = tn_a
+        .contract_to_tensor()
+        .unwrap()
+        .axpby(
+            tensor4all_core::AnyScalar::new_real(1.0),
+            &tn_b.contract_to_tensor().unwrap(),
+            tensor4all_core::AnyScalar::new_real(1.0),
+        )
+        .unwrap();
+    assert!(
+        dense_result.isapprox(&dense_expected, 1e-10, 0.0),
+        "same-id prime-pair MPO-like add failed: maxabs diff = {}",
+        (&dense_result - &dense_expected).maxabs()
     );
 }

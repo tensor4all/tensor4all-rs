@@ -57,6 +57,39 @@ fn new_index(dim: usize, tags: Option<&str>, plev: i64) -> *mut t4a_index {
     out
 }
 
+fn new_index_with_id(dim: usize, id: u64, tags: Option<&str>, plev: i64) -> *mut t4a_index {
+    let tags = tags.map(|s| CString::new(s).unwrap());
+    let mut out = std::ptr::null_mut();
+    let status = t4a_index_new_with_id(
+        dim,
+        id,
+        tags.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+        plev,
+        &mut out,
+    );
+    assert_eq!(status, T4A_SUCCESS);
+    assert!(!out.is_null());
+    out
+}
+
+fn index_equal(a: *const t4a_index, b: *const t4a_index) -> bool {
+    let mut equal = -1i32;
+    assert_eq!(t4a_index_equal(a, b, &mut equal), T4A_SUCCESS);
+    equal != 0
+}
+
+fn index_hash(index: *const t4a_index) -> u64 {
+    let mut hash = 0u64;
+    assert_eq!(t4a_index_hash(index, &mut hash), T4A_SUCCESS);
+    hash
+}
+
+fn index_id(index: *const t4a_index) -> u64 {
+    let mut id = 0u64;
+    assert_eq!(t4a_index_id(index, &mut id), T4A_SUCCESS);
+    id
+}
+
 #[test]
 fn test_index_new_rejects_zero_dim() {
     let mut out = std::ptr::null_mut();
@@ -121,40 +154,90 @@ fn test_index_clone_preserves_metadata() {
 
     let mut dims = [0usize; 2];
     let mut plevs = [0i64; 2];
-    let mut ids = [0u64; 2];
     for (slot, ptr) in [index as *const t4a_index, cloned as *const t4a_index]
         .into_iter()
         .enumerate()
     {
         assert_eq!(t4a_index_dim(ptr, &mut dims[slot]), T4A_SUCCESS);
         assert_eq!(t4a_index_plev(ptr, &mut plevs[slot]), T4A_SUCCESS);
-        assert_eq!(t4a_index_id(ptr, &mut ids[slot]), T4A_SUCCESS);
     }
 
     assert_eq!(dims, [5, 5]);
     assert_eq!(plevs, [9, 9]);
-    assert_eq!(ids[0], ids[1]);
     assert_eq!(read_tags(index), read_tags(cloned));
+    assert!(index_equal(index, cloned));
+    assert_eq!(index_hash(index), index_hash(cloned));
 
     t4a_index_release(cloned);
     t4a_index_release(index);
 }
 
 #[test]
-fn test_index_new_with_id_uses_explicit_id() {
-    let tags = CString::new("Custom").unwrap();
-    let mut out = std::ptr::null_mut();
-    let status = t4a_index_new_with_id(4, 0x1234_5678_9abc_def0, tags.as_ptr(), 2, &mut out);
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!out.is_null());
+fn test_index_new_with_id_roundtrips_identity() {
+    let a = new_index_with_id(5, 42, Some("Left,Link"), 7);
+    let b = new_index_with_id(5, 42, Some("Left,Link"), 7);
+    let different_plev = new_index_with_id(5, 42, Some("Left,Link"), 8);
+    let different_tags = new_index_with_id(5, 42, Some("Left,Other"), 7);
+    let different_id = new_index_with_id(5, 43, Some("Left,Link"), 7);
 
-    let mut id = 0u64;
-    let mut plev = 0i64;
-    assert_eq!(t4a_index_id(out, &mut id), T4A_SUCCESS);
-    assert_eq!(t4a_index_plev(out, &mut plev), T4A_SUCCESS);
-    assert_eq!(id, 0x1234_5678_9abc_def0);
-    assert_eq!(plev, 2);
-    assert_eq!(read_tags(out), ["Custom".to_string()].into_iter().collect());
+    assert_eq!(index_id(a), 42);
+    assert_eq!(index_id(b), 42);
+    assert!(index_equal(a, b));
+    assert_eq!(index_hash(a), index_hash(b));
+    assert!(!index_equal(a, different_plev));
+    assert!(!index_equal(a, different_tags));
+    assert!(!index_equal(a, different_id));
 
-    t4a_index_release(out);
+    t4a_index_release(different_id);
+    t4a_index_release(different_tags);
+    t4a_index_release(different_plev);
+    t4a_index_release(b);
+    t4a_index_release(a);
+}
+
+#[test]
+fn test_index_plev_transforms_preserve_identity_but_use_full_equality() {
+    let index = new_index(4, Some("Custom"), 0);
+
+    let mut primed: *mut t4a_index = std::ptr::null_mut();
+    assert_eq!(t4a_index_prime(index, &mut primed), T4A_SUCCESS);
+    assert!(!primed.is_null());
+
+    let mut explicit: *mut t4a_index = std::ptr::null_mut();
+    assert_eq!(t4a_index_set_plev(index, 1, &mut explicit), T4A_SUCCESS);
+    assert!(!explicit.is_null());
+
+    let mut unprimed: *mut t4a_index = std::ptr::null_mut();
+    assert_eq!(t4a_index_noprime(primed, &mut unprimed), T4A_SUCCESS);
+    assert!(!unprimed.is_null());
+
+    let mut plev = -1i64;
+    assert_eq!(t4a_index_plev(primed, &mut plev), T4A_SUCCESS);
+    assert_eq!(plev, 1);
+    assert_eq!(read_tags(index), read_tags(primed));
+    assert!(!index_equal(index, primed));
+    assert_ne!(index_hash(index), index_hash(primed));
+    assert!(index_equal(primed, explicit));
+    assert_eq!(index_hash(primed), index_hash(explicit));
+    assert!(index_equal(index, unprimed));
+    assert_eq!(index_hash(index), index_hash(unprimed));
+
+    t4a_index_release(unprimed);
+    t4a_index_release(explicit);
+    t4a_index_release(primed);
+    t4a_index_release(index);
+}
+
+#[test]
+fn test_index_set_plev_rejects_negative_plev() {
+    let index = new_index(4, None, 0);
+    let mut out: *mut t4a_index = std::ptr::null_mut();
+
+    let status = t4a_index_set_plev(index, -1, &mut out);
+
+    assert_eq!(status, T4A_INVALID_ARGUMENT);
+    assert!(out.is_null());
+    assert!(last_error().contains("plev"));
+
+    t4a_index_release(index);
 }

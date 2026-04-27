@@ -896,9 +896,9 @@ fn build_contraction_plan(
     options: ContractionOptions<'_>,
     diag_uf: &mut AxisUnionFind,
 ) -> Result<ContractionPlan> {
-    let retained_ids: HashSet<DynId> = options.retain_indices.iter().map(|idx| *idx.id()).collect();
+    let retained_indices: HashSet<DynIndex> = options.retain_indices.iter().cloned().collect();
     let (input_ids, internal_id_to_original) =
-        build_internal_ids(tensors, options.allowed, diag_uf, &retained_ids)?;
+        build_internal_ids(tensors, options.allowed, diag_uf, &retained_indices)?;
 
     let mut counts: HashMap<usize, usize> = HashMap::new();
     for ids in &input_ids {
@@ -913,17 +913,17 @@ fn build_contraction_plan(
     for (tensor_idx, tensor) in tensors.iter().enumerate() {
         for (axis, idx) in tensor.indices.iter().enumerate() {
             let internal_id = input_ids[tensor_idx][axis];
-            let should_output = counts[&internal_id] == 1 || retained_ids.contains(idx.id());
+            let should_output = counts[&internal_id] == 1 || retained_indices.contains(idx);
             if should_output && seen_output.insert(internal_id) {
                 output_ids.push(internal_id);
             }
-            if retained_ids.contains(idx.id()) {
-                found_retained.insert(*idx.id());
+            if retained_indices.contains(idx) {
+                found_retained.insert(idx.clone());
             }
         }
     }
 
-    for retained in retained_ids {
+    for retained in retained_indices {
         if !found_retained.contains(&retained) {
             return Err(anyhow::anyhow!(
                 "Retained index {:?} does not appear in the input tensors",
@@ -958,7 +958,7 @@ fn validate_retained_indices_exist(
     for retain in retain_indices {
         let found = tensors
             .iter()
-            .any(|tensor| tensor.indices().iter().any(|idx| idx.id() == retain.id()));
+            .any(|tensor| tensor.indices().iter().any(|idx| idx == retain));
         if !found {
             return Err(anyhow::anyhow!(
                 "Retained index {:?} does not appear in the input tensors",
@@ -977,12 +977,12 @@ fn retained_indices_for_component(
     let mut seen = HashSet::new();
     let mut retained = Vec::new();
     for retain in retain_indices {
-        if seen.insert(*retain.id())
+        if seen.insert(retain.clone())
             && component.iter().any(|&tensor_idx| {
                 tensors[tensor_idx]
                     .indices()
                     .iter()
-                    .any(|idx| idx.id() == retain.id())
+                    .any(|idx| idx == retain)
             })
         {
             retained.push(retain.clone());
@@ -994,7 +994,7 @@ fn retained_indices_for_component(
 fn validate_unique_output_indices(indices: &[DynIndex]) -> Result<()> {
     let mut seen = HashSet::new();
     for idx in indices {
-        if !seen.insert(*idx.id()) {
+        if !seen.insert(idx.clone()) {
             return Err(anyhow::anyhow!(
                 "Contraction result would contain duplicate output indices"
             ));
@@ -1089,11 +1089,12 @@ fn output_axis_classes(
 fn build_internal_ids(
     tensors: &[&TensorDynLen],
     allowed: AllowedPairs<'_>,
-    diag_uf: &mut AxisUnionFind,
-    retained_ids: &HashSet<DynId>,
+    _diag_uf: &mut AxisUnionFind,
+    retained_indices: &HashSet<DynIndex>,
 ) -> Result<(Vec<Vec<usize>>, HashMap<usize, (usize, usize)>)> {
     let mut next_id = 0usize;
-    let mut dynid_to_internal: HashMap<DynId, usize> = HashMap::new();
+    let mut index_to_internal: HashMap<DynIndex, usize> = HashMap::new();
+    let mut retained_index_to_internal: HashMap<DynIndex, usize> = HashMap::new();
     let mut assigned: HashMap<(usize, usize), usize> = HashMap::new();
     let mut internal_id_to_original: HashMap<usize, (usize, usize)> = HashMap::new();
 
@@ -1118,34 +1119,30 @@ fn build_internal_ids(
                     let key_i = (ti, pi);
                     let key_j = (tj, pj);
 
-                    let remapped_i = diag_uf.find(*idx_i.id());
-                    let remapped_j = diag_uf.find(*idx_j.id());
-
                     match (assigned.get(&key_i).copied(), assigned.get(&key_j).copied()) {
                         (None, None) => {
-                            let internal_id = if let Some(&id) = dynid_to_internal.get(&remapped_i)
-                            {
+                            let internal_id = if let Some(&id) = index_to_internal.get(idx_i) {
                                 id
                             } else {
                                 let id = next_id;
                                 next_id += 1;
-                                dynid_to_internal.insert(remapped_i, id);
+                                index_to_internal.insert(idx_i.clone(), id);
                                 internal_id_to_original.insert(id, key_i);
                                 id
                             };
                             assigned.insert(key_i, internal_id);
                             assigned.insert(key_j, internal_id);
-                            if remapped_i != remapped_j {
-                                dynid_to_internal.insert(remapped_j, internal_id);
+                            if idx_i != idx_j {
+                                index_to_internal.insert(idx_j.clone(), internal_id);
                             }
                         }
                         (Some(id), None) => {
                             assigned.insert(key_j, id);
-                            dynid_to_internal.insert(remapped_j, id);
+                            index_to_internal.insert(idx_j.clone(), id);
                         }
                         (None, Some(id)) => {
                             assigned.insert(key_i, id);
-                            dynid_to_internal.insert(remapped_i, id);
+                            index_to_internal.insert(idx_i.clone(), id);
                         }
                         (Some(_id_i), Some(_id_j)) => {
                             // Both already assigned
@@ -1161,14 +1158,13 @@ fn build_internal_ids(
         for (pos, idx) in tensor.indices.iter().enumerate() {
             let key = (tensor_idx, pos);
             if let std::collections::hash_map::Entry::Vacant(e) = assigned.entry(key) {
-                let remapped_id = diag_uf.find(*idx.id());
-                let internal_id = if retained_ids.contains(&remapped_id) {
-                    if let Some(&id) = dynid_to_internal.get(&remapped_id) {
+                let internal_id = if retained_indices.contains(idx) {
+                    if let Some(&id) = retained_index_to_internal.get(idx) {
                         id
                     } else {
                         let id = next_id;
                         next_id += 1;
-                        dynid_to_internal.insert(remapped_id, id);
+                        retained_index_to_internal.insert(idx.clone(), id);
                         internal_id_to_original.insert(id, key);
                         id
                     }
@@ -1300,8 +1296,8 @@ fn find_tensor_connected_components_with_retained(
 
 fn shares_retained_index(a: &TensorDynLen, b: &TensorDynLen, retain_indices: &[DynIndex]) -> bool {
     retain_indices.iter().any(|retain| {
-        a.indices().iter().any(|idx_a| idx_a.id() == retain.id())
-            && b.indices().iter().any(|idx_b| idx_b.id() == retain.id())
+        a.indices().iter().any(|idx_a| idx_a == retain)
+            && b.indices().iter().any(|idx_b| idx_b == retain)
     })
 }
 

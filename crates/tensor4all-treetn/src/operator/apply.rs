@@ -1021,7 +1021,7 @@ where
 
         // Check input mappings
         for (node, mapping) in &self.input_mapping {
-            if mapping.true_index.same_id(old_index) {
+            if mapping.true_index == *old_index && mapping.true_index.dim() == old_index.dim() {
                 result.input_mapping.insert(
                     node.clone(),
                     IndexMapping {
@@ -1035,7 +1035,7 @@ where
 
         // Check output mappings
         for (node, mapping) in &self.output_mapping {
-            if mapping.true_index.same_id(old_index) {
+            if mapping.true_index == *old_index && mapping.true_index.dim() == old_index.dim() {
                 result.output_mapping.insert(
                     node.clone(),
                     IndexMapping {
