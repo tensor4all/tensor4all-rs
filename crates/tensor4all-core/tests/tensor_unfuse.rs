@@ -1,5 +1,7 @@
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, IndexLike, LinearizationOrder, TensorDynLen, TensorLike};
+use tensor4all_core::{
+    DynIndex, IndexLike, LinearizationOrder, TensorDynLen, TensorIndex, TensorLike,
+};
 
 #[test]
 fn unfuse_index_column_major_preserves_column_major_layout() {
@@ -291,17 +293,35 @@ fn fuse_indices_rejects_duplicate_result_index() {
 }
 
 #[test]
-fn fuse_indices_rejects_duplicate_result_id_from_primed_index() {
+fn fuse_indices_allows_same_id_prime_pair_in_result() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(2);
     let tensor =
         TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
 
-    let err = tensor
+    let result = tensor
         .fuse_indices(&[i], j.prime(), LinearizationOrder::ColumnMajor)
-        .unwrap_err();
+        .unwrap();
 
-    assert!(err
-        .to_string()
-        .contains("fuse_indices result would contain duplicate index ID"));
+    assert_eq!(result.external_indices(), vec![j.prime(), j]);
+}
+
+#[test]
+fn unfuse_index_selects_exact_same_id_prime_index() {
+    let fused = DynIndex::new_dyn(4);
+    let fused_prime = fused.prime();
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+    let data: Vec<f64> = (0..16).map(|value| value as f64).collect();
+    let tensor = TensorDynLen::from_dense(vec![fused.clone(), fused_prime.clone()], data).unwrap();
+
+    let result = tensor
+        .unfuse_index(
+            &fused_prime,
+            &[i.clone(), j.clone()],
+            LinearizationOrder::ColumnMajor,
+        )
+        .unwrap();
+
+    assert_eq!(result.external_indices(), vec![fused, i, j]);
 }

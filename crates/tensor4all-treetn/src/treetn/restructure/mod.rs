@@ -41,15 +41,14 @@ where
     CurrentV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     I: IndexLike,
-    I::Id: Eq + Hash,
 {
     FuseOnly,
     SplitOnly,
     SwapOnly {
-        target_assignment: HashMap<I::Id, CurrentV>,
+        target_assignment: HashMap<I, CurrentV>,
     },
     SwapThenFuse {
-        target_assignment: HashMap<I::Id, CurrentV>,
+        target_assignment: HashMap<I, CurrentV>,
     },
     SplitThenFuse {
         split_target: Box<SplitThenFuseTarget<CurrentV, TargetV, I>>,
@@ -62,14 +61,13 @@ where
     CurrentV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     I: IndexLike,
-    I::Id: Eq + Hash,
 {
     kind: RestructurePlanKind<CurrentV, TargetV, I>,
 }
 
 fn collect_site_targets<T, TargetV>(
     target: &SiteIndexNetwork<TargetV, T::Index>,
-) -> Result<HashMap<<T::Index as IndexLike>::Id, TargetV>>
+) -> Result<HashMap<T::Index, TargetV>>
 where
     T: TensorLike,
     TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
@@ -84,11 +82,11 @@ where
             )
         })?;
         for site_idx in site_space {
-            let existing = site_to_target.insert(site_idx.id().clone(), target_node_name.clone());
+            let existing = site_to_target.insert(site_idx.clone(), target_node_name.clone());
             if let Some(previous_target) = existing {
                 bail!(
                     "restructure_to: site index {:?} appears in both target nodes {:?} and {:?}",
-                    site_idx.id(),
+                    site_idx,
                     previous_target,
                     target_node_name
                 );
@@ -98,15 +96,15 @@ where
     Ok(site_to_target)
 }
 
-fn collect_current_site_ids<T, CurrentV>(
+fn collect_current_site_indices<T, CurrentV>(
     current: &SiteIndexNetwork<CurrentV, T::Index>,
-) -> Result<HashSet<<T::Index as IndexLike>::Id>>
+) -> Result<HashSet<T::Index>>
 where
     T: TensorLike,
     CurrentV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
 {
-    let mut site_ids = HashSet::new();
+    let mut site_indices = HashSet::new();
     for current_node_name in current.node_names() {
         let site_space = current.site_space(current_node_name).ok_or_else(|| {
             anyhow::anyhow!(
@@ -115,15 +113,15 @@ where
             )
         })?;
         for site_idx in site_space {
-            site_ids.insert(site_idx.id().clone());
+            site_indices.insert(site_idx.clone());
         }
     }
-    Ok(site_ids)
+    Ok(site_indices)
 }
 
 fn current_nodes_map_uniquely_to_targets<T, CurrentV, TargetV>(
     current: &SiteIndexNetwork<CurrentV, T::Index>,
-    site_to_target: &HashMap<<T::Index as IndexLike>::Id, TargetV>,
+    site_to_target: &HashMap<T::Index, TargetV>,
 ) -> Result<bool>
 where
     T: TensorLike,
@@ -142,12 +140,12 @@ where
             .iter()
             .map(|site_idx| {
                 site_to_target
-                    .get(site_idx.id())
+                    .get(site_idx)
                     .cloned()
                     .ok_or_else(|| {
                         anyhow::anyhow!(
                             "restructure_to: site index {:?} is present in the current network but missing from the target",
-                            site_idx.id()
+                            site_idx
                         )
                     })
             })
@@ -161,7 +159,7 @@ where
 
 fn collect_site_currents<T, CurrentV>(
     current: &SiteIndexNetwork<CurrentV, T::Index>,
-) -> Result<HashMap<<T::Index as IndexLike>::Id, CurrentV>>
+) -> Result<HashMap<T::Index, CurrentV>>
 where
     T: TensorLike,
     CurrentV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
@@ -176,11 +174,11 @@ where
             )
         })?;
         for site_idx in site_space {
-            let existing = site_to_current.insert(site_idx.id().clone(), current_node_name.clone());
+            let existing = site_to_current.insert(site_idx.clone(), current_node_name.clone());
             if let Some(previous_current) = existing {
                 bail!(
                     "restructure_to: site index {:?} appears in both current nodes {:?} and {:?}",
-                    site_idx.id(),
+                    site_idx,
                     previous_current,
                     current_node_name
                 );
@@ -192,7 +190,7 @@ where
 
 fn target_nodes_map_uniquely_to_currents<T, CurrentV, TargetV>(
     target: &SiteIndexNetwork<TargetV, T::Index>,
-    site_to_current: &HashMap<<T::Index as IndexLike>::Id, CurrentV>,
+    site_to_current: &HashMap<T::Index, CurrentV>,
 ) -> Result<bool>
 where
     T: TensorLike,
@@ -211,12 +209,12 @@ where
             .iter()
             .map(|site_idx| {
                 site_to_current
-                    .get(site_idx.id())
+                    .get(site_idx)
                     .cloned()
                     .ok_or_else(|| {
                         anyhow::anyhow!(
                             "restructure_to: site index {:?} is present in the target but missing from the current network",
-                            site_idx.id()
+                            site_idx
                         )
                     })
             })
@@ -231,7 +229,7 @@ where
 fn target_nodes_span_connected_currents<T, CurrentV, TargetV>(
     current: &SiteIndexNetwork<CurrentV, T::Index>,
     target: &SiteIndexNetwork<TargetV, T::Index>,
-    site_to_current: &HashMap<<T::Index as IndexLike>::Id, CurrentV>,
+    site_to_current: &HashMap<T::Index, CurrentV>,
     full_graph: &NamedGraph<CurrentV, T, T::Index>,
 ) -> Result<bool>
 where
@@ -250,10 +248,10 @@ where
         let current_names: HashSet<CurrentV> = site_space
             .iter()
             .map(|site_idx| {
-                site_to_current.get(site_idx.id()).cloned().ok_or_else(|| {
+                site_to_current.get(site_idx).cloned().ok_or_else(|| {
                     anyhow::anyhow!(
                         "restructure_to: site index {:?} is present in the target but missing from the current network",
-                        site_idx.id()
+                        site_idx
                     )
                 })
             })
@@ -298,7 +296,7 @@ where
 
 fn collect_shared_targets<T, CurrentV, TargetV>(
     target: &SiteIndexNetwork<TargetV, T::Index>,
-    site_to_current: &HashMap<<T::Index as IndexLike>::Id, CurrentV>,
+    site_to_current: &HashMap<T::Index, CurrentV>,
 ) -> Result<HashSet<TargetV>>
 where
     T: TensorLike,
@@ -318,12 +316,12 @@ where
             .iter()
             .map(|site_idx| {
                 site_to_current
-                    .get(site_idx.id())
+                    .get(site_idx)
                     .cloned()
                     .ok_or_else(|| {
                         anyhow::anyhow!(
                             "restructure_to: site index {:?} is present in the target but missing from the current network",
-                            site_idx.id()
+                            site_idx
                         )
                     })
             })
@@ -338,8 +336,8 @@ where
 fn build_split_then_fuse_target<T, CurrentV, TargetV>(
     current: &SiteIndexNetwork<CurrentV, T::Index>,
     target: &SiteIndexNetwork<TargetV, T::Index>,
-    site_to_target: &HashMap<<T::Index as IndexLike>::Id, TargetV>,
-    site_to_current: &HashMap<<T::Index as IndexLike>::Id, CurrentV>,
+    site_to_target: &HashMap<T::Index, TargetV>,
+    site_to_current: &HashMap<T::Index, CurrentV>,
     full_graph: &NamedGraph<CurrentV, T, T::Index>,
 ) -> Result<Option<SplitThenFuseTarget<CurrentV, TargetV, T::Index>>>
 where
@@ -371,10 +369,10 @@ where
         })?;
         let mut fragments: HashMap<TargetV, HashSet<T::Index>> = HashMap::new();
         for site_idx in site_space {
-            let target_node_name = site_to_target.get(site_idx.id()).cloned().ok_or_else(|| {
+            let target_node_name = site_to_target.get(site_idx).cloned().ok_or_else(|| {
                 anyhow::anyhow!(
                     "restructure_to: site index {:?} is present in the current network but missing from the target",
-                    site_idx.id()
+                    site_idx
                 )
             })?;
             fragments
@@ -476,8 +474,8 @@ where
 fn build_path_swap_then_fuse_assignment<T, CurrentV, TargetV>(
     current: &SiteIndexNetwork<CurrentV, T::Index>,
     target: &SiteIndexNetwork<TargetV, T::Index>,
-    site_to_target: &HashMap<<T::Index as IndexLike>::Id, TargetV>,
-) -> Result<Option<HashMap<<T::Index as IndexLike>::Id, CurrentV>>>
+    site_to_target: &HashMap<T::Index, TargetV>,
+) -> Result<Option<HashMap<T::Index, CurrentV>>>
 where
     T: TensorLike,
     CurrentV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
@@ -505,12 +503,12 @@ where
             .iter()
             .map(|site_idx| {
                 site_to_target
-                    .get(site_idx.id())
+                    .get(site_idx)
                     .cloned()
                     .ok_or_else(|| {
                         anyhow::anyhow!(
                             "restructure_to: site index {:?} is present in the current network but missing from the target",
-                            site_idx.id()
+                            site_idx
                         )
                     })
             })
@@ -559,7 +557,7 @@ where
                 target_node_name
             )
         })?;
-        let mut site_ids: Vec<_> = target
+        let mut site_indices: Vec<_> = target
             .site_space(target_node_name)
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -568,16 +566,16 @@ where
                 )
             })?
             .iter()
-            .map(|site_idx| site_idx.id().clone())
+            .cloned()
             .collect();
-        site_ids.sort();
-        if site_ids.len() < block.len() {
+        site_indices.sort_by_key(|idx| format!("{:?}", idx));
+        if site_indices.len() < block.len() {
             return Ok(None);
         }
 
-        for (position, site_id) in site_ids.into_iter().enumerate() {
+        for (position, site_index) in site_indices.into_iter().enumerate() {
             let block_index = position.min(block.len() - 1);
-            target_assignment.insert(site_id, block[block_index].clone());
+            target_assignment.insert(site_index, block[block_index].clone());
         }
     }
 
@@ -785,7 +783,7 @@ where
 fn build_swap_assignment<T, CurrentV, TargetV>(
     current: &SiteIndexNetwork<CurrentV, T::Index>,
     target: &SiteIndexNetwork<TargetV, T::Index>,
-) -> Result<Option<HashMap<<T::Index as IndexLike>::Id, CurrentV>>>
+) -> Result<Option<HashMap<T::Index, CurrentV>>>
 where
     T: TensorLike,
     CurrentV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
@@ -824,7 +822,7 @@ where
             )
         })?;
         for site_idx in site_space {
-            assignment.insert(site_idx.id().clone(), current_name.clone());
+            assignment.insert(site_idx.clone(), current_name.clone());
         }
     }
 
@@ -880,11 +878,11 @@ where
 {
     let site_to_target = collect_site_targets::<T, TargetV>(target)?;
     let site_to_current = collect_site_currents::<T, CurrentV>(current)?;
-    let current_site_ids = collect_current_site_ids::<T, CurrentV>(current)?;
-    let target_site_ids: HashSet<_> = site_to_target.keys().cloned().collect();
+    let current_site_indices = collect_current_site_indices::<T, CurrentV>(current)?;
+    let target_site_indices: HashSet<_> = site_to_target.keys().cloned().collect();
 
-    if current_site_ids != target_site_ids {
-        bail!("restructure_to: current and target must contain the same site index ids");
+    if current_site_indices != target_site_indices {
+        bail!("restructure_to: current and target must contain the same site indices");
     }
 
     if current_nodes_map_uniquely_to_targets::<T, CurrentV, TargetV>(current, &site_to_target)? {
@@ -1090,7 +1088,7 @@ where
 mod tests {
     use std::collections::HashSet;
 
-    use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+    use tensor4all_core::{DynIndex, TensorDynLen};
 
     use super::*;
 
@@ -1271,28 +1269,28 @@ mod tests {
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(s0.id())
+                .find_node_by_index(&s0)
                 .map(|name| name.as_str()),
             Some("X")
         );
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(s1.id())
+                .find_node_by_index(&s1)
                 .map(|name| name.as_str()),
             Some("Y")
         );
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(s2.id())
+                .find_node_by_index(&s2)
                 .map(|name| name.as_str()),
             Some("Y")
         );
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(s3.id())
+                .find_node_by_index(&s3)
                 .map(|name| name.as_str()),
             Some("Z")
         );
@@ -1334,28 +1332,28 @@ mod tests {
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(x0.id())
+                .find_node_by_index(&x0)
                 .map(|name| name.as_str()),
             Some("X")
         );
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(x1.id())
+                .find_node_by_index(&x1)
                 .map(|name| name.as_str()),
             Some("Y")
         );
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(y0.id())
+                .find_node_by_index(&y0)
                 .map(|name| name.as_str()),
             Some("Y")
         );
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(y1.id())
+                .find_node_by_index(&y1)
                 .map(|name| name.as_str()),
             Some("Z")
         );
@@ -1391,28 +1389,28 @@ mod tests {
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(x0.id())
+                .find_node_by_index(&x0)
                 .map(|name| name.as_str()),
             Some("X")
         );
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(y0.id())
+                .find_node_by_index(&y0)
                 .map(|name| name.as_str()),
             Some("X")
         );
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(x1.id())
+                .find_node_by_index(&x1)
                 .map(|name| name.as_str()),
             Some("Y")
         );
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(y1.id())
+                .find_node_by_index(&y1)
                 .map(|name| name.as_str()),
             Some("Y")
         );
@@ -1448,28 +1446,28 @@ mod tests {
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(x0.id())
+                .find_node_by_index(&x0)
                 .map(|name| name.as_str()),
             Some("X")
         );
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(y0.id())
+                .find_node_by_index(&y0)
                 .map(|name| name.as_str()),
             Some("X")
         );
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(x1.id())
+                .find_node_by_index(&x1)
                 .map(|name| name.as_str()),
             Some("Y")
         );
         assert_eq!(
             result
                 .site_index_network()
-                .find_node_by_index_id(y1.id())
+                .find_node_by_index(&y1)
                 .map(|name| name.as_str()),
             Some("Y")
         );

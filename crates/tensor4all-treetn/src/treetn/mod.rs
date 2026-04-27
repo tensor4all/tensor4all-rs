@@ -257,13 +257,9 @@ where
             node_indices.push(node_idx);
         }
 
-        // Step 2: Build a map from index ID to (node_index, index) pairs in O(n) time
-        // Key: index ID, Value: vector of (NodeIndex, Index) pairs
-        #[allow(clippy::type_complexity)]
-        let mut index_map: HashMap<
-            <T::Index as IndexLike>::Id,
-            Vec<(NodeIndex, T::Index)>,
-        > = HashMap::new();
+        // Step 2: Build a map from full index metadata to (node_index, index) pairs in O(n) time.
+        // Same-id indices that differ by prime level or tags are distinct site legs.
+        let mut index_map: HashMap<T::Index, Vec<(NodeIndex, T::Index)>> = HashMap::new();
 
         for node_idx in &node_indices {
             let tensor = treetn
@@ -272,15 +268,15 @@ where
 
             for index in tensor.external_indices() {
                 index_map
-                    .entry(index.id().clone())
+                    .entry(index.clone())
                     .or_insert_with(Vec::new)
                     .push((*node_idx, index.clone()));
             }
         }
 
-        // Step 3: Connect nodes that share the same index ID
-        // For TreeTN (tree structure), each index ID should appear in exactly 2 tensors
-        for (index_id, nodes_with_index) in index_map {
+        // Step 3: Connect nodes that share the same full index.
+        // For TreeTN (tree structure), each bond index should appear in exactly 2 tensors.
+        for (shared_index, nodes_with_index) in index_map {
             match nodes_with_index.len() {
                 0 => unreachable!(),
                 1 => {
@@ -296,16 +292,16 @@ where
                         .connect_internal(*node_a, index_a, *node_b, index_b)
                         .with_context(|| {
                             format!(
-                                "Failed to connect nodes {:?} and {:?} via index ID {:?}",
-                                node_a, node_b, index_id
+                                "Failed to connect nodes {:?} and {:?} via index {:?}",
+                                node_a, node_b, shared_index
                             )
                         })?;
                 }
                 n => {
                     // Index appears in more than 2 tensors - this violates tree structure
                     return Err(anyhow::anyhow!(
-                        "Index ID {:?} appears in {} tensors, but TreeTN requires exactly 2 (tree structure)",
-                        index_id, n
+                        "Index {:?} appears in {} tensors, but TreeTN requires exactly 2 (tree structure)",
+                        shared_index, n
                     ))
                     .context("TreeTN::from_tensors: each bond index must connect exactly 2 nodes");
                 }
@@ -348,7 +344,7 @@ where
 
     /// Connect two tensors via a specified pair of indices.
     ///
-    /// The indices must have the same ID (Einsum mode).
+    /// The indices must match as full index values.
     ///
     /// # Arguments
     /// * `node_a` - First node
@@ -403,7 +399,7 @@ where
 
     /// Internal method to connect two tensors.
     ///
-    /// In Einsum mode, `index_a` and `index_b` must have the same ID.
+    /// In Einsum mode, `index_a` and `index_b` must be the same full index.
     pub(crate) fn connect_internal(
         &mut self,
         node_a: NodeIndex,
@@ -411,12 +407,12 @@ where
         node_b: NodeIndex,
         index_b: &T::Index,
     ) -> Result<EdgeIndex> {
-        // Validate that indices have the same ID (Einsum mode requirement)
-        if index_a.id() != index_b.id() {
+        // Validate that indices have the same full metadata (Einsum mode requirement).
+        if index_a != index_b {
             return Err(anyhow::anyhow!(
-                "Index IDs must match in Einsum mode: {:?} != {:?}",
-                index_a.id(),
-                index_b.id()
+                "Indices must match in Einsum mode: {:?} != {:?}",
+                index_a,
+                index_b
             ))
             .context("Failed to connect tensors");
         }
@@ -448,11 +444,11 @@ where
                 .context("Failed to connect: index_b must exist in tensor_b");
         }
 
-        // Clone the bond index (same ID, use index_a)
+        // Clone the bond index.
         let bond_index = tensor_a
             .external_indices()
             .iter()
-            .find(|idx| idx.same_id(index_a))
+            .find(|idx| *idx == index_a)
             .unwrap()
             .clone();
 
@@ -909,7 +905,7 @@ where
                 .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge {:?}", edge))? =
                 new_bond.clone();
 
-            // Update endpoint tensors by matching the old bond by ID.
+            // Update endpoint tensors by matching the old bond as a full index.
             let (node_a, node_b) = self
                 .graph
                 .graph()
@@ -922,18 +918,18 @@ where
                 let old_in_tensor = tensor
                     .external_indices()
                     .iter()
-                    .find(|idx| idx.id() == old_bond.id())
+                    .find(|idx| *idx == &old_bond)
                     .ok_or_else(|| anyhow::anyhow!("Bond index not found in endpoint tensor"))?
                     .clone();
                 let new_tensor = tensor.replaceind(&old_in_tensor, &new_bond)?;
                 self.replace_tensor(node, new_tensor)?;
             }
 
-            // Update ortho_towards key for this bond (if present), matched by ID.
+            // Update ortho_towards key for this bond (if present).
             if let Some((key, dir)) = self
                 .ortho_towards
                 .iter()
-                .find(|(k, _)| k.id() == old_bond.id())
+                .find(|(k, _)| *k == &old_bond)
                 .map(|(k, v)| (k.clone(), v.clone()))
             {
                 self.ortho_towards.remove(&key);
@@ -1423,8 +1419,8 @@ where
         &mut self,
         node_a_idx: NodeIndex,
         node_b_idx: NodeIndex,
-        a_side_sites: &HashSet<<T::Index as IndexLike>::Id>,
-        b_side_sites: &HashSet<<T::Index as IndexLike>::Id>,
+        a_side_sites: &HashSet<T::Index>,
+        b_side_sites: &HashSet<T::Index>,
         factorize_options: &FactorizeOptions,
     ) -> Result<()>
     where
@@ -1448,20 +1444,18 @@ where
             .ok_or_else(|| anyhow::anyhow!("swap_on_edge: bond not found"))?
             .clone();
 
-        // Structural bond ids of A and B (bonds other than bond_ab)
-        let other_bond_ids_a: HashSet<<T::Index as IndexLike>::Id> = self
+        // Structural bonds of A and B (bonds other than bond_ab).
+        let other_bonds_a: HashSet<T::Index> = self
             .edges_for_node(node_a_idx)
             .iter()
             .filter_map(|(e, _)| self.bond_index(*e).cloned())
-            .filter(|b| b.id() != bond_ab.id())
-            .map(|b| b.id().to_owned())
+            .filter(|b| b != &bond_ab)
             .collect();
-        let other_bond_ids_b: HashSet<<T::Index as IndexLike>::Id> = self
+        let other_bonds_b: HashSet<T::Index> = self
             .edges_for_node(node_b_idx)
             .iter()
             .filter_map(|(e, _)| self.bond_index(*e).cloned())
-            .filter(|b| b.id() != bond_ab.id())
-            .map(|b| b.id().to_owned())
+            .filter(|b| b != &bond_ab)
             .collect();
 
         let tensor_a = self
@@ -1473,28 +1467,28 @@ where
             .ok_or_else(|| anyhow::anyhow!("swap_on_edge: tensor_b not found"))?
             .clone();
 
-        // Site ids currently at each node (all non-bond indices)
-        let site_ids_a: HashSet<<T::Index as IndexLike>::Id> = tensor_a
+        // Sites currently at each node (all non-bond indices).
+        let site_indices_a: HashSet<T::Index> = tensor_a
             .external_indices()
             .iter()
-            .filter(|i| i.id() != bond_ab.id() && !other_bond_ids_a.contains(i.id()))
-            .map(|i| i.id().to_owned())
+            .filter(|i| *i != &bond_ab && !other_bonds_a.contains(*i))
+            .cloned()
             .collect();
-        let site_ids_b: HashSet<<T::Index as IndexLike>::Id> = tensor_b
+        let site_indices_b: HashSet<T::Index> = tensor_b
             .external_indices()
             .iter()
-            .filter(|i| i.id() != bond_ab.id() && !other_bond_ids_b.contains(i.id()))
-            .map(|i| i.id().to_owned())
+            .filter(|i| *i != &bond_ab && !other_bonds_b.contains(*i))
+            .cloned()
             .collect();
-        let all_site_ids: HashSet<_> = site_ids_a.union(&site_ids_b).cloned().collect();
-        let assigned_site_ids: HashSet<_> = a_side_sites.union(b_side_sites).cloned().collect();
+        let all_site_indices: HashSet<_> = site_indices_a.union(&site_indices_b).cloned().collect();
+        let assigned_site_indices: HashSet<_> = a_side_sites.union(b_side_sites).cloned().collect();
 
         if !a_side_sites.is_disjoint(b_side_sites) {
             return Err(anyhow::anyhow!(
                 "swap_on_edge: a_side_sites and b_side_sites overlap"
             ));
         }
-        if assigned_site_ids != all_site_ids {
+        if assigned_site_indices != all_site_indices {
             return Err(anyhow::anyhow!(
                 "swap_on_edge: scheduled site partition does not match current edge sites"
             ));
@@ -1506,7 +1500,7 @@ where
         let ab_indices = tensor_ab.external_indices();
         let left_inds: Vec<T::Index> = ab_indices
             .iter()
-            .filter(|i| other_bond_ids_a.contains(i.id()) || a_side_sites.contains(i.id()))
+            .filter(|i| other_bonds_a.contains(*i) || a_side_sites.contains(*i))
             .cloned()
             .collect();
 
@@ -1526,28 +1520,29 @@ where
         Ok(())
     }
 
-    /// Reorder site indices so that each index id ends up at the target node.
+    /// Reorder site indices so that each full index ends up at the target node.
     ///
     /// Builds a pre-computed schedule from the topology plus current and target
     /// site assignments, canonicalizes the network to the schedule root, then
-    /// executes the scheduled transport and swap steps.
-    /// Partial assignment is supported: indices not listed in
-    /// `target_assignment` stay on their current side of every visited edge.
+    /// executes the scheduled transport and swap steps. Partial assignment is
+    /// supported: indices not listed in `target_assignment` stay on their
+    /// current side of every visited edge.
     ///
     /// # Arguments
-    /// * `target_assignment` - Map from site index id to target node name.
+    /// * `target_assignment` - Map from full site index to target node name.
     /// * `options` - Truncation options for each SVD (default: no truncation, exact).
     ///
     /// # Errors
-    /// Returns an error if target nodes are missing, an index id is unknown, or sweep fails.
+    /// Returns an error if target nodes are missing, an index is unknown, or sweep fails.
     pub fn swap_site_indices(
         &mut self,
-        target_assignment: &HashMap<<T::Index as IndexLike>::Id, V>,
+        target_assignment: &HashMap<T::Index, V>,
         options: &swap::SwapOptions,
     ) -> Result<()>
     where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        T::Index: Hash + Eq,
         V: Ord,
     {
         if target_assignment.is_empty() {
@@ -1630,8 +1625,7 @@ where
 
     /// Reorder site indices so that each index ends up at the target node.
     ///
-    /// Index-based version of [`swap_site_indices`](Self::swap_site_indices).
-    /// Accepts `T::Index` keys instead of `T::Index::Id`.
+    /// Alias for [`swap_site_indices`](Self::swap_site_indices).
     ///
     /// # Examples
     ///
@@ -1657,12 +1651,12 @@ where
     /// let mut target = HashMap::new();
     /// target.insert(idx_a.clone(), node_name_b.clone());
     ///
-    /// treetn.swap_site_indices_by_index(&target, &SwapOptions::default())?;
+    /// treetn.swap_site_indices(&target, &SwapOptions::default())?;
     ///
     /// assert_eq!(
     ///     treetn
     ///         .site_index_network()
-    ///         .find_node_by_index_id(idx_a.id())
+    ///         .find_node_by_index(&idx_a)
     ///         .map(|name| name.as_str()),
     ///     Some(node_name_b.as_str())
     /// );
@@ -1681,12 +1675,7 @@ where
         T::Index: Hash + Eq,
         V: Ord,
     {
-        let id_assignment: HashMap<_, _> = target_assignment
-            .iter()
-            .map(|(idx, node)| (idx.id().clone(), node.clone()))
-            .collect();
-
-        self.swap_site_indices(&id_assignment, options)
+        self.swap_site_indices(target_assignment, options)
     }
 
     /// Verify internal data consistency by checking structural invariants and reconstructing the TreeTN.
@@ -1738,31 +1727,29 @@ where
             }
         }
 
-        // Step 0b: Verify non-adjacent tensors don't share index IDs
-        // Build a map from index ID to nodes that have that index
-        let mut index_id_to_nodes: HashMap<<T::Index as IndexLike>::Id, Vec<NodeIndex>> =
-            HashMap::new();
+        // Step 0b: Verify non-adjacent tensors don't share full bond indices.
+        let mut index_to_nodes: HashMap<T::Index, Vec<NodeIndex>> = HashMap::new();
         for node_idx in self.graph.graph().node_indices() {
             if let Some(tensor) = self.tensor(node_idx) {
                 for index in tensor.external_indices() {
-                    index_id_to_nodes
-                        .entry(index.id().clone())
+                    index_to_nodes
+                        .entry(index.clone())
                         .or_default()
                         .push(node_idx);
                 }
             }
         }
 
-        // Check each index ID - if shared by multiple nodes, they must be adjacent
-        for (index_id, nodes) in &index_id_to_nodes {
+        // Check each index - if shared by multiple nodes, they must be adjacent.
+        for (index, nodes) in &index_to_nodes {
             if nodes.len() > 2 {
-                // More than 2 nodes share the same index ID - always invalid for tree structure
+                // More than 2 nodes share the same index - always invalid for tree structure.
                 return Err(anyhow::anyhow!(
-                    "Index ID {:?} is shared by {} nodes, but tree structure allows at most 2",
-                    index_id,
+                    "Index {:?} is shared by {} nodes, but tree structure allows at most 2",
+                    index,
                     nodes.len()
                 ))
-                .context("verify_internal_consistency: index ID shared by too many nodes");
+                .context("verify_internal_consistency: index shared by too many nodes");
             }
             if nodes.len() == 2 {
                 // Two nodes share the index - they must be adjacent (connected by an edge)
@@ -1774,13 +1761,13 @@ where
                     let name_a = self.graph.node_name(node_a);
                     let name_b = self.graph.node_name(node_b);
                     return Err(anyhow::anyhow!(
-                        "Non-adjacent nodes {:?} and {:?} share index ID {:?}. \
-                        Only adjacent (edge-connected) nodes may share index IDs.",
+                        "Non-adjacent nodes {:?} and {:?} share index {:?}. \
+                        Only adjacent (edge-connected) nodes may share full bond indices.",
                         name_a,
                         name_b,
-                        index_id
+                        index
                     ))
-                    .context("verify_internal_consistency: non-adjacent nodes share index ID");
+                    .context("verify_internal_consistency: non-adjacent nodes share index");
                 }
             }
         }
@@ -1882,10 +1869,9 @@ where
 
 /// Find common indices between two slices of indices.
 pub(crate) fn common_inds<I: IndexLike>(inds_a: &[I], inds_b: &[I]) -> Vec<I> {
-    let set_b: HashSet<_> = inds_b.iter().map(|idx| idx.id()).collect();
     inds_a
         .iter()
-        .filter(|idx| set_b.contains(idx.id()))
+        .filter(|idx| inds_b.iter().any(|other| other == *idx))
         .cloned()
         .collect()
 }

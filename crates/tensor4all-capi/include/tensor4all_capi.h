@@ -384,14 +384,21 @@ StatusCode t4a_index_clone(const struct t4a_index *src, struct t4a_index **out);
 StatusCode t4a_index_dim(const struct t4a_index *ptr, size_t *out_dim);
 
 /**
+ * Compare two full index handles for equality.
+ */
+StatusCode t4a_index_equal(const struct t4a_index *lhs,
+                           const struct t4a_index *rhs,
+                           int32_t *out_equal);
+
+/**
  * Query whether an index has the provided tag.
  */
 StatusCode t4a_index_has_tag(const struct t4a_index *ptr, const char *tag, int32_t *out_has_tag);
 
 /**
- * Get the 64-bit ID of an index.
+ * Hash the full index value for process-local hash tables.
  */
-StatusCode t4a_index_id(const struct t4a_index *ptr, uint64_t *out_id);
+StatusCode t4a_index_hash(const struct t4a_index *ptr, uint64_t *out_hash);
 
 /**
  * Check whether an index handle is assigned.
@@ -404,13 +411,9 @@ int32_t t4a_index_is_assigned(const struct t4a_index *obj);
 StatusCode t4a_index_new(size_t dim, const char *tags_csv, int64_t plev, struct t4a_index **out);
 
 /**
- * Create a new index with an explicit 64-bit ID.
+ * Return a new index handle with prime level reset to zero.
  */
-StatusCode t4a_index_new_with_id(size_t dim,
-                                 uint64_t id,
-                                 const char *tags_csv,
-                                 int64_t plev,
-                                 struct t4a_index **out);
+StatusCode t4a_index_noprime(const struct t4a_index *ptr, struct t4a_index **out);
 
 /**
  * Get the prime level of an index.
@@ -418,9 +421,19 @@ StatusCode t4a_index_new_with_id(size_t dim,
 StatusCode t4a_index_plev(const struct t4a_index *ptr, int64_t *out_plev);
 
 /**
+ * Return a new index handle with prime level incremented by one.
+ */
+StatusCode t4a_index_prime(const struct t4a_index *ptr, struct t4a_index **out);
+
+/**
  * Release an index handle.
  */
 void t4a_index_release(struct t4a_index *obj);
+
+/**
+ * Return a new index handle with an explicit prime level.
+ */
+StatusCode t4a_index_set_plev(const struct t4a_index *ptr, int64_t plev, struct t4a_index **out);
 
 /**
  * Copy tags as a comma-separated UTF-8 string.

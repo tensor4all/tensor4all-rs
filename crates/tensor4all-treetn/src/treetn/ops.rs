@@ -8,8 +8,7 @@
 //! - `norm`, `norm_squared` for computing the Frobenius norm
 //! - `inner` for computing inner products of two TreeTNs
 //! - `to_dense` for contracting to a single tensor
-//! - `evaluate` for evaluating at specific index values
-//! - `evaluate_at` for evaluating using `Index` objects instead of raw IDs
+//! - `evaluate` for evaluating at specific index values using full indices
 //! - `all_site_indices` for retrieving all site indices and their owning vertices
 
 use std::collections::{HashMap, HashSet};
@@ -508,43 +507,14 @@ where
             .context("to_dense: failed to contract network to tensor")
     }
 
-    /// Returns all site index IDs and their owning vertex names.
-    ///
-    /// Returns `(index_ids, vertex_names)` where `index_ids[i]` belongs to
-    /// vertex `vertex_names[i]`. Order is unspecified but consistent
-    /// between the two vectors.
-    ///
-    /// For [`evaluate()`](Self::evaluate), pass `index_ids` and arrange
-    /// values in the same order.
-    #[allow(clippy::type_complexity)]
-    pub fn all_site_index_ids(&self) -> Result<(Vec<<T::Index as IndexLike>::Id>, Vec<V>)>
-    where
-        V: Clone,
-        <T::Index as IndexLike>::Id: Clone,
-    {
-        let mut ids = Vec::new();
-        let mut vertex_names = Vec::new();
-        for node_name in self.node_names() {
-            let site_space = self
-                .site_space(&node_name)
-                .ok_or_else(|| anyhow::anyhow!("Site space not found for node {:?}", node_name))
-                .context("all_site_index_ids: site space must exist")?;
-            for index in site_space {
-                ids.push(index.id().clone());
-                vertex_names.push(node_name.clone());
-            }
-        }
-        Ok((ids, vertex_names))
-    }
-
     /// Evaluate the TreeTN at multiple multi-indices (batch).
     ///
     /// # Arguments
-    /// * `index_ids` - Identifies each site index by its ID (from
-    ///   [`all_site_index_ids()`](Self::all_site_index_ids)).
+    /// * `indices` - Identifies each site index by full `Index` value (from
+    ///   [`all_site_indices()`](Self::all_site_indices)).
     ///   Must enumerate every site index exactly once.
     /// * `values` - Column-major array of shape `[n_indices, n_points]`.
-    ///   `values.get(&[i, p])` is the value of `index_ids[i]` at point `p`.
+    ///   `values.get(&[i, p])` is the value of `indices[i]` at point `p`.
     ///
     /// # Returns
     /// A `Vec<AnyScalar>` of length `n_points`.
@@ -552,24 +522,25 @@ where
     /// # Errors
     /// Returns an error if:
     /// - The network is empty
-    /// - `values` shape is inconsistent with `index_ids`
-    /// - An index ID is unknown
+    /// - `values` shape is inconsistent with `indices`
+    /// - An index is unknown
     /// - Index values are out of bounds
     /// - Contraction fails
     pub fn evaluate(
         &self,
-        index_ids: &[<T::Index as IndexLike>::Id],
+        indices: &[T::Index],
         values: ColMajorArrayRef<'_, usize>,
     ) -> Result<Vec<AnyScalar>>
     where
-        <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        T::Index: Clone + Hash + Eq,
+        <T::Index as IndexLike>::Id: Ord,
     {
         if self.node_count() == 0 {
             return Err(anyhow::anyhow!("Cannot evaluate empty TreeTN"))
                 .context("evaluate: network must have at least one node");
         }
 
-        let n_indices = index_ids.len();
+        let n_indices = indices.len();
         anyhow::ensure!(
             values.shape().len() == 2,
             "evaluate: values must be 2D, got {}D",
@@ -577,15 +548,15 @@ where
         );
         anyhow::ensure!(
             values.shape()[0] == n_indices,
-            "evaluate: values.shape()[0] ({}) != index_ids.len() ({})",
+            "evaluate: values.shape()[0] ({}) != indices.len() ({})",
             values.shape()[0],
             n_indices
         );
         let n_points = values.shape()[1];
 
-        // Build index_id -> position lookup (Vec-based linear scan is fine for
+        // Build index -> position lookup (Vec-based linear scan is fine for
         // the small number of site indices typical in practice).
-        let mut known_ids: HashSet<<T::Index as IndexLike>::Id> = HashSet::new();
+        let mut known_indices: HashSet<T::Index> = HashSet::new();
         let mut total_site_indices: usize = 0;
         for node_name in self.node_names() {
             let site_space = self
@@ -593,44 +564,44 @@ where
                 .ok_or_else(|| anyhow::anyhow!("Site space not found for node {:?}", node_name))
                 .context("evaluate: site space must exist")?;
             for index in site_space {
-                known_ids.insert(index.id().clone());
+                known_indices.insert(index.clone());
                 total_site_indices += 1;
             }
         }
 
-        // Validate: index_ids.len() must equal total number of site indices.
+        // Validate: indices.len() must equal total number of site indices.
         anyhow::ensure!(
             n_indices == total_site_indices,
-            "evaluate: index_ids.len() ({}) != total site indices ({})",
+            "evaluate: indices.len() ({}) != total site indices ({})",
             n_indices,
             total_site_indices
         );
 
-        // Validate: no duplicate index IDs.
+        // Validate: no duplicate indices.
         {
             let mut seen = HashSet::with_capacity(n_indices);
-            for id in index_ids {
-                anyhow::ensure!(seen.insert(id), "evaluate: duplicate index ID {:?}", id);
+            for index in indices {
+                anyhow::ensure!(seen.insert(index), "evaluate: duplicate index {:?}", index);
             }
         }
 
-        // Validate: all provided IDs must be known (exist in the network).
-        for id in index_ids {
+        // Validate: all provided indices must be known (exist in the network).
+        for index in indices {
             anyhow::ensure!(
-                known_ids.contains(id),
-                "evaluate: unknown index ID {:?}",
-                id
+                known_indices.contains(index),
+                "evaluate: unknown index {:?}",
+                index
             );
         }
 
         // Pre-compute per-node data: (node_name, node_index, tensor_ref,
-        //   site_entries: Vec<(Index, position_in_index_ids)>)
+        //   site_entries: Vec<(Index, position_in_indices)>)
         // This avoids HashMap lookups and repeated node_index/tensor lookups
         // inside the per-point loop.
         struct NodeEntry<'a, T: TensorLike, V> {
             name: V,
             tensor: &'a T,
-            /// (site_index, position in `index_ids`)
+            /// (site_index, position in `indices`)
             site_entries: Vec<(T::Index, usize)>,
         }
 
@@ -652,12 +623,11 @@ where
             let mut site_entries = Vec::new();
             if let Some(space) = site_space {
                 for index in space {
-                    let id = index.id();
-                    let pos = index_ids
+                    let pos = indices
                         .iter()
-                        .position(|x| x == id)
-                        .ok_or_else(|| anyhow::anyhow!("Index ID {:?} not found in index_ids", id))
-                        .context("evaluate: all site indices must be covered by index_ids")?;
+                        .position(|x| x == index)
+                        .ok_or_else(|| anyhow::anyhow!("Index {:?} not found in indices", index))
+                        .context("evaluate: all site indices must be covered by indices")?;
                     site_entries.push((index.clone(), pos));
                 }
             }
@@ -725,16 +695,12 @@ where
     /// vertex `vertex_names[i]`. Order is unspecified but consistent
     /// between the two vectors.
     ///
-    /// This is the `Index`-based counterpart of
-    /// [`all_site_index_ids()`](Self::all_site_index_ids), returning
-    /// full `Index` objects instead of raw IDs.
-    ///
     /// # Errors
     /// Returns an error if a node's site space cannot be found.
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorLike};
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
     /// use tensor4all_treetn::TreeTN;
     ///
     /// let s0 = DynIndex::new_dyn(2);
@@ -753,9 +719,8 @@ where
     /// assert_eq!(vertices.len(), 2);
     ///
     /// // The returned indices contain both s0 and s1
-    /// let id_set: std::collections::HashSet<_> = indices.iter().map(|i| *i.id()).collect();
-    /// assert!(id_set.contains(s0.id()));
-    /// assert!(id_set.contains(s1.id()));
+    /// assert!(indices.contains(&s0));
+    /// assert!(indices.contains(&s1));
     /// ```
     #[allow(clippy::type_complexity)]
     pub fn all_site_indices(&self) -> Result<(Vec<T::Index>, Vec<V>)>
@@ -778,12 +743,9 @@ where
         Ok((indices, node_names))
     }
 
-    /// Evaluate the TreeTN at multiple multi-indices (batch), using
-    /// `Index` objects instead of raw IDs.
+    /// Evaluate the TreeTN at multiple multi-indices (batch).
     ///
-    /// This is a convenience wrapper around [`evaluate()`](Self::evaluate)
-    /// that accepts `&[T::Index]` directly, extracting the IDs
-    /// internally.
+    /// Alias for [`evaluate()`](Self::evaluate).
     ///
     /// # Arguments
     /// * `indices` - Identifies each site index by its `Index` object
@@ -797,7 +759,7 @@ where
     ///
     /// # Errors
     /// Returns an error if the underlying [`evaluate()`](Self::evaluate)
-    /// call fails (see its documentation for details).
+    /// call fails.
     ///
     /// # Examples
     /// ```
@@ -823,10 +785,10 @@ where
         values: ColMajorArrayRef<'_, usize>,
     ) -> Result<Vec<AnyScalar>>
     where
-        <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        T::Index: Clone + Hash + Eq,
+        <T::Index as IndexLike>::Id: Ord,
     {
-        let index_ids: Vec<_> = indices.iter().map(|idx| idx.id().clone()).collect();
-        self.evaluate(&index_ids, values)
+        self.evaluate(indices, values)
     }
 }
 

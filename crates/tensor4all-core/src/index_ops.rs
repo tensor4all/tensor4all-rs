@@ -35,7 +35,7 @@ impl std::fmt::Display for ReplaceIndsError {
             } => {
                 write!(
                     f,
-                    "Duplicate indices found: index at position {} has the same ID as index at position {}",
+                    "Duplicate indices found: index at position {} equals index at position {}",
                     duplicate_pos, first_pos
                 )
             }
@@ -45,7 +45,7 @@ impl std::fmt::Display for ReplaceIndsError {
 
 impl std::error::Error for ReplaceIndsError {}
 
-/// Check if a collection of indices contains any duplicates (by ID).
+/// Check if a collection of indices contains any duplicate full indices.
 ///
 /// # Arguments
 /// * `indices` - Collection of indices to check
@@ -68,28 +68,28 @@ impl std::error::Error for ReplaceIndsError {}
 /// ```
 pub fn check_unique_indices<I: IndexLike>(indices: &[I]) -> Result<(), ReplaceIndsError> {
     use std::collections::HashMap;
-    let mut seen: HashMap<&I::Id, usize> = HashMap::with_capacity(indices.len());
+    let mut seen: HashMap<&I, usize> = HashMap::with_capacity(indices.len());
     for (pos, idx) in indices.iter().enumerate() {
-        if let Some(&first_pos) = seen.get(idx.id()) {
+        if let Some(&first_pos) = seen.get(idx) {
             return Err(ReplaceIndsError::DuplicateIndices {
                 first_pos,
                 duplicate_pos: pos,
             });
         }
-        seen.insert(idx.id(), pos);
+        seen.insert(idx, pos);
     }
     Ok(())
 }
 
-/// Replace indices in a collection based on ID matching.
+/// Replace indices in a collection based on full-index matching.
 ///
 /// This corresponds to ITensors.jl's `replaceinds` function. It replaces indices
-/// in `indices` that match (by ID) any of the `(old, new)` pairs in `replacements`.
+/// in `indices` that equal any of the `(old, new)` pairs in `replacements`.
 /// The replacement index must have the same dimension as the original.
 ///
 /// # Arguments
 /// * `indices` - Collection of indices to modify
-/// * `replacements` - Pairs of `(old_index, new_index)` where indices matching `old_index.id` are replaced with `new_index`
+/// * `replacements` - Pairs of `(old_index, new_index)` where indices equal to `old_index` are replaced with `new_index`
 ///
 /// # Returns
 /// A new vector with replacements applied, or an error if any replacement has a dimension mismatch.
@@ -121,7 +121,7 @@ pub fn replaceinds<I: IndexLike>(
     // Check for duplicates in input indices
     check_unique_indices(&indices)?;
 
-    // Build a map from old ID to new index for fast lookup
+    // Build a map from old index to new index for fast lookup.
     let mut replacement_map = std::collections::HashMap::with_capacity(replacements.len());
     for (old, new) in replacements {
         // Validate dimension match
@@ -131,13 +131,13 @@ pub fn replaceinds<I: IndexLike>(
                 to_dim: new.dim(),
             });
         }
-        replacement_map.insert(old.id(), new);
+        replacement_map.insert(old.clone(), new);
     }
 
     // Apply replacements
     let mut result = Vec::with_capacity(indices.len());
     for idx in indices {
-        if let Some(new_idx) = replacement_map.get(idx.id()) {
+        if let Some(new_idx) = replacement_map.get(&idx) {
             result.push((*new_idx).clone());
         } else {
             result.push(idx);
@@ -149,14 +149,14 @@ pub fn replaceinds<I: IndexLike>(
     Ok(result)
 }
 
-/// Replace indices in-place based on ID matching.
+/// Replace indices in-place based on full-index matching.
 ///
 /// This is an in-place variant of `replaceinds` that modifies the input slice directly.
 /// Useful for performance-critical code where you want to avoid allocations.
 ///
 /// # Arguments
 /// * `indices` - Mutable slice of indices to modify
-/// * `replacements` - Pairs of `(old_index, new_index)` where indices matching `old_index.id` are replaced with `new_index`
+/// * `replacements` - Pairs of `(old_index, new_index)` where indices equal to `old_index` are replaced with `new_index`
 ///
 /// # Returns
 /// `Ok(())` on success, or an error if any replacement has a dimension mismatch.
@@ -187,7 +187,7 @@ pub fn replaceinds_in_place<I: IndexLike>(
     // Check for duplicates in input indices
     check_unique_indices(indices)?;
 
-    // Build a map from old ID to new index for fast lookup
+    // Build a map from old index to new index for fast lookup.
     let mut replacement_map = std::collections::HashMap::with_capacity(replacements.len());
     for (old, new) in replacements {
         // Validate dimension match
@@ -197,12 +197,12 @@ pub fn replaceinds_in_place<I: IndexLike>(
                 to_dim: new.dim(),
             });
         }
-        replacement_map.insert(old.id(), new);
+        replacement_map.insert(old.clone(), new);
     }
 
     // Apply replacements in-place
     for idx in indices.iter_mut() {
-        if let Some(new_idx) = replacement_map.get(idx.id()) {
+        if let Some(new_idx) = replacement_map.get(idx) {
             *idx = (*new_idx).clone();
         }
     }
@@ -214,7 +214,7 @@ pub fn replaceinds_in_place<I: IndexLike>(
 
 /// Find indices that are unique to the first collection (set difference A \ B).
 ///
-/// Returns indices that appear in `indices_a` but not in `indices_b` (matched by ID).
+/// Returns indices that appear in `indices_a` but not in `indices_b` (matched by full index).
 /// This corresponds to ITensors.jl's `uniqueinds` function.
 ///
 /// # Arguments
@@ -241,10 +241,9 @@ pub fn replaceinds_in_place<I: IndexLike>(
 /// assert_eq!(unique[0].id, i.id);
 /// ```
 pub fn unique_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> {
-    let b_ids: std::collections::HashSet<_> = indices_b.iter().map(|idx| idx.id()).collect();
     indices_a
         .iter()
-        .filter(|idx| !b_ids.contains(idx.id()))
+        .filter(|idx| !indices_b.iter().any(|other| other == *idx))
         .cloned()
         .collect()
 }
@@ -252,7 +251,7 @@ pub fn unique_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> {
 /// Find indices that are not common between two collections (symmetric difference).
 ///
 /// Returns indices that appear in either `indices_a` or `indices_b` but not in both
-/// (matched by ID). This corresponds to ITensors.jl's `noncommoninds` function.
+/// (matched by full index). This corresponds to ITensors.jl's `noncommoninds` function.
 ///
 /// Time complexity: O(n + m) where n = len(indices_a), m = len(indices_b).
 ///
@@ -280,9 +279,6 @@ pub fn unique_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> {
 /// assert_eq!(noncommon.len(), 2);  // i and k
 /// ```
 pub fn noncommon_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> {
-    let a_ids: std::collections::HashSet<_> = indices_a.iter().map(|idx| idx.id()).collect();
-    let b_ids: std::collections::HashSet<_> = indices_b.iter().map(|idx| idx.id()).collect();
-
     // Pre-allocate with estimated capacity (worst case: no common indices)
     let mut result = Vec::with_capacity(indices_a.len() + indices_b.len());
 
@@ -290,14 +286,14 @@ pub fn noncommon_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> 
     result.extend(
         indices_a
             .iter()
-            .filter(|idx| !b_ids.contains(idx.id()))
+            .filter(|idx| !indices_b.iter().any(|other| other == *idx))
             .cloned(),
     );
     // Add indices from B that are not in A
     result.extend(
         indices_b
             .iter()
-            .filter(|idx| !a_ids.contains(idx.id()))
+            .filter(|idx| !indices_a.iter().any(|other| other == *idx))
             .cloned(),
     );
     result
@@ -305,7 +301,7 @@ pub fn noncommon_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> 
 
 /// Find the union of two index collections.
 ///
-/// Returns all unique indices from both collections (matched by ID).
+/// Returns all unique indices from both collections (matched by full index).
 /// This corresponds to ITensors.jl's `unioninds` function.
 ///
 /// Time complexity: O(n + m) where n = len(indices_a), m = len(indices_b).
@@ -333,24 +329,24 @@ pub fn noncommon_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> 
 /// assert_eq!(union.len(), 3);  // i, j, k
 /// ```
 pub fn union_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> {
-    let mut seen: std::collections::HashSet<&I::Id> =
+    let mut seen: std::collections::HashSet<&I> =
         std::collections::HashSet::with_capacity(indices_a.len() + indices_b.len());
     let mut result = Vec::with_capacity(indices_a.len() + indices_b.len());
 
     for idx in indices_a {
-        if seen.insert(idx.id()) {
+        if seen.insert(idx) {
             result.push(idx.clone());
         }
     }
     for idx in indices_b {
-        if seen.insert(idx.id()) {
+        if seen.insert(idx) {
             result.push(idx.clone());
         }
     }
     result
 }
 
-/// Check if a collection contains a specific index (by ID).
+/// Check if a collection contains a specific full index.
 ///
 /// This corresponds to ITensors.jl's `hasind` function.
 ///
@@ -377,7 +373,7 @@ pub fn hasind<I: IndexLike>(indices: &[I], index: &I) -> bool {
     indices.iter().any(|idx| idx == index)
 }
 
-/// Check if a collection contains all of the specified indices (by ID).
+/// Check if a collection contains all of the specified full indices.
 ///
 /// This corresponds to ITensors.jl's `hasinds` function.
 ///
@@ -386,7 +382,7 @@ pub fn hasind<I: IndexLike>(indices: &[I], index: &I) -> bool {
 /// * `targets` - The indices to look for
 ///
 /// # Returns
-/// `true` if all target indices (by ID) are found, `false` otherwise.
+/// `true` if all target indices are found, `false` otherwise.
 ///
 /// # Example
 /// ```
@@ -402,11 +398,12 @@ pub fn hasind<I: IndexLike>(indices: &[I], index: &I) -> bool {
 /// assert!(!hasinds(&indices, &[i.clone(), Index::new_dyn(5)]));
 /// ```
 pub fn hasinds<I: IndexLike>(indices: &[I], targets: &[I]) -> bool {
-    let index_ids: std::collections::HashSet<_> = indices.iter().map(|idx| idx.id()).collect();
-    targets.iter().all(|target| index_ids.contains(target.id()))
+    targets
+        .iter()
+        .all(|target| indices.iter().any(|idx| idx == target))
 }
 
-/// Check if two collections have any common indices (by ID).
+/// Check if two collections have any common full indices.
 ///
 /// This corresponds to ITensors.jl's `hascommoninds` function.
 ///
@@ -415,7 +412,7 @@ pub fn hasinds<I: IndexLike>(indices: &[I], targets: &[I]) -> bool {
 /// * `indices_b` - Second collection of indices
 ///
 /// # Returns
-/// `true` if there is at least one common index (by ID), `false` otherwise.
+/// `true` if there is at least one common index, `false` otherwise.
 ///
 /// # Example
 /// ```
@@ -433,8 +430,9 @@ pub fn hasinds<I: IndexLike>(indices: &[I], targets: &[I]) -> bool {
 /// assert!(!hascommoninds(&[i.clone()], &[k.clone()]));
 /// ```
 pub fn hascommoninds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> bool {
-    let b_ids: std::collections::HashSet<_> = indices_b.iter().map(|idx| idx.id()).collect();
-    indices_a.iter().any(|idx| b_ids.contains(idx.id()))
+    indices_a
+        .iter()
+        .any(|idx| indices_b.iter().any(|other| other == idx))
 }
 
 /// Find common indices between two index collections.
@@ -449,7 +447,7 @@ pub fn hascommoninds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> bool {
 /// * `indices_b` - Second collection of indices
 ///
 /// # Returns
-/// A vector containing indices that are common to both collections (matched by ID).
+/// A vector containing indices that are common to both collections (matched by full index).
 ///
 /// # Example
 /// ```
@@ -468,10 +466,9 @@ pub fn hascommoninds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> bool {
 /// assert_eq!(common[0].id, j.id);
 /// ```
 pub fn common_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> {
-    let b_ids: std::collections::HashSet<_> = indices_b.iter().map(|idx| idx.id()).collect();
     indices_a
         .iter()
-        .filter(|idx| b_ids.contains(idx.id()))
+        .filter(|idx| indices_b.iter().any(|other| other == *idx))
         .cloned()
         .collect()
 }
@@ -709,15 +706,16 @@ pub fn prepare_contraction_pairs<I: IndexLike>(
         return Err(ContractionError::NoCommonIndices);
     }
 
-    // Check for batch contraction (common indices not in pairs)
-    let contracted_a_ids: HashSet<_> = pairs.iter().map(|(idx, _)| idx.id()).collect();
-    let contracted_b_ids: HashSet<_> = pairs.iter().map(|(_, idx)| idx.id()).collect();
+    // Check for batch contraction (common indices not in pairs). The explicit
+    // pair list identifies axes by full index metadata, not by ID alone.
+    let contracted_a_indices: HashSet<_> = pairs.iter().map(|(idx, _)| idx).collect();
+    let contracted_b_indices: HashSet<_> = pairs.iter().map(|(_, idx)| idx).collect();
 
     let common_positions = common_ind_positions(indices_a, indices_b);
     for (pos_a, pos_b) in &common_positions {
-        let id_a = indices_a[*pos_a].id();
-        let id_b = indices_b[*pos_b].id();
-        if !contracted_a_ids.contains(id_a) || !contracted_b_ids.contains(id_b) {
+        let idx_a = &indices_a[*pos_a];
+        let idx_b = &indices_b[*pos_b];
+        if !contracted_a_indices.contains(idx_a) || !contracted_b_indices.contains(idx_b) {
             return Err(ContractionError::BatchContractionNotImplemented);
         }
     }
@@ -729,12 +727,12 @@ pub fn prepare_contraction_pairs<I: IndexLike>(
     for (idx_a, idx_b) in pairs {
         let pos_a = indices_a
             .iter()
-            .position(|idx| idx.id() == idx_a.id())
+            .position(|idx| idx == idx_a)
             .ok_or(ContractionError::IndexNotFound { tensor: "self" })?;
 
         let pos_b = indices_b
             .iter()
-            .position(|idx| idx.id() == idx_b.id())
+            .position(|idx| idx == idx_b)
             .ok_or(ContractionError::IndexNotFound { tensor: "other" })?;
 
         // Verify dimensions match

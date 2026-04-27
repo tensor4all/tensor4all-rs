@@ -18,7 +18,7 @@ use super::TreeTN;
 use crate::options::SplitOptions;
 use crate::site_index_network::SiteIndexNetwork;
 
-type SplitBoundaryIndices<V, TargetV, Id> = HashMap<V, HashMap<TargetV, HashSet<Id>>>;
+type SplitBoundaryIndices<V, TargetV, I> = HashMap<V, HashMap<TargetV, HashSet<I>>>;
 
 /// Compute the Steiner tree in the full graph spanning a set of terminal nodes.
 ///
@@ -113,12 +113,12 @@ where
     where
         TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
-        // Step 1: Build a mapping from site index ID to current node name
-        let mut site_to_current_node: HashMap<<T::Index as IndexLike>::Id, V> = HashMap::new();
+        // Step 1: Build a mapping from site index to current node name
+        let mut site_to_current_node: HashMap<T::Index, V> = HashMap::new();
         for current_node_name in self.node_names() {
             if let Some(site_space) = self.site_space(&current_node_name) {
                 for site_idx in site_space {
-                    site_to_current_node.insert(site_idx.id().clone(), current_node_name.clone());
+                    site_to_current_node.insert(site_idx.clone(), current_node_name.clone());
                 }
             }
         }
@@ -134,7 +134,7 @@ where
 
             let mut current_nodes_for_target: HashSet<V> = HashSet::new();
             for target_site_idx in target_site_space {
-                if let Some(current_node) = site_to_current_node.get(target_site_idx.id()) {
+                if let Some(current_node) = site_to_current_node.get(target_site_idx) {
                     current_nodes_for_target.insert(current_node.clone());
                 }
             }
@@ -342,7 +342,7 @@ where
     /// # Algorithm (Two-Phase Approach)
     ///
     /// **Phase 1: Exact factorization (no truncation)**
-    /// 1. Build mapping: site index ID -> target node name
+    /// 1. Build mapping: site index -> target node name
     /// 2. For each current node, check if its site indices map to multiple target nodes
     /// 3. If so, split the node using QR factorization
     /// 4. Repeat until all nodes match the target structure
@@ -377,17 +377,17 @@ where
     where
         TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
-        // Step 1: Build mapping from site index ID to target node name
-        let mut site_to_target: HashMap<<T::Index as IndexLike>::Id, TargetV> = HashMap::new();
+        // Step 1: Build mapping from site index to target node name
+        let mut site_to_target: HashMap<T::Index, TargetV> = HashMap::new();
         for target_node_name in target.node_names() {
             if let Some(site_space) = target.site_space(target_node_name) {
                 for site_idx in site_space {
-                    site_to_target.insert(site_idx.id().clone(), target_node_name.clone());
+                    site_to_target.insert(site_idx.clone(), target_node_name.clone());
                 }
             }
         }
 
-        let mut site_to_current: HashMap<<T::Index as IndexLike>::Id, V> = HashMap::new();
+        let mut site_to_current: HashMap<T::Index, V> = HashMap::new();
         for current_node_name in self.node_names() {
             let site_space = self.site_space(&current_node_name).ok_or_else(|| {
                 anyhow::anyhow!(
@@ -396,7 +396,7 @@ where
                 )
             })?;
             for site_idx in site_space {
-                site_to_current.insert(site_idx.id().clone(), current_node_name.clone());
+                site_to_current.insert(site_idx.clone(), current_node_name.clone());
             }
         }
 
@@ -411,10 +411,10 @@ where
             let current_names: HashSet<_> = site_space
                 .iter()
                 .map(|site_idx| {
-                    site_to_current.get(site_idx.id()).cloned().ok_or_else(|| {
+                    site_to_current.get(site_idx).cloned().ok_or_else(|| {
                         anyhow::anyhow!(
                             "split_to: target site index {:?} is missing from the current network",
-                            site_idx.id()
+                            site_idx
                         )
                     })
                 })
@@ -448,12 +448,12 @@ where
             if let Some(site_space) = self.site_space(&current_node_name) {
                 let mut targets_for_node: HashSet<TargetV> = HashSet::new();
                 for site_idx in site_space {
-                    if let Some(target_name) = site_to_target.get(site_idx.id()) {
+                    if let Some(target_name) = site_to_target.get(site_idx) {
                         targets_for_node.insert(target_name.clone());
                     } else {
                         return Err(anyhow::anyhow!(
                             "Site index {:?} in current node {:?} has no corresponding target node",
-                            site_idx.id(),
+                            site_idx,
                             current_node_name
                         ))
                         .context("split_to: incompatible target structure");
@@ -559,12 +559,11 @@ where
         &self,
         target: &SiteIndexNetwork<TargetV, T::Index>,
         target_to_current: &HashMap<TargetV, V>,
-    ) -> Result<SplitBoundaryIndices<V, TargetV, <T::Index as IndexLike>::Id>>
+    ) -> Result<SplitBoundaryIndices<V, TargetV, T::Index>>
     where
         TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
-        let mut boundary_indices: SplitBoundaryIndices<V, TargetV, <T::Index as IndexLike>::Id> =
-            HashMap::new();
+        let mut boundary_indices: SplitBoundaryIndices<V, TargetV, T::Index> = HashMap::new();
 
         for edge in self.graph.graph().edge_indices() {
             let (node_a, node_b) = self.graph.graph().edge_endpoints(edge).ok_or_else(|| {
@@ -616,13 +615,13 @@ where
                 .or_default()
                 .entry(target_for_a.clone())
                 .or_default()
-                .insert(bond_index.id().clone());
+                .insert(bond_index.clone());
             boundary_indices
                 .entry(current_b)
                 .or_default()
                 .entry(target_for_b.clone())
                 .or_default()
-                .insert(bond_index.id().clone());
+                .insert(bond_index.clone());
         }
 
         Ok(boundary_indices)
@@ -637,40 +636,36 @@ where
     fn split_tensor_for_targets<TargetV>(
         &self,
         tensor: &T,
-        site_to_target: &HashMap<<T::Index as IndexLike>::Id, TargetV>,
-        boundary_indices: Option<&HashMap<TargetV, HashSet<<T::Index as IndexLike>::Id>>>,
+        site_to_target: &HashMap<T::Index, TargetV>,
+        boundary_indices: Option<&HashMap<TargetV, HashSet<T::Index>>>,
         fragment_target: &SiteIndexNetwork<TargetV, T::Index>,
     ) -> Result<Vec<(TargetV, T)>>
     where
         TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
         // Group tensor's site indices by their target node
-        let mut partition: HashMap<TargetV, HashSet<<T::Index as IndexLike>::Id>> = HashMap::new();
+        let mut partition: HashMap<TargetV, HashSet<T::Index>> = HashMap::new();
         for idx in tensor.external_indices() {
-            if let Some(target_name) = site_to_target.get(idx.id()) {
+            if let Some(target_name) = site_to_target.get(&idx) {
                 partition
                     .entry(target_name.clone())
                     .or_default()
-                    .insert(idx.id().clone());
+                    .insert(idx);
             }
         }
         if let Some(boundary_indices) = boundary_indices {
-            let tensor_index_ids: HashSet<_> = tensor
-                .external_indices()
-                .iter()
-                .map(|idx| idx.id().clone())
-                .collect();
-            for (target_name, index_ids) in boundary_indices {
+            let tensor_index_set: HashSet<_> = tensor.external_indices().into_iter().collect();
+            for (target_name, indices) in boundary_indices {
                 let target_partition = partition.entry(target_name.clone()).or_default();
-                for index_id in index_ids {
-                    if !tensor_index_ids.contains(index_id) {
+                for index in indices {
+                    if !tensor_index_set.contains(index) {
                         return Err(anyhow::anyhow!(
                             "split_to: boundary index {:?} is not present in the tensor for target {:?}",
-                            index_id,
+                            index,
                             target_name
                         ));
                     }
-                    target_partition.insert(index_id.clone());
+                    target_partition.insert(index.clone());
                 }
             }
         }
@@ -736,26 +731,26 @@ where
         // Process nodes in post-order (skip root — it gets the remaining tensor)
         let mut remaining_tensor = tensor.clone();
         let mut result: Vec<(TargetV, T)> = Vec::new();
-        let mut child_bonds: HashMap<TargetV, <T::Index as IndexLike>::Id> = HashMap::new();
+        let mut child_bonds: HashMap<TargetV, T::Index> = HashMap::new();
 
         for node in traversal.iter().take(traversal.len() - 1) {
-            let node_ids = partition.get(node).cloned().unwrap_or_default();
+            let node_indices = partition.get(node).cloned().unwrap_or_default();
             let current_indices = remaining_tensor.external_indices();
 
-            // Build set of desired index IDs: this node's site+boundary indices
+            // Build set of desired indices: this node's site+boundary indices
             // plus bonds from already-processed children.
-            let mut desired_ids = node_ids;
+            let mut desired_indices = node_indices;
             if let Some(children) = children_by_parent.get(node) {
                 for child in children {
-                    if let Some(bond_id) = child_bonds.get(child) {
-                        desired_ids.insert(bond_id.clone());
+                    if let Some(bond) = child_bonds.get(child) {
+                        desired_indices.insert(bond.clone());
                     }
                 }
             }
 
             let left_inds: Vec<_> = current_indices
                 .iter()
-                .filter(|idx| desired_ids.contains(idx.id()))
+                .filter(|idx| desired_indices.contains(*idx))
                 .cloned()
                 .collect();
 
@@ -786,7 +781,7 @@ where
                     shared.len()
                 ));
             }
-            child_bonds.insert(node.clone(), shared[0].id().clone());
+            child_bonds.insert(node.clone(), shared[0].clone());
 
             result.push((node.clone(), factorize_result.left));
             remaining_tensor = factorize_result.right;
@@ -807,7 +802,7 @@ where
     fn split_tensor_for_targets_sequential<TargetV>(
         &self,
         tensor: &T,
-        partition: &HashMap<TargetV, HashSet<<T::Index as IndexLike>::Id>>,
+        partition: &HashMap<TargetV, HashSet<T::Index>>,
         target_names: &[TargetV],
     ) -> Result<Vec<(TargetV, T)>>
     where
@@ -817,12 +812,12 @@ where
         let mut result: Vec<(TargetV, T)> = Vec::new();
 
         for target_name in target_names.iter().take(target_names.len() - 1) {
-            let site_ids_for_target = partition.get(target_name).unwrap();
+            let site_indices_for_target = partition.get(target_name).unwrap();
 
             let left_inds: Vec<_> = remaining_tensor
                 .external_indices()
                 .iter()
-                .filter(|idx| site_ids_for_target.contains(idx.id()))
+                .filter(|idx| site_indices_for_target.contains(*idx))
                 .cloned()
                 .collect();
 
