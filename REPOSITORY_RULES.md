@@ -121,10 +121,17 @@
   metadata remain distinct.
 - Maps and sets that represent index identity must be keyed by the full index
   value, not by `IndexLike::Id`.
-- Pure ID comparisons are allowed only when the operation is explicitly about
-  logical-site lookup, compatibility, or contraction pairing. In those cases,
-  name the API or local variable to make the ID-based semantics explicit, such
-  as `find_*_by_id`, `*_ids`, or `target_assignment_by_id`.
+- Public and internal APIs that select a concrete tensor leg, TreeTN site,
+  edge, topology assignment, replacement target, split/fuse target, or
+  restructure target must accept the full `Index` value, not an index ID. Shape
+  APIs around index identity so callers can pass the index they mean.
+- Pure ID comparisons are allowed only inside implementation details that are
+  explicitly about logical-site lookup, compatibility, or contraction pairing.
+  Do not expose ID-based public APIs for selecting concrete indices. If a
+  temporary internal ID map is unavoidable, name the local variable to make the
+  ID-based semantics explicit, such as `logical_site_ids` or
+  `contraction_pair_ids`, and reject ambiguous same-ID inputs instead of
+  choosing one silently.
 - When changing tensor, TreeTN, contraction, direct-sum, replacement, or
   reindexing code, add a regression test with same-ID indices that differ by
   prime level or tags.
