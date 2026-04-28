@@ -326,3 +326,34 @@ fn test_contract_fit_matches_naive_contraction_on_two_node_tree() {
     let expected_dense = tn_a.contract_naive(&tn_b).unwrap();
     assert!((&fitted_dense - &expected_dense).maxabs() < 1e-10);
 }
+
+#[test]
+fn test_contract_fit_positive_sweeps_do_not_skip_without_truncation_options() {
+    set_fit_profile_enabled_for_tests(true);
+    FIT_PROFILE_STATE.with(|state| {
+        *state.borrow_mut() = None;
+    });
+
+    let tn_a = make_two_node_treetn();
+    let tn_b = make_two_node_treetn();
+
+    let fitted = contract_fit(
+        &tn_a,
+        &tn_b,
+        &"A".to_string(),
+        FitContractionOptions::new(1),
+    )
+    .unwrap();
+
+    set_fit_profile_enabled_for_tests(false);
+
+    let dangling_profile = FIT_PROFILE_STATE.with(|state| state.borrow().is_some());
+    assert!(
+        !dangling_profile,
+        "positive-sweep contract_fit should run the sweep path and consume fit profile state"
+    );
+
+    let fitted_dense = fitted.to_dense().unwrap();
+    let expected_dense = tn_a.contract_naive(&tn_b).unwrap();
+    assert!((&fitted_dense - &expected_dense).maxabs() < 1e-10);
+}
