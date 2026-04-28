@@ -763,7 +763,7 @@ impl TensorDynLen {
     ) -> Result<Storage> {
         if Self::is_diag_axis_classes(axis_classes) {
             match native.dtype() {
-                DType::F32 | DType::F64 => Storage::from_diag_col_major(
+                DType::F32 | DType::F64 | DType::I64 => Storage::from_diag_col_major(
                     native_tensor_primal_to_diag_f64(native)?,
                     logical_rank,
                 ),
