@@ -14,6 +14,7 @@ use crate::tensor_element::TensorElement;
 enum ScalarValue {
     F32(f32),
     F64(f64),
+    I64(i64),
     C32(Complex32),
     C64(Complex64),
 }
@@ -23,6 +24,7 @@ impl ScalarValue {
         match self {
             Self::F32(value) => value as f64,
             Self::F64(value) => value,
+            Self::I64(value) => value as f64,
             Self::C32(value) => value.re as f64,
             Self::C64(value) => value.re,
         }
@@ -30,7 +32,7 @@ impl ScalarValue {
 
     fn imag(self) -> f64 {
         match self {
-            Self::F32(_) | Self::F64(_) => 0.0,
+            Self::F32(_) | Self::F64(_) | Self::I64(_) => 0.0,
             Self::C32(value) => value.im as f64,
             Self::C64(value) => value.im,
         }
@@ -40,6 +42,7 @@ impl ScalarValue {
         match self {
             Self::F32(value) => value.abs() as f64,
             Self::F64(value) => value.abs(),
+            Self::I64(value) => value.abs() as f64,
             Self::C32(value) => value.norm() as f64,
             Self::C64(value) => value.norm(),
         }
@@ -53,6 +56,7 @@ impl ScalarValue {
         match self {
             Self::F32(value) => value == 0.0,
             Self::F64(value) => value == 0.0,
+            Self::I64(value) => value == 0,
             Self::C32(value) => value == Complex32::new(0.0, 0.0),
             Self::C64(value) => value == Complex64::new(0.0, 0.0),
         }
@@ -62,6 +66,7 @@ impl ScalarValue {
         match self {
             Self::F32(value) => Complex64::new(value as f64, 0.0),
             Self::F64(value) => Complex64::new(value, 0.0),
+            Self::I64(value) => Complex64::new(value as f64, 0.0),
             Self::C32(value) => Complex64::new(value.re as f64, value.im as f64),
             Self::C64(value) => value,
         }
@@ -90,6 +95,12 @@ fn scalar_value_from_native(native: &NativeTensor) -> ScalarValue {
                 .and_then(|values| values.first().copied())
                 .unwrap_or_else(|| panic!("failed to read f64 scalar tensor value")),
         ),
+        DType::I64 => ScalarValue::I64(
+            native
+                .as_slice::<i64>()
+                .and_then(|values| values.first().copied())
+                .unwrap_or_else(|| panic!("failed to read i64 scalar tensor value")),
+        ),
         DType::C32 => ScalarValue::C32(
             native
                 .as_slice::<Complex32>()
@@ -117,6 +128,7 @@ fn neg_native(native: &NativeTensor) -> Result<NativeTensor> {
     Ok(match scalar_value_from_native(native) {
         ScalarValue::F32(value) => Scalar::from_value(-value).native,
         ScalarValue::F64(value) => Scalar::from_value(-value).native,
+        ScalarValue::I64(value) => NativeTensor::from_vec(vec![], vec![-value]),
         ScalarValue::C32(value) => Scalar::from_value(-value).native,
         ScalarValue::C64(value) => Scalar::from_value(-value).native,
     })
@@ -130,20 +142,47 @@ pub(crate) fn promote_scalar_native(native: &NativeTensor, target: DType) -> Res
         (ScalarValue::F32(value), DType::C64) => {
             Scalar::from_value(Complex64::new(value as f64, 0.0))
         }
+        (ScalarValue::F32(_), DType::I64) => {
+            return Err(anyhow!(
+                "cannot promote f32 scalar to i64 without truncation"
+            ));
+        }
         (ScalarValue::F64(value), DType::F32) => Scalar::from_value(value as f32),
         (ScalarValue::F64(value), DType::F64) => Scalar::from_value(value),
+        (ScalarValue::F64(_), DType::I64) => {
+            return Err(anyhow!(
+                "cannot promote f64 scalar to i64 without truncation"
+            ));
+        }
         (ScalarValue::F64(value), DType::C32) => {
             Scalar::from_value(Complex32::new(value as f32, 0.0))
         }
         (ScalarValue::F64(value), DType::C64) => Scalar::from_value(Complex64::new(value, 0.0)),
+        (ScalarValue::I64(value), DType::F32) => Scalar::from_value(value as f32),
+        (ScalarValue::I64(value), DType::F64) => Scalar::from_value(value as f64),
+        (ScalarValue::I64(value), DType::I64) => Scalar {
+            native: NativeTensor::from_vec(vec![], vec![value]),
+        },
+        (ScalarValue::I64(value), DType::C32) => {
+            Scalar::from_value(Complex32::new(value as f32, 0.0))
+        }
+        (ScalarValue::I64(value), DType::C64) => {
+            Scalar::from_value(Complex64::new(value as f64, 0.0))
+        }
         (ScalarValue::C32(value), DType::F32) => Scalar::from_value(value.re),
         (ScalarValue::C32(value), DType::F64) => Scalar::from_value(value.re as f64),
+        (ScalarValue::C32(_), DType::I64) => {
+            return Err(anyhow!("cannot promote c32 scalar to i64"));
+        }
         (ScalarValue::C32(value), DType::C32) => Scalar::from_value(value),
         (ScalarValue::C32(value), DType::C64) => {
             Scalar::from_value(Complex64::new(value.re as f64, value.im as f64))
         }
         (ScalarValue::C64(value), DType::F32) => Scalar::from_value(value.re as f32),
         (ScalarValue::C64(value), DType::F64) => Scalar::from_value(value.re),
+        (ScalarValue::C64(_), DType::I64) => {
+            return Err(anyhow!("cannot promote c64 scalar to i64"));
+        }
         (ScalarValue::C64(value), DType::C32) => {
             Scalar::from_value(Complex32::new(value.re as f32, value.im as f32))
         }
@@ -420,6 +459,7 @@ impl Scalar {
         match self.value() {
             ScalarValue::F32(value) => Some(value as f64),
             ScalarValue::F64(value) => Some(value),
+            ScalarValue::I64(value) => Some(value as f64),
             ScalarValue::C32(_) | ScalarValue::C64(_) => None,
         }
     }
@@ -442,7 +482,7 @@ impl Scalar {
     /// ```
     pub fn as_c64(&self) -> Option<Complex64> {
         match self.value() {
-            ScalarValue::F32(_) | ScalarValue::F64(_) => None,
+            ScalarValue::F32(_) | ScalarValue::F64(_) | ScalarValue::I64(_) => None,
             ScalarValue::C32(value) => Some(Complex64::new(value.re as f64, value.im as f64)),
             ScalarValue::C64(value) => Some(value),
         }
@@ -469,6 +509,10 @@ impl Scalar {
         match self.value() {
             ScalarValue::F32(value) => Self::from_value(value),
             ScalarValue::F64(value) => Self::from_value(value),
+            ScalarValue::I64(value) => {
+                Self::wrap_native(NativeTensor::from_vec(vec![], vec![value]))
+                    .unwrap_or_else(|e| panic!("Scalar::conj returned a non-scalar tensor: {e}"))
+            }
             ScalarValue::C32(value) => Self::from_value(value.conj()),
             ScalarValue::C64(value) => Self::from_value(value.conj()),
         }
@@ -613,6 +657,11 @@ impl SumFromStorage for Scalar {
         match scalar_value_from_storage(storage) {
             ScalarValue::F32(value) => Self::from_value(value),
             ScalarValue::F64(value) => Self::from_value(value),
+            ScalarValue::I64(value) => {
+                Self::wrap_native(NativeTensor::from_vec(vec![], vec![value])).unwrap_or_else(|e| {
+                    panic!("Scalar::sum_from_storage returned a non-scalar tensor: {e}")
+                })
+            }
             ScalarValue::C32(value) => Self::from_value(value),
             ScalarValue::C64(value) => Self::from_value(value),
         }
@@ -650,6 +699,7 @@ impl TryFrom<Scalar> for f64 {
         match value.value() {
             ScalarValue::F32(real) => Ok(real as f64),
             ScalarValue::F64(real) => Ok(real),
+            ScalarValue::I64(real) => Ok(real as f64),
             ScalarValue::C32(_) | ScalarValue::C64(_) => {
                 Err("cannot convert complex scalar to f64")
             }
@@ -778,8 +828,17 @@ impl PartialOrd for Scalar {
         match (self.value(), other.value()) {
             (ScalarValue::F32(lhs), ScalarValue::F32(rhs)) => lhs.partial_cmp(&rhs),
             (ScalarValue::F32(lhs), ScalarValue::F64(rhs)) => (lhs as f64).partial_cmp(&rhs),
+            (ScalarValue::F32(lhs), ScalarValue::I64(rhs)) => {
+                (lhs as f64).partial_cmp(&(rhs as f64))
+            }
             (ScalarValue::F64(lhs), ScalarValue::F32(rhs)) => lhs.partial_cmp(&(rhs as f64)),
             (ScalarValue::F64(lhs), ScalarValue::F64(rhs)) => lhs.partial_cmp(&rhs),
+            (ScalarValue::F64(lhs), ScalarValue::I64(rhs)) => lhs.partial_cmp(&(rhs as f64)),
+            (ScalarValue::I64(lhs), ScalarValue::F32(rhs)) => {
+                (lhs as f64).partial_cmp(&(rhs as f64))
+            }
+            (ScalarValue::I64(lhs), ScalarValue::F64(rhs)) => (lhs as f64).partial_cmp(&rhs),
+            (ScalarValue::I64(lhs), ScalarValue::I64(rhs)) => lhs.partial_cmp(&rhs),
             _ => None,
         }
     }
@@ -790,6 +849,7 @@ impl fmt::Display for Scalar {
         match self.value() {
             ScalarValue::F32(value) => value.fmt(f),
             ScalarValue::F64(value) => value.fmt(f),
+            ScalarValue::I64(value) => value.fmt(f),
             ScalarValue::C32(value) => value.fmt(f),
             ScalarValue::C64(value) => value.fmt(f),
         }

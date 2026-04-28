@@ -164,6 +164,95 @@ fn promote_scalar_native_covers_all_scalar_type_pairs() {
 }
 
 #[test]
+fn i64_native_scalar_is_supported_without_public_tensor_element() {
+    let scalar = Scalar::from_native(NativeTensor::from_vec(vec![], vec![-3_i64]))
+        .expect("i64 native scalar");
+    let zero =
+        Scalar::from_native(NativeTensor::from_vec(vec![], vec![0_i64])).expect("i64 zero scalar");
+
+    assert_eq!(scalar.native.dtype(), DType::I64);
+    assert_eq!(scalar.real(), -3.0);
+    assert_eq!(scalar.imag(), 0.0);
+    assert_eq!(scalar.abs(), 3.0);
+    assert!(!scalar.is_complex());
+    assert!(scalar.is_real());
+    assert!(!scalar.is_zero());
+    assert!(zero.is_zero());
+    assert_eq!(scalar.as_f64(), Some(-3.0));
+    assert_eq!(scalar.as_c64(), None);
+    assert_eq!(Complex64::from(scalar.clone()), Complex64::new(-3.0, 0.0));
+    assert_eq!((-scalar).as_f64(), Some(3.0));
+    assert_eq!(format!("{}", zero), "0");
+}
+
+#[test]
+fn promote_i64_native_scalar_covers_supported_targets_and_rejections() {
+    let i64_scalar =
+        Scalar::from_native(NativeTensor::from_vec(vec![], vec![7_i64])).expect("i64 scalar");
+
+    let promoted_f32 =
+        Scalar::from_native(promote_scalar_native(i64_scalar.as_native(), DType::F32).unwrap())
+            .expect("promoted f32");
+    let promoted_f64 =
+        Scalar::from_native(promote_scalar_native(i64_scalar.as_native(), DType::F64).unwrap())
+            .expect("promoted f64");
+    let promoted_i64 =
+        Scalar::from_native(promote_scalar_native(i64_scalar.as_native(), DType::I64).unwrap())
+            .expect("promoted i64");
+    let promoted_c32 =
+        Scalar::from_native(promote_scalar_native(i64_scalar.as_native(), DType::C32).unwrap())
+            .expect("promoted c32");
+    let promoted_c64 =
+        Scalar::from_native(promote_scalar_native(i64_scalar.as_native(), DType::C64).unwrap())
+            .expect("promoted c64");
+
+    assert_eq!(promoted_f32.native.dtype(), DType::F32);
+    assert_eq!(promoted_f32.as_f64(), Some(7.0));
+    assert_eq!(promoted_f64.native.dtype(), DType::F64);
+    assert_eq!(promoted_f64.as_f64(), Some(7.0));
+    assert_eq!(promoted_i64.native.dtype(), DType::I64);
+    assert_eq!(promoted_i64.as_f64(), Some(7.0));
+    assert_eq!(promoted_c32.native.dtype(), DType::C32);
+    assert_eq!(promoted_c32.as_c64(), Some(Complex64::new(7.0, 0.0)));
+    assert_eq!(promoted_c64.native.dtype(), DType::C64);
+    assert_eq!(promoted_c64.as_c64(), Some(Complex64::new(7.0, 0.0)));
+
+    assert!(promote_scalar_native(Scalar::from_value(1.25_f32).as_native(), DType::I64).is_err());
+    assert!(promote_scalar_native(Scalar::from_value(1.25_f64).as_native(), DType::I64).is_err());
+    assert!(promote_scalar_native(
+        Scalar::from_value(Complex32::new(1.0, 0.0)).as_native(),
+        DType::I64
+    )
+    .is_err());
+    assert!(promote_scalar_native(
+        Scalar::from_value(Complex64::new(1.0, 0.0)).as_native(),
+        DType::I64
+    )
+    .is_err());
+}
+
+#[test]
+fn i64_native_scalar_participates_in_real_ordering() {
+    let i64_scalar =
+        Scalar::from_native(NativeTensor::from_vec(vec![], vec![3_i64])).expect("i64 scalar");
+
+    assert_eq!(
+        i64_scalar.partial_cmp(&Scalar::from_value(2.5_f32)),
+        Some(Ordering::Greater)
+    );
+    assert_eq!(
+        i64_scalar.partial_cmp(&Scalar::from_value(3.5_f64)),
+        Some(Ordering::Less)
+    );
+    assert_eq!(
+        i64_scalar.partial_cmp(
+            &Scalar::from_native(NativeTensor::from_vec(vec![], vec![3_i64])).unwrap()
+        ),
+        Some(Ordering::Equal)
+    );
+}
+
+#[test]
 fn scalar_utility_methods_cover_real_and_complex_cases() {
     let zero = Scalar::zero();
     let real = Scalar::from_real(-4.0);

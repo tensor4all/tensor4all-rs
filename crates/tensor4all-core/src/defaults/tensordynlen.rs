@@ -2,7 +2,7 @@ use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
 use crate::index_ops::{common_ind_positions, prepare_contraction, prepare_contraction_pairs};
 use crate::tensor_like::LinearizationOrder;
-use crate::{storage::Storage, AnyScalar};
+use crate::{storage::Storage, storage::StorageKind, AnyScalar};
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::Zero;
@@ -763,7 +763,7 @@ impl TensorDynLen {
     ) -> Result<Storage> {
         if Self::is_diag_axis_classes(axis_classes) {
             match native.dtype() {
-                DType::F32 | DType::F64 => Storage::from_diag_col_major(
+                DType::F32 | DType::F64 | DType::I64 => Storage::from_diag_col_major(
                     native_tensor_primal_to_diag_f64(native)?,
                     logical_rank,
                 ),
@@ -838,6 +838,119 @@ impl TensorDynLen {
     /// ```
     pub fn dims(&self) -> Vec<usize> {
         Self::expected_dims_from_indices(&self.indices)
+    }
+
+    /// Select fixed coordinates for tensor indices and drop those axes.
+    ///
+    /// The `selected_indices` slice identifies tensor axes by index identity,
+    /// and `positions` gives the zero-based coordinate to take on each
+    /// selected axis. Unselected indices are preserved in their original order.
+    ///
+    /// # Arguments
+    ///
+    /// * `selected_indices` - Indices to fix and remove from the result. Each
+    ///   index must appear exactly once in this tensor.
+    /// * `positions` - Coordinates for `selected_indices`. Each coordinate must
+    ///   be less than the corresponding index dimension.
+    ///
+    /// # Returns
+    ///
+    /// A dense tensor over the unselected indices. Selecting no indices returns
+    /// a clone of the original tensor. Selecting all indices returns a rank-0
+    /// scalar tensor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the argument lengths differ, a selected index is not
+    /// present, a selected index is duplicated, a coordinate is out of range,
+    /// or the tensor uses structured storage. Structured storage is rejected
+    /// because selecting a dense slice would otherwise require hidden
+    /// full-tensor materialization.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(3);
+    /// let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    /// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+    ///
+    /// let selected = tensor.select_indices(&[j], &[1]).unwrap();
+    /// assert_eq!(selected.dims(), vec![2]);
+    /// assert_eq!(selected.to_vec::<f64>().unwrap(), vec![3.0, 4.0]);
+    /// ```
+    pub fn select_indices(
+        &self,
+        selected_indices: &[DynIndex],
+        positions: &[usize],
+    ) -> Result<Self> {
+        if selected_indices.len() != positions.len() {
+            return Err(anyhow::anyhow!(
+                "selected_indices length {} does not match positions length {}",
+                selected_indices.len(),
+                positions.len()
+            ));
+        }
+        if selected_indices.is_empty() {
+            return Ok(self.clone());
+        }
+        if self.storage.storage_kind() != StorageKind::Dense {
+            return Err(anyhow::anyhow!(
+                "select_indices currently supports dense storage only, got {:?}",
+                self.storage.storage_kind()
+            ));
+        }
+
+        let mut selected_axes = Vec::with_capacity(selected_indices.len());
+        let mut seen_axes = HashSet::with_capacity(selected_indices.len());
+        for (selected, &position) in selected_indices.iter().zip(positions.iter()) {
+            let axis = self
+                .indices
+                .iter()
+                .position(|index| index == selected)
+                .ok_or_else(|| anyhow::anyhow!("selected index is not present in tensor"))?;
+            if !seen_axes.insert(axis) {
+                return Err(anyhow::anyhow!("selected index appears more than once"));
+            }
+            let dim = self.indices[axis].dim();
+            if position >= dim {
+                return Err(anyhow::anyhow!(
+                    "selected coordinate {position} is out of range for axis {axis} with dim {dim}"
+                ));
+            }
+            selected_axes.push(axis);
+        }
+
+        let rank = self.indices.len();
+        let mut starts = vec![0_i64; rank];
+        let mut slice_sizes = self.dims();
+        for (&axis, &position) in selected_axes.iter().zip(positions.iter()) {
+            starts[axis] = i64::try_from(position)
+                .map_err(|_| anyhow::anyhow!("selected coordinate does not fit in i64"))?;
+            slice_sizes[axis] = 1;
+        }
+
+        let starts_tensor = EagerTensor::from_tensor_in(
+            NativeTensor::from_vec(vec![rank], starts),
+            default_eager_ctx(),
+        );
+        let sliced = self
+            .materialized_inner()
+            .dynamic_slice(&starts_tensor, &slice_sizes)?;
+        let kept_indices = self
+            .indices
+            .iter()
+            .enumerate()
+            .filter(|(axis, _)| !seen_axes.contains(axis))
+            .map(|(_, index)| index.clone())
+            .collect::<Vec<_>>();
+        let kept_dims = kept_indices
+            .iter()
+            .map(|index| index.dim())
+            .collect::<Vec<_>>();
+        Self::from_inner(kept_indices, sliced.reshape(&kept_dims)?)
     }
 
     /// Create a new tensor with dynamic rank.

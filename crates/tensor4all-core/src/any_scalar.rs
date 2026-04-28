@@ -16,6 +16,7 @@ use crate::TensorElement;
 enum ScalarValue {
     F32(f32),
     F64(f64),
+    I64(i64),
     C32(Complex32),
     C64(Complex64),
 }
@@ -25,6 +26,7 @@ impl ScalarValue {
         match self {
             Self::F32(value) => value as f64,
             Self::F64(value) => value,
+            Self::I64(value) => value as f64,
             Self::C32(value) => value.re as f64,
             Self::C64(value) => value.re,
         }
@@ -32,7 +34,7 @@ impl ScalarValue {
 
     fn imag(self) -> f64 {
         match self {
-            Self::F32(_) | Self::F64(_) => 0.0,
+            Self::F32(_) | Self::F64(_) | Self::I64(_) => 0.0,
             Self::C32(value) => value.im as f64,
             Self::C64(value) => value.im,
         }
@@ -42,6 +44,7 @@ impl ScalarValue {
         match self {
             Self::F32(value) => value.abs() as f64,
             Self::F64(value) => value.abs(),
+            Self::I64(value) => value.abs() as f64,
             Self::C32(value) => value.norm() as f64,
             Self::C64(value) => value.norm(),
         }
@@ -55,6 +58,7 @@ impl ScalarValue {
         match self {
             Self::F32(value) => value == 0.0,
             Self::F64(value) => value == 0.0,
+            Self::I64(value) => value == 0,
             Self::C32(value) => value == Complex32::new(0.0, 0.0),
             Self::C64(value) => value == Complex64::new(0.0, 0.0),
         }
@@ -64,6 +68,7 @@ impl ScalarValue {
         match self {
             Self::F32(value) => Complex64::new(value as f64, 0.0),
             Self::F64(value) => Complex64::new(value, 0.0),
+            Self::I64(value) => Complex64::new(value as f64, 0.0),
             Self::C32(value) => Complex64::new(value.re as f64, value.im as f64),
             Self::C64(value) => value,
         }
@@ -143,6 +148,13 @@ impl AnyScalar {
                 self.tensor
                     .to_vec::<f64>()
                     .unwrap_or_else(|e| panic!("failed to read f64 scalar value: {e}"))[0],
+            ),
+            DType::I64 => ScalarValue::I64(
+                self.tensor
+                    .as_native()
+                    .as_slice::<i64>()
+                    .and_then(|values| values.first().copied())
+                    .unwrap_or_else(|| panic!("failed to read i64 scalar value")),
             ),
             DType::C32 => ScalarValue::C32(
                 self.tensor
@@ -251,13 +263,14 @@ impl AnyScalar {
         match self.value() {
             ScalarValue::F32(value) => Some(value as f64),
             ScalarValue::F64(value) => Some(value),
+            ScalarValue::I64(value) => Some(value as f64),
             ScalarValue::C32(_) | ScalarValue::C64(_) => None,
         }
     }
 
     pub fn as_c64(&self) -> Option<Complex64> {
         match self.value() {
-            ScalarValue::F32(_) | ScalarValue::F64(_) => None,
+            ScalarValue::F32(_) | ScalarValue::F64(_) | ScalarValue::I64(_) => None,
             ScalarValue::C32(value) => Some(Complex64::new(value.re as f64, value.im as f64)),
             ScalarValue::C64(value) => Some(value),
         }
@@ -329,6 +342,7 @@ impl AnyScalar {
         match self.value() {
             ScalarValue::F32(value) => BackendScalar::from_value(value),
             ScalarValue::F64(value) => BackendScalar::from_value(value),
+            ScalarValue::I64(value) => BackendScalar::from_value(value as f64),
             ScalarValue::C32(value) => BackendScalar::from_value(value),
             ScalarValue::C64(value) => BackendScalar::from_value(value),
         }
@@ -585,8 +599,17 @@ impl PartialOrd for AnyScalar {
         match (self.value(), other.value()) {
             (ScalarValue::F32(lhs), ScalarValue::F32(rhs)) => lhs.partial_cmp(&rhs),
             (ScalarValue::F32(lhs), ScalarValue::F64(rhs)) => (lhs as f64).partial_cmp(&rhs),
+            (ScalarValue::F32(lhs), ScalarValue::I64(rhs)) => {
+                (lhs as f64).partial_cmp(&(rhs as f64))
+            }
             (ScalarValue::F64(lhs), ScalarValue::F32(rhs)) => lhs.partial_cmp(&(rhs as f64)),
             (ScalarValue::F64(lhs), ScalarValue::F64(rhs)) => lhs.partial_cmp(&rhs),
+            (ScalarValue::F64(lhs), ScalarValue::I64(rhs)) => lhs.partial_cmp(&(rhs as f64)),
+            (ScalarValue::I64(lhs), ScalarValue::F32(rhs)) => {
+                (lhs as f64).partial_cmp(&(rhs as f64))
+            }
+            (ScalarValue::I64(lhs), ScalarValue::F64(rhs)) => (lhs as f64).partial_cmp(&rhs),
+            (ScalarValue::I64(lhs), ScalarValue::I64(rhs)) => lhs.partial_cmp(&rhs),
             _ => None,
         }
     }
@@ -597,6 +620,7 @@ impl fmt::Display for AnyScalar {
         match self.value() {
             ScalarValue::F32(value) => value.fmt(f),
             ScalarValue::F64(value) => value.fmt(f),
+            ScalarValue::I64(value) => value.fmt(f),
             ScalarValue::C32(value) => value.fmt(f),
             ScalarValue::C64(value) => value.fmt(f),
         }
