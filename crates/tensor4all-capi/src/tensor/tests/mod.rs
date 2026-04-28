@@ -272,6 +272,149 @@ fn test_tensor_dense_c64_roundtrip() {
 }
 
 #[test]
+fn test_tensor_select_indices_f64_drops_selected_axes() {
+    let i = new_index(2);
+    let j = new_index(3);
+    let k = new_index(4);
+    let data: Vec<f64> = (0..24).map(|value| value as f64).collect();
+    let tensor = new_tensor_f64(&[i, j, k], &data);
+
+    let selected = [i as *const t4a_index, k as *const t4a_index];
+    let positions = [1usize, 2usize];
+    let mut out = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_select_indices(tensor, 2, selected.as_ptr(), positions.as_ptr(), &mut out),
+        T4A_SUCCESS
+    );
+    assert!(!out.is_null());
+
+    let mut dims_len = 0usize;
+    assert_eq!(
+        t4a_tensor_dims(out, std::ptr::null_mut(), 0, &mut dims_len),
+        T4A_SUCCESS
+    );
+    let mut dims = vec![0usize; dims_len];
+    assert_eq!(
+        t4a_tensor_dims(out, dims.as_mut_ptr(), dims.len(), &mut dims_len),
+        T4A_SUCCESS
+    );
+    assert_eq!(dims, vec![3]);
+    assert_eq!(read_dense_f64(out), vec![13.0, 15.0, 17.0]);
+
+    t4a_tensor_release(out);
+    t4a_tensor_release(tensor);
+    t4a_index_release(i);
+    t4a_index_release(j);
+    t4a_index_release(k);
+}
+
+#[test]
+fn test_tensor_select_indices_c64_drops_one_axis() {
+    let i = new_index(2);
+    let j = new_index(3);
+    let data = [
+        0.0, 10.0, 1.0, 11.0, 2.0, 12.0, 3.0, 13.0, 4.0, 14.0, 5.0, 15.0,
+    ];
+    let tensor = new_tensor_c64(&[i, j], &data);
+
+    let selected = [j as *const t4a_index];
+    let positions = [1usize];
+    let mut out = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_select_indices(tensor, 1, selected.as_ptr(), positions.as_ptr(), &mut out),
+        T4A_SUCCESS
+    );
+    assert!(!out.is_null());
+    assert_eq!(read_payload_c64(out), vec![2.0, 12.0, 3.0, 13.0]);
+
+    t4a_tensor_release(out);
+    t4a_tensor_release(tensor);
+    t4a_index_release(i);
+    t4a_index_release(j);
+}
+
+#[test]
+fn test_tensor_select_indices_rejects_invalid_inputs() {
+    let i = new_index(2);
+    let j = new_index(3);
+    let k = new_index(4);
+    let tensor = new_tensor_f64(&[i, j], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let mut out = std::ptr::null_mut();
+
+    let selected = [k as *const t4a_index];
+    let positions = [0usize];
+    assert_eq!(
+        t4a_tensor_select_indices(tensor, 1, selected.as_ptr(), positions.as_ptr(), &mut out),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(out.is_null());
+
+    let selected = [j as *const t4a_index];
+    let positions = [3usize];
+    assert_eq!(
+        t4a_tensor_select_indices(tensor, 1, selected.as_ptr(), positions.as_ptr(), &mut out),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(out.is_null());
+
+    let selected = [i as *const t4a_index, i as *const t4a_index];
+    let positions = [0usize, 1usize];
+    assert_eq!(
+        t4a_tensor_select_indices(tensor, 2, selected.as_ptr(), positions.as_ptr(), &mut out),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(out.is_null());
+
+    assert_eq!(
+        t4a_tensor_select_indices(
+            tensor,
+            1,
+            selected.as_ptr(),
+            positions.as_ptr(),
+            std::ptr::null_mut()
+        ),
+        T4A_NULL_POINTER
+    );
+
+    t4a_tensor_release(tensor);
+    t4a_index_release(i);
+    t4a_index_release(j);
+    t4a_index_release(k);
+}
+
+#[test]
+fn test_tensor_select_indices_rejects_structured_storage() {
+    let i = new_index(3);
+    let j = new_index(3);
+    let diag = [1.0, 2.0, 4.0];
+    let index_ptrs = [i as *const t4a_index, j as *const t4a_index];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_diag_f64(
+            2,
+            index_ptrs.as_ptr(),
+            diag.as_ptr(),
+            diag.len(),
+            &mut tensor
+        ),
+        T4A_SUCCESS
+    );
+
+    let selected = [i as *const t4a_index];
+    let positions = [1usize];
+    let mut out = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_select_indices(tensor, 1, selected.as_ptr(), positions.as_ptr(), &mut out),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(out.is_null());
+
+    t4a_tensor_release(tensor);
+    t4a_index_release(i);
+    t4a_index_release(j);
+}
+
+#[test]
 fn test_tensor_diag_f64_storage_payload_roundtrip() {
     let i = new_index(3);
     let j = new_index(3);
