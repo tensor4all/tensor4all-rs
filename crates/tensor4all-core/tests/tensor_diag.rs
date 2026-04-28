@@ -76,6 +76,37 @@ fn test_diag_tensor_permute() {
 }
 
 #[test]
+fn diag_tensor_select_index_returns_dense_slice_from_payload() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(3);
+    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![2.0, 5.0, 7.0]);
+
+    let selected = tensor.select_indices(&[j], &[1]).unwrap();
+
+    assert_eq!(selected.dims(), vec![3]);
+    assert_eq!(selected.storage().storage_kind(), StorageKind::Dense);
+    assert_eq!(selected.to_vec::<f64>().unwrap(), vec![0.0, 5.0, 0.0]);
+}
+
+#[test]
+fn diag_tensor_select_multiple_indices_requires_matching_coordinates() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(3);
+    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone(), k.clone()], vec![2.0, 5.0, 7.0]);
+
+    let matching = tensor
+        .select_indices(&[i.clone(), k.clone()], &[2, 2])
+        .unwrap();
+    assert_eq!(matching.dims(), vec![3]);
+    assert_eq!(matching.to_vec::<f64>().unwrap(), vec![0.0, 0.0, 7.0]);
+
+    let mismatched = tensor.select_indices(&[i, k], &[1, 2]).unwrap();
+    assert_eq!(mismatched.dims(), vec![3]);
+    assert_eq!(mismatched.to_vec::<f64>().unwrap(), vec![0.0, 0.0, 0.0]);
+}
+
+#[test]
 fn test_diag_tensor_contract_diag_diag_all_contracted() {
     // Create two 2x2 DiagTensors and contract all indices
     let i = Index::new_dyn(2);

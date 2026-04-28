@@ -2,7 +2,8 @@
 
 use crate::types::{
     t4a_canonical_form, t4a_contract_method, t4a_factorize_alg, t4a_index,
-    t4a_svd_truncation_policy, t4a_tensor, t4a_treetn, InternalIndex, InternalTreeTN,
+    t4a_svd_truncation_policy, t4a_tensor, t4a_treetn, t4a_treetn_evaluator, InternalIndex,
+    InternalTreeTN,
 };
 use crate::{
     capi_error, clone_opaque, is_assigned_opaque, panic_message, release_opaque, run_catching,
@@ -38,6 +39,27 @@ pub extern "C" fn t4a_treetn_clone(
 /// Check whether a TreeTN handle is assigned.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetn_is_assigned(obj: *const t4a_treetn) -> i32 {
+    is_assigned_opaque(obj)
+}
+
+/// Release a reusable TreeTN evaluator handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_evaluator_release(obj: *mut t4a_treetn_evaluator) {
+    release_opaque(obj);
+}
+
+/// Clone a reusable TreeTN evaluator handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_evaluator_clone(
+    src: *const t4a_treetn_evaluator,
+    out: *mut *mut t4a_treetn_evaluator,
+) -> StatusCode {
+    clone_opaque(src, out)
+}
+
+/// Check whether a reusable TreeTN evaluator handle is assigned.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_evaluator_is_assigned(obj: *const t4a_treetn_evaluator) -> i32 {
     is_assigned_opaque(obj)
 }
 
@@ -113,6 +135,13 @@ fn require_tree_mut<'a>(ptr: *mut t4a_treetn) -> CapiResult<&'a mut t4a_treetn> 
         return Err(capi_error(T4A_NULL_POINTER, "treetn is null"));
     }
     Ok(unsafe { &mut *ptr })
+}
+
+fn require_evaluator<'a>(ptr: *const t4a_treetn_evaluator) -> CapiResult<&'a t4a_treetn_evaluator> {
+    if ptr.is_null() {
+        return Err(capi_error(T4A_NULL_POINTER, "treetn evaluator is null"));
+    }
+    Ok(unsafe { &*ptr })
 }
 
 fn require_node(tn: &InternalTreeTN, vertex: usize) -> CapiResult<()> {
@@ -211,6 +240,33 @@ fn collect_edge_endpoints(
     let sources = collect_positions(sources, n_edges, &format!("{what}.sources"))?;
     let targets = collect_positions(targets, n_edges, &format!("{what}.targets"))?;
     Ok(sources.into_iter().zip(targets).collect())
+}
+
+fn write_evaluation_results(
+    results: &[AnyScalar],
+    out_re: *mut libc::c_double,
+    out_im: *mut libc::c_double,
+) -> CapiResult<()> {
+    if out_re.is_null() {
+        return Err(capi_error(T4A_NULL_POINTER, "out_re is null"));
+    }
+
+    for (i, scalar) in results.iter().enumerate() {
+        let z: Complex64 = scalar.clone().into();
+        unsafe { *out_re.add(i) = z.re };
+        if z.im != 0.0 {
+            if out_im.is_null() {
+                return Err(capi_error(
+                    T4A_NULL_POINTER,
+                    "out_im is required for complex-valued evaluation results",
+                ));
+            }
+            unsafe { *out_im.add(i) = z.im };
+        } else if !out_im.is_null() {
+            unsafe { *out_im.add(i) = 0.0 };
+        }
+    }
+    Ok(())
 }
 
 fn collect_target_assignment(
@@ -1211,6 +1267,70 @@ pub extern "C" fn t4a_treetn_restructure_to(
     })
 }
 
+/// Create a reusable TreeTN evaluator from explicit index handles.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_evaluator_new(
+    treetn: *const t4a_treetn,
+    indices: *const *const t4a_index,
+    n_indices: libc::size_t,
+    out: *mut *mut t4a_treetn_evaluator,
+) -> StatusCode {
+    run_catching(out, || {
+        let tn = require_tree(treetn)?;
+        if n_indices == 0 {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "t4a_treetn_evaluator_new requires n_indices > 0",
+            ));
+        }
+        let indices = collect_indices(indices, n_indices, "indices")?;
+        let evaluator = tn
+            .inner()
+            .evaluator(&indices)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_treetn_evaluator::new(evaluator))
+    })
+}
+
+/// Evaluate one or more points using a reusable TreeTN evaluator.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_evaluator_evaluate(
+    evaluator: *const t4a_treetn_evaluator,
+    values_col_major: *const libc::size_t,
+    n_points: libc::size_t,
+    out_re: *mut libc::c_double,
+    out_im: *mut libc::c_double,
+) -> StatusCode {
+    run_status(|| {
+        let evaluator = require_evaluator(evaluator)?;
+        if n_points == 0 {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "t4a_treetn_evaluator_evaluate requires n_points > 0",
+            ));
+        }
+        if values_col_major.is_null() {
+            return Err(capi_error(T4A_NULL_POINTER, "values_col_major is null"));
+        }
+
+        let n_indices = evaluator.inner().input_count();
+        let n_values = n_indices.checked_mul(n_points).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                "t4a_treetn_evaluator_evaluate value array size overflowed size_t",
+            )
+        })?;
+        let values_slice = unsafe { std::slice::from_raw_parts(values_col_major, n_values) };
+        let shape = [n_indices, n_points];
+        let values = ColMajorArrayRef::new(values_slice, &shape);
+        let results = evaluator
+            .inner()
+            .evaluate_batch(values)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        write_evaluation_results(&results, out_re, out_im)
+    })
+}
+
 /// Evaluate a TreeTN at one or more points using explicit index handles.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetn_evaluate(
@@ -1239,9 +1359,6 @@ pub extern "C" fn t4a_treetn_evaluate(
         if values_col_major.is_null() {
             return Err(capi_error(T4A_NULL_POINTER, "values_col_major is null"));
         }
-        if out_re.is_null() {
-            return Err(capi_error(T4A_NULL_POINTER, "out_re is null"));
-        }
 
         let indices = collect_indices(indices, n_indices, "indices")?;
         let n_values = n_indices.checked_mul(n_points).ok_or_else(|| {
@@ -1255,25 +1372,12 @@ pub extern "C" fn t4a_treetn_evaluate(
         let values = ColMajorArrayRef::new(values_slice, &shape);
         let results = tn
             .inner()
-            .evaluate_at(&indices, values)
+            .evaluator(&indices)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?
+            .evaluate_batch(values)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
 
-        for (i, scalar) in results.iter().enumerate() {
-            let z: Complex64 = scalar.clone().into();
-            unsafe { *out_re.add(i) = z.re };
-            if z.im != 0.0 {
-                if out_im.is_null() {
-                    return Err(capi_error(
-                        T4A_NULL_POINTER,
-                        "out_im is required for complex-valued evaluation results",
-                    ));
-                }
-                unsafe { *out_im.add(i) = z.im };
-            } else if !out_im.is_null() {
-                unsafe { *out_im.add(i) = 0.0 };
-            }
-        }
-        Ok(())
+        write_evaluation_results(&results, out_re, out_im)
     })
 }
 

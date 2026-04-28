@@ -10,6 +10,7 @@ mod addition;
 mod canonicalize;
 pub mod contraction;
 mod decompose;
+mod evaluator;
 mod fit;
 mod localupdate;
 mod operator_impl;
@@ -39,6 +40,9 @@ use crate::site_index_network::SiteIndexNetwork;
 
 // Re-export the decomposition functions and types
 pub use decompose::{factorize_tensor_to_treetn, factorize_tensor_to_treetn_with, TreeTopology};
+
+// Re-export evaluator types
+pub use evaluator::TreeTNEvaluator;
 
 // Re-export local update types
 pub use localupdate::{

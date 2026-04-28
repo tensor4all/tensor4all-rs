@@ -271,6 +271,13 @@ typedef struct t4a_treetn {
 } t4a_treetn;
 
 /**
+ * Opaque reusable TreeTN evaluator type for the C API.
+ */
+typedef struct t4a_treetn_evaluator {
+  const void *_private;
+} t4a_treetn_evaluator;
+
+/**
  * Opaque tensor type for the C API.
  */
 typedef struct t4a_tensor {
@@ -885,6 +892,39 @@ StatusCode t4a_treetn_evaluate(const struct t4a_treetn *treetn,
                                size_t n_points,
                                double *out_re,
                                double *out_im);
+
+/**
+ * Clone a reusable TreeTN evaluator handle.
+ */
+StatusCode t4a_treetn_evaluator_clone(const struct t4a_treetn_evaluator *src,
+                                      struct t4a_treetn_evaluator **out);
+
+/**
+ * Evaluate one or more points using a reusable TreeTN evaluator.
+ */
+StatusCode t4a_treetn_evaluator_evaluate(const struct t4a_treetn_evaluator *evaluator,
+                                         const size_t *values_col_major,
+                                         size_t n_points,
+                                         double *out_re,
+                                         double *out_im);
+
+/**
+ * Check whether a reusable TreeTN evaluator handle is assigned.
+ */
+int32_t t4a_treetn_evaluator_is_assigned(const struct t4a_treetn_evaluator *obj);
+
+/**
+ * Create a reusable TreeTN evaluator for explicit index handles.
+ */
+StatusCode t4a_treetn_evaluator_new(const struct t4a_treetn *treetn,
+                                    const struct t4a_index *const *indices,
+                                    size_t n_indices,
+                                    struct t4a_treetn_evaluator **out);
+
+/**
+ * Release a reusable TreeTN evaluator handle.
+ */
+void t4a_treetn_evaluator_release(struct t4a_treetn_evaluator *obj);
 
 /**
  * Fuse connected current-node groups into the requested target topology.
