@@ -777,6 +777,65 @@ impl TensorDynLen {
         }
     }
 
+    fn dense_selected_diag_payload<T: TensorElement + Copy + Zero>(
+        payload: Vec<T>,
+        kept_dims: &[usize],
+        selected_positions: &[usize],
+    ) -> Vec<T> {
+        let output_len = kept_dims.iter().product::<usize>();
+        let mut data = vec![T::zero(); output_len];
+        if output_len == 0 {
+            return data;
+        }
+
+        let Some((&first_position, rest)) = selected_positions.split_first() else {
+            return data;
+        };
+        if rest.iter().any(|&position| position != first_position) {
+            return data;
+        }
+
+        let value = payload[first_position];
+        if kept_dims.is_empty() {
+            data[0] = value;
+            return data;
+        }
+
+        let mut offset = 0usize;
+        let mut stride = 1usize;
+        for &dim in kept_dims {
+            offset += first_position * stride;
+            stride *= dim;
+        }
+        data[offset] = value;
+        data
+    }
+
+    fn select_diag_indices(
+        &self,
+        kept_indices: Vec<DynIndex>,
+        kept_dims: Vec<usize>,
+        positions: &[usize],
+    ) -> Result<Self> {
+        if self.storage.is_f64() {
+            let payload = self
+                .storage
+                .payload_f64_col_major_vec()
+                .map_err(anyhow::Error::msg)?;
+            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
+            Self::from_dense(kept_indices, data)
+        } else if self.storage.is_c64() {
+            let payload = self
+                .storage
+                .payload_c64_col_major_vec()
+                .map_err(anyhow::Error::msg)?;
+            let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
+            Self::from_dense(kept_indices, data)
+        } else {
+            Err(anyhow::anyhow!("unsupported diagonal storage scalar type"))
+        }
+    }
+
     fn validate_storage_matches_indices(indices: &[DynIndex], storage: &Storage) -> Result<()> {
         let dims = Self::expected_dims_from_indices(indices);
         let storage_dims = storage.logical_dims();
@@ -857,15 +916,16 @@ impl TensorDynLen {
     ///
     /// A dense tensor over the unselected indices. Selecting no indices returns
     /// a clone of the original tensor. Selecting all indices returns a rank-0
-    /// scalar tensor.
+    /// scalar tensor. Diagonal tensors are sliced from their compact diagonal
+    /// payload without materializing the original full tensor.
     ///
     /// # Errors
     ///
     /// Returns an error if the argument lengths differ, a selected index is not
     /// present, a selected index is duplicated, a coordinate is out of range,
-    /// or the tensor uses structured storage. Structured storage is rejected
-    /// because selecting a dense slice would otherwise require hidden
-    /// full-tensor materialization.
+    /// or the tensor uses unsupported structured storage. General structured
+    /// storage is rejected because selecting a dense slice would otherwise
+    /// require hidden full-tensor materialization.
     ///
     /// # Examples
     ///
@@ -896,12 +956,6 @@ impl TensorDynLen {
         if selected_indices.is_empty() {
             return Ok(self.clone());
         }
-        if self.storage.storage_kind() != StorageKind::Dense {
-            return Err(anyhow::anyhow!(
-                "select_indices currently supports dense storage only, got {:?}",
-                self.storage.storage_kind()
-            ));
-        }
 
         let mut selected_axes = Vec::with_capacity(selected_indices.len());
         let mut seen_axes = HashSet::with_capacity(selected_indices.len());
@@ -923,6 +977,28 @@ impl TensorDynLen {
             selected_axes.push(axis);
         }
 
+        let kept_indices = self
+            .indices
+            .iter()
+            .enumerate()
+            .filter(|(axis, _)| !seen_axes.contains(axis))
+            .map(|(_, index)| index.clone())
+            .collect::<Vec<_>>();
+        let kept_dims = kept_indices
+            .iter()
+            .map(|index| index.dim())
+            .collect::<Vec<_>>();
+
+        if self.storage.storage_kind() == StorageKind::Diagonal {
+            return self.select_diag_indices(kept_indices, kept_dims, positions);
+        }
+        if self.storage.storage_kind() != StorageKind::Dense {
+            return Err(anyhow::anyhow!(
+                "select_indices currently supports dense and diagonal storage only, got {:?}",
+                self.storage.storage_kind()
+            ));
+        }
+
         let rank = self.indices.len();
         let mut starts = vec![0_i64; rank];
         let mut slice_sizes = self.dims();
@@ -939,17 +1015,6 @@ impl TensorDynLen {
         let sliced = self
             .materialized_inner()
             .dynamic_slice(&starts_tensor, &slice_sizes)?;
-        let kept_indices = self
-            .indices
-            .iter()
-            .enumerate()
-            .filter(|(axis, _)| !seen_axes.contains(axis))
-            .map(|(_, index)| index.clone())
-            .collect::<Vec<_>>();
-        let kept_dims = kept_indices
-            .iter()
-            .map(|index| index.dim())
-            .collect::<Vec<_>>();
         Self::from_inner(kept_indices, sliced.reshape(&kept_dims)?)
     }
 
