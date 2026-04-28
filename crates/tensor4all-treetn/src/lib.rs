@@ -71,6 +71,7 @@ pub use treetn::{
     SwapSchedule,
     // Core type
     TreeTN,
+    TreeTNEvaluator,
     TreeTopology,
     TruncateUpdater,
 };

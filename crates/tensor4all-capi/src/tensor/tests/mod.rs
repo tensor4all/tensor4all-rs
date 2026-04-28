@@ -383,7 +383,7 @@ fn test_tensor_select_indices_rejects_invalid_inputs() {
 }
 
 #[test]
-fn test_tensor_select_indices_rejects_structured_storage() {
+fn test_tensor_select_indices_accepts_diagonal_storage() {
     let i = new_index(3);
     let j = new_index(3);
     let diag = [1.0, 2.0, 4.0];
@@ -405,10 +405,13 @@ fn test_tensor_select_indices_rejects_structured_storage() {
     let mut out = std::ptr::null_mut();
     assert_eq!(
         t4a_tensor_select_indices(tensor, 1, selected.as_ptr(), positions.as_ptr(), &mut out),
-        T4A_INVALID_ARGUMENT
+        T4A_SUCCESS
     );
-    assert!(out.is_null());
+    assert_eq!(read_dense_f64(out), vec![0.0, 2.0, 0.0]);
+    assert_eq!(read_payload_dims(out), vec![3]);
+    assert_eq!(read_payload_f64(out), vec![0.0, 2.0, 0.0]);
 
+    t4a_tensor_release(out);
     t4a_tensor_release(tensor);
     t4a_index_release(i);
     t4a_index_release(j);

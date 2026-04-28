@@ -11,12 +11,12 @@
 //! - `evaluate` for evaluating at specific index values using full indices
 //! - `all_site_indices` for retrieving all site indices and their owning vertices
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::Hash;
 
 use tensor4all_core::{AllowedPairs, AnyScalar, ColMajorArrayRef, IndexLike, TensorLike};
 
-use super::TreeTN;
+use super::{TreeTN, TreeTNEvaluator};
 
 // ============================================================================
 // Default implementation
@@ -507,7 +507,54 @@ where
             .context("to_dense: failed to contract network to tensor")
     }
 
+    /// Create a reusable evaluator for repeated batched point evaluation.
+    ///
+    /// This is a convenience wrapper around [`TreeTNEvaluator::new`]. Use the
+    /// returned evaluator when repeatedly evaluating the same TreeTN with the
+    /// same site-index order.
+    ///
+    /// # Arguments
+    ///
+    /// * `indices` - Complete site-index order used as the row order of future
+    ///   batch value arrays.
+    ///
+    /// # Returns
+    ///
+    /// A reusable evaluator bound to this TreeTN.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the TreeTN is empty or `indices` is not a complete,
+    /// duplicate-free list of this TreeTN's site indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let s = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0])?;
+    /// let tree = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0])?;
+    ///
+    /// let evaluator = tree.evaluator(&[s])?;
+    /// assert_eq!(evaluator.input_count(), 1);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn evaluator(&self, indices: &[T::Index]) -> Result<TreeTNEvaluator<T, V>>
+    where
+        T::Index: Clone + Hash + Eq,
+        <T::Index as IndexLike>::Id: Ord,
+    {
+        TreeTNEvaluator::new(self, indices)
+    }
+
     /// Evaluate the TreeTN at multiple multi-indices (batch).
+    ///
+    /// This is a convenience method that constructs a temporary
+    /// [`TreeTNEvaluator`]. For repeated calls with the same site-index order,
+    /// create an evaluator once with [`Self::evaluator`] and call
+    /// [`TreeTNEvaluator::evaluate_batch`].
     ///
     /// # Arguments
     /// * `indices` - Identifies each site index by full `Index` value (from
@@ -535,158 +582,7 @@ where
         T::Index: Clone + Hash + Eq,
         <T::Index as IndexLike>::Id: Ord,
     {
-        if self.node_count() == 0 {
-            return Err(anyhow::anyhow!("Cannot evaluate empty TreeTN"))
-                .context("evaluate: network must have at least one node");
-        }
-
-        let n_indices = indices.len();
-        anyhow::ensure!(
-            values.shape().len() == 2,
-            "evaluate: values must be 2D, got {}D",
-            values.shape().len()
-        );
-        anyhow::ensure!(
-            values.shape()[0] == n_indices,
-            "evaluate: values.shape()[0] ({}) != indices.len() ({})",
-            values.shape()[0],
-            n_indices
-        );
-        let n_points = values.shape()[1];
-
-        // Build index -> position lookup (Vec-based linear scan is fine for
-        // the small number of site indices typical in practice).
-        let mut known_indices: HashSet<T::Index> = HashSet::new();
-        let mut total_site_indices: usize = 0;
-        for node_name in self.node_names() {
-            let site_space = self
-                .site_space(&node_name)
-                .ok_or_else(|| anyhow::anyhow!("Site space not found for node {:?}", node_name))
-                .context("evaluate: site space must exist")?;
-            for index in site_space {
-                known_indices.insert(index.clone());
-                total_site_indices += 1;
-            }
-        }
-
-        // Validate: indices.len() must equal total number of site indices.
-        anyhow::ensure!(
-            n_indices == total_site_indices,
-            "evaluate: indices.len() ({}) != total site indices ({})",
-            n_indices,
-            total_site_indices
-        );
-
-        // Validate: no duplicate indices.
-        {
-            let mut seen = HashSet::with_capacity(n_indices);
-            for index in indices {
-                anyhow::ensure!(seen.insert(index), "evaluate: duplicate index {:?}", index);
-            }
-        }
-
-        // Validate: all provided indices must be known (exist in the network).
-        for index in indices {
-            anyhow::ensure!(
-                known_indices.contains(index),
-                "evaluate: unknown index {:?}",
-                index
-            );
-        }
-
-        // Pre-compute per-node data: (node_name, node_index, tensor_ref,
-        //   site_entries: Vec<(Index, position_in_indices)>)
-        // This avoids HashMap lookups and repeated node_index/tensor lookups
-        // inside the per-point loop.
-        struct NodeEntry<'a, T: TensorLike, V> {
-            name: V,
-            tensor: &'a T,
-            /// (site_index, position in `indices`)
-            site_entries: Vec<(T::Index, usize)>,
-        }
-
-        let node_names = self.node_names();
-        let mut node_entries: Vec<NodeEntry<'_, T, V>> = Vec::with_capacity(node_names.len());
-
-        for node_name in &node_names {
-            let node_idx = self
-                .node_index(node_name)
-                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", node_name))
-                .context("evaluate: node must exist")?;
-
-            let tensor = self
-                .tensor(node_idx)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_name))
-                .context("evaluate: tensor must exist")?;
-
-            let site_space = self.site_space(node_name);
-            let mut site_entries = Vec::new();
-            if let Some(space) = site_space {
-                for index in space {
-                    let pos = indices
-                        .iter()
-                        .position(|x| x == index)
-                        .ok_or_else(|| anyhow::anyhow!("Index {:?} not found in indices", index))
-                        .context("evaluate: all site indices must be covered by indices")?;
-                    site_entries.push((index.clone(), pos));
-                }
-            }
-
-            node_entries.push(NodeEntry {
-                name: node_name.clone(),
-                tensor,
-                site_entries,
-            });
-        }
-
-        let mut results = Vec::with_capacity(n_points);
-        for point in 0..n_points {
-            let mut contracted_tensors: Vec<T> = Vec::with_capacity(node_entries.len());
-            let mut contracted_names: Vec<V> = Vec::with_capacity(node_entries.len());
-
-            for entry in &node_entries {
-                if entry.site_entries.is_empty() {
-                    // No site indices - just use the tensor as is
-                    contracted_tensors.push(entry.tensor.clone());
-                    contracted_names.push(entry.name.clone());
-                    continue;
-                }
-
-                let index_vals: Vec<(T::Index, usize)> = entry
-                    .site_entries
-                    .iter()
-                    .map(|(idx, pos)| {
-                        let val = *values.get(&[*pos, point]).unwrap();
-                        (idx.clone(), val)
-                    })
-                    .collect();
-
-                let onehot =
-                    T::onehot(&index_vals).context("evaluate: failed to create one-hot tensor")?;
-
-                let result =
-                    T::contract(&[entry.tensor, &onehot], tensor4all_core::AllowedPairs::All)
-                        .context("evaluate: failed to contract tensor with one-hot")?;
-
-                contracted_tensors.push(result);
-                contracted_names.push(entry.name.clone());
-            }
-
-            // Build a temporary TreeTN from the contracted tensors and contract to scalar
-            let temp_tn = TreeTN::<T, V>::from_tensors(contracted_tensors, contracted_names)
-                .context("evaluate: failed to build temporary TreeTN")?;
-            let result_tensor = temp_tn
-                .contract_to_tensor()
-                .context("evaluate: failed to contract to scalar")?;
-
-            let scalar_one = T::scalar_one().context("evaluate: failed to create scalar_one")?;
-            let scalar = scalar_one
-                .inner_product(&result_tensor)
-                .context("evaluate: failed to extract scalar value")?;
-            results.push(scalar);
-        }
-
-        Ok(results)
+        TreeTNEvaluator::new(self, indices)?.evaluate_batch(values)
     }
 
     /// Returns all site indices and their owning vertex names.

@@ -8,7 +8,7 @@ use tensor4all_core::{
 };
 use tensor4all_quanticstransform::BoundaryCondition as QuanticsBoundaryCondition;
 use tensor4all_treetn::treetn::contraction::ContractionMethod;
-use tensor4all_treetn::{CanonicalForm as TreeCanonicalForm, DefaultTreeTN};
+use tensor4all_treetn::{CanonicalForm as TreeCanonicalForm, DefaultTreeTN, TreeTNEvaluator};
 
 /// Internal dynamic index type wrapped by `t4a_index`.
 pub(crate) type InternalIndex = DynIndex;
@@ -18,6 +18,9 @@ pub(crate) type InternalTensor = TensorDynLen;
 
 /// Internal tree tensor network type wrapped by `t4a_treetn`.
 pub(crate) type InternalTreeTN = DefaultTreeTN<usize>;
+
+/// Internal reusable TreeTN evaluator type wrapped by `t4a_treetn_evaluator`.
+pub(crate) type InternalTreeTNEvaluator = TreeTNEvaluator<InternalTensor, usize>;
 
 /// Opaque index type for the C API.
 #[repr(C)]
@@ -183,6 +186,45 @@ impl Drop for t4a_treetn {
 
 unsafe impl Send for t4a_treetn {}
 unsafe impl Sync for t4a_treetn {}
+
+/// Opaque reusable TreeTN evaluator type for the C API.
+#[repr(C)]
+pub struct t4a_treetn_evaluator {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_treetn_evaluator {
+    /// Create a wrapper from an internal reusable evaluator value.
+    pub(crate) fn new(evaluator: InternalTreeTNEvaluator) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(evaluator)) as *const c_void,
+        }
+    }
+
+    /// Borrow the wrapped reusable evaluator.
+    pub(crate) fn inner(&self) -> &InternalTreeTNEvaluator {
+        unsafe { &*(self._private as *const InternalTreeTNEvaluator) }
+    }
+}
+
+impl Clone for t4a_treetn_evaluator {
+    fn clone(&self) -> Self {
+        Self::new(self.inner().clone())
+    }
+}
+
+impl Drop for t4a_treetn_evaluator {
+    fn drop(&mut self) {
+        if !self._private.is_null() {
+            unsafe {
+                let _ = Box::from_raw(self._private as *mut InternalTreeTNEvaluator);
+            }
+        }
+    }
+}
+
+unsafe impl Send for t4a_treetn_evaluator {}
+unsafe impl Sync for t4a_treetn_evaluator {}
 
 /// Canonical form used for orthogonalization and canonicalization.
 #[repr(C)]

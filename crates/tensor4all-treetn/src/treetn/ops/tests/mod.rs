@@ -1,7 +1,7 @@
 use num_complex::Complex64;
 use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex, TensorDynLen};
 
-use crate::TreeTN;
+use crate::{TreeTN, TreeTNEvaluator};
 
 fn make_three_node_chain() -> TreeTN<TensorDynLen, usize> {
     let s0 = DynIndex::new_dyn(2);
@@ -89,4 +89,34 @@ fn test_evaluate_accepts_full_indices_for_same_id_prime_pair() {
     assert_eq!(result.len(), 2);
     assert!((result[0].real() - 10.0).abs() < 1.0e-10);
     assert!((result[1].real() - 40.0).abs() < 1.0e-10);
+}
+
+#[test]
+fn evaluator_evaluate_batch_matches_evaluate_at_sugar() {
+    let tn = make_three_node_chain();
+    let (indices, _) = tn.all_site_indices().unwrap();
+    let values = [0usize, 0, 0, 1, 1, 1, 0, 1, 0];
+    let shape = [indices.len(), 3usize];
+    let values_ref = ColMajorArrayRef::new(&values, &shape);
+
+    let evaluator = TreeTNEvaluator::new(&tn, &indices).unwrap();
+    let direct = evaluator.evaluate_batch(values_ref).unwrap();
+    let sugar = tn.evaluate_at(&indices, values_ref).unwrap();
+
+    assert_eq!(direct.len(), 3);
+    assert_eq!(sugar.len(), 3);
+    for (left, right) in direct.iter().zip(sugar.iter()) {
+        assert!((left.real() - right.real()).abs() < 1.0e-12);
+        assert!((left.imag() - right.imag()).abs() < 1.0e-12);
+    }
+}
+
+#[test]
+fn evaluator_rejects_incomplete_site_index_list() {
+    let tn = make_three_node_chain();
+    let (indices, _) = tn.all_site_indices().unwrap();
+
+    let err = TreeTNEvaluator::new(&tn, &indices[..indices.len() - 1]).unwrap_err();
+
+    assert!(err.to_string().contains("indices.len()"));
 }

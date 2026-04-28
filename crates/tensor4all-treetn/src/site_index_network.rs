@@ -164,6 +164,28 @@ where
         self.index_to_node.contains_key(index)
     }
 
+    /// Return the number of registered site indices.
+    ///
+    /// This uses the reverse index lookup and does not scan every node's site
+    /// space. Use it when validating a complete site-index assignment.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::HashSet;
+    /// use tensor4all_core::DynIndex;
+    /// use tensor4all_treetn::SiteIndexNetwork;
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let mut network = SiteIndexNetwork::<&str, DynIndex>::new();
+    /// network.add_node("A", HashSet::from([i])).unwrap();
+    ///
+    /// assert_eq!(network.site_index_count(), 1);
+    /// ```
+    pub fn site_index_count(&self) -> usize {
+        self.index_to_node.len()
+    }
+
     /// Add a site index to a node's site space.
     ///
     /// Updates both the site space and the reverse lookup.
