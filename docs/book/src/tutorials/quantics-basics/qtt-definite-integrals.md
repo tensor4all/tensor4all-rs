@@ -7,17 +7,6 @@ integral estimate together.
 
 Runnable source: [`docs/tutorial-code/src/bin/qtt_integral.rs`](../../../../tutorial-code/src/bin/qtt_integral.rs)
 
-## What It Computes
-
-The tutorial builds the same interval QTT as before and calls `integral()` on
-it. The plot below comes from the bit-depth sweep and shows how the integral
-error changes as the grid is refined.
-
-![Integral error over bit depth](qtt_integral_sweep.png)
-
-The integral is still a grid approximation. More bits give more grid points,
-but they can also increase the work needed to build the QTT.
-
 ## Key API Pieces
 
 `integral()` is available when the QTT was built from a `DiscretizedGrid`.
@@ -45,3 +34,14 @@ assert!((integral - 1.0).abs() < 1e-8);
 
 For non-constant functions, compare the result against an analytic integral or
 a trusted high-resolution reference.
+
+## What It Computes
+
+The tutorial builds the same interval QTT as before and calls `integral()` on
+it. The plot below comes from the bit-depth sweep and shows how the integral
+error changes as the grid is refined.
+
+![Integral error over bit depth](qtt_integral_sweep.png)
+
+The integral is still a grid approximation. More bits give more grid points,
+but they can also increase the work needed to build the QTT.

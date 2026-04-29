@@ -1,25 +1,11 @@
 # QTT of a Scalar Function
 
 This tutorial builds a quantics tensor train (QTT) for one scalar function on a
-small binary grid. A QTT stores the values on \(2^R\) grid points as \(R\)
-small sites. The bond dimensions are the internal sizes between neighboring
+small binary grid. A QTT stores the values on `2^R` grid points as `R` small
+sites. The bond dimensions are the internal sizes between neighboring
 sites; larger values can carry more information but cost more memory and time.
 
 Runnable source: [`docs/tutorial-code/src/bin/qtt_function.rs`](../../../../tutorial-code/src/bin/qtt_function.rs)
-
-## What It Computes
-
-The example samples a smooth one-dimensional function, compresses the samples
-with tensor cross interpolation, evaluates the QTT back on the grid, and writes
-CSV data for the plots below.
-
-![QTT values compared with the direct function](qtt_function_vs_qtt.png)
-
-The points from the QTT lie on top of the direct function values. The next plot
-shows the bond dimensions along the QTT chain. A small peak means that part of
-the grid needs more internal information than its neighbors.
-
-![Bond dimensions for the scalar-function QTT](qtt_function_bond_dims.png)
 
 ## Key API Pieces
 
@@ -50,3 +36,17 @@ assert!(!ranks.is_empty());
 
 The tutorial binary uses the same pattern, but with a more interesting target
 function and CSV output.
+
+## What It Computes
+
+The example samples a smooth one-dimensional function, compresses the samples
+with tensor cross interpolation, evaluates the QTT back on the grid, and writes
+CSV data for the plots below.
+
+![QTT values compared with the direct function](qtt_function_vs_qtt.png)
+
+The points from the QTT lie on top of the direct function values. The next plot
+shows the bond dimensions along the QTT chain. A small peak means that part of
+the grid needs more internal information than its neighbors.
+
+![Bond dimensions for the scalar-function QTT](qtt_function_bond_dims.png)

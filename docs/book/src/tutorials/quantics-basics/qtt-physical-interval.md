@@ -1,22 +1,10 @@
 # QTT on a Physical Interval
 
 The previous tutorial used integer grid indices. This one maps those indices to
-a real interval, for example \([-1, 1]\). That is useful when the function is
-defined as \(f(x)\), not as \(f(i)\).
+a real interval, for example `[-1, 1]`. That is useful when the function is
+defined as `f(x)`, not as `f(i)`.
 
 Runnable source: [`docs/tutorial-code/src/bin/qtt_interval.rs`](../../../../tutorial-code/src/bin/qtt_interval.rs)
-
-## What It Computes
-
-The example builds a `DiscretizedGrid`, evaluates the target function on that
-grid, and checks that the QTT follows the direct values on the interval.
-
-![Interval function and QTT values](qtt_interval_function_vs_qtt.png)
-
-The bond-dimension plot shows how much information is carried between QTT
-sites. For this smooth example, the internal sizes stay modest.
-
-![Bond dimensions for the interval QTT](qtt_interval_bond_dims.png)
 
 ## Key API Pieces
 
@@ -48,3 +36,15 @@ assert!((qtt.evaluate(&[1])? - 1.0).abs() < 1e-12);
 
 Indices passed to `evaluate` are one-based grid indices. The grid converts them
 to the physical coordinate before the function is sampled.
+
+## What It Computes
+
+The example builds a `DiscretizedGrid`, evaluates the target function on that
+grid, and checks that the QTT follows the direct values on the interval.
+
+![Interval function and QTT values](qtt_interval_function_vs_qtt.png)
+
+The bond-dimension plot shows how much information is carried between QTT
+sites. For this smooth example, the internal sizes stay modest.
+
+![Bond dimensions for the interval QTT](qtt_interval_bond_dims.png)

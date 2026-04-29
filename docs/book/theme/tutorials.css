@@ -1,0 +1,12 @@
+main p > img[src^="qtt_"] {
+  display: block;
+  max-width: 100%;
+  margin: 1.25rem auto;
+  border-radius: 4px;
+}
+
+.coal main p > img[src^="qtt_"],
+.navy main p > img[src^="qtt_"],
+.ayu main p > img[src^="qtt_"] {
+  filter: invert(1) hue-rotate(180deg);
+}

@@ -1,25 +1,10 @@
 # 2D Partial Fourier Transform
 
 A partial Fourier transform applies Fourier only along one coordinate of a
-multivariate function. Here the function is \(f(x, t)\), and only the \(x\)
-direction is transformed. The \(t\) direction passes through unchanged.
+multivariate function. Here the function is `f(x, t)`, and only the `x`
+direction is transformed. The `t` direction passes through unchanged.
 
 Runnable source: [`docs/tutorial-code/src/bin/qtt_partial_fourier2d.rs`](../../../../tutorial-code/src/bin/qtt_partial_fourier2d.rs)
-
-## What It Computes
-
-The example builds an interleaved two-dimensional QTT, applies a one-dimensional
-Fourier operator to the x-sites, and compares the result with an analytic
-partial transform.
-
-![Partial Fourier values](qtt_partial_fourier2d_values.png)
-
-![Partial Fourier error](qtt_partial_fourier2d_error.png)
-
-Only the x-sites receive the operator, so the implementation must map the
-one-dimensional operator nodes onto the even nodes of the interleaved state.
-
-![Bond dimensions for the partial Fourier result](qtt_partial_fourier2d_bond_dims.png)
 
 ## Key API Pieces
 
@@ -41,3 +26,18 @@ assert_eq!(x_site_mapping, vec![(0, 0), (1, 2), (2, 4), (3, 6)]);
 
 The tutorial code renames the operator nodes with this mapping, then applies
 the operator while leaving the t-sites in place.
+
+## What It Computes
+
+The example builds an interleaved two-dimensional QTT, applies a one-dimensional
+Fourier operator to the x-sites, and compares the result with an analytic
+partial transform.
+
+![Partial Fourier values](qtt_partial_fourier2d_values.png)
+
+![Partial Fourier error](qtt_partial_fourier2d_error.png)
+
+Only the x-sites receive the operator, so the implementation must map the
+one-dimensional operator nodes onto the even nodes of the interleaved state.
+
+![Bond dimensions for the partial Fourier result](qtt_partial_fourier2d_bond_dims.png)

@@ -1,21 +1,10 @@
 # Sweep over Bit Depth
 
-The bit depth \(R\) sets the number of grid points: \(2^R\). Increasing \(R\)
+The bit depth `R` sets the number of grid points: `2^R`. Increasing `R`
 usually improves resolution, but it may also increase build time or bond
 dimensions.
 
 Runnable source: [`docs/tutorial-code/src/bin/qtt_r_sweep.rs`](../../../../tutorial-code/src/bin/qtt_r_sweep.rs)
-
-## What It Computes
-
-The example repeats the same QTT construction for several bit depths and writes
-the value error, runtime, and sample curves.
-
-![Sample curves from the bit-depth sweep](qtt_r_sweep_samples.png)
-
-![Maximum error over bit depth](qtt_r_sweep_error.png)
-
-![Runtime over bit depth](qtt_r_sweep_runtime.png)
 
 ## Key API Pieces
 
@@ -47,3 +36,14 @@ assert_eq!(point_counts, vec![8, 16]);
 ```
 
 Use sweeps like this when choosing a grid before running a larger computation.
+
+## What It Computes
+
+The example repeats the same QTT construction for several bit depths and writes
+the value error, runtime, and sample curves.
+
+![Sample curves from the bit-depth sweep](qtt_r_sweep_samples.png)
+
+![Maximum error over bit depth](qtt_r_sweep_error.png)
+
+![Runtime over bit depth](qtt_r_sweep_runtime.png)

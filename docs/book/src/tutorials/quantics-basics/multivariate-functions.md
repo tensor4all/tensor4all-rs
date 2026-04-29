@@ -1,22 +1,11 @@
 # Multivariate Functions
 
-A multivariate QTT stores a function such as \(f(x, y)\). The sites can be
+A multivariate QTT stores a function such as `f(x, y)`. The sites can be
 grouped by variable or interleaved. Grouped means all bits for one variable
 come first; interleaved means the first bit of each variable appears before the
 second bit of each variable. The best choice depends on the function.
 
 Runnable source: [`docs/tutorial-code/src/bin/qtt_multivariate.rs`](../../../../tutorial-code/src/bin/qtt_multivariate.rs)
-
-## What It Computes
-
-The example builds a two-dimensional QTT with both layouts and compares the
-values, errors, and bond dimensions.
-
-![Two-dimensional QTT values](qtt_multivariate_values.png)
-
-![Two-dimensional QTT error](qtt_multivariate_error.png)
-
-![Bond dimensions for grouped and interleaved layouts](qtt_multivariate_bond_dims.png)
 
 ## Key API Pieces
 
@@ -48,3 +37,14 @@ assert!((qtt.evaluate(&[1, 1])? - 0.0).abs() < 1e-12);
 
 The tutorial binary uses the same function with enough output data to compare
 the two layouts visually.
+
+## What It Computes
+
+The example builds a two-dimensional QTT with both layouts and compares the
+values, errors, and bond dimensions.
+
+![Two-dimensional QTT values](qtt_multivariate_values.png)
+
+![Two-dimensional QTT error](qtt_multivariate_error.png)
+
+![Bond dimensions for grouped and interleaved layouts](qtt_multivariate_bond_dims.png)

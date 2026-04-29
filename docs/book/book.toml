@@ -6,6 +6,7 @@ src = "src"
 
 [output.html]
 git-repository-url = "https://github.com/tensor4all/tensor4all-rs"
+additional-css = ["theme/tutorials.css"]
 
 [rust]
 edition = "2021"
