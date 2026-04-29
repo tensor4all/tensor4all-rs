@@ -418,6 +418,63 @@ fn test_tensor_select_indices_accepts_diagonal_storage() {
 }
 
 #[test]
+fn test_tensor_select_indices_accepts_structured_storage() {
+    let i = new_index(2);
+    let j = new_index(3);
+    let k = new_index(2);
+    let index_ptrs = [
+        i as *const t4a_index,
+        j as *const t4a_index,
+        k as *const t4a_index,
+    ];
+    let payload_dims = [2usize, 3];
+    let payload_strides = [1isize, 2];
+    let axis_classes = [0usize, 1, 0];
+    let payload = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_structured_f64(
+            3,
+            index_ptrs.as_ptr(),
+            payload.as_ptr(),
+            payload.len(),
+            payload_dims.as_ptr(),
+            payload_dims.len(),
+            payload_strides.as_ptr(),
+            payload_strides.len(),
+            axis_classes.as_ptr(),
+            axis_classes.len(),
+            &mut tensor,
+        ),
+        T4A_SUCCESS
+    );
+
+    let selected = [j as *const t4a_index];
+    let positions = [1usize];
+    let mut out = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_select_indices(tensor, 1, selected.as_ptr(), positions.as_ptr(), &mut out),
+        T4A_SUCCESS
+    );
+    assert!(!out.is_null());
+
+    let mut kind = t4a_storage_kind::Dense;
+    assert_eq!(t4a_tensor_storage_kind(out, &mut kind), T4A_SUCCESS);
+    assert_eq!(kind, t4a_storage_kind::Diagonal);
+    assert_eq!(read_payload_dims(out), vec![2]);
+    assert_eq!(read_payload_strides(out), vec![1]);
+    assert_eq!(read_axis_classes(out), vec![0, 0]);
+    assert_eq!(read_payload_f64(out), vec![3.0, 4.0]);
+    assert_eq!(read_dense_f64(out), vec![3.0, 0.0, 0.0, 4.0]);
+
+    t4a_tensor_release(out);
+    t4a_tensor_release(tensor);
+    for index in [k, j, i] {
+        t4a_index_release(index);
+    }
+}
+
+#[test]
 fn test_tensor_diag_f64_storage_payload_roundtrip() {
     let i = new_index(3);
     let j = new_index(3);
