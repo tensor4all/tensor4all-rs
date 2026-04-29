@@ -18,7 +18,8 @@ use tensor4all_tensorbackend::{
     dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
     native_tensor_primal_to_dense_col_major, native_tensor_primal_to_diag_c64,
     native_tensor_primal_to_diag_f64, native_tensor_primal_to_storage,
-    reshape_col_major_native_tensor, scale_native_tensor, storage_to_native_tensor, TensorElement,
+    reshape_col_major_native_tensor, scale_native_tensor, storage_to_native_tensor, StorageScalar,
+    TensorElement,
 };
 
 use super::structured_contraction::{
@@ -836,6 +837,217 @@ impl TensorDynLen {
         }
     }
 
+    fn col_major_strides(dims: &[usize]) -> Result<Vec<isize>> {
+        let mut strides = Vec::with_capacity(dims.len());
+        let mut stride = 1isize;
+        for &dim in dims {
+            strides.push(stride);
+            let dim = isize::try_from(dim)
+                .map_err(|_| anyhow::anyhow!("dimension does not fit in isize"))?;
+            stride = stride
+                .checked_mul(dim)
+                .ok_or_else(|| anyhow::anyhow!("column-major stride overflow"))?;
+        }
+        Ok(strides)
+    }
+
+    fn zero_structured_selection<T>(
+        kept_indices: Vec<DynIndex>,
+        kept_dims: &[usize],
+    ) -> Result<Self>
+    where
+        T: TensorElement + Zero,
+    {
+        let output_len = checked_product(kept_dims)?;
+        Self::from_dense(kept_indices, vec![T::zero(); output_len])
+    }
+
+    fn select_structured_indices_typed<T>(
+        &self,
+        payload: Vec<T>,
+        kept_axes: &[usize],
+        kept_indices: Vec<DynIndex>,
+        kept_dims: Vec<usize>,
+        selected_axes: &[usize],
+        positions: &[usize],
+    ) -> Result<Self>
+    where
+        T: TensorElement + StorageScalar + Zero,
+    {
+        let payload_dims = self.storage.payload_dims();
+        let axis_classes = self.storage.axis_classes();
+        let payload_rank = payload_dims.len();
+        let mut selected_class_positions = vec![None; payload_rank];
+
+        for (&axis, &position) in selected_axes.iter().zip(positions.iter()) {
+            let class_id = axis_classes[axis];
+            if let Some(existing) = selected_class_positions[class_id] {
+                if existing != position {
+                    return Self::zero_structured_selection::<T>(kept_indices, &kept_dims);
+                }
+            } else {
+                selected_class_positions[class_id] = Some(position);
+            }
+        }
+
+        let selected_class_kept = kept_axes
+            .iter()
+            .any(|&axis| selected_class_positions[axis_classes[axis]].is_some());
+        if selected_class_kept {
+            return self.select_structured_indices_dense(
+                payload,
+                kept_axes,
+                kept_indices,
+                kept_dims,
+                &selected_class_positions,
+            );
+        }
+
+        let mut old_to_new_class = vec![None; payload_rank];
+        let mut output_payload_dims = Vec::new();
+        let mut output_axis_classes = Vec::with_capacity(kept_axes.len());
+        for &axis in kept_axes {
+            let class_id = axis_classes[axis];
+            let new_class = match old_to_new_class[class_id] {
+                Some(new_class) => new_class,
+                None => {
+                    let new_class = output_payload_dims.len();
+                    old_to_new_class[class_id] = Some(new_class);
+                    output_payload_dims.push(payload_dims[class_id]);
+                    new_class
+                }
+            };
+            output_axis_classes.push(new_class);
+        }
+
+        let output_len = checked_product(&output_payload_dims)?;
+        let mut output_payload = Vec::with_capacity(output_len);
+        for linear in 0..output_len {
+            let output_payload_index = decode_col_major_linear(linear, &output_payload_dims)?;
+            let mut input_payload_index = vec![0usize; payload_rank];
+            for class_id in 0..payload_rank {
+                input_payload_index[class_id] =
+                    if let Some(position) = selected_class_positions[class_id] {
+                        position
+                    } else if let Some(new_class) = old_to_new_class[class_id] {
+                        output_payload_index[new_class]
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "structured payload class {class_id} is neither selected nor kept"
+                        ));
+                    };
+            }
+            let input_linear = encode_col_major_linear(&input_payload_index, payload_dims)?;
+            output_payload.push(payload[input_linear]);
+        }
+
+        let output_strides = Self::col_major_strides(&output_payload_dims)?;
+        let storage = Storage::new_structured(
+            output_payload,
+            output_payload_dims,
+            output_strides,
+            output_axis_classes,
+        )?;
+        Self::from_storage(kept_indices, Arc::new(storage))
+    }
+
+    fn select_structured_indices_dense<T>(
+        &self,
+        payload: Vec<T>,
+        kept_axes: &[usize],
+        kept_indices: Vec<DynIndex>,
+        kept_dims: Vec<usize>,
+        selected_class_positions: &[Option<usize>],
+    ) -> Result<Self>
+    where
+        T: TensorElement + Zero,
+    {
+        let payload_dims = self.storage.payload_dims();
+        let axis_classes = self.storage.axis_classes();
+        let output_len = checked_product(&kept_dims)?;
+        let mut output = Vec::with_capacity(output_len);
+
+        for linear in 0..output_len {
+            let kept_position = decode_col_major_linear(linear, &kept_dims)?;
+            let mut input_payload_index = selected_class_positions.to_vec();
+            let mut is_structural_zero = false;
+
+            for (&axis, &position) in kept_axes.iter().zip(kept_position.iter()) {
+                let class_id = axis_classes[axis];
+                match input_payload_index[class_id] {
+                    Some(existing) if existing != position => {
+                        is_structural_zero = true;
+                        break;
+                    }
+                    Some(_) => {}
+                    None => input_payload_index[class_id] = Some(position),
+                }
+            }
+
+            if is_structural_zero {
+                output.push(T::zero());
+                continue;
+            }
+
+            let input_payload_index = input_payload_index
+                .into_iter()
+                .enumerate()
+                .map(|(class_id, position)| {
+                    position.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "structured payload class {class_id} is neither selected nor kept"
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let input_linear = encode_col_major_linear(&input_payload_index, payload_dims)?;
+            output.push(payload[input_linear]);
+        }
+
+        Self::from_dense(kept_indices, output)
+    }
+
+    fn select_structured_indices(
+        &self,
+        kept_axes: &[usize],
+        kept_indices: Vec<DynIndex>,
+        kept_dims: Vec<usize>,
+        selected_axes: &[usize],
+        positions: &[usize],
+    ) -> Result<Self> {
+        if self.storage.is_f64() {
+            let payload = self
+                .storage
+                .payload_f64_col_major_vec()
+                .map_err(anyhow::Error::msg)?;
+            self.select_structured_indices_typed(
+                payload,
+                kept_axes,
+                kept_indices,
+                kept_dims,
+                selected_axes,
+                positions,
+            )
+        } else if self.storage.is_c64() {
+            let payload = self
+                .storage
+                .payload_c64_col_major_vec()
+                .map_err(anyhow::Error::msg)?;
+            self.select_structured_indices_typed(
+                payload,
+                kept_axes,
+                kept_indices,
+                kept_dims,
+                selected_axes,
+                positions,
+            )
+        } else {
+            Err(anyhow::anyhow!(
+                "unsupported structured storage scalar type"
+            ))
+        }
+    }
+
     fn validate_storage_matches_indices(indices: &[DynIndex], storage: &Storage) -> Result<()> {
         let dims = Self::expected_dims_from_indices(indices);
         let storage_dims = storage.logical_dims();
@@ -914,18 +1126,17 @@ impl TensorDynLen {
     ///
     /// # Returns
     ///
-    /// A dense tensor over the unselected indices. Selecting no indices returns
-    /// a clone of the original tensor. Selecting all indices returns a rank-0
-    /// scalar tensor. Diagonal tensors are sliced from their compact diagonal
-    /// payload without materializing the original full tensor.
+    /// A tensor over the unselected indices. Selecting no indices returns a
+    /// clone of the original tensor. Selecting all indices returns a rank-0
+    /// scalar tensor. Diagonal and structured tensors are sliced from their
+    /// compact payload without materializing the original full tensor; the
+    /// result keeps structured storage when the remaining logical axes can
+    /// still be represented by axis classes.
     ///
     /// # Errors
     ///
     /// Returns an error if the argument lengths differ, a selected index is not
-    /// present, a selected index is duplicated, a coordinate is out of range,
-    /// or the tensor uses unsupported structured storage. General structured
-    /// storage is rejected because selecting a dense slice would otherwise
-    /// require hidden full-tensor materialization.
+    /// present, a selected index is duplicated, or a coordinate is out of range.
     ///
     /// # Examples
     ///
@@ -977,24 +1188,37 @@ impl TensorDynLen {
             selected_axes.push(axis);
         }
 
-        let kept_indices = self
+        let kept_axes = self
             .indices
             .iter()
             .enumerate()
             .filter(|(axis, _)| !seen_axes.contains(axis))
-            .map(|(_, index)| index.clone())
+            .map(|(axis, _)| axis)
             .collect::<Vec<_>>();
-        let kept_dims = kept_indices
+        let kept_indices = kept_axes
             .iter()
-            .map(|index| index.dim())
+            .map(|&axis| self.indices[axis].clone())
+            .collect::<Vec<_>>();
+        let kept_dims = kept_axes
+            .iter()
+            .map(|&axis| self.indices[axis].dim())
             .collect::<Vec<_>>();
 
         if self.storage.storage_kind() == StorageKind::Diagonal {
             return self.select_diag_indices(kept_indices, kept_dims, positions);
         }
+        if self.storage.storage_kind() == StorageKind::Structured {
+            return self.select_structured_indices(
+                &kept_axes,
+                kept_indices,
+                kept_dims,
+                &selected_axes,
+                positions,
+            );
+        }
         if self.storage.storage_kind() != StorageKind::Dense {
             return Err(anyhow::anyhow!(
-                "select_indices currently supports dense and diagonal storage only, got {:?}",
+                "select_indices got unsupported storage kind {:?}",
                 self.storage.storage_kind()
             ));
         }
