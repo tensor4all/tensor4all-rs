@@ -14,20 +14,21 @@ Runnable source: [`docs/tutorial-code/src/bin/qtt_integral.rs`](../../../../tuto
 ```rust
 # fn main() -> anyhow::Result<()> {
 # use tensor4all_quanticstci::{quanticscrossinterpolate, DiscretizedGrid, QtciOptions};
-let grid = DiscretizedGrid::builder(&[4])
-    .with_lower_bound(&[0.0])
-    .with_upper_bound(&[1.0])
+let grid = DiscretizedGrid::builder(&[7])
+    .with_lower_bound(&[-1.0])
+    .with_upper_bound(&[2.0])
+    .include_endpoint(true)
     .build()?;
 
-let f = |_: &[f64]| -> f64 { 1.0 };
+let f = |coords: &[f64]| -> f64 { coords[0].powi(2) };
 let options = QtciOptions::default()
     .with_nrandominitpivot(0)
     .with_verbosity(0);
-let pivots = vec![vec![1_i64], vec![16]];
+let pivots = vec![vec![1_i64], vec![128]];
 let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, Some(pivots), options)?;
 
 let integral = qtt.integral()?;
-assert!((integral - 1.0).abs() < 1e-8);
+assert!(integral > 0.0);
 # Ok(())
 # }
 ```

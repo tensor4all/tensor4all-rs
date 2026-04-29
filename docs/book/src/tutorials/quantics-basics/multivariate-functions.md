@@ -16,26 +16,29 @@ Use one bit-depth entry per variable when building a `DiscretizedGrid`.
 # use tensor4all_quanticstci::{
 #     quanticscrossinterpolate, DiscretizedGrid, QtciOptions, UnfoldingScheme,
 # };
-let grid = DiscretizedGrid::builder(&[2, 2])
-    .with_lower_bound(&[0.0, 0.0])
-    .with_upper_bound(&[1.0, 1.0])
+let grid = DiscretizedGrid::builder(&[7, 7])
+    .with_variable_names(&["x", "y"])
+    .with_bounds(-2.0, 2.0)
+    .include_endpoint(false)
     .with_unfolding_scheme(UnfoldingScheme::Interleaved)
     .build()?;
 
-let f = |coords: &[f64]| -> f64 { coords[0] + coords[1] };
+let f = |coords: &[f64]| -> f64 {
+    coords[0].cos() * coords[1].cos() * coords[0]
+};
 let options = QtciOptions::default()
     .with_nrandominitpivot(0)
     .with_unfoldingscheme(UnfoldingScheme::Interleaved)
     .with_verbosity(0);
-let pivots = vec![vec![1_i64, 1], vec![4, 4]];
+let pivots = vec![vec![1_i64, 1_i64], vec![128, 128]];
 let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, Some(pivots), options)?;
 
-assert!((qtt.evaluate(&[1, 1])? - 0.0).abs() < 1e-12);
+assert!((qtt.evaluate(&[1, 1])? - f(&[-2.0, -2.0])).abs() < 1e-6);
 # Ok(())
 # }
 ```
 
-The tutorial binary uses the same function with enough output data to compare
+The tutorial binary builds a QTT for `f(x, y) = x * cos(x) * cos(y)` and compares
 the two layouts visually.
 
 ## What It Computes

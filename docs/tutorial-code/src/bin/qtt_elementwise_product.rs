@@ -2,7 +2,7 @@
 //! and export all data for Julia-based plotting.
 //!
 //! The example is intentionally pedagogical:
-//! - one factor is `cosh(x)`
+//! - one factor is `x^2`
 //! - the other factor is `factor_b_function` (default: `sin(10x)`)
 //! - the pointwise product is formed through the new public
 //!   `tensor4all_treetn::partial_contract` API using `diagonal_pairs`
@@ -50,7 +50,7 @@ type QttDemoOutput = (
 /// Keeping these values together makes `main()` read like the actual
 /// numerical workflow instead of a mixture of computation and file plumbing.
 struct OutputSpec {
-    cosh_label: &'static str,
+    square_label: &'static str,
     factor_b_label: &'static str,
     product_label: &'static str,
     samples_csv_name: &'static str,
@@ -61,9 +61,9 @@ struct OutputSpec {
 impl OutputSpec {
     fn new() -> Self {
         Self {
-            cosh_label: "QTT factor: cosh(x)",
+            square_label: "QTT factor: x^2",
             factor_b_label: "QTT factor B (default: sin(10x))",
-            product_label: "TreeTN product via partial_contract: cosh(x) .* factor B",
+            product_label: "TreeTN product via partial_contract: x^2 .* factor B",
             samples_csv_name: "qtt_elementwise_product_samples.csv",
             bond_dims_csv_name: "qtt_elementwise_product_bond_dims.csv",
             plot_script_name: "qtt_elementwise_product_plot.jl",
@@ -95,23 +95,23 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Library call: build a QTT approximation from a scalar callback.
     // The callback itself is defined below; `quanticscrossinterpolate_discrete`
     // does the actual interpolation work.
-    let (cosh_qtci, cosh_ranks, cosh_errors) = build_qtt_from_function(cosh_function)?;
+    let (square_qtci, square_ranks, square_errors) = build_qtt_from_function(square_function)?;
     let (factor_b_qtci, factor_b_ranks, factor_b_errors) =
         build_qtt_from_function(factor_b_function)?;
 
     // Library call: extract the underlying simple TT representation so we can
     // inspect its structure and convert it to TreeTN next.
-    let cosh_tt = cosh_qtci.tensor_train();
+    let square_tt = square_qtci.tensor_train();
     let factor_b_tt = factor_b_qtci.tensor_train();
 
     // Library call: bridge the linear-chain TT representation into TreeTN.
     // This is what makes the new partial contraction API usable here.
-    let (cosh_treetn, cosh_site_indices) = tensor_train_to_treetn(&cosh_tt)?;
+    let (square_treetn, square_site_indices) = tensor_train_to_treetn(&square_tt)?;
     let (factor_b_treetn, factor_b_site_indices) = tensor_train_to_treetn(&factor_b_tt)?;
 
     // Library data structure: tell `partial_contract` which site indices should
     // be paired diagonally so that the two functions are multiplied pointwise.
-    let diagonal_pairs = cosh_site_indices
+    let diagonal_pairs = square_site_indices
         .iter()
         .cloned()
         .zip(factor_b_site_indices.iter().cloned())
@@ -119,12 +119,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let spec = PartialContractionSpec {
         contract_pairs: vec![],
         diagonal_pairs,
-        output_order: Some(cosh_site_indices.clone()),
+        output_order: Some(square_site_indices.clone()),
     };
 
     // TreeTN is a graph structure, so we choose a center node for the
     // contraction/truncation routines used by the library.
-    let mut center_nodes = cosh_treetn.node_names();
+    let mut center_nodes = square_treetn.node_names();
     center_nodes.sort();
     let center = center_nodes[center_nodes.len() / 2];
 
@@ -132,7 +132,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // `partial_contract` performs the pointwise product on the paired sites.
     let raw_product_options = ContractionOptions::new(ContractionMethod::Naive);
     let product_raw_tn = partial_contract(
-        &cosh_treetn,
+        &square_treetn,
         &factor_b_treetn,
         &spec,
         &center,
@@ -151,20 +151,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Helper code: re-evaluate the factor QTTs and the product TreeTNs on every
     // grid point so we can compare exact vs. reconstructed values.
     let samples = collect_samples(
-        &cosh_qtci,
+        &square_qtci,
         &factor_b_qtci,
         &product_raw_tn,
         &product_compressed_tn,
-        &cosh_site_indices,
+        &square_site_indices,
         BITS,
         NPOINTS,
-        cosh_function,
+        square_function,
         factor_b_function,
     )?;
     // Helper code: collect the bond dimensions from the factor QTTs and the
     // product TreeTNs for the Julia plot.
     let bond_profile = collect_bond_profile(
-        &cosh_tt,
+        &square_tt,
         &factor_b_tt,
         &product_raw_tn,
         &product_compressed_tn,
@@ -180,11 +180,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         .fold(0.0_f64, f64::max);
 
     print_qtt_summary(
-        output.cosh_label,
-        &cosh_qtci,
-        &cosh_tt,
-        &cosh_ranks,
-        &cosh_errors,
+        output.square_label,
+        &square_qtci,
+        &square_tt,
+        &square_ranks,
+        &square_errors,
         SAMPLE_PRINT_COUNT,
     );
     print_qtt_summary(
@@ -248,11 +248,11 @@ where
     )?)
 }
 
-/// The first target function: `cosh(x)`.
+/// The first target function: `x^2`.
 ///
 /// This is plain scalar math, not a tensor-library API call.
-fn cosh_function(x: f64) -> f64 {
-    x.cosh()
+fn square_function(x: f64) -> f64 {
+    x.powi(2)
 }
 
 /// The second target function: `sin(10x)`.

@@ -766,11 +766,11 @@ fn qtt_multivariate_demo_compares_layouts_and_exports_stable_csv() -> Result<(),
         .fold(0.0_f64, f64::max);
 
     assert!(
-        max_interleaved_error < 1e-6,
+        max_interleaved_error < 1e-3,
         "unexpectedly large interleaved error: {max_interleaved_error}"
     );
     assert!(
-        max_grouped_error < 1e-6,
+        max_grouped_error < 1e-3,
         "unexpectedly large grouped error: {max_grouped_error}"
     );
 

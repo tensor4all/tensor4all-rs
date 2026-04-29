@@ -78,16 +78,15 @@ function plot_values(samples)
     open = to_matrix(samples, samples.open_qtt)
     colorrange = extrema(vcat(vec(source), vec(periodic), vec(open)))
 
-    fig = Figure(size = (1500, 520), fontsize = 20)
+    fig = Figure(size = (1800, 600), fontsize = 20)
     titles = ["source g(x, y)", "periodic pullback", "open pullback"]
     matrices = [source, periodic, open]
-    heatmaps = []
     for i in 1:3
-        ax = Axis(fig[1, i], xlabel = "x", ylabel = "y", title = titles[i])
-        hm = heatmap!(ax, xs, ys, matrices[i]; colorrange)
-        push!(heatmaps, hm)
+        ax = Axis(fig[1, 2i-1], xlabel = "x", ylabel = "y", title = titles[i])
+        hm = heatmap!(ax, xs, ys, matrices[i]; colorrange, colormap = :lipari)
+        Colorbar(fig[1, 2i], hm, vertical = true, ticks = WilkinsonTicks(6))
     end
-    Colorbar(fig[2, 1:3], heatmaps[1], vertical = false)
+    colgap!(fig.layout, 10)
     return fig
 end
 
@@ -97,14 +96,15 @@ function plot_errors(samples)
     periodic_error = to_matrix(samples, samples.periodic_abs_error)
     open_error = to_matrix(samples, samples.open_abs_error)
 
-    fig = Figure(size = (1200, 520), fontsize = 20)
+    fig = Figure(size = (1400, 600), fontsize = 20)
     titles = ["periodic abs error", "open abs error"]
     matrices = [periodic_error, open_error]
     for i in 1:2
-        ax = Axis(fig[1, i], xlabel = "x", ylabel = "y", title = titles[i])
-        hm = heatmap!(ax, xs, ys, matrices[i])
-        Colorbar(fig[2, i], hm, vertical = false)
+        ax = Axis(fig[1, 2i-1], xlabel = "x", ylabel = "y", title = titles[i])
+        hm = heatmap!(ax, xs, ys, matrices[i]; colormap = :lipari)
+        Colorbar(fig[1, 2i], hm, vertical = true, ticks = WilkinsonTicks(6))
     end
+    colgap!(fig.layout, 10)
     return fig
 end
 

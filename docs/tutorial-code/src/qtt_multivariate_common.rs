@@ -29,9 +29,9 @@ pub struct MultivariateTutorialConfig {
 
 /// Default configuration used throughout the tutorial.
 pub const DEFAULT_MULTIVARIATE_CONFIG: MultivariateTutorialConfig = MultivariateTutorialConfig {
-    bits: 5,
-    lower_bound: -5.0,
-    upper_bound: 5.0,
+    bits: 7,
+    lower_bound: -2.0,
+    upper_bound: 2.0,
     include_endpoint: false,
     tolerance: 1e-12,
     maxbonddim: 64,
@@ -343,8 +343,8 @@ mod tests {
 
     #[test]
     fn default_multivariate_config_uses_smoke_resolution() {
-        assert_eq!(DEFAULT_MULTIVARIATE_CONFIG.bits, 5);
-        assert_eq!(point_count(&DEFAULT_MULTIVARIATE_CONFIG), 32);
+        assert_eq!(DEFAULT_MULTIVARIATE_CONFIG.bits, 7);
+        assert_eq!(point_count(&DEFAULT_MULTIVARIATE_CONFIG), 128);
     }
 
     #[test]

@@ -9,17 +9,41 @@ Runnable source: [`docs/tutorial-code/src/bin/qtt_fourier.rs`](../../../../tutor
 ## Key API Pieces
 
 `quantics_fourier_operator` creates the operator. The tutorial binary then
-converts the QTT to TreeTN, aligns the site indices, and applies it.
+converts the state to TreeTN, aligns site indices, and applies it via
+`apply_linear_operator`.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
+# use tensor4all_quanticstci::{
+#     quanticscrossinterpolate_discrete, QtciOptions, UnfoldingScheme,
+# };
 # use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
-let bits = 4;
-let options = FourierOptions::forward();
+# use tensor4all_treetn::{apply_linear_operator, tensor_train_to_treetn, ApplyOptions};
+let bits = 3;
+let sizes = [8usize];
+let options = QtciOptions::default()
+    .with_nrandominitpivot(0)
+    .with_unfoldingscheme(UnfoldingScheme::Interleaved)
+    .with_verbosity(0);
+let pivots = vec![vec![1_i64], vec![8]];
 
-let operator = quantics_fourier_operator(bits, options)?;
+let (state, _, _) = quanticscrossinterpolate_discrete::<f64, _>(
+    &sizes,
+    |idx| (-((idx[0] as f64 - 4.0) / 2.0).powi(2)).exp(),
+    Some(pivots),
+    options,
+)?;
+
+let mut operator = quantics_fourier_operator(bits, FourierOptions::forward())?;
 assert_eq!(operator.mpo.node_count(), bits);
-assert_eq!(operator.input_mappings().len(), bits);
+
+let tt = state.tensor_train();
+let (state_tn, _indices) = tensor_train_to_treetn(&tt)?;
+
+operator.align_to_state(&state_tn)?;
+let result = apply_linear_operator(&operator, &state_tn, ApplyOptions::naive())?;
+
+assert!(result.node_count() > 0);
 # Ok(())
 # }
 ```

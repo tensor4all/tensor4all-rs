@@ -65,29 +65,26 @@ function plot_values(samples)
     analytic = to_matrix(samples, samples.analytic_re)
     qtt = to_matrix(samples, samples.qtt_re)
 
-    fig = Figure(size = (1350, 650), fontsize = 20)
+    fig = Figure(size = (1350, 600), fontsize = 20)
     ax1 = Axis(
         fig[1, 1],
         xlabel = "spatial frequency k",
         ylabel = "time t",
         title = "Analytic Re F(k,t)",
     )
-    hm1 = heatmap!(ax1, ks, ts, analytic')
-    Colorbar(fig[2, 1], hm1, vertical = false, label = "Re F(k,t)")
+    hm1 = heatmap!(ax1, ks, ts, analytic'; colormap = :lipari)
+    Colorbar(fig[1, 2], hm1, vertical = true, label = "Re F(k,t)", ticks = WilkinsonTicks(6))
 
     ax2 = Axis(
-        fig[1, 2],
+        fig[1, 3],
         xlabel = "spatial frequency k",
         ylabel = "time t",
         title = "QTT Re F(k,t)",
     )
-    hm2 = heatmap!(ax2, ks, ts, qtt')
-    Colorbar(fig[2, 2], hm2, vertical = false, label = "Re F(k,t)")
+    hm2 = heatmap!(ax2, ks, ts, qtt'; colormap = :lipari)
+    Colorbar(fig[1, 4], hm2, vertical = true, label = "Re F(k,t)", ticks = WilkinsonTicks(6))
 
-    rowsize!(fig.layout, 2, Fixed(55))
-    colgap!(fig.layout, 35)
-    rowgap!(fig.layout, 10)
-
+    colgap!(fig.layout, 10)
     return fig
 end
 
@@ -96,17 +93,15 @@ function plot_error(samples)
     ts = sort(unique(samples.t))
     errors = to_matrix(samples, samples.abs_error)
 
-    fig = Figure(size = (900, 650), fontsize = 20)
+    fig = Figure(size = (900, 600), fontsize = 20)
     ax = Axis(
         fig[1, 1],
         xlabel = "spatial frequency k",
         ylabel = "time t",
         title = "Absolute error",
     )
-    hm = heatmap!(ax, ks, ts, errors')
-    Colorbar(fig[2, 1], hm, vertical = false, label = "|QTT - analytic|")
-    rowsize!(fig.layout, 2, Fixed(55))
-    rowgap!(fig.layout, 10)
+    hm = heatmap!(ax, ks, ts, errors'; colormap = :lipari)
+    Colorbar(fig[1, 2], hm, vertical = true, label = "|QTT - analytic|", ticks = WilkinsonTicks(6))
     return fig
 end
 

@@ -44,6 +44,4 @@ the value error, runtime, and sample curves.
 
 ![Sample curves from the bit-depth sweep](qtt_r_sweep_samples.png)
 
-![Maximum error over bit depth](qtt_r_sweep_error.png)
-
 ![Runtime over bit depth](qtt_r_sweep_runtime.png)

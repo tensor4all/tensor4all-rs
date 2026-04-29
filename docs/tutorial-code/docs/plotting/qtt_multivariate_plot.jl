@@ -59,14 +59,20 @@ function plot_values(samples)
     interleaved = to_matrix(samples, samples.interleaved_qtt)
     grouped = to_matrix(samples, samples.grouped_qtt)
 
-    fig = Figure(size = (1500, 520), fontsize = 20)
+    xrange = (minimum(xs), maximum(xs))
+    yrange = (minimum(ys), maximum(ys))
+
+    fig = Figure(size = (1800, 600), fontsize = 20)
     titles = ["exact f(x, y)", "interleaved QTT", "grouped QTT"]
     matrices = [exact, interleaved, grouped]
     for i in 1:3
-        ax = Axis(fig[1, i], xlabel = "x", ylabel = "y", title = titles[i])
-        hm = heatmap!(ax, xs, ys, matrices[i])
-        Colorbar(fig[2, i], hm, vertical = false)
+        ax = Axis(fig[1, 2i-1],
+            xlabel = "x", ylabel = "y", title = titles[i],
+            limits = (xrange..., yrange...))
+        hm = heatmap!(ax, xs, ys, matrices[i]; colormap = :lipari)
+        Colorbar(fig[1, 2i], hm, vertical = true, ticks = WilkinsonTicks(6))
     end
+    colgap!(fig.layout, 10)
     return fig
 end
 
@@ -76,14 +82,20 @@ function plot_errors(samples)
     interleaved_error = to_matrix(samples, samples.interleaved_abs_error)
     grouped_error = to_matrix(samples, samples.grouped_abs_error)
 
-    fig = Figure(size = (1100, 520), fontsize = 20)
+    xrange = (minimum(xs), maximum(xs))
+    yrange = (minimum(ys), maximum(ys))
+
+    fig = Figure(size = (1400, 600), fontsize = 20)
     titles = ["interleaved abs error", "grouped abs error"]
     matrices = [interleaved_error, grouped_error]
     for i in 1:2
-        ax = Axis(fig[1, i], xlabel = "x", ylabel = "y", title = titles[i])
-        hm = heatmap!(ax, xs, ys, matrices[i])
-        Colorbar(fig[2, i], hm, vertical = false)
+        ax = Axis(fig[1, 2i-1],
+            xlabel = "x", ylabel = "y", title = titles[i],
+            limits = (xrange..., yrange...))
+        hm = heatmap!(ax, xs, ys, matrices[i]; colormap = :lipari)
+        Colorbar(fig[1, 2i], hm, vertical = true, ticks = WilkinsonTicks(6))
     end
+    colgap!(fig.layout, 10)
     return fig
 end
 

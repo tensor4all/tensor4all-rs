@@ -5,7 +5,6 @@
 //! dense samples and bond dimensions for Julia plotting.
 
 use std::error::Error;
-use std::f64::consts::PI;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -24,7 +23,7 @@ const MAXBONDDIM_ENV: &str = "QTT_MULTIVARIATE_MAXBONDDIM";
 const MAXITER_ENV: &str = "QTT_MULTIVARIATE_MAXITER";
 
 fn multivariate_target(x: f64, y: f64) -> f64 {
-    (2.0 * PI * x * y).cos() + y.cos()
+    x.cos() * y.cos() * x
 }
 
 fn parse_env_usize(name: &str) -> Result<Option<usize>, Box<dyn Error>> {

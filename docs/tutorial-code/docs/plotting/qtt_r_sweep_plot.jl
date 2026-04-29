@@ -43,7 +43,7 @@ end
 
 function plot_samples(samples)
     rs = sort(unique(samples.r))
-    selected_rs = [r for r in rs if iseven(r)]
+    selected_rs = [2, 4, 8]
     # Colorblind-friendly palette based on the Okabe-Ito colors.
     palette = [
         RGBf(0.000, 0.447, 0.698),
@@ -55,20 +55,21 @@ function plot_samples(samples)
         RGBf(0.941, 0.894, 0.259),
         RGBf(0.000, 0.000, 0.000),
     ]
-    markers = [:circle, :rect, :utriangle, :diamond, :xcross, :star5, :pentagon, :dtriangle,
+    markers = [:circle, :rect, :diamond, :utriangle, :xcross, :star5, :pentagon, :dtriangle,
                :ltriangle, :rtriangle, :cross, :hexagon, :star4, :star8]
 
-    fig = Figure(size = (1400, 750), fontsize = 22)
+    # Small R have few samples → show them prominently; large R are denser → smaller
+    markersize_map = Dict(2 => 32, 4 => 24, 8 => 10)
+
+    fig = Figure(size = (1400, 750), fontsize = 28)
     ax = Axis(
         fig[1, 1],
         xlabel = "x",
         ylabel = "value",
-        title = "QTT samples for sin(30x) across even R values",
+        title = "QTT samples for sin(30x)",
     )
 
-    x_min, x_max = 0.1, 0.2
-    xmask = (samples.x .>= x_min) .& (samples.x .<= x_max)
-    xs = range(x_min, x_max, length = 1000)
+    xs = range(0.0, 1.0, length = 1000)
     lines!(
         ax,
         xs,
@@ -77,11 +78,10 @@ function plot_samples(samples)
         linewidth = 2.5,
         label = "analytic sin(30x)",
     )
-    xlims!(ax, x_min, x_max)
 
     for (i, r) in enumerate(selected_rs)
-        rows = (samples.r .== r) .& xmask
-        markersize = clamp(22 - 1.2 * r, 6, 18)
+        rows = samples.r .== r
+        markersize = get(markersize_map, r, 10)
         scatter!(
             ax,
             samples.x[rows],

@@ -1,7 +1,7 @@
 # QTT on a Physical Interval
 
 The previous tutorial used integer grid indices. This one maps those indices to
-a real interval, for example `[-1, 1]`. That is useful when the function is
+a real interval, for example `[-1, 2]`. That is useful when the function is
 defined as `f(x)`, not as `f(i)`.
 
 Runnable source: [`docs/tutorial-code/src/bin/qtt_interval.rs`](../../../../tutorial-code/src/bin/qtt_interval.rs)
@@ -15,9 +15,9 @@ Runnable source: [`docs/tutorial-code/src/bin/qtt_interval.rs`](../../../../tuto
 # use tensor4all_quanticstci::{
 #     quanticscrossinterpolate, DiscretizedGrid, QtciOptions, UnfoldingScheme,
 # };
-let grid = DiscretizedGrid::builder(&[3])
+let grid = DiscretizedGrid::builder(&[7])
     .with_lower_bound(&[-1.0])
-    .with_upper_bound(&[1.0])
+    .with_upper_bound(&[2.0])
     .include_endpoint(true)
     .with_unfolding_scheme(UnfoldingScheme::Interleaved)
     .build()?;
@@ -26,10 +26,10 @@ let f = |coords: &[f64]| -> f64 { coords[0] * coords[0] };
 let options = QtciOptions::default()
     .with_nrandominitpivot(0)
     .with_verbosity(0);
-let pivots = vec![vec![1_i64], vec![4], vec![8]];
+let pivots = vec![vec![1_i64], vec![128]];
 let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, Some(pivots), options)?;
 
-assert!((qtt.evaluate(&[1])? - 1.0).abs() < 1e-12);
+assert!((qtt.evaluate(&[128])? - 4.0).abs() < 1e-8);
 # Ok(())
 # }
 ```

@@ -53,9 +53,9 @@ function plot_factors(samples)
         fig[1, 1],
         xlabel = "x",
         ylabel = "value",
-        title = "Factor QTT 1: cosh(x)",
+        title = "Factor QTT 1: x^2",
     )
-    lines!(ax1, samples.x, samples.cosh_exact, color = :black, linewidth = 3, label = "analytic cosh")
+    lines!(ax1, samples.x, samples.cosh_exact, color = :black, linewidth = 3, label = "analytic x^2")
     scatter!(ax1, samples.x, samples.cosh_qtt, color = :dodgerblue3, markersize = 10, label = "QTT samples")
     axislegend(ax1, position = :rb)
 
@@ -78,24 +78,12 @@ function plot_product(samples)
         fig[1, 1],
         xlabel = "x",
         ylabel = "value",
-        title = "Pointwise product: cosh(x) .* factor B",
+        title = "Pointwise product: x^2 .* sin(10x)",
     )
 
-    # The raw TreeTN product is exact at the tensor-network level, and the
-    # compressed version shows what the library can recover after bond reduction.
     lines!(ax, samples.x, samples.product_exact, color = :black, linewidth = 3, label = "analytic product")
-    scatter!(ax, samples.x, samples.product_raw, color = :forestgreen, markersize = 10, label = "raw TreeTN product")
-    scatter!(ax, samples.x, samples.product_compressed, color = :crimson, markersize = 10, label = "compressed TreeTN product")
+    scatter!(ax, samples.x, samples.product_compressed, color = :crimson, markersize = 10, label = "TreeTN product")
     axislegend(ax, position = :rb)
-    text!(
-        ax,
-        0.03,
-        maximum(samples.product_exact) * 0.98,
-        text = "max raw err = $(round(maximum(samples.abs_error_raw), sigdigits = 3))\nmax compressed err = $(round(maximum(samples.abs_error_compressed), sigdigits = 3))",
-        align = (:left, :top),
-        fontsize = 16,
-        color = :gray30,
-    )
 
     return fig
 end
@@ -106,14 +94,13 @@ function plot_bond_dims(bonds)
         fig[1, 1],
         xlabel = "bond index",
         ylabel = "bond dimension",
-        title = "Bond dimensions before and after compression",
+        title = "Bond dimensions for the elementwise product",
         yscale = log2,
     )
 
-    lines!(ax, bonds.bond_index, bonds.cosh, color = :dodgerblue3, linewidth = 3, label = "cosh(x)")
-    lines!(ax, bonds.bond_index, bonds.factor_b, color = :darkorange3, linewidth = 3, label = "factor B")
-    lines!(ax, bonds.bond_index, bonds.product_raw, color = :forestgreen, linewidth = 3, label = "raw product")
-    lines!(ax, bonds.bond_index, bonds.product_compressed, color = :crimson, linewidth = 3, label = "compressed product")
+    lines!(ax, bonds.bond_index, bonds.cosh, color = :dodgerblue3, linewidth = 3, label = "x^2")
+    lines!(ax, bonds.bond_index, bonds.factor_b, color = :darkorange3, linewidth = 3, label = "sin(10x)")
+    lines!(ax, bonds.bond_index, bonds.product_compressed, color = :crimson, linewidth = 3, label = "product")
     add_worst_case_envelope!(ax, bonds.bond_index; base = 2, label = "worst case")
     axislegend(ax, position = :rb)
 
