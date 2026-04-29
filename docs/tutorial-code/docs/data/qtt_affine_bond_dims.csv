@@ -1,0 +1,6 @@
+bond_index,input_bond_dim,periodic_transformed_bond_dim,open_transformed_bond_dim
+1,2,2,3
+2,6,6,9
+3,6,6,11
+4,6,6,11
+5,4,4,4

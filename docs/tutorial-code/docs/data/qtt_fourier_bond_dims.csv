@@ -1,0 +1,10 @@
+bond_index,input_bond_dim,transformed_bond_dim
+1,2,2
+2,4,4
+3,6,6
+4,10,4
+5,11,2
+6,9,2
+7,7,2
+8,4,2
+9,2,2

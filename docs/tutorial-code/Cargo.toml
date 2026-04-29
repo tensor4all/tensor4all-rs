@@ -1,0 +1,12 @@
+[package]
+name = "tensor4all-tutorial-code"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tensor4all-core = { path = "../../crates/tensor4all-core" }
+tensor4all-simplett = { path = "../../crates/tensor4all-simplett" }
+tensor4all-quanticstci = { path = "../../crates/tensor4all-quanticstci" }
+tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform" }
+tensor4all-treetn = { path = "../../crates/tensor4all-treetn" }
+num-complex.workspace = true

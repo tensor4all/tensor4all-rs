@@ -1,0 +1,4 @@
+target/
+.DS_Store
+docs/data/*.local.csv
+docs/.obsidian/workspace.json
