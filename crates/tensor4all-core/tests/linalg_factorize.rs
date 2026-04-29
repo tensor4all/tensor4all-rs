@@ -2,7 +2,8 @@
 
 use tensor4all_core::index::Index;
 use tensor4all_core::{
-    factorize, Canonical, DynIndex, FactorizeAlg, FactorizeError, FactorizeOptions,
+    factorize, factorize_full_rank, Canonical, DynIndex, FactorizeAlg, FactorizeError,
+    FactorizeOptions,
 };
 use tensor4all_core::{SvdTruncationPolicy, TensorDynLen, TensorLike};
 
@@ -274,6 +275,26 @@ fn test_factorize_with_max_rank() {
     let options = FactorizeOptions::svd().with_max_rank(1);
     let result = factorize(&tensor, &left_inds, &options).unwrap();
     assert!(result.rank >= 1);
+}
+
+#[test]
+fn test_factorize_full_rank_preserves_near_dependent_components() {
+    let i: DynIndex = Index::new_dyn(2);
+    let j: DynIndex = Index::new_dyn(2);
+    let tensor =
+        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 0.0, 0.0, 1.0e-16]).unwrap();
+
+    for alg in [FactorizeAlg::SVD, FactorizeAlg::QR, FactorizeAlg::LU] {
+        let result =
+            factorize_full_rank(&tensor, std::slice::from_ref(&i), alg, Canonical::Left).unwrap();
+        assert_eq!(
+            result.rank, 2,
+            "{alg:?} full-rank factorization dropped a near-dependent component"
+        );
+
+        let reconstructed = result.left.contract(&result.right);
+        assert_tensors_approx_equal(&tensor, &reconstructed, 1.0e-18);
+    }
 }
 
 #[test]

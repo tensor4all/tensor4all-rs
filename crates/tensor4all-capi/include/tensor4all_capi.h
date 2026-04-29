@@ -271,6 +271,13 @@ typedef struct t4a_treetn {
 } t4a_treetn;
 
 /**
+ * Opaque reusable TreeTN evaluator type for the C API.
+ */
+typedef struct t4a_treetn_evaluator {
+  const void *_private;
+} t4a_treetn_evaluator;
+
+/**
  * Opaque tensor type for the C API.
  */
 typedef struct t4a_tensor {
@@ -384,14 +391,21 @@ StatusCode t4a_index_clone(const struct t4a_index *src, struct t4a_index **out);
 StatusCode t4a_index_dim(const struct t4a_index *ptr, size_t *out_dim);
 
 /**
+ * Compare two full index handles for equality.
+ */
+StatusCode t4a_index_equal(const struct t4a_index *lhs,
+                           const struct t4a_index *rhs,
+                           int32_t *out_equal);
+
+/**
  * Query whether an index has the provided tag.
  */
 StatusCode t4a_index_has_tag(const struct t4a_index *ptr, const char *tag, int32_t *out_has_tag);
 
 /**
- * Get the 64-bit ID of an index.
+ * Hash the full index value for process-local hash tables.
  */
-StatusCode t4a_index_id(const struct t4a_index *ptr, uint64_t *out_id);
+StatusCode t4a_index_hash(const struct t4a_index *ptr, uint64_t *out_hash);
 
 /**
  * Check whether an index handle is assigned.
@@ -399,12 +413,17 @@ StatusCode t4a_index_id(const struct t4a_index *ptr, uint64_t *out_id);
 int32_t t4a_index_is_assigned(const struct t4a_index *obj);
 
 /**
+ * Get the explicit identity of an index.
+ */
+StatusCode t4a_index_id(const struct t4a_index *ptr, uint64_t *out_id);
+
+/**
  * Create a new index with explicit tags and prime level.
  */
 StatusCode t4a_index_new(size_t dim, const char *tags_csv, int64_t plev, struct t4a_index **out);
 
 /**
- * Create a new index with an explicit 64-bit ID.
+ * Create a new index with explicit identity, tags, and prime level.
  */
 StatusCode t4a_index_new_with_id(size_t dim,
                                  uint64_t id,
@@ -413,14 +432,29 @@ StatusCode t4a_index_new_with_id(size_t dim,
                                  struct t4a_index **out);
 
 /**
+ * Return a new index handle with prime level reset to zero.
+ */
+StatusCode t4a_index_noprime(const struct t4a_index *ptr, struct t4a_index **out);
+
+/**
  * Get the prime level of an index.
  */
 StatusCode t4a_index_plev(const struct t4a_index *ptr, int64_t *out_plev);
 
 /**
+ * Return a new index handle with prime level incremented by one.
+ */
+StatusCode t4a_index_prime(const struct t4a_index *ptr, struct t4a_index **out);
+
+/**
  * Release an index handle.
  */
 void t4a_index_release(struct t4a_index *obj);
+
+/**
+ * Return a new index handle with an explicit prime level.
+ */
+StatusCode t4a_index_set_plev(const struct t4a_index *ptr, int64_t plev, struct t4a_index **out);
 
 /**
  * Copy tags as a comma-separated UTF-8 string.
@@ -858,6 +892,39 @@ StatusCode t4a_treetn_evaluate(const struct t4a_treetn *treetn,
                                size_t n_points,
                                double *out_re,
                                double *out_im);
+
+/**
+ * Clone a reusable TreeTN evaluator handle.
+ */
+StatusCode t4a_treetn_evaluator_clone(const struct t4a_treetn_evaluator *src,
+                                      struct t4a_treetn_evaluator **out);
+
+/**
+ * Evaluate one or more points using a reusable TreeTN evaluator.
+ */
+StatusCode t4a_treetn_evaluator_evaluate(const struct t4a_treetn_evaluator *evaluator,
+                                         const size_t *values_col_major,
+                                         size_t n_points,
+                                         double *out_re,
+                                         double *out_im);
+
+/**
+ * Check whether a reusable TreeTN evaluator handle is assigned.
+ */
+int32_t t4a_treetn_evaluator_is_assigned(const struct t4a_treetn_evaluator *obj);
+
+/**
+ * Create a reusable TreeTN evaluator for explicit index handles.
+ */
+StatusCode t4a_treetn_evaluator_new(const struct t4a_treetn *treetn,
+                                    const struct t4a_index *const *indices,
+                                    size_t n_indices,
+                                    struct t4a_treetn_evaluator **out);
+
+/**
+ * Release a reusable TreeTN evaluator handle.
+ */
+void t4a_treetn_evaluator_release(struct t4a_treetn_evaluator *obj);
 
 /**
  * Fuse connected current-node groups into the requested target topology.

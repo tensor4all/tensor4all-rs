@@ -31,6 +31,37 @@ pub extern "C" fn t4a_tensor_clone(
     clone_opaque(src, out)
 }
 
+/// Select fixed coordinates for tensor indices and drop those axes.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_select_indices(
+    tensor: *const t4a_tensor,
+    n_select: usize,
+    selected_indices: *const *const t4a_index,
+    positions: *const usize,
+    out: *mut *mut t4a_tensor,
+) -> StatusCode {
+    run_status(|| {
+        let tensor = require_tensor(tensor)?;
+        if out.is_null() {
+            return Err(capi_error(T4A_NULL_POINTER, "out is null"));
+        }
+        unsafe {
+            *out = std::ptr::null_mut();
+        }
+
+        let selected_indices = read_indices_from_ptrs(n_select, selected_indices)?;
+        let positions = read_plain_slice("positions", positions, n_select)?;
+        let result = tensor
+            .inner()
+            .select_indices(&selected_indices, &positions)
+            .map_err(|e| capi_error(T4A_INVALID_ARGUMENT, format!("select_indices failed: {e}")))?;
+        unsafe {
+            *out = box_tensor_handle(result);
+        }
+        Ok(())
+    })
+}
+
 /// Check whether a tensor handle is assigned.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_is_assigned(obj: *const t4a_tensor) -> i32 {

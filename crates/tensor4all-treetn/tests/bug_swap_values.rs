@@ -67,10 +67,10 @@ fn test_swap_preserves_values_nontrivial_data() {
     let mut treetn: TreeTN<TensorDynLen, usize> =
         TreeTN::from_tensors(tensors, node_names).unwrap();
     let mut target = HashMap::new();
-    target.insert(z1_1.id().to_owned(), 0usize);
-    target.insert(z2_1.id().to_owned(), 1usize);
-    target.insert(z1_2.id().to_owned(), 2usize);
-    target.insert(z2_2.id().to_owned(), 3usize);
+    target.insert(z1_1.clone(), 0usize);
+    target.insert(z2_1.clone(), 1usize);
+    target.insert(z1_2.clone(), 2usize);
+    target.insert(z2_2.clone(), 3usize);
     treetn
         .swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
@@ -331,10 +331,10 @@ fn test_swap_preserves_values_plain_mps() {
     let mut treetn: TreeTN<TensorDynLen, usize> =
         TreeTN::from_tensors(tensors, node_names).unwrap();
     let mut target = HashMap::new();
-    target.insert(s0.id().to_owned(), 0usize);
-    target.insert(s2.id().to_owned(), 1usize);
-    target.insert(s1.id().to_owned(), 2usize);
-    target.insert(s3.id().to_owned(), 3usize);
+    target.insert(s0.clone(), 0usize);
+    target.insert(s2.clone(), 1usize);
+    target.insert(s1.clone(), 2usize);
+    target.insert(s3.clone(), 3usize);
     treetn
         .swap_site_indices(&target, &SwapOptions::default())
         .unwrap();

@@ -7,10 +7,7 @@ use tensor4all_treetn::{SwapOptions, TreeTN};
 fn build_tn(
     r: usize,
     bond_dim: usize,
-) -> (
-    TreeTN<TensorDynLen, String>,
-    HashMap<<DynIndex as IndexLike>::Id, String>,
-) {
+) -> (TreeTN<TensorDynLen, String>, HashMap<DynIndex, String>) {
     let n = 2 * r;
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
     let mut tn = TreeTN::<TensorDynLen, String>::new();
@@ -45,8 +42,8 @@ fn build_tn(
     }
     let mut target = HashMap::new();
     for k in 0..r {
-        target.insert(x_inds[k].id().to_owned(), (2 * k).to_string());
-        target.insert(y_inds[k].id().to_owned(), (2 * k + 1).to_string());
+        target.insert(x_inds[k].clone(), (2 * k).to_string());
+        target.insert(y_inds[k].clone(), (2 * k + 1).to_string());
     }
     (tn, target)
 }

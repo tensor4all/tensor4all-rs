@@ -41,6 +41,7 @@ fn tensor_dtype_name(dtype: DType) -> &'static str {
     match dtype {
         DType::F32 => "f32",
         DType::F64 => "f64",
+        DType::I64 => "i64",
         DType::C32 => "c32",
         DType::C64 => "c64",
     }

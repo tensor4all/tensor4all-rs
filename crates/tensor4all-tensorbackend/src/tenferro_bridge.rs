@@ -142,12 +142,13 @@ fn common_dtype(dtypes: &[DType]) -> DType {
     let has_f64 = dtypes.contains(&DType::F64);
     let has_c64 = dtypes.contains(&DType::C64);
     let has_c32 = dtypes.contains(&DType::C32);
+    let has_i64 = dtypes.contains(&DType::I64);
     let has_complex = has_c64 || has_c32;
     if has_c64 || (has_f64 && has_complex) {
         DType::C64
     } else if has_c32 {
         DType::C32
-    } else if has_f64 {
+    } else if has_f64 || has_i64 {
         DType::F64
     } else {
         DType::F32
@@ -307,6 +308,15 @@ pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage>
                 .to_vec(),
             tensor.shape(),
         ),
+        DType::I64 => Storage::from_dense_col_major(
+            tensor
+                .as_slice::<i64>()
+                .ok_or_else(|| anyhow!("failed to read i64 native tensor"))?
+                .iter()
+                .map(|&value| value as f64)
+                .collect::<Vec<_>>(),
+            tensor.shape(),
+        ),
         DType::C32 => Storage::from_dense_col_major(
             tensor
                 .as_slice::<Complex32>()
@@ -337,6 +347,12 @@ pub fn native_tensor_primal_to_dense_f64_col_major(tensor: &NativeTensor) -> Res
             .map(|&value| value as f64)
             .collect()),
         DType::F64 => <f64 as TensorElement>::dense_values_from_native_col_major(tensor),
+        DType::I64 => Ok(tensor
+            .as_slice::<i64>()
+            .ok_or_else(|| anyhow!("failed to read i64 native tensor"))?
+            .iter()
+            .map(|&value| value as f64)
+            .collect()),
         other => Err(anyhow!("expected real native tensor, got dtype {other:?}")),
     }
 }
@@ -374,6 +390,10 @@ pub fn native_tensor_primal_to_diag_f64(tensor: &NativeTensor) -> Result<Vec<f64
             <f64 as TensorElement>::diag_values_from_native_temp(&promoted)
         }
         DType::F64 => <f64 as TensorElement>::diag_values_from_native_temp(tensor),
+        DType::I64 => {
+            let promoted = convert_tensor(tensor, DType::F64)?;
+            <f64 as TensorElement>::diag_values_from_native_temp(&promoted)
+        }
         other => Err(anyhow!("expected real native tensor, got dtype {other:?}")),
     }
 }
@@ -493,6 +513,7 @@ pub fn scale_native_tensor(tensor: &NativeTensor, scalar: &AnyScalar) -> Result<
                 .collect::<Vec<_>>();
             Ok(NativeTensor::from_vec(tensor.shape().to_vec(), values))
         }
+        DType::I64 => Err(anyhow!("scale_native_tensor does not support i64 tensors")),
     }
 }
 
@@ -610,6 +631,7 @@ pub fn axpby_native_tensor(
                 .collect::<Vec<_>>();
             Ok(NativeTensor::from_vec(lhs.shape().to_vec(), values))
         }
+        DType::I64 => Err(anyhow!("axpby_native_tensor does not support i64 tensors")),
     }
 }
 
@@ -741,7 +763,7 @@ pub fn outer_product_native_tensor(lhs: &NativeTensor, rhs: &NativeTensor) -> Re
 /// Conjugate a native tensor.
 pub fn conj_native_tensor(tensor: &NativeTensor) -> Result<NativeTensor> {
     match tensor.dtype() {
-        DType::F32 | DType::F64 => Ok(tensor.clone()),
+        DType::F32 | DType::F64 | DType::I64 => Ok(tensor.clone()),
         DType::C32 => Ok(NativeTensor::from_vec(
             tensor.shape().to_vec(),
             tensor

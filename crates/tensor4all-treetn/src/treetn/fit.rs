@@ -41,6 +41,9 @@ use tensor4all_core::{
 use super::localupdate::{LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater};
 use super::TreeTN;
 
+#[cfg(test)]
+use std::cell::Cell;
+
 #[derive(Debug, Default, Clone)]
 struct FitProfile {
     zipup_init_time: Duration,
@@ -66,8 +69,22 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+#[cfg(test)]
+thread_local! {
+    static FORCE_FIT_PROFILE: Cell<bool> = const { Cell::new(false) };
+}
+
 fn fit_profile_enabled() -> bool {
+    #[cfg(test)]
+    if FORCE_FIT_PROFILE.with(Cell::get) {
+        return true;
+    }
     std::env::var("T4A_PROFILE_FIT").is_ok()
+}
+
+#[cfg(test)]
+fn set_fit_profile_enabled_for_tests(enabled: bool) {
+    FORCE_FIT_PROFILE.with(|slot| slot.set(enabled));
 }
 
 fn fit_profile_reset() {
@@ -653,7 +670,7 @@ where
             .iter()
             .filter(|idx| {
                 // Keep site indices of u and link indices to u's other neighbors
-                site_c_u.iter().any(|s| s.same_id(*idx))
+                site_c_u.contains(*idx)
                     || full_treetn
                         .site_index_network()
                         .neighbors(node_u)
@@ -662,7 +679,7 @@ where
                             full_treetn
                                 .edge_between(node_u, &neighbor)
                                 .and_then(|e| full_treetn.bond_index(e))
-                                .map(|b| b.same_id(*idx))
+                                .map(|b| b == *idx)
                                 .unwrap_or(false)
                         })
             })
@@ -919,10 +936,10 @@ where
 
     // The zip-up initializer already returns a network centered at `center`.
 
-    // With neither max_rank nor an algorithm-specific truncation override, fit
-    // sweeps cannot change the bond cap and only introduce numerical drift
-    // relative to the zip-up initializer.
-    if options.max_rank.is_none() && options.svd_policy.is_none() && options.qr_rtol.is_none() {
+    // Zero sweeps means "use the zip-up initializer as-is". Positive sweep
+    // counts are honored even when no truncation override is provided, so
+    // callers can explicitly exercise the variational update path.
+    if options.nfullsweeps == 0 {
         return Ok(tn_c);
     }
 

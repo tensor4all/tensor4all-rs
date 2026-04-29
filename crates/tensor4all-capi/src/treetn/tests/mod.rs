@@ -1135,6 +1135,73 @@ fn test_treetn_evaluate_complex_requires_out_im_buffer() {
 }
 
 #[test]
+fn test_treetn_evaluator_reuses_index_order_for_multiple_batches() {
+    let (tt, tensors, indices) = make_two_site_treetn();
+    let s0 = indices[0];
+    let s1 = indices[3];
+    let index_ptrs = [s0 as *const t4a_index, s1 as *const t4a_index];
+    let mut evaluator = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_evaluator_new(tt, index_ptrs.as_ptr(), 2, &mut evaluator),
+        T4A_SUCCESS
+    );
+    assert!(!evaluator.is_null());
+
+    let first_values = [
+        0usize, 0usize, // point 0
+        1usize, 1usize, // point 1
+    ];
+    let mut first_out = [0.0; 2];
+    assert_eq!(
+        t4a_treetn_evaluator_evaluate(
+            evaluator,
+            first_values.as_ptr(),
+            2,
+            first_out.as_mut_ptr(),
+            std::ptr::null_mut()
+        ),
+        T4A_SUCCESS
+    );
+    assert_eq!(first_out, [1.0, 4.0]);
+
+    let second_values = [
+        1usize, 0usize, // point 0
+        0usize, 1usize, // point 1
+    ];
+    let mut second_out = [0.0; 2];
+    assert_eq!(
+        t4a_treetn_evaluator_evaluate(
+            evaluator,
+            second_values.as_ptr(),
+            2,
+            second_out.as_mut_ptr(),
+            std::ptr::null_mut()
+        ),
+        T4A_SUCCESS
+    );
+    assert_eq!(second_out, [2.0, 3.0]);
+
+    t4a_treetn_evaluator_release(evaluator);
+    cleanup(tt, tensors, indices);
+}
+
+#[test]
+fn test_treetn_evaluator_new_rejects_incomplete_index_list() {
+    let (tt, tensors, indices) = make_two_site_treetn();
+    let s0 = indices[0];
+    let index_ptrs = [s0 as *const t4a_index];
+    let mut evaluator = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_evaluator_new(tt, index_ptrs.as_ptr(), 1, &mut evaluator),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("indices.len()"));
+    assert!(evaluator.is_null());
+
+    cleanup(tt, tensors, indices);
+}
+
+#[test]
 fn test_treetn_contract_and_to_dense() {
     let in_idx = new_index(2);
     let out_idx = new_index(2);

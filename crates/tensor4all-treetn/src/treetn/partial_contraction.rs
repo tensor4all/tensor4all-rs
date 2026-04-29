@@ -83,19 +83,11 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <T::Index as IndexLike>::Id: Clone + Hash + Eq + Debug + Send + Sync + Ord,
 {
-    let a_external_ids: HashSet<_> = a
-        .external_indices()
-        .into_iter()
-        .map(|idx| idx.id().clone())
-        .collect();
-    let b_external_ids: HashSet<_> = b
-        .external_indices()
-        .into_iter()
-        .map(|idx| idx.id().clone())
-        .collect();
+    let a_external_indices: HashSet<_> = a.external_indices().into_iter().collect();
+    let b_external_indices: HashSet<_> = b.external_indices().into_iter().collect();
 
-    let mut seen_a_ids = HashSet::new();
-    let mut seen_b_ids = HashSet::new();
+    let mut seen_a_indices = HashSet::new();
+    let mut seen_b_indices = HashSet::new();
 
     for (kind, pairs) in [
         ("contract_pairs", &spec.contract_pairs),
@@ -111,31 +103,31 @@ where
                 );
             }
 
-            if !a_external_ids.contains(idx_a.id()) {
+            if !a_external_indices.contains(idx_a) {
                 bail!(
                     "partial_contract: {:?} from {} not found in first TreeTN external indices",
-                    idx_a.id(),
+                    idx_a,
                     kind
                 );
             }
-            if !b_external_ids.contains(idx_b.id()) {
+            if !b_external_indices.contains(idx_b) {
                 bail!(
                     "partial_contract: {:?} from {} not found in second TreeTN external indices",
-                    idx_b.id(),
+                    idx_b,
                     kind
                 );
             }
 
-            if !seen_a_ids.insert(idx_a.id().clone()) {
+            if !seen_a_indices.insert(idx_a.clone()) {
                 bail!(
                     "partial_contract: first TreeTN index {:?} appears in multiple pairs",
-                    idx_a.id()
+                    idx_a
                 );
             }
-            if !seen_b_ids.insert(idx_b.id().clone()) {
+            if !seen_b_indices.insert(idx_b.clone()) {
                 bail!(
                     "partial_contract: second TreeTN index {:?} appears in multiple pairs",
-                    idx_b.id()
+                    idx_b
                 );
             }
         }
@@ -257,7 +249,7 @@ fn union_result_topology<V>(
     a: &TreeTN<TensorDynLen, V>,
     b: &TreeTN<TensorDynLen, V>,
     contracted_tensor: &TensorDynLen,
-) -> Result<TreeTopology<V, <DynIndex as IndexLike>::Id>>
+) -> Result<TreeTopology<V, DynIndex>>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
@@ -269,33 +261,29 @@ where
     union_edges.dedup();
     validate_union_topology(&node_names, &union_edges)?;
 
-    let surviving_ids: HashSet<_> = contracted_tensor
-        .external_indices()
-        .into_iter()
-        .map(|idx| *idx.id())
-        .collect();
+    let surviving_indices: HashSet<_> = contracted_tensor.external_indices().into_iter().collect();
 
     let mut nodes = HashMap::new();
     for node_name in &node_names {
-        let mut ids = Vec::new();
+        let mut indices = Vec::new();
 
         if let Some(site_space_a) = a.site_index_network().site_space(node_name) {
             for site_idx in site_space_a {
-                if surviving_ids.contains(site_idx.id()) {
-                    ids.push(*site_idx.id());
+                if surviving_indices.contains(site_idx) {
+                    indices.push(site_idx.clone());
                 }
             }
         }
 
         if let Some(site_space_b) = b.site_index_network().site_space(node_name) {
             for site_idx in site_space_b {
-                if surviving_ids.contains(site_idx.id()) && !ids.contains(site_idx.id()) {
-                    ids.push(*site_idx.id());
+                if surviving_indices.contains(site_idx) && !indices.contains(site_idx) {
+                    indices.push(site_idx.clone());
                 }
             }
         }
 
-        nodes.insert(node_name.clone(), ids);
+        nodes.insert(node_name.clone(), indices);
     }
 
     Ok(TreeTopology::new(nodes, union_edges))
@@ -356,9 +344,9 @@ where
         );
     }
 
-    let current_ids: HashSet<_> = current_indices.iter().map(|idx| idx.id().clone()).collect();
-    let requested_ids: HashSet<_> = output_order.iter().map(|idx| idx.id().clone()).collect();
-    if current_ids != requested_ids {
+    let current_index_set: HashSet<_> = current_indices.iter().cloned().collect();
+    let requested_index_set: HashSet<_> = output_order.iter().cloned().collect();
+    if current_index_set != requested_index_set {
         bail!("partial_contract: output_order must contain exactly the surviving external indices");
     }
 
@@ -367,7 +355,7 @@ where
         let node = result.site_index_network().find_node_by_index(index).ok_or_else(|| {
             anyhow!(
                 "partial_contract: current result index {:?} is not present in the site index network",
-                index.id()
+                index
             )
         })?;
         current_nodes.push(node.clone());
@@ -385,7 +373,7 @@ where
     let mut ordered_node_set = HashSet::new();
 
     for index in output_order {
-        if !seen_requested.insert(index.id().clone()) {
+        if !seen_requested.insert(index.clone()) {
             bail!("partial_contract: output_order contains duplicate indices");
         }
         let current_node = result
@@ -394,7 +382,7 @@ where
             .ok_or_else(|| {
                 anyhow!(
                     "partial_contract: output_order index {:?} is not present in the result",
-                    index.id()
+                    index
                 )
             })?;
         if !ordered_node_set.insert(current_node.clone()) {

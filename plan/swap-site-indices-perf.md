@@ -103,8 +103,8 @@ let oracle = SubtreeOracle::new(topology, &root)?;
 let sweep_plan = LocalUpdateSweepPlan::from_treetn(self, &root, 2)?;
 let factorize_options = FactorizeOptions::svd().with_canonical(Canonical::Left);
 
-let is_satisfied = |me: &Self| target_assignment.iter().all(|(id, target)| {
-    me.site_index_network().find_node_by_index_id(id) == Some(target)
+let is_satisfied = |me: &Self| target_assignment.iter().all(|(index, target)| {
+    me.site_index_network().find_node_by_index(index) == Some(target)
 });
 
 let max_passes = self.node_count().max(4);  // 修正済み

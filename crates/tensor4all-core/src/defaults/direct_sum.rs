@@ -17,7 +17,7 @@ use tensor4all_tensorbackend::TensorElement;
 ///
 /// For tensors A and B with indices to be summed specified as pairs,
 /// creates a new tensor C where each paired index has dimension = dim_A + dim_B.
-/// Non-paired indices must match exactly between A and B (same ID).
+/// Non-paired indices must match exactly between A and B.
 ///
 /// # Arguments
 ///
@@ -90,7 +90,6 @@ fn setup_direct_sum(
     b: &TensorDynLen,
     pairs: &[(DynIndex, DynIndex)],
 ) -> Result<DirectSumSetup> {
-    use crate::defaults::DynId;
     use std::collections::HashMap;
 
     if pairs.is_empty() {
@@ -99,37 +98,40 @@ fn setup_direct_sum(
         ));
     }
 
-    // Build maps from index IDs to positions
-    let a_idx_map: HashMap<&DynId, usize> = a
+    // Build maps from full index metadata to positions. Same-id indices that
+    // differ by prime level or tags are distinct axes.
+    let a_idx_map: HashMap<&DynIndex, usize> = a
         .indices
         .iter()
         .enumerate()
-        .map(|(i, idx)| (idx.id(), i))
+        .map(|(i, idx)| (idx, i))
         .collect();
-    let b_idx_map: HashMap<&DynId, usize> = b
+    let b_idx_map: HashMap<&DynIndex, usize> = b
         .indices
         .iter()
         .enumerate()
-        .map(|(i, idx)| (idx.id(), i))
+        .map(|(i, idx)| (idx, i))
         .collect();
 
-    // Build set of paired index IDs
-    let mut a_paired_ids: std::collections::HashSet<&DynId> = std::collections::HashSet::new();
-    let mut b_paired_ids: std::collections::HashSet<&DynId> = std::collections::HashSet::new();
+    // Build set of paired indices.
+    let mut a_paired_indices: std::collections::HashSet<&DynIndex> =
+        std::collections::HashSet::new();
+    let mut b_paired_indices: std::collections::HashSet<&DynIndex> =
+        std::collections::HashSet::new();
 
     for (a_idx, b_idx) in pairs {
-        if !a_idx_map.contains_key(a_idx.id()) {
+        if !a_idx_map.contains_key(a_idx) {
             return Err(anyhow::anyhow!(
                 "Index not found in first tensor (direct_sum)"
             ));
         }
-        if !b_idx_map.contains_key(b_idx.id()) {
+        if !b_idx_map.contains_key(b_idx) {
             return Err(anyhow::anyhow!(
                 "Index not found in second tensor (direct_sum)"
             ));
         }
-        a_paired_ids.insert(a_idx.id());
-        b_paired_ids.insert(b_idx.id());
+        a_paired_indices.insert(a_idx);
+        b_paired_indices.insert(b_idx);
     }
 
     // Identify common (non-paired) indices
@@ -138,12 +140,11 @@ fn setup_direct_sum(
     let mut common_a_positions: Vec<usize> = Vec::new();
     let mut common_b_positions: Vec<usize> = Vec::new();
     for (a_pos, a_idx) in a.indices.iter().enumerate() {
-        let a_id = a_idx.id();
-        if a_paired_ids.contains(a_id) {
+        if a_paired_indices.contains(a_idx) {
             continue;
         }
-        if let Some(&b_pos) = b_idx_map.get(a_id) {
-            if b_paired_ids.contains(a_id) {
+        if let Some(&b_pos) = b_idx_map.get(a_idx) {
+            if b_paired_indices.contains(a_idx) {
                 continue;
             }
             let a_dims = a.dims();
@@ -161,14 +162,8 @@ fn setup_direct_sum(
     }
 
     // Build paired positions and dimensions
-    let paired_a_positions: Vec<usize> = pairs
-        .iter()
-        .map(|(a_idx, _)| a_idx_map[a_idx.id()])
-        .collect();
-    let paired_b_positions: Vec<usize> = pairs
-        .iter()
-        .map(|(_, b_idx)| b_idx_map[b_idx.id()])
-        .collect();
+    let paired_a_positions: Vec<usize> = pairs.iter().map(|(a_idx, _)| a_idx_map[a_idx]).collect();
+    let paired_b_positions: Vec<usize> = pairs.iter().map(|(_, b_idx)| b_idx_map[b_idx]).collect();
     let a_dims = a.dims();
     let b_dims = b.dims();
     let paired_dims_a: Vec<usize> = paired_a_positions.iter().map(|&p| a_dims[p]).collect();
@@ -187,7 +182,7 @@ fn setup_direct_sum(
     let mut result_indices: Vec<DynIndex> = Vec::new();
     let mut result_dims: Vec<usize> = Vec::new();
 
-    // Common indices first
+    // Common indices first.
     let a_dims = a.dims();
     for &a_pos in &common_a_positions {
         result_indices.push(a.indices[a_pos].clone());

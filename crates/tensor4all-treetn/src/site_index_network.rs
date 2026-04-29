@@ -61,8 +61,8 @@ where
     topology: NodeNameNetwork<NodeName>,
     /// Site space (physical indices) for each node.
     site_spaces: HashMap<NodeName, HashSet<I>>,
-    /// Reverse lookup: index ID → node name containing this index.
-    index_to_node: HashMap<I::Id, NodeName>,
+    /// Reverse lookup: full index metadata → node name containing this index.
+    index_to_node: HashMap<I, NodeName>,
 }
 
 impl<NodeName, I> SiteIndexNetwork<NodeName, I>
@@ -102,10 +102,9 @@ where
     ) -> Result<NodeIndex, String> {
         let node_idx = self.topology.add_node(node_name.clone())?;
         let site_space_set = site_space.into();
-        // Update reverse lookup for all indices
+        // Update reverse lookup for all indices.
         for idx in &site_space_set {
-            self.index_to_node
-                .insert(idx.id().clone(), node_name.clone());
+            self.index_to_node.insert(idx.clone(), node_name.clone());
         }
         self.site_spaces.insert(node_name, site_space_set);
         Ok(node_idx)
@@ -128,8 +127,7 @@ where
             .ok_or_else(|| format!("Node {:?} not found", old_name))?;
         self.topology.rename_node(old_name, new_name.clone())?;
         for index in &site_space {
-            self.index_to_node
-                .insert(index.id().clone(), new_name.clone());
+            self.index_to_node.insert(index.clone(), new_name.clone());
         }
         self.site_spaces.insert(new_name, site_space);
         Ok(())
@@ -158,17 +156,34 @@ where
     /// # Returns
     /// The node name containing this index, or None if not found.
     pub fn find_node_by_index(&self, index: &I) -> Option<&NodeName> {
-        self.index_to_node.get(index.id())
-    }
-
-    /// Find the node containing an index by ID.
-    pub fn find_node_by_index_id(&self, id: &I::Id) -> Option<&NodeName> {
-        self.index_to_node.get(id)
+        self.index_to_node.get(index)
     }
 
     /// Check if a site index is registered.
     pub fn contains_index(&self, index: &I) -> bool {
-        self.index_to_node.contains_key(index.id())
+        self.index_to_node.contains_key(index)
+    }
+
+    /// Return the number of registered site indices.
+    ///
+    /// This uses the reverse index lookup and does not scan every node's site
+    /// space. Use it when validating a complete site-index assignment.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::HashSet;
+    /// use tensor4all_core::DynIndex;
+    /// use tensor4all_treetn::SiteIndexNetwork;
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let mut network = SiteIndexNetwork::<&str, DynIndex>::new();
+    /// network.add_node("A", HashSet::from([i])).unwrap();
+    ///
+    /// assert_eq!(network.site_index_count(), 1);
+    /// ```
+    pub fn site_index_count(&self) -> usize {
+        self.index_to_node.len()
     }
 
     /// Add a site index to a node's site space.
@@ -180,8 +195,7 @@ where
             .get_mut(node_name)
             .ok_or_else(|| format!("Node {:?} not found", node_name))?;
         site_space.insert(index.clone());
-        self.index_to_node
-            .insert(index.id().clone(), node_name.clone());
+        self.index_to_node.insert(index, node_name.clone());
         Ok(())
     }
 
@@ -195,7 +209,7 @@ where
             .ok_or_else(|| format!("Node {:?} not found", node_name))?;
         let removed = site_space.remove(index);
         if removed {
-            self.index_to_node.remove(index.id());
+            self.index_to_node.remove(index);
         }
         Ok(removed)
     }
@@ -220,10 +234,9 @@ where
                 node_name
             ));
         }
-        self.index_to_node.remove(old_index.id());
+        self.index_to_node.remove(old_index);
         site_space.insert(new_index.clone());
-        self.index_to_node
-            .insert(new_index.id().clone(), node_name.clone());
+        self.index_to_node.insert(new_index, node_name.clone());
         Ok(())
     }
 
@@ -243,15 +256,15 @@ where
 
         // Remove old indices from index_to_node
         for old_idx in site_space.iter() {
-            if self.index_to_node.get(old_idx.id()) == Some(node_name) {
-                self.index_to_node.remove(old_idx.id());
+            if self.index_to_node.get(old_idx) == Some(node_name) {
+                self.index_to_node.remove(old_idx);
             }
         }
 
         // Add new indices to index_to_node
         for new_idx in &new_indices {
             self.index_to_node
-                .insert(new_idx.id().clone(), node_name.clone());
+                .insert(new_idx.clone(), node_name.clone());
         }
 
         // Replace site space

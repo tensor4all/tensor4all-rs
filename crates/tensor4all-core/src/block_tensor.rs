@@ -32,7 +32,6 @@
 use std::collections::HashSet;
 
 use crate::any_scalar::AnyScalar;
-use crate::index_like::IndexLike;
 use crate::tensor_index::TensorIndex;
 use crate::tensor_like::{
     AllowedPairs, DirectSumResult, FactorizeError, FactorizeOptions, FactorizeResult,
@@ -299,25 +298,25 @@ impl<T: TensorLike> BlockTensor<T> {
             );
         }
 
-        // Same row: blocks should share some common index IDs (output indices)
+        // Same row: blocks should share at least one full output index.
         for row in 0..rows {
-            let ref_ids: HashSet<_> = self
+            let ref_indices: HashSet<_> = self
                 .get(row, 0)
                 .external_indices()
                 .iter()
-                .map(|idx| idx.id().clone())
+                .cloned()
                 .collect();
             for col in 1..cols {
-                let ids: HashSet<_> = self
+                let indices: HashSet<_> = self
                     .get(row, col)
                     .external_indices()
                     .iter()
-                    .map(|idx| idx.id().clone())
+                    .cloned()
                     .collect();
-                let common_count = ref_ids.intersection(&ids).count();
+                let common_count = ref_indices.intersection(&indices).count();
                 anyhow::ensure!(
                     common_count > 0,
-                    "Matrix row {}: blocks ({},{}) and ({},{}) share no index IDs",
+                    "Matrix row {}: blocks ({},{}) and ({},{}) share no common indices",
                     row,
                     row,
                     0,
@@ -327,25 +326,25 @@ impl<T: TensorLike> BlockTensor<T> {
             }
         }
 
-        // Same column: blocks should share some common index IDs (input indices)
+        // Same column: blocks should share at least one full input index.
         for col in 0..cols {
-            let ref_ids: HashSet<_> = self
+            let ref_indices: HashSet<_> = self
                 .get(0, col)
                 .external_indices()
                 .iter()
-                .map(|idx| idx.id().clone())
+                .cloned()
                 .collect();
             for row in 1..rows {
-                let ids: HashSet<_> = self
+                let indices: HashSet<_> = self
                     .get(row, col)
                     .external_indices()
                     .iter()
-                    .map(|idx| idx.id().clone())
+                    .cloned()
                     .collect();
-                let common_count = ref_ids.intersection(&ids).count();
+                let common_count = ref_indices.intersection(&indices).count();
                 anyhow::ensure!(
                     common_count > 0,
-                    "Matrix col {}: blocks ({},{}) and ({},{}) share no index IDs",
+                    "Matrix col {}: blocks ({},{}) and ({},{}) share no common indices",
                     col,
                     0,
                     col,
@@ -367,12 +366,12 @@ impl<T: TensorLike> TensorIndex for BlockTensor<T> {
     type Index = T::Index;
 
     fn external_indices(&self) -> Vec<Self::Index> {
-        // Collect unique external indices across all blocks (deduplicated by ID).
+        // Collect unique external indices across all blocks (deduplicated by full index).
         let mut seen = HashSet::new();
         let mut result = Vec::new();
         for block in &self.blocks {
             for idx in block.external_indices() {
-                if seen.insert(idx.id().clone()) {
+                if seen.insert(idx.clone()) {
                     result.push(idx);
                 }
             }
@@ -497,6 +496,17 @@ impl<T: TensorLike> TensorLike for BlockTensor<T> {
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
         Err(FactorizeError::ComputationError(anyhow::anyhow!(
             "BlockTensor does not support factorize"
+        )))
+    }
+
+    fn factorize_full_rank(
+        &self,
+        _left_inds: &[<Self as TensorIndex>::Index],
+        _alg: crate::FactorizeAlg,
+        _canonical: crate::Canonical,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        Err(FactorizeError::ComputationError(anyhow::anyhow!(
+            "BlockTensor does not support factorize_full_rank"
         )))
     }
 

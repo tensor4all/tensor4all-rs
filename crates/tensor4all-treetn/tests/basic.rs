@@ -596,6 +596,48 @@ fn test_canonicalize_simple() {
     assert!(tn_canon.validate_ortho_consistency().is_ok());
 }
 
+#[test]
+fn canonicalize_preserves_near_dependent_components() {
+    let mut tn = TreeTN::<TensorDynLen, NodeIndex>::new();
+
+    let left = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(2);
+    let right = DynIndex::new_dyn(2);
+
+    let tensor1 = TensorDynLen::from_dense(
+        vec![left.clone(), bond.clone()],
+        vec![1.0, 0.0, 0.0, 1.0e-16],
+    )
+    .unwrap();
+    let n1 = tn.add_tensor_auto_name(tensor1);
+
+    let tensor2 =
+        TensorDynLen::from_dense(vec![bond.clone(), right.clone()], vec![1.0, 0.0, 0.0, 1.0])
+            .unwrap();
+    let n2 = tn.add_tensor_auto_name(tensor2);
+
+    tn.connect(n1, &bond, n2, &bond).unwrap();
+    let expected = tn.contract_to_tensor().unwrap();
+
+    for form in [CanonicalForm::Unitary, CanonicalForm::LU] {
+        let actual = tn
+            .clone()
+            .canonicalize(
+                std::iter::once(n2),
+                CanonicalizationOptions::default().with_form(form),
+            )
+            .unwrap()
+            .contract_to_tensor()
+            .unwrap();
+
+        let error = (&actual - &expected).maxabs();
+        assert!(
+            error < 1.0e-18,
+            "{form:?} canonicalization changed the represented tensor: maxabs diff = {error}"
+        );
+    }
+}
+
 // ============================================================================
 // Contraction Tests
 // ============================================================================

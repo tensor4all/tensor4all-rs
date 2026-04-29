@@ -269,6 +269,32 @@ fn test_tensor_contract_with_options_retains_shared_index() {
 }
 
 #[test]
+fn test_contract_retains_exact_same_id_prime_index() {
+    let batch = Index::new(DynId(64), 2);
+    let batch_prime = batch.prime();
+    let k = Index::new(DynId(65), 3);
+
+    let a = make_test_tensor_from_data(
+        &[2, 2, 3],
+        vec![batch.clone(), batch_prime.clone(), k.clone()],
+        vec![1.0; 12],
+    );
+    let b = make_test_tensor_from_data(
+        &[2, 2, 3],
+        vec![batch.clone(), batch_prime.clone(), k.clone()],
+        vec![1.0; 12],
+    );
+
+    let retain_indices = [batch_prime.clone()];
+    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
+    let result = contract_multi_with_options(&[&a, &b], options).unwrap();
+
+    assert_eq!(result.indices(), &[batch_prime]);
+    assert_eq!(result.dims(), vec![2]);
+    assert_eq!(result.to_vec::<f64>().unwrap(), vec![6.0, 6.0]);
+}
+
+#[test]
 fn test_contract_multi_with_options_supports_three_way_retained_label() {
     let batch = Index::new(DynId(20), 2);
     let i = Index::new(DynId(21), 2);

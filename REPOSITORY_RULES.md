@@ -113,6 +113,33 @@
   the appropriate high-level API rather than exposing or reaching into internal
   details.
 
+## Index Identity Semantics
+
+- Do not use `index.id()` alone to decide whether two indices are the same
+  index object. Full index equality must be used for identity comparisons so
+  same-ID indices with different prime levels, tags, directions, or other
+  metadata remain distinct.
+- Maps and sets that represent index identity must be keyed by the full index
+  value, not by `IndexLike::Id`.
+- Public and internal APIs that select a concrete tensor leg, TreeTN site,
+  edge, topology assignment, replacement target, split/fuse target, or
+  restructure target must accept the full `Index` value, not an index ID. Shape
+  APIs around index identity so callers can pass the index they mean.
+- C API and language-binding-facing APIs must follow the same rule: accept
+  `Index` handles for concrete index selection, expose full-index
+  equality/hash helpers when bindings need map keys, and do not expose ID-only
+  constructors, selectors, or identity getters as public API.
+- Pure ID comparisons are allowed only inside implementation details that are
+  explicitly about logical-site lookup, compatibility, or contraction pairing.
+  Do not expose ID-based public APIs for selecting concrete indices. If a
+  temporary internal ID map is unavoidable, name the local variable to make the
+  ID-based semantics explicit, such as `logical_site_ids` or
+  `contraction_pair_ids`, and reject ambiguous same-ID inputs instead of
+  choosing one silently.
+- When changing tensor, TreeTN, contraction, direct-sum, replacement, or
+  reindexing code, add a regression test with same-ID indices that differ by
+  prime level or tags.
+
 ## No Ad Hoc Fixes
 
 - Do not add ad hoc fixes that violate DRY, KISS, or layering.

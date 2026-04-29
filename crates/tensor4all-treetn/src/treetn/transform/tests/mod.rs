@@ -321,28 +321,28 @@ fn test_split_to_allows_edgeless_intermediate_fragments() {
     assert_eq!(
         split
             .site_index_network()
-            .find_node_by_index_id(x0.id())
+            .find_node_by_index(&x0)
             .map(|name| name.as_str()),
         Some("left_x")
     );
     assert_eq!(
         split
             .site_index_network()
-            .find_node_by_index_id(x1.id())
+            .find_node_by_index(&x1)
             .map(|name| name.as_str()),
         Some("left_y")
     );
     assert_eq!(
         split
             .site_index_network()
-            .find_node_by_index_id(y0.id())
+            .find_node_by_index(&y0)
             .map(|name| name.as_str()),
         Some("right_y")
     );
     assert_eq!(
         split
             .site_index_network()
-            .find_node_by_index_id(y1.id())
+            .find_node_by_index(&y1)
             .map(|name| name.as_str()),
         Some("right_z")
     );

@@ -3,7 +3,7 @@ mod common;
 use anyhow::Result;
 use common::assert_real_samples_close;
 use quanticsgrids::{DiscretizedGrid, UnfoldingScheme};
-use tensor4all_core::{ColMajorArrayRef, IndexLike};
+use tensor4all_core::ColMajorArrayRef;
 use tensor4all_treetci::{
     crossinterpolate2, GlobalIndexBatch, SimpleProposer, TreeTciEdge, TreeTciGraph, TreeTciOptions,
 };
@@ -27,17 +27,20 @@ fn evaluate_treetn(
     tn: &tensor4all_treetn::TreeTN<tensor4all_core::TensorDynLen, usize>,
     point: &[usize],
 ) -> f64 {
-    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
-    // Build position map: vertex -> position in index_ids
-    let mut data = vec![0usize; index_ids.len()];
+    let (indices, _vertices) = tn.all_site_indices().unwrap();
+    // Build position map: vertex -> position in indices
+    let mut data = vec![0usize; indices.len()];
     for (site, &value) in point.iter().enumerate() {
-        let site_id = *tn.site_space(&site).unwrap().iter().next().unwrap().id();
-        let pos = index_ids.iter().position(|id| *id == site_id).unwrap();
+        let site_index = tn.site_space(&site).unwrap().iter().next().unwrap();
+        let pos = indices
+            .iter()
+            .position(|index| index == site_index)
+            .unwrap();
         data[pos] = value;
     }
-    let shape = [index_ids.len(), 1];
+    let shape = [indices.len(), 1];
     let values = ColMajorArrayRef::new(&data, &shape);
-    tn.evaluate(&index_ids, values).unwrap()[0].real()
+    tn.evaluate(&indices, values).unwrap()[0].real()
 }
 
 fn batch_eval_from_point<T: Clone>(

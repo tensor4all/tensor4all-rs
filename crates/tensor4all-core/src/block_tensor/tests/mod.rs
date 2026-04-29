@@ -1,6 +1,7 @@
 use super::*;
 use crate::defaults::tensordynlen::TensorDynLen;
 use crate::defaults::DynIndex;
+use crate::index_like::IndexLike;
 use crate::krylov::{gmres, GmresOptions};
 
 /// Helper to create a 1D tensor (vector) with given data and shared index.
@@ -416,13 +417,25 @@ fn test_validate_indices_matrix_shared() {
 
 #[test]
 fn test_validate_indices_matrix_no_row_sharing() {
-    // 2x2 matrix: all indices independent → should fail (no common IDs in same row)
+    // 2x2 matrix: all indices independent → should fail (no common indices in same row)
     let b00 = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
     let b01 = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
     let b10 = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
     let b11 = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
 
     let block = BlockTensor::new(vec![b00, b01, b10, b11], (2, 2));
+    assert!(block.validate_indices().is_err());
+}
+
+#[test]
+fn test_validate_indices_matrix_same_id_prime_is_not_shared_index() {
+    let row = DynIndex::new_dyn(2);
+    let row_prime = row.prime();
+    let b00 = TensorDynLen::from_dense(vec![row], vec![0.0; 2]).unwrap();
+    let b01 = TensorDynLen::from_dense(vec![row_prime], vec![0.0; 2]).unwrap();
+
+    let block = BlockTensor::new(vec![b00, b01], (1, 2));
+
     assert!(block.validate_indices().is_err());
 }
 
@@ -436,6 +449,19 @@ fn test_external_indices_deduplication() {
     let ext = block.external_indices();
     assert_eq!(ext.len(), 1, "Shared index should appear once");
     assert!(ext[0].same_id(&idx));
+}
+
+#[test]
+fn test_external_indices_preserves_same_id_prime_pair() {
+    let idx = DynIndex::new_dyn(2);
+    let idx_prime = idx.prime();
+    let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
+    let b2 = make_vector_with_index(vec![3.0, 4.0], &idx_prime);
+    let block = BlockTensor::new(vec![b1, b2], (2, 1));
+
+    let ext = block.external_indices();
+
+    assert_eq!(ext, vec![idx, idx_prime]);
 }
 
 #[test]

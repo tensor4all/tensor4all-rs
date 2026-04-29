@@ -30,6 +30,14 @@ fn test_check_unique_indices_duplicate() {
 }
 
 #[test]
+fn test_check_unique_indices_allows_same_id_prime_pair() {
+    let i = Index::new_dyn(2);
+    let i_prime = i.prime();
+    let indices = vec![i, i_prime];
+    assert!(check_unique_indices(&indices).is_ok());
+}
+
+#[test]
 fn test_replaceinds_duplicate_input() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);

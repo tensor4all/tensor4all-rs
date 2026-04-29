@@ -76,6 +76,28 @@ fn test_replaceind_site_index() {
 }
 
 #[test]
+fn test_replaceind_matches_same_id_prime_pair_site_index_exactly() {
+    let i = DynIndex::new_dyn(2);
+    let i_prime = i.prime();
+    let replacement = i_prime.sim();
+    let t = TensorDynLen::from_dense(vec![i.clone(), i_prime.clone()], vec![1.0, 2.0, 3.0, 4.0])
+        .unwrap();
+    let tn = TreeTN::<TensorDynLen, String>::from_tensors(vec![t], vec!["A".to_string()]).unwrap();
+
+    let replaced = tn.replaceind(&i_prime, &replacement).unwrap();
+    let site_space = replaced.site_space(&"A".to_string()).unwrap();
+    assert!(site_space.contains(&i));
+    assert!(!site_space.contains(&i_prime));
+    assert!(site_space.contains(&replacement));
+
+    let tensor_indices = replaced
+        .tensor(replaced.node_index(&"A".to_string()).unwrap())
+        .unwrap()
+        .external_indices();
+    assert_eq!(tensor_indices, vec![i, replacement]);
+}
+
+#[test]
 fn test_replaceind_link_index_via_sim_linkinds() {
     let (tn, s0, bond, s1) = make_two_node_treetn();
 
