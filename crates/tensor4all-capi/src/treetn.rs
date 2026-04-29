@@ -16,9 +16,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike, SvdTruncationPolicy};
 use tensor4all_treetn::treetn::contraction::{self, ContractionMethod, ContractionOptions};
 use tensor4all_treetn::{
-    apply_linear_operator, square_linsolve, ApplyOptions, CanonicalForm, CanonicalizationOptions,
-    IndexMapping, LinearOperator, LinsolveOptions, RestructureOptions, SiteIndexNetwork,
-    SplitOptions, SwapOptions, TruncationOptions,
+    apply_linear_operator, partial_contract, square_linsolve, ApplyOptions, CanonicalForm,
+    CanonicalizationOptions, IndexMapping, LinearOperator, LinsolveOptions, PartialContractionSpec,
+    RestructureOptions, SiteIndexNetwork, SplitOptions, SwapOptions, TruncationOptions,
 };
 
 /// Release a TreeTN handle.
@@ -210,6 +210,17 @@ fn collect_indices(
         indices.push(unsafe { &*ptr }.inner().clone());
     }
     Ok(indices)
+}
+
+fn collect_index_pairs(
+    left_ptrs: *const *const t4a_index,
+    right_ptrs: *const *const t4a_index,
+    n_pairs: usize,
+    what: &str,
+) -> CapiResult<Vec<(InternalIndex, InternalIndex)>> {
+    let left = collect_indices(left_ptrs, n_pairs, &format!("{what}.left"))?;
+    let right = collect_indices(right_ptrs, n_pairs, &format!("{what}.right"))?;
+    Ok(left.into_iter().zip(right).collect())
 }
 
 fn collect_positions(
@@ -1581,6 +1592,124 @@ pub extern "C" fn t4a_treetn_contract(
 
         let result = contraction::contract(tn_a.inner(), tn_b.inner(), &center, options)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_treetn::new(result))
+    })
+}
+
+/// Partially contract two tree tensor networks using explicit site-index pairs.
+///
+/// `contract_*` pairs are summed over and removed from the result.
+/// `diagonal_*` pairs are linked by diagonal/copy structure while preserving
+/// the left-hand index as an external result leg. `output_order`, when nonempty,
+/// lists the surviving external indices in the requested result order.
+///
+/// For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
+/// default", which currently resolves to one variational sweep.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn t4a_treetn_partial_contract(
+    a: *const t4a_treetn,
+    b: *const t4a_treetn,
+    n_contract_pairs: libc::size_t,
+    contract_left: *const *const t4a_index,
+    contract_right: *const *const t4a_index,
+    n_diagonal_pairs: libc::size_t,
+    diagonal_left: *const *const t4a_index,
+    diagonal_right: *const *const t4a_index,
+    n_output_order: libc::size_t,
+    output_order: *const *const t4a_index,
+    center: libc::size_t,
+    method: t4a_contract_method,
+    policy: *const t4a_svd_truncation_policy,
+    maxdim: libc::size_t,
+    nfullsweeps: libc::size_t,
+    convergence_tol: libc::c_double,
+    factorize_alg: t4a_factorize_alg,
+    qr_rtol: libc::c_double,
+    out: *mut *mut t4a_treetn,
+) -> StatusCode {
+    run_catching(out, || {
+        let tn_a = require_tree(a)?;
+        let tn_b = require_tree(b)?;
+        let contract_pairs = collect_index_pairs(
+            contract_left,
+            contract_right,
+            n_contract_pairs,
+            "contract_pairs",
+        )?;
+        let diagonal_pairs = collect_index_pairs(
+            diagonal_left,
+            diagonal_right,
+            n_diagonal_pairs,
+            "diagonal_pairs",
+        )?;
+        let output_order = if n_output_order == 0 {
+            None
+        } else {
+            Some(collect_indices(
+                output_order,
+                n_output_order,
+                "output_order",
+            )?)
+        };
+
+        let rust_method: ContractionMethod = method.into();
+        let fit_nfullsweeps = resolve_fit_nfullsweeps(nfullsweeps);
+        let mut options = ContractionOptions::new(rust_method)
+            .with_nfullsweeps(fit_nfullsweeps)
+            .with_factorize_alg(factorize_alg.into());
+        match factorize_alg {
+            t4a_factorize_alg::SVD => {
+                if qr_rtol != 0.0 {
+                    return Err(capi_error(
+                        T4A_INVALID_ARGUMENT,
+                        "qr_rtol is only supported when factorize_alg=QR",
+                    ));
+                }
+                if let Some(policy) = resolve_svd_policy(policy) {
+                    options = options.with_svd_policy(policy);
+                }
+            }
+            t4a_factorize_alg::QR => {
+                if !policy.is_null() {
+                    return Err(capi_error(
+                        T4A_INVALID_ARGUMENT,
+                        "policy is only supported when factorize_alg=SVD",
+                    ));
+                }
+                if let Some(rtol) = resolve_qr_rtol(qr_rtol) {
+                    options = options.with_qr_rtol(rtol);
+                }
+            }
+            t4a_factorize_alg::LU | t4a_factorize_alg::CI => {
+                if !policy.is_null() {
+                    return Err(capi_error(
+                        T4A_INVALID_ARGUMENT,
+                        "policy is only supported when factorize_alg=SVD",
+                    ));
+                }
+                if qr_rtol != 0.0 {
+                    return Err(capi_error(
+                        T4A_INVALID_ARGUMENT,
+                        "qr_rtol is only supported when factorize_alg=QR",
+                    ));
+                }
+            }
+        }
+        if maxdim > 0 {
+            options = options.with_max_rank(maxdim);
+        }
+        if let Some(tol) = resolve_convergence_tol(convergence_tol) {
+            options = options.with_convergence_tol(tol);
+        }
+
+        let spec = PartialContractionSpec {
+            contract_pairs,
+            diagonal_pairs,
+            output_order,
+        };
+        let result = partial_contract(tn_a.inner(), tn_b.inner(), &spec, &center, options)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, format!("{err:#}")))?;
         Ok(t4a_treetn::new(result))
     })
 }
