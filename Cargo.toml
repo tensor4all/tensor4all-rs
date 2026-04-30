@@ -16,6 +16,7 @@ members = [
     "tools/api-dump",
     "xtask",
     "docs/book-tests",
+    "docs/tutorial-code",
 ]
 resolver = "2"
 

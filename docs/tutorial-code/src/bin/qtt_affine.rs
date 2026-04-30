@@ -1,0 +1,141 @@
+//! Build and apply a 2D affine pullback operator on a fused quantics grid.
+
+use std::error::Error;
+use std::fs;
+use std::path::Path;
+
+use tensor4all_core::TensorIndex;
+use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions, UnfoldingScheme};
+use tensor4all_quanticstransform::{affine_operator, AffineParams, BoundaryCondition};
+use tensor4all_treetn::{apply_linear_operator, tensor_train_to_treetn, ApplyOptions};
+
+use tensor4all_tutorial_code::output_paths;
+use tensor4all_tutorial_code::qtt_affine_common::{
+    collect_bond_dims, collect_operator_bond_dims, collect_samples, point_count, print_summary,
+    source_function, tree_link_dims, write_bond_dims_csv, write_operator_bond_dims_csv,
+    write_samples_csv, DEFAULT_AFFINE_CONFIG,
+};
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let data_dir = output_paths::data_dir();
+    let config = DEFAULT_AFFINE_CONFIG;
+
+    fs::create_dir_all(&data_dir)?;
+
+    // Build the source QTT directly so the tutorial shows the Tensor4all API.
+    let n = point_count(config.bits);
+    let source_grid = vec![n, n];
+    // QTCI options control accuracy, rank cap, initialization, and sweep count.
+    let source_options = QtciOptions::default()
+        .with_tolerance(config.tolerance)
+        .with_maxbonddim(config.maxbonddim)
+        .with_maxiter(config.maxiter)
+        .with_nrandominitpivot(5)
+        .with_unfoldingscheme(UnfoldingScheme::Fused)
+        .with_verbosity(0);
+
+    // `quanticscrossinterpolate_discrete(...)` builds the fused quantics source QTT.
+    let source_callback = move |grid_1based: &[i64]| -> f64 {
+        let u = (grid_1based[0] - 1) as usize;
+        let v = (grid_1based[1] - 1) as usize;
+        source_function(u, v, n)
+    };
+    let (source, _ranks, _errors) =
+        quanticscrossinterpolate_discrete(&source_grid, source_callback, None, source_options)?;
+
+    // `AffineParams::from_integers(...)` encodes the affine map used in the tutorial.
+    let affine_params = AffineParams::from_integers(vec![1, 0, 1, 1], vec![0, 0], 2, 2)?;
+
+    // `affine_operator(...)` builds the MPO, and `transpose()` switches to the passive pullback.
+    let periodic_operator = affine_operator(
+        config.bits,
+        &affine_params,
+        &[BoundaryCondition::Periodic; 2],
+    )?
+    .transpose();
+
+    let open_operator =
+        affine_operator(config.bits, &affine_params, &[BoundaryCondition::Open; 2])?.transpose();
+
+    // The source QTT stores the inherent discrete grid that its quantics sites live on.
+    // `inherent_grid()` exposes the grid needed to translate from physical points to quantics sites.
+    let evaluation_grid = source
+        .inherent_grid()
+        .expect("source QTT uses an inherent discrete grid");
+
+    // Convert the tensor train to a TreeTN, then align each MPO before applying it.
+    let source_tt = source.tensor_train();
+    // `tensor_train_to_treetn(...)` turns the QTT into the TreeTN state used by the operator API.
+    let (state, _source_site_indices) = tensor_train_to_treetn(&source_tt)?;
+
+    let mut periodic_aligned = periodic_operator.clone();
+    // `align_to_state(...)` matches the MPO site ordering to the state before contraction.
+    periodic_aligned.align_to_state(&state)?;
+
+    // `apply_linear_operator(...)` performs the actual MPO-MPS contraction.
+    let periodic = apply_linear_operator(&periodic_aligned, &state, ApplyOptions::naive())?;
+    // `TensorIndex::external_indices(...)` gives the output site labels for evaluation.
+    let periodic_sites = TensorIndex::external_indices(&periodic);
+
+    let mut open_aligned = open_operator.clone();
+    // Align the second boundary-condition variant the same way.
+    open_aligned.align_to_state(&state)?;
+
+    // Reuse the same linear-operator application path for the open-boundary result.
+    let open = apply_linear_operator(&open_aligned, &state, ApplyOptions::naive())?;
+    // The output site labels are needed to evaluate the transformed TreeTN on the grid.
+    let open_sites = TensorIndex::external_indices(&open);
+
+    // Sample both transformed states against the analytic reference on the full grid.
+    let samples = collect_samples(
+        &periodic,
+        &periodic_sites,
+        &open,
+        &open_sites,
+        evaluation_grid,
+        &config,
+    )?;
+
+    let bond_dims = collect_bond_dims(
+        &tree_link_dims(&state),
+        &tree_link_dims(&periodic),
+        &tree_link_dims(&open),
+    );
+    let operator_bond_dims = collect_operator_bond_dims(
+        &tree_link_dims(&periodic_operator.mpo),
+        &tree_link_dims(&open_operator.mpo),
+    );
+
+    print_summary(&source, &periodic, &open, &samples, &config);
+
+    write_samples_csv(&data_dir.join("qtt_affine_samples.csv"), &samples)?;
+    write_bond_dims_csv(&data_dir.join("qtt_affine_bond_dims.csv"), &bond_dims)?;
+    write_operator_bond_dims_csv(
+        &data_dir.join("qtt_affine_operator_bond_dims.csv"),
+        &operator_bond_dims,
+    )?;
+
+    println!(
+        "wrote {}",
+        data_dir.join("qtt_affine_samples.csv").display()
+    );
+    println!(
+        "wrote {}",
+        data_dir.join("qtt_affine_bond_dims.csv").display()
+    );
+    println!(
+        "wrote {}",
+        data_dir.join("qtt_affine_operator_bond_dims.csv").display()
+    );
+    println!(
+        "next: run the Julia plotting script at {}",
+        project_root
+            .join("docs")
+            .join("plotting")
+            .join("qtt_affine_plot.jl")
+            .display()
+    );
+
+    Ok(())
+}

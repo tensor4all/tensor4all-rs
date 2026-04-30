@@ -76,6 +76,13 @@ Every public type, trait, and function **must** have doc comments with the follo
 - When changing public APIs, documented capabilities, or user-facing examples, check for stale names, stale capability claims, and references to removed paths or workflows.
 - Keep documentation slightly behind reality if validation is incomplete; do not advertise partially landed surfaces as stable or fully supported.
 
+### Online Tutorial Synchronization
+
+- The live online tutorials are in `docs/book/src/tutorials/`.
+- Runnable tutorial demos live in `docs/tutorial-code/src/bin/` with shared helpers in `docs/tutorial-code/src/`.
+- When changing public APIs, tutorial code, generated tutorial CSV/PNG artifacts, or examples quoted by the online tutorials, update the live mdBook tutorial page in the same branch.
+- Treat `docs/tutorial-code/docs/tutorials/` as legacy/reference material unless this policy is changed explicitly.
+
 ## Error Handling
 
 - `anyhow` for internal error handling and context
