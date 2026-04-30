@@ -8,47 +8,60 @@ Runnable source: [`docs/tutorial-code/src/bin/qtt_partial_fourier2d.rs`](../../.
 
 ## Key API Pieces
 
-For an interleaved two-variable QTT, x-sites live at positions `0, 2, 4, ...`.
-The operator is built for the x-sites only, then applied via
-`tensor_train_to_treetn`, `align_to_state`, and `apply_linear_operator`.
+For an interleaved two-variable QTT, the state nodes are ordered
+`x0, t0, x1, t1, ...`. A one-dimensional Fourier MPO has only `x` nodes, so the
+operator nodes must be renamed onto the even state nodes before the operator is
+expanded with identity tensors on the `t` nodes. The runnable source linked
+above performs that expansion in `transform_x_dimension`. The source function
+is `f(x, t) = exp(-x^2 / 2) * cos(2πt)`.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
 # use tensor4all_quanticstci::{
-#     quanticscrossinterpolate_discrete, QtciOptions, UnfoldingScheme,
+#     quanticscrossinterpolate, DiscretizedGrid, QtciOptions, UnfoldingScheme,
 # };
 # use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
-# use tensor4all_treetn::{apply_linear_operator, tensor_train_to_treetn, ApplyOptions};
-let bits = 4;
-let sizes = vec![2usize; bits * 2];
+# use tensor4all_simplett::AbstractTensorTrain;
+let bits = 7;
+let grid = DiscretizedGrid::builder(&[bits, bits])
+    .with_variable_names(&["x", "t"])
+    .with_lower_bound(&[-4.0, 0.0])
+    .with_upper_bound(&[4.0, 1.0])
+    .include_endpoint(true)
+    .with_unfolding_scheme(UnfoldingScheme::Interleaved)
+    .build()?;
+
+let f = |coords: &[f64]| -> f64 {
+    let x = coords[0];
+    let t = coords[1];
+    (-0.5 * x * x).exp() * (2.0 * std::f64::consts::PI * t).cos()
+};
 let options = QtciOptions::default()
-    .with_nrandominitpivot(0)
+    .with_nrandominitpivot(5)
+    .with_unfoldingscheme(UnfoldingScheme::Interleaved)
     .with_verbosity(0);
-let pivots = vec![vec![1_i64; bits * 2], vec![2_i64; bits * 2]];
 
-let (state, _, _) = quanticscrossinterpolate_discrete::<f64, _>(
-    &sizes,
-    |_idx| 1.0,
-    Some(pivots),
-    options,
-)?;
+let (state, _ranks, _errors) = quanticscrossinterpolate(&grid, f, None, options)?;
 
-let mut operator = quantics_fourier_operator(bits, FourierOptions::forward())?;
+let operator = quantics_fourier_operator(bits, FourierOptions::forward())?;
 assert_eq!(operator.mpo.node_count(), bits);
 
-let tt = state.tensor_train();
-let (state_tn, _indices) = tensor_train_to_treetn(&tt)?;
+let x_site_mapping: Vec<_> = (0..bits).map(|site| (site, 2 * site)).collect();
 
-operator.align_to_state(&state_tn)?;
-let result = apply_linear_operator(&operator, &state_tn, ApplyOptions::naive())?;
-
-assert!(result.node_count() > 0);
+assert_eq!(state.tensor_train().len(), 2 * bits);
+assert_eq!(x_site_mapping.len(), bits);
+assert_eq!(x_site_mapping[0], (0, 0));
+assert_eq!(x_site_mapping[bits - 1], (bits - 1, 2 * (bits - 1)));
 # Ok(())
 # }
 ```
 
-The tutorial code renames the operator nodes with a site mapping, then applies
-the operator while leaving the t-sites in place.
+The full source then renames the operator nodes with this mapping, expands the
+operator with identity tensors on the odd `t` nodes, aligns the resulting
+operator to the state, and applies it. Passing `None` for `initial_pivots` is
+the best starting point for tutorial code because `QtciOptions` already adds
+random initial pivots. Explicit pivot lists are a later tuning tool for cases
+where you already know important grid points.
 
 ## What It Computes
 

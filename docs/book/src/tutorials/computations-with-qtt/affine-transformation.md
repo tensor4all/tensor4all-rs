@@ -11,7 +11,8 @@ Runnable source: [`docs/tutorial-code/src/bin/qtt_affine.rs`](../../../../tutori
 `AffineParams` stores the matrix and offset. Boundary conditions say what
 happens when transformed coordinates leave the grid. The operator is
 applied via `tensor_train_to_treetn`, `align_to_state`, and
-`apply_linear_operator`.
+`apply_linear_operator`. The source function is
+`f(u, v) = sin(2πu/N) + 0.5 cos(2πv/N) + 0.25 sin(2π(u + 2v)/N)`.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
@@ -23,18 +24,28 @@ applied via `tensor_train_to_treetn`, `align_to_state`, and
 #     affine_operator, AffineParams, BoundaryCondition,
 # };
 # use tensor4all_treetn::{apply_linear_operator, tensor_train_to_treetn, ApplyOptions};
-let bits = 3;
-let source_grid = [8usize, 8];
+use std::f64::consts::PI;
+
+let bits = 7;
+let n = 1usize << bits;
+let source_grid = [n, n];
+let source_function = move |grid_1based: &[i64]| -> f64 {
+    let u = (grid_1based[0] - 1) as f64;
+    let v = (grid_1based[1] - 1) as f64;
+    let n = n as f64;
+    (2.0 * PI * u / n).sin()
+        + 0.5 * (2.0 * PI * v / n).cos()
+        + 0.25 * (2.0 * PI * (u + 2.0 * v) / n).sin()
+};
 let source_options = QtciOptions::default()
-    .with_nrandominitpivot(0)
+    .with_nrandominitpivot(5)
     .with_unfoldingscheme(UnfoldingScheme::Fused)
     .with_verbosity(0);
-let pivots = vec![vec![1_i64, 1], vec![8, 8]];
 
 let (source, _, _) = quanticscrossinterpolate_discrete::<f64, _>(
     &source_grid,
-    |idx| idx[0] as f64 + 2.0 * idx[1] as f64,
-    Some(pivots),
+    source_function,
+    None,
     source_options,
 )?;
 
@@ -49,7 +60,8 @@ operator.align_to_state(&state)?;
 let result = apply_linear_operator(&operator, &state, ApplyOptions::naive())?;
 
 let external = TensorIndex::external_indices(&result);
-assert_eq!(external.len(), 3);
+assert_eq!(external.len(), bits);
+assert!(result.node_count() >= state.node_count());
 # Ok(())
 # }
 ```

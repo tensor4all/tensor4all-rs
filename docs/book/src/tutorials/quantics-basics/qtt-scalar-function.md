@@ -17,36 +17,42 @@ written in terms of grid indices.
 # use tensor4all_quanticstci::{
 #     quanticscrossinterpolate_discrete, QtciOptions, UnfoldingScheme,
 # };
-let sizes = [8usize];
-let f = |idx: &[i64]| -> f64 { idx[0] as f64 };
+let npoints = 128usize;
+let sizes = [npoints];
+let f = move |idx: &[i64]| -> f64 {
+    let x = (idx[0] as f64 - 1.0) / npoints as f64;
+    x.cosh()
+};
 let options = QtciOptions::default()
-    .with_nrandominitpivot(0)
+    .with_nrandominitpivot(3)
     .with_unfoldingscheme(UnfoldingScheme::Interleaved)
     .with_verbosity(0);
-let pivots = vec![vec![1_i64], vec![8]];
 
 let (qtt, ranks, _errors) =
-    quanticscrossinterpolate_discrete::<f64, _>(&sizes, f, Some(pivots), options)?;
+    quanticscrossinterpolate_discrete::<f64, _>(&sizes, f, None, options)?;
 
-assert!((qtt.evaluate(&[3])? - 3.0).abs() < 1e-10);
+let x = 0.5_f64;
+assert!((qtt.evaluate(&[65])? - x.cosh()).abs() < 1e-8);
 assert!(!ranks.is_empty());
 # Ok(())
 # }
 ```
 
-The tutorial binary uses the same pattern, but with a more interesting target
-function and CSV output.
+The tutorial binary uses the same target function, `cosh(x)`, and adds CSV
+output for plotting.
 
 ## What It Computes
 
 The example samples a smooth one-dimensional function, compresses the samples
 with tensor cross interpolation, evaluates the QTT back on the grid, and writes
-CSV data for the plots below.
+CSV data for the plots below. In this tutorial the function is `cosh(x)` on
+`x in [0, 1)`.
 
 ![QTT values compared with the direct function](qtt_function_vs_qtt.png)
 
 The points from the QTT lie on top of the direct function values. The next plot
-shows the bond dimensions along the QTT chain. A small peak means that part of
-the grid needs more internal information than its neighbors.
+shows the bond dimensions along the QTT chain. In examples with a visible peak,
+that peak would mean that part of the grid needs more internal information than
+its neighbors.
 
 ![Bond dimensions for the scalar-function QTT](qtt_function_bond_dims.png)

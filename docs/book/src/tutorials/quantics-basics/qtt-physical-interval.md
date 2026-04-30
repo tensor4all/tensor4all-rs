@@ -9,6 +9,7 @@ Runnable source: [`docs/tutorial-code/src/bin/qtt_interval.rs`](../../../../tuto
 ## Key API Pieces
 
 `DiscretizedGrid` owns the mapping from grid index to physical coordinate.
+Here the target function is `f(x) = x^2` on `[-1, 2]`.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
@@ -22,12 +23,14 @@ let grid = DiscretizedGrid::builder(&[7])
     .with_unfolding_scheme(UnfoldingScheme::Interleaved)
     .build()?;
 
-let f = |coords: &[f64]| -> f64 { coords[0] * coords[0] };
+let f = |coords: &[f64]| -> f64 {
+    let x = coords[0];
+    x.powi(2)
+};
 let options = QtciOptions::default()
-    .with_nrandominitpivot(0)
+    .with_nrandominitpivot(3)
     .with_verbosity(0);
-let pivots = vec![vec![1_i64], vec![128]];
-let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, Some(pivots), options)?;
+let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, None, options)?;
 
 assert!((qtt.evaluate(&[128])? - 4.0).abs() < 1e-8);
 # Ok(())
@@ -35,12 +38,15 @@ assert!((qtt.evaluate(&[128])? - 4.0).abs() < 1e-8);
 ```
 
 Indices passed to `evaluate` are one-based grid indices. The grid converts them
-to the physical coordinate before the function is sampled.
+to the physical coordinate before the function is sampled. Passing `None` for
+the initial pivots lets the interpolator use its configured random initial
+pivots; hand-picked pivots are mainly useful when you already know especially
+important grid points.
 
 ## What It Computes
 
-The example builds a `DiscretizedGrid`, evaluates the target function on that
-grid, and checks that the QTT follows the direct values on the interval.
+The example builds a `DiscretizedGrid`, evaluates `f(x) = x^2` on that grid,
+and checks that the QTT follows the direct values on the interval.
 
 ![Interval function and QTT values](qtt_interval_function_vs_qtt.png)
 

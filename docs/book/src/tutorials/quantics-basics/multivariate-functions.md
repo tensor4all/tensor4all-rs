@@ -10,6 +10,7 @@ Runnable source: [`docs/tutorial-code/src/bin/qtt_multivariate.rs`](../../../../
 ## Key API Pieces
 
 Use one bit-depth entry per variable when building a `DiscretizedGrid`.
+The target function is `f(x, y) = x * cos(x) * cos(y)`.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
@@ -24,14 +25,15 @@ let grid = DiscretizedGrid::builder(&[7, 7])
     .build()?;
 
 let f = |coords: &[f64]| -> f64 {
-    coords[0].cos() * coords[1].cos() * coords[0]
+    let x = coords[0];
+    let y = coords[1];
+    x * x.cos() * y.cos()
 };
 let options = QtciOptions::default()
-    .with_nrandominitpivot(0)
+    .with_nrandominitpivot(5)
     .with_unfoldingscheme(UnfoldingScheme::Interleaved)
     .with_verbosity(0);
-let pivots = vec![vec![1_i64, 1_i64], vec![128, 128]];
-let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, Some(pivots), options)?;
+let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, None, options)?;
 
 assert!((qtt.evaluate(&[1, 1])? - f(&[-2.0, -2.0])).abs() < 1e-6);
 # Ok(())

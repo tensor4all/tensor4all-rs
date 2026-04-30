@@ -49,15 +49,17 @@ into `docs/plots`.
 
 Start with [docs/index.md](docs/index.md).
 
-Suggested order:
+Suggested online order:
 
-1. [QTT of a scalar function](docs/tutorials/qtt_function_tutorial.md)
-2. [QTT on a physical interval](docs/tutorials/qtt_interval_tutorial.md)
-3. [QTTs for multivariate functions](docs/tutorials/qtt_multivariate_tutorial.md)
-4. [Definite integrals](docs/tutorials/qtt_integral_tutorial.md)
-5. [Sweep over bit depth](docs/tutorials/qtt_r_sweep_tutorial.md)
-6. [Elementwise TreeTN product](docs/tutorials/qtt_elementwise_product_tutorial.md)
-7. [Fourier transform](docs/tutorials/qtt_fourier_tutorial.md)
+1. [QTT of a Scalar Function](../book/src/tutorials/quantics-basics/qtt-scalar-function.md)
+2. [QTT on a Physical Interval](../book/src/tutorials/quantics-basics/qtt-physical-interval.md)
+3. [Definite Integrals](../book/src/tutorials/quantics-basics/qtt-definite-integrals.md)
+4. [Sweep over Bit Depth](../book/src/tutorials/quantics-basics/sweep-bit-depth.md)
+5. [Multivariate Functions](../book/src/tutorials/quantics-basics/multivariate-functions.md)
+6. [Elementwise Product](../book/src/tutorials/computations-with-qtt/elementwise-product.md)
+7. [Affine Transformation](../book/src/tutorials/computations-with-qtt/affine-transformation.md)
+8. [Fourier Transform](../book/src/tutorials/computations-with-qtt/fourier-transform.md)
+9. [2D Partial Fourier Transform](../book/src/tutorials/computations-with-qtt/partial-fourier2d.md)
 
 For terminology, see [docs/glossary.md](docs/glossary.md).
 
@@ -110,3 +112,7 @@ Because this crate depends on the local workspace crates, updating
 `tensor4all-rs` automatically updates the APIs used by these tutorials. If a
 check fails after a library change, update the tutorial code or the mdBook page
 that quotes it in the same branch.
+
+The markdown files under `docs/tutorial-code/docs/tutorials/` are legacy
+reference material. The online documentation is generated from
+`docs/book/src/tutorials/`.

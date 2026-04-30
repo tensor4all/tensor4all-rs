@@ -104,6 +104,17 @@
 - Examples must include assertions that verify correctness, not just compile or
   execute.
 
+## Online Tutorial Synchronization
+
+- `docs/book/src/tutorials/` is the live source for online tutorial prose.
+- `docs/tutorial-code/src/bin/` and `docs/tutorial-code/src/` are the runnable
+  source for tutorial demos and shared tutorial helpers.
+- Any change to tutorial APIs, tutorial code, generated tutorial artifacts, or
+  public APIs used by tutorials must check and update the corresponding live
+  mdBook page before the branch is complete.
+- Legacy markdown under `docs/tutorial-code/docs/tutorials/` must not be treated
+  as the online source of truth.
+
 ## API Design
 
 - Only make functions `pub` when they are intended public API.

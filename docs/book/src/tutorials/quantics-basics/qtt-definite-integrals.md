@@ -10,6 +10,8 @@ Runnable source: [`docs/tutorial-code/src/bin/qtt_integral.rs`](../../../../tuto
 ## Key API Pieces
 
 `integral()` is available when the QTT was built from a `DiscretizedGrid`.
+This example uses the same target function as the interval tutorial,
+`f(x) = x^2` on `[-1, 2]`.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
@@ -20,15 +22,18 @@ let grid = DiscretizedGrid::builder(&[7])
     .include_endpoint(true)
     .build()?;
 
-let f = |coords: &[f64]| -> f64 { coords[0].powi(2) };
+let f = |coords: &[f64]| -> f64 {
+    let x = coords[0];
+    x.powi(2)
+};
 let options = QtciOptions::default()
-    .with_nrandominitpivot(0)
+    .with_nrandominitpivot(3)
     .with_verbosity(0);
-let pivots = vec![vec![1_i64], vec![128]];
-let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, Some(pivots), options)?;
+let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, None, options)?;
 
 let integral = qtt.integral()?;
-assert!(integral > 0.0);
+let exact = 3.0;
+assert!((integral - exact).abs() < 8e-2);
 # Ok(())
 # }
 ```

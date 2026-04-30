@@ -10,28 +10,36 @@ Runnable source: [`docs/tutorial-code/src/bin/qtt_elementwise_product.rs`](../..
 
 The first step is simply to build two QTTs on the same grid. Converting
 to TreeTN enables `partial_contract` with `diagonal_pairs` for the
-pointwise product.
+pointwise product. The two target functions are `f(x) = x^2` and
+`g(x) = sin(10x)` on the unit interval.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
 # use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
+# use tensor4all_core::ColMajorArrayRef;
 # use tensor4all_treetn::{
 #     contraction::ContractionOptions,
 #     partial_contract, tensor_train_to_treetn, PartialContractionSpec,
 # };
-let sizes = [8usize];
-let f_a = |idx: &[i64]| -> f64 { (idx[0] as f64).powi(2) };
-let f_b = |idx: &[i64]| -> f64 { (10.0 * (idx[0] as f64 - 1.0) / 8.0).sin() };
+let npoints = 8usize;
+let sizes = [npoints];
+let f = move |idx: &[i64]| -> f64 {
+    let x = (idx[0] as f64 - 1.0) / npoints as f64;
+    x.powi(2)
+};
+let g = move |idx: &[i64]| -> f64 {
+    let x = (idx[0] as f64 - 1.0) / npoints as f64;
+    (10.0 * x).sin()
+};
 let options = QtciOptions::default()
-    .with_nrandominitpivot(0)
+    .with_nrandominitpivot(3)
     .with_verbosity(0);
-let pivots = vec![vec![1_i64], vec![8]];
 
 let (qtt_a, _, _) = quanticscrossinterpolate_discrete::<f64, _>(
-    &sizes, f_a, Some(pivots.clone()), options.clone(),
+    &sizes, f, None, options.clone(),
 )?;
 let (qtt_b, _, _) = quanticscrossinterpolate_discrete::<f64, _>(
-    &sizes, f_b, Some(pivots), options,
+    &sizes, g, None, options,
 )?;
 
 let tt_a = qtt_a.tensor_train();
@@ -54,6 +62,12 @@ let product = partial_contract(
     &tn_a, &tn_b, &spec, &center, ContractionOptions::default(),
 )?;
 
+let shape = [site_indices_a.len(), 1];
+let site_values = ColMajorArrayRef::new(&[0usize, 1, 1], &shape);
+let value = product.evaluate_at(&site_indices_a, site_values)?;
+let x = (4.0 - 1.0) / npoints as f64;
+let expected = x.powi(2) * (10.0 * x).sin();
+assert!((value[0].real() - expected).abs() < 1e-8);
 assert_eq!(product.node_count(), 3);
 # Ok(())
 # }
