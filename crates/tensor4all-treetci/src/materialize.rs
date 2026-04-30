@@ -3,16 +3,15 @@ use crate::{
     assemble_global_point, GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
-use faer::prelude::Solve;
-use faer::MatRef;
 use num_complex::{Complex32, Complex64};
 use std::collections::HashMap;
+use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorScalar};
 use tensor4all_core::{ColMajorArray, DynIndex, TensorDynLen, TensorElement};
 use tensor4all_tcicore::MatrixLuciScalar as Scalar;
 use tensor4all_treetn::TreeTN;
 
 #[doc(hidden)]
-pub trait FullPivLuScalar: Scalar + TensorElement {
+pub trait FullPivLuScalar: Scalar + TensorElement + TensorScalar {
     fn solve_right_full_piv_lu(
         lhs_values: &[Self],
         lhs_rows: usize,
@@ -51,18 +50,15 @@ macro_rules! impl_full_piv_lu_scalar {
 
                 let lhs_t = transpose_column_major(lhs_values, lhs_rows, lhs_cols);
                 let pivot_t = transpose_column_major(pivot_values, pivot_rows, pivot_cols);
-                let lu =
-                    MatRef::from_column_major_slice(&pivot_t, pivot_cols, pivot_rows).full_piv_lu();
-                let solved_t =
-                    lu.solve(MatRef::from_column_major_slice(&lhs_t, lhs_cols, lhs_rows));
+                let mut backend = CpuBackend::new();
+                let pivot_tensor = Tensor::from_vec(vec![pivot_cols, pivot_rows], pivot_t);
+                let lhs_tensor = Tensor::from_vec(vec![lhs_cols, lhs_rows], lhs_t);
+                let solved_t = pivot_tensor.full_piv_lu_solve(&lhs_tensor, &mut backend)?;
 
-                let mut solved_t_values = vec![<$t as Scalar>::from_f64(0.0); lhs_rows * lhs_cols];
-                for col in 0..lhs_rows {
-                    for row in 0..lhs_cols {
-                        solved_t_values[row + lhs_cols * col] = solved_t[(row, col)];
-                    }
-                }
-                Ok(transpose_column_major(&solved_t_values, lhs_cols, lhs_rows))
+                let solved_t_values = solved_t.as_slice::<Self>().ok_or_else(|| {
+                    anyhow::anyhow!("full_piv_lu_solve returned unexpected dtype")
+                })?;
+                Ok(transpose_column_major(solved_t_values, lhs_cols, lhs_rows))
             }
         }
     };

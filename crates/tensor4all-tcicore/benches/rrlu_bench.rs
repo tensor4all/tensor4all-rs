@@ -1,8 +1,8 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use faer::prelude::*;
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
+use tenferro_tensor::{cpu::CpuBackend, Tensor};
 use tensor4all_tcicore::matrix::{from_vec2d, Matrix};
 use tensor4all_tcicore::{rrlu_inplace, RrLUOptions};
 
@@ -15,10 +15,16 @@ fn random_matrix(n: usize, m: usize, seed: u64) -> Matrix<f64> {
     from_vec2d(data)
 }
 
-/// Generate a random faer Mat<f64>
-fn random_faer_matrix(n: usize, m: usize, seed: u64) -> Mat<f64> {
+/// Generate a random column-major tensor for the configured tensor backend.
+fn random_tenferro_matrix(n: usize, m: usize, seed: u64) -> Tensor {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    Mat::from_fn(n, m, |_, _| rng.random::<f64>())
+    let mut data = vec![0.0; n * m];
+    for col in 0..m {
+        for row in 0..n {
+            data[row + n * col] = rng.random::<f64>();
+        }
+    }
+    Tensor::from_vec(vec![n, m], data)
 }
 
 fn bench_rrlu(c: &mut Criterion) {
@@ -41,15 +47,20 @@ fn bench_rrlu(c: &mut Criterion) {
             );
         });
 
-        group.bench_with_input(BenchmarkId::new("faer_lu_fullpiv", size), &size, |b, &n| {
-            b.iter_batched(
-                || random_faer_matrix(n, n, 42),
-                |m| {
-                    m.full_piv_lu();
-                },
-                criterion::BatchSize::SmallInput,
-            );
-        });
+        let mut backend = CpuBackend::new();
+        group.bench_with_input(
+            BenchmarkId::new("tenferro_full_piv_lu", size),
+            &size,
+            |b, &n| {
+                b.iter_batched(
+                    || random_tenferro_matrix(n, n, 42),
+                    |m| {
+                        m.full_piv_lu(&mut backend).unwrap();
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
     }
 
     group.finish();

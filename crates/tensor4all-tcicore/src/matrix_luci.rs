@@ -8,7 +8,7 @@ use crate::error::{MatrixCIError, Result};
 use crate::matrix::{submatrix, zeros, Matrix};
 use crate::matrixlu::RrLUOptions;
 use crate::matrixluci::{
-    CrossFactors, DenseFaerLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions,
+    CrossFactors, DenseLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions,
     PivotSelectionCore,
 };
 use crate::scalar::Scalar;
@@ -90,7 +90,7 @@ pub(crate) fn dense_selection_from_matrix<T>(
 ) -> Result<(PivotSelectionCore, CrossFactors<T>)>
 where
     T: Scalar + crate::matrixluci::Scalar,
-    DenseFaerLuKernel: PivotKernel<T>,
+    DenseLuKernel: PivotKernel<T>,
 {
     let data = to_column_major(a);
     let source = DenseMatrixSource::from_column_major(&data, a.nrows(), a.ncols());
@@ -101,7 +101,7 @@ where
         left_orthogonal: options.left_orthogonal,
     };
 
-    let selection = DenseFaerLuKernel
+    let selection = DenseLuKernel
         .factorize(&source, &kernel_options)
         .map_err(map_backend_error)?;
     let factors = CrossFactors::from_source(&source, &selection).map_err(map_backend_error)?;
@@ -111,7 +111,7 @@ where
 impl<T> MatrixLUCI<T>
 where
     T: Scalar + crate::matrixluci::Scalar,
-    DenseFaerLuKernel: PivotKernel<T>,
+    DenseLuKernel: PivotKernel<T>,
 {
     /// Create a MatrixLUCI from a dense row-major matrix.
     ///

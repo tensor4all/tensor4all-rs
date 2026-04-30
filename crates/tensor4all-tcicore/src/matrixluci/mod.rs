@@ -1,9 +1,9 @@
 #![warn(missing_docs)]
 //! Low-level LUCI / rrLU substrate.
 //!
-//! The dense LU path in this crate is a tensor4all-owned port derived from
-//! `faer` full-pivoting LU ideas and primitives. Keep that attribution explicit
-//! in user-facing documentation.
+//! The dense LU path materializes candidate matrices for exact pivot selection.
+//! It uses the configured tensor backend for square complete-pivoting LU and
+//! the internal rrLU implementation for rectangular fallback coverage.
 
 pub mod block_rook;
 pub mod dense;
@@ -15,7 +15,7 @@ pub mod source;
 pub mod types;
 
 pub use block_rook::LazyBlockRookKernel;
-pub use dense::DenseFaerLuKernel;
+pub use dense::DenseLuKernel;
 pub use error::{MatrixLuciError, Result};
 pub use factors::CrossFactors;
 pub use kernel::PivotKernel;

@@ -9,7 +9,7 @@ use quanticsgrids::{DiscretizedGrid, InherentDiscreteGrid};
 use rand::Rng;
 use tensor4all_core::TensorDynLen;
 use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TTScalar, TensorTrain};
-use tensor4all_tcicore::{DenseFaerLuKernel, PivotKernel};
+use tensor4all_tcicore::{DenseLuKernel, PivotKernel};
 use tensor4all_treetci::materialize::{to_treetn, FullPivLuScalar};
 use tensor4all_treetci::{
     optimize_with_proposer, DefaultProposer, GlobalIndexBatch, TreeTCI2, TreeTciGraph,
@@ -447,7 +447,7 @@ pub fn quanticscrossinterpolate<V, F>(
 ) -> Result<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
     V: TTScalar + Default + Clone + 'static + tensor4all_core::TensorElement + FullPivLuScalar,
-    DenseFaerLuKernel: PivotKernel<V>,
+    DenseLuKernel: PivotKernel<V>,
     F: Fn(&[f64]) -> V + 'static,
 {
     let local_dims = grid.local_dimensions();
@@ -614,7 +614,7 @@ pub fn quanticscrossinterpolate_from_arrays<V, F>(
 ) -> Result<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
     V: TTScalar + Default + Clone + 'static + tensor4all_core::TensorElement + FullPivLuScalar,
-    DenseFaerLuKernel: PivotKernel<V>,
+    DenseLuKernel: PivotKernel<V>,
     F: Fn(&[f64]) -> V + 'static,
 {
     if xvals.is_empty() {
@@ -723,7 +723,7 @@ pub fn quanticscrossinterpolate_discrete<V, F>(
 ) -> Result<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
     V: TTScalar + Default + Clone + 'static + tensor4all_core::TensorElement + FullPivLuScalar,
-    DenseFaerLuKernel: PivotKernel<V>,
+    DenseLuKernel: PivotKernel<V>,
     F: Fn(&[i64]) -> V + 'static,
 {
     // Validate sizes are powers of 2

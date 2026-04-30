@@ -1,4 +1,4 @@
-use crate::matrixluci::{DenseFaerLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions};
+use crate::matrixluci::{DenseLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions};
 use crate::{from_vec2d, rrlu, RrLUOptions};
 use approx::assert_abs_diff_eq;
 
@@ -6,7 +6,7 @@ use approx::assert_abs_diff_eq;
 fn dense_kernel_recovers_identity_pivots() {
     let src =
         DenseMatrixSource::from_column_major(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], 3, 3);
-    let kernel = DenseFaerLuKernel;
+    let kernel = DenseLuKernel;
     let out = kernel
         .factorize(&src, &PivotKernelOptions::no_truncation())
         .unwrap();
@@ -18,7 +18,7 @@ fn dense_kernel_recovers_identity_pivots() {
 #[test]
 fn dense_kernel_reports_zero_rank_for_zero_matrix() {
     let src = DenseMatrixSource::from_column_major(&[0.0; 9], 3, 3);
-    let kernel = DenseFaerLuKernel;
+    let kernel = DenseLuKernel;
     let out = kernel
         .factorize(&src, &PivotKernelOptions::no_truncation())
         .unwrap();
@@ -45,7 +45,7 @@ fn dense_factorize(
     let ncols = rows.first().map_or(0, Vec::len);
     let data = col_major_from_rows(rows);
     let src = DenseMatrixSource::from_column_major(&data, nrows, ncols);
-    DenseFaerLuKernel.factorize(&src, &options).unwrap()
+    DenseLuKernel.factorize(&src, &options).unwrap()
 }
 
 fn assert_pivot_parity(

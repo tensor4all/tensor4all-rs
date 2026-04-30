@@ -1,8 +1,8 @@
 //! Pivot-kernel traits.
 //!
 //! The [`PivotKernel`] trait abstracts pivot selection strategies.
-//! Implementations include [`DenseFaerLuKernel`](super::DenseFaerLuKernel)
-//! (full-pivoting LU via faer) and
+//! Implementations include [`DenseLuKernel`](super::DenseLuKernel)
+//! (dense full-pivoting LU through the configured tensor backend) and
 //! [`LazyBlockRookKernel`](super::LazyBlockRookKernel) (residual-based
 //! rook search for lazy sources).
 

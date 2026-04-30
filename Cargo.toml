@@ -40,7 +40,6 @@ bnum = "0.12"
 uint = "0.10"
 libc = "0.2"
 paste = "1.0"
-faer = "0.23"
 thiserror = "2.0"
 rand = "0.9"
 rand_chacha = "0.9"
@@ -53,7 +52,7 @@ hdf5-metno = { version = "0.12", default-features = false }
 ndarray = "0.17"
 quanticsgrids = { git = "https://github.com/tensor4all/quanticsgrids-rs", rev = "a76b8fb" }
 hdf5-rt = { git = "https://github.com/tensor4all/hdf5-rt", default-features = false }
-tenferro = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "b5b1c8fc9e91b2415553d15206ee0ace7860fff8" }
-tenferro-device = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "b5b1c8fc9e91b2415553d15206ee0ace7860fff8" }
-tenferro-einsum = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "b5b1c8fc9e91b2415553d15206ee0ace7860fff8" }
-tenferro-tensor = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "b5b1c8fc9e91b2415553d15206ee0ace7860fff8" }
+tenferro = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "a523dbcbd1fd50055378b7c1685ff869db0f95f0" }
+tenferro-device = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "a523dbcbd1fd50055378b7c1685ff869db0f95f0" }
+tenferro-einsum = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "a523dbcbd1fd50055378b7c1685ff869db0f95f0" }
+tenferro-tensor = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "a523dbcbd1fd50055378b7c1685ff869db0f95f0" }

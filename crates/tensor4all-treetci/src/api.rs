@@ -84,7 +84,7 @@ pub fn crossinterpolate2<T, F, P>(
 ) -> Result<TreeTciRunResult>
 where
     T: FullPivLuScalar,
-    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+    tensor4all_tcicore::DenseLuKernel: tensor4all_tcicore::PivotKernel<T>,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {

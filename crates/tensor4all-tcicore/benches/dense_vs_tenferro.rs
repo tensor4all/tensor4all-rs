@@ -1,10 +1,10 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use faer::MatRef;
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
+use tenferro_tensor::{cpu::CpuBackend, Tensor};
 use tensor4all_tcicore::matrixluci::{
-    DenseFaerLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions,
+    DenseLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions,
 };
 
 fn random_column_major(nrows: usize, ncols: usize, seed: u64) -> Vec<f64> {
@@ -18,9 +18,9 @@ fn random_column_major(nrows: usize, ncols: usize, seed: u64) -> Vec<f64> {
     data
 }
 
-fn bench_dense_vs_faer(c: &mut Criterion) {
-    let mut group = c.benchmark_group("dense_no_truncation_vs_faer");
-    let kernel = DenseFaerLuKernel;
+fn bench_dense_vs_tenferro(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dense_no_truncation_vs_tenferro");
+    let kernel = DenseLuKernel;
     let options = PivotKernelOptions::no_truncation();
 
     for &size in &[32usize, 64, 100, 128] {
@@ -33,13 +33,14 @@ fn bench_dense_vs_faer(c: &mut Criterion) {
             });
         });
 
+        let mut backend = CpuBackend::new();
         group.bench_with_input(
-            BenchmarkId::new("faer_full_piv_lu", size),
+            BenchmarkId::new("tenferro_full_piv_lu", size),
             &size,
             |b, &n| {
                 b.iter(|| {
-                    let mat = MatRef::from_column_major_slice(&data, n, n);
-                    black_box(mat.full_piv_lu());
+                    let mat = Tensor::from_vec(vec![n, n], data.clone());
+                    black_box(mat.full_piv_lu(&mut backend).unwrap());
                 });
             },
         );
@@ -48,5 +49,5 @@ fn bench_dense_vs_faer(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_dense_vs_faer);
+criterion_group!(benches, bench_dense_vs_tenferro);
 criterion_main!(benches);

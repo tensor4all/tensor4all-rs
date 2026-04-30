@@ -163,7 +163,7 @@ fn factorize<T>(
 ) -> crate::error::Result<(Matrix<T>, Matrix<T>, usize)>
 where
     T: TTScalar + Scalar + tensor4all_tcicore::MatrixLuciScalar,
-    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+    tensor4all_tcicore::DenseLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     let reltol = if tolerance > 0.0 { tolerance } else { 1e-14 };
     let abstol = 0.0;
@@ -399,7 +399,7 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
     pub fn compress(&mut self, options: &CompressionOptions) -> Result<()>
     where
         T: tensor4all_tcicore::MatrixLuciScalar,
-        tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+        tensor4all_tcicore::DenseLuKernel: tensor4all_tcicore::PivotKernel<T>,
     {
         let n = self.len();
         if n <= 1 {
@@ -540,7 +540,7 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
     pub fn compressed(&self, options: &CompressionOptions) -> Result<Self>
     where
         T: tensor4all_tcicore::MatrixLuciScalar,
-        tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+        tensor4all_tcicore::DenseLuKernel: tensor4all_tcicore::PivotKernel<T>,
     {
         let mut result = self.clone();
         result.compress(options)?;

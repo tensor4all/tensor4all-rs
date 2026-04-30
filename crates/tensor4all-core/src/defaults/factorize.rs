@@ -360,7 +360,7 @@ where
         + tensor4all_tcicore::MatrixLuciScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
-    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+    tensor4all_tcicore::DenseLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     factorize_lu_with_options::<T>(
         t,
@@ -385,7 +385,7 @@ where
         + tensor4all_tcicore::MatrixLuciScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
-    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+    tensor4all_tcicore::DenseLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     factorize_lu_with_options::<T>(t, left_inds, canonical, usize::MAX, 0.0)
 }
@@ -406,7 +406,7 @@ where
         + tensor4all_tcicore::MatrixLuciScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
-    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+    tensor4all_tcicore::DenseLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     // Unfold tensor into matrix
     let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
@@ -474,7 +474,7 @@ where
         + tensor4all_tcicore::MatrixLuciScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
-    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+    tensor4all_tcicore::DenseLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     factorize_ci_with_options::<T>(
         t,
@@ -499,7 +499,7 @@ where
         + tensor4all_tcicore::MatrixLuciScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
-    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+    tensor4all_tcicore::DenseLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     factorize_ci_with_options::<T>(t, left_inds, canonical, usize::MAX, 0.0)
 }
@@ -520,7 +520,7 @@ where
         + tensor4all_tcicore::MatrixLuciScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
-    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+    tensor4all_tcicore::DenseLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     // Unfold tensor into matrix
     let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)

@@ -9,7 +9,7 @@ use std::ops::{Index, IndexMut};
 /// Simple owned dense matrix in column-major layout.
 ///
 /// Unlike [`Matrix`](crate::Matrix) which is row-major, this type stores
-/// data in column-major order for compatibility with LAPACK/faer.
+/// data in column-major order for compatibility with dense linear algebra backends.
 /// Access elements with `m[[row, col]]`.
 #[derive(Debug, Clone)]
 pub struct DenseOwnedMatrix<T: Scalar> {

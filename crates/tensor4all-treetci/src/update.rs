@@ -7,8 +7,8 @@ use crate::{
 use anyhow::{ensure, Result};
 use tensor4all_core::ColMajorArray;
 use tensor4all_tcicore::{
-    DenseFaerLuKernel, DenseMatrixSource, MatrixLuciScalar as Scalar, PivotKernel,
-    PivotKernelOptions, PivotSelectionCore,
+    DenseLuKernel, DenseMatrixSource, MatrixLuciScalar as Scalar, PivotKernel, PivotKernelOptions,
+    PivotSelectionCore,
 };
 
 /// Update one edge bipartition using a batch evaluator and a pivot-candidate proposer.
@@ -28,7 +28,7 @@ pub fn update_edge<T, F, P>(
 ) -> Result<PivotSelectionCore>
 where
     T: Scalar,
-    DenseFaerLuKernel: PivotKernel<T>,
+    DenseLuKernel: PivotKernel<T>,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
@@ -52,7 +52,7 @@ where
         left_candidates.len(),
         right_candidates.len(),
     );
-    let selection = DenseFaerLuKernel.factorize(&source, options)?;
+    let selection = DenseLuKernel.factorize(&source, options)?;
 
     // Build ColMajorArray from selected pivot indices
     let n_left_sites = left_key.as_slice().len();
@@ -93,7 +93,7 @@ pub fn update_edge_default<T, F>(
 ) -> Result<PivotSelectionCore>
 where
     T: Scalar,
-    DenseFaerLuKernel: PivotKernel<T>,
+    DenseLuKernel: PivotKernel<T>,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     update_edge(state, edge, evaluate, options, &DefaultProposer)

@@ -3,7 +3,7 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_tcicore::matrixluci::{
-    DenseFaerLuKernel, DenseMatrixSource, LazyBlockRookKernel, LazyMatrixSource, PivotKernel,
+    DenseLuKernel, DenseMatrixSource, LazyBlockRookKernel, LazyMatrixSource, PivotKernel,
     PivotKernelOptions,
 };
 
@@ -45,7 +45,7 @@ fn materialize_expensive(n: usize) -> Vec<f64> {
 }
 
 fn bench_lazy_block_rook(c: &mut Criterion) {
-    let dense_kernel = DenseFaerLuKernel;
+    let dense_kernel = DenseLuKernel;
     let rook_kernel = LazyBlockRookKernel;
     let options = PivotKernelOptions {
         max_rank: 8,

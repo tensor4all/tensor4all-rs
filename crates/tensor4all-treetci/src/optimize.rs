@@ -3,7 +3,7 @@ use crate::{
 };
 use anyhow::{ensure, Result};
 use tensor4all_tcicore::{
-    DenseFaerLuKernel, MatrixLuciScalar as Scalar, PivotKernel, PivotKernelOptions,
+    DenseLuKernel, MatrixLuciScalar as Scalar, PivotKernel, PivotKernelOptions,
 };
 
 /// MVP optimization options for TreeTCI.
@@ -131,7 +131,7 @@ pub fn optimize_default<T, F>(
 ) -> Result<(Vec<usize>, Vec<f64>)>
 where
     T: Scalar,
-    DenseFaerLuKernel: PivotKernel<T>,
+    DenseLuKernel: PivotKernel<T>,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     optimize_with_proposer(state, evaluate, options, &crate::DefaultProposer)
@@ -186,7 +186,7 @@ pub fn optimize_with_proposer<T, F, P>(
 ) -> Result<(Vec<usize>, Vec<f64>)>
 where
     T: Scalar,
-    DenseFaerLuKernel: PivotKernel<T>,
+    DenseLuKernel: PivotKernel<T>,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
