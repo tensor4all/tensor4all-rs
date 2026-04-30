@@ -32,7 +32,6 @@ let gaussian = |coords: &[f64]| -> f64 {
     (-0.5 * x * x).exp()
 };
 let options = QtciOptions::default()
-    .with_nrandominitpivot(3)
     .with_unfoldingscheme(UnfoldingScheme::Interleaved)
     .with_verbosity(0);
 

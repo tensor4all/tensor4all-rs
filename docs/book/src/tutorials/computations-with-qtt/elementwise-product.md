@@ -32,7 +32,6 @@ let g = move |idx: &[i64]| -> f64 {
     (10.0 * x).sin()
 };
 let options = QtciOptions::default()
-    .with_nrandominitpivot(3)
     .with_verbosity(0);
 
 let (qtt_a, _, _) = quanticscrossinterpolate_discrete::<f64, _>(

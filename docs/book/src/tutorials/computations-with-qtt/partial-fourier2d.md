@@ -37,7 +37,6 @@ let f = |coords: &[f64]| -> f64 {
     (-0.5 * x * x).exp() * (2.0 * std::f64::consts::PI * t).cos()
 };
 let options = QtciOptions::default()
-    .with_nrandominitpivot(5)
     .with_unfoldingscheme(UnfoldingScheme::Interleaved)
     .with_verbosity(0);
 
@@ -59,8 +58,8 @@ assert_eq!(x_site_mapping[bits - 1], (bits - 1, 2 * (bits - 1)));
 The full source then renames the operator nodes with this mapping, expands the
 operator with identity tensors on the odd `t` nodes, aligns the resulting
 operator to the state, and applies it. Passing `None` for `initial_pivots` is
-the best starting point for tutorial code because `QtciOptions` already adds
-random initial pivots. Explicit pivot lists are a later tuning tool for cases
+the best starting point for tutorial code because it keeps QTCI on its default
+initialization path. Explicit pivot lists are a later tuning tool for cases
 where you already know important grid points.
 
 ## What It Computes

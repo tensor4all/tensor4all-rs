@@ -26,7 +26,6 @@ for bits in [7usize, 8] {
         target_function(x)
     };
     let options = QtciOptions::default()
-        .with_nrandominitpivot(3)
         .with_verbosity(0);
     let (qtt, _ranks, _errors) =
         quanticscrossinterpolate_discrete::<f64, _>(&sizes, f, None, options)?;

@@ -24,7 +24,6 @@ let f = move |idx: &[i64]| -> f64 {
     x.cosh()
 };
 let options = QtciOptions::default()
-    .with_nrandominitpivot(3)
     .with_unfoldingscheme(UnfoldingScheme::Interleaved)
     .with_verbosity(0);
 

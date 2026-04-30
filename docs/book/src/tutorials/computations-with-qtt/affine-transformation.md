@@ -38,7 +38,6 @@ let source_function = move |grid_1based: &[i64]| -> f64 {
         + 0.25 * (2.0 * PI * (u + 2.0 * v) / n).sin()
 };
 let source_options = QtciOptions::default()
-    .with_nrandominitpivot(5)
     .with_unfoldingscheme(UnfoldingScheme::Fused)
     .with_verbosity(0);
 

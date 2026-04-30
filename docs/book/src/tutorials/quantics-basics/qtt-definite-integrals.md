@@ -27,7 +27,6 @@ let f = |coords: &[f64]| -> f64 {
     x.powi(2)
 };
 let options = QtciOptions::default()
-    .with_nrandominitpivot(3)
     .with_verbosity(0);
 let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, None, options)?;
 

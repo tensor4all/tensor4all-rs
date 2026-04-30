@@ -28,7 +28,6 @@ let f = |coords: &[f64]| -> f64 {
     x.powi(2)
 };
 let options = QtciOptions::default()
-    .with_nrandominitpivot(3)
     .with_verbosity(0);
 let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, None, options)?;
 
@@ -39,9 +38,8 @@ assert!((qtt.evaluate(&[128])? - 4.0).abs() < 1e-8);
 
 Indices passed to `evaluate` are one-based grid indices. The grid converts them
 to the physical coordinate before the function is sampled. Passing `None` for
-the initial pivots lets the interpolator use its configured random initial
-pivots; hand-picked pivots are mainly useful when you already know especially
-important grid points.
+the optional initial-pivot argument keeps the tutorial on the default QTCI
+initialization path.
 
 ## What It Computes
 
