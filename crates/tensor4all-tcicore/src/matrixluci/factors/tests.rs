@@ -1,5 +1,5 @@
 use crate::matrixluci::{
-    CandidateMatrixSource, CrossFactors, DenseFaerLuKernel, DenseMatrixSource, PivotKernel,
+    CandidateMatrixSource, CrossFactors, DenseLuKernel, DenseMatrixSource, PivotKernel,
     PivotKernelOptions,
 };
 use approx::assert_abs_diff_eq;
@@ -30,7 +30,7 @@ fn assert_dense_eq(
 fn reconstruct_cross_factors_matches_selected_submatrices() {
     let data = test_matrix_data();
     let src = DenseMatrixSource::from_column_major(&data, 4, 4);
-    let selection = DenseFaerLuKernel
+    let selection = DenseLuKernel
         .factorize(&src, &PivotKernelOptions::default())
         .unwrap();
 
@@ -58,7 +58,7 @@ fn reconstruct_cross_factors_matches_selected_submatrices() {
 fn reconstruct_cross_factors_can_form_inverse_scaled_factors() {
     let data = test_matrix_data();
     let src = DenseMatrixSource::from_column_major(&data, 4, 4);
-    let selection = DenseFaerLuKernel
+    let selection = DenseLuKernel
         .factorize(&src, &PivotKernelOptions::default())
         .unwrap();
 

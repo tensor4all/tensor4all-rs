@@ -73,7 +73,7 @@ pub mod scalar;
 pub mod traits;
 
 pub use self::matrixluci::{
-    CandidateMatrixSource, CrossFactors, DenseFaerLuKernel, DenseMatrixSource, DenseOwnedMatrix,
+    CandidateMatrixSource, CrossFactors, DenseLuKernel, DenseMatrixSource, DenseOwnedMatrix,
     LazyBlockRookKernel, LazyMatrixSource, MatrixLuciError, PivotKernel, PivotKernelOptions,
     PivotSelectionCore,
 };

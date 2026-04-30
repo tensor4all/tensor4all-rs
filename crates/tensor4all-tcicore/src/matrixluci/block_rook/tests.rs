@@ -1,5 +1,5 @@
 use crate::matrixluci::{
-    DenseFaerLuKernel, DenseMatrixSource, LazyBlockRookKernel, LazyMatrixSource, PivotKernel,
+    DenseLuKernel, DenseMatrixSource, LazyBlockRookKernel, LazyMatrixSource, PivotKernel,
     PivotKernelOptions,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -36,7 +36,7 @@ fn lazy_block_rook_kernel_matches_dense_kernel_on_unique_pivot_matrix() {
     let dense = DenseMatrixSource::from_column_major(&data, 4, 4);
     let lazy = dense_to_lazy(data.clone(), 4, 4);
 
-    let dense_out = DenseFaerLuKernel
+    let dense_out = DenseLuKernel
         .factorize(&dense, &PivotKernelOptions::no_truncation())
         .unwrap();
     let lazy_out = LazyBlockRookKernel
@@ -59,7 +59,7 @@ fn lazy_block_rook_kernel_matches_dense_kernel_for_abs_tol_stop() {
         ..PivotKernelOptions::default()
     };
 
-    let dense_out = DenseFaerLuKernel.factorize(&dense, &options).unwrap();
+    let dense_out = DenseLuKernel.factorize(&dense, &options).unwrap();
     let lazy_out = LazyBlockRookKernel.factorize(&lazy, &options).unwrap();
 
     assert_eq!(lazy_out.row_indices, dense_out.row_indices);

@@ -15,7 +15,6 @@ thiserror.workspace = true
 rand.workspace = true
 paste.workspace = true
 bnum.workspace = true
-faer.workspace = true
 tenferro-einsum.workspace = true
 tenferro-tensor.workspace = true
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend" }
@@ -36,7 +35,7 @@ name = "cached_function"
 harness = false
 
 [[bench]]
-name = "dense_vs_faer"
+name = "dense_vs_tenferro"
 harness = false
 
 [[bench]]

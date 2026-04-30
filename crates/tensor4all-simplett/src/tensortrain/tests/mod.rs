@@ -532,7 +532,7 @@ fn test_svd_compression_tolerance_generic<
         + std::fmt::Debug,
 >()
 where
-    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+    tensor4all_tcicore::DenseLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     use crate::compression::{CompressionMethod, CompressionOptions};
 

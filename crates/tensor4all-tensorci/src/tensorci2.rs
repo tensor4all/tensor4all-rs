@@ -14,9 +14,8 @@ use tensor4all_tcicore::matrix::zeros;
 use tensor4all_tcicore::MultiIndex;
 use tensor4all_tcicore::Scalar;
 use tensor4all_tcicore::{
-    rrlu, AbstractMatrixCI, CrossFactors, DenseFaerLuKernel, DenseMatrixSource,
-    LazyBlockRookKernel, LazyMatrixSource, MatrixLUCI, PivotKernel, PivotKernelOptions,
-    RrLUOptions,
+    rrlu, AbstractMatrixCI, CrossFactors, DenseLuKernel, DenseMatrixSource, LazyBlockRookKernel,
+    LazyMatrixSource, MatrixLUCI, PivotKernel, PivotKernelOptions, RrLUOptions,
 };
 
 /// Configuration for the TCI2 algorithm ([`crossinterpolate2`]).
@@ -283,7 +282,7 @@ pub struct TensorCI2<T: Scalar + TTScalar> {
 impl<T> TensorCI2<T>
 where
     T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
-    DenseFaerLuKernel: PivotKernel<T>,
+    DenseLuKernel: PivotKernel<T>,
     LazyBlockRookKernel: PivotKernel<T>,
 {
     /// Create a new empty TensorCI2
@@ -980,7 +979,7 @@ pub fn crossinterpolate2<T, F, B>(
 ) -> Result<(TensorCI2<T>, Vec<usize>, Vec<f64>)>
 where
     T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
-    DenseFaerLuKernel: PivotKernel<T>,
+    DenseLuKernel: PivotKernel<T>,
     LazyBlockRookKernel: PivotKernel<T>,
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
@@ -1178,7 +1177,7 @@ fn update_pivots<T, F, B>(
 ) -> Result<()>
 where
     T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
-    DenseFaerLuKernel: PivotKernel<T>,
+    DenseLuKernel: PivotKernel<T>,
     LazyBlockRookKernel: PivotKernel<T>,
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
@@ -1258,7 +1257,7 @@ where
             }
         }
         let source = DenseMatrixSource::from_column_major(&data, pi.nrows(), pi.ncols());
-        selection = DenseFaerLuKernel.factorize(&source, &lu_options)?;
+        selection = DenseLuKernel.factorize(&source, &lu_options)?;
         factors = CrossFactors::from_source(&source, &selection)?;
     } else {
         let evaluator = LazyPiEvaluator::new(
