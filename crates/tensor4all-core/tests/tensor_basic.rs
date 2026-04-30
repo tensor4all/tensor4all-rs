@@ -164,6 +164,78 @@ fn tensor_from_structured_storage_rejects_index_dim_mismatch() {
 }
 
 #[test]
+fn structured_select_indices_preserves_copy_structure_when_possible() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(2);
+    let tensor = TensorDynLen::from_storage(
+        vec![i.clone(), j.clone(), k.clone()],
+        Arc::new(
+            Storage::new_structured(
+                vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+                vec![2, 3],
+                vec![1, 2],
+                vec![0, 1, 0],
+            )
+            .unwrap(),
+        ),
+    )
+    .unwrap();
+
+    let selected = tensor.select_indices(&[j], &[1]).unwrap();
+
+    assert_eq!(selected.dims(), vec![2, 2]);
+    assert_eq!(selected.storage().storage_kind(), StorageKind::Diagonal);
+    assert_eq!(selected.storage().payload_dims(), &[2]);
+    assert_eq!(selected.storage().axis_classes(), &[0, 0]);
+    assert_eq!(
+        selected.storage().payload_f64_col_major_vec().unwrap(),
+        vec![3.0, 4.0]
+    );
+    assert_eq!(selected.to_vec::<f64>().unwrap(), vec![3.0, 0.0, 0.0, 4.0]);
+}
+
+#[test]
+fn structured_select_indices_handles_fixed_copy_class() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(2);
+    let tensor = TensorDynLen::from_storage(
+        vec![i.clone(), j.clone(), k.clone()],
+        Arc::new(
+            Storage::new_structured(
+                vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+                vec![2, 3],
+                vec![1, 2],
+                vec![0, 1, 0],
+            )
+            .unwrap(),
+        ),
+    )
+    .unwrap();
+
+    let selected = tensor
+        .select_indices(std::slice::from_ref(&k), &[1])
+        .unwrap();
+    assert_eq!(selected.dims(), vec![2, 3]);
+    assert_eq!(selected.storage().storage_kind(), StorageKind::Dense);
+    assert_eq!(
+        selected.to_vec::<f64>().unwrap(),
+        vec![0.0, 2.0, 0.0, 4.0, 0.0, 6.0]
+    );
+
+    let matching = tensor
+        .select_indices(&[i.clone(), k.clone()], &[1, 1])
+        .unwrap();
+    assert_eq!(matching.dims(), vec![3]);
+    assert_eq!(matching.to_vec::<f64>().unwrap(), vec![2.0, 4.0, 6.0]);
+
+    let mismatched = tensor.select_indices(&[i, k], &[0, 1]).unwrap();
+    assert_eq!(mismatched.dims(), vec![3]);
+    assert_eq!(mismatched.to_vec::<f64>().unwrap(), vec![0.0, 0.0, 0.0]);
+}
+
+#[test]
 fn same_layout_axpby_preserves_structured_metadata() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
