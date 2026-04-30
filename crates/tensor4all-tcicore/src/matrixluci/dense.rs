@@ -141,12 +141,10 @@ impl DenseLuKernel {
         for row in 0..n {
             let mut selected = None;
             for col in 0..n {
-                if data[row + n * col].abs_val() > 0.5 {
-                    if selected.replace(col).is_some() {
-                        return Err(MatrixLuciError::InvalidArgument {
-                            message: format!("{name} permutation row {row} has multiple entries"),
-                        });
-                    }
+                if data[row + n * col].abs_val() > 0.5 && selected.replace(col).is_some() {
+                    return Err(MatrixLuciError::InvalidArgument {
+                        message: format!("{name} permutation row {row} has multiple entries"),
+                    });
                 }
             }
             indices.push(selected.ok_or_else(|| MatrixLuciError::InvalidArgument {
