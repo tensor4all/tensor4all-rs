@@ -1248,6 +1248,67 @@ fn test_treetn_contract_and_to_dense() {
 }
 
 #[test]
+fn test_treetn_partial_contract_elementwise_diagonal_pairs() {
+    let (a, a_tensors, a_indices) = make_two_site_treetn();
+    let (b, b_tensors, b_indices) = make_two_site_treetn();
+
+    let a_sites_0 = read_siteinds(a, 0);
+    let a_sites_1 = read_siteinds(a, 1);
+    let b_sites_0 = read_siteinds(b, 0);
+    let b_sites_1 = read_siteinds(b, 1);
+
+    let diagonal_left = [
+        a_sites_0[0] as *const t4a_index,
+        a_sites_1[0] as *const t4a_index,
+    ];
+    let diagonal_right = [
+        b_sites_0[0] as *const t4a_index,
+        b_sites_1[0] as *const t4a_index,
+    ];
+    let output_order = diagonal_left;
+
+    let mut out = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_partial_contract(
+            a,
+            b,
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+            diagonal_left.len(),
+            diagonal_left.as_ptr(),
+            diagonal_right.as_ptr(),
+            output_order.len(),
+            output_order.as_ptr(),
+            0,
+            t4a_contract_method::Zipup,
+            std::ptr::null(),
+            0,
+            0,
+            0.0,
+            t4a_factorize_alg::SVD,
+            0.0,
+            &mut out,
+        ),
+        T4A_SUCCESS
+    );
+
+    assert_vec_close(&read_dense_f64_treetn(out), &[1.0, 4.0, 9.0, 16.0], 1e-12);
+
+    t4a_treetn_release(out);
+    for index in a_sites_0
+        .into_iter()
+        .chain(a_sites_1)
+        .chain(b_sites_0)
+        .chain(b_sites_1)
+    {
+        t4a_index_release(index);
+    }
+    cleanup(a, a_tensors, a_indices);
+    cleanup(b, b_tensors, b_indices);
+}
+
+#[test]
 fn test_treetn_contract_fit_zero_sweeps_uses_backend_default() {
     let ((a, a_tensors, a_indices), (b, b_tensors, b_indices)) = make_two_site_contract_operands();
 
