@@ -7,14 +7,27 @@ license.workspace = true
 repository.workspace = true
 description = "C API for tensor4all (Rust) core types"
 
+[features]
+default = ["tenferro-cpu-faer"]
+tenferro-cpu-faer = [
+    "tensor4all-core/tenferro-cpu-faer",
+    "tensor4all-quanticstransform/tenferro-cpu-faer",
+    "tensor4all-treetn/tenferro-cpu-faer",
+]
+tenferro-provider-inject = [
+    "tensor4all-core/tenferro-provider-inject",
+    "tensor4all-quanticstransform/tenferro-provider-inject",
+    "tensor4all-treetn/tenferro-provider-inject",
+]
+
 [lib]
 name = "tensor4all_capi"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-tensor4all-core = { path = "../tensor4all-core" }
-tensor4all-treetn = { path = "../tensor4all-treetn" }
-tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform" }
+tensor4all-core = { path = "../tensor4all-core", default-features = false }
+tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
+tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform", default-features = false }
 libc.workspace = true
 paste.workspace = true
 num-complex.workspace = true

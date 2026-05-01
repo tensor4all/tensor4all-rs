@@ -95,7 +95,7 @@ fn build_function_qtt(target_fn: fn(f64) -> f64) -> Result<QttDemoOutput, Box<dy
     let options = QtciOptions::default()
         .with_tolerance(FUNCTION_TOLERANCE)
         .with_maxbonddim(FUNCTION_MAX_BOND_DIM)
-        .with_nrandominitpivot(3)
+        .with_nrandominitpivot(0)
         .with_unfoldingscheme(UnfoldingScheme::Interleaved)
         .with_verbosity(0);
 
@@ -104,8 +104,17 @@ fn build_function_qtt(target_fn: fn(f64) -> f64) -> Result<QttDemoOutput, Box<dy
         target_fn(x)
     };
 
+    let initial_pivots = vec![
+        vec![1],
+        vec![(FUNCTION_NPOINTS / 2) as i64],
+        vec![FUNCTION_NPOINTS as i64],
+    ];
+
     Ok(quanticscrossinterpolate_discrete(
-        &sizes, callback, None, options,
+        &sizes,
+        callback,
+        Some(initial_pivots),
+        options,
     )?)
 }
 
@@ -701,11 +710,19 @@ fn qtt_elementwise_product_demo_tracks_the_pointwise_product() -> Result<(), Box
         .iter()
         .map(|sample| sample.abs_error_compressed)
         .fold(0.0_f64, f64::max);
+    let max_raw_vs_factor_error = samples
+        .iter()
+        .map(|sample| (sample.cosh_qtt * sample.factor_b_qtt - sample.product_raw).abs())
+        .fold(0.0_f64, f64::max);
 
     assert!(!cosh_ranks.is_empty());
     assert!(!factor_b_ranks.is_empty());
     assert!(!cosh_errors.is_empty());
     assert!(!factor_b_errors.is_empty());
+    assert!(
+        max_raw_vs_factor_error < 1e-12,
+        "raw TreeTN product differs from QTT factor product: {max_raw_vs_factor_error}"
+    );
     assert!(
         max_raw_error < 1e-14,
         "raw TreeTN product error was too large: {max_raw_error}"

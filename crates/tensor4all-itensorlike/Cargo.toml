@@ -10,9 +10,20 @@ readme = "README.md"
 keywords = ["tensor", "itensor", "tensor-network"]
 categories = ["science", "mathematics"]
 
+[features]
+default = ["tenferro-cpu-faer"]
+tenferro-cpu-faer = [
+    "tensor4all-core/tenferro-cpu-faer",
+    "tensor4all-treetn/tenferro-cpu-faer",
+]
+tenferro-provider-inject = [
+    "tensor4all-core/tenferro-provider-inject",
+    "tensor4all-treetn/tenferro-provider-inject",
+]
+
 [dependencies]
-tensor4all-core = { path = "../tensor4all-core" }
-tensor4all-treetn = { path = "../tensor4all-treetn" }
+tensor4all-core = { path = "../tensor4all-core", default-features = false }
+tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 num-complex.workspace = true
 thiserror.workspace = true
 petgraph.workspace = true
@@ -21,4 +32,4 @@ anyhow.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
-tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend" }
+tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false, features = ["tenferro-cpu-faer"] }

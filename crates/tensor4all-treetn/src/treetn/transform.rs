@@ -763,7 +763,7 @@ where
                 canonical: Canonical::Left,
                 max_rank: None,
                 svd_policy: None,
-                qr_rtol: None,
+                qr_rtol: Some(0.0),
             };
 
             let factorize_result = remaining_tensor
@@ -830,7 +830,7 @@ where
                 canonical: Canonical::Left,
                 max_rank: None,
                 svd_policy: None,
-                qr_rtol: None,
+                qr_rtol: Some(0.0),
             };
 
             let factorize_result = remaining_tensor

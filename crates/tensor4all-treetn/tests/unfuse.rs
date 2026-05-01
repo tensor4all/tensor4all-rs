@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use tensor4all_core::{DynIndex, IndexLike, LinearizationOrder, TensorDynLen};
-use tensor4all_treetn::TreeTN;
+use tensor4all_treetn::{SiteIndexNetwork, TreeTN};
 
 #[test]
 fn replace_site_index_with_indices_preserves_dense_tensor_values() {
@@ -30,4 +30,39 @@ fn replace_site_index_with_indices_preserves_dense_tensor_values() {
     assert_eq!(site_indices.len(), 2);
     assert!(site_id_set.contains(left.id()));
     assert!(site_id_set.contains(right.id()));
+}
+
+#[test]
+fn split_to_preserves_sparse_tensor_with_zero_leading_qr_row() {
+    let out0 = DynIndex::new_dyn(2);
+    let out1 = DynIndex::new_dyn(2);
+    let in0 = DynIndex::new_dyn(2);
+    let in1 = DynIndex::new_dyn(2);
+
+    let mut data = vec![0.0; 16];
+    data[6] = 1.0;
+    let tensor = TensorDynLen::from_dense(
+        vec![out0.clone(), out1.clone(), in0.clone(), in1.clone()],
+        data,
+    )
+    .unwrap();
+    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
+
+    let mut target = SiteIndexNetwork::<usize, DynIndex>::new();
+    target
+        .add_node(0, HashSet::from([out0.clone(), in0.clone()]))
+        .unwrap();
+    target
+        .add_node(1, HashSet::from([out1.clone(), in1.clone()]))
+        .unwrap();
+    target.add_edge(&0, &1).unwrap();
+
+    let split = tn.split_to(&target, &Default::default()).unwrap();
+    let dense = split.contract_to_tensor().unwrap();
+    let expected = tn.contract_to_tensor().unwrap();
+
+    assert!(
+        dense.distance(&expected) < 1.0e-12,
+        "exact split_to must not drop rows when QR produces a zero leading row"
+    );
 }

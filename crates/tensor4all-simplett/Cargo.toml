@@ -12,8 +12,22 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["backend-tenferro"]
+default = ["backend-tenferro", "tenferro-cpu-faer"]
 backend-tenferro = ["tensor4all-tensorbackend/backend-tenferro"]
+tenferro-cpu-faer = [
+    "tensor4all-core/tenferro-cpu-faer",
+    "tensor4all-tcicore/tenferro-cpu-faer",
+    "tensor4all-tensorbackend/tenferro-cpu-faer",
+    "tenferro-einsum/cpu-faer",
+    "tenferro-tensor/cpu-faer",
+]
+tenferro-provider-inject = [
+    "tensor4all-core/tenferro-provider-inject",
+    "tensor4all-tcicore/tenferro-provider-inject",
+    "tensor4all-tensorbackend/tenferro-provider-inject",
+    "tenferro-einsum/cpu-blas",
+    "tenferro-tensor/provider-inject",
+]
 
 [dependencies]
 num-complex.workspace = true
@@ -22,9 +36,9 @@ anyhow.workspace = true
 thiserror.workspace = true
 rand.workspace = true
 bnum.workspace = true
-tensor4all-tcicore = { path = "../tensor4all-tcicore" }
-tensor4all-core = { path = "../tensor4all-core" }
-tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend" }
+tensor4all-tcicore = { path = "../tensor4all-tcicore", default-features = false }
+tensor4all-core = { path = "../tensor4all-core", default-features = false }
+tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 tenferro-einsum.workspace = true
 tenferro-tensor.workspace = true
 

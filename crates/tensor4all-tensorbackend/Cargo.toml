@@ -10,8 +10,10 @@ keywords = ["tensor", "storage", "backend", "linear-algebra"]
 categories = ["science", "mathematics"]
 
 [features]
-default = ["backend-tenferro"]
+default = ["backend-tenferro", "tenferro-cpu-faer"]
 backend-tenferro = []
+tenferro-cpu-faer = ["tenferro/cpu-faer"]
+tenferro-provider-inject = ["tenferro/cpu-blas", "tenferro-tensor/provider-inject"]
 einsum-dispatch-profile = []
 
 [dependencies]
