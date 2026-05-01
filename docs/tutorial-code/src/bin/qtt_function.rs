@@ -95,12 +95,12 @@ where
     let sizes = [NPOINTS];
 
     // The options below mirror the notebook-style workflow: a tight tolerance,
-    // a reasonable maximum bond dimension, and a small number of random initial
-    // pivots to stabilize interpolation.
+    // a reasonable maximum bond dimension, and deterministic initial pivots so
+    // tutorial smoke tests are reproducible.
     let options = QtciOptions::default()
         .with_tolerance(TOLERANCE)
         .with_maxbonddim(MAX_BOND_DIM)
-        .with_nrandominitpivot(3)
+        .with_nrandominitpivot(0)
         .with_unfoldingscheme(UnfoldingScheme::Interleaved)
         .with_verbosity(0);
 
@@ -111,7 +111,14 @@ where
         target_fn(x)
     };
 
-    Ok(quanticscrossinterpolate_discrete(&sizes, f, None, options)?)
+    let initial_pivots = vec![vec![2], vec![(NPOINTS / 2) as i64], vec![NPOINTS as i64]];
+
+    Ok(quanticscrossinterpolate_discrete(
+        &sizes,
+        f,
+        Some(initial_pivots),
+        options,
+    )?)
 }
 
 /// Default target function used by the demo.
