@@ -15,7 +15,7 @@ use tensor4all_quanticstci::{
 use tensor4all_tutorial_code::output_paths;
 use tensor4all_tutorial_code::qtt_multivariate_common::{
     collect_bond_dims, collect_samples, print_summary, write_bond_dims_csv, write_samples_csv,
-    LayoutSummary, MultivariateTutorialConfig, DEFAULT_MULTIVARIATE_CONFIG, N_RANDOM_INIT_PIVOT,
+    LayoutSummary, MultivariateTutorialConfig, DEFAULT_MULTIVARIATE_CONFIG,
 };
 
 const BITS_ENV: &str = "QTT_MULTIVARIATE_BITS";
@@ -89,18 +89,28 @@ fn main() -> Result<(), Box<dyn Error>> {
         .with_tolerance(config.tolerance)
         .with_maxbonddim(config.maxbonddim)
         .with_maxiter(config.maxiter)
-        .with_nrandominitpivot(N_RANDOM_INIT_PIVOT)
+        .with_nrandominitpivot(0)
         .with_verbosity(0);
 
     // `quanticscrossinterpolate` receives physical coordinates from the grid.
     let target = |coords: &[f64]| -> f64 { multivariate_target(coords[0], coords[1]) };
+    let npoints = 1_i64 << config.bits;
+    let initial_pivots = vec![
+        vec![1, 1],
+        vec![npoints / 2, npoints / 2],
+        vec![npoints, npoints],
+    ];
 
     // Build two QTT approximations of the same physical function using different layouts.
-    let (interleaved, interleaved_ranks, interleaved_errors) =
-        quanticscrossinterpolate(&interleaved_grid, target, None, options.clone())?;
+    let (interleaved, interleaved_ranks, interleaved_errors) = quanticscrossinterpolate(
+        &interleaved_grid,
+        target,
+        Some(initial_pivots.clone()),
+        options.clone(),
+    )?;
 
     let (grouped, grouped_ranks, grouped_errors) =
-        quanticscrossinterpolate(&grouped_grid, target, None, options)?;
+        quanticscrossinterpolate(&grouped_grid, target, Some(initial_pivots), options)?;
 
     // Reconstruct both QTTs on the full Cartesian grid for heatmaps and error plots.
     let samples = collect_samples(&interleaved, &grouped, multivariate_target)?;

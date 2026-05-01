@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .with_tolerance(config.tolerance)
         .with_maxbonddim(config.maxbonddim)
         .with_maxiter(config.maxiter)
-        .with_nrandominitpivot(5)
+        .with_nrandominitpivot(0)
         .with_unfoldingscheme(UnfoldingScheme::Fused)
         .with_verbosity(0);
 
@@ -41,8 +41,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         let v = (grid_1based[1] - 1) as usize;
         source_function(u, v, n)
     };
-    let (source, _ranks, _errors) =
-        quanticscrossinterpolate_discrete(&source_grid, source_callback, None, source_options)?;
+    let initial_pivots = vec![
+        vec![1, 1],
+        vec![(n / 2) as i64, (n / 2) as i64],
+        vec![n as i64, n as i64],
+    ];
+    let (source, _ranks, _errors) = quanticscrossinterpolate_discrete(
+        &source_grid,
+        source_callback,
+        Some(initial_pivots),
+        source_options,
+    )?;
 
     // `AffineParams::from_integers(...)` encodes the affine map used in the tutorial.
     let affine_params = AffineParams::from_integers(vec![1, 0, 1, 1], vec![0, 0], 2, 2)?;

@@ -75,8 +75,6 @@ pub type AffineTransformOutput = (TreeTN<TensorDynLen, usize>, Vec<SiteIndex>);
 /// Result of building the source QTT.
 pub type AffineQttOutput = (QuanticsTensorCI2<f64>, Vec<usize>, Vec<f64>);
 
-const N_RANDOM_INIT_PIVOT: usize = 5;
-
 /// Number of grid points per direction.
 pub fn point_count(bits: usize) -> usize {
     1usize << bits
@@ -115,7 +113,7 @@ pub fn build_source_qtt(config: &AffineTutorialConfig) -> Result<AffineQttOutput
         .with_tolerance(config.tolerance)
         .with_maxbonddim(config.maxbonddim)
         .with_maxiter(config.maxiter)
-        .with_nrandominitpivot(N_RANDOM_INIT_PIVOT)
+        .with_nrandominitpivot(0)
         .with_unfoldingscheme(UnfoldingScheme::Fused)
         .with_verbosity(0);
 
@@ -125,8 +123,17 @@ pub fn build_source_qtt(config: &AffineTutorialConfig) -> Result<AffineQttOutput
         source_function(u, v, n)
     };
 
+    let initial_pivots = vec![
+        vec![1, 1],
+        vec![(n / 2) as i64, (n / 2) as i64],
+        vec![n as i64, n as i64],
+    ];
+
     Ok(quanticscrossinterpolate_discrete(
-        &sizes, callback, None, options,
+        &sizes,
+        callback,
+        Some(initial_pivots),
+        options,
     )?)
 }
 

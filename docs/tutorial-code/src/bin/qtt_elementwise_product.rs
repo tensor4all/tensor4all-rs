@@ -232,7 +232,7 @@ where
     let options = QtciOptions::default()
         .with_tolerance(TOLERANCE)
         .with_maxbonddim(MAX_BOND_DIM)
-        .with_nrandominitpivot(3)
+        .with_nrandominitpivot(0)
         .with_unfoldingscheme(UnfoldingScheme::Interleaved)
         .with_verbosity(0);
 
@@ -243,8 +243,13 @@ where
         target_fn(x)
     };
 
+    let initial_pivots = vec![vec![2], vec![(NPOINTS / 2) as i64], vec![NPOINTS as i64]];
+
     Ok(quanticscrossinterpolate_discrete(
-        &sizes, callback, None, options,
+        &sizes,
+        callback,
+        Some(initial_pivots),
+        options,
     )?)
 }
 

@@ -45,8 +45,6 @@ pub fn point_count(config: &MultivariateTutorialConfig) -> usize {
     1usize << config.bits
 }
 
-pub const N_RANDOM_INIT_PIVOT: usize = 5;
-
 /// Build the two-dimensional discretized grid used by the tutorial.
 pub fn build_multivariate_grid(
     config: &MultivariateTutorialConfig,
@@ -73,11 +71,23 @@ where
         .with_tolerance(config.tolerance)
         .with_maxbonddim(config.maxbonddim)
         .with_maxiter(config.maxiter)
-        .with_nrandominitpivot(N_RANDOM_INIT_PIVOT)
+        .with_nrandominitpivot(0)
         .with_verbosity(0);
 
     let f = move |coords: &[f64]| -> f64 { target_fn(coords[0], coords[1]) };
-    Ok(quanticscrossinterpolate(grid, f, None, options)?)
+    let npoints = point_count(config) as i64;
+    let initial_pivots = vec![
+        vec![1, 1],
+        vec![npoints / 2, npoints / 2],
+        vec![npoints, npoints],
+    ];
+
+    Ok(quanticscrossinterpolate(
+        grid,
+        f,
+        Some(initial_pivots),
+        options,
+    )?)
 }
 
 /// One sample row in the exported dense table.

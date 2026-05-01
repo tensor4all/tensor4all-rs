@@ -63,7 +63,7 @@ pub fn build_interval_grid(
 pub fn build_interval_qtt<F>(
     grid: &DiscretizedGrid,
     target_fn: F,
-    _config: &IntervalTutorialConfig,
+    config: &IntervalTutorialConfig,
 ) -> Result<IntervalQttOutput, Box<dyn Error>>
 where
     F: Fn(f64) -> f64 + 'static,
@@ -71,11 +71,18 @@ where
     let options = QtciOptions::default()
         .with_tolerance(TOLERANCE)
         .with_maxbonddim(MAX_BOND_DIM)
-        .with_nrandominitpivot(3)
+        .with_nrandominitpivot(0)
         .with_unfoldingscheme(UnfoldingScheme::Interleaved)
         .with_verbosity(0);
 
     let f = move |coords: &[f64]| -> f64 { target_fn(coords[0]) };
+    let npoints = 1_i64 << config.bits;
+    let initial_pivots = vec![vec![1], vec![npoints / 2], vec![npoints]];
 
-    Ok(quanticscrossinterpolate(grid, f, None, options)?)
+    Ok(quanticscrossinterpolate(
+        grid,
+        f,
+        Some(initial_pivots),
+        options,
+    )?)
 }

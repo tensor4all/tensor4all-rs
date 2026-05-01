@@ -45,7 +45,6 @@ pub const DEFAULT_FOURIER_CONFIG: FourierTutorialConfig = FourierTutorialConfig 
     maxbonddim: 32,
 };
 
-const N_RANDOM_INIT_PIVOT: usize = 3;
 /// QTT construction result returned by the Fourier helper.
 pub type FourierQttOutput = (QuanticsTensorCI2<f64>, Vec<usize>, Vec<f64>);
 /// Transformed Fourier state and the site indices needed for evaluation.
@@ -111,12 +110,20 @@ pub fn build_gaussian_qtt(
     let options = QtciOptions::default()
         .with_tolerance(config.tolerance)
         .with_maxbonddim(config.maxbonddim)
-        .with_nrandominitpivot(N_RANDOM_INIT_PIVOT)
+        .with_nrandominitpivot(0)
         .with_unfoldingscheme(UnfoldingScheme::Interleaved)
         .with_verbosity(0);
 
     let f = |coords: &[f64]| -> f64 { gaussian_target(coords[0]) };
-    Ok(quanticscrossinterpolate(grid, f, None, options)?)
+    let npoints = 1_i64 << config.bits;
+    let initial_pivots = vec![vec![1], vec![npoints / 2], vec![npoints]];
+
+    Ok(quanticscrossinterpolate(
+        grid,
+        f,
+        Some(initial_pivots),
+        options,
+    )?)
 }
 
 /// Build the quantics Fourier operator.

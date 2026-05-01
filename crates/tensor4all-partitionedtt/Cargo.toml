@@ -7,13 +7,24 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["tenferro-cpu-faer"]
+tenferro-cpu-faer = [
+    "tensor4all-core/tenferro-cpu-faer",
+    "tensor4all-itensorlike/tenferro-cpu-faer",
+]
+tenferro-provider-inject = [
+    "tensor4all-core/tenferro-provider-inject",
+    "tensor4all-itensorlike/tenferro-provider-inject",
+]
+
 [dependencies]
 num-complex.workspace = true
 num-traits.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
-tensor4all-core = { path = "../tensor4all-core" }
-tensor4all-itensorlike = { path = "../tensor4all-itensorlike" }
+tensor4all-core = { path = "../tensor4all-core", default-features = false }
+tensor4all-itensorlike = { path = "../tensor4all-itensorlike", default-features = false }
 
 [dev-dependencies]
 approx.workspace = true

@@ -14,10 +14,23 @@ license.workspace = true
 repository.workspace = true
 description = "Quantics transformation operators for tensor train methods"
 
+[features]
+default = ["tenferro-cpu-faer"]
+tenferro-cpu-faer = [
+    "tensor4all-core/tenferro-cpu-faer",
+    "tensor4all-simplett/tenferro-cpu-faer",
+    "tensor4all-treetn/tenferro-cpu-faer",
+]
+tenferro-provider-inject = [
+    "tensor4all-core/tenferro-provider-inject",
+    "tensor4all-simplett/tenferro-provider-inject",
+    "tensor4all-treetn/tenferro-provider-inject",
+]
+
 [dependencies]
-tensor4all-treetn = { path = "../tensor4all-treetn" }
-tensor4all-core = { path = "../tensor4all-core" }
-tensor4all-simplett = { path = "../tensor4all-simplett" }
+tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
+tensor4all-core = { path = "../tensor4all-core", default-features = false }
+tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
 quanticsgrids.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true

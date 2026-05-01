@@ -11,12 +11,29 @@ license.workspace = true
 repository.workspace = true
 description = "High-level Quantics TCI interface for function interpolation"
 
+[features]
+default = ["tenferro-cpu-faer"]
+tenferro-cpu-faer = [
+    "tensor4all-core/tenferro-cpu-faer",
+    "tensor4all-simplett/tenferro-cpu-faer",
+    "tensor4all-tcicore/tenferro-cpu-faer",
+    "tensor4all-treetci/tenferro-cpu-faer",
+    "tensor4all-treetn/tenferro-cpu-faer",
+]
+tenferro-provider-inject = [
+    "tensor4all-core/tenferro-provider-inject",
+    "tensor4all-simplett/tenferro-provider-inject",
+    "tensor4all-tcicore/tenferro-provider-inject",
+    "tensor4all-treetci/tenferro-provider-inject",
+    "tensor4all-treetn/tenferro-provider-inject",
+]
+
 [dependencies]
-tensor4all-tcicore = { path = "../tensor4all-tcicore" }
-tensor4all-treetci = { path = "../tensor4all-treetci" }
-tensor4all-simplett = { path = "../tensor4all-simplett" }
-tensor4all-core = { path = "../tensor4all-core" }
-tensor4all-treetn = { path = "../tensor4all-treetn" }
+tensor4all-tcicore = { path = "../tensor4all-tcicore", default-features = false }
+tensor4all-treetci = { path = "../tensor4all-treetci", default-features = false }
+tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
+tensor4all-core = { path = "../tensor4all-core", default-features = false }
+tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 quanticsgrids.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
@@ -25,4 +42,4 @@ rand.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
-tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform" }
+tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-faer"] }
