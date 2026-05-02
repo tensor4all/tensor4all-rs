@@ -821,6 +821,12 @@ pub struct ContractionOptions {
     pub convergence_tol: Option<f64>,
     /// Factorization algorithm for Fit method.
     pub factorize_alg: FactorizeAlg,
+    /// Maximum dense elements allowed for explicit mismatched-topology
+    /// reference fallback in `partial_contract`.
+    ///
+    /// `None` rejects the fallback. Set this only for small reference/debug
+    /// cases where full dense materialization is expected and bounded.
+    pub mismatched_topology_dense_limit: Option<usize>,
 }
 
 impl Default for ContractionOptions {
@@ -833,6 +839,7 @@ impl Default for ContractionOptions {
             nfullsweeps: 1,
             convergence_tol: None,
             factorize_alg: FactorizeAlg::default(),
+            mismatched_topology_dense_limit: None,
         }
     }
 }
@@ -889,6 +896,31 @@ impl ContractionOptions {
     /// Set factorization algorithm for Fit method.
     pub fn with_factorize_alg(mut self, alg: FactorizeAlg) -> Self {
         self.factorize_alg = alg;
+        self
+    }
+
+    /// Allow `partial_contract` to use its mismatched-topology dense reference
+    /// fallback up to `max_elements` elements.
+    ///
+    /// # Arguments
+    /// * `max_elements` - Maximum number of elements allowed in each dense
+    ///   intermediate and in the dense contracted result. Typical values should
+    ///   remain small and test-sized.
+    ///
+    /// # Returns
+    /// Updated options with the dense/reference fallback limit enabled.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::ContractionOptions;
+    ///
+    /// let options = ContractionOptions::default()
+    ///     .with_mismatched_topology_dense_limit(1024);
+    /// assert_eq!(options.mismatched_topology_dense_limit, Some(1024));
+    /// ```
+    pub fn with_mismatched_topology_dense_limit(mut self, max_elements: usize) -> Self {
+        self.mismatched_topology_dense_limit = Some(max_elements);
         self
     }
 }

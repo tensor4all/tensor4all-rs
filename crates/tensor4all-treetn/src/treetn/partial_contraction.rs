@@ -289,6 +289,87 @@ where
     Ok(TreeTopology::new(nodes, union_edges))
 }
 
+fn validate_mismatched_union_topology<V>(
+    a: &TreeTN<TensorDynLen, V>,
+    b: &TreeTN<TensorDynLen, V>,
+) -> Result<()>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+{
+    let node_names = compatible_union_node_names(a, b);
+    let mut union_edges = sorted_edge_set(a);
+    union_edges.extend(sorted_edge_set(b));
+    union_edges.sort();
+    union_edges.dedup();
+    validate_union_topology(&node_names, &union_edges)
+}
+
+fn dense_element_count(indices: &[DynIndex]) -> Result<usize> {
+    indices.iter().try_fold(1usize, |acc, index| {
+        acc.checked_mul(index.dim()).ok_or_else(|| {
+            anyhow!(
+                "partial_contract: dense/reference element count overflowed for mismatched-topology fallback"
+            )
+        })
+    })
+}
+
+fn dense_contract_output_indices(a_indices: &[DynIndex], b_indices: &[DynIndex]) -> Vec<DynIndex> {
+    let mut b_remaining = b_indices.to_vec();
+    let mut output = Vec::new();
+
+    for idx_a in a_indices {
+        if let Some(position) = b_remaining
+            .iter()
+            .position(|idx_b| idx_a.is_contractable(idx_b))
+        {
+            b_remaining.remove(position);
+        } else {
+            output.push(idx_a.clone());
+        }
+    }
+
+    output.extend(b_remaining);
+    output
+}
+
+fn ensure_dense_reference_limit(
+    label: &str,
+    indices: &[DynIndex],
+    max_elements: usize,
+) -> Result<()> {
+    let elements = dense_element_count(indices)?;
+    if elements > max_elements {
+        bail!(
+            "partial_contract: mismatched-topology dense/reference fallback would materialize {label} with {elements} elements, exceeding limit {max_elements}"
+        );
+    }
+    Ok(())
+}
+
+fn validate_mismatched_dense_reference_fallback<V>(
+    a: &TreeTN<TensorDynLen, V>,
+    b: &TreeTN<TensorDynLen, V>,
+    options: &ContractionOptions,
+) -> Result<()>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+{
+    let Some(max_elements) = options.mismatched_topology_dense_limit else {
+        bail!(
+            "partial_contract: mismatched topologies require an explicit dense/reference limit; call ContractionOptions::with_mismatched_topology_dense_limit(max_elements) for small reference cases"
+        );
+    };
+
+    let a_external = a.external_indices();
+    let b_external = b.external_indices();
+    let output = dense_contract_output_indices(&a_external, &b_external);
+
+    ensure_dense_reference_limit("first TreeTN", &a_external, max_elements)?;
+    ensure_dense_reference_limit("second TreeTN", &b_external, max_elements)?;
+    ensure_dense_reference_limit("contracted result", &output, max_elements)
+}
+
 fn contract_mismatched_topologies<V>(
     a: &TreeTN<TensorDynLen, V>,
     b: &TreeTN<TensorDynLen, V>,
@@ -299,6 +380,9 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
 {
+    validate_mismatched_union_topology(a, b)?;
+    validate_mismatched_dense_reference_fallback(a, b, &options)?;
+
     let a_dense = a
         .sim_internal_inds()
         .contract_to_tensor()
