@@ -1,4 +1,5 @@
 use crate::smallstring::{SmallChar, SmallString, SmallStringError};
+use std::cmp::Ordering;
 
 /// Trait for tag set implementations.
 ///
@@ -362,9 +363,145 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar> std::hash::H
     }
 }
 
+/// A sorted tag set backed by owned strings.
+///
+/// Use this when tags must be preserved losslessly across language boundaries
+/// or when a fixed inline string capacity would reject valid user-facing tags.
+/// Tags are sorted, duplicate insertion is a no-op, and commas are rejected
+/// because comma is the textual separator used by [`TagSetLike::from_str`].
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::tagset::{DynamicTagSet, TagSetLike};
+///
+/// let mut tags = DynamicTagSet::from_str("Site3_Site4_Site5,Link")?;
+/// tags.add_tag("LongDescriptiveTagName")?;
+///
+/// assert!(tags.has_tag("Site3_Site4_Site5"));
+/// assert!(tags.has_tag("LongDescriptiveTagName"));
+/// assert_eq!(tags.len(), 3);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct DynamicTagSet {
+    tags: Vec<String>,
+}
+
+impl DynamicTagSet {
+    /// Create an empty dynamic tag set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::tagset::{DynamicTagSet, TagSetLike};
+    ///
+    /// let tags = DynamicTagSet::new();
+    /// assert!(tags.is_empty());
+    /// assert_eq!(tags.capacity(), usize::MAX);
+    /// ```
+    pub fn new() -> Self {
+        Self { tags: Vec::new() }
+    }
+
+    /// Create a dynamic tag set from a comma-separated string.
+    ///
+    /// ASCII spaces are ignored, matching [`TagSetLike::from_str`].
+    ///
+    /// # Errors
+    /// Returns an error if a parsed tag violates dynamic tag-set rules.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::tagset::{DynamicTagSet, TagSetLike};
+    ///
+    /// let tags = DynamicTagSet::from_str("Site3_Site4_Site5, Link")?;
+    /// assert!(tags.has_tag("Site3_Site4_Site5"));
+    /// assert!(tags.has_tag("Link"));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Result<Self, TagSetError> {
+        <Self as TagSetLike>::from_str(s)
+    }
+}
+
+impl TagSetLike for DynamicTagSet {
+    fn len(&self) -> usize {
+        self.tags.len()
+    }
+
+    fn capacity(&self) -> usize {
+        usize::MAX
+    }
+
+    fn get(&self, index: usize) -> Option<String> {
+        self.tags.get(index).cloned()
+    }
+
+    fn iter(&self) -> TagSetIterator<'_> {
+        Box::new(self.tags.iter().cloned())
+    }
+
+    fn has_tag(&self, tag: &str) -> bool {
+        self.tags
+            .binary_search_by(|existing| existing.as_str().cmp(tag))
+            .is_ok()
+    }
+
+    fn add_tag(&mut self, tag: &str) -> Result<(), TagSetError> {
+        if tag.contains(',') {
+            return Err(TagSetError::TagContainsComma {
+                tag: tag.to_string(),
+            });
+        }
+
+        match self
+            .tags
+            .binary_search_by(|existing| existing.as_str().cmp(tag))
+        {
+            Ok(_) => Ok(()),
+            Err(position) => {
+                self.tags.insert(position, tag.to_string());
+                Ok(())
+            }
+        }
+    }
+
+    fn remove_tag(&mut self, tag: &str) -> bool {
+        match self
+            .tags
+            .binary_search_by(|existing| existing.as_str().cmp(tag))
+        {
+            Ok(position) => {
+                self.tags.remove(position);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+impl PartialOrd for DynamicTagSet {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DynamicTagSet {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.tags.cmp(&other.tags)
+    }
+}
+
 /// Default tag type (max 16 characters, u16 storage, matching ITensors.jl's `SmallString`).
 pub type Tag = SmallString<16>;
 
-/// Inline TagSet with fixed capacity (used internally by Arc-wrapped TagSet).
-/// For public API, use `tensor4all_core::TagSet` (Arc-wrapped) instead.
-pub type DefaultTagSet = TagSet<4, 16>;
+/// Default tag set for public dynamic indices.
+///
+/// This is string-backed so FFI and language bindings preserve descriptive
+/// tags losslessly instead of truncating or rejecting tags that exceed the
+/// fixed inline [`Tag`] capacity. Use [`TagSet`] directly when a fixed inline
+/// capacity is required.
+pub type DefaultTagSet = DynamicTagSet;

@@ -67,7 +67,7 @@ fn test_tagset_wrapper_trait_methods() {
     assert!(tags.is_empty());
     assert_eq!(std::sync::Arc::strong_count(tags.inner()), 1);
     assert_eq!(TagSetLike::len(&tags), 0);
-    assert_eq!(TagSetLike::capacity(&tags), 4);
+    assert_eq!(TagSetLike::capacity(&tags), usize::MAX);
     assert_eq!(TagSetLike::get(&tags, 0), None);
 
     TagSetLike::add_tag(&mut tags, "Site").unwrap();

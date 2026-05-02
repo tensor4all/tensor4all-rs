@@ -145,6 +145,25 @@ fn test_index_tags_roundtrip_and_has_tag() {
 }
 
 #[test]
+fn test_index_accepts_long_tags_losslessly() {
+    let long_tag = "Site3_Site4_Site5";
+    let index = new_index(2, Some(long_tag), 0);
+
+    let tags = read_tags(index);
+    assert_eq!(tags, [long_tag.to_string()].into_iter().collect());
+
+    let long_tag_c = CString::new(long_tag).unwrap();
+    let mut has_tag = -1i32;
+    assert_eq!(
+        t4a_index_has_tag(index, long_tag_c.as_ptr(), &mut has_tag),
+        T4A_SUCCESS
+    );
+    assert_eq!(has_tag, 1);
+
+    t4a_index_release(index);
+}
+
+#[test]
 fn test_index_clone_preserves_metadata() {
     let index = new_index(5, Some("Left,Link"), 9);
 

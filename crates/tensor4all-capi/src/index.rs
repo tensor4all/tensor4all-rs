@@ -12,7 +12,7 @@ use crate::{
     T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
 };
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::IndexLike;
+use tensor4all_core::{IndexLike, TagSetLike};
 
 /// Release an index handle.
 #[unsafe(no_mangle)]

@@ -1,5 +1,5 @@
 use tensor4all_core::smallstring::{SmallString, SmallStringError};
-use tensor4all_core::tagset::{DefaultTagSet, Tag, TagSet, TagSetError, TagSetLike};
+use tensor4all_core::tagset::{DefaultTagSet, DynamicTagSet, Tag, TagSet, TagSetError, TagSetLike};
 
 #[test]
 fn test_smallstring_new() {
@@ -178,8 +178,23 @@ fn test_default_types() {
     let tag: Tag = SmallString::<16>::from_str("test").unwrap();
     assert_eq!(tag.as_str(), "test");
 
-    let ts: DefaultTagSet = TagSet::<4, 16>::from_str("t1,t2").unwrap();
+    let ts: DefaultTagSet = DynamicTagSet::from_str("t1,t2").unwrap();
     assert_eq!(ts.len(), 2);
+}
+
+#[test]
+fn test_dynamic_tagset_preserves_long_tags() {
+    let long_tag = "Site3_Site4_Site5";
+    let mut tags = DynamicTagSet::from_str(long_tag).unwrap();
+    tags.add_tag("Link").unwrap();
+
+    assert_eq!(tags.capacity(), usize::MAX);
+    assert!(tags.has_tag(long_tag));
+    assert!(tags.has_tag("Link"));
+    assert_eq!(
+        TagSetLike::iter(&tags).collect::<Vec<_>>(),
+        vec!["Link".to_string(), long_tag.to_string()]
+    );
 }
 
 #[test]

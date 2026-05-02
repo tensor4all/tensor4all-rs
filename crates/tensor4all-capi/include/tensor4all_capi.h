@@ -371,12 +371,12 @@ typedef struct t4a_svd_truncation_policy {
 #define T4A_SUCCESS 0
 
 /**
- * Too many tags would be added to a TagSet (exceeds maximum).
+ * Too many tags would be added to a fixed-capacity tag set.
  */
 #define T4A_TAG_OVERFLOW -3
 
 /**
- * A tag string exceeds the maximum allowed length.
+ * A tag string exceeds a fixed-capacity tag storage limit.
  */
 #define T4A_TAG_TOO_LONG -4
 
@@ -419,11 +419,17 @@ StatusCode t4a_index_id(const struct t4a_index *ptr, uint64_t *out_id);
 
 /**
  * Create a new index with explicit tags and prime level.
+ *
+ * Tags are provided as a comma-separated UTF-8 string and are preserved
+ * losslessly by the default dynamic index tag storage.
  */
 StatusCode t4a_index_new(size_t dim, const char *tags_csv, int64_t plev, struct t4a_index **out);
 
 /**
  * Create a new index with explicit identity, tags, and prime level.
+ *
+ * Tags are provided as a comma-separated UTF-8 string and are preserved
+ * losslessly by the default dynamic index tag storage.
  */
 StatusCode t4a_index_new_with_id(size_t dim,
                                  uint64_t id,
