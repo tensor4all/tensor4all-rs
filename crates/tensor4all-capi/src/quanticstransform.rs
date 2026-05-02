@@ -139,11 +139,25 @@ impl SourceSite {
     }
 }
 
-fn require_layout<'a>(layout: *const t4a_qtt_layout) -> CapiResult<&'a InternalQttLayout> {
+fn require_layout_or_status<'a>(
+    layout: *const t4a_qtt_layout,
+) -> std::result::Result<&'a InternalQttLayout, StatusCode> {
     if layout.is_null() {
-        return Err(capi_error(T4A_NULL_POINTER, "layout is null"));
+        set_last_error("layout is null");
+        return Err(T4A_NULL_POINTER);
     }
     Ok(unsafe { (&*layout).inner() })
+}
+
+macro_rules! require_layout_or_return {
+    ($layout:expr) => {{
+        match require_layout_or_status($layout) {
+            Ok(layout) => layout,
+            Err(code) => {
+                return code;
+            }
+        }
+    }};
 }
 
 fn bit_dim(bits: usize, what: &str) -> CapiResult<usize> {
@@ -532,13 +546,7 @@ pub extern "C" fn t4a_qtransform_shift_materialize(
     bc: t4a_boundary_condition,
     out: *mut *mut t4a_treetn,
 ) -> StatusCode {
-    let layout_ref = match require_layout(layout) {
-        Ok(layout) => layout,
-        Err((code, msg)) => {
-            set_last_error(&msg);
-            return code;
-        }
-    };
+    let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
         if target_var >= layout_ref.nvariables() {
@@ -563,13 +571,7 @@ pub extern "C" fn t4a_qtransform_flip_materialize(
     bc: t4a_boundary_condition,
     out: *mut *mut t4a_treetn,
 ) -> StatusCode {
-    let layout_ref = match require_layout(layout) {
-        Ok(layout) => layout,
-        Err((code, msg)) => {
-            set_last_error(&msg);
-            return code;
-        }
-    };
+    let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
         if target_var >= layout_ref.nvariables() {
@@ -594,13 +596,7 @@ pub extern "C" fn t4a_qtransform_phase_rotation_materialize(
     theta: f64,
     out: *mut *mut t4a_treetn,
 ) -> StatusCode {
-    let layout_ref = match require_layout(layout) {
-        Ok(layout) => layout,
-        Err((code, msg)) => {
-            set_last_error(&msg);
-            return code;
-        }
-    };
+    let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
         if target_var >= layout_ref.nvariables() {
@@ -624,13 +620,7 @@ pub extern "C" fn t4a_qtransform_cumsum_materialize(
     target_var: usize,
     out: *mut *mut t4a_treetn,
 ) -> StatusCode {
-    let layout_ref = match require_layout(layout) {
-        Ok(layout) => layout,
-        Err((code, msg)) => {
-            set_last_error(&msg);
-            return code;
-        }
-    };
+    let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
         if target_var >= layout_ref.nvariables() {
@@ -656,13 +646,7 @@ pub extern "C" fn t4a_qtransform_fourier_materialize(
     tolerance: f64,
     out: *mut *mut t4a_treetn,
 ) -> StatusCode {
-    let layout_ref = match require_layout(layout) {
-        Ok(layout) => layout,
-        Err((code, msg)) => {
-            set_last_error(&msg);
-            return code;
-        }
-    };
+    let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
         if target_var >= layout_ref.nvariables() {
@@ -722,13 +706,7 @@ pub extern "C" fn t4a_qtransform_affine_materialize(
     bc: *const t4a_boundary_condition,
     out: *mut *mut t4a_treetn,
 ) -> StatusCode {
-    let layout_ref = match require_layout(layout) {
-        Ok(layout) => layout,
-        Err((code, msg)) => {
-            set_last_error(&msg);
-            return code;
-        }
-    };
+    let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
         if m == 0 || n == 0 {

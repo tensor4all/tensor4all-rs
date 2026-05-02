@@ -1,5 +1,5 @@
 use super::*;
-use crate::{t4a_index, t4a_treetn_release, T4A_INVALID_ARGUMENT, T4A_SUCCESS};
+use crate::{t4a_index, t4a_treetn_release, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
 use num_complex::Complex64;
 use num_rational::Rational64;
 use tensor4all_core::{ColMajorArrayRef, TensorDynLen};
@@ -361,6 +361,19 @@ fn test_layout_and_affine_validation_errors_are_reported() {
         T4A_INVALID_ARGUMENT
     );
     assert!(last_error().contains("target_var must be smaller than nvariables"));
+
+    assert_eq!(
+        t4a_qtransform_shift_materialize(
+            std::ptr::null(),
+            0,
+            0,
+            t4a_boundary_condition::Periodic,
+            &mut op
+        ),
+        T4A_NULL_POINTER
+    );
+    let err = last_error();
+    assert!(err.contains("layout") || err.contains("null"), "{err}");
 
     let interleaved = new_layout(t4a_qtt_layout_kind::Interleaved, &resolutions);
     let a_num = [1i64];
