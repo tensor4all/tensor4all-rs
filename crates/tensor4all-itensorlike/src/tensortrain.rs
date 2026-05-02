@@ -657,7 +657,13 @@ impl TensorTrain {
     ///
     /// This invalidates orthogonality tracking.
     fn set_tensor_raw(&mut self, site: usize, tensor: TensorDynLen) -> Result<()> {
-        let node_idx = self.treetn.node_index(&site).expect("Site out of bounds");
+        let node_idx = self
+            .treetn
+            .node_index(&site)
+            .ok_or(TensorTrainError::SiteOutOfBounds {
+                site,
+                length: self.len(),
+            })?;
         self.treetn.replace_tensor(node_idx, tensor).map_err(|e| {
             TensorTrainError::InvalidStructure {
                 message: format!("Failed to replace tensor at site {}: {}", site, e),
@@ -669,12 +675,45 @@ impl TensorTrain {
     /// Replace the tensor at the given site.
     ///
     /// This invalidates orthogonality tracking.
-    pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen) {
-        self.set_tensor_raw(site, tensor)
-            .and_then(|()| self.normalize_site_tensor_order(site))
-            .unwrap_or_else(|e| panic!("TensorTrain::set_tensor failed: {}", e));
+    ///
+    /// # Arguments
+    ///
+    /// * `site` - The site index whose tensor should be replaced.
+    /// * `tensor` - The new tensor to store at `site`. Its structure must be
+    ///   compatible with the existing tensor-train topology.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` after the tensor is replaced and the local site tensor order is
+    /// normalized.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TensorTrainError::SiteOutOfBounds` if `site` is not a valid
+    /// tensor-train site. Returns `TensorTrainError::InvalidStructure` if the
+    /// replacement tensor cannot be inserted without violating the tensor-train
+    /// structure.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_itensorlike::TensorTrain;
+    /// use tensor4all_core::{DynId, Index, TensorDynLen};
+    ///
+    /// let site = Index::new_with_size(DynId(0), 2);
+    /// let tensor = TensorDynLen::from_dense(vec![site.clone()], vec![1.0, 0.0]).unwrap();
+    /// let replacement = TensorDynLen::from_dense(vec![site.clone()], vec![0.5, 0.5]).unwrap();
+    /// let mut tt = TensorTrain::new(vec![tensor]).unwrap();
+    ///
+    /// assert!(tt.set_tensor(0, replacement).is_ok());
+    /// assert_eq!(tt.tensor(0).to_vec::<f64>().unwrap(), vec![0.5, 0.5]);
+    /// ```
+    pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen) -> Result<()> {
+        self.set_tensor_raw(site, tensor)?;
+        self.normalize_site_tensor_order(site)?;
         // Invalidate orthogonality
         let _ = self.treetn.set_canonical_region(Vec::<usize>::new());
+        Ok(())
     }
 
     /// Orthogonalize the tensor train to have orthogonality center at the given site.
@@ -1263,11 +1302,12 @@ impl TensorLike for TensorTrain {
 
     fn conj(&self) -> Self {
         // Clone and conjugate each site tensor
-        // Note: conj() cannot return Result, so we ensure this never fails
+        // Conjugation preserves the tensor-train structure, so mutate tensors
+        // in place without changing the topology or orthogonality metadata.
         let mut result = self.clone();
         for site in 0..result.len() {
             let t = result.tensor(site).conj();
-            result.set_tensor(site, t);
+            *result.tensor_mut(site) = t;
         }
         result
     }

@@ -665,7 +665,7 @@ fn test_set_tensor_invalidates_ortho() {
 
     // Replace tensor at site 0
     let new_tensor = make_tensor(vec![s0, l01]);
-    tt.set_tensor(0, new_tensor);
+    assert!(tt.set_tensor(0, new_tensor).is_ok());
     assert!(!tt.isortho());
 }
 

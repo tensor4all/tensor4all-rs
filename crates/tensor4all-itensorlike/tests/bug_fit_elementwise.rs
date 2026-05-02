@@ -201,10 +201,10 @@ fn elementwise_mul(
             .unwrap();
 
         let t1 = as_diagonal(m1_prep.tensor(pos1), s, &s_result, &s_contract);
-        m1_prep.set_tensor(pos1, t1);
+        assert!(m1_prep.set_tensor(pos1, t1).is_ok());
 
         let t2 = as_diagonal(m2_prep.tensor(pos2), s, &s_contract, s);
-        m2_prep.set_tensor(pos2, t2);
+        assert!(m2_prep.set_tensor(pos2, t2).is_ok());
 
         maps.push((s.clone(), s_result));
     }
@@ -219,7 +219,7 @@ fn elementwise_mul(
             .unwrap();
         let t = result.tensor(pos);
         let extracted = extract_diagonal(t, original, s_result);
-        result.set_tensor(pos, extracted);
+        assert!(result.set_tensor(pos, extracted).is_ok());
     }
     result
 }
