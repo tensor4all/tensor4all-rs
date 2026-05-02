@@ -489,10 +489,24 @@ fn affine_matrix_to_dense_tensor(
 /// Assert that the MPO representation matches the direct sparse matrix computation
 /// for all elements. This is the primary correctness check: two independent algorithms
 /// (carry-based MPO vs direct enumeration) must agree.
+const AFFINE_DENSE_REFERENCE_MAX_ELEMENTS: usize = 1 << 20;
+
+fn affine_dense_reference_element_count(r: usize, m: usize, n: usize) -> Option<usize> {
+    let local_bits = m.checked_add(n)?;
+    let total_bits = r.checked_mul(local_bits)?;
+    let shift = u32::try_from(total_bits).ok()?;
+    1usize.checked_shl(shift)
+}
+
 #[allow(clippy::needless_range_loop)]
 fn assert_affine_mpo_matches_matrix(r: usize, params: &AffineParams, bc: &[BoundaryCondition]) {
     let m = params.m;
     let n = params.n;
+    let dense_elements = affine_dense_reference_element_count(r, m, n).unwrap_or(usize::MAX);
+    assert!(
+        dense_elements <= AFFINE_DENSE_REFERENCE_MAX_ELEMENTS,
+        "affine dense reference helper is limited to {AFFINE_DENSE_REFERENCE_MAX_ELEMENTS} elements, requested {dense_elements} [r={r}, m={m}, n={n}]"
+    );
 
     let matrix = affine_transform_matrix(r, params, bc).unwrap();
     let op = affine_operator(r, params, bc).unwrap();
@@ -510,6 +524,14 @@ fn assert_affine_mpo_matches_matrix(r: usize, params: &AffineParams, bc: &[Bound
         n,
         bc
     );
+}
+
+#[test]
+#[should_panic(expected = "affine dense reference helper is limited")]
+fn test_affine_dense_reference_helper_rejects_large_cases() {
+    let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+    let bc = vec![BoundaryCondition::Periodic];
+    assert_affine_mpo_matches_matrix(21, &params, &bc);
 }
 
 /// Assert that affine_transform_matrix produces correct results by independently

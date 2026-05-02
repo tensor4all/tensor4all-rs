@@ -1142,7 +1142,24 @@ fn test_maxbonddim_single_site() {
 }
 
 #[test]
-fn test_tensor_like_maxabs() {
+fn test_dense_maxabs_is_explicit_dense_reference_api() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+    let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+
+    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+    let maxabs = tt.dense_maxabs().unwrap();
+    let dense = tt.to_dense().unwrap();
+    let dense_maxabs = dense.maxabs();
+    assert!((maxabs - dense_maxabs).abs() < 1e-10);
+}
+
+#[test]
+fn test_tensor_like_maxabs_is_not_hidden_dense_for_tensor_train() {
     use tensor4all_core::TensorLike;
 
     let s0 = idx(0, 2);
@@ -1154,13 +1171,9 @@ fn test_tensor_like_maxabs() {
 
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
-    let maxabs = TensorLike::maxabs(&tt);
-    assert!(maxabs > 0.0);
-
-    // Compare with dense maxabs
-    let dense = tt.to_dense().unwrap();
-    let dense_maxabs = dense.maxabs();
-    assert!((maxabs - dense_maxabs).abs() < 1e-10);
+    let err = TensorLike::try_maxabs(&tt).unwrap_err();
+    assert!(err.to_string().contains("explicit dense materialization"));
+    assert!(TensorLike::maxabs(&tt).is_nan());
 }
 
 #[test]

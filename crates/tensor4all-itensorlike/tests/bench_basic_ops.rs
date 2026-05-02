@@ -84,6 +84,7 @@ fn time_it<F: FnOnce() -> R, R>(label: &str, f: F) -> R {
 }
 
 #[test]
+#[ignore = "benchmark-only timing test"]
 fn bench_norm() {
     eprintln!("\n=== norm benchmark (main) ===");
     for &n in &[20, 45, 90] {
@@ -95,6 +96,7 @@ fn bench_norm() {
 }
 
 #[test]
+#[ignore = "benchmark-only timing test"]
 fn bench_inner() {
     eprintln!("\n=== inner benchmark (main) ===");
     for &n in &[20, 45, 90] {
@@ -110,6 +112,7 @@ fn bench_inner() {
 }
 
 #[test]
+#[ignore = "benchmark-only timing test"]
 fn bench_truncate() {
     eprintln!("\n=== truncate benchmark (main) ===");
     for &n in &[20, 45, 90] {
@@ -124,6 +127,7 @@ fn bench_truncate() {
 }
 
 #[test]
+#[ignore = "benchmark-only timing test"]
 fn bench_contract_zipup() {
     eprintln!("\n=== contract zipup benchmark (main) ===");
     for &n in &[10, 20, 45] {
@@ -138,6 +142,7 @@ fn bench_contract_zipup() {
 }
 
 #[test]
+#[ignore = "benchmark-only timing test"]
 fn bench_contract_fit() {
     eprintln!("\n=== contract fit benchmark (main) ===");
     for &n in &[10, 20, 45] {
