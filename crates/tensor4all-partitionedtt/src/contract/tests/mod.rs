@@ -81,6 +81,10 @@ fn make_tt_generic<T: TestScalar>(
     TensorTrain::new(vec![t0, t1]).unwrap()
 }
 
+fn naive_reference_options() -> ContractOptions {
+    ContractOptions::naive().with_dense_reference_limit(4)
+}
+
 fn project_dense_tensor_at_index<T: TestScalar>(
     tensor: &TensorDynLen,
     index: &DynIndex,
@@ -265,7 +269,7 @@ fn test_contract_numerical_correctness_generic<T: TestScalar>() {
     let m1 = SubDomainTT::from_tt(tt1);
     let m2 = SubDomainTT::from_tt(tt2);
     // Use Naive method for exact results (no approximation)
-    let options = ContractOptions::naive();
+    let options = naive_reference_options();
     let result = contract(&m1, &m2, &options).unwrap().unwrap();
     let contracted_tt = result.data();
 
@@ -331,7 +335,7 @@ fn test_contract_with_projectors_numerical_correctness_generic<T: TestScalar>() 
 
     // Contract
     // Use Naive method for exact results (no approximation)
-    let options = ContractOptions::naive();
+    let options = naive_reference_options();
     let result = contract(&m1, &m2, &options).unwrap().unwrap();
     let contracted_tt = result.data();
 
@@ -467,7 +471,7 @@ fn test_contract_with_projector_on_contracted_index_generic<T: TestScalar>() {
     let m2 = SubDomainTT::new(tt2, proj2);
 
     // Use Naive method for exact results (no approximation)
-    let options = ContractOptions::naive();
+    let options = naive_reference_options();
     let result = contract(&m1, &m2, &options).unwrap().unwrap();
     let contracted_tt = result.data();
 
@@ -524,7 +528,7 @@ fn test_contract_one_side_has_projector_generic<T: TestScalar>() {
     let m2 = SubDomainTT::from_tt(tt2);
 
     // Use Naive method for exact results (no approximation)
-    let options = ContractOptions::naive();
+    let options = naive_reference_options();
     let result = contract(&m1, &m2, &options).unwrap().unwrap();
 
     // Result should have projector on s0 only
@@ -580,7 +584,7 @@ fn test_proj_contract_numerical_correctness_generic<T: TestScalar>() {
     // proj_contract with projector that projects s0=0 and s2=1
     let proj = Projector::from_pairs([(s0.clone(), 0), (s2.clone(), 1)]);
     // Use Naive method for exact results (no approximation)
-    let options = ContractOptions::naive();
+    let options = naive_reference_options();
     let result = proj_contract(&m1, &m2, &proj, &options).unwrap().unwrap();
 
     // Verify projectors

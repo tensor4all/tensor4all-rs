@@ -84,6 +84,11 @@ pub fn contract(
     } else {
         treetn_options
     };
+    let treetn_options = if let Some(limit) = options.dense_reference_limit() {
+        treetn_options.with_dense_reference_limit(limit)
+    } else {
+        treetn_options
+    };
 
     // Use the last site as the canonical center (consistent with existing behavior)
     let center = a.len() - 1;

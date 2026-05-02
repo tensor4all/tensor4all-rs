@@ -42,6 +42,8 @@ fn test_contraction_options_default() {
     assert!(opts.qr_rtol.is_none());
     assert_eq!(opts.nfullsweeps, 1);
     assert!(opts.convergence_tol.is_none());
+    assert!(opts.dense_reference_limit.is_none());
+    assert!(opts.mismatched_topology_dense_limit.is_none());
 }
 
 #[test]
@@ -72,7 +74,9 @@ fn test_contraction_options_builders() {
         .with_svd_policy(policy)
         .with_nfullsweeps(3)
         .with_convergence_tol(1e-6)
-        .with_factorize_alg(FactorizeAlg::LU);
+        .with_factorize_alg(FactorizeAlg::LU)
+        .with_dense_reference_limit(128)
+        .with_mismatched_topology_dense_limit(64);
 
     assert_eq!(opts.max_rank, Some(10));
     assert_eq!(opts.svd_policy, Some(policy));
@@ -80,6 +84,8 @@ fn test_contraction_options_builders() {
     assert_eq!(opts.nfullsweeps, 3);
     assert_eq!(opts.convergence_tol, Some(1e-6));
     assert_eq!(opts.factorize_alg, FactorizeAlg::LU);
+    assert_eq!(opts.dense_reference_limit, Some(128));
+    assert_eq!(opts.mismatched_topology_dense_limit, Some(64));
 }
 
 #[test]
@@ -233,6 +239,55 @@ fn test_contract_zipup_topology_mismatch() {
 
     let result = tn1.contract_zipup(&tn2, &"A".to_string(), None, None);
     assert!(result.is_err());
+}
+
+#[test]
+fn test_contract_naive_requires_dense_reference_limit() {
+    let s = DynIndex::new_dyn(3);
+    let t_a = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    let t_b = TensorDynLen::from_dense(vec![s], vec![1.0, 1.0, 1.0]).unwrap();
+    let tn_a =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let tn_b =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
+
+    let err = contract(
+        &tn_a,
+        &tn_b,
+        &"A".to_string(),
+        ContractionOptions::new(ContractionMethod::Naive),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("explicit dense/reference limit"));
+}
+
+#[test]
+fn test_contract_naive_dense_reference_limit_bounds_materialization() {
+    let s = DynIndex::new_dyn(3);
+    let t_a = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    let t_b = TensorDynLen::from_dense(vec![s], vec![1.0, 1.0, 1.0]).unwrap();
+    let tn_a =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let tn_b =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
+
+    let err = contract(
+        &tn_a,
+        &tn_b,
+        &"A".to_string(),
+        ContractionOptions::new(ContractionMethod::Naive).with_dense_reference_limit(2),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("exceeding limit 2"));
+
+    let result = contract(
+        &tn_a,
+        &tn_b,
+        &"A".to_string(),
+        ContractionOptions::new(ContractionMethod::Naive).with_dense_reference_limit(3),
+    )
+    .unwrap();
+    assert_eq!(result.node_count(), 1);
 }
 
 #[test]

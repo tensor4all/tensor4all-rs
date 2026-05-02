@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use crate::algorithm::CanonicalForm;
 use tensor4all_core::{
     AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, SvdTruncationPolicy,
-    TensorLike,
+    TensorIndex, TensorLike,
 };
 
 use super::TreeTN;
@@ -821,6 +821,13 @@ pub struct ContractionOptions {
     pub convergence_tol: Option<f64>,
     /// Factorization algorithm for Fit method.
     pub factorize_alg: FactorizeAlg,
+    /// Maximum dense elements allowed for generic Naive dense/reference
+    /// contraction.
+    ///
+    /// `None` rejects the generic dense/reference path. Set this only for
+    /// small debugging or reference cases where full dense materialization of
+    /// both inputs and the contracted result is expected and bounded.
+    pub dense_reference_limit: Option<usize>,
     /// Maximum dense elements allowed for explicit mismatched-topology
     /// reference fallback in `partial_contract`.
     ///
@@ -839,6 +846,7 @@ impl Default for ContractionOptions {
             nfullsweeps: 1,
             convergence_tol: None,
             factorize_alg: FactorizeAlg::default(),
+            dense_reference_limit: None,
             mismatched_topology_dense_limit: None,
         }
     }
@@ -899,6 +907,29 @@ impl ContractionOptions {
         self
     }
 
+    /// Allow generic Naive dense/reference contraction up to `max_elements`.
+    ///
+    /// # Arguments
+    /// * `max_elements` - Maximum number of elements allowed in each full dense
+    ///   input tensor and in the dense contracted result. Typical values should
+    ///   remain small and test-sized.
+    ///
+    /// # Returns
+    /// Updated options with the dense/reference contraction limit enabled.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::contraction::ContractionOptions;
+    ///
+    /// let options = ContractionOptions::default().with_dense_reference_limit(1024);
+    /// assert_eq!(options.dense_reference_limit, Some(1024));
+    /// ```
+    pub fn with_dense_reference_limit(mut self, max_elements: usize) -> Self {
+        self.dense_reference_limit = Some(max_elements);
+        self
+    }
+
     /// Allow `partial_contract` to use its mismatched-topology dense reference
     /// fallback up to `max_elements` elements.
     ///
@@ -923,6 +954,75 @@ impl ContractionOptions {
         self.mismatched_topology_dense_limit = Some(max_elements);
         self
     }
+}
+
+fn dense_element_count<I: IndexLike>(indices: &[I], context: &str) -> Result<usize> {
+    indices.iter().try_fold(1usize, |acc, index| {
+        acc.checked_mul(index.dim()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "{context}: dense/reference element count overflowed while checking limit"
+            )
+        })
+    })
+}
+
+fn dense_contract_output_indices<I: IndexLike>(a_indices: &[I], b_indices: &[I]) -> Vec<I> {
+    let mut b_remaining = b_indices.to_vec();
+    let mut output = Vec::new();
+
+    for idx_a in a_indices {
+        if let Some(position) = b_remaining
+            .iter()
+            .position(|idx_b| idx_a.is_contractable(idx_b))
+        {
+            b_remaining.remove(position);
+        } else {
+            output.push(idx_a.clone());
+        }
+    }
+
+    output.extend(b_remaining);
+    output
+}
+
+fn ensure_dense_reference_limit<I: IndexLike>(
+    context: &str,
+    label: &str,
+    indices: &[I],
+    max_elements: usize,
+) -> Result<()> {
+    let elements = dense_element_count(indices, context)?;
+    if elements > max_elements {
+        anyhow::bail!(
+            "{context}: Naive dense/reference contraction would materialize {label} with {elements} elements, exceeding limit {max_elements}"
+        );
+    }
+    Ok(())
+}
+
+fn validate_naive_dense_reference_limit<T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    options: &ContractionOptions,
+) -> Result<()>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let Some(max_elements) = options.dense_reference_limit else {
+        anyhow::bail!(
+            "contract: Naive dense/reference contraction requires an explicit dense/reference limit; call ContractionOptions::with_dense_reference_limit(max_elements) for small reference cases"
+        );
+    };
+
+    let a_external = tn_a.external_indices();
+    let b_external = tn_b.external_indices();
+    let output = dense_contract_output_indices(&a_external, &b_external);
+
+    ensure_dense_reference_limit("contract", "first TreeTN", &a_external, max_elements)?;
+    ensure_dense_reference_limit("contract", "second TreeTN", &b_external, max_elements)?;
+    ensure_dense_reference_limit("contract", "contracted result", &output, max_elements)
 }
 
 /// Contract two TreeTNs using the specified method.
@@ -969,14 +1069,17 @@ where
             };
             super::fit::contract_fit(tn_a, tn_b, center, fit_options)
         }
-        ContractionMethod::Naive => contract_naive_to_treetn(
-            tn_a,
-            tn_b,
-            center,
-            options.max_rank,
-            options.svd_policy,
-            options.qr_rtol,
-        ),
+        ContractionMethod::Naive => {
+            validate_naive_dense_reference_limit(tn_a, tn_b, &options)?;
+            contract_naive_to_treetn(
+                tn_a,
+                tn_b,
+                center,
+                options.max_rank,
+                options.svd_policy,
+                options.qr_rtol,
+            )
+        }
     }
 }
 

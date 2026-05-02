@@ -674,7 +674,8 @@ fn qtt_elementwise_product_demo_tracks_the_pointwise_product() -> Result<(), Box
     center_nodes.sort();
     let center = center_nodes[center_nodes.len() / 2];
 
-    let raw_product_options = ContractionOptions::new(ContractionMethod::Naive);
+    let raw_product_options = ContractionOptions::new(ContractionMethod::Naive)
+        .with_dense_reference_limit(FUNCTION_NPOINTS * FUNCTION_NPOINTS);
     let product_raw_tn = partial_contract(
         &cosh_treetn,
         &factor_b_treetn,

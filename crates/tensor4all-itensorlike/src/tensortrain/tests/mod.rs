@@ -316,7 +316,7 @@ fn test_contract_with_naive_method() {
     let tt2 = TensorTrain::new(vec![t2]).unwrap();
 
     // Test contract with Naive method
-    let options = ContractOptions::naive();
+    let options = ContractOptions::naive().with_dense_reference_limit(2);
     let result = tt1.contract(&tt2, &options);
     assert!(result.is_ok());
     let result_tt = result.unwrap();

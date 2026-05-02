@@ -1504,6 +1504,11 @@ pub extern "C" fn t4a_treetn_add(
 
 /// Contract two tree tensor networks with the requested method.
 ///
+/// `t4a_contract_method::Naive` is a dense/reference method that materializes
+/// both TreeTNs and the contracted result as full tensors. Pass a nonzero
+/// `max_dense_elements` to opt into this path for small reference cases; each
+/// dense input and output tensor must fit under that limit.
+///
 /// For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
 /// default", which currently resolves to one variational sweep.
 #[unsafe(no_mangle)]
@@ -1517,6 +1522,7 @@ pub extern "C" fn t4a_treetn_contract(
     convergence_tol: libc::c_double,
     factorize_alg: t4a_factorize_alg,
     qr_rtol: libc::c_double,
+    max_dense_elements: libc::size_t,
     out: *mut *mut t4a_treetn,
 ) -> StatusCode {
     let tn_a = match require_tree(a) {
@@ -1589,6 +1595,9 @@ pub extern "C" fn t4a_treetn_contract(
         if let Some(tol) = resolve_convergence_tol(convergence_tol) {
             options = options.with_convergence_tol(tol);
         }
+        if max_dense_elements > 0 {
+            options = options.with_dense_reference_limit(max_dense_elements);
+        }
 
         let result = contraction::contract(tn_a.inner(), tn_b.inner(), &center, options)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
@@ -1602,6 +1611,11 @@ pub extern "C" fn t4a_treetn_contract(
 /// `diagonal_*` pairs are linked by diagonal/copy structure while preserving
 /// the left-hand index as an external result leg. `output_order`, when nonempty,
 /// lists the surviving external indices in the requested result order.
+///
+/// `t4a_contract_method::Naive` and mismatched-topology fallback paths are
+/// dense/reference operations. Pass a nonzero `max_dense_elements` to opt into
+/// those paths for small reference cases; each dense input and output tensor
+/// must fit under that limit.
 ///
 /// For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
 /// default", which currently resolves to one variational sweep.
@@ -1626,6 +1640,7 @@ pub extern "C" fn t4a_treetn_partial_contract(
     convergence_tol: libc::c_double,
     factorize_alg: t4a_factorize_alg,
     qr_rtol: libc::c_double,
+    max_dense_elements: libc::size_t,
     out: *mut *mut t4a_treetn,
 ) -> StatusCode {
     run_catching(out, || {
@@ -1702,6 +1717,11 @@ pub extern "C" fn t4a_treetn_partial_contract(
         if let Some(tol) = resolve_convergence_tol(convergence_tol) {
             options = options.with_convergence_tol(tol);
         }
+        if max_dense_elements > 0 {
+            options = options
+                .with_dense_reference_limit(max_dense_elements)
+                .with_mismatched_topology_dense_limit(max_dense_elements);
+        }
 
         let spec = PartialContractionSpec {
             contract_pairs,
@@ -1725,6 +1745,8 @@ pub extern "C" fn t4a_treetn_partial_contract(
 ///
 /// For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
 /// default", which currently resolves to one variational sweep.
+/// `t4a_contract_method::Naive` uses the dedicated local-exact apply path here,
+/// not the generic full-dense TreeTN contraction used by `t4a_treetn_contract`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetn_apply_operator_chain(
     operator: *const t4a_treetn,

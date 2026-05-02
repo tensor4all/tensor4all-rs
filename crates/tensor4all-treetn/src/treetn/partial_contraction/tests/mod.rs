@@ -102,7 +102,7 @@ fn test_partial_contract_allows_same_node_contract_and_diagonal() {
         &tn_b,
         &spec,
         &"B".to_string(),
-        ContractionOptions::new(ContractionMethod::Naive),
+        ContractionOptions::new(ContractionMethod::Naive).with_dense_reference_limit(128),
     );
     assert!(result.is_ok());
 }
@@ -279,7 +279,7 @@ fn test_partial_contract_contract_only() {
         &tn_b,
         &spec,
         &"A".to_string(),
-        ContractionOptions::new(ContractionMethod::Naive),
+        ContractionOptions::new(ContractionMethod::Naive).with_dense_reference_limit(128),
     )
     .unwrap();
 
@@ -311,7 +311,7 @@ fn test_partial_contract_empty_spec() {
         &tn_b,
         &spec,
         &"A".to_string(),
-        ContractionOptions::new(ContractionMethod::Naive),
+        ContractionOptions::new(ContractionMethod::Naive).with_dense_reference_limit(128),
     )
     .unwrap();
 
@@ -342,7 +342,7 @@ fn test_partial_contract_rejects_bad_output_order_length() {
         &tn_b,
         &spec,
         &"A".to_string(),
-        ContractionOptions::new(ContractionMethod::Naive),
+        ContractionOptions::new(ContractionMethod::Naive).with_dense_reference_limit(128),
     );
     assert!(result.is_err());
     assert!(result
@@ -375,7 +375,7 @@ fn test_partial_contract_rejects_unknown_output_order_index() {
         &tn_b,
         &spec,
         &"A".to_string(),
-        ContractionOptions::new(ContractionMethod::Naive),
+        ContractionOptions::new(ContractionMethod::Naive).with_dense_reference_limit(128),
     );
     assert!(result.is_err());
     assert!(result
@@ -850,7 +850,9 @@ fn test_partial_contract_matches_dense_reference_for_cross_topology_chain() {
         &tn_b,
         &spec,
         &1usize,
-        ContractionOptions::new(ContractionMethod::Naive).with_mismatched_topology_dense_limit(128),
+        ContractionOptions::new(ContractionMethod::Naive)
+            .with_dense_reference_limit(128)
+            .with_mismatched_topology_dense_limit(128),
     )
     .unwrap();
     let result_dense = result.to_dense().unwrap();

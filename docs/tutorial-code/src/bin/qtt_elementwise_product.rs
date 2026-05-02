@@ -130,7 +130,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Library call: exact TreeTN-level partial contraction.
     // `partial_contract` performs the pointwise product on the paired sites.
-    let raw_product_options = ContractionOptions::new(ContractionMethod::Naive);
+    let raw_product_options = ContractionOptions::new(ContractionMethod::Naive)
+        .with_dense_reference_limit(NPOINTS * NPOINTS);
     let product_raw_tn = partial_contract(
         &square_treetn,
         &factor_b_treetn,
