@@ -275,6 +275,34 @@ fn test_mps_canonical_form_roundtrip() {
 }
 
 #[test]
+fn test_roundtrip_preserves_same_id_distinct_metadata_indices() -> anyhow::Result<()> {
+    use tensor4all_core::{DynId, Index, TagSet, TensorDynLen};
+    use tensor4all_hdf5::{load_itensor, save_itensor};
+
+    let tags_a = TagSet::from_str("Site,A")?;
+    let tags_b = TagSet::from_str("Site,B")?;
+    let i = Index::new_with_tags(DynId(7), 2, tags_a);
+    let j = Index::new_with_tags(DynId(7), 3, tags_b).set_plev(1);
+    assert_ne!(i, j);
+
+    let tensor = TensorDynLen::from_dense(
+        vec![i.clone(), j.clone()],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    )?;
+
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("same_id_metadata.h5");
+    let path = path.to_str().unwrap();
+
+    save_itensor(path, "tensor", &tensor)?;
+    let loaded = load_itensor(path, "tensor")?;
+
+    assert_eq!(loaded.indices(), tensor.indices());
+    assert_eq!(loaded.to_vec::<f64>()?, tensor.to_vec::<f64>()?);
+    Ok(())
+}
+
+#[test]
 fn test_type_mismatch_error() {
     // Write an ITensor, then try to load it as MPS → should get a clear error
     let path = temp_path("type_mismatch");
