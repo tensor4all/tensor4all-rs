@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use std::str::FromStr;
 use tensor4all_core::index::{DynId, DynIndex, Index, TagSet};
 use tensor4all_core::tagset::TagSetLike;
+use tensor4all_core::IndexLike;
 
 use crate::schema;
 
@@ -91,21 +92,21 @@ pub(crate) fn write_index(group: &Group, index: &DynIndex) -> Result<()> {
 
     // Datasets
     let id_ds = group.new_dataset::<u64>().shape(()).create("id")?;
-    id_ds.as_writer().write_scalar(&index.id.0)?;
+    id_ds.as_writer().write_scalar(&index.id().value())?;
 
     let dim_ds = group.new_dataset::<i64>().shape(()).create("dim")?;
-    dim_ds.as_writer().write_scalar(&(index.dim as i64))?;
+    dim_ds.as_writer().write_scalar(&(index.dim() as i64))?;
 
     // dir: always 0 (direction is unused in tensor4all-rs)
     let dir_ds = group.new_dataset::<i64>().shape(()).create("dir")?;
     dir_ds.as_writer().write_scalar(&0i64)?;
 
     let plev_ds = group.new_dataset::<i64>().shape(()).create("plev")?;
-    plev_ds.as_writer().write_scalar(&index.plev)?;
+    plev_ds.as_writer().write_scalar(&index.plev())?;
 
     // Tags subgroup
     let tags_group = group.create_group("tags")?;
-    write_tagset(&tags_group, &index.tags)?;
+    write_tagset(&tags_group, index.tags())?;
 
     Ok(())
 }
@@ -146,8 +147,7 @@ pub(crate) fn read_index(group: &Group) -> Result<DynIndex> {
     let tags_group = group.group("tags")?;
     let tags = read_tagset(&tags_group)?;
 
-    let mut idx = Index::new_with_tags(DynId(id), dim as usize, tags);
-    idx.plev = plev;
+    let idx = Index::new_with_tags(DynId(id), dim as usize, tags).set_plev(plev);
     Ok(idx)
 }
 

@@ -198,10 +198,8 @@ pub fn save_itensor(filepath: &str, name: &str, tensor: &TensorDynLen) -> Result
 /// // Index dimensions are preserved
 /// assert_eq!(loaded.dims(), vec![2, 3]);
 ///
-/// // Index IDs are preserved
-/// let orig_ids: Vec<_> = tensor.indices().iter().map(|idx| idx.id).collect();
-/// let loaded_ids: Vec<_> = loaded.indices().iter().map(|idx| idx.id).collect();
-/// assert_eq!(orig_ids, loaded_ids);
+/// // Index identity and metadata are preserved
+/// assert_eq!(loaded.indices(), tensor.indices());
 /// # Ok(())
 /// # }
 /// ```

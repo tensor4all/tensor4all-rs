@@ -262,7 +262,7 @@ pub extern "C" fn t4a_tensor_rank(ptr: *const t4a_tensor, out_rank: *mut usize) 
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
-        *out_rank = (*ptr).inner().indices.len();
+        *out_rank = (*ptr).inner().indices().len();
         T4A_SUCCESS
     }));
 
@@ -312,7 +312,7 @@ pub extern "C" fn t4a_tensor_indices(
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
-        let indices = &(*ptr).inner().indices;
+        let indices = (*ptr).inner().indices();
         *out_len = indices.len();
 
         if buf.is_null() {

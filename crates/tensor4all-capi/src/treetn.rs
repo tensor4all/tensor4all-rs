@@ -1002,7 +1002,7 @@ pub extern "C" fn t4a_treetn_siteinds(
             )
         })?;
         let ordered_indices: Vec<_> = tensor
-            .indices
+            .indices()
             .iter()
             .filter(|index| site_space.contains(*index))
             .cloned()

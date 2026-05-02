@@ -12,6 +12,7 @@ use crate::{
     T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
 };
 use tensor4all_core::index::{DynId, Index, TagSet};
+use tensor4all_core::IndexLike;
 
 /// Release an index handle.
 #[unsafe(no_mangle)]
@@ -185,7 +186,7 @@ pub extern "C" fn t4a_index_dim(ptr: *const t4a_index, out_dim: *mut usize) -> S
 pub extern "C" fn t4a_index_id(ptr: *const t4a_index, out_id: *mut u64) -> StatusCode {
     run_value(out_id, || {
         let index = require_index(ptr, "index")?;
-        Ok(index.id.0)
+        Ok(index.id().value())
     })
 }
 
@@ -222,7 +223,7 @@ pub extern "C" fn t4a_index_plev(ptr: *const t4a_index, out_plev: *mut i64) -> S
     }
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        *out_plev = (*ptr).inner().plev;
+        *out_plev = (*ptr).inner().plev();
         T4A_SUCCESS
     }));
 
