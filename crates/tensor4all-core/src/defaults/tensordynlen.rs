@@ -111,12 +111,6 @@ pub fn compute_permutation_from_indices(
     perm
 }
 
-/// Trait for accessing tensor index metadata.
-pub trait TensorAccess {
-    /// Get a reference to the indices.
-    fn indices(&self) -> &[DynIndex];
-}
-
 #[derive(Clone)]
 pub(crate) struct StructuredAdValue {
     payload: Arc<EagerTensor<CpuBackend>>,
@@ -185,12 +179,6 @@ pub struct TensorDynLen {
     pub(crate) structured_ad: Option<Arc<StructuredAdValue>>,
     /// Lazily materialized eager payload for native execution and AD.
     pub(crate) eager_cache: Arc<OnceLock<Arc<EagerTensor<CpuBackend>>>>,
-}
-
-impl TensorAccess for TensorDynLen {
-    fn indices(&self) -> &[DynIndex] {
-        &self.indices
-    }
 }
 
 impl TensorDynLen {
