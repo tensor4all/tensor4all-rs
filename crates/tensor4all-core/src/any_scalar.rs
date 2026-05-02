@@ -85,7 +85,6 @@ pub struct AnyScalar {
     tensor: TensorDynLen,
 }
 
-#[allow(missing_docs)]
 impl AnyScalar {
     fn wrap_tensor(tensor: TensorDynLen) -> Result<Self> {
         let dims = tensor.dims();
@@ -185,80 +184,419 @@ impl AnyScalar {
         &self.tensor
     }
 
+    /// Creates an `AnyScalar` from a tensor element.
+    ///
+    /// Use this when you already have a scalar value that implements
+    /// [`TensorElement`] and want to lift it into the dynamic scalar wrapper.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The scalar value to wrap.
+    ///
+    /// # Returns
+    ///
+    /// A rank-0 `AnyScalar` containing `value`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::from_value(3.0f64);
+    /// assert_eq!(scalar.real(), 3.0);
+    /// assert!(scalar.is_real());
+    /// ```
     pub fn from_value<T: TensorElement>(value: T) -> Self {
         Self::from_tensor_result(TensorDynLen::scalar(value), "from_value")
     }
 
+    /// Creates a real-valued `AnyScalar`.
+    ///
+    /// This is a convenience wrapper around [`AnyScalar::from_value`].
+    ///
+    /// # Arguments
+    ///
+    /// * `x` - The real scalar value to wrap.
+    ///
+    /// # Returns
+    ///
+    /// A rank-0 `AnyScalar` with real dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::from_real(1.25);
+    /// assert_eq!(scalar.as_f64(), Some(1.25));
+    /// assert!(scalar.is_real());
+    /// ```
     pub fn from_real(x: f64) -> Self {
         Self::from_value(x)
     }
 
+    /// Creates a complex-valued `AnyScalar`.
+    ///
+    /// This is a convenience wrapper around [`AnyScalar::from_value`].
+    ///
+    /// # Arguments
+    ///
+    /// * `re` - The real part of the complex value.
+    /// * `im` - The imaginary part of the complex value.
+    ///
+    /// # Returns
+    ///
+    /// A rank-0 `AnyScalar` containing the requested complex number.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::from_complex(1.0, -2.0);
+    /// assert_eq!(scalar.as_c64().map(|z| (z.re, z.im)), Some((1.0, -2.0)));
+    /// assert!(scalar.is_complex());
+    /// ```
     pub fn from_complex(re: f64, im: f64) -> Self {
         Self::from_value(Complex64::new(re, im))
     }
 
+    /// Creates a real-valued `AnyScalar`.
+    ///
+    /// This is an alias for [`AnyScalar::from_real`].
+    ///
+    /// # Arguments
+    ///
+    /// * `x` - The real scalar value to wrap.
+    ///
+    /// # Returns
+    ///
+    /// A rank-0 `AnyScalar` with real dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::new_real(2.5);
+    /// assert_eq!(scalar.real(), 2.5);
+    /// assert!(scalar.is_real());
+    /// ```
     pub fn new_real(x: f64) -> Self {
         Self::from_real(x)
     }
 
+    /// Creates a complex-valued `AnyScalar`.
+    ///
+    /// This is an alias for [`AnyScalar::from_complex`].
+    ///
+    /// # Arguments
+    ///
+    /// * `re` - The real part of the complex value.
+    /// * `im` - The imaginary part of the complex value.
+    ///
+    /// # Returns
+    ///
+    /// A rank-0 `AnyScalar` containing the requested complex number.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::new_complex(2.0, 3.0);
+    /// assert_eq!(scalar.as_c64().map(|z| (z.re, z.im)), Some((2.0, 3.0)));
+    /// assert!(scalar.is_complex());
+    /// ```
     pub fn new_complex(re: f64, im: f64) -> Self {
         Self::from_complex(re, im)
     }
 
+    /// Returns the detached primal value of this scalar.
+    ///
+    /// This is an alias for [`AnyScalar::detach`].
+    ///
+    /// # Returns
+    ///
+    /// A scalar with the same value and no gradient tracking.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let primal = AnyScalar::new_real(5.0).enable_grad().primal();
+    /// assert_eq!(primal.real(), 5.0);
+    /// assert!(!primal.tracks_grad());
+    /// ```
     pub fn primal(&self) -> Self {
         self.detach()
     }
 
+    /// Enables gradient tracking for this scalar.
+    ///
+    /// # Returns
+    ///
+    /// A new scalar that shares the same value but participates in autodiff.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::new_real(2.0).enable_grad();
+    /// assert!(scalar.tracks_grad());
+    /// ```
     pub fn enable_grad(self) -> Self {
         Self::from_tensor_unchecked(self.tensor.enable_grad())
     }
 
+    /// Returns whether this scalar tracks gradients.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the scalar participates in autodiff and can accumulate a
+    /// gradient, otherwise `false`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::new_real(1.0);
+    /// assert!(!scalar.tracks_grad());
+    /// ```
     pub fn tracks_grad(&self) -> bool {
         self.tensor.tracks_grad()
     }
 
+    /// Returns the stored gradient, if any.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Some(_))` when a gradient is available, `Ok(None)` when no gradient
+    /// has been recorded, or an error if the backend cannot read it.
+    ///
+    /// # Errors
+    ///
+    /// Propagates autodiff or tensor access failures from the underlying
+    /// tensor runtime.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let x = AnyScalar::new_real(2.0).enable_grad();
+    /// let y = &x * &x;
+    /// y.backward().unwrap();
+    ///
+    /// let grad = x.grad().unwrap().unwrap();
+    /// assert_eq!(grad.real(), 4.0);
+    /// ```
     pub fn grad(&self) -> Result<Option<Self>> {
         self.tensor
             .grad()
             .map(|maybe_grad| maybe_grad.map(Self::from_tensor_unchecked))
     }
 
+    /// Clears the stored gradient for this scalar.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when the gradient buffer was cleared successfully.
+    ///
+    /// # Errors
+    ///
+    /// Propagates tensor runtime failures from the underlying autodiff state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let x = AnyScalar::new_real(2.0).enable_grad();
+    /// let y = &x * &x;
+    /// y.backward().unwrap();
+    /// assert!(x.grad().unwrap().is_some());
+    ///
+    /// x.clear_grad().unwrap();
+    /// assert!(x.grad().unwrap().is_none());
+    /// ```
     pub fn clear_grad(&self) -> Result<()> {
         self.tensor.clear_grad()
     }
 
+    /// Runs reverse-mode autodiff starting from this scalar.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when gradients were accumulated successfully.
+    ///
+    /// # Errors
+    ///
+    /// Propagates failures from the underlying tensor autodiff engine.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let x = AnyScalar::new_real(2.0).enable_grad();
+    /// let y = &x * &x;
+    /// y.backward().unwrap();
+    ///
+    /// let grad = x.grad().unwrap().unwrap();
+    /// assert_eq!(grad.real(), 4.0);
+    /// ```
     pub fn backward(&self) -> Result<()> {
         self.tensor.backward()
     }
 
+    /// Returns a detached copy of this scalar.
+    ///
+    /// # Returns
+    ///
+    /// A scalar with the same value but without gradient tracking.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let detached = AnyScalar::new_real(7.0).enable_grad().detach();
+    /// assert_eq!(detached.real(), 7.0);
+    /// assert!(!detached.tracks_grad());
+    /// ```
     pub fn detach(&self) -> Self {
         Self::from_tensor_unchecked(self.tensor.detach())
     }
 
+    /// Returns the real part of this scalar.
+    ///
+    /// # Returns
+    ///
+    /// The real component as an `f64`, regardless of the underlying storage
+    /// type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::new_complex(3.0, -4.0);
+    /// assert_eq!(scalar.real(), 3.0);
+    /// ```
     pub fn real(&self) -> f64 {
         self.value().real()
     }
 
+    /// Returns the imaginary part of this scalar.
+    ///
+    /// # Returns
+    ///
+    /// The imaginary component as an `f64`. Real-valued scalars return `0.0`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::new_complex(3.0, -4.0);
+    /// assert_eq!(scalar.imag(), -4.0);
+    /// ```
     pub fn imag(&self) -> f64 {
         self.value().imag()
     }
 
+    /// Returns the magnitude of this scalar.
+    ///
+    /// # Returns
+    ///
+    /// The absolute value for real scalars or the complex norm for complex
+    /// scalars.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::new_complex(3.0, -4.0);
+    /// assert_eq!(scalar.abs(), 5.0);
+    /// ```
     pub fn abs(&self) -> f64 {
         self.value().abs()
     }
 
+    /// Returns whether this scalar is complex-valued.
+    ///
+    /// # Returns
+    ///
+    /// `true` for complex dtypes and `false` for real or integer dtypes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// assert!(AnyScalar::new_complex(1.0, 2.0).is_complex());
+    /// assert!(!AnyScalar::new_real(1.0).is_complex());
+    /// ```
     pub fn is_complex(&self) -> bool {
         self.value().is_complex()
     }
 
+    /// Returns whether this scalar is real-valued.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the scalar is not complex-valued.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// assert!(AnyScalar::new_real(1.0).is_real());
+    /// assert!(!AnyScalar::new_complex(1.0, 2.0).is_real());
+    /// ```
     pub fn is_real(&self) -> bool {
         !self.is_complex()
     }
 
+    /// Returns whether this scalar is exactly zero.
+    ///
+    /// # Returns
+    ///
+    /// `true` for exact zeros and `false` for any nonzero value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// assert!(AnyScalar::new_real(0.0).is_zero());
+    /// assert!(!AnyScalar::new_complex(0.0, 1.0).is_zero());
+    /// ```
     pub fn is_zero(&self) -> bool {
         self.value().is_zero()
     }
 
+    /// Returns this scalar as an `f64` when it is real-valued.
+    ///
+    /// # Returns
+    ///
+    /// `Some(value)` for real and integer scalars, or `None` for complex
+    /// scalars.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// assert_eq!(AnyScalar::new_real(2.5).as_f64(), Some(2.5));
+    /// assert_eq!(AnyScalar::new_complex(2.5, 1.0).as_f64(), None);
+    /// ```
     pub fn as_f64(&self) -> Option<f64> {
         match self.value() {
             ScalarValue::F32(value) => Some(value as f64),
@@ -268,6 +606,22 @@ impl AnyScalar {
         }
     }
 
+    /// Returns this scalar as a `Complex64` when it is complex-valued.
+    ///
+    /// # Returns
+    ///
+    /// `Some(value)` for complex scalars or `None` for real and integer
+    /// scalars.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::new_complex(2.5, 1.0);
+    /// assert_eq!(scalar.as_c64().map(|z| (z.re, z.im)), Some((2.5, 1.0)));
+    /// assert_eq!(AnyScalar::new_real(2.5).as_c64(), None);
+    /// ```
     pub fn as_c64(&self) -> Option<Complex64> {
         match self.value() {
             ScalarValue::F32(_) | ScalarValue::F64(_) | ScalarValue::I64(_) => None,
@@ -276,18 +630,90 @@ impl AnyScalar {
         }
     }
 
+    /// Returns the complex conjugate of this scalar.
+    ///
+    /// # Returns
+    ///
+    /// The conjugated scalar. Real-valued inputs are returned unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::new_complex(3.0, -4.0).conj();
+    /// assert_eq!(scalar.as_c64().map(|z| (z.re, z.im)), Some((3.0, 4.0)));
+    /// ```
     pub fn conj(&self) -> Self {
         Self::from_eager_unary(self, "conj", |tensor| tensor.conj())
     }
 
+    /// Returns the real part as a real-valued scalar.
+    ///
+    /// # Returns
+    ///
+    /// A real-valued scalar containing the real component of `self`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::new_complex(3.0, -4.0).real_part();
+    /// assert_eq!(scalar.real(), 3.0);
+    /// assert!(scalar.is_real());
+    /// ```
     pub fn real_part(&self) -> Self {
         Self::from_real(self.real())
     }
 
+    /// Returns the imaginary part as a real-valued scalar.
+    ///
+    /// # Returns
+    ///
+    /// A real-valued scalar containing the imaginary component of `self`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::new_complex(3.0, -4.0).imag_part();
+    /// assert_eq!(scalar.real(), -4.0);
+    /// assert!(scalar.is_real());
+    /// ```
     pub fn imag_part(&self) -> Self {
         Self::from_real(self.imag())
     }
 
+    /// Combines two real-valued scalars into a complex scalar.
+    ///
+    /// # Arguments
+    ///
+    /// * `real` - The real component.
+    /// * `imag` - The imaginary component.
+    ///
+    /// # Returns
+    ///
+    /// A complex `AnyScalar` whose real and imaginary parts come from the
+    /// inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either input is not real-valued.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::compose_complex(
+    ///     AnyScalar::new_real(3.0),
+    ///     AnyScalar::new_real(-4.0),
+    /// )
+    /// .unwrap();
+    /// assert_eq!(scalar.as_c64().map(|z| (z.re, z.im)), Some((3.0, -4.0)));
+    /// ```
     pub fn compose_complex(real: Self, imag: Self) -> Result<Self> {
         if !real.is_real() || !imag.is_real() {
             return Err(anyhow!(
@@ -300,6 +726,22 @@ impl AnyScalar {
         Ok(&real + &imag_term)
     }
 
+    /// Returns the square root of this scalar.
+    ///
+    /// # Returns
+    ///
+    /// The principal square root. Negative real inputs and complex inputs use
+    /// complex arithmetic.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::new_real(9.0).sqrt();
+    /// assert_eq!(scalar.real(), 3.0);
+    /// assert!(scalar.is_real());
+    /// ```
     pub fn sqrt(&self) -> Self {
         if self.is_complex() || self.real() < 0.0 {
             Self::from_backend_scalar(self.to_backend_scalar().sqrt())
@@ -308,10 +750,47 @@ impl AnyScalar {
         }
     }
 
+    /// Raises this scalar to a floating-point power.
+    ///
+    /// # Arguments
+    ///
+    /// * `exponent` - The exponent to apply.
+    ///
+    /// # Returns
+    ///
+    /// The value of `self^exponent`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// let scalar = AnyScalar::new_real(2.0).powf(3.0);
+    /// assert_eq!(scalar.real(), 8.0);
+    /// ```
     pub fn powf(&self, exponent: f64) -> Self {
         Self::from_backend_scalar(self.to_backend_scalar().powf(exponent))
     }
 
+    /// Raises this scalar to an integer power.
+    ///
+    /// # Arguments
+    ///
+    /// * `exponent` - The integer exponent to apply. Negative exponents return
+    ///   the reciprocal power.
+    ///
+    /// # Returns
+    ///
+    /// The value of `self^exponent`. Zero exponents return `1`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// assert_eq!(AnyScalar::new_real(2.0).powi(3).real(), 8.0);
+    /// assert_eq!(AnyScalar::new_real(2.0).powi(-1).real(), 0.5);
+    /// ```
     pub fn powi(&self, exponent: i32) -> Self {
         if exponent == 0 {
             return Self::one();
