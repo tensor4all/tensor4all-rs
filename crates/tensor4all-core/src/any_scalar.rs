@@ -9,8 +9,8 @@ use tenferro::DType;
 use tensor4all_tensorbackend::AnyScalar as BackendScalar;
 
 use crate::defaults::tensordynlen::TensorDynLen;
-use crate::storage::{Storage, SumFromStorage};
 use crate::TensorElement;
+use tensor4all_tensorbackend::{Storage, SumFromStorage};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum ScalarValue {

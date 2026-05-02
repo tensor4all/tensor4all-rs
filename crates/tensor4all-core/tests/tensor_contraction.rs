@@ -1,7 +1,8 @@
 use num_complex::Complex64;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index_ops::common_inds;
-use tensor4all_core::{DynIndex, Storage, StorageKind, TensorDynLen, TensorLike};
+use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+use tensor4all_tensorbackend::{Storage, StorageKind};
 
 fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
     TensorDynLen::from_dense(indices, data).unwrap()

@@ -1,7 +1,8 @@
 use tensor4all_core::{
-    contract_multi, contract_multi_with_options, AllowedPairs, ContractionOptions, Index, Storage,
-    StorageKind, TensorDynLen,
+    contract_multi, contract_multi_with_options, AllowedPairs, ContractionOptions, Index,
+    TensorDynLen,
 };
+use tensor4all_tensorbackend::{Storage, StorageKind};
 
 #[test]
 fn plain_dense_storage_auto_seeds_native_payload() {

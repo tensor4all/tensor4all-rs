@@ -1,10 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::Storage;
 use anyhow::{anyhow, ensure, Result};
 use num_complex::Complex64;
 use tenferro::{DType, Tensor as NativeTensor};
-use tensor4all_tensorbackend::einsum_native_tensors;
+use tensor4all_tensorbackend::{einsum_native_tensors, Storage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OperandLayout {
@@ -440,6 +439,7 @@ impl UnionFind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tensor4all_tensorbackend::StorageKind;
 
     #[test]
     fn plans_diag_diag_partial_as_diag_output() {
@@ -503,7 +503,7 @@ mod tests {
 
     #[test]
     fn storage_payload_native_roundtrip_preserves_compact_payload() {
-        let storage = crate::Storage::new_structured(
+        let storage = Storage::new_structured(
             vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
             vec![2, 3],
             vec![1, 2],
@@ -519,7 +519,7 @@ mod tests {
         );
 
         let rebuilt = storage_from_payload_native(native, &[2, 3], vec![0, 1, 0]).unwrap();
-        assert_eq!(rebuilt.storage_kind(), crate::StorageKind::Structured);
+        assert_eq!(rebuilt.storage_kind(), StorageKind::Structured);
         assert_eq!(rebuilt.payload_dims(), &[2, 3]);
         assert_eq!(rebuilt.axis_classes(), &[0, 1, 0]);
         assert_eq!(

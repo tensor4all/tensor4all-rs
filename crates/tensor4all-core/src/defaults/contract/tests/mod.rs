@@ -1,10 +1,10 @@
 use super::*;
 use crate::defaults::Index;
 use crate::tensor_like::TensorLike;
-use crate::StorageKind;
 use num_complex::Complex64;
 use std::ffi::OsString;
 use std::time::Duration;
+use tensor4all_tensorbackend::StorageKind;
 
 struct ScopedEnvVar {
     key: &'static str,
