@@ -4,6 +4,7 @@ use crate::{
     TreeTciGraph, TreeTciOptions,
 };
 use anyhow::{ensure, Result};
+use tensor4all_core::CommonScalar;
 use tensor4all_treetn::TreeTN;
 
 /// High-level TreeTCI return type:
@@ -83,8 +84,7 @@ pub fn crossinterpolate2<T, F, P>(
     proposer: &P,
 ) -> Result<TreeTciRunResult>
 where
-    T: FullPivLuScalar,
-    tensor4all_tcicore::DenseLuKernel: tensor4all_tcicore::PivotKernel<T>,
+    T: FullPivLuScalar + CommonScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
@@ -111,7 +111,7 @@ where
     let init_vals = evaluate(batch)?;
     tci.max_sample_value = init_vals
         .iter()
-        .map(|v| T::abs_val(*v))
+        .map(|v| CommonScalar::abs_val(*v))
         .fold(0.0f64, f64::max);
     ensure!(
         tci.max_sample_value > 0.0,

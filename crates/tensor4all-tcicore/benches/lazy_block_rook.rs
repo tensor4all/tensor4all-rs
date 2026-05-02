@@ -2,9 +2,8 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tensor4all_tcicore::matrixluci::{
-    DenseLuKernel, DenseMatrixSource, LazyBlockRookKernel, LazyMatrixSource, PivotKernel,
-    PivotKernelOptions,
+use tensor4all_tcicore::{
+    matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix, RrLUOptions,
 };
 
 fn random_column_major(nrows: usize, ncols: usize, seed: u64) -> Vec<f64> {
@@ -45,11 +44,11 @@ fn materialize_expensive(n: usize) -> Vec<f64> {
 }
 
 fn bench_lazy_block_rook(c: &mut Criterion) {
-    let dense_kernel = DenseLuKernel;
-    let rook_kernel = LazyBlockRookKernel;
-    let options = PivotKernelOptions {
+    let options = RrLUOptions {
         max_rank: 8,
-        ..PivotKernelOptions::no_truncation()
+        rel_tol: 0.0,
+        abs_tol: 0.0,
+        left_orthogonal: true,
     };
 
     let mut cheap_group = c.benchmark_group("lazy_block_rook_cheap_callback");
@@ -62,18 +61,32 @@ fn bench_lazy_block_rook(c: &mut Criterion) {
             |b, &n| {
                 b.iter(|| {
                     let materialized = data.clone();
-                    let source = DenseMatrixSource::from_column_major(&materialized, n, n);
-                    black_box(dense_kernel.factorize(&source, &options).unwrap());
+                    let mut matrix = tensor4all_tcicore::matrix::zeros(n, n);
+                    for col in 0..n {
+                        for row in 0..n {
+                            matrix[[row, col]] = materialized[row + n * col];
+                        }
+                    }
+                    black_box(
+                        matrix_luci_factors_from_matrix(&matrix, Some(options.clone())).unwrap(),
+                    );
                 });
             },
         );
 
         cheap_group.bench_with_input(BenchmarkId::new("lazy_rook", size), &size, |b, &n| {
             b.iter(|| {
-                let source = LazyMatrixSource::new(n, n, |rows, cols, out: &mut [f64]| {
-                    fill_from_dense(&data, n, rows, cols, out);
-                });
-                black_box(rook_kernel.factorize(&source, &options).unwrap());
+                black_box(
+                    matrix_luci_factors_from_blocks(
+                        n,
+                        n,
+                        |rows, cols, out: &mut [f64]| {
+                            fill_from_dense(&data, n, rows, cols, out);
+                        },
+                        options.clone(),
+                    )
+                    .unwrap(),
+                );
             });
         });
     }
@@ -87,22 +100,36 @@ fn bench_lazy_block_rook(c: &mut Criterion) {
             |b, &n| {
                 b.iter(|| {
                     let materialized = materialize_expensive(n);
-                    let source = DenseMatrixSource::from_column_major(&materialized, n, n);
-                    black_box(dense_kernel.factorize(&source, &options).unwrap());
+                    let mut matrix = tensor4all_tcicore::matrix::zeros(n, n);
+                    for col in 0..n {
+                        for row in 0..n {
+                            matrix[[row, col]] = materialized[row + n * col];
+                        }
+                    }
+                    black_box(
+                        matrix_luci_factors_from_matrix(&matrix, Some(options.clone())).unwrap(),
+                    );
                 });
             },
         );
 
         expensive_group.bench_with_input(BenchmarkId::new("lazy_rook", size), &size, |b, &n| {
             b.iter(|| {
-                let source = LazyMatrixSource::new(n, n, |rows, cols, out: &mut [f64]| {
-                    for (j, &col) in cols.iter().enumerate() {
-                        for (i, &row) in rows.iter().enumerate() {
-                            out[i + rows.len() * j] = expensive_entry(row, col);
-                        }
-                    }
-                });
-                black_box(rook_kernel.factorize(&source, &options).unwrap());
+                black_box(
+                    matrix_luci_factors_from_blocks(
+                        n,
+                        n,
+                        |rows, cols, out: &mut [f64]| {
+                            for (j, &col) in cols.iter().enumerate() {
+                                for (i, &row) in rows.iter().enumerate() {
+                                    out[i + rows.len() * j] = expensive_entry(row, col);
+                                }
+                            }
+                        },
+                        options.clone(),
+                    )
+                    .unwrap(),
+                );
             });
         });
     }

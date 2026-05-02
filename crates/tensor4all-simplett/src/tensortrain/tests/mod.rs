@@ -530,10 +530,7 @@ fn test_svd_compression_tolerance_generic<
         + tensor4all_tcicore::MatrixLuciScalar
         + Default
         + std::fmt::Debug,
->()
-where
-    tensor4all_tcicore::DenseLuKernel: tensor4all_tcicore::PivotKernel<T>,
-{
+>() {
     use crate::compression::{CompressionMethod, CompressionOptions};
 
     // Build a random-ish TT with known structure: sum of two rank-1 terms

@@ -12,7 +12,7 @@ use std::marker::PhantomData;
 ///
 /// Implementors provide block-level access (filling column-major sub-blocks)
 /// so that kernels can select pivots without materializing the full matrix.
-pub trait CandidateMatrixSource<T: Scalar> {
+pub(crate) trait CandidateMatrixSource<T: Scalar> {
     /// Number of rows.
     fn nrows(&self) -> usize;
 
@@ -28,6 +28,7 @@ pub trait CandidateMatrixSource<T: Scalar> {
     }
 
     /// Read a single matrix entry.
+    #[cfg(test)]
     fn get(&self, row: usize, col: usize) -> T {
         let mut out = [T::zero(); 1];
         self.get_block(&[row], &[col], &mut out);
@@ -38,7 +39,7 @@ pub trait CandidateMatrixSource<T: Scalar> {
 /// Borrowed dense matrix source with column-major layout.
 ///
 /// Wraps a column-major data slice for use with pivot kernels.
-pub struct DenseMatrixSource<'a, T: Scalar> {
+pub(crate) struct DenseMatrixSource<'a, T: Scalar> {
     data: &'a [T],
     nrows: usize,
     ncols: usize,
@@ -49,7 +50,7 @@ pub struct DenseMatrixSource<'a, T: Scalar> {
 /// Evaluates matrix blocks on demand via a user-supplied closure,
 /// avoiding full materialization. The closure fills a column-major
 /// output buffer for a given set of rows and columns.
-pub struct LazyMatrixSource<T: Scalar, F> {
+pub(crate) struct LazyMatrixSource<T: Scalar, F> {
     nrows: usize,
     ncols: usize,
     fill_block: F,

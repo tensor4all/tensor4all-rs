@@ -74,6 +74,39 @@ fn test_matrixluci_rank2_iplusj_left_orthogonal() {
 }
 
 #[test]
+fn test_matrixluci_rank2_iplusj_right_orthogonal() {
+    let m = from_vec2d(vec![
+        vec![0.0, 1.0, 2.0, 3.0],
+        vec![1.0, 2.0, 3.0, 4.0],
+        vec![2.0, 3.0, 4.0, 5.0],
+        vec![3.0, 4.0, 5.0, 6.0],
+    ]);
+
+    let opts = RrLUOptions {
+        left_orthogonal: false,
+        ..Default::default()
+    };
+    let luci = MatrixLUCI::from_matrix(&m, Some(opts)).unwrap();
+    assert_eq!(luci.rank(), 2);
+
+    let reconstructed = mat_mul(&luci.left(), &luci.right());
+    for i in 0..4 {
+        for j in 0..4 {
+            let diff = (m[[i, j]] - reconstructed[[i, j]]).abs();
+            assert!(
+                diff < 1e-10,
+                "Reconstruction error at ({}, {}): expected {} got {} (diff {})",
+                i,
+                j,
+                m[[i, j]],
+                reconstructed[[i, j]],
+                diff
+            );
+        }
+    }
+}
+
+#[test]
 fn test_matrixluci_rank_deficient() {
     // Rank-1 matrix
     let m = from_vec2d(vec![

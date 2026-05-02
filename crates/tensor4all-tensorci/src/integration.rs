@@ -9,9 +9,7 @@
 use crate::error::{Result, TCIError};
 use crate::tensorci2::{crossinterpolate2, TCI2Options};
 use tensor4all_simplett::{AbstractTensorTrain, TTScalar};
-use tensor4all_tcicore::{
-    DenseLuKernel, LazyBlockRookKernel, MatrixLuciScalar, MultiIndex, PivotKernel, Scalar,
-};
+use tensor4all_tcicore::{MatrixLuciScalar, MultiIndex, Scalar};
 
 /// Gauss-Kronrod 15-point rule: nodes on [-1, 1]
 const GK15_NODES: [f64; 15] = [
@@ -186,8 +184,6 @@ pub fn integrate<T, F>(
 ) -> Result<T>
 where
     T: Scalar + TTScalar + Default + MatrixLuciScalar,
-    DenseLuKernel: PivotKernel<T>,
-    LazyBlockRookKernel: PivotKernel<T>,
     F: Fn(&[f64]) -> T,
 {
     if a.len() != b.len() {

@@ -11,11 +11,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
 use tensor4all_tcicore::matrix::zeros;
-use tensor4all_tcicore::MultiIndex;
-use tensor4all_tcicore::Scalar;
 use tensor4all_tcicore::{
-    rrlu, AbstractMatrixCI, CrossFactors, DenseLuKernel, DenseMatrixSource, LazyBlockRookKernel,
-    LazyMatrixSource, MatrixLUCI, PivotKernel, PivotKernelOptions, RrLUOptions,
+    matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix, rrlu, MatrixLuciScalar,
+    MultiIndex, RrLUOptions, Scalar,
 };
 
 /// Configuration for the TCI2 algorithm ([`crossinterpolate2`]).
@@ -281,9 +279,7 @@ pub struct TensorCI2<T: Scalar + TTScalar> {
 
 impl<T> TensorCI2<T>
 where
-    T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
-    DenseLuKernel: PivotKernel<T>,
-    LazyBlockRookKernel: PivotKernel<T>,
+    T: Scalar + TTScalar + Default + MatrixLuciScalar,
 {
     /// Create a new empty TensorCI2
     pub fn new(local_dims: Vec<usize>) -> Result<Self> {
@@ -643,10 +639,10 @@ where
             abs_tol: config.abs_tol,
             left_orthogonal: forward,
         };
-        let luci = MatrixLUCI::from_matrix(&pi, Some(lu_options))?;
+        let factors = matrix_luci_factors_from_matrix(&pi, Some(lu_options))?;
 
-        let row_indices = luci.row_indices();
-        let col_indices = luci.col_indices();
+        let row_indices = &factors.row_indices;
+        let col_indices = &factors.col_indices;
 
         // Update I/J sets
         if forward {
@@ -659,11 +655,15 @@ where
 
         // Update site tensor
         if config.update_tensors {
-            let mat = if forward { luci.left() } else { luci.right() };
+            let mat = if forward {
+                factors.left.clone()
+            } else {
+                factors.right.clone()
+            };
             let local_dim = self.local_dims[b];
             if forward {
                 let left_dim = if b == 0 { 1 } else { self.i_set[b].len() };
-                let right_dim = luci.rank().max(1);
+                let right_dim = factors.rank.max(1);
                 let mut tensor = tensor3_zeros(left_dim, local_dim, right_dim);
                 for l in 0..left_dim {
                     for s in 0..local_dim {
@@ -677,7 +677,7 @@ where
                 }
                 self.site_tensors[b] = tensor;
             } else {
-                let left_dim = luci.rank().max(1);
+                let left_dim = factors.rank.max(1);
                 let right_dim = if b == self.len() - 1 {
                     1
                 } else {
@@ -699,12 +699,12 @@ where
         }
 
         // Update errors
-        let errors = luci.pivot_errors();
+        let errors = &factors.pivot_errors;
         if !errors.is_empty() {
             let bond_idx = if forward { b } else { b - 1 };
             self.bond_errors[bond_idx] = *errors.last().unwrap_or(&0.0);
         }
-        self.update_pivot_errors(&errors);
+        self.update_pivot_errors(errors);
 
         Ok(())
     }
@@ -978,9 +978,7 @@ pub fn crossinterpolate2<T, F, B>(
     options: TCI2Options,
 ) -> Result<(TensorCI2<T>, Vec<usize>, Vec<f64>)>
 where
-    T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
-    DenseLuKernel: PivotKernel<T>,
-    LazyBlockRookKernel: PivotKernel<T>,
+    T: Scalar + TTScalar + Default + MatrixLuciScalar,
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
@@ -1176,9 +1174,7 @@ fn update_pivots<T, F, B>(
     context: PivotUpdateContext<'_, B>,
 ) -> Result<()>
 where
-    T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
-    DenseLuKernel: PivotKernel<T>,
-    LazyBlockRookKernel: PivotKernel<T>,
+    T: Scalar + TTScalar + Default + MatrixLuciScalar,
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
@@ -1202,17 +1198,7 @@ where
         return Ok(());
     }
 
-    // Apply LU-based cross interpolation
-    let lu_options = PivotKernelOptions {
-        max_rank: context.options.max_bond_dim,
-        rel_tol: context.options.tolerance,
-        abs_tol: 0.0,
-        left_orthogonal: context.left_orthogonal,
-    };
-
-    let selection;
-    let factors;
-    if context.options.pivot_search == PivotSearchStrategy::Full {
+    let factors = if context.options.pivot_search == PivotSearchStrategy::Full {
         let mut pi = zeros(i_combined.len(), j_combined.len());
 
         if let Some(ref batch_fn) = context.batched_f {
@@ -1250,15 +1236,15 @@ where
             }
         }
 
-        let mut data = Vec::with_capacity(pi.nrows() * pi.ncols());
-        for col in 0..pi.ncols() {
-            for row in 0..pi.nrows() {
-                data.push(pi[[row, col]]);
-            }
-        }
-        let source = DenseMatrixSource::from_column_major(&data, pi.nrows(), pi.ncols());
-        selection = DenseLuKernel.factorize(&source, &lu_options)?;
-        factors = CrossFactors::from_source(&source, &selection)?;
+        matrix_luci_factors_from_matrix(
+            &pi,
+            Some(RrLUOptions {
+                max_rank: context.options.max_bond_dim,
+                rel_tol: context.options.tolerance,
+                abs_tol: 0.0,
+                left_orthogonal: context.left_orthogonal,
+            }),
+        )?
     } else {
         let evaluator = LazyPiEvaluator::new(
             &i_combined,
@@ -1267,30 +1253,29 @@ where
             context.batched_f,
             tci.max_sample_value,
         );
-        let source = LazyMatrixSource::new(
+        let factors_result = matrix_luci_factors_from_blocks(
             i_combined.len(),
             j_combined.len(),
             |rows, cols, out: &mut [T]| {
                 evaluator.fill_block(rows, cols, out);
             },
+            RrLUOptions {
+                max_rank: context.options.max_bond_dim,
+                rel_tol: context.options.tolerance,
+                abs_tol: 0.0,
+                left_orthogonal: context.left_orthogonal,
+            },
         );
-        let selection_result = LazyBlockRookKernel.factorize(&source, &lu_options);
         if let Some(err) = evaluator.take_error() {
             return Err(err);
         }
-        selection = selection_result?;
-
-        let factors_result = CrossFactors::from_source(&source, &selection);
-        if let Some(err) = evaluator.take_error() {
-            return Err(err);
-        }
-        factors = factors_result?;
         tci.max_sample_value = evaluator.sampled_max();
-    }
+        factors_result?
+    };
 
     // Update I and J sets
-    let row_indices = &selection.row_indices;
-    let col_indices = &selection.col_indices;
+    let row_indices = &factors.row_indices;
+    let col_indices = &factors.col_indices;
 
     tci.i_set[b + 1] = row_indices.iter().map(|&i| i_combined[i].clone()).collect();
     tci.j_set[b] = col_indices.iter().map(|&j| j_combined[j].clone()).collect();
@@ -1299,7 +1284,7 @@ where
     // filled separately by fill_site_tensors after the sweep).
     if !context.extra_i_set.is_empty() || !context.extra_j_set.is_empty() {
         // Update bond error only
-        let errors = &selection.pivot_errors;
+        let errors = &factors.pivot_errors;
         if !errors.is_empty() {
             tci.bond_errors[b] = *errors.last().unwrap_or(&0.0);
         }
@@ -1307,29 +1292,18 @@ where
     }
 
     // Update site tensors
-    let left = if context.left_orthogonal {
-        factors.cols_times_pivot_inv()?
-    } else {
-        factors.pivot_cols.clone()
-    };
-    let right = if context.left_orthogonal {
-        factors.pivot_rows.clone()
-    } else {
-        factors.pivot_inv_times_rows()?
-    };
-
     // Convert left matrix to tensor at site b
     let left_dim = if b == 0 { 1 } else { tci.i_set[b].len() };
     let site_dim_b = tci.local_dims[b];
-    let new_bond_dim = selection.rank.max(1);
+    let new_bond_dim = factors.rank.max(1);
 
     let mut tensor_b = tensor3_zeros(left_dim, site_dim_b, new_bond_dim);
     for l in 0..left_dim {
         for s in 0..site_dim_b {
             for r in 0..new_bond_dim {
                 let row = l * site_dim_b + s;
-                if row < left.nrows() && r < left.ncols() {
-                    tensor_b.set3(l, s, r, left[[row, r]]);
+                if row < factors.left.nrows() && r < factors.left.ncols() {
+                    tensor_b.set3(l, s, r, factors.left[[row, r]]);
                 }
             }
         }
@@ -1349,8 +1323,8 @@ where
         for s in 0..site_dim_bp1 {
             for r in 0..right_dim {
                 let col = s * right_dim + r;
-                if l < right.nrows() && col < right.ncols() {
-                    tensor_bp1.set3(l, s, r, right[[l, col]]);
+                if l < factors.right.nrows() && col < factors.right.ncols() {
+                    tensor_bp1.set3(l, s, r, factors.right[[l, col]]);
                 }
             }
         }
@@ -1358,8 +1332,8 @@ where
     tci.site_tensors[b + 1] = tensor_bp1;
 
     // Update bond error
-    if !selection.pivot_errors.is_empty() {
-        tci.bond_errors[b] = *selection.pivot_errors.last().unwrap_or(&0.0);
+    if !factors.pivot_errors.is_empty() {
+        tci.bond_errors[b] = *factors.pivot_errors.last().unwrap_or(&0.0);
     }
 
     Ok(())
@@ -1393,7 +1367,7 @@ fn callback_length_mismatch(actual: usize, expected: usize) -> TCIError {
 
 struct LazyPiEvaluator<'a, T, F, B>
 where
-    T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    T: Scalar + TTScalar + Default + MatrixLuciScalar,
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
@@ -1408,7 +1382,7 @@ where
 
 impl<'a, T, F, B> LazyPiEvaluator<'a, T, F, B>
 where
-    T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    T: Scalar + TTScalar + Default + MatrixLuciScalar,
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {

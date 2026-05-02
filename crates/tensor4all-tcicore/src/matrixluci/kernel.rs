@@ -14,7 +14,7 @@ use crate::matrixluci::types::{PivotKernelOptions, PivotSelectionCore};
 ///
 /// Different implementations choose pivots using different strategies
 /// (dense full-pivoting LU, lazy rook search, etc.).
-pub trait PivotKernel<T: Scalar> {
+pub(crate) trait PivotKernel<T: Scalar> {
     /// Factorize the candidate matrix and return pivot-only output.
     fn factorize<S: CandidateMatrixSource<T>>(
         &self,

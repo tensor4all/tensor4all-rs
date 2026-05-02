@@ -3,7 +3,16 @@ use crate::test_support::assert_scalar_close;
 use crate::{GlobalIndexBatch, TreeTCI2, TreeTciEdge, TreeTciGraph};
 use anyhow::Result;
 use tensor4all_core::ColMajorArray;
-use tensor4all_tcicore::PivotKernelOptions;
+use tensor4all_tcicore::RrLUOptions;
+
+fn no_truncation_options() -> RrLUOptions {
+    RrLUOptions {
+        max_rank: usize::MAX,
+        rel_tol: 0.0,
+        abs_tol: 0.0,
+        left_orthogonal: true,
+    }
+}
 
 fn two_site_graph() -> TreeTciGraph {
     TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap()
@@ -29,7 +38,7 @@ fn update_edge_selects_identity_pivots_on_two_site_tree() {
         &mut tci,
         TreeTciEdge::new(0, 1),
         batch_eval,
-        &PivotKernelOptions::no_truncation(),
+        &no_truncation_options(),
     )
     .unwrap();
 
@@ -63,7 +72,7 @@ fn update_edge_rejects_bad_batch_length() {
         &mut tci,
         TreeTciEdge::new(0, 1),
         bad_eval,
-        &PivotKernelOptions::no_truncation(),
+        &no_truncation_options(),
     );
 
     assert!(result.is_err());

@@ -79,7 +79,3 @@ pub use tensorci1::{crossinterpolate1, SweepStrategy, TCI1Options, TensorCI1};
 pub use tensorci2::{
     crossinterpolate2, PivotSearchStrategy, Sweep2Strategy, TCI2Options, TensorCI2,
 };
-
-pub use tensor4all_tcicore::{
-    CacheKey, CacheKeyError, CachedFunction, IndexInt, IndexSet, LocalIndex, MultiIndex, Scalar,
-};
