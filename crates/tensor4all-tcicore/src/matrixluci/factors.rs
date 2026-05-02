@@ -135,7 +135,7 @@ pub(crate) fn invert_square<T: Scalar>(
 /// right CI factors for the cross interpolation approximation
 /// `A ~ A[:, J] * A[I, J]^{-1} * A[I, :]`.
 #[derive(Debug, Clone)]
-pub struct CrossFactors<T: Scalar> {
+pub(crate) struct CrossFactors<T: Scalar> {
     /// Pivot block `A[I, J]`.
     pub pivot: DenseOwnedMatrix<T>,
     /// Columns through selected pivot columns `A[:, J]`.
@@ -146,6 +146,7 @@ pub struct CrossFactors<T: Scalar> {
 
 impl<T: Scalar> CrossFactors<T> {
     /// Gather a dense block from a source.
+    #[cfg(test)]
     pub fn gather<S: CandidateMatrixSource<T>>(
         source: &S,
         rows: &[usize],

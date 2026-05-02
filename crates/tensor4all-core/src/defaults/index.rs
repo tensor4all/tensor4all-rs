@@ -26,6 +26,26 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DynId(pub u64);
 
+impl DynId {
+    /// Return the numeric ID value used for ITensors-compatible serialization.
+    ///
+    /// Prefer full [`Index`] equality for tensor index identity.
+    /// This accessor exists for stable serialization and FFI query paths that
+    /// must expose the raw numeric identifier.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::DynId;
+    ///
+    /// let id = DynId(42);
+    /// assert_eq!(id.value(), 42);
+    /// ```
+    pub fn value(&self) -> u64 {
+        self.0
+    }
+}
+
 /// Tag set wrapper using `Arc` for efficient cloning.
 ///
 /// This wraps the underlying tag storage in an `Arc` for cheap cloning (reference count increment only).

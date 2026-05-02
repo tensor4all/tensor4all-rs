@@ -398,15 +398,11 @@ where
         let physical_indices: HashSet<T::Index> = tensor.external_indices().into_iter().collect();
 
         // Add to graph
-        let node_idx = self
-            .graph
-            .add_node(node_name.clone(), tensor)
-            .map_err(|e| anyhow::anyhow!(e))?;
+        let node_idx = self.graph.add_node(node_name.clone(), tensor)?;
 
         // Add to site_index_network
         self.site_index_network
-            .add_node(node_name, physical_indices)
-            .map_err(|e| anyhow::anyhow!("Failed to add node to site_index_network: {}", e))?;
+            .add_node(node_name, physical_indices)?;
 
         Ok(node_idx)
     }
@@ -486,8 +482,7 @@ where
 
         // Add edge to site_index_network
         self.site_index_network
-            .add_edge(&node_name_a, &node_name_b)
-            .map_err(|e| anyhow::anyhow!("Failed to add edge to site_index_network: {}", e))?;
+            .add_edge(&node_name_a, &node_name_b)?;
 
         // Update physical indices: remove bond index from physical indices
         // Use remove_site_index to also update the index_to_node reverse lookup
@@ -827,8 +822,7 @@ where
         // Update site_index_network with new physical indices
         // This properly updates both the site_space and the index_to_node mapping
         self.site_index_network
-            .set_site_space(&node_name, new_physical_indices)
-            .map_err(|e| anyhow::anyhow!("Failed to update site_index_network: {}", e))?;
+            .set_site_space(&node_name, new_physical_indices)?;
 
         Ok(old_tensor)
     }
@@ -1156,11 +1150,9 @@ where
 
         self.graph
             .rename_node(old_name, new_name.clone())
-            .map_err(|e| anyhow::anyhow!(e))
             .context("rename_node: failed to rename graph node")?;
         self.site_index_network
             .rename_node(old_name, new_name.clone())
-            .map_err(|e| anyhow::anyhow!(e))
             .context("rename_node: failed to rename site-index node")?;
 
         if self.canonical_region.remove(old_name) {

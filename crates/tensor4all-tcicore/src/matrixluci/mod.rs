@@ -5,20 +5,27 @@
 //! It uses the configured tensor backend for square complete-pivoting LU and
 //! the internal rrLU implementation for rectangular fallback coverage.
 
-pub mod block_rook;
-pub mod dense;
-pub mod error;
-pub mod factors;
-pub mod kernel;
-pub mod scalar;
-pub mod source;
-pub mod types;
+pub(crate) mod block_rook;
+pub(crate) mod dense;
+pub(crate) mod error;
+pub(crate) mod factors;
+pub(crate) mod kernel;
+pub(crate) mod scalar;
+pub(crate) mod source;
+pub(crate) mod types;
 
-pub use block_rook::LazyBlockRookKernel;
-pub use dense::DenseLuKernel;
-pub use error::{MatrixLuciError, Result};
-pub use factors::CrossFactors;
-pub use kernel::PivotKernel;
+#[allow(unused_imports)]
+pub(crate) use block_rook::LazyBlockRookKernel;
+#[allow(unused_imports)]
+pub(crate) use dense::DenseLuKernel;
+#[allow(unused_imports)]
+pub(crate) use error::{MatrixLuciError, Result};
+#[allow(unused_imports)]
+pub(crate) use factors::CrossFactors;
+#[allow(unused_imports)]
+pub(crate) use kernel::PivotKernel;
 pub use scalar::Scalar;
-pub use source::{CandidateMatrixSource, DenseMatrixSource, LazyMatrixSource};
-pub use types::{DenseOwnedMatrix, PivotKernelOptions, PivotSelectionCore};
+#[allow(unused_imports)]
+pub(crate) use source::{CandidateMatrixSource, DenseMatrixSource, LazyMatrixSource};
+#[allow(unused_imports)]
+pub(crate) use types::{DenseOwnedMatrix, PivotKernelOptions, PivotSelectionCore};

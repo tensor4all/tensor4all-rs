@@ -11,7 +11,8 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::{RandomScalar, TensorDynLen};
+use tensor4all_core::tensor::RandomScalar;
+use tensor4all_core::TensorDynLen;
 
 /// Specification for link (bond) dimensions.
 ///

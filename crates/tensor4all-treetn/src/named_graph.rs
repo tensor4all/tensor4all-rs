@@ -4,6 +4,7 @@
 //! Provides a mapping between arbitrary node name types (NodeName) and internal NodeIndex.
 //! This allows using meaningful identifiers (coordinates, strings, etc.) instead of raw indices.
 
+use anyhow::Result;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex, StableGraph};
 use petgraph::EdgeType;
 use petgraph::Undirected;
@@ -62,9 +63,9 @@ where
     /// Add a node with the given name and data.
     ///
     /// Returns an error if the node already exists.
-    pub fn add_node(&mut self, node_name: NodeName, data: NodeData) -> Result<NodeIndex, String> {
+    pub fn add_node(&mut self, node_name: NodeName, data: NodeData) -> Result<NodeIndex> {
         if self.node_name_to_index.contains_key(&node_name) {
-            return Err(format!("Node already exists: {:?}", node_name));
+            return Err(anyhow::anyhow!("Node already exists: {:?}", node_name));
         }
         let node = self.graph.add_node(data);
         self.node_name_to_index.insert(node_name.clone(), node);
@@ -90,18 +91,18 @@ where
     /// Rename an existing node without changing its data or incident edges.
     ///
     /// Returns an error if the old node doesn't exist or the new name is already in use.
-    pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<(), String> {
+    pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<()> {
         if old_name == &new_name {
             return Ok(());
         }
         if self.node_name_to_index.contains_key(&new_name) {
-            return Err(format!("Node already exists: {:?}", new_name));
+            return Err(anyhow::anyhow!("Node already exists: {:?}", new_name));
         }
 
         let node_idx = self
             .node_name_to_index
             .remove(old_name)
-            .ok_or_else(|| format!("Node not found: {:?}", old_name))?;
+            .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", old_name))?;
 
         self.node_name_to_index.insert(new_name.clone(), node_idx);
         self.index_to_node_name.insert(node_idx, new_name);
@@ -135,23 +136,18 @@ where
     /// Add an edge between two nodes.
     ///
     /// Returns an error if either node doesn't exist.
-    pub fn add_edge(
-        &mut self,
-        n1: &NodeName,
-        n2: &NodeName,
-        weight: EdgeData,
-    ) -> Result<EdgeIndex, String>
+    pub fn add_edge(&mut self, n1: &NodeName, n2: &NodeName, weight: EdgeData) -> Result<EdgeIndex>
     where
         EdgeData: Clone,
     {
         let node1 = self
             .node_name_to_index
             .get(n1)
-            .ok_or_else(|| format!("Node not found: {:?}", n1))?;
+            .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", n1))?;
         let node2 = self
             .node_name_to_index
             .get(n2)
-            .ok_or_else(|| format!("Node not found: {:?}", n2))?;
+            .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", n2))?;
         Ok(self.graph.add_edge(*node1, *node2, weight))
     }
 

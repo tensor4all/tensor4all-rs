@@ -3,6 +3,11 @@
 use num_complex::{Complex32, Complex64};
 use num_traits::{Float, One, Zero};
 
+use crate::error::Result;
+use crate::matrix::Matrix;
+use crate::matrix_luci::MatrixLuciFactors;
+use crate::matrixlu::RrLUOptions;
+
 /// Common scalar trait for matrix LUCI operations.
 pub trait Scalar:
     Clone
@@ -43,6 +48,25 @@ pub trait Scalar:
     fn epsilon() -> f64 {
         f64::EPSILON
     }
+
+    #[doc(hidden)]
+    fn matrix_luci_factors_from_matrix(
+        a: &Matrix<Self>,
+        options: RrLUOptions,
+    ) -> Result<MatrixLuciFactors<Self>>
+    where
+        Self: Sized + crate::scalar::Scalar;
+
+    #[doc(hidden)]
+    fn matrix_luci_factors_from_blocks<F>(
+        nrows: usize,
+        ncols: usize,
+        fill_block: F,
+        options: RrLUOptions,
+    ) -> Result<MatrixLuciFactors<Self>>
+    where
+        F: Fn(&[usize], &[usize], &mut [Self]),
+        Self: Sized + crate::scalar::Scalar;
 }
 
 impl Scalar for f64 {
@@ -68,6 +92,25 @@ impl Scalar for f64 {
 
     fn is_nan(self) -> bool {
         Float::is_nan(self)
+    }
+
+    fn matrix_luci_factors_from_matrix(
+        a: &Matrix<Self>,
+        options: RrLUOptions,
+    ) -> Result<MatrixLuciFactors<Self>> {
+        crate::matrix_luci::dense_matrix_luci_factors_from_matrix(a, options)
+    }
+
+    fn matrix_luci_factors_from_blocks<F>(
+        nrows: usize,
+        ncols: usize,
+        fill_block: F,
+        options: RrLUOptions,
+    ) -> Result<MatrixLuciFactors<Self>>
+    where
+        F: Fn(&[usize], &[usize], &mut [Self]),
+    {
+        crate::matrix_luci::lazy_matrix_luci_factors_from_blocks(nrows, ncols, fill_block, options)
     }
 }
 
@@ -95,6 +138,25 @@ impl Scalar for f32 {
     fn is_nan(self) -> bool {
         Float::is_nan(self)
     }
+
+    fn matrix_luci_factors_from_matrix(
+        a: &Matrix<Self>,
+        options: RrLUOptions,
+    ) -> Result<MatrixLuciFactors<Self>> {
+        crate::matrix_luci::dense_matrix_luci_factors_from_matrix(a, options)
+    }
+
+    fn matrix_luci_factors_from_blocks<F>(
+        nrows: usize,
+        ncols: usize,
+        fill_block: F,
+        options: RrLUOptions,
+    ) -> Result<MatrixLuciFactors<Self>>
+    where
+        F: Fn(&[usize], &[usize], &mut [Self]),
+    {
+        crate::matrix_luci::lazy_matrix_luci_factors_from_blocks(nrows, ncols, fill_block, options)
+    }
 }
 
 impl Scalar for Complex64 {
@@ -121,6 +183,25 @@ impl Scalar for Complex64 {
     fn is_nan(self) -> bool {
         self.re.is_nan() || self.im.is_nan()
     }
+
+    fn matrix_luci_factors_from_matrix(
+        a: &Matrix<Self>,
+        options: RrLUOptions,
+    ) -> Result<MatrixLuciFactors<Self>> {
+        crate::matrix_luci::dense_matrix_luci_factors_from_matrix(a, options)
+    }
+
+    fn matrix_luci_factors_from_blocks<F>(
+        nrows: usize,
+        ncols: usize,
+        fill_block: F,
+        options: RrLUOptions,
+    ) -> Result<MatrixLuciFactors<Self>>
+    where
+        F: Fn(&[usize], &[usize], &mut [Self]),
+    {
+        crate::matrix_luci::lazy_matrix_luci_factors_from_blocks(nrows, ncols, fill_block, options)
+    }
 }
 
 impl Scalar for Complex32 {
@@ -146,6 +227,25 @@ impl Scalar for Complex32 {
 
     fn is_nan(self) -> bool {
         self.re.is_nan() || self.im.is_nan()
+    }
+
+    fn matrix_luci_factors_from_matrix(
+        a: &Matrix<Self>,
+        options: RrLUOptions,
+    ) -> Result<MatrixLuciFactors<Self>> {
+        crate::matrix_luci::dense_matrix_luci_factors_from_matrix(a, options)
+    }
+
+    fn matrix_luci_factors_from_blocks<F>(
+        nrows: usize,
+        ncols: usize,
+        fill_block: F,
+        options: RrLUOptions,
+    ) -> Result<MatrixLuciFactors<Self>>
+    where
+        F: Fn(&[usize], &[usize], &mut [Self]),
+    {
+        crate::matrix_luci::lazy_matrix_luci_factors_from_blocks(nrows, ncols, fill_block, options)
     }
 }
 

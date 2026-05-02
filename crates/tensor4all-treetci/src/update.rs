@@ -2,14 +2,16 @@ use crate::{
     assemble::{assemble_points_column_major, MultiIndex},
     assemble_global_point,
     batch::GlobalIndexBatch,
-    DefaultProposer, PivotCandidateProposer, TreeTCI2, TreeTciEdge,
+    PivotCandidateProposer, TreeTCI2, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
-use tensor4all_core::ColMajorArray;
+use tensor4all_core::{ColMajorArray, CommonScalar};
 use tensor4all_tcicore::{
-    DenseLuKernel, DenseMatrixSource, MatrixLuciScalar as Scalar, PivotKernel, PivotKernelOptions,
-    PivotSelectionCore,
+    matrix_luci_factors_from_matrix, MatrixLuciFactors, MatrixLuciScalar as Scalar, RrLUOptions,
 };
+
+#[cfg(test)]
+use crate::DefaultProposer;
 
 /// Update one edge bipartition using a batch evaluator and a pivot-candidate proposer.
 ///
@@ -19,16 +21,15 @@ use tensor4all_tcicore::{
 ///
 /// This is a low-level building block; prefer [`optimize_default`](crate::optimize_default)
 /// or [`crossinterpolate2`](crate::crossinterpolate2) for typical usage.
-pub fn update_edge<T, F, P>(
+pub(crate) fn update_edge<T, F, P>(
     state: &mut TreeTCI2<T>,
     edge: TreeTciEdge,
     evaluate: F,
-    options: &PivotKernelOptions,
+    options: &RrLUOptions,
     proposer: &P,
-) -> Result<PivotSelectionCore>
+) -> Result<MatrixLuciFactors<T>>
 where
-    T: Scalar,
-    DenseLuKernel: PivotKernel<T>,
+    T: Scalar + CommonScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
@@ -44,15 +45,17 @@ where
     )?;
 
     for value in &values {
-        state.max_sample_value = state.max_sample_value.max(value.abs_val());
+        state.max_sample_value = state.max_sample_value.max(CommonScalar::abs_val(*value));
     }
 
-    let source = DenseMatrixSource::from_column_major(
-        &values,
-        left_candidates.len(),
-        right_candidates.len(),
-    );
-    let selection = DenseLuKernel.factorize(&source, options)?;
+    let mut matrix =
+        tensor4all_tcicore::matrix::zeros(left_candidates.len(), right_candidates.len());
+    for col in 0..right_candidates.len() {
+        for row in 0..left_candidates.len() {
+            matrix[[row, col]] = values[row + left_candidates.len() * col];
+        }
+    }
+    let selection = matrix_luci_factors_from_matrix(&matrix, Some(options.clone()))?;
 
     // Build ColMajorArray from selected pivot indices
     let n_left_sites = left_key.as_slice().len();
@@ -85,15 +88,15 @@ where
 /// Update one edge using the default proposer.
 ///
 /// Convenience wrapper around [`update_edge`] that uses [`DefaultProposer`].
-pub fn update_edge_default<T, F>(
+#[cfg(test)]
+pub(crate) fn update_edge_default<T, F>(
     state: &mut TreeTCI2<T>,
     edge: TreeTciEdge,
     evaluate: F,
-    options: &PivotKernelOptions,
-) -> Result<PivotSelectionCore>
+    options: &RrLUOptions,
+) -> Result<MatrixLuciFactors<T>>
 where
-    T: Scalar,
-    DenseLuKernel: PivotKernel<T>,
+    T: Scalar + CommonScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     update_edge(state, edge, evaluate, options, &DefaultProposer)
@@ -108,7 +111,7 @@ fn evaluate_candidate_matrix<T, F>(
     evaluate: F,
 ) -> Result<Vec<T>>
 where
-    T: Scalar,
+    T: Scalar + CommonScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     let mut points = Vec::with_capacity(left_candidates.len() * right_candidates.len());

@@ -52,7 +52,7 @@
 //! # Related crates
 //!
 //! - [`tensor4all_tcicore`] -- low-level matrix CI primitives and
-//!   [`CachedFunction`]
+//!   [`CachedFunction`](tensor4all_tcicore::CachedFunction)
 //! - [`tensor4all_simplett`] -- the [`TensorTrain`](tensor4all_simplett::TensorTrain)
 //!   data structure produced by TCI
 //! - `tensor4all-quanticstci` -- higher-level quantics TCI on discrete
@@ -78,8 +78,4 @@ pub use optfirstpivot::opt_first_pivot;
 pub use tensorci1::{crossinterpolate1, SweepStrategy, TCI1Options, TensorCI1};
 pub use tensorci2::{
     crossinterpolate2, PivotSearchStrategy, Sweep2Strategy, TCI2Options, TensorCI2,
-};
-
-pub use tensor4all_tcicore::{
-    CacheKey, CacheKeyError, CachedFunction, IndexInt, IndexSet, LocalIndex, MultiIndex, Scalar,
 };

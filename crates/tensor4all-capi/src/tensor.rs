@@ -4,7 +4,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 use num_complex::Complex64;
-use tensor4all_core::{qr_with, svd_with, QrOptions, Storage, SvdOptions, SvdTruncationPolicy};
+use tensor4all_core::{qr_with, svd_with, QrOptions, SvdOptions, SvdTruncationPolicy};
+use tensor4all_tensorbackend::Storage;
 
 use crate::types::{
     t4a_index, t4a_scalar_kind, t4a_storage_kind, t4a_svd_truncation_policy, t4a_tensor,
@@ -262,7 +263,7 @@ pub extern "C" fn t4a_tensor_rank(ptr: *const t4a_tensor, out_rank: *mut usize) 
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
-        *out_rank = (*ptr).inner().indices.len();
+        *out_rank = (*ptr).inner().indices().len();
         T4A_SUCCESS
     }));
 
@@ -312,7 +313,7 @@ pub extern "C" fn t4a_tensor_indices(
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
-        let indices = &(*ptr).inner().indices;
+        let indices = (*ptr).inner().indices();
         *out_len = indices.len();
 
         if buf.is_null() {

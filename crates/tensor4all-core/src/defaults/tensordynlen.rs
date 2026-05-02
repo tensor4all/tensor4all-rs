@@ -2,7 +2,7 @@ use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
 use crate::index_ops::{common_ind_positions, prepare_contraction, prepare_contraction_pairs};
 use crate::tensor_like::LinearizationOrder;
-use crate::{storage::Storage, storage::StorageKind, AnyScalar};
+use crate::AnyScalar;
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::Zero;
@@ -21,6 +21,7 @@ use tensor4all_tensorbackend::{
     reshape_col_major_native_tensor, scale_native_tensor, storage_to_native_tensor, StorageScalar,
     TensorElement,
 };
+use tensor4all_tensorbackend::{Storage, StorageKind};
 
 use super::structured_contraction::{
     normalize_payload_for_roots, storage_from_payload_native, storage_payload_native,
@@ -110,12 +111,6 @@ pub fn compute_permutation_from_indices(
     perm
 }
 
-/// Trait for accessing tensor index metadata.
-pub trait TensorAccess {
-    /// Get a reference to the indices.
-    fn indices(&self) -> &[DynIndex];
-}
-
 #[derive(Clone)]
 pub(crate) struct StructuredAdValue {
     payload: Arc<EagerTensor<CpuBackend>>,
@@ -184,12 +179,6 @@ pub struct TensorDynLen {
     pub(crate) structured_ad: Option<Arc<StructuredAdValue>>,
     /// Lazily materialized eager payload for native execution and AD.
     pub(crate) eager_cache: Arc<OnceLock<Arc<EagerTensor<CpuBackend>>>>,
-}
-
-impl TensorAccess for TensorDynLen {
-    fn indices(&self) -> &[DynIndex] {
-        &self.indices
-    }
 }
 
 impl TensorDynLen {
@@ -1251,7 +1240,8 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen, Storage};
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_tensorbackend::Storage;
     /// use std::sync::Arc;
     ///
     /// let i = DynIndex::new_dyn(3);
@@ -1277,7 +1267,8 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen, Storage};
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_tensorbackend::Storage;
     /// use std::sync::Arc;
     ///
     /// let i = DynIndex::new_dyn(4);
@@ -1294,7 +1285,8 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen, Storage};
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_tensorbackend::Storage;
     /// use std::sync::Arc;
     ///
     /// let i = DynIndex::new_dyn(2);
@@ -1328,7 +1320,8 @@ impl TensorDynLen {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use tensor4all_core::{DynIndex, Storage, StorageKind, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_tensorbackend::{Storage, StorageKind};
     ///
     /// let i = DynIndex::new_dyn(2);
     /// let j = DynIndex::new_dyn(2);
@@ -3720,7 +3713,8 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, Storage, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_tensorbackend::Storage;
     ///
     /// // Tensors from `from_dense` use dense storage
     /// let i = DynIndex::new_dyn(2);

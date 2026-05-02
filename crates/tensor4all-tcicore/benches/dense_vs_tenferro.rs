@@ -3,9 +3,7 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tenferro_tensor::{cpu::CpuBackend, Tensor};
-use tensor4all_tcicore::matrixluci::{
-    DenseLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions,
-};
+use tensor4all_tcicore::{matrix_luci_factors_from_matrix, RrLUOptions};
 
 fn random_column_major(nrows: usize, ncols: usize, seed: u64) -> Vec<f64> {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
@@ -20,16 +18,25 @@ fn random_column_major(nrows: usize, ncols: usize, seed: u64) -> Vec<f64> {
 
 fn bench_dense_vs_tenferro(c: &mut Criterion) {
     let mut group = c.benchmark_group("dense_no_truncation_vs_tenferro");
-    let kernel = DenseLuKernel;
-    let options = PivotKernelOptions::no_truncation();
+    let options = RrLUOptions {
+        max_rank: usize::MAX,
+        rel_tol: 0.0,
+        abs_tol: 0.0,
+        left_orthogonal: true,
+    };
 
     for &size in &[32usize, 64, 100, 128] {
         let data = random_column_major(size, size, 42);
 
         group.bench_with_input(BenchmarkId::new("matrixluci", size), &size, |b, &n| {
             b.iter(|| {
-                let src = DenseMatrixSource::from_column_major(&data, n, n);
-                black_box(kernel.factorize(&src, &options).unwrap());
+                let mut matrix = tensor4all_tcicore::matrix::zeros(n, n);
+                for col in 0..n {
+                    for row in 0..n {
+                        matrix[[row, col]] = data[row + n * col];
+                    }
+                }
+                black_box(matrix_luci_factors_from_matrix(&matrix, Some(options.clone())).unwrap());
             });
         });
 

@@ -90,5 +90,4 @@ pub use proposer::{
 #[allow(deprecated)]
 pub use state::SimpleTreeTci;
 pub use state::TreeTCI2;
-pub use update::update_edge;
 pub use visitor::{AllEdges, EdgeVisitor};

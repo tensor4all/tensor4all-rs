@@ -2,9 +2,8 @@ use crate::{
     update::update_edge, AllEdges, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer, TreeTCI2,
 };
 use anyhow::{ensure, Result};
-use tensor4all_tcicore::{
-    DenseLuKernel, MatrixLuciScalar as Scalar, PivotKernel, PivotKernelOptions,
-};
+use tensor4all_core::CommonScalar;
+use tensor4all_tcicore::{MatrixLuciScalar as Scalar, RrLUOptions};
 
 /// MVP optimization options for TreeTCI.
 ///
@@ -130,8 +129,7 @@ pub fn optimize_default<T, F>(
     options: &TreeTciOptions,
 ) -> Result<(Vec<usize>, Vec<f64>)>
 where
-    T: Scalar,
-    DenseLuKernel: PivotKernel<T>,
+    T: Scalar + CommonScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     optimize_with_proposer(state, evaluate, options, &crate::DefaultProposer)
@@ -185,8 +183,7 @@ pub fn optimize_with_proposer<T, F, P>(
     proposer: &P,
 ) -> Result<(Vec<usize>, Vec<f64>)>
 where
-    T: Scalar,
-    DenseLuKernel: PivotKernel<T>,
+    T: Scalar + CommonScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
@@ -211,7 +208,7 @@ where
             } else {
                 1.0
             };
-            let kernel_options = PivotKernelOptions {
+            let kernel_options = RrLUOptions {
                 rel_tol: 1e-14,
                 abs_tol: options.tolerance * error_scale,
                 max_rank: options.max_bond_dim,

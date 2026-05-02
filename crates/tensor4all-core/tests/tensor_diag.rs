@@ -1,7 +1,8 @@
 use num_complex::Complex64;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::TensorLike;
-use tensor4all_core::{diag_tensor_dyn_len, AnyScalar, StorageKind, TensorDynLen};
+use tensor4all_core::{diag_tensor_dyn_len, AnyScalar, TensorDynLen};
+use tensor4all_tensorbackend::StorageKind;
 
 #[test]
 fn test_diag_tensor_creation() {

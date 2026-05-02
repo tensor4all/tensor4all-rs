@@ -12,7 +12,7 @@ use std::ops::{Index, IndexMut};
 /// data in column-major order for compatibility with dense linear algebra backends.
 /// Access elements with `m[[row, col]]`.
 #[derive(Debug, Clone)]
-pub struct DenseOwnedMatrix<T: Scalar> {
+pub(crate) struct DenseOwnedMatrix<T: Scalar> {
     pub(crate) data: Vec<T>,
     pub(crate) nrows: usize,
     pub(crate) ncols: usize,
@@ -23,7 +23,7 @@ pub struct DenseOwnedMatrix<T: Scalar> {
 /// Controls rank truncation, tolerance thresholds, and the normalization
 /// convention (left-orthogonal vs. right-orthogonal).
 #[derive(Debug, Clone)]
-pub struct PivotKernelOptions {
+pub(crate) struct PivotKernelOptions {
     /// Relative tolerance.
     pub rel_tol: f64,
     /// Absolute tolerance.
@@ -36,7 +36,7 @@ pub struct PivotKernelOptions {
 
 /// Result of pivot selection: chosen row/column indices, rank, and error history.
 #[derive(Debug, Clone)]
-pub struct PivotSelectionCore {
+pub(crate) struct PivotSelectionCore {
     /// Selected row indices.
     pub row_indices: Vec<usize>,
     /// Selected column indices.
@@ -77,11 +77,6 @@ impl<T: Scalar> DenseOwnedMatrix<T> {
     pub fn as_slice(&self) -> &[T] {
         &self.data
     }
-
-    /// Mutably borrow the underlying column-major data.
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
-        &mut self.data
-    }
 }
 
 impl<T: Scalar> Index<[usize; 2]> for DenseOwnedMatrix<T> {
@@ -100,6 +95,7 @@ impl<T: Scalar> IndexMut<[usize; 2]> for DenseOwnedMatrix<T> {
 
 impl PivotKernelOptions {
     /// Canonical options for dense no-truncation behavior.
+    #[cfg(test)]
     pub fn no_truncation() -> Self {
         Self {
             rel_tol: 0.0,

@@ -321,6 +321,12 @@ fn test_is_contractable_undirected() {
 }
 
 #[test]
+fn test_dyn_id_value_accessor() {
+    let id = DynId(42);
+    assert_eq!(id.value(), 42);
+}
+
+#[test]
 fn test_is_contractable_same_id_dim() {
     let i1: DynIndex = Index::new_dyn(5);
     let i2 = i1.clone();

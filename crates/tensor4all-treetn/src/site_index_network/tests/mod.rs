@@ -519,3 +519,15 @@ fn test_compatible_different_topology() {
 
     assert!(!net1.compatible_site_dimensions(&net2));
 }
+
+#[test]
+fn test_site_index_network_add_node_returns_anyhow_error() {
+    let mut net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
+    let site: HashSet<_> = [DynIndex::new_dyn(2)].into();
+    net.add_node("A".to_string(), site).unwrap();
+
+    let result: anyhow::Result<_> = net.add_node("A".to_string(), HashSet::new());
+    let err = result.unwrap_err();
+
+    assert_eq!(err.to_string(), "Node already exists: \"A\"");
+}

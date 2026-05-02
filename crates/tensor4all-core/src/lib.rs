@@ -62,13 +62,6 @@ pub use smallstring::{SmallChar, SmallString, SmallStringError};
 pub use tagset::{Tag, TagSetError, TagSetLike};
 
 // Tensor (storage, tensor types)
-pub mod storage {
-    //! Re-export of snapshot storage utilities.
-    pub use tensor4all_tensorbackend::{
-        make_mut_storage, mindim, AnyScalar, Storage, StorageKind, StorageScalar,
-        StructuredStorage, SumFromStorage,
-    };
-}
 pub mod tensor_index;
 pub mod tensor_like;
 
@@ -85,11 +78,7 @@ pub use defaults::tensordynlen as tensor;
 
 pub use any_scalar::AnyScalar;
 pub use defaults::tensordynlen::{
-    compute_permutation_from_indices, diag_tensor_dyn_len, unfold_split, RandomScalar,
-    TensorAccess, TensorDynLen,
-};
-pub use storage::{
-    make_mut_storage, mindim, Storage, StorageKind, StructuredStorage, SumFromStorage,
+    compute_permutation_from_indices, diag_tensor_dyn_len, unfold_split, TensorDynLen,
 };
 pub use tensor4all_tensorbackend::TensorElement;
 pub use tensor4all_tensorbackend::{

@@ -4,7 +4,7 @@ use thiserror::Error;
 
 /// Errors that can occur during matrix LUCI operations.
 #[derive(Debug, Error)]
-pub enum MatrixLuciError {
+pub(crate) enum MatrixLuciError {
     /// Invalid argument.
     #[error("Invalid argument: {message}")]
     InvalidArgument {
@@ -17,4 +17,4 @@ pub enum MatrixLuciError {
 }
 
 /// Result type for matrixluci operations.
-pub type Result<T> = std::result::Result<T, MatrixLuciError>;
+pub(crate) type Result<T> = std::result::Result<T, MatrixLuciError>;

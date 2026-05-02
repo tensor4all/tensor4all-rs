@@ -3,10 +3,11 @@
 use std::ffi::c_void;
 
 use tensor4all_core::{
-    DynIndex, FactorizeAlg, SingularValueMeasure, StorageKind, SvdTruncationPolicy, TensorDynLen,
+    DynIndex, FactorizeAlg, SingularValueMeasure, SvdTruncationPolicy, TensorDynLen,
     ThresholdScale, TruncationRule,
 };
 use tensor4all_quanticstransform::BoundaryCondition as QuanticsBoundaryCondition;
+use tensor4all_tensorbackend::StorageKind;
 use tensor4all_treetn::treetn::contraction::ContractionMethod;
 use tensor4all_treetn::{CanonicalForm as TreeCanonicalForm, DefaultTreeTN, TreeTNEvaluator};
 
