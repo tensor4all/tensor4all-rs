@@ -118,10 +118,7 @@ pub fn linsolve(
     // site indices. For each site, the MPO has 2 site indices while the MPS has 1.
     // We find the MPO index that shares an ID with init's site index (input) and
     // the remaining one (output).
-    let (input_mapping, output_mapping) =
-        infer_index_mappings(operator, &init).map_err(|e| TensorTrainError::OperationError {
-            message: format!("Failed to infer index mappings: {}", e),
-        })?;
+    let (input_mapping, output_mapping) = infer_index_mappings(operator, &init)?;
 
     let result = square_linsolve(
         operator.as_treetn(),
@@ -150,10 +147,7 @@ type SiteMappings = (
 /// finds the operator index sharing an ID with init's index (input) and the
 /// remaining one (output). Returns `(None, None)` when no mappings are needed
 /// (operator and init share all site indices).
-fn infer_index_mappings(
-    operator: &TensorTrain,
-    init: &TensorTrain,
-) -> std::result::Result<SiteMappings, String> {
+fn infer_index_mappings(operator: &TensorTrain, init: &TensorTrain) -> Result<SiteMappings> {
     let op_treetn = operator.as_treetn();
     let init_treetn = init.as_treetn();
     let nsites = init.len();
@@ -184,13 +178,15 @@ fn infer_index_mappings(
                         needs_mapping = true;
                     }
                 } else {
-                    return Err(format!(
-                        "Site {}: operator has 2 site indices but none share an ID with init's \
-                         site index {:?}. Cannot auto-infer index mappings. \
-                         Use the treetn-level API with explicit IndexMapping.",
-                        site,
-                        init_idx.id()
-                    ));
+                    return Err(TensorTrainError::OperationError {
+                        message: format!(
+                            "Site {}: operator has 2 site indices but none share an ID with init's \
+                             site index {:?}. Cannot auto-infer index mappings. \
+                             Use the treetn-level API with explicit IndexMapping.",
+                            site,
+                            init_idx.id()
+                        ),
+                    });
                 }
             }
         }
@@ -247,5 +243,35 @@ impl TensorTrain {
     /// See [`linsolve`] for details.
     pub fn linsolve(&self, rhs: &Self, init: Self, options: &LinsolveOptions) -> Result<Self> {
         linsolve(self, rhs, init, options)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tensor4all_core::{DynIndex, TensorDynLen};
+
+    fn make_tensor(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
+        TensorDynLen::from_dense(indices, data).unwrap()
+    }
+
+    #[test]
+    fn infer_index_mappings_returns_typed_error() {
+        let op_in = DynIndex::new_dyn(2);
+        let op_out = DynIndex::new_dyn(2);
+        let init_site = DynIndex::new_dyn(2);
+
+        let operator = TensorTrain::new(vec![make_tensor(
+            vec![op_in, op_out],
+            vec![1.0, 0.0, 0.0, 1.0],
+        )])
+        .unwrap();
+        let init = TensorTrain::new(vec![make_tensor(vec![init_site], vec![1.0, 2.0])]).unwrap();
+
+        let result: crate::error::Result<_> = infer_index_mappings(&operator, &init);
+        let err = result.unwrap_err();
+
+        assert!(matches!(err, TensorTrainError::OperationError { .. }));
+        assert!(err.to_string().contains("Cannot auto-infer index mappings"));
     }
 }

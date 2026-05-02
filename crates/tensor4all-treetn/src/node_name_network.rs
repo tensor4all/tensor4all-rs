@@ -8,6 +8,7 @@
 //! when only the graph structure (without index information) is needed.
 
 use crate::named_graph::NamedGraph;
+use anyhow::Result;
 use petgraph::algo::astar;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex, StableGraph};
 use petgraph::visit::{Bfs, DfsPostOrder};
@@ -150,7 +151,7 @@ where
     /// Add a node to the network.
     ///
     /// Returns an error if the node already exists.
-    pub fn add_node(&mut self, node_name: NodeName) -> Result<NodeIndex, String> {
+    pub fn add_node(&mut self, node_name: NodeName) -> Result<NodeIndex> {
         self.graph.add_node(node_name, ())
     }
 
@@ -162,7 +163,7 @@ where
     /// Add an edge between two nodes.
     ///
     /// Returns an error if either node doesn't exist.
-    pub fn add_edge(&mut self, n1: &NodeName, n2: &NodeName) -> Result<EdgeIndex, String> {
+    pub fn add_edge(&mut self, n1: &NodeName, n2: &NodeName) -> Result<EdgeIndex> {
         self.graph.add_edge(n1, n2, ())
     }
 
@@ -177,7 +178,7 @@ where
     }
 
     /// Rename an existing node.
-    pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<(), String> {
+    pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<()> {
         self.graph.rename_node(old_name, new_name)
     }
 

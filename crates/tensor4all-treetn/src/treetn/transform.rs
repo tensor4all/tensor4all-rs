@@ -863,12 +863,11 @@ where
         let site_space = target
             .site_space(name)
             .ok_or_else(|| anyhow::anyhow!("Fragment node {:?} not found in target", name))?;
-        sub.add_node(name.clone(), site_space.clone())
-            .map_err(anyhow::Error::msg)?;
+        sub.add_node(name.clone(), site_space.clone())?;
     }
     for (a, b) in target.edges() {
         if fragment_names.contains(&a) && fragment_names.contains(&b) {
-            sub.add_edge(&a, &b).map_err(anyhow::Error::msg)?;
+            sub.add_edge(&a, &b)?;
         }
     }
     Ok(sub)

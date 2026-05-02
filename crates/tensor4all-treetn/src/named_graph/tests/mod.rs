@@ -125,3 +125,14 @@ fn test_euler_tour_single_node() {
     let vertices = g.euler_tour_vertices(&"A".to_string()).unwrap();
     assert_eq!(vertices, vec![a]);
 }
+
+#[test]
+fn test_named_graph_add_node_returns_anyhow_error() {
+    let mut g: NamedGraph<String, i32, ()> = NamedGraph::new();
+    g.add_node("A".to_string(), 1).unwrap();
+
+    let result: anyhow::Result<_> = g.add_node("A".to_string(), 2);
+    let err = result.unwrap_err();
+
+    assert_eq!(err.to_string(), "Node already exists: \"A\"");
+}

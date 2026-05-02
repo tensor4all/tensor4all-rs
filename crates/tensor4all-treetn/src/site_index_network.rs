@@ -8,6 +8,7 @@
 //! enabling topology and site space comparison independent of tensor values.
 
 use crate::node_name_network::{CanonicalizeEdges, NodeNameNetwork};
+use anyhow::Result;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex, StableGraph};
 use petgraph::Undirected;
 use std::collections::{HashMap, HashSet};
@@ -99,7 +100,7 @@ where
         &mut self,
         node_name: NodeName,
         site_space: impl Into<HashSet<I>>,
-    ) -> Result<NodeIndex, String> {
+    ) -> Result<NodeIndex> {
         let node_idx = self.topology.add_node(node_name.clone())?;
         let site_space_set = site_space.into();
         // Update reverse lookup for all indices.
@@ -116,7 +117,7 @@ where
     }
 
     /// Rename an existing node and preserve its site-space metadata.
-    pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<(), String> {
+    pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<()> {
         if old_name == &new_name {
             return Ok(());
         }
@@ -124,7 +125,7 @@ where
         let site_space = self
             .site_spaces
             .remove(old_name)
-            .ok_or_else(|| format!("Node {:?} not found", old_name))?;
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", old_name))?;
         self.topology.rename_node(old_name, new_name.clone())?;
         for index in &site_space {
             self.index_to_node.insert(index.clone(), new_name.clone());
@@ -189,11 +190,11 @@ where
     /// Add a site index to a node's site space.
     ///
     /// Updates both the site space and the reverse lookup.
-    pub fn add_site_index(&mut self, node_name: &NodeName, index: I) -> Result<(), String> {
+    pub fn add_site_index(&mut self, node_name: &NodeName, index: I) -> Result<()> {
         let site_space = self
             .site_spaces
             .get_mut(node_name)
-            .ok_or_else(|| format!("Node {:?} not found", node_name))?;
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", node_name))?;
         site_space.insert(index.clone());
         self.index_to_node.insert(index, node_name.clone());
         Ok(())
@@ -202,11 +203,11 @@ where
     /// Remove a site index from a node's site space.
     ///
     /// Updates both the site space and the reverse lookup.
-    pub fn remove_site_index(&mut self, node_name: &NodeName, index: &I) -> Result<bool, String> {
+    pub fn remove_site_index(&mut self, node_name: &NodeName, index: &I) -> Result<bool> {
         let site_space = self
             .site_spaces
             .get_mut(node_name)
-            .ok_or_else(|| format!("Node {:?} not found", node_name))?;
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", node_name))?;
         let removed = site_space.remove(index);
         if removed {
             self.index_to_node.remove(index);
@@ -222,13 +223,13 @@ where
         node_name: &NodeName,
         old_index: &I,
         new_index: I,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let site_space = self
             .site_spaces
             .get_mut(node_name)
-            .ok_or_else(|| format!("Node {:?} not found", node_name))?;
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", node_name))?;
         if !site_space.remove(old_index) {
-            return Err(format!(
+            return Err(anyhow::anyhow!(
                 "Index {:?} not found in node {:?}",
                 old_index.id(),
                 node_name
@@ -244,15 +245,11 @@ where
     ///
     /// Updates both the site space and the reverse lookup.
     /// This is an atomic operation that removes all old indices and adds all new ones.
-    pub fn set_site_space(
-        &mut self,
-        node_name: &NodeName,
-        new_indices: HashSet<I>,
-    ) -> Result<(), String> {
+    pub fn set_site_space(&mut self, node_name: &NodeName, new_indices: HashSet<I>) -> Result<()> {
         let site_space = self
             .site_spaces
             .get_mut(node_name)
-            .ok_or_else(|| format!("Node {:?} not found", node_name))?;
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", node_name))?;
 
         // Remove old indices from index_to_node
         for old_idx in site_space.iter() {
@@ -282,7 +279,7 @@ where
     /// Add an edge between two nodes.
     ///
     /// Returns an error if either node doesn't exist.
-    pub fn add_edge(&mut self, n1: &NodeName, n2: &NodeName) -> Result<EdgeIndex, String> {
+    pub fn add_edge(&mut self, n1: &NodeName, n2: &NodeName) -> Result<EdgeIndex> {
         self.topology.add_edge(n1, n2)
     }
 
@@ -494,7 +491,7 @@ where
     ///
     /// # Returns
     /// - `Ok(SiteIndexNetwork)` - The resulting state's site index network after the operator acts
-    /// - `Err(String)` - Error message if the operator cannot act on this state
+    /// - `Err(anyhow::Error)` - Error message if the operator cannot act on this state
     ///
     /// # Note
     /// This is a simplified version that assumes the operator's output indices
@@ -502,10 +499,10 @@ where
     /// site index structure as the original state). For more complex operators
     /// with different input/output dimensions, a more sophisticated approach
     /// would be needed.
-    pub fn apply_operator_topology(&self, operator: &Self) -> Result<Self, String> {
+    pub fn apply_operator_topology(&self, operator: &Self) -> Result<Self> {
         // Check topology match
         if !self.topology.same_topology(&operator.topology) {
-            return Err(format!(
+            return Err(anyhow::anyhow!(
                 "Operator and state have different topologies. State nodes: {:?}, Operator nodes: {:?}",
                 self.node_names(),
                 operator.node_names()
