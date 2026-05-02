@@ -1,5 +1,10 @@
 # N-ary Contraction Pipeline Unification Implementation Plan
 
+> Historical note: this planning document predates the current repository rule
+> that production tensor-network paths must not silently dense-materialize full
+> tensors. Treat any dense fallback discussed here as small/reference/debug
+> behavior only, not production guidance.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Make tensor4all-core contractions express retained shared indices, route dense contraction execution through tenferro-rs N-ary eager einsum, and remove the semantic drift between AD and non-AD paths.
@@ -732,4 +737,3 @@ Suggested checkpoints:
 3. `feat: unify ad and native contraction execution`
 4. `feat: add owned contraction entrypoints`
 5. `docs: document retained contraction options`
-

@@ -23,6 +23,10 @@ use crate::common::{
 /// # Returns
 /// LinearOperator representing the flip transformation
 ///
+/// # Errors
+/// Returns an error when `r` is zero, when one-site flip construction is
+/// requested, or when internal MPO/operator construction fails.
+///
 /// # Examples
 ///
 /// ```
@@ -60,6 +64,10 @@ pub fn flip_operator(r: usize, bc: BoundaryCondition) -> Result<QuanticsOperator
 /// * `bc` - Boundary condition
 /// * `nvariables` - Total number of variables (must be at least 2)
 /// * `target_var` - Which variable to flip (0-indexed, must be < nvariables)
+///
+/// # Errors
+/// Returns an error when `r` is zero or one, when `nvariables` or `target_var`
+/// is invalid, or when embedding/operator construction fails.
 ///
 /// # Examples
 ///

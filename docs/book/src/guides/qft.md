@@ -89,13 +89,16 @@ for i in 0..r {
     state = state.replaceind(&site_indices[i], &op_input).unwrap();
 }
 
-// Apply the QFT with local exact naive apply.
+// Apply the QFT with local exact naive apply. This can grow bond dimensions as
+// state/operator products, so use it for small exact/debug cases.
 let result = apply_linear_operator(&qft_op, &state, ApplyOptions::naive()).unwrap();
 
 // The result should exist and have the same number of nodes
 assert_eq!(result.node_count(), r);
 
-// This example is small, so dense verification is acceptable.
+// This example is intentionally small, so dense verification is acceptable.
+// For production-size networks, prefer scalable residual norms or sampled
+// `evaluate()` checks rather than `contract_to_tensor()`.
 let dense = result.contract_to_tensor().unwrap();
 let data = dense.to_vec::<Complex64>().unwrap();
 

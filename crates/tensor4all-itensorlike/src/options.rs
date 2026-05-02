@@ -115,8 +115,9 @@ pub enum ContractMethod {
     Zipup,
     /// Fit/variational contraction (iterative optimization).
     Fit,
-    /// Naive contraction: contract to full tensor, then decompose back.
-    /// Useful for debugging and testing, but O(exp(n)) in memory.
+    /// Dense/reference contraction: contract to a full tensor, then decompose back.
+    /// Useful only for small debugging and testing cases; memory scales as the
+    /// product of external dimensions.
     Naive,
 }
 

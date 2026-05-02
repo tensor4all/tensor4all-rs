@@ -140,7 +140,7 @@ Three methods are available, each with different tradeoffs:
 
 | Method | Algorithm | When to use |
 |--------|-----------|-------------|
-| `ApplyOptions::naive()` | Local exact operator-state apply with product links | Exactness required and bond growth is acceptable |
+| `ApplyOptions::naive()` | Local exact operator-state apply with product links | Small exact/debug cases; bond dimensions may grow as products |
 | `ApplyOptions::zipup()` | Single-sweep contraction with SVD truncation | Default choice; fast, good accuracy |
 | `ApplyOptions::fit()` | Iterative variational optimization | Best compression; use when bond dim must be small |
 
@@ -149,7 +149,8 @@ use tensor4all_core::SvdTruncationPolicy;
 use tensor4all_treetn::ApplyOptions;
 
 // Naive: local exact apply with no truncation or full dense materialization.
-// Output bond dimensions can grow as state/operator bond products.
+// Use for small exact/debug cases; output bond dimensions can grow as
+// state/operator bond products.
 let opts = ApplyOptions::naive();
 assert_eq!(opts.max_rank, None);
 

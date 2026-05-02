@@ -53,6 +53,10 @@ pub enum TriangleType {
 /// # Returns
 /// LinearOperator representing the cumulative sum
 ///
+/// # Errors
+/// Returns an error when `r < 2` or when internal MPO/operator construction
+/// fails.
+///
 /// # Examples
 ///
 /// ```
@@ -83,6 +87,10 @@ pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
 /// # Arguments
 /// * `r` - Number of bits (sites). Must be at least 2.
 /// * `triangle` - Which triangle to use
+///
+/// # Errors
+/// Returns an error when `r < 2` or when internal MPO/operator construction
+/// fails.
 ///
 /// # Examples
 ///

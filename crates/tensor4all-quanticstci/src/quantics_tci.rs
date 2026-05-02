@@ -244,8 +244,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
-    /// use tensor4all_simplett::AbstractTensorTrain;
+    /// use tensor4all_quanticstci::{
+    ///     quanticscrossinterpolate_discrete, AbstractTensorTrain, QtciOptions,
+    /// };
     ///
     /// let f = |idx: &[i64]| idx[0] as f64;
     /// let (qtci, _, _) = quanticscrossinterpolate_discrete::<f64, _>(

@@ -30,6 +30,10 @@ use crate::common::{
 /// # Returns
 /// LinearOperator representing the phase rotation
 ///
+/// # Errors
+/// Returns an error when `r` is zero, when `theta` is not finite, or when
+/// internal MPO/operator construction fails.
+///
 /// # Examples
 ///
 /// ```
@@ -72,6 +76,11 @@ pub fn phase_rotation_operator(r: usize, theta: f64) -> Result<QuanticsOperator>
 /// * `theta` - Phase angle in radians
 /// * `nvariables` - Total number of variables
 /// * `target_var` - Which variable to apply phase rotation to (0-indexed)
+///
+/// # Errors
+/// Returns an error when `r` is zero, when `theta` is not finite, when
+/// `nvariables` or `target_var` is invalid, or when embedding/operator
+/// construction fails.
 ///
 /// # Examples
 ///

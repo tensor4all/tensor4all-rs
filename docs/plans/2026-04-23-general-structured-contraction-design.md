@@ -1,5 +1,10 @@
 # General Structured Contraction Design
 
+> Historical note: this design predates the current repository rule that
+> production paths must preserve compact structured representations and avoid
+> hidden full dense materialization. Mentions of dense fallback below describe a
+> temporary reference/debug path, not current production guidance.
+
 ## Goal
 
 Implement contraction for dense, diagonal, and general structured
@@ -266,4 +271,3 @@ Then test value and AD behavior:
   call `backward()`, and verify `grad().storage().axis_classes()` matches the
   input layout;
 - verify gradient payload values against dense whole-result comparisons.
-
