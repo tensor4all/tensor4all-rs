@@ -27,9 +27,8 @@ use crate::quantics_tci::quanticscrossinterpolate;
 ///
 /// ```
 /// use tensor4all_quanticstci::{
-///     quanticscrossinterpolate_batched, QtciOptions, DiscretizedGrid,
+///     quanticscrossinterpolate_batched, AbstractTensorTrain, DiscretizedGrid, QtciOptions,
 /// };
-/// use tensor4all_simplett::AbstractTensorTrain;
 ///
 /// let grid = DiscretizedGrid::builder(&[2])
 ///     .with_lower_bound(&[0.0])
@@ -71,9 +70,8 @@ where
     ///
     /// ```
     /// use tensor4all_quanticstci::{
-    ///     quanticscrossinterpolate_batched, QtciOptions, DiscretizedGrid,
+    ///     quanticscrossinterpolate_batched, AbstractTensorTrain, DiscretizedGrid, QtciOptions,
     /// };
-    /// use tensor4all_simplett::AbstractTensorTrain;
     ///
     /// let grid = DiscretizedGrid::builder(&[2])
     ///     .with_lower_bound(&[0.0])
@@ -180,9 +178,8 @@ where
 ///
 /// ```
 /// use tensor4all_quanticstci::{
-///     quanticscrossinterpolate_batched, QtciOptions, DiscretizedGrid,
+///     quanticscrossinterpolate_batched, AbstractTensorTrain, DiscretizedGrid, QtciOptions,
 /// };
-/// use tensor4all_simplett::AbstractTensorTrain;
 ///
 /// let grid = DiscretizedGrid::builder(&[2])
 ///     .with_lower_bound(&[0.0])

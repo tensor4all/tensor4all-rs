@@ -421,11 +421,14 @@ impl<T: TensorLike> TensorLike for BlockTensor<T> {
         self.blocks.iter().map(|b| b.norm_squared()).sum()
     }
 
-    fn maxabs(&self) -> f64 {
+    fn try_maxabs(&self) -> Result<f64> {
         self.blocks
             .iter()
-            .map(|b| b.maxabs())
-            .fold(0.0_f64, f64::max)
+            .try_fold(0.0_f64, |acc, block| Ok(acc.max(block.try_maxabs()?)))
+    }
+
+    fn maxabs(&self) -> f64 {
+        self.try_maxabs().unwrap_or(f64::NAN)
     }
 
     fn scale(&self, scalar: AnyScalar) -> Result<Self> {

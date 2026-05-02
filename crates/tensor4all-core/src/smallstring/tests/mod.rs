@@ -49,6 +49,31 @@ fn test_smallstring_ordering() {
 }
 
 #[test]
+fn test_smallstring_accessors_default_and_display() {
+    let empty = SmallString::<4>::default();
+    assert!(empty.is_empty());
+    assert_eq!(empty.len(), 0);
+    assert_eq!(empty.capacity(), 4);
+    assert_eq!(empty.get(0), None);
+    assert_eq!(empty.as_slice(), &[] as &[u16]);
+    assert_eq!(empty.to_string(), "");
+
+    let s = SmallString::<4>::from_str("ab").unwrap();
+    assert!(!s.is_empty());
+    assert_eq!(s.capacity(), 4);
+    assert_eq!(s.get(0), Some('a'));
+    assert_eq!(s.get(1), Some('b'));
+    assert_eq!(s.get(2), None);
+    assert_eq!(s.as_slice(), &[b'a' as u16, b'b' as u16]);
+    assert_eq!(s.to_string(), "ab");
+}
+
+#[test]
+fn test_smallchar_u16_invalid_code_unit_uses_replacement_char() {
+    assert_eq!(<u16 as SmallChar>::to_char(0xD800), '\u{FFFD}');
+}
+
+#[test]
 fn test_smallstring_size() {
     // u16 version: 16 * 2 + 8 = 40 bytes
     assert_eq!(std::mem::size_of::<SmallString<16, u16>>(), 40);

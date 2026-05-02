@@ -1073,6 +1073,40 @@ impl TensorTrain {
             })
     }
 
+    /// Compute an explicit dense maximum absolute value.
+    ///
+    /// This method first materializes the full tensor train with
+    /// [`Self::to_dense`], then computes the dense tensor's L-infinity norm.
+    /// Use it only for small reference/debug checks. Long tensor-train
+    /// comparisons should use scalable residual norms such as
+    /// `tt1.axpby(1, tt2, -1)?.norm() / tt2.norm()`.
+    ///
+    /// # Returns
+    /// The maximum absolute element in the dense tensor represented by this
+    /// tensor train.
+    ///
+    /// # Errors
+    /// Returns an error when the tensor train is empty or dense materialization
+    /// fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let site = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(vec![site], vec![-2.0, 3.0])?;
+    /// let tt = TensorTrain::new(vec![tensor])?;
+    /// assert_eq!(tt.dense_maxabs()?, 3.0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn dense_maxabs(&self) -> Result<f64> {
+        self.to_dense().map(|t| t.maxabs())
+    }
+
     /// Add two tensor trains using direct-sum construction.
     ///
     /// This creates a new tensor train where each tensor is the direct sum of the
@@ -1257,8 +1291,14 @@ impl TensorLike for TensorTrain {
         TensorTrain::norm_squared(self)
     }
 
+    fn try_maxabs(&self) -> anyhow::Result<f64> {
+        anyhow::bail!(
+            "TensorTrain does not support TensorLike::maxabs without explicit dense materialization; use TensorTrain::dense_maxabs() for small reference checks or norm-based residuals for long tensor trains"
+        )
+    }
+
     fn maxabs(&self) -> f64 {
-        self.to_dense().map(|t| t.maxabs()).unwrap_or(0.0)
+        f64::NAN
     }
 
     fn conj(&self) -> Self {

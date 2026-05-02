@@ -1,6 +1,8 @@
-//! Shift operator: f(x) = g(x + offset) mod 2^R
+//! Shift operator for basis-state translations.
 //!
-//! This transformation shifts the argument by a constant offset.
+//! The operator maps basis states as `|x> -> |x + offset>`. As a matrix action
+//! on sampled values, `(M g)[x] = g[x - offset]` with the selected boundary
+//! condition.
 
 use anyhow::Result;
 use num_complex::Complex64;
@@ -12,9 +14,10 @@ use crate::common::{
     tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
 };
 
-/// Create a shift operator: f(x) = g(x + offset) mod 2^R
+/// Create a shift operator for `|x> -> |x + offset>`.
 ///
-/// This MPO transforms a function g(x) to f(x) = g(x + offset) for x = 0, 1, ..., 2^R - 1.
+/// As a matrix acting on a value vector `g`, the output satisfies
+/// `(M g)[x] = g[x - offset]` for `x = 0, 1, ..., 2^R - 1`, subject to `bc`.
 ///
 /// # Arguments
 /// * `r` - Number of bits (sites)
@@ -23,6 +26,10 @@ use crate::common::{
 ///
 /// # Returns
 /// LinearOperator representing the shift transformation
+///
+/// # Errors
+/// Returns an error when `r` is zero, when `r > 63` would overflow the integer
+/// index representation, or when internal MPO/operator construction fails.
 ///
 /// # Examples
 ///
@@ -57,6 +64,10 @@ pub fn shift_operator(r: usize, offset: i64, bc: BoundaryCondition) -> Result<Qu
 /// * `bc` - Boundary condition
 /// * `nvariables` - Total number of variables (must be at least 2)
 /// * `target_var` - Which variable to shift (0-indexed, must be < nvariables)
+///
+/// # Errors
+/// Returns an error when `r` is zero, when `r > 63`, when `nvariables` or
+/// `target_var` is invalid, or when embedding/operator construction fails.
 ///
 /// # Examples
 ///

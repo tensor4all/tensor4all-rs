@@ -5,23 +5,37 @@ Quantics transformation operators for tensor train methods. Port of Quantics.jl.
 ## Key Types
 
 - `LinearOperator` — operator in TreeTN form; returned by all constructor functions
-- `shift_operator()` — cyclic shift: f(x) = g(x + offset) mod 2^R
+- `shift_operator()` — basis shift `|x> -> |x + offset>`; as a matrix action, `(M g)[x] = g[x - offset]`
 - `flip_operator()` — reflection: f(x) = g(2^R - x)
 - `quantics_fourier_operator()` — Quantics Fourier Transform (QFT)
 - `affine_operator()` — affine transform y = A·x + b with rational coefficients
 
+## Conventions
+
+- Operators carry their own input and output indices. Replace a state site's
+  index with the operator input index before applying it.
+- Multi-variable operators use interleaved bit encoding:
+  `site = bit_var0 + 2 * bit_var1 + ...`.
+- QFT output is in bit-reversed frequency order.
+- Affine matrices are column-major.
+- Dense materialization is for small reference/debug checks only.
+
 ## Example
 
-```rust,ignore
-use tensor4all_quanticstransform::{shift_operator, flip_operator, BoundaryCondition};
+```rust
+# fn main() -> anyhow::Result<()> {
+use tensor4all_quanticstransform::{flip_operator, shift_operator, BoundaryCondition};
 
 // Create operators for R=4 sites (2^4 = 16 grid points)
 let r = 4;
 let shift_op = shift_operator(r, 3, BoundaryCondition::Periodic)?;
-let flip_op = flip_operator(r)?;
+let flip_op = flip_operator(r, BoundaryCondition::Periodic)?;
 
-// Operators are LinearOperator (TreeTN form) — apply to a TreeTN with
-// tensor4all_treetn::apply_linear_operator()
+// Operators are LinearOperator (TreeTN form).
+assert_eq!(shift_op.mpo.node_count(), r);
+assert_eq!(flip_op.mpo.node_count(), r);
+# Ok(())
+# }
 ```
 
 ## Documentation

@@ -7,12 +7,12 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::types::{t4a_index, InternalIndex};
 use crate::{
-    capi_error, clone_opaque, is_assigned_opaque, panic_message, release_opaque, run_catching,
-    set_last_error, CapiResult, StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR,
-    T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
+    capi_error, clone_opaque, err_buffer_too_small, err_null_pointer, is_assigned_opaque,
+    panic_message, release_opaque, run_catching, set_last_error, CapiResult, StatusCode,
+    T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
 };
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::IndexLike;
+use tensor4all_core::{IndexLike, TagSetLike};
 
 /// Release an index handle.
 #[unsafe(no_mangle)]
@@ -117,7 +117,7 @@ where
     F: FnOnce() -> CapiResult<T>,
 {
     if out.is_null() {
-        return T4A_NULL_POINTER;
+        return err_null_pointer("out");
     }
 
     match catch_unwind(AssertUnwindSafe(f)) {
@@ -169,8 +169,11 @@ pub extern "C" fn t4a_index_new_with_id(
 /// Get the dimension of an index.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_index_dim(ptr: *const t4a_index, out_dim: *mut usize) -> StatusCode {
-    if ptr.is_null() || out_dim.is_null() {
-        return T4A_NULL_POINTER;
+    if ptr.is_null() {
+        return err_null_pointer("index");
+    }
+    if out_dim.is_null() {
+        return err_null_pointer("out_dim");
     }
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
@@ -218,8 +221,11 @@ pub extern "C" fn t4a_index_hash(ptr: *const t4a_index, out_hash: *mut u64) -> S
 /// Get the prime level of an index.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_index_plev(ptr: *const t4a_index, out_plev: *mut i64) -> StatusCode {
-    if ptr.is_null() || out_plev.is_null() {
-        return T4A_NULL_POINTER;
+    if ptr.is_null() {
+        return err_null_pointer("index");
+    }
+    if out_plev.is_null() {
+        return err_null_pointer("out_plev");
     }
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
@@ -275,8 +281,11 @@ pub extern "C" fn t4a_index_tags(
     buf_len: usize,
     out_len: *mut usize,
 ) -> StatusCode {
-    if ptr.is_null() || out_len.is_null() {
-        return T4A_NULL_POINTER;
+    if ptr.is_null() {
+        return err_null_pointer("index");
+    }
+    if out_len.is_null() {
+        return err_null_pointer("out_len");
     }
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
@@ -294,7 +303,7 @@ pub extern "C" fn t4a_index_tags(
             return T4A_SUCCESS;
         }
         if buf_len < required_len {
-            return T4A_BUFFER_TOO_SMALL;
+            return err_buffer_too_small("index tags", required_len, buf_len);
         }
 
         std::ptr::copy_nonoverlapping(tags.as_ptr(), buf, tags.len());
@@ -312,8 +321,14 @@ pub extern "C" fn t4a_index_has_tag(
     tag: *const c_char,
     out_has_tag: *mut i32,
 ) -> StatusCode {
-    if ptr.is_null() || tag.is_null() || out_has_tag.is_null() {
-        return T4A_NULL_POINTER;
+    if ptr.is_null() {
+        return err_null_pointer("index");
+    }
+    if tag.is_null() {
+        return err_null_pointer("tag");
+    }
+    if out_has_tag.is_null() {
+        return err_null_pointer("out_has_tag");
     }
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {

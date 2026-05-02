@@ -9,15 +9,42 @@
 //!
 //! All transformations return `LinearOperator` from tensor4all-treetn for
 //! consistent operator application to tensor train states.
+//! Operators use their own input and output indices. Before applying an
+//! operator to an existing state, replace the state's site indices with the
+//! operator input indices from `get_input_mapping()`. The result then carries
+//! the operator output indices.
 //!
 //! ## Available Transformations
 //!
 //! - **Flip**: f(x) = g(2^R - x)
-//! - **Shift**: f(x) = g(x + offset) mod 2^R
+//! - **Shift**: maps basis states as `|x> -> |x + offset>`; as a matrix action,
+//!   `(M g)[x] = g[x - offset]` with the selected boundary condition
 //! - **Phase Rotation**: f(x) = exp(i*θ*x) * g(x)
 //! - **Cumulative Sum**: y_i = Σ_{j<i} x_j
 //! - **Fourier Transform**: Quantics Fourier Transform (QFT)
 //! - **Affine Transform**: y = A*x + b with rational coefficients
+//!
+//! # Conventions
+//!
+//! - Quantics bits are big-endian by site: site 0 stores the most significant
+//!   bit unless a function documents a different output ordering.
+//! - The QFT output uses bit-reversed frequency order. A site configuration
+//!   `(b_0, ..., b_{R-1})` corresponds to frequency
+//!   `b_{R-1} * 2^{R-1} + ... + b_0`.
+//! - Multi-variable operators use interleaved quantics encoding. At each bit
+//!   site, the local index is `bit_var0 + 2 * bit_var1 + ...`.
+//! - `AffineParams::a` is column-major: `[[1, 2], [3, 4]]` is stored as
+//!   `[1, 3, 2, 4]`.
+//! - Dense materialization is appropriate only for small reference checks and
+//!   debugging. Production-size tensor-network workflows should use local
+//!   operator application and scalable residual checks.
+//!
+//! # Errors
+//!
+//! Constructors return an error when dimensions are invalid, a bit count would
+//! overflow an integer representation, an affine matrix/vector shape is
+//! inconsistent, boundary-condition restrictions cannot be satisfied, or an
+//! internal tensor-train/operator conversion fails.
 //!
 //! # Example
 //!

@@ -242,7 +242,7 @@ fn test_contract_naive_single_site() {
     let t2 = make_tensor(vec![s0.clone()]);
     let tt2 = TensorTrain::new(vec![t2]).unwrap();
 
-    let options = ContractOptions::naive();
+    let options = ContractOptions::naive().with_dense_reference_limit(3);
     let result = contract(&tt1, &tt2, &options).unwrap();
     assert_eq!(result.len(), 1);
     assert_matches_naive(&tt1, &tt2, &result);

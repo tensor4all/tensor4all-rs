@@ -118,6 +118,9 @@ impl AffineParams {
     /// * `m` - Number of output dimensions
     /// * `n` - Number of input dimensions
     ///
+    /// # Errors
+    /// Returns an error when `a.len() != m * n` or `b.len() != m`.
+    ///
     /// # Examples
     ///
     /// ```
@@ -161,6 +164,9 @@ impl AffineParams {
     /// Create affine parameters from integer matrix and vector.
     ///
     /// Convenience method that converts integer values to rationals.
+    ///
+    /// # Errors
+    /// Returns an error when `a.len() != m * n` or `b.len() != m`.
     ///
     /// # Examples
     ///
@@ -368,6 +374,9 @@ pub fn affine_operator(
 /// # Note
 /// This is only practical for small R due to exponential size.
 /// Use for testing/verification only.
+///
+/// # Errors
+/// Returns an error when `r == 0` or when `bc.len() != params.m`.
 pub fn affine_transform_matrix(
     r: usize,
     params: &AffineParams,
@@ -494,6 +503,10 @@ fn affine_transform_mpo(
 ///
 /// # Returns
 /// Vector of R tensors with unfused physical indices.
+///
+/// # Errors
+/// Returns an error when `r == 0`, when `bc.len() != params.m`, or when affine
+/// tensor construction fails.
 ///
 /// # Examples
 ///

@@ -48,12 +48,10 @@ impl DynId {
 
 /// Tag set wrapper using `Arc` for efficient cloning.
 ///
-/// This wraps the underlying tag storage in an `Arc` for cheap cloning (reference count increment only).
-/// Tags are immutable and shared across indices with the same tag set.
-///
-/// # Size comparison
-/// - Inline storage: 168 bytes (Copy)
-/// - `TagSet` (Arc): 8 bytes (Clone only)
+/// This wraps the underlying default tag storage in an `Arc` for cheap cloning
+/// (reference count increment only). Tags are immutable and shared across
+/// indices with the same tag set. The default storage is string-backed so
+/// descriptive tags from language bindings are preserved losslessly.
 ///
 /// # Example
 /// ```
@@ -159,7 +157,7 @@ impl TagSetLike for TagSet {
 
     fn add_tag(&mut self, tag: &str) -> Result<(), TagSetError> {
         // Arc is immutable, so we need to clone and replace
-        let mut inner = *self.0;
+        let mut inner = self.0.as_ref().clone();
         inner.add_tag(tag)?;
         self.0 = Arc::new(inner);
         Ok(())
@@ -167,7 +165,7 @@ impl TagSetLike for TagSet {
 
     fn remove_tag(&mut self, tag: &str) -> bool {
         // Arc is immutable, so we need to clone and replace
-        let mut inner = *self.0;
+        let mut inner = self.0.as_ref().clone();
         let removed = inner.remove_tag(tag);
         if removed {
             self.0 = Arc::new(inner);

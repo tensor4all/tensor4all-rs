@@ -4,6 +4,25 @@ use crate::types::{
     t4a_singular_value_measure, t4a_storage_kind, t4a_threshold_scale, t4a_truncation_rule,
 };
 use num_complex::Complex64;
+use std::ffi::CStr;
+
+fn last_error() -> String {
+    let mut len = 0usize;
+    assert_eq!(
+        crate::t4a_last_error_message(std::ptr::null_mut(), 0, &mut len),
+        T4A_SUCCESS
+    );
+    let mut buf = vec![0u8; len];
+    assert_eq!(
+        crate::t4a_last_error_message(buf.as_mut_ptr(), buf.len(), &mut len),
+        T4A_SUCCESS
+    );
+    CStr::from_bytes_until_nul(&buf)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string()
+}
 
 fn new_index(dim: usize) -> *mut t4a_index {
     let mut out = std::ptr::null_mut();
@@ -59,6 +78,30 @@ fn read_dense_f64(tensor: *const t4a_tensor) -> Vec<f64> {
         T4A_SUCCESS
     );
     data
+}
+
+#[test]
+fn test_tensor_query_failures_set_last_error() {
+    let mut rank = 0usize;
+    assert_eq!(
+        t4a_tensor_rank(std::ptr::null(), &mut rank),
+        T4A_NULL_POINTER
+    );
+    assert_eq!(last_error(), "tensor is null");
+
+    let i = new_index(2);
+    let tensor = new_tensor_f64(&[i], &[1.0, 2.0]);
+    let mut len = 0usize;
+    let mut short = [0usize; 0];
+    assert_eq!(
+        t4a_tensor_dims(tensor, short.as_mut_ptr(), short.len(), &mut len),
+        T4A_BUFFER_TOO_SMALL
+    );
+    assert_eq!(len, 1);
+    assert!(last_error().contains("tensor dims buffer too small"));
+
+    t4a_tensor_release(tensor);
+    t4a_index_release(i);
 }
 
 fn read_payload_dims(tensor: *const t4a_tensor) -> Vec<usize> {

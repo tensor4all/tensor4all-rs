@@ -1231,6 +1231,7 @@ fn test_treetn_contract_and_to_dense() {
             0.0,
             t4a_factorize_alg::SVD,
             0.0,
+            4,
             &mut result
         ),
         T4A_SUCCESS
@@ -1245,6 +1246,53 @@ fn test_treetn_contract_and_to_dense() {
     t4a_index_release(in_clone);
     t4a_index_release(out_idx);
     t4a_index_release(in_idx);
+}
+
+#[test]
+fn test_treetn_contract_naive_requires_dense_limit() {
+    let ((a, a_tensors, a_indices), (b, b_tensors, b_indices)) = make_two_site_contract_operands();
+
+    let mut out = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_contract(
+            a,
+            b,
+            t4a_contract_method::Naive,
+            std::ptr::null(),
+            0,
+            1,
+            0.0,
+            t4a_factorize_alg::SVD,
+            0.0,
+            0,
+            &mut out
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(out.is_null());
+    assert!(last_error().contains("explicit dense/reference limit"));
+
+    assert_eq!(
+        t4a_treetn_contract(
+            a,
+            b,
+            t4a_contract_method::Naive,
+            std::ptr::null(),
+            0,
+            1,
+            0.0,
+            t4a_factorize_alg::SVD,
+            0.0,
+            3,
+            &mut out
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(out.is_null());
+    assert!(last_error().contains("exceeding limit 3"));
+
+    cleanup(a, a_tensors, a_indices);
+    cleanup(b, b_tensors, b_indices);
 }
 
 #[test]
@@ -1288,6 +1336,7 @@ fn test_treetn_partial_contract_elementwise_diagonal_pairs() {
             0.0,
             t4a_factorize_alg::SVD,
             0.0,
+            0,
             &mut out,
         ),
         T4A_SUCCESS
@@ -1324,6 +1373,7 @@ fn test_treetn_contract_fit_zero_sweeps_uses_backend_default() {
             1e-30,
             t4a_factorize_alg::LU,
             0.0,
+            0,
             &mut baseline
         ),
         T4A_SUCCESS
@@ -1341,6 +1391,7 @@ fn test_treetn_contract_fit_zero_sweeps_uses_backend_default() {
             1e-30,
             t4a_factorize_alg::LU,
             0.0,
+            0,
             &mut uses_default
         ),
         T4A_SUCCESS
@@ -1372,6 +1423,7 @@ fn test_treetn_contract_fit_accepts_iterative_options() {
             0.0,
             t4a_factorize_alg::SVD,
             0.0,
+            1024,
             &mut expected
         ),
         T4A_SUCCESS
@@ -1389,6 +1441,7 @@ fn test_treetn_contract_fit_accepts_iterative_options() {
             1e-30,
             t4a_factorize_alg::LU,
             0.0,
+            0,
             &mut fitted
         ),
         T4A_SUCCESS

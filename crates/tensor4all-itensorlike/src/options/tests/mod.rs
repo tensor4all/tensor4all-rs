@@ -56,12 +56,14 @@ fn test_contract_options_builder() {
     let opts = ContractOptions::zipup()
         .with_max_rank(100)
         .with_svd_policy(policy)
-        .with_nhalfsweeps(6);
+        .with_nhalfsweeps(6)
+        .with_dense_reference_limit(256);
 
     assert_eq!(opts.method(), ContractMethod::Zipup);
     assert_eq!(opts.max_rank(), Some(100));
     assert_eq!(opts.svd_policy(), Some(policy));
     assert_eq!(opts.nhalfsweeps(), 6);
+    assert_eq!(opts.dense_reference_limit(), Some(256));
 }
 
 #[test]
@@ -78,6 +80,7 @@ fn test_contract_options_default() {
     assert_eq!(opts.nhalfsweeps(), 2);
     assert_eq!(opts.svd_policy(), None);
     assert_eq!(opts.max_rank(), None);
+    assert_eq!(opts.dense_reference_limit(), None);
 }
 
 #[test]

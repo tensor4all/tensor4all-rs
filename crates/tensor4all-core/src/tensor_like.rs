@@ -1023,7 +1023,42 @@ pub trait TensorLike: TensorIndex {
         self.norm_squared().sqrt()
     }
 
+    /// Try to compute the maximum absolute value of all tensor elements.
+    ///
+    /// This is the error-aware form of [`Self::maxabs`]. Tensor
+    /// implementations should return an error when an exact elementwise maximum
+    /// would require hidden full-network materialization or another unsupported
+    /// operation.
+    ///
+    /// # Returns
+    /// The L-infinity norm when it is available without violating the tensor
+    /// representation's scalability contract.
+    ///
+    /// # Errors
+    /// Returns an error when the tensor type cannot compute an exact maximum
+    /// absolute value through a safe/scalable implementation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// let i = DynIndex::new_dyn(3);
+    /// let tensor = TensorDynLen::from_dense(vec![i], vec![1.0, -3.0, 2.0])?;
+    /// assert_eq!(tensor.try_maxabs()?, 3.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn try_maxabs(&self) -> Result<f64> {
+        Ok(self.maxabs())
+    }
+
     /// Maximum absolute value of all elements (L-infinity norm).
+    ///
+    /// This infallible method is kept for dense/reference tensor code. Generic
+    /// code should prefer [`Self::try_maxabs`] so tensor-network
+    /// implementations can report that exact elementwise maxima are
+    /// unsupported instead of hiding dense materialization. Implementations
+    /// that cannot compute this value safely may return `NaN`.
     fn maxabs(&self) -> f64;
 
     /// Element-wise subtraction: `self - other`.

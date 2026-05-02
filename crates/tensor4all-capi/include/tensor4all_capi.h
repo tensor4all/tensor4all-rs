@@ -199,7 +199,13 @@ typedef enum t4a_contract_method {
    */
   T4A_CONTRACT_METHOD_FIT = 1,
   /**
-   * Naive dense contraction.
+   * Naive dense/reference contraction for generic TreeTN contraction.
+   *
+   * This materializes full dense tensors for `t4a_treetn_contract`; that entry
+   * point requires an explicit nonzero `max_dense_elements` limit when this
+   * method is selected. `t4a_treetn_apply_operator_chain` uses a dedicated
+   * local-exact apply path for this method instead of generic full-dense
+   * TreeTN contraction.
    */
   T4A_CONTRACT_METHOD_NAIVE = 2,
 } t4a_contract_method;
@@ -371,12 +377,12 @@ typedef struct t4a_svd_truncation_policy {
 #define T4A_SUCCESS 0
 
 /**
- * Too many tags would be added to a TagSet (exceeds maximum).
+ * Too many tags would be added to a fixed-capacity tag set.
  */
 #define T4A_TAG_OVERFLOW -3
 
 /**
- * A tag string exceeds the maximum allowed length.
+ * A tag string exceeds a fixed-capacity tag storage limit.
  */
 #define T4A_TAG_TOO_LONG -4
 
@@ -419,11 +425,17 @@ StatusCode t4a_index_id(const struct t4a_index *ptr, uint64_t *out_id);
 
 /**
  * Create a new index with explicit tags and prime level.
+ *
+ * Tags are provided as a comma-separated UTF-8 string and are preserved
+ * losslessly by the default dynamic index tag storage.
  */
 StatusCode t4a_index_new(size_t dim, const char *tags_csv, int64_t plev, struct t4a_index **out);
 
 /**
  * Create a new index with explicit identity, tags, and prime level.
+ *
+ * Tags are provided as a comma-separated UTF-8 string and are preserved
+ * losslessly by the default dynamic index tag storage.
  */
 StatusCode t4a_index_new_with_id(size_t dim,
                                  uint64_t id,
@@ -837,6 +849,8 @@ StatusCode t4a_treetn_add(const struct t4a_treetn *a,
  *
  * For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
  * default", which currently resolves to one variational sweep.
+ * `t4a_contract_method::Naive` uses the dedicated local-exact apply path here,
+ * not the generic full-dense TreeTN contraction used by `t4a_treetn_contract`.
  */
 StatusCode t4a_treetn_apply_operator_chain(const struct t4a_treetn *operator_,
                                            const struct t4a_treetn *state,
@@ -868,6 +882,11 @@ StatusCode t4a_treetn_clone(const struct t4a_treetn *src, struct t4a_treetn **ou
 /**
  * Contract two tree tensor networks with the requested method.
  *
+ * `t4a_contract_method::Naive` is a dense/reference method that materializes
+ * both TreeTNs and the contracted result as full tensors. Pass a nonzero
+ * `max_dense_elements` to opt into this path for small reference cases; each
+ * dense input and output tensor must fit under that limit.
+ *
  * For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
  * default", which currently resolves to one variational sweep.
  */
@@ -880,6 +899,7 @@ StatusCode t4a_treetn_contract(const struct t4a_treetn *a,
                                double convergence_tol,
                                enum t4a_factorize_alg factorize_alg,
                                double qr_rtol,
+                               size_t max_dense_elements,
                                struct t4a_treetn **out);
 
 /**

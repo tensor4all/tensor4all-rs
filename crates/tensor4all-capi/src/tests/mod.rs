@@ -24,6 +24,7 @@ fn read_last_error() -> String {
 fn test_last_error_message_null_out_len() {
     let status = t4a_last_error_message(std::ptr::null_mut(), 0, std::ptr::null_mut());
     assert_eq!(status, T4A_NULL_POINTER);
+    assert_eq!(read_last_error(), "out_len is null");
 }
 
 #[test]
@@ -45,6 +46,7 @@ fn test_last_error_message_buffer_too_small() {
     );
     assert_eq!(status, T4A_BUFFER_TOO_SMALL);
     assert_eq!(out_len, 6); // "hello" + null
+    assert!(read_last_error().contains("last_error_message buffer too small"));
 }
 
 #[test]
@@ -68,6 +70,22 @@ fn test_err_null_stores_message() {
     let ptr: *mut u8 = err_null("null error");
     assert!(ptr.is_null());
     assert_eq!(read_last_error(), "null error");
+}
+
+#[test]
+fn test_run_catching_null_out_stores_message() {
+    let status = run_catching::<u8, _>(std::ptr::null_mut(), || Ok(1));
+    assert_eq!(status, T4A_NULL_POINTER);
+    assert_eq!(read_last_error(), "out is null");
+}
+
+#[test]
+fn test_clone_opaque_null_src_stores_message() {
+    let mut out = std::ptr::null_mut();
+    let status = clone_opaque::<u8>(std::ptr::null(), &mut out);
+    assert_eq!(status, T4A_NULL_POINTER);
+    assert!(out.is_null());
+    assert_eq!(read_last_error(), "source handle is null");
 }
 
 #[test]

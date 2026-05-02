@@ -113,6 +113,9 @@ pub struct FTCore {
 
 impl FTCore {
     /// Create a new FTCore for r bits.
+    ///
+    /// # Errors
+    /// Returns an error when `r < 2` or when Fourier MPO construction fails.
     pub fn new(r: usize, options: FourierOptions) -> Result<Self> {
         if r < 2 {
             anyhow::bail!("Number of sites must be at least 2, got {r}");
@@ -130,12 +133,20 @@ impl FTCore {
     }
 
     /// Get the forward Fourier transform operator.
+    ///
+    /// # Errors
+    /// Returns an error when converting the cached Fourier MPO to a linear
+    /// operator fails.
     pub fn forward(&self) -> Result<QuanticsOperator> {
         let site_dims = vec![2; self.r];
         tensortrain_to_linear_operator(&self.forward_mpo, &site_dims)
     }
 
     /// Get the backward (inverse) Fourier transform operator.
+    ///
+    /// # Errors
+    /// Returns an error when inverse Fourier MPO construction or conversion to
+    /// a linear operator fails.
     pub fn backward(&self) -> Result<QuanticsOperator> {
         let inverse_options = FourierOptions {
             sign: 1.0,
@@ -172,6 +183,10 @@ impl FTCore {
 ///
 /// # Returns
 /// LinearOperator representing the QFT
+///
+/// # Errors
+/// Returns an error when `r < 2` or when Fourier MPO/operator construction
+/// fails.
 ///
 /// # Examples
 ///

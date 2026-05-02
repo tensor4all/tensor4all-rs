@@ -37,9 +37,9 @@ pub const T4A_SUCCESS: StatusCode = 0;
 pub const T4A_NULL_POINTER: StatusCode = -1;
 /// An invalid argument was provided.
 pub const T4A_INVALID_ARGUMENT: StatusCode = -2;
-/// Too many tags would be added to a TagSet (exceeds maximum).
+/// Too many tags would be added to a fixed-capacity tag set.
 pub const T4A_TAG_OVERFLOW: StatusCode = -3;
-/// A tag string exceeds the maximum allowed length.
+/// A tag string exceeds a fixed-capacity tag storage limit.
 pub const T4A_TAG_TOO_LONG: StatusCode = -4;
 /// The provided output buffer is too small for the result.
 pub const T4A_BUFFER_TOO_SMALL: StatusCode = -5;
@@ -84,6 +84,23 @@ pub(crate) fn err_status<E: std::fmt::Display>(err: E, code: StatusCode) -> Stat
     code
 }
 
+/// Store a null-pointer diagnostic and return `T4A_NULL_POINTER`.
+pub(crate) fn err_null_pointer<E: std::fmt::Display>(what: E) -> StatusCode {
+    err_status(format!("{what} is null"), T4A_NULL_POINTER)
+}
+
+/// Store a buffer-size diagnostic and return `T4A_BUFFER_TOO_SMALL`.
+pub(crate) fn err_buffer_too_small(
+    what: &str,
+    required_len: usize,
+    actual_len: usize,
+) -> StatusCode {
+    err_status(
+        format!("{what} buffer too small: required {required_len}, got {actual_len}"),
+        T4A_BUFFER_TOO_SMALL,
+    )
+}
+
 /// Store an error and return a null pointer.
 #[allow(dead_code)]
 pub(crate) fn err_null<T, E: std::fmt::Display>(err: E) -> *mut T {
@@ -102,7 +119,7 @@ where
     F: FnOnce() -> CapiResult<T>,
 {
     if out.is_null() {
-        return T4A_NULL_POINTER;
+        return err_null_pointer("out");
     }
 
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
@@ -125,7 +142,7 @@ where
 /// Clone an opaque wrapper through the constructor-style `out` pattern.
 pub(crate) fn clone_opaque<T: Clone>(src: *const T, out: *mut *mut T) -> StatusCode {
     if src.is_null() {
-        return T4A_NULL_POINTER;
+        return err_null_pointer("source handle");
     }
 
     run_catching(out, || unsafe { Ok((&*src).clone()) })
@@ -215,11 +232,11 @@ pub extern "C" fn t4a_last_error_message(
     out_len: *mut libc::size_t,
 ) -> StatusCode {
     if out_len.is_null() {
-        return T4A_NULL_POINTER;
+        return err_null_pointer("out_len");
     }
 
     LAST_ERROR.with(|cell| {
-        let msg = cell.borrow();
+        let msg = cell.borrow().clone();
         let required_len = msg.len() + 1; // +1 for null terminator
 
         unsafe { *out_len = required_len };
@@ -229,7 +246,7 @@ pub extern "C" fn t4a_last_error_message(
         }
 
         if buf_len < required_len {
-            return T4A_BUFFER_TOO_SMALL;
+            return err_buffer_too_small("last_error_message", required_len, buf_len);
         }
 
         unsafe {

@@ -539,7 +539,11 @@ pub enum t4a_contract_method {
     Zipup = 0,
     /// Variational fit-based contraction.
     Fit = 1,
-    /// Naive dense contraction.
+    /// Naive dense/reference contraction for generic TreeTN contraction.
+    ///
+    /// `t4a_treetn_contract` requires an explicit nonzero dense-element limit
+    /// for this method. `t4a_treetn_apply_operator_chain` uses a dedicated
+    /// local-exact apply path instead of generic full-dense TreeTN contraction.
     Naive = 2,
 }
 

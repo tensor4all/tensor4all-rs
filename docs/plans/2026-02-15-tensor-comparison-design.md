@@ -1,5 +1,11 @@
 # Tensor Comparison Utilities Design
 
+> Historical note: this early design treats `maxabs()` as a general
+> `TensorLike` primitive. Current repository rules reserve dense `maxabs()`
+> comparisons for small dense/reference tensors. Long TT/TN checks should use
+> scalable residual norms, sampled `evaluate()` checks, or structural
+> invariants instead.
+
 ## Problem
 
 Test code across tensor4all-rs uses verbose element-wise loops to verify tensor accuracy:

@@ -1,4 +1,5 @@
 use super::*;
+use crate::T4A_BUFFER_TOO_SMALL;
 use std::collections::BTreeSet;
 use std::ffi::{CStr, CString};
 
@@ -140,6 +141,44 @@ fn test_index_tags_roundtrip_and_has_tag() {
         T4A_SUCCESS
     );
     assert_eq!(has_tag, 0);
+
+    t4a_index_release(index);
+}
+
+#[test]
+fn test_index_query_failures_set_last_error() {
+    let mut dim = 0usize;
+    assert_eq!(t4a_index_dim(std::ptr::null(), &mut dim), T4A_NULL_POINTER);
+    assert_eq!(last_error(), "index is null");
+
+    let index = new_index(2, Some("Site"), 0);
+    let mut len = 0usize;
+    let mut short = [0u8; 2];
+    assert_eq!(
+        t4a_index_tags(index, short.as_mut_ptr(), short.len(), &mut len),
+        T4A_BUFFER_TOO_SMALL
+    );
+    assert_eq!(len, "Site".len() + 1);
+    assert!(last_error().contains("index tags buffer too small"));
+
+    t4a_index_release(index);
+}
+
+#[test]
+fn test_index_accepts_long_tags_losslessly() {
+    let long_tag = "Site3_Site4_Site5";
+    let index = new_index(2, Some(long_tag), 0);
+
+    let tags = read_tags(index);
+    assert_eq!(tags, [long_tag.to_string()].into_iter().collect());
+
+    let long_tag_c = CString::new(long_tag).unwrap();
+    let mut has_tag = -1i32;
+    assert_eq!(
+        t4a_index_has_tag(index, long_tag_c.as_ptr(), &mut has_tag),
+        T4A_SUCCESS
+    );
+    assert_eq!(has_tag, 1);
 
     t4a_index_release(index);
 }

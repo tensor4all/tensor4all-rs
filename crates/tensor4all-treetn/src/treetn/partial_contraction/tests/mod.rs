@@ -102,7 +102,7 @@ fn test_partial_contract_allows_same_node_contract_and_diagonal() {
         &tn_b,
         &spec,
         &"B".to_string(),
-        ContractionOptions::new(ContractionMethod::Naive),
+        ContractionOptions::new(ContractionMethod::Naive).with_dense_reference_limit(128),
     );
     assert!(result.is_ok());
 }
@@ -279,7 +279,7 @@ fn test_partial_contract_contract_only() {
         &tn_b,
         &spec,
         &"A".to_string(),
-        ContractionOptions::new(ContractionMethod::Naive),
+        ContractionOptions::new(ContractionMethod::Naive).with_dense_reference_limit(128),
     )
     .unwrap();
 
@@ -311,7 +311,7 @@ fn test_partial_contract_empty_spec() {
         &tn_b,
         &spec,
         &"A".to_string(),
-        ContractionOptions::new(ContractionMethod::Naive),
+        ContractionOptions::new(ContractionMethod::Naive).with_dense_reference_limit(128),
     )
     .unwrap();
 
@@ -342,7 +342,7 @@ fn test_partial_contract_rejects_bad_output_order_length() {
         &tn_b,
         &spec,
         &"A".to_string(),
-        ContractionOptions::new(ContractionMethod::Naive),
+        ContractionOptions::new(ContractionMethod::Naive).with_dense_reference_limit(128),
     );
     assert!(result.is_err());
     assert!(result
@@ -375,7 +375,7 @@ fn test_partial_contract_rejects_unknown_output_order_index() {
         &tn_b,
         &spec,
         &"A".to_string(),
-        ContractionOptions::new(ContractionMethod::Naive),
+        ContractionOptions::new(ContractionMethod::Naive).with_dense_reference_limit(128),
     );
     assert!(result.is_err());
     assert!(result
@@ -468,7 +468,7 @@ fn test_partial_contract_allows_compatible_topology_mismatch_with_gap_leaf() {
         &tn_b,
         &spec,
         &"A".to_string(),
-        ContractionOptions::default(),
+        ContractionOptions::default().with_mismatched_topology_dense_limit(64),
     );
     assert!(result.is_ok(), "{result:?}");
 
@@ -478,6 +478,47 @@ fn test_partial_contract_allows_compatible_topology_mismatch_with_gap_leaf() {
     assert!(external.iter().any(|idx| idx.id() == s_a.id()));
     assert!(external.iter().any(|idx| idx.id() == s_b.id()));
     assert!(external.iter().any(|idx| idx.id() == s_b2.id()));
+}
+
+#[test]
+fn test_partial_contract_rejects_mismatched_topology_dense_fallback_without_explicit_limit() {
+    fn binary_chain(node_count: usize) -> TreeTN<TensorDynLen, usize> {
+        let mut tensors = Vec::with_capacity(node_count);
+        let mut names = Vec::with_capacity(node_count);
+        let mut left_bond: Option<DynIndex> = None;
+
+        for site in 0..node_count {
+            let site_index = DynIndex::new_dyn(2);
+            let right_bond = (site + 1 < node_count).then(|| DynIndex::new_dyn(1));
+            let mut indices = Vec::new();
+            if let Some(bond) = left_bond.take() {
+                indices.push(bond);
+            }
+            indices.push(site_index);
+            if let Some(bond) = &right_bond {
+                indices.push(bond.clone());
+            }
+
+            let element_count = indices.iter().map(IndexLike::dim).product();
+            tensors.push(TensorDynLen::from_dense(indices, vec![1.0; element_count]).unwrap());
+            names.push(site);
+            left_bond = right_bond;
+        }
+
+        TreeTN::<TensorDynLen, usize>::from_tensors(tensors, names).unwrap()
+    }
+
+    let tn_a = binary_chain(24);
+    let tn_b = binary_chain(25);
+    let spec = PartialContractionSpec {
+        contract_pairs: vec![],
+        diagonal_pairs: vec![],
+        output_order: None,
+    };
+
+    let err =
+        partial_contract(&tn_a, &tn_b, &spec, &0usize, ContractionOptions::default()).unwrap_err();
+    assert!(err.to_string().contains("explicit dense/reference limit"));
 }
 
 #[test]
@@ -558,7 +599,7 @@ fn test_partial_contract_mismatched_topology_scalar_result() {
         &tn_b,
         &spec,
         &"A".to_string(),
-        ContractionOptions::default(),
+        ContractionOptions::default().with_mismatched_topology_dense_limit(64),
     )
     .unwrap();
 
@@ -809,7 +850,9 @@ fn test_partial_contract_matches_dense_reference_for_cross_topology_chain() {
         &tn_b,
         &spec,
         &1usize,
-        ContractionOptions::new(ContractionMethod::Naive),
+        ContractionOptions::new(ContractionMethod::Naive)
+            .with_dense_reference_limit(128)
+            .with_mismatched_topology_dense_limit(128),
     )
     .unwrap();
     let result_dense = result.to_dense().unwrap();

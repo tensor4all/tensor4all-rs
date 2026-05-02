@@ -115,8 +115,9 @@ pub enum ContractMethod {
     Zipup,
     /// Fit/variational contraction (iterative optimization).
     Fit,
-    /// Naive contraction: contract to full tensor, then decompose back.
-    /// Useful for debugging and testing, but O(exp(n)) in memory.
+    /// Dense/reference contraction: contract to a full tensor, then decompose back.
+    /// Useful only for small debugging and testing cases; memory scales as the
+    /// product of external dimensions.
     Naive,
 }
 
@@ -143,6 +144,7 @@ pub struct ContractOptions {
     max_rank: Option<usize>,
     svd_policy: Option<SvdTruncationPolicy>,
     nhalfsweeps: usize,
+    dense_reference_limit: Option<usize>,
 }
 
 impl Default for ContractOptions {
@@ -152,6 +154,7 @@ impl Default for ContractOptions {
             max_rank: None,
             svd_policy: None,
             nhalfsweeps: 2,
+            dense_reference_limit: None,
         }
     }
 }
@@ -174,6 +177,24 @@ impl ContractOptions {
     }
 
     /// Create options for naive contraction.
+    ///
+    /// Naive contraction is a dense/reference path. Call
+    /// [`ContractOptions::with_dense_reference_limit`] before use to bound full
+    /// dense materialization.
+    ///
+    /// # Returns
+    /// Options configured for the dense/reference contraction method.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_itensorlike::{ContractMethod, ContractOptions};
+    ///
+    /// let opts = ContractOptions::naive().with_dense_reference_limit(16);
+    ///
+    /// assert_eq!(opts.method(), ContractMethod::Naive);
+    /// assert_eq!(opts.dense_reference_limit(), Some(16));
+    /// ```
     pub fn naive() -> Self {
         Self {
             method: ContractMethod::Naive,
@@ -207,6 +228,30 @@ impl ContractOptions {
         self
     }
 
+    /// Set the maximum dense elements allowed for naive dense/reference contraction.
+    ///
+    /// # Arguments
+    /// * `max_elements` - Maximum element count allowed for each dense input
+    ///   and output tensor materialized by the reference path. Use small,
+    ///   test-sized values unless you have explicitly budgeted memory.
+    ///
+    /// # Returns
+    /// Updated options with the dense/reference limit enabled.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_itensorlike::ContractOptions;
+    ///
+    /// let opts = ContractOptions::naive().with_dense_reference_limit(32);
+    ///
+    /// assert_eq!(opts.dense_reference_limit(), Some(32));
+    /// ```
+    pub fn with_dense_reference_limit(mut self, max_elements: usize) -> Self {
+        self.dense_reference_limit = Some(max_elements);
+        self
+    }
+
     /// Get the contraction method.
     #[inline]
     pub fn method(&self) -> ContractMethod {
@@ -229,6 +274,26 @@ impl ContractOptions {
     #[inline]
     pub fn nhalfsweeps(&self) -> usize {
         self.nhalfsweeps
+    }
+
+    /// Get the dense/reference element limit for naive contraction.
+    ///
+    /// # Returns
+    /// `Some(max_elements)` when a dense/reference limit has been configured,
+    /// otherwise `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_itensorlike::ContractOptions;
+    ///
+    /// let opts = ContractOptions::naive().with_dense_reference_limit(8);
+    ///
+    /// assert_eq!(opts.dense_reference_limit(), Some(8));
+    /// ```
+    #[inline]
+    pub fn dense_reference_limit(&self) -> Option<usize> {
+        self.dense_reference_limit
     }
 }
 
