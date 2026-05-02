@@ -110,10 +110,49 @@ fn storage_payload_c64_readback_is_interpreted_as_payload_not_logical_dense() {
     let storage = Storage::from_diag_col_major(data.clone(), 2).unwrap();
     assert_eq!(storage.storage_kind(), StorageKind::Diagonal);
     assert_eq!(storage.payload_c64_col_major_vec().unwrap(), data);
-    assert!(storage
-        .payload_f64_col_major_vec()
-        .unwrap_err()
-        .contains("expected f64"));
+    match storage.payload_f64_col_major_vec().unwrap_err() {
+        StorageError::ScalarKindMismatch {
+            expected, actual, ..
+        } => {
+            assert_eq!(expected, "f64");
+            assert_eq!(actual, "Complex64");
+        }
+        err => panic!("unexpected error: {err}"),
+    }
+}
+
+#[test]
+fn payload_f64_reports_scalar_kind_mismatch() {
+    let storage = Storage::from_dense_col_major(vec![Complex64::new(1.0, 0.0)], &[1]).unwrap();
+
+    match storage.payload_f64_col_major_vec().unwrap_err() {
+        StorageError::ScalarKindMismatch {
+            expected, actual, ..
+        } => {
+            assert_eq!(expected, "f64");
+            assert_eq!(actual, "Complex64");
+        }
+        err => panic!("unexpected error: {err}"),
+    }
+}
+
+#[test]
+fn try_add_reports_length_mismatch() {
+    let a = Storage::from_dense_col_major(vec![1.0_f64, 2.0], &[2]).unwrap();
+    let b = Storage::from_dense_col_major(vec![3.0_f64], &[1]).unwrap();
+
+    match a.try_add(&b).unwrap_err() {
+        StorageError::LengthMismatch {
+            operation,
+            left,
+            right,
+        } => {
+            assert_eq!(operation, "addition");
+            assert_eq!(left, 2);
+            assert_eq!(right, 1);
+        }
+        err => panic!("unexpected error: {err}"),
+    }
 }
 
 #[test]
@@ -432,20 +471,44 @@ fn test_storage_try_add_and_try_sub_cover_all_variants_and_errors() {
     ));
 
     let mismatched_len = Storage::from_dense_col_major(vec![1.0], &[1]).unwrap();
-    let err = dense_f64_a.try_add(&mismatched_len).unwrap_err();
-    assert!(err.contains("Storage lengths must match for addition"));
-    let err = dense_f64_a.try_sub(&mismatched_len).unwrap_err();
-    assert!(err.contains("Storage lengths must match for subtraction"));
+    assert!(matches!(
+        dense_f64_a.try_add(&mismatched_len).unwrap_err(),
+        StorageError::LengthMismatch {
+            operation: "addition",
+            left: 2,
+            right: 1
+        }
+    ));
+    assert!(matches!(
+        dense_f64_a.try_sub(&mismatched_len).unwrap_err(),
+        StorageError::LengthMismatch {
+            operation: "subtraction",
+            left: 2,
+            right: 1
+        }
+    ));
 
     let mismatched_type = Storage::from_dense_col_major(
         vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
         &[2],
     )
     .unwrap();
-    let err = dense_f64_a.try_add(&mismatched_type).unwrap_err();
-    assert!(err.contains("Storage types must match for addition"));
-    let err = dense_f64_a.try_sub(&mismatched_type).unwrap_err();
-    assert!(err.contains("Storage types must match for subtraction"));
+    assert!(matches!(
+        dense_f64_a.try_add(&mismatched_type).unwrap_err(),
+        StorageError::OperationNotSupported {
+            operation: "addition",
+            left: "f64",
+            right: "Complex64"
+        }
+    ));
+    assert!(matches!(
+        dense_f64_a.try_sub(&mismatched_type).unwrap_err(),
+        StorageError::OperationNotSupported {
+            operation: "subtraction",
+            left: "f64",
+            right: "Complex64"
+        }
+    ));
 }
 
 // ===== StructuredStorage permute_logical_axes assertion path =====

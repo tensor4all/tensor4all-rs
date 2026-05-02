@@ -27,8 +27,8 @@ pub use any_scalar::AnyScalar;
 pub use backend::{qr_backend, svd_backend, BackendLinalgScalar, SvdResult};
 pub use context::{default_eager_ctx, with_default_backend};
 pub use storage::{
-    contract_storage, make_mut_storage, mindim, Storage, StorageKind, StorageScalar,
-    StructuredStorage, SumFromStorage,
+    contract_storage, make_mut_storage, mindim, Storage, StorageError, StorageKind, StorageResult,
+    StorageScalar, StructuredStorage, SumFromStorage,
 };
 pub use tenferro_bridge::{
     axpby_native_tensor, axpby_storage_native, conj_native_tensor, contract_native_tensor,

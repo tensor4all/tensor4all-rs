@@ -722,12 +722,83 @@ pub enum StorageKind {
     Structured,
 }
 
+/// Errors returned by storage payload and elementwise operations.
+///
+/// Use this to distinguish scalar-kind mismatches, length mismatches, and
+/// invalid structured-storage metadata from general backend failures.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{Storage, StorageError};
+///
+/// let storage = Storage::from_dense_col_major(vec![1.0_f64], &[1]).unwrap();
+/// let err = storage.payload_c64_col_major_vec().unwrap_err();
+/// assert!(matches!(err, StorageError::ScalarKindMismatch { .. }));
+/// ```
+#[derive(Debug, thiserror::Error)]
+pub enum StorageError {
+    /// The storage scalar kind did not match the requested operation.
+    #[error("expected {expected} storage when {operation}, got {actual}")]
+    ScalarKindMismatch {
+        /// The scalar kind that the caller requested.
+        expected: &'static str,
+        /// The scalar kind actually stored.
+        actual: &'static str,
+        /// Human-readable operation description.
+        operation: &'static str,
+    },
+    /// Two storages had different payload lengths for an elementwise operation.
+    #[error("storage lengths must match for {operation}: {left} != {right}")]
+    LengthMismatch {
+        /// Name of the operation being performed.
+        operation: &'static str,
+        /// Left-hand payload length.
+        left: usize,
+        /// Right-hand payload length.
+        right: usize,
+    },
+    /// Structured storage metadata was invalid after an operation.
+    #[error("invalid structured storage: {0}")]
+    InvalidStructuredStorage(String),
+    /// The requested operation does not support the provided storage kinds.
+    #[error("storage types are not supported for {operation}: {left} vs {right}")]
+    OperationNotSupported {
+        /// Name of the operation being performed.
+        operation: &'static str,
+        /// Left-hand storage kind.
+        left: &'static str,
+        /// Right-hand storage kind.
+        right: &'static str,
+    },
+    /// The requested operation requires real scalars but at least one scalar was complex.
+    #[error("expected real scalars in {operation} branch: a={a}, b={b}")]
+    RealScalarRequired {
+        /// Name of the operation being performed.
+        operation: &'static str,
+        /// Left scalar display string.
+        a: String,
+        /// Right scalar display string.
+        b: String,
+    },
+}
+
+/// Result type returned by storage methods that can fail with [`StorageError`].
+pub type StorageResult<T> = std::result::Result<T, StorageError>;
+
 #[derive(Debug, Clone)]
 pub(crate) enum StorageRepr {
     /// Storage with f64 elements.
     F64(StructuredStorage<f64>),
     /// Storage with Complex64 elements.
     C64(StructuredStorage<Complex64>),
+}
+
+fn storage_scalar_kind(repr: &StorageRepr) -> &'static str {
+    match repr {
+        StorageRepr::F64(_) => "f64",
+        StorageRepr::C64(_) => "Complex64",
+    }
 }
 
 /// Types that can be computed as the result of a reduction over `Storage`.
@@ -1185,10 +1256,14 @@ impl Storage {
     /// let diag = Storage::from_diag_col_major(vec![1.0_f64, 2.0], 2).unwrap();
     /// assert_eq!(diag.payload_f64_col_major_vec().unwrap(), vec![1.0, 2.0]);
     /// ```
-    pub fn payload_f64_col_major_vec(&self) -> Result<Vec<f64>, String> {
+    pub fn payload_f64_col_major_vec(&self) -> StorageResult<Vec<f64>> {
         match &self.0 {
             StorageRepr::F64(value) => Ok(value.payload_col_major_vec()),
-            StorageRepr::C64(_) => Err("expected f64 storage when copying f64 payload".to_string()),
+            StorageRepr::C64(_) => Err(StorageError::ScalarKindMismatch {
+                expected: "f64",
+                actual: storage_scalar_kind(&self.0),
+                operation: "copying f64 payload",
+            }),
         }
     }
 
@@ -1211,12 +1286,14 @@ impl Storage {
     /// let diag = Storage::from_diag_col_major(data.clone(), 2).unwrap();
     /// assert_eq!(diag.payload_c64_col_major_vec().unwrap(), data);
     /// ```
-    pub fn payload_c64_col_major_vec(&self) -> Result<Vec<Complex64>, String> {
+    pub fn payload_c64_col_major_vec(&self) -> StorageResult<Vec<Complex64>> {
         match &self.0 {
             StorageRepr::C64(value) => Ok(value.payload_col_major_vec()),
-            StorageRepr::F64(_) => {
-                Err("expected Complex64 storage when copying c64 payload".to_string())
-            }
+            StorageRepr::F64(_) => Err(StorageError::ScalarKindMismatch {
+                expected: "Complex64",
+                actual: storage_scalar_kind(&self.0),
+                operation: "copying c64 payload",
+            }),
         }
     }
 
@@ -1364,21 +1441,23 @@ impl Storage {
     /// let dense = s.to_dense_f64_col_major_vec(&[2, 2]).unwrap();
     /// assert_eq!(dense, vec![1.0, 2.0, 3.0, 4.0]);
     /// ```
-    pub fn to_dense_f64_col_major_vec(&self, logical_dims: &[usize]) -> Result<Vec<f64>, String> {
+    pub fn to_dense_f64_col_major_vec(&self, logical_dims: &[usize]) -> StorageResult<Vec<f64>> {
         match &self.0 {
             StorageRepr::F64(v) => {
                 let structured_dims = v.logical_dims();
                 if structured_dims != logical_dims {
-                    return Err(format!(
+                    return Err(StorageError::InvalidStructuredStorage(format!(
                         "logical dims {:?} do not match StructuredF64 logical dims {:?}",
                         logical_dims, structured_dims
-                    ));
+                    )));
                 }
                 Ok(v.logical_dense_col_major_vec())
             }
-            StorageRepr::C64(_) => {
-                Err("expected f64 storage when materializing dense f64 values".to_string())
-            }
+            StorageRepr::C64(_) => Err(StorageError::ScalarKindMismatch {
+                expected: "f64",
+                actual: storage_scalar_kind(&self.0),
+                operation: "materializing dense f64 values",
+            }),
         }
     }
 
@@ -1403,21 +1482,23 @@ impl Storage {
     pub fn to_dense_c64_col_major_vec(
         &self,
         logical_dims: &[usize],
-    ) -> Result<Vec<Complex64>, String> {
+    ) -> StorageResult<Vec<Complex64>> {
         match &self.0 {
             StorageRepr::C64(v) => {
                 let structured_dims = v.logical_dims();
                 if structured_dims != logical_dims {
-                    return Err(format!(
+                    return Err(StorageError::InvalidStructuredStorage(format!(
                         "logical dims {:?} do not match StructuredC64 logical dims {:?}",
                         logical_dims, structured_dims
-                    ));
+                    )));
                 }
                 Ok(v.logical_dense_col_major_vec())
             }
-            StorageRepr::F64(_) => {
-                Err("expected Complex64 storage when materializing dense c64 values".to_string())
-            }
+            StorageRepr::F64(_) => Err(StorageError::ScalarKindMismatch {
+                expected: "Complex64",
+                actual: storage_scalar_kind(&self.0),
+                operation: "materializing dense c64 values",
+            }),
         }
     }
 
@@ -1639,15 +1720,15 @@ impl Storage {
     /// let c = a.try_add(&b).unwrap();
     /// assert_eq!(c.to_dense_f64_col_major_vec(&[2]).unwrap(), vec![4.0, 6.0]);
     /// ```
-    pub fn try_add(&self, other: &Storage) -> Result<Storage, String> {
+    pub fn try_add(&self, other: &Storage) -> StorageResult<Storage> {
         match (&self.0, &other.0) {
             (StorageRepr::F64(a), StorageRepr::F64(b)) => {
                 if a.len() != b.len() {
-                    return Err(format!(
-                        "Storage lengths must match for addition: {} != {}",
-                        a.len(),
-                        b.len()
-                    ));
+                    return Err(StorageError::LengthMismatch {
+                        operation: "addition",
+                        left: a.len(),
+                        right: b.len(),
+                    });
                 }
                 let sum_vec: Vec<f64> = a
                     .data()
@@ -1662,16 +1743,16 @@ impl Storage {
                         a.strides().to_vec(),
                         a.axis_classes().to_vec(),
                     )
-                    .map_err(|err| err.to_string())?,
+                    .map_err(|err| StorageError::InvalidStructuredStorage(err.to_string()))?,
                 )))
             }
             (StorageRepr::C64(a), StorageRepr::C64(b)) => {
                 if a.len() != b.len() {
-                    return Err(format!(
-                        "Storage lengths must match for addition: {} != {}",
-                        a.len(),
-                        b.len()
-                    ));
+                    return Err(StorageError::LengthMismatch {
+                        operation: "addition",
+                        left: a.len(),
+                        right: b.len(),
+                    });
                 }
                 let sum_vec: Vec<Complex64> = a
                     .data()
@@ -1686,14 +1767,14 @@ impl Storage {
                         a.strides().to_vec(),
                         a.axis_classes().to_vec(),
                     )
-                    .map_err(|err| err.to_string())?,
+                    .map_err(|err| StorageError::InvalidStructuredStorage(err.to_string()))?,
                 )))
             }
-            _ => Err(format!(
-                "Storage types must match for addition: {:?} vs {:?}",
-                std::mem::discriminant(&self.0),
-                std::mem::discriminant(&other.0)
-            )),
+            _ => Err(StorageError::OperationNotSupported {
+                operation: "addition",
+                left: storage_scalar_kind(&self.0),
+                right: storage_scalar_kind(&other.0),
+            }),
         }
     }
 
@@ -1713,15 +1794,15 @@ impl Storage {
     /// let c = a.try_sub(&b).unwrap();
     /// assert_eq!(c.to_dense_f64_col_major_vec(&[2]).unwrap(), vec![4.0, 4.0]);
     /// ```
-    pub fn try_sub(&self, other: &Storage) -> Result<Storage, String> {
+    pub fn try_sub(&self, other: &Storage) -> StorageResult<Storage> {
         match (&self.0, &other.0) {
             (StorageRepr::F64(a), StorageRepr::F64(b)) => {
                 if a.len() != b.len() {
-                    return Err(format!(
-                        "Storage lengths must match for subtraction: {} != {}",
-                        a.len(),
-                        b.len()
-                    ));
+                    return Err(StorageError::LengthMismatch {
+                        operation: "subtraction",
+                        left: a.len(),
+                        right: b.len(),
+                    });
                 }
                 let diff_vec: Vec<f64> = a
                     .data()
@@ -1736,16 +1817,16 @@ impl Storage {
                         a.strides().to_vec(),
                         a.axis_classes().to_vec(),
                     )
-                    .map_err(|err| err.to_string())?,
+                    .map_err(|err| StorageError::InvalidStructuredStorage(err.to_string()))?,
                 )))
             }
             (StorageRepr::C64(a), StorageRepr::C64(b)) => {
                 if a.len() != b.len() {
-                    return Err(format!(
-                        "Storage lengths must match for subtraction: {} != {}",
-                        a.len(),
-                        b.len()
-                    ));
+                    return Err(StorageError::LengthMismatch {
+                        operation: "subtraction",
+                        left: a.len(),
+                        right: b.len(),
+                    });
                 }
                 let diff_vec: Vec<Complex64> = a
                     .data()
@@ -1760,14 +1841,14 @@ impl Storage {
                         a.strides().to_vec(),
                         a.axis_classes().to_vec(),
                     )
-                    .map_err(|err| err.to_string())?,
+                    .map_err(|err| StorageError::InvalidStructuredStorage(err.to_string()))?,
                 )))
             }
-            _ => Err(format!(
-                "Storage types must match for subtraction: {:?} vs {:?}",
-                std::mem::discriminant(&self.0),
-                std::mem::discriminant(&other.0)
-            )),
+            _ => Err(StorageError::OperationNotSupported {
+                operation: "subtraction",
+                left: storage_scalar_kind(&self.0),
+                right: storage_scalar_kind(&other.0),
+            }),
         }
     }
 
@@ -1813,14 +1894,14 @@ impl Storage {
         a: &crate::AnyScalar,
         other: &Storage,
         b: &crate::AnyScalar,
-    ) -> Result<Storage, String> {
+    ) -> StorageResult<Storage> {
         // First check lengths match
         if self.len() != other.len() {
-            return Err(format!(
-                "Storage lengths must match for axpby: {} != {}",
-                self.len(),
-                other.len()
-            ));
+            return Err(StorageError::LengthMismatch {
+                operation: "axpby",
+                left: self.len(),
+                right: other.len(),
+            });
         }
 
         // Determine if we need complex output
@@ -1885,14 +1966,16 @@ impl Storage {
             };
             Ok(Storage::from_repr(StorageRepr::C64(
                 StructuredStorage::new(result, payload_dims, strides, axis_classes)
-                    .map_err(|err| err.to_string())?,
+                    .map_err(|err| StorageError::InvalidStructuredStorage(err.to_string()))?,
             )))
         } else {
             // All real
             if !a.is_real() || !b.is_real() {
-                return Err(format!(
-                    "expected real scalars in real axpby branch: a={a}, b={b}"
-                ));
+                return Err(StorageError::RealScalarRequired {
+                    operation: "real axpby",
+                    a: a.to_string(),
+                    b: b.to_string(),
+                });
             }
             let a_f = a.real();
             let b_f = b.real();
@@ -1912,14 +1995,14 @@ impl Storage {
                             x.strides().to_vec(),
                             x.axis_classes().to_vec(),
                         )
-                        .map_err(|err| err.to_string())?,
+                        .map_err(|err| StorageError::InvalidStructuredStorage(err.to_string()))?,
                     )))
                 }
-                _ => Err(format!(
-                    "axpby not supported for storage types: {:?} vs {:?}",
-                    std::mem::discriminant(&self.0),
-                    std::mem::discriminant(&other.0)
-                )),
+                _ => Err(StorageError::OperationNotSupported {
+                    operation: "axpby",
+                    left: storage_scalar_kind(&self.0),
+                    right: storage_scalar_kind(&other.0),
+                }),
             }
         }
     }
