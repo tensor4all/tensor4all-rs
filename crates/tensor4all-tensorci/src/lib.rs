@@ -52,7 +52,7 @@
 //! # Related crates
 //!
 //! - [`tensor4all_tcicore`] -- low-level matrix CI primitives and
-//!   [`CachedFunction`]
+//!   [`CachedFunction`](tensor4all_tcicore::CachedFunction)
 //! - [`tensor4all_simplett`] -- the [`TensorTrain`](tensor4all_simplett::TensorTrain)
 //!   data structure produced by TCI
 //! - `tensor4all-quanticstci` -- higher-level quantics TCI on discrete

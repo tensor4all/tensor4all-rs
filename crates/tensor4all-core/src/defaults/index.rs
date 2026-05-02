@@ -29,7 +29,7 @@ pub struct DynId(pub u64);
 impl DynId {
     /// Return the numeric ID value used for ITensors-compatible serialization.
     ///
-    /// Prefer full [`Index`](crate::Index) equality for tensor index identity.
+    /// Prefer full [`Index`] equality for tensor index identity.
     /// This accessor exists for stable serialization and FFI query paths that
     /// must expose the raw numeric identifier.
     ///
