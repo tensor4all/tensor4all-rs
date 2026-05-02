@@ -5,7 +5,7 @@ use crate::types::{
     InternalQttLayout, InternalTreeTN,
 };
 use crate::{
-    capi_error, clone_opaque, is_assigned_opaque, release_opaque, run_catching, set_last_error,
+    capi_error, clone_opaque, err_null_pointer, is_assigned_opaque, release_opaque, run_catching,
     CapiResult, StatusCode, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER,
 };
 use num_complex::Complex64;
@@ -143,8 +143,7 @@ fn require_layout_or_status<'a>(
     layout: *const t4a_qtt_layout,
 ) -> std::result::Result<&'a InternalQttLayout, StatusCode> {
     if layout.is_null() {
-        set_last_error("layout is null");
-        return Err(T4A_NULL_POINTER);
+        return Err(err_null_pointer("layout"));
     }
     Ok(unsafe { (&*layout).inner() })
 }

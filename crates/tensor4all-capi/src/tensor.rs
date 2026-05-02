@@ -12,9 +12,9 @@ use crate::types::{
     InternalIndex, InternalTensor,
 };
 use crate::{
-    capi_error, clone_opaque, is_assigned_opaque, panic_message, release_opaque, run_catching,
-    set_last_error, CapiResult, StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR,
-    T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
+    capi_error, clone_opaque, err_buffer_too_small, err_null_pointer, is_assigned_opaque,
+    panic_message, release_opaque, run_catching, set_last_error, CapiResult, StatusCode,
+    T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
 };
 
 /// Release a tensor handle.
@@ -258,8 +258,11 @@ fn box_tensor_handle(tensor: InternalTensor) -> *mut t4a_tensor {
 /// Get the rank of a tensor.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_rank(ptr: *const t4a_tensor, out_rank: *mut usize) -> StatusCode {
-    if ptr.is_null() || out_rank.is_null() {
-        return T4A_NULL_POINTER;
+    if ptr.is_null() {
+        return err_null_pointer("tensor");
+    }
+    if out_rank.is_null() {
+        return err_null_pointer("out_rank");
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
@@ -278,8 +281,11 @@ pub extern "C" fn t4a_tensor_dims(
     buf_len: usize,
     out_len: *mut usize,
 ) -> StatusCode {
-    if ptr.is_null() || out_len.is_null() {
-        return T4A_NULL_POINTER;
+    if ptr.is_null() {
+        return err_null_pointer("tensor");
+    }
+    if out_len.is_null() {
+        return err_null_pointer("out_len");
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
@@ -290,7 +296,7 @@ pub extern "C" fn t4a_tensor_dims(
             return T4A_SUCCESS;
         }
         if buf_len < dims.len() {
-            return T4A_BUFFER_TOO_SMALL;
+            return err_buffer_too_small("tensor dims", dims.len(), buf_len);
         }
 
         std::ptr::copy_nonoverlapping(dims.as_ptr(), buf, dims.len());
@@ -308,8 +314,11 @@ pub extern "C" fn t4a_tensor_indices(
     buf_len: usize,
     out_len: *mut usize,
 ) -> StatusCode {
-    if ptr.is_null() || out_len.is_null() {
-        return T4A_NULL_POINTER;
+    if ptr.is_null() {
+        return err_null_pointer("tensor");
+    }
+    if out_len.is_null() {
+        return err_null_pointer("out_len");
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
@@ -320,7 +329,7 @@ pub extern "C" fn t4a_tensor_indices(
             return T4A_SUCCESS;
         }
         if buf_len < indices.len() {
-            return T4A_BUFFER_TOO_SMALL;
+            return err_buffer_too_small("tensor indices", indices.len(), buf_len);
         }
 
         for (i, index) in indices.iter().enumerate() {
@@ -338,8 +347,11 @@ pub extern "C" fn t4a_tensor_scalar_kind(
     ptr: *const t4a_tensor,
     out_kind: *mut t4a_scalar_kind,
 ) -> StatusCode {
-    if ptr.is_null() || out_kind.is_null() {
-        return T4A_NULL_POINTER;
+    if ptr.is_null() {
+        return err_null_pointer("tensor");
+    }
+    if out_kind.is_null() {
+        return err_null_pointer("out_kind");
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
@@ -475,8 +487,11 @@ pub extern "C" fn t4a_tensor_copy_dense_f64(
     buf_len: usize,
     out_len: *mut usize,
 ) -> StatusCode {
-    if ptr.is_null() || out_len.is_null() {
-        return T4A_NULL_POINTER;
+    if ptr.is_null() {
+        return err_null_pointer("tensor");
+    }
+    if out_len.is_null() {
+        return err_null_pointer("out_len");
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
@@ -490,7 +505,7 @@ pub extern "C" fn t4a_tensor_copy_dense_f64(
             return T4A_SUCCESS;
         }
         if buf_len < data.len() {
-            return T4A_BUFFER_TOO_SMALL;
+            return err_buffer_too_small("tensor dense f64", data.len(), buf_len);
         }
 
         std::ptr::copy_nonoverlapping(data.as_ptr(), buf, data.len());
@@ -508,8 +523,11 @@ pub extern "C" fn t4a_tensor_copy_dense_c64(
     n_complex: usize,
     out_len: *mut usize,
 ) -> StatusCode {
-    if ptr.is_null() || out_len.is_null() {
-        return T4A_NULL_POINTER;
+    if ptr.is_null() {
+        return err_null_pointer("tensor");
+    }
+    if out_len.is_null() {
+        return err_null_pointer("out_len");
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
@@ -523,7 +541,7 @@ pub extern "C" fn t4a_tensor_copy_dense_c64(
             return T4A_SUCCESS;
         }
         if n_complex < data.len() {
-            return T4A_BUFFER_TOO_SMALL;
+            return err_buffer_too_small("tensor dense c64", data.len(), n_complex);
         }
 
         for (i, value) in data.iter().enumerate() {
@@ -581,8 +599,11 @@ pub extern "C" fn t4a_tensor_contract(
     b: *const t4a_tensor,
     out: *mut *mut t4a_tensor,
 ) -> StatusCode {
-    if a.is_null() || b.is_null() {
-        return T4A_NULL_POINTER;
+    if a.is_null() {
+        return err_null_pointer("a");
+    }
+    if b.is_null() {
+        return err_null_pointer("b");
     }
 
     run_catching(out, || unsafe {
