@@ -4,6 +4,8 @@
 
 A Rust implementation of tensor networks: TCI, Quantics Tensor Train, and Tree Tensor Networks.
 
+Related project: [tenferro-rs](https://github.com/tensor4all/tenferro-rs) provides tensor backend components used by tensor4all-rs.
+
 ## Features
 
 - **ITensors.jl-like dynamic tensors**: Flexible `Index` system with dynamic-rank `Tensor`
