@@ -1,3 +1,4 @@
+pub mod interpolative_qtt_common;
 pub mod output_paths;
 pub mod qtt_affine_common;
 pub mod qtt_elementwise_product_utils;

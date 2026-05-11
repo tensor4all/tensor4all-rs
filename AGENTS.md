@@ -62,6 +62,11 @@ Every public type, trait, and function **must** have doc comments with the follo
 - All doc examples **must** be runnable (`ignore` and `no_run` attributes are **prohibited**)
 - All doc examples **must** include assertions verifying correctness (not just compilation/execution)
   - Use `assert!`, `assert_eq!`, `approx::assert_abs_diff_eq!`, etc.
+  - Weak smoke checks such as non-zero, non-empty, finite, shape-only, or
+    "rank is positive" are not enough unless that exact property is the
+    documented behavior. Prefer checking numerical values against known
+    answers, algebraic identities, reconstruction error, or structural
+    invariants that would catch an incorrect implementation.
 - mdBook guide code blocks follow the same rules: runnable with assertions
 - mdBook code blocks use hidden lines (`# ` prefix) for `use` statements and `fn main()` wrappers
 

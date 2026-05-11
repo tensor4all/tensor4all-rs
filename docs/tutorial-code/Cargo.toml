@@ -7,6 +7,7 @@ edition = "2021"
 tensor4all-core = { path = "../../crates/tensor4all-core" }
 tensor4all-simplett = { path = "../../crates/tensor4all-simplett" }
 tensor4all-quanticstci = { path = "../../crates/tensor4all-quanticstci" }
+tensor4all-interpolativeqtt = { path = "../../crates/tensor4all-interpolativeqtt" }
 tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform" }
 tensor4all-treetn = { path = "../../crates/tensor4all-treetn" }
 num-complex.workspace = true

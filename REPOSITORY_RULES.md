@@ -103,6 +103,10 @@
 - `ignore` and `no_run` examples are prohibited unless explicitly approved.
 - Examples must include assertions that verify correctness, not just compile or
   execute.
+- Weak smoke checks such as non-zero, non-empty, finite, shape-only, or
+  positive-rank assertions are not sufficient unless that exact property is the
+  behavior being documented. Prefer known numerical values, algebraic
+  identities, reconstruction error, or meaningful structural invariants.
 
 ## Online Tutorial Synchronization
 

@@ -114,6 +114,21 @@ fn tutorial_binaries_run_current_api_flows() -> Result<(), Box<dyn Error>> {
             ],
         },
         TutorialBinary {
+            name: "interpolative_qtt",
+            path: env!("CARGO_BIN_EXE_interpolative_qtt"),
+            env: &[
+                ("INTERPOLATIVE_QTT_BITS_1D", "5"),
+                ("INTERPOLATIVE_QTT_BITS_2D", "4"),
+                ("INTERPOLATIVE_QTT_DEGREE_1D", "12"),
+                ("INTERPOLATIVE_QTT_DEGREE_2D", "6"),
+            ],
+            expected_csvs: &[
+                "interpolative_qtt_1d_samples.csv",
+                "interpolative_qtt_2d_samples.csv",
+                "interpolative_qtt_bond_dims.csv",
+            ],
+        },
+        TutorialBinary {
             name: "qtt_elementwise_product",
             path: env!("CARGO_BIN_EXE_qtt_elementwise_product"),
             env: &[],
