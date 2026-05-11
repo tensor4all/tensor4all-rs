@@ -155,7 +155,7 @@ where
 /// ).unwrap();
 ///
 /// assert_eq!(tt.len(), 4);
-/// assert!(tt.evaluate(&[0, 0, 0, 0]).unwrap().is_finite());
+/// assert!((tt.evaluate(&[0, 0, 0, 0]).unwrap() - 1.0).abs() < 1e-10);
 /// ```
 pub fn interpolate_multi_scale<F>(
     f: F,

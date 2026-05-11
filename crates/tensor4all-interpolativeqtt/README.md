@@ -21,5 +21,6 @@ let tt = interpolate_single_scale(
 ).unwrap();
 
 let value = tt.evaluate(&[0, 0, 0, 0, 0]).unwrap();
-assert!(value.is_finite());
+let expected = (-4.0_f64).exp();
+assert!((value - expected).abs() < 1e-10);
 ```

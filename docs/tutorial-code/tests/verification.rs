@@ -18,9 +18,9 @@ use tensor4all_treetn::{
 use tensor4all_treetn::Operator;
 
 use tensor4all_tutorial_code::{
-    output_paths, qtt_affine_common, qtt_elementwise_product_utils, qtt_fourier_common,
-    qtt_function_utils, qtt_integral_sweep_utils, qtt_interval_common, qtt_interval_utils,
-    qtt_multivariate_common, qtt_partial_fourier2d_common, qtt_r_sweep_utils,
+    interpolative_qtt_common, output_paths, qtt_affine_common, qtt_elementwise_product_utils,
+    qtt_fourier_common, qtt_function_utils, qtt_integral_sweep_utils, qtt_interval_common,
+    qtt_interval_utils, qtt_multivariate_common, qtt_partial_fourier2d_common, qtt_r_sweep_utils,
 };
 
 const FUNCTION_BITS: usize = 7;
@@ -1217,6 +1217,117 @@ fn qtt_partial_fourier2d_exports_stable_csv_headers() -> Result<(), Box<dyn Erro
             .first()
             .map(String::as_str),
         Some("bond_index,bond_dim")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn interpolative_qtt_demo_matches_known_values_and_exports_csv() -> Result<(), Box<dyn Error>> {
+    let config = interpolative_qtt_common::InterpolativeQttTutorialConfig {
+        bits_1d: 5,
+        bits_2d: 4,
+        single_scale_degree: 12,
+        multi_scale_degree_1d: 20,
+        multi_scale_degree_2d: 12,
+        ..interpolative_qtt_common::DEFAULT_INTERPOLATIVE_QTT_CONFIG
+    };
+
+    let single_scale = interpolative_qtt_common::build_single_scale_smooth_qtt(&config)?;
+    let multi_scale_1d =
+        interpolative_qtt_common::build_multi_scale_inverse_square_1d_qtt(&config)?;
+    let multi_scale_2d =
+        interpolative_qtt_common::build_multi_scale_inverse_square_2d_qtt(&config)?;
+
+    let smooth_samples = interpolative_qtt_common::collect_1d_samples(
+        "single_scale_1d",
+        &single_scale,
+        config.bits_1d,
+        config.lower_bound,
+        config.upper_bound,
+        interpolative_qtt_common::smooth_target,
+    )?;
+    let inverse_samples_1d = interpolative_qtt_common::collect_1d_samples(
+        "multi_scale_1d",
+        &multi_scale_1d,
+        config.bits_1d,
+        config.lower_bound,
+        config.upper_bound,
+        |x| interpolative_qtt_common::softened_inverse_square_1d(x, config.epsilon),
+    )?;
+    let lower = [config.lower_bound, config.lower_bound];
+    let upper = [config.upper_bound, config.upper_bound];
+    let inverse_samples_2d = interpolative_qtt_common::collect_2d_samples(
+        &multi_scale_2d,
+        config.bits_2d,
+        &lower,
+        &upper,
+        |coords| interpolative_qtt_common::softened_inverse_square_2d(coords, config.epsilon),
+    )?;
+
+    let smooth_error = interpolative_qtt_common::max_abs_error_1d(&smooth_samples);
+    let inverse_error_1d = interpolative_qtt_common::max_abs_error_1d(&inverse_samples_1d);
+    let inverse_error_2d = interpolative_qtt_common::max_abs_error_2d(&inverse_samples_2d);
+
+    assert!(
+        smooth_error < 1e-10,
+        "single-scale smooth interpolation error was {smooth_error}"
+    );
+    assert!(
+        inverse_error_1d < 1e-4,
+        "1D multiscale inverse-square interpolation error was {inverse_error_1d}"
+    );
+    assert!(
+        inverse_error_2d < 1e-2,
+        "2D multiscale inverse-square interpolation error was {inverse_error_2d}"
+    );
+
+    let first_smooth = smooth_samples
+        .first()
+        .expect("smooth sample table should be non-empty");
+    assert!((first_smooth.x - config.lower_bound).abs() < 1e-12);
+    assert!(
+        (first_smooth.exact - interpolative_qtt_common::smooth_target(config.lower_bound)).abs()
+            < 1e-12
+    );
+    assert!((first_smooth.qtt - first_smooth.exact).abs() < 1e-10);
+
+    let origin_peak = inverse_samples_1d
+        .iter()
+        .find(|sample| sample.x.abs() < 1e-12)
+        .expect("the 1D grid should contain the origin");
+    let expected_peak = interpolative_qtt_common::softened_inverse_square_1d(0.0, config.epsilon);
+    assert!((origin_peak.exact - expected_peak).abs() < 1e-12);
+    assert!((origin_peak.qtt - expected_peak).abs() < 1e-4);
+
+    let mut samples_1d = smooth_samples;
+    samples_1d.extend(inverse_samples_1d);
+    let bonds = interpolative_qtt_common::collect_bond_dims(
+        &single_scale.link_dims(),
+        &multi_scale_1d.link_dims(),
+        &multi_scale_2d.link_dims(),
+    );
+
+    let scratch = scratch_dir("interpolative-qtt");
+    let samples_1d_path = scratch.join("samples_1d.csv");
+    let samples_2d_path = scratch.join("samples_2d.csv");
+    let bonds_path = scratch.join("bond_dims.csv");
+
+    interpolative_qtt_common::write_1d_samples_csv(&samples_1d_path, &samples_1d)?;
+    interpolative_qtt_common::write_2d_samples_csv(&samples_2d_path, &inverse_samples_2d)?;
+    interpolative_qtt_common::write_bond_dims_csv(&bonds_path, &bonds)?;
+
+    assert_eq!(
+        read_lines(&samples_1d_path).first().map(String::as_str),
+        Some("case,index,x,exact,qtt,abs_error")
+    );
+    assert_eq!(
+        read_lines(&samples_2d_path).first().map(String::as_str),
+        Some("x_index,y_index,x,y,exact,qtt,abs_error")
+    );
+    assert_eq!(
+        read_lines(&bonds_path).first().map(String::as_str),
+        Some("bond_index,single_scale_1d,multi_scale_1d,multi_scale_2d")
     );
 
     Ok(())

@@ -56,10 +56,11 @@ Suggested online order:
 3. [Definite Integrals](../book/src/tutorials/quantics-basics/qtt-definite-integrals.md)
 4. [Sweep over Bit Depth](../book/src/tutorials/quantics-basics/sweep-bit-depth.md)
 5. [Multivariate Functions](../book/src/tutorials/quantics-basics/multivariate-functions.md)
-6. [Elementwise Product](../book/src/tutorials/computations-with-qtt/elementwise-product.md)
-7. [Affine Transformation](../book/src/tutorials/computations-with-qtt/affine-transformation.md)
-8. [Fourier Transform](../book/src/tutorials/computations-with-qtt/fourier-transform.md)
-9. [2D Partial Fourier Transform](../book/src/tutorials/computations-with-qtt/partial-fourier2d.md)
+6. [Interpolative QTT](../book/src/tutorials/quantics-basics/interpolative-qtt.md)
+7. [Elementwise Product](../book/src/tutorials/computations-with-qtt/elementwise-product.md)
+8. [Affine Transformation](../book/src/tutorials/computations-with-qtt/affine-transformation.md)
+9. [Fourier Transform](../book/src/tutorials/computations-with-qtt/fourier-transform.md)
+10. [2D Partial Fourier Transform](../book/src/tutorials/computations-with-qtt/partial-fourier2d.md)
 
 For terminology, see [docs/glossary.md](docs/glossary.md).
 

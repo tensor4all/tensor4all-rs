@@ -20,6 +20,7 @@
     - [Definite Integrals](tutorials/quantics-basics/qtt-definite-integrals.md)
     - [Sweep over Bit Depth](tutorials/quantics-basics/sweep-bit-depth.md)
     - [Multivariate Functions](tutorials/quantics-basics/multivariate-functions.md)
+    - [Interpolative QTT](tutorials/quantics-basics/interpolative-qtt.md)
   - [Computations with QTT]()
     - [Elementwise Product](tutorials/computations-with-qtt/elementwise-product.md)
     - [Affine Transformation](tutorials/computations-with-qtt/affine-transformation.md)
