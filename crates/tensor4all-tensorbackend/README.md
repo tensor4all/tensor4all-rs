@@ -8,8 +8,11 @@ backed by tenferro-rs.
 ## Key Types
 
 - `AnyScalar` — dynamic scalar type (f64 or Complex64)
+- `Matrix` — shared column-major dense matrix boundary for tensor4all crates
 - `Storage` — dense/diagonal tensor storage
 - `StructuredStorage` — axis-class-aware storage snapshots
+- `svd_backend`, `qr_backend`, `solve_matrix`, `full_piv_lu_matrix` —
+  tenferro-backed dense linear algebra entry points
 
 ## Documentation
 

@@ -11,9 +11,8 @@
 //! - **Cached function evaluation**: [`CachedFunction`] wraps expensive
 //!   multi-index functions with thread-safe memoization and automatic key
 //!   type selection (up to 1024 bits by default, extensible via [`CacheKey`]).
-//! - **Utility types**: [`IndexSet`] for bidirectional pivot management,
-//!   [`Matrix`] for dense row-major matrices, and [`Scalar`] for numeric
-//!   scalar requirements.
+//! - **Utility types**: [`IndexSet`] for bidirectional pivot management and
+//!   [`Scalar`] for numeric scalar requirements.
 //!
 //! Higher-level crates (`tensor4all-tensorci`, `tensor4all-quanticstci`) build
 //! on these primitives.
@@ -23,7 +22,8 @@
 //! Cross-interpolate a rank-2 matrix:
 //!
 //! ```
-//! use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+//! use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+//! use tensor4all_tensorbackend::from_vec2d;
 //!
 //! let m = from_vec2d(vec![
 //!     vec![1.0_f64, 2.0, 3.0],
@@ -64,7 +64,6 @@
 pub mod cached_function;
 pub mod error;
 pub mod indexset;
-pub mod matrix;
 mod matrix_luci;
 pub mod matrixaca;
 pub mod matrixlu;
@@ -79,7 +78,6 @@ pub use cached_function::index_int::IndexInt;
 pub use cached_function::CachedFunction;
 pub use error::{MatrixCIError, Result};
 pub use indexset::{IndexSet, LocalIndex, MultiIndex};
-pub use matrix::{from_vec2d, Matrix};
 pub use matrix_luci::{
     matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix, MatrixLUCI, MatrixLuciFactors,
 };

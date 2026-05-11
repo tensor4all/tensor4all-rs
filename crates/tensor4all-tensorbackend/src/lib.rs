@@ -13,10 +13,12 @@
 
 /// Dynamic scalar types supporting f64 and Complex64.
 mod any_scalar;
-/// Backend dispatch for SVD and QR operations.
+/// Backend dispatch for dense linear algebra operations.
 mod backend;
-/// Thread-local tenferro execution helpers.
+/// Process-global tenferro execution helpers.
 mod context;
+/// Dense column-major matrix type and backend-backed matrix utilities.
+mod matrix;
 /// Tensor snapshot storage types and low-level dense/diagonal kernels.
 mod storage;
 pub(crate) mod tenferro_bridge;
@@ -24,8 +26,15 @@ pub(crate) mod tenferro_bridge;
 mod tensor_element;
 
 pub use any_scalar::AnyScalar;
-pub use backend::{qr_backend, svd_backend, BackendLinalgScalar, SvdResult};
+pub use backend::{
+    full_piv_lu_backend, full_piv_lu_matrix, qr_backend, solve_backend, solve_matrix, svd_backend,
+    BackendLinalgScalar, FullPivLuMatrixResult, FullPivLuResult, MatrixSolveScalar, SvdResult,
+};
 pub use context::{default_eager_ctx, with_default_backend};
+pub use matrix::{
+    from_vec2d, mat_mul, submatrix, submatrix_argmax, swap_cols, swap_rows, transpose, BlasMul,
+    Matrix, MatrixScalar,
+};
 pub use storage::{
     contract_storage, make_mut_storage, mindim, Storage, StorageError, StorageKind, StorageResult,
     StorageScalar, StructuredStorage, SumFromStorage,

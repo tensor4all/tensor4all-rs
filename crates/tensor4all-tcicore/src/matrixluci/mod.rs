@@ -28,4 +28,4 @@ pub use scalar::Scalar;
 #[allow(unused_imports)]
 pub(crate) use source::{CandidateMatrixSource, DenseMatrixSource, LazyMatrixSource};
 #[allow(unused_imports)]
-pub(crate) use types::{DenseOwnedMatrix, PivotKernelOptions, PivotSelectionCore};
+pub(crate) use types::{PivotKernelOptions, PivotSelectionCore};

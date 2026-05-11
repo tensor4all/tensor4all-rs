@@ -57,11 +57,11 @@ fn test_slice_site() {
     let slice = t.slice_site(1);
     assert_eq!(slice.len(), 8); // 2 * 4
     assert_eq!(slice[0], 0.0); // l=0, r=0
-    assert_eq!(slice[1], 1.0); // l=0, r=1
-    assert_eq!(slice[2], 2.0); // l=0, r=2
-    assert_eq!(slice[3], 3.0); // l=0, r=3
-    assert_eq!(slice[4], 4.0); // l=1, r=0
-    assert_eq!(slice[5], 5.0); // l=1, r=1
+    assert_eq!(slice[1], 4.0); // l=1, r=0
+    assert_eq!(slice[2], 1.0); // l=0, r=1
+    assert_eq!(slice[3], 5.0); // l=1, r=1
+    assert_eq!(slice[4], 2.0); // l=0, r=2
+    assert_eq!(slice[5], 6.0); // l=1, r=2
 
     let slice_zero = t.slice_site(0);
     assert!(slice_zero.iter().all(|&v| v == 0.0));
@@ -77,15 +77,13 @@ fn test_as_left_matrix() {
     assert_eq!(cols, 4);
     assert_eq!(mat.len(), 24);
 
-    // The data should be laid out as (l, s, r) -> row = l*site_dim + s, col = r
-    // with the tensor populated from a column-major flat buffer.
-    // First row (l=0, s=0): elements 0,6,12,18
+    // Column-major matrix data: row = l*site_dim + s, col = r.
+    // First column (r=0): rows (0,0), (0,1), (0,2), (1,0), ...
     assert_eq!(mat[0], 0.0);
-    assert_eq!(mat[1], 6.0);
-    assert_eq!(mat[2], 12.0);
-    assert_eq!(mat[3], 18.0);
-    // Second row (l=0, s=1): elements 2,8,14,20
-    assert_eq!(mat[4], 2.0);
+    assert_eq!(mat[1], 2.0);
+    assert_eq!(mat[2], 4.0);
+    assert_eq!(mat[5], 5.0);
+    assert_eq!(mat[6], 6.0);
 }
 
 #[test]
@@ -98,10 +96,9 @@ fn test_as_right_matrix() {
     assert_eq!(cols, 12); // 3 * 4
     assert_eq!(mat.len(), 24);
 
-    // First row (l=0): values from the column-major tensor loading
+    // Column-major matrix data with rows l and columns (s, r).
     assert_eq!(mat[0], 0.0);
-    assert_eq!(mat[11], 22.0);
-    // Second row (l=1): remaining values
-    assert_eq!(mat[12], 1.0);
+    assert_eq!(mat[1], 1.0);
+    assert_eq!(mat[22], 22.0);
     assert_eq!(mat[23], 23.0);
 }

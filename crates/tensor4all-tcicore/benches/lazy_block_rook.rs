@@ -5,6 +5,7 @@ use rand_chacha::ChaCha8Rng;
 use tensor4all_tcicore::{
     matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix, RrLUOptions,
 };
+use tensor4all_tensorbackend::Matrix;
 
 fn random_column_major(nrows: usize, ncols: usize, seed: u64) -> Vec<f64> {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
@@ -61,7 +62,7 @@ fn bench_lazy_block_rook(c: &mut Criterion) {
             |b, &n| {
                 b.iter(|| {
                     let materialized = data.clone();
-                    let mut matrix = tensor4all_tcicore::matrix::zeros(n, n);
+                    let mut matrix = Matrix::zeros(n, n);
                     for col in 0..n {
                         for row in 0..n {
                             matrix[[row, col]] = materialized[row + n * col];
@@ -100,7 +101,7 @@ fn bench_lazy_block_rook(c: &mut Criterion) {
             |b, &n| {
                 b.iter(|| {
                     let materialized = materialize_expensive(n);
-                    let mut matrix = tensor4all_tcicore::matrix::zeros(n, n);
+                    let mut matrix = Matrix::zeros(n, n);
                     for col in 0..n {
                         for row in 0..n {
                             matrix[[row, col]] = materialized[row + n * col];

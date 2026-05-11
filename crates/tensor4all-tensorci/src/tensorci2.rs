@@ -1,8 +1,8 @@
 //! TensorCI2 - Two-site Tensor Cross Interpolation algorithm
 //!
 //! This implements the TCI2 algorithm which uses two-site updates for
-//! more efficient convergence. Unlike TCI1, it supports batch evaluation
-//! of function values through an explicit batch function parameter.
+//! more efficient convergence. It supports batch evaluation of function
+//! values through an explicit batch function parameter.
 
 use crate::error::{Result, TCIError};
 use crate::globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput};
@@ -10,11 +10,11 @@ use rand::SeedableRng;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
-use tensor4all_tcicore::matrix::zeros;
 use tensor4all_tcicore::{
-    matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix, rrlu, MatrixLuciScalar,
-    MultiIndex, RrLUOptions, Scalar,
+    matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix, MatrixLuciScalar, MultiIndex,
+    RrLUOptions, Scalar,
 };
+use tensor4all_tensorbackend::{solve_matrix, transpose, Matrix};
 
 /// Configuration for the TCI2 algorithm ([`crossinterpolate2`]).
 ///
@@ -618,7 +618,7 @@ where
         // Build Pi matrix by evaluating function at all (I, J) combinations
         let ni = is.len();
         let nj = js.len();
-        let mut pi = zeros(ni, nj);
+        let mut pi = Matrix::zeros(ni, nj);
         for (i, i_multi) in is.iter().enumerate() {
             for (j, j_multi) in js.iter().enumerate() {
                 let mut full_idx = i_multi.clone();
@@ -733,7 +733,7 @@ where
             // Pi1: evaluate f at (Kronecker(I_b, d_b), J_b)
             let ni = i_kron.len();
             let nj = j_set_b.len();
-            let mut pi1 = zeros(ni, nj);
+            let mut pi1 = Matrix::zeros(ni, nj);
             for (i, i_multi) in i_kron.iter().enumerate() {
                 for (j, j_multi) in j_set_b.iter().enumerate() {
                     let mut full_idx = i_multi.clone();
@@ -763,7 +763,7 @@ where
                 let i_set_bp1 = self.i_set[b + 1].clone();
                 let np = i_set_bp1.len();
 
-                let mut p_mat = zeros(np, nj);
+                let mut p_mat = Matrix::zeros(np, nj);
                 for (i, i_multi) in i_set_bp1.iter().enumerate() {
                     for (j, j_multi) in j_set_b.iter().enumerate() {
                         let mut full_idx = i_multi.clone();
@@ -772,28 +772,12 @@ where
                     }
                 }
 
-                // Solve P * X^T = Pi1^T via LU factorization
-                // First transpose P and Pi1
-                let mut p_t = zeros(nj, np);
-                for i in 0..np {
-                    for j in 0..nj {
-                        p_t[[j, i]] = p_mat[[i, j]];
-                    }
-                }
-                let mut pi1_t = zeros(nj, ni);
-                for i in 0..ni {
-                    for j in 0..nj {
-                        pi1_t[[j, i]] = pi1[[i, j]];
-                    }
-                }
-
-                // LU factorize P^T with full pivoting
-                let lu = rrlu(&p_t, None)?;
-                let l_mat = lu.left(true);
-                let u_mat = lu.right(true);
-
-                // Solve L*U * X_t = Pi1^T
-                let x_t = tensor4all_tcicore::matrixlu::solve_lu(&l_mat, &u_mat, &pi1_t)?;
+                // Solve P^T * X_t = Pi1^T through the configured tensor backend.
+                let p_t = transpose(&p_mat);
+                let pi1_t = transpose(&pi1);
+                let x_t = solve_matrix(&p_t, &pi1_t).map_err(|err| TCIError::InvalidOperation {
+                    message: format!("one-site interpolation solve failed: {err}"),
+                })?;
 
                 // X = X_t^T → shape (ni, np) = (|I_b|*d_b, |I_{b+1}|)
                 let left_dim = if b == 0 { 1 } else { self.i_set[b].len() };
@@ -1199,7 +1183,7 @@ where
     }
 
     let factors = if context.options.pivot_search == PivotSearchStrategy::Full {
-        let mut pi = zeros(i_combined.len(), j_combined.len());
+        let mut pi = Matrix::zeros(i_combined.len(), j_combined.len());
 
         if let Some(ref batch_fn) = context.batched_f {
             let mut all_indices: Vec<MultiIndex> =

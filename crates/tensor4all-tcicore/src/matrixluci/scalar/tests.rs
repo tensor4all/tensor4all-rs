@@ -1,9 +1,9 @@
 use super::*;
-use crate::matrix::Matrix;
 use crate::matrix_luci::MatrixLuciFactors;
+use tensor4all_tensorbackend::Matrix;
 
 fn identity2<T: Scalar>() -> Matrix<T> {
-    Matrix::from_raw_vec(
+    Matrix::from_col_major_vec(
         2,
         2,
         vec![

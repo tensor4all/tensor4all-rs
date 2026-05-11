@@ -5,8 +5,8 @@
 //! [`LazyMatrixSource`] (callback-backed block evaluation).
 
 use crate::matrixluci::scalar::Scalar;
-use crate::matrixluci::types::DenseOwnedMatrix;
 use std::marker::PhantomData;
+use tensor4all_tensorbackend::Matrix;
 
 /// Abstraction for accessing a matrix that will be cross-interpolated.
 ///
@@ -121,16 +121,14 @@ where
     }
 }
 
-pub(crate) fn materialize_source<T: Scalar, S: CandidateMatrixSource<T>>(
-    source: &S,
-) -> DenseOwnedMatrix<T> {
+pub(crate) fn materialize_source<T: Scalar, S: CandidateMatrixSource<T>>(source: &S) -> Matrix<T> {
     let nrows = source.nrows();
     let ncols = source.ncols();
     let rows: Vec<usize> = (0..nrows).collect();
     let cols: Vec<usize> = (0..ncols).collect();
     let mut out = vec![T::zero(); nrows * ncols];
     source.get_block(&rows, &cols, &mut out);
-    DenseOwnedMatrix::from_column_major(out, nrows, ncols)
+    Matrix::from_col_major_vec(nrows, ncols, out)
 }
 
 #[cfg(test)]

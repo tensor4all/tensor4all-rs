@@ -6,7 +6,7 @@
 
 use std::ops::Range;
 
-use crate::einsum_helper::{tensor_to_row_major_vec, typed_tensor_from_row_major_slice};
+use crate::einsum_helper::{tensor_to_col_major_vec, typed_tensor_from_col_major_slice};
 use crate::error::{Result, TensorTrainError};
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
@@ -14,15 +14,14 @@ use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 use num_complex::ComplexFloat;
 use num_traits::ToPrimitive;
 use tenferro_tensor::{TensorScalar, TypedTensor};
-use tensor4all_tcicore::matrix::{mat_mul, ncols, nrows, zeros, Matrix};
 use tensor4all_tcicore::Scalar;
 use tensor4all_tcicore::{rrlu, RrLUOptions};
-use tensor4all_tensorbackend::{svd_backend, BackendLinalgScalar};
+use tensor4all_tensorbackend::{mat_mul, svd_backend, BackendLinalgScalar, Matrix};
 
 /// Compute QR decomposition
 fn qr_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> (Matrix<T>, Matrix<T>) {
     let options = RrLUOptions {
-        max_rank: ncols(matrix).min(nrows(matrix)),
+        max_rank: matrix.ncols().min(matrix.nrows()),
         rel_tol: 0.0,
         abs_tol: 0.0,
         left_orthogonal: true,
@@ -46,22 +45,18 @@ where
 
     let rows = tensor.shape[0];
     let cols = tensor.shape[1];
-    let data = tensor_to_row_major_vec(tensor);
-
-    let mut matrix = zeros(rows, cols);
-    for i in 0..rows {
-        for j in 0..cols {
-            matrix[[i, j]] = data[i * cols + j];
-        }
-    }
-    Ok(matrix)
+    Ok(Matrix::from_col_major_vec(
+        rows,
+        cols,
+        tensor_to_col_major_vec(tensor),
+    ))
 }
 
 fn typed_real_values_to_f64<R>(tensor: &TypedTensor<R>, op: &'static str) -> Result<Vec<f64>>
 where
     R: TensorScalar + ToPrimitive,
 {
-    let data = tensor_to_row_major_vec(tensor);
+    let data = tensor_to_col_major_vec(tensor);
     data.iter()
         .map(|value| {
             value
@@ -80,22 +75,15 @@ where
     T: TTScalar + Scalar + Default + ComplexFloat + BackendLinalgScalar + Copy + 'static,
     <T as TensorScalar>::Real: TensorScalar + ToPrimitive,
 {
-    let rows = nrows(matrix);
-    let cols = ncols(matrix);
+    let rows = matrix.nrows();
+    let cols = matrix.ncols();
     if rows == 0 || cols == 0 {
         return Err(TensorTrainError::InvalidOperation {
             message: "Cannot compute Vidal singular values for an empty bond matrix".to_string(),
         });
     }
 
-    let mut data = Vec::with_capacity(rows * cols);
-    for i in 0..rows {
-        for j in 0..cols {
-            data.push(matrix[[i, j]]);
-        }
-    }
-
-    let typed = typed_tensor_from_row_major_slice(&data, &[rows, cols]);
+    let typed = typed_tensor_from_col_major_slice(matrix.as_col_major_slice(), &[rows, cols]);
     let decomp = svd_backend(&typed).map_err(|e| TensorTrainError::InvalidOperation {
         message: format!("Failed to compute Vidal bond SVD: {e}"),
     })?;
@@ -105,7 +93,7 @@ where
     let singular_values = typed_real_values_to_f64(&decomp.s, "svd.s")?;
     let rank = singular_values.len();
 
-    let mut left_scaled = zeros(rows, rank);
+    let mut left_scaled = Matrix::zeros(rows, rank);
     for i in 0..rows {
         for j in 0..rank {
             left_scaled[[i, j]] = u[[i, j]] * T::from_f64(singular_values[j]);
@@ -123,7 +111,7 @@ fn tensor3_to_left_matrix<T: TTScalar + Scalar + Default>(tensor: &Tensor3<T>) -
     let rows = left_dim * site_dim;
     let cols = right_dim;
 
-    let mut mat = zeros(rows, cols);
+    let mut mat = Matrix::zeros(rows, cols);
     for l in 0..left_dim {
         for s in 0..site_dim {
             for r in 0..right_dim {
@@ -142,7 +130,7 @@ fn tensor3_to_right_matrix<T: TTScalar + Scalar + Default>(tensor: &Tensor3<T>) 
     let rows = left_dim;
     let cols = site_dim * right_dim;
 
-    let mut mat = zeros(rows, cols);
+    let mut mat = Matrix::zeros(rows, cols);
     for l in 0..left_dim {
         for s in 0..site_dim {
             for r in 0..right_dim {
@@ -255,7 +243,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             let mat = tensor3_to_left_matrix(&tensors[i]);
             let (q, r) = qr_decomp(&mat);
 
-            let new_bond_dim = ncols(&q);
+            let new_bond_dim = q.ncols();
 
             // Update current tensor with Q
             let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim);
@@ -263,7 +251,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
                 for s in 0..site_dim {
                     for b in 0..new_bond_dim {
                         let row = l * site_dim + s;
-                        if row < nrows(&q) && b < ncols(&q) {
+                        if row < q.nrows() && b < q.ncols() {
                             new_tensor.set3(l, s, b, q[[row, b]]);
                         }
                     }
@@ -302,7 +290,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             let mat = tensor3_to_right_matrix(&tensors[i]);
             let (us, sv, vt) = svd_factorize_right_matrix(&mat)?;
 
-            let new_bond_dim = nrows(&vt);
+            let new_bond_dim = vt.nrows();
 
             singular_values[i - 1] = sv;
 
@@ -311,7 +299,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             for l in 0..new_bond_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
-                        if l < nrows(&vt) {
+                        if l < vt.nrows() {
                             new_tensor.set3(l, s, r, vt[[l, s * right_dim + r]]);
                         }
                     }
@@ -330,7 +318,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
                 for l in 0..prev_left_dim {
                     for s in 0..prev_site_dim {
                         for r in 0..new_bond_dim {
-                            if l * prev_site_dim + s < nrows(&contracted) && r < ncols(&contracted)
+                            if l * prev_site_dim + s < contracted.nrows() && r < contracted.ncols()
                             {
                                 new_prev_tensor.set3(
                                     l,

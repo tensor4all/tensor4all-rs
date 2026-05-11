@@ -166,6 +166,26 @@ fn test_op_f64() { test_op_generic::<f64>(); }
 fn test_op_c64() { test_op_generic::<Complex64>(); }
 ```
 
+### Dense Layout And Linear Algebra
+
+- Dense flat-buffer APIs use **column-major** linearization. New public
+  constructors, exports, examples, FFI contracts, and docs must state or
+  preserve column-major semantics.
+- Do not add row-major compatibility shims or hidden row-major round-trips in
+  library code. If external data is naturally row-shaped, convert privately at
+  that explicit boundary.
+- Reuse `tensor4all-tensorbackend::Matrix` for dense matrix values crossing crate
+  boundaries. Do not introduce duplicate public matrix containers in downstream
+  crates.
+- Use tenferro-backed `tensor4all-tensorbackend` / existing tensor4all
+  abstractions for SVD, QR, einsum, and dense tensor linear algebra instead of
+  local reimplementations.
+- Do not instantiate `CpuBackend` directly outside `tensor4all-tensorbackend`.
+  Use tensorbackend wrappers or `with_default_backend` so CPU execution shares
+  the repository's process-global tenferro `CpuContext`.
+- `Tensor3Ops::slice_site`, `Tensor4Ops::slice_site`, and dense/full-tensor
+  exports return column-major flat data.
+
 ## C API & Language Bindings
 
 See `docs/CAPI_DESIGN.md` for C API patterns. Bindings: [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl) (separate repo), `python/tensor4all/`.
@@ -188,7 +208,10 @@ Tensor4all.jl should link the related Julia-side issue.
 
 ## Dependencies
 
-- Prefer `mdarray` for arrays (row-major only), `mdarray-linalg` for linear algebra
+- Prefer existing tensor4all core/tcicore/simplett abstractions and
+  tenferro-backed `tensor4all-tensorbackend` operations for arrays and linear
+  algebra. Add direct array/linalg dependencies only when the established
+  abstraction is genuinely insufficient.
 - SVD singular values: `s[[0, i]]` not `s[[i, i]]`
 
 ## Git Workflow

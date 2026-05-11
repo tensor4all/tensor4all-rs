@@ -1,6 +1,6 @@
 use super::*;
 use crate::einsum_helper::{
-    einsum_tensors, tensor_to_row_major_vec, typed_tensor_from_row_major_slice, EinsumScalar,
+    einsum_tensors, tensor_to_col_major_vec, typed_tensor_from_col_major_slice, EinsumScalar,
 };
 use crate::types::{tensor3_zeros, Tensor3};
 
@@ -151,9 +151,9 @@ fn test_dot_three_sites() {
 
 #[test]
 fn test_einsum_tensors_matmul() {
-    let a = typed_tensor_from_row_major_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
-    let b = typed_tensor_from_row_major_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+    let a = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]);
+    let b = typed_tensor_from_col_major_slice(&[5.0, 7.0, 6.0, 8.0], &[2, 2]);
 
     let c = einsum_tensors("ij,jk->ik", &[&a, &b]);
-    assert_eq!(tensor_to_row_major_vec(&c), &[19.0, 22.0, 43.0, 50.0]);
+    assert_eq!(tensor_to_col_major_vec(&c), &[19.0, 43.0, 22.0, 50.0]);
 }

@@ -15,12 +15,14 @@ default = ["tenferro-cpu-faer"]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
     "tensor4all-tcicore/tenferro-cpu-faer",
+    "tensor4all-tensorbackend/tenferro-cpu-faer",
     "tensor4all-treetn/tenferro-cpu-faer",
     "tenferro-tensor/cpu-faer",
 ]
 tenferro-provider-inject = [
     "tensor4all-core/tenferro-provider-inject",
     "tensor4all-tcicore/tenferro-provider-inject",
+    "tensor4all-tensorbackend/tenferro-provider-inject",
     "tensor4all-treetn/tenferro-provider-inject",
     "tenferro-tensor/provider-inject",
 ]
@@ -34,6 +36,7 @@ rand.workspace = true
 tenferro-tensor.workspace = true
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-tcicore = { path = "../tensor4all-tcicore", default-features = false }
+tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 
 [dev-dependencies]

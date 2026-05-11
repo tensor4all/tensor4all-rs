@@ -1,5 +1,6 @@
 use super::*;
 use num_complex::Complex64;
+use tenferro_tensor::TensorScalar;
 
 // Generic test functions for f64 and Complex64
 
@@ -524,13 +525,15 @@ fn test_tt_addition_c64() {
 // SVD compression with tolerance (port of test_tensortrain.jl "compress! (SVD)")
 // ============================================================================
 
-fn test_svd_compression_tolerance_generic<
+fn test_svd_compression_tolerance_generic<T>()
+where
     T: TTScalar
         + tensor4all_tcicore::Scalar
         + tensor4all_tcicore::MatrixLuciScalar
         + Default
         + std::fmt::Debug,
->() {
+    f64: From<<T as TensorScalar>::Real>,
+{
     use crate::compression::{CompressionMethod, CompressionOptions};
 
     // Build a random-ish TT with known structure: sum of two rank-1 terms

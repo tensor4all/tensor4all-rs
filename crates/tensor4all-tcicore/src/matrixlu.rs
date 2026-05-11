@@ -14,7 +14,8 @@
 //! # Examples
 //!
 //! ```
-//! use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu};
+//! use tensor4all_tcicore::matrixlu::rrlu;
+//! use tensor4all_tensorbackend::from_vec2d;
 //!
 //! let m = from_vec2d(vec![
 //!     vec![1.0_f64, 2.0],
@@ -25,10 +26,8 @@
 //! ```
 
 use crate::error::{MatrixCIError, Result};
-use crate::matrix::{
-    ncols, nrows, submatrix_argmax, swap_cols, swap_rows, transpose, zeros, Matrix,
-};
 use crate::scalar::Scalar;
+use tensor4all_tensorbackend::{submatrix_argmax, swap_cols, swap_rows, transpose, Matrix};
 
 /// Rank-Revealing LU decomposition.
 ///
@@ -40,7 +39,8 @@ use crate::scalar::Scalar;
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu, matrix::mat_mul};
+/// use tensor4all_tcicore::matrixlu::rrlu;
+/// use tensor4all_tensorbackend::{from_vec2d, mat_mul};
 ///
 /// let m = from_vec2d(vec![
 ///     vec![1.0_f64, 2.0, 3.0],
@@ -104,8 +104,8 @@ impl<T: Scalar> RrLU<T> {
         Self {
             row_permutation: (0..nr).collect(),
             col_permutation: (0..nc).collect(),
-            l: zeros(nr, 0),
-            u: zeros(0, nc),
+            l: Matrix::zeros(nr, 0),
+            u: Matrix::zeros(0, nc),
             left_orthogonal,
             n_pivot: 0,
             error: f64::NAN,
@@ -117,14 +117,15 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu};
+    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]]);
     /// let lu = rrlu(&m, None).unwrap();
     /// assert_eq!(lu.nrows(), 3);
     /// ```
     pub fn nrows(&self) -> usize {
-        nrows(&self.l)
+        self.l.nrows()
     }
 
     /// Number of columns
@@ -132,14 +133,15 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu};
+    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0, 3.0], vec![4.0, 5.0, 6.0]]);
     /// let lu = rrlu(&m, None).unwrap();
     /// assert_eq!(lu.ncols(), 3);
     /// ```
     pub fn ncols(&self) -> usize {
-        ncols(&self.u)
+        self.u.ncols()
     }
 
     /// Number of pivots
@@ -147,7 +149,8 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu};
+    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let lu = rrlu(&m, None).unwrap();
@@ -162,7 +165,8 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu};
+    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let lu = rrlu(&m, None).unwrap();
@@ -182,7 +186,8 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu};
+    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let lu = rrlu(&m, None).unwrap();
@@ -201,7 +206,8 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu, RrLUOptions};
+    /// use tensor4all_tcicore::{matrixlu::rrlu, RrLUOptions};
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let lu = rrlu(&m, Some(RrLUOptions { max_rank: 1, ..Default::default() })).unwrap();
@@ -218,7 +224,8 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu, RrLUOptions};
+    /// use tensor4all_tcicore::{matrixlu::rrlu, RrLUOptions};
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let lu = rrlu(&m, Some(RrLUOptions { max_rank: 1, ..Default::default() })).unwrap();
@@ -235,7 +242,8 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu, matrix::mat_mul};
+    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_tensorbackend::{from_vec2d, mat_mul};
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let lu = rrlu(&m, None).unwrap();
@@ -254,9 +262,9 @@ impl<T: Scalar> RrLU<T> {
     /// ```
     pub fn left(&self, permute: bool) -> Matrix<T> {
         if permute {
-            let mut result = zeros(nrows(&self.l), ncols(&self.l));
+            let mut result = Matrix::zeros(self.l.nrows(), self.l.ncols());
             for (new_i, &old_i) in self.row_permutation.iter().enumerate() {
-                for j in 0..ncols(&self.l) {
+                for j in 0..self.l.ncols() {
                     result[[old_i, j]] = self.l[[new_i, j]];
                 }
             }
@@ -271,7 +279,8 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu, matrix::mat_mul};
+    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_tensorbackend::{from_vec2d, mat_mul};
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let lu = rrlu(&m, None).unwrap();
@@ -285,8 +294,8 @@ impl<T: Scalar> RrLU<T> {
     /// ```
     pub fn right(&self, permute: bool) -> Matrix<T> {
         if permute {
-            let mut result = zeros(nrows(&self.u), ncols(&self.u));
-            for i in 0..nrows(&self.u) {
+            let mut result = Matrix::zeros(self.u.nrows(), self.u.ncols());
+            for i in 0..self.u.nrows() {
                 for (new_j, &old_j) in self.col_permutation.iter().enumerate() {
                     result[[i, old_j]] = self.u[[i, new_j]];
                 }
@@ -302,7 +311,8 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu};
+    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let lu = rrlu(&m, None).unwrap();
@@ -327,7 +337,8 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu};
+    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let lu = rrlu(&m, None).unwrap();
@@ -350,7 +361,8 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu};
+    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let lu = rrlu(&m, None).unwrap();
@@ -366,7 +378,8 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu};
+    /// use tensor4all_tcicore::matrixlu::rrlu;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let lu = rrlu(&m, None).unwrap();
@@ -393,7 +406,8 @@ impl<T: Scalar> RrLU<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu, RrLUOptions};
+    /// use tensor4all_tcicore::{matrixlu::rrlu, RrLUOptions};
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     ///
@@ -463,7 +477,8 @@ impl Default for RrLUOptions {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu_inplace, RrLUOptions};
+/// use tensor4all_tcicore::{matrixlu::rrlu_inplace, RrLUOptions};
+/// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// let mut m = from_vec2d(vec![
 ///     vec![1.0_f64, 2.0],
@@ -474,8 +489,8 @@ impl Default for RrLUOptions {
 /// ```
 pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> Result<RrLU<T>> {
     let opts = options.unwrap_or_default();
-    let nr = nrows(a);
-    let nc = ncols(a);
+    let nr = a.nrows();
+    let nc = a.ncols();
 
     let mut lu = RrLU::new(nr, nc, opts.left_orthogonal);
     let max_rank = opts.max_rank.min(nr).min(nc);
@@ -561,7 +576,7 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
     let n = lu.n_pivot;
 
     // L is lower triangular part
-    let mut l = zeros(nr, n);
+    let mut l = Matrix::zeros(nr, n);
     for i in 0..nr {
         for j in 0..n.min(i + 1) {
             l[[i, j]] = a[[i, j]];
@@ -569,7 +584,7 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
     }
 
     // U is upper triangular part
-    let mut u = zeros(n, nc);
+    let mut u = Matrix::zeros(n, nc);
     for i in 0..n {
         for j in i..nc {
             u[[i, j]] = a[[i, j]];
@@ -588,8 +603,8 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
     }
 
     // Check for NaNs (return error instead of panicking)
-    for i in 0..nrows(&l) {
-        for j in 0..ncols(&l) {
+    for i in 0..l.nrows() {
+        for j in 0..l.ncols() {
             if l[[i, j]].is_nan() {
                 return Err(MatrixCIError::NaNEncountered {
                     matrix: "L".to_string(),
@@ -597,8 +612,8 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
             }
         }
     }
-    for i in 0..nrows(&u) {
-        for j in 0..ncols(&u) {
+    for i in 0..u.nrows() {
+        for j in 0..u.ncols() {
             if u[[i, j]].is_nan() {
                 return Err(MatrixCIError::NaNEncountered {
                     matrix: "U".to_string(),
@@ -630,7 +645,8 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::{from_vec2d, matrixlu::rrlu};
+/// use tensor4all_tcicore::matrixlu::rrlu;
+/// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// let m = from_vec2d(vec![
 ///     vec![1.0_f64, 0.0],
@@ -649,20 +665,21 @@ pub fn rrlu<T: Scalar>(a: &Matrix<T>, options: Option<RrLUOptions>) -> Result<Rr
 /// Convert L matrix to solve L * X = B given pivot matrix P
 ///
 /// Modifies `c` in place so that the columns satisfy the triangular
-/// system defined by `p`. The matrix `c` must have at least `nrows(p)`
+/// system defined by `p`. The matrix `c` must have at least `p.nrows()`
 /// columns.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::{from_vec2d, matrixlu::cols_to_l_matrix};
+/// use tensor4all_tcicore::matrixlu::cols_to_l_matrix;
+/// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// // Upper-triangular P (2x2)
 /// let p = from_vec2d(vec![
 ///     vec![2.0_f64, 1.0],
 ///     vec![0.0, 3.0],
 /// ]);
-/// // c has 3 rows, 2 columns (ncols >= nrows(p))
+/// // c has 3 rows, 2 columns (ncols >= p.nrows())
 /// let mut c = from_vec2d(vec![
 ///     vec![4.0_f64, 5.0],
 ///     vec![6.0, 9.0],
@@ -675,20 +692,20 @@ pub fn rrlu<T: Scalar>(a: &Matrix<T>, options: Option<RrLUOptions>) -> Result<Rr
 /// assert!((c[[2, 0]] - 4.0).abs() < 1e-10);
 /// ```
 pub fn cols_to_l_matrix<T: Scalar>(c: &mut Matrix<T>, p: &Matrix<T>, _left_orthogonal: bool) {
-    let n = nrows(p);
+    let n = p.nrows();
 
     for k in 0..n {
         let pivot = p[[k, k]];
         // c[:, k] /= pivot
-        for i in 0..nrows(c) {
+        for i in 0..c.nrows() {
             let val = c[[i, k]] / pivot;
             c[[i, k]] = val;
         }
 
         // c[:, k+1:] -= c[:, k] * p[k, k+1:]
-        for j in (k + 1)..ncols(c) {
+        for j in (k + 1)..c.ncols() {
             let p_kj = p[[k, j]];
-            for i in 0..nrows(c) {
+            for i in 0..c.nrows() {
                 let c_ik = c[[i, k]];
                 let old = c[[i, j]];
                 c[[i, j]] = old - c_ik * p_kj;
@@ -700,20 +717,21 @@ pub fn cols_to_l_matrix<T: Scalar>(c: &mut Matrix<T>, p: &Matrix<T>, _left_ortho
 /// Convert R matrix to solve X * U = B given pivot matrix P
 ///
 /// Modifies `r` in place so that the rows satisfy the triangular
-/// system defined by `p`. The matrix `r` must have at least `nrows(p)`
+/// system defined by `p`. The matrix `r` must have at least `p.nrows()`
 /// rows.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::{from_vec2d, matrixlu::rows_to_u_matrix};
+/// use tensor4all_tcicore::matrixlu::rows_to_u_matrix;
+/// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// // Lower-triangular P (2x2)
 /// let p = from_vec2d(vec![
 ///     vec![2.0_f64, 0.0],
 ///     vec![1.0, 3.0],
 /// ]);
-/// // r has 2 rows (nrows >= nrows(p)), 3 columns
+/// // r has 2 rows (nrows >= p.nrows()), 3 columns
 /// let mut r = from_vec2d(vec![
 ///     vec![4.0_f64, 6.0, 8.0],
 ///     vec![5.0, 9.0, 7.0],
@@ -725,86 +743,26 @@ pub fn cols_to_l_matrix<T: Scalar>(c: &mut Matrix<T>, p: &Matrix<T>, _left_ortho
 /// assert!((r[[0, 2]] - 4.0).abs() < 1e-10);
 /// ```
 pub fn rows_to_u_matrix<T: Scalar>(r: &mut Matrix<T>, p: &Matrix<T>, _left_orthogonal: bool) {
-    let n = nrows(p);
+    let n = p.nrows();
 
     for k in 0..n {
         let pivot = p[[k, k]];
         // r[k, :] /= pivot
-        for j in 0..ncols(r) {
+        for j in 0..r.ncols() {
             let val = r[[k, j]] / pivot;
             r[[k, j]] = val;
         }
 
         // r[k+1:, :] -= p[k+1:, k] * r[k, :]
-        for i in (k + 1)..nrows(r) {
+        for i in (k + 1)..r.nrows() {
             let p_ik = p[[i, k]];
-            for j in 0..ncols(r) {
+            for j in 0..r.ncols() {
                 let r_kj = r[[k, j]];
                 let old = r[[i, j]];
                 r[[i, j]] = old - p_ik * r_kj;
             }
         }
     }
-}
-
-/// Solve LU * x = b
-///
-/// Given factors `L` and `U` such that `A = L * U`, solves `A * x = b`
-/// via forward and back substitution.
-///
-/// # Examples
-///
-/// ```
-/// use tensor4all_tcicore::{from_vec2d, matrixlu::{rrlu, solve_lu}};
-///
-/// let m = from_vec2d(vec![vec![2.0_f64, 1.0], vec![1.0, 3.0]]);
-/// let lu = rrlu(&m, None).unwrap();
-/// let l = lu.left(false);
-/// let u = lu.right(false);
-///
-/// // b = [5, 10] => solve Ax = b in permuted coordinates
-/// let b = from_vec2d(vec![
-///     vec![m[[lu.row_permutation()[0], 0]] * 1.0 + m[[lu.row_permutation()[0], 1]] * 2.0],
-///     vec![m[[lu.row_permutation()[1], 0]] * 1.0 + m[[lu.row_permutation()[1], 1]] * 2.0],
-/// ]);
-/// let x = solve_lu(&l, &u, &b).unwrap();
-/// // Solution in permuted col order
-/// assert!((x[[lu.col_permutation().iter().position(|&c| c == 0).unwrap(), 0]] - 1.0).abs() < 1e-10);
-/// assert!((x[[lu.col_permutation().iter().position(|&c| c == 1).unwrap(), 0]] - 2.0).abs() < 1e-10);
-/// ```
-pub fn solve_lu<T: Scalar>(l: &Matrix<T>, u: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>> {
-    let _n1 = nrows(l);
-    let n2 = ncols(l);
-    let n3 = ncols(u);
-    let m = ncols(b);
-
-    // Solve L * y = b (forward substitution)
-    let mut y: Matrix<T> = zeros(n2, m);
-    for i in 0..n2 {
-        for k in 0..m {
-            let mut sum = b[[i, k]];
-            for j in 0..i {
-                sum = sum - l[[i, j]] * y[[j, k]];
-            }
-            let diag = l[[i, i]];
-            y[[i, k]] = sum / diag;
-        }
-    }
-
-    // Solve U * x = y (back substitution)
-    let mut x: Matrix<T> = zeros(n3, m);
-    for i in (0..n3).rev() {
-        for k in 0..m {
-            let mut sum = y[[i, k]];
-            for j in (i + 1)..n3 {
-                sum = sum - u[[i, j]] * x[[j, k]];
-            }
-            let diag = u[[i, i]];
-            x[[i, k]] = sum / diag;
-        }
-    }
-
-    Ok(x)
 }
 
 #[cfg(test)]

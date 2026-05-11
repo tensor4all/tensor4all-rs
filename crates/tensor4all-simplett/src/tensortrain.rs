@@ -407,7 +407,7 @@ impl<T: TTScalar> TensorTrain<T> {
     /// assert!((val - 3.0).abs() < 1e-12);
     /// ```
     pub fn partial_sum(&self, dims: &[usize]) -> Result<TensorTrain<T>> {
-        use tensor4all_tcicore::matrix::{mat_mul, ncols, nrows, zeros as mat_zeros};
+        use tensor4all_tensorbackend::{mat_mul, Matrix};
 
         let n = self.len();
         if n == 0 {
@@ -428,7 +428,7 @@ impl<T: TTScalar> TensorTrain<T> {
         let mut result_tensors: Vec<Tensor3<T>> = Vec::new();
 
         // Tprod: accumulator matrix, starts as 1x1 identity
-        let mut tprod = mat_zeros(1, 1);
+        let mut tprod = Matrix::zeros(1, 1);
         tprod[[0, 0]] = T::one();
 
         for site in 0..n {
@@ -440,7 +440,7 @@ impl<T: TTScalar> TensorTrain<T> {
             if dims.contains(&site) {
                 // Sum over site index: result is (left_dim, right_dim) matrix
                 // sum(T, dims=2)[:, 1, :] in Julia
-                let mut site_sum = mat_zeros(left_dim, right_dim);
+                let mut site_sum = Matrix::zeros(left_dim, right_dim);
                 for l in 0..left_dim {
                     for r in 0..right_dim {
                         let mut acc = T::zero();
@@ -455,8 +455,8 @@ impl<T: TTScalar> TensorTrain<T> {
             } else {
                 // Keep this dimension: multiply Tprod into the site tensor
                 // Tprod (tprod_rows, left_dim) * T reshaped to (left_dim, site_dim * right_dim)
-                let tprod_rows = nrows(&tprod);
-                let mut t_reshaped = mat_zeros(left_dim, site_dim * right_dim);
+                let tprod_rows = tprod.nrows();
+                let mut t_reshaped = Matrix::zeros(left_dim, site_dim * right_dim);
                 for l in 0..left_dim {
                     for s in 0..site_dim {
                         for r in 0..right_dim {
@@ -479,7 +479,7 @@ impl<T: TTScalar> TensorTrain<T> {
                 result_tensors.push(new_tensor);
 
                 // Reset Tprod to identity of size right_dim
-                tprod = mat_zeros(right_dim, right_dim);
+                tprod = Matrix::zeros(right_dim, right_dim);
                 for i in 0..right_dim {
                     tprod[[i, i]] = T::one();
                 }
@@ -500,10 +500,10 @@ impl<T: TTScalar> TensorTrain<T> {
         let last_left = last.left_dim();
         let last_site = last.site_dim();
         let last_right = last.right_dim();
-        let tprod_cols = ncols(&tprod);
+        let tprod_cols = tprod.ncols();
 
         // Reshape last tensor to (last_left * last_site, last_right)
-        let mut last_mat = mat_zeros(last_left * last_site, last_right);
+        let mut last_mat = Matrix::zeros(last_left * last_site, last_right);
         for l in 0..last_left {
             for s in 0..last_site {
                 for r in 0..last_right {

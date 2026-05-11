@@ -1,6 +1,6 @@
 # tensor4all-tensorci
 
-Tensor Cross Interpolation algorithms. TCI2 (primary, actively maintained) and TCI1 (legacy).
+Tensor Cross Interpolation algorithms. TCI2 is the maintained tensor cross interpolation implementation.
 
 ## Key Types
 

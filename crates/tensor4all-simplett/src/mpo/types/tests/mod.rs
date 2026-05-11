@@ -59,9 +59,9 @@ fn test_slice_site() {
     let slice = t.slice_site(1, 0);
     assert_eq!(slice.len(), 6); // 2 * 3
     assert_eq!(slice[0], 0.0); // l=0, r=0
-    assert_eq!(slice[1], 1.0); // l=0, r=1
-    assert_eq!(slice[2], 2.0); // l=0, r=2
-    assert_eq!(slice[3], 3.0); // l=1, r=0
+    assert_eq!(slice[1], 3.0); // l=1, r=0
+    assert_eq!(slice[2], 1.0); // l=0, r=1
+    assert_eq!(slice[3], 4.0); // l=1, r=1
 }
 
 #[test]

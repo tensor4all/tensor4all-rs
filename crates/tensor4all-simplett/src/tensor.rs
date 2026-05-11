@@ -8,13 +8,13 @@ use std::ops::{Index, IndexMut};
 
 use tenferro_tensor::{TensorScalar, TypedTensor as TfTensor};
 
-use crate::einsum_helper::{tensor_to_row_major_vec, typed_tensor_from_row_major_slice};
+use crate::einsum_helper::{tensor_to_col_major_vec, typed_tensor_from_col_major_slice};
 
 /// Rank-N tensor backed by `tenferro_tensor::TypedTensor<T>`.
 #[derive(Debug)]
 pub struct Tensor<T: TensorScalar, const N: usize>(TfTensor<T>);
 
-/// Iterator over tensor elements in row-major order.
+/// Iterator over tensor elements in column-major order.
 pub struct TensorIter<'a, T: TensorScalar, const N: usize> {
     tensor: &'a TfTensor<T>,
     dims: [usize; N],
@@ -22,7 +22,7 @@ pub struct TensorIter<'a, T: TensorScalar, const N: usize> {
     len: usize,
 }
 
-/// Mutable iterator over tensor elements in row-major order.
+/// Mutable iterator over tensor elements in column-major order.
 pub struct TensorIterMut<'a, T: TensorScalar, const N: usize> {
     tensor: *mut TfTensor<T>,
     dims: [usize; N],
@@ -40,9 +40,9 @@ pub type Tensor3<T> = Tensor<T, 3>;
 /// 4D tensor.
 pub type Tensor4<T> = Tensor<T, 4>;
 
-fn row_major_index_from_linear<const N: usize>(mut linear: usize, dims: &[usize; N]) -> [usize; N] {
+fn col_major_index_from_linear<const N: usize>(mut linear: usize, dims: &[usize; N]) -> [usize; N] {
     let mut idx = [0usize; N];
-    for axis in (0..N).rev() {
+    for axis in 0..N {
         let dim = dims[axis];
         if dim == 0 {
             return idx;
@@ -53,11 +53,11 @@ fn row_major_index_from_linear<const N: usize>(mut linear: usize, dims: &[usize;
     idx
 }
 
-fn row_major_data_to_tensor<T: TensorScalar, const N: usize>(
+fn col_major_data_to_tensor<T: TensorScalar, const N: usize>(
     dims: [usize; N],
     data: Vec<T>,
 ) -> Tensor<T, N> {
-    let inner = typed_tensor_from_row_major_slice(&data, &dims);
+    let inner = typed_tensor_from_col_major_slice(&data, &dims);
     Tensor::from_tenferro(inner)
 }
 
@@ -83,7 +83,7 @@ impl<'a, T: TensorScalar, const N: usize> Iterator for TensorIter<'a, T, N> {
             return None;
         }
 
-        let idx = row_major_index_from_linear(self.next, &self.dims);
+        let idx = col_major_index_from_linear(self.next, &self.dims);
         self.next += 1;
         Some(self.tensor.get(&idx[..]))
     }
@@ -104,7 +104,7 @@ impl<'a, T: TensorScalar, const N: usize> Iterator for TensorIterMut<'a, T, N> {
             return None;
         }
 
-        let idx = row_major_index_from_linear(self.next, &self.dims);
+        let idx = col_major_index_from_linear(self.next, &self.dims);
         self.next += 1;
 
         // Safety: each logical index is visited at most once, so returned
@@ -149,12 +149,12 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
         })
     }
 
-    /// Export the tensor as a row-major flat vector.
-    pub fn to_row_major_vec(&self) -> Vec<T> {
-        tensor_to_row_major_vec(&self.0)
+    /// Export the tensor as a column-major flat vector.
+    pub fn to_col_major_vec(&self) -> Vec<T> {
+        tensor_to_col_major_vec(&self.0)
     }
 
-    /// Iterate over all elements in row-major order.
+    /// Iterate over all elements in column-major order.
     pub fn iter(&self) -> TensorIter<'_, T, N> {
         TensorIter {
             tensor: &self.0,
@@ -164,7 +164,7 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
         }
     }
 
-    /// Iterate mutably over all elements in row-major order.
+    /// Iterate mutably over all elements in column-major order.
     pub fn iter_mut(&mut self) -> TensorIterMut<'_, T, N> {
         TensorIterMut {
             tensor: &mut self.0,
@@ -201,16 +201,16 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
         Self(tensor)
     }
 
-    /// Create a tensor by applying `f` to each multi-index (row-major order).
+    /// Create a tensor by applying `f` to each multi-index (column-major order).
     pub fn from_fn(dims: [usize; N], mut f: impl FnMut([usize; N]) -> T) -> Self {
         let total: usize = dims.iter().product();
         let mut data = Vec::with_capacity(total);
 
         for linear in 0..total {
-            data.push(f(row_major_index_from_linear(linear, &dims)));
+            data.push(f(col_major_index_from_linear(linear, &dims)));
         }
 
-        row_major_data_to_tensor(dims, data)
+        col_major_data_to_tensor(dims, data)
     }
 }
 
@@ -218,7 +218,7 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     /// Create a tensor filled with `value`.
     pub fn from_elem(dims: [usize; N], value: T) -> Self {
         let total: usize = dims.iter().product();
-        row_major_data_to_tensor(dims, vec![value; total])
+        col_major_data_to_tensor(dims, vec![value; total])
     }
 }
 
@@ -240,7 +240,7 @@ impl<T: TensorScalar, const N: usize> IndexMut<[usize; N]> for Tensor<T, N> {
 mod tests {
     use super::*;
 
-    use crate::einsum_helper::{tensor_to_row_major_vec, typed_tensor_from_row_major_slice};
+    use crate::einsum_helper::{tensor_to_col_major_vec, typed_tensor_from_col_major_slice};
 
     #[test]
     fn test_tensor2_from_elem() {
@@ -262,7 +262,7 @@ mod tests {
         t[[1, 2]] = 6.0;
         assert_eq!(t[[0, 0]], 1.0);
         assert_eq!(t[[1, 2]], 6.0);
-        assert_eq!(t.to_row_major_vec(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(t.to_col_major_vec(), vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
     }
 
     #[test]
@@ -295,7 +295,7 @@ mod tests {
     fn test_iter() {
         let t: Tensor2<f64> = Tensor2::from_fn([2, 3], |[i, j]| (i * 3 + j) as f64);
         let collected: Vec<f64> = t.iter().copied().collect();
-        assert_eq!(collected, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert_eq!(collected, vec![0.0, 3.0, 1.0, 4.0, 2.0, 5.0]);
     }
 
     #[test]
@@ -306,26 +306,25 @@ mod tests {
 
     #[test]
     fn test_from_tenferro_roundtrip() {
-        let inner = typed_tensor_from_row_major_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        let inner = typed_tensor_from_col_major_slice(&[1.0, 4.0, 2.0, 5.0, 3.0, 6.0], &[2, 3]);
         let tensor = Tensor2::from_tenferro(inner);
 
         assert_eq!(tensor.dims(), &[2, 3]);
         assert_eq!(
-            tensor.to_row_major_vec(),
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+            tensor.to_col_major_vec(),
+            vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
         );
-
         let inner_again = tensor.clone().into_inner();
         assert_eq!(
-            tensor_to_row_major_vec(&inner_again),
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+            tensor_to_col_major_vec(&inner_again),
+            &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
         );
     }
 
     #[test]
     #[should_panic(expected = "rank")]
     fn test_from_tenferro_rank_mismatch_panics() {
-        let inner = typed_tensor_from_row_major_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let inner = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]);
         let _ = Tensor3::from_tenferro(inner);
     }
 

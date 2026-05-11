@@ -3,6 +3,7 @@ use crate::matrixluci::{
     PivotKernelOptions,
 };
 use approx::assert_abs_diff_eq;
+use tensor4all_tensorbackend::Matrix;
 
 fn test_matrix_data() -> Vec<f64> {
     vec![
@@ -13,10 +14,7 @@ fn test_matrix_data() -> Vec<f64> {
     ]
 }
 
-fn assert_dense_eq(
-    lhs: &crate::matrixluci::DenseOwnedMatrix<f64>,
-    rhs: &crate::matrixluci::DenseOwnedMatrix<f64>,
-) {
+fn assert_dense_eq(lhs: &Matrix<f64>, rhs: &Matrix<f64>) {
     assert_eq!(lhs.nrows(), rhs.nrows());
     assert_eq!(lhs.ncols(), rhs.ncols());
     for j in 0..lhs.ncols() {

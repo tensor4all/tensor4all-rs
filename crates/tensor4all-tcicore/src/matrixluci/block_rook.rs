@@ -1,12 +1,13 @@
 //! Lazy pivot-kernel implementations.
 
-use crate::matrixluci::factors::{invert_square, load_block, matmul, subtract_inplace};
+use crate::matrixluci::factors::{invert_square, load_block, subtract_inplace};
 use crate::matrixluci::kernel::PivotKernel;
 use crate::matrixluci::scalar::Scalar;
 use crate::matrixluci::source::CandidateMatrixSource;
-use crate::matrixluci::types::{DenseOwnedMatrix, PivotKernelOptions, PivotSelectionCore};
+use crate::matrixluci::types::{PivotKernelOptions, PivotSelectionCore};
 use crate::matrixluci::Result;
 use num_complex::{Complex32, Complex64};
+use tensor4all_tensorbackend::{mat_mul, Matrix};
 
 /// Lazy pivot kernel based on residual row/column rook search.
 ///
@@ -22,8 +23,8 @@ fn residual_block<T: Scalar, S: CandidateMatrixSource<T>>(
     cols: &[usize],
     selected_rows: &[usize],
     selected_cols: &[usize],
-    pivot_inv: Option<&DenseOwnedMatrix<T>>,
-) -> DenseOwnedMatrix<T> {
+    pivot_inv: Option<&Matrix<T>>,
+) -> Matrix<T> {
     let mut residual = load_block(source, rows, cols);
     if selected_rows.is_empty() {
         return residual;
@@ -31,13 +32,13 @@ fn residual_block<T: Scalar, S: CandidateMatrixSource<T>>(
 
     let a_rj = load_block(source, rows, selected_cols);
     let a_ic = load_block(source, selected_rows, cols);
-    let temp = matmul(&a_rj, pivot_inv.unwrap());
-    let approx = matmul(&temp, &a_ic);
+    let temp = mat_mul(&a_rj, pivot_inv.unwrap());
+    let approx = mat_mul(&temp, &a_ic);
     subtract_inplace(&mut residual, &approx);
     residual
 }
 
-fn argmax_abs<T: Scalar>(matrix: &DenseOwnedMatrix<T>) -> (usize, usize, f64) {
+fn argmax_abs<T: Scalar>(matrix: &Matrix<T>) -> (usize, usize, f64) {
     let mut best_row = 0usize;
     let mut best_col = 0usize;
     let mut best_abs = -1.0f64;
@@ -68,7 +69,7 @@ fn rook_pivot<T: Scalar, S: CandidateMatrixSource<T>>(
     remaining_cols: &[usize],
     selected_rows: &[usize],
     selected_cols: &[usize],
-    pivot_inv: Option<&DenseOwnedMatrix<T>>,
+    pivot_inv: Option<&Matrix<T>>,
 ) -> (usize, usize, f64) {
     let mut current_col = remaining_cols[0];
     let mut current_row = remaining_rows[0];

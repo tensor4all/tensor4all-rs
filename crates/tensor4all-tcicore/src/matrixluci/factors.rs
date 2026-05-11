@@ -7,43 +7,23 @@
 use crate::matrixluci::error::MatrixLuciError;
 use crate::matrixluci::scalar::Scalar;
 use crate::matrixluci::source::CandidateMatrixSource;
-use crate::matrixluci::types::{DenseOwnedMatrix, PivotSelectionCore};
+use crate::matrixluci::types::PivotSelectionCore;
 use crate::matrixluci::Result;
+use tensor4all_tensorbackend::{mat_mul, solve_matrix, Matrix};
 
 /// Gather a dense column-major block from a source.
 pub(crate) fn load_block<T: Scalar, S: CandidateMatrixSource<T>>(
     source: &S,
     rows: &[usize],
     cols: &[usize],
-) -> DenseOwnedMatrix<T> {
+) -> Matrix<T> {
     let mut data = vec![T::zero(); rows.len() * cols.len()];
     source.get_block(rows, cols, &mut data);
-    DenseOwnedMatrix::from_column_major(data, rows.len(), cols.len())
-}
-
-/// Dense matrix product in column-major layout.
-pub(crate) fn matmul<T: Scalar>(
-    lhs: &DenseOwnedMatrix<T>,
-    rhs: &DenseOwnedMatrix<T>,
-) -> DenseOwnedMatrix<T> {
-    assert_eq!(lhs.ncols(), rhs.nrows());
-    let mut out = DenseOwnedMatrix::zeros(lhs.nrows(), rhs.ncols());
-    for j in 0..rhs.ncols() {
-        for k in 0..lhs.ncols() {
-            let rhs_kj = rhs[[k, j]];
-            for i in 0..lhs.nrows() {
-                out[[i, j]] = out[[i, j]] + lhs[[i, k]] * rhs_kj;
-            }
-        }
-    }
-    out
+    Matrix::from_col_major_vec(rows.len(), cols.len(), data)
 }
 
 /// Subtract one dense matrix from another in place.
-pub(crate) fn subtract_inplace<T: Scalar>(
-    lhs: &mut DenseOwnedMatrix<T>,
-    rhs: &DenseOwnedMatrix<T>,
-) {
+pub(crate) fn subtract_inplace<T: Scalar>(lhs: &mut Matrix<T>, rhs: &Matrix<T>) {
     assert_eq!(lhs.nrows(), rhs.nrows());
     assert_eq!(lhs.ncols(), rhs.ncols());
     for j in 0..lhs.ncols() {
@@ -53,21 +33,8 @@ pub(crate) fn subtract_inplace<T: Scalar>(
     }
 }
 
-fn swap_rows<T: Scalar>(matrix: &mut DenseOwnedMatrix<T>, a: usize, b: usize) {
-    if a == b {
-        return;
-    }
-    for col in 0..matrix.ncols() {
-        let tmp = matrix[[a, col]];
-        matrix[[a, col]] = matrix[[b, col]];
-        matrix[[b, col]] = tmp;
-    }
-}
-
-/// Invert a small square dense matrix with Gauss-Jordan elimination.
-pub(crate) fn invert_square<T: Scalar>(
-    matrix: &DenseOwnedMatrix<T>,
-) -> Result<DenseOwnedMatrix<T>> {
+/// Invert a square dense matrix via the configured tensor backend.
+pub(crate) fn invert_square<T: Scalar>(matrix: &Matrix<T>) -> Result<Matrix<T>> {
     if matrix.nrows() != matrix.ncols() {
         return Err(MatrixLuciError::InvalidArgument {
             message: "pivot block must be square".to_string(),
@@ -75,57 +42,14 @@ pub(crate) fn invert_square<T: Scalar>(
     }
 
     let n = matrix.nrows();
-    let mut aug = DenseOwnedMatrix::zeros(n, 2 * n);
-    for j in 0..n {
-        for i in 0..n {
-            aug[[i, j]] = matrix[[i, j]];
-        }
-        aug[[j, n + j]] = T::one();
+    let mut identity = Matrix::zeros(n, n);
+    for i in 0..n {
+        identity[[i, i]] = T::one();
     }
 
-    for k in 0..n {
-        let mut pivot_row = k;
-        let mut pivot_abs = 0.0f64;
-        for row in k..n {
-            let candidate = aug[[row, k]].abs_val();
-            if candidate > pivot_abs {
-                pivot_abs = candidate;
-                pivot_row = row;
-            }
-        }
-
-        if pivot_abs < T::epsilon() {
-            return Err(MatrixLuciError::SingularPivotBlock);
-        }
-
-        swap_rows(&mut aug, k, pivot_row);
-
-        let pivot = aug[[k, k]];
-        for col in 0..(2 * n) {
-            aug[[k, col]] = aug[[k, col]] / pivot;
-        }
-
-        for row in 0..n {
-            if row == k {
-                continue;
-            }
-            let factor = aug[[row, k]];
-            if factor.abs_val() < T::epsilon() {
-                continue;
-            }
-            for col in 0..(2 * n) {
-                aug[[row, col]] = aug[[row, col]] - factor * aug[[k, col]];
-            }
-        }
-    }
-
-    let mut inv = DenseOwnedMatrix::zeros(n, n);
-    for j in 0..n {
-        for i in 0..n {
-            inv[[i, j]] = aug[[i, n + j]];
-        }
-    }
-    Ok(inv)
+    solve_matrix(matrix, &identity).map_err(|err| MatrixLuciError::InvalidArgument {
+        message: format!("pivot block solve failed: {err}"),
+    })
 }
 
 /// Dense factors derived from a pivot selection.
@@ -137,11 +61,11 @@ pub(crate) fn invert_square<T: Scalar>(
 #[derive(Debug, Clone)]
 pub(crate) struct CrossFactors<T: Scalar> {
     /// Pivot block `A[I, J]`.
-    pub pivot: DenseOwnedMatrix<T>,
+    pub pivot: Matrix<T>,
     /// Columns through selected pivot columns `A[:, J]`.
-    pub pivot_cols: DenseOwnedMatrix<T>,
+    pub pivot_cols: Matrix<T>,
     /// Rows through selected pivot rows `A[I, :]`.
-    pub pivot_rows: DenseOwnedMatrix<T>,
+    pub pivot_rows: Matrix<T>,
 }
 
 impl<T: Scalar> CrossFactors<T> {
@@ -151,7 +75,7 @@ impl<T: Scalar> CrossFactors<T> {
         source: &S,
         rows: &[usize],
         cols: &[usize],
-    ) -> DenseOwnedMatrix<T> {
+    ) -> Matrix<T> {
         load_block(source, rows, cols)
     }
 
@@ -170,20 +94,20 @@ impl<T: Scalar> CrossFactors<T> {
     }
 
     /// Invert the pivot block.
-    pub fn pivot_inverse(&self) -> Result<DenseOwnedMatrix<T>> {
+    pub fn pivot_inverse(&self) -> Result<Matrix<T>> {
         invert_square(&self.pivot)
     }
 
     /// Form `A[:, J] * A[I, J]^{-1}`.
-    pub fn cols_times_pivot_inv(&self) -> Result<DenseOwnedMatrix<T>> {
+    pub fn cols_times_pivot_inv(&self) -> Result<Matrix<T>> {
         let pivot_inv = self.pivot_inverse()?;
-        Ok(matmul(&self.pivot_cols, &pivot_inv))
+        Ok(mat_mul(&self.pivot_cols, &pivot_inv))
     }
 
     /// Form `A[I, J]^{-1} * A[I, :]`.
-    pub fn pivot_inv_times_rows(&self) -> Result<DenseOwnedMatrix<T>> {
+    pub fn pivot_inv_times_rows(&self) -> Result<Matrix<T>> {
         let pivot_inv = self.pivot_inverse()?;
-        Ok(matmul(&pivot_inv, &self.pivot_rows))
+        Ok(mat_mul(&pivot_inv, &self.pivot_rows))
     }
 }
 
