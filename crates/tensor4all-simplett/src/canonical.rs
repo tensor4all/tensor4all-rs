@@ -10,14 +10,14 @@ use crate::error::{Result, TensorTrainError};
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
-use tensor4all_tcicore::matrix::{mat_mul, ncols, nrows, transpose, zeros, Matrix};
 use tensor4all_tcicore::Scalar;
 use tensor4all_tcicore::{rrlu, RrLUOptions};
+use tensor4all_tensorbackend::{mat_mul, transpose, Matrix};
 
 /// Compute QR decomposition using rank-revealing LU with left-orthogonal output
 fn qr_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> (Matrix<T>, Matrix<T>) {
     let options = RrLUOptions {
-        max_rank: ncols(matrix).min(nrows(matrix)),
+        max_rank: matrix.ncols().min(matrix.nrows()),
         rel_tol: 0.0, // No truncation
         abs_tol: 0.0,
         left_orthogonal: true,
@@ -41,7 +41,7 @@ fn tensor3_to_left_matrix<T: TTScalar + Scalar + Default>(tensor: &Tensor3<T>) -
     let rows = left_dim * site_dim;
     let cols = right_dim;
 
-    let mut mat = zeros(rows, cols);
+    let mut mat = Matrix::zeros(rows, cols);
     for l in 0..left_dim {
         for s in 0..site_dim {
             for r in 0..right_dim {
@@ -60,7 +60,7 @@ fn tensor3_to_right_matrix<T: TTScalar + Scalar + Default>(tensor: &Tensor3<T>) 
     let rows = left_dim;
     let cols = site_dim * right_dim;
 
-    let mut mat = zeros(rows, cols);
+    let mut mat = Matrix::zeros(rows, cols);
     for l in 0..left_dim {
         for s in 0..site_dim {
             for r in 0..right_dim {
@@ -187,7 +187,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
         let mat = tensor3_to_left_matrix(&self.tensors[i]);
         let (q, r) = qr_decomp(&mat);
 
-        let new_bond_dim = ncols(&q);
+        let new_bond_dim = q.ncols();
 
         // Update current tensor with Q
         let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim);
@@ -195,7 +195,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
             for s in 0..site_dim {
                 for b in 0..new_bond_dim {
                     let row = l * site_dim + s;
-                    if row < nrows(&q) && b < ncols(&q) {
+                    if row < q.nrows() && b < q.ncols() {
                         new_tensor.set3(l, s, b, q[[row, b]]);
                     }
                 }
@@ -236,7 +236,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
         let mat = tensor3_to_right_matrix(&self.tensors[i]);
         let (l_mat, q) = lq_decomp(&mat);
 
-        let new_bond_dim = nrows(&q);
+        let new_bond_dim = q.nrows();
 
         // Update current tensor with Q
         let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim);
@@ -406,7 +406,7 @@ pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
         let mat = tensor3_to_left_matrix(&tensors[i]);
         let (q, r) = qr_decomp(&mat);
 
-        let new_bond_dim = ncols(&q);
+        let new_bond_dim = q.ncols();
 
         // Update current tensor
         let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim);
@@ -414,7 +414,7 @@ pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
             for s in 0..site_dim {
                 for b in 0..new_bond_dim {
                     let row = l * site_dim + s;
-                    if row < nrows(&q) && b < ncols(&q) {
+                    if row < q.nrows() && b < q.ncols() {
                         new_tensor.set3(l, s, b, q[[row, b]]);
                     }
                 }
@@ -455,7 +455,7 @@ pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
         let mat = tensor3_to_right_matrix(&tensors[i]);
         let (l_mat, q) = lq_decomp(&mat);
 
-        let new_bond_dim = nrows(&q);
+        let new_bond_dim = q.nrows();
 
         // Update current tensor
         let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim);

@@ -5,9 +5,10 @@ use crate::{
 use anyhow::{ensure, Result};
 use num_complex::{Complex32, Complex64};
 use std::collections::HashMap;
-use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorScalar};
+use tenferro_tensor::{Tensor, TensorScalar};
 use tensor4all_core::{ColMajorArray, DynIndex, TensorDynLen, TensorElement};
 use tensor4all_tcicore::MatrixLuciScalar as Scalar;
+use tensor4all_tensorbackend::with_default_backend;
 use tensor4all_treetn::TreeTN;
 
 #[doc(hidden)]
@@ -50,10 +51,11 @@ macro_rules! impl_full_piv_lu_scalar {
 
                 let lhs_t = transpose_column_major(lhs_values, lhs_rows, lhs_cols);
                 let pivot_t = transpose_column_major(pivot_values, pivot_rows, pivot_cols);
-                let mut backend = CpuBackend::new();
                 let pivot_tensor = Tensor::from_vec(vec![pivot_cols, pivot_rows], pivot_t);
                 let lhs_tensor = Tensor::from_vec(vec![lhs_cols, lhs_rows], lhs_t);
-                let solved_t = pivot_tensor.full_piv_lu_solve(&lhs_tensor, &mut backend)?;
+                let solved_t = with_default_backend(|backend| {
+                    pivot_tensor.full_piv_lu_solve(&lhs_tensor, backend)
+                })?;
 
                 let solved_t_values = solved_t.as_slice::<Self>().ok_or_else(|| {
                     anyhow::anyhow!("full_piv_lu_solve returned unexpected dtype")

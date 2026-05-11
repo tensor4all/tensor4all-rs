@@ -185,7 +185,7 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
             for r in 0..right_dim {
                 let mut sum = T::zero();
                 for l in 0..left_dim {
-                    sum = sum + current[l] * slice[l * right_dim + r];
+                    sum = sum + current[l] * slice[l + left_dim * r];
                 }
                 next[r] = sum;
             }

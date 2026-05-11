@@ -6,7 +6,7 @@
 use super::error::{MPOError, Result};
 use super::types::{tensor4_zeros, LocalIndex, Tensor4, Tensor4Ops};
 use crate::einsum_helper::{
-    einsum_tensors, row_vector_times_matrix, tensor_to_row_major_vec, EinsumScalar,
+    einsum_tensors, row_vector_times_matrix, tensor_to_col_major_vec, EinsumScalar,
 };
 use crate::traits::TTScalar;
 
@@ -305,13 +305,13 @@ impl<T: TTScalar> MPO<T> {
 
         // Start with sum over first tensor
         let first = &self.tensors[0];
-        let mut current = tensor_to_row_major_vec(&einsum_tensors("lstr->r", &[first.as_inner()]));
+        let mut current = tensor_to_col_major_vec(&einsum_tensors("lstr->r", &[first.as_inner()]));
 
         // Contract with sums of remaining tensors
         for site in 1..self.len() {
             let tensor = &self.tensors[site];
             let site_sum =
-                tensor_to_row_major_vec(&einsum_tensors("lstr->lr", &[tensor.as_inner()]));
+                tensor_to_col_major_vec(&einsum_tensors("lstr->lr", &[tensor.as_inner()]));
             current =
                 row_vector_times_matrix(&current, &site_sum, tensor.left_dim(), tensor.right_dim());
         }

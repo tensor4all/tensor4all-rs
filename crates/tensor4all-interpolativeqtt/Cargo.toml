@@ -1,36 +1,33 @@
 [package]
-name = "tensor4all-tensorci"
-description = "Tensor Cross Interpolation algorithms for tensor4all"
+name = "tensor4all-interpolativeqtt"
 version.workspace = true
 edition.workspace = true
-authors = ["Marc Ritter <Ritter.Marc@physik.uni-muenchen.de>", "Hiroshi Shinaoka <h.shinaoka@gmail.com>", "tensor4all contributors"]
+authors = [
+    "Marc Ritter <Ritter.Marc@physik.uni-muenchen.de>",
+    "Hiroshi Shinaoka <h.shinaoka@gmail.com>",
+]
 license.workspace = true
 repository.workspace = true
+description = "Interpolative Quantics Tensor Train construction"
 
 [features]
 default = ["tenferro-cpu-faer"]
 tenferro-cpu-faer = [
     "tensor4all-simplett/tenferro-cpu-faer",
-    "tensor4all-tcicore/tenferro-cpu-faer",
     "tensor4all-tensorbackend/tenferro-cpu-faer",
 ]
 tenferro-provider-inject = [
     "tensor4all-simplett/tenferro-provider-inject",
-    "tensor4all-tcicore/tenferro-provider-inject",
     "tensor4all-tensorbackend/tenferro-provider-inject",
 ]
 
 [dependencies]
-num-complex.workspace = true
-num-traits.workspace = true
-anyhow.workspace = true
 thiserror.workspace = true
-rand.workspace = true
 tensor4all-tcicore = { path = "../tensor4all-tcicore", default-features = false }
 tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 
 [dev-dependencies]
 approx.workspace = true
-criterion.workspace = true
-uint.workspace = true
+quanticsgrids.workspace = true
+rand.workspace = true

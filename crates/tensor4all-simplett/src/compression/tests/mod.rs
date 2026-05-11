@@ -1,11 +1,13 @@
 use super::*;
 use num_complex::Complex64;
+use tenferro_tensor::TensorScalar;
 
 // Generic test functions for f64 and Complex64
 
 fn test_compress_constant_generic<T>()
 where
     T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    f64: From<<T as TensorScalar>::Real>,
 {
     let tt = TensorTrain::<T>::constant(&[2, 3, 2], <T as Scalar>::from_f64(1.0));
     let original_sum = tt.sum();
@@ -22,6 +24,7 @@ where
 fn test_compress_preserves_values_generic<T>()
 where
     T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    f64: From<<T as TensorScalar>::Real>,
 {
     // Create a simple tensor train
     let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2);
@@ -65,6 +68,7 @@ where
 fn test_compress_with_max_bond_dim_generic<T>()
 where
     T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    f64: From<<T as TensorScalar>::Real>,
 {
     // Create a tensor train with higher bond dimension
     let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 3);
@@ -133,6 +137,7 @@ fn test_compress_with_max_bond_dim_c64() {
 fn test_compress_svd_constant_generic<T>()
 where
     T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    f64: From<<T as TensorScalar>::Real>,
 {
     let tt = TensorTrain::<T>::constant(&[2, 3, 2], <T as Scalar>::from_f64(1.0));
     let original_sum = tt.sum();
@@ -151,6 +156,7 @@ where
 fn test_compress_svd_with_truncation_generic<T>()
 where
     T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    f64: From<<T as TensorScalar>::Real>,
 {
     // Create a rank-3 TT and compress with SVD to max_bond_dim=2
     let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 3);

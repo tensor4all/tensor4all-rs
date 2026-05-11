@@ -6,12 +6,45 @@
 //! one at a time.
 
 use crate::error::{MatrixCIError, Result};
-use crate::matrix::{
-    append_col, append_row, from_vec2d, get_col, get_row, mat_mul, ncols, nrows, submatrix,
-    submatrix_argmax, zeros, Matrix,
-};
 use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
+use tensor4all_tensorbackend::{mat_mul, submatrix, submatrix_argmax, Matrix};
+
+fn matrix_row<T: Scalar>(m: &Matrix<T>, i: usize) -> Vec<T> {
+    (0..m.ncols()).map(|j| m[[i, j]]).collect()
+}
+
+fn matrix_col<T: Scalar>(m: &Matrix<T>, j: usize) -> Vec<T> {
+    (0..m.nrows()).map(|i| m[[i, j]]).collect()
+}
+
+fn append_col<T: Scalar>(m: &Matrix<T>, col: &[T]) -> Matrix<T> {
+    assert_eq!(col.len(), m.nrows());
+
+    let mut result = Matrix::zeros(m.nrows(), m.ncols() + 1);
+    for i in 0..m.nrows() {
+        for j in 0..m.ncols() {
+            result[[i, j]] = m[[i, j]];
+        }
+        result[[i, m.ncols()]] = col[i];
+    }
+    result
+}
+
+fn append_row<T: Scalar>(m: &Matrix<T>, row: &[T]) -> Matrix<T> {
+    assert_eq!(row.len(), m.ncols());
+
+    let mut result = Matrix::zeros(m.nrows() + 1, m.ncols());
+    for i in 0..m.nrows() {
+        for j in 0..m.ncols() {
+            result[[i, j]] = m[[i, j]];
+        }
+    }
+    for j in 0..m.ncols() {
+        result[[m.nrows(), j]] = row[j];
+    }
+    result
+}
 
 /// Adaptive Cross Approximation representation.
 ///
@@ -22,7 +55,8 @@ use crate::traits::AbstractMatrixCI;
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA, from_vec2d};
+/// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+/// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// let m = from_vec2d(vec![
 ///     vec![1.0_f64, 2.0, 3.0],
@@ -74,8 +108,8 @@ impl<T: Scalar> MatrixACA<T> {
         Self {
             row_indices: Vec::new(),
             col_indices: Vec::new(),
-            u: zeros(nr, 0),
-            v: zeros(0, nc),
+            u: Matrix::zeros(nr, 0),
+            v: Matrix::zeros(0, nc),
             alpha: Vec::new(),
         }
     }
@@ -87,7 +121,8 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA, from_vec2d};
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
@@ -104,12 +139,16 @@ impl<T: Scalar> MatrixACA<T> {
         }
 
         // u = A[:, j]
-        let u_col = get_col(a, j);
-        let u = from_vec2d((0..nrows(a)).map(|r| vec![u_col[r]]).collect());
+        let mut u = Matrix::zeros(a.nrows(), 1);
+        for r in 0..a.nrows() {
+            u[[r, 0]] = a[[r, j]];
+        }
 
         // v = A[i, :]
-        let v_row = get_row(a, i);
-        let v = from_vec2d(vec![v_row]);
+        let mut v = Matrix::zeros(1, a.ncols());
+        for c in 0..a.ncols() {
+            v[[0, c]] = a[[i, c]];
+        }
 
         let alpha = vec![T::one() / pivot_val];
 
@@ -127,7 +166,8 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{MatrixACA, from_vec2d};
+    /// use tensor4all_tcicore::MatrixACA;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let mut aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
@@ -144,7 +184,8 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{MatrixACA, from_vec2d};
+    /// use tensor4all_tcicore::MatrixACA;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
@@ -161,7 +202,8 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{MatrixACA, from_vec2d};
+    /// use tensor4all_tcicore::MatrixACA;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
@@ -178,7 +220,8 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{MatrixACA, from_vec2d};
+    /// use tensor4all_tcicore::MatrixACA;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![2.0_f64, 1.0], vec![1.0, 3.0]]);
     /// let aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
@@ -197,7 +240,7 @@ impl<T: Scalar> MatrixACA<T> {
         let yk = self.col_indices[k - 1];
 
         // result = A[:, yk]
-        let mut result: Vec<T> = get_col(a, yk);
+        let mut result: Vec<T> = matrix_col(a, yk);
 
         // Subtract contribution from previous pivots
         for l in 0..(k - 1) {
@@ -223,7 +266,7 @@ impl<T: Scalar> MatrixACA<T> {
         let xk = self.row_indices[k - 1];
 
         // result = A[xk, :]
-        let mut result: Vec<T> = get_row(a, xk);
+        let mut result: Vec<T> = matrix_row(a, xk);
 
         // Subtract contribution from previous pivots
         for l in 0..(k - 1) {
@@ -248,7 +291,8 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{MatrixACA, from_vec2d};
+    /// use tensor4all_tcicore::MatrixACA;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let mut aca = MatrixACA::<f64>::new(2, 2);
@@ -277,7 +321,8 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{MatrixACA, from_vec2d};
+    /// use tensor4all_tcicore::MatrixACA;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let mut aca = MatrixACA::<f64>::new(2, 2);
@@ -302,7 +347,7 @@ impl<T: Scalar> MatrixACA<T> {
 
         // Update alpha
         let xk = row_index;
-        let u_xk_last = self.u[[xk, ncols(&self.u) - 1]];
+        let u_xk_last = self.u[[xk, self.u.ncols() - 1]];
         if u_xk_last.abs_sq() < f64::EPSILON * f64::EPSILON {
             return Err(MatrixCIError::SingularMatrix);
         }
@@ -316,7 +361,8 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA, from_vec2d};
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let mut aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
@@ -340,7 +386,8 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA, from_vec2d};
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![
     ///     vec![1.0_f64, 2.0, 3.0],
@@ -368,7 +415,7 @@ impl<T: Scalar> MatrixACA<T> {
         }
 
         // Find column with max |v[last, j]| among available columns
-        let last_row = nrows(&self.v) - 1;
+        let last_row = self.v.nrows() - 1;
         let mut max_val = self.v[[last_row, avail_cols[0]]].abs_sq();
         let mut best_col = avail_cols[0];
         for &c in &avail_cols {
@@ -387,7 +434,7 @@ impl<T: Scalar> MatrixACA<T> {
             return Err(MatrixCIError::FullRank);
         }
 
-        let last_col = ncols(&self.u) - 1;
+        let last_col = self.u.ncols() - 1;
         let mut max_val = self.u[[avail_rows[0], last_col]].abs_sq();
         let mut best_row = avail_rows[0];
         for &r in &avail_rows {
@@ -411,7 +458,8 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA, from_vec2d};
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let mut aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
@@ -425,10 +473,10 @@ impl<T: Scalar> MatrixACA<T> {
         self.col_indices = self.col_indices.iter().map(|&c| permutation[c]).collect();
 
         // Permute V matrix columns
-        let mut temp_v = zeros(nrows(&self.v), ncols(new_pivot_rows));
-        for i in 0..nrows(&self.v) {
+        let mut temp_v = Matrix::zeros(self.v.nrows(), new_pivot_rows.ncols());
+        for i in 0..self.v.nrows() {
             for (new_j, &old_j) in permutation.iter().enumerate() {
-                if old_j < ncols(&self.v) {
+                if old_j < self.v.ncols() {
                     temp_v[[i, new_j]] = self.v[[i, old_j]];
                 }
             }
@@ -436,11 +484,11 @@ impl<T: Scalar> MatrixACA<T> {
         self.v = temp_v;
 
         // Insert new elements
-        let new_indices: Vec<usize> = (0..ncols(new_pivot_rows))
+        let new_indices: Vec<usize> = (0..new_pivot_rows.ncols())
             .filter(|j| !permutation.contains(j))
             .collect();
 
-        for k in 0..nrows(new_pivot_rows) {
+        for k in 0..new_pivot_rows.nrows() {
             for &j in &new_indices {
                 let mut val = new_pivot_rows[[k, j]];
                 for l in 0..k {
@@ -460,7 +508,8 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA, from_vec2d};
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let mut aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
@@ -474,10 +523,10 @@ impl<T: Scalar> MatrixACA<T> {
         self.row_indices = self.row_indices.iter().map(|&r| permutation[r]).collect();
 
         // Permute U matrix rows
-        let mut temp_u = zeros(nrows(new_pivot_cols), ncols(&self.u));
+        let mut temp_u = Matrix::zeros(new_pivot_cols.nrows(), self.u.ncols());
         for (new_i, &old_i) in permutation.iter().enumerate() {
-            if old_i < nrows(&self.u) {
-                for j in 0..ncols(&self.u) {
+            if old_i < self.u.nrows() {
+                for j in 0..self.u.ncols() {
                     temp_u[[new_i, j]] = self.u[[old_i, j]];
                 }
             }
@@ -485,11 +534,11 @@ impl<T: Scalar> MatrixACA<T> {
         self.u = temp_u;
 
         // Insert new elements
-        let new_indices: Vec<usize> = (0..nrows(new_pivot_cols))
+        let new_indices: Vec<usize> = (0..new_pivot_cols.nrows())
             .filter(|i| !permutation.contains(i))
             .collect();
 
-        for k in 0..ncols(new_pivot_cols) {
+        for k in 0..new_pivot_cols.ncols() {
             for &i in &new_indices {
                 let mut val = new_pivot_cols[[i, k]];
                 for l in 0..k {
@@ -504,11 +553,11 @@ impl<T: Scalar> MatrixACA<T> {
 
 impl<T: Scalar> AbstractMatrixCI<T> for MatrixACA<T> {
     fn nrows(&self) -> usize {
-        nrows(&self.u)
+        self.u.nrows()
     }
 
     fn ncols(&self) -> usize {
-        ncols(&self.v)
+        self.v.ncols()
     }
 
     fn rank(&self) -> usize {
@@ -537,7 +586,7 @@ impl<T: Scalar> AbstractMatrixCI<T> for MatrixACA<T> {
 
     fn submatrix(&self, rows: &[usize], cols: &[usize]) -> Matrix<T> {
         if self.is_empty() {
-            return zeros(rows.len(), cols.len());
+            return Matrix::zeros(rows.len(), cols.len());
         }
 
         let r = self.rank();

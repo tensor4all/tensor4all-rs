@@ -5,9 +5,10 @@ use crate::matrixluci::scalar::Scalar;
 use crate::matrixluci::source::{materialize_source, CandidateMatrixSource};
 use crate::matrixluci::{MatrixLuciError, PivotKernelOptions, PivotSelectionCore, Result};
 use crate::scalar::Scalar as LegacyScalar;
-use crate::{from_vec2d, rrlu, RrLUOptions};
+use crate::{rrlu, RrLUOptions};
 use num_complex::{Complex32, Complex64};
-use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorScalar};
+use tenferro_tensor::TensorScalar;
+use tensor4all_tensorbackend::{full_piv_lu_matrix, Matrix};
 
 /// Dense full-pivoting LU kernel backed by the configured tensor backend.
 ///
@@ -95,26 +96,17 @@ impl DenseLuKernel {
         ncols: usize,
         options: &PivotKernelOptions,
     ) -> Result<PivotSelectionCore> {
-        let mut rows = Vec::with_capacity(nrows);
-        for row in 0..nrows {
-            let mut values = Vec::with_capacity(ncols);
-            for col in 0..ncols {
-                values.push(data[row + nrows * col]);
-            }
-            rows.push(values);
-        }
-
         let lu_options = RrLUOptions {
             max_rank: options.max_rank,
             rel_tol: options.rel_tol,
             abs_tol: options.abs_tol,
             left_orthogonal: options.left_orthogonal,
         };
-        let lu = rrlu(&from_vec2d(rows), Some(lu_options)).map_err(|err| {
-            MatrixLuciError::InvalidArgument {
+        let matrix = Matrix::from_col_major_vec(nrows, ncols, data.to_vec());
+        let lu =
+            rrlu(&matrix, Some(lu_options)).map_err(|err| MatrixLuciError::InvalidArgument {
                 message: format!("dense rrLU factorization failed: {err}"),
-            }
-        })?;
+            })?;
 
         Ok(PivotSelectionCore {
             row_indices: lu.row_indices(),
@@ -122,14 +114,6 @@ impl DenseLuKernel {
             pivot_errors: lu.pivot_errors(),
             rank: lu.npivots(),
         })
-    }
-
-    fn tensor_slice<'a, T: TensorScalar>(tensor: &'a Tensor, name: &str) -> Result<&'a [T]> {
-        tensor
-            .as_slice::<T>()
-            .ok_or_else(|| MatrixLuciError::InvalidArgument {
-                message: format!("tenferro full_piv_lu returned unexpected dtype for {name}"),
-            })
     }
 
     fn permutation_indices_from_matrix<T: Scalar>(
@@ -159,16 +143,13 @@ impl DenseLuKernel {
         n: usize,
         options: &PivotKernelOptions,
     ) -> Result<PivotSelectionCore> {
-        let mut backend = CpuBackend::new();
-        let matrix = Tensor::from_vec(vec![n, n], data.to_vec());
-        let (p, _l, u, q, _parity) =
-            matrix
-                .full_piv_lu(&mut backend)
-                .map_err(|err| MatrixLuciError::InvalidArgument {
-                    message: format!("tenferro full_piv_lu failed: {err}"),
-                })?;
+        let matrix = Matrix::from_col_major_vec(n, n, data.to_vec());
+        let decomp =
+            full_piv_lu_matrix(&matrix).map_err(|err| MatrixLuciError::InvalidArgument {
+                message: format!("tenferro full_piv_lu failed: {err}"),
+            })?;
 
-        let u_values = Self::tensor_slice::<T>(&u, "U")?;
+        let u_values = decomp.u.as_col_major_slice();
         let diag_abs = (0..n)
             .map(|i| u_values[i + n * i].abs_val())
             .collect::<Vec<_>>();
@@ -176,9 +157,9 @@ impl DenseLuKernel {
         let rank = pivot_errors.len().saturating_sub(1);
 
         let row_perm =
-            Self::permutation_indices_from_matrix(Self::tensor_slice::<T>(&p, "P")?, n, "P")?;
+            Self::permutation_indices_from_matrix(decomp.p.as_col_major_slice(), n, "P")?;
         let col_perm =
-            Self::permutation_indices_from_matrix(Self::tensor_slice::<T>(&q, "Q")?, n, "Q")?;
+            Self::permutation_indices_from_matrix(decomp.q.as_col_major_slice(), n, "Q")?;
 
         Ok(PivotSelectionCore {
             row_indices: row_perm[..rank].to_vec(),
@@ -211,7 +192,7 @@ macro_rules! impl_dense_kernel {
                     run(data)
                 } else {
                     let materialized = materialize_source(source);
-                    run(materialized.as_slice())
+                    run(materialized.as_col_major_slice())
                 }
             }
         }

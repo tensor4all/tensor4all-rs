@@ -343,9 +343,9 @@ Replace all `matrixci::` with `tensor4all_tcicore::` and `matrixci::util::` with
 
 - `use matrixci::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};` → `use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};`
 - `matrixci::Matrix<T>` → `tensor4all_tcicore::Matrix<T>`
-- `matrixci::util::zeros(` → `tensor4all_tcicore::matrix::zeros(`
-- `matrixci::util::nrows(` → `tensor4all_tcicore::matrix::nrows(`
-- `matrixci::util::ncols(` → `tensor4all_tcicore::matrix::ncols(`
+- `matrixci::util::zeros(` → `tensor4all_tcicore::Matrix::zeros(`
+- `matrixci::util::nrows(` → `Matrix::nrows()`
+- `matrixci::util::ncols(` → `Matrix::ncols()`
 
 - [ ] **Step 4: Update error type in tensor_like.rs**
 
@@ -475,7 +475,7 @@ pub use tensor4all_tcicore::{
 Replace:
 - `use matrixci::` → `use tensor4all_tcicore::`
 - `use matrixci::util::` → `use tensor4all_tcicore::matrix::`
-- `matrixci::util::zeros` → `tensor4all_tcicore::matrix::zeros`
+- `matrixci::util::zeros` → `tensor4all_tcicore::Matrix::zeros`
 - `matrixci::rrlu` → `tensor4all_tcicore::rrlu`
 - `matrixci::matrixlu::solve_lu` → `tensor4all_tcicore::matrixlu::solve_lu`
 - `matrixci::MatrixCIError` → `tensor4all_tcicore::MatrixCIError`

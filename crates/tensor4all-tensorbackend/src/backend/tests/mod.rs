@@ -1,5 +1,5 @@
 use super::*;
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
 
 fn row_major_values<T>(tensor: &TypedTensor<T>) -> Vec<T>
@@ -103,4 +103,87 @@ fn svd_backend_reconstructs_complex_matrix() {
             "SVD reconstruction mismatch: {actual:?} vs {expected:?}"
         );
     }
+}
+
+#[test]
+fn solve_backend_solves_real_system() {
+    let a = TypedTensor::from_vec(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0]);
+    let b = TypedTensor::from_vec(vec![2, 1], vec![1.0_f64, 0.0]);
+
+    let x = solve_backend(&a, &b).unwrap();
+
+    assert_eq!(x.shape, vec![2, 1]);
+    assert!((x.as_slice()[0] - 2.0 / 3.0).abs() < 1.0e-12);
+    assert!((x.as_slice()[1] + 1.0 / 3.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn solve_matrix_solves_real_system() {
+    let a = crate::from_vec2d(vec![vec![2.0_f64, 1.0], vec![1.0, 2.0]]);
+    let b = crate::from_vec2d(vec![vec![1.0_f64], vec![0.0]]);
+
+    let x = solve_matrix(&a, &b).unwrap();
+
+    assert_eq!(x.nrows(), 2);
+    assert_eq!(x.ncols(), 1);
+    assert!((x[[0, 0]] - 2.0 / 3.0).abs() < 1.0e-12);
+    assert!((x[[1, 0]] + 1.0 / 3.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn solve_matrix_promotes_f32_system() {
+    let a = crate::from_vec2d(vec![vec![2.0_f32, 1.0], vec![1.0, 2.0]]);
+    let b = crate::from_vec2d(vec![vec![1.0_f32], vec![0.0]]);
+
+    let x = solve_matrix(&a, &b).unwrap();
+
+    assert!((x[[0, 0]] - 2.0 / 3.0).abs() < 1.0e-6);
+    assert!((x[[1, 0]] + 1.0 / 3.0).abs() < 1.0e-6);
+}
+
+#[test]
+fn solve_matrix_promotes_complex32_system() {
+    let a = crate::from_vec2d(vec![
+        vec![Complex32::new(2.0, 0.0), Complex32::new(1.0, 0.0)],
+        vec![Complex32::new(1.0, 0.0), Complex32::new(2.0, 0.0)],
+    ]);
+    let b = crate::from_vec2d(vec![
+        vec![Complex32::new(1.0, 0.0)],
+        vec![Complex32::new(0.0, 0.0)],
+    ]);
+
+    let x = solve_matrix(&a, &b).unwrap();
+
+    assert!((x[[0, 0]].re - 2.0 / 3.0).abs() < 1.0e-6);
+    assert!((x[[1, 0]].re + 1.0 / 3.0).abs() < 1.0e-6);
+    assert!(x[[0, 0]].im.abs() < 1.0e-6);
+    assert!(x[[1, 0]].im.abs() < 1.0e-6);
+}
+
+#[test]
+fn full_piv_lu_backend_returns_square_factors() {
+    let input = TypedTensor::from_vec(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]);
+
+    let decomp = full_piv_lu_backend(&input).unwrap();
+
+    assert_eq!(decomp.p.shape, vec![2, 2]);
+    assert_eq!(decomp.l.shape, vec![2, 2]);
+    assert_eq!(decomp.u.shape, vec![2, 2]);
+    assert_eq!(decomp.q.shape, vec![2, 2]);
+}
+
+#[test]
+fn full_piv_lu_matrix_returns_square_factors() {
+    let input = crate::from_vec2d(vec![vec![0.0_f64, 1.0], vec![2.0, 3.0]]);
+
+    let decomp = full_piv_lu_matrix(&input).unwrap();
+
+    assert_eq!(decomp.p.nrows(), 2);
+    assert_eq!(decomp.p.ncols(), 2);
+    assert_eq!(decomp.l.nrows(), 2);
+    assert_eq!(decomp.l.ncols(), 2);
+    assert_eq!(decomp.u.nrows(), 2);
+    assert_eq!(decomp.u.ncols(), 2);
+    assert_eq!(decomp.q.nrows(), 2);
+    assert_eq!(decomp.q.ncols(), 2);
 }

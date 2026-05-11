@@ -4,9 +4,9 @@ use num_complex::{Complex32, Complex64};
 use num_traits::{Float, One, Zero};
 
 use crate::error::Result;
-use crate::matrix::Matrix;
 use crate::matrix_luci::MatrixLuciFactors;
 use crate::matrixlu::RrLUOptions;
+use tensor4all_tensorbackend::{BackendLinalgScalar, Matrix, MatrixScalar, MatrixSolveScalar};
 
 /// Common scalar trait for matrix LUCI operations.
 pub trait Scalar:
@@ -22,6 +22,9 @@ pub trait Scalar:
     + Default
     + Send
     + Sync
+    + BackendLinalgScalar
+    + MatrixScalar
+    + MatrixSolveScalar
     + 'static
 {
     /// Complex conjugate.

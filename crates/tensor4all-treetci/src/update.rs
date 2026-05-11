@@ -9,6 +9,7 @@ use tensor4all_core::{ColMajorArray, CommonScalar};
 use tensor4all_tcicore::{
     matrix_luci_factors_from_matrix, MatrixLuciFactors, MatrixLuciScalar as Scalar, RrLUOptions,
 };
+use tensor4all_tensorbackend::Matrix;
 
 #[cfg(test)]
 use crate::DefaultProposer;
@@ -48,8 +49,7 @@ where
         state.max_sample_value = state.max_sample_value.max(CommonScalar::abs_val(*value));
     }
 
-    let mut matrix =
-        tensor4all_tcicore::matrix::zeros(left_candidates.len(), right_candidates.len());
+    let mut matrix = Matrix::zeros(left_candidates.len(), right_candidates.len());
     for col in 0..right_candidates.len() {
         for row in 0..left_candidates.len() {
             matrix[[row, col]] = values[row + left_candidates.len() * col];

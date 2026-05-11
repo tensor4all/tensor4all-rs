@@ -7,9 +7,9 @@
 //! The `scalar_tests!` macro generates dual `f64`/`Complex64` test
 //! variants from a single generic test function.
 
-use crate::matrix::BlasMul;
 use num_complex::{Complex32, Complex64};
 use num_traits::{Float, One, Zero};
+use tensor4all_tensorbackend::MatrixScalar;
 
 /// Common scalar trait for matrix and tensor operations.
 ///
@@ -50,7 +50,7 @@ pub trait Scalar:
     + Default
     + Send
     + Sync
-    + BlasMul
+    + MatrixScalar
     + 'static
 {
     /// Complex conjugate of the value.

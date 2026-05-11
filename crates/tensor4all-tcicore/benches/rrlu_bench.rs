@@ -2,11 +2,11 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tenferro_tensor::{cpu::CpuBackend, Tensor};
-use tensor4all_tcicore::matrix::{from_vec2d, Matrix};
+use tenferro_tensor::Tensor;
 use tensor4all_tcicore::{rrlu_inplace, RrLUOptions};
+use tensor4all_tensorbackend::{from_vec2d, with_default_backend, Matrix};
 
-/// Generate a random f64 matrix as tensor4all_tcicore::Matrix
+/// Generate a random f64 backend matrix.
 fn random_matrix(n: usize, m: usize, seed: u64) -> Matrix<f64> {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let data: Vec<Vec<f64>> = (0..n)
@@ -47,7 +47,6 @@ fn bench_rrlu(c: &mut Criterion) {
             );
         });
 
-        let mut backend = CpuBackend::new();
         group.bench_with_input(
             BenchmarkId::new("tenferro_full_piv_lu", size),
             &size,
@@ -55,7 +54,7 @@ fn bench_rrlu(c: &mut Criterion) {
                 b.iter_batched(
                     || random_tenferro_matrix(n, n, 42),
                     |m| {
-                        m.full_piv_lu(&mut backend).unwrap();
+                        with_default_backend(|backend| m.full_piv_lu(backend)).unwrap();
                     },
                     criterion::BatchSize::SmallInput,
                 );

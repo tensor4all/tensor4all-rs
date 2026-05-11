@@ -5,14 +5,14 @@
 
 use crate::compression::CompressionMethod;
 use crate::einsum_helper::{
-    einsum_tensors, tensor_to_row_major_vec, typed_tensor_from_row_major_slice, EinsumScalar,
+    einsum_tensors, tensor_to_col_major_vec, typed_tensor_from_col_major_slice, EinsumScalar,
 };
 use crate::error::{Result, TensorTrainError};
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::Tensor3Ops;
-use tensor4all_tcicore::matrix::Matrix;
 use tensor4all_tcicore::Scalar;
+use tensor4all_tensorbackend::Matrix;
 
 /// Options for MPO-MPO contraction with on-the-fly compression.
 ///
@@ -100,10 +100,10 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> TensorTrain<T> {
             });
         }
 
-        let mut result = Matrix::from_raw_vec(
+        let mut result = Matrix::from_col_major_vec(
             a0.right_dim(),
             b0.right_dim(),
-            tensor_to_row_major_vec(&einsum_tensors(
+            tensor_to_col_major_vec(&einsum_tensors(
                 "asr,ast->rt",
                 &[a0.as_inner(), b0.as_inner()],
             )),
@@ -125,15 +125,15 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> TensorTrain<T> {
                 });
             }
 
-            let result_tf = typed_tensor_from_row_major_slice(
-                result.as_slice(),
+            let result_tf = typed_tensor_from_col_major_slice(
+                result.as_col_major_slice(),
                 &[result.nrows(), result.ncols()],
             );
 
-            result = Matrix::from_raw_vec(
+            result = Matrix::from_col_major_vec(
                 a.right_dim(),
                 b.right_dim(),
-                tensor_to_row_major_vec(&einsum_tensors(
+                tensor_to_col_major_vec(&einsum_tensors(
                     "ij,isk,jsl->kl",
                     &[&result_tf, a.as_inner(), b.as_inner()],
                 )),

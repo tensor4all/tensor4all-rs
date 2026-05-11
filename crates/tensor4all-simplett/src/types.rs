@@ -50,7 +50,7 @@ pub trait Tensor3Ops<T: Clone + Default> {
     fn set3(&mut self, l: usize, s: usize, r: usize, value: T);
 
     /// Extract the `(left_dim, right_dim)` matrix for a fixed site index `s`
-    /// as a flat row-major vector.
+    /// as a flat column-major vector.
     fn slice_site(&self, s: usize) -> Vec<T>;
 
     /// Reshape to a `(left_dim * site_dim, right_dim)` matrix.
@@ -89,8 +89,8 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
         let left_dim = self.left_dim();
         let right_dim = self.right_dim();
         let mut result = Vec::with_capacity(left_dim * right_dim);
-        for l in 0..left_dim {
-            for r in 0..right_dim {
+        for r in 0..right_dim {
+            for l in 0..left_dim {
                 result.push(self[[l, s, r]]);
             }
         }
@@ -104,9 +104,9 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
         let rows = left_dim * site_dim;
         let cols = right_dim;
         let mut result = Vec::with_capacity(rows * cols);
-        for l in 0..left_dim {
-            for s in 0..site_dim {
-                for r in 0..right_dim {
+        for r in 0..right_dim {
+            for l in 0..left_dim {
+                for s in 0..site_dim {
                     result.push(self[[l, s, r]]);
                 }
             }
@@ -121,9 +121,9 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
         let rows = left_dim;
         let cols = site_dim * right_dim;
         let mut result = Vec::with_capacity(rows * cols);
-        for l in 0..left_dim {
-            for s in 0..site_dim {
-                for r in 0..right_dim {
+        for s in 0..site_dim {
+            for r in 0..right_dim {
+                for l in 0..left_dim {
                     result.push(self[[l, s, r]]);
                 }
             }

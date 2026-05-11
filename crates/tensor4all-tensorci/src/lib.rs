@@ -12,7 +12,6 @@
 //! | Entry point | Algorithm | State type | Notes |
 //! |---|---|---|---|
 //! | [`crossinterpolate2`] | TCI2 (two-site) | [`TensorCI2`] | **Primary, actively maintained** |
-//! | [`crossinterpolate1`] | TCI1 (one-site) | [`TensorCI1`] | Legacy, kept for compatibility |
 //!
 //! `TCI2` uses [`MatrixLUCI`](tensor4all_tcicore::MatrixLUCI) for pivot
 //! updates and supports batch evaluation, global pivot search, and two pivot
@@ -67,7 +66,6 @@ pub mod globalpivot;
 pub mod globalsearch;
 pub mod integration;
 pub mod optfirstpivot;
-pub mod tensorci1;
 pub mod tensorci2;
 
 // Re-export main types
@@ -75,7 +73,6 @@ pub use error::{Result, TCIError};
 pub use globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput};
 pub use globalsearch::{estimate_true_error, floating_zone};
 pub use optfirstpivot::opt_first_pivot;
-pub use tensorci1::{crossinterpolate1, SweepStrategy, TCI1Options, TensorCI1};
 pub use tensorci2::{
     crossinterpolate2, PivotSearchStrategy, Sweep2Strategy, TCI2Options, TensorCI2,
 };

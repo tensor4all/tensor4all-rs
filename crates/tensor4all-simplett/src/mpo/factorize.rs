@@ -5,7 +5,7 @@
 
 use super::error::{MPOError, Result};
 use super::Matrix2;
-use crate::einsum_helper::{tensor_to_row_major_vec, typed_tensor_from_row_major_slice};
+use crate::einsum_helper::tensor_to_col_major_vec;
 use num_complex::{Complex64, ComplexFloat};
 use tenferro_tensor::{TensorScalar, TypedTensor};
 use tensor4all_tensorbackend::{svd_backend, BackendLinalgScalar};
@@ -127,13 +127,11 @@ pub fn factorize<T: SVDScalar>(
 // Use the shared matrix2_zeros from the parent module
 use super::matrix2_zeros;
 
-fn matrix2_to_typed_tensor<T>(matrix: &Matrix2<T>) -> Result<TypedTensor<T>>
+fn matrix2_to_typed_tensor<T>(matrix: &Matrix2<T>) -> TypedTensor<T>
 where
     T: TensorScalar,
 {
-    let dims = [matrix.dim(0), matrix.dim(1)];
-    let data: Vec<T> = matrix.iter().copied().collect();
-    Ok(typed_tensor_from_row_major_slice(&data, &dims))
+    matrix.as_inner().clone()
 }
 
 fn typed_tensor_to_matrix2<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Matrix2<T>>
@@ -149,25 +147,15 @@ where
         });
     }
 
-    let rows = tensor.shape[0];
-    let cols = tensor.shape[1];
-    let data = tensor_to_row_major_vec(tensor);
-
-    let mut matrix = matrix2_zeros(rows, cols);
-    for i in 0..rows {
-        for j in 0..cols {
-            matrix[[i, j]] = data[i * cols + j];
-        }
-    }
-    Ok(matrix)
+    Ok(Matrix2::from_tenferro(tensor.clone()))
 }
 
-fn typed_row_major_values<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Vec<T>>
+fn typed_col_major_values<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Vec<T>>
 where
     T: TensorScalar,
 {
     let _ = op;
-    Ok(tensor_to_row_major_vec(tensor))
+    Ok(tensor_to_col_major_vec(tensor))
 }
 
 /// Factorize using SVD
@@ -185,14 +173,14 @@ fn factorize_svd<T: SVDScalar>(
     }
 
     // Compute SVD using tensorbackend (tenferro-backed implementation)
-    let a_tensor = matrix2_to_typed_tensor(matrix)?;
+    let a_tensor = matrix2_to_typed_tensor(matrix);
     let svd_result = svd_backend(&a_tensor).map_err(|e| MPOError::FactorizationError {
         message: format!("SVD computation failed: {:?}", e),
     })?;
 
     let u = typed_tensor_to_matrix2(&svd_result.u, "svd.u")?;
     let vt = typed_tensor_to_matrix2(&svd_result.vt, "svd.vt")?;
-    let singular_values = typed_row_major_values(&svd_result.s, "svd.s")?;
+    let singular_values = typed_col_major_values(&svd_result.s, "svd.s")?;
 
     // Determine rank based on tolerance and max_rank
     let min_dim = m.min(n);
@@ -298,12 +286,13 @@ where
     T: SVDScalar + tensor4all_tcicore::Scalar + tensor4all_tcicore::MatrixLuciScalar,
 {
     use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
+    use tensor4all_tensorbackend::Matrix;
 
     let m = matrix.dim(0);
     let n = matrix.dim(1);
 
-    // Convert Matrix2 to tensor4all_tcicore::Matrix for LU/CI factorization.
-    let mut mat_ci: tensor4all_tcicore::Matrix<T> = tensor4all_tcicore::matrix::zeros(m, n);
+    // Convert Matrix2 to the shared backend Matrix for LU/CI factorization.
+    let mut mat_ci = Matrix::zeros(m, n);
     for i in 0..m {
         for j in 0..n {
             mat_ci[[i, j]] = matrix[[i, j]];
@@ -323,8 +312,8 @@ where
     let rank = luci.rank().max(1);
 
     // Convert back to Matrix2
-    let left_m = tensor4all_tcicore::matrix::nrows(&left_ci);
-    let left_n = tensor4all_tcicore::matrix::ncols(&left_ci);
+    let left_m = left_ci.nrows();
+    let left_n = left_ci.ncols();
     let mut left: Matrix2<T> = matrix2_zeros(left_m, left_n);
     for i in 0..left_m {
         for j in 0..left_n {
@@ -332,8 +321,8 @@ where
         }
     }
 
-    let right_m = tensor4all_tcicore::matrix::nrows(&right_ci);
-    let right_n = tensor4all_tcicore::matrix::ncols(&right_ci);
+    let right_m = right_ci.nrows();
+    let right_n = right_ci.ncols();
     let mut right: Matrix2<T> = matrix2_zeros(right_m, right_n);
     for i in 0..right_m {
         for j in 0..right_n {

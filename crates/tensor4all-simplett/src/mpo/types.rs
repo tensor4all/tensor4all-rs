@@ -39,7 +39,8 @@ pub trait Tensor4Ops<T: Clone + Default> {
     /// Set element at (left, site1, site2, right)
     fn set4(&mut self, l: usize, s1: usize, s2: usize, r: usize, value: T);
 
-    /// Get a slice for fixed site indices: returns (left_dim, right_dim) matrix as flat Vec
+    /// Get a slice for fixed site indices as a flat column-major
+    /// `(left_dim, right_dim)` matrix.
     fn slice_site(&self, s1: usize, s2: usize) -> Vec<T>;
 
     /// Reshape this tensor to a matrix (left_dim * site_dim_1 * site_dim_2, right_dim)
@@ -85,8 +86,8 @@ impl<T: Clone + Default + TensorScalar> Tensor4Ops<T> for Tensor4<T> {
         let left_dim = self.left_dim();
         let right_dim = self.right_dim();
         let mut result = Vec::with_capacity(left_dim * right_dim);
-        for l in 0..left_dim {
-            for r in 0..right_dim {
+        for r in 0..right_dim {
+            for l in 0..left_dim {
                 result.push(self[[l, s1, s2, r]]);
             }
         }
@@ -101,10 +102,10 @@ impl<T: Clone + Default + TensorScalar> Tensor4Ops<T> for Tensor4<T> {
         let rows = left_dim * site_dim_1 * site_dim_2;
         let cols = right_dim;
         let mut result = Vec::with_capacity(rows * cols);
-        for l in 0..left_dim {
-            for s1 in 0..site_dim_1 {
-                for s2 in 0..site_dim_2 {
-                    for r in 0..right_dim {
+        for r in 0..right_dim {
+            for l in 0..left_dim {
+                for s1 in 0..site_dim_1 {
+                    for s2 in 0..site_dim_2 {
                         result.push(self[[l, s1, s2, r]]);
                     }
                 }
@@ -121,10 +122,10 @@ impl<T: Clone + Default + TensorScalar> Tensor4Ops<T> for Tensor4<T> {
         let rows = left_dim;
         let cols = site_dim_1 * site_dim_2 * right_dim;
         let mut result = Vec::with_capacity(rows * cols);
-        for l in 0..left_dim {
-            for s1 in 0..site_dim_1 {
-                for s2 in 0..site_dim_2 {
-                    for r in 0..right_dim {
+        for s1 in 0..site_dim_1 {
+            for s2 in 0..site_dim_2 {
+                for r in 0..right_dim {
+                    for l in 0..left_dim {
                         result.push(self[[l, s1, s2, r]]);
                     }
                 }
@@ -141,10 +142,10 @@ impl<T: Clone + Default + TensorScalar> Tensor4Ops<T> for Tensor4<T> {
         let rows = left_dim * site_dim_1;
         let cols = site_dim_2 * right_dim;
         let mut result = Vec::with_capacity(rows * cols);
-        for l in 0..left_dim {
-            for s1 in 0..site_dim_1 {
-                for s2 in 0..site_dim_2 {
-                    for r in 0..right_dim {
+        for s2 in 0..site_dim_2 {
+            for r in 0..right_dim {
+                for l in 0..left_dim {
+                    for s1 in 0..site_dim_1 {
                         result.push(self[[l, s1, s2, r]]);
                     }
                 }

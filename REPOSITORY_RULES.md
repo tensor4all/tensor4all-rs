@@ -124,6 +124,30 @@
   the appropriate high-level API rather than exposing or reaching into internal
   details.
 
+## Dense Layout And Linear Algebra
+
+- Dense flat-buffer APIs use column-major linearization. New public flat-buffer
+  constructors, exports, examples, FFI contracts, and docs must state or
+  preserve column-major semantics.
+- Do not add row-major compatibility shims or hidden row-major round-trips in
+  library code. When an external dependency or test fixture naturally provides
+  row-shaped data, convert at that explicit boundary and keep the conversion
+  private.
+- Reuse `tensor4all-tensorbackend::Matrix` for dense matrix values exposed across
+  crate boundaries. Do not introduce a second public matrix type with the same
+  role in downstream crates.
+- Use existing tensor4all abstractions and the tenferro-backed
+  `tensor4all-tensorbackend` route for SVD, QR, einsum, and dense tensor
+  linear algebra. Do not reimplement these algorithms locally in feature
+  crates.
+- Do not instantiate `CpuBackend` directly outside
+  `tensor4all-tensorbackend`. Use `tensor4all-tensorbackend` wrappers or
+  `with_default_backend` so tenferro CPU execution uses the repository's shared
+  process-global `CpuContext`.
+- `Tensor3Ops::slice_site`, `Tensor4Ops::slice_site`, and tensor train
+  dense/full-tensor exports return column-major flat data. Call sites that
+  treat these buffers as matrices must use column-major indexing.
+
 ## Index Identity Semantics
 
 - Do not use `index.id()` alone to decide whether two indices are the same
@@ -185,7 +209,10 @@
 
 ## Dependencies And Numeric Conventions
 
-- Prefer `mdarray` for arrays and `mdarray-linalg` for linear algebra.
+- Prefer existing tensor4all core/tcicore/simplett abstractions and
+  tenferro-backed `tensor4all-tensorbackend` operations for arrays and linear
+  algebra. Add direct array/linalg dependencies only when the established
+  abstraction is genuinely insufficient.
 - SVD singular values use `s[[0, i]]`, not `s[[i, i]]`.
 
 ## Graph Algorithms

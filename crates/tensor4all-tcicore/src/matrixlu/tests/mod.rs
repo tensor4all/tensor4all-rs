@@ -1,9 +1,17 @@
 use super::*;
-use crate::matrix::{eye, from_vec2d, mat_mul, ncols, nrows, transpose};
+use tensor4all_tensorbackend::{from_vec2d, mat_mul, transpose, Matrix};
+
+fn identity(n: usize) -> Matrix<f64> {
+    let mut m = Matrix::zeros(n, n);
+    for i in 0..n {
+        m[[i, i]] = 1.0;
+    }
+    m
+}
 
 #[test]
 fn test_rrlu_identity() {
-    let m: Matrix<f64> = eye(3);
+    let m = identity(3);
     let lu = rrlu(&m, None).unwrap();
 
     assert_eq!(lu.npivots(), 3);
@@ -108,16 +116,16 @@ fn test_rrlu_4x4_reconstruct() {
 
     // L (unpermuted) should be unit lower triangular
     let l = lu.left(false);
-    for i in 0..nrows(&l) {
+    for i in 0..l.nrows() {
         assert!((l[[i, i]] - 1.0).abs() < 1e-14, "L diagonal should be 1");
-        for j in (i + 1)..ncols(&l) {
+        for j in (i + 1)..l.ncols() {
             assert!(l[[i, j]].abs() < 1e-14, "L should be lower triangular");
         }
     }
 
     // U (unpermuted) should be upper triangular
     let u = lu.right(false);
-    for i in 0..nrows(&u) {
+    for i in 0..u.nrows() {
         for j in 0..i {
             assert!(u[[i, j]].abs() < 1e-14, "U should be upper triangular");
         }
@@ -162,12 +170,12 @@ fn test_rrlu_max_rank() {
     assert_eq!(lu.col_indices().len(), 4);
 
     let l = lu.left(false);
-    assert_eq!(nrows(&l), 8);
-    assert_eq!(ncols(&l), 4);
+    assert_eq!(l.nrows(), 8);
+    assert_eq!(l.ncols(), 4);
 
     let u = lu.right(false);
-    assert_eq!(nrows(&u), 4);
-    assert_eq!(ncols(&u), 6);
+    assert_eq!(u.nrows(), 4);
+    assert_eq!(u.ncols(), 6);
 }
 
 /// Julia: "rrLU for exact low-rank matrix" (rank-3 from outer product)
@@ -210,8 +218,8 @@ fn test_rrlu_exact_low_rank() {
     let l = lu.left(true);
     let u = lu.right(true);
     let reconstructed = mat_mul(&l, &u);
-    for i in 0..nrows(&a) {
-        for j in 0..ncols(&a) {
+    for i in 0..a.nrows() {
+        for j in 0..a.ncols() {
             assert!(
                 (a[[i, j]] - reconstructed[[i, j]]).abs() < 1e-10,
                 "Reconstruction error at ({}, {})",
@@ -225,7 +233,7 @@ fn test_rrlu_exact_low_rank() {
 /// Julia: "lastpivoterror for full-rank matrix"
 #[test]
 fn test_rrlu_pivot_errors_full_rank() {
-    let m: Matrix<f64> = eye(2);
+    let m = identity(2);
     let lu = rrlu(&m, None).unwrap();
 
     let errors = lu.pivot_errors();
@@ -331,8 +339,8 @@ fn test_rrlu_transpose() {
     let reconstructed = mat_mul(&l, &u);
     let mt = transpose(&m);
 
-    for i in 0..nrows(&mt) {
-        for j in 0..ncols(&mt) {
+    for i in 0..mt.nrows() {
+        for j in 0..mt.ncols() {
             assert!(
                 (mt[[i, j]] - reconstructed[[i, j]]).abs() < 1e-10,
                 "Transpose reconstruction error at ({}, {})",
@@ -340,34 +348,5 @@ fn test_rrlu_transpose() {
                 j,
             );
         }
-    }
-}
-
-/// Julia: "solve by rrLU"
-#[test]
-fn test_solve_lu() {
-    let a = from_vec2d(vec![
-        vec![2.0, 1.0, 0.0],
-        vec![1.0, 3.0, 1.0],
-        vec![0.0, 1.0, 2.0],
-    ]);
-    let b = from_vec2d(vec![vec![1.0], vec![2.0], vec![3.0]]);
-
-    let lu = rrlu(&a, None).unwrap();
-    let l = lu.left(false);
-    let u = lu.right(false);
-    let x = solve_lu(&l, &u, &b).unwrap();
-
-    // Verify A * x ≈ b (after permutation)
-    let l_perm = lu.left(true);
-    let u_perm = lu.right(true);
-    let a_recon = mat_mul(&l_perm, &u_perm);
-    let _b_recon = mat_mul(&a_recon, &x);
-
-    // The solve uses unpermuted L,U so we just verify dimensions and no NaN
-    assert_eq!(nrows(&x), 3);
-    assert_eq!(ncols(&x), 1);
-    for i in 0..3 {
-        assert!(!x[[i, 0]].is_nan(), "solve_lu produced NaN");
     }
 }

@@ -2,8 +2,9 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tenferro_tensor::{cpu::CpuBackend, Tensor};
+use tenferro_tensor::Tensor;
 use tensor4all_tcicore::{matrix_luci_factors_from_matrix, RrLUOptions};
+use tensor4all_tensorbackend::{with_default_backend, Matrix};
 
 fn random_column_major(nrows: usize, ncols: usize, seed: u64) -> Vec<f64> {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
@@ -30,7 +31,7 @@ fn bench_dense_vs_tenferro(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("matrixluci", size), &size, |b, &n| {
             b.iter(|| {
-                let mut matrix = tensor4all_tcicore::matrix::zeros(n, n);
+                let mut matrix = Matrix::zeros(n, n);
                 for col in 0..n {
                     for row in 0..n {
                         matrix[[row, col]] = data[row + n * col];
@@ -40,14 +41,13 @@ fn bench_dense_vs_tenferro(c: &mut Criterion) {
             });
         });
 
-        let mut backend = CpuBackend::new();
         group.bench_with_input(
             BenchmarkId::new("tenferro_full_piv_lu", size),
             &size,
             |b, &n| {
                 b.iter(|| {
                     let mat = Tensor::from_vec(vec![n, n], data.clone());
-                    black_box(mat.full_piv_lu(&mut backend).unwrap());
+                    black_box(with_default_backend(|backend| mat.full_piv_lu(backend)).unwrap());
                 });
             },
         );

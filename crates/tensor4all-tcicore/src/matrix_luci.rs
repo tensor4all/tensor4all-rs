@@ -1,11 +1,10 @@
 //! Matrix LU-based Cross Interpolation (MatrixLUCI) implementation.
 //!
-//! [`MatrixLUCI`] provides a higher-level row-major API over the lower-level
+//! [`MatrixLUCI`] provides a higher-level [`Matrix`] API over the lower-level
 //! `matrixluci` substrate. It decomposes a matrix into left and right factors
 //! via LU cross interpolation and implements [`AbstractMatrixCI`].
 
 use crate::error::{MatrixCIError, Result};
-use crate::matrix::{submatrix, zeros, Matrix};
 use crate::matrixlu::RrLUOptions;
 use crate::matrixluci::block_rook::LazyBlockRookKernel;
 use crate::matrixluci::dense::DenseLuKernel;
@@ -15,16 +14,18 @@ use crate::matrixluci::types::{PivotKernelOptions, PivotSelectionCore};
 use crate::matrixluci::PivotKernel;
 use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
+use tensor4all_tensorbackend::{mat_mul, submatrix, Matrix};
 
 /// Matrix LU-based Cross Interpolation.
 ///
-/// This is a higher-level row-major wrapper around the lower-level `matrixluci`
+/// This is a higher-level [`Matrix`] wrapper around the lower-level `matrixluci`
 /// substrate.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+/// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+/// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// let m = from_vec2d(vec![
 ///     vec![1.0_f64, 2.0, 3.0],
@@ -58,18 +59,19 @@ pub struct MatrixLUCI<T: Scalar + crate::MatrixLuciScalar> {
 /// High-level factors produced by MatrixLUCI.
 ///
 /// This is the public result of the LUCI factorization facade. It exposes
-/// the selected pivot metadata and the row-major left and right factors
+/// the selected pivot metadata and the left and right factors
 /// needed by higher-level tensor-network code without exposing the low-level
 /// pivot kernel substrate.
 ///
-/// Related types: [`MatrixLUCI`] is the owning row-major CI wrapper, while
+/// Related types: [`MatrixLUCI`] is the owning CI wrapper, while
 /// [`MatrixACA`](crate::MatrixACA) and [`RrLU`](crate::RrLU) are related
 /// matrix factorization entry points.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::{from_vec2d, matrix_luci_factors_from_matrix};
+/// use tensor4all_tcicore::matrix_luci_factors_from_matrix;
+/// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// let m = from_vec2d(vec![
 ///     vec![1.0_f64, 2.0],
@@ -91,9 +93,9 @@ pub struct MatrixLuciFactors<T> {
     pub pivot_errors: Vec<f64>,
     /// Selected rank.
     pub rank: usize,
-    /// Left factor in row-major layout.
+    /// Left factor.
     pub left: Matrix<T>,
-    /// Right factor in row-major layout.
+    /// Right factor.
     pub right: Matrix<T>,
 }
 
@@ -102,30 +104,7 @@ pub(crate) fn map_backend_error(err: crate::matrixluci::MatrixLuciError) -> Matr
         crate::matrixluci::MatrixLuciError::InvalidArgument { message } => {
             MatrixCIError::InvalidArgument { message }
         }
-        crate::matrixluci::MatrixLuciError::SingularPivotBlock => MatrixCIError::SingularMatrix,
     }
-}
-
-pub(crate) fn to_column_major<T: Scalar>(matrix: &Matrix<T>) -> Vec<T> {
-    let mut out = Vec::with_capacity(matrix.nrows() * matrix.ncols());
-    for col in 0..matrix.ncols() {
-        for row in 0..matrix.nrows() {
-            out.push(matrix[[row, col]]);
-        }
-    }
-    out
-}
-
-pub(crate) fn to_row_major<T: Scalar + crate::MatrixLuciScalar>(
-    matrix: &crate::matrixluci::DenseOwnedMatrix<T>,
-) -> Matrix<T> {
-    let mut out = zeros(matrix.nrows(), matrix.ncols());
-    for col in 0..matrix.ncols() {
-        for row in 0..matrix.nrows() {
-            out[[row, col]] = matrix[[row, col]];
-        }
-    }
-    out
 }
 
 fn factors_to_public<T>(
@@ -137,14 +116,14 @@ where
     T: Scalar + crate::MatrixLuciScalar,
 {
     let left = if left_orthogonal {
-        to_row_major(&factors.cols_times_pivot_inv().map_err(map_backend_error)?)
+        factors.cols_times_pivot_inv().map_err(map_backend_error)?
     } else {
-        to_row_major(&factors.pivot_cols)
+        factors.pivot_cols.clone()
     };
     let right = if left_orthogonal {
-        to_row_major(&factors.pivot_rows)
+        factors.pivot_rows.clone()
     } else {
-        to_row_major(&factors.pivot_inv_times_rows().map_err(map_backend_error)?)
+        factors.pivot_inv_times_rows().map_err(map_backend_error)?
     };
 
     Ok(MatrixLuciFactors {
@@ -165,8 +144,7 @@ where
     T: Scalar + crate::MatrixLuciScalar,
     DenseLuKernel: PivotKernel<T>,
 {
-    let data = to_column_major(a);
-    let source = DenseMatrixSource::from_column_major(&data, a.nrows(), a.ncols());
+    let source = DenseMatrixSource::from_column_major(a.as_col_major_slice(), a.nrows(), a.ncols());
     let kernel_options = PivotKernelOptions {
         max_rank: options.max_rank,
         rel_tol: options.rel_tol,
@@ -207,21 +185,21 @@ where
     factors_to_public(selection, factors, options.left_orthogonal)
 }
 
-/// Factorize a dense row-major matrix with MatrixLUCI.
+/// Factorize a dense matrix with MatrixLUCI.
 ///
-/// Returns the selected pivot metadata together with row-major left and
+/// Returns the selected pivot metadata together with left and
 /// right factors. This is the public facade used by higher-level crates.
 ///
 /// # Arguments
 ///
-/// * `a` - Dense row-major matrix to factorize.
+/// * `a` - Dense matrix to factorize.
 /// * `options` - Optional rank and tolerance controls. `None` uses the
 ///   default LUCI settings.
 ///
 /// # Returns
 ///
 /// A [`MatrixLuciFactors`] value containing the selected pivot indices,
-/// error history, rank, and row-major factors.
+/// error history, rank, and factors.
 ///
 /// # Errors
 ///
@@ -231,7 +209,8 @@ where
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tcicore::{from_vec2d, matrix_luci_factors_from_matrix};
+/// use tensor4all_tcicore::matrix_luci_factors_from_matrix;
+/// use tensor4all_tensorbackend::from_vec2d;
 ///
 /// let m = from_vec2d(vec![
 ///     vec![1.0_f64, 0.0],
@@ -268,7 +247,7 @@ where
 ///
 /// # Returns
 ///
-/// A [`MatrixLuciFactors`] value containing the pivot metadata and row-major
+/// A [`MatrixLuciFactors`] value containing the pivot metadata and
 /// factors.
 ///
 /// # Errors
@@ -315,12 +294,13 @@ impl<T> MatrixLUCI<T>
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
-    /// Create a MatrixLUCI from a dense row-major matrix.
+    /// Create a MatrixLUCI from a dense matrix.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![
     ///     vec![2.0_f64, 0.0],
@@ -350,7 +330,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d, matrix::mat_mul};
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_tensorbackend::{from_vec2d, mat_mul};
     ///
     /// let m = from_vec2d(vec![
     ///     vec![1.0_f64, 2.0],
@@ -375,7 +356,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d, matrix::mat_mul};
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI};
+    /// use tensor4all_tensorbackend::{from_vec2d, mat_mul};
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
@@ -399,7 +381,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{MatrixLUCI, from_vec2d};
+    /// use tensor4all_tcicore::MatrixLUCI;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
@@ -419,7 +402,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tcicore::{MatrixLUCI, from_vec2d};
+    /// use tensor4all_tcicore::MatrixLUCI;
+    /// use tensor4all_tensorbackend::from_vec2d;
     ///
     /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
     /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
@@ -468,7 +452,7 @@ where
         let left_sub = submatrix(&self.left, rows, &(0..r).collect::<Vec<_>>());
         let right_sub = submatrix(&self.right, &(0..r).collect::<Vec<_>>(), cols);
 
-        crate::matrix::mat_mul(&left_sub, &right_sub)
+        mat_mul(&left_sub, &right_sub)
     }
 }
 
