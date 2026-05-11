@@ -5,6 +5,7 @@ edition.workspace = true
 authors = [
     "Marc Ritter <Ritter.Marc@physik.uni-muenchen.de>",
     "Hiroshi Shinaoka <h.shinaoka@gmail.com>",
+    "Martin Mikkelsen <https://github.com/MartinMikkelsen>",
 ]
 license.workspace = true
 repository.workspace = true
