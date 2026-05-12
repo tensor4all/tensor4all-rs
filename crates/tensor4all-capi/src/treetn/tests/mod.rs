@@ -1186,6 +1186,49 @@ fn test_treetn_evaluator_reuses_index_order_for_multiple_batches() {
 }
 
 #[test]
+fn test_treetn_evaluator_clone_remains_usable_after_original_release() {
+    let (tt, tensors, indices) = make_two_site_treetn();
+    let s0 = indices[0];
+    let s1 = indices[3];
+    let index_ptrs = [s0 as *const t4a_index, s1 as *const t4a_index];
+    let mut evaluator = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_evaluator_new(tt, index_ptrs.as_ptr(), 2, &mut evaluator),
+        T4A_SUCCESS
+    );
+    assert_eq!(t4a_treetn_evaluator_is_assigned(evaluator), 1);
+    assert_eq!(t4a_treetn_evaluator_is_assigned(std::ptr::null()), 0);
+
+    let mut clone = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_evaluator_clone(evaluator, &mut clone),
+        T4A_SUCCESS
+    );
+    assert!(!clone.is_null());
+    t4a_treetn_evaluator_release(evaluator);
+
+    let values = [
+        0usize, 0usize, // point 0
+        1usize, 1usize, // point 1
+    ];
+    let mut out = [0.0; 2];
+    assert_eq!(
+        t4a_treetn_evaluator_evaluate(
+            clone,
+            values.as_ptr(),
+            2,
+            out.as_mut_ptr(),
+            std::ptr::null_mut()
+        ),
+        T4A_SUCCESS
+    );
+    assert_eq!(out, [1.0, 4.0]);
+
+    t4a_treetn_evaluator_release(clone);
+    cleanup(tt, tensors, indices);
+}
+
+#[test]
 fn test_treetn_evaluator_new_rejects_incomplete_index_list() {
     let (tt, tensors, indices) = make_two_site_treetn();
     let s0 = indices[0];
