@@ -28,28 +28,51 @@ pub use tensor::*;
 pub use treetn::*;
 pub use types::*;
 
-/// Status code type for C API
-pub type StatusCode = libc::c_int;
+/// Status code returned by fallible C API functions.
+///
+/// The explicit enum keeps the ABI type-safe for C consumers while preserving
+/// the existing numeric values used by downstream bindings.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_capi::{t4a_last_error_message, t4a_status_code, T4A_NULL_POINTER};
+///
+/// let status = t4a_last_error_message(std::ptr::null_mut(), 0, std::ptr::null_mut());
+/// assert_eq!(status, t4a_status_code::T4A_NULL_POINTER);
+/// assert_eq!(status, T4A_NULL_POINTER);
+/// ```
+///
+/// cbindgen:prefix-with-name=false
+#[repr(C)]
+#[allow(non_camel_case_types)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum t4a_status_code {
+    /// Operation completed successfully.
+    T4A_SUCCESS = 0,
+    /// A null pointer was passed where a valid pointer was required.
+    T4A_NULL_POINTER = -1,
+    /// An invalid argument was provided.
+    T4A_INVALID_ARGUMENT = -2,
+    /// Too many tags would be added to a fixed-capacity tag set.
+    T4A_TAG_OVERFLOW = -3,
+    /// A tag string exceeds a fixed-capacity tag storage limit.
+    T4A_TAG_TOO_LONG = -4,
+    /// The provided output buffer is too small for the result.
+    T4A_BUFFER_TOO_SMALL = -5,
+    /// An internal error occurred (e.g., a panic was caught).
+    T4A_INTERNAL_ERROR = -6,
+    /// The requested API exists but is not implemented yet.
+    T4A_NOT_IMPLEMENTED = -7,
+}
 
-/// Operation completed successfully.
-pub const T4A_SUCCESS: StatusCode = 0;
-/// A null pointer was passed where a valid pointer was required.
-pub const T4A_NULL_POINTER: StatusCode = -1;
-/// An invalid argument was provided.
-pub const T4A_INVALID_ARGUMENT: StatusCode = -2;
-/// Too many tags would be added to a fixed-capacity tag set.
-pub const T4A_TAG_OVERFLOW: StatusCode = -3;
-/// A tag string exceeds a fixed-capacity tag storage limit.
-pub const T4A_TAG_TOO_LONG: StatusCode = -4;
-/// The provided output buffer is too small for the result.
-pub const T4A_BUFFER_TOO_SMALL: StatusCode = -5;
-/// An internal error occurred (e.g., a panic was caught).
-pub const T4A_INTERNAL_ERROR: StatusCode = -6;
-/// The requested API exists but is not implemented yet.
-pub const T4A_NOT_IMPLEMENTED: StatusCode = -7;
+pub use t4a_status_code::{
+    T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NOT_IMPLEMENTED,
+    T4A_NULL_POINTER, T4A_SUCCESS, T4A_TAG_OVERFLOW, T4A_TAG_TOO_LONG,
+};
 
 /// Internal result type carrying both a status code and an error message.
-pub(crate) type CapiResult<T> = Result<T, (StatusCode, String)>;
+pub(crate) type CapiResult<T> = Result<T, (t4a_status_code, String)>;
 
 // ============================================================================
 // Thread-local error message storage
@@ -79,13 +102,13 @@ pub(crate) fn set_last_error(msg: &str) {
 }
 
 /// Store an error and return a status code.
-pub(crate) fn err_status<E: std::fmt::Display>(err: E, code: StatusCode) -> StatusCode {
+pub(crate) fn err_status<E: std::fmt::Display>(err: E, code: t4a_status_code) -> t4a_status_code {
     set_last_error(&err.to_string());
     code
 }
 
 /// Store a null-pointer diagnostic and return `T4A_NULL_POINTER`.
-pub(crate) fn err_null_pointer<E: std::fmt::Display>(what: E) -> StatusCode {
+pub(crate) fn err_null_pointer<E: std::fmt::Display>(what: E) -> t4a_status_code {
     err_status(format!("{what} is null"), T4A_NULL_POINTER)
 }
 
@@ -94,7 +117,7 @@ pub(crate) fn err_buffer_too_small(
     what: &str,
     required_len: usize,
     actual_len: usize,
-) -> StatusCode {
+) -> t4a_status_code {
     err_status(
         format!("{what} buffer too small: required {required_len}, got {actual_len}"),
         T4A_BUFFER_TOO_SMALL,
@@ -109,12 +132,15 @@ pub(crate) fn err_null<T, E: std::fmt::Display>(err: E) -> *mut T {
 }
 
 /// Pair a status code with an error message for `run_catching`.
-pub(crate) fn capi_error<E: std::fmt::Display>(code: StatusCode, err: E) -> (StatusCode, String) {
+pub(crate) fn capi_error<E: std::fmt::Display>(
+    code: t4a_status_code,
+    err: E,
+) -> (t4a_status_code, String) {
     (code, err.to_string())
 }
 
 /// Run a constructor-like closure and write the resulting handle to `out`.
-pub(crate) fn run_catching<T, F>(out: *mut *mut T, f: F) -> StatusCode
+pub(crate) fn run_catching<T, F>(out: *mut *mut T, f: F) -> t4a_status_code
 where
     F: FnOnce() -> CapiResult<T>,
 {
@@ -140,7 +166,7 @@ where
 }
 
 /// Clone an opaque wrapper through the constructor-style `out` pattern.
-pub(crate) fn clone_opaque<T: Clone>(src: *const T, out: *mut *mut T) -> StatusCode {
+pub(crate) fn clone_opaque<T: Clone>(src: *const T, out: *mut *mut T) -> t4a_status_code {
     if src.is_null() {
         return err_null_pointer("source handle");
     }
@@ -179,7 +205,7 @@ pub(crate) fn is_assigned_opaque<T>(obj: *const T) -> i32 {
 }
 
 /// Unwrap a `catch_unwind` result, storing any panic message.
-pub(crate) fn unwrap_catch(result: std::thread::Result<StatusCode>) -> StatusCode {
+pub(crate) fn unwrap_catch(result: std::thread::Result<t4a_status_code>) -> t4a_status_code {
     match result {
         Ok(code) => code,
         Err(panic) => {
@@ -230,7 +256,7 @@ pub extern "C" fn t4a_last_error_message(
     buf: *mut u8,
     buf_len: libc::size_t,
     out_len: *mut libc::size_t,
-) -> StatusCode {
+) -> t4a_status_code {
     if out_len.is_null() {
         return err_null_pointer("out_len");
     }

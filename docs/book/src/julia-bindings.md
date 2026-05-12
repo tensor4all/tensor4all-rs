@@ -21,9 +21,9 @@ exposes the pieces needed to build a Julia-native surface on top:
 - **Indices** — immutable index handles with IDs, tags, and prime levels
 - **Dense tensors** — `Float64` / complex tensor construction, export, and contraction
 - **Tree tensor networks** — topology queries, orthogonalization, truncation, evaluation, and dense export
-- **Canonical QTT layouts** — grouped, interleaved, and fused binary layouts
-- **Quantics transform materialization** — shift, flip, phase rotation, cumsum, Fourier, binary-op, and affine operators materialized directly as `TreeTN`
-- **Error reporting** — `StatusCode` plus `t4a_last_error_message`
+- **Canonical QTT layouts** — interleaved and fused binary layouts
+- **Quantics transform materialization** — shift, flip, phase rotation, cumsum, Fourier, and affine operators materialized directly as `TreeTN`
+- **Error reporting** — `enum t4a_status_code` plus `t4a_last_error_message`
 
 This split is deliberate: the Rust side owns performance-critical kernels and
 the Julia side owns higher-level ergonomics.

@@ -13,7 +13,7 @@ use crate::types::{
 };
 use crate::{
     capi_error, clone_opaque, err_buffer_too_small, err_null_pointer, is_assigned_opaque,
-    panic_message, release_opaque, run_catching, set_last_error, CapiResult, StatusCode,
+    panic_message, release_opaque, run_catching, set_last_error, t4a_status_code, CapiResult,
     T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
 };
 
@@ -28,7 +28,7 @@ pub extern "C" fn t4a_tensor_release(obj: *mut t4a_tensor) {
 pub extern "C" fn t4a_tensor_clone(
     src: *const t4a_tensor,
     out: *mut *mut t4a_tensor,
-) -> StatusCode {
+) -> t4a_status_code {
     clone_opaque(src, out)
 }
 
@@ -40,7 +40,7 @@ pub extern "C" fn t4a_tensor_select_indices(
     selected_indices: *const *const t4a_index,
     positions: *const usize,
     out: *mut *mut t4a_tensor,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(tensor)?;
         if out.is_null() {
@@ -72,7 +72,7 @@ pub extern "C" fn t4a_tensor_is_assigned(obj: *const t4a_tensor) -> i32 {
 fn read_indices_from_ptrs(
     rank: usize,
     index_ptrs: *const *const t4a_index,
-) -> Result<Vec<InternalIndex>, (StatusCode, String)> {
+) -> Result<Vec<InternalIndex>, (t4a_status_code, String)> {
     if rank == 0 {
         return Ok(Vec::new());
     }
@@ -102,7 +102,7 @@ fn read_plain_slice<T: Copy>(
     name: &str,
     ptr: *const T,
     len: usize,
-) -> Result<Vec<T>, (StatusCode, String)> {
+) -> Result<Vec<T>, (t4a_status_code, String)> {
     if len == 0 {
         return Ok(Vec::new());
     }
@@ -116,7 +116,7 @@ fn read_c64_slice(
     name: &str,
     ptr: *const f64,
     n_complex: usize,
-) -> Result<Vec<Complex64>, (StatusCode, String)> {
+) -> Result<Vec<Complex64>, (t4a_status_code, String)> {
     if n_complex == 0 {
         return Ok(Vec::new());
     }
@@ -209,7 +209,7 @@ fn copy_c64_interleaved(
     Ok(())
 }
 
-fn run_status<F>(f: F) -> StatusCode
+fn run_status<F>(f: F) -> t4a_status_code
 where
     F: FnOnce() -> CapiResult<()>,
 {
@@ -227,7 +227,7 @@ where
     }
 }
 
-fn require_tensor<'a>(ptr: *const t4a_tensor) -> Result<&'a t4a_tensor, (StatusCode, String)> {
+fn require_tensor<'a>(ptr: *const t4a_tensor) -> Result<&'a t4a_tensor, (t4a_status_code, String)> {
     if ptr.is_null() {
         return Err(capi_error(T4A_NULL_POINTER, "tensor is null"));
     }
@@ -257,7 +257,7 @@ fn box_tensor_handle(tensor: InternalTensor) -> *mut t4a_tensor {
 
 /// Get the rank of a tensor.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_tensor_rank(ptr: *const t4a_tensor, out_rank: *mut usize) -> StatusCode {
+pub extern "C" fn t4a_tensor_rank(ptr: *const t4a_tensor, out_rank: *mut usize) -> t4a_status_code {
     if ptr.is_null() {
         return err_null_pointer("tensor");
     }
@@ -280,7 +280,7 @@ pub extern "C" fn t4a_tensor_dims(
     buf: *mut usize,
     buf_len: usize,
     out_len: *mut usize,
-) -> StatusCode {
+) -> t4a_status_code {
     if ptr.is_null() {
         return err_null_pointer("tensor");
     }
@@ -313,7 +313,7 @@ pub extern "C" fn t4a_tensor_indices(
     buf: *mut *mut t4a_index,
     buf_len: usize,
     out_len: *mut usize,
-) -> StatusCode {
+) -> t4a_status_code {
     if ptr.is_null() {
         return err_null_pointer("tensor");
     }
@@ -346,7 +346,7 @@ pub extern "C" fn t4a_tensor_indices(
 pub extern "C" fn t4a_tensor_scalar_kind(
     ptr: *const t4a_tensor,
     out_kind: *mut t4a_scalar_kind,
-) -> StatusCode {
+) -> t4a_status_code {
     if ptr.is_null() {
         return err_null_pointer("tensor");
     }
@@ -367,7 +367,7 @@ pub extern "C" fn t4a_tensor_scalar_kind(
 pub extern "C" fn t4a_tensor_storage_kind(
     ptr: *const t4a_tensor,
     out_kind: *mut t4a_storage_kind,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
         if out_kind.is_null() {
@@ -385,7 +385,7 @@ pub extern "C" fn t4a_tensor_storage_kind(
 pub extern "C" fn t4a_tensor_payload_rank(
     ptr: *const t4a_tensor,
     out_rank: *mut usize,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
         if out_rank.is_null() {
@@ -403,7 +403,7 @@ pub extern "C" fn t4a_tensor_payload_rank(
 pub extern "C" fn t4a_tensor_payload_len(
     ptr: *const t4a_tensor,
     out_len: *mut usize,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
         if out_len.is_null() {
@@ -423,7 +423,7 @@ pub extern "C" fn t4a_tensor_payload_dims(
     buf: *mut usize,
     buf_len: usize,
     out_len: *mut usize,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
         let storage = tensor.inner().storage();
@@ -444,7 +444,7 @@ pub extern "C" fn t4a_tensor_payload_strides(
     buf: *mut isize,
     buf_len: usize,
     out_len: *mut usize,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
         let storage = tensor.inner().storage();
@@ -465,7 +465,7 @@ pub extern "C" fn t4a_tensor_axis_classes(
     buf: *mut usize,
     buf_len: usize,
     out_len: *mut usize,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
         let storage = tensor.inner().storage();
@@ -486,7 +486,7 @@ pub extern "C" fn t4a_tensor_copy_dense_f64(
     buf: *mut f64,
     buf_len: usize,
     out_len: *mut usize,
-) -> StatusCode {
+) -> t4a_status_code {
     if ptr.is_null() {
         return err_null_pointer("tensor");
     }
@@ -522,7 +522,7 @@ pub extern "C" fn t4a_tensor_copy_dense_c64(
     buf_interleaved: *mut f64,
     n_complex: usize,
     out_len: *mut usize,
-) -> StatusCode {
+) -> t4a_status_code {
     if ptr.is_null() {
         return err_null_pointer("tensor");
     }
@@ -561,7 +561,7 @@ pub extern "C" fn t4a_tensor_copy_payload_f64(
     buf: *mut f64,
     buf_len: usize,
     out_len: *mut usize,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
         let data = tensor
@@ -580,7 +580,7 @@ pub extern "C" fn t4a_tensor_copy_payload_c64(
     buf_interleaved: *mut f64,
     n_complex: usize,
     out_len: *mut usize,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(ptr)?;
         let data = tensor
@@ -598,7 +598,7 @@ pub extern "C" fn t4a_tensor_contract(
     a: *const t4a_tensor,
     b: *const t4a_tensor,
     out: *mut *mut t4a_tensor,
-) -> StatusCode {
+) -> t4a_status_code {
     if a.is_null() {
         return err_null_pointer("a");
     }
@@ -622,7 +622,7 @@ pub extern "C" fn t4a_tensor_svd(
     out_u: *mut *mut t4a_tensor,
     out_s: *mut *mut t4a_tensor,
     out_v: *mut *mut t4a_tensor,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(tensor)?;
         if out_u.is_null() || out_s.is_null() || out_v.is_null() {
@@ -690,7 +690,7 @@ pub extern "C" fn t4a_tensor_qr(
     rtol: f64,
     out_q: *mut *mut t4a_tensor,
     out_r: *mut *mut t4a_tensor,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tensor = require_tensor(tensor)?;
         if out_q.is_null() || out_r.is_null() {
@@ -721,7 +721,7 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
     data: *const f64,
     data_len: usize,
     out: *mut *mut t4a_tensor,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
         let expected_len: usize = dims_from_indices(&indices).iter().product();
@@ -750,7 +750,7 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
     data_interleaved: *const f64,
     n_complex: usize,
     out: *mut *mut t4a_tensor,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
         let expected_len: usize = dims_from_indices(&indices).iter().product();
@@ -788,7 +788,7 @@ pub extern "C" fn t4a_tensor_new_structured_f64(
     axis_classes: *const usize,
     axis_classes_len: usize,
     out: *mut *mut t4a_tensor,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
         let values = read_plain_slice("data", data, data_len)?;
@@ -818,7 +818,7 @@ pub extern "C" fn t4a_tensor_new_structured_c64(
     axis_classes: *const usize,
     axis_classes_len: usize,
     out: *mut *mut t4a_tensor,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
         let values = read_c64_slice("data_interleaved", data_interleaved, n_complex)?;
@@ -842,7 +842,7 @@ pub extern "C" fn t4a_tensor_new_diag_f64(
     diag_data: *const f64,
     diag_len: usize,
     out: *mut *mut t4a_tensor,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
         let values = read_plain_slice("diag_data", diag_data, diag_len)?;
@@ -860,7 +860,7 @@ pub extern "C" fn t4a_tensor_new_diag_c64(
     diag_data_interleaved: *const f64,
     n_complex: usize,
     out: *mut *mut t4a_tensor,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         let indices = read_indices_from_ptrs(rank, index_ptrs)?;
         let values = read_c64_slice("diag_data_interleaved", diag_data_interleaved, n_complex)?;

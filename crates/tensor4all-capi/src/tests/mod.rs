@@ -1,5 +1,16 @@
 use super::*;
 
+#[test]
+fn test_generated_header_uses_named_status_enum() {
+    let header = include_str!("../../include/tensor4all_capi.h");
+
+    assert!(header.contains("typedef enum t4a_status_code {"));
+    assert!(header.contains("} t4a_status_code;"));
+    assert!(header.contains("enum t4a_status_code t4a_last_error_message("));
+    assert!(!header.contains("typedef int StatusCode;"));
+    assert!(!header.contains("StatusCode"));
+}
+
 /// Helper: read the last error message as a Rust String.
 fn read_last_error() -> String {
     let mut out_len: libc::size_t = 0;
@@ -90,13 +101,14 @@ fn test_clone_opaque_null_src_stores_message() {
 
 #[test]
 fn test_unwrap_catch_ok() {
-    let result: std::thread::Result<StatusCode> = Ok(T4A_SUCCESS);
+    let result: std::thread::Result<t4a_status_code> = Ok(T4A_SUCCESS);
     assert_eq!(unwrap_catch(result), T4A_SUCCESS);
 }
 
 #[test]
 fn test_unwrap_catch_panic() {
-    let result: std::thread::Result<StatusCode> = std::panic::catch_unwind(|| panic!("test panic"));
+    let result: std::thread::Result<t4a_status_code> =
+        std::panic::catch_unwind(|| panic!("test panic"));
     assert_eq!(unwrap_catch(result), T4A_INTERNAL_ERROR);
     assert_eq!(read_last_error(), "test panic");
 }

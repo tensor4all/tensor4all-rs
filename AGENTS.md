@@ -93,16 +93,17 @@ Every public type, trait, and function **must** have doc comments with the follo
 - `anyhow` for internal error handling and context
 - `thiserror` for public API error types
 
-### C API Error Handling (Known Issue)
+### C API Error Handling
 
-**IMPORTANT**: The C API (`tensor4all-capi`) currently discards all error details at the FFI boundary. See [#228](https://github.com/tensor4all/tensor4all-rs/issues/228).
+The C API (`tensor4all-capi`) preserves error details through
+`t4a_last_error_message`. See `docs/CAPI_DESIGN.md` for the detailed ABI rules.
 
-- `catch_unwind` catches panics but the panic message is lost (`result.unwrap_or(T4A_INTERNAL_ERROR)`)
-- `Err(e)` variants are discarded (`Err(_) => T4A_INTERNAL_ERROR`)
-- FFI consumers (Julia, Python) only see a generic "Internal error" with no diagnostic info
-- **~76 `catch_unwind` sites** and **~47 `Err(_)` discard sites** across the capi crate need updating
-- **Do not add new `catch_unwind` / `Err(_) => T4A_INTERNAL_ERROR` patterns** without preserving error messages
-- When #228 is resolved, use the `t4a_last_error_message` API and `run_catching` helper for all new FFI functions
+- Fallible C API functions return `enum t4a_status_code`, not a bare `int`
+  or generic `StatusCode` typedef.
+- Use `run_catching`, `unwrap_catch`, `capi_error`, and `err_status` so
+  `Err(e)` values and panic payloads reach `t4a_last_error_message`.
+- **Do not add new `catch_unwind` / `Err(_) => T4A_INTERNAL_ERROR` patterns**
+  without preserving error messages.
 
 ## Testing
 

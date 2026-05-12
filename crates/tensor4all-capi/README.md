@@ -10,7 +10,7 @@ minimal Julia-facing surface.
 - **TreeTN API**: General tree tensor network accessors and core operations
 - **QTT layout API**: Canonical binary QTT layout descriptors for transform materialization
 - **Generated C header**: `include/tensor4all_capi.h` for downstream bindings
-- **Error handling**: `StatusCode + out` constructors/clones plus `t4a_last_error_message`
+- **Error handling**: `enum t4a_status_code + out` constructors/clones plus `t4a_last_error_message`
 - **Panic safety**: All exported functions catch Rust panics at the FFI boundary
 
 ## API Conventions
