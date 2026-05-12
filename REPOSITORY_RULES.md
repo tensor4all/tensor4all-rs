@@ -198,11 +198,22 @@
 - When removing code, check whether removed tests were the sole exerciser of
   any shared helper; add replacement coverage if so.
 
-## C API Error Handling
+## C API And Language-Binding ABI
 
+- `docs/CAPI_DESIGN.md` is the detailed design guide for C API shape,
+  ownership, error handling, header generation, and binding-facing conventions.
+  Read it before changing `tensor4all-capi` exported types or functions.
+- Fallible C ABI functions must return the generated `enum t4a_status_code`
+  status enum. Do not introduce bare `int` status returns, generic
+  `StatusCode` typedefs, or function-specific status integer types.
+- Status variants keep the `T4A_` prefix, for example `T4A_SUCCESS`,
+  `T4A_NULL_POINTER`, and `T4A_INTERNAL_ERROR`.
 - Do not add new C API paths that discard error details.
 - Avoid new `catch_unwind` / `Err(_) => T4A_INTERNAL_ERROR` patterns unless
   error messages are preserved at the FFI boundary.
+- Regenerate `crates/tensor4all-capi/include/tensor4all_capi.h` with
+  `cbindgen` whenever exported C API types, enums, constants, or function
+  signatures change.
 
 ## Language Bindings
 

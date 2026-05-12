@@ -14,6 +14,58 @@
 #include <stdlib.h>
 
 /**
+ * Status code returned by fallible C API functions.
+ *
+ * The explicit enum keeps the ABI type-safe for C consumers while preserving
+ * the existing numeric values used by downstream bindings.
+ *
+ * # Examples
+ *
+ * ```
+ * use tensor4all_capi::{t4a_last_error_message, t4a_status_code, T4A_NULL_POINTER};
+ *
+ * let status = t4a_last_error_message(std::ptr::null_mut(), 0, std::ptr::null_mut());
+ * assert_eq!(status, t4a_status_code::T4A_NULL_POINTER);
+ * assert_eq!(status, T4A_NULL_POINTER);
+ * ```
+ *
+ */
+typedef enum t4a_status_code {
+  /**
+   * Operation completed successfully.
+   */
+  T4A_SUCCESS = 0,
+  /**
+   * A null pointer was passed where a valid pointer was required.
+   */
+  T4A_NULL_POINTER = -1,
+  /**
+   * An invalid argument was provided.
+   */
+  T4A_INVALID_ARGUMENT = -2,
+  /**
+   * Too many tags would be added to a fixed-capacity tag set.
+   */
+  T4A_TAG_OVERFLOW = -3,
+  /**
+   * A tag string exceeds a fixed-capacity tag storage limit.
+   */
+  T4A_TAG_TOO_LONG = -4,
+  /**
+   * The provided output buffer is too small for the result.
+   */
+  T4A_BUFFER_TOO_SMALL = -5,
+  /**
+   * An internal error occurred (e.g., a panic was caught).
+   */
+  T4A_INTERNAL_ERROR = -6,
+  /**
+   * The requested API exists but is not implemented yet.
+   */
+  T4A_NOT_IMPLEMENTED = -7,
+} t4a_status_code;
+
+/**
  * Boundary-condition choices for quantics transform materialization.
  */
 typedef enum t4a_boundary_condition {
@@ -201,11 +253,9 @@ typedef enum t4a_contract_method {
   /**
    * Naive dense/reference contraction for generic TreeTN contraction.
    *
-   * This materializes full dense tensors for `t4a_treetn_contract`; that entry
-   * point requires an explicit nonzero `max_dense_elements` limit when this
-   * method is selected. `t4a_treetn_apply_operator_chain` uses a dedicated
-   * local-exact apply path for this method instead of generic full-dense
-   * TreeTN contraction.
+   * `t4a_treetn_contract` requires an explicit nonzero dense-element limit
+   * for this method. `t4a_treetn_apply_operator_chain` uses a dedicated
+   * local-exact apply path instead of generic full-dense TreeTN contraction.
    */
   T4A_CONTRACT_METHOD_NAIVE = 2,
 } t4a_contract_method;
@@ -251,11 +301,6 @@ typedef enum t4a_canonical_form {
 } t4a_canonical_form;
 
 /**
- * Status code type for C API
- */
-typedef int StatusCode;
-
-/**
  * Opaque index type for the C API.
  */
 typedef struct t4a_index {
@@ -275,13 +320,6 @@ typedef struct t4a_qtt_layout {
 typedef struct t4a_treetn {
   const void *_private;
 } t4a_treetn;
-
-/**
- * Opaque reusable TreeTN evaluator type for the C API.
- */
-typedef struct t4a_treetn_evaluator {
-  const void *_private;
-} t4a_treetn_evaluator;
 
 /**
  * Opaque tensor type for the C API.
@@ -347,71 +385,45 @@ typedef struct t4a_svd_truncation_policy {
 } t4a_svd_truncation_policy;
 
 /**
- * The provided output buffer is too small for the result.
+ * Opaque reusable TreeTN evaluator type for the C API.
  */
-#define T4A_BUFFER_TOO_SMALL -5
-
-/**
- * An internal error occurred (e.g., a panic was caught).
- */
-#define T4A_INTERNAL_ERROR -6
-
-/**
- * An invalid argument was provided.
- */
-#define T4A_INVALID_ARGUMENT -2
-
-/**
- * The requested API exists but is not implemented yet.
- */
-#define T4A_NOT_IMPLEMENTED -7
-
-/**
- * A null pointer was passed where a valid pointer was required.
- */
-#define T4A_NULL_POINTER -1
-
-/**
- * Operation completed successfully.
- */
-#define T4A_SUCCESS 0
-
-/**
- * Too many tags would be added to a fixed-capacity tag set.
- */
-#define T4A_TAG_OVERFLOW -3
-
-/**
- * A tag string exceeds a fixed-capacity tag storage limit.
- */
-#define T4A_TAG_TOO_LONG -4
+typedef struct t4a_treetn_evaluator {
+  const void *_private;
+} t4a_treetn_evaluator;
 
 /**
  * Clone an index handle.
  */
-StatusCode t4a_index_clone(const struct t4a_index *src, struct t4a_index **out);
+enum t4a_status_code t4a_index_clone(const struct t4a_index *src, struct t4a_index **out);
 
 /**
  * Get the dimension of an index.
  */
-StatusCode t4a_index_dim(const struct t4a_index *ptr, size_t *out_dim);
+enum t4a_status_code t4a_index_dim(const struct t4a_index *ptr, size_t *out_dim);
 
 /**
  * Compare two full index handles for equality.
  */
-StatusCode t4a_index_equal(const struct t4a_index *lhs,
-                           const struct t4a_index *rhs,
-                           int32_t *out_equal);
+enum t4a_status_code t4a_index_equal(const struct t4a_index *lhs,
+                                     const struct t4a_index *rhs,
+                                     int32_t *out_equal);
 
 /**
  * Query whether an index has the provided tag.
  */
-StatusCode t4a_index_has_tag(const struct t4a_index *ptr, const char *tag, int32_t *out_has_tag);
+enum t4a_status_code t4a_index_has_tag(const struct t4a_index *ptr,
+                                       const char *tag,
+                                       int32_t *out_has_tag);
 
 /**
  * Hash the full index value for process-local hash tables.
  */
-StatusCode t4a_index_hash(const struct t4a_index *ptr, uint64_t *out_hash);
+enum t4a_status_code t4a_index_hash(const struct t4a_index *ptr, uint64_t *out_hash);
+
+/**
+ * Get the explicit identity of an index.
+ */
+enum t4a_status_code t4a_index_id(const struct t4a_index *ptr, uint64_t *out_id);
 
 /**
  * Check whether an index handle is assigned.
@@ -419,44 +431,36 @@ StatusCode t4a_index_hash(const struct t4a_index *ptr, uint64_t *out_hash);
 int32_t t4a_index_is_assigned(const struct t4a_index *obj);
 
 /**
- * Get the explicit identity of an index.
- */
-StatusCode t4a_index_id(const struct t4a_index *ptr, uint64_t *out_id);
-
-/**
  * Create a new index with explicit tags and prime level.
- *
- * Tags are provided as a comma-separated UTF-8 string and are preserved
- * losslessly by the default dynamic index tag storage.
  */
-StatusCode t4a_index_new(size_t dim, const char *tags_csv, int64_t plev, struct t4a_index **out);
+enum t4a_status_code t4a_index_new(size_t dim,
+                                   const char *tags_csv,
+                                   int64_t plev,
+                                   struct t4a_index **out);
 
 /**
  * Create a new index with explicit identity, tags, and prime level.
- *
- * Tags are provided as a comma-separated UTF-8 string and are preserved
- * losslessly by the default dynamic index tag storage.
  */
-StatusCode t4a_index_new_with_id(size_t dim,
-                                 uint64_t id,
-                                 const char *tags_csv,
-                                 int64_t plev,
-                                 struct t4a_index **out);
+enum t4a_status_code t4a_index_new_with_id(size_t dim,
+                                           uint64_t id,
+                                           const char *tags_csv,
+                                           int64_t plev,
+                                           struct t4a_index **out);
 
 /**
  * Return a new index handle with prime level reset to zero.
  */
-StatusCode t4a_index_noprime(const struct t4a_index *ptr, struct t4a_index **out);
+enum t4a_status_code t4a_index_noprime(const struct t4a_index *ptr, struct t4a_index **out);
 
 /**
  * Get the prime level of an index.
  */
-StatusCode t4a_index_plev(const struct t4a_index *ptr, int64_t *out_plev);
+enum t4a_status_code t4a_index_plev(const struct t4a_index *ptr, int64_t *out_plev);
 
 /**
  * Return a new index handle with prime level incremented by one.
  */
-StatusCode t4a_index_prime(const struct t4a_index *ptr, struct t4a_index **out);
+enum t4a_status_code t4a_index_prime(const struct t4a_index *ptr, struct t4a_index **out);
 
 /**
  * Release an index handle.
@@ -466,15 +470,17 @@ void t4a_index_release(struct t4a_index *obj);
 /**
  * Return a new index handle with an explicit prime level.
  */
-StatusCode t4a_index_set_plev(const struct t4a_index *ptr, int64_t plev, struct t4a_index **out);
+enum t4a_status_code t4a_index_set_plev(const struct t4a_index *ptr,
+                                        int64_t plev,
+                                        struct t4a_index **out);
 
 /**
  * Copy tags as a comma-separated UTF-8 string.
  */
-StatusCode t4a_index_tags(const struct t4a_index *ptr,
-                          uint8_t *buf,
-                          size_t buf_len,
-                          size_t *out_len);
+enum t4a_status_code t4a_index_tags(const struct t4a_index *ptr,
+                                    uint8_t *buf,
+                                    size_t buf_len,
+                                    size_t *out_len);
 
 /**
  * Retrieve the last error message.
@@ -490,7 +496,7 @@ StatusCode t4a_index_tags(const struct t4a_index *ptr,
  * * `T4A_NULL_POINTER` - `out_len` is null.
  * * `T4A_BUFFER_TOO_SMALL` - Buffer too small; `out_len` has the required size.
  */
-StatusCode t4a_last_error_message(uint8_t *buf, size_t buf_len, size_t *out_len);
+enum t4a_status_code t4a_last_error_message(uint8_t *buf, size_t buf_len, size_t *out_len);
 
 /**
  * Materialize the forward affine operator `y = A * x + b` as a chain-shaped
@@ -514,62 +520,63 @@ StatusCode t4a_last_error_message(uint8_t *buf, size_t buf_len, size_t *out_len)
  * Returns `T4A_INVALID_ARGUMENT` if `m == 0`, `n == 0`, `layout->kind()`
  * is not `Fused`, `b_den[i] == 0`, or `a_den[i + k * m] == 0`.
  */
-StatusCode t4a_qtransform_affine_materialize(const struct t4a_qtt_layout *layout,
-                                             const int64_t *a_num,
-                                             const int64_t *a_den,
-                                             const int64_t *b_num,
-                                             const int64_t *b_den,
-                                             size_t m,
-                                             size_t n,
-                                             const enum t4a_boundary_condition *bc,
-                                             struct t4a_treetn **out);
+enum t4a_status_code t4a_qtransform_affine_materialize(const struct t4a_qtt_layout *layout,
+                                                       const int64_t *a_num,
+                                                       const int64_t *a_den,
+                                                       const int64_t *b_num,
+                                                       const int64_t *b_den,
+                                                       size_t m,
+                                                       size_t n,
+                                                       const enum t4a_boundary_condition *bc,
+                                                       struct t4a_treetn **out);
 
 /**
  * Materialize a cumulative-sum transform directly as a chain-shaped TreeTN.
  */
-StatusCode t4a_qtransform_cumsum_materialize(const struct t4a_qtt_layout *layout,
-                                             size_t target_var,
-                                             struct t4a_treetn **out);
+enum t4a_status_code t4a_qtransform_cumsum_materialize(const struct t4a_qtt_layout *layout,
+                                                       size_t target_var,
+                                                       struct t4a_treetn **out);
 
 /**
  * Materialize a flip transform directly as a chain-shaped TreeTN.
  */
-StatusCode t4a_qtransform_flip_materialize(const struct t4a_qtt_layout *layout,
-                                           size_t target_var,
-                                           enum t4a_boundary_condition bc,
-                                           struct t4a_treetn **out);
+enum t4a_status_code t4a_qtransform_flip_materialize(const struct t4a_qtt_layout *layout,
+                                                     size_t target_var,
+                                                     enum t4a_boundary_condition bc,
+                                                     struct t4a_treetn **out);
 
 /**
  * Materialize a Fourier transform directly as a chain-shaped TreeTN.
  */
-StatusCode t4a_qtransform_fourier_materialize(const struct t4a_qtt_layout *layout,
-                                              size_t target_var,
-                                              int32_t forward,
-                                              size_t maxbonddim,
-                                              double tolerance,
-                                              struct t4a_treetn **out);
+enum t4a_status_code t4a_qtransform_fourier_materialize(const struct t4a_qtt_layout *layout,
+                                                        size_t target_var,
+                                                        int32_t forward,
+                                                        size_t maxbonddim,
+                                                        double tolerance,
+                                                        struct t4a_treetn **out);
 
 /**
  * Materialize a phase-rotation transform directly as a chain-shaped TreeTN.
  */
-StatusCode t4a_qtransform_phase_rotation_materialize(const struct t4a_qtt_layout *layout,
-                                                     size_t target_var,
-                                                     double theta,
-                                                     struct t4a_treetn **out);
+enum t4a_status_code t4a_qtransform_phase_rotation_materialize(const struct t4a_qtt_layout *layout,
+                                                               size_t target_var,
+                                                               double theta,
+                                                               struct t4a_treetn **out);
 
 /**
  * Materialize a shift transform directly as a chain-shaped TreeTN.
  */
-StatusCode t4a_qtransform_shift_materialize(const struct t4a_qtt_layout *layout,
-                                            size_t target_var,
-                                            int64_t offset,
-                                            enum t4a_boundary_condition bc,
-                                            struct t4a_treetn **out);
+enum t4a_status_code t4a_qtransform_shift_materialize(const struct t4a_qtt_layout *layout,
+                                                      size_t target_var,
+                                                      int64_t offset,
+                                                      enum t4a_boundary_condition bc,
+                                                      struct t4a_treetn **out);
 
 /**
  * Clone a QTT layout handle.
  */
-StatusCode t4a_qtt_layout_clone(const struct t4a_qtt_layout *src, struct t4a_qtt_layout **out);
+enum t4a_status_code t4a_qtt_layout_clone(const struct t4a_qtt_layout *src,
+                                          struct t4a_qtt_layout **out);
 
 /**
  * Check whether a QTT layout handle is assigned.
@@ -579,10 +586,10 @@ int32_t t4a_qtt_layout_is_assigned(const struct t4a_qtt_layout *obj);
 /**
  * Create an immutable canonical QTT layout descriptor.
  */
-StatusCode t4a_qtt_layout_new(enum t4a_qtt_layout_kind kind,
-                              size_t nvariables,
-                              const size_t *variable_resolutions,
-                              struct t4a_qtt_layout **out);
+enum t4a_status_code t4a_qtt_layout_new(enum t4a_qtt_layout_kind kind,
+                                        size_t nvariables,
+                                        const size_t *variable_resolutions,
+                                        struct t4a_qtt_layout **out);
 
 /**
  * Release a QTT layout handle.
@@ -592,70 +599,70 @@ void t4a_qtt_layout_release(struct t4a_qtt_layout *obj);
 /**
  * Copy logical-axis to payload-axis class mapping.
  */
-StatusCode t4a_tensor_axis_classes(const struct t4a_tensor *ptr,
-                                   size_t *buf,
-                                   size_t buf_len,
-                                   size_t *out_len);
+enum t4a_status_code t4a_tensor_axis_classes(const struct t4a_tensor *ptr,
+                                             size_t *buf,
+                                             size_t buf_len,
+                                             size_t *out_len);
 
 /**
  * Clone a tensor handle.
  */
-StatusCode t4a_tensor_clone(const struct t4a_tensor *src, struct t4a_tensor **out);
+enum t4a_status_code t4a_tensor_clone(const struct t4a_tensor *src, struct t4a_tensor **out);
 
 /**
  * Contract two tensors by matching common indices.
  */
-StatusCode t4a_tensor_contract(const struct t4a_tensor *a,
-                               const struct t4a_tensor *b,
-                               struct t4a_tensor **out);
+enum t4a_status_code t4a_tensor_contract(const struct t4a_tensor *a,
+                                         const struct t4a_tensor *b,
+                                         struct t4a_tensor **out);
 
 /**
  * Copy dense `Complex64` data as interleaved doubles in column-major order.
  */
-StatusCode t4a_tensor_copy_dense_c64(const struct t4a_tensor *ptr,
-                                     double *buf_interleaved,
-                                     size_t n_complex,
-                                     size_t *out_len);
+enum t4a_status_code t4a_tensor_copy_dense_c64(const struct t4a_tensor *ptr,
+                                               double *buf_interleaved,
+                                               size_t n_complex,
+                                               size_t *out_len);
 
 /**
  * Copy dense `f64` data in column-major order.
  */
-StatusCode t4a_tensor_copy_dense_f64(const struct t4a_tensor *ptr,
-                                     double *buf,
-                                     size_t buf_len,
-                                     size_t *out_len);
+enum t4a_status_code t4a_tensor_copy_dense_f64(const struct t4a_tensor *ptr,
+                                               double *buf,
+                                               size_t buf_len,
+                                               size_t *out_len);
 
 /**
  * Copy compact payload `Complex64` data as interleaved doubles.
  */
-StatusCode t4a_tensor_copy_payload_c64(const struct t4a_tensor *ptr,
-                                       double *buf_interleaved,
-                                       size_t n_complex,
-                                       size_t *out_len);
+enum t4a_status_code t4a_tensor_copy_payload_c64(const struct t4a_tensor *ptr,
+                                                 double *buf_interleaved,
+                                                 size_t n_complex,
+                                                 size_t *out_len);
 
 /**
  * Copy compact payload `f64` data in payload column-major order.
  */
-StatusCode t4a_tensor_copy_payload_f64(const struct t4a_tensor *ptr,
-                                       double *buf,
-                                       size_t buf_len,
-                                       size_t *out_len);
+enum t4a_status_code t4a_tensor_copy_payload_f64(const struct t4a_tensor *ptr,
+                                                 double *buf,
+                                                 size_t buf_len,
+                                                 size_t *out_len);
 
 /**
  * Copy tensor dimensions in index order.
  */
-StatusCode t4a_tensor_dims(const struct t4a_tensor *ptr,
-                           size_t *buf,
-                           size_t buf_len,
-                           size_t *out_len);
+enum t4a_status_code t4a_tensor_dims(const struct t4a_tensor *ptr,
+                                     size_t *buf,
+                                     size_t buf_len,
+                                     size_t *out_len);
 
 /**
  * Copy cloned index handles describing the tensor axes.
  */
-StatusCode t4a_tensor_indices(const struct t4a_tensor *ptr,
-                              struct t4a_index **buf,
-                              size_t buf_len,
-                              size_t *out_len);
+enum t4a_status_code t4a_tensor_indices(const struct t4a_tensor *ptr,
+                                        struct t4a_index **buf,
+                                        size_t buf_len,
+                                        size_t *out_len);
 
 /**
  * Check whether a tensor handle is assigned.
@@ -665,94 +672,94 @@ int32_t t4a_tensor_is_assigned(const struct t4a_tensor *obj);
 /**
  * Create a dense complex tensor from interleaved column-major data.
  */
-StatusCode t4a_tensor_new_dense_c64(size_t rank,
-                                    const struct t4a_index *const *index_ptrs,
-                                    const double *data_interleaved,
-                                    size_t n_complex,
-                                    struct t4a_tensor **out);
+enum t4a_status_code t4a_tensor_new_dense_c64(size_t rank,
+                                              const struct t4a_index *const *index_ptrs,
+                                              const double *data_interleaved,
+                                              size_t n_complex,
+                                              struct t4a_tensor **out);
 
 /**
  * Create a dense real tensor from column-major data.
  */
-StatusCode t4a_tensor_new_dense_f64(size_t rank,
-                                    const struct t4a_index *const *index_ptrs,
-                                    const double *data,
-                                    size_t data_len,
-                                    struct t4a_tensor **out);
+enum t4a_status_code t4a_tensor_new_dense_f64(size_t rank,
+                                              const struct t4a_index *const *index_ptrs,
+                                              const double *data,
+                                              size_t data_len,
+                                              struct t4a_tensor **out);
 
 /**
  * Create a complex diagonal tensor from compact diagonal payload data.
  */
-StatusCode t4a_tensor_new_diag_c64(size_t rank,
-                                   const struct t4a_index *const *index_ptrs,
-                                   const double *diag_data_interleaved,
-                                   size_t n_complex,
-                                   struct t4a_tensor **out);
+enum t4a_status_code t4a_tensor_new_diag_c64(size_t rank,
+                                             const struct t4a_index *const *index_ptrs,
+                                             const double *diag_data_interleaved,
+                                             size_t n_complex,
+                                             struct t4a_tensor **out);
 
 /**
  * Create a real diagonal tensor from compact diagonal payload data.
  */
-StatusCode t4a_tensor_new_diag_f64(size_t rank,
-                                   const struct t4a_index *const *index_ptrs,
-                                   const double *diag_data,
-                                   size_t diag_len,
-                                   struct t4a_tensor **out);
+enum t4a_status_code t4a_tensor_new_diag_f64(size_t rank,
+                                             const struct t4a_index *const *index_ptrs,
+                                             const double *diag_data,
+                                             size_t diag_len,
+                                             struct t4a_tensor **out);
 
 /**
  * Create a complex tensor from explicit compact structured storage.
  */
-StatusCode t4a_tensor_new_structured_c64(size_t rank,
-                                         const struct t4a_index *const *index_ptrs,
-                                         const double *data_interleaved,
-                                         size_t n_complex,
-                                         const size_t *payload_dims,
-                                         size_t payload_rank,
-                                         const ptrdiff_t *payload_strides,
-                                         size_t payload_strides_len,
-                                         const size_t *axis_classes,
-                                         size_t axis_classes_len,
-                                         struct t4a_tensor **out);
+enum t4a_status_code t4a_tensor_new_structured_c64(size_t rank,
+                                                   const struct t4a_index *const *index_ptrs,
+                                                   const double *data_interleaved,
+                                                   size_t n_complex,
+                                                   const size_t *payload_dims,
+                                                   size_t payload_rank,
+                                                   const ptrdiff_t *payload_strides,
+                                                   size_t payload_strides_len,
+                                                   const size_t *axis_classes,
+                                                   size_t axis_classes_len,
+                                                   struct t4a_tensor **out);
 
 /**
  * Create a real tensor from explicit compact structured storage.
  */
-StatusCode t4a_tensor_new_structured_f64(size_t rank,
-                                         const struct t4a_index *const *index_ptrs,
-                                         const double *data,
-                                         size_t data_len,
-                                         const size_t *payload_dims,
-                                         size_t payload_rank,
-                                         const ptrdiff_t *payload_strides,
-                                         size_t payload_strides_len,
-                                         const size_t *axis_classes,
-                                         size_t axis_classes_len,
-                                         struct t4a_tensor **out);
+enum t4a_status_code t4a_tensor_new_structured_f64(size_t rank,
+                                                   const struct t4a_index *const *index_ptrs,
+                                                   const double *data,
+                                                   size_t data_len,
+                                                   const size_t *payload_dims,
+                                                   size_t payload_rank,
+                                                   const ptrdiff_t *payload_strides,
+                                                   size_t payload_strides_len,
+                                                   const size_t *axis_classes,
+                                                   size_t axis_classes_len,
+                                                   struct t4a_tensor **out);
 
 /**
  * Copy compact payload dimensions.
  */
-StatusCode t4a_tensor_payload_dims(const struct t4a_tensor *ptr,
-                                   size_t *buf,
-                                   size_t buf_len,
-                                   size_t *out_len);
+enum t4a_status_code t4a_tensor_payload_dims(const struct t4a_tensor *ptr,
+                                             size_t *buf,
+                                             size_t buf_len,
+                                             size_t *out_len);
 
 /**
  * Get the compact payload length in scalar elements.
  */
-StatusCode t4a_tensor_payload_len(const struct t4a_tensor *ptr, size_t *out_len);
+enum t4a_status_code t4a_tensor_payload_len(const struct t4a_tensor *ptr, size_t *out_len);
 
 /**
  * Get the rank of the compact payload tensor.
  */
-StatusCode t4a_tensor_payload_rank(const struct t4a_tensor *ptr, size_t *out_rank);
+enum t4a_status_code t4a_tensor_payload_rank(const struct t4a_tensor *ptr, size_t *out_rank);
 
 /**
  * Copy compact payload strides in scalar elements.
  */
-StatusCode t4a_tensor_payload_strides(const struct t4a_tensor *ptr,
-                                      ptrdiff_t *buf,
-                                      size_t buf_len,
-                                      size_t *out_len);
+enum t4a_status_code t4a_tensor_payload_strides(const struct t4a_tensor *ptr,
+                                                ptrdiff_t *buf,
+                                                size_t buf_len,
+                                                size_t *out_len);
 
 /**
  * Compute the QR decomposition of a tensor split by the requested left indices.
@@ -789,17 +796,17 @@ StatusCode t4a_tensor_payload_strides(const struct t4a_tensor *ptr,
  * - `T4A_INTERNAL_ERROR` if the Rust implementation panics while processing
  *   the request.
  */
-StatusCode t4a_tensor_qr(const struct t4a_tensor *tensor,
-                         const struct t4a_index *const *left_inds,
-                         size_t n_left,
-                         double rtol,
-                         struct t4a_tensor **out_q,
-                         struct t4a_tensor **out_r);
+enum t4a_status_code t4a_tensor_qr(const struct t4a_tensor *tensor,
+                                   const struct t4a_index *const *left_inds,
+                                   size_t n_left,
+                                   double rtol,
+                                   struct t4a_tensor **out_q,
+                                   struct t4a_tensor **out_r);
 
 /**
  * Get the rank of a tensor.
  */
-StatusCode t4a_tensor_rank(const struct t4a_tensor *ptr, size_t *out_rank);
+enum t4a_status_code t4a_tensor_rank(const struct t4a_tensor *ptr, size_t *out_rank);
 
 /**
  * Release a tensor handle.
@@ -809,33 +816,44 @@ void t4a_tensor_release(struct t4a_tensor *obj);
 /**
  * Get the scalar kind of a tensor.
  */
-StatusCode t4a_tensor_scalar_kind(const struct t4a_tensor *ptr, enum t4a_scalar_kind *out_kind);
+enum t4a_status_code t4a_tensor_scalar_kind(const struct t4a_tensor *ptr,
+                                            enum t4a_scalar_kind *out_kind);
+
+/**
+ * Select fixed coordinates for tensor indices and drop those axes.
+ */
+enum t4a_status_code t4a_tensor_select_indices(const struct t4a_tensor *tensor,
+                                               size_t n_select,
+                                               const struct t4a_index *const *selected_indices,
+                                               const size_t *positions,
+                                               struct t4a_tensor **out);
 
 /**
  * Get the storage layout kind of a tensor.
  */
-StatusCode t4a_tensor_storage_kind(const struct t4a_tensor *ptr, enum t4a_storage_kind *out_kind);
+enum t4a_status_code t4a_tensor_storage_kind(const struct t4a_tensor *ptr,
+                                             enum t4a_storage_kind *out_kind);
 
 /**
  * Compute the SVD of a tensor split by the requested left indices.
  */
-StatusCode t4a_tensor_svd(const struct t4a_tensor *tensor,
-                          const struct t4a_index *const *left_inds,
-                          size_t n_left,
-                          const struct t4a_svd_truncation_policy *policy,
-                          size_t maxdim,
-                          struct t4a_tensor **out_u,
-                          struct t4a_tensor **out_s,
-                          struct t4a_tensor **out_v);
+enum t4a_status_code t4a_tensor_svd(const struct t4a_tensor *tensor,
+                                    const struct t4a_index *const *left_inds,
+                                    size_t n_left,
+                                    const struct t4a_svd_truncation_policy *policy,
+                                    size_t maxdim,
+                                    struct t4a_tensor **out_u,
+                                    struct t4a_tensor **out_s,
+                                    struct t4a_tensor **out_v);
 
 /**
  * Add two tree tensor networks, optionally truncating the result.
  */
-StatusCode t4a_treetn_add(const struct t4a_treetn *a,
-                          const struct t4a_treetn *b,
-                          const struct t4a_svd_truncation_policy *policy,
-                          size_t maxdim,
-                          struct t4a_treetn **out);
+enum t4a_status_code t4a_treetn_add(const struct t4a_treetn *a,
+                                    const struct t4a_treetn *b,
+                                    const struct t4a_svd_truncation_policy *policy,
+                                    size_t maxdim,
+                                    struct t4a_treetn **out);
 
 /**
  * Apply a chain-compatible operator TreeTN to a chain state TreeTN.
@@ -852,32 +870,32 @@ StatusCode t4a_treetn_add(const struct t4a_treetn *a,
  * `t4a_contract_method::Naive` uses the dedicated local-exact apply path here,
  * not the generic full-dense TreeTN contraction used by `t4a_treetn_contract`.
  */
-StatusCode t4a_treetn_apply_operator_chain(const struct t4a_treetn *operator_,
-                                           const struct t4a_treetn *state,
-                                           const size_t *mapped_positions,
-                                           size_t n_mapped_positions,
-                                           const struct t4a_index *const *internal_input_indices,
-                                           const struct t4a_index *const *internal_output_indices,
-                                           const struct t4a_index *const *true_output_indices,
-                                           enum t4a_contract_method method,
-                                           const struct t4a_svd_truncation_policy *policy,
-                                           size_t maxdim,
-                                           size_t nfullsweeps,
-                                           double convergence_tol,
-                                           struct t4a_treetn **out);
+enum t4a_status_code t4a_treetn_apply_operator_chain(const struct t4a_treetn *operator_,
+                                                     const struct t4a_treetn *state,
+                                                     const size_t *mapped_positions,
+                                                     size_t n_mapped_positions,
+                                                     const struct t4a_index *const *internal_input_indices,
+                                                     const struct t4a_index *const *internal_output_indices,
+                                                     const struct t4a_index *const *true_output_indices,
+                                                     enum t4a_contract_method method,
+                                                     const struct t4a_svd_truncation_policy *policy,
+                                                     size_t maxdim,
+                                                     size_t nfullsweeps,
+                                                     double convergence_tol,
+                                                     struct t4a_treetn **out);
 
 /**
  * Get the canonical region vertices, sorted ascending.
  */
-StatusCode t4a_treetn_canonical_region(const struct t4a_treetn *treetn,
-                                       size_t *buf,
-                                       size_t buf_len,
-                                       size_t *out_len);
+enum t4a_status_code t4a_treetn_canonical_region(const struct t4a_treetn *treetn,
+                                                 size_t *buf,
+                                                 size_t buf_len,
+                                                 size_t *out_len);
 
 /**
  * Clone a TreeTN handle.
  */
-StatusCode t4a_treetn_clone(const struct t4a_treetn *src, struct t4a_treetn **out);
+enum t4a_status_code t4a_treetn_clone(const struct t4a_treetn *src, struct t4a_treetn **out);
 
 /**
  * Contract two tree tensor networks with the requested method.
@@ -890,43 +908,43 @@ StatusCode t4a_treetn_clone(const struct t4a_treetn *src, struct t4a_treetn **ou
  * For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
  * default", which currently resolves to one variational sweep.
  */
-StatusCode t4a_treetn_contract(const struct t4a_treetn *a,
-                               const struct t4a_treetn *b,
-                               enum t4a_contract_method method,
-                               const struct t4a_svd_truncation_policy *policy,
-                               size_t maxdim,
-                               size_t nfullsweeps,
-                               double convergence_tol,
-                               enum t4a_factorize_alg factorize_alg,
-                               double qr_rtol,
-                               size_t max_dense_elements,
-                               struct t4a_treetn **out);
+enum t4a_status_code t4a_treetn_contract(const struct t4a_treetn *a,
+                                         const struct t4a_treetn *b,
+                                         enum t4a_contract_method method,
+                                         const struct t4a_svd_truncation_policy *policy,
+                                         size_t maxdim,
+                                         size_t nfullsweeps,
+                                         double convergence_tol,
+                                         enum t4a_factorize_alg factorize_alg,
+                                         double qr_rtol,
+                                         size_t max_dense_elements,
+                                         struct t4a_treetn **out);
 
 /**
  * Evaluate a TreeTN at one or more points using explicit index handles.
  */
-StatusCode t4a_treetn_evaluate(const struct t4a_treetn *treetn,
-                               const struct t4a_index *const *indices,
-                               size_t n_indices,
-                               const size_t *values_col_major,
-                               size_t n_points,
-                               double *out_re,
-                               double *out_im);
-
-/**
- * Clone a reusable TreeTN evaluator handle.
- */
-StatusCode t4a_treetn_evaluator_clone(const struct t4a_treetn_evaluator *src,
-                                      struct t4a_treetn_evaluator **out);
-
-/**
- * Evaluate one or more points using a reusable TreeTN evaluator.
- */
-StatusCode t4a_treetn_evaluator_evaluate(const struct t4a_treetn_evaluator *evaluator,
+enum t4a_status_code t4a_treetn_evaluate(const struct t4a_treetn *treetn,
+                                         const struct t4a_index *const *indices,
+                                         size_t n_indices,
                                          const size_t *values_col_major,
                                          size_t n_points,
                                          double *out_re,
                                          double *out_im);
+
+/**
+ * Clone a reusable TreeTN evaluator handle.
+ */
+enum t4a_status_code t4a_treetn_evaluator_clone(const struct t4a_treetn_evaluator *src,
+                                                struct t4a_treetn_evaluator **out);
+
+/**
+ * Evaluate one or more points using a reusable TreeTN evaluator.
+ */
+enum t4a_status_code t4a_treetn_evaluator_evaluate(const struct t4a_treetn_evaluator *evaluator,
+                                                   const size_t *values_col_major,
+                                                   size_t n_points,
+                                                   double *out_re,
+                                                   double *out_im);
 
 /**
  * Check whether a reusable TreeTN evaluator handle is assigned.
@@ -934,12 +952,12 @@ StatusCode t4a_treetn_evaluator_evaluate(const struct t4a_treetn_evaluator *eval
 int32_t t4a_treetn_evaluator_is_assigned(const struct t4a_treetn_evaluator *obj);
 
 /**
- * Create a reusable TreeTN evaluator for explicit index handles.
+ * Create a reusable TreeTN evaluator from explicit index handles.
  */
-StatusCode t4a_treetn_evaluator_new(const struct t4a_treetn *treetn,
-                                    const struct t4a_index *const *indices,
-                                    size_t n_indices,
-                                    struct t4a_treetn_evaluator **out);
+enum t4a_status_code t4a_treetn_evaluator_new(const struct t4a_treetn *treetn,
+                                              const struct t4a_index *const *indices,
+                                              size_t n_indices,
+                                              struct t4a_treetn_evaluator **out);
 
 /**
  * Release a reusable TreeTN evaluator handle.
@@ -949,23 +967,23 @@ void t4a_treetn_evaluator_release(struct t4a_treetn_evaluator *obj);
 /**
  * Fuse connected current-node groups into the requested target topology.
  */
-StatusCode t4a_treetn_fuse_to(const struct t4a_treetn *treetn,
-                              const size_t *target_vertices,
-                              size_t n_target_vertices,
-                              const struct t4a_index *const *target_siteinds,
-                              const size_t *target_siteinds_len,
-                              const size_t *target_edge_sources,
-                              const size_t *target_edge_targets,
-                              size_t n_target_edges,
-                              struct t4a_treetn **out);
+enum t4a_status_code t4a_treetn_fuse_to(const struct t4a_treetn *treetn,
+                                        const size_t *target_vertices,
+                                        size_t n_target_vertices,
+                                        const struct t4a_index *const *target_siteinds,
+                                        const size_t *target_siteinds_len,
+                                        const size_t *target_edge_sources,
+                                        const size_t *target_edge_targets,
+                                        size_t n_target_edges,
+                                        struct t4a_treetn **out);
 
 /**
  * Compute the inner product of two tree tensor networks.
  */
-StatusCode t4a_treetn_inner(const struct t4a_treetn *a,
-                            const struct t4a_treetn *b,
-                            double *out_re,
-                            double *out_im);
+enum t4a_status_code t4a_treetn_inner(const struct t4a_treetn *a,
+                                      const struct t4a_treetn *b,
+                                      double *out_re,
+                                      double *out_im);
 
 /**
  * Check whether a TreeTN handle is assigned.
@@ -975,10 +993,10 @@ int32_t t4a_treetn_is_assigned(const struct t4a_treetn *obj);
 /**
  * Get the bond index on the edge between two vertices.
  */
-StatusCode t4a_treetn_linkind(const struct t4a_treetn *treetn,
-                              size_t v1,
-                              size_t v2,
-                              struct t4a_index **out);
+enum t4a_status_code t4a_treetn_linkind(const struct t4a_treetn *treetn,
+                                        size_t v1,
+                                        size_t v2,
+                                        struct t4a_index **out);
 
 /**
  * Solve `(a0 + a1 * operator) * x = rhs` for `x` as a TreeTN.
@@ -996,52 +1014,52 @@ StatusCode t4a_treetn_linkind(const struct t4a_treetn *treetn,
  * operator's internal indices to those true indices, but they do not yet
  * support solving between distinct `init` and `rhs` true index spaces.
  */
-StatusCode t4a_treetn_linsolve(const struct t4a_treetn *operator_,
-                               const struct t4a_treetn *rhs,
-                               const struct t4a_treetn *init,
-                               size_t center_vertex,
-                               const size_t *mapped_vertices,
-                               size_t n_mapped_vertices,
-                               const struct t4a_index *const *true_input_indices,
-                               const struct t4a_index *const *internal_input_indices,
-                               const struct t4a_index *const *true_output_indices,
-                               const struct t4a_index *const *internal_output_indices,
-                               const struct t4a_svd_truncation_policy *policy,
-                               size_t maxdim,
-                               size_t nfullsweeps,
-                               double krylov_tol,
-                               size_t krylov_maxiter,
-                               size_t krylov_dim,
-                               double a0,
-                               double a1,
-                               double convergence_tol,
-                               struct t4a_treetn **out);
+enum t4a_status_code t4a_treetn_linsolve(const struct t4a_treetn *operator_,
+                                         const struct t4a_treetn *rhs,
+                                         const struct t4a_treetn *init,
+                                         size_t center_vertex,
+                                         const size_t *mapped_vertices,
+                                         size_t n_mapped_vertices,
+                                         const struct t4a_index *const *true_input_indices,
+                                         const struct t4a_index *const *internal_input_indices,
+                                         const struct t4a_index *const *true_output_indices,
+                                         const struct t4a_index *const *internal_output_indices,
+                                         const struct t4a_svd_truncation_policy *policy,
+                                         size_t maxdim,
+                                         size_t nfullsweeps,
+                                         double krylov_tol,
+                                         size_t krylov_maxiter,
+                                         size_t krylov_dim,
+                                         double a0,
+                                         double a1,
+                                         double convergence_tol,
+                                         struct t4a_treetn **out);
 
 /**
  * Get the neighbors of a vertex.
  */
-StatusCode t4a_treetn_neighbors(const struct t4a_treetn *treetn,
-                                size_t vertex,
-                                size_t *buf,
-                                size_t buf_len,
-                                size_t *out_len);
+enum t4a_status_code t4a_treetn_neighbors(const struct t4a_treetn *treetn,
+                                          size_t vertex,
+                                          size_t *buf,
+                                          size_t buf_len,
+                                          size_t *out_len);
 
 /**
  * Create a tree tensor network from an array of tensors.
  */
-StatusCode t4a_treetn_new(const struct t4a_tensor *const *tensors,
-                          size_t n_tensors,
-                          struct t4a_treetn **out);
+enum t4a_status_code t4a_treetn_new(const struct t4a_tensor *const *tensors,
+                                    size_t n_tensors,
+                                    struct t4a_treetn **out);
 
 /**
  * Compute the norm of the tree tensor network.
  */
-StatusCode t4a_treetn_norm(struct t4a_treetn *treetn, double *out_norm);
+enum t4a_status_code t4a_treetn_norm(struct t4a_treetn *treetn, double *out_norm);
 
 /**
  * Get the number of vertices in the tree tensor network.
  */
-StatusCode t4a_treetn_num_vertices(const struct t4a_treetn *treetn, size_t *out_n);
+enum t4a_status_code t4a_treetn_num_vertices(const struct t4a_treetn *treetn, size_t *out_n);
 
 /**
  * Orthogonalize the tree tensor network to a vertex using the requested form.
@@ -1051,10 +1069,47 @@ StatusCode t4a_treetn_num_vertices(const struct t4a_treetn *treetn, size_t *out_
  * - If the network is already canonicalized with a different form, the call returns
  *   `T4A_INVALID_ARGUMENT`. Pass a nonzero `force` to re-canonicalize with a different form.
  */
-StatusCode t4a_treetn_orthogonalize(struct t4a_treetn *treetn,
-                                    size_t vertex,
-                                    enum t4a_canonical_form form,
-                                    int force);
+enum t4a_status_code t4a_treetn_orthogonalize(struct t4a_treetn *treetn,
+                                              size_t vertex,
+                                              enum t4a_canonical_form form,
+                                              int force);
+
+/**
+ * Partially contract two tree tensor networks using explicit site-index pairs.
+ *
+ * `contract_*` pairs are summed over and removed from the result.
+ * `diagonal_*` pairs are linked by diagonal/copy structure while preserving
+ * the left-hand index as an external result leg. `output_order`, when nonempty,
+ * lists the surviving external indices in the requested result order.
+ *
+ * `t4a_contract_method::Naive` and mismatched-topology fallback paths are
+ * dense/reference operations. Pass a nonzero `max_dense_elements` to opt into
+ * those paths for small reference cases; each dense input and output tensor
+ * must fit under that limit.
+ *
+ * For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
+ * default", which currently resolves to one variational sweep.
+ */
+enum t4a_status_code t4a_treetn_partial_contract(const struct t4a_treetn *a,
+                                                 const struct t4a_treetn *b,
+                                                 size_t n_contract_pairs,
+                                                 const struct t4a_index *const *contract_left,
+                                                 const struct t4a_index *const *contract_right,
+                                                 size_t n_diagonal_pairs,
+                                                 const struct t4a_index *const *diagonal_left,
+                                                 const struct t4a_index *const *diagonal_right,
+                                                 size_t n_output_order,
+                                                 const struct t4a_index *const *output_order,
+                                                 size_t center,
+                                                 enum t4a_contract_method method,
+                                                 const struct t4a_svd_truncation_policy *policy,
+                                                 size_t maxdim,
+                                                 size_t nfullsweeps,
+                                                 double convergence_tol,
+                                                 enum t4a_factorize_alg factorize_alg,
+                                                 double qr_rtol,
+                                                 size_t max_dense_elements,
+                                                 struct t4a_treetn **out);
 
 /**
  * Release a TreeTN handle.
@@ -1064,91 +1119,91 @@ void t4a_treetn_release(struct t4a_treetn *obj);
 /**
  * Restructure a TreeTN using split, swap, and optional final truncation phases.
  */
-StatusCode t4a_treetn_restructure_to(const struct t4a_treetn *treetn,
-                                     const size_t *target_vertices,
-                                     size_t n_target_vertices,
-                                     const struct t4a_index *const *target_siteinds,
-                                     const size_t *target_siteinds_len,
-                                     const size_t *target_edge_sources,
-                                     const size_t *target_edge_targets,
-                                     size_t n_target_edges,
-                                     const struct t4a_svd_truncation_policy *split_policy,
-                                     size_t split_maxdim,
-                                     int split_final_sweep,
-                                     size_t swap_maxdim,
-                                     double swap_rtol,
-                                     const struct t4a_svd_truncation_policy *final_policy,
-                                     size_t final_maxdim,
-                                     struct t4a_treetn **out);
+enum t4a_status_code t4a_treetn_restructure_to(const struct t4a_treetn *treetn,
+                                               const size_t *target_vertices,
+                                               size_t n_target_vertices,
+                                               const struct t4a_index *const *target_siteinds,
+                                               const size_t *target_siteinds_len,
+                                               const size_t *target_edge_sources,
+                                               const size_t *target_edge_targets,
+                                               size_t n_target_edges,
+                                               const struct t4a_svd_truncation_policy *split_policy,
+                                               size_t split_maxdim,
+                                               int split_final_sweep,
+                                               size_t swap_maxdim,
+                                               double swap_rtol,
+                                               const struct t4a_svd_truncation_policy *final_policy,
+                                               size_t final_maxdim,
+                                               struct t4a_treetn **out);
 
 /**
  * Scale a tree tensor network by a complex scalar.
  */
-StatusCode t4a_treetn_scale(const struct t4a_treetn *treetn,
-                            double re,
-                            double im,
-                            struct t4a_treetn **out);
+enum t4a_status_code t4a_treetn_scale(const struct t4a_treetn *treetn,
+                                      double re,
+                                      double im,
+                                      struct t4a_treetn **out);
 
 /**
  * Replace the tensor at a specific vertex.
  */
-StatusCode t4a_treetn_set_tensor(struct t4a_treetn *treetn,
-                                 size_t vertex,
-                                 const struct t4a_tensor *tensor);
+enum t4a_status_code t4a_treetn_set_tensor(struct t4a_treetn *treetn,
+                                           size_t vertex,
+                                           const struct t4a_tensor *tensor);
 
 /**
  * Get the site indices attached to a vertex.
  */
-StatusCode t4a_treetn_siteinds(const struct t4a_treetn *treetn,
-                               size_t vertex,
-                               struct t4a_index **buf,
-                               size_t buf_len,
-                               size_t *out_len);
+enum t4a_status_code t4a_treetn_siteinds(const struct t4a_treetn *treetn,
+                                         size_t vertex,
+                                         struct t4a_index **buf,
+                                         size_t buf_len,
+                                         size_t *out_len);
 
 /**
  * Split current nodes to match the requested target topology.
  */
-StatusCode t4a_treetn_split_to(const struct t4a_treetn *treetn,
-                               const size_t *target_vertices,
-                               size_t n_target_vertices,
-                               const struct t4a_index *const *target_siteinds,
-                               const size_t *target_siteinds_len,
-                               const size_t *target_edge_sources,
-                               const size_t *target_edge_targets,
-                               size_t n_target_edges,
-                               const struct t4a_svd_truncation_policy *policy,
-                               size_t maxdim,
-                               int final_sweep,
-                               struct t4a_treetn **out);
+enum t4a_status_code t4a_treetn_split_to(const struct t4a_treetn *treetn,
+                                         const size_t *target_vertices,
+                                         size_t n_target_vertices,
+                                         const struct t4a_index *const *target_siteinds,
+                                         const size_t *target_siteinds_len,
+                                         const size_t *target_edge_sources,
+                                         const size_t *target_edge_targets,
+                                         size_t n_target_edges,
+                                         const struct t4a_svd_truncation_policy *policy,
+                                         size_t maxdim,
+                                         int final_sweep,
+                                         struct t4a_treetn **out);
 
 /**
  * Reassign site indices to target vertices using scheduled swap transport.
  */
-StatusCode t4a_treetn_swap_site_indices(const struct t4a_treetn *treetn,
-                                        const struct t4a_index *const *assignment_siteinds,
-                                        const size_t *assignment_target_vertices,
-                                        size_t n_assignments,
-                                        size_t maxdim,
-                                        double rtol,
-                                        struct t4a_treetn **out);
+enum t4a_status_code t4a_treetn_swap_site_indices(const struct t4a_treetn *treetn,
+                                                  const struct t4a_index *const *assignment_siteinds,
+                                                  const size_t *assignment_target_vertices,
+                                                  size_t n_assignments,
+                                                  size_t maxdim,
+                                                  double rtol,
+                                                  struct t4a_treetn **out);
 
 /**
  * Get the tensor at a specific vertex.
  */
-StatusCode t4a_treetn_tensor(const struct t4a_treetn *treetn,
-                             size_t vertex,
-                             struct t4a_tensor **out);
+enum t4a_status_code t4a_treetn_tensor(const struct t4a_treetn *treetn,
+                                       size_t vertex,
+                                       struct t4a_tensor **out);
 
 /**
  * Contract all bonds and materialize the TreeTN as a dense tensor.
  */
-StatusCode t4a_treetn_to_dense(const struct t4a_treetn *treetn, struct t4a_tensor **out);
+enum t4a_status_code t4a_treetn_to_dense(const struct t4a_treetn *treetn, struct t4a_tensor **out);
 
 /**
  * Truncate the tree tensor network bond dimensions using SVD-based truncation.
  */
-StatusCode t4a_treetn_truncate(struct t4a_treetn *treetn,
-                               const struct t4a_svd_truncation_policy *policy,
-                               size_t maxdim);
+enum t4a_status_code t4a_treetn_truncate(struct t4a_treetn *treetn,
+                                         const struct t4a_svd_truncation_policy *policy,
+                                         size_t maxdim);
 
 #endif  /* TENSOR4ALL_CAPI_H */

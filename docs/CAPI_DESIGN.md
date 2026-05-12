@@ -54,7 +54,10 @@ Prefer explicit `t4a_<type>_release`, `t4a_<type>_clone`, and
 
 ### Error Handling
 
-Functions that can fail return `StatusCode`:
+Functions that can fail return the generated `enum t4a_status_code` status
+enum. The public header defines it as `typedef enum t4a_status_code { ... }
+t4a_status_code;` so C consumers get a named status type rather than a bare
+`int`:
 
 - `T4A_SUCCESS`
 - `T4A_NULL_POINTER`
@@ -64,6 +67,11 @@ Functions that can fail return `StatusCode`:
 - `T4A_BUFFER_TOO_SMALL`
 - `T4A_INTERNAL_ERROR`
 - `T4A_NOT_IMPLEMENTED`
+
+Do not add new `int` status returns, generic `StatusCode` typedefs, or
+function-specific status integer types. Keep new status variants in the shared
+`t4a_status_code` enum unless there is a binding-level reason to introduce a
+new typed result channel.
 
 Error details are stored in thread-local storage and must be preserved across
 the FFI boundary. Do not discard `Err(e)` or panic payloads. New entry points
@@ -176,8 +184,9 @@ the error message returned to bindings.
 
 - Functions use the `t4a_` prefix
 - Status codes use the `T4A_` prefix
-- Opaque types and enums use `snake_case`
-- Constructor-style functions write to an `out` pointer and return `StatusCode`
+- Opaque types and enums use `snake_case`, including `t4a_status_code`
+- Constructor-style functions write to an `out` pointer and return
+  `enum t4a_status_code`
 
 Prefer type-generic names inside Rust. Scalar-specialized names are acceptable
 at the FFI boundary when the ABI needs concrete layouts.
@@ -205,7 +214,7 @@ signatures change.
 | `treetn.rs` | `t4a_treetn_*` | Tree tensor network inspection and core ops |
 | `quanticstransform.rs` | `t4a_qtt_layout_*`, `t4a_qtransform_*` | Canonical QTT layouts and transform materialization |
 | `types.rs` | exported enums and opaque handles | ABI-facing type definitions |
-| `lib.rs` | `t4a_last_error_message`, status codes | shared error/panic handling |
+| `lib.rs` | `t4a_status_code`, `t4a_last_error_message` | shared error/panic handling |
 
 ## Binding Notes
 

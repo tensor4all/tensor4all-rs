@@ -8,7 +8,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use crate::types::{t4a_index, InternalIndex};
 use crate::{
     capi_error, clone_opaque, err_buffer_too_small, err_null_pointer, is_assigned_opaque,
-    panic_message, release_opaque, run_catching, set_last_error, CapiResult, StatusCode,
+    panic_message, release_opaque, run_catching, set_last_error, t4a_status_code, CapiResult,
     T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
 };
 use tensor4all_core::index::{DynId, Index, TagSet};
@@ -22,7 +22,10 @@ pub extern "C" fn t4a_index_release(obj: *mut t4a_index) {
 
 /// Clone an index handle.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_index_clone(src: *const t4a_index, out: *mut *mut t4a_index) -> StatusCode {
+pub extern "C" fn t4a_index_clone(
+    src: *const t4a_index,
+    out: *mut *mut t4a_index,
+) -> t4a_status_code {
     clone_opaque(src, out)
 }
 
@@ -32,7 +35,9 @@ pub extern "C" fn t4a_index_is_assigned(obj: *const t4a_index) -> i32 {
     is_assigned_opaque(obj)
 }
 
-fn read_optional_tags_csv(tags_csv: *const c_char) -> Result<Option<String>, (StatusCode, String)> {
+fn read_optional_tags_csv(
+    tags_csv: *const c_char,
+) -> Result<Option<String>, (t4a_status_code, String)> {
     if tags_csv.is_null() {
         return Ok(None);
     }
@@ -48,7 +53,7 @@ fn build_index(
     dim: usize,
     tags_csv: *const c_char,
     plev: i64,
-) -> Result<InternalIndex, (StatusCode, String)> {
+) -> Result<InternalIndex, (t4a_status_code, String)> {
     if dim == 0 {
         return Err(capi_error(
             T4A_INVALID_ARGUMENT,
@@ -78,7 +83,7 @@ fn build_index_with_id(
     id: u64,
     tags_csv: *const c_char,
     plev: i64,
-) -> Result<InternalIndex, (StatusCode, String)> {
+) -> Result<InternalIndex, (t4a_status_code, String)> {
     if dim == 0 {
         return Err(capi_error(
             T4A_INVALID_ARGUMENT,
@@ -112,7 +117,7 @@ fn require_index<'a>(ptr: *const t4a_index, what: &str) -> CapiResult<&'a Intern
     Ok(unsafe { &*ptr }.inner())
 }
 
-fn run_value<T: Copy, F>(out: *mut T, f: F) -> StatusCode
+fn run_value<T: Copy, F>(out: *mut T, f: F) -> t4a_status_code
 where
     F: FnOnce() -> CapiResult<T>,
 {
@@ -144,7 +149,7 @@ pub extern "C" fn t4a_index_new(
     tags_csv: *const c_char,
     plev: i64,
     out: *mut *mut t4a_index,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         Ok(t4a_index::new(build_index(dim, tags_csv, plev)?))
     })
@@ -158,7 +163,7 @@ pub extern "C" fn t4a_index_new_with_id(
     tags_csv: *const c_char,
     plev: i64,
     out: *mut *mut t4a_index,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         Ok(t4a_index::new(build_index_with_id(
             dim, id, tags_csv, plev,
@@ -168,7 +173,7 @@ pub extern "C" fn t4a_index_new_with_id(
 
 /// Get the dimension of an index.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_index_dim(ptr: *const t4a_index, out_dim: *mut usize) -> StatusCode {
+pub extern "C" fn t4a_index_dim(ptr: *const t4a_index, out_dim: *mut usize) -> t4a_status_code {
     if ptr.is_null() {
         return err_null_pointer("index");
     }
@@ -186,7 +191,7 @@ pub extern "C" fn t4a_index_dim(ptr: *const t4a_index, out_dim: *mut usize) -> S
 
 /// Get the explicit identity of an index.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_index_id(ptr: *const t4a_index, out_id: *mut u64) -> StatusCode {
+pub extern "C" fn t4a_index_id(ptr: *const t4a_index, out_id: *mut u64) -> t4a_status_code {
     run_value(out_id, || {
         let index = require_index(ptr, "index")?;
         Ok(index.id().value())
@@ -199,7 +204,7 @@ pub extern "C" fn t4a_index_equal(
     lhs: *const t4a_index,
     rhs: *const t4a_index,
     out_equal: *mut i32,
-) -> StatusCode {
+) -> t4a_status_code {
     run_value(out_equal, || {
         let lhs = require_index(lhs, "lhs")?;
         let rhs = require_index(rhs, "rhs")?;
@@ -209,7 +214,7 @@ pub extern "C" fn t4a_index_equal(
 
 /// Hash the full index value for process-local hash tables.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_index_hash(ptr: *const t4a_index, out_hash: *mut u64) -> StatusCode {
+pub extern "C" fn t4a_index_hash(ptr: *const t4a_index, out_hash: *mut u64) -> t4a_status_code {
     run_value(out_hash, || {
         let index = require_index(ptr, "index")?;
         let mut hasher = DefaultHasher::new();
@@ -220,7 +225,7 @@ pub extern "C" fn t4a_index_hash(ptr: *const t4a_index, out_hash: *mut u64) -> S
 
 /// Get the prime level of an index.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_index_plev(ptr: *const t4a_index, out_plev: *mut i64) -> StatusCode {
+pub extern "C" fn t4a_index_plev(ptr: *const t4a_index, out_plev: *mut i64) -> t4a_status_code {
     if ptr.is_null() {
         return err_null_pointer("index");
     }
@@ -238,7 +243,10 @@ pub extern "C" fn t4a_index_plev(ptr: *const t4a_index, out_plev: *mut i64) -> S
 
 /// Return a new index handle with prime level incremented by one.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_index_prime(ptr: *const t4a_index, out: *mut *mut t4a_index) -> StatusCode {
+pub extern "C" fn t4a_index_prime(
+    ptr: *const t4a_index,
+    out: *mut *mut t4a_index,
+) -> t4a_status_code {
     run_catching(out, || {
         let index = require_index(ptr, "index")?;
         Ok(t4a_index::new(index.prime()))
@@ -247,7 +255,10 @@ pub extern "C" fn t4a_index_prime(ptr: *const t4a_index, out: *mut *mut t4a_inde
 
 /// Return a new index handle with prime level reset to zero.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_index_noprime(ptr: *const t4a_index, out: *mut *mut t4a_index) -> StatusCode {
+pub extern "C" fn t4a_index_noprime(
+    ptr: *const t4a_index,
+    out: *mut *mut t4a_index,
+) -> t4a_status_code {
     run_catching(out, || {
         let index = require_index(ptr, "index")?;
         Ok(t4a_index::new(index.noprime()))
@@ -260,7 +271,7 @@ pub extern "C" fn t4a_index_set_plev(
     ptr: *const t4a_index,
     plev: i64,
     out: *mut *mut t4a_index,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         if plev < 0 {
             return Err(capi_error(
@@ -280,7 +291,7 @@ pub extern "C" fn t4a_index_tags(
     buf: *mut u8,
     buf_len: usize,
     out_len: *mut usize,
-) -> StatusCode {
+) -> t4a_status_code {
     if ptr.is_null() {
         return err_null_pointer("index");
     }
@@ -320,7 +331,7 @@ pub extern "C" fn t4a_index_has_tag(
     ptr: *const t4a_index,
     tag: *const c_char,
     out_has_tag: *mut i32,
-) -> StatusCode {
+) -> t4a_status_code {
     if ptr.is_null() {
         return err_null_pointer("index");
     }
@@ -341,7 +352,7 @@ pub extern "C" fn t4a_index_has_tag(
         } else {
             0
         };
-        Ok::<StatusCode, StatusCode>(T4A_SUCCESS)
+        Ok::<t4a_status_code, t4a_status_code>(T4A_SUCCESS)
     }));
 
     match result {

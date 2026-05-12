@@ -6,7 +6,7 @@ use crate::types::{
 };
 use crate::{
     capi_error, clone_opaque, err_null_pointer, is_assigned_opaque, release_opaque, run_catching,
-    CapiResult, StatusCode, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER,
+    t4a_status_code, CapiResult, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER,
 };
 use num_complex::Complex64;
 use num_rational::Rational64;
@@ -27,7 +27,7 @@ pub extern "C" fn t4a_qtt_layout_release(obj: *mut t4a_qtt_layout) {
 pub extern "C" fn t4a_qtt_layout_clone(
     src: *const t4a_qtt_layout,
     out: *mut *mut t4a_qtt_layout,
-) -> StatusCode {
+) -> t4a_status_code {
     clone_opaque(src, out)
 }
 
@@ -141,7 +141,7 @@ impl SourceSite {
 
 fn require_layout_or_status<'a>(
     layout: *const t4a_qtt_layout,
-) -> std::result::Result<&'a InternalQttLayout, StatusCode> {
+) -> std::result::Result<&'a InternalQttLayout, t4a_status_code> {
     if layout.is_null() {
         return Err(err_null_pointer("layout"));
     }
@@ -517,7 +517,7 @@ pub extern "C" fn t4a_qtt_layout_new(
     nvariables: usize,
     variable_resolutions: *const usize,
     out: *mut *mut t4a_qtt_layout,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         if nvariables == 0 {
             return Err(capi_error(
@@ -544,7 +544,7 @@ pub extern "C" fn t4a_qtransform_shift_materialize(
     offset: i64,
     bc: t4a_boundary_condition,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
@@ -569,7 +569,7 @@ pub extern "C" fn t4a_qtransform_flip_materialize(
     target_var: usize,
     bc: t4a_boundary_condition,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
@@ -594,7 +594,7 @@ pub extern "C" fn t4a_qtransform_phase_rotation_materialize(
     target_var: usize,
     theta: f64,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
@@ -618,7 +618,7 @@ pub extern "C" fn t4a_qtransform_cumsum_materialize(
     layout: *const t4a_qtt_layout,
     target_var: usize,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
@@ -644,7 +644,7 @@ pub extern "C" fn t4a_qtransform_fourier_materialize(
     maxbonddim: usize,
     tolerance: f64,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {
@@ -704,7 +704,7 @@ pub extern "C" fn t4a_qtransform_affine_materialize(
     n: usize,
     bc: *const t4a_boundary_condition,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     let layout_ref = require_layout_or_return!(layout);
 
     run_catching(out, || {

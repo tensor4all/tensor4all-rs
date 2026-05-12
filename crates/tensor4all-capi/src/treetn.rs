@@ -7,7 +7,7 @@ use crate::types::{
 };
 use crate::{
     capi_error, clone_opaque, is_assigned_opaque, panic_message, release_opaque, run_catching,
-    set_last_error, CapiResult, StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR,
+    set_last_error, t4a_status_code, CapiResult, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR,
     T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
 };
 use num_complex::Complex64;
@@ -32,7 +32,7 @@ pub extern "C" fn t4a_treetn_release(obj: *mut t4a_treetn) {
 pub extern "C" fn t4a_treetn_clone(
     src: *const t4a_treetn,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     clone_opaque(src, out)
 }
 
@@ -53,7 +53,7 @@ pub extern "C" fn t4a_treetn_evaluator_release(obj: *mut t4a_treetn_evaluator) {
 pub extern "C" fn t4a_treetn_evaluator_clone(
     src: *const t4a_treetn_evaluator,
     out: *mut *mut t4a_treetn_evaluator,
-) -> StatusCode {
+) -> t4a_status_code {
     clone_opaque(src, out)
 }
 
@@ -105,7 +105,7 @@ fn orthogonalize_error_message(force: libc::c_int, err: impl std::fmt::Display) 
     msg
 }
 
-fn run_status<F>(f: F) -> StatusCode
+fn run_status<F>(f: F) -> t4a_status_code
 where
     F: FnOnce() -> CapiResult<()>,
 {
@@ -835,7 +835,7 @@ pub extern "C" fn t4a_treetn_new(
     tensors: *const *const t4a_tensor,
     n_tensors: libc::size_t,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         if n_tensors == 0 {
             return Err(capi_error(
@@ -871,7 +871,7 @@ pub extern "C" fn t4a_treetn_new(
 pub extern "C" fn t4a_treetn_num_vertices(
     treetn: *const t4a_treetn,
     out_n: *mut libc::size_t,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tn = require_tree(treetn)?;
         if out_n.is_null() {
@@ -888,7 +888,7 @@ pub extern "C" fn t4a_treetn_tensor(
     treetn: *const t4a_treetn,
     vertex: libc::size_t,
     out: *mut *mut t4a_tensor,
-) -> StatusCode {
+) -> t4a_status_code {
     let tn = match require_tree(treetn) {
         Ok(tn) => tn,
         Err((code, msg)) => {
@@ -920,7 +920,7 @@ pub extern "C" fn t4a_treetn_set_tensor(
     treetn: *mut t4a_treetn,
     vertex: libc::size_t,
     tensor: *const t4a_tensor,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tn = require_tree_mut(treetn)?;
         if tensor.is_null() {
@@ -947,7 +947,7 @@ pub extern "C" fn t4a_treetn_neighbors(
     buf: *mut libc::size_t,
     buf_len: libc::size_t,
     out_len: *mut libc::size_t,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tn = require_tree(treetn)?;
         require_node(tn.inner(), vertex)?;
@@ -963,7 +963,7 @@ pub extern "C" fn t4a_treetn_canonical_region(
     buf: *mut libc::size_t,
     buf_len: libc::size_t,
     out_len: *mut libc::size_t,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tn = require_tree(treetn)?;
         let mut vertices: Vec<_> = tn.inner().canonical_region().iter().cloned().collect();
@@ -980,7 +980,7 @@ pub extern "C" fn t4a_treetn_siteinds(
     buf: *mut *mut t4a_index,
     buf_len: libc::size_t,
     out_len: *mut libc::size_t,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tn = require_tree(treetn)?;
         let node_idx = tn.inner().node_index(&vertex).ok_or_else(|| {
@@ -1041,7 +1041,7 @@ pub extern "C" fn t4a_treetn_linkind(
     v1: libc::size_t,
     v2: libc::size_t,
     out: *mut *mut t4a_index,
-) -> StatusCode {
+) -> t4a_status_code {
     let tn = match require_tree(treetn) {
         Ok(tn) => tn,
         Err((code, msg)) => {
@@ -1079,7 +1079,7 @@ pub extern "C" fn t4a_treetn_orthogonalize(
     vertex: libc::size_t,
     form: t4a_canonical_form,
     force: libc::c_int,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tn = require_tree_mut(treetn)?;
         require_node(tn.inner(), vertex)?;
@@ -1107,7 +1107,7 @@ pub extern "C" fn t4a_treetn_truncate(
     treetn: *mut t4a_treetn,
     policy: *const t4a_svd_truncation_policy,
     maxdim: libc::size_t,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tn = require_tree_mut(treetn)?;
 
@@ -1142,7 +1142,7 @@ pub extern "C" fn t4a_treetn_fuse_to(
     target_edge_targets: *const libc::size_t,
     n_target_edges: libc::size_t,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         let tn = require_tree(treetn)?;
         let target = build_target_network(
@@ -1178,7 +1178,7 @@ pub extern "C" fn t4a_treetn_split_to(
     maxdim: libc::size_t,
     final_sweep: libc::c_int,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         let tn = require_tree(treetn)?;
         let target = build_target_network(
@@ -1210,7 +1210,7 @@ pub extern "C" fn t4a_treetn_swap_site_indices(
     maxdim: libc::size_t,
     rtol: libc::c_double,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         let tn = require_tree(treetn)?;
         let target_assignment = collect_target_assignment(
@@ -1247,7 +1247,7 @@ pub extern "C" fn t4a_treetn_restructure_to(
     final_policy: *const t4a_svd_truncation_policy,
     final_maxdim: libc::size_t,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         let tn = require_tree(treetn)?;
         let target = build_target_network(
@@ -1285,7 +1285,7 @@ pub extern "C" fn t4a_treetn_evaluator_new(
     indices: *const *const t4a_index,
     n_indices: libc::size_t,
     out: *mut *mut t4a_treetn_evaluator,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         let tn = require_tree(treetn)?;
         if n_indices == 0 {
@@ -1311,7 +1311,7 @@ pub extern "C" fn t4a_treetn_evaluator_evaluate(
     n_points: libc::size_t,
     out_re: *mut libc::c_double,
     out_im: *mut libc::c_double,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let evaluator = require_evaluator(evaluator)?;
         if n_points == 0 {
@@ -1352,7 +1352,7 @@ pub extern "C" fn t4a_treetn_evaluate(
     n_points: libc::size_t,
     out_re: *mut libc::c_double,
     out_im: *mut libc::c_double,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tn = require_tree(treetn)?;
         if n_indices == 0 {
@@ -1399,7 +1399,7 @@ pub extern "C" fn t4a_treetn_inner(
     b: *const t4a_treetn,
     out_re: *mut libc::c_double,
     out_im: *mut libc::c_double,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tn_a = require_tree(a)?;
         let tn_b = require_tree(b)?;
@@ -1424,7 +1424,7 @@ pub extern "C" fn t4a_treetn_inner(
 pub extern "C" fn t4a_treetn_norm(
     treetn: *mut t4a_treetn,
     out_norm: *mut libc::c_double,
-) -> StatusCode {
+) -> t4a_status_code {
     run_status(|| {
         let tn = require_tree_mut(treetn)?;
         if out_norm.is_null() {
@@ -1447,7 +1447,7 @@ pub extern "C" fn t4a_treetn_scale(
     re: libc::c_double,
     im: libc::c_double,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         let tn = require_tree(treetn)?;
         let mut result = tn.inner().clone();
@@ -1471,7 +1471,7 @@ pub extern "C" fn t4a_treetn_add(
     policy: *const t4a_svd_truncation_policy,
     maxdim: libc::size_t,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         let tn_a = require_tree(a)?;
         let tn_b = require_tree(b)?;
@@ -1524,7 +1524,7 @@ pub extern "C" fn t4a_treetn_contract(
     qr_rtol: libc::c_double,
     max_dense_elements: libc::size_t,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     let tn_a = match require_tree(a) {
         Ok(tn) => tn,
         Err((code, msg)) => {
@@ -1642,7 +1642,7 @@ pub extern "C" fn t4a_treetn_partial_contract(
     qr_rtol: libc::c_double,
     max_dense_elements: libc::size_t,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     run_catching(out, || {
         let tn_a = require_tree(a)?;
         let tn_b = require_tree(b)?;
@@ -1762,7 +1762,7 @@ pub extern "C" fn t4a_treetn_apply_operator_chain(
     nfullsweeps: libc::size_t,
     convergence_tol: libc::c_double,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     let op = match require_tree(operator) {
         Ok(tn) => tn,
         Err((code, msg)) => {
@@ -1866,7 +1866,7 @@ pub extern "C" fn t4a_treetn_linsolve(
     a1: libc::c_double,
     convergence_tol: libc::c_double,
     out: *mut *mut t4a_treetn,
-) -> StatusCode {
+) -> t4a_status_code {
     let operator = match require_tree(operator) {
         Ok(tn) => tn,
         Err((code, msg)) => {
@@ -1974,7 +1974,7 @@ pub extern "C" fn t4a_treetn_linsolve(
 pub extern "C" fn t4a_treetn_to_dense(
     treetn: *const t4a_treetn,
     out: *mut *mut t4a_tensor,
-) -> StatusCode {
+) -> t4a_status_code {
     let tn = match require_tree(treetn) {
         Ok(tn) => tn,
         Err((code, msg)) => {
