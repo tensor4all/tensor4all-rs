@@ -61,6 +61,16 @@ mod tests {
     }
 
     #[test]
+    fn eager_context_is_shared_across_threads() {
+        let main_context = default_eager_ctx();
+        let worker_context = std::thread::spawn(default_eager_ctx)
+            .join()
+            .expect("worker thread should complete");
+
+        assert!(Arc::ptr_eq(&main_context, &worker_context));
+    }
+
+    #[test]
     fn default_backend_is_shared_across_threads() {
         let main_threads = with_default_backend(|backend| backend.num_threads());
         let worker_threads =

@@ -617,6 +617,24 @@ enum t4a_status_code t4a_tensor_contract(const struct t4a_tensor *a,
                                          struct t4a_tensor **out);
 
 /**
+ * Contract multiple tensors while retaining selected shared indices as output legs.
+ */
+enum t4a_status_code t4a_tensor_contract_multi(const struct t4a_tensor *const *tensors,
+                                               size_t n_tensors,
+                                               const struct t4a_index *const *retain_indices,
+                                               size_t n_retain,
+                                               struct t4a_tensor **out);
+
+/**
+ * Contract two tensors while retaining selected shared indices as output legs.
+ */
+enum t4a_status_code t4a_tensor_contract_retain(const struct t4a_tensor *a,
+                                                const struct t4a_tensor *b,
+                                                const struct t4a_index *const *retain_indices,
+                                                size_t n_retain,
+                                                struct t4a_tensor **out);
+
+/**
  * Copy dense `Complex64` data as interleaved doubles in column-major order.
  */
 enum t4a_status_code t4a_tensor_copy_dense_c64(const struct t4a_tensor *ptr,

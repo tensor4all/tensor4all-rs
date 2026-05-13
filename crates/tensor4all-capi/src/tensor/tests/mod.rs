@@ -799,6 +799,98 @@ fn test_tensor_contract_matches_matrix_multiplication() {
 }
 
 #[test]
+fn test_tensor_contract_retain_preserves_shared_index() {
+    let i = new_index(2);
+    let j = new_index(3);
+    let k = new_index(2);
+
+    let mut j_clone = std::ptr::null_mut();
+    assert_eq!(crate::index::t4a_index_clone(j, &mut j_clone), T4A_SUCCESS);
+
+    let a = new_tensor_f64(&[i, j], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = new_tensor_f64(
+        &[j_clone as *const t4a_index, k],
+        &[7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+    );
+
+    let retain = [j as *const t4a_index];
+    let mut c = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_contract_retain(a, b, retain.as_ptr(), retain.len(), &mut c),
+        T4A_SUCCESS
+    );
+
+    assert_eq!(unsafe { (*c).inner().dims() }, vec![2, 3, 2]);
+    assert_eq!(
+        read_dense_f64(c),
+        vec![7.0, 14.0, 24.0, 32.0, 45.0, 54.0, 10.0, 20.0, 33.0, 44.0, 60.0, 72.0]
+    );
+
+    t4a_tensor_release(c);
+    t4a_tensor_release(b);
+    t4a_tensor_release(a);
+    t4a_index_release(j_clone);
+    t4a_index_release(k);
+    t4a_index_release(j);
+    t4a_index_release(i);
+}
+
+#[test]
+fn test_tensor_contract_multi_retain_preserves_batch_index() {
+    let i = new_index(2);
+    let j = new_index(3);
+    let k = new_index(2);
+    let l = new_index(2);
+
+    let mut j_clone = std::ptr::null_mut();
+    assert_eq!(crate::index::t4a_index_clone(j, &mut j_clone), T4A_SUCCESS);
+    let mut k_clone = std::ptr::null_mut();
+    assert_eq!(crate::index::t4a_index_clone(k, &mut k_clone), T4A_SUCCESS);
+
+    let a = new_tensor_f64(&[i, j], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = new_tensor_f64(
+        &[j_clone as *const t4a_index, k],
+        &[7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+    );
+    let c = new_tensor_f64(&[k_clone as *const t4a_index, l], &[2.0, 3.0, 4.0, 5.0]);
+
+    let tensors = [
+        a as *const t4a_tensor,
+        b as *const t4a_tensor,
+        c as *const t4a_tensor,
+    ];
+    let retain = [j as *const t4a_index];
+    let mut out = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_contract_multi(
+            tensors.as_ptr(),
+            tensors.len(),
+            retain.as_ptr(),
+            retain.len(),
+            &mut out
+        ),
+        T4A_SUCCESS
+    );
+
+    assert_eq!(unsafe { (*out).inner().dims() }, vec![2, 3, 2]);
+    assert_eq!(
+        read_dense_f64(out),
+        vec![44.0, 88.0, 147.0, 196.0, 270.0, 324.0, 78.0, 156.0, 261.0, 348.0, 480.0, 576.0,]
+    );
+
+    t4a_tensor_release(out);
+    t4a_tensor_release(c);
+    t4a_tensor_release(b);
+    t4a_tensor_release(a);
+    t4a_index_release(k_clone);
+    t4a_index_release(j_clone);
+    t4a_index_release(l);
+    t4a_index_release(k);
+    t4a_index_release(j);
+    t4a_index_release(i);
+}
+
+#[test]
 fn test_tensor_svd_rank2() {
     let i = new_index(3);
     let j = new_index(4);
