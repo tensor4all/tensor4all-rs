@@ -1,9 +1,9 @@
 //! C API for the reduced TreeTN surface.
 
 use crate::types::{
-    t4a_canonical_form, t4a_contract_method, t4a_factorize_alg, t4a_index,
+    t4a_canonical_form, t4a_contract_method, t4a_factorize_alg, t4a_index, t4a_scalar_kind,
     t4a_svd_truncation_policy, t4a_tensor, t4a_treetn, t4a_treetn_evaluator, InternalIndex,
-    InternalTreeTN,
+    InternalTreeTN, InternalTreeTNEvaluatorHandle,
 };
 use crate::{
     capi_error, clone_opaque, is_assigned_opaque, panic_message, release_opaque, run_catching,
@@ -255,6 +255,7 @@ fn collect_edge_endpoints(
 
 fn write_evaluation_results(
     results: &[AnyScalar],
+    scalar_kind: t4a_scalar_kind,
     out_re: *mut libc::c_double,
     out_im: *mut libc::c_double,
 ) -> CapiResult<()> {
@@ -262,22 +263,44 @@ fn write_evaluation_results(
         return Err(capi_error(T4A_NULL_POINTER, "out_re is null"));
     }
 
-    for (i, scalar) in results.iter().enumerate() {
-        let z: Complex64 = scalar.clone().into();
-        unsafe { *out_re.add(i) = z.re };
-        if z.im != 0.0 {
+    match scalar_kind {
+        t4a_scalar_kind::F64 => {
+            for (i, scalar) in results.iter().enumerate() {
+                unsafe { *out_re.add(i) = scalar.real() };
+                if !out_im.is_null() {
+                    unsafe { *out_im.add(i) = 0.0 };
+                }
+            }
+        }
+        t4a_scalar_kind::C64 => {
             if out_im.is_null() {
                 return Err(capi_error(
                     T4A_NULL_POINTER,
                     "out_im is required for complex-valued evaluation results",
                 ));
             }
-            unsafe { *out_im.add(i) = z.im };
-        } else if !out_im.is_null() {
-            unsafe { *out_im.add(i) = 0.0 };
+            for (i, scalar) in results.iter().enumerate() {
+                let z: Complex64 = scalar.clone().into();
+                unsafe {
+                    *out_re.add(i) = z.re;
+                    *out_im.add(i) = z.im;
+                }
+            }
         }
     }
     Ok(())
+}
+
+fn treetn_scalar_kind(tn: &InternalTreeTN) -> t4a_scalar_kind {
+    if tn
+        .node_indices()
+        .into_iter()
+        .any(|node| tn.tensor(node).is_some_and(|tensor| tensor.is_complex()))
+    {
+        t4a_scalar_kind::C64
+    } else {
+        t4a_scalar_kind::F64
+    }
 }
 
 fn collect_target_assignment(
@@ -1299,7 +1322,10 @@ pub extern "C" fn t4a_treetn_evaluator_new(
             .inner()
             .evaluator(&indices)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
-        Ok(t4a_treetn_evaluator::new(evaluator))
+        Ok(t4a_treetn_evaluator::new(InternalTreeTNEvaluatorHandle {
+            evaluator,
+            scalar_kind: treetn_scalar_kind(tn.inner()),
+        }))
     })
 }
 
@@ -1324,7 +1350,8 @@ pub extern "C" fn t4a_treetn_evaluator_evaluate(
             return Err(capi_error(T4A_NULL_POINTER, "values_col_major is null"));
         }
 
-        let n_indices = evaluator.inner().input_count();
+        let handle = evaluator.inner();
+        let n_indices = handle.evaluator.input_count();
         let n_values = n_indices.checked_mul(n_points).ok_or_else(|| {
             capi_error(
                 T4A_INVALID_ARGUMENT,
@@ -1334,11 +1361,11 @@ pub extern "C" fn t4a_treetn_evaluator_evaluate(
         let values_slice = unsafe { std::slice::from_raw_parts(values_col_major, n_values) };
         let shape = [n_indices, n_points];
         let values = ColMajorArrayRef::new(values_slice, &shape);
-        let results = evaluator
-            .inner()
+        let results = handle
+            .evaluator
             .evaluate_batch(values)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
-        write_evaluation_results(&results, out_re, out_im)
+        write_evaluation_results(&results, handle.scalar_kind, out_re, out_im)
     })
 }
 
@@ -1381,6 +1408,7 @@ pub extern "C" fn t4a_treetn_evaluate(
         let values_slice = unsafe { std::slice::from_raw_parts(values_col_major, n_values) };
         let shape = [n_indices, n_points];
         let values = ColMajorArrayRef::new(values_slice, &shape);
+        let scalar_kind = treetn_scalar_kind(tn.inner());
         let results = tn
             .inner()
             .evaluator(&indices)
@@ -1388,7 +1416,7 @@ pub extern "C" fn t4a_treetn_evaluate(
             .evaluate_batch(values)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
 
-        write_evaluation_results(&results, out_re, out_im)
+        write_evaluation_results(&results, scalar_kind, out_re, out_im)
     })
 }
 

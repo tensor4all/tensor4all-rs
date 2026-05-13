@@ -4,7 +4,10 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 use num_complex::Complex64;
-use tensor4all_core::{qr_with, svd_with, QrOptions, SvdOptions, SvdTruncationPolicy};
+use tensor4all_core::{
+    contract_multi_with_options, qr_with, svd_with, AllowedPairs, ContractionOptions, QrOptions,
+    SvdOptions, SvdTruncationPolicy,
+};
 use tensor4all_tensorbackend::Storage;
 
 use crate::types::{
@@ -232,6 +235,31 @@ fn require_tensor<'a>(ptr: *const t4a_tensor) -> Result<&'a t4a_tensor, (t4a_sta
         return Err(capi_error(T4A_NULL_POINTER, "tensor is null"));
     }
     Ok(unsafe { &*ptr })
+}
+
+fn read_tensor_refs<'a>(
+    tensors: *const *const t4a_tensor,
+    n_tensors: usize,
+) -> Result<Vec<&'a InternalTensor>, (t4a_status_code, String)> {
+    if n_tensors == 0 {
+        return Ok(Vec::new());
+    }
+    if tensors.is_null() {
+        return Err(capi_error(T4A_NULL_POINTER, "tensors is null"));
+    }
+
+    let mut refs = Vec::with_capacity(n_tensors);
+    for i in 0..n_tensors {
+        let tensor = unsafe { *tensors.add(i) };
+        if tensor.is_null() {
+            return Err(capi_error(
+                T4A_NULL_POINTER,
+                format!("tensors[{i}] is null"),
+            ));
+        }
+        refs.push(unsafe { (&*tensor).inner() });
+    }
+    Ok(refs)
 }
 
 fn build_svd_options(policy: *const t4a_svd_truncation_policy, maxdim: usize) -> SvdOptions {
@@ -608,6 +636,49 @@ pub extern "C" fn t4a_tensor_contract(
 
     run_catching(out, || unsafe {
         Ok(t4a_tensor::new((*a).inner().contract((*b).inner())))
+    })
+}
+
+/// Contract two tensors while retaining selected shared indices as output legs.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_contract_retain(
+    a: *const t4a_tensor,
+    b: *const t4a_tensor,
+    retain_indices: *const *const t4a_index,
+    n_retain: usize,
+    out: *mut *mut t4a_tensor,
+) -> t4a_status_code {
+    run_catching(out, || {
+        let a = require_tensor(a)?;
+        let b = require_tensor(b)?;
+        let retain_indices = read_indices_from_ptrs(n_retain, retain_indices)?;
+        let options =
+            ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
+        let result = a
+            .inner()
+            .contract_with_options(b.inner(), options)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_tensor::new(result))
+    })
+}
+
+/// Contract multiple tensors while retaining selected shared indices as output legs.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_contract_multi(
+    tensors: *const *const t4a_tensor,
+    n_tensors: usize,
+    retain_indices: *const *const t4a_index,
+    n_retain: usize,
+    out: *mut *mut t4a_tensor,
+) -> t4a_status_code {
+    run_catching(out, || {
+        let tensors = read_tensor_refs(tensors, n_tensors)?;
+        let retain_indices = read_indices_from_ptrs(n_retain, retain_indices)?;
+        let options =
+            ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
+        let result = contract_multi_with_options(&tensors, options)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_tensor::new(result))
     })
 }
 

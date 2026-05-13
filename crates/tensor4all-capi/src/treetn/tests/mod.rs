@@ -1135,6 +1135,39 @@ fn test_treetn_evaluate_complex_requires_out_im_buffer() {
 }
 
 #[test]
+fn test_treetn_evaluate_complex_requires_out_im_even_for_real_value() {
+    let s = new_index(2);
+    let index_ptrs = [s as *const t4a_index];
+    let interleaved = [1.0, 2.0, 3.0, 0.0];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_dense_c64(1, index_ptrs.as_ptr(), interleaved.as_ptr(), 2, &mut tensor),
+        T4A_SUCCESS
+    );
+
+    let tt = new_treetn(&[tensor as *const t4a_tensor]);
+    let values = [1usize];
+    let mut out_re = 0.0;
+    assert_eq!(
+        t4a_treetn_evaluate(
+            tt,
+            index_ptrs.as_ptr(),
+            1,
+            values.as_ptr(),
+            1,
+            &mut out_re,
+            std::ptr::null_mut()
+        ),
+        T4A_NULL_POINTER
+    );
+    assert!(last_error().contains("out_im is required"));
+
+    t4a_treetn_release(tt);
+    t4a_tensor_release(tensor);
+    t4a_index_release(s);
+}
+
+#[test]
 fn test_treetn_evaluator_reuses_index_order_for_multiple_batches() {
     let (tt, tensors, indices) = make_two_site_treetn();
     let s0 = indices[0];
@@ -1183,6 +1216,44 @@ fn test_treetn_evaluator_reuses_index_order_for_multiple_batches() {
 
     t4a_treetn_evaluator_release(evaluator);
     cleanup(tt, tensors, indices);
+}
+
+#[test]
+fn test_treetn_evaluator_complex_requires_out_im_even_for_real_value() {
+    let s = new_index(2);
+    let index_ptrs = [s as *const t4a_index];
+    let interleaved = [1.0, 2.0, 3.0, 0.0];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_dense_c64(1, index_ptrs.as_ptr(), interleaved.as_ptr(), 2, &mut tensor),
+        T4A_SUCCESS
+    );
+    let tt = new_treetn(&[tensor as *const t4a_tensor]);
+
+    let mut evaluator = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_evaluator_new(tt, index_ptrs.as_ptr(), 1, &mut evaluator),
+        T4A_SUCCESS
+    );
+
+    let values = [1usize];
+    let mut out_re = 0.0;
+    assert_eq!(
+        t4a_treetn_evaluator_evaluate(
+            evaluator,
+            values.as_ptr(),
+            1,
+            &mut out_re,
+            std::ptr::null_mut()
+        ),
+        T4A_NULL_POINTER
+    );
+    assert!(last_error().contains("out_im is required"));
+
+    t4a_treetn_evaluator_release(evaluator);
+    t4a_treetn_release(tt);
+    t4a_tensor_release(tensor);
+    t4a_index_release(s);
 }
 
 #[test]

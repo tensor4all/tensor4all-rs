@@ -23,6 +23,13 @@ pub(crate) type InternalTreeTN = DefaultTreeTN<usize>;
 /// Internal reusable TreeTN evaluator type wrapped by `t4a_treetn_evaluator`.
 pub(crate) type InternalTreeTNEvaluator = TreeTNEvaluator<InternalTensor, usize>;
 
+/// Internal C API evaluator handle state.
+#[derive(Clone)]
+pub(crate) struct InternalTreeTNEvaluatorHandle {
+    pub(crate) evaluator: InternalTreeTNEvaluator,
+    pub(crate) scalar_kind: t4a_scalar_kind,
+}
+
 /// Opaque index type for the C API.
 #[repr(C)]
 pub struct t4a_index {
@@ -196,15 +203,15 @@ pub struct t4a_treetn_evaluator {
 
 impl t4a_treetn_evaluator {
     /// Create a wrapper from an internal reusable evaluator value.
-    pub(crate) fn new(evaluator: InternalTreeTNEvaluator) -> Self {
+    pub(crate) fn new(handle: InternalTreeTNEvaluatorHandle) -> Self {
         Self {
-            _private: Box::into_raw(Box::new(evaluator)) as *const c_void,
+            _private: Box::into_raw(Box::new(handle)) as *const c_void,
         }
     }
 
     /// Borrow the wrapped reusable evaluator.
-    pub(crate) fn inner(&self) -> &InternalTreeTNEvaluator {
-        unsafe { &*(self._private as *const InternalTreeTNEvaluator) }
+    pub(crate) fn inner(&self) -> &InternalTreeTNEvaluatorHandle {
+        unsafe { &*(self._private as *const InternalTreeTNEvaluatorHandle) }
     }
 }
 
@@ -218,7 +225,7 @@ impl Drop for t4a_treetn_evaluator {
     fn drop(&mut self) {
         if !self._private.is_null() {
             unsafe {
-                let _ = Box::from_raw(self._private as *mut InternalTreeTNEvaluator);
+                let _ = Box::from_raw(self._private as *mut InternalTreeTNEvaluatorHandle);
             }
         }
     }
