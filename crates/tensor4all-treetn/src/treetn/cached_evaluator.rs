@@ -5,12 +5,13 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use anyhow::{bail, Context, Result};
-use tensor4all_core::{AllowedPairs, AnyScalar, ColMajorArrayRef, IndexLike, TensorLike};
+use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike, TensorLike};
 
 use super::TreeTN;
 
 type KeyId = usize;
-type EntryOffsets<I, V> = HashMap<V, Vec<(SiteEntry<I>, usize)>>;
+type EnvironmentCache<T, V> = HashMap<V, Vec<T>>;
+type CacheBuildResult<T, V> = (Vec<ComponentBatch<V>>, EnvironmentCache<T, V>);
 type ParentMap<V> = HashMap<V, Option<V>>;
 
 #[derive(Clone, Debug)]
@@ -44,24 +45,28 @@ where
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct ComponentAssignment {
-    values: Vec<usize>,
+#[derive(Clone, Debug)]
+struct AssignmentBatch {
+    point_to_assignment: Vec<usize>,
+    first_points: Vec<usize>,
 }
 
 #[derive(Clone, Debug)]
-struct ComponentBatch<I, V> {
+struct ComponentBatch<V> {
     neighbor: V,
-    nodes: Vec<V>,
-    entries: Vec<SiteEntry<I>>,
-    entry_offsets_by_node: EntryOffsets<I, V>,
     point_to_assignment: Vec<usize>,
-    assignments: Vec<ComponentAssignment>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct CachedEvaluationStats {
     subtree_environment_count: usize,
+    directed_message_count: usize,
+}
+
+#[derive(Clone, Debug)]
+struct RootedMessagePlan<V> {
+    children: HashMap<V, Vec<V>>,
+    postorder: Vec<V>,
 }
 
 #[derive(Debug)]
@@ -279,6 +284,46 @@ fn intern_component_keys(
         keys.push(interner.intern(tuple));
     }
     keys
+}
+
+impl<V> RootedMessagePlan<V>
+where
+    V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
+{
+    fn new<T>(tree: &TreeTN<T, V>, center: &V) -> Result<Self>
+    where
+        T: TensorLike,
+    {
+        let neighbors = sorted_neighbors(tree);
+        let (parent, order) = rooted_tree(&neighbors, center)?;
+
+        let mut children = HashMap::<V, Vec<V>>::new();
+        for node in neighbors.keys() {
+            children.insert(node.clone(), Vec::new());
+        }
+        for (node, parent_node) in &parent {
+            if let Some(parent_node) = parent_node {
+                children
+                    .get_mut(parent_node)
+                    .ok_or_else(|| anyhow::anyhow!("missing rooted parent {:?}", parent_node))?
+                    .push(node.clone());
+            }
+        }
+        for node_children in children.values_mut() {
+            node_children.sort();
+        }
+
+        let postorder = order
+            .into_iter()
+            .rev()
+            .filter(|node| node != center)
+            .collect::<Vec<_>>();
+
+        Ok(Self {
+            children,
+            postorder,
+        })
+    }
 }
 
 /// Options controlling cached batch evaluation for [`TreeTN`].
@@ -674,8 +719,8 @@ where
             "TreeTNCachedEvaluator::evaluate_batch",
         )?;
         let center = self.ensure_center(values)?.clone();
-        let component_batches = self.build_component_batches(&center, values)?;
-        let environment_cache = self.build_environment_cache(&center, &component_batches)?;
+        let (component_batches, environment_cache) =
+            self.build_environment_cache(&center, values)?;
         self.contract_center_for_points(&center, values, &component_batches, &environment_cache)
     }
 
@@ -690,146 +735,185 @@ where
         Ok(self.center.as_ref().unwrap())
     }
 
-    fn build_component_batches(
-        &self,
-        center: &V,
-        values: ColMajorArrayRef<'_, usize>,
-    ) -> Result<Vec<ComponentBatch<T::Index, V>>> {
-        let mut batches = Vec::new();
-        let n_points = values.shape()[1];
-        for neighbor in sorted_neighbors(self.tree)
-            .get(center)
-            .cloned()
-            .unwrap_or_default()
-        {
-            let nodes = component_nodes(self.tree, &neighbor, center)?;
-            let mut entries = Vec::new();
-            for node in &nodes {
-                if let Some(node_entries) = self.layout.entries_by_node.get(node) {
-                    entries.extend(node_entries.iter().cloned());
-                }
-            }
-            entries.sort_by_key(|entry| entry.input_position);
-
-            let mut entry_offsets_by_node: EntryOffsets<T::Index, V> = HashMap::new();
-            for (offset, entry) in entries.iter().cloned().enumerate() {
-                let owner = self
-                    .tree
-                    .site_index_network()
-                    .find_node_by_index(&entry.index)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "TreeTNCachedEvaluator::evaluate_batch: unknown index {:?}",
-                            entry.index
-                        )
-                    })?
-                    .clone();
-                entry_offsets_by_node
-                    .entry(owner)
-                    .or_default()
-                    .push((entry, offset));
-            }
-
-            let mut assignment_ids = HashMap::<ComponentAssignment, usize>::new();
-            let mut assignments = Vec::<ComponentAssignment>::new();
-            let mut point_to_assignment = Vec::with_capacity(n_points);
-            for point in 0..n_points {
-                let assignment = ComponentAssignment {
-                    values: entries
-                        .iter()
-                        .map(|entry| *values.get(&[entry.input_position, point]).unwrap())
-                        .collect(),
-                };
-                validate_entry_values(
-                    &entries,
-                    &assignment.values,
-                    "TreeTNCachedEvaluator::evaluate_batch",
-                )?;
-                let next_id = assignment_ids.len();
-                let assignment_id =
-                    *assignment_ids.entry(assignment.clone()).or_insert_with(|| {
-                        assignments.push(assignment);
-                        next_id
-                    });
-                point_to_assignment.push(assignment_id);
-            }
-
-            batches.push(ComponentBatch {
-                neighbor,
-                nodes,
-                entries,
-                entry_offsets_by_node,
-                point_to_assignment,
-                assignments,
-            });
-        }
-        Ok(batches)
-    }
-
     fn build_environment_cache(
         &mut self,
         center: &V,
-        component_batches: &[ComponentBatch<T::Index, V>],
-    ) -> Result<HashMap<V, Vec<T>>> {
-        let mut cache = HashMap::new();
-        let mut count = 0usize;
-        for batch in component_batches {
-            let mut environments = Vec::with_capacity(batch.assignments.len());
-            for assignment in &batch.assignments {
-                environments.push(self.compute_component_environment(center, batch, assignment)?);
-                count += 1;
+        values: ColMajorArrayRef<'_, usize>,
+    ) -> Result<CacheBuildResult<T, V>> {
+        self.last_stats = CachedEvaluationStats::default();
+        let plan = RootedMessagePlan::new(self.tree, center)?;
+        let assignment_batches = self.build_message_assignment_batches(&plan, values)?;
+
+        let mut messages = HashMap::<V, Vec<T>>::new();
+        let mut directed_message_count = 0usize;
+        for node in &plan.postorder {
+            let assignment_batch = assignment_batches
+                .get(node)
+                .ok_or_else(|| anyhow::anyhow!("missing assignment batch for node {:?}", node))?;
+            let mut node_messages = Vec::with_capacity(assignment_batch.first_points.len());
+            for point in assignment_batch.first_points.iter().copied() {
+                node_messages.push(self.compute_directed_message(
+                    node,
+                    point,
+                    values,
+                    &plan,
+                    &assignment_batches,
+                    &messages,
+                )?);
+                directed_message_count += 1;
             }
-            cache.insert(batch.neighbor.clone(), environments);
+            messages.insert(node.clone(), node_messages);
         }
-        self.last_stats.subtree_environment_count = count;
-        Ok(cache)
+
+        let mut component_batches = Vec::new();
+        let mut cache = HashMap::new();
+        let mut subtree_environment_count = 0usize;
+        for neighbor in plan.children.get(center).cloned().unwrap_or_default() {
+            let assignment_batch = assignment_batches.get(&neighbor).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "TreeTNCachedEvaluator::evaluate_batch: missing assignments for neighbor {:?}",
+                    neighbor
+                )
+            })?;
+            let environments = messages.remove(&neighbor).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "TreeTNCachedEvaluator::evaluate_batch: missing messages for neighbor {:?}",
+                    neighbor
+                )
+            })?;
+            subtree_environment_count += environments.len();
+            cache.insert(neighbor.clone(), environments);
+            component_batches.push(ComponentBatch {
+                neighbor,
+                point_to_assignment: assignment_batch.point_to_assignment.clone(),
+            });
+        }
+        self.last_stats.subtree_environment_count = subtree_environment_count;
+        self.last_stats.directed_message_count = directed_message_count;
+        Ok((component_batches, cache))
     }
 
-    fn compute_component_environment(
+    fn build_message_assignment_batches(
         &self,
-        _center: &V,
-        batch: &ComponentBatch<T::Index, V>,
-        assignment: &ComponentAssignment,
-    ) -> Result<T> {
-        let mut tensors = Vec::with_capacity(batch.nodes.len());
-        let mut names = Vec::with_capacity(batch.nodes.len());
-        for node in &batch.nodes {
-            let tensor = tensor_for_node(self.tree, node)?;
-            let index_vals = batch
-                .entry_offsets_by_node
+        plan: &RootedMessagePlan<V>,
+        values: ColMajorArrayRef<'_, usize>,
+    ) -> Result<HashMap<V, AssignmentBatch>> {
+        let n_points = values.shape()[1];
+        let mut local_interner = KeyInterner::<Vec<usize>>::default();
+        let mut local_keys = HashMap::<V, Vec<KeyId>>::new();
+
+        let mut node_names = self.tree.node_names();
+        node_names.sort();
+        for node in &node_names {
+            let entries = self
+                .layout
+                .entries_by_node
                 .get(node)
-                .map(|offsets| {
-                    offsets
-                        .iter()
-                        .map(|(entry, offset)| (entry.index.clone(), assignment.values[*offset]))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            tensors.push(slice_tensor(tensor, &index_vals).with_context(|| {
-                format!(
-                    "TreeTNCachedEvaluator::evaluate_batch: failed to slice component node {:?}",
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let mut keys = Vec::with_capacity(n_points);
+            for point in 0..n_points {
+                let key = entries
+                    .iter()
+                    .map(|entry| *values.get(&[entry.input_position, point]).unwrap())
+                    .collect::<Vec<_>>();
+                validate_entry_values(entries, &key, "TreeTNCachedEvaluator::evaluate_batch")?;
+                keys.push(local_interner.intern(key));
+            }
+            local_keys.insert(node.clone(), keys);
+        }
+
+        let mut assignment_batches = HashMap::<V, AssignmentBatch>::new();
+        for node in &plan.postorder {
+            let local_keys = local_keys.get(node).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "TreeTNCachedEvaluator::evaluate_batch: missing local keys for {:?}",
                     node
                 )
-            })?);
-            names.push(node.clone());
+            })?;
+            let children = plan.children.get(node).map(Vec::as_slice).unwrap_or(&[]);
+            let child_batches = children
+                .iter()
+                .map(|child| {
+                    assignment_batches.get(child).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "TreeTNCachedEvaluator::evaluate_batch: missing child assignments for {:?}",
+                            child
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let assignment_batch =
+                build_compact_assignment_batch(local_keys, &child_batches, n_points);
+            assignment_batches.insert(node.clone(), assignment_batch);
         }
 
-        if tensors.len() == 1 {
-            return Ok(tensors.remove(0));
+        Ok(assignment_batches)
+    }
+
+    fn compute_directed_message(
+        &self,
+        node: &V,
+        point: usize,
+        values: ColMajorArrayRef<'_, usize>,
+        plan: &RootedMessagePlan<V>,
+        assignment_batches: &HashMap<V, AssignmentBatch>,
+        messages: &HashMap<V, Vec<T>>,
+    ) -> Result<T> {
+        let tensor = tensor_for_node(self.tree, node)?;
+        let index_vals = self.index_vals_for_point(node, values, point);
+        let local_message = slice_tensor(tensor, &index_vals).with_context(|| {
+            format!(
+                "TreeTNCachedEvaluator::evaluate_batch: failed to slice message node {:?}",
+                node
+            )
+        })?;
+
+        let children = plan.children.get(node).map(Vec::as_slice).unwrap_or(&[]);
+        if children.is_empty() {
+            return Ok(local_message);
         }
 
-        TreeTN::<T, V>::from_tensors(tensors, names)
-            .context("TreeTNCachedEvaluator::evaluate_batch: failed to build component TreeTN")?
-            .contract_to_tensor()
-            .context("TreeTNCachedEvaluator::evaluate_batch: failed to contract component")
+        let mut child_messages = Vec::with_capacity(children.len());
+        for child in children {
+            let assignment_batch = assignment_batches.get(child).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "TreeTNCachedEvaluator::evaluate_batch: missing child assignments for {:?}",
+                    child
+                )
+            })?;
+            let assignment_id = assignment_batch
+                .point_to_assignment
+                .get(point)
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("missing child assignment for point {point}"))?;
+            let child_message = messages
+                .get(child)
+                .and_then(|node_messages| node_messages.get(assignment_id))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "TreeTNCachedEvaluator::evaluate_batch: missing child message for {:?}",
+                        child
+                    )
+                })?;
+            child_messages.push(child_message.clone());
+        }
+
+        let mut message = local_message;
+        for child_message in child_messages {
+            message = message.contract_pair(&child_message).context(
+                "TreeTNCachedEvaluator::evaluate_batch: failed to contract directed message",
+            )?;
+        }
+        Ok(message)
     }
 
     fn contract_center_for_points(
         &self,
         center: &V,
         values: ColMajorArrayRef<'_, usize>,
-        component_batches: &[ComponentBatch<T::Index, V>],
-        environment_cache: &HashMap<V, Vec<T>>,
+        component_batches: &[ComponentBatch<V>],
+        environment_cache: &EnvironmentCache<T, V>,
     ) -> Result<Vec<AnyScalar>> {
         let n_points = values.shape()[1];
         let center_entries = self
@@ -855,8 +939,7 @@ where
             let center_partial = slice_tensor(center_tensor, &center_index_vals)
                 .context("TreeTNCachedEvaluator::evaluate_batch: failed to slice center tensor")?;
 
-            let mut tensor_refs = Vec::with_capacity(1 + component_batches.len());
-            tensor_refs.push(&center_partial);
+            let mut result_tensor = center_partial;
             for batch in component_batches {
                 let assignment_id = batch.point_to_assignment[point];
                 let environment = environment_cache
@@ -867,11 +950,11 @@ where
                             "TreeTNCachedEvaluator::evaluate_batch: missing cached environment"
                         )
                     })?;
-                tensor_refs.push(environment);
+                result_tensor = result_tensor
+                    .contract_pair(environment)
+                    .context("TreeTNCachedEvaluator::evaluate_batch: failed to contract center")?;
             }
 
-            let result_tensor = T::contract(&tensor_refs, AllowedPairs::All)
-                .context("TreeTNCachedEvaluator::evaluate_batch: failed to contract center")?;
             results.push(
                 scalar_one
                     .inner_product(&result_tensor)
@@ -880,6 +963,27 @@ where
         }
 
         Ok(results)
+    }
+
+    fn index_vals_for_point(
+        &self,
+        node: &V,
+        values: ColMajorArrayRef<'_, usize>,
+        point: usize,
+    ) -> Vec<(T::Index, usize)> {
+        self.layout
+            .entries_by_node
+            .get(node)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|entry| {
+                        let value = *values.get(&[entry.input_position, point]).unwrap();
+                        (entry.index.clone(), value)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     #[cfg(test)]
@@ -963,6 +1067,38 @@ where
     })
 }
 
+fn build_compact_assignment_batch(
+    local_keys: &[KeyId],
+    child_batches: &[&AssignmentBatch],
+    n_points: usize,
+) -> AssignmentBatch {
+    let mut assignment_ids = HashMap::<Vec<KeyId>, usize>::new();
+    let mut first_points = Vec::<usize>::new();
+    let mut point_to_assignment = Vec::with_capacity(n_points);
+    for (point, &local_key) in local_keys.iter().enumerate().take(n_points) {
+        let mut assignment = Vec::with_capacity(1 + child_batches.len());
+        assignment.push(local_key);
+        for child_batch in child_batches {
+            assignment.push(child_batch.point_to_assignment[point]);
+        }
+
+        let assignment_id = if let Some(&assignment_id) = assignment_ids.get(&assignment) {
+            assignment_id
+        } else {
+            let assignment_id = assignment_ids.len();
+            assignment_ids.insert(assignment, assignment_id);
+            first_points.push(point);
+            assignment_id
+        };
+        point_to_assignment.push(assignment_id);
+    }
+
+    AssignmentBatch {
+        point_to_assignment,
+        first_points,
+    }
+}
+
 fn validate_values_shape(
     values: ColMajorArrayRef<'_, usize>,
     n_indices: usize,
@@ -1041,8 +1177,15 @@ where
         return Ok(tensor.clone());
     }
     validate_index_vals(index_vals, "slice_tensor")?;
-    let onehot = T::onehot(index_vals)?;
-    T::contract(&[tensor, &onehot], AllowedPairs::All)
+    let selected_indices = index_vals
+        .iter()
+        .map(|(index, _)| index.clone())
+        .collect::<Vec<_>>();
+    let positions = index_vals
+        .iter()
+        .map(|(_, position)| *position)
+        .collect::<Vec<_>>();
+    tensor.select_indices(&selected_indices, &positions)
 }
 
 fn sorted_neighbors<T, V>(tree: &TreeTN<T, V>) -> HashMap<V, Vec<V>>
@@ -1096,30 +1239,6 @@ where
     Ok((parent, order))
 }
 
-fn component_nodes<T, V>(tree: &TreeTN<T, V>, start: &V, blocked: &V) -> Result<Vec<V>>
-where
-    T: TensorLike,
-    V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
-{
-    let neighbors = sorted_neighbors(tree);
-    let mut nodes = Vec::new();
-    let mut seen = HashSet::new();
-    let mut stack = vec![start.clone()];
-    while let Some(node) = stack.pop() {
-        if &node == blocked || !seen.insert(node.clone()) {
-            continue;
-        }
-        nodes.push(node.clone());
-        for neighbor in neighbors.get(&node).cloned().unwrap_or_default() {
-            if &neighbor != blocked && !seen.contains(&neighbor) {
-                stack.push(neighbor);
-            }
-        }
-    }
-    nodes.sort();
-    Ok(nodes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1165,6 +1284,37 @@ mod tests {
         let t2 = TensorDynLen::from_dense(vec![b12, s2.clone()], vec![1.0_f64; 4]).unwrap();
         let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1, t2], vec![0, 1, 2]).unwrap();
         (tree, vec![s0, s1, s2])
+    }
+
+    fn five_node_chain() -> (TreeTN<TensorDynLen, usize>, Vec<DynIndex>) {
+        let sites: Vec<DynIndex> = (0..5).map(|_| DynIndex::new_dyn(2)).collect();
+        let bonds: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
+
+        let t0 =
+            TensorDynLen::from_dense(vec![sites[0].clone(), bonds[0].clone()], vec![1.0_f64; 4])
+                .unwrap();
+        let t1 = TensorDynLen::from_dense(
+            vec![bonds[0].clone(), sites[1].clone(), bonds[1].clone()],
+            vec![1.0_f64; 8],
+        )
+        .unwrap();
+        let t2 = TensorDynLen::from_dense(
+            vec![bonds[1].clone(), sites[2].clone(), bonds[2].clone()],
+            vec![1.0_f64; 8],
+        )
+        .unwrap();
+        let t3 = TensorDynLen::from_dense(
+            vec![bonds[2].clone(), sites[3].clone(), bonds[3].clone()],
+            vec![1.0_f64; 8],
+        )
+        .unwrap();
+        let t4 =
+            TensorDynLen::from_dense(vec![bonds[3].clone(), sites[4].clone()], vec![1.0_f64; 4])
+                .unwrap();
+
+        let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1, t2, t3, t4], vec![0, 1, 2, 3, 4])
+            .unwrap();
+        (tree, sites)
     }
 
     fn star_tree() -> (TreeTN<TensorDynLen, usize>, Vec<DynIndex>) {
@@ -1341,6 +1491,34 @@ mod tests {
 
         assert_scalars_close(&actual, &expected);
         assert_eq!(evaluator.stats_for_test().subtree_environment_count, 4);
+    }
+
+    #[test]
+    fn cached_evaluator_reuses_directed_messages_inside_components() {
+        let (tree, indices) = five_node_chain();
+        let values = vec![
+            0, 0, 0, 0, 0, //
+            0, 1, 0, 0, 1, //
+            1, 0, 1, 1, 0, //
+            1, 1, 1, 1, 1,
+        ];
+        let shape = [5, 4];
+        let points = ColMajorArrayRef::new(&values, &shape);
+
+        let expected = tree.evaluate(&indices, points).unwrap();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(2),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let actual = evaluator.evaluate_batch(points).unwrap();
+
+        assert_scalars_close(&actual, &expected);
+        assert_eq!(evaluator.stats_for_test().directed_message_count, 12);
     }
 
     #[test]

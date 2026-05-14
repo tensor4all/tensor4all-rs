@@ -13,9 +13,11 @@
 //! For heterogeneous tensor collections, use an enum wrapper.
 
 use crate::any_scalar::AnyScalar;
+use crate::index_like::IndexLike;
 use crate::tensor_index::TensorIndex;
 use crate::truncation::SvdTruncationPolicy;
 use anyhow::Result;
+use std::collections::HashSet;
 use std::fmt::Debug;
 
 // ============================================================================
@@ -953,6 +955,49 @@ pub trait TensorLike: TensorIndex {
     /// ```
     fn contract(tensors: &[&Self], allowed: AllowedPairs<'_>) -> Result<Self>;
 
+    /// Contract this tensor with one other tensor using default pairwise semantics.
+    ///
+    /// This contracts all compatible common indices between `self` and `other`.
+    /// Implementations may override it with a specialized two-tensor path. The
+    /// default implementation calls [`Self::contract`] with two inputs and
+    /// [`AllowedPairs::All`].
+    ///
+    /// # Arguments
+    /// * `other` - The tensor to contract with. It should share at least one
+    ///   compatible common index unless the implementation supports outer
+    ///   products through its default pairwise semantics.
+    ///
+    /// # Returns
+    /// The tensor produced by contracting `self` and `other`.
+    ///
+    /// # Errors
+    /// Returns an error if pairwise contraction cannot be performed, for example
+    /// because common indices have incompatible dimensions or the contraction
+    /// executor fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(2);
+    /// let k = DynIndex::new_dyn(2);
+    /// let a = TensorDynLen::from_dense(
+    ///     vec![i.clone(), j.clone()],
+    ///     vec![1.0_f64, 0.0, 0.0, 1.0],
+    /// )?;
+    /// let b = TensorDynLen::from_dense(vec![j.clone(), k.clone()], vec![2.0, 3.0, 4.0, 5.0])?;
+    ///
+    /// let result = a.contract_pair(&b)?;
+    /// assert_eq!(result.dims(), vec![2, 2]);
+    /// assert_eq!(result.to_vec::<f64>()?, vec![2.0, 3.0, 4.0, 5.0]);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn contract_pair(&self, other: &Self) -> Result<Self> {
+        Self::contract(&[self, other], AllowedPairs::All)
+    }
+
     /// Contract multiple tensors that must form a connected graph.
     ///
     /// This is the core contraction method that requires all tensors to be
@@ -1260,6 +1305,85 @@ pub trait TensorLike: TensorIndex {
     /// # }
     /// ```
     fn ones(indices: &[<Self as TensorIndex>::Index]) -> Result<Self>;
+
+    /// Select fixed coordinates for a subset of this tensor's external indices.
+    ///
+    /// This returns a new tensor with `selected_indices` removed and the
+    /// corresponding coordinates fixed to `positions`. Implementations may
+    /// override this with direct slicing. The default implementation contracts
+    /// with a one-hot tensor, so it works for any tensor type that supports
+    /// [`Self::onehot`] and [`Self::contract`].
+    ///
+    /// # Arguments
+    /// * `selected_indices` - External indices to fix. Each index must appear
+    ///   at most once and should be present in the tensor.
+    /// * `positions` - Zero-based coordinates, one for each selected index.
+    ///
+    /// # Returns
+    /// A tensor with the selected indices removed. If no indices are selected,
+    /// this returns a clone of `self`.
+    ///
+    /// # Errors
+    /// Returns an error if the argument lengths differ, if an index is repeated,
+    /// if a coordinate is outside the index dimension, or if the one-hot
+    /// contraction fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(3);
+    /// let tensor = TensorDynLen::from_dense(
+    ///     vec![i.clone(), j.clone()],
+    ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    /// )?;
+    ///
+    /// let selected =
+    ///     <TensorDynLen as TensorLike>::select_indices(&tensor, &[j], &[1])?;
+    /// assert_eq!(selected.dims(), vec![2]);
+    /// assert_eq!(selected.to_vec::<f64>()?, vec![3.0, 4.0]);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn select_indices(
+        &self,
+        selected_indices: &[<Self as TensorIndex>::Index],
+        positions: &[usize],
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            selected_indices.len() == positions.len(),
+            "selected_indices length {} does not match positions length {}",
+            selected_indices.len(),
+            positions.len()
+        );
+        if selected_indices.is_empty() {
+            return Ok(self.clone());
+        }
+
+        let mut seen = HashSet::with_capacity(selected_indices.len());
+        for (index, &position) in selected_indices.iter().zip(positions.iter()) {
+            anyhow::ensure!(
+                seen.insert(index.clone()),
+                "selected index appears more than once"
+            );
+            anyhow::ensure!(
+                position < index.dim(),
+                "selected coordinate {} is out of range for index {:?} with dim {}",
+                position,
+                index,
+                index.dim()
+            );
+        }
+
+        let index_vals = selected_indices
+            .iter()
+            .cloned()
+            .zip(positions.iter().copied())
+            .collect::<Vec<_>>();
+        let onehot = Self::onehot(&index_vals)?;
+        Self::contract(&[self, &onehot], AllowedPairs::All)
+    }
 
     /// Create a one-hot tensor with value 1.0 at the specified index positions.
     ///
