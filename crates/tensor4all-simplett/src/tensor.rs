@@ -13,7 +13,10 @@ use crate::error::{Result, TensorTrainError};
 
 /// Rank-N tensor backed by `tenferro_tensor::TypedTensor<T>`.
 #[derive(Debug)]
-pub struct Tensor<T: TensorScalar, const N: usize>(TfTensor<T>);
+pub struct Tensor<T: TensorScalar, const N: usize> {
+    inner: TfTensor<T>,
+    dims: [usize; N],
+}
 
 /// Iterator over tensor elements in column-major order.
 pub struct TensorIter<'a, T: TensorScalar, const N: usize> {
@@ -64,7 +67,10 @@ fn col_major_data_to_tensor<T: TensorScalar, const N: usize>(
 
 impl<T: TensorScalar, const N: usize> Clone for Tensor<T, N> {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self {
+            inner: self.inner.clone(),
+            dims: self.dims,
+        }
     }
 }
 
@@ -132,12 +138,19 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
             "tensor rank mismatch: expected rank {N}, got {}",
             tensor.shape.len()
         );
-        Self(tensor)
+        let mut dims = [0usize; N];
+        for (dim, value) in dims.iter_mut().zip(tensor.shape.iter().copied()) {
+            *dim = value;
+        }
+        Self {
+            inner: tensor,
+            dims,
+        }
     }
 
     /// Total number of elements.
     pub fn len(&self) -> usize {
-        self.0.n_elements()
+        self.inner.n_elements()
     }
 
     /// Whether the tensor is empty (zero elements).
@@ -152,23 +165,18 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
 
     /// All dimensions.
     pub fn dims(&self) -> &[usize; N] {
-        self.0.shape.as_slice().try_into().unwrap_or_else(|_| {
-            panic!(
-                "tensor rank mismatch: expected rank {N}, got {}",
-                self.0.shape.len()
-            )
-        })
+        &self.dims
     }
 
     /// Export the tensor as a column-major flat vector.
     pub fn to_col_major_vec(&self) -> Vec<T> {
-        tensor_to_col_major_vec(&self.0)
+        tensor_to_col_major_vec(&self.inner)
     }
 
     /// Iterate over all elements in column-major order.
     pub fn iter(&self) -> TensorIter<'_, T, N> {
         TensorIter {
-            tensor: &self.0,
+            tensor: &self.inner,
             dims: *self.dims(),
             next: 0,
             len: self.len(),
@@ -178,7 +186,7 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     /// Iterate mutably over all elements in column-major order.
     pub fn iter_mut(&mut self) -> TensorIterMut<'_, T, N> {
         TensorIterMut {
-            tensor: &mut self.0,
+            tensor: &mut self.inner,
             dims: *self.dims(),
             next: 0,
             len: self.len(),
@@ -188,17 +196,17 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
 
     /// Borrow the wrapped tenferro tensor.
     pub fn as_inner(&self) -> &TfTensor<T> {
-        &self.0
+        &self.inner
     }
 
     /// Mutably borrow the wrapped tenferro tensor.
     pub fn as_inner_mut(&mut self) -> &mut TfTensor<T> {
-        &mut self.0
+        &mut self.inner
     }
 
     /// Consume this wrapper and return the inner tenferro tensor.
     pub fn into_inner(self) -> TfTensor<T> {
-        self.0
+        self.inner
     }
 
     /// Try to wrap an existing tenferro tensor.
@@ -252,7 +260,12 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
                 ),
             });
         }
-        Ok(Self(tensor))
+        let mut dims = [0usize; N];
+        dims.copy_from_slice(&tensor.shape);
+        Ok(Self {
+            inner: tensor,
+            dims,
+        })
     }
 
     /// Create a tensor by applying `f` to each multi-index (column-major order).
@@ -280,13 +293,13 @@ impl<T: TensorScalar, const N: usize> Index<[usize; N]> for Tensor<T, N> {
     type Output = T;
 
     fn index(&self, idx: [usize; N]) -> &T {
-        self.0.get(&idx[..])
+        self.inner.get(&idx[..])
     }
 }
 
 impl<T: TensorScalar, const N: usize> IndexMut<[usize; N]> for Tensor<T, N> {
     fn index_mut(&mut self, idx: [usize; N]) -> &mut T {
-        self.0.get_mut(&idx[..])
+        self.inner.get_mut(&idx[..])
     }
 }
 
@@ -356,6 +369,14 @@ mod tests {
     fn test_dims() {
         let t: Tensor3<f64> = Tensor3::from_elem([2, 3, 4], 1.0);
         assert_eq!(t.dims(), &[2, 3, 4]);
+    }
+
+    #[test]
+    fn dims_remain_available_after_inner_shape_mutation() {
+        let mut t: Tensor2<f64> = Tensor2::from_elem([2, 3], 1.0);
+        t.as_inner_mut().shape.push(4);
+
+        assert_eq!(t.dims(), &[2, 3]);
     }
 
     #[test]

@@ -61,6 +61,15 @@ pub enum MPOError {
     #[error("MPO is empty")]
     Empty,
 
+    /// Flat tensor data did not match the requested shape.
+    #[error("Tensor data length mismatch: expected {expected} elements, got {got}")]
+    DataLengthMismatch {
+        /// The element count implied by the requested shape.
+        expected: usize,
+        /// The number of elements supplied by the caller.
+        got: usize,
+    },
+
     /// Invalid boundary conditions
     #[error("Invalid boundary conditions: first tensor must have left_dim=1, last tensor must have right_dim=1")]
     InvalidBoundary,

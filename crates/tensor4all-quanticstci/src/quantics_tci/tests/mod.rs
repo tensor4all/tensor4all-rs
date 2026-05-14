@@ -3,6 +3,17 @@ use approx::assert_relative_eq;
 use quanticsgrids::UnfoldingScheme;
 
 #[test]
+fn point_from_batch_rejects_out_of_bounds_point() {
+    let data = vec![0, 1];
+    let batch = GlobalIndexBatch::new(&data, 2, 1).unwrap();
+    let err = point_from_batch(batch, 1).unwrap_err();
+
+    assert!(err.to_string().contains("invalid batch index"));
+    assert!(err.to_string().contains("site 0"));
+    assert!(err.to_string().contains("point 1"));
+}
+
+#[test]
 fn test_discrete_simple_function() {
     // f(i, j) = i + j (grididx are 1-indexed)
     // Use 4x4 grid which gives 2 sites with Fused scheme

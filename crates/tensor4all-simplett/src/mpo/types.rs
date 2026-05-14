@@ -10,6 +10,8 @@ use crate::tensor::Tensor;
 pub use crate::tensor::Tensor4;
 use tenferro_tensor::{TensorScalar, TypedTensor as TfTensor};
 
+use super::error::{MPOError, Result};
+
 /// Local index type (index within a single tensor site)
 pub type LocalIndex = usize;
 
@@ -172,11 +174,17 @@ pub fn tensor4_from_data<T: TensorScalar>(
     site_dim_1: usize,
     site_dim_2: usize,
     right_dim: usize,
-) -> Tensor4<T> {
-    assert_eq!(data.len(), left_dim * site_dim_1 * site_dim_2 * right_dim);
+) -> Result<Tensor4<T>> {
+    let expected = left_dim * site_dim_1 * site_dim_2 * right_dim;
+    if data.len() != expected {
+        return Err(MPOError::DataLengthMismatch {
+            expected,
+            got: data.len(),
+        });
+    }
     let dims = [left_dim, site_dim_1, site_dim_2, right_dim];
     let inner = TfTensor::from_vec(dims.to_vec(), data);
-    Tensor::from_tenferro_unchecked(inner)
+    Ok(Tensor::from_tenferro_unchecked(inner))
 }
 
 #[cfg(test)]

@@ -17,7 +17,7 @@ use crate::TreeTN;
 /// use tensor4all_treetn::tensor_train_to_treetn;
 ///
 /// let tt = TensorTrain::new(vec![
-///     tensor3_from_data(vec![1.0_f64, 2.0], 1, 2, 1),
+///     tensor3_from_data(vec![1.0_f64, 2.0], 1, 2, 1).unwrap(),
 /// ]).unwrap();
 ///
 /// let (treetn, site_indices) = tensor_train_to_treetn(&tt).unwrap();
@@ -49,7 +49,7 @@ where
 /// use tensor4all_treetn::tensor_train_to_treetn_with_names;
 ///
 /// let tt = TensorTrain::new(vec![
-///     tensor3_from_data(vec![1.0_f64, 2.0], 1, 2, 1),
+///     tensor3_from_data(vec![1.0_f64, 2.0], 1, 2, 1).unwrap(),
 /// ]).unwrap();
 ///
 /// let (treetn, site_indices) =
@@ -84,7 +84,7 @@ where
 /// use tensor4all_treetn::tensor_train_to_treetn_with_names_and_site_indices;
 ///
 /// let tt = TensorTrain::new(vec![
-///     tensor3_from_data(vec![1.0_f64, 2.0], 1, 2, 1),
+///     tensor3_from_data(vec![1.0_f64, 2.0], 1, 2, 1).unwrap(),
 /// ]).unwrap();
 /// let site = DynIndex::new_dyn(2);
 ///
