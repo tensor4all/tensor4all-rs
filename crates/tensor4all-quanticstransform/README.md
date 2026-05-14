@@ -9,6 +9,7 @@ Quantics transformation operators for tensor train methods. Port of Quantics.jl.
 - `flip_operator()` — reflection: f(x) = g(2^R - x)
 - `quantics_fourier_operator()` — Quantics Fourier Transform (QFT)
 - `affine_operator()` — affine transform y = A·x + b with rational coefficients
+- `LinearConstraintRow` — primitive integer row normalization for scale-invariant constraints
 
 ## Conventions
 
@@ -18,6 +19,9 @@ Quantics transformation operators for tensor train methods. Port of Quantics.jl.
   `site = bit_var0 + 2 * bit_var1 + ...`.
 - QFT output is in bit-reversed frequency order.
 - Affine matrices are column-major.
+- `LinearConstraintRow` is for equality or halfspace constraints such as
+  `16*x <= 64`; it is not a simplification step for affine maps such as
+  `y = A*x + b`.
 - Dense materialization is for small reference/debug checks only.
 
 ## Example
