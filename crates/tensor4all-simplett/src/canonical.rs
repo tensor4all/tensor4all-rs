@@ -15,22 +15,24 @@ use tensor4all_tcicore::{rrlu, RrLUOptions};
 use tensor4all_tensorbackend::{mat_mul, transpose, Matrix};
 
 /// Compute QR decomposition using rank-revealing LU with left-orthogonal output
-fn qr_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> (Matrix<T>, Matrix<T>) {
+fn qr_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> Result<(Matrix<T>, Matrix<T>)> {
     let options = RrLUOptions {
         max_rank: matrix.ncols().min(matrix.nrows()),
         rel_tol: 0.0, // No truncation
         abs_tol: 0.0,
         left_orthogonal: true,
     };
-    let lu = rrlu(matrix, Some(options)).expect("rrlu failed in QR decomposition");
-    (lu.left(true), lu.right(true))
+    let lu = rrlu(matrix, Some(options)).map_err(|err| TensorTrainError::InvalidOperation {
+        message: format!("QR decomposition failed: {err}"),
+    })?;
+    Ok((lu.left(true), lu.right(true)))
 }
 
 /// Compute LQ decomposition (transpose, QR, transpose)
-fn lq_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> (Matrix<T>, Matrix<T>) {
+fn lq_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> Result<(Matrix<T>, Matrix<T>)> {
     let at = transpose(matrix);
-    let (qt, lt) = qr_decomp(&at);
-    (transpose(&lt), transpose(&qt))
+    let (qt, lt) = qr_decomp(&at)?;
+    Ok((transpose(&lt), transpose(&qt)))
 }
 
 /// Convert Tensor3 to Matrix with left dimensions flattened
@@ -131,7 +133,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
             center,
             partition: 0..n,
         };
-        result.canonicalize();
+        result.canonicalize()?;
         Ok(result)
     }
 
@@ -157,27 +159,28 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
     }
 
     /// Canonicalize the tensor train around the center
-    fn canonicalize(&mut self) {
+    fn canonicalize(&mut self) -> Result<()> {
         let n = self.len();
         if n <= 1 {
-            return;
+            return Ok(());
         }
 
         // Left sweep: make tensors [0..center) left-orthogonal
         for i in 0..self.center {
-            self.make_left_orthogonal(i);
+            self.make_left_orthogonal(i)?;
         }
 
         // Right sweep: make tensors (center..n] right-orthogonal
         for i in (self.center + 1..n).rev() {
-            self.make_right_orthogonal(i);
+            self.make_right_orthogonal(i)?;
         }
+        Ok(())
     }
 
     /// Make tensor at site i left-orthogonal, pushing R to site i+1
-    fn make_left_orthogonal(&mut self, i: usize) {
+    fn make_left_orthogonal(&mut self, i: usize) -> Result<()> {
         if i >= self.len() - 1 {
-            return;
+            return Ok(());
         }
 
         let left_dim = self.tensors[i].left_dim();
@@ -185,7 +188,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
 
         // Reshape to (left_dim * site_dim, right_dim)
         let mat = tensor3_to_left_matrix(&self.tensors[i]);
-        let (q, r) = qr_decomp(&mat);
+        let (q, r) = qr_decomp(&mat)?;
 
         let new_bond_dim = q.ncols();
 
@@ -221,12 +224,13 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
             }
         }
         self.tensors[i + 1] = new_next_tensor;
+        Ok(())
     }
 
     /// Make tensor at site i right-orthogonal, pushing L to site i-1
-    fn make_right_orthogonal(&mut self, i: usize) {
+    fn make_right_orthogonal(&mut self, i: usize) -> Result<()> {
         if i == 0 {
-            return;
+            return Ok(());
         }
 
         let site_dim = self.tensors[i].site_dim();
@@ -234,7 +238,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
 
         // Reshape to (left_dim, site_dim * right_dim)
         let mat = tensor3_to_right_matrix(&self.tensors[i]);
-        let (l_mat, q) = lq_decomp(&mat);
+        let (l_mat, q) = lq_decomp(&mat)?;
 
         let new_bond_dim = q.nrows();
 
@@ -267,6 +271,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
             }
         }
         self.tensors[i - 1] = new_prev_tensor;
+        Ok(())
     }
 
     /// Move the center one position to the right
@@ -277,7 +282,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
             });
         }
 
-        self.make_left_orthogonal(self.center);
+        self.make_left_orthogonal(self.center)?;
         self.center += 1;
         Ok(())
     }
@@ -290,7 +295,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
             });
         }
 
-        self.make_right_orthogonal(self.center);
+        self.make_right_orthogonal(self.center)?;
         self.center -= 1;
         Ok(())
     }
@@ -382,20 +387,24 @@ impl<T: TTScalar + Scalar + Default> AbstractTensorTrain<T> for SiteTensorTrain<
 /// let mut tensors: Vec<_> = tt.site_tensors().to_vec();
 ///
 /// // Canonicalize around site 1.
-/// center_canonicalize(&mut tensors, 1);
+/// center_canonicalize(&mut tensors, 1).unwrap();
 ///
 /// // Rebuild TT from the canonicalized tensors; values are preserved.
 /// let tt2 = TensorTrain::new(tensors).unwrap();
 /// let val = tt2.evaluate(&[0, 1, 0]).unwrap();
 /// assert!((val - 1.0).abs() < 1e-12);
 /// ```
+///
+/// # Errors
+///
+/// Returns an error if the underlying QR/LQ factorization fails.
 pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
     tensors: &mut [Tensor3<T>],
     center: usize,
-) {
+) -> Result<()> {
     let n = tensors.len();
     if n <= 1 || center >= n {
-        return;
+        return Ok(());
     }
 
     // Left sweep: make tensors [0..center) left-orthogonal
@@ -404,7 +413,7 @@ pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
         let site_dim = tensors[i].site_dim();
 
         let mat = tensor3_to_left_matrix(&tensors[i]);
-        let (q, r) = qr_decomp(&mat);
+        let (q, r) = qr_decomp(&mat)?;
 
         let new_bond_dim = q.ncols();
 
@@ -453,7 +462,7 @@ pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
         let right_dim = tensors[i].right_dim();
 
         let mat = tensor3_to_right_matrix(&tensors[i]);
-        let (l_mat, q) = lq_decomp(&mat);
+        let (l_mat, q) = lq_decomp(&mat)?;
 
         let new_bond_dim = q.nrows();
 
@@ -487,6 +496,7 @@ pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
             tensors[i - 1] = new_prev_tensor;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -139,6 +139,19 @@ fn test_vidal_partition_exceeds_length() {
 }
 
 #[test]
+fn test_vidal_from_tensor_train_reports_qr_failure() {
+    let mut left = tensor3_zeros(1, 2, 1);
+    left.set3(0, 0, 0, f64::NAN);
+    left.set3(0, 1, 0, 1.0);
+    let right = tensor3_zeros(1, 2, 1);
+    let tt = TensorTrain::new(vec![left, right]).unwrap();
+
+    let err = VidalTensorTrain::from_tensor_train(&tt).unwrap_err();
+
+    assert!(err.to_string().contains("QR decomposition failed"));
+}
+
+#[test]
 fn test_vidal_round_trip_evaluations() {
     // Test that Vidal round-trip preserves individual element values
     let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 2);
