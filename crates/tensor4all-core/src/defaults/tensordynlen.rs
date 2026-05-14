@@ -3,7 +3,7 @@ use crate::index_like::IndexLike;
 use crate::index_ops::{common_ind_positions, prepare_contraction, prepare_contraction_pairs};
 use crate::tensor_like::LinearizationOrder;
 use crate::AnyScalar;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use num_complex::Complex64;
 use num_traits::Zero;
 use rand::Rng;
@@ -1758,10 +1758,15 @@ impl TensorDynLen {
     }
 
     pub(crate) fn contract_pairwise_default(&self, other: &Self) -> Self {
+        self.try_contract_pairwise_default(other)
+            .unwrap_or_else(|e| panic!("TensorDynLen::contract failed: {e}"))
+    }
+
+    pub(crate) fn try_contract_pairwise_default(&self, other: &Self) -> Result<Self> {
         let self_dims = Self::expected_dims_from_indices(&self.indices);
         let other_dims = Self::expected_dims_from_indices(&other.indices);
         let spec = prepare_contraction(&self.indices, &self_dims, &other.indices, &other_dims)
-            .expect("contraction preparation failed");
+            .context("contraction preparation failed")?;
         let result_axis_classes = Self::binary_contraction_axis_classes(
             self.storage.axis_classes(),
             &spec.axes_a,
@@ -1770,23 +1775,17 @@ impl TensorDynLen {
         );
 
         if self.should_use_structured_payload_contract(other) {
-            return self
-                .contract_structured_payloads(
-                    other,
-                    spec.result_indices,
-                    &spec.axes_a,
-                    &spec.axes_b,
-                )
-                .expect("TensorDynLen::contract structured payload path failed");
+            return self.contract_structured_payloads(
+                other,
+                spec.result_indices,
+                &spec.axes_a,
+                &spec.axes_b,
+            );
         }
 
         if self.indices.is_empty() && other.indices.is_empty() {
-            let result = self
-                .materialized_inner()
-                .mul(other.materialized_inner())
-                .unwrap_or_else(|e| panic!("TensorDynLen::contract scalar multiply failed: {e}"));
-            return Self::from_inner(spec.result_indices, result)
-                .expect("TensorDynLen::contract returned invalid scalar");
+            let result = self.materialized_inner().mul(other.materialized_inner())?;
+            return Self::from_inner(spec.result_indices, result);
         }
 
         if self.as_native().dtype() != other.as_native().dtype() {
@@ -1795,14 +1794,12 @@ impl TensorDynLen {
                 &spec.axes_a,
                 other.as_native(),
                 &spec.axes_b,
-            )
-            .unwrap_or_else(|e| panic!("TensorDynLen::contract native fallback failed: {e}"));
+            )?;
             return Self::from_native_with_axis_classes(
                 spec.result_indices,
                 result_native,
                 result_axis_classes,
-            )
-            .expect("TensorDynLen::contract native fallback returned invalid tensor");
+            );
         }
 
         let subscripts = Self::build_binary_einsum_subscripts(
@@ -1810,15 +1807,12 @@ impl TensorDynLen {
             &spec.axes_a,
             other.indices.len(),
             &spec.axes_b,
-        )
-        .expect("TensorDynLen::contract failed to build einsum subscripts");
+        )?;
         let result = eager_einsum_ad(
             &[self.materialized_inner(), other.materialized_inner()],
             &subscripts,
-        )
-        .unwrap_or_else(|e| panic!("TensorDynLen::contract failed: {e}"));
+        )?;
         Self::from_inner_with_axis_classes(spec.result_indices, result, result_axis_classes)
-            .expect("TensorDynLen::contract returned invalid tensor")
     }
 
     /// Contract this tensor with another tensor along explicitly specified index pairs.
@@ -3046,9 +3040,17 @@ impl TensorLike for TensorDynLen {
         super::contract::contract_multi(tensors, allowed)
     }
 
+    fn contract_pair(&self, other: &Self) -> Result<Self> {
+        self.try_contract_pairwise_default(other)
+    }
+
     fn contract_connected(tensors: &[&Self], allowed: crate::AllowedPairs<'_>) -> Result<Self> {
         // Delegate to contract_connected which requires connected graph
         super::contract::contract_connected(tensors, allowed)
+    }
+
+    fn select_indices(&self, selected_indices: &[DynIndex], positions: &[usize]) -> Result<Self> {
+        TensorDynLen::select_indices(self, selected_indices, positions)
     }
 
     fn axpby(&self, a: crate::AnyScalar, other: &Self, b: crate::AnyScalar) -> Result<Self> {
