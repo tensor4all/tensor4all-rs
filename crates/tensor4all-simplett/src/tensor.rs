@@ -9,6 +9,7 @@ use std::ops::{Index, IndexMut};
 use tenferro_tensor::{TensorScalar, TypedTensor as TfTensor};
 
 use crate::einsum_helper::{tensor_to_col_major_vec, typed_tensor_from_col_major_slice};
+use crate::error::{Result, TensorTrainError};
 
 /// Rank-N tensor backed by `tenferro_tensor::TypedTensor<T>`.
 #[derive(Debug)]
@@ -190,15 +191,45 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
         self.0
     }
 
-    /// Wrap an existing tenferro tensor, panicking on rank mismatch.
-    pub fn from_tenferro(tensor: TfTensor<T>) -> Self {
+    /// Try to wrap an existing tenferro tensor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tensor rank does not match `N`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::tensor::{Tensor2, Tensor3};
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let rank_2 = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let tensor = Tensor2::try_from_tenferro(rank_2).unwrap();
+    /// assert_eq!(tensor.dims(), &[2, 2]);
+    ///
+    /// let rank_2 = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// assert!(Tensor3::try_from_tenferro(rank_2).is_err());
+    /// ```
+    pub fn try_from_tenferro(tensor: TfTensor<T>) -> Result<Self> {
         if tensor.shape.len() != N {
-            panic!(
-                "tensor rank mismatch: expected rank {N}, got {}",
-                tensor.shape.len()
-            );
+            return Err(TensorTrainError::InvalidOperation {
+                message: format!(
+                    "tensor rank mismatch: expected rank {N}, got {}",
+                    tensor.shape.len()
+                ),
+            });
         }
-        Self(tensor)
+        Ok(Self(tensor))
+    }
+
+    /// Wrap an existing tenferro tensor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the tensor rank does not match `N`. Use
+    /// [`Tensor::try_from_tenferro`] to handle rank mismatch as an error.
+    pub fn from_tenferro(tensor: TfTensor<T>) -> Self {
+        Self::try_from_tenferro(tensor).unwrap_or_else(|err| panic!("{err}"))
     }
 
     /// Create a tensor by applying `f` to each multi-index (column-major order).
@@ -326,6 +357,15 @@ mod tests {
     fn test_from_tenferro_rank_mismatch_panics() {
         let inner = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]);
         let _ = Tensor3::from_tenferro(inner);
+    }
+
+    #[test]
+    fn test_try_from_tenferro_rank_mismatch_errors() {
+        let inner = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]);
+        let err = Tensor3::try_from_tenferro(inner).unwrap_err();
+
+        assert!(err.to_string().contains("expected rank 3"));
+        assert!(err.to_string().contains("got 2"));
     }
 
     #[test]

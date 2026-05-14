@@ -345,7 +345,7 @@ impl TensorTrain {
         let region = self.treetn.canonical_region();
         if region.len() == 1 {
             // Node name IS the site index since V = usize
-            Some(*region.iter().next().unwrap())
+            region.iter().next().copied()
         } else {
             None
         }
@@ -370,11 +370,13 @@ impl TensorTrain {
     /// Panics if `site >= len()`.
     #[inline]
     pub fn tensor(&self, site: usize) -> &TensorDynLen {
-        let node_idx = self.treetn.node_index(&site).expect("Site out of bounds");
-        self.treetn.tensor(node_idx).expect("Tensor not found")
+        self.tensor_checked(site)
+            .unwrap_or_else(|err| panic!("TensorTrain::tensor failed: {err}"))
     }
 
     /// Get a reference to the tensor at the given site.
+    ///
+    /// # Errors
     ///
     /// Returns `Err` if `site >= len()`.
     pub fn tensor_checked(&self, site: usize) -> Result<&TensorDynLen> {
@@ -406,8 +408,49 @@ impl TensorTrain {
     /// Panics if `site >= len()`.
     #[inline]
     pub fn tensor_mut(&mut self, site: usize) -> &mut TensorDynLen {
-        let node_idx = self.treetn.node_index(&site).expect("Site out of bounds");
-        self.treetn.tensor_mut(node_idx).expect("Tensor not found")
+        self.tensor_mut_checked(site)
+            .unwrap_or_else(|err| panic!("TensorTrain::tensor_mut failed: {err}"))
+    }
+
+    /// Get a mutable reference to the tensor at the given site.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `site >= len()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynId, Index, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// let s0 = Index::new_with_size(DynId(0), 2);
+    /// let link = Index::new_with_size(DynId(1), 3);
+    /// let s1 = Index::new_with_size(DynId(2), 2);
+    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), link.clone()], vec![1.0; 6]).unwrap();
+    /// let t1 = TensorDynLen::from_dense(vec![link, s1], vec![2.0; 6]).unwrap();
+    /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    ///
+    /// assert_eq!(tt.tensor_mut_checked(0).unwrap().indices()[0], s0);
+    /// assert!(tt.tensor_mut_checked(2).is_err());
+    /// ```
+    pub fn tensor_mut_checked(&mut self, site: usize) -> Result<&mut TensorDynLen> {
+        if site >= self.len() {
+            return Err(TensorTrainError::SiteOutOfBounds {
+                site,
+                length: self.len(),
+            });
+        }
+        let length = self.len();
+        let node_idx = self
+            .treetn
+            .node_index(&site)
+            .ok_or(TensorTrainError::SiteOutOfBounds { site, length })?;
+        self.treetn
+            .tensor_mut(node_idx)
+            .ok_or_else(|| TensorTrainError::InvalidStructure {
+                message: format!("missing tensor storage for site {site}"),
+            })
     }
 
     /// Get a reference to all tensors.
@@ -424,12 +467,50 @@ impl TensorTrain {
     /// Get a mutable reference to all tensors.
     #[inline]
     pub fn tensors_mut(&mut self) -> Vec<&mut TensorDynLen> {
-        let node_indices: Vec<_> = (0..self.len())
-            .map(|site| self.treetn.node_index(&site).expect("Site out of bounds"))
-            .collect();
+        self.tensors_mut_checked()
+            .unwrap_or_else(|err| panic!("TensorTrain::tensors_mut failed: {err}"))
+    }
+
+    /// Get mutable references to all tensors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the internal site-to-node mapping is inconsistent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynId, Index, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// let s0 = Index::new_with_size(DynId(0), 2);
+    /// let link = Index::new_with_size(DynId(1), 3);
+    /// let s1 = Index::new_with_size(DynId(2), 2);
+    /// let t0 = TensorDynLen::from_dense(vec![s0, link.clone()], vec![1.0; 6]).unwrap();
+    /// let t1 = TensorDynLen::from_dense(vec![link, s1], vec![2.0; 6]).unwrap();
+    /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    ///
+    /// let tensors = tt.tensors_mut_checked().unwrap();
+    /// assert_eq!(tensors.len(), 2);
+    /// assert_eq!(tensors[0].indices().len(), 2);
+    /// assert_eq!(tensors[1].indices().len(), 2);
+    /// ```
+    pub fn tensors_mut_checked(&mut self) -> Result<Vec<&mut TensorDynLen>> {
+        let length = self.len();
+        let node_indices: Vec<_> = (0..length)
+            .map(|site| {
+                self.treetn
+                    .node_index(&site)
+                    .ok_or(TensorTrainError::SiteOutOfBounds { site, length })
+            })
+            .collect::<Result<_>>()?;
         let mut tensor_ptrs = Vec::with_capacity(node_indices.len());
-        for node_idx in node_indices {
-            let tensor = self.treetn.tensor_mut(node_idx).expect("Tensor not found");
+        for (site, node_idx) in node_indices.into_iter().enumerate() {
+            let tensor = self.treetn.tensor_mut(node_idx).ok_or_else(|| {
+                TensorTrainError::InvalidStructure {
+                    message: format!("missing tensor storage for site {site}"),
+                }
+            })?;
             tensor_ptrs.push(tensor as *mut TensorDynLen);
         }
 
@@ -437,7 +518,7 @@ impl TensorTrain {
         // distinct TreeTN node. We collect at most one pointer per node and do
         // not mutate the network structure before converting those pointers back
         // into mutable references.
-        unsafe { tensor_ptrs.into_iter().map(|tensor| &mut *tensor).collect() }
+        Ok(unsafe { tensor_ptrs.into_iter().map(|tensor| &mut *tensor).collect() })
     }
 
     /// Get the link index between sites `i` and `i+1`.
@@ -657,7 +738,13 @@ impl TensorTrain {
     ///
     /// This invalidates orthogonality tracking.
     fn set_tensor_raw(&mut self, site: usize, tensor: TensorDynLen) -> Result<()> {
-        let node_idx = self.treetn.node_index(&site).expect("Site out of bounds");
+        let node_idx =
+            self.treetn
+                .node_index(&site)
+                .ok_or_else(|| TensorTrainError::SiteOutOfBounds {
+                    site,
+                    length: self.len(),
+                })?;
         self.treetn.replace_tensor(node_idx, tensor).map_err(|e| {
             TensorTrainError::InvalidStructure {
                 message: format!("Failed to replace tensor at site {}: {}", site, e),
@@ -669,12 +756,69 @@ impl TensorTrain {
     /// Replace the tensor at the given site.
     ///
     /// This invalidates orthogonality tracking.
-    pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `site >= len()` or if replacing the tensor makes the
+    /// tensor train structure invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynId, Index, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// let s0 = Index::new_with_size(DynId(0), 2);
+    /// let link = Index::new_with_size(DynId(1), 3);
+    /// let s1 = Index::new_with_size(DynId(2), 2);
+    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), link.clone()], vec![1.0; 6]).unwrap();
+    /// let t1 = TensorDynLen::from_dense(vec![link.clone(), s1], vec![2.0; 6]).unwrap();
+    /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    ///
+    /// let replacement = TensorDynLen::from_dense(vec![s0, link], vec![3.0; 6]).unwrap();
+    /// tt.set_tensor(0, replacement).unwrap();
+    /// assert_eq!(tt.tensor(0).to_vec::<f64>().unwrap(), vec![3.0; 6]);
+    /// ```
+    pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen) -> Result<()> {
+        self.set_tensor_checked(site, tensor)
+    }
+
+    /// Replace the tensor at the given site.
+    ///
+    /// This invalidates orthogonality tracking.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `site >= len()` or if replacing the tensor makes the
+    /// tensor train structure invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynId, Index, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// let s0 = Index::new_with_size(DynId(0), 2);
+    /// let link = Index::new_with_size(DynId(1), 3);
+    /// let s1 = Index::new_with_size(DynId(2), 2);
+    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), link.clone()], vec![1.0; 6]).unwrap();
+    /// let t1 = TensorDynLen::from_dense(vec![link.clone(), s1], vec![2.0; 6]).unwrap();
+    /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    ///
+    /// let replacement = TensorDynLen::from_dense(vec![s0, link], vec![4.0; 6]).unwrap();
+    /// tt.set_tensor_checked(0, replacement).unwrap();
+    /// assert!(tt.set_tensor_checked(2, tt.tensor(0).clone()).is_err());
+    /// ```
+    pub fn set_tensor_checked(&mut self, site: usize, tensor: TensorDynLen) -> Result<()> {
         self.set_tensor_raw(site, tensor)
-            .and_then(|()| self.normalize_site_tensor_order(site))
-            .unwrap_or_else(|e| panic!("TensorTrain::set_tensor failed: {}", e));
+            .and_then(|()| self.normalize_site_tensor_order(site))?;
         // Invalidate orthogonality
-        let _ = self.treetn.set_canonical_region(Vec::<usize>::new());
+        self.treetn
+            .set_canonical_region(Vec::<usize>::new())
+            .map_err(|e| TensorTrainError::InvalidStructure {
+                message: format!("Failed to clear canonical region: {}", e),
+            })?;
+        Ok(())
     }
 
     /// Orthogonalize the tensor train to have orthogonality center at the given site.
@@ -1233,7 +1377,10 @@ impl TensorTrain {
 // Implement Default for TensorTrain to allow std::mem::take
 impl Default for TensorTrain {
     fn default() -> Self {
-        Self::new(vec![]).expect("Failed to create empty TensorTrain")
+        Self {
+            treetn: TreeTN::new(),
+            canonical_form: None,
+        }
     }
 }
 
@@ -1307,7 +1454,9 @@ impl TensorLike for TensorTrain {
         let mut result = self.clone();
         for site in 0..result.len() {
             let t = result.tensor(site).conj();
-            result.set_tensor(site, t);
+            result
+                .set_tensor(site, t)
+                .unwrap_or_else(|err| panic!("TensorTrain::conj failed: {err}"));
         }
         result
     }

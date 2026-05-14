@@ -298,7 +298,7 @@ where
         // For TreeTN (tree structure), each bond index should appear in exactly 2 tensors.
         for (shared_index, nodes_with_index) in index_map {
             match nodes_with_index.len() {
-                0 => unreachable!(),
+                0 => continue,
                 1 => {
                     // Index appears in only one tensor - this is a physical index, no connection needed
                     continue;
@@ -465,7 +465,7 @@ where
             .external_indices()
             .iter()
             .find(|idx| *idx == index_a)
-            .unwrap()
+            .ok_or_else(|| anyhow::anyhow!("Index not found in tensor_a"))?
             .clone();
 
         // Get node names for site_index_network (before mutable borrow)
@@ -1926,4 +1926,19 @@ pub(crate) fn common_inds<I: IndexLike>(inds_a: &[I], inds_b: &[I]) -> Vec<I> {
         .filter(|idx| inds_b.iter().any(|other| other == *idx))
         .cloned()
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tensor4all_core::TensorDynLen;
+
+    #[test]
+    fn from_tensors_empty_returns_empty_network() {
+        let tn = TreeTN::<TensorDynLen, usize>::from_tensors(Vec::new(), Vec::new()).unwrap();
+
+        assert_eq!(tn.node_count(), 0);
+        assert_eq!(tn.edge_count(), 0);
+        assert!(tn.node_names().is_empty());
+    }
 }

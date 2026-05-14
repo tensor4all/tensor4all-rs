@@ -91,7 +91,8 @@ pub(crate) fn read_itensor(group: &Group) -> Result<TensorDynLen> {
             .read_1d()
             .context("Failed to read f64 data")?
             .to_vec();
-        Ok(TensorDynLen::from_dense(indices, col_major_data).unwrap())
+        TensorDynLen::from_dense(indices, col_major_data)
+            .context("Failed to build f64 TensorDynLen from HDF5 data")
     } else if storage_type_str.contains("Dense{ComplexF64}") {
         let data_ds = storage_group.dataset("data")?;
         // Read as native HDF5 compound type (Complex64)
@@ -100,7 +101,8 @@ pub(crate) fn read_itensor(group: &Group) -> Result<TensorDynLen> {
             .read_1d()
             .context("Failed to read complex data")?
             .to_vec();
-        Ok(TensorDynLen::from_dense(indices, col_major_data).unwrap())
+        TensorDynLen::from_dense(indices, col_major_data)
+            .context("Failed to build complex TensorDynLen from HDF5 data")
     } else {
         bail!(
             "Unsupported storage type: {}. Only Dense{{Float64}} and Dense{{ComplexF64}} are supported.",

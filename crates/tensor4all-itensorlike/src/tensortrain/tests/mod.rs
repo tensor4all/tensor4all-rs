@@ -665,8 +665,45 @@ fn test_set_tensor_invalidates_ortho() {
 
     // Replace tensor at site 0
     let new_tensor = make_tensor(vec![s0, l01]);
-    tt.set_tensor(0, new_tensor);
+    tt.set_tensor(0, new_tensor).unwrap();
     assert!(!tt.isortho());
+}
+
+#[test]
+fn test_set_tensor_checked_invalid_site_errors() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+    let t1 = make_tensor(vec![l01.clone(), s1]);
+    let replacement = make_tensor(vec![s0, l01]);
+
+    let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+    let err = tt.set_tensor_checked(2, replacement).unwrap_err();
+    assert!(matches!(
+        err,
+        TensorTrainError::SiteOutOfBounds { site: 2, length: 2 }
+    ));
+}
+
+#[test]
+fn test_tensor_mut_checked_invalid_site_errors() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![s0, l01.clone()]);
+    let t1 = make_tensor(vec![l01, s1]);
+
+    let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+    let err = tt.tensor_mut_checked(2).unwrap_err();
+    assert!(matches!(
+        err,
+        TensorTrainError::SiteOutOfBounds { site: 2, length: 2 }
+    ));
 }
 
 #[test]
@@ -684,6 +721,28 @@ fn test_tensors_mut_returns_all_sites_in_order() {
 
     {
         let mut tensors = tt.tensors_mut();
+        assert_eq!(tensors.len(), 2);
+        *tensors[0] = replacement.clone();
+    }
+
+    assert_eq!(tt.tensor(0).to_vec::<f64>().unwrap(), vec![42.0; 6]);
+}
+
+#[test]
+fn test_tensors_mut_checked_returns_all_sites_in_order() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+    let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+    let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+    let replacement =
+        TensorDynLen::from_dense(vec![s0, l01], vec![42.0; 6]).expect("valid replacement");
+
+    {
+        let mut tensors = tt.tensors_mut_checked().unwrap();
         assert_eq!(tensors.len(), 2);
         *tensors[0] = replacement.clone();
     }
