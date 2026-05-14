@@ -72,6 +72,7 @@ struct CachedEvaluationStats {
     subtree_environment_count: usize,
     directed_message_count: usize,
     batched_message_contract_count: usize,
+    batched_center_contract_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -712,10 +713,21 @@ where
             self.layout.n_indices,
             "TreeTNCachedEvaluator::evaluate_batch",
         )?;
+        if values.shape()[1] == 0 {
+            self.last_stats = CachedEvaluationStats::default();
+            return Ok(Vec::new());
+        }
         let center = self.ensure_center(values)?.clone();
         let (component_batches, environment_cache) =
             self.build_environment_cache(&center, values)?;
-        self.contract_center_for_points(&center, values, &component_batches, &environment_cache)
+        let results = self.contract_center_for_points(
+            &center,
+            values,
+            &component_batches,
+            &environment_cache,
+        )?;
+        self.last_stats.batched_center_contract_count = 1;
+        Ok(results)
     }
 
     fn ensure_center(&mut self, values: ColMajorArrayRef<'_, usize>) -> Result<&V> {
@@ -938,6 +950,9 @@ where
         environment_cache: &EnvironmentCache<V>,
     ) -> Result<Vec<AnyScalar>> {
         let n_points = values.shape()[1];
+        if n_points == 0 {
+            return Ok(Vec::new());
+        }
         let center_entries = self
             .layout
             .entries_by_node
@@ -945,10 +960,8 @@ where
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         let center_tensor = tensor_for_node(self.tree, center)?;
-        let scalar_one = TensorDynLen::scalar_one()
-            .context("TreeTNCachedEvaluator::evaluate_batch: failed to create scalar")?;
-
-        let mut results = Vec::with_capacity(n_points);
+        let point_index = DynIndex::new_dyn(n_points);
+        let mut center_slices = Vec::with_capacity(n_points);
         for point in 0..n_points {
             let center_index_vals = center_entries
                 .iter()
@@ -958,39 +971,53 @@ where
                 })
                 .collect::<Vec<_>>();
             validate_index_vals(&center_index_vals, "TreeTNCachedEvaluator::evaluate_batch")?;
-            let center_partial = slice_tensor(center_tensor, &center_index_vals)
-                .context("TreeTNCachedEvaluator::evaluate_batch: failed to slice center tensor")?;
-
-            let mut result_tensor = center_partial;
-            for batch in component_batches {
-                let assignment_id = batch.point_to_assignment[point];
-                let environment = environment_cache.get(&batch.neighbor).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "TreeTNCachedEvaluator::evaluate_batch: missing cached environment"
-                    )
-                })?;
-                let environment = environment
-                    .tensor
-                    .select_indices(
-                        std::slice::from_ref(&environment.assignment_index),
-                        &[assignment_id],
-                    )
-                    .context(
-                        "TreeTNCachedEvaluator::evaluate_batch: failed to select cached environment",
-                    )?;
-                result_tensor = result_tensor
-                    .contract_pair(&environment)
-                    .context("TreeTNCachedEvaluator::evaluate_batch: failed to contract center")?;
-            }
-
-            results.push(
-                scalar_one
-                    .inner_product(&result_tensor)
-                    .context("TreeTNCachedEvaluator::evaluate_batch: failed to extract scalar")?,
+            center_slices.push(
+                slice_tensor(center_tensor, &center_index_vals).context(
+                    "TreeTNCachedEvaluator::evaluate_batch: failed to slice center tensor",
+                )?,
             );
         }
 
-        Ok(results)
+        let mut operands = Vec::with_capacity(1 + component_batches.len());
+        operands.push(
+            stack_tensors_with_assignment_index(&point_index, &center_slices)
+                .context("TreeTNCachedEvaluator::evaluate_batch: failed to stack center tensor")?,
+        );
+
+        for batch in component_batches {
+            let environment = environment_cache.get(&batch.neighbor).ok_or_else(|| {
+                anyhow::anyhow!("TreeTNCachedEvaluator::evaluate_batch: missing cached environment")
+            })?;
+            operands.push(
+                gather_stacked_tensor(
+                    &environment.tensor,
+                    &environment.assignment_index,
+                    &point_index,
+                    &batch.point_to_assignment,
+                )
+                .context(
+                    "TreeTNCachedEvaluator::evaluate_batch: failed to gather center environment",
+                )?,
+            );
+        }
+
+        let result_tensor = if operands.len() == 1 {
+            operands.remove(0)
+        } else {
+            let retain = [point_index.clone()];
+            let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain);
+            let operand_refs = operands.iter().collect::<Vec<_>>();
+            contract_multi_with_options(&operand_refs, options)
+                .context("TreeTNCachedEvaluator::evaluate_batch: failed to contract center batch")?
+        };
+        let result_tensor = ensure_assignment_axis_first(result_tensor, &point_index)?;
+        anyhow::ensure!(
+            result_tensor.indices() == std::slice::from_ref(&point_index),
+            "TreeTNCachedEvaluator::evaluate_batch: center contraction left non-scalar indices {:?}",
+            result_tensor.indices()
+        );
+
+        tensor_values_any(&result_tensor)
     }
 
     fn index_vals_for_point(
@@ -1797,5 +1824,33 @@ mod tests {
         let actual = evaluator.evaluate_batch(points).unwrap();
 
         assert_scalars_close(&actual, &expected);
+    }
+
+    #[test]
+    fn cached_evaluator_batches_center_contraction() {
+        let (tree, indices) = star_tree();
+        let values = vec![
+            0, 0, 0, 0, //
+            1, 0, 1, 0, //
+            0, 1, 0, 1, //
+            1, 1, 1, 1,
+        ];
+        let shape = [4, 4];
+        let points = ColMajorArrayRef::new(&values, &shape);
+        let expected = tree.evaluate(&indices, points).unwrap();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let actual = evaluator.evaluate_batch(points).unwrap();
+
+        assert_scalars_close(&actual, &expected);
+        assert_eq!(evaluator.stats_for_test().batched_center_contract_count, 1);
     }
 }
