@@ -73,30 +73,6 @@ where
     assert_identity2_factor_shapes(&lazy);
 }
 
-fn test_matrix_luci_factor_dispatch_dense_error_lazy_success<T>()
-where
-    T: Scalar + crate::scalar::Scalar,
-{
-    let matrix = identity2::<T>();
-    let dense = <T as Scalar>::matrix_luci_factors_from_matrix(&matrix, options());
-    assert!(dense.is_err());
-
-    let lazy = <T as Scalar>::matrix_luci_factors_from_blocks(
-        matrix.nrows(),
-        matrix.ncols(),
-        |rows, cols, out| {
-            for (j, &col) in cols.iter().enumerate() {
-                for (i, &row) in rows.iter().enumerate() {
-                    out[i + rows.len() * j] = matrix[[row, col]];
-                }
-            }
-        },
-        options(),
-    )
-    .unwrap();
-    assert_identity2_factor_shapes(&lazy);
-}
-
 #[test]
 fn test_scalar_f64() {
     test_scalar_generic::<f64>();
@@ -124,7 +100,7 @@ fn test_scalar_f32() {
 
 #[test]
 fn test_matrix_luci_factor_dispatch_f32() {
-    test_matrix_luci_factor_dispatch_dense_error_lazy_success::<f32>();
+    test_matrix_luci_factor_dispatch_supported::<f32>();
 }
 
 #[test]
@@ -172,5 +148,5 @@ fn test_scalar_c32() {
 
 #[test]
 fn test_matrix_luci_factor_dispatch_c32() {
-    test_matrix_luci_factor_dispatch_dense_error_lazy_success::<Complex32>();
+    test_matrix_luci_factor_dispatch_supported::<Complex32>();
 }

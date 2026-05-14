@@ -1168,6 +1168,17 @@ fn test_treetn_evaluate_complex_requires_out_im_even_for_real_value() {
 }
 
 #[test]
+fn test_treetn_evaluator_evaluate_requires_mutable_handle_signature() {
+    let _evaluate: extern "C" fn(
+        *mut t4a_treetn_evaluator,
+        *const libc::size_t,
+        libc::size_t,
+        *mut libc::c_double,
+        *mut libc::c_double,
+    ) -> t4a_status_code = t4a_treetn_evaluator_evaluate;
+}
+
+#[test]
 fn test_treetn_evaluator_reuses_index_order_for_multiple_batches() {
     let (tt, tensors, indices) = make_two_site_treetn();
     let s0 = indices[0];
@@ -1216,6 +1227,47 @@ fn test_treetn_evaluator_reuses_index_order_for_multiple_batches() {
 
     t4a_treetn_evaluator_release(evaluator);
     cleanup(tt, tensors, indices);
+}
+
+#[test]
+fn test_treetn_evaluator_owns_tree_after_original_release() {
+    let (tt, tensors, indices) = make_two_site_treetn();
+    let s0 = indices[0];
+    let s1 = indices[3];
+    let index_ptrs = [s0 as *const t4a_index, s1 as *const t4a_index];
+    let mut evaluator = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_evaluator_new(tt, index_ptrs.as_ptr(), 2, &mut evaluator),
+        T4A_SUCCESS
+    );
+    assert!(!evaluator.is_null());
+
+    t4a_treetn_release(tt);
+
+    let values = [
+        0usize, 0usize, // point 0
+        1usize, 1usize, // point 1
+    ];
+    let mut out = [0.0; 2];
+    assert_eq!(
+        t4a_treetn_evaluator_evaluate(
+            evaluator,
+            values.as_ptr(),
+            2,
+            out.as_mut_ptr(),
+            std::ptr::null_mut()
+        ),
+        T4A_SUCCESS
+    );
+    assert_eq!(out, [1.0, 4.0]);
+
+    t4a_treetn_evaluator_release(evaluator);
+    for tensor in tensors {
+        t4a_tensor_release(tensor);
+    }
+    for index in indices {
+        t4a_index_release(index);
+    }
 }
 
 #[test]

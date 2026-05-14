@@ -16,9 +16,10 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike, SvdTruncationPolicy};
 use tensor4all_treetn::treetn::contraction::{self, ContractionMethod, ContractionOptions};
 use tensor4all_treetn::{
-    apply_linear_operator, partial_contract, square_linsolve, ApplyOptions, CanonicalForm,
-    CanonicalizationOptions, IndexMapping, LinearOperator, LinsolveOptions, PartialContractionSpec,
-    RestructureOptions, SiteIndexNetwork, SplitOptions, SwapOptions, TruncationOptions,
+    apply_linear_operator, partial_contract, square_linsolve, ApplyOptions, CachedEvaluatorOptions,
+    CanonicalForm, CanonicalizationOptions, IndexMapping, LinearOperator, LinsolveOptions,
+    PartialContractionSpec, RestructureOptions, SiteIndexNetwork, SplitOptions, SwapOptions,
+    TreeTNCachedEvaluator, TruncationOptions,
 };
 
 /// Release a TreeTN handle.
@@ -137,11 +138,13 @@ fn require_tree_mut<'a>(ptr: *mut t4a_treetn) -> CapiResult<&'a mut t4a_treetn> 
     Ok(unsafe { &mut *ptr })
 }
 
-fn require_evaluator<'a>(ptr: *const t4a_treetn_evaluator) -> CapiResult<&'a t4a_treetn_evaluator> {
+fn require_evaluator_mut<'a>(
+    ptr: *mut t4a_treetn_evaluator,
+) -> CapiResult<&'a mut t4a_treetn_evaluator> {
     if ptr.is_null() {
         return Err(capi_error(T4A_NULL_POINTER, "treetn evaluator is null"));
     }
-    Ok(unsafe { &*ptr })
+    Ok(unsafe { &mut *ptr })
 }
 
 fn require_node(tn: &InternalTreeTN, vertex: usize) -> CapiResult<()> {
@@ -1318,12 +1321,12 @@ pub extern "C" fn t4a_treetn_evaluator_new(
             ));
         }
         let indices = collect_indices(indices, n_indices, "indices")?;
-        let evaluator = tn
-            .inner()
-            .evaluator(&indices)
+        TreeTNCachedEvaluator::new(tn.inner(), &indices, CachedEvaluatorOptions::default())
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         Ok(t4a_treetn_evaluator::new(InternalTreeTNEvaluatorHandle {
-            evaluator,
+            tree: tn.inner().clone(),
+            indices,
+            center: None,
             scalar_kind: treetn_scalar_kind(tn.inner()),
         }))
     })
@@ -1332,14 +1335,14 @@ pub extern "C" fn t4a_treetn_evaluator_new(
 /// Evaluate one or more points using a reusable TreeTN evaluator.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetn_evaluator_evaluate(
-    evaluator: *const t4a_treetn_evaluator,
+    evaluator: *mut t4a_treetn_evaluator,
     values_col_major: *const libc::size_t,
     n_points: libc::size_t,
     out_re: *mut libc::c_double,
     out_im: *mut libc::c_double,
 ) -> t4a_status_code {
     run_status(|| {
-        let evaluator = require_evaluator(evaluator)?;
+        let evaluator = require_evaluator_mut(evaluator)?;
         if n_points == 0 {
             return Err(capi_error(
                 T4A_INVALID_ARGUMENT,
@@ -1350,8 +1353,8 @@ pub extern "C" fn t4a_treetn_evaluator_evaluate(
             return Err(capi_error(T4A_NULL_POINTER, "values_col_major is null"));
         }
 
-        let handle = evaluator.inner();
-        let n_indices = handle.evaluator.input_count();
+        let handle = evaluator.inner_mut();
+        let n_indices = handle.indices.len();
         let n_values = n_indices.checked_mul(n_points).ok_or_else(|| {
             capi_error(
                 T4A_INVALID_ARGUMENT,
@@ -1361,11 +1364,25 @@ pub extern "C" fn t4a_treetn_evaluator_evaluate(
         let values_slice = unsafe { std::slice::from_raw_parts(values_col_major, n_values) };
         let shape = [n_indices, n_points];
         let values = ColMajorArrayRef::new(values_slice, &shape);
-        let results = handle
-            .evaluator
+
+        let scalar_kind = handle.scalar_kind;
+        let mut cached = TreeTNCachedEvaluator::new(
+            &handle.tree,
+            &handle.indices,
+            CachedEvaluatorOptions {
+                center: handle.center,
+                ..Default::default()
+            },
+        )
+        .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        let results = cached
             .evaluate_batch(values)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
-        write_evaluation_results(&results, handle.scalar_kind, out_re, out_im)
+        let center = cached.center().copied();
+        drop(cached);
+        handle.center = center;
+
+        write_evaluation_results(&results, scalar_kind, out_re, out_im)
     })
 }
 
@@ -1409,10 +1426,10 @@ pub extern "C" fn t4a_treetn_evaluate(
         let shape = [n_indices, n_points];
         let values = ColMajorArrayRef::new(values_slice, &shape);
         let scalar_kind = treetn_scalar_kind(tn.inner());
-        let results = tn
-            .inner()
-            .evaluator(&indices)
-            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?
+        let mut evaluator =
+            TreeTNCachedEvaluator::new(tn.inner(), &indices, CachedEvaluatorOptions::default())
+                .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        let results = evaluator
             .evaluate_batch(values)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
 

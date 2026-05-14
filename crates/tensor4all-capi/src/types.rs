@@ -9,7 +9,7 @@ use tensor4all_core::{
 use tensor4all_quanticstransform::BoundaryCondition as QuanticsBoundaryCondition;
 use tensor4all_tensorbackend::StorageKind;
 use tensor4all_treetn::treetn::contraction::ContractionMethod;
-use tensor4all_treetn::{CanonicalForm as TreeCanonicalForm, DefaultTreeTN, TreeTNEvaluator};
+use tensor4all_treetn::{CanonicalForm as TreeCanonicalForm, DefaultTreeTN};
 
 /// Internal dynamic index type wrapped by `t4a_index`.
 pub(crate) type InternalIndex = DynIndex;
@@ -20,13 +20,12 @@ pub(crate) type InternalTensor = TensorDynLen;
 /// Internal tree tensor network type wrapped by `t4a_treetn`.
 pub(crate) type InternalTreeTN = DefaultTreeTN<usize>;
 
-/// Internal reusable TreeTN evaluator type wrapped by `t4a_treetn_evaluator`.
-pub(crate) type InternalTreeTNEvaluator = TreeTNEvaluator<InternalTensor, usize>;
-
 /// Internal C API evaluator handle state.
 #[derive(Clone)]
 pub(crate) struct InternalTreeTNEvaluatorHandle {
-    pub(crate) evaluator: InternalTreeTNEvaluator,
+    pub(crate) tree: InternalTreeTN,
+    pub(crate) indices: Vec<InternalIndex>,
+    pub(crate) center: Option<usize>,
     pub(crate) scalar_kind: t4a_scalar_kind,
 }
 
@@ -202,16 +201,21 @@ pub struct t4a_treetn_evaluator {
 }
 
 impl t4a_treetn_evaluator {
-    /// Create a wrapper from an internal reusable evaluator value.
+    /// Create a wrapper from internal reusable evaluator state.
     pub(crate) fn new(handle: InternalTreeTNEvaluatorHandle) -> Self {
         Self {
             _private: Box::into_raw(Box::new(handle)) as *const c_void,
         }
     }
 
-    /// Borrow the wrapped reusable evaluator.
+    /// Borrow the wrapped reusable evaluator state.
     pub(crate) fn inner(&self) -> &InternalTreeTNEvaluatorHandle {
         unsafe { &*(self._private as *const InternalTreeTNEvaluatorHandle) }
+    }
+
+    /// Mutably borrow the wrapped reusable evaluator state.
+    pub(crate) fn inner_mut(&mut self) -> &mut InternalTreeTNEvaluatorHandle {
+        unsafe { &mut *(self._private as *mut InternalTreeTNEvaluatorHandle) }
     }
 }
 

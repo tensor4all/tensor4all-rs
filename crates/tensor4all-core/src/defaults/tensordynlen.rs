@@ -217,6 +217,19 @@ impl TensorDynLen {
         Self::canonicalize_axis_classes(&permuted)
     }
 
+    fn normalize_insert_axis(op: &str, axis: isize, rank: usize) -> Result<usize> {
+        let normalized = if axis < 0 {
+            rank as isize + 1 + axis
+        } else {
+            axis
+        };
+        anyhow::ensure!(
+            normalized >= 0 && normalized <= rank as isize,
+            "{op}: axis {axis} is out of bounds for inserting into rank {rank}"
+        );
+        Ok(normalized as usize)
+    }
+
     fn is_diag_axis_classes(axis_classes: &[usize]) -> bool {
         axis_classes.len() >= 2 && axis_classes.iter().all(|&class_id| class_id == 0)
     }
@@ -448,6 +461,19 @@ impl TensorDynLen {
     fn compact_payload_is_logical_dense(&self, payload_dims: &[usize]) -> bool {
         self.storage.axis_classes() == Self::dense_axis_classes(self.indices.len())
             && payload_dims == self.dims()
+    }
+
+    fn uses_tracked_compact_storage(&self) -> bool {
+        self.tracked_compact_payload_value()
+            .is_some_and(|value| !self.compact_payload_is_logical_dense(&value.payload_dims))
+    }
+
+    fn ensure_shape_packing_preserves_ad(&self, op_name: &str) -> Result<()> {
+        anyhow::ensure!(
+            !self.uses_tracked_compact_storage(),
+            "{op_name}: structured AD tensors with compact storage are not supported because materializing compact storage would detach gradients"
+        );
+        Ok(())
     }
 
     fn build_binary_contraction_labels(
@@ -1229,6 +1255,144 @@ impl TensorDynLen {
             .materialized_inner()
             .dynamic_slice(&starts_tensor, &slice_sizes)?;
         Self::from_inner(kept_indices, sliced.reshape(&kept_dims)?)
+    }
+
+    /// Stack tensors along a newly inserted index.
+    ///
+    /// Each input must have exactly the same index order and dimensions. The
+    /// `new_index` dimension must match the number of input tensors. The
+    /// `axis` argument follows tenferro/PyTorch-style insertion semantics:
+    /// `0` inserts before the first existing axis and `-1` appends a trailing
+    /// axis. Use `axis = -1` for batched contractions because tenferro uses
+    /// trailing batch dimensions as the canonical batched-GEMM layout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no tensors are provided, the new index dimension
+    /// does not match the number of tensors, an input has a different index
+    /// order, `axis` is outside the valid insertion range, or a tracked
+    /// structured-AD tensor uses compact storage that would need dense
+    /// materialization.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let batch = DynIndex::new_dyn(2);
+    /// let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
+    /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0_f64, 4.0]).unwrap();
+    ///
+    /// let stacked = TensorDynLen::stack_along_new_index(&[&a, &b], batch.clone(), -1).unwrap();
+    ///
+    /// assert_eq!(stacked.indices(), &[i, batch]);
+    /// assert_eq!(stacked.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
+    /// ```
+    pub fn stack_along_new_index(
+        tensors: &[&Self],
+        new_index: DynIndex,
+        axis: isize,
+    ) -> Result<Self> {
+        let first = tensors
+            .first()
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("stack_along_new_index requires at least one tensor"))?;
+        anyhow::ensure!(
+            new_index.dim() == tensors.len(),
+            "stack_along_new_index: new index dim {} does not match tensor count {}",
+            new_index.dim(),
+            tensors.len()
+        );
+
+        let base_indices = first.indices.clone();
+        for tensor in tensors.iter().copied().skip(1) {
+            anyhow::ensure!(
+                tensor.indices == base_indices,
+                "stack_along_new_index: input tensors must have identical index order"
+            );
+        }
+        for &tensor in tensors {
+            tensor.ensure_shape_packing_preserves_ad("stack_along_new_index")?;
+        }
+
+        let insert_axis =
+            Self::normalize_insert_axis("stack_along_new_index", axis, base_indices.len())?;
+        let mut result_indices = base_indices;
+        result_indices.insert(insert_axis, new_index);
+
+        let inner_refs = tensors
+            .iter()
+            .map(|tensor| tensor.materialized_inner())
+            .collect::<Vec<_>>();
+        let stacked = EagerTensor::stack(&inner_refs, axis)?;
+        Self::from_inner(result_indices, stacked)
+    }
+
+    /// Select positions along one index and replace it with a new index.
+    ///
+    /// This is the retained-axis counterpart to [`Self::select_indices`]:
+    /// instead of fixing one coordinate and removing the index, it gathers a
+    /// list of positions and keeps the gathered axis under `target_index`.
+    /// Repeated positions are allowed; reverse-mode AD accumulates repeated
+    /// cotangents through tenferro's scatter-add gather transpose.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `source_index` is not present, `target_index.dim()`
+    /// differs from `positions.len()`, or any position is out of range for the
+    /// source index. A tracked structured-AD tensor with compact storage is
+    /// also rejected because dense materialization would detach gradients.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let source = DynIndex::new_dyn(3);
+    /// let target = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(
+    ///     vec![source.clone()],
+    ///     vec![10.0_f64, 20.0, 30.0],
+    /// ).unwrap();
+    ///
+    /// let selected = tensor.index_select(&source, target.clone(), &[2, 0]).unwrap();
+    ///
+    /// assert_eq!(selected.indices(), &[target]);
+    /// assert_eq!(selected.to_vec::<f64>().unwrap(), vec![30.0, 10.0]);
+    /// ```
+    pub fn index_select(
+        &self,
+        source_index: &DynIndex,
+        target_index: DynIndex,
+        positions: &[usize],
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            target_index.dim() == positions.len(),
+            "index_select: target index dim {} does not match position count {}",
+            target_index.dim(),
+            positions.len()
+        );
+        let axis = self
+            .indices
+            .iter()
+            .position(|index| index == source_index)
+            .ok_or_else(|| anyhow::anyhow!("index_select: source index is not present"))?;
+        let source_dim = self.indices[axis].dim();
+        for &position in positions {
+            anyhow::ensure!(
+                position < source_dim,
+                "index_select: position {position} is out of range for source dim {source_dim}"
+            );
+        }
+        self.ensure_shape_packing_preserves_ad("index_select")?;
+
+        let axis = isize::try_from(axis)
+            .map_err(|_| anyhow::anyhow!("index_select: axis does not fit in isize"))?;
+        let selected = self.materialized_inner().index_select(axis, positions)?;
+        let mut result_indices = self.indices.clone();
+        result_indices[axis as usize] = target_index;
+        Self::from_inner(result_indices, selected)
     }
 
     /// Create a new tensor with dynamic rank.
