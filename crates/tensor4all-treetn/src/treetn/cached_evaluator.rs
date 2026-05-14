@@ -6,25 +6,27 @@ use std::hash::Hash;
 
 use anyhow::{bail, Context, Result};
 use num_complex::Complex64;
-use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex, IndexLike, TensorDynLen, TensorLike};
+use tensor4all_core::{
+    AnyScalar, ColMajorArrayRef, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike,
+};
 
 use super::TreeTN;
 
 type KeyId = usize;
-type EnvironmentCache<T, V> = HashMap<V, Vec<T>>;
-type CacheBuildResult<T, V> = (Vec<ComponentBatch<V>>, EnvironmentCache<T, V>);
+type EnvironmentCache<V> = HashMap<V, Vec<TensorDynLen>>;
+type CacheBuildResult<V> = (Vec<ComponentBatch<V>>, EnvironmentCache<V>);
 type ParentMap<V> = HashMap<V, Option<V>>;
 
 #[derive(Clone, Debug)]
-struct SiteEntry<I> {
-    index: I,
+struct SiteEntry {
+    index: DynIndex,
     input_position: usize,
     local_axis: usize,
 }
 
 #[derive(Clone, Debug)]
-struct EvaluatorLayout<I, V> {
-    entries_by_node: HashMap<V, Vec<SiteEntry<I>>>,
+struct EvaluatorLayout<V> {
+    entries_by_node: HashMap<V, Vec<SiteEntry>>,
     n_indices: usize,
 }
 
@@ -81,30 +83,20 @@ impl<V> ComponentCostIndex<V>
 where
     V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
 {
-    fn new<T>(
-        tree: &TreeTN<T, V>,
-        indices: &[T::Index],
+    fn new(
+        tree: &TreeTN<TensorDynLen, V>,
+        indices: &[DynIndex],
         values: ColMajorArrayRef<'_, usize>,
-    ) -> Result<Self>
-    where
-        T: TensorLike,
-        T::Index: Clone + Eq + Hash,
-        <T::Index as IndexLike>::Id: Ord,
-    {
+    ) -> Result<Self> {
         let layout = build_layout(tree, indices)?;
         Self::from_layout(tree, &layout, values)
     }
 
-    fn from_layout<T>(
-        tree: &TreeTN<T, V>,
-        layout: &EvaluatorLayout<T::Index, V>,
+    fn from_layout(
+        tree: &TreeTN<TensorDynLen, V>,
+        layout: &EvaluatorLayout<V>,
         values: ColMajorArrayRef<'_, usize>,
-    ) -> Result<Self>
-    where
-        T: TensorLike,
-        T::Index: Clone + Eq + Hash,
-        <T::Index as IndexLike>::Id: Ord,
-    {
+    ) -> Result<Self> {
         validate_values_shape(values, layout.n_indices, "ComponentCostIndex::new")?;
         let n_points = values.shape()[1];
 
@@ -291,10 +283,7 @@ impl<V> RootedMessagePlan<V>
 where
     V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
 {
-    fn new<T>(tree: &TreeTN<T, V>, center: &V) -> Result<Self>
-    where
-        T: TensorLike,
-    {
+    fn new(tree: &TreeTN<TensorDynLen, V>, center: &V) -> Result<Self> {
         let neighbors = sorted_neighbors(tree);
         let (parent, order) = rooted_tree(&neighbors, center)?;
 
@@ -574,23 +563,19 @@ where
 /// assert_eq!(evaluator.center(), Some(&0));
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub struct TreeTNCachedEvaluator<'a, T, V>
+pub struct TreeTNCachedEvaluator<'a, V>
 where
-    T: TensorLike,
     V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
 {
-    tree: &'a TreeTN<T, V>,
-    layout: EvaluatorLayout<T::Index, V>,
+    tree: &'a TreeTN<TensorDynLen, V>,
+    layout: EvaluatorLayout<V>,
     options: CachedEvaluatorOptions<V>,
     center: Option<V>,
     last_stats: CachedEvaluationStats,
 }
 
-impl<'a, T, V> TreeTNCachedEvaluator<'a, T, V>
+impl<'a, V> TreeTNCachedEvaluator<'a, V>
 where
-    T: TensorLike,
-    T::Index: Clone + Eq + Hash,
-    <T::Index as IndexLike>::Id: Clone + Eq + Hash + Ord + Debug + Send + Sync,
     V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
 {
     /// Creates a cached evaluator for `tree` and the requested physical indices.
@@ -622,8 +607,8 @@ where
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn new(
-        tree: &'a TreeTN<T, V>,
-        indices: &[T::Index],
+        tree: &'a TreeTN<TensorDynLen, V>,
+        indices: &[DynIndex],
         options: CachedEvaluatorOptions<V>,
     ) -> Result<Self> {
         let layout = build_layout(tree, indices)?;
@@ -740,12 +725,12 @@ where
         &mut self,
         center: &V,
         values: ColMajorArrayRef<'_, usize>,
-    ) -> Result<CacheBuildResult<T, V>> {
+    ) -> Result<CacheBuildResult<V>> {
         self.last_stats = CachedEvaluationStats::default();
         let plan = RootedMessagePlan::new(self.tree, center)?;
         let assignment_batches = self.build_message_assignment_batches(&plan, values)?;
 
-        let mut messages = HashMap::<V, Vec<T>>::new();
+        let mut messages = HashMap::<V, Vec<TensorDynLen>>::new();
         let mut directed_message_count = 0usize;
         for node in &plan.postorder {
             let assignment_batch = assignment_batches
@@ -859,8 +844,8 @@ where
         values: ColMajorArrayRef<'_, usize>,
         plan: &RootedMessagePlan<V>,
         assignment_batches: &HashMap<V, AssignmentBatch>,
-        messages: &HashMap<V, Vec<T>>,
-    ) -> Result<T> {
+        messages: &HashMap<V, Vec<TensorDynLen>>,
+    ) -> Result<TensorDynLen> {
         let tensor = tensor_for_node(self.tree, node)?;
         let index_vals = self.index_vals_for_point(node, values, point);
         let local_message = slice_tensor(tensor, &index_vals).with_context(|| {
@@ -914,7 +899,7 @@ where
         center: &V,
         values: ColMajorArrayRef<'_, usize>,
         component_batches: &[ComponentBatch<V>],
-        environment_cache: &EnvironmentCache<T, V>,
+        environment_cache: &EnvironmentCache<V>,
     ) -> Result<Vec<AnyScalar>> {
         let n_points = values.shape()[1];
         let center_entries = self
@@ -924,7 +909,7 @@ where
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         let center_tensor = tensor_for_node(self.tree, center)?;
-        let scalar_one = T::scalar_one()
+        let scalar_one = TensorDynLen::scalar_one()
             .context("TreeTNCachedEvaluator::evaluate_batch: failed to create scalar")?;
 
         let mut results = Vec::with_capacity(n_points);
@@ -971,7 +956,7 @@ where
         node: &V,
         values: ColMajorArrayRef<'_, usize>,
         point: usize,
-    ) -> Vec<(T::Index, usize)> {
+    ) -> Vec<(DynIndex, usize)> {
         self.layout
             .entries_by_node
             .get(node)
@@ -993,14 +978,11 @@ where
     }
 }
 
-fn build_layout<T, V>(
-    tree: &TreeTN<T, V>,
-    indices: &[T::Index],
-) -> Result<EvaluatorLayout<T::Index, V>>
+fn build_layout<V>(
+    tree: &TreeTN<TensorDynLen, V>,
+    indices: &[DynIndex],
+) -> Result<EvaluatorLayout<V>>
 where
-    T: TensorLike,
-    T::Index: Clone + Eq + Hash,
-    <T::Index as IndexLike>::Id: Ord,
     V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
 {
     if tree.node_count() == 0 {
@@ -1024,8 +1006,8 @@ where
         );
     }
 
-    let mut entries_by_node: HashMap<V, Vec<SiteEntry<T::Index>>> = HashMap::new();
-    let mut tensor_indices_by_node: HashMap<V, Vec<T::Index>> = HashMap::new();
+    let mut entries_by_node: HashMap<V, Vec<SiteEntry>> = HashMap::new();
+    let mut tensor_indices_by_node: HashMap<V, Vec<DynIndex>> = HashMap::new();
     for (input_position, index) in indices.iter().enumerate() {
         let node_name = tree
             .site_index_network()
@@ -1119,10 +1101,7 @@ fn validate_values_shape(
     Ok(())
 }
 
-fn validate_entry_values<I>(entries: &[SiteEntry<I>], values: &[usize], context: &str) -> Result<()>
-where
-    I: IndexLike,
-{
+fn validate_entry_values(entries: &[SiteEntry], values: &[usize], context: &str) -> Result<()> {
     let index_vals = entries
         .iter()
         .zip(values.iter().copied())
@@ -1147,9 +1126,8 @@ where
     Ok(())
 }
 
-fn ensure_node_exists<T, V>(tree: &TreeTN<T, V>, node: &V, context: &str) -> Result<()>
+fn ensure_node_exists<V>(tree: &TreeTN<TensorDynLen, V>, node: &V, context: &str) -> Result<()>
 where
-    T: TensorLike,
     V: Clone + Eq + Hash + Debug + Send + Sync,
 {
     if tree.node_index(node).is_none() {
@@ -1158,9 +1136,8 @@ where
     Ok(())
 }
 
-fn tensor_for_node<'a, T, V>(tree: &'a TreeTN<T, V>, node: &V) -> Result<&'a T>
+fn tensor_for_node<'a, V>(tree: &'a TreeTN<TensorDynLen, V>, node: &V) -> Result<&'a TensorDynLen>
 where
-    T: TensorLike,
     V: Clone + Eq + Hash + Debug + Send + Sync,
 {
     let node_idx = tree
@@ -1170,10 +1147,7 @@ where
         .ok_or_else(|| anyhow::anyhow!("tensor for node {:?} is not present", node))
 }
 
-fn slice_tensor<T>(tensor: &T, index_vals: &[(T::Index, usize)]) -> Result<T>
-where
-    T: TensorLike,
-{
+fn slice_tensor(tensor: &TensorDynLen, index_vals: &[(DynIndex, usize)]) -> Result<TensorDynLen> {
     if index_vals.is_empty() {
         return Ok(tensor.clone());
     }
