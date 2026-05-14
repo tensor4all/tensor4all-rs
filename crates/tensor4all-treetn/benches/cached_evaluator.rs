@@ -202,5 +202,59 @@ fn bench_batch_size_scaling(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_chain_size_scaling, bench_batch_size_scaling);
+fn bench_bond_dim_scaling(c: &mut Criterion) {
+    const N_SITES: usize = 128;
+    const LOCAL_DIM: usize = 2;
+    const N_LEFT: usize = 10;
+    const N_RIGHT: usize = 10;
+
+    let indices = generate_tci_like_indices(N_LEFT, N_RIGHT, N_SITES, LOCAL_DIM, N_SITES / 2, 2026);
+    let values = multi_indices_to_col_major(&indices, N_SITES);
+    let shape = [N_SITES, indices.len()];
+
+    let mut group = c.benchmark_group("treetn_cached_bond_dim");
+    group.sample_size(10);
+
+    for bond_dim in [4usize, 8, 16, 32, 64] {
+        let tt = create_tt_with_bond_dim(N_SITES, LOCAL_DIM, bond_dim);
+        let (tree, site_indices) = tensor_train_to_treetn(&tt).unwrap();
+
+        group.bench_with_input(
+            BenchmarkId::new("ttcache", bond_dim),
+            &indices,
+            |b, indices| {
+                b.iter(|| {
+                    let mut cache = TTCache::new(&tt);
+                    cache.evaluate_many(black_box(indices), None).unwrap()
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("treetn_cached", bond_dim),
+            &values,
+            |b, values| {
+                b.iter(|| {
+                    let points = ColMajorArrayRef::new(black_box(values), &shape);
+                    let mut evaluator = TreeTNCachedEvaluator::new(
+                        &tree,
+                        &site_indices,
+                        CachedEvaluatorOptions::<usize>::default(),
+                    )
+                    .unwrap();
+                    evaluator.evaluate_batch(points).unwrap()
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_chain_size_scaling,
+    bench_batch_size_scaling,
+    bench_bond_dim_scaling
+);
 criterion_main!(benches);
