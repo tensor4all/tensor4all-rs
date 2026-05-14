@@ -20,6 +20,24 @@
 - `AGENTS.md` is the entry point for developers and AI agents. This file is
   the durable repository rule set.
 
+## Error Handling
+
+- Public Rust library APIs should return crate-local typed error types rather
+  than `anyhow::Result`. Prefer `thiserror` for public error enums, or a manual
+  `std::error::Error` implementation when that is a better fit.
+- `anyhow` is appropriate for internal implementation plumbing, binaries,
+  examples, tests, rustdoc snippet wrappers, and contextual propagation where
+  callers do not depend on a stable error contract.
+- Do not introduce new public `anyhow::Result` APIs unless the exception is
+  deliberate, documented in rustdoc, and called out in the PR rationale.
+- Existing public `anyhow::Result` surfaces are migration targets, not patterns
+  to copy. Known categories include quantics transform operator constructors,
+  HDF5 load/save helpers, graph/topology helper APIs, and trait methods whose
+  current public trait contract already uses `anyhow`.
+- When converting a public API from `anyhow::Result` to a typed error, add or
+  update the crate-local error type, document the `# Errors` behavior, and keep
+  error messages useful enough for C API and binding layers to preserve context.
+
 ## Base Branch Synchronization
 
 - Start new work from the current remote base, not from a stale local checkout:
