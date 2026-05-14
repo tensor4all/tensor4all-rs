@@ -60,7 +60,7 @@ where
     let contracted = einsum_tensors("askr,bktq->bastqr", &[a.as_inner(), b.as_inner()]);
     let reshaped = typed_tensor_reshape(&contracted, &[new_left, new_s1, new_s2, new_right]);
 
-    Ok(Tensor4::from_tenferro(reshaped))
+    Ok(Tensor4::from_tenferro_unchecked(reshaped))
 }
 
 /// Compute the left environment at site i for MPO contraction
@@ -94,8 +94,8 @@ where
     }
 
     // Check cache
-    if site <= cache.len() && cache[site - 1].is_some() {
-        return Ok(cache[site - 1].as_ref().unwrap().clone());
+    if let Some(Some(cached)) = cache.get(site - 1) {
+        return Ok(cached.clone());
     }
 
     // Recursively compute from the left
@@ -120,7 +120,7 @@ where
         });
     }
 
-    let new_env = Matrix2::from_tenferro(einsum_tensors(
+    let new_env = Matrix2::from_tenferro_unchecked(einsum_tensors(
         "ab,asdr,bsdt->rt",
         &[prev_env.as_inner(), a.as_inner(), b.as_inner()],
     ));
@@ -168,8 +168,8 @@ where
 
     // Check cache
     let cache_idx = n - site - 2;
-    if cache_idx < cache.len() && cache[cache_idx].is_some() {
-        return Ok(cache[cache_idx].as_ref().unwrap().clone());
+    if let Some(Some(cached)) = cache.get(cache_idx) {
+        return Ok(cached.clone());
     }
 
     // Recursively compute from the right
@@ -194,7 +194,7 @@ where
         });
     }
 
-    let new_env = Matrix2::from_tenferro(einsum_tensors(
+    let new_env = Matrix2::from_tenferro_unchecked(einsum_tensors(
         "rt,asdr,bsdt->ab",
         &[prev_env.as_inner(), a.as_inner(), b.as_inner()],
     ));

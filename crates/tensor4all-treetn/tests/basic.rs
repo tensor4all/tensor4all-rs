@@ -36,11 +36,11 @@ fn create_two_node_treetn() -> (
 
     let tensor1 =
         TensorDynLen::from_dense(vec![phys1.clone(), bond.clone()], vec![1.0; 6]).unwrap();
-    let node1 = tn.add_tensor_auto_name(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1).unwrap();
 
     let tensor2 =
         TensorDynLen::from_dense(vec![bond.clone(), phys2.clone()], vec![1.0; 12]).unwrap();
-    let node2 = tn.add_tensor_auto_name(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2).unwrap();
 
     let edge = tn.connect(node1, &bond, node2, &bond).unwrap();
 
@@ -67,15 +67,15 @@ fn create_three_node_chain() -> (
 
     let tensor1 =
         TensorDynLen::from_dense(vec![phys1.clone(), bond12.clone()], vec![1.0; 6]).unwrap();
-    let node1 = tn.add_tensor_auto_name(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1).unwrap();
 
     let tensor2 =
         TensorDynLen::from_dense(vec![bond12.clone(), bond23.clone()], vec![1.0; 12]).unwrap();
-    let node2 = tn.add_tensor_auto_name(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2).unwrap();
 
     let tensor3 =
         TensorDynLen::from_dense(vec![bond23.clone(), phys3.clone()], vec![1.0; 20]).unwrap();
-    let node3 = tn.add_tensor_auto_name(tensor3);
+    let node3 = tn.add_tensor_auto_name(tensor3).unwrap();
 
     let edge12 = tn.connect(node1, &bond12, node2, &bond12).unwrap();
     let edge23 = tn.connect(node2, &bond23, node3, &bond23).unwrap();
@@ -95,12 +95,26 @@ fn test_treetn_add_tensor() {
     let j = DynIndex::new_dyn(3);
     let tensor = TensorDynLen::from_dense(vec![i, j], vec![0.0; 6]).unwrap();
 
-    let node = tn.add_tensor_auto_name(tensor);
+    let node = tn.add_tensor_auto_name(tensor).unwrap();
     assert_eq!(tn.node_count(), 1);
 
     let retrieved = tn.tensor(node);
     assert!(retrieved.is_some());
     assert_eq!(retrieved.unwrap().dims(), vec![2, 3]);
+}
+
+#[test]
+fn test_add_tensor_auto_name_returns_result() {
+    let mut tn = TreeTN::<TensorDynLen, NodeIndex>::new();
+
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let tensor = TensorDynLen::from_dense(vec![i, j], vec![0.0; 6]).unwrap();
+
+    let node = tn.add_tensor_auto_name(tensor).unwrap();
+
+    assert_eq!(node.index(), 0);
+    assert_eq!(tn.node_count(), 1);
 }
 
 #[test]
@@ -110,7 +124,7 @@ fn test_treetn_replace_tensor() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(3);
     let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![0.0; 6]).unwrap();
-    let node = tn.add_tensor_auto_name(tensor);
+    let node = tn.add_tensor_auto_name(tensor).unwrap();
 
     // Replace with a tensor that has the same indices
     let new_tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![0.0; 6]).unwrap();
@@ -188,12 +202,12 @@ fn test_treetn_connect_id_mismatch() {
     let i1 = DynIndex::new_dyn(2);
     let j1 = DynIndex::new_dyn(3);
     let tensor1 = TensorDynLen::from_dense(vec![i1.clone(), j1.clone()], vec![0.0; 6]).unwrap();
-    let node1 = tn.add_tensor_auto_name(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1).unwrap();
 
     let i2 = DynIndex::new_dyn(3); // Different ID than j1
     let k2 = DynIndex::new_dyn(4);
     let tensor2 = TensorDynLen::from_dense(vec![i2.clone(), k2.clone()], vec![0.0; 12]).unwrap();
-    let node2 = tn.add_tensor_auto_name(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2).unwrap();
 
     // Try to connect with different index IDs - should fail in Einsum mode
     let result = tn.connect(node1, &j1, node2, &i2);
@@ -215,7 +229,7 @@ fn test_treetn_connect_invalid_node() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(3);
     let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![0.0; 6]).unwrap();
-    let node1 = tn.add_tensor_auto_name(tensor);
+    let node1 = tn.add_tensor_auto_name(tensor).unwrap();
 
     let invalid_node = NodeIndex::new(999);
     let result = tn.connect(node1, &j, invalid_node, &j);
@@ -229,12 +243,12 @@ fn test_treetn_connect_index_not_in_tensor() {
     let i1 = DynIndex::new_dyn(2);
     let j1 = DynIndex::new_dyn(3);
     let tensor1 = TensorDynLen::from_dense(vec![i1.clone(), j1.clone()], vec![0.0; 6]).unwrap();
-    let node1 = tn.add_tensor_auto_name(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1).unwrap();
 
     let bond = DynIndex::new_dyn(3);
     let k2 = DynIndex::new_dyn(4);
     let tensor2 = TensorDynLen::from_dense(vec![bond.clone(), k2.clone()], vec![0.0; 12]).unwrap();
-    let node2 = tn.add_tensor_auto_name(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2).unwrap();
 
     // Try to connect with an index that doesn't exist in tensor1
     let fake_index = DynIndex::new_dyn(3);
@@ -310,7 +324,7 @@ fn test_treetn_set_edge_ortho_towards_invalid() {
     let i3 = DynIndex::new_dyn(5);
     let k3 = DynIndex::new_dyn(6);
     let tensor3 = TensorDynLen::from_dense(vec![i3, k3], vec![0.0; 30]).unwrap();
-    let node3 = tn.add_tensor_auto_name(tensor3);
+    let node3 = tn.add_tensor_auto_name(tensor3).unwrap();
 
     // Try to set ortho direction to a node that's not an endpoint
     let result = tn.set_edge_ortho_towards(edge, Some(node3));
@@ -344,15 +358,15 @@ fn test_treetn_validate_tree_cycle() {
 
     let tensor1 =
         TensorDynLen::from_dense(vec![bond12.clone(), bond31.clone()], vec![0.0; 15]).unwrap();
-    let node1 = tn.add_tensor_auto_name(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1).unwrap();
 
     let tensor2 =
         TensorDynLen::from_dense(vec![bond12.clone(), bond23.clone()], vec![0.0; 12]).unwrap();
-    let node2 = tn.add_tensor_auto_name(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2).unwrap();
 
     let tensor3 =
         TensorDynLen::from_dense(vec![bond23.clone(), bond31.clone()], vec![0.0; 20]).unwrap();
-    let node3 = tn.add_tensor_auto_name(tensor3);
+    let node3 = tn.add_tensor_auto_name(tensor3).unwrap();
 
     tn.connect(node1, &bond12, node2, &bond12).unwrap();
     tn.connect(node2, &bond23, node3, &bond23).unwrap();
@@ -369,11 +383,11 @@ fn test_treetn_validate_tree_disconnected() {
     // Create two disconnected nodes
     let i1 = DynIndex::new_dyn(2);
     let tensor1 = TensorDynLen::from_dense(vec![i1], vec![0.0; 2]).unwrap();
-    let _node1 = tn.add_tensor_auto_name(tensor1);
+    let _node1 = tn.add_tensor_auto_name(tensor1).unwrap();
 
     let i2 = DynIndex::new_dyn(3);
     let tensor2 = TensorDynLen::from_dense(vec![i2], vec![0.0; 3]).unwrap();
-    let _node2 = tn.add_tensor_auto_name(tensor2);
+    let _node2 = tn.add_tensor_auto_name(tensor2).unwrap();
 
     // Should fail: not connected
     assert!(tn.validate_tree().is_err());
@@ -402,7 +416,7 @@ fn test_set_canonical_region() {
 
     let i = DynIndex::new_dyn(2);
     let tensor = TensorDynLen::from_dense(vec![i], vec![0.0; 2]).unwrap();
-    let node = tn.add_tensor_auto_name(tensor);
+    let node = tn.add_tensor_auto_name(tensor).unwrap();
 
     assert!(!tn.is_canonicalized());
 
@@ -427,7 +441,7 @@ fn test_clear_canonical_region() {
 
     let i = DynIndex::new_dyn(2);
     let tensor = TensorDynLen::from_dense(vec![i], vec![0.0; 2]).unwrap();
-    let node = tn.add_tensor_auto_name(tensor);
+    let node = tn.add_tensor_auto_name(tensor).unwrap();
 
     tn.set_canonical_region(vec![node]).unwrap();
     assert!(tn.is_canonicalized());
@@ -447,7 +461,7 @@ fn test_add_to_canonical_region() {
 
     let i = DynIndex::new_dyn(2);
     let tensor = TensorDynLen::from_dense(vec![i], vec![0.0; 2]).unwrap();
-    let node = tn.add_tensor_auto_name(tensor);
+    let node = tn.add_tensor_auto_name(tensor).unwrap();
 
     // Add valid node to canonical region
     tn.add_to_canonical_region(node).unwrap();
@@ -470,7 +484,7 @@ fn test_remove_from_canonical_region() {
 
     let i = DynIndex::new_dyn(2);
     let tensor = TensorDynLen::from_dense(vec![i], vec![0.0; 2]).unwrap();
-    let node = tn.add_tensor_auto_name(tensor);
+    let node = tn.add_tensor_auto_name(tensor).unwrap();
 
     tn.set_canonical_region(vec![node]).unwrap();
     assert!(tn.canonical_region().contains(&node));
@@ -527,11 +541,11 @@ fn test_validate_ortho_consistency_disconnected_centers() {
     // Create two disconnected nodes
     let i1 = DynIndex::new_dyn(2);
     let tensor1 = TensorDynLen::from_dense(vec![i1], vec![0.0; 2]).unwrap();
-    let n1 = tn.add_tensor_auto_name(tensor1);
+    let n1 = tn.add_tensor_auto_name(tensor1).unwrap();
 
     let i2 = DynIndex::new_dyn(3);
     let tensor2 = TensorDynLen::from_dense(vec![i2], vec![0.0; 3]).unwrap();
-    let n2 = tn.add_tensor_auto_name(tensor2);
+    let n2 = tn.add_tensor_auto_name(tensor2).unwrap();
 
     // Two centers that are not connected should fail
     tn.set_canonical_region(vec![n1, n2]).unwrap();
@@ -578,11 +592,11 @@ fn test_canonicalize_simple() {
 
     let data1: Vec<f64> = vec![1.0; 6];
     let tensor1 = TensorDynLen::from_dense(vec![phys1.clone(), bond.clone()], data1).unwrap();
-    let n1 = tn.add_tensor_auto_name(tensor1);
+    let n1 = tn.add_tensor_auto_name(tensor1).unwrap();
 
     let data2: Vec<f64> = vec![1.0; 12];
     let tensor2 = TensorDynLen::from_dense(vec![bond.clone(), phys2.clone()], data2).unwrap();
-    let n2 = tn.add_tensor_auto_name(tensor2);
+    let n2 = tn.add_tensor_auto_name(tensor2).unwrap();
 
     tn.connect(n1, &bond, n2, &bond).unwrap();
 
@@ -609,12 +623,12 @@ fn canonicalize_preserves_near_dependent_components() {
         vec![1.0, 0.0, 0.0, 1.0e-16],
     )
     .unwrap();
-    let n1 = tn.add_tensor_auto_name(tensor1);
+    let n1 = tn.add_tensor_auto_name(tensor1).unwrap();
 
     let tensor2 =
         TensorDynLen::from_dense(vec![bond.clone(), right.clone()], vec![1.0, 0.0, 0.0, 1.0])
             .unwrap();
-    let n2 = tn.add_tensor_auto_name(tensor2);
+    let n2 = tn.add_tensor_auto_name(tensor2).unwrap();
 
     tn.connect(n1, &bond, n2, &bond).unwrap();
     let expected = tn.contract_to_tensor().unwrap();
@@ -652,11 +666,11 @@ fn test_contract_two_nodes() {
 
     let data1: Vec<f64> = (0..6).map(|x| x as f64).collect();
     let tensor1 = TensorDynLen::from_dense(vec![i.clone(), bond.clone()], data1).unwrap();
-    let n1 = tn.add_tensor_auto_name(tensor1);
+    let n1 = tn.add_tensor_auto_name(tensor1).unwrap();
 
     let data2: Vec<f64> = (0..12).map(|x| x as f64).collect();
     let tensor2 = TensorDynLen::from_dense(vec![bond.clone(), k.clone()], data2).unwrap();
-    let n2 = tn.add_tensor_auto_name(tensor2);
+    let n2 = tn.add_tensor_auto_name(tensor2).unwrap();
 
     tn.connect(n1, &bond, n2, &bond).unwrap();
 
@@ -771,11 +785,11 @@ fn test_log_norm_simple() {
 
     let data1: Vec<f64> = vec![1.0; 6];
     let tensor1 = TensorDynLen::from_dense(vec![i.clone(), bond.clone()], data1).unwrap();
-    let n1 = tn.add_tensor_auto_name(tensor1);
+    let n1 = tn.add_tensor_auto_name(tensor1).unwrap();
 
     let data2: Vec<f64> = vec![1.0; 12];
     let tensor2 = TensorDynLen::from_dense(vec![bond.clone(), k.clone()], data2).unwrap();
-    let n2 = tn.add_tensor_auto_name(tensor2);
+    let n2 = tn.add_tensor_auto_name(tensor2).unwrap();
 
     tn.connect(n1, &bond, n2, &bond).unwrap();
 
@@ -803,7 +817,7 @@ fn test_truncate_simple() {
         data1[idx * 10 + 1] = 0.5;
     }
     let tensor1 = TensorDynLen::from_dense(vec![i.clone(), bond.clone()], data1).unwrap();
-    let n1 = tn.add_tensor_auto_name(tensor1);
+    let n1 = tn.add_tensor_auto_name(tensor1).unwrap();
 
     // tensor2[bond, k] similar structure
     let mut data2 = vec![0.0f64; 40];
@@ -812,7 +826,7 @@ fn test_truncate_simple() {
         data2[4 + k_idx] = 0.3;
     }
     let tensor2 = TensorDynLen::from_dense(vec![bond.clone(), k.clone()], data2).unwrap();
-    let n2 = tn.add_tensor_auto_name(tensor2);
+    let n2 = tn.add_tensor_auto_name(tensor2).unwrap();
 
     let edge = tn.connect(n1, &bond, n2, &bond).unwrap();
 
@@ -842,11 +856,11 @@ fn test_truncate_mut_simple() {
 
     let data1: Vec<f64> = (0..16).map(|x| x as f64).collect();
     let tensor1 = TensorDynLen::from_dense(vec![i.clone(), bond.clone()], data1).unwrap();
-    let n1 = tn.add_tensor_auto_name(tensor1);
+    let n1 = tn.add_tensor_auto_name(tensor1).unwrap();
 
     let data2: Vec<f64> = (0..32).map(|x| x as f64).collect();
     let tensor2 = TensorDynLen::from_dense(vec![bond.clone(), k.clone()], data2).unwrap();
-    let n2 = tn.add_tensor_auto_name(tensor2);
+    let n2 = tn.add_tensor_auto_name(tensor2).unwrap();
 
     let edge = tn.connect(n1, &bond, n2, &bond).unwrap();
 
@@ -905,14 +919,14 @@ fn test_truncate_with_svd_policy() {
     data1[0] = 1.0;
     data1[5] = 1.0;
     let tensor1 = TensorDynLen::from_dense(vec![i.clone(), bond.clone()], data1).unwrap();
-    let n1 = tn.add_tensor_auto_name(tensor1);
+    let n1 = tn.add_tensor_auto_name(tensor1).unwrap();
 
     let mut data2 = vec![0.0f64; 15];
     data2[0] = 1.0;
     data2[1] = 1.0;
     data2[2] = 1.0;
     let tensor2 = TensorDynLen::from_dense(vec![bond.clone(), k.clone()], data2).unwrap();
-    let n2 = tn.add_tensor_auto_name(tensor2);
+    let n2 = tn.add_tensor_auto_name(tensor2).unwrap();
 
     tn.connect(n1, &bond, n2, &bond).unwrap();
 
@@ -954,22 +968,22 @@ fn test_truncate_y_shape() {
 
     let tensor_a =
         TensorDynLen::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 12]).unwrap();
-    let n_a = tn.add_tensor_auto_name(tensor_a);
+    let n_a = tn.add_tensor_auto_name(tensor_a).unwrap();
 
     let tensor_b = TensorDynLen::from_dense(
         vec![bond_ab.clone(), bond_bc.clone(), bond_bd.clone()],
         vec![1.0; 216],
     )
     .unwrap();
-    let n_b = tn.add_tensor_auto_name(tensor_b);
+    let n_b = tn.add_tensor_auto_name(tensor_b).unwrap();
 
     let tensor_c =
         TensorDynLen::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 12]).unwrap();
-    let n_c = tn.add_tensor_auto_name(tensor_c);
+    let n_c = tn.add_tensor_auto_name(tensor_c).unwrap();
 
     let tensor_d =
         TensorDynLen::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 12]).unwrap();
-    let n_d = tn.add_tensor_auto_name(tensor_d);
+    let n_d = tn.add_tensor_auto_name(tensor_d).unwrap();
 
     tn.connect(n_a, &bond_ab, n_b, &bond_ab).unwrap();
     tn.connect(n_b, &bond_bc, n_c, &bond_bc).unwrap();

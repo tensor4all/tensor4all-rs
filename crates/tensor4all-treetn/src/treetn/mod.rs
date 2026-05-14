@@ -343,10 +343,34 @@ where
 
     /// Add a tensor to the network using NodeIndex as the node name.
     ///
-    /// This method only works when `V = NodeIndex`.
+    /// This method only works when `V = NodeIndex`. The `tensor` argument
+    /// supplies the node data, and the generated node index is also used as
+    /// the public node name.
     ///
     /// Returns the NodeIndex for the newly added tensor.
-    pub fn add_tensor_auto_name(&mut self, tensor: T) -> NodeIndex
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the generated node name already exists or the
+    /// underlying graph rejects the tensor insertion.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(3);
+    /// let tensor = TensorDynLen::from_dense(vec![i, j], vec![0.0_f64; 6]).unwrap();
+    ///
+    /// let mut tn = TreeTN::<TensorDynLen>::new();
+    /// let node = tn.add_tensor_auto_name(tensor).unwrap();
+    ///
+    /// assert_eq!(node.index(), 0);
+    /// assert_eq!(tn.node_count(), 1);
+    /// ```
+    pub fn add_tensor_auto_name(&mut self, tensor: T) -> Result<NodeIndex>
     where
         V: From<NodeIndex> + Into<NodeIndex>,
     {
@@ -359,7 +383,6 @@ where
 
         // Re-add with the correct name
         self.add_tensor_internal(node_name, tensor)
-            .expect("add_tensor_internal failed for auto-named tensor")
     }
 
     /// Connect two tensors via a specified pair of indices.

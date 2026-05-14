@@ -178,7 +178,7 @@ pub fn tensor3_from_data<T: TensorScalar>(
     assert_eq!(data.len(), left_dim * site_dim * right_dim);
     let dims = [left_dim, site_dim, right_dim];
     let inner = TfTensor::from_vec(dims.to_vec(), data);
-    Tensor::from_tenferro(inner)
+    Tensor::from_tenferro_unchecked(inner)
 }
 
 #[cfg(test)]

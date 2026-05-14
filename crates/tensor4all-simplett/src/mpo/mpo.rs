@@ -48,8 +48,10 @@ impl<T: TTScalar> MPO<T> {
         }
 
         // Last tensor should have right_dim = 1
-        if !tensors.is_empty() && tensors.last().unwrap().right_dim() != 1 {
-            return Err(MPOError::InvalidBoundary);
+        if let Some(last) = tensors.last() {
+            if last.right_dim() != 1 {
+                return Err(MPOError::InvalidBoundary);
+            }
         }
 
         Ok(Self { tensors })

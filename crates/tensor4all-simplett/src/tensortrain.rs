@@ -110,10 +110,12 @@ impl<T: TTScalar> TensorTrain<T> {
         }
 
         // Last tensor should have right_dim = 1
-        if !tensors.is_empty() && tensors.last().unwrap().right_dim() != 1 {
-            return Err(TensorTrainError::InvalidOperation {
-                message: "Last tensor must have right dimension 1".to_string(),
-            });
+        if let Some(last) = tensors.last() {
+            if last.right_dim() != 1 {
+                return Err(TensorTrainError::InvalidOperation {
+                    message: "Last tensor must have right dimension 1".to_string(),
+                });
+            }
         }
 
         Ok(Self { tensors })
@@ -496,7 +498,7 @@ impl<T: TTScalar> TensorTrain<T> {
         }
 
         // Contract final Tprod into last result tensor
-        let last = result_tensors.last().unwrap();
+        let last = result_tensors.last().ok_or(TensorTrainError::Empty)?;
         let last_left = last.left_dim();
         let last_site = last.site_dim();
         let last_right = last.right_dim();
@@ -524,7 +526,7 @@ impl<T: TTScalar> TensorTrain<T> {
                 }
             }
         }
-        *result_tensors.last_mut().unwrap() = new_last;
+        *result_tensors.last_mut().ok_or(TensorTrainError::Empty)? = new_last;
 
         TensorTrain::new(result_tensors)
     }

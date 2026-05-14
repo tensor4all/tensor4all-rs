@@ -147,7 +147,7 @@ where
         });
     }
 
-    Ok(Matrix2::from_tenferro(tensor.clone()))
+    Ok(Matrix2::from_tenferro_unchecked(tensor.clone()))
 }
 
 fn typed_col_major_values<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Vec<T>>
