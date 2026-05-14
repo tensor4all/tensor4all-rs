@@ -5,7 +5,8 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use anyhow::{bail, Context, Result};
-use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike, TensorLike};
+use num_complex::Complex64;
+use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex, IndexLike, TensorDynLen, TensorLike};
 
 use super::TreeTN;
 
@@ -1188,6 +1189,110 @@ where
     tensor.select_indices(&selected_indices, &positions)
 }
 
+fn tensor_values_any(tensor: &TensorDynLen) -> Result<Vec<AnyScalar>> {
+    if tensor.is_complex() {
+        tensor.to_vec::<Complex64>().map(|values| {
+            values
+                .into_iter()
+                .map(|value| AnyScalar::new_complex(value.re, value.im))
+                .collect()
+        })
+    } else {
+        tensor
+            .to_vec::<f64>()
+            .map(|values| values.into_iter().map(AnyScalar::new_real).collect())
+    }
+}
+
+fn stack_tensors_with_assignment_index(
+    assignment_index: &DynIndex,
+    tensors: &[TensorDynLen],
+) -> Result<TensorDynLen> {
+    anyhow::ensure!(
+        !tensors.is_empty(),
+        "stack_tensors_with_assignment_index requires at least one tensor"
+    );
+    anyhow::ensure!(
+        assignment_index.dim() == tensors.len(),
+        "assignment index dim {} does not match tensor count {}",
+        assignment_index.dim(),
+        tensors.len()
+    );
+
+    let base_indices = tensors[0].indices().to_vec();
+    let mut tensor_values = Vec::with_capacity(tensors.len());
+    for tensor in tensors {
+        anyhow::ensure!(
+            tensor.indices() == base_indices.as_slice(),
+            "stacked tensors must have identical index order"
+        );
+        tensor_values.push(tensor_values_any(tensor)?);
+    }
+
+    let rest_len = tensor_values[0].len();
+    let batch_dim = assignment_index.dim();
+    let mut stacked = Vec::with_capacity(batch_dim * rest_len);
+    for rest_offset in 0..rest_len {
+        for values in &tensor_values {
+            stacked.push(values[rest_offset].clone());
+        }
+    }
+
+    let mut indices = Vec::with_capacity(1 + base_indices.len());
+    indices.push(assignment_index.clone());
+    indices.extend(base_indices);
+    TensorDynLen::from_dense_any(indices, stacked)
+}
+
+fn gather_stacked_tensor(
+    stacked: &TensorDynLen,
+    source_assignment_index: &DynIndex,
+    target_assignment_index: &DynIndex,
+    selected_assignments: &[usize],
+) -> Result<TensorDynLen> {
+    anyhow::ensure!(
+        stacked.indices().first() == Some(source_assignment_index),
+        "source assignment index must be the first stacked axis"
+    );
+    anyhow::ensure!(
+        selected_assignments.len() == target_assignment_index.dim(),
+        "selected assignment count {} does not match target assignment dim {}",
+        selected_assignments.len(),
+        target_assignment_index.dim()
+    );
+
+    let source_dim = source_assignment_index.dim();
+    for &assignment in selected_assignments {
+        anyhow::ensure!(
+            assignment < source_dim,
+            "selected assignment {} is out of range for source dim {}",
+            assignment,
+            source_dim
+        );
+    }
+
+    let values = tensor_values_any(stacked)?;
+    anyhow::ensure!(
+        values.len() % source_dim == 0,
+        "stacked tensor payload length {} is not divisible by source dim {}",
+        values.len(),
+        source_dim
+    );
+    let rest_len = values.len() / source_dim;
+    let target_dim = target_assignment_index.dim();
+    let mut gathered = Vec::with_capacity(target_dim * rest_len);
+    for rest_offset in 0..rest_len {
+        for &assignment in selected_assignments {
+            gathered.push(values[assignment + source_dim * rest_offset].clone());
+        }
+    }
+
+    let mut indices = Vec::with_capacity(stacked.indices().len());
+    indices.push(target_assignment_index.clone());
+    indices.extend_from_slice(&stacked.indices()[1..]);
+    TensorDynLen::from_dense_any(indices, gathered)
+}
+
 fn sorted_neighbors<T, V>(tree: &TreeTN<T, V>) -> HashMap<V, Vec<V>>
 where
     T: TensorLike,
@@ -1254,6 +1359,40 @@ mod tests {
                 expected.real()
             );
         }
+    }
+
+    #[test]
+    fn stack_tensors_adds_assignment_axis_in_column_major_order() {
+        let batch = DynIndex::new_dyn(2);
+        let i = DynIndex::new_dyn(2);
+        let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
+        let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0_f64, 4.0]).unwrap();
+
+        let stacked = stack_tensors_with_assignment_index(&batch, &[a, b]).unwrap();
+
+        assert_eq!(stacked.indices(), &[batch, i]);
+        assert_eq!(stacked.to_vec::<f64>().unwrap(), vec![1.0, 3.0, 2.0, 4.0]);
+    }
+
+    #[test]
+    fn gather_stacked_tensor_remaps_assignment_axis() {
+        let source_batch = DynIndex::new_dyn(3);
+        let target_batch = DynIndex::new_dyn(4);
+        let i = DynIndex::new_dyn(2);
+        let stacked = TensorDynLen::from_dense(
+            vec![source_batch.clone(), i.clone()],
+            vec![10.0_f64, 20.0, 30.0, 11.0, 21.0, 31.0],
+        )
+        .unwrap();
+
+        let gathered =
+            gather_stacked_tensor(&stacked, &source_batch, &target_batch, &[2, 0, 2, 1]).unwrap();
+
+        assert_eq!(gathered.indices(), &[target_batch, i]);
+        assert_eq!(
+            gathered.to_vec::<f64>().unwrap(),
+            vec![30.0, 10.0, 30.0, 20.0, 31.0, 11.0, 31.0, 21.0]
+        );
     }
 
     fn two_node_tree() -> (TreeTN<TensorDynLen, usize>, Vec<DynIndex>) {
