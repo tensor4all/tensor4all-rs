@@ -23,6 +23,8 @@
 //! - **Cumulative Sum**: y_i = Σ_{j<i} x_j
 //! - **Fourier Transform**: Quantics Fourier Transform (QFT)
 //! - **Affine Transform**: y = A*x + b with rational coefficients
+//! - **Constraint Row Normalization**: primitive integer rows for equality or
+//!   halfspace constraints before deriving transform operators
 //!
 //! # Conventions
 //!
@@ -66,7 +68,7 @@ mod shift;
 
 pub use affine::{
     affine_operator, affine_transform_matrix, affine_transform_tensors_unfused, AffineParams,
-    UnfusedTensorInfo,
+    LinearConstraintRow, UnfusedTensorInfo,
 };
 pub use common::{BoundaryCondition, CarryDirection};
 pub use cumsum::{cumsum_operator, triangle_operator, TriangleType};

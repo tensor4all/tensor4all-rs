@@ -63,6 +63,137 @@ impl<const N: usize> BoolTensor<N> {
     }
 }
 
+/// A primitive integer row for a linear equality or inequality constraint.
+///
+/// Use this type when a row is scale-invariant, such as `a*x == rhs` or
+/// `a*x <= rhs`, and the row will be used to derive affine or halfspace
+/// transform operators. It is intentionally separate from [`AffineParams`]
+/// because an affine map `y = A*x + b` is not invariant under row scaling.
+///
+/// Related types: [`AffineParams`] stores affine-map parameters for
+/// [`affine_operator`]; this type stores normalized constraint rows that can be
+/// used before constructing a constraint-derived operator.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::LinearConstraintRow;
+///
+/// let row = LinearConstraintRow::from_integers(vec![16], 64);
+/// assert_eq!(row.coefficients, vec![1]);
+/// assert_eq!(row.rhs, 4);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinearConstraintRow {
+    /// Integer coefficients in primitive form.
+    ///
+    /// The row is normalized by clearing rational denominators when needed and
+    /// then dividing all coefficients and the right-hand side by their positive
+    /// greatest common divisor. Use these coefficients when a constraint row is
+    /// scale-invariant, such as `a*x <= rhs` or `a*x == rhs`.
+    pub coefficients: Vec<i64>,
+    /// Integer right-hand side in primitive form.
+    ///
+    /// This value is reduced with [`Self::coefficients`]. For example,
+    /// `16*x <= 64` is represented as `coefficients = [1]` and `rhs = 4`.
+    pub rhs: i64,
+}
+
+impl LinearConstraintRow {
+    /// Create a primitive integer constraint row.
+    ///
+    /// # Arguments
+    ///
+    /// * `coefficients` - Coefficients of the left-hand side. The entries may
+    ///   share a positive common factor with `rhs`; that factor is removed.
+    /// * `rhs` - Right-hand side of the equality or inequality constraint.
+    ///
+    /// # Returns
+    ///
+    /// A row with the same represented equality or inequality set under
+    /// positive scaling. If all coefficients and `rhs` are zero, the zero row
+    /// is returned unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::LinearConstraintRow;
+    ///
+    /// let row = LinearConstraintRow::from_integers(vec![16], 64);
+    /// assert_eq!(row.coefficients, vec![1]);
+    /// assert_eq!(row.rhs, 4);
+    ///
+    /// let negative = LinearConstraintRow::from_integers(vec![-16], -64);
+    /// assert_eq!(negative.coefficients, vec![-1]);
+    /// assert_eq!(negative.rhs, -4);
+    /// ```
+    pub fn from_integers(coefficients: Vec<i64>, rhs: i64) -> Self {
+        let common_factor = coefficients
+            .iter()
+            .chain(std::iter::once(&rhs))
+            .fold(0i64, |factor, value| factor.gcd(value))
+            .abs();
+
+        if common_factor > 1 {
+            Self {
+                coefficients: coefficients
+                    .into_iter()
+                    .map(|coefficient| coefficient / common_factor)
+                    .collect(),
+                rhs: rhs / common_factor,
+            }
+        } else {
+            Self { coefficients, rhs }
+        }
+    }
+
+    /// Create a primitive constraint row from rational values.
+    ///
+    /// # Arguments
+    ///
+    /// * `coefficients` - Rational coefficients of the left-hand side. The
+    ///   least common multiple of all denominators is used to clear
+    ///   denominators before gcd reduction.
+    /// * `rhs` - Rational right-hand side of the equality or inequality
+    ///   constraint.
+    ///
+    /// # Returns
+    ///
+    /// A primitive integer row equivalent to the rational constraint under
+    /// positive scaling. Use this for constraint rows before deriving
+    /// affine/halfspace projector operators; do not use it to simplify a
+    /// general affine map `y = A*x + b`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_rational::Rational64;
+    /// use tensor4all_quanticstransform::LinearConstraintRow;
+    ///
+    /// let row = LinearConstraintRow::from_rationals(
+    ///     vec![Rational64::new(2, 3), Rational64::new(4, 3)],
+    ///     Rational64::from_integer(2),
+    /// );
+    /// assert_eq!(row.coefficients, vec![1, 2]);
+    /// assert_eq!(row.rhs, 3);
+    /// ```
+    pub fn from_rationals(coefficients: Vec<Rational64>, rhs: Rational64) -> Self {
+        let mut denominator_lcm = 1i64;
+        for coefficient in &coefficients {
+            denominator_lcm = denominator_lcm.lcm(coefficient.denom());
+        }
+        denominator_lcm = denominator_lcm.lcm(rhs.denom());
+
+        let integer_coefficients = coefficients
+            .iter()
+            .map(|coefficient| (coefficient * denominator_lcm).to_integer())
+            .collect();
+        let integer_rhs = (rhs * denominator_lcm).to_integer();
+
+        Self::from_integers(integer_coefficients, integer_rhs)
+    }
+}
+
 /// Affine transformation parameters.
 ///
 /// Represents the transformation y = A*x + b where:

@@ -54,6 +54,52 @@ fn test_affine_params_to_integer_scaled() {
 }
 
 #[test]
+fn test_linear_constraint_row_from_integers_divides_common_factor() {
+    let row = LinearConstraintRow::from_integers(vec![16], 64);
+
+    assert_eq!(row.coefficients, vec![1]);
+    assert_eq!(row.rhs, 4);
+}
+
+#[test]
+fn test_linear_constraint_row_from_rationals_clears_denominators_then_reduces() {
+    let row = LinearConstraintRow::from_rationals(
+        vec![Rational64::new(2, 3), Rational64::new(4, 3)],
+        Rational64::from_integer(2),
+    );
+
+    assert_eq!(row.coefficients, vec![1, 2]);
+    assert_eq!(row.rhs, 3);
+}
+
+#[test]
+fn test_linear_constraint_row_uses_positive_gcd_for_negative_rows() {
+    let row = LinearConstraintRow::from_integers(vec![-16], -64);
+
+    assert_eq!(row.coefficients, vec![-1]);
+    assert_eq!(row.rhs, -4);
+}
+
+#[test]
+fn test_linear_constraint_row_preserves_all_zero_row() {
+    let row = LinearConstraintRow::from_integers(vec![0, 0], 0);
+
+    assert_eq!(row.coefficients, vec![0, 0]);
+    assert_eq!(row.rhs, 0);
+}
+
+#[test]
+fn test_affine_params_to_integer_scaled_does_not_normalize_constraint_rows() {
+    let params = AffineParams::from_integers(vec![16], vec![64], 1, 1).unwrap();
+
+    let (a_int, b_int, scale) = params.to_integer_scaled();
+
+    assert_eq!(a_int, vec![16]);
+    assert_eq!(b_int, vec![64]);
+    assert_eq!(scale, 1);
+}
+
+#[test]
 fn test_affine_transform_identity() {
     // Identity transformation: y = x
     let a = vec![1i64];
