@@ -958,7 +958,7 @@ enum t4a_status_code t4a_treetn_evaluator_clone(const struct t4a_treetn_evaluato
 /**
  * Evaluate one or more points using a reusable TreeTN evaluator.
  */
-enum t4a_status_code t4a_treetn_evaluator_evaluate(const struct t4a_treetn_evaluator *evaluator,
+enum t4a_status_code t4a_treetn_evaluator_evaluate(struct t4a_treetn_evaluator *evaluator,
                                                    const size_t *values_col_major,
                                                    size_t n_points,
                                                    double *out_re,
