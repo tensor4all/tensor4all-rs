@@ -61,6 +61,10 @@ pub use treetn::{
     get_boundary_edges,
     partial_contract,
     BoundaryEdge,
+    CachedEvaluatorOptions,
+    CenterSearchResult,
+    // Core type
+    GreedyCenterSearch,
     LocalUpdateStep,
     LocalUpdateSweepPlan,
     LocalUpdater,
@@ -69,8 +73,8 @@ pub use treetn::{
     ScheduledSwapStep,
     SwapOptions,
     SwapSchedule,
-    // Core type
     TreeTN,
+    TreeTNCachedEvaluator,
     TreeTNEvaluator,
     TreeTopology,
     TruncateUpdater,

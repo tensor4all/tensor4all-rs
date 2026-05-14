@@ -7,6 +7,7 @@
 #![allow(dead_code)]
 
 mod addition;
+mod cached_evaluator;
 mod canonicalize;
 pub mod contraction;
 mod decompose;
@@ -40,6 +41,11 @@ use crate::site_index_network::SiteIndexNetwork;
 
 // Re-export the decomposition functions and types
 pub use decompose::{factorize_tensor_to_treetn, factorize_tensor_to_treetn_with, TreeTopology};
+
+// Re-export cached evaluator types
+pub use cached_evaluator::{
+    CachedEvaluatorOptions, CenterSearchResult, GreedyCenterSearch, TreeTNCachedEvaluator,
+};
 
 // Re-export evaluator types
 pub use evaluator::TreeTNEvaluator;
