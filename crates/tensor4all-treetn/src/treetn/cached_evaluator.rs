@@ -10,6 +10,8 @@ use tensor4all_core::{AllowedPairs, AnyScalar, ColMajorArrayRef, IndexLike, Tens
 use super::TreeTN;
 
 type KeyId = usize;
+type EntryOffsets<I, V> = HashMap<V, Vec<(SiteEntry<I>, usize)>>;
+type ParentMap<V> = HashMap<V, Option<V>>;
 
 #[derive(Clone, Debug)]
 struct SiteEntry<I> {
@@ -52,7 +54,7 @@ struct ComponentBatch<I, V> {
     neighbor: V,
     nodes: Vec<V>,
     entries: Vec<SiteEntry<I>>,
-    entry_offsets_by_node: HashMap<V, Vec<(SiteEntry<I>, usize)>>,
+    entry_offsets_by_node: EntryOffsets<I, V>,
     point_to_assignment: Vec<usize>,
     assignments: Vec<ComponentAssignment>,
 }
@@ -709,8 +711,7 @@ where
             }
             entries.sort_by_key(|entry| entry.input_position);
 
-            let mut entry_offsets_by_node: HashMap<V, Vec<(SiteEntry<T::Index>, usize)>> =
-                HashMap::new();
+            let mut entry_offsets_by_node: EntryOffsets<T::Index, V> = HashMap::new();
             for (offset, entry) in entries.iter().cloned().enumerate() {
                 let owner = self
                     .tree
@@ -1060,10 +1061,7 @@ where
     map
 }
 
-fn rooted_tree<V>(
-    neighbors: &HashMap<V, Vec<V>>,
-    root: &V,
-) -> Result<(HashMap<V, Option<V>>, Vec<V>)>
+fn rooted_tree<V>(neighbors: &HashMap<V, Vec<V>>, root: &V) -> Result<(ParentMap<V>, Vec<V>)>
 where
     V: Clone + Eq + Hash + Ord + Debug,
 {
