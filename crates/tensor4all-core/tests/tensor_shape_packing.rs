@@ -1,0 +1,100 @@
+use tensor4all_core::{DynIndex, TensorDynLen};
+
+#[test]
+fn stack_along_new_index_uses_trailing_column_major_batch_axis() {
+    let batch = DynIndex::new_dyn(2);
+    let i = DynIndex::new_dyn(2);
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
+    let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0_f64, 4.0]).unwrap();
+
+    let stacked = TensorDynLen::stack_along_new_index(&[&a, &b], batch.clone(), -1).unwrap();
+
+    assert_eq!(stacked.indices(), &[i, batch]);
+    assert_eq!(stacked.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
+fn index_select_replaces_trailing_index_and_allows_repeated_positions() {
+    let source_batch = DynIndex::new_dyn(3);
+    let target_batch = DynIndex::new_dyn(4);
+    let i = DynIndex::new_dyn(2);
+    let source = TensorDynLen::from_dense(
+        vec![i.clone(), source_batch.clone()],
+        vec![10.0_f64, 11.0, 20.0, 21.0, 30.0, 31.0],
+    )
+    .unwrap();
+
+    let selected = source
+        .index_select(&source_batch, target_batch.clone(), &[2, 0, 2, 1])
+        .unwrap();
+
+    assert_eq!(selected.indices(), &[i, target_batch]);
+    assert_eq!(
+        selected.to_vec::<f64>().unwrap(),
+        vec![30.0, 31.0, 10.0, 11.0, 30.0, 31.0, 20.0, 21.0]
+    );
+}
+
+#[test]
+fn index_select_backward_scatter_adds_repeated_positions() {
+    let source = DynIndex::new_dyn(3);
+    let target = DynIndex::new_dyn(3);
+    let x = TensorDynLen::from_dense(vec![source.clone()], vec![1.0_f64, 2.0, 3.0])
+        .unwrap()
+        .enable_grad();
+    let weights =
+        TensorDynLen::from_dense(vec![target.clone()], vec![10.0_f64, 20.0, 30.0]).unwrap();
+
+    let y = x.index_select(&source, target, &[1, 1, 2]).unwrap();
+    let loss = y.inner_product(&weights).unwrap();
+    loss.backward().unwrap();
+
+    let grad = x.grad().unwrap().unwrap();
+    assert_eq!(grad.indices(), &[source]);
+    assert_eq!(grad.to_vec::<f64>().unwrap(), vec![0.0, 30.0, 30.0]);
+}
+
+#[test]
+fn stack_along_new_index_backward_splits_cotangent_to_inputs() {
+    let batch = DynIndex::new_dyn(2);
+    let x0 = TensorDynLen::scalar(2.0).unwrap().enable_grad();
+    let x1 = TensorDynLen::scalar(3.0).unwrap().enable_grad();
+    let weights = TensorDynLen::from_dense(vec![batch.clone()], vec![10.0_f64, 20.0]).unwrap();
+
+    let stacked = TensorDynLen::stack_along_new_index(&[&x0, &x1], batch, -1).unwrap();
+    let loss = stacked.inner_product(&weights).unwrap();
+    loss.backward().unwrap();
+
+    let grad0 = x0.grad().unwrap().unwrap();
+    let grad1 = x1.grad().unwrap().unwrap();
+    assert!((grad0.only().real() - 10.0).abs() < 1.0e-12);
+    assert!((grad1.only().real() - 20.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn stack_along_new_index_rejects_tracked_compact_storage() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+    let batch = DynIndex::new_dyn(1);
+    let diag = TensorDynLen::from_diag(vec![i, j], vec![1.0_f64, 2.0])
+        .unwrap()
+        .enable_grad();
+
+    let err = TensorDynLen::stack_along_new_index(&[&diag], batch, -1).unwrap_err();
+
+    assert!(err.to_string().contains("structured AD"));
+}
+
+#[test]
+fn index_select_rejects_tracked_compact_storage() {
+    let source = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+    let target = DynIndex::new_dyn(1);
+    let diag = TensorDynLen::from_diag(vec![source.clone(), j], vec![1.0_f64, 2.0])
+        .unwrap()
+        .enable_grad();
+
+    let err = diag.index_select(&source, target, &[0]).unwrap_err();
+
+    assert!(err.to_string().contains("structured AD"));
+}

@@ -935,7 +935,7 @@ where
         let tensor = contract_multi_with_options(&operand_refs, options).context(
             "TreeTNCachedEvaluator::evaluate_batch: failed to contract batched directed message",
         )?;
-        let tensor = ensure_assignment_axis_first(tensor, &assignment_index)?;
+        let tensor = ensure_assignment_axis_last(tensor, &assignment_index)?;
         Ok(StackedMessage {
             assignment_index,
             tensor,
@@ -1010,7 +1010,7 @@ where
             contract_multi_with_options(&operand_refs, options)
                 .context("TreeTNCachedEvaluator::evaluate_batch: failed to contract center batch")?
         };
-        let result_tensor = ensure_assignment_axis_first(result_tensor, &point_index)?;
+        let result_tensor = ensure_assignment_axis_last(result_tensor, &point_index)?;
         anyhow::ensure!(
             result_tensor.indices() == std::slice::from_ref(&point_index),
             "TreeTNCachedEvaluator::evaluate_batch: center contraction left non-scalar indices {:?}",
@@ -1262,29 +1262,8 @@ fn stack_tensors_with_assignment_index(
         tensors.len()
     );
 
-    let base_indices = tensors[0].indices().to_vec();
-    let mut tensor_values = Vec::with_capacity(tensors.len());
-    for tensor in tensors {
-        anyhow::ensure!(
-            tensor.indices() == base_indices.as_slice(),
-            "stacked tensors must have identical index order"
-        );
-        tensor_values.push(tensor_values_any(tensor)?);
-    }
-
-    let rest_len = tensor_values[0].len();
-    let batch_dim = assignment_index.dim();
-    let mut stacked = Vec::with_capacity(batch_dim * rest_len);
-    for rest_offset in 0..rest_len {
-        for values in &tensor_values {
-            stacked.push(values[rest_offset].clone());
-        }
-    }
-
-    let mut indices = Vec::with_capacity(1 + base_indices.len());
-    indices.push(assignment_index.clone());
-    indices.extend(base_indices);
-    TensorDynLen::from_dense_any(indices, stacked)
+    let tensor_refs = tensors.iter().collect::<Vec<_>>();
+    TensorDynLen::stack_along_new_index(&tensor_refs, assignment_index.clone(), -1)
 }
 
 fn gather_stacked_tensor(
@@ -1294,8 +1273,8 @@ fn gather_stacked_tensor(
     selected_assignments: &[usize],
 ) -> Result<TensorDynLen> {
     anyhow::ensure!(
-        stacked.indices().first() == Some(source_assignment_index),
-        "source assignment index must be the first stacked axis"
+        stacked.indices().last() == Some(source_assignment_index),
+        "source assignment index must be the last stacked axis"
     );
     anyhow::ensure!(
         selected_assignments.len() == target_assignment_index.dim(),
@@ -1304,43 +1283,18 @@ fn gather_stacked_tensor(
         target_assignment_index.dim()
     );
 
-    let source_dim = source_assignment_index.dim();
-    for &assignment in selected_assignments {
-        anyhow::ensure!(
-            assignment < source_dim,
-            "selected assignment {} is out of range for source dim {}",
-            assignment,
-            source_dim
-        );
-    }
-
-    let values = tensor_values_any(stacked)?;
-    anyhow::ensure!(
-        values.len() % source_dim == 0,
-        "stacked tensor payload length {} is not divisible by source dim {}",
-        values.len(),
-        source_dim
-    );
-    let rest_len = values.len() / source_dim;
-    let target_dim = target_assignment_index.dim();
-    let mut gathered = Vec::with_capacity(target_dim * rest_len);
-    for rest_offset in 0..rest_len {
-        for &assignment in selected_assignments {
-            gathered.push(values[assignment + source_dim * rest_offset].clone());
-        }
-    }
-
-    let mut indices = Vec::with_capacity(stacked.indices().len());
-    indices.push(target_assignment_index.clone());
-    indices.extend_from_slice(&stacked.indices()[1..]);
-    TensorDynLen::from_dense_any(indices, gathered)
+    stacked.index_select(
+        source_assignment_index,
+        target_assignment_index.clone(),
+        selected_assignments,
+    )
 }
 
-fn ensure_assignment_axis_first(
+fn ensure_assignment_axis_last(
     tensor: TensorDynLen,
     assignment_index: &DynIndex,
 ) -> Result<TensorDynLen> {
-    if tensor.indices().first() == Some(assignment_index) {
+    if tensor.indices().last() == Some(assignment_index) {
         return Ok(tensor);
     }
     anyhow::ensure!(
@@ -1349,7 +1303,6 @@ fn ensure_assignment_axis_first(
         assignment_index
     );
     let mut new_order = Vec::with_capacity(tensor.indices().len());
-    new_order.push(assignment_index.clone());
     new_order.extend(
         tensor
             .indices()
@@ -1357,6 +1310,7 @@ fn ensure_assignment_axis_first(
             .filter(|index| *index != assignment_index)
             .cloned(),
     );
+    new_order.push(assignment_index.clone());
     tensor.permuteinds(&new_order)
 }
 
@@ -1429,7 +1383,7 @@ mod tests {
     }
 
     #[test]
-    fn stack_tensors_adds_assignment_axis_in_column_major_order() {
+    fn stack_tensors_adds_trailing_assignment_axis_in_column_major_order() {
         let batch = DynIndex::new_dyn(2);
         let i = DynIndex::new_dyn(2);
         let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
@@ -1437,28 +1391,28 @@ mod tests {
 
         let stacked = stack_tensors_with_assignment_index(&batch, &[a, b]).unwrap();
 
-        assert_eq!(stacked.indices(), &[batch, i]);
-        assert_eq!(stacked.to_vec::<f64>().unwrap(), vec![1.0, 3.0, 2.0, 4.0]);
+        assert_eq!(stacked.indices(), &[i, batch]);
+        assert_eq!(stacked.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
     }
 
     #[test]
-    fn gather_stacked_tensor_remaps_assignment_axis() {
+    fn gather_stacked_tensor_remaps_trailing_assignment_axis() {
         let source_batch = DynIndex::new_dyn(3);
         let target_batch = DynIndex::new_dyn(4);
         let i = DynIndex::new_dyn(2);
         let stacked = TensorDynLen::from_dense(
-            vec![source_batch.clone(), i.clone()],
-            vec![10.0_f64, 20.0, 30.0, 11.0, 21.0, 31.0],
+            vec![i.clone(), source_batch.clone()],
+            vec![10.0_f64, 11.0, 20.0, 21.0, 30.0, 31.0],
         )
         .unwrap();
 
         let gathered =
             gather_stacked_tensor(&stacked, &source_batch, &target_batch, &[2, 0, 2, 1]).unwrap();
 
-        assert_eq!(gathered.indices(), &[target_batch, i]);
+        assert_eq!(gathered.indices(), &[i, target_batch]);
         assert_eq!(
             gathered.to_vec::<f64>().unwrap(),
-            vec![30.0, 10.0, 30.0, 20.0, 31.0, 11.0, 31.0, 21.0]
+            vec![30.0, 31.0, 10.0, 11.0, 30.0, 31.0, 20.0, 21.0]
         );
     }
 
