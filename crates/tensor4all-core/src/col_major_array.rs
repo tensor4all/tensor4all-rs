@@ -326,12 +326,20 @@ impl<T> ColMajorArray<T> {
 
     /// Number of rows, or `None` when the array is not 2D.
     pub fn nrows(&self) -> Option<usize> {
-        (self.ndim() == 2).then_some(self.shape[0])
+        if self.ndim() == 2 {
+            Some(self.shape[0])
+        } else {
+            None
+        }
     }
 
     /// Number of columns, or `None` when the array is not 2D.
     pub fn ncols(&self) -> Option<usize> {
-        (self.ndim() == 2).then_some(self.shape[1])
+        if self.ndim() == 2 {
+            Some(self.shape[1])
+        } else {
+            None
+        }
     }
 
     /// Return a slice for column `j` of a 2D array, or `None` if `j` is out
@@ -643,6 +651,8 @@ mod tests {
         assert!(arr.is_empty());
         assert_eq!(arr.len(), 0);
         assert_eq!(arr.ndim(), 1);
+        assert_eq!(arr.nrows(), None);
+        assert_eq!(arr.ncols(), None);
     }
 
     #[test]
