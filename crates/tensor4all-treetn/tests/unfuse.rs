@@ -23,7 +23,7 @@ fn replace_site_index_with_indices_preserves_dense_tensor_values() {
     let expected =
         TensorDynLen::from_dense(vec![left.clone(), right.clone()], vec![1.0, 2.0, 3.0, 4.0])
             .unwrap();
-    assert!((&dense - &expected).maxabs() < 1.0e-12);
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
 
     let (site_indices, _) = unfused.all_site_indices().unwrap();
     let site_id_set: HashSet<_> = site_indices.iter().map(|idx| *idx.id()).collect();
@@ -62,7 +62,7 @@ fn split_to_preserves_sparse_tensor_with_zero_leading_qr_row() {
     let expected = tn.contract_to_tensor().unwrap();
 
     assert!(
-        dense.distance(&expected) < 1.0e-12,
+        dense.distance(&expected).unwrap() < 1.0e-12,
         "exact split_to must not drop rows when QR produces a zero leading row"
     );
 }

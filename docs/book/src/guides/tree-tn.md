@@ -182,7 +182,7 @@ let ttn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
 let sum = ttn.add(&ttn).unwrap();
 let dense = sum.to_dense().unwrap();
 let expected = TensorDynLen::from_dense(vec![s], vec![2.0, 4.0]).unwrap();
-assert!((&dense - &expected).maxabs() < 1e-12);
+assert!(dense.distance(&expected).unwrap() < 1e-12);
 ```
 
 After addition the bond dimensions grow, so it is common to follow up with `truncate` to keep them

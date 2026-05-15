@@ -81,7 +81,7 @@ fn tensor_train_to_treetn_preserves_dense_values() -> Result<()> {
 
     assert_eq!(treetn.node_names(), vec![0, 1]);
     assert_eq!(site_indices.len(), tt.len());
-    assert!((&dense - &expected).maxabs() < 1.0e-12);
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
     Ok(())
 }
 
@@ -106,7 +106,7 @@ fn tensor_train_to_treetn_supports_complex_scalars() -> Result<()> {
     let (values, _shape) = tt.fulltensor();
     let expected = TensorDynLen::from_dense(site_indices, values)?;
 
-    assert!((&dense - &expected).maxabs() < 1.0e-12);
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
     Ok(())
 }
 
@@ -142,7 +142,7 @@ fn tensor_train_to_treetn_single_site_preserves_dense_values() -> Result<()> {
 
     assert_eq!(treetn.node_names(), vec![0]);
     assert_eq!(site_indices.len(), 1);
-    assert!((&dense - &expected).maxabs() < 1.0e-12);
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
     Ok(())
 }
 
@@ -156,7 +156,7 @@ fn tensor_train_to_treetn_three_site_preserves_dense_values() -> Result<()> {
     let expected = TensorDynLen::from_dense(site_indices, values)?;
 
     assert_eq!(treetn.node_names(), vec![0, 1, 2]);
-    assert!((&dense - &expected).maxabs() < 1.0e-12);
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
     Ok(())
 }
 

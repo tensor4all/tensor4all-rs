@@ -279,7 +279,10 @@ impl<T: TTScalar> MPO<T> {
 
             let slice = tensor.slice_site(i_k, j_k);
             current =
-                row_vector_times_matrix(&current, &slice, tensor.left_dim(), tensor.right_dim());
+                row_vector_times_matrix(&current, &slice, tensor.left_dim(), tensor.right_dim())
+                    .map_err(|err| MPOError::InvalidOperation {
+                        message: format!("Failed to evaluate MPO at site {site}: {err}"),
+                    })?;
         }
 
         // Should have a single element
@@ -296,29 +299,70 @@ impl<T: TTScalar> MPO<T> {
     }
 
     /// Sum over all indices of the MPO
+    ///
+    /// Returns the scalar sum of every matrix-product-operator entry. Use this
+    /// for small validation checks or algorithms that need the total operator
+    /// weight without materializing the full operator.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a tenferro-backed contraction fails or if an
+    /// internally constructed MPO has inconsistent bond dimensions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::mpo::MPO;
+    ///
+    /// let mpo = MPO::<f64>::constant(&[(2, 2)], 3.0);
+    /// let sum = mpo.sum().unwrap();
+    /// assert!((sum - 12.0).abs() < 1e-10);
+    /// ```
     #[allow(clippy::needless_range_loop)]
-    pub fn sum(&self) -> T
+    pub fn sum(&self) -> Result<T>
     where
         T: EinsumScalar,
     {
         if self.is_empty() {
-            return T::zero();
+            return Ok(T::zero());
         }
 
         // Start with sum over first tensor
         let first = &self.tensors[0];
-        let mut current = tensor_to_col_major_vec(&einsum_tensors("lstr->r", &[first.as_inner()]));
+        let mut current =
+            tensor_to_col_major_vec(&einsum_tensors("lstr->r", &[first.as_inner()]).map_err(
+                |err| MPOError::InvalidOperation {
+                    message: format!("Failed to sum first MPO site: {err}"),
+                },
+            )?);
 
         // Contract with sums of remaining tensors
         for site in 1..self.len() {
             let tensor = &self.tensors[site];
-            let site_sum =
-                tensor_to_col_major_vec(&einsum_tensors("lstr->lr", &[tensor.as_inner()]));
+            let site_sum = tensor_to_col_major_vec(
+                &einsum_tensors("lstr->lr", &[tensor.as_inner()]).map_err(|err| {
+                    MPOError::InvalidOperation {
+                        message: format!("Failed to sum MPO site {site}: {err}"),
+                    }
+                })?,
+            );
             current =
-                row_vector_times_matrix(&current, &site_sum, tensor.left_dim(), tensor.right_dim());
+                row_vector_times_matrix(&current, &site_sum, tensor.left_dim(), tensor.right_dim())
+                    .map_err(|err| MPOError::InvalidOperation {
+                        message: format!("Failed to accumulate MPO sum at site {site}: {err}"),
+                    })?;
         }
 
-        current[0]
+        if current.len() != 1 {
+            return Err(MPOError::InvalidOperation {
+                message: format!(
+                    "Final MPO sum contraction resulted in {} elements, expected 1",
+                    current.len()
+                ),
+            });
+        }
+
+        Ok(current[0])
     }
 
     /// Multiply the MPO by a scalar

@@ -101,13 +101,17 @@ impl<T: Scalar> CrossFactors<T> {
     /// Form `A[:, J] * A[I, J]^{-1}`.
     pub fn cols_times_pivot_inv(&self) -> Result<Matrix<T>> {
         let pivot_inv = self.pivot_inverse()?;
-        Ok(mat_mul(&self.pivot_cols, &pivot_inv))
+        mat_mul(&self.pivot_cols, &pivot_inv).map_err(|err| MatrixLuciError::InvalidArgument {
+            message: format!("left factor multiplication failed: {err}"),
+        })
     }
 
     /// Form `A[I, J]^{-1} * A[I, :]`.
     pub fn pivot_inv_times_rows(&self) -> Result<Matrix<T>> {
         let pivot_inv = self.pivot_inverse()?;
-        Ok(mat_mul(&pivot_inv, &self.pivot_rows))
+        mat_mul(&pivot_inv, &self.pivot_rows).map_err(|err| MatrixLuciError::InvalidArgument {
+            message: format!("right factor multiplication failed: {err}"),
+        })
     }
 }
 

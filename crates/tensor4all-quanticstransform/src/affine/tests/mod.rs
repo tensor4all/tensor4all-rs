@@ -558,8 +558,7 @@ fn assert_affine_mpo_matches_matrix(r: usize, params: &AffineParams, bc: &[Bound
     let op = affine_operator(r, params, bc).unwrap();
     let actual = op.mpo.contract_to_tensor().unwrap();
     let expected = affine_matrix_to_dense_tensor(&matrix, &op, r, m, n, &actual);
-    let diff = &actual - &expected;
-    let maxabs = diff.maxabs();
+    let maxabs = actual.distance(&expected).unwrap();
 
     assert!(
         maxabs < 1e-10,

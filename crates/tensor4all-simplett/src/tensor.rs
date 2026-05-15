@@ -8,7 +8,7 @@ use std::ops::{Index, IndexMut};
 
 use tenferro_tensor::{TensorScalar, TypedTensor as TfTensor};
 
-use crate::einsum_helper::{tensor_to_col_major_vec, typed_tensor_from_col_major_slice};
+use crate::einsum_helper::tensor_to_col_major_vec;
 use crate::error::{Result, TensorTrainError};
 
 /// Rank-N tensor backed by `tenferro_tensor::TypedTensor<T>`.
@@ -61,7 +61,7 @@ fn col_major_data_to_tensor<T: TensorScalar, const N: usize>(
     dims: [usize; N],
     data: Vec<T>,
 ) -> Tensor<T, N> {
-    let inner = typed_tensor_from_col_major_slice(&data, &dims);
+    let inner = TfTensor::from_vec(dims.to_vec(), data);
     Tensor::from_tenferro_unchecked(inner)
 }
 
@@ -381,7 +381,8 @@ mod tests {
 
     #[test]
     fn test_from_tenferro_roundtrip() {
-        let inner = typed_tensor_from_col_major_slice(&[1.0, 4.0, 2.0, 5.0, 3.0, 6.0], &[2, 3]);
+        let inner =
+            typed_tensor_from_col_major_slice(&[1.0, 4.0, 2.0, 5.0, 3.0, 6.0], &[2, 3]).unwrap();
         let tensor = Tensor2::from_tenferro(inner).unwrap();
 
         assert_eq!(tensor.dims(), &[2, 3]);
@@ -398,7 +399,7 @@ mod tests {
 
     #[test]
     fn test_from_tenferro_rank_mismatch_errors() {
-        let inner = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]);
+        let inner = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
         let err = Tensor3::from_tenferro(inner).unwrap_err();
 
         assert!(err.to_string().contains("expected rank 3"));
@@ -407,7 +408,7 @@ mod tests {
 
     #[test]
     fn test_try_from_tenferro_rank_mismatch_errors() {
-        let inner = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]);
+        let inner = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
         let err = Tensor3::try_from_tenferro(inner).unwrap_err();
 
         assert!(err.to_string().contains("expected rank 3"));

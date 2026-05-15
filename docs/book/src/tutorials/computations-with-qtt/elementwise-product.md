@@ -62,7 +62,7 @@ let product = partial_contract(
 )?;
 
 let shape = [site_indices_a.len(), 1];
-let site_values = ColMajorArrayRef::new(&[0usize, 1, 1], &shape);
+let site_values = ColMajorArrayRef::new(&[0usize, 1, 1], &shape)?;
 let value = product.evaluate_at(&site_indices_a, site_values)?;
 let x = (4.0 - 1.0) / npoints as f64;
 let expected = x.powi(2) * (10.0 * x).sin();

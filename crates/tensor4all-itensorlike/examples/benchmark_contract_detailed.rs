@@ -3,8 +3,9 @@
 use rand::rng;
 use std::time::Instant;
 
+use anyhow::Result;
 use tensor4all_core::{DynIndex, TensorDynLen};
-use tensor4all_itensorlike::{CanonicalForm, ContractOptions, Result, TensorTrain};
+use tensor4all_itensorlike::{CanonicalForm, ContractOptions, TensorTrain};
 
 /// Create a random MPO (Matrix Product Operator).
 fn create_random_mpo(
@@ -29,11 +30,11 @@ fn create_random_mpo(
             indices.push(link_indices[i].clone());
         }
 
-        let tensor = TensorDynLen::random::<f64, _>(&mut rng, indices);
+        let tensor = TensorDynLen::random::<f64, _>(&mut rng, indices)?;
         tensors.push(tensor);
     }
 
-    TensorTrain::new(tensors)
+    Ok(TensorTrain::new(tensors)?)
 }
 
 fn main() -> Result<()> {

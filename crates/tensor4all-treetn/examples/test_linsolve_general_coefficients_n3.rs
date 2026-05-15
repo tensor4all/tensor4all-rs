@@ -265,7 +265,7 @@ fn create_random_mps_with_same_sites(
                     bond_indices[i].clone(),
                 ],
             )
-        };
+        }?;
         mps.add_tensor(name, tensor).unwrap();
     }
 

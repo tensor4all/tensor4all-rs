@@ -177,6 +177,15 @@ fn test_ttcache_evaluate_wrong_length() {
 }
 
 #[test]
+fn test_ttcache_partial_environment_wrong_length_errors() {
+    let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let mut cache = TTCache::new(&tt);
+
+    assert!(cache.evaluate_left(&[0, 0, 0]).is_err());
+    assert!(cache.evaluate_right(&[0, 0, 0]).is_err());
+}
+
+#[test]
 fn test_ttcache_evaluate_many_invalid_split() {
     let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
     let mut cache = TTCache::new(&tt);
@@ -185,6 +194,15 @@ fn test_ttcache_evaluate_many_invalid_split() {
     assert!(cache.evaluate_many(&indices, Some(0)).is_err());
     // split > n is invalid
     assert!(cache.evaluate_many(&indices, Some(10)).is_err());
+}
+
+#[test]
+fn test_ttcache_evaluate_many_wrong_index_length_errors() {
+    let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let mut cache = TTCache::new(&tt);
+
+    assert!(cache.evaluate_many(&[vec![0]], Some(1)).is_err());
+    assert!(cache.evaluate_many(&[vec![0, 0, 0]], Some(1)).is_err());
 }
 
 #[test]

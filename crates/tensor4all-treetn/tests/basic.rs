@@ -644,7 +644,7 @@ fn canonicalize_preserves_near_dependent_components() {
             .contract_to_tensor()
             .unwrap();
 
-        let error = (&actual - &expected).maxabs();
+        let error = actual.distance(&expected).unwrap();
         assert!(
             error < 1.0e-18,
             "{form:?} canonicalization changed the represented tensor: maxabs diff = {error}"
@@ -1418,8 +1418,8 @@ fn compare_contract_vs_naive(
     // Create two random TreeTNs
     let mut rng1 = ChaCha8Rng::seed_from_u64(seed1);
     let mut rng2 = ChaCha8Rng::seed_from_u64(seed2);
-    let tn1 = random_treetn::<f64, _, _>(&mut rng1, site_network, link_space.clone());
-    let tn2 = random_treetn::<f64, _, _>(&mut rng2, site_network, link_space);
+    let tn1 = random_treetn::<f64, _, _>(&mut rng1, site_network, link_space.clone()).unwrap();
+    let tn2 = random_treetn::<f64, _, _>(&mut rng2, site_network, link_space).unwrap();
 
     // Contract using naive method (reference)
     let naive_result = tn1

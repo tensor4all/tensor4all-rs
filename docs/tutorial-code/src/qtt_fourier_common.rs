@@ -171,7 +171,7 @@ pub fn evaluate_tree_point(
     site_values: &[usize],
 ) -> Result<Complex64, Box<dyn Error>> {
     let shape = [site_indices.len(), 1];
-    let values = ColMajorArrayRef::new(site_values, &shape);
+    let values = ColMajorArrayRef::new(site_values, &shape)?;
     let result = tn.evaluate_at(site_indices, values)?;
     let value = result
         .first()

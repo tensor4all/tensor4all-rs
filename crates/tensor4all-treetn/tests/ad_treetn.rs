@@ -36,6 +36,7 @@ fn backward_ad_to_dense_propagates_gradients() {
             TensorDynLen::from_dense(idx.clone(), d.clone())
                 .unwrap()
                 .enable_grad()
+                .unwrap()
         })
         .collect();
 
@@ -70,6 +71,7 @@ fn backward_ad_gradient_matches_finite_diff() {
             TensorDynLen::from_dense(idx.clone(), d.clone())
                 .unwrap()
                 .enable_grad()
+                .unwrap()
         })
         .collect();
 
@@ -110,7 +112,7 @@ fn backward_ad_gradient_matches_finite_diff() {
                 })
                 .collect();
             let ttn = TreeTN::from_tensors(tensors, vec![0, 1, 2]).unwrap();
-            ttn.to_dense().unwrap().sum().real()
+            ttn.to_dense().unwrap().sum().unwrap().real()
         };
 
         let fd = (make_perturbed_sum(eps) - make_perturbed_sum(-eps)) / (2.0 * eps);
@@ -134,6 +136,7 @@ fn backward_accumulates_until_clear_grad_across_treetn_nodes() {
             TensorDynLen::from_dense(idx.clone(), d.clone())
                 .unwrap()
                 .enable_grad()
+                .unwrap()
         })
         .collect();
 

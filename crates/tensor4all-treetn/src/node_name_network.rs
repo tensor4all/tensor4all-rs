@@ -325,7 +325,9 @@ where
         // DFS within the subset only: petgraph's Dfs visits all reachable
         // nodes, but we must restrict traversal to edges whose both endpoints
         // are in the subset.
-        let start = *nodes.iter().next().unwrap();
+        let Some(&start) = nodes.iter().next() else {
+            return true;
+        };
         let mut seen = HashSet::new();
         let mut stack = vec![start];
         seen.insert(start);
@@ -627,7 +629,9 @@ where
         // Check edges match (by checking neighbors for each node)
         let self_graph = self.graph.graph();
         for name in self.node_names() {
-            let self_idx = self.node_index(name).unwrap();
+            let Some(self_idx) = self.node_index(name) else {
+                return false;
+            };
             let other_idx = match other.node_index(name) {
                 Some(idx) => idx,
                 None => return false,

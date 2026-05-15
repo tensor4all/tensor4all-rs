@@ -157,9 +157,9 @@ pub enum FactorizeAlg {
 /// ).unwrap();
 ///
 /// // Both recover the same tensor
-/// let recovered_left = left_result.left.contract(&left_result.right);
-/// let recovered_right = right_result.left.contract(&right_result.right);
-/// assert!(recovered_left.distance(&recovered_right) < 1e-12);
+/// let recovered_left = left_result.left.contract(&left_result.right).unwrap();
+/// let recovered_right = right_result.left.contract(&right_result.right).unwrap();
+/// assert!(recovered_left.distance(&recovered_right).unwrap() < 1e-12);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Canonical {
@@ -436,8 +436,8 @@ impl FactorizeOptions {
 /// let result = factorize(&tensor, &[i.clone()], &FactorizeOptions::svd()).unwrap();
 ///
 /// // Contracting left * right recovers the original tensor
-/// let recovered = result.left.contract(&result.right);
-/// assert!(tensor.distance(&recovered) < 1e-12);
+/// let recovered = result.left.contract(&result.right).unwrap();
+/// assert!(tensor.distance(&recovered).unwrap() < 1e-12);
 ///
 /// // SVD provides singular values
 /// assert!(result.singular_values.is_some());
@@ -606,7 +606,7 @@ impl LinearizationOrder {
 ///
 /// let i = DynIndex::new_dyn(2);
 /// let dense = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
-/// let block = BlockTensor::new(vec![dense.clone()], (1, 1));
+/// let block = BlockTensor::new(vec![dense.clone()], (1, 1)).unwrap();
 ///
 /// enum TensorNetwork {
 ///     Dense(TensorDynLen),
@@ -699,8 +699,8 @@ pub trait TensorLike: TensorIndex {
     ///     FactorizeAlg::QR,
     ///     Canonical::Left,
     /// )?;
-    /// let reconstructed = result.left.contract(&result.right);
-    /// assert!((tensor - reconstructed).maxabs() < 1.0e-18);
+    /// let reconstructed = result.left.contract(&result.right)?;
+    /// assert!(tensor.distance(&reconstructed)? < 1.0e-18);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn factorize_full_rank(
@@ -1277,7 +1277,7 @@ pub trait TensorLike: TensorIndex {
     ///
     /// let one = TensorDynLen::scalar_one().unwrap();
     /// assert_eq!(one.dims(), Vec::<usize>::new());
-    /// assert!((one.only().real() - 1.0).abs() < 1e-12);
+    /// assert!((one.only().unwrap().real() - 1.0).abs() < 1e-12);
     /// ```
     fn scalar_one() -> Result<Self>;
 
@@ -1410,7 +1410,7 @@ pub trait TensorLike: TensorIndex {
     /// let data = t.to_vec::<f64>().unwrap();
     /// // column-major 3x2: element at (1,0) = index 1
     /// assert!((data[1] - 1.0).abs() < 1e-12);
-    /// assert!((t.sum().real() - 1.0).abs() < 1e-12);  // exactly one non-zero
+    /// assert!((t.sum().unwrap().real() - 1.0).abs() < 1e-12);  // exactly one non-zero
     /// ```
     fn onehot(index_vals: &[(<Self as TensorIndex>::Index, usize)]) -> Result<Self>;
 }

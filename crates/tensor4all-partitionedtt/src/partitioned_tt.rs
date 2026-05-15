@@ -420,7 +420,7 @@ impl PartitionedTT {
         sorted.sort_by(|(p1, _), (p2, _)| Self::projector_cmp(p1, p2));
 
         let mut iter = sorted.into_iter().map(|(_, subdomain)| subdomain);
-        let first = iter.next().unwrap();
+        let first = iter.next().ok_or(PartitionedTTError::Empty)?;
         let mut result = first.data().clone();
 
         for subdomain in iter {
@@ -451,16 +451,6 @@ impl PartitionedTT {
         b_pairs.sort();
 
         a_pairs.cmp(&b_pairs)
-    }
-}
-
-impl std::ops::Index<&Projector> for PartitionedTT {
-    type Output = SubDomainTT;
-
-    fn index(&self, projector: &Projector) -> &Self::Output {
-        self.data
-            .get(projector)
-            .expect("Projector not found in PartitionedTT")
     }
 }
 

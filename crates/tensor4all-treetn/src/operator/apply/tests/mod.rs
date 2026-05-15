@@ -378,7 +378,7 @@ fn assert_identity_application(
     let result = apply_linear_operator(operator, state, ApplyOptions::default()).unwrap();
     let result_dense = result.to_dense().unwrap();
     let state_dense = state.to_dense().unwrap();
-    assert!((&result_dense - &state_dense).maxabs() < 1e-10);
+    assert!(result_dense.distance(&state_dense).unwrap() < 1e-10);
 }
 
 #[test]
@@ -418,7 +418,7 @@ fn test_linear_operator_tensor_index() {
 
     let link_space = LinkSpace::uniform(2);
     let mut rng = rand::rng();
-    let mpo = random_treetn::<f64, _, _>(&mut rng, &net, link_space);
+    let mpo = random_treetn::<f64, _, _>(&mut rng, &net, link_space).unwrap();
 
     let true_s0 = make_index(2);
     let mut input_mapping = HashMap::new();
@@ -479,7 +479,7 @@ fn test_arc_linear_operator_cow() {
 
     let link_space = LinkSpace::uniform(2);
     let mut rng = rand::rng();
-    let mpo = random_treetn::<f64, _, _>(&mut rng, &net, link_space);
+    let mpo = random_treetn::<f64, _, _>(&mut rng, &net, link_space).unwrap();
 
     let arc_op = ArcLinearOperator::new(mpo, HashMap::new(), HashMap::new());
 
@@ -637,7 +637,7 @@ fn naive_apply_preserves_product_link_space_for_redundant_mpo_bond() {
 
     let result_dense = result.to_dense().unwrap();
     let state_dense = state.to_dense().unwrap();
-    assert!((&result_dense - &state_dense).maxabs() < 1e-10);
+    assert!(result_dense.distance(&state_dense).unwrap() < 1e-10);
 }
 
 #[test]
@@ -652,7 +652,7 @@ fn naive_apply_full_product_identity_embeds_on_state_topology() {
 
     let result_dense = result.to_dense().unwrap();
     let state_dense = state.to_dense().unwrap();
-    assert!((&result_dense - &state_dense).maxabs() < 1e-10);
+    assert!(result_dense.distance(&state_dense).unwrap() < 1e-10);
 }
 
 #[test]
@@ -675,7 +675,7 @@ fn naive_apply_noncontiguous_bonded_identity_uses_compact_bridge_delta() {
     let result = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
     let result_dense = result.to_dense().unwrap();
     let state_dense = state.to_dense().unwrap();
-    assert!((&result_dense - &state_dense).maxabs() < 1e-10);
+    assert!(result_dense.distance(&state_dense).unwrap() < 1e-10);
 }
 
 #[test]
@@ -713,7 +713,7 @@ fn naive_apply_long_identity_chain_keeps_local_bonds_bounded() {
         values.extend(point.iter().copied());
     }
     let shape = [length, sample_points.len()];
-    let value_ref = ColMajorArrayRef::new(&values, &shape);
+    let value_ref = ColMajorArrayRef::new(&values, &shape).unwrap();
     let state_values = state.evaluate_at(&site_indices, value_ref).unwrap();
     let result_values = result.evaluate_at(&site_indices, value_ref).unwrap();
 
@@ -1369,7 +1369,7 @@ fn test_linear_operator_replaceinds() {
 
     let link_space = LinkSpace::uniform(2);
     let mut rng = rand::rng();
-    let mpo = random_treetn::<f64, _, _>(&mut rng, &net, link_space);
+    let mpo = random_treetn::<f64, _, _>(&mut rng, &net, link_space).unwrap();
 
     let true_s0 = make_index(2);
     let mut input_mapping = HashMap::new();

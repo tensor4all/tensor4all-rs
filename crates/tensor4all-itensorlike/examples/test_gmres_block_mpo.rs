@@ -539,6 +539,15 @@ fn apply_cross_block_operator_full(
     Ok(result)
 }
 
+fn block_entry(
+    x: &BlockTensor<TensorTrain>,
+    row: usize,
+    col: usize,
+) -> anyhow::Result<&TensorTrain> {
+    x.get(row, col)
+        .ok_or_else(|| anyhow::anyhow!("missing block ({row}, {col})"))
+}
+
 // ============================================================================
 // Truncation helper
 // ============================================================================
@@ -587,7 +596,7 @@ fn test_block_diagonal_identity() -> anyhow::Result<()> {
     let apply_a = |x: &BlockTensor<TensorTrain>| -> anyhow::Result<BlockTensor<TensorTrain>> {
         let mut result_blocks = Vec::with_capacity(indices.num_blocks);
         for (block_idx, op) in identity_ops.iter().enumerate() {
-            let block = x.get(block_idx / block_cols, block_idx % block_cols);
+            let block = block_entry(x, block_idx / block_cols, block_idx % block_cols)?;
             let result = apply_operator_for_block(op, block, &indices, block_idx)?;
             result_blocks.push(result);
         }
@@ -678,7 +687,7 @@ fn test_block_diagonal_diagonal_operator() -> anyhow::Result<()> {
     let apply_a = |x: &BlockTensor<TensorTrain>| -> anyhow::Result<BlockTensor<TensorTrain>> {
         let mut result_blocks = Vec::with_capacity(indices.num_blocks);
         for (block_idx, op) in diagonal_ops.iter().enumerate() {
-            let block = x.get(block_idx / block_cols, block_idx % block_cols);
+            let block = block_entry(x, block_idx / block_cols, block_idx % block_cols)?;
             let result = apply_operator_for_block(op, block, &indices, block_idx)?;
             result_blocks.push(result);
         }
@@ -794,12 +803,12 @@ fn test_block_upper_triangular() -> anyhow::Result<()> {
         for row in 0..block_rows {
             for (col, cross_op) in cross_block_ops.iter().enumerate() {
                 let flat = indices.flat_idx(row, col);
-                let x_rc = x.get(row, col);
+                let x_rc = block_entry(x, row, col)?;
 
                 if row == 0 {
                     // y_{0,j} = I * x_{0,j} + B * x_{1,j}
                     let i_x = apply_operator_for_block(&identity_ops[flat], x_rc, &indices, flat)?;
-                    let x_1j = x.get(1, col);
+                    let x_1j = block_entry(x, 1, col)?;
                     let b_x = apply_cross_block_operator(cross_op, x_1j, &indices, flat)?;
                     let y = i_x.axpby(AnyScalar::new_real(1.0), &b_x, AnyScalar::new_real(1.0))?;
                     result_blocks.push(y);
@@ -925,7 +934,7 @@ fn test_restart_gmres_block_mpo() -> anyhow::Result<()> {
     let apply_a = |x: &BlockTensor<TensorTrain>| -> anyhow::Result<BlockTensor<TensorTrain>> {
         let mut result_blocks = Vec::with_capacity(indices.num_blocks);
         for (block_idx, op) in diagonal_ops.iter().enumerate() {
-            let block = x.get(block_idx / block_cols, block_idx % block_cols);
+            let block = block_entry(x, block_idx / block_cols, block_idx % block_cols)?;
             let result = apply_operator_for_block(op, block, &indices, block_idx)?;
             result_blocks.push(result);
         }
@@ -1062,7 +1071,7 @@ fn test_block_offdiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
 
         for (col, op) in ops_1to0.iter().enumerate() {
             // y_{0,j} = i*σ_x * x_{1,j}
-            let x_1j = x.get(1, col);
+            let x_1j = block_entry(x, 1, col)?;
             let src = indices.flat_idx(1, col);
             let dst = indices.flat_idx(0, col);
             let y = apply_cross_block_operator_full(op, x_1j, &indices, src, dst)?;
@@ -1070,7 +1079,7 @@ fn test_block_offdiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
         }
         for (col, op) in ops_0to1.iter().enumerate() {
             // y_{1,j} = i*σ_x * x_{0,j}
-            let x_0j = x.get(0, col);
+            let x_0j = block_entry(x, 0, col)?;
             let src = indices.flat_idx(0, col);
             let dst = indices.flat_idx(1, col);
             let y = apply_cross_block_operator_full(op, x_0j, &indices, src, dst)?;
@@ -1212,7 +1221,7 @@ fn test_3x3_block_antidiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
 
         // Row 0: y_{0,j} = i*σ_x * x_{2,j}
         for (col, op) in ops_2to0.iter().enumerate() {
-            let x_2j = x.get(2, col);
+            let x_2j = block_entry(x, 2, col)?;
             let src = indices.flat_idx(2, col);
             let dst = indices.flat_idx(0, col);
             let y = apply_cross_block_operator_full(op, x_2j, &indices, src, dst)?;
@@ -1220,7 +1229,7 @@ fn test_3x3_block_antidiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
         }
         // Row 1: y_{1,j} = i*σ_x * x_{1,j}
         for (col, op) in ops_1to1.iter().enumerate() {
-            let x_1j = x.get(1, col);
+            let x_1j = block_entry(x, 1, col)?;
             let src = indices.flat_idx(1, col);
             let dst = indices.flat_idx(1, col);
             let y = apply_cross_block_operator_full(op, x_1j, &indices, src, dst)?;
@@ -1228,7 +1237,7 @@ fn test_3x3_block_antidiagonal_complex_pauli_x_mpo() -> anyhow::Result<()> {
         }
         // Row 2: y_{2,j} = i*σ_x * x_{0,j}
         for (col, op) in ops_0to2.iter().enumerate() {
-            let x_0j = x.get(0, col);
+            let x_0j = block_entry(x, 0, col)?;
             let src = indices.flat_idx(0, col);
             let dst = indices.flat_idx(2, col);
             let y = apply_cross_block_operator_full(op, x_0j, &indices, src, dst)?;
@@ -1349,14 +1358,14 @@ fn scaling_2x2_offdiagonal_mpo(n_sites: usize) -> anyhow::Result<()> {
         let mut result_blocks = Vec::with_capacity(indices.num_blocks);
 
         for (col, op) in ops_1to0.iter().enumerate() {
-            let x_1j = x.get(1, col);
+            let x_1j = block_entry(x, 1, col)?;
             let src = indices.flat_idx(1, col);
             let dst = indices.flat_idx(0, col);
             let y = apply_cross_block_operator_full(op, x_1j, &indices, src, dst)?;
             result_blocks.push(y);
         }
         for (col, op) in ops_0to1.iter().enumerate() {
-            let x_0j = x.get(0, col);
+            let x_0j = block_entry(x, 0, col)?;
             let src = indices.flat_idx(0, col);
             let dst = indices.flat_idx(1, col);
             let y = apply_cross_block_operator_full(op, x_0j, &indices, src, dst)?;
@@ -1482,21 +1491,21 @@ fn scaling_3x3_antidiagonal_mpo(n_sites: usize) -> anyhow::Result<()> {
         let mut result_blocks = Vec::with_capacity(indices.num_blocks);
 
         for (col, op) in ops_2to0.iter().enumerate() {
-            let x_2j = x.get(2, col);
+            let x_2j = block_entry(x, 2, col)?;
             let src = indices.flat_idx(2, col);
             let dst = indices.flat_idx(0, col);
             let y = apply_cross_block_operator_full(op, x_2j, &indices, src, dst)?;
             result_blocks.push(y);
         }
         for (col, op) in ops_1to1.iter().enumerate() {
-            let x_1j = x.get(1, col);
+            let x_1j = block_entry(x, 1, col)?;
             let src = indices.flat_idx(1, col);
             let dst = indices.flat_idx(1, col);
             let y = apply_cross_block_operator_full(op, x_1j, &indices, src, dst)?;
             result_blocks.push(y);
         }
         for (col, op) in ops_0to2.iter().enumerate() {
-            let x_0j = x.get(0, col);
+            let x_0j = block_entry(x, 0, col)?;
             let src = indices.flat_idx(0, col);
             let dst = indices.flat_idx(2, col);
             let y = apply_cross_block_operator_full(op, x_0j, &indices, src, dst)?;

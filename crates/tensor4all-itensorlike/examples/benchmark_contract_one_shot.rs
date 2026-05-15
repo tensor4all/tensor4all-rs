@@ -1,8 +1,9 @@
 use rand::rng;
 use std::time::Instant;
 
+use anyhow::Result;
 use tensor4all_core::{DynIndex, TensorDynLen};
-use tensor4all_itensorlike::{CanonicalForm, ContractOptions, Result, TensorTrain};
+use tensor4all_itensorlike::{CanonicalForm, ContractOptions, TensorTrain};
 
 fn create_random_mpo(
     length: usize,
@@ -23,13 +24,13 @@ fn create_random_mpo(
         if i + 1 < length {
             indices.push(link_indices[i].clone());
         }
-        let tensor = TensorDynLen::random::<f64, _>(&mut rng, indices);
+        let tensor = TensorDynLen::random::<f64, _>(&mut rng, indices)?;
         tensors.push(tensor);
     }
 
     let _ = phys_dim;
     let _ = bond_dim;
-    TensorTrain::new(tensors)
+    Ok(TensorTrain::new(tensors)?)
 }
 
 fn run_zipup(length: usize, phys_dim: usize, bond_dim: usize, max_rank: usize) -> Result<()> {

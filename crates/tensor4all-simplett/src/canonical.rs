@@ -212,7 +212,10 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
         let next_mat = tensor3_to_right_matrix(&self.tensors[i + 1]);
 
         // R * next_mat
-        let contracted = mat_mul(&r, &next_mat);
+        let contracted =
+            mat_mul(&r, &next_mat).map_err(|err| TensorTrainError::InvalidOperation {
+                message: format!("left-orthogonalization matrix multiply failed: {err}"),
+            })?;
 
         // Update next tensor
         let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim);
@@ -259,7 +262,10 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
         let prev_mat = tensor3_to_left_matrix(&self.tensors[i - 1]);
 
         // prev_mat * L
-        let contracted = mat_mul(&prev_mat, &l_mat);
+        let contracted =
+            mat_mul(&prev_mat, &l_mat).map_err(|err| TensorTrainError::InvalidOperation {
+                message: format!("right-orthogonalization matrix multiply failed: {err}"),
+            })?;
 
         // Update previous tensor
         let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim);
@@ -437,7 +443,10 @@ pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
             let next_right_dim = tensors[i + 1].right_dim();
             let next_mat = tensor3_to_right_matrix(&tensors[i + 1]);
 
-            let contracted = mat_mul(&r, &next_mat);
+            let contracted =
+                mat_mul(&r, &next_mat).map_err(|err| TensorTrainError::InvalidOperation {
+                    message: format!("left sweep matrix multiply failed: {err}"),
+                })?;
 
             let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim);
             for l in 0..new_bond_dim {
@@ -483,7 +492,10 @@ pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
             let prev_site_dim = tensors[i - 1].site_dim();
             let prev_mat = tensor3_to_left_matrix(&tensors[i - 1]);
 
-            let contracted = mat_mul(&prev_mat, &l_mat);
+            let contracted =
+                mat_mul(&prev_mat, &l_mat).map_err(|err| TensorTrainError::InvalidOperation {
+                    message: format!("right sweep matrix multiply failed: {err}"),
+                })?;
 
             let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim);
             for l in 0..prev_left_dim {

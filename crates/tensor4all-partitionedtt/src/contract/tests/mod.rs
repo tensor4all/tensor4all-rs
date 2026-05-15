@@ -279,7 +279,7 @@ fn test_contract_numerical_correctness_generic<T: TestScalar>() {
     // Manually compute expected contraction: R = T1 * T2 (contracting s1)
     // T1 has indices [s0, s1], T2 has indices [s1, s2]
     // Result R has indices [s0, s2]
-    let expected = t1_full.contract(&t2_full);
+    let expected = t1_full.contract(&t2_full).unwrap();
 
     // Compare: both should have the same data
     let contracted_data = T::extract_slice(&contracted_full);
@@ -361,7 +361,7 @@ fn test_contract_with_projectors_numerical_correctness_generic<T: TestScalar>() 
     let t2_proj = project_dense_tensor_at_index::<T>(&t2_full, &s2, 1);
 
     // Contract projected tensors
-    let expected = t1_proj.contract(&t2_proj);
+    let expected = t1_proj.contract(&t2_proj).unwrap();
 
     // Compare
     let contracted_data = T::extract_slice(&contracted_full);
@@ -419,7 +419,7 @@ fn test_contract_with_projectors_numerical_correctness_default_zipup_generic<T: 
             let t1_proj = project_dense_tensor_at_index::<T>(&t1_full, &s0, s0_val);
             let t2_proj = project_dense_tensor_at_index::<T>(&t2_full, &s2, s2_val);
 
-            let expected = t1_proj.contract(&t2_proj);
+            let expected = t1_proj.contract(&t2_proj).unwrap();
 
             let contracted_data = T::extract_slice(&contracted_full);
             let expected_data = T::extract_slice(&expected);
@@ -484,7 +484,7 @@ fn test_contract_with_projector_on_contracted_index_generic<T: TestScalar>() {
     let t1_proj = project_dense_tensor_at_index::<T>(&t1_full, &s1, 0);
     let t2_proj = project_dense_tensor_at_index::<T>(&t2_full, &s1, 0);
 
-    let expected = t1_proj.contract(&t2_proj);
+    let expected = t1_proj.contract(&t2_proj).unwrap();
 
     let contracted_data = T::extract_slice(&contracted_full);
     let expected_data = T::extract_slice(&expected);
@@ -540,7 +540,7 @@ fn test_contract_one_side_has_projector_generic<T: TestScalar>() {
     // Compute expected: project t1 to s0=1, t2 unchanged
     let t1_proj = project_dense_tensor_at_index::<T>(&t1_full, &s0, 1);
 
-    let expected = t1_proj.contract(&t2_full);
+    let expected = t1_proj.contract(&t2_full).unwrap();
 
     let contracted_data = T::extract_slice(&contracted_full);
     let expected_data = T::extract_slice(&expected);
@@ -597,7 +597,7 @@ fn test_proj_contract_numerical_correctness_generic<T: TestScalar>() {
     let t1_proj = project_dense_tensor_at_index::<T>(&t1_full, &s0, 0);
     let t2_proj = project_dense_tensor_at_index::<T>(&t2_full, &s2, 1);
 
-    let expected = t1_proj.contract(&t2_proj);
+    let expected = t1_proj.contract(&t2_proj).unwrap();
 
     let contracted_data = T::extract_slice(&contracted_full);
     let expected_data = T::extract_slice(&expected);

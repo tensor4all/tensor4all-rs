@@ -1,5 +1,6 @@
 //! Lazy pivot-kernel implementations.
 
+use crate::matrixluci::error::MatrixLuciError;
 use crate::matrixluci::factors::{invert_square, load_block, subtract_inplace};
 use crate::matrixluci::kernel::PivotKernel;
 use crate::matrixluci::scalar::Scalar;
@@ -24,18 +25,25 @@ fn residual_block<T: Scalar, S: CandidateMatrixSource<T>>(
     selected_rows: &[usize],
     selected_cols: &[usize],
     pivot_inv: Option<&Matrix<T>>,
-) -> Matrix<T> {
+) -> Result<Matrix<T>> {
     let mut residual = load_block(source, rows, cols);
     if selected_rows.is_empty() {
-        return residual;
+        return Ok(residual);
     }
 
+    let pivot_inv = pivot_inv.ok_or_else(|| MatrixLuciError::InvalidArgument {
+        message: "pivot inverse is required after pivots have been selected".to_string(),
+    })?;
     let a_rj = load_block(source, rows, selected_cols);
     let a_ic = load_block(source, selected_rows, cols);
-    let temp = mat_mul(&a_rj, pivot_inv.unwrap());
-    let approx = mat_mul(&temp, &a_ic);
+    let temp = mat_mul(&a_rj, pivot_inv).map_err(|err| MatrixLuciError::InvalidArgument {
+        message: format!("residual left multiplication failed: {err}"),
+    })?;
+    let approx = mat_mul(&temp, &a_ic).map_err(|err| MatrixLuciError::InvalidArgument {
+        message: format!("residual right multiplication failed: {err}"),
+    })?;
     subtract_inplace(&mut residual, &approx);
-    residual
+    Ok(residual)
 }
 
 fn argmax_abs<T: Scalar>(matrix: &Matrix<T>) -> (usize, usize, f64) {
@@ -70,7 +78,7 @@ fn rook_pivot<T: Scalar, S: CandidateMatrixSource<T>>(
     selected_rows: &[usize],
     selected_cols: &[usize],
     pivot_inv: Option<&Matrix<T>>,
-) -> (usize, usize, f64) {
+) -> Result<(usize, usize, f64)> {
     let mut current_col = remaining_cols[0];
     let mut current_row = remaining_rows[0];
     let max_steps = remaining_rows.len() + remaining_cols.len() + 1;
@@ -83,7 +91,7 @@ fn rook_pivot<T: Scalar, S: CandidateMatrixSource<T>>(
             selected_rows,
             selected_cols,
             pivot_inv,
-        );
+        )?;
         let (best_row_pos, _, _) = argmax_abs(&col_residual);
         current_row = remaining_rows[best_row_pos];
 
@@ -94,12 +102,12 @@ fn rook_pivot<T: Scalar, S: CandidateMatrixSource<T>>(
             selected_rows,
             selected_cols,
             pivot_inv,
-        );
+        )?;
         let (_, best_col_pos, best_abs) = argmax_abs(&row_residual);
         let next_col = remaining_cols[best_col_pos];
 
         if next_col == current_col {
-            return (current_row, current_col, best_abs);
+            return Ok((current_row, current_col, best_abs));
         }
         current_col = next_col;
     }
@@ -111,9 +119,9 @@ fn rook_pivot<T: Scalar, S: CandidateMatrixSource<T>>(
         selected_rows,
         selected_cols,
         pivot_inv,
-    );
+    )?;
     let (_, best_col_pos, best_abs) = argmax_abs(&row_residual);
-    (current_row, remaining_cols[best_col_pos], best_abs)
+    Ok((current_row, remaining_cols[best_col_pos], best_abs))
 }
 
 fn factorize_lazy<T: Scalar, S: CandidateMatrixSource<T>>(
@@ -160,7 +168,7 @@ fn factorize_lazy<T: Scalar, S: CandidateMatrixSource<T>>(
             &selected_rows,
             &selected_cols,
             pivot_inv.as_ref(),
-        );
+        )?;
         last_error = pivot_abs;
 
         if !selected_rows.is_empty()

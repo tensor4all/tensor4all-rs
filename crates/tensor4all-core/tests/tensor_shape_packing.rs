@@ -41,7 +41,8 @@ fn index_select_backward_scatter_adds_repeated_positions() {
     let target = DynIndex::new_dyn(3);
     let x = TensorDynLen::from_dense(vec![source.clone()], vec![1.0_f64, 2.0, 3.0])
         .unwrap()
-        .enable_grad();
+        .enable_grad()
+        .unwrap();
     let weights =
         TensorDynLen::from_dense(vec![target.clone()], vec![10.0_f64, 20.0, 30.0]).unwrap();
 
@@ -57,8 +58,8 @@ fn index_select_backward_scatter_adds_repeated_positions() {
 #[test]
 fn stack_along_new_index_backward_splits_cotangent_to_inputs() {
     let batch = DynIndex::new_dyn(2);
-    let x0 = TensorDynLen::scalar(2.0).unwrap().enable_grad();
-    let x1 = TensorDynLen::scalar(3.0).unwrap().enable_grad();
+    let x0 = TensorDynLen::scalar(2.0).unwrap().enable_grad().unwrap();
+    let x1 = TensorDynLen::scalar(3.0).unwrap().enable_grad().unwrap();
     let weights = TensorDynLen::from_dense(vec![batch.clone()], vec![10.0_f64, 20.0]).unwrap();
 
     let stacked = TensorDynLen::stack_along_new_index(&[&x0, &x1], batch, -1).unwrap();
@@ -67,8 +68,8 @@ fn stack_along_new_index_backward_splits_cotangent_to_inputs() {
 
     let grad0 = x0.grad().unwrap().unwrap();
     let grad1 = x1.grad().unwrap().unwrap();
-    assert!((grad0.only().real() - 10.0).abs() < 1.0e-12);
-    assert!((grad1.only().real() - 20.0).abs() < 1.0e-12);
+    assert!((grad0.only().unwrap().real() - 10.0).abs() < 1.0e-12);
+    assert!((grad1.only().unwrap().real() - 20.0).abs() < 1.0e-12);
 }
 
 #[test]
@@ -78,7 +79,8 @@ fn stack_along_new_index_rejects_tracked_compact_storage() {
     let batch = DynIndex::new_dyn(1);
     let diag = TensorDynLen::from_diag(vec![i, j], vec![1.0_f64, 2.0])
         .unwrap()
-        .enable_grad();
+        .enable_grad()
+        .unwrap();
 
     let err = TensorDynLen::stack_along_new_index(&[&diag], batch, -1).unwrap_err();
 
@@ -92,7 +94,8 @@ fn index_select_rejects_tracked_compact_storage() {
     let target = DynIndex::new_dyn(1);
     let diag = TensorDynLen::from_diag(vec![source.clone(), j], vec![1.0_f64, 2.0])
         .unwrap()
-        .enable_grad();
+        .enable_grad()
+        .unwrap();
 
     let err = diag.index_select(&source, target, &[0]).unwrap_err();
 

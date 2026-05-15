@@ -109,6 +109,46 @@ fn take_fit_profile() -> Option<FitProfile> {
     FIT_PROFILE_STATE.with(|state| state.borrow_mut().take())
 }
 
+fn sorted_neighbors_by_node_index<T, V>(
+    tn: &TreeTN<T, V>,
+    node: &V,
+    excluded: Option<&V>,
+    context: &str,
+) -> Result<Vec<V>>
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    let mut neighbors = Vec::new();
+    for neighbor in tn.site_index_network().neighbors(node) {
+        if excluded == Some(&neighbor) {
+            continue;
+        }
+        let node_idx = tn.node_index(&neighbor).ok_or_else(|| {
+            anyhow::anyhow!(
+                "{context}: neighbor {:?} of node {:?} is missing from TreeTN node map",
+                neighbor,
+                node
+            )
+        })?;
+        neighbors.push((node_idx.index(), neighbor));
+    }
+    neighbors.sort_by_key(|(index, _node)| *index);
+    Ok(neighbors.into_iter().map(|(_index, node)| node).collect())
+}
+
+fn tensor_at_node<'a, T, V>(tn: &'a TreeTN<T, V>, node: &V, tree_name: &str) -> Result<&'a T>
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    let node_idx = tn
+        .node_index(node)
+        .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in {}", node, tree_name))?;
+    tn.tensor(node_idx)
+        .ok_or_else(|| anyhow::anyhow!("Tensor for node {:?} not found in {}", node, tree_name))
+}
+
 // ============================================================================
 // FitEnvironment: Environment tensor cache
 // ============================================================================
@@ -230,16 +270,8 @@ where
         });
 
         // Get neighbors of `from` excluding `to`
-        let mut child_neighbors: Vec<V> = tn_c
-            .site_index_network()
-            .neighbors(from)
-            .filter(|n| n != to)
-            .collect();
-        child_neighbors.sort_by_key(|node| {
-            tn_c.node_index(node)
-                .expect("neighbor must exist in site index network")
-                .index()
-        });
+        let child_neighbors =
+            sorted_neighbors_by_node_index(tn_c, from, Some(to), "FitEnvironment::get_or_compute")?;
 
         // Recursively get or compute child environments
         let child_envs: Vec<T> = child_neighbors
@@ -273,44 +305,49 @@ where
     where
         V: 'a + Send + Sync,
     {
+        let _ = self.try_invalidate(region, tn_c);
+    }
+
+    fn try_invalidate<'a>(
+        &mut self,
+        region: impl IntoIterator<Item = &'a V>,
+        tn_c: &TreeTN<T, V>,
+    ) -> Result<()>
+    where
+        V: 'a + Send + Sync,
+    {
         for t in region {
             // Get all neighbors of t
-            let mut neighbors: Vec<V> = tn_c.site_index_network().neighbors(t).collect();
-            neighbors.sort_by_key(|node| {
-                tn_c.node_index(node)
-                    .expect("neighbor must exist in site index network")
-                    .index()
-            });
+            let neighbors =
+                sorted_neighbors_by_node_index(tn_c, t, None, "FitEnvironment::invalidate")?;
 
             // Remove all env[(t, *)] and propagate recursively
             for neighbor in neighbors {
-                self.invalidate_recursive(t, &neighbor, tn_c);
+                self.invalidate_recursive(t, &neighbor, tn_c)?;
             }
         }
+        Ok(())
     }
 
     /// Recursively invalidate caches starting from env[(from, to)] towards leaves.
     ///
     /// If env[(from, to)] exists, remove it and propagate to env[(to, x)] for all x ≠ from.
-    fn invalidate_recursive(&mut self, from: &V, to: &V, tn_c: &TreeTN<T, V>) {
+    fn invalidate_recursive(&mut self, from: &V, to: &V, tn_c: &TreeTN<T, V>) -> Result<()> {
         // Remove env[(from, to)] if it exists
         if self.envs.remove(&(from.clone(), to.clone())).is_some() {
             // Propagate to next generation: env[(to, x)] for all neighbors x of to, x ≠ from
-            let mut neighbors: Vec<V> = tn_c
-                .site_index_network()
-                .neighbors(to)
-                .filter(|n| n != from)
-                .collect();
-            neighbors.sort_by_key(|node| {
-                tn_c.node_index(node)
-                    .expect("neighbor must exist in site index network")
-                    .index()
-            });
+            let neighbors = sorted_neighbors_by_node_index(
+                tn_c,
+                to,
+                Some(from),
+                "FitEnvironment::invalidate_recursive",
+            )?;
 
             for neighbor in neighbors {
-                self.invalidate_recursive(to, &neighbor, tn_c);
+                self.invalidate_recursive(to, &neighbor, tn_c)?;
             }
         }
+        Ok(())
     }
 
     /// Verify cache structural consistency.
@@ -329,16 +366,12 @@ where
     {
         for (from, to) in self.envs.keys() {
             // Get neighbors of `from` excluding `to`
-            let mut child_neighbors: Vec<V> = tn_c
-                .site_index_network()
-                .neighbors(from)
-                .filter(|n| n != to)
-                .collect();
-            child_neighbors.sort_by_key(|node| {
-                tn_c.node_index(node)
-                    .expect("neighbor must exist in site index network")
-                    .index()
-            });
+            let child_neighbors = sorted_neighbors_by_node_index(
+                tn_c,
+                from,
+                Some(to),
+                "FitEnvironment::verify_structural_consistency",
+            )?;
 
             // If `from` is not a leaf, all child environments must exist
             for child in &child_neighbors {
@@ -385,25 +418,9 @@ where
     let started = fit_profile_enabled().then(Instant::now);
 
     // Get tensors
-    let node_idx_a = tn_a
-        .node_index(node)
-        .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tn_a", node))?;
-    let node_idx_b = tn_b
-        .node_index(node)
-        .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tn_b", node))?;
-    let node_idx_c = tn_c
-        .node_index(node)
-        .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tn_c", node))?;
-
-    let tensor_a = tn_a
-        .tensor(node_idx_a)
-        .ok_or_else(|| anyhow::anyhow!("Tensor not found in tn_a"))?;
-    let tensor_b = tn_b
-        .tensor(node_idx_b)
-        .ok_or_else(|| anyhow::anyhow!("Tensor not found in tn_b"))?;
-    let tensor_c = tn_c
-        .tensor(node_idx_c)
-        .ok_or_else(|| anyhow::anyhow!("Tensor not found in tn_c"))?;
+    let tensor_a = tensor_at_node(tn_a, node, "tn_a")?;
+    let tensor_b = tensor_at_node(tn_b, node, "tn_b")?;
+    let tensor_c = tensor_at_node(tn_c, node, "tn_c")?;
 
     // Contract A × B × conj(C) with a single multi-tensor call.
     let c_conj = tensor_c.conj();
@@ -439,25 +456,9 @@ where
     let started = fit_profile_enabled().then(Instant::now);
 
     // Get local tensors
-    let node_idx_a = tn_a
-        .node_index(node)
-        .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tn_a", node))?;
-    let node_idx_b = tn_b
-        .node_index(node)
-        .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tn_b", node))?;
-    let node_idx_c = tn_c
-        .node_index(node)
-        .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tn_c", node))?;
-
-    let tensor_a = tn_a
-        .tensor(node_idx_a)
-        .ok_or_else(|| anyhow::anyhow!("Tensor not found in tn_a"))?;
-    let tensor_b = tn_b
-        .tensor(node_idx_b)
-        .ok_or_else(|| anyhow::anyhow!("Tensor not found in tn_b"))?;
-    let tensor_c = tn_c
-        .tensor(node_idx_c)
-        .ok_or_else(|| anyhow::anyhow!("Tensor not found in tn_c"))?;
+    let tensor_a = tensor_at_node(tn_a, node, "tn_a")?;
+    let tensor_b = tensor_at_node(tn_b, node, "tn_b")?;
+    let tensor_c = tensor_at_node(tn_c, node, "tn_c")?;
 
     if child_envs.is_empty() {
         // Leaf node: compute from tensors directly
@@ -594,55 +595,75 @@ where
             profile.step_count += 1;
         });
 
-        // Get node indices in various TreeTNs
-        let idx_u_a = self.tn_a.node_index(node_u).unwrap();
-        let idx_v_a = self.tn_a.node_index(node_v).unwrap();
-        let idx_u_b = self.tn_b.node_index(node_u).unwrap();
-        let idx_v_b = self.tn_b.node_index(node_v).unwrap();
-
         // Get tensors
-        let a_u = self.tn_a.tensor(idx_u_a).unwrap();
-        let a_v = self.tn_a.tensor(idx_v_a).unwrap();
-        let b_u = self.tn_b.tensor(idx_u_b).unwrap();
-        let b_v = self.tn_b.tensor(idx_v_b).unwrap();
+        let a_u = tensor_at_node(&self.tn_a, node_u, "tn_a")?;
+        let a_v = tensor_at_node(&self.tn_a, node_v, "tn_a")?;
+        let b_u = tensor_at_node(&self.tn_b, node_u, "tn_b")?;
+        let b_v = tensor_at_node(&self.tn_b, node_v, "tn_b")?;
+
+        if full_treetn.node_index(node_u).is_none() {
+            return Err(anyhow::anyhow!(
+                "Node {:?} not found in full TreeTN",
+                node_u
+            ));
+        }
+        if full_treetn.node_index(node_v).is_none() {
+            return Err(anyhow::anyhow!(
+                "Node {:?} not found in full TreeTN",
+                node_v
+            ));
+        }
+        if full_treetn.edge_between(node_u, node_v).is_none() {
+            return Err(anyhow::anyhow!(
+                "FitUpdater update step nodes {:?} and {:?} are not adjacent in full TreeTN",
+                node_u,
+                node_v
+            ));
+        }
 
         // Collect environments from neighbors (excluding the edge between u and v)
         // Uses lazy evaluation: computes and caches if not already present
         let mut env_tensors: Vec<T> = Vec::new();
 
         // Environments from u's neighbors (except v)
-        let mut u_neighbors: Vec<V> = full_treetn.site_index_network().neighbors(node_u).collect();
-        u_neighbors.sort_by_key(|node| {
-            full_treetn
-                .node_index(node)
-                .expect("neighbor must exist in site index network")
-                .index()
-        });
-        for neighbor in u_neighbors {
-            if neighbor == *node_v {
+        let u_neighbors =
+            sorted_neighbors_by_node_index(full_treetn, node_u, None, "FitUpdater::update")?;
+        let mut left_bond_indices = Vec::new();
+        for neighbor in &u_neighbors {
+            if neighbor == node_v {
                 continue;
             }
+            let edge = full_treetn.edge_between(node_u, neighbor).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "FitUpdater: missing edge between {:?} and {:?} in full TreeTN",
+                    node_u,
+                    neighbor
+                )
+            })?;
+            let bond = full_treetn.bond_index(edge).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "FitUpdater: missing bond index for edge between {:?} and {:?}",
+                    node_u,
+                    neighbor
+                )
+            })?;
+            left_bond_indices.push(bond.clone());
             let env =
                 self.envs
-                    .get_or_compute(&neighbor, node_u, &self.tn_a, &self.tn_b, full_treetn)?;
+                    .get_or_compute(neighbor, node_u, &self.tn_a, &self.tn_b, full_treetn)?;
             env_tensors.push(env);
         }
 
         // Environments from v's neighbors (except u)
-        let mut v_neighbors: Vec<V> = full_treetn.site_index_network().neighbors(node_v).collect();
-        v_neighbors.sort_by_key(|node| {
-            full_treetn
-                .node_index(node)
-                .expect("neighbor must exist in site index network")
-                .index()
-        });
-        for neighbor in v_neighbors {
-            if neighbor == *node_u {
+        let v_neighbors =
+            sorted_neighbors_by_node_index(full_treetn, node_v, None, "FitUpdater::update")?;
+        for neighbor in &v_neighbors {
+            if neighbor == node_u {
                 continue;
             }
             let env =
                 self.envs
-                    .get_or_compute(&neighbor, node_v, &self.tn_a, &self.tn_b, full_treetn)?;
+                    .get_or_compute(neighbor, node_v, &self.tn_a, &self.tn_b, full_treetn)?;
             env_tensors.push(env);
         }
 
@@ -664,24 +685,18 @@ where
 
         // Determine left indices (indices that will remain on u after factorization)
         let left_inds_started = fit_profile_enabled().then(Instant::now);
-        let site_c_u = full_treetn.site_space(node_u).cloned().unwrap_or_default();
+        let site_c_u = full_treetn.site_space(node_u).cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "FitUpdater: site space for node {:?} not found in full TreeTN",
+                node_u
+            )
+        })?;
         let mut left_inds: Vec<_> = ab_uv
             .external_indices()
             .iter()
             .filter(|idx| {
                 // Keep site indices of u and link indices to u's other neighbors
-                site_c_u.contains(*idx)
-                    || full_treetn
-                        .site_index_network()
-                        .neighbors(node_u)
-                        .filter(|n| n != node_v)
-                        .any(|neighbor| {
-                            full_treetn
-                                .edge_between(node_u, &neighbor)
-                                .and_then(|e| full_treetn.bond_index(e))
-                                .map(|b| b == *idx)
-                                .unwrap_or(false)
-                        })
+                site_c_u.contains(*idx) || left_bond_indices.iter().any(|bond| bond == *idx)
             })
             .cloned()
             .collect();
@@ -747,16 +762,40 @@ where
         let new_bond = factorize_result.bond_index;
 
         // Get edge between u and v
-        let edge_uv = subtree.edge_between(node_u, node_v).unwrap();
+        let edge_uv = subtree.edge_between(node_u, node_v).ok_or_else(|| {
+            anyhow::anyhow!(
+                "FitUpdater: subtree is missing edge between {:?} and {:?}",
+                node_u,
+                node_v
+            )
+        })?;
 
         // Update subtree with new bond and tensors
-        let idx_u_sub = subtree.node_index(node_u).unwrap();
-        let idx_v_sub = subtree.node_index(node_v).unwrap();
+        let idx_u_sub = subtree.node_index(node_u).ok_or_else(|| {
+            anyhow::anyhow!("FitUpdater: node {:?} not found in update subtree", node_u)
+        })?;
+        let idx_v_sub = subtree.node_index(node_v).ok_or_else(|| {
+            anyhow::anyhow!("FitUpdater: node {:?} not found in update subtree", node_v)
+        })?;
 
         let replace_started = fit_profile_enabled().then(Instant::now);
         subtree.replace_edge_bond(edge_uv, new_bond.clone())?;
-        subtree.replace_tensor(idx_u_sub, new_tensor_u)?;
-        subtree.replace_tensor(idx_v_sub, new_tensor_v)?;
+        subtree
+            .replace_tensor(idx_u_sub, new_tensor_u)?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "FitUpdater: node {:?} disappeared before tensor replacement",
+                    node_u
+                )
+            })?;
+        subtree
+            .replace_tensor(idx_v_sub, new_tensor_v)?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "FitUpdater: node {:?} disappeared before tensor replacement",
+                    node_v
+                )
+            })?;
 
         // Set ortho_towards
         subtree.set_ortho_towards(&new_bond, Some(step.new_center.clone()));
@@ -777,7 +816,7 @@ where
     ) -> Result<()> {
         // Invalidate all caches affected by the updated region
         let started = fit_profile_enabled().then(Instant::now);
-        self.envs.invalidate(&step.nodes, full_treetn_after);
+        self.envs.try_invalidate(&step.nodes, full_treetn_after)?;
         if let Some(started) = started {
             with_fit_profile(|profile| {
                 profile.invalidate_time += started.elapsed();

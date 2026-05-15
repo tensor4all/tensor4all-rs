@@ -149,7 +149,7 @@ fn test_contract_factorize_roundtrip() {
     let t1 = treetn.tensor(n1).unwrap().clone();
     let t2 = treetn.tensor(n2).unwrap().clone();
 
-    let contracted = t1.contract(&t2);
+    let contracted = t1.contract(&t2).unwrap();
 
     // Find left_inds for factorization
     let t1_ids: std::collections::HashSet<_> = t1
@@ -180,8 +180,10 @@ fn test_contract_factorize_roundtrip() {
         .factorize(&left_inds, &factorize_options)
         .unwrap();
 
-    let reconstructed = result.left.contract(&result.right);
-    let recon_aligned = reconstructed.permute_indices(&contracted.external_indices());
+    let reconstructed = result.left.contract(&result.right).unwrap();
+    let recon_aligned = reconstructed
+        .permute_indices(&contracted.external_indices())
+        .unwrap();
     let neg = recon_aligned
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();
@@ -203,15 +205,24 @@ fn test_manual_sweep_edge_steps() {
     let mut t = concatenate(&left, &right);
 
     // Reference: full contraction of original tensors
-    let full_ref = t[3].contract(&t[2]).contract(&t[1]).contract(&t[0]);
+    let full_ref = t[3]
+        .contract(&t[2])
+        .unwrap()
+        .contract(&t[1])
+        .unwrap()
+        .contract(&t[0])
+        .unwrap();
 
     // Helper: contract all 4 tensors and compare to reference
     let check_full = |_label: &str, tensors: &[TensorDynLen]| -> f64 {
         let full = tensors[3]
             .contract(&tensors[2])
+            .unwrap()
             .contract(&tensors[1])
-            .contract(&tensors[0]);
-        let aligned = full.permute_indices(&full_ref.external_indices());
+            .unwrap()
+            .contract(&tensors[0])
+            .unwrap();
+        let aligned = full.permute_indices(&full_ref.external_indices()).unwrap();
         let neg = full_ref
             .scale(tensor4all_core::AnyScalar::new_real(-1.0))
             .unwrap();
@@ -245,7 +256,7 @@ fn test_manual_sweep_edge_steps() {
         let fr = t[src]
             .factorize(&left_inds, &FactorizeOptions::qr())
             .unwrap();
-        let new_dst = t[dst].contract(&fr.right);
+        let new_dst = t[dst].contract(&fr.right).unwrap();
         t[src] = fr.left;
         t[dst] = new_dst;
     };
@@ -285,8 +296,8 @@ fn test_qr_roundtrip_tall_matrix() {
         .factorize(&[i2.clone(), i3.clone()], &FactorizeOptions::qr())
         .unwrap();
 
-    let recon = fr.left.contract(&fr.right);
-    let recon_aligned = recon.permute_indices(&t.external_indices());
+    let recon = fr.left.contract(&fr.right).unwrap();
+    let recon_aligned = recon.permute_indices(&t.external_indices()).unwrap();
     let neg = t.scale(tensor4all_core::AnyScalar::new_real(-1.0)).unwrap();
     let diff = recon_aligned.add(&neg).unwrap();
     let rel_err = diff.norm() / t.norm();

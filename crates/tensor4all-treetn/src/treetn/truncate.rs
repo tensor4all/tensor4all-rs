@@ -141,7 +141,12 @@ where
             .context(format!("{}: multi-node center not supported", context_name));
         }
 
-        let center_node = center_nodes.iter().next().unwrap().clone();
+        let center_node = center_nodes
+            .iter()
+            .next()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("truncate requires a center node"))
+            .context(format!("{}: missing center node", context_name))?;
 
         // Step 1: Canonicalize towards the center (required before truncation sweep)
         let canonicalize_options =

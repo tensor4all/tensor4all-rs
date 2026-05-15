@@ -10,7 +10,7 @@ fn test_diag_tensor_creation() {
     let j = Index::new_dyn(3);
     let diag_data = vec![1.0, 2.0, 3.0];
 
-    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_data.clone());
+    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_data.clone()).unwrap();
     assert_eq!(tensor.dims(), vec![3, 3]);
     assert!(tensor.is_diag());
     assert_eq!(tensor.storage().storage_kind(), StorageKind::Diagonal);
@@ -25,13 +25,13 @@ fn test_diag_tensor_creation() {
 }
 
 #[test]
-#[should_panic(expected = "DiagTensor requires all indices to have the same dimension")]
 fn test_diag_tensor_validation_different_dims() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let diag_data = vec![1.0, 2.0];
 
-    let _tensor = diag_tensor_dyn_len(vec![i, j], diag_data);
+    let err = diag_tensor_dyn_len(vec![i, j], diag_data).unwrap_err();
+    assert!(err.to_string().contains("same dimension"));
 }
 
 #[test]
@@ -40,8 +40,8 @@ fn test_diag_tensor_sum() {
     let j = Index::new_dyn(3);
     let diag_data = vec![1.0, 2.0, 3.0];
 
-    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_data);
-    let sum: AnyScalar = tensor.sum();
+    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_data).unwrap();
+    let sum: AnyScalar = tensor.sum().unwrap();
     assert!(!sum.is_complex());
     assert!((sum.real() - 6.0).abs() < 1e-10);
 }
@@ -50,13 +50,13 @@ fn test_diag_tensor_sum() {
 fn test_diag_tensor_scale_preserves_diagonal_values() {
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(3);
-    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![1.0, -2.0, 4.0]);
+    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![1.0, -2.0, 4.0]).unwrap();
 
     let scaled = tensor.scale(AnyScalar::new_real(-0.5)).unwrap();
 
     assert!(scaled.is_diag());
     assert_eq!(scaled.storage().storage_kind(), StorageKind::Diagonal);
-    let expected = diag_tensor_dyn_len(vec![i, j], vec![-0.5, 1.0, -2.0]);
+    let expected = diag_tensor_dyn_len(vec![i, j], vec![-0.5, 1.0, -2.0]).unwrap();
     assert!(scaled.isapprox(&expected, 1e-12, 0.0));
 }
 
@@ -67,12 +67,13 @@ fn test_diag_tensor_permute() {
     let k = Index::new_dyn(3);
     let diag_data = vec![1.0, 2.0, 3.0];
 
-    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone(), k.clone()], diag_data.clone());
+    let tensor =
+        diag_tensor_dyn_len(vec![i.clone(), j.clone(), k.clone()], diag_data.clone()).unwrap();
 
     // Permute: data should not change for DiagTensor
-    let permuted = tensor.permute(&[2, 0, 1]);
+    let permuted = tensor.permute(&[2, 0, 1]).unwrap();
     assert_eq!(permuted.dims(), vec![3, 3, 3]);
-    let expected = diag_tensor_dyn_len(vec![k, i, j], diag_data);
+    let expected = diag_tensor_dyn_len(vec![k, i, j], diag_data).unwrap();
     assert!(permuted.isapprox(&expected, 1e-12, 0.0));
 }
 
@@ -80,7 +81,7 @@ fn test_diag_tensor_permute() {
 fn diag_tensor_select_index_returns_dense_slice_from_payload() {
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(3);
-    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![2.0, 5.0, 7.0]);
+    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![2.0, 5.0, 7.0]).unwrap();
 
     let selected = tensor.select_indices(&[j], &[1]).unwrap();
 
@@ -94,7 +95,8 @@ fn diag_tensor_select_multiple_indices_requires_matching_coordinates() {
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(3);
-    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone(), k.clone()], vec![2.0, 5.0, 7.0]);
+    let tensor =
+        diag_tensor_dyn_len(vec![i.clone(), j.clone(), k.clone()], vec![2.0, 5.0, 7.0]).unwrap();
 
     let matching = tensor
         .select_indices(&[i.clone(), k.clone()], &[2, 2])
@@ -115,15 +117,15 @@ fn test_diag_tensor_contract_diag_diag_all_contracted() {
     let diag_a = vec![1.0, 2.0];
     let diag_b = vec![3.0, 4.0];
 
-    let tensor_a = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_a);
-    let tensor_b = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_b);
+    let tensor_a = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_a).unwrap();
+    let tensor_b = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_b).unwrap();
 
     // Contract all indices: result should be scalar (inner product)
-    let result = tensor_a.contract(&tensor_b);
+    let result = tensor_a.contract(&tensor_b).unwrap();
 
     // Result should be scalar: 1*3 + 2*4 = 11
     assert_eq!(result.dims().len(), 0);
-    assert!((result.only().real() - 11.0).abs() < 1e-12);
+    assert!((result.only().unwrap().real() - 11.0).abs() < 1e-12);
 }
 
 #[test]
@@ -135,18 +137,18 @@ fn test_diag_tensor_contract_diag_diag_partial() {
     let diag_a = vec![1.0, 2.0, 3.0];
     let diag_b = vec![4.0, 5.0, 6.0];
 
-    let tensor_a = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_a);
-    let tensor_b = diag_tensor_dyn_len(vec![j.clone(), k.clone()], diag_b);
+    let tensor_a = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_a).unwrap();
+    let tensor_b = diag_tensor_dyn_len(vec![j.clone(), k.clone()], diag_b).unwrap();
 
     // Contract along j: result should be DiagTensor[i, k]
-    let result = tensor_a.contract(&tensor_b);
+    let result = tensor_a.contract(&tensor_b).unwrap();
 
     assert_eq!(result.dims(), vec![3, 3]);
     assert!(result.is_diag());
     assert_eq!(result.storage().storage_kind(), StorageKind::Diagonal);
 
     // Result diagonal should be element-wise product: [1*4, 2*5, 3*6] = [4, 10, 18]
-    let expected = diag_tensor_dyn_len(vec![i, k], vec![4.0, 10.0, 18.0]);
+    let expected = diag_tensor_dyn_len(vec![i, k], vec![4.0, 10.0, 18.0]).unwrap();
     assert!(result.isapprox(&expected, 1e-12, 0.0));
 }
 
@@ -155,14 +157,17 @@ fn tracked_diag_partial_contraction_preserves_diag_result_and_grad() {
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(3);
-    let a = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![2.0, 3.0, 5.0]).enable_grad();
-    let b = diag_tensor_dyn_len(vec![j, k.clone()], vec![7.0, 11.0, 13.0]);
+    let a = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![2.0, 3.0, 5.0])
+        .unwrap()
+        .enable_grad()
+        .unwrap();
+    let b = diag_tensor_dyn_len(vec![j, k.clone()], vec![7.0, 11.0, 13.0]).unwrap();
 
-    let c = a.contract(&b);
+    let c = a.contract(&b).unwrap();
     assert_eq!(c.storage().storage_kind(), StorageKind::Diagonal);
 
-    let ones = diag_tensor_dyn_len(vec![i, k], vec![1.0, 1.0, 1.0]);
-    let loss = c.contract(&ones);
+    let ones = diag_tensor_dyn_len(vec![i, k], vec![1.0, 1.0, 1.0]).unwrap();
+    let loss = c.contract(&ones).unwrap();
     loss.backward().unwrap();
 
     let grad = a.grad().unwrap().unwrap();
@@ -180,8 +185,8 @@ fn test_diag_tensor_tensordot_diag_diag_partial_preserves_diagonal_storage() {
     let k = Index::new_dyn(3);
     let l = Index::new_dyn(3);
 
-    let tensor_a = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0]);
-    let tensor_b = diag_tensor_dyn_len(vec![k.clone(), l.clone()], vec![4.0, 5.0, 6.0]);
+    let tensor_a = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    let tensor_b = diag_tensor_dyn_len(vec![k.clone(), l.clone()], vec![4.0, 5.0, 6.0]).unwrap();
 
     let result = tensor_a
         .tensordot(&tensor_b, &[(j, k)])
@@ -191,7 +196,7 @@ fn test_diag_tensor_tensordot_diag_diag_partial_preserves_diagonal_storage() {
     assert!(result.is_diag());
     assert_eq!(result.storage().storage_kind(), StorageKind::Diagonal);
 
-    let expected = diag_tensor_dyn_len(vec![i, l], vec![4.0, 10.0, 18.0]);
+    let expected = diag_tensor_dyn_len(vec![i, l], vec![4.0, 10.0, 18.0]).unwrap();
     assert!(result.isapprox(&expected, 1e-12, 0.0));
 }
 
@@ -203,13 +208,13 @@ fn test_diag_tensor_contract_diag_dense() {
     let k = Index::new_dyn(2);
     let diag_a = vec![1.0, 2.0];
 
-    let tensor_a = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_a);
+    let tensor_a = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_a).unwrap();
 
     // Create DenseTensor B[j, k] with all ones
     let tensor_b = TensorDynLen::from_dense(vec![j.clone(), k.clone()], vec![1.0; 4]).unwrap();
 
     // Contract along j: result should be DenseTensor[i, k]
-    let result = tensor_a.contract(&tensor_b);
+    let result = tensor_a.contract(&tensor_b).unwrap();
 
     assert_eq!(result.dims(), vec![2, 2]);
     let expected = TensorDynLen::from_dense(vec![i, k], vec![1.0, 2.0, 1.0, 2.0]).unwrap();
@@ -222,7 +227,7 @@ fn test_diag_tensor_convert_to_dense() {
     let j = Index::new_dyn(3);
     let diag_data = vec![1.0, 2.0, 3.0];
 
-    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_data);
+    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_data).unwrap();
     let dense_tensor =
         TensorDynLen::from_dense(vec![i.clone(), j.clone()], tensor.to_vec::<f64>().unwrap())
             .unwrap();
@@ -309,7 +314,7 @@ fn diag_permute_scale_conj_and_replaceind_preserve_payload_metadata() {
     )
     .unwrap();
 
-    let permuted = tensor.permute(&[2, 0, 1]);
+    let permuted = tensor.permute(&[2, 0, 1]).unwrap();
     assert!(permuted.is_diag());
     assert_eq!(permuted.storage().axis_classes(), &[0, 0, 0]);
     assert_eq!(
@@ -324,7 +329,7 @@ fn diag_permute_scale_conj_and_replaceind_preserve_payload_metadata() {
         vec![2.0, -4.0, 8.0]
     );
 
-    let replaced = scaled.replaceind(&k, &Index::new_dyn(3));
+    let replaced = scaled.replaceind(&k, &Index::new_dyn(3)).unwrap();
     assert!(replaced.is_diag());
     assert_eq!(
         replaced.storage().payload_f64_col_major_vec().unwrap(),
@@ -347,13 +352,14 @@ fn test_diag_tensor_rank3() {
     let k = Index::new_dyn(2);
     let diag_data = vec![1.0, 2.0];
 
-    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone(), k.clone()], diag_data.clone());
+    let tensor =
+        diag_tensor_dyn_len(vec![i.clone(), j.clone(), k.clone()], diag_data.clone()).unwrap();
     assert_eq!(tensor.dims(), vec![2, 2, 2]);
     assert!(tensor.is_diag());
     assert_eq!(tensor.storage().storage_kind(), StorageKind::Diagonal);
 
     // Sum should work
-    let sum: AnyScalar = tensor.sum();
+    let sum: AnyScalar = tensor.sum().unwrap();
     assert!(!sum.is_complex());
     assert!((sum.real() - 3.0).abs() < 1e-10);
 }
@@ -440,7 +446,7 @@ fn test_diag_tensor_complex() {
     );
 
     // Sum should work
-    let sum: AnyScalar = tensor.sum();
+    let sum: AnyScalar = tensor.sum().unwrap();
     assert!(sum.is_complex());
     let z: Complex64 = sum.into();
     assert!((z.re - 3.0).abs() < 1e-10);
@@ -483,17 +489,17 @@ fn test_diag_tensor_contract_rank3() {
     let diag_a = vec![1.0, 2.0];
     let diag_b = vec![3.0, 4.0];
 
-    let tensor_a = diag_tensor_dyn_len(vec![i.clone(), j.clone(), k.clone()], diag_a);
-    let tensor_b = diag_tensor_dyn_len(vec![k.clone(), l.clone()], diag_b);
+    let tensor_a = diag_tensor_dyn_len(vec![i.clone(), j.clone(), k.clone()], diag_a).unwrap();
+    let tensor_b = diag_tensor_dyn_len(vec![k.clone(), l.clone()], diag_b).unwrap();
 
     // Contract along k: result should be DiagTensor[i, j, l]
-    let result = tensor_a.contract(&tensor_b);
+    let result = tensor_a.contract(&tensor_b).unwrap();
 
     assert_eq!(result.dims(), vec![2, 2, 2]);
     assert!(result.is_diag());
     assert_eq!(result.storage().storage_kind(), StorageKind::Diagonal);
 
     // Result diagonal should be element-wise product: [1*3, 2*4] = [3, 8]
-    let expected = diag_tensor_dyn_len(vec![i, j, l], vec![3.0, 8.0]);
+    let expected = diag_tensor_dyn_len(vec![i, j, l], vec![3.0, 8.0]).unwrap();
     assert!(result.isapprox(&expected, 1e-12, 0.0));
 }

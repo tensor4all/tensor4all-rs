@@ -378,7 +378,7 @@ fn test_fuse_to_y_shape_internal_center_node() {
     let orig_full = tn.contract_to_tensor().unwrap();
     let fused_full = fused.contract_to_tensor().unwrap();
     assert!(
-        orig_full.distance(&fused_full) < 1e-12,
+        orig_full.distance(&fused_full).unwrap() < 1e-12,
         "fused Y-shape with internal center should match original contraction"
     );
 }
@@ -587,7 +587,7 @@ Add after the existing Y-shape tests:
         assert_eq!(result.node_count(), 2);
         let dense_expected = tn.contract_to_tensor()?;
         let dense_actual = result.contract_to_tensor()?;
-        assert!((&dense_actual - &dense_expected).maxabs() < 1e-12);
+        assert!(dense_actual.distance(&dense_expected).unwrap() < 1e-12);
         Ok(())
     }
 ```

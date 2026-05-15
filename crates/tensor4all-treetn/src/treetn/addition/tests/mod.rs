@@ -191,7 +191,7 @@ fn test_add_verifies_with_contraction() {
     assert!(
         tensor_sum.isapprox(&expected, 1e-10, 0.0),
         "contract(result) != contract(tn_a) + contract(tn_b): maxabs diff = {}",
-        (&tensor_sum - &expected).maxabs()
+        tensor_sum.distance(&expected).unwrap()
     );
 }
 
@@ -239,7 +239,7 @@ fn test_add_single_site() {
     assert!(
         dense.isapprox(&expected, 1e-10, 0.0),
         "single-site add failed: maxabs diff = {}",
-        (&dense - &expected).maxabs()
+        dense.distance(&expected).unwrap()
     );
 }
 
@@ -274,7 +274,7 @@ fn test_add_aligned_accepts_equivalent_site_space_with_different_ids() {
     assert!(
         dense_sum.isapprox(&dense_expected, 1e-10, 0.0),
         "add_aligned failed: maxabs diff = {}",
-        (&dense_sum - &dense_expected).maxabs()
+        dense_sum.distance(&dense_expected).unwrap()
     );
 }
 
@@ -315,6 +315,6 @@ fn test_add_preserves_same_id_prime_pair_site_indices() {
     assert!(
         dense_result.isapprox(&dense_expected, 1e-10, 0.0),
         "same-id prime-pair MPO-like add failed: maxabs diff = {}",
-        (&dense_result - &dense_expected).maxabs()
+        dense_result.distance(&dense_expected).unwrap()
     );
 }

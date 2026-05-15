@@ -54,7 +54,9 @@ fn is_connected_subset_on_graph<T: TensorLike>(
     if nodes.is_empty() || nodes.len() == 1 {
         return true;
     }
-    let start = *nodes.iter().next().unwrap();
+    let Some(&start) = nodes.iter().next() else {
+        return true;
+    };
     let mut seen = HashSet::new();
     let mut stack = vec![start];
     seen.insert(start);
@@ -227,8 +229,12 @@ where
 
         let tensors: Vec<T> = target_names
             .iter()
-            .map(|name| result_tensors.remove(name).unwrap())
-            .collect();
+            .map(|name| {
+                result_tensors.remove(name).ok_or_else(|| {
+                    anyhow::anyhow!("fuse_to: missing contracted tensor for target {:?}", name)
+                })
+            })
+            .collect::<Result<_>>()?;
 
         let result = TreeTN::<T, TargetV>::from_tensors(tensors, target_names)
             .context("fuse_to: failed to build result TreeTN")?;
@@ -272,8 +278,14 @@ where
         }
 
         // Pick a root (smallest node name for determinism)
-        let root_name = nodes.iter().min().unwrap();
-        let root_idx = self.graph.node_index(root_name).unwrap();
+        let root_name = nodes
+            .iter()
+            .min()
+            .ok_or_else(|| anyhow::anyhow!("Cannot contract empty node group"))?;
+        let root_idx = self
+            .graph
+            .node_index(root_name)
+            .ok_or_else(|| anyhow::anyhow!("Root node {:?} not found in graph", root_name))?;
 
         // Get edges within the group, ordered from leaves to root.
         let mut dfs = petgraph::visit::DfsPostOrder::new(g, root_idx);
@@ -481,7 +493,9 @@ where
 
             if targets_for_node.len() == 1 {
                 // No split needed - just relabel
-                let target_name = targets_for_node.iter().next().unwrap().clone();
+                let target_name = targets_for_node.iter().next().cloned().ok_or_else(|| {
+                    anyhow::anyhow!("No target mapping for node {:?}", current_node_name)
+                })?;
                 result_tensors.push((target_name, tensor.clone()));
             } else {
                 // Need to split this node
@@ -713,8 +727,24 @@ where
         // the root (higher position in post-order) is the parent.
         let mut children_by_parent: HashMap<TargetV, Vec<TargetV>> = HashMap::new();
         for (ref parent_name, ref child_name) in fragment_target.edges() {
-            let pos_a = traversal.iter().position(|n| *n == *parent_name).unwrap();
-            let pos_b = traversal.iter().position(|n| *n == *child_name).unwrap();
+            let pos_a = traversal
+                .iter()
+                .position(|n| *n == *parent_name)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "split_to: fragment edge references node {:?} outside traversal",
+                        parent_name
+                    )
+                })?;
+            let pos_b = traversal
+                .iter()
+                .position(|n| *n == *child_name)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "split_to: fragment edge references node {:?} outside traversal",
+                        child_name
+                    )
+                })?;
             if pos_a > pos_b {
                 children_by_parent
                     .entry(parent_name.clone())
@@ -788,7 +818,9 @@ where
         }
 
         // Root gets the remaining tensor with all child bonds
-        let root_name = traversal.last().unwrap();
+        let root_name = traversal
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("split_to: fragment traversal produced no nodes"))?;
         result.push((root_name.clone(), remaining_tensor));
 
         Ok(result)
@@ -812,7 +844,12 @@ where
         let mut result: Vec<(TargetV, T)> = Vec::new();
 
         for target_name in target_names.iter().take(target_names.len() - 1) {
-            let site_indices_for_target = partition.get(target_name).unwrap();
+            let site_indices_for_target = partition.get(target_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "split_to: no partitioned indices found for target {:?}",
+                    target_name
+                )
+            })?;
 
             let left_inds: Vec<_> = remaining_tensor
                 .external_indices()
@@ -841,7 +878,9 @@ where
             remaining_tensor = factorize_result.right;
         }
 
-        let last_target = target_names.last().unwrap();
+        let last_target = target_names
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("split_to: sequential split has no target nodes"))?;
         result.push((last_target.clone(), remaining_tensor));
 
         Ok(result)

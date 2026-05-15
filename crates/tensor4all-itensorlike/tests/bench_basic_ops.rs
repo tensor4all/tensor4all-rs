@@ -106,7 +106,7 @@ fn bench_inner() {
         let b_sites: Vec<DynIndex> = b.siteinds().into_iter().flatten().collect();
         let b = b.replaceinds(&b_sites, &a_sites).unwrap();
         time_it(&format!("inner({n} sites, bd=16)"), || {
-            let _ = a.inner(&b);
+            let _ = a.inner(&b).unwrap();
         });
     }
 }

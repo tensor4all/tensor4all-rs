@@ -8,7 +8,7 @@
 use crate::error::{MatrixCIError, Result};
 use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
-use tensor4all_tensorbackend::{mat_mul, submatrix, submatrix_argmax, Matrix};
+use tensor4all_tensorbackend::{submatrix_argmax, Matrix};
 
 fn matrix_row<T: Scalar>(m: &Matrix<T>, i: usize) -> Vec<T> {
     (0..m.ncols()).map(|j| m[[i, j]]).collect()
@@ -590,15 +590,17 @@ impl<T: Scalar> AbstractMatrixCI<T> for MatrixACA<T> {
         }
 
         let r = self.rank();
-        let pivot_indices: Vec<usize> = (0..r).collect();
-        let mut left = submatrix(&self.u, rows, &pivot_indices);
-        for i in 0..rows.len() {
-            for k in 0..r {
-                left[[i, k]] = left[[i, k]] * self.alpha[k];
+        let mut result = Matrix::zeros(rows.len(), cols.len());
+        for (j_out, &col) in cols.iter().enumerate() {
+            for (i_out, &row) in rows.iter().enumerate() {
+                let mut sum = T::zero();
+                for k in 0..r {
+                    sum = sum + self.u[[row, k]] * self.alpha[k] * self.v[[k, col]];
+                }
+                result[[i_out, j_out]] = sum;
             }
         }
-        let right = submatrix(&self.v, &pivot_indices, cols);
-        mat_mul(&left, &right)
+        result
     }
 }
 

@@ -1,6 +1,7 @@
 use super::*;
 use crate::einsum_helper::{
-    einsum_tensors, tensor_to_col_major_vec, typed_tensor_from_col_major_slice, EinsumScalar,
+    einsum_tensors, row_vector_times_matrix, tensor_to_col_major_vec,
+    typed_tensor_from_col_major_slice, EinsumScalar,
 };
 use crate::types::{tensor3_zeros, Tensor3};
 
@@ -151,9 +152,27 @@ fn test_dot_three_sites() {
 
 #[test]
 fn test_einsum_tensors_matmul() {
-    let a = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]);
-    let b = typed_tensor_from_col_major_slice(&[5.0, 7.0, 6.0, 8.0], &[2, 2]);
+    let a = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+    let b = typed_tensor_from_col_major_slice(&[5.0, 7.0, 6.0, 8.0], &[2, 2]).unwrap();
 
-    let c = einsum_tensors("ij,jk->ik", &[&a, &b]);
+    let c = einsum_tensors("ij,jk->ik", &[&a, &b]).unwrap();
     assert_eq!(tensor_to_col_major_vec(&c), &[19.0, 43.0, 22.0, 50.0]);
+}
+
+#[test]
+fn test_einsum_tensors_reports_backend_error() {
+    let a = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+
+    let err = einsum_tensors("ij,jk->ik", &[&a]).unwrap_err();
+    assert!(err.to_string().contains("einsum failed"));
+    assert!(err.to_string().contains("ij,jk->ik"));
+}
+
+#[test]
+fn test_row_vector_times_matrix_reports_shape_error() {
+    let err = row_vector_times_matrix::<f64>(&[1.0], &[1.0, 2.0, 3.0, 4.0], 2, 2).unwrap_err();
+
+    assert!(err.to_string().contains("row vector length mismatch"));
+    assert!(err.to_string().contains("expected 2"));
+    assert!(err.to_string().contains("got 1"));
 }

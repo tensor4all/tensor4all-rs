@@ -14,7 +14,7 @@ fn test_mpo_constant() {
     assert_eq!(mpo.len(), 2);
 
     // Sum should be 5.0 * (2*2) * (2*2) = 5.0 * 4 * 4 = 80.0
-    let sum = mpo.sum();
+    let sum = mpo.sum().unwrap();
     assert!((sum - 80.0).abs() < 1e-10);
 }
 
@@ -62,7 +62,7 @@ fn test_mpo_scale() {
     mpo.scale(3.0);
 
     // Sum should be 3.0 * (2*2) * (2*2) = 3.0 * 16 = 48.0
-    let sum = mpo.sum();
+    let sum = mpo.sum().unwrap();
     assert!((sum - 48.0).abs() < 1e-10);
 }
 

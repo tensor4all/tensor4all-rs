@@ -57,7 +57,7 @@ fn create_random_mps_chain_with_sites_c64(
             vec![bonds[i - 1].clone(), sites[i].clone(), bonds[i].clone()]
         };
 
-        let t = TensorDynLen::random::<Complex64, _>(rng, indices);
+        let t = TensorDynLen::random::<Complex64, _>(rng, indices)?;
         let node = mps.add_tensor(make_node_name(i), t).unwrap();
         nodes.push(node);
     }

@@ -84,13 +84,13 @@ fn test_qr_reconstruction() {
     let (q, r) = qr::<f64>(&tensor, std::slice::from_ref(&i)).expect("QR should succeed");
 
     // Reconstruct: A = Q * R
-    let reconstructed = q.contract(&r);
+    let reconstructed = q.contract(&r).unwrap();
 
     // Check reconstruction accuracy
     assert!(
         tensor.isapprox(&reconstructed, 1e-8, 0.0),
         "QR reconstruction failed: maxabs diff = {}",
-        (&tensor - &reconstructed).maxabs()
+        tensor.sub(&reconstructed).unwrap().maxabs()
     );
 }
 
@@ -181,12 +181,12 @@ fn test_qr_nontrivial_split_reconstruction() {
     let tensor = dense_f64(vec![i.clone(), j.clone(), k.clone(), l.clone()], data);
 
     let (q, r) = qr::<f64>(&tensor, &[i.clone(), k.clone()]).expect("QR should succeed");
-    let reconstructed = q.contract(&r);
+    let reconstructed = q.contract(&r).unwrap();
 
     assert!(
         tensor.isapprox(&reconstructed, 1e-8, 0.0),
         "QR nontrivial split reconstruction failed: maxabs diff = {}",
-        (&tensor - &reconstructed).maxabs()
+        tensor.sub(&reconstructed).unwrap().maxabs()
     );
 }
 
@@ -207,18 +207,18 @@ fn test_qr_complex_reconstruction() {
     let (q, r) =
         qr::<Complex64>(&tensor, std::slice::from_ref(&i_idx)).expect("Complex QR should succeed");
 
-    let reconstructed = q.contract(&r);
+    let reconstructed = q.contract(&r).unwrap();
     assert!(
         tensor.isapprox(&reconstructed, 1e-8, 0.0),
         "Complex QR reconstruction failed: maxabs diff = {}",
-        (&tensor - &reconstructed).maxabs()
+        tensor.sub(&reconstructed).unwrap().maxabs()
     );
 }
 
 /// Helper: compute ||Q*R - T|| via tensor contraction for any tensor shape.
 fn qr_reconstruction_error_f64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
     let (q, r) = qr::<f64>(t, left_inds).expect("QR should succeed");
-    let recon = q.contract(&r);
+    let recon = q.contract(&r).unwrap();
     let neg = recon
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();
@@ -228,7 +228,7 @@ fn qr_reconstruction_error_f64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 
 
 fn qr_reconstruction_error_c64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
     let (q, r) = qr::<Complex64>(t, left_inds).expect("QR should succeed");
-    let recon = q.contract(&r);
+    let recon = q.contract(&r).unwrap();
     let neg = recon
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();

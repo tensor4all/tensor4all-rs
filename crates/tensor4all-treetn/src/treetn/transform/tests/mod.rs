@@ -39,7 +39,7 @@ fn test_fuse_to_two_nodes_into_one() {
     let orig_full = tn.contract_to_tensor().unwrap();
     let fused_full = fused.contract_to_tensor().unwrap();
     assert!(
-        orig_full.distance(&fused_full) < 1e-12,
+        orig_full.distance(&fused_full).unwrap() < 1e-12,
         "fused tensor should match original contraction"
     );
 }
@@ -75,7 +75,7 @@ fn test_split_to_one_node_into_two() {
     let fused_full = fused.contract_to_tensor().unwrap();
     let split_full = split.contract_to_tensor().unwrap();
     assert!(
-        fused_full.distance(&split_full) < 1e-12,
+        fused_full.distance(&split_full).unwrap() < 1e-12,
         "split tensor should match fused tensor"
     );
 }
@@ -185,7 +185,7 @@ fn test_fuse_to_three_nodes_pairwise() {
 
     let orig_full = tn.contract_to_tensor().unwrap();
     let fused_full = fused.contract_to_tensor().unwrap();
-    assert!(orig_full.distance(&fused_full) < 1e-12);
+    assert!(orig_full.distance(&fused_full).unwrap() < 1e-12);
 }
 
 #[test]
@@ -205,7 +205,7 @@ fn test_fuse_to_three_nodes_into_one() {
 
     let orig_full = tn.contract_to_tensor().unwrap();
     let fused_full = fused.contract_to_tensor().unwrap();
-    assert!(orig_full.distance(&fused_full) < 1e-12);
+    assert!(orig_full.distance(&fused_full).unwrap() < 1e-12);
 }
 
 #[test]
@@ -270,7 +270,7 @@ fn test_split_to_with_actual_splitting() {
 
     let fused_full = fused.contract_to_tensor().unwrap();
     let split_full = split.contract_to_tensor().unwrap();
-    assert!(fused_full.distance(&split_full) < 1e-12);
+    assert!(fused_full.distance(&split_full).unwrap() < 1e-12);
 }
 
 #[test]
@@ -350,6 +350,7 @@ fn test_split_to_allows_edgeless_intermediate_fragments() {
         tn.contract_to_tensor()
             .unwrap()
             .distance(&split.contract_to_tensor().unwrap())
+            .unwrap()
             < 1e-12
     );
 }
@@ -464,6 +465,7 @@ fn test_split_to_identity_preserves_explicit_edge() {
         tn.contract_to_tensor()
             .unwrap()
             .distance(&split.contract_to_tensor().unwrap())
+            .unwrap()
             < 1e-12
     );
 }
@@ -542,7 +544,7 @@ fn test_split_to_with_final_sweep() {
 
     let fused_full = fused.contract_to_tensor().unwrap();
     let split_full = split.contract_to_tensor().unwrap();
-    assert!(fused_full.distance(&split_full) < 1e-10);
+    assert!(fused_full.distance(&split_full).unwrap() < 1e-10);
 }
 
 #[test]
@@ -584,7 +586,7 @@ fn test_fuse_identity_mapping() {
 
     let orig_full = tn.contract_to_tensor().unwrap();
     let fused_full = fused.contract_to_tensor().unwrap();
-    assert!(orig_full.distance(&fused_full) < 1e-12);
+    assert!(orig_full.distance(&fused_full).unwrap() < 1e-12);
 }
 
 fn make_four_site_fused_node() -> (
@@ -640,7 +642,7 @@ fn test_split_to_y_shape() {
 
     let full = tn.contract_to_tensor().unwrap();
     let split_full = split.contract_to_tensor().unwrap();
-    assert!(full.distance(&split_full) < 1e-12);
+    assert!(full.distance(&split_full).unwrap() < 1e-12);
 }
 
 #[test]
@@ -675,7 +677,7 @@ fn test_split_to_nested_tree() {
 
     let full = tn.contract_to_tensor().unwrap();
     let split_full = split.contract_to_tensor().unwrap();
-    assert!(full.distance(&split_full) < 1e-12);
+    assert!(full.distance(&split_full).unwrap() < 1e-12);
 }
 
 #[test]
@@ -722,7 +724,7 @@ fn test_split_to_y_shape_across_original_bond() {
 
     let full = fused.contract_to_tensor().unwrap();
     let split_full = split.contract_to_tensor().unwrap();
-    assert!(full.distance(&split_full) < 1e-12);
+    assert!(full.distance(&split_full).unwrap() < 1e-12);
 }
 
 // ============================================================================
@@ -814,7 +816,7 @@ fn test_fuse_to_y_shape_fuse_subtree() {
     let orig_full = tn.contract_to_tensor().unwrap();
     let fused_full = fused.contract_to_tensor().unwrap();
     assert!(
-        orig_full.distance(&fused_full) < 1e-12,
+        orig_full.distance(&fused_full).unwrap() < 1e-12,
         "fused Y-shape branch should match original contraction"
     );
 }
@@ -843,7 +845,7 @@ fn test_fuse_to_y_shape_all_into_one() {
     let orig_full = tn.contract_to_tensor().unwrap();
     let fused_full = fused.contract_to_tensor().unwrap();
     assert!(
-        orig_full.distance(&fused_full) < 1e-12,
+        orig_full.distance(&fused_full).unwrap() < 1e-12,
         "fused entire Y-shape should match original contraction"
     );
 }
@@ -876,7 +878,7 @@ fn test_fuse_to_y_shape_identity() {
     let orig_full = tn.contract_to_tensor().unwrap();
     let fused_full = fused.contract_to_tensor().unwrap();
     assert!(
-        orig_full.distance(&fused_full) < 1e-12,
+        orig_full.distance(&fused_full).unwrap() < 1e-12,
         "identity fuse on Y-shape should match original contraction"
     );
 }
@@ -947,7 +949,7 @@ fn test_fuse_to_y_shape_internal_center_node() {
     let orig_full = tn.contract_to_tensor().unwrap();
     let fused_full = fused.contract_to_tensor().unwrap();
     assert!(
-        orig_full.distance(&fused_full) < 1e-12,
+        orig_full.distance(&fused_full).unwrap() < 1e-12,
         "fused Y-shape with internal center should match original contraction"
     );
 }

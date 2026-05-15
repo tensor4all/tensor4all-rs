@@ -173,7 +173,7 @@ fn test_fit_environment_get_or_compute_caches_leaf_environment() {
 
     let cached = env.get_or_compute(&from, &to, &tn_a, &tn_b, &tn_c).unwrap();
     assert_eq!(env.len(), 1);
-    assert!((&computed - &cached).maxabs() < 1e-12);
+    assert!(computed.distance(&cached).unwrap() < 1e-12);
 }
 
 #[test]
@@ -324,7 +324,7 @@ fn test_contract_fit_matches_naive_contraction_on_two_node_tree() {
 
     let fitted_dense = fitted.to_dense().unwrap();
     let expected_dense = tn_a.contract_naive(&tn_b).unwrap();
-    assert!((&fitted_dense - &expected_dense).maxabs() < 1e-10);
+    assert!(fitted_dense.distance(&expected_dense).unwrap() < 1e-10);
 }
 
 #[test]
@@ -355,5 +355,5 @@ fn test_contract_fit_positive_sweeps_do_not_skip_without_truncation_options() {
 
     let fitted_dense = fitted.to_dense().unwrap();
     let expected_dense = tn_a.contract_naive(&tn_b).unwrap();
-    assert!((&fitted_dense - &expected_dense).maxabs() < 1e-10);
+    assert!(fitted_dense.distance(&expected_dense).unwrap() < 1e-10);
 }

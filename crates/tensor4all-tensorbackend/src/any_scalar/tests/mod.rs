@@ -232,6 +232,15 @@ fn promote_i64_native_scalar_covers_supported_targets_and_rejections() {
 }
 
 #[test]
+fn promote_scalar_native_rejects_non_scalar_tensor() {
+    let tensor = NativeTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+
+    let err = promote_scalar_native(&tensor, DType::F64).unwrap_err();
+
+    assert!(err.to_string().contains("rank-0 scalar"));
+}
+
+#[test]
 fn i64_native_scalar_participates_in_real_ordering() {
     let i64_scalar =
         Scalar::from_native(NativeTensor::from_vec(vec![], vec![3_i64])).expect("i64 scalar");

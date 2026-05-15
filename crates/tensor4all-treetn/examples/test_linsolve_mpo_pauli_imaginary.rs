@@ -243,7 +243,7 @@ fn create_random_mpo_state_c64(
                 s_out_tmp[i].clone(),
                 s_in_tmp[i].clone(),
             ],
-        );
+        )?;
 
         let t = if indices.len() == 2 {
             // n == 1 case: [external, s_out, s_in]

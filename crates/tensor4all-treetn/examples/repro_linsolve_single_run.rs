@@ -177,7 +177,7 @@ fn create_random_chain_mpo_with_internal_indices(
     }
 
     let mut rng = StdRng::seed_from_u64(seed);
-    let mpo = random_treetn::<f64, _, _>(&mut rng, &net, LinkSpace::uniform(mpo_bond_dim));
+    let mpo = random_treetn::<f64, _, _>(&mut rng, &net, LinkSpace::uniform(mpo_bond_dim)).unwrap();
     (mpo, s_in_tmp, s_out_tmp)
 }
 

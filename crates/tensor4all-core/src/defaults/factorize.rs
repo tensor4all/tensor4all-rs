@@ -11,7 +11,7 @@
 //! # Example
 //!
 //! ```
-//! use tensor4all_core::{factorize, Canonical, DynIndex, FactorizeOptions, TensorDynLen};
+//! use tensor4all_core::{factorize, Canonical, DynIndex, FactorizeOptions, TensorDynLen, TensorLike};
 //!
 //! # fn main() -> anyhow::Result<()> {
 //! let i = DynIndex::new_dyn(2);
@@ -138,8 +138,8 @@ pub fn factorize(
 ///     FactorizeAlg::QR,
 ///     Canonical::Left,
 /// )?;
-/// let reconstructed = result.left.contract(&result.right);
-/// assert!((tensor - reconstructed).maxabs() < 1.0e-18);
+/// let reconstructed = result.left.contract(&result.right).unwrap();
+/// assert!(tensor.sub(&reconstructed)?.maxabs() < 1.0e-18);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn factorize_full_rank(
@@ -263,8 +263,8 @@ fn factorize_svd_with_options(
     match canonical {
         Canonical::Left => {
             // L = U (orthogonal), R = S * V^H
-            let right_contracted = s.contract(&vh);
-            let right = right_contracted.replaceind(&sim_bond_index, &bond_index);
+            let right_contracted = s.contract(&vh)?;
+            let right = right_contracted.replaceind(&sim_bond_index, &bond_index)?;
             Ok(FactorizeResult {
                 left: u,
                 right,
@@ -275,8 +275,8 @@ fn factorize_svd_with_options(
         }
         Canonical::Right => {
             // L = U * S, R = V^H
-            let left_contracted = u.contract(&s);
-            let left = left_contracted.replaceind(&sim_bond_index, &bond_index);
+            let left_contracted = u.contract(&s)?;
+            let left = left_contracted.replaceind(&sim_bond_index, &bond_index)?;
             Ok(FactorizeResult {
                 left,
                 right: vh,
@@ -331,10 +331,16 @@ fn factorize_qr_with_options(
     let (q, r) = qr_with::<f64>(t, left_inds, qr_options)?;
 
     // Get bond index from Q tensor (last index)
-    let bond_index = q.indices.last().unwrap().clone();
+    let bond_index = q
+        .indices
+        .last()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("QR factorization returned a rank-0 Q tensor"))?;
     // Rank is the last dimension of Q
     let q_dims = q.dims();
-    let rank = *q_dims.last().unwrap();
+    let rank = *q_dims
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("QR factorization returned Q with no dimensions"))?;
 
     Ok(FactorizeResult {
         left: q,

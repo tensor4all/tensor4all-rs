@@ -85,7 +85,10 @@ where
         });
     }
 
-    let typed = typed_tensor_from_col_major_slice(matrix.as_col_major_slice(), &[rows, cols]);
+    let typed = typed_tensor_from_col_major_slice(matrix.as_col_major_slice(), &[rows, cols])
+        .map_err(|err| TensorTrainError::InvalidOperation {
+            message: format!("Failed to prepare Vidal bond SVD input matrix: {err}"),
+        })?;
     let decomp = svd_backend(&typed).map_err(|e| TensorTrainError::InvalidOperation {
         message: format!("Failed to compute Vidal bond SVD: {e}"),
     })?;
@@ -266,7 +269,10 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             let next_right_dim = tensors[i + 1].right_dim();
             let next_mat = tensor3_to_right_matrix(&tensors[i + 1]);
 
-            let contracted = mat_mul(&r, &next_mat);
+            let contracted =
+                mat_mul(&r, &next_mat).map_err(|err| TensorTrainError::InvalidOperation {
+                    message: format!("Vidal left sweep matrix multiply failed: {err}"),
+                })?;
 
             let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim);
             for l in 0..new_bond_dim {
@@ -314,7 +320,10 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
                 let prev_left_dim = tensors[i - 1].left_dim();
                 let prev_site_dim = tensors[i - 1].site_dim();
                 let prev_mat = tensor3_to_left_matrix(&tensors[i - 1]);
-                let contracted = mat_mul(&prev_mat, &us);
+                let contracted =
+                    mat_mul(&prev_mat, &us).map_err(|err| TensorTrainError::InvalidOperation {
+                        message: format!("Vidal right sweep matrix multiply failed: {err}"),
+                    })?;
 
                 let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim);
                 for l in 0..prev_left_dim {

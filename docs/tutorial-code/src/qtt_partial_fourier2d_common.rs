@@ -347,13 +347,13 @@ fn expand_operator_to_interleaved_state(
             let tensor = tensors_by_node
                 .get_mut(&start)
                 .ok_or_else(|| format!("missing tensor at expanded node {start}"))?;
-            *tensor = tensor.replaceind(bond, &left_bridge);
+            *tensor = tensor.replaceind(bond, &left_bridge)?;
         }
         {
             let tensor = tensors_by_node
                 .get_mut(&end)
                 .ok_or_else(|| format!("missing tensor at expanded node {end}"))?;
-            *tensor = tensor.replaceind(bond, &right_bridge);
+            *tensor = tensor.replaceind(bond, &right_bridge)?;
         }
         {
             let bridge = TensorDynLen::delta(&[left_bridge], &[right_bridge])?;
@@ -420,7 +420,7 @@ pub fn evaluate_tree_point(
     site_values: &[usize],
 ) -> Result<Complex64, Box<dyn Error>> {
     let shape = [site_indices.len(), 1];
-    let values = ColMajorArrayRef::new(site_values, &shape);
+    let values = ColMajorArrayRef::new(site_values, &shape)?;
     let result = tn.evaluate_at(site_indices, values)?;
     let value = result
         .first()

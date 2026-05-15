@@ -379,7 +379,9 @@ where
             ))
             .context("apply_local_update_sweep: canonical_region must be a single node");
         }
-        let center_node = canonical_region.iter().next().unwrap();
+        let center_node = canonical_region.iter().next().ok_or_else(|| {
+            anyhow::anyhow!("canonical_region reported one node but yielded none")
+        })?;
         let step_nodes_set: HashSet<V> = step.nodes.iter().cloned().collect();
         if !step_nodes_set.contains(center_node) {
             return Err(anyhow::anyhow!(
@@ -522,8 +524,12 @@ where
             .clone();
 
         // Contract A and B
-        let tensor_a = subtree.tensor(idx_a).unwrap();
-        let tensor_b = subtree.tensor(idx_b).unwrap();
+        let tensor_a = subtree
+            .tensor(idx_a)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in subtree", node_a))?;
+        let tensor_b = subtree
+            .tensor(idx_b)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in subtree", node_b))?;
         let tensor_ab = T::contract(&[tensor_a, tensor_b], AllowedPairs::All)
             .context("Failed to contract A and B")?;
 
@@ -636,7 +642,10 @@ where
 
         // Step 1: Add all nodes with their tensors
         for name in node_names {
-            let node_idx = self.graph.node_index(name).unwrap();
+            let node_idx = self
+                .graph
+                .node_index(name)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} does not exist", name))?;
             let tensor = self
                 .tensor(node_idx)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", name))?

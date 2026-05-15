@@ -46,7 +46,7 @@ where
 /// let evaluator = TreeTNEvaluator::new(&tree, &[s])?;
 /// let values = [0usize, 2usize];
 /// let shape = [1usize, 2usize];
-/// let result = evaluator.evaluate_batch(ColMajorArrayRef::new(&values, &shape))?;
+/// let result = evaluator.evaluate_batch(ColMajorArrayRef::new(&values, &shape).unwrap())?;
 ///
 /// assert_eq!(result.len(), 2);
 /// assert!((result[0].real() - 10.0).abs() < 1.0e-12);
@@ -250,7 +250,7 @@ where
     /// let values = [1usize];
     /// let shape = [1usize, 1usize];
     ///
-    /// let result = evaluator.evaluate_batch(ColMajorArrayRef::new(&values, &shape))?;
+    /// let result = evaluator.evaluate_batch(ColMajorArrayRef::new(&values, &shape).unwrap())?;
     /// assert!((result[0].real() - 9.0).abs() < 1.0e-12);
     /// # Ok::<(), anyhow::Error>(())
     /// ```
@@ -294,10 +294,15 @@ where
                 .site_entries
                 .iter()
                 .map(|site| {
-                    let val = *values.get(&[site.input_position, point]).unwrap();
-                    (site.index.clone(), val)
+                    let value = value_at(
+                        values,
+                        site.input_position,
+                        point,
+                        "TreeTNEvaluator::evaluate_batch",
+                    )?;
+                    Ok((site.index.clone(), value))
                 })
-                .collect();
+                .collect::<Result<_>>()?;
 
             let onehot = T::onehot(&index_vals)
                 .context("TreeTNEvaluator::evaluate_batch: failed to create one-hot tensor")?;
@@ -324,4 +329,23 @@ where
             .inner_product(&result_tensor)
             .context("TreeTNEvaluator::evaluate_batch: failed to extract scalar value")
     }
+}
+
+fn value_at(
+    values: ColMajorArrayRef<'_, usize>,
+    input_position: usize,
+    point: usize,
+    context: &str,
+) -> Result<usize> {
+    values
+        .get(&[input_position, point])
+        .copied()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{context}: missing coordinate at row {} point {} for shape {:?}",
+                input_position,
+                point,
+                values.shape()
+            )
+        })
 }

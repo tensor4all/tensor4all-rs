@@ -216,7 +216,7 @@ where
     ///
     /// let dense = unfused.contract_to_tensor().unwrap();
     /// let expected = TensorDynLen::from_dense(vec![left, right], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
-    /// assert!((&dense - &expected).maxabs() < 1.0e-12);
+    /// assert!(dense.distance(&expected).unwrap() < 1.0e-12);
     /// ```
     pub fn replace_site_index_with_indices(
         &self,

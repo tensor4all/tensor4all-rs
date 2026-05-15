@@ -55,7 +55,7 @@ fn test_rrlu_reconstruct() {
     let u = lu.right(true);
 
     // Reconstruct: L * U should approximate original matrix
-    let reconstructed = mat_mul(&l, &u);
+    let reconstructed = mat_mul(&l, &u).unwrap();
 
     for i in 0..2 {
         for j in 0..2 {
@@ -134,7 +134,7 @@ fn test_rrlu_4x4_reconstruct() {
     // L * U (permuted) should reconstruct original matrix
     let l_perm = lu.left(true);
     let u_perm = lu.right(true);
-    let reconstructed = mat_mul(&l_perm, &u_perm);
+    let reconstructed = mat_mul(&l_perm, &u_perm).unwrap();
     for i in 0..4 {
         for j in 0..4 {
             assert!(
@@ -209,7 +209,7 @@ fn test_rrlu_exact_low_rank() {
         ],
     ]);
 
-    let a = mat_mul(&p, &q);
+    let a = mat_mul(&p, &q).unwrap();
     let lu = rrlu(&a, None).unwrap();
 
     assert_eq!(lu.npivots(), 3);
@@ -217,7 +217,7 @@ fn test_rrlu_exact_low_rank() {
     // Reconstruct
     let l = lu.left(true);
     let u = lu.right(true);
-    let reconstructed = mat_mul(&l, &u);
+    let reconstructed = mat_mul(&l, &u).unwrap();
     for i in 0..a.nrows() {
         for j in 0..a.ncols() {
             assert!(
@@ -336,7 +336,7 @@ fn test_rrlu_transpose() {
 
     let l = tlu.left(true);
     let u = tlu.right(true);
-    let reconstructed = mat_mul(&l, &u);
+    let reconstructed = mat_mul(&l, &u).unwrap();
     let mt = transpose(&m);
 
     for i in 0..mt.nrows() {

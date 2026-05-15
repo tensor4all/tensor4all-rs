@@ -84,7 +84,7 @@ fn tensor_like_default_neg_and_delta_helpers_work() {
 
     let delta = TensorDynLen::delta(&[i.clone(), j.clone()], &[k, l]).unwrap();
     assert_eq!(delta.dims(), vec![2, 2, 3, 3]);
-    assert!((delta.sum().real() - 6.0).abs() < 1.0e-12);
+    assert!((delta.sum().unwrap().real() - 6.0).abs() < 1.0e-12);
 
     let err = TensorDynLen::delta(&[i], &[]).unwrap_err();
     assert!(err.to_string().contains("Number of input indices"));

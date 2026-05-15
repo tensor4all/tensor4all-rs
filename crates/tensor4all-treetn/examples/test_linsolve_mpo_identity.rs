@@ -185,7 +185,7 @@ fn create_random_mpo_matching_structure(
         let node_idx = mpo.node_index(&node_name).unwrap();
         let t = mpo.tensor(node_idx).unwrap();
         let indices = t.external_indices();
-        let new_t = TensorDynLen::random::<f64, _>(&mut rng, indices);
+        let new_t = TensorDynLen::random::<f64, _>(&mut rng, indices)?;
         mpo.replace_tensor(node_idx, new_t)?;
     }
     Ok(mpo)
@@ -203,7 +203,7 @@ fn create_random_mpo_matching_structure_c64(
         let node_idx = mpo.node_index(&node_name).unwrap();
         let t = mpo.tensor(node_idx).unwrap();
         let indices = t.external_indices();
-        let new_t = TensorDynLen::random::<Complex64, _>(&mut rng, indices);
+        let new_t = TensorDynLen::random::<Complex64, _>(&mut rng, indices)?;
         mpo.replace_tensor(node_idx, new_t)?;
     }
     Ok(mpo)

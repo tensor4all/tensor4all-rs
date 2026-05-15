@@ -81,7 +81,7 @@ fn simple_tree_parity_matches_reference_points() {
             data[pos[v]] = val;
         }
         let shape = [indices.len(), 1];
-        let values = ColMajorArrayRef::new(&data, &shape);
+        let values = ColMajorArrayRef::new(&data, &shape).unwrap();
         tn.evaluate(&indices, values).unwrap()[0].real()
     };
 
@@ -136,7 +136,7 @@ fn simple_tree_product_function_is_exact_on_branching_tree() {
             data[pos[v]] = val;
         }
         let shape = [indices.len(), 1];
-        let values = ColMajorArrayRef::new(&data, &shape);
+        let values = ColMajorArrayRef::new(&data, &shape).unwrap();
         tn.evaluate(&indices, values).unwrap()[0].real()
     };
 
@@ -195,7 +195,7 @@ fn simple_tree_complex_product_function_is_exact_on_branching_tree() {
             data[pos[v]] = val;
         }
         let shape = [indices.len(), 1];
-        let values = ColMajorArrayRef::new(&data, &shape);
+        let values = ColMajorArrayRef::new(&data, &shape).unwrap();
         tn.evaluate(&indices, values)
             .unwrap()
             .into_iter()
@@ -264,7 +264,7 @@ fn simple_tree_complex_product_function_is_exact_on_two_site_tree() {
                 data[pos[v]] = val;
             }
             let shape = [indices.len(), 1];
-            let values = ColMajorArrayRef::new(&data, &shape);
+            let values = ColMajorArrayRef::new(&data, &shape).unwrap();
             let value = tn
                 .evaluate(&indices, values)
                 .unwrap()

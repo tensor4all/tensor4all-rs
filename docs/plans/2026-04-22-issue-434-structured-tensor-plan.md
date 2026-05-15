@@ -712,7 +712,7 @@ fn structured_tensor_contract_materializes_to_correct_dense_result() {
     let result = diag.contract(&dense);
 
     let expected = TensorDynLen::from_dense(vec![i, k], vec![10.0, 21.0, 22.0, 39.0]).unwrap();
-    assert!((&result - &expected).maxabs() < 1e-12);
+    assert!(result.distance(&expected).unwrap() < 1e-12);
 }
 ```
 

@@ -424,7 +424,7 @@ fn test_to_dense() {
     let dense = tt.to_dense().unwrap();
 
     // Expected: contract t0 and t1 along l01
-    let expected = t0.contract(&t1);
+    let expected = t0.contract(&t1).unwrap();
 
     // Compare results
     let dense_data = dense.to_vec::<f64>().unwrap();
@@ -483,7 +483,7 @@ fn test_to_dense_three_sites() {
     let dense = tt.to_dense().unwrap();
 
     // Expected: contract t0, t1, t2 sequentially
-    let expected = t0.contract(&t1).contract(&t2);
+    let expected = t0.contract(&t1).unwrap().contract(&t2).unwrap();
 
     let dense_data = dense.to_vec::<f64>().unwrap();
     let expected_data = expected.to_vec::<f64>().unwrap();
@@ -720,12 +720,15 @@ fn test_tensors_mut_returns_all_sites_in_order() {
         TensorDynLen::from_dense(vec![s0, l01], vec![42.0; 6]).expect("valid replacement");
 
     {
-        let mut tensors = tt.tensors_mut();
+        let mut tensors = tt.tensors_mut().unwrap();
         assert_eq!(tensors.len(), 2);
         *tensors[0] = replacement.clone();
     }
 
-    assert_eq!(tt.tensor(0).to_vec::<f64>().unwrap(), vec![42.0; 6]);
+    assert_eq!(
+        tt.tensor(0).unwrap().to_vec::<f64>().unwrap(),
+        vec![42.0; 6]
+    );
 }
 
 #[test]
@@ -747,7 +750,10 @@ fn test_tensors_mut_checked_returns_all_sites_in_order() {
         *tensors[0] = replacement.clone();
     }
 
-    assert_eq!(tt.tensor(0).to_vec::<f64>().unwrap(), vec![42.0; 6]);
+    assert_eq!(
+        tt.tensor(0).unwrap().to_vec::<f64>().unwrap(),
+        vec![42.0; 6]
+    );
 }
 
 #[test]
@@ -863,7 +869,7 @@ fn test_tensor_like_inner_product() {
 
     // TensorLike::inner_product should equal TensorTrain::inner
     let inner_via_trait = TensorLike::inner_product(&tt, &tt).unwrap();
-    let inner_direct = tt.inner(&tt);
+    let inner_direct = tt.inner(&tt).unwrap();
 
     assert!(
         (inner_via_trait.real() - inner_direct.real()).abs() < 1e-10,
@@ -945,7 +951,7 @@ fn test_tensor_mut() {
     let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
     // Mutate tensor at site 0
-    let t = tt.tensor_mut(0);
+    let t = tt.tensor_mut(0).unwrap();
     assert_eq!(t.indices().len(), 2);
     // Just verify we can get a mutable reference without panic
     let _ = t.indices();
@@ -977,11 +983,11 @@ fn test_sim_linkinds_single_site() {
     let t0 = make_tensor(vec![s0.clone()]);
     let tt = TensorTrain::new(vec![t0]).unwrap();
 
-    let simmed = tt.sim_linkinds();
+    let simmed = tt.sim_linkinds().unwrap();
     assert_eq!(simmed.len(), 1);
     // Should have same data
-    let orig_data = tt.tensor(0).to_vec::<f64>().unwrap();
-    let sim_data = simmed.tensor(0).to_vec::<f64>().unwrap();
+    let orig_data = tt.tensor(0).unwrap().to_vec::<f64>().unwrap();
+    let sim_data = simmed.tensor(0).unwrap().to_vec::<f64>().unwrap();
     assert_eq!(orig_data, sim_data);
 }
 
@@ -995,7 +1001,7 @@ fn test_sim_linkinds_two_sites() {
     let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
 
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
-    let simmed = tt.sim_linkinds();
+    let simmed = tt.sim_linkinds().unwrap();
 
     assert_eq!(simmed.len(), 2);
     assert_eq!(simmed.bond_dims(), vec![3]);
@@ -1104,7 +1110,7 @@ fn test_sim_linkinds_three_sites() {
     let t2 = make_tensor(vec![l12.clone(), s2.clone()]);
 
     let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
-    let simmed = tt.sim_linkinds();
+    let simmed = tt.sim_linkinds().unwrap();
 
     assert_eq!(simmed.len(), 3);
     assert_eq!(simmed.bond_dims().len(), 2);

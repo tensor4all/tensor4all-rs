@@ -70,14 +70,14 @@ fn test_set_center_out_of_bounds() {
 #[test]
 fn test_into_mpo_round_trip() {
     let mpo = MPO::<f64>::constant(&[(2, 2), (3, 3)], 5.0);
-    let original_sum = mpo.sum();
+    let original_sum = mpo.sum().unwrap();
     let original_dims = mpo.site_dims();
 
     let site_mpo = SiteMPO::from_mpo(mpo, 0).unwrap();
     let recovered = site_mpo.into_mpo();
 
     assert_eq!(recovered.site_dims(), original_dims);
-    assert!((recovered.sum() - original_sum).abs() < 1e-10);
+    assert!((recovered.sum().unwrap() - original_sum).abs() < 1e-10);
 }
 
 #[test]

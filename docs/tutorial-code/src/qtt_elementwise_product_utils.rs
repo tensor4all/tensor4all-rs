@@ -188,7 +188,7 @@ fn evaluate_tree_point(
     // Library call: evaluate the TreeTN at a specific set of site values.
     // We wrap it here so the sampling code stays simple.
     let shape = [site_indices.len(), 1];
-    let values = ColMajorArrayRef::new(site_values, &shape);
+    let values = ColMajorArrayRef::new(site_values, &shape)?;
     let result = tn.evaluate_at(site_indices, values)?;
     let value = result
         .first()

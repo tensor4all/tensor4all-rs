@@ -58,7 +58,7 @@
 //! // Applying identity preserves the state
 //! let result_dense = result.to_dense()?;
 //! let state_dense = state.to_dense()?;
-//! assert!((&result_dense - &state_dense).maxabs() < 1e-12);
+//! assert!(result_dense.distance(&state_dense).unwrap() < 1e-12);
 //! # Ok(())
 //! # }
 //! ```
@@ -279,7 +279,7 @@ impl ApplyOptions {
 /// // Applying identity preserves the state
 /// let result_dense = result.to_dense()?;
 /// let state_dense = state.to_dense()?;
-/// assert!((&result_dense - &state_dense).maxabs() < 1e-12);
+/// assert!(result_dense.distance(&state_dense).unwrap() < 1e-12);
 ///
 /// let truncated = apply_linear_operator(
 ///     &operator,

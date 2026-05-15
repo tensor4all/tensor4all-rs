@@ -83,7 +83,7 @@ fn test_evaluate_accepts_full_indices_for_same_id_prime_pair() {
     let values = [0usize, 0usize, 1usize, 1usize];
     let shape = [2usize, 2usize];
     let result = tn
-        .evaluate(&indices, ColMajorArrayRef::new(&values, &shape))
+        .evaluate(&indices, ColMajorArrayRef::new(&values, &shape).unwrap())
         .unwrap();
 
     assert_eq!(result.len(), 2);
@@ -97,7 +97,7 @@ fn evaluator_evaluate_batch_matches_evaluate_at_sugar() {
     let (indices, _) = tn.all_site_indices().unwrap();
     let values = [0usize, 0, 0, 1, 1, 1, 0, 1, 0];
     let shape = [indices.len(), 3usize];
-    let values_ref = ColMajorArrayRef::new(&values, &shape);
+    let values_ref = ColMajorArrayRef::new(&values, &shape).unwrap();
 
     let evaluator = TreeTNEvaluator::new(&tn, &indices).unwrap();
     let direct = evaluator.evaluate_batch(values_ref).unwrap();

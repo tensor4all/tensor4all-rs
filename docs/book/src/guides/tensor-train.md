@@ -250,7 +250,7 @@ let norm = tt.norm();
 assert!(norm.is_finite());
 
 // <tt|tt> = ||tt||^2
-let inner = tt.inner(&tt);
+let inner = tt.inner(&tt)?;
 assert!((inner.real() - norm * norm).abs() < 1e-10);
 # Ok(())
 # }
@@ -292,7 +292,7 @@ let norm = tt.norm();
 assert!(norm > 0.0);
 
 // For complex tensors, inner product uses complex conjugation on self
-let inner = tt.inner(&tt);
+let inner = tt.inner(&tt)?;
 assert!((inner.real() - norm * norm).abs() < 1e-10);
 # Ok(())
 # }

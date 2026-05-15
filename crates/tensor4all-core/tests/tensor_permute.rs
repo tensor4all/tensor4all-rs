@@ -55,27 +55,26 @@ fn test_compute_permutation_from_indices() {
 
     // Test identity permutation
     let new_order1 = vec![i.clone(), j.clone(), k.clone()];
-    let perm1 = compute_permutation_from_indices(&original, &new_order1);
+    let perm1 = compute_permutation_from_indices(&original, &new_order1).unwrap();
     assert_eq!(perm1, vec![0, 1, 2]);
 
     // Test swap first two
     let new_order2 = vec![j.clone(), i.clone(), k.clone()];
-    let perm2 = compute_permutation_from_indices(&original, &new_order2);
+    let perm2 = compute_permutation_from_indices(&original, &new_order2).unwrap();
     assert_eq!(perm2, vec![1, 0, 2]);
 
     // Test reverse
     let new_order3 = vec![k.clone(), j.clone(), i.clone()];
-    let perm3 = compute_permutation_from_indices(&original, &new_order3);
+    let perm3 = compute_permutation_from_indices(&original, &new_order3).unwrap();
     assert_eq!(perm3, vec![2, 1, 0]);
 
     // Test rotation
     let new_order4 = vec![j.clone(), k.clone(), i.clone()];
-    let perm4 = compute_permutation_from_indices(&original, &new_order4);
+    let perm4 = compute_permutation_from_indices(&original, &new_order4).unwrap();
     assert_eq!(perm4, vec![1, 2, 0]);
 }
 
 #[test]
-#[should_panic(expected = "new_indices must be a permutation of original_indices")]
 fn test_compute_permutation_from_indices_invalid() {
     // Test with invalid index (ID doesn't match)
     let i = Index::new_dyn(2);
@@ -85,11 +84,11 @@ fn test_compute_permutation_from_indices_invalid() {
     let original = vec![i.clone(), j.clone()];
     let new_order = vec![i.clone(), invalid];
 
-    compute_permutation_from_indices(&original, &new_order);
+    let err = compute_permutation_from_indices(&original, &new_order).unwrap_err();
+    assert!(err.to_string().contains("permutation"));
 }
 
 #[test]
-#[should_panic(expected = "duplicate index in new_indices")]
 fn test_compute_permutation_from_indices_duplicate() {
     // Test with duplicate indices
     let i = Index::new_dyn(2);
@@ -98,7 +97,8 @@ fn test_compute_permutation_from_indices_duplicate() {
     let original = vec![i.clone(), j.clone()];
     let new_order = vec![i.clone(), i.clone()]; // Duplicate
 
-    compute_permutation_from_indices(&original, &new_order);
+    let err = compute_permutation_from_indices(&original, &new_order).unwrap_err();
+    assert!(err.to_string().contains("duplicate"));
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn test_permute_dyn_f64_2d() {
     let data = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
     let tensor = dense_f64(indices, data.clone());
 
-    let permuted = tensor.permute(&[1, 0]);
+    let permuted = tensor.permute(&[1, 0]).unwrap();
 
     assert_eq!(permuted.dims(), vec![3, 2]);
     assert_eq!(permuted.indices[0].id, j.id);
@@ -137,7 +137,7 @@ fn test_permute_dyn_c64_2d() {
     ];
     let tensor = dense_c64(indices, data.clone());
 
-    let permuted = tensor.permute(&[1, 0]);
+    let permuted = tensor.permute(&[1, 0]).unwrap();
 
     assert_eq!(permuted.dims(), vec![3, 2]);
     assert_eq!(permuted.indices[0].id, j.id);
@@ -159,7 +159,7 @@ fn test_permute_dyn_f64_3d() {
     let data: Vec<f64> = (1..=24).map(|i| i as f64).collect();
     let tensor = dense_f64(indices, data.clone());
 
-    let permuted = tensor.permute(&[2, 0, 1]);
+    let permuted = tensor.permute(&[2, 0, 1]).unwrap();
 
     assert_eq!(permuted.dims(), vec![4, 2, 3]);
     assert_eq!(permuted.indices[0].id, k.id);
@@ -179,7 +179,7 @@ fn test_permute_identity() {
     let data = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
     let tensor = dense_f64(indices, data.clone());
 
-    let permuted = tensor.permute(&[0, 1]);
+    let permuted = tensor.permute(&[0, 1]).unwrap();
 
     assert_eq!(permuted.dims(), vec![2, 3]);
     assert_eq!(permuted.indices[0].id, i.id);
@@ -196,7 +196,7 @@ fn test_permute_indices_dyn_f64_2d() {
     let data = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
     let tensor = dense_f64(indices, data.clone());
 
-    let permuted = tensor.permute_indices(&[j.clone(), i.clone()]);
+    let permuted = tensor.permute_indices(&[j.clone(), i.clone()]).unwrap();
 
     assert_eq!(permuted.dims(), vec![3, 2]);
     assert_eq!(permuted.indices[0].id, j.id);
@@ -223,7 +223,7 @@ fn test_permute_indices_c64() {
     ];
     let tensor = dense_c64(indices, data.clone());
 
-    let permuted = tensor.permute_indices(&[j.clone(), i.clone()]);
+    let permuted = tensor.permute_indices(&[j.clone(), i.clone()]).unwrap();
 
     assert_eq!(permuted.dims(), vec![3, 2]);
     assert_eq!(permuted.indices[0].id, j.id);

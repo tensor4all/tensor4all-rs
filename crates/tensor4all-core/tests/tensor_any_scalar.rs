@@ -334,8 +334,8 @@ fn test_scalar_lhs_rhs_mixed_ops() {
 
 #[test]
 fn test_enable_grad_and_borrow_arithmetic_backward() {
-    let x = AnyScalar::new_real(2.0).enable_grad();
-    let y = AnyScalar::new_real(3.0).enable_grad();
+    let x = AnyScalar::new_real(2.0).enable_grad().unwrap();
+    let y = AnyScalar::new_real(3.0).enable_grad().unwrap();
 
     let product = &x * &y;
     let loss = &product + &x;
@@ -351,7 +351,7 @@ fn test_enable_grad_and_borrow_arithmetic_backward() {
 
 #[test]
 fn test_clone_shares_tracked_leaf_gradient_slot() {
-    let x = AnyScalar::new_real(2.0).enable_grad();
+    let x = AnyScalar::new_real(2.0).enable_grad().unwrap();
     let alias = x.clone();
 
     let loss = &x * &alias;
@@ -365,8 +365,8 @@ fn test_clone_shares_tracked_leaf_gradient_slot() {
 
 #[test]
 fn test_owned_arithmetic_backward_with_moved_operands() {
-    let x = AnyScalar::new_real(2.0).enable_grad();
-    let y = AnyScalar::new_real(3.0).enable_grad();
+    let x = AnyScalar::new_real(2.0).enable_grad().unwrap();
+    let y = AnyScalar::new_real(3.0).enable_grad().unwrap();
 
     let x_alias = x.clone();
     let y_alias = y.clone();
@@ -385,8 +385,8 @@ fn test_owned_arithmetic_backward_with_moved_operands() {
 
 #[test]
 fn test_clear_grad_resets_anyscalar_accumulation() {
-    let x = AnyScalar::new_real(2.0).enable_grad();
-    let y = AnyScalar::new_real(3.0).enable_grad();
+    let x = AnyScalar::new_real(2.0).enable_grad().unwrap();
+    let y = AnyScalar::new_real(3.0).enable_grad().unwrap();
 
     let loss = &x * &y;
     loss.backward().unwrap();
@@ -407,9 +407,9 @@ fn test_clear_grad_resets_anyscalar_accumulation() {
 
 #[test]
 fn test_detach_breaks_reverse_graph_for_anyscalar() {
-    let x = AnyScalar::new_real(3.0).enable_grad();
-    let y = AnyScalar::new_real(2.0).enable_grad();
-    let detached = x.detach();
+    let x = AnyScalar::new_real(3.0).enable_grad().unwrap();
+    let y = AnyScalar::new_real(2.0).enable_grad().unwrap();
+    let detached = x.detach().unwrap();
 
     assert!(!detached.tracks_grad());
     assert!(x.tracks_grad());
@@ -426,9 +426,9 @@ fn test_detach_breaks_reverse_graph_for_anyscalar() {
 
 #[test]
 fn test_primal_matches_detach_semantics_for_anyscalar() {
-    let x = AnyScalar::new_real(3.0).enable_grad();
-    let y = AnyScalar::new_real(2.0).enable_grad();
-    let primal = x.primal();
+    let x = AnyScalar::new_real(3.0).enable_grad().unwrap();
+    let y = AnyScalar::new_real(2.0).enable_grad().unwrap();
+    let primal = x.primal().unwrap();
 
     assert!(!primal.tracks_grad());
     assert_eq!(primal.real(), 3.0);
@@ -449,7 +449,7 @@ fn test_function_api_takes_anyscalar_ref() {
         &square + &AnyScalar::one()
     }
 
-    let x = AnyScalar::new_real(3.0).enable_grad();
+    let x = AnyScalar::new_real(3.0).enable_grad().unwrap();
     let loss = quadratic_plus_one(&x);
     loss.backward().unwrap();
 

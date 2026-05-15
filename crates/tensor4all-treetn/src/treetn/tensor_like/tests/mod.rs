@@ -193,7 +193,7 @@ fn test_replaceind_link_index_direct() {
     // The contracted result should be the same
     let orig_dense = tn.contract_to_tensor().unwrap();
     let new_dense = tn2.contract_to_tensor().unwrap();
-    assert!(orig_dense.distance(&new_dense) < 1e-12);
+    assert!(orig_dense.distance(&new_dense).unwrap() < 1e-12);
 }
 
 #[test]

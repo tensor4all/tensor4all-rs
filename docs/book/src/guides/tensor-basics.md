@@ -80,7 +80,8 @@ let zeros = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 let mut rng = ChaCha8Rng::seed_from_u64(42);
-let rand_t: TensorDynLen = TensorDynLen::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]);
+let rand_t: TensorDynLen =
+    TensorDynLen::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]).unwrap();
 assert_eq!(rand_t.dims(), vec![2, 3]);
 ```
 
@@ -99,7 +100,7 @@ let out: Vec<f64> = t.to_vec().unwrap();
 assert_eq!(out, vec![10.0, 20.0]);
 
 // Sum all elements.
-let s = t.sum();
+let s = t.sum().unwrap();
 assert_eq!(s.real(), 30.0);
 ```
 
@@ -122,7 +123,7 @@ let k = Index::new_dyn(4);
 let a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 let b = TensorDynLen::zeros::<f64>(vec![j.clone(), k.clone()]).unwrap();
 
-let c = a.contract(&b);      // or equivalently: &a * &b
+let c = a.contract(&b).unwrap();      // or equivalently: &a * &b
 assert_eq!(c.dims(), vec![2, 4]);  // j is summed away
 ```
 
@@ -145,9 +146,12 @@ let mut rng = {
     use rand::SeedableRng;
     rand_chacha::ChaCha8Rng::seed_from_u64(0)
 };
-let a: TensorDynLen = TensorDynLen::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]);
-let b: TensorDynLen = TensorDynLen::random::<f64, _>(&mut rng, vec![j.clone(), k.clone()]);
-let c: TensorDynLen = TensorDynLen::random::<f64, _>(&mut rng, vec![k.clone(), l.clone()]);
+let a: TensorDynLen =
+    TensorDynLen::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]).unwrap();
+let b: TensorDynLen =
+    TensorDynLen::random::<f64, _>(&mut rng, vec![j.clone(), k.clone()]).unwrap();
+let c: TensorDynLen =
+    TensorDynLen::random::<f64, _>(&mut rng, vec![k.clone(), l.clone()]).unwrap();
 
 // Contract A(i,j) * B(j,k) * C(k,l) -> result(i,l)
 let result = contract_multi(&[&a, &b, &c], AllowedPairs::All).unwrap();
@@ -184,7 +188,8 @@ let mut rng = {
     use rand::SeedableRng;
     rand_chacha::ChaCha8Rng::seed_from_u64(1)
 };
-let t: TensorDynLen = TensorDynLen::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]);
+let t: TensorDynLen =
+    TensorDynLen::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]).unwrap();
 
 // SVD: split along i | j, discarding singular values below the chosen policy threshold.
 let opts = FactorizeOptions::svd().with_svd_policy(SvdTruncationPolicy::new(1e-10));
@@ -215,7 +220,8 @@ let mut rng = {
     use rand::SeedableRng;
     rand_chacha::ChaCha8Rng::seed_from_u64(2)
 };
-let t: TensorDynLen = TensorDynLen::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]);
+let t: TensorDynLen =
+    TensorDynLen::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]).unwrap();
 
 // QR: left factor is orthogonal (Q), right factor is upper-triangular (R).
 let opts = FactorizeOptions::qr();

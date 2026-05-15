@@ -463,6 +463,15 @@ fn apply_cross_block_mpo(
     Ok(result)
 }
 
+fn block_entry(
+    x: &BlockTensor<TensorTrain>,
+    row: usize,
+    col: usize,
+) -> anyhow::Result<&TensorTrain> {
+    x.get(row, col)
+        .ok_or_else(|| anyhow::anyhow!("missing block ({row}, {col})"))
+}
+
 // ============================================================================
 // Truncation helper for BlockTensor<TensorTrain>
 // ============================================================================
@@ -510,7 +519,7 @@ fn test_block_diagonal_identity() -> anyhow::Result<()> {
     let apply_a = |x: &BlockTensor<TensorTrain>| -> anyhow::Result<BlockTensor<TensorTrain>> {
         let mut result_blocks = Vec::with_capacity(num_blocks);
         for (block_idx, mpo) in identity_mpos.iter().enumerate() {
-            let block = x.get(block_idx, 0);
+            let block = block_entry(x, block_idx, 0)?;
             let result = apply_mpo_for_block(mpo, block, &indices, block_idx)?;
             result_blocks.push(result);
         }
@@ -603,7 +612,7 @@ fn test_block_diagonal_diagonal_mpo() -> anyhow::Result<()> {
     let apply_a = |x: &BlockTensor<TensorTrain>| -> anyhow::Result<BlockTensor<TensorTrain>> {
         let mut result_blocks = Vec::with_capacity(num_blocks);
         for (block_idx, mpo) in diagonal_mpos.iter().enumerate() {
-            let block = x.get(block_idx, 0);
+            let block = block_entry(x, block_idx, 0)?;
             let result = apply_mpo_for_block(mpo, block, &indices, block_idx)?;
             result_blocks.push(result);
         }
@@ -708,8 +717,8 @@ fn test_block_upper_triangular() -> anyhow::Result<()> {
     // Define upper triangular operator: A = [[I, B], [0, I]]
     // Ax = [I*x1 + B*x2, I*x2]^T
     let apply_a = |x: &BlockTensor<TensorTrain>| -> anyhow::Result<BlockTensor<TensorTrain>> {
-        let x1 = x.get(0, 0);
-        let x2 = x.get(1, 0);
+        let x1 = block_entry(x, 0, 0)?;
+        let x2 = block_entry(x, 1, 0)?;
 
         // y2 = I * x2
         let y2 = apply_mpo_for_block(&identity_mpo_1, x2, &indices, 1)?;
@@ -833,7 +842,7 @@ fn test_restart_gmres_block_mps() -> anyhow::Result<()> {
     let apply_a = |x: &BlockTensor<TensorTrain>| -> anyhow::Result<BlockTensor<TensorTrain>> {
         let mut result_blocks = Vec::with_capacity(num_blocks);
         for (block_idx, mpo) in diagonal_mpos.iter().enumerate() {
-            let block = x.get(block_idx, 0);
+            let block = block_entry(x, block_idx, 0)?;
             let result = apply_mpo_for_block(mpo, block, &indices, block_idx)?;
             result_blocks.push(result);
         }
@@ -943,14 +952,14 @@ fn test_block_offdiagonal_complex_pauli_x() -> anyhow::Result<()> {
     // A * x_true = [i*σ_x * 2i*ones, i*σ_x * i*ones]^T = [-2*ones, -ones]^T
     let x1_true = create_complex_ones_mps_for_block(&indices, 0, Complex64::new(0.0, 1.0))?;
     let x2_true = create_complex_ones_mps_for_block(&indices, 1, Complex64::new(0.0, 2.0))?;
-    let x_true = BlockTensor::new(vec![x1_true, x2_true], (num_blocks, 1));
+    let x_true = BlockTensor::new(vec![x1_true, x2_true], (num_blocks, 1))?;
     println!("x_true created, norm: {:.6}", x_true.norm());
 
     // Define off-diagonal block operator: A = [[0, i*σ_x], [i*σ_x, 0]]
     // y1 = i*σ_x * x2, y2 = i*σ_x * x1
     let apply_a = |x: &BlockTensor<TensorTrain>| -> anyhow::Result<BlockTensor<TensorTrain>> {
-        let x1 = x.get(0, 0);
-        let x2 = x.get(1, 0);
+        let x1 = block_entry(x, 0, 0)?;
+        let x2 = block_entry(x, 1, 0)?;
 
         // y1 = i*σ_x * x2 (cross-block: src=1 -> dst=0)
         let y1 = apply_cross_block_mpo(&mpo_1to0, x2, &indices, 0)?;
@@ -971,7 +980,7 @@ fn test_block_offdiagonal_complex_pauli_x() -> anyhow::Result<()> {
             create_complex_ones_mps_for_block(&indices, block_idx, Complex64::new(0.0, 0.0))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let x0 = BlockTensor::new(x0_blocks, (num_blocks, 1));
+    let x0 = BlockTensor::new(x0_blocks, (num_blocks, 1))?;
     println!("x0 (complex zero) created, norm: {:.6}", x0.norm());
 
     // GMRES options
@@ -1061,15 +1070,15 @@ fn test_3x3_block_antidiagonal_complex_pauli_x() -> anyhow::Result<()> {
     let x0_true = create_complex_ones_mps_for_block(&indices, 0, Complex64::new(0.0, 1.0))?;
     let x1_true = create_complex_ones_mps_for_block(&indices, 1, Complex64::new(0.0, 2.0))?;
     let x2_true = create_complex_ones_mps_for_block(&indices, 2, Complex64::new(0.0, 3.0))?;
-    let x_true = BlockTensor::new(vec![x0_true, x1_true, x2_true], (num_blocks, 1));
+    let x_true = BlockTensor::new(vec![x0_true, x1_true, x2_true], (num_blocks, 1))?;
     println!("x_true created, norm: {:.6}", x_true.norm());
 
     // Define anti-diagonal block operator:
     // y0 = i*σ_x * x2, y1 = i*σ_x * x1, y2 = i*σ_x * x0
     let apply_a = |x: &BlockTensor<TensorTrain>| -> anyhow::Result<BlockTensor<TensorTrain>> {
-        let x0 = x.get(0, 0);
-        let x1 = x.get(1, 0);
-        let x2 = x.get(2, 0);
+        let x0 = block_entry(x, 0, 0)?;
+        let x1 = block_entry(x, 1, 0)?;
+        let x2 = block_entry(x, 2, 0)?;
 
         let y0 = apply_cross_block_mpo(&mpo_2to0, x2, &indices, 0)?;
         let y1 = apply_cross_block_mpo(&mpo_1to1, x1, &indices, 1)?;
@@ -1089,7 +1098,7 @@ fn test_3x3_block_antidiagonal_complex_pauli_x() -> anyhow::Result<()> {
             create_complex_ones_mps_for_block(&indices, block_idx, Complex64::new(0.0, 0.0))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let x0 = BlockTensor::new(x0_blocks, (num_blocks, 1));
+    let x0 = BlockTensor::new(x0_blocks, (num_blocks, 1))?;
     println!("x0 (complex zero) created, norm: {:.6}", x0.norm());
 
     // GMRES options
@@ -1172,12 +1181,12 @@ fn scaling_offdiagonal_complex_pauli_x(n_sites: usize) -> anyhow::Result<()> {
     // x_true = [i*ones, 2i*ones]^T
     let x1_true = create_complex_ones_mps_for_block(&indices, 0, Complex64::new(0.0, 1.0))?;
     let x2_true = create_complex_ones_mps_for_block(&indices, 1, Complex64::new(0.0, 2.0))?;
-    let x_true = BlockTensor::new(vec![x1_true, x2_true], (num_blocks, 1));
+    let x_true = BlockTensor::new(vec![x1_true, x2_true], (num_blocks, 1))?;
 
     // A = [[0, i*σ_x], [i*σ_x, 0]]
     let apply_a = |x: &BlockTensor<TensorTrain>| -> anyhow::Result<BlockTensor<TensorTrain>> {
-        let x1 = x.get(0, 0);
-        let x2 = x.get(1, 0);
+        let x1 = block_entry(x, 0, 0)?;
+        let x2 = block_entry(x, 1, 0)?;
         let y1 = apply_cross_block_mpo(&mpo_1to0, x2, &indices, 0)?;
         let y2 = apply_cross_block_mpo(&mpo_0to1, x1, &indices, 1)?;
         BlockTensor::try_new(vec![y1, y2], (num_blocks, 1))
@@ -1192,7 +1201,7 @@ fn scaling_offdiagonal_complex_pauli_x(n_sites: usize) -> anyhow::Result<()> {
             create_complex_ones_mps_for_block(&indices, block_idx, Complex64::new(0.0, 0.0))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let x0 = BlockTensor::new(x0_blocks, (num_blocks, 1));
+    let x0 = BlockTensor::new(x0_blocks, (num_blocks, 1))?;
 
     let options = GmresOptions {
         max_iter: 30,
@@ -1271,13 +1280,13 @@ fn scaling_3x3_antidiagonal_complex_pauli_x(n_sites: usize) -> anyhow::Result<()
     let x0_true = create_complex_ones_mps_for_block(&indices, 0, Complex64::new(0.0, 1.0))?;
     let x1_true = create_complex_ones_mps_for_block(&indices, 1, Complex64::new(0.0, 2.0))?;
     let x2_true = create_complex_ones_mps_for_block(&indices, 2, Complex64::new(0.0, 3.0))?;
-    let x_true = BlockTensor::new(vec![x0_true, x1_true, x2_true], (num_blocks, 1));
+    let x_true = BlockTensor::new(vec![x0_true, x1_true, x2_true], (num_blocks, 1))?;
 
     // A = [[0, 0, i*σ_x], [0, i*σ_x, 0], [i*σ_x, 0, 0]]
     let apply_a = |x: &BlockTensor<TensorTrain>| -> anyhow::Result<BlockTensor<TensorTrain>> {
-        let x0 = x.get(0, 0);
-        let x1 = x.get(1, 0);
-        let x2 = x.get(2, 0);
+        let x0 = block_entry(x, 0, 0)?;
+        let x1 = block_entry(x, 1, 0)?;
+        let x2 = block_entry(x, 2, 0)?;
         let y0 = apply_cross_block_mpo(&mpo_2to0, x2, &indices, 0)?;
         let y1 = apply_cross_block_mpo(&mpo_1to1, x1, &indices, 1)?;
         let y2 = apply_cross_block_mpo(&mpo_0to2, x0, &indices, 2)?;
@@ -1293,7 +1302,7 @@ fn scaling_3x3_antidiagonal_complex_pauli_x(n_sites: usize) -> anyhow::Result<()
             create_complex_ones_mps_for_block(&indices, block_idx, Complex64::new(0.0, 0.0))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let x0 = BlockTensor::new(x0_blocks, (num_blocks, 1));
+    let x0 = BlockTensor::new(x0_blocks, (num_blocks, 1))?;
 
     let options = GmresOptions {
         max_iter: 30,

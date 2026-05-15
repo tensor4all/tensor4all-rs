@@ -126,7 +126,7 @@ fn make_buggy_tensor() -> TensorDynLen {
 
 fn reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex], opts: &FactorizeOptions) -> f64 {
     let result = factorize(t, left_inds, opts).unwrap();
-    let recon = result.left.contract(&result.right);
+    let recon = result.left.contract(&result.right).unwrap();
     let neg = recon
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();
@@ -138,11 +138,13 @@ fn svd_reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
     let (u, s, v) = svd::<Complex64>(t, left_inds).unwrap();
     let mut perm = vec![v.indices.len() - 1];
     perm.extend(0..v.indices.len() - 1);
-    let vh = v.conj().permute(&perm);
+    let vh = v.conj().permute(&perm).unwrap();
     let svh = s
         .contract(&vh)
-        .replaceind(&s.indices[1], &u.indices[u.indices.len() - 1]);
-    let recon = u.contract(&svh);
+        .unwrap()
+        .replaceind(&s.indices[1], &u.indices[u.indices.len() - 1])
+        .unwrap();
+    let recon = u.contract(&svh).unwrap();
     let neg = recon
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();

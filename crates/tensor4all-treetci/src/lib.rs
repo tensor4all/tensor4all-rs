@@ -51,6 +51,24 @@
 
 #![warn(missing_docs)]
 
+pub(crate) fn ncols_2d<T>(array: &tensor4all_core::ColMajorArray<T>) -> anyhow::Result<usize> {
+    array
+        .ncols()
+        .ok_or_else(|| anyhow::anyhow!("expected 2D ColMajorArray, got shape {:?}", array.shape()))
+}
+
+pub(crate) fn column_2d<T>(
+    array: &tensor4all_core::ColMajorArray<T>,
+    column: usize,
+) -> anyhow::Result<&[T]> {
+    array.column(column).ok_or_else(|| {
+        anyhow::anyhow!(
+            "column {column} is out of range for shape {:?}",
+            array.shape()
+        )
+    })
+}
+
 /// High-level TreeTCI entry points.
 pub mod api;
 /// Assembly helpers from subtree-local pivots to global site-order indices.

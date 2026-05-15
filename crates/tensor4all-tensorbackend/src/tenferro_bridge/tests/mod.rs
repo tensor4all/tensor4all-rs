@@ -49,7 +49,7 @@ fn storage_native_roundtrip_diag_densifies_at_public_bridge() {
     let storage = Storage::from_diag_col_major(vec![2.0, -1.0, 4.0], 2).unwrap();
     let native = storage_to_native_tensor(&storage, &[3, 3]).unwrap();
     let roundtrip = native_tensor_primal_to_storage(&native).unwrap();
-    let expected = storage.to_dense_storage(&[3, 3]);
+    let expected = storage.to_dense_storage(&[3, 3]).unwrap();
 
     assert_eq!(native.shape(), &[3, 3]);
     assert_storage_eq(&roundtrip, &expected);
@@ -66,7 +66,7 @@ fn storage_native_roundtrip_structured_c64_densifies_at_public_bridge() {
     .unwrap();
     let native = storage_to_native_tensor(&storage, &[2, 2]).unwrap();
     let roundtrip = native_tensor_primal_to_storage(&native).unwrap();
-    let expected = storage.to_dense_storage(&[2, 2]);
+    let expected = storage.to_dense_storage(&[2, 2]).unwrap();
 
     assert_eq!(native.shape(), &[2, 2]);
     assert_storage_eq(&roundtrip, &expected);

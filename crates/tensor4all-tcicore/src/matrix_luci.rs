@@ -14,7 +14,7 @@ use crate::matrixluci::types::{PivotKernelOptions, PivotSelectionCore};
 use crate::matrixluci::PivotKernel;
 use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
-use tensor4all_tensorbackend::{mat_mul, submatrix, Matrix};
+use tensor4all_tensorbackend::Matrix;
 
 /// Matrix LU-based Cross Interpolation.
 ///
@@ -338,7 +338,7 @@ where
     ///     vec![3.0, 4.0],
     /// ]);
     /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
-    /// let reconstructed = mat_mul(&ci.left(), &ci.right());
+    /// let reconstructed = mat_mul(&ci.left(), &ci.right()).unwrap();
     /// for i in 0..2 {
     ///     for j in 0..2 {
     ///         assert!((reconstructed[[i, j]] - m[[i, j]]).abs() < 1e-10);
@@ -365,7 +365,7 @@ where
     /// assert_eq!(r.nrows(), ci.rank());
     /// assert_eq!(r.ncols(), ci.ncols());
     /// // left * right reconstructs the matrix
-    /// let recon = mat_mul(&ci.left(), &r);
+    /// let recon = mat_mul(&ci.left(), &r).unwrap();
     /// for i in 0..2 {
     ///     for j in 0..2 {
     ///         assert!((recon[[i, j]] - m[[i, j]]).abs() < 1e-10);
@@ -449,10 +449,17 @@ where
 
     fn submatrix(&self, rows: &[usize], cols: &[usize]) -> Matrix<T> {
         let r = self.rank();
-        let left_sub = submatrix(&self.left, rows, &(0..r).collect::<Vec<_>>());
-        let right_sub = submatrix(&self.right, &(0..r).collect::<Vec<_>>(), cols);
-
-        mat_mul(&left_sub, &right_sub)
+        let mut result = Matrix::zeros(rows.len(), cols.len());
+        for (j_out, &col) in cols.iter().enumerate() {
+            for (i_out, &row) in rows.iter().enumerate() {
+                let mut sum = T::zero();
+                for k in 0..r {
+                    sum = sum + self.left[[row, k]] * self.right[[k, col]];
+                }
+                result[[i_out, j_out]] = sum;
+            }
+        }
+        result
     }
 }
 
