@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, ensure, Result};
 use num_complex::{Complex32, Complex64};
-use tenferro::eager_einsum::eager_einsum_owned;
+use tenferro::eager_einsum::{eager_einsum, eager_einsum_owned};
 use tenferro::{DType, Tensor as NativeTensor, TensorBackend};
 
 use crate::any_scalar::promote_scalar_native;
@@ -24,7 +24,8 @@ use std::cell::Cell;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 enum NativeEinsumPath {
-    FrontendFallback,
+    Borrowed,
+    BorrowedWithConversions,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -709,20 +710,90 @@ pub fn einsum_native_tensors_owned(
     Ok(result)
 }
 
-/// Execute an eager einsum over native tensors.
+/// Execute an eager einsum over borrowed native tensors.
+///
+/// Inputs are promoted to a common dtype before contraction. Operands that
+/// already have the target dtype are passed to the backend by reference;
+/// operands with another dtype are converted into temporary native tensors and
+/// then borrowed for the contraction.
+///
+/// # Arguments
+/// * `operands` - Native tensors paired with numeric einsum labels for each axis.
+///   Each label slice must have the same length as the corresponding tensor rank.
+/// * `output_ids` - Numeric labels to keep in the result, in output axis order.
+///
+/// # Returns
+/// The contracted native tensor in the promoted common dtype.
+///
+/// # Errors
+/// Returns an error if the operand list is empty, any label list length does
+/// not match its tensor rank, label generation exceeds the supported range,
+/// dtype conversion fails, or the backend contraction fails.
+///
+/// # Examples
+/// ```
+/// use tensor4all_tensorbackend::einsum_native_tensors;
+/// use tenferro::Tensor as NativeTensor;
+///
+/// let lhs = NativeTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+/// let rhs = NativeTensor::from_vec(vec![3, 2], vec![1.0_f64; 6]);
+/// let result = einsum_native_tensors(&[(&lhs, &[0, 1]), (&rhs, &[1, 2])], &[0, 2]).unwrap();
+///
+/// assert_eq!(result.shape(), &[2, 2]);
+/// assert_eq!(result.as_slice::<f64>().unwrap(), &[3.0, 3.0, 3.0, 3.0]);
+/// ```
 pub fn einsum_native_tensors(
     operands: &[(&NativeTensor, &[usize])],
     output_ids: &[usize],
 ) -> Result<NativeTensor> {
-    let owned_operands = operands
-        .iter()
-        .map(|(tensor, ids)| ((*tensor).clone(), ids.to_vec()))
-        .collect::<Vec<_>>();
-    let output_ids_u32 = output_ids.iter().map(|&id| id as u32).collect::<Vec<_>>();
+    ensure!(
+        !operands.is_empty(),
+        "native einsum requires at least one operand"
+    );
+
+    let target = common_dtype(
+        &operands
+            .iter()
+            .map(|(tensor, _)| tensor.dtype())
+            .collect::<Vec<_>>(),
+    );
+    let mut converted = Vec::with_capacity(operands.len());
+    let mut input_ids = Vec::with_capacity(operands.len());
+    let mut has_conversions = false;
     let started = Instant::now();
-    let result = einsum_native_tensors_owned(owned_operands, output_ids)?;
+
+    for (tensor, ids) in operands {
+        ensure!(
+            tensor.shape().len() == ids.len(),
+            "einsum id list {:?} does not match tensor shape {:?}",
+            ids,
+            tensor.shape()
+        );
+        input_ids.push(ids.iter().map(|&id| id as u32).collect::<Vec<_>>());
+        if tensor.dtype() == target {
+            converted.push(None);
+        } else {
+            converted.push(Some(convert_tensor(tensor, target)?));
+            has_conversions = true;
+        }
+    }
+
+    let input_slices = input_ids.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let output_ids_u32 = output_ids.iter().map(|&id| id as u32).collect::<Vec<_>>();
+    let subscripts = build_einsum_subscripts(&input_slices, &output_ids_u32)?;
+    let input_refs = operands
+        .iter()
+        .zip(converted.iter())
+        .map(|((tensor, _), converted)| converted.as_ref().unwrap_or(*tensor))
+        .collect::<Vec<_>>();
+    let result = with_default_backend(|backend| eager_einsum(backend, &input_refs, &subscripts))
+        .map_err(|e| anyhow!("native einsum failed: {e}"))?;
     record_native_einsum_profile(
-        NativeEinsumPath::FrontendFallback,
+        if has_conversions {
+            NativeEinsumPath::BorrowedWithConversions
+        } else {
+            NativeEinsumPath::Borrowed
+        },
         operands,
         &output_ids_u32,
         started.elapsed(),

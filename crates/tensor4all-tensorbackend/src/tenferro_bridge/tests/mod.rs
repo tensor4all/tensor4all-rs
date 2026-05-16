@@ -36,6 +36,23 @@ fn recorded_native_einsum_call_count(path: NativeEinsumPath) -> usize {
     })
 }
 
+struct ProfileGuard;
+
+impl ProfileGuard {
+    fn enable() -> Self {
+        reset_native_einsum_profile();
+        set_native_einsum_profile_enabled_for_tests(true);
+        Self
+    }
+}
+
+impl Drop for ProfileGuard {
+    fn drop(&mut self) {
+        set_native_einsum_profile_enabled_for_tests(false);
+        reset_native_einsum_profile();
+    }
+}
+
 #[test]
 fn storage_native_roundtrip_dense_f64() {
     let storage = Storage::from_dense_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
@@ -265,7 +282,8 @@ fn einsum_native_tensors_supports_retained_shared_nary_label() {
 }
 
 #[test]
-fn einsum_native_tensors_owned_matches_borrowed_and_promotes_dtype() {
+fn einsum_native_tensors_mixed_dtype_records_borrowed_conversion_profile() {
+    let _guard = ProfileGuard::enable();
     let lhs = NativeTensor::from_vec(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]);
     let rhs = NativeTensor::from_vec(vec![2, 3], vec![5.0_f64, 6.0, 7.0, 8.0, 9.0, 10.0]);
 
@@ -282,33 +300,39 @@ fn einsum_native_tensors_owned_matches_borrowed_and_promotes_dtype() {
         native_tensor_primal_to_dense_f64_col_major(&owned).unwrap(),
         native_tensor_primal_to_dense_f64_col_major(&borrowed).unwrap()
     );
+    assert_eq!(
+        recorded_native_einsum_call_count(NativeEinsumPath::BorrowedWithConversions),
+        1
+    );
+    assert_eq!(
+        recorded_native_einsum_call_count(NativeEinsumPath::Borrowed),
+        0
+    );
 }
 
 #[test]
-fn einsum_native_tensors_dense_binary_records_frontend_fallback_profile() {
-    struct ProfileGuard;
-
-    impl Drop for ProfileGuard {
-        fn drop(&mut self) {
-            set_native_einsum_profile_enabled_for_tests(false);
-            reset_native_einsum_profile();
-        }
-    }
-
-    reset_native_einsum_profile();
-    set_native_einsum_profile_enabled_for_tests(true);
-    let _guard = ProfileGuard;
+fn einsum_native_tensors_dense_binary_records_borrowed_profile() {
+    let _guard = ProfileGuard::enable();
 
     let lhs = dense_native_tensor_from_col_major(&[1.0_f64, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
     let rhs =
         dense_native_tensor_from_col_major(&[10.0_f64, 30.0, 50.0, 20.0, 40.0, 60.0], &[3, 2])
             .unwrap();
     let out = einsum_native_tensors(&[(&lhs, &[0, 1]), (&rhs, &[2, 1])], &[0, 2]).unwrap();
+    let snapshot = native_tensor_primal_to_storage(&out).unwrap();
+    let expected =
+        Storage::from_dense_col_major(vec![50.0, 110.0, 110.0, 250.0, 170.0, 390.0], &[2, 3])
+            .unwrap();
 
     assert_eq!(out.shape(), &[2, 3]);
+    assert_storage_eq(&snapshot, &expected);
     assert_eq!(
-        recorded_native_einsum_call_count(NativeEinsumPath::FrontendFallback),
+        recorded_native_einsum_call_count(NativeEinsumPath::Borrowed),
         1
+    );
+    assert_eq!(
+        recorded_native_einsum_call_count(NativeEinsumPath::BorrowedWithConversions),
+        0
     );
 }
 
