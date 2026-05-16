@@ -1153,7 +1153,8 @@ fn invert_stage1(tt: &TensorTrain<f64>, basis: &LagrangePolynomials) -> Result<M
             decode.ncols()
         )));
     }
-    Ok(mat_mul(&current, &decode))
+    mat_mul(&current, &decode)
+        .map_err(|err| invalid_argument(format!("decode multiply failed: {err}")))
 }
 
 fn build_restriction(basis: &LagrangePolynomials) -> Result<(Matrix<f64>, Matrix<f64>)> {

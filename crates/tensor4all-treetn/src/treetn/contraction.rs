@@ -568,8 +568,18 @@ where
                 result.node_index(source_name),
                 result.node_index(destination_name),
             ) {
-                let tensor_a = result.tensor(node_a_idx).unwrap();
-                let tensor_b = result.tensor(node_b_idx).unwrap();
+                let tensor_a = result.tensor(node_a_idx).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "contract_zipup_tree_accumulated: result tensor not found for node {:?}",
+                        source_name
+                    )
+                })?;
+                let tensor_b = result.tensor(node_b_idx).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "contract_zipup_tree_accumulated: result tensor not found for node {:?}",
+                        destination_name
+                    )
+                })?;
 
                 // Find the common index (should be the bond index)
                 use tensor4all_core::index_ops::common_inds;

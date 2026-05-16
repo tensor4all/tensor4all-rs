@@ -556,7 +556,8 @@ fn test_contract_multi_owned_falls_back_to_borrowed_for_grad_tensors() {
         vec![batch.clone(), i.clone(), k.clone()],
         (1..=12).map(|value| value as f64).collect(),
     )
-    .enable_grad();
+    .enable_grad()
+    .unwrap();
     let y = make_test_tensor_from_data(
         &[2, 3, 2],
         vec![batch.clone(), k.clone(), j.clone()],

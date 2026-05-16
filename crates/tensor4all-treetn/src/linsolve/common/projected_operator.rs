@@ -146,14 +146,20 @@ where
 
             let mut transformed_v = v.clone();
             for (node, (temp_in, _temp_out, _)) in region.iter().zip(per_node.iter()) {
-                let im = input_mapping.get(node).unwrap();
+                let im = input_mapping
+                    .get(node)
+                    .ok_or_else(|| anyhow::anyhow!("Missing input_mapping for node {:?}", node))?;
                 transformed_v = transformed_v.replaceind(&im.true_index, temp_in)?;
             }
             all_tensors.push(transformed_v);
 
             for (node, (temp_in, temp_out, true_idx)) in region.iter().zip(per_node.iter()) {
-                let im = input_mapping.get(node).unwrap();
-                let om = output_mapping.get(node).unwrap();
+                let im = input_mapping
+                    .get(node)
+                    .ok_or_else(|| anyhow::anyhow!("Missing input_mapping for node {:?}", node))?;
+                let om = output_mapping
+                    .get(node)
+                    .ok_or_else(|| anyhow::anyhow!("Missing output_mapping for node {:?}", node))?;
                 let node_idx = self
                     .operator
                     .node_index(node)

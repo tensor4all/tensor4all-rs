@@ -198,7 +198,7 @@ fn create_random_mpo_operator(
         let node_name = make_node_name(i);
 
         let indices = mpo_node_indices(n, i, &bonds, &s_out_tmp, &s_in_tmp);
-        let t = TensorDynLen::random::<f64, _>(rng, indices);
+        let t = TensorDynLen::random::<f64, _>(rng, indices)?;
 
         let node = mpo.add_tensor(node_name.clone(), t).unwrap();
         nodes.push(node);

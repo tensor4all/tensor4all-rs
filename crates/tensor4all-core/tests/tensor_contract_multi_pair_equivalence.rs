@@ -63,14 +63,14 @@ fn test_contract_multi_pair_matches_binary_contract() {
         &[3, 2],
     );
 
-    let binary = t1.contract(&t2);
+    let binary = t1.contract(&t2).unwrap();
     let multi =
         <TensorDynLen as TensorLike>::contract(&[&t1, &t2], AllowedPairs::All).expect("contract");
 
     assert!(
         multi.isapprox(&binary, 1e-12, 0.0),
         "multi-contract and binary contract differ: maxabs diff = {}",
-        (&multi - &binary).maxabs()
+        multi.sub(&binary).unwrap().maxabs()
     );
 }
 
@@ -98,14 +98,14 @@ fn test_contract_multi_three_matches_sequential_binary_contract() {
         &[3, 2],
     );
 
-    let sequential = t0.contract(&t1).contract(&t2);
+    let sequential = t0.contract(&t1).unwrap().contract(&t2).unwrap();
     let multi = <TensorDynLen as TensorLike>::contract(&[&t0, &t1, &t2], AllowedPairs::All)
         .expect("contract");
 
     assert!(
         multi.isapprox(&sequential, 1e-12, 0.0),
         "3-tensor multi-contract and sequential contract differ: maxabs diff = {}",
-        (&multi - &sequential).maxabs()
+        multi.sub(&sequential).unwrap().maxabs()
     );
 }
 
@@ -122,14 +122,14 @@ fn test_contract_multi_pair_matches_binary_contract_for_zero_masked_inputs() {
     );
     let t1 = make_tensor(vec![l01, s1], (1..=6).map(|x| x as f64).collect(), &[3, 2]);
 
-    let binary = t0.contract(&t1);
+    let binary = t0.contract(&t1).unwrap();
     let multi =
         <TensorDynLen as TensorLike>::contract(&[&t0, &t1], AllowedPairs::All).expect("contract");
 
     assert!(
         multi.isapprox(&binary, 1e-12, 0.0),
         "zero-masked multi-contract and binary contract differ: maxabs diff = {}",
-        (&multi - &binary).maxabs()
+        multi.sub(&binary).unwrap().maxabs()
     );
 }
 
@@ -164,7 +164,9 @@ fn test_zipup_zero_masked_root_multi_matches_sequential_binary_contract() {
 
     let leaf = <TensorDynLen as TensorLike>::contract(&[&a0, &b0], AllowedPairs::All)
         .expect("leaf contract");
-    let permuted_leaf = leaf.permute_indices(&[s0.clone(), s1.clone(), l01.clone(), l12.clone()]);
+    let permuted_leaf = leaf
+        .permute_indices(&[s0.clone(), s1.clone(), l01.clone(), l12.clone()])
+        .unwrap();
     let expected_permuted = TensorDynLen::from_dense(
         vec![s0.clone(), s1.clone(), l01.clone(), l12.clone()],
         permute_col_major(&leaf.to_vec::<f64>().unwrap(), &leaf.dims(), &[0, 2, 1, 3]),
@@ -173,21 +175,23 @@ fn test_zipup_zero_masked_root_multi_matches_sequential_binary_contract() {
     assert!(
         permuted_leaf.isapprox(&expected_permuted, 1e-12, 0.0),
         "native permute for leaf does not match tensor-level column-major expectation: maxabs diff = {}",
-        (&permuted_leaf - &expected_permuted).maxabs()
+        permuted_leaf.sub(&expected_permuted).unwrap().maxabs()
     );
 
     let (u, s, v) = svd::<f64>(&leaf, &[s0.clone(), s1.clone()]).expect("svd");
-    let vh = v.conj().permute(&[2, 0, 1]);
-    let svh = s.contract(&vh);
-    let svh = svh.replaceind(
-        &s.indices[1].clone(),
-        &v.indices[v.indices.len() - 1].clone(),
-    );
-    let svd_reconstructed = u.contract(&svh);
+    let vh = v.conj().permute(&[2, 0, 1]).unwrap();
+    let svh = s.contract(&vh).unwrap();
+    let svh = svh
+        .replaceind(
+            &s.indices[1].clone(),
+            &v.indices[v.indices.len() - 1].clone(),
+        )
+        .unwrap();
+    let svd_reconstructed = u.contract(&svh).unwrap();
     assert!(
         svd_reconstructed.isapprox(&leaf, 1e-10, 0.0),
         "svd leaf does not reconstruct: maxabs diff = {}",
-        (&svd_reconstructed - &leaf).maxabs()
+        svd_reconstructed.sub(&leaf).unwrap().maxabs()
     );
 
     let factorized = factorize(
@@ -197,14 +201,19 @@ fn test_zipup_zero_masked_root_multi_matches_sequential_binary_contract() {
     )
     .expect("factorize");
 
-    let reconstructed_leaf = factorized.left.contract(&factorized.right);
+    let reconstructed_leaf = factorized.left.contract(&factorized.right).unwrap();
     assert!(
         reconstructed_leaf.isapprox(&leaf, 1e-10, 0.0),
         "factorized leaf does not reconstruct: maxabs diff = {}",
-        (&reconstructed_leaf - &leaf).maxabs()
+        reconstructed_leaf.sub(&leaf).unwrap().maxabs()
     );
 
-    let sequential = factorized.right.contract(&a1).contract(&b1);
+    let sequential = factorized
+        .right
+        .contract(&a1)
+        .unwrap()
+        .contract(&b1)
+        .unwrap();
     let multi =
         <TensorDynLen as TensorLike>::contract(&[&factorized.right, &a1, &b1], AllowedPairs::All)
             .expect("root contract");
@@ -212,6 +221,6 @@ fn test_zipup_zero_masked_root_multi_matches_sequential_binary_contract() {
     assert!(
         multi.isapprox(&sequential, 1e-10, 0.0),
         "zipup root multi-contract and sequential binary contract differ: maxabs diff = {}",
-        (&multi - &sequential).maxabs()
+        multi.sub(&sequential).unwrap().maxabs()
     );
 }

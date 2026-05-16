@@ -1,6 +1,6 @@
 use anyhow::{anyhow, ensure, Result};
 use num_complex::{Complex64, ComplexFloat};
-use std::ops::{Add, Mul};
+use std::ops::Mul;
 use std::sync::Arc;
 
 /// Trait for scalar types that can be stored in [`Storage`].
@@ -42,12 +42,12 @@ impl StorageScalar for f64 {
     fn build_dense_storage(data: Vec<Self>, logical_dims: &[usize]) -> Result<Storage> {
         Storage::validate_dense_len(&data, logical_dims, "dense f64 payload")?;
         Ok(Storage::from_repr(StorageRepr::F64(
-            StructuredStorage::from_dense_col_major(data, logical_dims),
+            StructuredStorage::from_dense_col_major(data, logical_dims)?,
         )))
     }
     fn build_diag_storage(diag_data: Vec<Self>, logical_rank: usize) -> Result<Storage> {
         Ok(Storage::from_repr(StorageRepr::F64(
-            StructuredStorage::from_diag_col_major(diag_data, logical_rank),
+            StructuredStorage::from_diag_col_major(diag_data, logical_rank)?,
         )))
     }
     fn build_structured_storage(
@@ -66,12 +66,12 @@ impl StorageScalar for Complex64 {
     fn build_dense_storage(data: Vec<Self>, logical_dims: &[usize]) -> Result<Storage> {
         Storage::validate_dense_len(&data, logical_dims, "dense c64 payload")?;
         Ok(Storage::from_repr(StorageRepr::C64(
-            StructuredStorage::from_dense_col_major(data, logical_dims),
+            StructuredStorage::from_dense_col_major(data, logical_dims)?,
         )))
     }
     fn build_diag_storage(diag_data: Vec<Self>, logical_rank: usize) -> Result<Storage> {
         Ok(Storage::from_repr(StorageRepr::C64(
-            StructuredStorage::from_diag_col_major(diag_data, logical_rank),
+            StructuredStorage::from_diag_col_major(diag_data, logical_rank)?,
         )))
     }
     fn build_structured_storage(
@@ -86,16 +86,18 @@ impl StorageScalar for Complex64 {
     }
 }
 
-pub(crate) fn col_major_strides(dims: &[usize]) -> Vec<isize> {
+pub(crate) fn col_major_strides(dims: &[usize]) -> Result<Vec<isize>> {
     let mut strides = Vec::with_capacity(dims.len());
     let mut stride = 1isize;
     for &dim in dims {
         strides.push(stride);
+        let dim = isize::try_from(dim)
+            .map_err(|_| anyhow!("column-major stride overflow for dims {dims:?}"))?;
         stride = stride
-            .checked_mul(dim as isize)
-            .unwrap_or_else(|| panic!("column-major stride overflow for dims {dims:?}"));
+            .checked_mul(dim)
+            .ok_or_else(|| anyhow!("column-major stride overflow for dims {dims:?}"))?;
     }
-    strides
+    Ok(strides)
 }
 
 fn validate_canonical_axis_classes(axis_classes: &[usize]) -> Result<()> {
@@ -188,14 +190,14 @@ fn offset_from_strides(index: &[usize], strides: &[isize]) -> usize {
 /// // Dense 2x3 storage, column-major: [[1,3,5],[2,4,6]]
 /// let dense = StructuredStorage::from_dense_col_major(
 ///     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3],
-/// );
+/// ).unwrap();
 /// assert!(dense.is_dense());
 /// assert!(!dense.is_diag());
 /// assert_eq!(dense.logical_rank(), 2);
 /// assert_eq!(dense.logical_dims(), vec![2, 3]);
 ///
 /// // Diagonal 3x3 storage
-/// let diag = StructuredStorage::from_diag_col_major(vec![1.0, 2.0, 3.0], 2);
+/// let diag = StructuredStorage::from_diag_col_major(vec![1.0, 2.0, 3.0], 2).unwrap();
 /// assert!(diag.is_diag());
 /// assert_eq!(diag.logical_dims(), vec![3, 3]);
 /// assert_eq!(diag.len(), 3);
@@ -282,25 +284,25 @@ impl<T> StructuredStorage<T> {
 
     /// Creates a dense structured snapshot from column-major logical data.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `data.len()` does not equal the product of `logical_dims`.
+    /// Returns an error if `data.len()` does not equal the product of
+    /// `logical_dims`, or if column-major stride computation overflows.
     ///
     /// # Examples
     ///
     /// ```
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
-    /// let s = StructuredStorage::from_dense_col_major(vec![10.0, 20.0, 30.0, 40.0], &[2, 2]);
+    /// let s = StructuredStorage::from_dense_col_major(vec![10.0, 20.0, 30.0, 40.0], &[2, 2]).unwrap();
     /// assert!(s.is_dense());
     /// assert_eq!(s.data(), &[10.0, 20.0, 30.0, 40.0]);
     /// ```
-    pub fn from_dense_col_major(data: Vec<T>, logical_dims: &[usize]) -> Self {
+    pub fn from_dense_col_major(data: Vec<T>, logical_dims: &[usize]) -> Result<Self> {
         let payload_dims = logical_dims.to_vec();
-        let strides = col_major_strides(&payload_dims);
+        let strides = col_major_strides(&payload_dims)?;
         let axis_classes = (0..logical_dims.len()).collect();
         Self::new(data, payload_dims, strides, axis_classes)
-            .unwrap_or_else(|err| panic!("StructuredStorage::from_dense_col_major failed: {err}"))
     }
 
     /// Creates a diagonal structured snapshot from column-major diagonal data.
@@ -308,30 +310,30 @@ impl<T> StructuredStorage<T> {
     /// The resulting tensor has `logical_rank` axes, each of size `diag_data.len()`.
     /// Only the diagonal entries are stored.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `logical_rank` is zero and data is non-empty.
+    /// Returns an error if `logical_rank` is zero and the data does not contain
+    /// exactly one scalar value, or if column-major stride computation overflows.
     ///
     /// # Examples
     ///
     /// ```
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
-    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0, 3.0], 2);
+    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0, 3.0], 2).unwrap();
     /// assert!(d.is_diag());
     /// assert_eq!(d.logical_dims(), vec![3, 3]);
     /// assert_eq!(d.data(), &[1.0, 2.0, 3.0]);
     /// ```
-    pub fn from_diag_col_major(diag_data: Vec<T>, logical_rank: usize) -> Self {
+    pub fn from_diag_col_major(diag_data: Vec<T>, logical_rank: usize) -> Result<Self> {
         let payload_dims = if logical_rank == 0 {
             vec![]
         } else {
             vec![diag_data.len()]
         };
-        let strides = col_major_strides(&payload_dims);
+        let strides = col_major_strides(&payload_dims)?;
         let axis_classes = vec![0; logical_rank];
         Self::new(diag_data, payload_dims, strides, axis_classes)
-            .unwrap_or_else(|err| panic!("StructuredStorage::from_diag_col_major failed: {err}"))
     }
 
     /// Returns the payload data buffer as a slice.
@@ -341,7 +343,7 @@ impl<T> StructuredStorage<T> {
     /// ```
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
-    /// let s = StructuredStorage::from_dense_col_major(vec![1.0, 2.0], &[2]);
+    /// let s = StructuredStorage::from_dense_col_major(vec![1.0, 2.0], &[2]).unwrap();
     /// assert_eq!(s.data(), &[1.0, 2.0]);
     /// ```
     pub fn data(&self) -> &[T] {
@@ -359,10 +361,10 @@ impl<T> StructuredStorage<T> {
     /// ```
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
-    /// let s = StructuredStorage::from_dense_col_major(vec![0.0; 6], &[2, 3]);
+    /// let s = StructuredStorage::from_dense_col_major(vec![0.0; 6], &[2, 3]).unwrap();
     /// assert_eq!(s.payload_dims(), &[2, 3]);
     ///
-    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 3);
+    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 3).unwrap();
     /// assert_eq!(d.payload_dims(), &[2]);
     /// ```
     pub fn payload_dims(&self) -> &[usize] {
@@ -377,7 +379,7 @@ impl<T> StructuredStorage<T> {
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
     /// // Column-major 2x3: strides are [1, 2]
-    /// let s = StructuredStorage::from_dense_col_major(vec![0.0; 6], &[2, 3]);
+    /// let s = StructuredStorage::from_dense_col_major(vec![0.0; 6], &[2, 3]).unwrap();
     /// assert_eq!(s.strides(), &[1, 2]);
     /// ```
     pub fn strides(&self) -> &[isize] {
@@ -394,10 +396,10 @@ impl<T> StructuredStorage<T> {
     /// ```
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
-    /// let dense = StructuredStorage::from_dense_col_major(vec![0.0; 4], &[2, 2]);
+    /// let dense = StructuredStorage::from_dense_col_major(vec![0.0; 4], &[2, 2]).unwrap();
     /// assert_eq!(dense.axis_classes(), &[0, 1]);
     ///
-    /// let diag = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 2);
+    /// let diag = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 2).unwrap();
     /// assert_eq!(diag.axis_classes(), &[0, 0]);
     /// ```
     pub fn axis_classes(&self) -> &[usize] {
@@ -411,7 +413,7 @@ impl<T> StructuredStorage<T> {
     /// ```
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
-    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0, 3.0], 3);
+    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0, 3.0], 3).unwrap();
     /// assert_eq!(d.logical_dims(), vec![3, 3, 3]);
     /// ```
     pub fn logical_dims(&self) -> Vec<usize> {
@@ -425,7 +427,7 @@ impl<T> StructuredStorage<T> {
     /// ```
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
-    /// let s = StructuredStorage::from_dense_col_major(vec![0.0; 6], &[2, 3]);
+    /// let s = StructuredStorage::from_dense_col_major(vec![0.0; 6], &[2, 3]).unwrap();
     /// assert_eq!(s.logical_rank(), 2);
     /// ```
     pub fn logical_rank(&self) -> usize {
@@ -440,10 +442,10 @@ impl<T> StructuredStorage<T> {
     /// ```
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
-    /// let s = StructuredStorage::from_dense_col_major(vec![1.0, 2.0], &[2]);
+    /// let s = StructuredStorage::from_dense_col_major(vec![1.0, 2.0], &[2]).unwrap();
     /// assert!(s.is_dense());
     ///
-    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 2);
+    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 2).unwrap();
     /// assert!(!d.is_dense());
     /// ```
     pub fn is_dense(&self) -> bool {
@@ -461,10 +463,10 @@ impl<T> StructuredStorage<T> {
     /// ```
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
-    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 2);
+    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 2).unwrap();
     /// assert!(d.is_diag());
     ///
-    /// let s = StructuredStorage::from_dense_col_major(vec![1.0, 2.0], &[2]);
+    /// let s = StructuredStorage::from_dense_col_major(vec![1.0, 2.0], &[2]).unwrap();
     /// assert!(!s.is_diag());
     /// ```
     pub fn is_diag(&self) -> bool {
@@ -478,10 +480,10 @@ impl<T> StructuredStorage<T> {
     /// ```
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
-    /// let dense = StructuredStorage::from_dense_col_major(vec![1.0, 2.0, 3.0], &[3]);
+    /// let dense = StructuredStorage::from_dense_col_major(vec![1.0, 2.0, 3.0], &[3]).unwrap();
     /// assert_eq!(dense.len(), 3);
     ///
-    /// let diag = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 2);
+    /// let diag = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 2).unwrap();
     /// assert_eq!(diag.len(), 2);
     /// ```
     pub fn len(&self) -> usize {
@@ -495,10 +497,10 @@ impl<T> StructuredStorage<T> {
     /// ```
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
-    /// let empty = StructuredStorage::from_dense_col_major(Vec::<f64>::new(), &[0]);
+    /// let empty = StructuredStorage::from_dense_col_major(Vec::<f64>::new(), &[0]).unwrap();
     /// assert!(empty.is_empty());
     ///
-    /// let non_empty = StructuredStorage::from_dense_col_major(vec![1.0], &[1]);
+    /// let non_empty = StructuredStorage::from_dense_col_major(vec![1.0], &[1]).unwrap();
     /// assert!(!non_empty.is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
@@ -515,14 +517,16 @@ impl<T> StructuredStorage<T> {
     /// ```
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
-    /// let s = StructuredStorage::from_dense_col_major(vec![1.0, 2.0, 3.0], &[3]);
+    /// let s = StructuredStorage::from_dense_col_major(vec![1.0, 2.0, 3.0], &[3]).unwrap();
     /// assert_eq!(s.dense_col_major_view_if_contiguous(), Some(&[1.0, 2.0, 3.0][..]));
     ///
-    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 2);
+    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 2).unwrap();
     /// assert_eq!(d.dense_col_major_view_if_contiguous(), None);
     /// ```
     pub fn dense_col_major_view_if_contiguous(&self) -> Option<&[T]> {
-        if self.is_dense() && self.strides == col_major_strides(&self.payload_dims) {
+        if self.is_dense()
+            && matches!(col_major_strides(&self.payload_dims), Ok(strides) if strides == self.strides)
+        {
             Some(&self.data)
         } else {
             None
@@ -540,7 +544,7 @@ impl<T: Clone> StructuredStorage<T> {
     /// ```
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
-    /// let s = StructuredStorage::from_dense_col_major(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    /// let s = StructuredStorage::from_dense_col_major(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
     /// assert_eq!(s.payload_col_major_vec(), vec![1.0, 2.0, 3.0, 4.0]);
     /// ```
     pub fn payload_col_major_vec(&self) -> Vec<T> {
@@ -548,7 +552,7 @@ impl<T: Clone> StructuredStorage<T> {
         if payload_len == 0 {
             return Vec::new();
         }
-        if self.strides == col_major_strides(&self.payload_dims) {
+        if matches!(col_major_strides(&self.payload_dims), Ok(strides) if strides == self.strides) {
             return self.data.clone();
         }
 
@@ -563,9 +567,9 @@ impl<T: Clone> StructuredStorage<T> {
 
     /// Returns a copy of the storage with logical axes permuted.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `perm.len()` does not equal the logical rank.
+    /// Returns an error if `perm` is not a valid permutation of the logical axes.
     ///
     /// # Examples
     ///
@@ -573,28 +577,39 @@ impl<T: Clone> StructuredStorage<T> {
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
     /// // Diagonal 3x3x3 tensor; permute axes (identity for diag is always valid)
-    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0, 3.0], 3);
-    /// let p = d.permute_logical_axes(&[2, 0, 1]);
+    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0, 3.0], 3).unwrap();
+    /// let p = d.permute_logical_axes(&[2, 0, 1]).unwrap();
     /// // Diagonal: all axes share the same dimension, so dims stay the same
     /// assert_eq!(p.logical_dims(), vec![3, 3, 3]);
     /// assert!(p.is_diag());
     /// ```
-    pub fn permute_logical_axes(&self, perm: &[usize]) -> Self {
-        assert_eq!(
-            perm.len(),
-            self.axis_classes.len(),
+    pub fn permute_logical_axes(&self, perm: &[usize]) -> Result<Self> {
+        ensure!(
+            perm.len() == self.axis_classes.len(),
             "logical permutation length {} must match logical rank {}",
             perm.len(),
             self.axis_classes.len()
         );
-        let axis_classes = perm.iter().map(|&index| self.axis_classes[index]).collect();
+        let mut seen = vec![false; self.axis_classes.len()];
+        let axis_classes = perm
+            .iter()
+            .map(|&index| {
+                ensure!(
+                    index < self.axis_classes.len(),
+                    "logical permutation axis {index} is out of range for rank {}",
+                    self.axis_classes.len()
+                );
+                ensure!(!seen[index], "logical permutation repeats axis {index}");
+                seen[index] = true;
+                Ok(self.axis_classes[index])
+            })
+            .collect::<Result<Vec<_>>>()?;
         Self::new(
             self.data.clone(),
             self.payload_dims.clone(),
             self.strides.clone(),
             axis_classes,
         )
-        .unwrap_or_else(|err| panic!("StructuredStorage::permute_logical_axes failed: {err}"))
     }
 }
 
@@ -606,18 +621,17 @@ impl<T: Copy> StructuredStorage<T> {
     /// ```
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
-    /// let s = StructuredStorage::from_dense_col_major(vec![1.0, 2.0, 3.0], &[3]);
+    /// let s = StructuredStorage::from_dense_col_major(vec![1.0, 2.0, 3.0], &[3]).unwrap();
     /// let doubled = s.map_copy(|x| x * 2.0);
     /// assert_eq!(doubled.data(), &[2.0, 4.0, 6.0]);
     /// ```
     pub fn map_copy<U>(&self, mut f: impl FnMut(T) -> U) -> StructuredStorage<U> {
-        StructuredStorage::new(
-            self.data.iter().copied().map(&mut f).collect(),
-            self.payload_dims.clone(),
-            self.strides.clone(),
-            self.axis_classes.clone(),
-        )
-        .unwrap_or_else(|err| panic!("StructuredStorage::map_copy failed: {err}"))
+        StructuredStorage {
+            data: self.data.iter().copied().map(&mut f).collect(),
+            payload_dims: self.payload_dims.clone(),
+            strides: self.strides.clone(),
+            axis_classes: self.axis_classes.clone(),
+        }
     }
 }
 
@@ -634,7 +648,7 @@ impl<T: Copy + Default> StructuredStorage<T> {
     /// use tensor4all_tensorbackend::StructuredStorage;
     ///
     /// // Diagonal [1, 2] in 2x2 becomes [1, 0, 0, 2] column-major
-    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 2);
+    /// let d = StructuredStorage::from_diag_col_major(vec![1.0, 2.0], 2).unwrap();
     /// assert_eq!(d.logical_dense_col_major_vec(), vec![1.0, 0.0, 0.0, 2.0]);
     /// ```
     pub fn logical_dense_col_major_vec(&self) -> Vec<T> {
@@ -690,7 +704,7 @@ impl<T: Copy + Default> StructuredStorage<T> {
 /// assert!(!s.is_complex());
 ///
 /// // Diagonal storage: 2x2 identity-like diagonal
-/// let diag = Storage::new_diag(vec![1.0_f64, 2.0]);
+/// let diag = Storage::new_diag(vec![1.0_f64, 2.0]).unwrap();
 /// assert!(diag.is_f64());
 /// ```
 #[derive(Debug, Clone)]
@@ -846,6 +860,10 @@ impl Storage {
         Self(repr)
     }
 
+    fn invalid_storage_error(err: anyhow::Error) -> StorageError {
+        StorageError::InvalidStructuredStorage(err.to_string())
+    }
+
     #[cfg(test)]
     pub(crate) fn repr(&self) -> &StorageRepr {
         &self.0
@@ -866,6 +884,10 @@ impl Storage {
     /// Create dense storage from column-major logical values (generic over scalar type).
     ///
     /// The scalar type is inferred from the `data` argument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the requested dense metadata overflows.
     ///
     /// # Examples
     ///
@@ -918,30 +940,33 @@ impl Storage {
     /// ```
     /// use tensor4all_tensorbackend::Storage;
     ///
-    /// let s = Storage::new_dense::<f64>(5);
+    /// let s = Storage::new_dense::<f64>(5).unwrap();
     /// assert!(s.is_dense());
     /// assert_eq!(s.len(), 5);
     /// assert!((s.max_abs()).abs() < 1e-10);
     /// ```
-    pub fn new_dense<T: StorageScalar + Default>(size: usize) -> Self {
+    pub fn new_dense<T: StorageScalar + Default>(size: usize) -> StorageResult<Self> {
         Self::from_dense_col_major(vec![T::default(); size], &[size])
-            .unwrap_or_else(|err| panic!("Storage::new_dense failed: {err}"))
+            .map_err(Self::invalid_storage_error)
     }
 
     /// Create a new diagonal storage with the given diagonal data (generic over scalar type).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if diagonal metadata is invalid.
     ///
     /// # Examples
     ///
     /// ```
     /// use tensor4all_tensorbackend::Storage;
     ///
-    /// let s = Storage::new_diag(vec![1.0_f64, 2.0, 3.0]);
+    /// let s = Storage::new_diag(vec![1.0_f64, 2.0, 3.0]).unwrap();
     /// assert!(s.is_diag());
     /// assert!(s.is_f64());
     /// ```
-    pub fn new_diag<T: StorageScalar>(diag_data: Vec<T>) -> Self {
-        Self::from_diag_col_major(diag_data, 2)
-            .unwrap_or_else(|err| panic!("Storage::new_diag failed: {err}"))
+    pub fn new_diag<T: StorageScalar>(diag_data: Vec<T>) -> StorageResult<Self> {
+        Self::from_diag_col_major(diag_data, 2).map_err(Self::invalid_storage_error)
     }
 
     /// Create a new structured storage (generic over scalar type).
@@ -992,7 +1017,7 @@ impl Storage {
     pub fn from_dense_f64_col_major(data: Vec<f64>, logical_dims: &[usize]) -> Result<Self> {
         Self::validate_dense_len(&data, logical_dims, "dense f64 payload")?;
         Ok(Self::from_repr(StorageRepr::F64(
-            StructuredStorage::from_dense_col_major(data, logical_dims),
+            StructuredStorage::from_dense_col_major(data, logical_dims)?,
         )))
     }
 
@@ -1016,7 +1041,7 @@ impl Storage {
     pub fn from_dense_c64_col_major(data: Vec<Complex64>, logical_dims: &[usize]) -> Result<Self> {
         Self::validate_dense_len(&data, logical_dims, "dense c64 payload")?;
         Ok(Self::from_repr(StorageRepr::C64(
-            StructuredStorage::from_dense_col_major(data, logical_dims),
+            StructuredStorage::from_dense_col_major(data, logical_dims)?,
         )))
     }
 
@@ -1033,7 +1058,7 @@ impl Storage {
     /// ```
     pub fn from_diag_f64_col_major(diag_data: Vec<f64>, logical_rank: usize) -> Result<Self> {
         Ok(Self::from_repr(StorageRepr::F64(
-            StructuredStorage::from_diag_col_major(diag_data, logical_rank),
+            StructuredStorage::from_diag_col_major(diag_data, logical_rank)?,
         )))
     }
 
@@ -1052,7 +1077,7 @@ impl Storage {
     /// ```
     pub fn from_diag_c64_col_major(diag_data: Vec<Complex64>, logical_rank: usize) -> Result<Self> {
         Ok(Self::from_repr(StorageRepr::C64(
-            StructuredStorage::from_diag_col_major(diag_data, logical_rank),
+            StructuredStorage::from_diag_col_major(diag_data, logical_rank)?,
         )))
     }
 
@@ -1066,7 +1091,7 @@ impl Storage {
     /// let s = Storage::from_dense_col_major(vec![1.0_f64, 2.0], &[2]).unwrap();
     /// assert!(s.is_dense());
     ///
-    /// let d = Storage::new_diag(vec![1.0_f64, 2.0]);
+    /// let d = Storage::new_diag(vec![1.0_f64, 2.0]).unwrap();
     /// assert!(!d.is_dense());
     /// ```
     pub fn is_dense(&self) -> bool {
@@ -1083,7 +1108,7 @@ impl Storage {
     /// ```
     /// use tensor4all_tensorbackend::Storage;
     ///
-    /// let d = Storage::new_diag(vec![1.0_f64, 2.0]);
+    /// let d = Storage::new_diag(vec![1.0_f64, 2.0]).unwrap();
     /// assert!(d.is_diag());
     /// ```
     pub fn is_diag(&self) -> bool {
@@ -1364,7 +1389,7 @@ impl Storage {
     /// let s = Storage::from_dense_col_major(vec![1.0_f64, 2.0, 3.0], &[3]).unwrap();
     /// assert_eq!(s.len(), 3);
     ///
-    /// let d = Storage::new_diag(vec![1.0_f64, 2.0]);
+    /// let d = Storage::new_diag(vec![1.0_f64, 2.0]).unwrap();
     /// assert_eq!(d.len(), 2);
     /// ```
     pub fn len(&self) -> usize {
@@ -1381,10 +1406,10 @@ impl Storage {
     /// ```
     /// use tensor4all_tensorbackend::Storage;
     ///
-    /// let s = Storage::new_dense::<f64>(0);
+    /// let s = Storage::new_dense::<f64>(0).unwrap();
     /// assert!(s.is_empty());
     ///
-    /// let s2 = Storage::new_dense::<f64>(3);
+    /// let s2 = Storage::new_dense::<f64>(3).unwrap();
     /// assert!(!s2.is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
@@ -1507,34 +1532,29 @@ impl Storage {
     /// For Diag storage, creates a Dense storage with diagonal elements set
     /// and off-diagonal elements as zero. For Dense storage, returns a copy.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `dims` does not match the stored logical dimensions.
+    /// Returns an error if `dims` does not match the stored logical dimensions
+    /// or if dense storage construction fails.
     ///
     /// # Examples
     ///
     /// ```
     /// use tensor4all_tensorbackend::Storage;
     ///
-    /// let d = Storage::new_diag(vec![1.0_f64, 2.0]);
-    /// let dense = d.to_dense_storage(&[2, 2]);
+    /// let d = Storage::new_diag(vec![1.0_f64, 2.0]).unwrap();
+    /// let dense = d.to_dense_storage(&[2, 2]).unwrap();
     /// assert!(dense.is_dense());
     /// let vals = dense.to_dense_f64_col_major_vec(&[2, 2]).unwrap();
     /// assert_eq!(vals, vec![1.0, 0.0, 0.0, 2.0]);
     /// ```
-    pub fn to_dense_storage(&self, dims: &[usize]) -> Storage {
+    pub fn to_dense_storage(&self, dims: &[usize]) -> StorageResult<Storage> {
         if self.is_f64() {
-            let values = self
-                .to_dense_f64_col_major_vec(dims)
-                .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
-            Storage::from_dense_col_major(values, dims)
-                .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"))
+            let values = self.to_dense_f64_col_major_vec(dims)?;
+            Storage::from_dense_col_major(values, dims).map_err(Self::invalid_storage_error)
         } else {
-            let values = self
-                .to_dense_c64_col_major_vec(dims)
-                .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
-            Storage::from_dense_col_major(values, dims)
-                .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"))
+            let values = self.to_dense_c64_col_major_vec(dims)?;
+            Storage::from_dense_col_major(values, dims).map_err(Self::invalid_storage_error)
         }
     }
 
@@ -1548,18 +1568,20 @@ impl Storage {
     /// use tensor4all_tensorbackend::Storage;
     ///
     /// // Diagonal 2x2 tensor, permute axes (identity perm for diag is valid)
-    /// let d = Storage::new_diag(vec![1.0_f64, 2.0]);
-    /// let t = d.permute_storage(&[2, 2], &[1, 0]);
+    /// let d = Storage::new_diag(vec![1.0_f64, 2.0]).unwrap();
+    /// let t = d.permute_storage(&[2, 2], &[1, 0]).unwrap();
     /// assert!(t.is_diag());
     /// ```
-    pub fn permute_storage(&self, _dims: &[usize], perm: &[usize]) -> Storage {
+    pub fn permute_storage(&self, _dims: &[usize], perm: &[usize]) -> StorageResult<Storage> {
         match &self.0 {
-            StorageRepr::F64(v) => {
-                Storage::from_repr(StorageRepr::F64(v.permute_logical_axes(perm)))
-            }
-            StorageRepr::C64(v) => {
-                Storage::from_repr(StorageRepr::C64(v.permute_logical_axes(perm)))
-            }
+            StorageRepr::F64(v) => Ok(Storage::from_repr(StorageRepr::F64(
+                v.permute_logical_axes(perm)
+                    .map_err(Self::invalid_storage_error)?,
+            ))),
+            StorageRepr::C64(v) => Ok(Storage::from_repr(StorageRepr::C64(
+                v.permute_logical_axes(perm)
+                    .map_err(Self::invalid_storage_error)?,
+            ))),
         }
     }
 
@@ -1660,9 +1682,10 @@ impl Storage {
     /// `real_storage` becomes the real part, `imag_storage` becomes the imaginary part.
     /// Formula: `real + i * imag`.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if either storage is not f64, or if their lengths differ.
+    /// Returns an error if either storage is not `f64`, if their payload lengths
+    /// differ, or if the result metadata is invalid.
     ///
     /// # Examples
     ///
@@ -1672,33 +1695,46 @@ impl Storage {
     ///
     /// let re = Storage::from_dense_col_major(vec![1.0_f64, 3.0], &[2]).unwrap();
     /// let im = Storage::from_dense_col_major(vec![2.0_f64, 4.0], &[2]).unwrap();
-    /// let c = Storage::combine_to_complex(&re, &im);
+    /// let c = Storage::combine_to_complex(&re, &im).unwrap();
     /// assert!(c.is_c64());
     /// let vals = c.to_dense_c64_col_major_vec(&[2]).unwrap();
     /// assert_eq!(vals[0], Complex64::new(1.0, 2.0));
     /// assert_eq!(vals[1], Complex64::new(3.0, 4.0));
     /// ```
-    pub fn combine_to_complex(real_storage: &Storage, imag_storage: &Storage) -> Storage {
+    pub fn combine_to_complex(
+        real_storage: &Storage,
+        imag_storage: &Storage,
+    ) -> StorageResult<Storage> {
         match (&real_storage.0, &imag_storage.0) {
             (StorageRepr::F64(real), StorageRepr::F64(imag)) => {
-                assert_eq!(real.len(), imag.len(), "Storage lengths must match");
+                if real.len() != imag.len() {
+                    return Err(StorageError::LengthMismatch {
+                        operation: "combine_to_complex",
+                        left: real.len(),
+                        right: imag.len(),
+                    });
+                }
                 let complex_vec: Vec<Complex64> = real
                     .data()
                     .iter()
                     .zip(imag.data().iter())
                     .map(|(&r, &i)| Complex64::new(r, i))
                     .collect();
-                Storage::from_repr(StorageRepr::C64(
+                Ok(Storage::from_repr(StorageRepr::C64(
                     StructuredStorage::new(
                         complex_vec,
                         real.payload_dims().to_vec(),
                         real.strides().to_vec(),
                         real.axis_classes().to_vec(),
                     )
-                    .unwrap_or_else(|err| panic!("Storage::combine_to_complex failed: {err}")),
-                ))
+                    .map_err(Self::invalid_storage_error)?,
+                )))
             }
-            _ => panic!("Both storages must be f64 for combine_to_complex"),
+            _ => Err(StorageError::OperationNotSupported {
+                operation: "combine_to_complex",
+                left: storage_scalar_kind(&real_storage.0),
+                right: storage_scalar_kind(&imag_storage.0),
+            }),
         }
     }
 
@@ -2067,10 +2103,10 @@ pub fn mindim(dims: &[usize]) -> usize {
 /// # Returns
 /// A new `Storage` containing the contracted result.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if the contracted dimensions don't match, or if the storage types
-/// are incompatible.
+/// Returns an error if axes are invalid, contracted dimensions do not match, or
+/// the native backend rejects the contraction.
 ///
 /// # Examples
 ///
@@ -2082,7 +2118,7 @@ pub fn mindim(dims: &[usize]) -> usize {
 ///     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3],
 /// ).unwrap();
 /// let v = Storage::from_dense_col_major(vec![1.0, 1.0, 1.0], &[3]).unwrap();
-/// let result = contract_storage(&a, &[2, 3], &[1], &v, &[3], &[0], &[2]);
+/// let result = contract_storage(&a, &[2, 3], &[1], &v, &[3], &[0], &[2]).unwrap();
 /// // Row sums: [1+3+5, 2+4+6] = [9, 12]
 /// let vals = result.to_dense_f64_col_major_vec(&[2]).unwrap();
 /// assert!((vals[0] - 9.0).abs() < 1e-10);
@@ -2096,14 +2132,51 @@ pub fn contract_storage(
     dims_b: &[usize],
     axes_b: &[usize],
     result_dims: &[usize],
-) -> Storage {
-    // Verify that contracted dimensions match
-    for (a_axis, b_axis) in axes_a.iter().zip(axes_b.iter()) {
-        assert_eq!(
-            dims_a[*a_axis], dims_b[*b_axis],
-            "Contracted dimensions must match: dims_a[{}] = {} != dims_b[{}] = {}",
-            a_axis, dims_a[*a_axis], b_axis, dims_b[*b_axis]
-        );
+) -> StorageResult<Storage> {
+    try_contract_storage(
+        storage_a,
+        dims_a,
+        axes_a,
+        storage_b,
+        dims_b,
+        axes_b,
+        result_dims,
+    )
+}
+
+fn try_contract_storage(
+    storage_a: &Storage,
+    dims_a: &[usize],
+    axes_a: &[usize],
+    storage_b: &Storage,
+    dims_b: &[usize],
+    axes_b: &[usize],
+    result_dims: &[usize],
+) -> StorageResult<Storage> {
+    if axes_a.len() != axes_b.len() {
+        return Err(StorageError::InvalidStructuredStorage(format!(
+            "contract axes lengths must match: {} != {}",
+            axes_a.len(),
+            axes_b.len()
+        )));
+    }
+
+    for (&a_axis, &b_axis) in axes_a.iter().zip(axes_b.iter()) {
+        let Some(&a_dim) = dims_a.get(a_axis) else {
+            return Err(StorageError::InvalidStructuredStorage(format!(
+                "contract axis {a_axis} is out of range for left dims {dims_a:?}"
+            )));
+        };
+        let Some(&b_dim) = dims_b.get(b_axis) else {
+            return Err(StorageError::InvalidStructuredStorage(format!(
+                "contract axis {b_axis} is out of range for right dims {dims_b:?}"
+            )));
+        };
+        if a_dim != b_dim {
+            return Err(StorageError::InvalidStructuredStorage(format!(
+                "contracted dimensions must match: dims_a[{a_axis}] = {a_dim} != dims_b[{b_axis}] = {b_dim}"
+            )));
+        }
     }
 
     crate::tenferro_bridge::contract_storage_native(
@@ -2115,27 +2188,7 @@ pub fn contract_storage(
         axes_b,
         result_dims,
     )
-    .unwrap_or_else(|err| panic!("contract_storage failed: {err}"))
-}
-
-/// Add two storages element-wise.
-/// Both storages must have the same type and length.
-///
-/// # Panics
-///
-/// Panics if storage types don't match or lengths differ.
-///
-/// # Note
-///
-/// **Prefer using [`Storage::try_add`]** which returns a `Result` instead of panicking.
-/// This trait implementation is kept for convenience but may panic on invalid inputs.
-impl Add<&Storage> for &Storage {
-    type Output = Storage;
-
-    fn add(self, rhs: &Storage) -> Self::Output {
-        self.try_add(rhs)
-            .unwrap_or_else(|err| panic!("Storage addition failed: {err}"))
-    }
+    .map_err(|err| StorageError::InvalidStructuredStorage(err.to_string()))
 }
 
 /// Multiply storage by a scalar (f64).

@@ -149,14 +149,14 @@ impl SubDomainTT {
         let mut new_tensors = Vec::with_capacity(self.data.len());
 
         for (site, site_indices) in siteinds.iter().enumerate() {
-            let tensor = self.data.tensor(site);
+            let tensor = self.data.tensor(site).ok()?;
 
             // Check if any site index is projected
             let mut projected_tensor = tensor.clone();
             for idx in site_indices {
                 if let Some(projected_value) = projector.get(idx) {
                     projected_tensor =
-                        Self::project_tensor_at_index(&projected_tensor, idx, projected_value);
+                        Self::project_tensor_at_index(&projected_tensor, idx, projected_value)?;
                 }
             }
             new_tensors.push(projected_tensor);
@@ -170,7 +170,7 @@ impl SubDomainTT {
         tensor: &TensorDynLen,
         index: &DynIndex,
         projected_value: usize,
-    ) -> TensorDynLen {
+    ) -> Option<TensorDynLen> {
         use num_complex::Complex64;
 
         // Find the axis corresponding to this index
@@ -186,10 +186,9 @@ impl SubDomainTT {
             if projected_value >= dim {
                 // Invalid projection - zero out entire tensor
                 if tensor.is_f64() {
-                    return TensorDynLen::zeros::<f64>(indices.to_vec()).unwrap();
+                    return TensorDynLen::zeros::<f64>(indices.to_vec()).ok();
                 } else {
-                    return TensorDynLen::zeros::<num_complex::Complex64>(indices.to_vec())
-                        .unwrap();
+                    return TensorDynLen::zeros::<num_complex::Complex64>(indices.to_vec()).ok();
                 }
             }
 
@@ -205,7 +204,7 @@ impl SubDomainTT {
                     }
                 }
 
-                TensorDynLen::from_dense(indices.to_vec(), result_data).unwrap()
+                TensorDynLen::from_dense(indices.to_vec(), result_data).ok()
             } else {
                 let src_data = tensor.to_vec::<Complex64>().unwrap_or_default();
                 let mut result_data = vec![Complex64::new(0.0, 0.0); total_size];
@@ -217,11 +216,11 @@ impl SubDomainTT {
                     }
                 }
 
-                TensorDynLen::from_dense(indices.to_vec(), result_data).unwrap()
+                TensorDynLen::from_dense(indices.to_vec(), result_data).ok()
             }
         } else {
             // Index not found - return tensor unchanged
-            tensor.clone()
+            Some(tensor.clone())
         }
     }
 
@@ -316,8 +315,10 @@ impl SubDomainTT {
     }
 
     /// Inner product with another SubDomainTT.
-    pub fn inner(&self, other: &Self) -> AnyScalar {
-        self.data.inner(other.data())
+    pub fn inner(&self, other: &Self) -> Result<AnyScalar> {
+        self.data
+            .inner(other.data())
+            .map_err(|err| PartitionedTTError::TensorTrainError(err.to_string()))
     }
 }
 

@@ -56,7 +56,7 @@ fn test_matrixluci_rank2_iplusj_left_orthogonal() {
     // Check left() * right() = Pi
     let left = luci.left();
     let right = luci.right();
-    let reconstructed = mat_mul(&left, &right);
+    let reconstructed = mat_mul(&left, &right).unwrap();
     for i in 0..4 {
         for j in 0..4 {
             let diff = (m[[i, j]] - reconstructed[[i, j]]).abs();
@@ -89,7 +89,7 @@ fn test_matrixluci_rank2_iplusj_right_orthogonal() {
     let luci = MatrixLUCI::from_matrix(&m, Some(opts)).unwrap();
     assert_eq!(luci.rank(), 2);
 
-    let reconstructed = mat_mul(&luci.left(), &luci.right());
+    let reconstructed = mat_mul(&luci.left(), &luci.right()).unwrap();
     for i in 0..4 {
         for j in 0..4 {
             let diff = (m[[i, j]] - reconstructed[[i, j]]).abs();

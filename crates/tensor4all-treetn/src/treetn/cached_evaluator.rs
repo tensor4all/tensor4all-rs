@@ -135,8 +135,15 @@ where
             for point in 0..n_points {
                 let key = entries
                     .iter()
-                    .map(|entry| *values.get(&[entry.input_position, point]).unwrap())
-                    .collect::<Vec<_>>();
+                    .map(|entry| {
+                        value_at(
+                            values,
+                            entry.input_position,
+                            point,
+                            "ComponentCostIndex::new",
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 validate_entry_values(entries, &key, "ComponentCostIndex::new")?;
                 keys.push(local_interner.intern(key));
             }
@@ -151,9 +158,10 @@ where
             let Some(parent_node) = parent.get(node).and_then(Clone::clone) else {
                 continue;
             };
-            let incoming = neighbors
-                .get(node)
-                .unwrap()
+            let node_neighbors = neighbors.get(node).ok_or_else(|| {
+                anyhow::anyhow!("ComponentCostIndex::new: missing neighbors for {:?}", node)
+            })?;
+            let incoming = node_neighbors
                 .iter()
                 .filter(|neighbor| *neighbor != &parent_node)
                 .map(|neighbor| {
@@ -167,8 +175,11 @@ where
                         })
                 })
                 .collect::<Result<Vec<_>>>()?;
+            let node_local_keys = local_keys.get(node).ok_or_else(|| {
+                anyhow::anyhow!("ComponentCostIndex::new: missing local keys for {:?}", node)
+            })?;
             let keys = intern_component_keys(
-                local_keys.get(node).unwrap(),
+                node_local_keys,
                 &incoming,
                 n_points,
                 &mut component_interner,
@@ -177,12 +188,13 @@ where
         }
 
         for node in &order {
-            for child in neighbors.get(node).unwrap().iter().filter(|neighbor| {
+            let node_neighbors = neighbors.get(node).ok_or_else(|| {
+                anyhow::anyhow!("ComponentCostIndex::new: missing neighbors for {:?}", node)
+            })?;
+            for child in node_neighbors.iter().filter(|neighbor| {
                 parent.get(*neighbor).and_then(Clone::clone) == Some(node.clone())
             }) {
-                let incoming = neighbors
-                    .get(node)
-                    .unwrap()
+                let incoming = node_neighbors
                     .iter()
                     .filter(|neighbor| *neighbor != child)
                     .map(|neighbor| {
@@ -196,8 +208,11 @@ where
                             })
                     })
                     .collect::<Result<Vec<_>>>()?;
+                let node_local_keys = local_keys.get(node).ok_or_else(|| {
+                    anyhow::anyhow!("ComponentCostIndex::new: missing local keys for {:?}", node)
+                })?;
                 let keys = intern_component_keys(
-                    local_keys.get(node).unwrap(),
+                    node_local_keys,
                     &incoming,
                     n_points,
                     &mut component_interner,
@@ -520,7 +535,13 @@ where
             }
 
             let mut candidates = Vec::new();
-            for neighbor in cost_index.neighbors.get(&center).unwrap() {
+            let neighbors = cost_index.neighbors.get(&center).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "GreedyCenterSearch::descend_from: center {:?} is not present in cost index",
+                    center
+                )
+            })?;
+            for neighbor in neighbors {
                 candidates.push((cost_index.center_cost(neighbor)?, neighbor.clone()));
             }
             candidates.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
@@ -558,7 +579,7 @@ where
 /// let tree = TreeTN::<_, usize>::from_tensors(vec![tensor], vec![0])?;
 /// let values = [0usize, 1usize];
 /// let shape = [1usize, 2usize];
-/// let points = ColMajorArrayRef::new(&values, &shape);
+/// let points = ColMajorArrayRef::new(&values, &shape).unwrap();
 ///
 /// let mut evaluator = TreeTNCachedEvaluator::new(
 ///     &tree,
@@ -663,7 +684,7 @@ where
     /// assert_eq!(evaluator.center(), None);
     /// let values = [0usize];
     /// let shape = [1usize, 1usize];
-    /// let _ = evaluator.evaluate_batch(ColMajorArrayRef::new(&values, &shape))?;
+    /// let _ = evaluator.evaluate_batch(ColMajorArrayRef::new(&values, &shape).unwrap())?;
     /// assert_eq!(evaluator.center(), Some(&0));
     /// # Ok::<(), anyhow::Error>(())
     /// ```
@@ -698,7 +719,7 @@ where
     ///     &[s],
     ///     CachedEvaluatorOptions::<usize>::default(),
     /// )?;
-    /// let result = evaluator.evaluate_batch(ColMajorArrayRef::new(&values, &shape))?;
+    /// let result = evaluator.evaluate_batch(ColMajorArrayRef::new(&values, &shape).unwrap())?;
     /// assert_eq!(result.len(), 2);
     /// assert_eq!(result[0].real(), 4.0);
     /// assert_eq!(result[1].real(), 6.0);
@@ -738,7 +759,9 @@ where
             let result = search.search(&cost_index, &self.options.initial_centers)?;
             self.center = Some(result.center);
         }
-        Ok(self.center.as_ref().unwrap())
+        self.center.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("TreeTNCachedEvaluator::ensure_center: no center selected")
+        })
     }
 
     fn build_environment_cache(
@@ -815,8 +838,15 @@ where
             for point in 0..n_points {
                 let key = entries
                     .iter()
-                    .map(|entry| *values.get(&[entry.input_position, point]).unwrap())
-                    .collect::<Vec<_>>();
+                    .map(|entry| {
+                        value_at(
+                            values,
+                            entry.input_position,
+                            point,
+                            "TreeTNCachedEvaluator::evaluate_batch",
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 validate_entry_values(entries, &key, "TreeTNCachedEvaluator::evaluate_batch")?;
                 keys.push(local_interner.intern(key));
             }
@@ -869,7 +899,7 @@ where
         let tensor = tensor_for_node(self.tree, node)?;
         let mut local_slices = Vec::with_capacity(assignment_batch.first_points.len());
         for point in assignment_batch.first_points.iter().copied() {
-            let index_vals = self.index_vals_for_point(node, values, point);
+            let index_vals = self.index_vals_for_point(node, values, point)?;
             local_slices.push(slice_tensor(tensor, &index_vals).with_context(|| {
                 format!(
                     "TreeTNCachedEvaluator::evaluate_batch: failed to slice message node {:?}",
@@ -966,10 +996,15 @@ where
             let center_index_vals = center_entries
                 .iter()
                 .map(|entry| {
-                    let value = *values.get(&[entry.input_position, point]).unwrap();
-                    (entry.index.clone(), value)
+                    let value = value_at(
+                        values,
+                        entry.input_position,
+                        point,
+                        "TreeTNCachedEvaluator::evaluate_batch",
+                    )?;
+                    Ok((entry.index.clone(), value))
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>>>()?;
             validate_index_vals(&center_index_vals, "TreeTNCachedEvaluator::evaluate_batch")?;
             center_slices.push(
                 slice_tensor(center_tensor, &center_index_vals).context(
@@ -1025,20 +1060,22 @@ where
         node: &V,
         values: ColMajorArrayRef<'_, usize>,
         point: usize,
-    ) -> Vec<(DynIndex, usize)> {
-        self.layout
-            .entries_by_node
-            .get(node)
-            .map(|entries| {
-                entries
-                    .iter()
-                    .map(|entry| {
-                        let value = *values.get(&[entry.input_position, point]).unwrap();
-                        (entry.index.clone(), value)
-                    })
-                    .collect()
+    ) -> Result<Vec<(DynIndex, usize)>> {
+        let Some(entries) = self.layout.entries_by_node.get(node) else {
+            return Ok(Vec::new());
+        };
+        entries
+            .iter()
+            .map(|entry| {
+                let value = value_at(
+                    values,
+                    entry.input_position,
+                    point,
+                    "TreeTNCachedEvaluator::evaluate_batch",
+                )?;
+                Ok((entry.index.clone(), value))
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     #[cfg(test)]
@@ -1168,6 +1205,25 @@ fn validate_values_shape(
         n_indices
     );
     Ok(())
+}
+
+fn value_at(
+    values: ColMajorArrayRef<'_, usize>,
+    input_position: usize,
+    point: usize,
+    context: &str,
+) -> Result<usize> {
+    values
+        .get(&[input_position, point])
+        .copied()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{context}: missing coordinate at row {} point {} for shape {:?}",
+                input_position,
+                point,
+                values.shape()
+            )
+        })
 }
 
 fn validate_entry_values(entries: &[SiteEntry], values: &[usize], context: &str) -> Result<()> {
@@ -1508,7 +1564,7 @@ mod tests {
         let (tree, indices) = two_node_tree();
         let values = vec![0, 0, 1, 0, 0, 1, 1, 1];
         let shape = [2, 4];
-        let points = ColMajorArrayRef::new(&values, &shape);
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
 
         let expected = tree.evaluate(&indices, points).unwrap();
         let options = CachedEvaluatorOptions {
@@ -1527,7 +1583,7 @@ mod tests {
         let (tree, indices) = three_node_chain();
         let values = vec![0, 0, 0, 0, 1, 1, 1, 1, 1];
         let shape = [3, 3];
-        let points = ColMajorArrayRef::new(&values, &shape);
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
 
         let cost_index = ComponentCostIndex::new(&tree, &indices, points).unwrap();
 
@@ -1545,7 +1601,7 @@ mod tests {
         let (tree, indices) = three_node_chain();
         let values = vec![0, 1, 1, 0];
         let shape = [2, 2];
-        let points = ColMajorArrayRef::new(&values, &shape);
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
 
         let err = ComponentCostIndex::new(&tree, &indices, points)
             .err()
@@ -1594,7 +1650,7 @@ mod tests {
         let (tree, indices) = three_node_chain();
         let values = vec![0, 0, 0, 0, 1, 1, 1, 1, 1];
         let shape = [3, 3];
-        let points = ColMajorArrayRef::new(&values, &shape);
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
 
         let expected = tree.evaluate(&indices, points).unwrap();
         let mut evaluator = TreeTNCachedEvaluator::new(
@@ -1635,7 +1691,7 @@ mod tests {
         let (tree, indices) = three_node_chain();
         let values = vec![0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1];
         let shape = [3, 4];
-        let points = ColMajorArrayRef::new(&values, &shape);
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
 
         let mut evaluator = TreeTNCachedEvaluator::new(
             &tree,
@@ -1663,7 +1719,7 @@ mod tests {
             1, 1, 1, 1, 1,
         ];
         let shape = [5, 4];
-        let points = ColMajorArrayRef::new(&values, &shape);
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
 
         let expected = tree.evaluate(&indices, points).unwrap();
         let mut evaluator = TreeTNCachedEvaluator::new(
@@ -1691,7 +1747,7 @@ mod tests {
             1, 1, 1, 1, 1,
         ];
         let shape = [5, 4];
-        let points = ColMajorArrayRef::new(&values, &shape);
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
 
         let expected = tree.evaluate(&indices, points).unwrap();
         let mut evaluator = TreeTNCachedEvaluator::new(
@@ -1715,7 +1771,7 @@ mod tests {
         let (tree, indices) = two_node_tree();
         let values = vec![0, 1, 1];
         let shape = [1, 3];
-        let points = ColMajorArrayRef::new(&values, &shape);
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
         let mut evaluator =
             TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
 
@@ -1728,7 +1784,7 @@ mod tests {
         let (tree, indices) = two_node_tree();
         let values = vec![0, 2];
         let shape = [2, 1];
-        let points = ColMajorArrayRef::new(&values, &shape);
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
         let mut evaluator =
             TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
 
@@ -1741,7 +1797,7 @@ mod tests {
         let (tree, indices) = two_node_tree();
         let values = vec![0, 0, 1, 1, 0, 0, 1, 1];
         let shape = [2, 4];
-        let points = ColMajorArrayRef::new(&values, &shape);
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
         let expected = tree.evaluate(&indices, points).unwrap();
         let mut evaluator =
             TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
@@ -1763,7 +1819,7 @@ mod tests {
             1, 1, 1, 1,
         ];
         let shape = [4, 4];
-        let points = ColMajorArrayRef::new(&values, &shape);
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
         let expected = tree.evaluate(&indices, points).unwrap();
         let mut evaluator = TreeTNCachedEvaluator::new(
             &tree,
@@ -1790,7 +1846,7 @@ mod tests {
             1, 1, 1, 1,
         ];
         let shape = [4, 4];
-        let points = ColMajorArrayRef::new(&values, &shape);
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
         let expected = tree.evaluate(&indices, points).unwrap();
         let mut evaluator = TreeTNCachedEvaluator::new(
             &tree,

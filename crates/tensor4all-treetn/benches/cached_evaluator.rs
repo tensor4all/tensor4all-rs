@@ -109,7 +109,7 @@ fn bench_chain_size_scaling(c: &mut Criterion) {
             &values,
             |b, values| {
                 b.iter(|| {
-                    let points = ColMajorArrayRef::new(black_box(values), &shape);
+                    let points = ColMajorArrayRef::new(black_box(values), &shape).unwrap();
                     let mut evaluator = TreeTNCachedEvaluator::new(
                         &tree,
                         &site_indices,
@@ -126,7 +126,7 @@ fn bench_chain_size_scaling(c: &mut Criterion) {
             &values,
             |b, values| {
                 b.iter(|| {
-                    let points = ColMajorArrayRef::new(black_box(values), &shape);
+                    let points = ColMajorArrayRef::new(black_box(values), &shape).unwrap();
                     tree.evaluate(&site_indices, points).unwrap()
                 })
             },
@@ -175,7 +175,7 @@ fn bench_batch_size_scaling(c: &mut Criterion) {
             &values,
             |b, values| {
                 b.iter(|| {
-                    let points = ColMajorArrayRef::new(black_box(values), &shape);
+                    let points = ColMajorArrayRef::new(black_box(values), &shape).unwrap();
                     let mut evaluator = TreeTNCachedEvaluator::new(
                         &tree,
                         &site_indices,
@@ -192,7 +192,7 @@ fn bench_batch_size_scaling(c: &mut Criterion) {
             &values,
             |b, values| {
                 b.iter(|| {
-                    let points = ColMajorArrayRef::new(black_box(values), &shape);
+                    let points = ColMajorArrayRef::new(black_box(values), &shape).unwrap();
                     tree.evaluate(&site_indices, points).unwrap()
                 })
             },
@@ -235,7 +235,7 @@ fn bench_bond_dim_scaling(c: &mut Criterion) {
             &values,
             |b, values| {
                 b.iter(|| {
-                    let points = ColMajorArrayRef::new(black_box(values), &shape);
+                    let points = ColMajorArrayRef::new(black_box(values), &shape).unwrap();
                     let mut evaluator = TreeTNCachedEvaluator::new(
                         &tree,
                         &site_indices,

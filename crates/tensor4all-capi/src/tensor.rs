@@ -635,7 +635,11 @@ pub extern "C" fn t4a_tensor_contract(
     }
 
     run_catching(out, || unsafe {
-        Ok(t4a_tensor::new((*a).inner().contract((*b).inner())))
+        let tensor = (*a)
+            .inner()
+            .contract((*b).inner())
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_tensor::new(tensor))
     })
 }
 

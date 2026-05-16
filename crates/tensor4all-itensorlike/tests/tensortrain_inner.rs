@@ -10,7 +10,7 @@ fn test_inner_empty_tensor_trains() {
     let tt1 = TensorTrain::new(vec![]).unwrap();
     let tt2 = TensorTrain::new(vec![]).unwrap();
 
-    let result = tt1.inner(&tt2);
+    let result = tt1.inner(&tt2).unwrap();
     assert_eq!(result.real(), 0.0);
 }
 
@@ -39,11 +39,11 @@ fn test_inner_single_site() {
     let tt2 = TensorTrain::new(vec![t2.clone()]).unwrap();
 
     // Orthogonal vectors: inner product should be 0
-    let result = tt1.inner(&tt2);
+    let result = tt1.inner(&tt2).unwrap();
     assert!((result.real() - 0.0).abs() < 1e-10);
 
     // Same vector: inner product should be 1
     let tt3 = TensorTrain::new(vec![t1.clone()]).unwrap();
-    let result2 = tt1.inner(&tt3);
+    let result2 = tt1.inner(&tt3).unwrap();
     assert!((result2.real() - 1.0).abs() < 1e-10);
 }

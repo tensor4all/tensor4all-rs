@@ -61,10 +61,6 @@ fn checked_shape_numel(shape: &[usize]) -> Option<usize> {
         .try_fold(1usize, |acc, d| acc.checked_mul(d))
 }
 
-fn shape_numel(shape: &[usize]) -> usize {
-    checked_shape_numel(shape).expect("shape product overflows usize")
-}
-
 /// Compute the flat offset for a column-major multi-index, using checked
 /// arithmetic. Returns `None` if any index is out of bounds or on overflow.
 fn flat_offset(shape: &[usize], index: &[usize]) -> Option<usize> {
@@ -100,19 +96,23 @@ pub struct ColMajorArrayRef<'a, T> {
 impl<'a, T> ColMajorArrayRef<'a, T> {
     /// Create a new borrowed array view.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `data.len() != shape.iter().product()`.
-    pub fn new(data: &'a [T], shape: &'a [usize]) -> Self {
-        let expected = shape_numel(shape);
-        assert_eq!(
-            data.len(),
-            expected,
-            "ColMajorArrayRef::new: data length {} != shape product {}",
-            data.len(),
-            expected,
-        );
-        Self { data, shape }
+    /// Returns an error if `data.len()` does not match the product of `shape`,
+    /// or if the shape product overflows `usize`.
+    pub fn new(data: &'a [T], shape: &'a [usize]) -> Result<Self, ColMajorArrayError> {
+        let expected =
+            checked_shape_numel(shape).ok_or_else(|| ColMajorArrayError::ShapeOverflow {
+                shape: shape.to_vec(),
+            })?;
+        if data.len() != expected {
+            return Err(ColMajorArrayError::ShapeMismatch {
+                shape: shape.to_vec(),
+                expected,
+                actual: data.len(),
+            });
+        }
+        Ok(Self { data, shape })
     }
 
     /// Number of dimensions.
@@ -162,19 +162,23 @@ pub struct ColMajorArrayMut<'a, T> {
 impl<'a, T> ColMajorArrayMut<'a, T> {
     /// Create a new mutable borrowed array view.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `data.len() != shape.iter().product()`.
-    pub fn new(data: &'a mut [T], shape: &'a [usize]) -> Self {
-        let expected = shape_numel(shape);
-        assert_eq!(
-            data.len(),
-            expected,
-            "ColMajorArrayMut::new: data length {} != shape product {}",
-            data.len(),
-            expected,
-        );
-        Self { data, shape }
+    /// Returns an error if `data.len()` does not match the product of `shape`,
+    /// or if the shape product overflows `usize`.
+    pub fn new(data: &'a mut [T], shape: &'a [usize]) -> Result<Self, ColMajorArrayError> {
+        let expected =
+            checked_shape_numel(shape).ok_or_else(|| ColMajorArrayError::ShapeOverflow {
+                shape: shape.to_vec(),
+            })?;
+        if data.len() != expected {
+            return Err(ColMajorArrayError::ShapeMismatch {
+                shape: shape.to_vec(),
+                expected,
+                actual: data.len(),
+            });
+        }
+        Ok(Self { data, shape })
     }
 
     /// Number of dimensions.
@@ -320,22 +324,30 @@ impl<T> ColMajorArray<T> {
 
     // -- 2D helpers ---------------------------------------------------------
 
-    /// Number of rows (panics if not 2D).
-    pub fn nrows(&self) -> usize {
-        assert_eq!(self.ndim(), 2, "nrows() requires a 2D array");
-        self.shape[0]
+    /// Number of rows, or `None` when the array is not 2D.
+    pub fn nrows(&self) -> Option<usize> {
+        if self.ndim() == 2 {
+            Some(self.shape[0])
+        } else {
+            None
+        }
     }
 
-    /// Number of columns (panics if not 2D).
-    pub fn ncols(&self) -> usize {
-        assert_eq!(self.ndim(), 2, "ncols() requires a 2D array");
-        self.shape[1]
+    /// Number of columns, or `None` when the array is not 2D.
+    pub fn ncols(&self) -> Option<usize> {
+        if self.ndim() == 2 {
+            Some(self.shape[1])
+        } else {
+            None
+        }
     }
 
     /// Return a slice for column `j` of a 2D array, or `None` if `j` is out
-    /// of range. Panics if the array is not 2D.
+    /// of range or if the array is not 2D.
     pub fn column(&self, j: usize) -> Option<&[T]> {
-        assert_eq!(self.ndim(), 2, "column() requires a 2D array");
+        if self.ndim() != 2 {
+            return None;
+        }
         let nrows = self.shape[0];
         if j >= self.shape[1] {
             return None;
@@ -513,10 +525,10 @@ mod tests {
     #[test]
     fn test_push_column() {
         let mut arr = ColMajorArray::new(vec![1, 2, 3, 4], vec![2, 2]).unwrap();
-        assert_eq!(arr.ncols(), 2);
+        assert_eq!(arr.ncols(), Some(2));
 
         arr.push_column(&[5, 6]).unwrap();
-        assert_eq!(arr.ncols(), 3);
+        assert_eq!(arr.ncols(), Some(3));
         assert_eq!(arr.shape(), &[2, 3]);
         assert_eq!(arr.len(), 6);
         assert_eq!(arr.get(&[0, 2]), Some(&5));
@@ -639,6 +651,8 @@ mod tests {
         assert!(arr.is_empty());
         assert_eq!(arr.len(), 0);
         assert_eq!(arr.ndim(), 1);
+        assert_eq!(arr.nrows(), None);
+        assert_eq!(arr.ncols(), None);
     }
 
     #[test]
@@ -646,8 +660,8 @@ mod tests {
         let arr: ColMajorArray<i32> = ColMajorArray::new(vec![], vec![3, 0]).unwrap();
         assert!(arr.is_empty());
         assert_eq!(arr.len(), 0);
-        assert_eq!(arr.nrows(), 3);
-        assert_eq!(arr.ncols(), 0);
+        assert_eq!(arr.nrows(), Some(3));
+        assert_eq!(arr.ncols(), Some(0));
     }
 
     // -- ColMajorArrayRef construction --------------------------------------
@@ -656,7 +670,7 @@ mod tests {
     fn test_ref_new() {
         let data = [1, 2, 3, 4, 5, 6];
         let shape = [2, 3];
-        let view = ColMajorArrayRef::new(&data, &shape);
+        let view = ColMajorArrayRef::new(&data, &shape).unwrap();
         assert_eq!(view.ndim(), 2);
         assert_eq!(view.len(), 6);
         assert_eq!(view.get(&[1, 2]), Some(&6));
@@ -668,7 +682,7 @@ mod tests {
     fn test_mut_new() {
         let mut data = [1, 2, 3, 4, 5, 6];
         let shape = [2, 3];
-        let mut view = ColMajorArrayMut::new(&mut data, &shape);
+        let mut view = ColMajorArrayMut::new(&mut data, &shape).unwrap();
         assert_eq!(view.ndim(), 2);
         assert_eq!(view.len(), 6);
         *view.get_mut(&[0, 0]).unwrap() = 100;

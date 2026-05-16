@@ -415,12 +415,12 @@ pub fn contract_multi_owned(
                 .into_iter()
                 .enumerate()
                 .map(|(tensor_idx, tensor)| {
-                    (
-                        tensor.as_native().clone(),
+                    Ok((
+                        tensor.as_native()?.clone(),
                         plan.input_ids[tensor_idx].clone(),
-                    )
+                    ))
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>>>()?;
             let result_native = einsum_native_tensors_owned(native_operands, &plan.output_ids)?;
             TensorDynLen::from_native_with_axis_classes(
                 plan.result_indices,
@@ -794,10 +794,17 @@ fn execute_contraction_plan(
     has_retained_indices: bool,
 ) -> Result<TensorDynLen> {
     let any_grad = tensors.iter().any(|tensor| tensor.tracks_grad());
-    let first_dtype = tensors[0].as_native().dtype();
+    let first_dtype = tensors[0].as_native()?.dtype();
     let same_dtype = tensors
         .iter()
-        .all(|tensor| tensor.as_native().dtype() == first_dtype);
+        .map(|tensor| {
+            tensor
+                .as_native()
+                .map(|native| native.dtype() == first_dtype)
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .all(|same| same);
     let has_non_dense_axis_classes = tensors.iter().any(|tensor| {
         tensor
             .storage()
@@ -823,7 +830,7 @@ fn execute_contraction_plan(
         };
         let mut result = (*first).clone();
         for tensor in iter {
-            result = result.contract_pairwise_default(tensor);
+            result = result.try_contract_pairwise_default(tensor)?;
         }
         return Ok(result);
     }
@@ -832,7 +839,7 @@ fn execute_contraction_plan(
         let operands = tensors
             .iter()
             .map(|tensor| tensor.as_inner())
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         let subscripts = build_einsum_subscripts_from_usize_ids(&plan.input_ids, &plan.output_ids)?;
         let result = eager_einsum_ad(&operands, &subscripts)?;
         return TensorDynLen::from_inner_with_axis_classes(
@@ -845,8 +852,10 @@ fn execute_contraction_plan(
     let native_operands: Vec<_> = tensors
         .iter()
         .enumerate()
-        .map(|(tensor_idx, tensor)| (tensor.as_native(), plan.input_ids[tensor_idx].as_slice()))
-        .collect();
+        .map(|(tensor_idx, tensor)| {
+            Ok((tensor.as_native()?, plan.input_ids[tensor_idx].as_slice()))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let result_native = einsum_native_tensors(&native_operands, &plan.output_ids)?;
     TensorDynLen::from_native_with_axis_classes(
         plan.result_indices.clone(),

@@ -31,7 +31,7 @@ fn test_tensor4_get_set() {
 #[test]
 fn test_tensor4_from_data() {
     let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
-    let t = tensor4_from_data(data, 2, 3, 2, 2);
+    let t = tensor4_from_data(data, 2, 3, 2, 2).unwrap();
 
     assert_eq!(t.left_dim(), 2);
     assert_eq!(t.site_dim_1(), 3);
@@ -45,6 +45,14 @@ fn test_tensor4_from_data() {
     assert_eq!(*t.get4(0, 0, 1, 0), 6.0);
     assert_eq!(*t.get4(0, 0, 0, 1), 12.0);
     assert_eq!(*t.get4(1, 2, 1, 1), 23.0);
+}
+
+#[test]
+fn tensor4_from_data_rejects_length_mismatch() {
+    let err = tensor4_from_data(vec![1.0, 2.0], 1, 2, 2, 1).unwrap_err();
+
+    assert!(err.to_string().contains("expected 4 elements"));
+    assert!(err.to_string().contains("got 2"));
 }
 
 #[test]
@@ -66,7 +74,8 @@ fn test_slice_site() {
 
 #[test]
 fn test_as_left_matrix() {
-    let t: Tensor4<f64> = tensor4_from_data((0..24).map(|x| x as f64).collect(), 2, 3, 2, 2);
+    let t: Tensor4<f64> =
+        tensor4_from_data((0..24).map(|x| x as f64).collect(), 2, 3, 2, 2).unwrap();
 
     let (mat, rows, cols) = t.as_left_matrix();
     assert_eq!(rows, 12); // 2 * 3 * 2
@@ -76,7 +85,8 @@ fn test_as_left_matrix() {
 
 #[test]
 fn test_as_right_matrix() {
-    let t: Tensor4<f64> = tensor4_from_data((0..24).map(|x| x as f64).collect(), 2, 3, 2, 2);
+    let t: Tensor4<f64> =
+        tensor4_from_data((0..24).map(|x| x as f64).collect(), 2, 3, 2, 2).unwrap();
 
     let (mat, rows, cols) = t.as_right_matrix();
     assert_eq!(rows, 2);
@@ -86,7 +96,8 @@ fn test_as_right_matrix() {
 
 #[test]
 fn test_as_center_matrix() {
-    let t: Tensor4<f64> = tensor4_from_data((0..24).map(|x| x as f64).collect(), 2, 3, 2, 2);
+    let t: Tensor4<f64> =
+        tensor4_from_data((0..24).map(|x| x as f64).collect(), 2, 3, 2, 2).unwrap();
 
     let (mat, rows, cols) = t.as_center_matrix();
     assert_eq!(rows, 6); // 2 * 3

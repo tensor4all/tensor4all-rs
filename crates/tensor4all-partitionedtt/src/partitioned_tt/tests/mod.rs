@@ -145,7 +145,7 @@ fn test_partitioned_tt_index() {
     let partitioned = PartitionedTT::from_subdomain(subdomain);
 
     // Access by projector
-    let retrieved = &partitioned[&projector];
+    let retrieved = partitioned.get(&projector).unwrap();
     assert_eq!(retrieved.projector(), &projector);
 }
 
@@ -245,7 +245,7 @@ fn test_partitioned_tt_contract_numerical() {
         // Project t2 to s2=s2_val
         let t2_proj = project_dense_tensor_at_index(&t2_full, &s2, s2_val);
 
-        let expected = t1_proj.contract(&t2_proj);
+        let expected = t1_proj.contract(&t2_proj).unwrap();
         let expected_data = expected.to_vec::<f64>().unwrap();
 
         assert_eq!(
@@ -466,7 +466,7 @@ fn test_partitioned_tt_to_tensor_train_single() {
     let combined = partitioned.to_tensor_train().unwrap();
     let combined_dense = combined.to_dense().unwrap();
 
-    let diff = (&combined_dense - &expected_dense).maxabs();
+    let diff = combined_dense.distance(&expected_dense).unwrap();
     assert!(diff < 1e-10);
 }
 
@@ -494,7 +494,7 @@ fn test_partitioned_tt_to_tensor_train_multiple() {
     let combined_dense = combined.to_dense().unwrap();
     let expected_dense = expected.to_dense().unwrap();
 
-    let diff = (&combined_dense - &expected_dense).maxabs();
+    let diff = combined_dense.distance(&expected_dense).unwrap();
     assert!(diff < 1e-10);
 }
 

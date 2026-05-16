@@ -3,7 +3,7 @@ use super::super::types::tensor4_from_data;
 use super::*;
 
 fn scalar_tensor4(value: f64) -> Tensor4<f64> {
-    tensor4_from_data(vec![value], 1, 1, 1, 1)
+    tensor4_from_data(vec![value], 1, 1, 1, 1).unwrap()
 }
 
 #[test]
@@ -66,6 +66,17 @@ fn test_environment_identity_get_and_set() {
 
     let scalar_env = Environment::<f64>::identity(1, 1, 1);
     assert_eq!(scalar_env.get(0, 0, 0), 1.0);
+}
+
+#[test]
+fn missing_environment_returns_typed_error() {
+    let envs: Vec<Option<Environment<f64>>> = vec![None];
+    let err = require_environment(&envs, 0, "left").unwrap_err();
+
+    assert!(matches!(err, MPOError::InvalidOperation { .. }));
+    assert!(err
+        .to_string()
+        .contains("missing left environment at site 0"));
 }
 
 #[test]

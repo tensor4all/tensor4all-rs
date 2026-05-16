@@ -1,5 +1,6 @@
-use crate::{assemble::MultiIndex, SubtreeKey, TreeTciEdge, TreeTciGraph};
+use crate::{assemble::MultiIndex, column_2d, ncols_2d, SubtreeKey, TreeTciEdge, TreeTciGraph};
 use anyhow::{ensure, Result};
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
 use tensor4all_core::ColMajorArray;
@@ -104,25 +105,33 @@ impl<T> TreeTCI2<T> {
                 let right_projection = project_pivot(pivot, &right_key);
                 let n_left = left_key.as_slice().len();
                 let n_right = right_key.as_slice().len();
-                push_unique_column(
-                    self.ijset
-                        .entry(left_key)
-                        .or_insert_with(|| empty_2d(n_left)),
-                    &left_projection,
-                );
-                push_unique_column(
-                    self.ijset
-                        .entry(right_key)
-                        .or_insert_with(|| empty_2d(n_right)),
-                    &right_projection,
-                );
+                match self.ijset.entry(left_key) {
+                    Entry::Occupied(mut entry) => {
+                        push_unique_column(entry.get_mut(), &left_projection)?;
+                    }
+                    Entry::Vacant(entry) => {
+                        let mut array = empty_2d(n_left)?;
+                        push_unique_column(&mut array, &left_projection)?;
+                        entry.insert(array);
+                    }
+                }
+                match self.ijset.entry(right_key) {
+                    Entry::Occupied(mut entry) => {
+                        push_unique_column(entry.get_mut(), &right_projection)?;
+                    }
+                    Entry::Vacant(entry) => {
+                        let mut array = empty_2d(n_right)?;
+                        push_unique_column(&mut array, &right_projection)?;
+                        entry.insert(array);
+                    }
+                }
             }
         }
 
         let full_key = SubtreeKey::new((0..n_sites).collect());
-        self.ijset
-            .entry(full_key)
-            .or_insert_with(|| empty_2d(n_sites));
+        if let Entry::Vacant(entry) = self.ijset.entry(full_key) {
+            entry.insert(empty_2d(n_sites)?);
+        }
         Ok(())
     }
 
@@ -154,7 +163,7 @@ impl<T> TreeTCI2<T> {
     pub fn max_rank(&self) -> usize {
         self.ijset
             .values()
-            .map(|arr| arr.ncols())
+            .filter_map(|arr| arr.ncols())
             .max()
             .unwrap_or(0)
     }
@@ -165,20 +174,19 @@ fn project_pivot(pivot: &MultiIndex, key: &SubtreeKey) -> MultiIndex {
 }
 
 /// Create an empty 2D ColMajorArray with shape [nrows, 0].
-fn empty_2d(nrows: usize) -> ColMajorArray<usize> {
-    ColMajorArray::new(vec![], vec![nrows, 0]).expect("empty 2D array creation should not fail")
+fn empty_2d(nrows: usize) -> Result<ColMajorArray<usize>> {
+    Ok(ColMajorArray::new(vec![], vec![nrows, 0])?)
 }
 
 /// Push a column to a ColMajorArray if it is not already present.
-pub(crate) fn push_unique_column(array: &mut ColMajorArray<usize>, column: &[usize]) {
-    for j in 0..array.ncols() {
-        if array.column(j) == Some(column) {
-            return; // duplicate
+pub(crate) fn push_unique_column(array: &mut ColMajorArray<usize>, column: &[usize]) -> Result<()> {
+    for j in 0..ncols_2d(array)? {
+        if column_2d(array, j)? == column {
+            return Ok(()); // duplicate
         }
     }
-    array
-        .push_column(column)
-        .expect("push_column should not fail for matching nrows");
+    array.push_column(column)?;
+    Ok(())
 }
 
 #[cfg(test)]

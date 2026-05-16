@@ -255,7 +255,7 @@ fn test_to_dense_single_node() {
     assert!(
         dense.isapprox(&t0, 1e-10, 0.0),
         "to_dense mismatch: maxabs diff = {}",
-        (&dense - &t0).maxabs()
+        dense.distance(&t0).unwrap()
     );
 }
 
@@ -337,7 +337,7 @@ fn test_evaluate_single_node() {
     // Evaluate at index 0
     let data = [0usize];
     let shape = [indices.len(), 1];
-    let values = ColMajorArrayRef::new(&data, &shape);
+    let values = ColMajorArrayRef::new(&data, &shape).unwrap();
     let vals = tn.evaluate(&indices, values).unwrap();
     assert!(
         (vals[0].real() - 10.0).abs() < 1e-10,
@@ -347,7 +347,7 @@ fn test_evaluate_single_node() {
 
     // Evaluate at index 2
     let data = [2usize];
-    let values = ColMajorArrayRef::new(&data, &shape);
+    let values = ColMajorArrayRef::new(&data, &shape).unwrap();
     let vals = tn.evaluate(&indices, values).unwrap();
     assert!(
         (vals[0].real() - 30.0).abs() < 1e-10,
@@ -379,7 +379,7 @@ fn test_evaluate_two_nodes() {
             data[pos0] = i;
             data[pos1] = j;
             let shape = [indices.len(), 1];
-            let values = ColMajorArrayRef::new(&data, &shape);
+            let values = ColMajorArrayRef::new(&data, &shape).unwrap();
             let vals = tn.evaluate(&indices, values).unwrap();
 
             // Get the expected value from dense tensor
@@ -426,7 +426,7 @@ fn test_evaluate_two_nodes_complex() {
             data[pos0] = i;
             data[pos1] = j;
             let shape = [indices.len(), 1];
-            let values = ColMajorArrayRef::new(&data, &shape);
+            let values = ColMajorArrayRef::new(&data, &shape).unwrap();
             let vals = tn.evaluate(&indices, values).unwrap();
             let expected = *a_i * *b_j;
             let got = Complex64::new(vals[0].real(), vals[0].imag());
@@ -465,7 +465,7 @@ fn test_evaluate_three_nodes() {
         data[pos1] = j;
         data[pos2] = k;
         let shape = [indices.len(), 1];
-        let values = ColMajorArrayRef::new(&data, &shape);
+        let values = ColMajorArrayRef::new(&data, &shape).unwrap();
         let vals = tn.evaluate(&indices, values).unwrap();
 
         let flat_idx = i + dim0 * (j + dim1 * k);
@@ -498,11 +498,11 @@ fn test_evaluate_at_matches_evaluate() {
     let shape = [indices.len(), 3];
 
     let evaluate_data = build_col_major_data(&indices, &point_values);
-    let evaluate_values = ColMajorArrayRef::new(&evaluate_data, &shape);
+    let evaluate_values = ColMajorArrayRef::new(&evaluate_data, &shape).unwrap();
     let evaluate_result = tn.evaluate(&indices, evaluate_values).unwrap();
 
     let evaluate_at_data = build_col_major_data(&indices, &point_values);
-    let evaluate_at_values = ColMajorArrayRef::new(&evaluate_at_data, &shape);
+    let evaluate_at_values = ColMajorArrayRef::new(&evaluate_at_data, &shape).unwrap();
     let evaluate_at_result = tn.evaluate_at(&indices, evaluate_at_values).unwrap();
 
     assert_eq!(evaluate_at_result.len(), evaluate_result.len());
@@ -518,7 +518,7 @@ fn test_evaluate_empty() {
     let tn = TreeTN::<TensorDynLen, usize>::new();
     let data: [usize; 0] = [];
     let shape = [0, 1];
-    let values = ColMajorArrayRef::new(&data, &shape);
+    let values = ColMajorArrayRef::new(&data, &shape).unwrap();
     let result = tn.evaluate(&[], values);
     assert!(result.is_err());
 }
@@ -535,7 +535,7 @@ fn test_evaluate_rejects_duplicate_indices() {
     let dup_indices = vec![s0.clone(), s0.clone()];
     let data = [0usize, 0];
     let shape = [2, 1];
-    let values = ColMajorArrayRef::new(&data, &shape);
+    let values = ColMajorArrayRef::new(&data, &shape).unwrap();
     let result = tn.evaluate(&dup_indices, values);
     assert!(result.is_err(), "should reject duplicate indices");
     let msg = format!("{}", result.unwrap_err());
@@ -554,7 +554,7 @@ fn test_evaluate_rejects_unknown_indices() {
     let fake_indices = vec![s0.clone(), unknown];
     let data = [0usize, 0];
     let shape = [2, 1];
-    let values = ColMajorArrayRef::new(&data, &shape);
+    let values = ColMajorArrayRef::new(&data, &shape).unwrap();
     let result = tn.evaluate(&fake_indices, values);
     assert!(result.is_err(), "should reject unknown indices");
     let msg = format!("{}", result.unwrap_err());
@@ -572,7 +572,7 @@ fn test_evaluate_rejects_missing_indices() {
     let partial_indices = vec![s0.clone()];
     let data = [0usize];
     let shape = [1, 1];
-    let values = ColMajorArrayRef::new(&data, &shape);
+    let values = ColMajorArrayRef::new(&data, &shape).unwrap();
     let result = tn.evaluate(&partial_indices, values);
     assert!(result.is_err(), "should reject missing indices");
     let msg = format!("{}", result.unwrap_err());
@@ -650,7 +650,7 @@ fn test_evaluate_at_single_node() {
     // Evaluate at index 0
     let data = [0usize];
     let shape = [indices.len(), 1];
-    let values = ColMajorArrayRef::new(&data, &shape);
+    let values = ColMajorArrayRef::new(&data, &shape).unwrap();
     let vals = tn.evaluate_at(&indices, values).unwrap();
     assert!(
         (vals[0].real() - 10.0).abs() < 1e-10,
@@ -660,7 +660,7 @@ fn test_evaluate_at_single_node() {
 
     // Evaluate at index 2
     let data = [2usize];
-    let values = ColMajorArrayRef::new(&data, &shape);
+    let values = ColMajorArrayRef::new(&data, &shape).unwrap();
     let vals = tn.evaluate_at(&indices, values).unwrap();
     assert!(
         (vals[0].real() - 30.0).abs() < 1e-10,
@@ -692,7 +692,7 @@ fn test_evaluate_at_two_nodes() {
             data[pos0] = i;
             data[pos1] = j;
             let shape = [indices.len(), 1];
-            let values = ColMajorArrayRef::new(&data, &shape);
+            let values = ColMajorArrayRef::new(&data, &shape).unwrap();
             let vals = tn.evaluate_at(&indices, values).unwrap();
 
             let flat_idx = i + dim0 * j;
@@ -727,7 +727,7 @@ fn test_evaluate_at_consistent_with_evaluate() {
             data[pos0] = i;
             data[pos1] = j;
             let shape = [indices.len(), 1];
-            let values = ColMajorArrayRef::new(&data, &shape);
+            let values = ColMajorArrayRef::new(&data, &shape).unwrap();
 
             let vals_at = tn.evaluate_at(&indices, values).unwrap();
             let vals = tn.evaluate(&indices, values).unwrap();
@@ -765,7 +765,7 @@ fn test_evaluate_at_three_nodes() {
         data[pos1] = j;
         data[pos2] = k;
         let shape = [indices.len(), 1];
-        let values = ColMajorArrayRef::new(&data, &shape);
+        let values = ColMajorArrayRef::new(&data, &shape).unwrap();
         let vals = tn.evaluate_at(&indices, values).unwrap();
 
         let flat_idx = i + dim0 * (j + dim1 * k);
@@ -801,6 +801,6 @@ fn test_add_two_nodes() {
     assert!(
         sum_dense.isapprox(&expected, 1e-10, 0.0),
         "add mismatch: maxabs diff = {}",
-        (&sum_dense - &expected).maxabs()
+        sum_dense.distance(&expected).unwrap()
     );
 }

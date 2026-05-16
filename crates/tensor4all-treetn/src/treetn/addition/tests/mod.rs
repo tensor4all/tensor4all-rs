@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike};
 
 use crate::treetn::TreeTN;
@@ -191,7 +192,7 @@ fn test_add_verifies_with_contraction() {
     assert!(
         tensor_sum.isapprox(&expected, 1e-10, 0.0),
         "contract(result) != contract(tn_a) + contract(tn_b): maxabs diff = {}",
-        (&tensor_sum - &expected).maxabs()
+        tensor_sum.distance(&expected).unwrap()
     );
 }
 
@@ -239,7 +240,7 @@ fn test_add_single_site() {
     assert!(
         dense.isapprox(&expected, 1e-10, 0.0),
         "single-site add failed: maxabs diff = {}",
-        (&dense - &expected).maxabs()
+        dense.distance(&expected).unwrap()
     );
 }
 
@@ -249,6 +250,83 @@ fn test_reindex_site_space_like_matches_template_ids() {
 
     let reindexed = tn_b.reindex_site_space_like(&tn_a).unwrap();
     assert!(reindexed.share_equivalent_site_index_network(&tn_a));
+}
+
+#[test]
+fn test_sorted_site_space_orders_deterministically() {
+    let a = DynIndex::new_dyn(3);
+    let b = DynIndex::new_dyn(2);
+    let c = b.prime();
+    let mut site_space = HashSet::new();
+    site_space.insert(c.clone());
+    site_space.insert(a.clone());
+    site_space.insert(b.clone());
+
+    let sorted = TreeTN::<TensorDynLen, usize>::sorted_site_space(&site_space);
+    assert_eq!(sorted, vec![b, c, a]);
+}
+
+#[test]
+fn test_reindex_site_space_like_rejects_incompatible_inputs() {
+    let (tn_a, _) = make_two_matching_treetns_different_site_ids();
+
+    let lone_site = DynIndex::new_dyn(2);
+    let lone_tensor = TensorDynLen::from_dense(vec![lone_site], vec![1.0, 2.0]).unwrap();
+    let single =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![lone_tensor], vec!["A".to_string()])
+            .unwrap();
+    let err = tn_a.reindex_site_space_like(&single).unwrap_err();
+    assert!(err.to_string().contains("incompatible topologies"));
+
+    let self_s0 = DynIndex::new_dyn(2);
+    let self_s1 = DynIndex::new_dyn(2);
+    let self_bond = DynIndex::new_dyn(1);
+    let self_t0 =
+        TensorDynLen::from_dense(vec![self_s0, self_bond.clone()], vec![1.0, 2.0]).unwrap();
+    let self_t1 = TensorDynLen::from_dense(vec![self_bond, self_s1], vec![1.0, 2.0]).unwrap();
+    let self_two_node = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![self_t0, self_t1],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+
+    let tmpl_s0 = DynIndex::new_dyn(2);
+    let tmpl_extra = DynIndex::new_dyn(2);
+    let tmpl_s1 = DynIndex::new_dyn(2);
+    let tmpl_bond = DynIndex::new_dyn(1);
+    let tmpl_t0 = TensorDynLen::from_dense(
+        vec![tmpl_s0, tmpl_extra, tmpl_bond.clone()],
+        vec![1.0, 2.0, 3.0, 4.0],
+    )
+    .unwrap();
+    let tmpl_t1 = TensorDynLen::from_dense(vec![tmpl_bond, tmpl_s1], vec![1.0, 2.0]).unwrap();
+    let template_extra_site = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![tmpl_t0, tmpl_t1],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+    let err = self_two_node
+        .reindex_site_space_like(&template_extra_site)
+        .unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("has 1 site indices in self but 2 in template"));
+
+    let tmpl_s0 = DynIndex::new_dyn(3);
+    let tmpl_s1 = DynIndex::new_dyn(2);
+    let tmpl_bond = DynIndex::new_dyn(1);
+    let tmpl_t0 =
+        TensorDynLen::from_dense(vec![tmpl_s0, tmpl_bond.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    let tmpl_t1 = TensorDynLen::from_dense(vec![tmpl_bond, tmpl_s1], vec![1.0, 2.0]).unwrap();
+    let template_dim_mismatch = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![tmpl_t0, tmpl_t1],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+    let err = self_two_node
+        .reindex_site_space_like(&template_dim_mismatch)
+        .unwrap_err();
+    assert!(err.to_string().contains("site dimension mismatch"));
 }
 
 #[test]
@@ -274,7 +352,7 @@ fn test_add_aligned_accepts_equivalent_site_space_with_different_ids() {
     assert!(
         dense_sum.isapprox(&dense_expected, 1e-10, 0.0),
         "add_aligned failed: maxabs diff = {}",
-        (&dense_sum - &dense_expected).maxabs()
+        dense_sum.distance(&dense_expected).unwrap()
     );
 }
 
@@ -315,6 +393,6 @@ fn test_add_preserves_same_id_prime_pair_site_indices() {
     assert!(
         dense_result.isapprox(&dense_expected, 1e-10, 0.0),
         "same-id prime-pair MPO-like add failed: maxabs diff = {}",
-        (&dense_result - &dense_expected).maxabs()
+        dense_result.distance(&dense_expected).unwrap()
     );
 }

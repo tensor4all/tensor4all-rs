@@ -351,19 +351,61 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         flat
     }
 
+    fn flat_site_dim(&self, site: usize) -> Result<usize> {
+        self.site_dims[site]
+            .iter()
+            .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+            .ok_or_else(|| TensorTrainError::InvalidOperation {
+                message: format!("Site dimension product overflowed at site {site}"),
+            })
+    }
+
+    fn validate_partial_indices(&self, start: usize, indices: &[LocalIndex]) -> Result<()> {
+        let end =
+            start
+                .checked_add(indices.len())
+                .ok_or_else(|| TensorTrainError::InvalidOperation {
+                    message: "Partial index range overflowed usize".to_string(),
+                })?;
+        if end > self.len() {
+            return Err(TensorTrainError::IndexLengthMismatch {
+                expected: self.len(),
+                got: end,
+            });
+        }
+
+        for (offset, &index) in indices.iter().enumerate() {
+            let site = start + offset;
+            let max = self.flat_site_dim(site)?;
+            if index >= max {
+                return Err(TensorTrainError::IndexOutOfBounds { site, index, max });
+            }
+        }
+
+        Ok(())
+    }
+
     /// Evaluate from the left up to (but not including) site `end`
     ///
     /// Returns a vector of size `link_dim(end-1)` (or 1 if end == 0)
-    pub fn evaluate_left(&mut self, indices: &[LocalIndex]) -> Vec<T> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `indices` spans more sites than the tensor train, if
+    /// any index is out of bounds for its site, or if the tenferro-backed
+    /// matrix-vector contraction fails.
+    pub fn evaluate_left(&mut self, indices: &[LocalIndex]) -> Result<Vec<T>> {
         let ell = indices.len();
+        self.validate_partial_indices(0, indices)?;
+
         if ell == 0 {
-            return vec![T::one()];
+            return Ok(vec![T::one()]);
         }
 
         // Check cache
         let key: MultiIndex = indices.to_vec();
         if let Some(cached) = self.cache_left[ell - 1].get(&key) {
-            return cached.clone();
+            return Ok(cached.clone());
         }
 
         // Compute recursively
@@ -374,35 +416,53 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
             tensor.slice_site(flat_idx)
         } else {
             // Recursive case: left[0..ell-1] * tensor[ell-1][:, idx, :]
-            let left = self.evaluate_left(&indices[0..ell - 1]);
+            let left = self.evaluate_left(&indices[0..ell - 1])?;
             let flat_idx = self.multi_to_flat(ell - 1, &indices[ell - 1..ell]);
             let tensor = &self.tensors[ell - 1];
             let slice = tensor.slice_site(flat_idx);
-            row_vector_times_matrix(&left, &slice, tensor.left_dim(), tensor.right_dim())
+            row_vector_times_matrix(&left, &slice, tensor.left_dim(), tensor.right_dim()).map_err(
+                |err| TensorTrainError::InvalidOperation {
+                    message: format!("Failed to evaluate left environment at site {ell}: {err}"),
+                },
+            )?
         };
 
         // Cache and return
         self.cache_left[ell - 1].insert(key, result.clone());
-        result
+        Ok(result)
     }
 
     /// Evaluate from the right starting at site `start`
     ///
     /// `indices` contains indices for sites `start` to `n-1`
     /// Returns a vector of size `link_dim(start-1)` (or 1 if start == n)
-    pub fn evaluate_right(&mut self, indices: &[LocalIndex]) -> Vec<T> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `indices` spans more sites than the tensor train, if
+    /// any index is out of bounds for its site, or if the tenferro-backed
+    /// matrix-vector contraction fails.
+    pub fn evaluate_right(&mut self, indices: &[LocalIndex]) -> Result<Vec<T>> {
         let n = self.len();
         let ell = indices.len();
+        if ell > n {
+            return Err(TensorTrainError::IndexLengthMismatch {
+                expected: n,
+                got: ell,
+            });
+        }
+
         if ell == 0 {
-            return vec![T::one()];
+            return Ok(vec![T::one()]);
         }
 
         let start = n - ell;
+        self.validate_partial_indices(start, indices)?;
 
         // Check cache
         let key: MultiIndex = indices.to_vec();
         if let Some(cached) = self.cache_right[start].get(&key) {
-            return cached.clone();
+            return Ok(cached.clone());
         }
 
         // Compute recursively
@@ -413,16 +473,20 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
             tensor.slice_site(flat_idx)
         } else {
             // Recursive case: tensor[start][:, idx, :] * right[1..]
-            let right = self.evaluate_right(&indices[1..]);
+            let right = self.evaluate_right(&indices[1..])?;
             let flat_idx = self.multi_to_flat(start, &indices[0..1]);
             let tensor = &self.tensors[start];
             let slice = tensor.slice_site(flat_idx);
-            matrix_times_col_vector(&slice, tensor.left_dim(), tensor.right_dim(), &right)
+            matrix_times_col_vector(&slice, tensor.left_dim(), tensor.right_dim(), &right).map_err(
+                |err| TensorTrainError::InvalidOperation {
+                    message: format!("Failed to evaluate right environment at site {start}: {err}"),
+                },
+            )?
         };
 
         // Cache and return
         self.cache_right[start].insert(key, result.clone());
-        result
+        Ok(result)
     }
 
     /// Evaluate the tensor train at a given index set using cache
@@ -441,8 +505,8 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
 
         // Split at midpoint for efficiency
         let mid = n / 2;
-        let left = self.evaluate_left(&indices[0..mid]);
-        let right = self.evaluate_right(&indices[mid..]);
+        let left = self.evaluate_left(&indices[0..mid])?;
+        let right = self.evaluate_right(&indices[mid..])?;
 
         // Contract left and right
         if left.len() != right.len() {
@@ -487,6 +551,15 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         if n == 0 {
             return Err(TensorTrainError::Empty);
         }
+        for idx in indices {
+            if idx.len() != n {
+                return Err(TensorTrainError::IndexLengthMismatch {
+                    expected: n,
+                    got: idx.len(),
+                });
+            }
+            self.validate_partial_indices(0, idx)?;
+        }
 
         // Determine split position
         let split = match split {
@@ -501,7 +574,9 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
         }
 
         // Get local dimensions for flat index computation
-        let local_dims: Vec<usize> = self.site_dims.iter().map(|d| d.iter().product()).collect();
+        let local_dims: Vec<usize> = (0..n)
+            .map(|site| self.flat_site_dim(site))
+            .collect::<Result<Vec<_>>>()?;
 
         // Build index mapper with appropriate key type for each half
         let mut mapper =
@@ -525,13 +600,16 @@ impl<T: TTScalar + EinsumScalar> TTCache<T> {
             .collect();
 
         // Compute left environments for all unique left parts
-        let left_envs: Vec<Vec<T>> = unique_left.iter().map(|l| self.evaluate_left(l)).collect();
+        let left_envs: Vec<Vec<T>> = unique_left
+            .iter()
+            .map(|l| self.evaluate_left(l))
+            .collect::<Result<Vec<_>>>()?;
 
         // Compute right environments for all unique right parts
         let right_envs: Vec<Vec<T>> = unique_right
             .iter()
             .map(|r| self.evaluate_right(r))
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         // Compute results using position mappings
         let results: Vec<T> = mapper

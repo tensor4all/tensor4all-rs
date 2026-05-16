@@ -931,7 +931,7 @@ fn test_restart_gmres_zero_rhs_with_x0() {
     assert!(result.converged);
     assert_eq!(result.iterations, 0);
     // Solution should be x0 when b is zero
-    assert!(result.solution.distance(&x0) < 1e-12);
+    assert!(result.solution.distance(&x0).unwrap() < 1e-12);
 }
 
 #[test]

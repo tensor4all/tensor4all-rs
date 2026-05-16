@@ -116,12 +116,14 @@ where
 
     // Build initial right environments
     for i in (1..n).rev() {
-        right_envs[i - 1] = Some(build_right_environment(
+        let next_env = require_environment(&right_envs, i, "right")?;
+        let env = build_right_environment(
             mpo_a.site_tensor(i),
             mpo_b.site_tensor(i),
             result.site_tensor(i),
-            right_envs[i].as_ref().unwrap(),
-        )?);
+            next_env,
+        )?;
+        right_envs[i - 1] = Some(env);
     }
 
     let mut current = result;
@@ -143,12 +145,14 @@ where
             )?;
 
             // Update left environment at i+1
-            left_envs[i + 1] = Some(build_left_environment(
+            let prev_env = require_environment(&left_envs, i, "left")?;
+            let env = build_left_environment(
                 mpo_a.site_tensor(i),
                 mpo_b.site_tensor(i),
                 current.site_tensor(i),
-                left_envs[i].as_ref().unwrap(),
-            )?);
+                prev_env,
+            )?;
+            left_envs[i + 1] = Some(env);
         }
 
         // Backward sweep (right to left)
@@ -166,12 +170,14 @@ where
 
             // Update right environment at i-1
             if i > 0 {
-                right_envs[i - 1] = Some(build_right_environment(
+                let next_env = require_environment(&right_envs, i, "right")?;
+                let env = build_right_environment(
                     mpo_a.site_tensor(i),
                     mpo_b.site_tensor(i),
                     current.site_tensor(i),
-                    right_envs[i].as_ref().unwrap(),
-                )?);
+                    next_env,
+                )?;
+                right_envs[i - 1] = Some(env);
             }
         }
 
@@ -222,6 +228,18 @@ where
     fn set(&mut self, r: usize, a: usize, b: usize, val: T) {
         self.data[(r * self.dim_a + a) * self.dim_b + b] = val;
     }
+}
+
+fn require_environment<'a, T>(
+    envs: &'a [Option<Environment<T>>],
+    site: usize,
+    side: &'static str,
+) -> Result<&'a Environment<T>> {
+    envs.get(site)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| MPOError::InvalidOperation {
+            message: format!("missing {side} environment at site {site}"),
+        })
 }
 
 /// Build left environment by extending from previous environment

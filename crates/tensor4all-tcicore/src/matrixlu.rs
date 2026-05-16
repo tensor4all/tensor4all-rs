@@ -54,7 +54,7 @@ use tensor4all_tensorbackend::{submatrix_argmax, swap_cols, swap_rows, transpose
 /// // Verify L * U reconstructs the permuted matrix
 /// let l = lu.left(false);
 /// let u = lu.right(false);
-/// let reconstructed = mat_mul(&l, &u);
+/// let reconstructed = mat_mul(&l, &u).unwrap();
 ///
 /// // Check reconstruction matches the permuted matrix
 /// for i in 0..3 {
@@ -251,7 +251,7 @@ impl<T: Scalar> RrLU<T> {
     /// // Unpermuted: L * U reconstructs the row/col-permuted matrix
     /// let l = lu.left(false);
     /// let u = lu.right(false);
-    /// let prod = mat_mul(&l, &u);
+    /// let prod = mat_mul(&l, &u).unwrap();
     /// for i in 0..2 {
     ///     for j in 0..2 {
     ///         let ri = lu.row_permutation()[i];
@@ -289,7 +289,7 @@ impl<T: Scalar> RrLU<T> {
     /// assert_eq!(u.nrows(), lu.npivots());
     /// assert_eq!(u.ncols(), lu.ncols());
     /// // L * U reconstructs the permuted matrix
-    /// let prod = mat_mul(&l, &u);
+    /// let prod = mat_mul(&l, &u).unwrap();
     /// assert!((prod[[0, 0]] - m[[lu.row_permutation()[0], lu.col_permutation()[0]]]).abs() < 1e-10);
     /// ```
     pub fn right(&self, permute: bool) -> Matrix<T> {

@@ -342,11 +342,11 @@ fn test_swap_2r_interleave_generic<T: TensorElement + From<f64>>() {
     assert_eq!(net.find_node_by_index(&y1).map(|n| n.as_str()), Some("3"));
 
     let after = tn.contract_to_tensor().unwrap();
-    let diff = &before - &after;
+    let diff = before.distance(&after).unwrap();
     assert!(
-        diff.maxabs() < 1e-10,
+        diff < 1e-10,
         "contract_to_tensor must match before and after swap, diff={}",
-        diff.maxabs()
+        diff
     );
 }
 
@@ -378,11 +378,11 @@ fn test_swap_y_shape_contract_and_canonical_form_generic<T: TensorElement + From
         .unwrap();
 
     let after = tn.contract_to_tensor().unwrap();
-    let diff = &before - &after;
+    let diff = before.distance(&after).unwrap();
     assert!(
-        diff.maxabs() < 1e-10,
+        diff < 1e-10,
         "contract_to_tensor must match before and after Y-shape swap, diff={}",
-        diff.maxabs()
+        diff
     );
     assert!(tn.is_canonicalized());
 }
@@ -398,11 +398,11 @@ fn test_swap_correctness_contract_generic<T: TensorElement + From<f64>>() {
         .unwrap();
 
     let after = tn.contract_to_tensor().unwrap();
-    let diff = &before - &after;
+    let diff = before.distance(&after).unwrap();
     assert!(
-        diff.maxabs() < 1e-10,
+        diff < 1e-10,
         "contract_to_tensor must match before and after swap, diff={}",
-        diff.maxabs()
+        diff
     );
 }
 

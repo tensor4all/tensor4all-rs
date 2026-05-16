@@ -110,10 +110,12 @@ impl<T: TTScalar> TensorTrain<T> {
         }
 
         // Last tensor should have right_dim = 1
-        if !tensors.is_empty() && tensors.last().unwrap().right_dim() != 1 {
-            return Err(TensorTrainError::InvalidOperation {
-                message: "Last tensor must have right dimension 1".to_string(),
-            });
+        if let Some(last) = tensors.last() {
+            if last.right_dim() != 1 {
+                return Err(TensorTrainError::InvalidOperation {
+                    message: "Last tensor must have right dimension 1".to_string(),
+                });
+            }
         }
 
         Ok(Self { tensors })
@@ -451,7 +453,11 @@ impl<T: TTScalar> TensorTrain<T> {
                     }
                 }
                 // Tprod = Tprod * site_sum
-                tprod = mat_mul(&tprod, &site_sum);
+                tprod = mat_mul(&tprod, &site_sum).map_err(|err| {
+                    TensorTrainError::InvalidOperation {
+                        message: format!("dimension summation matrix multiply failed: {err}"),
+                    }
+                })?;
             } else {
                 // Keep this dimension: multiply Tprod into the site tensor
                 // Tprod (tprod_rows, left_dim) * T reshaped to (left_dim, site_dim * right_dim)
@@ -464,7 +470,11 @@ impl<T: TTScalar> TensorTrain<T> {
                         }
                     }
                 }
-                let product = mat_mul(&tprod, &t_reshaped);
+                let product = mat_mul(&tprod, &t_reshaped).map_err(|err| {
+                    TensorTrainError::InvalidOperation {
+                        message: format!("dimension retention matrix multiply failed: {err}"),
+                    }
+                })?;
 
                 // Reshape product (tprod_rows, site_dim * right_dim)
                 // into tensor (tprod_rows, site_dim, right_dim)
@@ -496,7 +506,7 @@ impl<T: TTScalar> TensorTrain<T> {
         }
 
         // Contract final Tprod into last result tensor
-        let last = result_tensors.last().unwrap();
+        let last = result_tensors.last().ok_or(TensorTrainError::Empty)?;
         let last_left = last.left_dim();
         let last_site = last.site_dim();
         let last_right = last.right_dim();
@@ -513,7 +523,10 @@ impl<T: TTScalar> TensorTrain<T> {
         }
 
         // Multiply: last_mat * Tprod → (last_left * last_site, tprod_cols)
-        let contracted = mat_mul(&last_mat, &tprod);
+        let contracted =
+            mat_mul(&last_mat, &tprod).map_err(|err| TensorTrainError::InvalidOperation {
+                message: format!("final dimension summation multiply failed: {err}"),
+            })?;
 
         // Reshape back to tensor (last_left, last_site, tprod_cols)
         let mut new_last = tensor3_zeros(last_left, last_site, tprod_cols);
@@ -524,7 +537,7 @@ impl<T: TTScalar> TensorTrain<T> {
                 }
             }
         }
-        *result_tensors.last_mut().unwrap() = new_last;
+        *result_tensors.last_mut().ok_or(TensorTrainError::Empty)? = new_last;
 
         TensorTrain::new(result_tensors)
     }

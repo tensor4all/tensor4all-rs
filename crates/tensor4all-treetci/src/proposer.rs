@@ -1,4 +1,4 @@
-use crate::{assemble::MultiIndex, SubtreeKey, TreeTCI2, TreeTciEdge};
+use crate::{assemble::MultiIndex, column_2d, ncols_2d, SubtreeKey, TreeTCI2, TreeTciEdge};
 use anyhow::{ensure, Result};
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
@@ -69,8 +69,8 @@ impl PivotCandidateProposer for DefaultProposer {
         let jset = kronecker(&jpivots, jsite_index, state.local_dims[vq]);
 
         let history = state.ijset_history.last();
-        let icombined = union_with_history(iset, history, &ikey);
-        let jcombined = union_with_history(jset, history, &jkey);
+        let icombined = union_with_history(iset, history, &ikey)?;
+        let jcombined = union_with_history(jset, history, &jkey)?;
         Ok((icombined, jcombined))
     }
 }
@@ -127,27 +127,25 @@ impl PivotCandidateProposer for SimpleProposer {
     ) -> Result<(Vec<MultiIndex>, Vec<MultiIndex>)> {
         let (vp, vq) = state.graph.separate_vertices(edge)?;
         let (ikey, jkey) = state.graph.subregion_vertices(edge)?;
-        let mut rng = rng_for_edge(state, edge, self.seed, "simple");
+        let mut rng = rng_for_edge(state, edge, self.seed, "simple")?;
 
-        let ichi = state.local_dims[vp]
-            * state
-                .ijset
-                .get(&ikey)
-                .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", ikey))?
-                .ncols();
-        let jchi = state.local_dims[vq]
-            * state
-                .ijset
-                .get(&jkey)
-                .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", jkey))?
-                .ncols();
+        let ichi =
+            state.local_dims[vp]
+                * ncols_2d(state.ijset.get(&ikey).ok_or_else(|| {
+                    anyhow::anyhow!("missing pivot set for subtree key {:?}", ikey)
+                })?)?;
+        let jchi =
+            state.local_dims[vq]
+                * ncols_2d(state.ijset.get(&jkey).ok_or_else(|| {
+                    anyhow::anyhow!("missing pivot set for subtree key {:?}", jkey)
+                })?)?;
 
         let iset = random_candidates(&mut rng, state.local_dims.as_slice(), &ikey, ichi);
         let jset = random_candidates(&mut rng, state.local_dims.as_slice(), &jkey, jchi);
 
         let history = state.ijset_history.last();
-        let icombined = union_with_history(iset, history, &ikey);
-        let jcombined = union_with_history(jset, history, &jkey);
+        let icombined = union_with_history(iset, history, &ikey)?;
+        let jcombined = union_with_history(jset, history, &jkey)?;
         Ok((icombined, jcombined))
     }
 }
@@ -202,20 +200,18 @@ impl PivotCandidateProposer for TruncatedDefaultProposer {
         let (vp, vq) = state.graph.separate_vertices(edge)?;
         let (ikey, jkey) = state.graph.subregion_vertices(edge)?;
         let (default_i, default_j) = DefaultProposer.candidates(state, edge)?;
-        let mut rng = rng_for_edge(state, edge, self.seed, "truncated_default");
+        let mut rng = rng_for_edge(state, edge, self.seed, "truncated_default")?;
 
-        let ichi = state.local_dims[vp]
-            * state
-                .ijset
-                .get(&ikey)
-                .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", ikey))?
-                .ncols();
-        let jchi = state.local_dims[vq]
-            * state
-                .ijset
-                .get(&jkey)
-                .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", jkey))?
-                .ncols();
+        let ichi =
+            state.local_dims[vp]
+                * ncols_2d(state.ijset.get(&ikey).ok_or_else(|| {
+                    anyhow::anyhow!("missing pivot set for subtree key {:?}", ikey)
+                })?)?;
+        let jchi =
+            state.local_dims[vq]
+                * ncols_2d(state.ijset.get(&jkey).ok_or_else(|| {
+                    anyhow::anyhow!("missing pivot set for subtree key {:?}", jkey)
+                })?)?;
 
         Ok((
             sample_ordered_candidates(&default_i, ichi, &mut rng),
@@ -235,7 +231,7 @@ fn union_with_history(
     values: Vec<MultiIndex>,
     history: Option<&HashMap<SubtreeKey, ColMajorArray<usize>>>,
     key: &SubtreeKey,
-) -> Vec<MultiIndex> {
+) -> Result<Vec<MultiIndex>> {
     let mut unique = Vec::with_capacity(values.len());
     for candidate in values {
         if !unique.contains(&candidate) {
@@ -243,14 +239,14 @@ fn union_with_history(
         }
     }
     if let Some(arr) = history.and_then(|history| history.get(key)) {
-        for j in 0..arr.ncols() {
-            let col = arr.column(j).expect("column index in range").to_vec();
+        for j in 0..ncols_2d(arr)? {
+            let col = column_2d(arr, j)?.to_vec();
             if !unique.contains(&col) {
                 unique.push(col);
             }
         }
     }
-    unique
+    Ok(unique)
 }
 
 fn pivot_set(
@@ -267,8 +263,8 @@ fn pivot_set(
             .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", in_key))?;
         let mut next = Vec::new();
         for base in &pivots {
-            for j in 0..incoming.ncols() {
-                let index = incoming.column(j).expect("column index in range");
+            for j in 0..ncols_2d(incoming)? {
+                let index = column_2d(incoming, j)?;
                 ensure!(
                     index.len() == in_key.as_slice().len(),
                     "pivot length {} does not match subtree key length {}",
@@ -317,11 +313,13 @@ fn random_candidates(
         .collect()
 }
 
-fn rng_for_edge<T>(state: &TreeTCI2<T>, edge: TreeTciEdge, seed: u64, tag: &str) -> SmallRng {
-    let (ikey, jkey) = state
-        .graph
-        .subregion_vertices(edge)
-        .expect("edge must belong to the tree graph");
+fn rng_for_edge<T>(
+    state: &TreeTCI2<T>,
+    edge: TreeTciEdge,
+    seed: u64,
+    tag: &str,
+) -> Result<SmallRng> {
+    let (ikey, jkey) = state.graph.subregion_vertices(edge)?;
     let mut hasher = DefaultHasher::new();
     seed.hash(&mut hasher);
     tag.hash(&mut hasher);
@@ -330,14 +328,18 @@ fn rng_for_edge<T>(state: &TreeTCI2<T>, edge: TreeTciEdge, seed: u64, tag: &str)
     state
         .ijset
         .get(&ikey)
-        .map_or(0usize, |arr| arr.ncols())
+        .map(ncols_2d)
+        .transpose()?
+        .unwrap_or(0)
         .hash(&mut hasher);
     state
         .ijset
         .get(&jkey)
-        .map_or(0usize, |arr| arr.ncols())
+        .map(ncols_2d)
+        .transpose()?
+        .unwrap_or(0)
         .hash(&mut hasher);
-    SmallRng::seed_from_u64(hasher.finish())
+    Ok(SmallRng::seed_from_u64(hasher.finish()))
 }
 
 fn sample_ordered_candidates(

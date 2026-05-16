@@ -2,7 +2,7 @@ use super::super::types::tensor4_from_data;
 use super::*;
 
 fn sample_tensor4(scale: f64) -> Tensor4<f64> {
-    tensor4_from_data(vec![scale, scale + 1.0], 1, 1, 2, 1)
+    tensor4_from_data(vec![scale, scale + 1.0], 1, 1, 2, 1).unwrap()
 }
 
 #[test]

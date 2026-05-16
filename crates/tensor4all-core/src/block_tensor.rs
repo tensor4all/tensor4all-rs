@@ -17,8 +17,8 @@
 //! let b_block = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0])?;
 //! let zero_block = TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0])?;
 //!
-//! let b = BlockTensor::new(vec![b_block], (1, 1));
-//! let x0 = BlockTensor::new(vec![zero_block], (1, 1));
+//! let b = BlockTensor::new(vec![b_block], (1, 1))?;
+//! let x0 = BlockTensor::new(vec![zero_block], (1, 1))?;
 //!
 //! let apply_a = |x: &BlockTensor<TensorDynLen>| Ok(x.clone());
 //! let result = gmres(apply_a, &b, &x0, &GmresOptions::default())?;
@@ -105,9 +105,9 @@ impl<T: TensorLike> BlockTensor<T> {
     /// * `blocks` - Vector of blocks flattened row-by-row
     /// * `shape` - Block structure as (rows, cols)
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `rows * cols != blocks.len()`.
+    /// Returns an error if `rows * cols != blocks.len()`.
     ///
     /// # Examples
     ///
@@ -117,11 +117,11 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// let i = DynIndex::new_dyn(2);
     /// let t = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
-    /// let bt = BlockTensor::new(vec![t], (1, 1));
+    /// let bt = BlockTensor::new(vec![t], (1, 1)).unwrap();
     /// assert_eq!(bt.shape(), (1, 1));
     /// ```
-    pub fn new(blocks: Vec<T>, shape: (usize, usize)) -> Self {
-        Self::try_new(blocks, shape).expect("Invalid block tensor shape")
+    pub fn new(blocks: Vec<T>, shape: (usize, usize)) -> Result<Self> {
+        Self::try_new(blocks, shape)
     }
 
     /// Get the block structure (rows, cols).
@@ -136,7 +136,7 @@ impl<T: TensorLike> BlockTensor<T> {
     /// let blocks: Vec<TensorDynLen> = (0..6)
     ///     .map(|_| TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0]).unwrap())
     ///     .collect();
-    /// let bt = BlockTensor::new(blocks, (2, 3));
+    /// let bt = BlockTensor::new(blocks, (2, 3)).unwrap();
     /// assert_eq!(bt.shape(), (2, 3));
     /// ```
     pub fn shape(&self) -> (usize, usize) {
@@ -150,10 +150,6 @@ impl<T: TensorLike> BlockTensor<T> {
 
     /// Get a reference to the block at (row, col).
     ///
-    /// # Panics
-    ///
-    /// Panics if the indices are out of bounds.
-    ///
     /// # Examples
     ///
     /// ```
@@ -163,21 +159,19 @@ impl<T: TensorLike> BlockTensor<T> {
     /// let i = DynIndex::new_dyn(2);
     /// let t1 = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
     /// let t2 = TensorDynLen::from_dense(vec![i], vec![3.0, 4.0]).unwrap();
-    /// let bt = BlockTensor::new(vec![t1, t2], (2, 1));
-    /// assert_eq!(bt.get(0, 0).dims(), vec![2]);
-    /// assert_eq!(bt.get(1, 0).dims(), vec![2]);
+    /// let bt = BlockTensor::new(vec![t1, t2], (2, 1)).unwrap();
+    /// assert_eq!(bt.get(0, 0).unwrap().dims(), vec![2]);
+    /// assert_eq!(bt.get(1, 0).unwrap().dims(), vec![2]);
     /// ```
-    pub fn get(&self, row: usize, col: usize) -> &T {
+    pub fn get(&self, row: usize, col: usize) -> Option<&T> {
         let (rows, cols) = self.shape;
-        assert!(row < rows && col < cols, "Block index out of bounds");
-        &self.blocks[row * cols + col]
+        if row >= rows || col >= cols {
+            return None;
+        }
+        self.blocks.get(row * cols + col)
     }
 
     /// Get a mutable reference to the block at (row, col).
-    ///
-    /// # Panics
-    ///
-    /// Panics if the indices are out of bounds.
     ///
     /// # Examples
     ///
@@ -187,14 +181,16 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// let i = DynIndex::new_dyn(2);
     /// let t = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
-    /// let mut bt = BlockTensor::new(vec![t], (1, 1));
-    /// let block = bt.get_mut(0, 0);
+    /// let mut bt = BlockTensor::new(vec![t], (1, 1)).unwrap();
+    /// let block = bt.get_mut(0, 0).unwrap();
     /// assert_eq!(block.dims(), vec![2]);
     /// ```
-    pub fn get_mut(&mut self, row: usize, col: usize) -> &mut T {
+    pub fn get_mut(&mut self, row: usize, col: usize) -> Option<&mut T> {
         let (rows, cols) = self.shape;
-        assert!(row < rows && col < cols, "Block index out of bounds");
-        &mut self.blocks[row * cols + col]
+        if row >= rows || col >= cols {
+            return None;
+        }
+        self.blocks.get_mut(row * cols + col)
     }
 
     /// Get all blocks as a slice.
@@ -208,7 +204,7 @@ impl<T: TensorLike> BlockTensor<T> {
     /// let i = DynIndex::new_dyn(2);
     /// let t1 = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
     /// let t2 = TensorDynLen::from_dense(vec![i], vec![3.0, 4.0]).unwrap();
-    /// let bt = BlockTensor::new(vec![t1, t2], (1, 2));
+    /// let bt = BlockTensor::new(vec![t1, t2], (1, 2)).unwrap();
     /// assert_eq!(bt.blocks().len(), 2);
     /// ```
     pub fn blocks(&self) -> &[T] {
@@ -225,7 +221,7 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// let i = DynIndex::new_dyn(2);
     /// let t = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
-    /// let mut bt = BlockTensor::new(vec![t], (1, 1));
+    /// let mut bt = BlockTensor::new(vec![t], (1, 1)).unwrap();
     /// assert_eq!(bt.blocks_mut().len(), 1);
     /// ```
     pub fn blocks_mut(&mut self) -> &mut [T] {
@@ -242,7 +238,7 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// let i = DynIndex::new_dyn(2);
     /// let t = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
-    /// let bt = BlockTensor::new(vec![t], (1, 1));
+    /// let bt = BlockTensor::new(vec![t], (1, 1)).unwrap();
     /// let blocks = bt.into_blocks();
     /// assert_eq!(blocks.len(), 1);
     /// assert_eq!(blocks[0].dims(), vec![2]);
@@ -273,7 +269,7 @@ impl<T: TensorLike> BlockTensor<T> {
     /// let j = DynIndex::new_dyn(2);
     /// let t1 = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
     /// let t2 = TensorDynLen::from_dense(vec![j], vec![3.0, 4.0]).unwrap();
-    /// let bt = BlockTensor::new(vec![t1, t2], (2, 1));
+    /// let bt = BlockTensor::new(vec![t1, t2], (2, 1)).unwrap();
     /// assert!(bt.validate_indices().is_ok());
     /// ```
     pub fn validate_indices(&self) -> Result<()> {
@@ -302,6 +298,7 @@ impl<T: TensorLike> BlockTensor<T> {
         for row in 0..rows {
             let ref_indices: HashSet<_> = self
                 .get(row, 0)
+                .ok_or_else(|| anyhow::anyhow!("block index ({row}, 0) is out of bounds"))?
                 .external_indices()
                 .iter()
                 .cloned()
@@ -309,6 +306,7 @@ impl<T: TensorLike> BlockTensor<T> {
             for col in 1..cols {
                 let indices: HashSet<_> = self
                     .get(row, col)
+                    .ok_or_else(|| anyhow::anyhow!("block index ({row}, {col}) is out of bounds"))?
                     .external_indices()
                     .iter()
                     .cloned()
@@ -330,6 +328,7 @@ impl<T: TensorLike> BlockTensor<T> {
         for col in 0..cols {
             let ref_indices: HashSet<_> = self
                 .get(0, col)
+                .ok_or_else(|| anyhow::anyhow!("block index (0, {col}) is out of bounds"))?
                 .external_indices()
                 .iter()
                 .cloned()
@@ -337,6 +336,7 @@ impl<T: TensorLike> BlockTensor<T> {
             for row in 1..rows {
                 let indices: HashSet<_> = self
                     .get(row, col)
+                    .ok_or_else(|| anyhow::anyhow!("block index ({row}, {col}) is out of bounds"))?
                     .external_indices()
                     .iter()
                     .cloned()

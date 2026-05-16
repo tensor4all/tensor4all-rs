@@ -62,7 +62,7 @@ fn test_factorize_reconstruction(options: &FactorizeOptions) {
     let result = factorize(&tensor, &left_inds, options).unwrap();
 
     // Verify reconstruction: left * right ≈ original
-    let reconstructed = result.left.contract(&result.right);
+    let reconstructed = result.left.contract(&result.right).unwrap();
     assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
 }
 
@@ -163,7 +163,7 @@ fn test_factorize_svd_rank3() {
     let options = FactorizeOptions::svd();
     let result = factorize(&tensor, &left_inds, &options).unwrap();
 
-    let reconstructed = result.left.contract(&result.right);
+    let reconstructed = result.left.contract(&result.right).unwrap();
     assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
 }
 
@@ -233,7 +233,7 @@ fn test_factorize_lu_ci_reconstruction_with_unit_dim_axis() {
             qr_rtol: None,
         };
         let result = factorize(&tensor, &left_inds, &options).unwrap();
-        let reconstructed = result.left.contract(&result.right);
+        let reconstructed = result.left.contract(&result.right).unwrap();
         assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
     }
 }
@@ -252,7 +252,7 @@ fn test_factorize_lu_ci_reconstruction_with_col_major_matrix_input() {
             qr_rtol: None,
         };
         let result = factorize(&tensor, &left_inds, &options).unwrap();
-        let reconstructed = result.left.contract(&result.right);
+        let reconstructed = result.left.contract(&result.right).unwrap();
         assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
     }
 }
@@ -292,7 +292,7 @@ fn test_factorize_full_rank_preserves_near_dependent_components() {
             "{alg:?} full-rank factorization dropped a near-dependent component"
         );
 
-        let reconstructed = result.left.contract(&result.right);
+        let reconstructed = result.left.contract(&result.right).unwrap();
         assert_tensors_approx_equal(&tensor, &reconstructed, 1.0e-18);
     }
 }
@@ -356,10 +356,10 @@ fn test_diag_dense_contraction_svd_internals() {
     assert!(common_found, "S and V should share a common index");
 
     // Contractions should work
-    let sv = s.contract(&v);
+    let sv = s.contract(&v).unwrap();
     assert_eq!(sv.dims().len(), 2, "S*V should be a 2D tensor");
 
-    let us = u.contract(&s);
+    let us = u.contract(&s).unwrap();
     assert_eq!(us.dims().len(), 2, "U*S should be a 2D tensor");
 }
 
@@ -371,6 +371,6 @@ fn assert_tensors_approx_equal(a: &TensorDynLen, b: &TensorDynLen, tol: f64) {
     assert!(
         a.isapprox(b, tol, 0.0),
         "Tensors differ: maxabs diff = {}",
-        (a - b).maxabs()
+        a.sub(b).unwrap().maxabs()
     );
 }

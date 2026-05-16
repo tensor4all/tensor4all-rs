@@ -6,6 +6,7 @@
 
 use crate::site_index_network::SiteIndexNetwork;
 use crate::treetn::TreeTN;
+use anyhow::{anyhow, Result};
 use rand::Rng;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -93,7 +94,7 @@ pub type DefaultIndex = Index<DynId, TagSet>;
 /// site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
 ///
 /// let mut rng = ChaCha8Rng::seed_from_u64(42);
-/// let treetn = random_treetn::<f64, _, _>(&mut rng, &site_network, LinkSpace::uniform(4));
+/// let treetn = random_treetn::<f64, _, _>(&mut rng, &site_network, LinkSpace::uniform(4)).unwrap();
 ///
 /// assert_eq!(treetn.node_count(), 2);
 /// ```
@@ -101,7 +102,7 @@ pub fn random_treetn<T, R, V>(
     rng: &mut R,
     site_network: &SiteIndexNetwork<V, DefaultIndex>,
     link_space: LinkSpace<V>,
-) -> TreeTN<TensorDynLen, V>
+) -> Result<TreeTN<TensorDynLen, V>>
 where
     T: RandomScalar,
     R: Rng,
@@ -120,12 +121,12 @@ where
         };
         let key_clone = (key.0.clone(), key.1.clone());
 
-        link_indices.entry(key).or_insert_with(|| {
+        if let std::collections::hash_map::Entry::Vacant(entry) = link_indices.entry(key) {
             let dim = link_space
                 .get(&key_clone.0, &key_clone.1)
-                .expect("LinkSpace must provide dimension for all edges");
-            Index::new_dyn(dim)
-        });
+                .ok_or_else(|| anyhow!("LinkSpace has no dimension for edge {:?}", key_clone))?;
+            entry.insert(Index::new_dyn(dim));
+        }
     }
 
     // Step 2: For each node, collect all indices and create random tensor
@@ -157,14 +158,14 @@ where
         }
 
         // Create random tensor
-        let tensor = TensorDynLen::random::<T, R>(rng, all_indices);
+        let tensor = TensorDynLen::random::<T, R>(rng, all_indices)?;
 
         tensors.push(tensor);
         node_names.push(node_name);
     }
 
     // Step 3: Create TreeTN from tensors
-    TreeTN::from_tensors(tensors, node_names).expect("Failed to create TreeTN from random tensors")
+    TreeTN::from_tensors(tensors, node_names)
 }
 
 #[cfg(test)]

@@ -39,7 +39,7 @@ fn evaluate_treetn(
         data[pos] = value;
     }
     let shape = [indices.len(), 1];
-    let values = ColMajorArrayRef::new(&data, &shape);
+    let values = ColMajorArrayRef::new(&data, &shape).unwrap();
     tn.evaluate(&indices, values).unwrap()[0].real()
 }
 

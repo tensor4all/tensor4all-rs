@@ -51,6 +51,24 @@
 
 #![warn(missing_docs)]
 
+pub(crate) fn ncols_2d<T>(array: &tensor4all_core::ColMajorArray<T>) -> anyhow::Result<usize> {
+    array
+        .ncols()
+        .ok_or_else(|| anyhow::anyhow!("expected 2D ColMajorArray, got shape {:?}", array.shape()))
+}
+
+pub(crate) fn column_2d<T>(
+    array: &tensor4all_core::ColMajorArray<T>,
+    column: usize,
+) -> anyhow::Result<&[T]> {
+    array.column(column).ok_or_else(|| {
+        anyhow::anyhow!(
+            "column {column} is out of range for shape {:?}",
+            array.shape()
+        )
+    })
+}
+
 /// High-level TreeTCI entry points.
 pub mod api;
 /// Assembly helpers from subtree-local pivots to global site-order indices.
@@ -91,3 +109,22 @@ pub use proposer::{
 pub use state::SimpleTreeTci;
 pub use state::TreeTCI2;
 pub use visitor::{AllEdges, EdgeVisitor};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tensor4all_core::ColMajorArray;
+
+    #[test]
+    fn two_dimensional_column_helpers_report_shape_errors() {
+        let one_dimensional = ColMajorArray::new(vec![1usize, 2, 3], vec![3]).unwrap();
+        let err = ncols_2d(&one_dimensional).unwrap_err();
+        assert!(err.to_string().contains("expected 2D ColMajorArray"));
+        assert!(err.to_string().contains("[3]"));
+
+        let matrix = ColMajorArray::new(vec![1usize, 2, 3, 4], vec![2, 2]).unwrap();
+        let err = column_2d(&matrix, 2).unwrap_err();
+        assert!(err.to_string().contains("column 2 is out of range"));
+        assert!(err.to_string().contains("[2, 2]"));
+    }
+}

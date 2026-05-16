@@ -58,7 +58,8 @@ fn backward_accumulates_until_clear_grad() {
     let i = Index::new_dyn(3);
     let x = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0, 3.0])
         .unwrap()
-        .enable_grad();
+        .enable_grad()
+        .unwrap();
     let ones = TensorDynLen::from_dense(vec![i], vec![1.0, 1.0, 1.0]).unwrap();
 
     let loss = contract_multi(&[&x, &ones], AllowedPairs::All).unwrap();
@@ -92,7 +93,8 @@ fn general_structured_grad_preserves_input_axis_classes() {
     .unwrap();
     let x = TensorDynLen::from_storage(vec![i.clone(), j.clone(), k.clone()], storage)
         .unwrap()
-        .enable_grad();
+        .enable_grad()
+        .unwrap();
     let ones = TensorDynLen::from_dense(vec![i, j, k], vec![1.0; 12]).unwrap();
 
     let loss = contract_multi(&[&x, &ones], AllowedPairs::All).unwrap();
@@ -113,25 +115,26 @@ fn tracks_grad_and_detach_report_leaf_state() {
     assert!(!scalar.tracks_grad());
 
     let tracked = scalar.enable_grad();
+    let tracked = tracked.unwrap();
     assert!(tracked.tracks_grad());
 
-    let detached = tracked.detach();
+    let detached = tracked.detach().unwrap();
     assert!(!detached.tracks_grad());
     assert!(tracked.tracks_grad());
 }
 
 #[test]
 fn clone_shares_tracked_leaf_gradient_slot() {
-    let x = TensorDynLen::scalar(2.0).unwrap().enable_grad();
+    let x = TensorDynLen::scalar(2.0).unwrap().enable_grad().unwrap();
     let alias = x.clone();
 
-    let loss = &x * &alias;
+    let loss = x.contract(&alias).unwrap();
     loss.backward().unwrap();
 
     let grad_x = x.grad().unwrap().unwrap();
     let grad_alias = alias.grad().unwrap().unwrap();
-    assert!((grad_x.only().real() - 4.0).abs() < 1e-12);
-    assert!((grad_alias.only().real() - 4.0).abs() < 1e-12);
+    assert!((grad_x.only().unwrap().real() - 4.0).abs() < 1e-12);
+    assert!((grad_alias.only().unwrap().real() - 4.0).abs() < 1e-12);
 }
 
 #[test]
@@ -146,7 +149,8 @@ fn retained_multi_contraction_preserves_grad_path() {
         (1..=12).map(|value| value as f64).collect(),
     )
     .unwrap()
-    .enable_grad();
+    .enable_grad()
+    .unwrap();
     let y =
         TensorDynLen::from_dense(vec![batch.clone(), k.clone(), j.clone()], vec![1.0; 12]).unwrap();
     let retain_indices = [batch.clone()];
@@ -184,7 +188,8 @@ fn structured_retained_multi_contraction_errors_before_detaching_grad() {
     .unwrap();
     let x = TensorDynLen::from_storage(vec![batch.clone(), i.clone(), k.clone()], storage)
         .unwrap()
-        .enable_grad();
+        .enable_grad()
+        .unwrap();
     let y =
         TensorDynLen::from_dense(vec![batch.clone(), k.clone(), j.clone()], vec![1.0; 8]).unwrap();
     let retain_indices = [batch.clone()];

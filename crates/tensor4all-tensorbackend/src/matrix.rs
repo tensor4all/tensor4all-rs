@@ -19,6 +19,7 @@
 //! assert_eq!(m[[1, 0]], 3.0);
 //! ```
 
+use anyhow::{ensure, Context, Result};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 use std::ops::{Index, IndexMut};
@@ -348,14 +349,14 @@ pub fn submatrix_argmax<T: MatrixScalar>(
 /// types cannot implement it.
 pub trait BlasMul: Sized {
     #[doc(hidden)]
-    fn blas_mat_mul(a: &Matrix<Self>, b: &Matrix<Self>) -> Matrix<Self>;
+    fn blas_mat_mul(a: &Matrix<Self>, b: &Matrix<Self>) -> Result<Matrix<Self>>;
 }
 
 macro_rules! impl_blas_mul {
     ($($t:ty),*) => {
         $(
         impl BlasMul for $t {
-            fn blas_mat_mul(a: &Matrix<Self>, b: &Matrix<Self>) -> Matrix<Self> {
+            fn blas_mat_mul(a: &Matrix<Self>, b: &Matrix<Self>) -> Result<Matrix<Self>> {
                 use tenferro_einsum::typed_eager_einsum;
                 use tenferro_tensor::TypedTensor;
                 use crate::with_default_backend;
@@ -363,7 +364,14 @@ macro_rules! impl_blas_mul {
                 let m = a.nrows();
                 let k = a.ncols();
                 let n = b.ncols();
-                assert_eq!(b.nrows(), k);
+                ensure!(
+                    b.nrows() == k,
+                    "matrix dimensions must agree for multiplication: left is {}x{}, right is {}x{}",
+                    m,
+                    k,
+                    b.nrows(),
+                    n
+                );
 
                 let a_tensor = TypedTensor::<$t>::from_vec(
                     vec![m, k],
@@ -376,8 +384,20 @@ macro_rules! impl_blas_mul {
                 let c = with_default_backend(|backend| {
                     typed_eager_einsum(backend, &[&a_tensor, &b_tensor], "ij,jk->ik")
                 })
-                .expect("einsum failed");
-                Matrix::from_col_major_vec(m, n, c.as_slice().to_vec())
+                .context("matrix multiplication einsum failed")?;
+                let data = c.as_slice().to_vec();
+                ensure!(
+                    data.len() == m * n,
+                    "matrix multiplication returned {} values for expected shape {}x{}",
+                    data.len(),
+                    m,
+                    n
+                );
+                Ok(Matrix {
+                    data,
+                    nrows: m,
+                    ncols: n,
+                })
             }
         }
         )*
@@ -439,9 +459,9 @@ impl MatrixScalar for Complex32 {
 ///
 /// Uses BLAS-backed einsum via tenferro for high performance.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if `a.ncols() != b.nrows()`.
+/// Returns an error if `a.ncols() != b.nrows()` or the backend einsum fails.
 ///
 /// # Examples
 ///
@@ -450,13 +470,13 @@ impl MatrixScalar for Complex32 {
 ///
 /// let a = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
 /// let b = from_vec2d(vec![vec![5.0, 6.0], vec![7.0, 8.0]]);
-/// let c = mat_mul(&a, &b);
+/// let c = mat_mul(&a, &b).unwrap();
 /// assert!((c[[0, 0]] - 19.0).abs() < 1e-10);
 /// assert!((c[[0, 1]] - 22.0).abs() < 1e-10);
 /// assert!((c[[1, 0]] - 43.0).abs() < 1e-10);
 /// assert!((c[[1, 1]] - 50.0).abs() < 1e-10);
 /// ```
-pub fn mat_mul<T: BlasMul>(a: &Matrix<T>, b: &Matrix<T>) -> Matrix<T> {
+pub fn mat_mul<T: BlasMul>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>> {
     T::blas_mat_mul(a, b)
 }
 

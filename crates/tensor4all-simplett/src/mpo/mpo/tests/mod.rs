@@ -14,8 +14,48 @@ fn test_mpo_constant() {
     assert_eq!(mpo.len(), 2);
 
     // Sum should be 5.0 * (2*2) * (2*2) = 5.0 * 4 * 4 = 80.0
-    let sum = mpo.sum();
+    let sum = mpo.sum().unwrap();
     assert!((sum - 80.0).abs() < 1e-10);
+}
+
+#[test]
+fn test_mpo_new_rejects_invalid_structure() {
+    let left: Tensor4<f64> = tensor4_zeros(1, 2, 2, 2);
+    let right: Tensor4<f64> = tensor4_zeros(3, 2, 2, 1);
+    let err = MPO::new(vec![left, right]).unwrap_err();
+    assert!(err.to_string().contains("Bond dimension mismatch"));
+
+    let bad_left: Tensor4<f64> = tensor4_zeros(2, 2, 2, 1);
+    let err = MPO::new(vec![bad_left]).unwrap_err();
+    assert!(err.to_string().contains("Invalid boundary"));
+
+    let bad_right: Tensor4<f64> = tensor4_zeros(1, 2, 2, 2);
+    let err = MPO::new(vec![bad_right]).unwrap_err();
+    assert!(err.to_string().contains("Invalid boundary"));
+}
+
+#[test]
+fn test_mpo_empty_and_single_site_constructors() {
+    let empty = MPO::<f64>::constant(&[], 3.0);
+    assert!(empty.is_empty());
+    assert_eq!(empty.link_dims(), Vec::<usize>::new());
+    assert_eq!(empty.rank(), 1);
+    assert_eq!(empty.fulltensor(), (Vec::new(), Vec::new()));
+    assert_eq!(empty.sum().unwrap(), 0.0);
+    assert!(empty
+        .evaluate(&[])
+        .unwrap_err()
+        .to_string()
+        .contains("MPO is empty"));
+
+    let single = MPO::<f64>::constant(&[(2, 3)], 4.0);
+    assert_eq!(single.site_dim(0), (2, 3));
+    assert_eq!(single.link_dims(), Vec::<usize>::new());
+    assert_eq!(single.evaluate(&[1, 2]).unwrap(), 4.0);
+    assert_eq!(single.scaled(0.5).evaluate(&[1, 2]).unwrap(), 2.0);
+
+    let identity_empty = MPO::<f64>::identity(&[]).unwrap();
+    assert!(identity_empty.is_empty());
 }
 
 #[test]
@@ -57,12 +97,36 @@ fn test_mpo_evaluate() {
 }
 
 #[test]
+fn test_mpo_evaluate_reports_invalid_indices() {
+    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+
+    let err = mpo.evaluate(&[0, 0, 0]).unwrap_err();
+    assert!(err.to_string().contains("Expected 4 indices"));
+
+    let err = mpo.evaluate(&[2, 0, 0, 0]).unwrap_err();
+    assert!(err.to_string().contains("Index out of bounds"));
+    assert!(err.to_string().contains("site 0"));
+
+    let err = mpo.evaluate(&[0, 0, 0, 2]).unwrap_err();
+    assert!(err.to_string().contains("Index out of bounds"));
+    assert!(err.to_string().contains("site 1"));
+}
+
+#[test]
+fn test_mpo_fulltensor_zero_dimension_returns_shape() {
+    let mpo = MPO::<f64>::zeros(&[(0, 2)]);
+    let (data, shape) = mpo.fulltensor();
+    assert!(data.is_empty());
+    assert_eq!(shape, vec![0, 2]);
+}
+
+#[test]
 fn test_mpo_scale() {
     let mut mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
     mpo.scale(3.0);
 
     // Sum should be 3.0 * (2*2) * (2*2) = 3.0 * 16 = 48.0
-    let sum = mpo.sum();
+    let sum = mpo.sum().unwrap();
     assert!((sum - 48.0).abs() < 1e-10);
 }
 

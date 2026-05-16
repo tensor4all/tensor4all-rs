@@ -162,7 +162,13 @@ fn infer_index_mappings(operator: &TensorTrain, init: &TensorTrain) -> Result<Si
         if let (Some(op_indices), Some(init_indices)) = (op_site, init_site) {
             if op_indices.len() == 2 && init_indices.len() == 1 {
                 // MPO-like site: check if we need mappings
-                let init_idx = init_indices.iter().next().unwrap();
+                let init_idx =
+                    init_indices
+                        .iter()
+                        .next()
+                        .ok_or_else(|| TensorTrainError::OperationError {
+                            message: format!("Site {site}: init site space is empty"),
+                        })?;
                 let has_shared = op_indices.iter().any(|idx| idx.same_id(init_idx));
                 if has_shared {
                     // The shared index exists but may differ by plev → need mapping
@@ -206,13 +212,32 @@ fn infer_index_mappings(operator: &TensorTrain, init: &TensorTrain) -> Result<Si
 
         if let (Some(op_indices), Some(init_indices)) = (op_site, init_site) {
             if op_indices.len() == 2 && init_indices.len() == 1 {
-                let init_idx = init_indices.iter().next().unwrap();
+                let init_idx =
+                    init_indices
+                        .iter()
+                        .next()
+                        .ok_or_else(|| TensorTrainError::OperationError {
+                            message: format!("Site {site}: init site space is empty"),
+                        })?;
 
-                let op_input = op_indices.iter().find(|idx| idx.same_id(init_idx)).unwrap();
+                let op_input = op_indices
+                    .iter()
+                    .find(|idx| idx.same_id(init_idx))
+                    .ok_or_else(|| TensorTrainError::OperationError {
+                        message: format!(
+                            "Site {site}: operator has no input index sharing an ID with init index {:?}",
+                            init_idx.id()
+                        ),
+                    })?;
                 let op_output = op_indices
                     .iter()
                     .find(|idx| !idx.same_id(init_idx))
-                    .unwrap();
+                    .ok_or_else(|| TensorTrainError::OperationError {
+                        message: format!(
+                            "Site {site}: operator has no output index distinct from init index {:?}",
+                            init_idx.id()
+                        ),
+                    })?;
 
                 input_mapping.insert(
                     site,

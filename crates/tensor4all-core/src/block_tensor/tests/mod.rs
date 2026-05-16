@@ -44,8 +44,8 @@ fn test_axpby_shape_mismatch() {
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
     let b3 = make_vector_with_index(vec![5.0, 6.0], &idx);
 
-    let block_2x1 = BlockTensor::new(vec![b1.clone(), b2], (2, 1));
-    let block_1x1 = BlockTensor::new(vec![b3], (1, 1));
+    let block_2x1 = BlockTensor::new(vec![b1.clone(), b2], (2, 1)).unwrap();
+    let block_1x1 = BlockTensor::new(vec![b3], (1, 1)).unwrap();
 
     let result = block_2x1.axpby(
         AnyScalar::new_real(1.0),
@@ -62,8 +62,8 @@ fn test_inner_product_shape_mismatch() {
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
     let b3 = make_vector_with_index(vec![5.0, 6.0], &idx);
 
-    let block_2x1 = BlockTensor::new(vec![b1.clone(), b2], (2, 1));
-    let block_1x1 = BlockTensor::new(vec![b3], (1, 1));
+    let block_2x1 = BlockTensor::new(vec![b1.clone(), b2], (2, 1)).unwrap();
+    let block_1x1 = BlockTensor::new(vec![b3], (1, 1)).unwrap();
 
     let result = block_2x1.inner_product(&block_1x1);
     assert!(result.is_err());
@@ -78,7 +78,7 @@ fn test_fuse_indices_delegates_to_blocks_and_preserves_shape() {
         TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     let block_b =
         TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![5.0, 6.0, 7.0, 8.0]).unwrap();
-    let block = BlockTensor::new(vec![block_a, block_b], (1, 2));
+    let block = BlockTensor::new(vec![block_a, block_b], (1, 2)).unwrap();
 
     let fused_block = <BlockTensor<TensorDynLen> as crate::tensor_like::TensorLike>::fuse_indices(
         &block,
@@ -90,14 +90,14 @@ fn test_fuse_indices_delegates_to_blocks_and_preserves_shape() {
 
     assert_eq!(fused_block.shape(), (1, 2));
     assert_eq!(fused_block.num_blocks(), 2);
-    assert_eq!(fused_block.get(0, 0).dims(), vec![4]);
-    assert_eq!(fused_block.get(0, 1).dims(), vec![4]);
+    assert_eq!(fused_block.get(0, 0).unwrap().dims(), vec![4]);
+    assert_eq!(fused_block.get(0, 1).unwrap().dims(), vec![4]);
     assert_eq!(
-        fused_block.get(0, 0).to_vec::<f64>().unwrap(),
+        fused_block.get(0, 0).unwrap().to_vec::<f64>().unwrap(),
         vec![1.0, 2.0, 3.0, 4.0]
     );
     assert_eq!(
-        fused_block.get(0, 1).to_vec::<f64>().unwrap(),
+        fused_block.get(0, 1).unwrap().to_vec::<f64>().unwrap(),
         vec![5.0, 6.0, 7.0, 8.0]
     );
 }
@@ -114,11 +114,11 @@ fn test_gmres_identity_block() {
 
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
-    let b = BlockTensor::new(vec![b1, b2], (2, 1));
+    let b = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     let zero1 = make_vector_with_index(vec![0.0, 0.0], &idx);
     let zero2 = make_vector_with_index(vec![0.0, 0.0], &idx);
-    let x0 = BlockTensor::new(vec![zero1, zero2], (2, 1));
+    let x0 = BlockTensor::new(vec![zero1, zero2], (2, 1)).unwrap();
 
     // Identity operator: A x = x
     let apply_a =
@@ -161,23 +161,23 @@ fn test_gmres_diagonal_block() {
 
     let b1 = make_vector_with_index(vec![2.0, 3.0], &idx);
     let b2 = make_vector_with_index(vec![4.0, 5.0], &idx);
-    let b = BlockTensor::new(vec![b1, b2], (2, 1));
+    let b = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     let zero1 = make_vector_with_index(vec![0.0, 0.0], &idx);
     let zero2 = make_vector_with_index(vec![0.0, 0.0], &idx);
-    let x0 = BlockTensor::new(vec![zero1, zero2], (2, 1));
+    let x0 = BlockTensor::new(vec![zero1, zero2], (2, 1)).unwrap();
 
     let expected1 = make_vector_with_index(vec![1.0, 1.0], &idx);
     let expected2 = make_vector_with_index(vec![1.0, 1.0], &idx);
-    let expected = BlockTensor::new(vec![expected1, expected2], (2, 1));
+    let expected = BlockTensor::new(vec![expected1, expected2], (2, 1)).unwrap();
 
     // Diagonal block operator
     let diag1 = [2.0, 3.0];
     let diag2 = [4.0, 5.0];
 
     let apply_a = move |x: &BlockTensor<TensorDynLen>| -> Result<BlockTensor<TensorDynLen>> {
-        let x1 = x.get(0, 0);
-        let x2 = x.get(1, 0);
+        let x1 = x.get(0, 0).unwrap();
+        let x2 = x.get(1, 0).unwrap();
 
         // Apply D1 to x1
         let x1_data = x1.to_vec::<f64>()?;
@@ -197,7 +197,7 @@ fn test_gmres_diagonal_block() {
             .collect();
         let y2 = TensorDynLen::from_dense(x2.indices.clone(), y2_data).unwrap();
 
-        Ok(BlockTensor::new(vec![y1, y2], (2, 1)))
+        BlockTensor::new(vec![y1, y2], (2, 1))
     };
 
     let options = GmresOptions {
@@ -242,27 +242,27 @@ fn test_gmres_upper_triangular_block() {
 
     let b1 = make_vector_with_index(vec![2.0, 3.0], &idx);
     let b2 = make_vector_with_index(vec![1.0, 1.0], &idx);
-    let b = BlockTensor::new(vec![b1, b2], (2, 1));
+    let b = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     let zero1 = make_vector_with_index(vec![0.0, 0.0], &idx);
     let zero2 = make_vector_with_index(vec![0.0, 0.0], &idx);
-    let x0 = BlockTensor::new(vec![zero1, zero2], (2, 1));
+    let x0 = BlockTensor::new(vec![zero1, zero2], (2, 1)).unwrap();
 
     let expected1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let expected2 = make_vector_with_index(vec![1.0, 1.0], &idx);
-    let expected = BlockTensor::new(vec![expected1, expected2], (2, 1));
+    let expected = BlockTensor::new(vec![expected1, expected2], (2, 1)).unwrap();
 
     // Upper triangular block operator: A = [[I, I], [0, I]]
     let apply_a = |x: &BlockTensor<TensorDynLen>| -> Result<BlockTensor<TensorDynLen>> {
-        let x1 = x.get(0, 0);
-        let x2 = x.get(1, 0);
+        let x1 = x.get(0, 0).unwrap();
+        let x2 = x.get(1, 0).unwrap();
 
         // y1 = x1 + x2
         let y1 = x1.axpby(AnyScalar::new_real(1.0), x2, AnyScalar::new_real(1.0))?;
         // y2 = x2
         let y2 = x2.clone();
 
-        Ok(BlockTensor::new(vec![y1, y2], (2, 1)))
+        BlockTensor::new(vec![y1, y2], (2, 1))
     };
 
     let options = GmresOptions {
@@ -302,7 +302,7 @@ fn test_norm_squared() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
-    let block = BlockTensor::new(vec![b1, b2], (2, 1));
+    let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     // norm_squared = 1^2 + 2^2 + 3^2 + 4^2 = 1 + 4 + 9 + 16 = 30
     let norm_sq = block.norm_squared();
@@ -314,14 +314,14 @@ fn test_scale() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
-    let block = BlockTensor::new(vec![b1, b2], (2, 1));
+    let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     let scaled = block.scale(AnyScalar::new_real(2.0)).unwrap();
 
     // Check scaled values
     let expected1 = make_vector_with_index(vec![2.0, 4.0], &idx);
     let expected2 = make_vector_with_index(vec![6.0, 8.0], &idx);
-    let expected = BlockTensor::new(vec![expected1, expected2], (2, 1));
+    let expected = BlockTensor::new(vec![expected1, expected2], (2, 1)).unwrap();
 
     let diff = scaled
         .axpby(
@@ -338,11 +338,11 @@ fn test_inner_product() {
     let idx = DynIndex::new_dyn(2);
     let a1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let a2 = make_vector_with_index(vec![3.0, 4.0], &idx);
-    let a = BlockTensor::new(vec![a1, a2], (2, 1));
+    let a = BlockTensor::new(vec![a1, a2], (2, 1)).unwrap();
 
     let b1 = make_vector_with_index(vec![5.0, 6.0], &idx);
     let b2 = make_vector_with_index(vec![7.0, 8.0], &idx);
-    let b = BlockTensor::new(vec![b1, b2], (2, 1));
+    let b = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     // inner_product = (1*5 + 2*6) + (3*7 + 4*8) = 17 + 53 = 70
     let ip = a.inner_product(&b).unwrap();
@@ -354,7 +354,7 @@ fn test_conj() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
-    let block = BlockTensor::new(vec![b1, b2], (2, 1));
+    let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     // For real tensors, conj should be identity
     let conjugated = block.conj();
@@ -374,7 +374,7 @@ fn test_validate_indices_column_shared() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
-    let block = BlockTensor::new(vec![b1, b2], (2, 1));
+    let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
     assert!(block.validate_indices().is_ok());
 }
 
@@ -386,7 +386,7 @@ fn test_validate_indices_column_independent() {
     let idx2 = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx1);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx2);
-    let block = BlockTensor::new(vec![b1, b2], (2, 1));
+    let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
     assert!(block.validate_indices().is_ok());
 }
 
@@ -411,7 +411,7 @@ fn test_validate_indices_matrix_shared() {
     let b11 =
         TensorDynLen::from_dense(vec![col1_idx.clone(), row1_idx.clone()], vec![0.0; 6]).unwrap();
 
-    let block = BlockTensor::new(vec![b00, b01, b10, b11], (2, 2));
+    let block = BlockTensor::new(vec![b00, b01, b10, b11], (2, 2)).unwrap();
     assert!(block.validate_indices().is_ok());
 }
 
@@ -423,7 +423,7 @@ fn test_validate_indices_matrix_no_row_sharing() {
     let b10 = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
     let b11 = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
 
-    let block = BlockTensor::new(vec![b00, b01, b10, b11], (2, 2));
+    let block = BlockTensor::new(vec![b00, b01, b10, b11], (2, 2)).unwrap();
     assert!(block.validate_indices().is_err());
 }
 
@@ -434,7 +434,7 @@ fn test_validate_indices_matrix_same_id_prime_is_not_shared_index() {
     let b00 = TensorDynLen::from_dense(vec![row], vec![0.0; 2]).unwrap();
     let b01 = TensorDynLen::from_dense(vec![row_prime], vec![0.0; 2]).unwrap();
 
-    let block = BlockTensor::new(vec![b00, b01], (1, 2));
+    let block = BlockTensor::new(vec![b00, b01], (1, 2)).unwrap();
 
     assert!(block.validate_indices().is_err());
 }
@@ -445,7 +445,7 @@ fn test_external_indices_deduplication() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
-    let block = BlockTensor::new(vec![b1, b2], (2, 1));
+    let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
     let ext = block.external_indices();
     assert_eq!(ext.len(), 1, "Shared index should appear once");
     assert!(ext[0].same_id(&idx));
@@ -457,7 +457,7 @@ fn test_external_indices_preserves_same_id_prime_pair() {
     let idx_prime = idx.prime();
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx_prime);
-    let block = BlockTensor::new(vec![b1, b2], (2, 1));
+    let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     let ext = block.external_indices();
 
@@ -471,7 +471,7 @@ fn test_external_indices_independent() {
     let idx2 = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx1);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx2);
-    let block = BlockTensor::new(vec![b1, b2], (2, 1));
+    let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
     let ext = block.external_indices();
     assert_eq!(ext.len(), 2, "Independent indices should both appear");
 }
@@ -485,13 +485,13 @@ fn test_get_mut() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
-    let mut block = BlockTensor::new(vec![b1, b2], (2, 1));
+    let mut block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     // Mutate block (1, 0) via get_mut
-    let blk = block.get_mut(1, 0);
+    let blk = block.get_mut(1, 0).unwrap();
     *blk = make_vector_with_index(vec![10.0, 20.0], &idx);
 
-    let data = block.get(1, 0).to_vec::<f64>().unwrap();
+    let data = block.get(1, 0).unwrap().to_vec::<f64>().unwrap();
     assert!((data[0] - 10.0).abs() < 1e-10);
     assert!((data[1] - 20.0).abs() < 1e-10);
 }
@@ -501,14 +501,14 @@ fn test_blocks_and_blocks_mut() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
-    let mut block = BlockTensor::new(vec![b1, b2], (2, 1));
+    let mut block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     // blocks() returns immutable slice
     assert_eq!(block.blocks().len(), 2);
 
     // blocks_mut() returns mutable slice
     block.blocks_mut()[0] = make_vector_with_index(vec![10.0, 20.0], &idx);
-    let data = block.get(0, 0).to_vec::<f64>().unwrap();
+    let data = block.get(0, 0).unwrap().to_vec::<f64>().unwrap();
     assert!((data[0] - 10.0).abs() < 1e-10);
 }
 
@@ -517,7 +517,7 @@ fn test_into_blocks() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
-    let block = BlockTensor::new(vec![b1, b2], (2, 1));
+    let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     let blocks = block.into_blocks();
     assert_eq!(blocks.len(), 2);
@@ -535,7 +535,7 @@ fn test_replaceind() {
     let new_idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
-    let block = BlockTensor::new(vec![b1, b2], (2, 1));
+    let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     let replaced = block.replaceind(&idx, &new_idx).unwrap();
 
@@ -545,7 +545,7 @@ fn test_replaceind() {
         assert!(ext[0].same_id(&new_idx));
     }
     // Data should be preserved
-    let data = replaced.get(0, 0).to_vec::<f64>().unwrap();
+    let data = replaced.get(0, 0).unwrap().to_vec::<f64>().unwrap();
     assert!((data[0] - 1.0).abs() < 1e-10);
     assert!((data[1] - 2.0).abs() < 1e-10);
 }
@@ -559,7 +559,7 @@ fn test_replaceinds() {
 
     let b1 = TensorDynLen::from_dense(vec![idx1.clone(), idx2.clone()], vec![0.0; 6]).unwrap();
     let b2 = TensorDynLen::from_dense(vec![idx1.clone(), idx2.clone()], vec![1.0; 6]).unwrap();
-    let block = BlockTensor::new(vec![b1, b2], (2, 1));
+    let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     let replaced = block
         .replaceinds(
@@ -587,7 +587,7 @@ fn test_maxabs() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, -5.0], &idx);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
-    let block = BlockTensor::new(vec![b1, b2], (2, 1));
+    let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
 
     let m = block.maxabs();
     assert!((m - 5.0).abs() < 1e-10);
@@ -601,7 +601,7 @@ fn test_maxabs() {
 fn test_factorize_unsupported() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
-    let block = BlockTensor::new(vec![b1], (1, 1));
+    let block = BlockTensor::new(vec![b1], (1, 1)).unwrap();
 
     let result = block.factorize(&[idx], &FactorizeOptions::default());
     assert!(result.is_err());
@@ -612,8 +612,8 @@ fn test_direct_sum_unsupported() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
-    let block1 = BlockTensor::new(vec![b1], (1, 1));
-    let block2 = BlockTensor::new(vec![b2], (1, 1));
+    let block1 = BlockTensor::new(vec![b1], (1, 1)).unwrap();
+    let block2 = BlockTensor::new(vec![b2], (1, 1)).unwrap();
 
     let result = block1.direct_sum(&block2, &[(idx.clone(), idx.clone())]);
     assert!(result.is_err());
@@ -624,8 +624,8 @@ fn test_outer_product_unsupported() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
-    let block1 = BlockTensor::new(vec![b1], (1, 1));
-    let block2 = BlockTensor::new(vec![b2], (1, 1));
+    let block1 = BlockTensor::new(vec![b1], (1, 1)).unwrap();
+    let block2 = BlockTensor::new(vec![b2], (1, 1)).unwrap();
 
     let result = block1.outer_product(&block2);
     assert!(result.is_err());
@@ -635,7 +635,7 @@ fn test_outer_product_unsupported() {
 fn test_permuteinds_unsupported() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
-    let block = BlockTensor::new(vec![b1], (1, 1));
+    let block = BlockTensor::new(vec![b1], (1, 1)).unwrap();
 
     let result = block.permuteinds(&[idx]);
     assert!(result.is_err());
@@ -645,7 +645,7 @@ fn test_permuteinds_unsupported() {
 fn test_contract_unsupported() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
-    let block = BlockTensor::new(vec![b1], (1, 1));
+    let block = BlockTensor::new(vec![b1], (1, 1)).unwrap();
 
     let result = BlockTensor::<TensorDynLen>::contract(&[&block], AllowedPairs::All);
     assert!(result.is_err());
@@ -655,7 +655,7 @@ fn test_contract_unsupported() {
 fn test_contract_connected_unsupported() {
     let idx = DynIndex::new_dyn(2);
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
-    let block = BlockTensor::new(vec![b1], (1, 1));
+    let block = BlockTensor::new(vec![b1], (1, 1)).unwrap();
 
     let result = BlockTensor::<TensorDynLen>::contract_connected(&[&block], AllowedPairs::All);
     assert!(result.is_err());

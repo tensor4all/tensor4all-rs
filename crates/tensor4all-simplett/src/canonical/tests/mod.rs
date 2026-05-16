@@ -78,7 +78,7 @@ fn test_center_canonicalize_function_generic<T: TTScalar + Scalar + Default>() {
 
     let original_sum = tt.sum();
 
-    center_canonicalize(&mut tensors, 1);
+    center_canonicalize(&mut tensors, 1).unwrap();
 
     // Reconstruct and verify sum
     let tt_new = TensorTrain::from_tensors_unchecked(tensors);
@@ -119,6 +119,32 @@ fn test_evaluate_matches_original_generic<T: TTScalar + Scalar + Default>() {
             );
         }
     }
+}
+
+#[test]
+fn test_site_tensor_train_from_tensor_train_reports_qr_failure() {
+    let mut left = tensor3_zeros(1, 2, 1);
+    left.set3(0, 0, 0, f64::NAN);
+    left.set3(0, 1, 0, 1.0);
+    let right = tensor3_zeros(1, 2, 1);
+    let tt = TensorTrain::new(vec![left, right]).unwrap();
+
+    let err = SiteTensorTrain::from_tensor_train(&tt, 1).unwrap_err();
+
+    assert!(err.to_string().contains("QR decomposition failed"));
+}
+
+#[test]
+fn test_center_canonicalize_reports_qr_failure() {
+    let mut left = tensor3_zeros(1, 2, 1);
+    left.set3(0, 0, 0, f64::NAN);
+    left.set3(0, 1, 0, 1.0);
+    let right = tensor3_zeros(1, 2, 1);
+    let mut tensors = vec![left, right];
+
+    let err = center_canonicalize(&mut tensors, 1).unwrap_err();
+
+    assert!(err.to_string().contains("QR decomposition failed"));
 }
 
 // f64 tests

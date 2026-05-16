@@ -161,7 +161,12 @@ where
 
     if topology.nodes.len() == 1 {
         // Single node - just wrap the tensor
-        let node_name = topology.nodes.keys().next().unwrap().clone();
+        let node_name = topology
+            .nodes
+            .keys()
+            .next()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Tree topology must have at least one node"))?;
         if &node_name != root {
             return Err(anyhow::anyhow!("Requested root node not found in topology"));
         }
@@ -208,8 +213,12 @@ where
         adj.insert(node.clone(), Vec::new());
     }
     for (a, b) in &topology.edges {
-        adj.get_mut(a).unwrap().push(b.clone());
-        adj.get_mut(b).unwrap().push(a.clone());
+        adj.get_mut(a)
+            .ok_or_else(|| anyhow::anyhow!("Edge refers to unknown node {:?}", a))?
+            .push(b.clone());
+        adj.get_mut(b)
+            .ok_or_else(|| anyhow::anyhow!("Edge refers to unknown node {:?}", b))?
+            .push(a.clone());
     }
     // Sort each adjacency list to ensure deterministic traversal order
     for neighbors in adj.values_mut() {
@@ -235,11 +244,22 @@ where
         visited.insert(node.clone());
         traversal_order.push((node.clone(), parent));
 
-        for neighbor in adj.get(&node).unwrap() {
+        let neighbors = adj
+            .get(&node)
+            .ok_or_else(|| anyhow::anyhow!("Traversal reached unknown node {:?}", node))?;
+        for neighbor in neighbors {
             if !visited.contains(neighbor) {
                 queue.push_back((neighbor.clone(), Some(node.clone())));
             }
         }
+    }
+    if visited.len() != topology.nodes.len() {
+        return Err(anyhow::anyhow!(
+            "Tree topology must be connected: reached {} of {} nodes from root {:?}",
+            visited.len(),
+            topology.nodes.len(),
+            root
+        ));
     }
 
     let mut children_by_parent: HashMap<V, Vec<V>> = HashMap::new();
@@ -273,11 +293,15 @@ where
     };
 
     // Process nodes in post-order (leaves first)
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..traversal_order.len() - 1 {
-        let (node, _parent) = &traversal_order[i];
+    for (node, _parent) in traversal_order
+        .iter()
+        .take(traversal_order.len().saturating_sub(1))
+    {
         // Get the indices for this node.
-        let node_indices = topology.nodes.get(node).unwrap();
+        let node_indices = topology
+            .nodes
+            .get(node)
+            .ok_or_else(|| anyhow::anyhow!("Topology is missing node {:?}", node))?;
 
         // Keep this node's physical indices and the bonds to already-factorized
         // children on the left side. This preserves the requested tree topology
@@ -342,7 +366,9 @@ where
     }
 
     // The last node (root) gets the remaining tensor
-    let (root_node, _) = &traversal_order.last().unwrap();
+    let (root_node, _) = traversal_order
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("Tree traversal produced no nodes"))?;
     node_tensors.insert(root_node.clone(), current_tensor);
 
     // Build the TreeTN using from_tensors (auto-connection by contractable indices).
@@ -352,8 +378,13 @@ where
     node_names.sort();
     let tensors: Vec<T> = node_names
         .iter()
-        .map(|name| node_tensors.get(name).cloned().unwrap())
-        .collect();
+        .map(|name| {
+            node_tensors
+                .get(name)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("Missing tensor for topology node {:?}", name))
+        })
+        .collect::<Result<_>>()?;
 
     let mut tn = TreeTN::from_tensors(tensors, node_names)?;
     tn.set_canonical_region([root.clone()])?;

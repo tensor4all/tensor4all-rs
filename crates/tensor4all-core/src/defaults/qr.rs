@@ -42,8 +42,8 @@ pub enum QrError {
 /// let (q, r) = qr_with::<f64>(&tensor, &[i], &opts).unwrap();
 ///
 /// // Q * R recovers the original tensor
-/// let recovered = q.contract(&r);
-/// assert!(tensor.distance(&recovered) < 1e-12);
+/// let recovered = q.contract(&r).unwrap();
+/// assert!(tensor.distance(&recovered).unwrap() < 1e-12);
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct QrOptions {

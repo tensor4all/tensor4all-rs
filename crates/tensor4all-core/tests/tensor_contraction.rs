@@ -49,7 +49,7 @@ fn test_contract_dyn_len_matrix_multiplication() {
     let tensor_b = dense_f64(vec![j.clone(), k.clone()], vec![1.0; 12]);
 
     // Contract along j: result should be C[i, k] with all 3.0 (since each element is sum of 3 ones)
-    let result = tensor_a.contract(&tensor_b);
+    let result = tensor_a.contract(&tensor_b).unwrap();
     assert_eq!(result.dims(), vec![2, 4]);
     assert_eq!(result.indices.len(), 2);
     assert_eq!(result.indices[0].id, i.id);
@@ -74,7 +74,7 @@ fn test_mul_operator_contraction() {
     let tensor_b = dense_f64(vec![j.clone(), k.clone()], vec![1.0; 12]);
 
     // Contract along j using * operator: result should be C[i, k] with all 3.0
-    let result = &tensor_a * &tensor_b;
+    let result = tensor_a.contract(&tensor_b).unwrap();
     assert_eq!(result.dims(), vec![2, 4]);
     assert_eq!(result.indices.len(), 2);
     assert_eq!(result.indices[0].id, i.id);
@@ -95,7 +95,7 @@ fn test_mul_operator_owned() {
     let tensor_b = dense_f64(vec![j.clone(), k.clone()], vec![1.0; 12]);
 
     // Use * operator with owned tensors
-    let result = tensor_a * tensor_b;
+    let result = tensor_a.contract(&tensor_b).unwrap();
     assert_eq!(result.dims(), vec![2, 4]);
     assert_eq!(result.indices.len(), 2);
 }
@@ -111,7 +111,7 @@ fn test_contract_no_common_indices_gives_outer_product() {
     let tensor_b = TensorDynLen::zeros::<f64>(vec![k.clone()]).unwrap();
 
     // No common indices → outer product
-    let result = tensor_a.contract(&tensor_b);
+    let result = tensor_a.contract(&tensor_b).unwrap();
     assert_eq!(result.dims(), vec![2, 3, 4]);
     assert_eq!(result.indices.len(), 3);
 }
@@ -124,7 +124,7 @@ fn test_contract_no_common_indices_preserves_left_then_right_index_order_and_val
     let tensor_a = TensorDynLen::from_dense(vec![i.clone()], vec![2.0, -1.0]).unwrap();
     let tensor_b = TensorDynLen::from_dense(vec![j.clone()], vec![3.0, 4.0, -2.0]).unwrap();
 
-    let result = tensor_a.contract(&tensor_b);
+    let result = tensor_a.contract(&tensor_b).unwrap();
 
     assert_eq!(result.indices, vec![i, j]);
     let expected = TensorDynLen::from_dense(
@@ -147,10 +147,10 @@ fn structured_tensor_contract_materializes_to_correct_dense_result() {
     assert!(diag.is_diag());
     let dense = TensorDynLen::from_dense(vec![j, k.clone()], vec![5.0, 7.0, 11.0, 13.0]).unwrap();
 
-    let result = diag.contract(&dense);
+    let result = diag.contract(&dense).unwrap();
 
     let expected = TensorDynLen::from_dense(vec![i, k], vec![10.0, 21.0, 22.0, 39.0]).unwrap();
-    assert!((&result - &expected).maxabs() < 1e-12);
+    assert!(result.sub(&expected).unwrap().maxabs() < 1e-12);
 }
 
 #[test]
@@ -177,7 +177,7 @@ fn general_structured_contract_preserves_output_axis_classes() {
     )
     .unwrap();
 
-    let result = structured.contract(&dense);
+    let result = structured.contract(&dense).unwrap();
 
     assert_eq!(result.indices, vec![i, k, l]);
     assert_eq!(result.storage().storage_kind(), StorageKind::Structured);
@@ -208,7 +208,7 @@ fn test_contract_three_indices() {
     let tensor_b = dense_f64(vec![j.clone(), k.clone(), l.clone()], vec![1.0; 60]);
 
     // Contract along j and k: result should be C[i, l] with all 12.0 (3 * 4 = 12)
-    let result = tensor_a.contract(&tensor_b);
+    let result = tensor_a.contract(&tensor_b).unwrap();
     assert_eq!(result.dims(), vec![2, 5]);
     assert_eq!(result.indices.len(), 2);
     assert_eq!(result.indices[0].id, i.id);
@@ -242,7 +242,7 @@ fn test_contract_mixed_f64_c64() {
     // Contract along j: result should be C[i, k] (Complex64)
     // Expected result: [[1+2i + 5+6i, 3+4i + 7+8i], [1+2i + 5+6i, 3+4i + 7+8i]]
     //                  = [[6+8i, 10+12i], [6+8i, 10+12i]]
-    let result = tensor_a.contract(&tensor_b);
+    let result = tensor_a.contract(&tensor_b).unwrap();
     assert_eq!(result.dims(), vec![2, 2]);
     assert_eq!(result.indices.len(), 2);
     assert_eq!(result.indices[0].id, i.id);
@@ -289,7 +289,7 @@ fn test_contract_mixed_c64_f64() {
     // C[0,1] = (1+2i)*1 + (3+4i)*1 = 4+6i
     // C[1,0] = (5+6i)*1 + (7+8i)*1 = 12+14i
     // C[1,1] = (5+6i)*1 + (7+8i)*1 = 12+14i
-    let result = tensor_a.contract(&tensor_b);
+    let result = tensor_a.contract(&tensor_b).unwrap();
     assert_eq!(result.dims(), vec![2, 2]);
 
     assert_eq!(
@@ -488,7 +488,7 @@ fn test_scalar_times_tensor() {
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data.clone()).unwrap();
 
-    let result = scalar.contract(&tensor);
+    let result = scalar.contract(&tensor).unwrap();
     assert_eq!(result.dims(), vec![2, 3]);
     assert_eq!(result.to_vec::<f64>().unwrap(), data);
 }
@@ -501,7 +501,7 @@ fn test_tensor_times_scalar() {
     let data = vec![10.0, 20.0];
     let tensor = TensorDynLen::from_dense(vec![i.clone()], data.clone()).unwrap();
 
-    let result = tensor.contract(&scalar);
+    let result = tensor.contract(&scalar).unwrap();
     assert_eq!(result.dims(), vec![2]);
     assert_eq!(result.to_vec::<f64>().unwrap(), data);
 }
@@ -511,7 +511,7 @@ fn test_scalar_times_scalar() {
     let s1 = TensorDynLen::scalar(3.0).unwrap();
     let s2 = TensorDynLen::scalar(5.0).unwrap();
 
-    let result = s1.contract(&s2);
+    let result = s1.contract(&s2).unwrap();
     assert_eq!(result.dims().len(), 0);
     let val = result.to_vec::<f64>().unwrap();
     assert_eq!(val.len(), 1);
@@ -526,7 +526,7 @@ fn test_mul_operator_scalar_times_tensor() {
     let data = vec![1.0, 2.0, 3.0];
     let tensor = TensorDynLen::from_dense(vec![i.clone()], data.clone()).unwrap();
 
-    let result = &scalar * &tensor;
+    let result = scalar.contract(&tensor).unwrap();
     assert_eq!(result.dims(), vec![3]);
     assert_eq!(result.to_vec::<f64>().unwrap(), data);
 }
@@ -540,8 +540,8 @@ fn test_foldl_sequential_contraction() {
     let b = TensorDynLen::from_dense(vec![j.clone(), i.clone()], vec![2.0; 6]).unwrap();
 
     let mut acc = TensorDynLen::scalar_one().unwrap();
-    acc = &acc * &a; // acc = a (outer product with scalar)
-    acc = &acc * &b; // acc = contract(a, b) over i and j
+    acc = acc.contract(&a).unwrap(); // acc = a (outer product with scalar)
+    acc = acc.contract(&b).unwrap(); // acc = contract(a, b) over i and j
 
     // a[i,j] * b[j,i] = sum_j(a[i,j]*b[j,i]) summed over both → scalar
     assert_eq!(acc.dims().len(), 0);

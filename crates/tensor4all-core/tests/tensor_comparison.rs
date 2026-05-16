@@ -12,7 +12,7 @@ fn test_sub_identical_tensors_is_zero() {
     )
     .unwrap();
 
-    let diff = &a - &a;
+    let diff = a.sub(&a).unwrap();
     assert!(diff.norm() < 1e-14);
     assert!(diff.maxabs() < 1e-14);
 }
@@ -23,7 +23,7 @@ fn test_sub_different_tensors() {
     let a = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 5.0]).unwrap();
     let b = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
 
-    let diff = &a - &b;
+    let diff = a.sub(&b).unwrap();
     let data = diff.to_vec::<f64>().unwrap();
     assert!((data[0] - 2.0).abs() < 1e-14);
     assert!((data[1] - 3.0).abs() < 1e-14);
@@ -45,7 +45,7 @@ fn test_sub_permuted_indices() {
     )
     .unwrap();
 
-    let diff = &a - &b;
+    let diff = a.sub(&b).unwrap();
     assert!(diff.maxabs() < 1e-14);
 }
 
@@ -54,7 +54,7 @@ fn test_neg() {
     let i = Index::new_dyn(3);
     let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, -2.0, 3.0]).unwrap();
 
-    let neg_a = -&a;
+    let neg_a = a.neg().unwrap();
     let data = neg_a.to_vec::<f64>().unwrap();
     assert!((data[0] - (-1.0)).abs() < 1e-14);
     assert!((data[1] - 2.0).abs() < 1e-14);
@@ -78,7 +78,7 @@ fn test_maxabs_scalar() {
 fn test_maxabs_diag_f64() {
     let i = Index::new_dyn(4);
     let j = Index::new_dyn(4);
-    let d = diag_tensor_dyn_len(vec![i, j], vec![1.0, -5.0, 3.0, -2.0]);
+    let d = diag_tensor_dyn_len(vec![i, j], vec![1.0, -5.0, 3.0, -2.0]).unwrap();
     assert!((d.maxabs() - 5.0).abs() < 1e-14);
 }
 
@@ -147,16 +147,16 @@ fn test_sub_operator_owned() {
     let b = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 3.0]).unwrap();
 
     // owned - owned
-    let diff = a.clone() - b.clone();
+    let diff = a.sub(&b).unwrap();
     let data = diff.to_vec::<f64>().unwrap();
     assert!((data[0] - 4.0).abs() < 1e-14);
     assert!((data[1] - 7.0).abs() < 1e-14);
 
     // owned - ref
-    let diff2 = a.clone() - &b;
+    let diff2 = a.sub(&b).unwrap();
     assert!(diff2.isapprox(&diff, 1e-14, 0.0));
 
     // ref - owned
-    let diff3 = &a - b.clone();
+    let diff3 = a.sub(&b).unwrap();
     assert!(diff3.isapprox(&diff, 1e-14, 0.0));
 }

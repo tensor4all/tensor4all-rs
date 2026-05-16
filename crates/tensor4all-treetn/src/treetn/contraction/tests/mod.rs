@@ -158,7 +158,7 @@ fn test_contract_to_tensor_two_nodes() {
         vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     )
     .unwrap();
-    let expected = t0.contract(&t1).to_vec::<f64>().unwrap();
+    let expected = t0.contract(&t1).unwrap().to_vec::<f64>().unwrap();
 
     let result_data = result.to_vec::<f64>().unwrap();
     assert_eq!(result_data.len(), expected.len());
@@ -336,7 +336,7 @@ fn test_naive_contraction_scalar_result() {
 
     assert_eq!(result.node_count(), 1);
     let dense = result.contract_to_tensor().unwrap();
-    let val = dense.sum().real();
+    let val = dense.sum().unwrap().real();
     assert!(
         (val - 6.0).abs() < 1e-10,
         "scalar contraction expected 6.0, got {}",

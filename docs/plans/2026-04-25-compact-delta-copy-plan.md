@@ -176,7 +176,7 @@ fn naive_apply_noncontiguous_bonded_identity_uses_compact_bridge_delta() {
     let result = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
     let result_dense = result.to_dense().unwrap();
     let state_dense = state.to_dense().unwrap();
-    assert!((&result_dense - &state_dense).maxabs() < 1e-10);
+    assert!(result_dense.distance(&state_dense).unwrap() < 1e-10);
 }
 ```
 

@@ -53,7 +53,7 @@ fn test_submatrix_argmax() {
 fn test_mat_mul() {
     let a = from_vec2d(vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
     let b = from_vec2d(vec![vec![5.0, 6.0], vec![7.0, 8.0]]);
-    let c = mat_mul(&a, &b);
+    let c = mat_mul(&a, &b).unwrap();
 
     assert_eq!(c[[0, 0]], 19.0);
     assert_eq!(c[[0, 1]], 22.0);
@@ -65,7 +65,7 @@ fn test_mat_mul() {
 fn test_mat_mul_rectangular_preserves_column_major_layout() {
     let a = from_vec2d(vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]]);
     let b = from_vec2d(vec![vec![7.0, 8.0], vec![9.0, 10.0], vec![11.0, 12.0]]);
-    let c = mat_mul(&a, &b);
+    let c = mat_mul(&a, &b).unwrap();
 
     assert_eq!(c.nrows(), 2);
     assert_eq!(c.ncols(), 2);
@@ -74,4 +74,14 @@ fn test_mat_mul_rectangular_preserves_column_major_layout() {
     assert_eq!(c[[1, 0]], 139.0);
     assert_eq!(c[[1, 1]], 154.0);
     assert_eq!(c.as_col_major_slice(), &[58.0, 139.0, 64.0, 154.0]);
+}
+
+#[test]
+fn mat_mul_reports_dimension_mismatch() {
+    let a = Matrix::from_col_major_vec(2, 3, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    let b = Matrix::from_col_major_vec(2, 2, vec![1.0, 3.0, 2.0, 4.0]);
+
+    let err = mat_mul(&a, &b).unwrap_err();
+
+    assert!(err.to_string().contains("matrix dimensions"));
 }

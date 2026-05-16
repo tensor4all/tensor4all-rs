@@ -1,5 +1,6 @@
 //! Core types for tensor train operations
 
+use crate::error::{Result, TensorTrainError};
 use crate::tensor::Tensor;
 pub use crate::tensor::Tensor3;
 use tenferro_tensor::{TensorScalar, TypedTensor as TfTensor};
@@ -155,9 +156,9 @@ pub fn tensor3_zeros<T: Clone + Default + TensorScalar>(
 
 /// Create a rank-3 tensor from flat data in **column-major** order.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if `data.len() != left_dim * site_dim * right_dim`.
+/// Returns an error if `data.len() != left_dim * site_dim * right_dim`.
 ///
 /// # Examples
 ///
@@ -165,7 +166,7 @@ pub fn tensor3_zeros<T: Clone + Default + TensorScalar>(
 /// use tensor4all_simplett::{tensor3_from_data, Tensor3Ops};
 ///
 /// // 1 x 2 x 1 tensor, column-major data: [10.0, 20.0]
-/// let t = tensor3_from_data(vec![10.0, 20.0], 1, 2, 1);
+/// let t = tensor3_from_data(vec![10.0, 20.0], 1, 2, 1).unwrap();
 /// assert_eq!(*t.get3(0, 0, 0), 10.0);
 /// assert_eq!(*t.get3(0, 1, 0), 20.0);
 /// ```
@@ -174,11 +175,17 @@ pub fn tensor3_from_data<T: TensorScalar>(
     left_dim: usize,
     site_dim: usize,
     right_dim: usize,
-) -> Tensor3<T> {
-    assert_eq!(data.len(), left_dim * site_dim * right_dim);
+) -> Result<Tensor3<T>> {
+    let expected = left_dim * site_dim * right_dim;
+    if data.len() != expected {
+        return Err(TensorTrainError::DataLengthMismatch {
+            expected,
+            got: data.len(),
+        });
+    }
     let dims = [left_dim, site_dim, right_dim];
     let inner = TfTensor::from_vec(dims.to_vec(), data);
-    Tensor::from_tenferro(inner)
+    Ok(Tensor::from_tenferro_unchecked(inner))
 }
 
 #[cfg(test)]

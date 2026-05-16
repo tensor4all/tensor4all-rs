@@ -14,6 +14,12 @@ use crate::types::Tensor3Ops;
 use tensor4all_tcicore::Scalar;
 use tensor4all_tensorbackend::Matrix;
 
+fn contraction_helper_error(context: &str, err: impl std::fmt::Display) -> TensorTrainError {
+    TensorTrainError::InvalidOperation {
+        message: format!("{context}: {err}"),
+    }
+}
+
 /// Options for MPO-MPO contraction with on-the-fly compression.
 ///
 /// # Examples
@@ -103,10 +109,11 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> TensorTrain<T> {
         let mut result = Matrix::from_col_major_vec(
             a0.right_dim(),
             b0.right_dim(),
-            tensor_to_col_major_vec(&einsum_tensors(
-                "asr,ast->rt",
-                &[a0.as_inner(), b0.as_inner()],
-            )),
+            tensor_to_col_major_vec(
+                &einsum_tensors("asr,ast->rt", &[a0.as_inner(), b0.as_inner()]).map_err(|err| {
+                    contraction_helper_error("Failed to contract first dot site", err)
+                })?,
+            ),
         );
 
         // Contract through remaining sites
@@ -128,15 +135,23 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> TensorTrain<T> {
             let result_tf = typed_tensor_from_col_major_slice(
                 result.as_col_major_slice(),
                 &[result.nrows(), result.ncols()],
-            );
+            )
+            .map_err(|err| {
+                contraction_helper_error("Failed to prepare intermediate dot environment", err)
+            })?;
 
             result = Matrix::from_col_major_vec(
                 a.right_dim(),
                 b.right_dim(),
-                tensor_to_col_major_vec(&einsum_tensors(
-                    "ij,isk,jsl->kl",
-                    &[&result_tf, a.as_inner(), b.as_inner()],
-                )),
+                tensor_to_col_major_vec(
+                    &einsum_tensors("ij,isk,jsl->kl", &[&result_tf, a.as_inner(), b.as_inner()])
+                        .map_err(|err| {
+                            contraction_helper_error(
+                                &format!("Failed to contract dot site {i}"),
+                                err,
+                            )
+                        })?,
+                ),
             );
         }
 

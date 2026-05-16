@@ -5,6 +5,7 @@ use crate::types::{
 };
 use num_complex::Complex64;
 use std::ffi::CStr;
+use tensor4all_core::AnyScalar;
 
 fn last_error() -> String {
     let mut len = 0usize;
@@ -175,7 +176,8 @@ fn read_payload_c64(tensor: *const t4a_tensor) -> Vec<f64> {
 }
 
 fn assert_tensors_close(actual: &InternalTensor, expected: &InternalTensor, tol: f64) {
-    let diff = actual - expected;
+    let neg_expected = expected.scale(AnyScalar::new_real(-1.0)).unwrap();
+    let diff = actual.add(&neg_expected).unwrap();
     let maxabs = diff.maxabs();
     assert!(
         maxabs < tol,
@@ -192,16 +194,16 @@ fn reconstruct_svd(
     let s = unsafe { (*s).inner() };
     let mut perm = vec![v.indices.len() - 1];
     perm.extend(0..(v.indices.len() - 1));
-    let vh = v.conj().permute(&perm);
-    let svh = s.contract(&vh);
+    let vh = v.conj().permute(&perm).unwrap();
+    let svh = s.contract(&vh).unwrap();
     let sim_bond = s.indices[1].clone();
     let bond = v.indices[v.indices.len() - 1].clone();
-    let svh = svh.replaceind(&sim_bond, &bond);
-    unsafe { (*u).inner().contract(&svh) }
+    let svh = svh.replaceind(&sim_bond, &bond).unwrap();
+    unsafe { (*u).inner().contract(&svh).unwrap() }
 }
 
 fn reconstruct_qr(q: *const t4a_tensor, r: *const t4a_tensor) -> InternalTensor {
-    unsafe { (*q).inner().contract((*r).inner()) }
+    unsafe { (*q).inner().contract((*r).inner()).unwrap() }
 }
 
 fn internal_tensor_f64(indices: &[*const t4a_index], data: &[f64]) -> InternalTensor {

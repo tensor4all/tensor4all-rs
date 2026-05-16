@@ -1064,7 +1064,7 @@ where
     /// assert_eq!(result.node_count(), 1);
     /// let dense = result.contract_to_tensor()?;
     /// let expected = treetn.contract_to_tensor()?;
-    /// assert!((&dense - &expected).maxabs() < 1e-12);
+    /// assert!(dense.distance(&expected).unwrap() < 1e-12);
     /// # Ok::<(), anyhow::Error>(())
     /// # }
     /// ```
@@ -1202,7 +1202,7 @@ mod tests {
 
         assert_eq!(result.node_count(), 1);
         assert_eq!(result.site_index_network().node_count(), 1);
-        assert!((&dense_actual - &dense_expected).maxabs() < 1e-12);
+        assert!(dense_actual.distance(&dense_expected).unwrap() < 1e-12);
 
         Ok(())
     }
@@ -1236,7 +1236,7 @@ mod tests {
         let dense_actual = result.contract_to_tensor()?;
 
         assert_eq!(result.node_count(), 2);
-        assert!((&dense_actual - &dense_expected).maxabs() < 1e-12);
+        assert!(dense_actual.distance(&dense_expected).unwrap() < 1e-12);
 
         Ok(())
     }
@@ -1294,7 +1294,7 @@ mod tests {
                 .map(|name| name.as_str()),
             Some("Z")
         );
-        assert!((&dense_actual - &dense_expected).maxabs() < 1e-10);
+        assert!(dense_actual.distance(&dense_expected).unwrap() < 1e-10);
 
         Ok(())
     }
@@ -1357,7 +1357,7 @@ mod tests {
                 .map(|name| name.as_str()),
             Some("Z")
         );
-        assert!((&dense_actual - &dense_expected).maxabs() < 1e-10);
+        assert!(dense_actual.distance(&dense_expected).unwrap() < 1e-10);
 
         Ok(())
     }
@@ -1414,7 +1414,7 @@ mod tests {
                 .map(|name| name.as_str()),
             Some("Y")
         );
-        assert!((&dense_actual - &dense_expected).maxabs() < 1e-10);
+        assert!(dense_actual.distance(&dense_expected).unwrap() < 1e-10);
 
         Ok(())
     }
@@ -1471,7 +1471,7 @@ mod tests {
                 .map(|name| name.as_str()),
             Some("Y")
         );
-        assert!((&dense_actual - &dense_expected).maxabs() < 1e-10);
+        assert!(dense_actual.distance(&dense_expected).unwrap() < 1e-10);
 
         Ok(())
     }
@@ -1558,7 +1558,7 @@ mod tests {
         );
         let dense_expected = tn.contract_to_tensor()?;
         let dense_actual = result.contract_to_tensor()?;
-        assert!((&dense_actual - &dense_expected).maxabs() < 1e-12);
+        assert!(dense_actual.distance(&dense_expected).unwrap() < 1e-12);
         Ok(())
     }
 
@@ -1637,7 +1637,7 @@ mod tests {
         );
         let dense_expected = tn.contract_to_tensor()?;
         let dense_actual = result.contract_to_tensor()?;
-        assert!((&dense_actual - &dense_expected).maxabs() < 1e-12);
+        assert!(dense_actual.distance(&dense_expected).unwrap() < 1e-12);
         Ok(())
     }
 
@@ -1696,7 +1696,7 @@ mod tests {
         assert_eq!(result.node_count(), 2);
         let dense_expected = tn.contract_to_tensor()?;
         let dense_actual = result.contract_to_tensor()?;
-        assert!((&dense_actual - &dense_expected).maxabs() < 1e-12);
+        assert!(dense_actual.distance(&dense_expected).unwrap() < 1e-12);
         Ok(())
     }
 }

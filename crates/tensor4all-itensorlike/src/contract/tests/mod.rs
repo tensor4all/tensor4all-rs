@@ -20,12 +20,16 @@ fn idx(id: u64, size: usize) -> DynIndex {
 /// Converts both TTs to dense, contracts the dense tensors, then compares
 /// with the TT contraction result using `isapprox`.
 fn assert_matches_naive(tt1: &TensorTrain, tt2: &TensorTrain, result: &TensorTrain) {
-    let naive_result = tt1.to_dense().unwrap().contract(&tt2.to_dense().unwrap());
+    let naive_result = tt1
+        .to_dense()
+        .unwrap()
+        .contract(&tt2.to_dense().unwrap())
+        .unwrap();
     let result_dense = result.to_dense().unwrap();
     assert!(
         result_dense.isapprox(&naive_result, 1e-10, 0.0),
         "TT contraction result does not match naive: maxabs diff = {}",
-        (&result_dense - &naive_result).maxabs()
+        result_dense.distance(&naive_result).unwrap()
     );
 }
 
@@ -369,7 +373,11 @@ fn test_contract_zipup_with_truncation() {
     }
 
     // Compare with naive (exact) result — should be approximate, not exact
-    let naive_result = tt1.to_dense().unwrap().contract(&tt2.to_dense().unwrap());
+    let naive_result = tt1
+        .to_dense()
+        .unwrap()
+        .contract(&tt2.to_dense().unwrap())
+        .unwrap();
     let naive_data = naive_result.to_vec::<f64>().unwrap();
     let result_data = result.to_dense().unwrap().to_vec::<f64>().unwrap();
 

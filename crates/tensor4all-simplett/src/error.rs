@@ -60,6 +60,15 @@ pub enum TensorTrainError {
     #[error("Tensor train is empty")]
     Empty,
 
+    /// Flat tensor data did not match the requested shape.
+    #[error("Tensor data length mismatch: expected {expected} elements, got {got}")]
+    DataLengthMismatch {
+        /// The element count implied by the requested shape.
+        expected: usize,
+        /// The number of elements supplied by the caller.
+        got: usize,
+    },
+
     /// Invalid operation
     #[error("Invalid operation: {message}")]
     InvalidOperation {

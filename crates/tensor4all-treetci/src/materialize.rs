@@ -1,6 +1,7 @@
 use crate::{
     assemble::{assemble_points_column_major, MultiIndex},
-    assemble_global_point, GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge,
+    assemble_global_point, column_2d, ncols_2d, GlobalIndexBatch, SubtreeKey, TreeTCI2,
+    TreeTciEdge,
 };
 use anyhow::{ensure, Result};
 use num_complex::{Complex32, Complex64};
@@ -96,8 +97,18 @@ where
     let mut bond_indices = HashMap::new();
     for edge in state.graph.edges() {
         let (left_key, right_key) = state.graph.subregion_vertices(edge)?;
-        let left_rank = state.ijset.get(&left_key).map_or(0, |arr| arr.ncols());
-        let right_rank = state.ijset.get(&right_key).map_or(0, |arr| arr.ncols());
+        let left_rank = state
+            .ijset
+            .get(&left_key)
+            .map(ncols_2d)
+            .transpose()?
+            .unwrap_or(0);
+        let right_rank = state
+            .ijset
+            .get(&right_key)
+            .map(ncols_2d)
+            .transpose()?
+            .unwrap_or(0);
         ensure!(
             left_rank == right_rank,
             "bond ranks disagree across edge {:?}: left {}, right {}",
@@ -189,8 +200,8 @@ where
     let p_rows = state
         .ijset
         .get(&site_side_key)
-        .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", site_side_key))?
-        .ncols();
+        .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", site_side_key))
+        .and_then(ncols_2d)?;
     ensure!(
         p_rows == cols,
         "pivot matrix for site {} is not square: {} x {}",
@@ -223,8 +234,8 @@ fn product_pivot_dims<T>(state: &TreeTCI2<T>, keys: &[SubtreeKey]) -> Result<usi
         let dim = state
             .ijset
             .get(key)
-            .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", key))?
-            .ncols();
+            .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", key))
+            .and_then(ncols_2d)?;
         product = product.saturating_mul(dim.max(1));
     }
     Ok(product)
@@ -291,9 +302,9 @@ fn cartesian_entries(
             let arr = ijset
                 .get(key)
                 .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", key))?;
-            let columns: Vec<MultiIndex> = (0..arr.ncols())
-                .map(|j| arr.column(j).expect("column index in range").to_vec())
-                .collect();
+            let columns: Vec<MultiIndex> = (0..ncols_2d(arr)?)
+                .map(|j| column_2d(arr, j).map(|column| column.to_vec()))
+                .collect::<Result<_>>()?;
             Ok(columns)
         })
         .collect::<Result<Vec<_>>>()?;

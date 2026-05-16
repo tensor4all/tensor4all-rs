@@ -9,20 +9,22 @@ use tensor4all_treetn::{
 
 fn two_site_tensor_train_f64() -> TensorTrain<f64> {
     TensorTrain::new(vec![
-        tensor3_from_data(vec![1.0, 2.0, 3.0, 4.0], 1, 2, 2),
-        tensor3_from_data(vec![1.0, 0.5, -1.0, 2.0], 2, 2, 1),
+        tensor3_from_data(vec![1.0, 2.0, 3.0, 4.0], 1, 2, 2).unwrap(),
+        tensor3_from_data(vec![1.0, 0.5, -1.0, 2.0], 2, 2, 1).unwrap(),
     ])
     .expect("valid two-site tensor train")
 }
 
 fn single_site_tensor_train_f64() -> TensorTrain<f64> {
-    TensorTrain::new(vec![tensor3_from_data(vec![1.0, -2.0, 3.5], 1, 3, 1)])
-        .expect("valid single-site tensor train")
+    TensorTrain::new(vec![
+        tensor3_from_data(vec![1.0, -2.0, 3.5], 1, 3, 1).unwrap()
+    ])
+    .expect("valid single-site tensor train")
 }
 
 fn three_site_tensor_train_f64() -> TensorTrain<f64> {
     TensorTrain::new(vec![
-        tensor3_from_data(vec![1.0, 2.0, 3.0, 4.0], 1, 2, 2),
+        tensor3_from_data(vec![1.0, 2.0, 3.0, 4.0], 1, 2, 2).unwrap(),
         tensor3_from_data(
             vec![
                 1.0, 0.5, -1.0, 2.0, //
@@ -31,8 +33,9 @@ fn three_site_tensor_train_f64() -> TensorTrain<f64> {
             2,
             2,
             2,
-        ),
-        tensor3_from_data(vec![0.5, 1.5, -2.0, 1.0], 2, 2, 1),
+        )
+        .unwrap(),
+        tensor3_from_data(vec![0.5, 1.5, -2.0, 1.0], 2, 2, 1).unwrap(),
     ])
     .expect("valid three-site tensor train")
 }
@@ -49,7 +52,8 @@ fn two_site_tensor_train_c64() -> TensorTrain<Complex64> {
             1,
             2,
             2,
-        ),
+        )
+        .unwrap(),
         tensor3_from_data(
             vec![
                 Complex64::new(1.0, -0.5),
@@ -60,7 +64,8 @@ fn two_site_tensor_train_c64() -> TensorTrain<Complex64> {
             2,
             2,
             1,
-        ),
+        )
+        .unwrap(),
     ])
     .expect("valid complex two-site tensor train")
 }
@@ -76,7 +81,7 @@ fn tensor_train_to_treetn_preserves_dense_values() -> Result<()> {
 
     assert_eq!(treetn.node_names(), vec![0, 1]);
     assert_eq!(site_indices.len(), tt.len());
-    assert!((&dense - &expected).maxabs() < 1.0e-12);
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
     Ok(())
 }
 
@@ -101,7 +106,7 @@ fn tensor_train_to_treetn_supports_complex_scalars() -> Result<()> {
     let (values, _shape) = tt.fulltensor();
     let expected = TensorDynLen::from_dense(site_indices, values)?;
 
-    assert!((&dense - &expected).maxabs() < 1.0e-12);
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
     Ok(())
 }
 
@@ -137,7 +142,7 @@ fn tensor_train_to_treetn_single_site_preserves_dense_values() -> Result<()> {
 
     assert_eq!(treetn.node_names(), vec![0]);
     assert_eq!(site_indices.len(), 1);
-    assert!((&dense - &expected).maxabs() < 1.0e-12);
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
     Ok(())
 }
 
@@ -151,7 +156,7 @@ fn tensor_train_to_treetn_three_site_preserves_dense_values() -> Result<()> {
     let expected = TensorDynLen::from_dense(site_indices, values)?;
 
     assert_eq!(treetn.node_names(), vec![0, 1, 2]);
-    assert!((&dense - &expected).maxabs() < 1.0e-12);
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
     Ok(())
 }
 

@@ -1,7 +1,7 @@
 //! Compression algorithms for tensor trains
 
 use crate::einsum_helper::{tensor_to_col_major_vec, typed_tensor_from_col_major_slice};
-use crate::error::Result;
+use crate::error::{Result, TensorTrainError};
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
@@ -219,7 +219,10 @@ where
         });
     }
 
-    let a_tensor = typed_tensor_from_col_major_slice(matrix.as_col_major_slice(), &[m, n]);
+    let a_tensor = typed_tensor_from_col_major_slice(matrix.as_col_major_slice(), &[m, n])
+        .map_err(|err| TensorTrainError::InvalidOperation {
+            message: format!("Failed to prepare SVD input matrix: {err}"),
+        })?;
 
     let svd_result = tensor4all_tensorbackend::svd_backend(&a_tensor).map_err(|e| {
         crate::error::TensorTrainError::InvalidOperation {
@@ -375,7 +378,11 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
             let next_mat = tensor3_to_right_matrix(&tensors[ell + 1]);
 
             // Multiply: right_factor * next_mat
-            let contracted = mat_mul(&right_factor, &next_mat);
+            let contracted = mat_mul(&right_factor, &next_mat).map_err(|err| {
+                TensorTrainError::InvalidOperation {
+                    message: format!("left-to-right compression multiply failed: {err}"),
+                }
+            })?;
 
             // Update next tensor
             let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim);
@@ -425,7 +432,11 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
             let prev_mat = tensor3_to_left_matrix(&tensors[ell - 1]);
 
             // Multiply: prev_mat * left_factor
-            let contracted = mat_mul(&prev_mat, &left_factor);
+            let contracted = mat_mul(&prev_mat, &left_factor).map_err(|err| {
+                TensorTrainError::InvalidOperation {
+                    message: format!("right-to-left compression multiply failed: {err}"),
+                }
+            })?;
 
             // Update prev tensor
             let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim);

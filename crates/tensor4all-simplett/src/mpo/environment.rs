@@ -10,6 +10,13 @@ use super::factorize::SVDScalar;
 use super::mpo::MPO;
 use super::types::{Tensor4, Tensor4Ops};
 use super::{matrix2_zeros, Matrix2};
+
+fn mpo_helper_error(context: &str, err: impl std::fmt::Display) -> MPOError {
+    MPOError::InvalidOperation {
+        message: format!("{context}: {err}"),
+    }
+}
+
 /// Contract two 4D site tensors over their shared physical index
 ///
 /// Given two 4D tensors:
@@ -57,10 +64,13 @@ where
     // TODO: Remove this materialization once tenferro supports reshaping
     // layout-compatible strided views directly.
     // Tracking issue: https://github.com/tensor4all/tenferro-rs/issues/575
-    let contracted = einsum_tensors("askr,bktq->bastqr", &[a.as_inner(), b.as_inner()]);
-    let reshaped = typed_tensor_reshape(&contracted, &[new_left, new_s1, new_s2, new_right]);
+    let contracted = einsum_tensors("askr,bktq->bastqr", &[a.as_inner(), b.as_inner()])
+        .map_err(|err| mpo_helper_error("Failed to contract MPO site tensors", err))?;
+    let reshaped = typed_tensor_reshape(&contracted, &[new_left, new_s1, new_s2, new_right])
+        .map_err(|err| mpo_helper_error("Failed to reshape contracted MPO site tensor", err))?;
 
-    Ok(Tensor4::from_tenferro(reshaped))
+    Tensor4::from_tenferro(reshaped)
+        .map_err(|err| mpo_helper_error("Contracted MPO site tensor has invalid rank", err))
 }
 
 /// Compute the left environment at site i for MPO contraction
@@ -94,8 +104,8 @@ where
     }
 
     // Check cache
-    if site <= cache.len() && cache[site - 1].is_some() {
-        return Ok(cache[site - 1].as_ref().unwrap().clone());
+    if let Some(Some(cached)) = cache.get(site - 1) {
+        return Ok(cached.clone());
     }
 
     // Recursively compute from the left
@@ -120,10 +130,13 @@ where
         });
     }
 
-    let new_env = Matrix2::from_tenferro(einsum_tensors(
+    let new_env_tensor = einsum_tensors(
         "ab,asdr,bsdt->rt",
         &[prev_env.as_inner(), a.as_inner(), b.as_inner()],
-    ));
+    )
+    .map_err(|err| mpo_helper_error("Failed to compute left MPO environment", err))?;
+    let new_env = Matrix2::from_tenferro(new_env_tensor)
+        .map_err(|err| mpo_helper_error("Left MPO environment has invalid rank", err))?;
 
     // Update cache
     while cache.len() < site {
@@ -168,8 +181,8 @@ where
 
     // Check cache
     let cache_idx = n - site - 2;
-    if cache_idx < cache.len() && cache[cache_idx].is_some() {
-        return Ok(cache[cache_idx].as_ref().unwrap().clone());
+    if let Some(Some(cached)) = cache.get(cache_idx) {
+        return Ok(cached.clone());
     }
 
     // Recursively compute from the right
@@ -194,10 +207,13 @@ where
         });
     }
 
-    let new_env = Matrix2::from_tenferro(einsum_tensors(
+    let new_env_tensor = einsum_tensors(
         "rt,asdr,bsdt->ab",
         &[prev_env.as_inner(), a.as_inner(), b.as_inner()],
-    ));
+    )
+    .map_err(|err| mpo_helper_error("Failed to compute right MPO environment", err))?;
+    let new_env = Matrix2::from_tenferro(new_env_tensor)
+        .map_err(|err| mpo_helper_error("Right MPO environment has invalid rank", err))?;
 
     // Update cache
     while cache.len() <= cache_idx {

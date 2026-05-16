@@ -529,7 +529,13 @@ fn collect_single_site_indices(tn: &InternalTreeTN, what: &str) -> CapiResult<Ve
                 ),
             ));
         }
-        site_indices.push(site_space.iter().next().unwrap().clone());
+        let site_index = site_space.iter().next().cloned().ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("{what} node {position} has no site index"),
+            )
+        })?;
+        site_indices.push(site_index);
     }
     Ok(site_indices)
 }
@@ -1363,7 +1369,8 @@ pub extern "C" fn t4a_treetn_evaluator_evaluate(
         })?;
         let values_slice = unsafe { std::slice::from_raw_parts(values_col_major, n_values) };
         let shape = [n_indices, n_points];
-        let values = ColMajorArrayRef::new(values_slice, &shape);
+        let values = ColMajorArrayRef::new(values_slice, &shape)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
 
         let scalar_kind = handle.scalar_kind;
         let mut cached = TreeTNCachedEvaluator::new(
@@ -1424,7 +1431,8 @@ pub extern "C" fn t4a_treetn_evaluate(
         })?;
         let values_slice = unsafe { std::slice::from_raw_parts(values_col_major, n_values) };
         let shape = [n_indices, n_points];
-        let values = ColMajorArrayRef::new(values_slice, &shape);
+        let values = ColMajorArrayRef::new(values_slice, &shape)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         let scalar_kind = treetn_scalar_kind(tn.inner());
         let mut evaluator =
             TreeTNCachedEvaluator::new(tn.inner(), &indices, CachedEvaluatorOptions::default())

@@ -9,7 +9,6 @@ use num_traits::Zero;
 use rand::Rng;
 use rand_distr::{Distribution, StandardNormal};
 use std::collections::HashSet;
-use std::ops::{Mul, Neg, Sub};
 use std::sync::{Arc, OnceLock};
 use tenferro::eager_einsum::eager_einsum_ad;
 use tenferro::{CpuBackend, DType, EagerTensor, Tensor as NativeTensor};
@@ -63,9 +62,10 @@ impl RandomScalar for Complex64 {
 /// A `Vec<usize>` representing the permutation: `perm[i]` is the position in
 /// `original_indices` of the index that should be at position `i` in `new_indices`.
 ///
-/// # Panics
-/// Panics if any index ID in `new_indices` doesn't match an index in `original_indices`,
-/// or if there are duplicate indices in `new_indices`.
+/// # Errors
+/// Returns an error if the slices have different lengths, if `new_indices`
+/// is not a permutation of `original_indices`, or if `new_indices` contains
+/// duplicate indices.
 ///
 /// # Example
 /// ```
@@ -77,16 +77,15 @@ impl RandomScalar for Complex64 {
 /// let original = vec![i.clone(), j.clone()];
 /// let new_order = vec![j.clone(), i.clone()];
 ///
-/// let perm = compute_permutation_from_indices(&original, &new_order);
+/// let perm = compute_permutation_from_indices(&original, &new_order).unwrap();
 /// assert_eq!(perm, vec![1, 0]);  // j is at position 1, i is at position 0
 /// ```
 pub fn compute_permutation_from_indices(
     original_indices: &[DynIndex],
     new_indices: &[DynIndex],
-) -> Vec<usize> {
-    assert_eq!(
-        new_indices.len(),
-        original_indices.len(),
+) -> Result<Vec<usize>> {
+    anyhow::ensure!(
+        new_indices.len() == original_indices.len(),
         "new_indices length must match original_indices length"
     );
 
@@ -99,16 +98,15 @@ pub fn compute_permutation_from_indices(
         let pos = original_indices
             .iter()
             .position(|old_idx| old_idx == new_idx)
-            .expect("new_indices must be a permutation of original_indices");
+            .ok_or_else(|| {
+                anyhow::anyhow!("new_indices must be a permutation of original_indices")
+            })?;
 
-        if used.contains(&pos) {
-            panic!("duplicate index in new_indices");
-        }
-        used.insert(pos);
+        anyhow::ensure!(used.insert(pos), "duplicate index in new_indices");
         perm.push(pos);
     }
 
-    perm
+    Ok(perm)
 }
 
 #[derive(Clone)]
@@ -134,8 +132,8 @@ pub(crate) struct StructuredAdValue {
 /// |-----------|--------|
 /// | Create from data | [`from_dense`](Self::from_dense), [`from_diag`](Self::from_diag), [`zeros`](Self::zeros) |
 /// | Extract data | [`to_vec`](Self::to_vec), [`sum`](Self::sum), [`only`](Self::only) |
-/// | Contraction | [`contract`](Self::contract), `*` operator |
-/// | Arithmetic | [`add`](Self::add), [`scale`](Self::scale), [`axpby`](Self::axpby), `-` operator |
+/// | Contraction | [`contract`](Self::contract) |
+/// | Arithmetic | [`add`](Self::add), [`scale`](Self::scale), [`axpby`](Self::axpby) |
 /// | Factorization | via [`TensorLike::factorize`] |
 /// | Norms | [`norm`](Self::norm), [`norm_squared`](Self::norm_squared), [`maxabs`](Self::maxabs) |
 /// | Index ops | [`replaceind`](Self::replaceind), [`permute_indices`](Self::permute_indices) |
@@ -162,7 +160,7 @@ pub(crate) struct StructuredAdValue {
 /// assert!(t.is_f64());
 ///
 /// // Sum all elements: 1+2+3+4+5+6 = 21
-/// let s = t.sum();
+/// let s = t.sum().unwrap();
 /// assert!((s.real() - 21.0).abs() < 1e-12);
 ///
 /// // Extract data back out
@@ -408,14 +406,15 @@ impl TensorDynLen {
         }
     }
 
-    fn validate_indices(indices: &[DynIndex]) {
+    fn validate_indices(indices: &[DynIndex]) -> Result<()> {
         let mut seen = HashSet::new();
         for idx in indices {
-            assert!(
+            anyhow::ensure!(
                 seen.insert(idx.clone()),
                 "Tensor indices must all be unique"
             );
         }
+        Ok(())
     }
 
     fn validate_diag_dims(dims: &[usize]) -> Result<()> {
@@ -615,7 +614,7 @@ impl TensorDynLen {
         payload_dims: Vec<usize>,
         axis_classes: Vec<usize>,
     ) -> Result<Self> {
-        Self::validate_indices(&indices);
+        Self::validate_indices(&indices)?;
         if payload_inner.data().shape() != payload_dims {
             return Err(anyhow::anyhow!(
                 "structured payload dims {:?} do not match planned payload dims {:?}",
@@ -706,12 +705,16 @@ impl TensorDynLen {
             let lhs = if let Some(value) = self.tracked_compact_payload_value() {
                 value.payload.as_ref()
             } else {
-                lhs_owned.as_ref().unwrap()
+                lhs_owned
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("missing untracked left compact payload"))?
             };
             let rhs = if let Some(value) = other.tracked_compact_payload_value() {
                 value.payload.as_ref()
             } else {
-                rhs_owned.as_ref().unwrap()
+                rhs_owned
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("missing untracked right compact payload"))?
             };
             if lhs.data().dtype() != rhs.data().dtype() {
                 return Err(anyhow::anyhow!(
@@ -1079,23 +1082,30 @@ impl TensorDynLen {
         Ok(())
     }
 
-    fn materialized_inner(&self) -> &EagerTensor<CpuBackend> {
+    fn try_materialized_inner(&self) -> Result<&EagerTensor<CpuBackend>> {
         if let Some(value) = self.tracked_compact_payload_value() {
             if self.compact_payload_is_logical_dense(&value.payload_dims) {
-                return value.payload.as_ref();
+                return Ok(value.payload.as_ref());
             }
         }
+        if self.eager_cache.get().is_none() {
+            let native = Self::seed_native_payload(self.storage.as_ref(), &self.dims())
+                .context("TensorDynLen materialization failed")?;
+            let _ = self.eager_cache.set(Arc::new(EagerTensor::from_tensor_in(
+                native,
+                default_eager_ctx(),
+            )));
+        }
         self.eager_cache
-            .get_or_init(|| {
-                let native = Self::seed_native_payload(self.storage.as_ref(), &self.dims())
-                    .unwrap_or_else(|err| panic!("TensorDynLen materialization failed: {err}"));
-                Arc::new(EagerTensor::from_tensor_in(native, default_eager_ctx()))
+            .get()
+            .map(|inner| inner.as_ref())
+            .ok_or_else(|| {
+                anyhow::anyhow!("TensorDynLen materialization cache was not initialized")
             })
-            .as_ref()
     }
 
-    pub(crate) fn as_inner(&self) -> &EagerTensor<CpuBackend> {
-        self.materialized_inner()
+    pub(crate) fn as_inner(&self) -> Result<&EagerTensor<CpuBackend>> {
+        self.try_materialized_inner()
     }
 
     /// Compute dims from `indices` order.
@@ -1252,7 +1262,7 @@ impl TensorDynLen {
             default_eager_ctx(),
         );
         let sliced = self
-            .materialized_inner()
+            .try_materialized_inner()?
             .dynamic_slice(&starts_tensor, &slice_sizes)?;
         Self::from_inner(kept_indices, sliced.reshape(&kept_dims)?)
     }
@@ -1323,8 +1333,8 @@ impl TensorDynLen {
 
         let inner_refs = tensors
             .iter()
-            .map(|tensor| tensor.materialized_inner())
-            .collect::<Vec<_>>();
+            .map(|tensor| tensor.try_materialized_inner())
+            .collect::<Result<Vec<_>>>()?;
         let stacked = EagerTensor::stack(&inner_refs, axis)?;
         Self::from_inner(result_indices, stacked)
     }
@@ -1389,7 +1399,9 @@ impl TensorDynLen {
 
         let axis = isize::try_from(axis)
             .map_err(|_| anyhow::anyhow!("index_select: axis does not fit in isize"))?;
-        let selected = self.materialized_inner().index_select(axis, positions)?;
+        let selected = self
+            .try_materialized_inner()?
+            .index_select(axis, positions)?;
         let mut result_indices = self.indices.clone();
         result_indices[axis as usize] = target_index;
         Self::from_inner(result_indices, selected)
@@ -1397,9 +1409,10 @@ impl TensorDynLen {
 
     /// Create a new tensor with dynamic rank.
     ///
-    /// # Panics
-    /// Panics if the storage is Diag and not all indices have the same dimension.
-    /// Panics if there are duplicate indices.
+    /// # Errors
+    /// Returns an error if the storage logical dimensions do not match the
+    /// supplied indices, if diagonal storage has unequal logical dimensions,
+    /// or if duplicate indices are provided.
     ///
     /// # Examples
     ///
@@ -1409,24 +1422,22 @@ impl TensorDynLen {
     /// use std::sync::Arc;
     ///
     /// let i = DynIndex::new_dyn(3);
-    /// let storage = Arc::new(Storage::new_dense::<f64>(3));
-    /// let t = TensorDynLen::new(vec![i], storage);
+    /// let storage = Arc::new(Storage::new_dense::<f64>(3).unwrap());
+    /// let t = TensorDynLen::new(vec![i], storage).unwrap();
     /// assert_eq!(t.dims(), vec![3]);
     /// ```
-    pub fn new(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Self {
-        match Self::from_storage(indices, storage) {
-            Ok(tensor) => tensor,
-            Err(err) => panic!("TensorDynLen::new failed: {err}"),
-        }
+    pub fn new(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Result<Self> {
+        Self::from_storage(indices, storage)
     }
 
     /// Create a new tensor with dynamic rank, automatically computing dimensions from indices.
     ///
     /// This is a convenience constructor that extracts dimensions from indices using `IndexLike::dim()`.
     ///
-    /// # Panics
-    /// Panics if the storage is Diag and not all indices have the same dimension.
-    /// Panics if there are duplicate indices.
+    /// # Errors
+    /// Returns an error if the storage logical dimensions do not match the
+    /// supplied indices, if diagonal storage has unequal logical dimensions,
+    /// or if duplicate indices are provided.
     ///
     /// # Examples
     ///
@@ -1436,11 +1447,11 @@ impl TensorDynLen {
     /// use std::sync::Arc;
     ///
     /// let i = DynIndex::new_dyn(4);
-    /// let storage = Arc::new(Storage::new_dense::<f64>(4));
-    /// let t = TensorDynLen::from_indices(vec![i], storage);
+    /// let storage = Arc::new(Storage::new_dense::<f64>(4).unwrap());
+    /// let t = TensorDynLen::from_indices(vec![i], storage).unwrap();
     /// assert_eq!(t.dims(), vec![4]);
     /// ```
-    pub fn from_indices(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Self {
+    pub fn from_indices(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Result<Self> {
         Self::new(indices, storage)
     }
 
@@ -1455,12 +1466,12 @@ impl TensorDynLen {
     ///
     /// let i = DynIndex::new_dyn(2);
     /// let j = DynIndex::new_dyn(2);
-    /// let storage = Arc::new(Storage::new_diag(vec![1.0_f64, 2.0]));
+    /// let storage = Arc::new(Storage::new_diag(vec![1.0_f64, 2.0]).unwrap());
     /// let t = TensorDynLen::from_storage(vec![i, j], storage).unwrap();
     /// assert_eq!(t.dims(), vec![2, 2]);
     /// ```
     pub fn from_storage(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Result<Self> {
-        Self::validate_indices(&indices);
+        Self::validate_indices(&indices)?;
         Self::validate_storage_matches_indices(&indices, storage.as_ref())?;
         Ok(Self {
             indices,
@@ -1529,7 +1540,7 @@ impl TensorDynLen {
         axis_classes: Vec<usize>,
     ) -> Result<Self> {
         let dims = Self::expected_dims_from_indices(&indices);
-        Self::validate_indices(&indices);
+        Self::validate_indices(&indices)?;
         if dims != inner.data().shape() {
             return Err(anyhow::anyhow!(
                 "native payload dims {:?} do not match indices dims {:?}",
@@ -1559,17 +1570,17 @@ impl TensorDynLen {
     }
 
     /// Borrow the native payload.
-    pub(crate) fn as_native(&self) -> &NativeTensor {
-        self.materialized_inner().data()
+    pub(crate) fn as_native(&self) -> Result<&NativeTensor> {
+        Ok(self.try_materialized_inner()?.data())
     }
 
     /// Enable reverse-mode AD tracking on this tensor by creating a tracked leaf.
-    pub fn enable_grad(self) -> Self {
+    pub fn enable_grad(self) -> Result<Self> {
         let payload = storage_payload_native(self.storage.as_ref())
-            .unwrap_or_else(|err| panic!("TensorDynLen::enable_grad failed: {err}"));
+            .context("TensorDynLen::enable_grad failed")?;
         let payload_dims = self.storage.payload_dims().to_vec();
         let axis_classes = self.storage.axis_classes().to_vec();
-        Self {
+        Ok(Self {
             indices: self.indices,
             storage: self.storage,
             structured_ad: Some(Arc::new(StructuredAdValue {
@@ -1578,7 +1589,7 @@ impl TensorDynLen {
                 axis_classes,
             })),
             eager_cache: Self::empty_eager_cache(),
-        }
+        })
     }
 
     /// Report whether this tensor participates in gradient tracking.
@@ -1608,7 +1619,7 @@ impl TensorDynLen {
                 })
                 .transpose();
         }
-        self.materialized_inner()
+        self.try_materialized_inner()?
             .grad()
             .map(|grad| {
                 Self::from_native_with_axis_classes(
@@ -1640,24 +1651,22 @@ impl TensorDynLen {
                 .map(|_| ())
                 .map_err(|e| anyhow::anyhow!("TensorDynLen::backward failed: {e}"));
         }
-        self.materialized_inner()
+        self.try_materialized_inner()?
             .backward()
             .map(|_| ())
             .map_err(|e| anyhow::anyhow!("TensorDynLen::backward failed: {e}"))
     }
 
     /// Detach this tensor from the reverse graph.
-    pub fn detach(&self) -> Self {
+    pub fn detach(&self) -> Result<Self> {
         if self.tracked_compact_payload_value().is_some() {
-            return Self::from_storage(self.indices.clone(), Arc::clone(&self.storage))
-                .expect("TensorDynLen::detach returned invalid tensor");
+            return Self::from_storage(self.indices.clone(), Arc::clone(&self.storage));
         }
         Self::from_inner_with_axis_classes(
             self.indices.clone(),
-            self.materialized_inner().detach(),
+            self.try_materialized_inner()?.detach(),
             self.storage.axis_classes().to_vec(),
         )
-        .expect("TensorDynLen::detach returned invalid tensor")
     }
 
     /// Check if this tensor is already in canonical form.
@@ -1684,22 +1693,16 @@ impl TensorDynLen {
     ///
     /// let i = DynIndex::new_dyn(3);
     /// let t = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
-    /// let s = t.sum();
+    /// let s = t.sum().unwrap();
     /// assert!((s.real() - 6.0).abs() < 1e-12);
     /// ```
-    pub fn sum(&self) -> AnyScalar {
+    pub fn sum(&self) -> Result<AnyScalar> {
         if self.indices.is_empty() {
-            return AnyScalar::from_tensor_unchecked(self.clone());
+            return AnyScalar::from_tensor(self.clone());
         }
         let axes: Vec<usize> = (0..self.indices.len()).collect();
-        let reduced = self
-            .materialized_inner()
-            .reduce_sum(&axes)
-            .unwrap_or_else(|e| panic!("TensorDynLen::sum failed: {e}"));
-        AnyScalar::from_tensor_unchecked(
-            Self::from_inner(Vec::new(), reduced)
-                .unwrap_or_else(|e| panic!("TensorDynLen::sum returned invalid scalar: {e}")),
-        )
+        let reduced = self.try_materialized_inner()?.reduce_sum(&axes)?;
+        AnyScalar::from_tensor(Self::from_inner(Vec::new(), reduced)?)
     }
 
     /// Extract the scalar value from a 0-dimensional tensor (or 1-element tensor).
@@ -1720,12 +1723,12 @@ impl TensorDynLen {
     /// let indices: Vec<Index<DynId>> = vec![];
     /// let tensor: TensorDynLen = TensorDynLen::from_dense(indices, vec![42.0]).unwrap();
     ///
-    /// assert_eq!(tensor.only().real(), 42.0);
+    /// assert_eq!(tensor.only().unwrap().real(), 42.0);
     /// ```
-    pub fn only(&self) -> AnyScalar {
+    pub fn only(&self) -> Result<AnyScalar> {
         let dims = self.dims();
-        let total_size: usize = dims.iter().product();
-        assert!(
+        let total_size = checked_product(&dims)?;
+        anyhow::ensure!(
             total_size == 1 || dims.is_empty(),
             "only() requires a scalar tensor (1 element), got {} elements with dims {:?}",
             if dims.is_empty() { 1 } else { total_size },
@@ -1761,28 +1764,24 @@ impl TensorDynLen {
     /// let tensor: TensorDynLen = TensorDynLen::from_dense(indices, vec![0.0; 6]).unwrap();
     ///
     /// // Permute to 3×2: swap the two dimensions by providing new indices order
-    /// let permuted = tensor.permute_indices(&[j, i]);
+    /// let permuted = tensor.permute_indices(&[j, i]).unwrap();
     /// assert_eq!(permuted.dims(), vec![3, 2]);
     /// ```
-    pub fn permute_indices(&self, new_indices: &[DynIndex]) -> Self {
+    pub fn permute_indices(&self, new_indices: &[DynIndex]) -> Result<Self> {
         // Compute permutation by matching IDs
-        let perm = compute_permutation_from_indices(&self.indices, new_indices);
+        let perm = compute_permutation_from_indices(&self.indices, new_indices)?;
         if perm.iter().copied().eq(0..perm.len()) {
-            return Self {
+            return Ok(Self {
                 indices: new_indices.to_vec(),
                 storage: Arc::clone(&self.storage),
                 structured_ad: self.structured_ad.clone(),
                 eager_cache: Arc::clone(&self.eager_cache),
-            };
+            });
         }
 
-        let permuted = self
-            .materialized_inner()
-            .transpose(&perm)
-            .unwrap_or_else(|e| panic!("TensorDynLen::permute_indices failed: {e}"));
+        let permuted = self.try_materialized_inner()?.transpose(&perm)?;
         let axis_classes = self.permute_axis_classes(&perm);
         Self::from_inner_with_axis_classes(new_indices.to_vec(), permuted, axis_classes)
-            .expect("TensorDynLen::permute_indices returned invalid tensor")
     }
 
     /// Permute the tensor dimensions, returning a new tensor.
@@ -1810,28 +1809,31 @@ impl TensorDynLen {
     /// let tensor: TensorDynLen = TensorDynLen::from_dense(indices, vec![0.0; 6]).unwrap();
     ///
     /// // Permute to 3×2: swap the two dimensions
-    /// let permuted = tensor.permute(&[1, 0]);
+    /// let permuted = tensor.permute(&[1, 0]).unwrap();
     /// assert_eq!(permuted.dims(), vec![3, 2]);
     /// ```
-    pub fn permute(&self, perm: &[usize]) -> Self {
-        assert_eq!(
-            perm.len(),
-            self.indices.len(),
+    pub fn permute(&self, perm: &[usize]) -> Result<Self> {
+        anyhow::ensure!(
+            perm.len() == self.indices.len(),
             "permutation length must match tensor rank"
         );
+        let mut seen = HashSet::new();
+        for &axis in perm {
+            anyhow::ensure!(
+                axis < self.indices.len(),
+                "permutation axis {axis} out of range"
+            );
+            anyhow::ensure!(seen.insert(axis), "duplicate axis {axis} in permutation");
+        }
         if perm.iter().copied().eq(0..perm.len()) {
-            return self.clone();
+            return Ok(self.clone());
         }
 
         // Permute indices
         let new_indices: Vec<DynIndex> = perm.iter().map(|&i| self.indices[i].clone()).collect();
-        let permuted = self
-            .materialized_inner()
-            .transpose(perm)
-            .unwrap_or_else(|e| panic!("TensorDynLen::permute failed: {e}"));
+        let permuted = self.try_materialized_inner()?.transpose(perm)?;
         let axis_classes = self.permute_axis_classes(perm);
         Self::from_inner_with_axis_classes(new_indices, permuted, axis_classes)
-            .expect("TensorDynLen::permute returned invalid tensor")
     }
 
     /// Contract this tensor with another tensor along common indices.
@@ -1868,11 +1870,11 @@ impl TensorDynLen {
     /// let tensor_b: TensorDynLen = TensorDynLen::from_dense(indices_b, vec![0.0; 12]).unwrap();
     ///
     /// // Contract along j with the default pairwise semantics: result is C[i, k]
-    /// let result = tensor_a.contract(&tensor_b);
+    /// let result = tensor_a.contract(&tensor_b).unwrap();
     /// assert_eq!(result.dims(), vec![2, 4]);
     /// ```
-    pub fn contract(&self, other: &Self) -> Self {
-        self.contract_pairwise_default(other)
+    pub fn contract(&self, other: &Self) -> Result<Self> {
+        self.try_contract_pairwise_default(other)
     }
 
     /// Contract this tensor with another tensor using explicit contraction options.
@@ -1921,11 +1923,6 @@ impl TensorDynLen {
         crate::defaults::contract::contract_multi_with_options(&[self, other], options)
     }
 
-    pub(crate) fn contract_pairwise_default(&self, other: &Self) -> Self {
-        self.try_contract_pairwise_default(other)
-            .unwrap_or_else(|e| panic!("TensorDynLen::contract failed: {e}"))
-    }
-
     pub(crate) fn try_contract_pairwise_default(&self, other: &Self) -> Result<Self> {
         let self_dims = Self::expected_dims_from_indices(&self.indices);
         let other_dims = Self::expected_dims_from_indices(&other.indices);
@@ -1948,17 +1945,17 @@ impl TensorDynLen {
         }
 
         if self.indices.is_empty() && other.indices.is_empty() {
-            let result = self.materialized_inner().mul(other.materialized_inner())?;
+            let result = self
+                .try_materialized_inner()?
+                .mul(other.try_materialized_inner()?)?;
             return Self::from_inner(spec.result_indices, result);
         }
 
-        if self.as_native().dtype() != other.as_native().dtype() {
-            let result_native = contract_native_tensor(
-                self.as_native(),
-                &spec.axes_a,
-                other.as_native(),
-                &spec.axes_b,
-            )?;
+        let self_native = self.as_native()?;
+        let other_native = other.as_native()?;
+        if self_native.dtype() != other_native.dtype() {
+            let result_native =
+                contract_native_tensor(self_native, &spec.axes_a, other_native, &spec.axes_b)?;
             return Self::from_native_with_axis_classes(
                 spec.result_indices,
                 result_native,
@@ -1973,7 +1970,10 @@ impl TensorDynLen {
             &spec.axes_b,
         )?;
         let result = eager_einsum_ad(
-            &[self.materialized_inner(), other.materialized_inner()],
+            &[
+                self.try_materialized_inner()?,
+                other.try_materialized_inner()?,
+            ],
             &subscripts,
         )?;
         Self::from_inner_with_axis_classes(spec.result_indices, result, result_axis_classes)
@@ -2080,19 +2080,17 @@ impl TensorDynLen {
 
         if self.indices.is_empty() && other.indices.is_empty() {
             let result = self
-                .materialized_inner()
-                .mul(other.materialized_inner())
+                .try_materialized_inner()?
+                .mul(other.try_materialized_inner()?)
                 .map_err(|e| anyhow::anyhow!("tensordot scalar multiply failed: {e}"))?;
             return Self::from_inner(spec.result_indices, result);
         }
 
-        if self.as_native().dtype() != other.as_native().dtype() {
-            let result_native = contract_native_tensor(
-                self.as_native(),
-                &spec.axes_a,
-                other.as_native(),
-                &spec.axes_b,
-            )?;
+        let self_native = self.as_native()?;
+        let other_native = other.as_native()?;
+        if self_native.dtype() != other_native.dtype() {
+            let result_native =
+                contract_native_tensor(self_native, &spec.axes_a, other_native, &spec.axes_b)?;
             return Self::from_native_with_axis_classes(
                 spec.result_indices,
                 result_native,
@@ -2107,7 +2105,10 @@ impl TensorDynLen {
             &spec.axes_b,
         )?;
         let result = eager_einsum_ad(
-            &[self.materialized_inner(), other.materialized_inner()],
+            &[
+                self.try_materialized_inner()?,
+                other.try_materialized_inner()?,
+            ],
             &subscripts,
         )
         .map_err(|e| anyhow::anyhow!("tensordot failed: {e}"))?;
@@ -2174,9 +2175,10 @@ impl TensorDynLen {
         if self.should_use_structured_payload_contract(other) {
             return self.contract_structured_payloads(other, result_indices, &[], &[]);
         }
-        if self.as_native().dtype() != other.as_native().dtype() {
-            let result_native =
-                contract_native_tensor(self.as_native(), &[], other.as_native(), &[])?;
+        let self_native = self.as_native()?;
+        let other_native = other.as_native()?;
+        if self_native.dtype() != other_native.dtype() {
+            let result_native = contract_native_tensor(self_native, &[], other_native, &[])?;
             return Self::from_native_with_axis_classes(
                 result_indices,
                 result_native,
@@ -2191,7 +2193,10 @@ impl TensorDynLen {
             &[],
         )?;
         let result = eager_einsum_ad(
-            &[self.materialized_inner(), other.materialized_inner()],
+            &[
+                self.try_materialized_inner()?,
+                other.try_materialized_inner()?,
+            ],
             &subscripts,
         )
         .map_err(|e| anyhow::anyhow!("outer_product failed: {e}"))?;
@@ -2227,130 +2232,14 @@ impl TensorDynLen {
     /// let mut rng = ChaCha8Rng::seed_from_u64(42);
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
-    /// let tensor: TensorDynLen = TensorDynLen::random::<f64, _>(&mut rng, vec![i, j]);
+    /// let tensor: TensorDynLen = TensorDynLen::random::<f64, _>(&mut rng, vec![i, j]).unwrap();
     /// assert_eq!(tensor.dims(), vec![2, 3]);
     /// ```
-    pub fn random<T: RandomScalar, R: Rng>(rng: &mut R, indices: Vec<DynIndex>) -> Self {
+    pub fn random<T: RandomScalar, R: Rng>(rng: &mut R, indices: Vec<DynIndex>) -> Result<Self> {
         let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
-        let size: usize = dims.iter().product();
+        let size = checked_product(&dims)?;
         let data: Vec<T> = (0..size).map(|_| T::random_value(rng)).collect();
-        Self::from_dense(indices, data).expect("TensorDynLen::random failed")
-    }
-}
-
-/// Implement multiplication operator for tensor contraction.
-///
-/// The `*` operator performs tensor contraction along common indices.
-/// This is equivalent to calling the `contract` method.
-///
-/// # Example
-/// ```
-/// use tensor4all_core::TensorDynLen;
-/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-///
-/// // Create two tensors: A[i, j] and B[j, k]
-/// let i = Index::new_dyn(2);
-/// let j = Index::new_dyn(3);
-/// let k = Index::new_dyn(4);
-///
-/// let indices_a = vec![i.clone(), j.clone()];
-/// let tensor_a: TensorDynLen = TensorDynLen::from_dense(indices_a, vec![0.0; 6]).unwrap();
-///
-/// let indices_b = vec![j.clone(), k.clone()];
-/// let tensor_b: TensorDynLen = TensorDynLen::from_dense(indices_b, vec![0.0; 12]).unwrap();
-///
-/// // Contract along j using * operator: result is C[i, k]
-/// let result = &tensor_a * &tensor_b;
-/// assert_eq!(result.dims(), vec![2, 4]);
-/// ```
-impl Mul<&TensorDynLen> for &TensorDynLen {
-    type Output = TensorDynLen;
-
-    fn mul(self, other: &TensorDynLen) -> Self::Output {
-        self.contract(other)
-    }
-}
-
-/// Implement multiplication operator for tensor contraction (owned version).
-///
-/// This allows using `tensor_a * tensor_b` when both tensors are owned.
-impl Mul<TensorDynLen> for TensorDynLen {
-    type Output = TensorDynLen;
-
-    fn mul(self, other: TensorDynLen) -> Self::Output {
-        self.contract(&other)
-    }
-}
-
-/// Implement multiplication operator for tensor contraction (mixed reference/owned).
-impl Mul<TensorDynLen> for &TensorDynLen {
-    type Output = TensorDynLen;
-
-    fn mul(self, other: TensorDynLen) -> Self::Output {
-        self.contract(&other)
-    }
-}
-
-/// Implement multiplication operator for tensor contraction (mixed owned/reference).
-impl Mul<&TensorDynLen> for TensorDynLen {
-    type Output = TensorDynLen;
-
-    fn mul(self, other: &TensorDynLen) -> Self::Output {
-        self.contract(other)
-    }
-}
-
-impl Sub<&TensorDynLen> for &TensorDynLen {
-    type Output = TensorDynLen;
-
-    fn sub(self, other: &TensorDynLen) -> Self::Output {
-        TensorDynLen::axpby(
-            self,
-            AnyScalar::new_real(1.0),
-            other,
-            AnyScalar::new_real(-1.0),
-        )
-        .expect("tensor subtraction failed")
-    }
-}
-
-impl Sub<TensorDynLen> for TensorDynLen {
-    type Output = TensorDynLen;
-
-    fn sub(self, other: TensorDynLen) -> Self::Output {
-        Sub::sub(&self, &other)
-    }
-}
-
-impl Sub<TensorDynLen> for &TensorDynLen {
-    type Output = TensorDynLen;
-
-    fn sub(self, other: TensorDynLen) -> Self::Output {
-        Sub::sub(self, &other)
-    }
-}
-
-impl Sub<&TensorDynLen> for TensorDynLen {
-    type Output = TensorDynLen;
-
-    fn sub(self, other: &TensorDynLen) -> Self::Output {
-        Sub::sub(&self, other)
-    }
-}
-
-impl Neg for &TensorDynLen {
-    type Output = TensorDynLen;
-
-    fn neg(self) -> Self::Output {
-        TensorDynLen::scale(self, AnyScalar::new_real(-1.0)).expect("tensor negation failed")
-    }
-}
-
-impl Neg for TensorDynLen {
-    type Output = TensorDynLen;
-
-    fn neg(self) -> Self::Output {
-        Neg::neg(&self)
+        Self::from_dense(indices, data)
     }
 }
 
@@ -2409,7 +2298,7 @@ impl TensorDynLen {
         }
 
         // Permute other to match self's index order (no-op if already aligned)
-        let other_aligned = other.permute_indices(&self.indices);
+        let other_aligned = other.permute_indices(&self.indices)?;
 
         // Validate dimensions match after alignment
         let self_expected_dims = Self::expected_dims_from_indices(&self.indices);
@@ -2484,7 +2373,7 @@ impl TensorDynLen {
         }
 
         // Align other tensor axis order to self.
-        let other_aligned = other.permute_indices(&self.indices);
+        let other_aligned = other.permute_indices(&self.indices)?;
 
         // Validate dimensions match after alignment.
         let self_expected_dims = Self::expected_dims_from_indices(&self.indices);
@@ -2524,14 +2413,18 @@ impl TensorDynLen {
             return Self::from_storage(self.indices.clone(), Arc::new(combined));
         }
 
-        if self.as_native().dtype() != other_aligned.as_native().dtype()
-            || self.as_native().dtype() != a.as_tensor().as_native().dtype()
-            || other_aligned.as_native().dtype() != b.as_tensor().as_native().dtype()
+        let self_native = self.as_native()?;
+        let other_native = other_aligned.as_native()?;
+        let a_native = a.as_tensor()?.as_native()?;
+        let b_native = b.as_tensor()?.as_native()?;
+        if self_native.dtype() != other_native.dtype()
+            || self_native.dtype() != a_native.dtype()
+            || other_native.dtype() != b_native.dtype()
         {
             let combined = axpby_native_tensor(
-                self.as_native(),
+                self_native,
                 &a.to_backend_scalar(),
-                other_aligned.as_native(),
+                other_native,
                 &b.to_backend_scalar(),
             )?;
             return Self::from_native_with_axis_classes(
@@ -2544,8 +2437,8 @@ impl TensorDynLen {
         let lhs = self.scale(a)?;
         let rhs = other_aligned.scale(b)?;
         let combined = lhs
-            .materialized_inner()
-            .add(rhs.materialized_inner())
+            .try_materialized_inner()?
+            .add(rhs.try_materialized_inner()?)
             .map_err(|e| anyhow::anyhow!("tensor addition failed: {e}"))?;
         Self::from_inner_with_axis_classes(self.indices.clone(), combined, axis_classes)
     }
@@ -2565,8 +2458,10 @@ impl TensorDynLen {
     /// assert_eq!(scaled.to_vec::<f64>().unwrap(), vec![2.0, 4.0, 6.0]);
     /// ```
     pub fn scale(&self, scalar: AnyScalar) -> Result<Self> {
-        if self.as_native().dtype() != scalar.as_tensor().as_native().dtype() {
-            let scaled = scale_native_tensor(self.as_native(), &scalar.to_backend_scalar())?;
+        let self_native = self.as_native()?;
+        let scalar_native = scalar.as_tensor()?.as_native()?;
+        if self_native.dtype() != scalar_native.dtype() {
+            let scaled = scale_native_tensor(self_native, &scalar.to_backend_scalar())?;
             return Self::from_native_with_axis_classes(
                 self.indices.clone(),
                 scaled,
@@ -2575,15 +2470,15 @@ impl TensorDynLen {
         }
 
         let scaled = if self.indices.is_empty() {
-            self.materialized_inner()
-                .mul(scalar.as_tensor().materialized_inner())
+            self.try_materialized_inner()?
+                .mul(scalar.as_tensor()?.try_materialized_inner()?)
                 .map_err(|e| anyhow::anyhow!("scalar multiplication failed: {e}"))?
         } else {
             let subscripts = Self::scale_subscripts(self.indices.len())?;
             eager_einsum_ad(
                 &[
-                    self.materialized_inner(),
-                    scalar.as_tensor().materialized_inner(),
+                    self.try_materialized_inner()?,
+                    scalar.as_tensor()?.try_materialized_inner()?,
                 ],
                 &subscripts,
             )
@@ -2618,9 +2513,9 @@ impl TensorDynLen {
             let self_set: HashSet<_> = self.indices.iter().collect();
             let other_set: HashSet<_> = other.indices.iter().collect();
             if self_set == other_set {
-                let other_aligned = other.permute_indices(&self.indices);
-                let result = self.conj().contract(&other_aligned);
-                return Ok(result.sum());
+                let other_aligned = other.permute_indices(&self.indices)?;
+                let result = self.conj().contract(&other_aligned)?;
+                return result.sum();
             }
         }
 
@@ -2629,7 +2524,7 @@ impl TensorDynLen {
         let result =
             super::contract::contract_multi(&[&conj_self, other], crate::AllowedPairs::All)?;
         // Result should be a scalar (no indices)
-        Ok(result.sum())
+        result.sum()
     }
 }
 
@@ -2651,6 +2546,9 @@ impl TensorDynLen {
     /// A new tensor with the index replaced. If no index matches `old_index`,
     /// returns a clone of the original tensor.
     ///
+    /// # Errors
+    /// Returns an error if the replacement index has a different dimension.
+    ///
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
@@ -2664,18 +2562,18 @@ impl TensorDynLen {
     /// let tensor: TensorDynLen = TensorDynLen::from_dense(indices, vec![0.0; 6]).unwrap();
     ///
     /// // Replace index i with new_i
-    /// let replaced = tensor.replaceind(&i, &new_i);
+    /// let replaced = tensor.replaceind(&i, &new_i).unwrap();
     /// assert_eq!(replaced.indices[0].id, new_i.id);
     /// assert_eq!(replaced.indices[1].id, j.id);
     /// ```
-    pub fn replaceind(&self, old_index: &DynIndex, new_index: &DynIndex) -> Self {
+    pub fn replaceind(&self, old_index: &DynIndex, new_index: &DynIndex) -> Result<Self> {
         // Validate dimension match
         if old_index.dim() != new_index.dim() {
-            panic!(
+            return Err(anyhow::anyhow!(
                 "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
                 old_index.dim(),
                 new_index.dim()
-            );
+            ));
         }
 
         let new_indices: Vec<_> = self
@@ -2690,12 +2588,12 @@ impl TensorDynLen {
             })
             .collect();
 
-        Self {
+        Ok(Self {
             indices: new_indices,
             storage: Arc::clone(&self.storage),
             structured_ad: self.structured_ad.clone(),
             eager_cache: Arc::clone(&self.eager_cache),
-        }
+        })
     }
 
     /// Replace multiple indices in the tensor.
@@ -2707,12 +2605,13 @@ impl TensorDynLen {
     /// * `old_indices` - The indices to replace (matched by ID)
     /// * `new_indices` - The new indices to use
     ///
-    /// # Panics
-    /// Panics if `old_indices` and `new_indices` have different lengths.
-    ///
     /// # Returns
     /// A new tensor with the indices replaced. Indices not found in `old_indices`
     /// are kept unchanged.
+    ///
+    /// # Errors
+    /// Returns an error if `old_indices` and `new_indices` have different
+    /// lengths or if any replacement index has a different dimension.
     ///
     /// # Example
     /// ```
@@ -2728,25 +2627,26 @@ impl TensorDynLen {
     /// let tensor: TensorDynLen = TensorDynLen::from_dense(indices, vec![0.0; 6]).unwrap();
     ///
     /// // Replace both indices
-    /// let replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()]);
+    /// let replaced = tensor
+    ///     .replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()])
+    ///     .unwrap();
     /// assert_eq!(replaced.indices[0].id, new_i.id);
     /// assert_eq!(replaced.indices[1].id, new_j.id);
     /// ```
-    pub fn replaceinds(&self, old_indices: &[DynIndex], new_indices: &[DynIndex]) -> Self {
-        assert_eq!(
-            old_indices.len(),
-            new_indices.len(),
+    pub fn replaceinds(&self, old_indices: &[DynIndex], new_indices: &[DynIndex]) -> Result<Self> {
+        anyhow::ensure!(
+            old_indices.len() == new_indices.len(),
             "old_indices and new_indices must have the same length"
         );
 
         // Validate dimension matches for all replacements
         for (old, new) in old_indices.iter().zip(new_indices.iter()) {
             if old.dim() != new.dim() {
-                panic!(
+                return Err(anyhow::anyhow!(
                     "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
                     old.dim(),
                     new.dim()
-                );
+                ));
             }
         }
 
@@ -2766,12 +2666,12 @@ impl TensorDynLen {
             })
             .collect();
 
-        Self {
+        Ok(Self {
             indices: new_indices_vec,
             storage: Arc::clone(&self.storage),
             structured_ad: self.structured_ad.clone(),
             eager_cache: Arc::clone(&self.eager_cache),
-        }
+        })
     }
 }
 
@@ -2807,16 +2707,27 @@ impl TensorDynLen {
         // For default undirected indices, conj() is a no-op, so this is future-proof
         // for QSpace-compatible directed indices where conj() flips Ket <-> Bra
         let new_indices: Vec<DynIndex> = self.indices.iter().map(|idx| idx.conj()).collect();
-        let conjugated = self
-            .materialized_inner()
-            .conj()
-            .unwrap_or_else(|e| panic!("TensorDynLen::conj failed: {e}"));
-        Self::from_inner_with_axis_classes(
-            new_indices,
-            conjugated,
-            self.storage.axis_classes().to_vec(),
-        )
-        .expect("TensorDynLen::conj returned invalid tensor")
+        let structured_ad = self.tracked_compact_payload_value().and_then(|value| {
+            value.payload.conj().ok().map(|payload| {
+                Arc::new(StructuredAdValue {
+                    payload: Arc::new(payload),
+                    payload_dims: value.payload_dims.clone(),
+                    axis_classes: value.axis_classes.clone(),
+                })
+            })
+        });
+        let eager_cache = self
+            .eager_cache
+            .get()
+            .and_then(|inner| inner.conj().ok())
+            .map(Self::eager_cache_with)
+            .unwrap_or_else(Self::empty_eager_cache);
+        Self {
+            indices: new_indices,
+            storage: Arc::new(self.storage.conj()),
+            structured_ad,
+            eager_cache,
+        }
     }
 }
 
@@ -2843,21 +2754,29 @@ impl TensorDynLen {
     /// assert!((tensor.norm_squared() - 91.0).abs() < 1e-10);
     /// ```
     pub fn norm_squared(&self) -> f64 {
+        self.try_norm_squared().unwrap_or(f64::NAN)
+    }
+
+    /// Try to compute the squared Frobenius norm of the tensor.
+    ///
+    /// # Errors
+    /// Returns an error if conjugation, contraction, or scalar extraction fails.
+    pub fn try_norm_squared(&self) -> Result<f64> {
         // Special case: scalar tensor (no indices)
         if self.indices.is_empty() {
             // For a scalar, ||T||² = |value|²
-            let value = self.sum();
+            let value = self.sum()?;
             let abs_val = value.abs();
-            return abs_val * abs_val;
+            return Ok(abs_val * abs_val);
         }
 
         // Contract tensor with its conjugate over all indices → scalar
         // ||T||² = Σ T_ijk... * conj(T_ijk...) = Σ |T_ijk...|²
         let conj = self.conj();
-        let scalar = self.contract(&conj);
+        let scalar = self.contract(&conj)?;
         // The mathematical result is nonnegative and real. Clamp tiny negative
         // roundoff so downstream `sqrt` stays well-defined for complex tensors.
-        scalar.sum().real().max(0.0)
+        Ok(scalar.sum()?.real().max(0.0))
     }
 
     /// Compute the Frobenius norm of the tensor: ||T|| = sqrt(Σ|T_ijk...|²)
@@ -2922,24 +2841,20 @@ impl TensorDynLen {
     /// let tensor_a: TensorDynLen = TensorDynLen::from_dense(vec![i.clone()], data_a).unwrap();
     /// let tensor_b: TensorDynLen = TensorDynLen::from_dense(vec![i.clone()], data_b).unwrap();
     ///
-    /// assert!(tensor_a.distance(&tensor_b) < 1e-10);  // Zero distance
+    /// assert!(tensor_a.distance(&tensor_b).unwrap() < 1e-10);  // Zero distance
     /// ```
-    pub fn distance(&self, other: &Self) -> f64 {
+    pub fn distance(&self, other: &Self) -> Result<f64> {
         let norm_self = self.norm();
 
         // Compute A - B = A + (-1) * B
-        let neg_other = other
-            .scale(AnyScalar::new_real(-1.0))
-            .expect("distance: tensor scaling failed");
-        let diff = self
-            .add(&neg_other)
-            .expect("distance: tensors must have same indices");
+        let neg_other = other.scale(AnyScalar::new_real(-1.0))?;
+        let diff = self.add(&neg_other)?;
         let norm_diff = diff.norm();
 
         if norm_self > 0.0 {
-            norm_diff / norm_self
+            Ok(norm_diff / norm_self)
         } else {
-            norm_diff
+            Ok(norm_diff)
         }
     }
 }
@@ -2974,13 +2889,12 @@ impl std::fmt::Debug for TensorDynLen {
 ///
 /// let i = DynIndex::new_dyn(3);
 /// let j = DynIndex::new_dyn(3);
-/// let t = diag_tensor_dyn_len(vec![i, j], vec![1.0, 2.0, 3.0]);
+/// let t = diag_tensor_dyn_len(vec![i, j], vec![1.0, 2.0, 3.0]).unwrap();
 /// assert_eq!(t.dims(), vec![3, 3]);
 /// assert!(t.is_diag());
 /// ```
-pub fn diag_tensor_dyn_len(indices: Vec<DynIndex>, diag_data: Vec<f64>) -> TensorDynLen {
+pub fn diag_tensor_dyn_len(indices: Vec<DynIndex>, diag_data: Vec<f64>) -> Result<TensorDynLen> {
     TensorDynLen::from_diag(indices, diag_data)
-        .unwrap_or_else(|err| panic!("diag_tensor_dyn_len failed: {err}"))
 }
 
 /// Unfold a tensor into a matrix by splitting indices into left and right groups.
@@ -3082,14 +2996,14 @@ pub fn unfold_split(
     new_indices.extend_from_slice(&right_inds);
 
     // Permute tensor to have left indices first, then right indices
-    let unfolded = t.permute_indices(&new_indices);
+    let unfolded = t.permute_indices(&new_indices)?;
 
     // Compute matrix dimensions
     let unfolded_dims = unfolded.dims();
     let m: usize = unfolded_dims[..left_len].iter().product();
     let n: usize = unfolded_dims[left_len..].iter().product();
 
-    let matrix_tensor = reshape_col_major_native_tensor(unfolded.as_native(), &[m, n])?;
+    let matrix_tensor = reshape_col_major_native_tensor(unfolded.as_native()?, &[m, n])?;
 
     Ok((
         matrix_tensor,
@@ -3121,12 +3035,12 @@ impl TensorIndex for TensorDynLen {
 
     fn replaceind(&self, old_index: &DynIndex, new_index: &DynIndex) -> Result<Self> {
         // Delegate to the inherent method
-        Ok(TensorDynLen::replaceind(self, old_index, new_index))
+        TensorDynLen::replaceind(self, old_index, new_index)
     }
 
     fn replaceinds(&self, old_indices: &[DynIndex], new_indices: &[DynIndex]) -> Result<Self> {
         // Delegate to the inherent method
-        Ok(TensorDynLen::replaceinds(self, old_indices, new_indices))
+        TensorDynLen::replaceinds(self, old_indices, new_indices)
     }
 }
 
@@ -3187,7 +3101,7 @@ impl TensorLike for TensorDynLen {
 
     fn permuteinds(&self, new_order: &[DynIndex]) -> Result<Self> {
         // Delegate to the inherent method
-        Ok(TensorDynLen::permute_indices(self, new_order))
+        TensorDynLen::permute_indices(self, new_order)
     }
 
     fn fuse_indices(
@@ -3411,7 +3325,7 @@ impl TensorDynLen {
     /// ```
     pub fn from_dense<T: TensorElement>(indices: Vec<DynIndex>, data: Vec<T>) -> Result<Self> {
         let dims = Self::expected_dims_from_indices(&indices);
-        Self::validate_indices(&indices);
+        Self::validate_indices(&indices)?;
         Self::validate_dense_payload_len(data.len(), &dims)?;
         let native = dense_native_tensor_from_col_major(&data, &dims)?;
         Self::from_native(indices, native)
@@ -3479,7 +3393,7 @@ impl TensorDynLen {
     /// ```
     pub fn from_diag<T: TensorElement>(indices: Vec<DynIndex>, data: Vec<T>) -> Result<Self> {
         let dims = Self::expected_dims_from_indices(&indices);
-        Self::validate_indices(&indices);
+        Self::validate_indices(&indices)?;
         Self::validate_diag_payload_len(data.len(), &dims)?;
         let native = diag_native_tensor_from_col_major(&data, dims.len())?;
         Self::from_native_with_axis_classes(indices, native, Self::diag_axis_classes(dims.len()))
@@ -3657,7 +3571,7 @@ impl TensorDynLen {
                 "fuse_indices result would contain duplicate index"
             );
         }
-        Self::validate_indices(&result_indices);
+        Self::validate_indices(&result_indices)?;
 
         let mut new_dims = Vec::with_capacity(old_dims.len() - old_indices.len() + 1usize);
         for (axis, dim) in old_dims.iter().copied().enumerate() {
@@ -3742,7 +3656,7 @@ impl TensorDynLen {
         result_indices.extend_from_slice(&self.indices[..axis]);
         result_indices.extend(new_indices.iter().cloned());
         result_indices.extend_from_slice(&self.indices[axis + 1..]);
-        Self::validate_indices(&result_indices);
+        Self::validate_indices(&result_indices)?;
 
         let old_dims = self.dims();
         let mut new_dims = Vec::with_capacity(old_dims.len() - 1usize + replacement_dims.len());
@@ -3774,7 +3688,7 @@ impl TensorDynLen {
     ///
     /// let scalar = TensorDynLen::scalar(42.0).unwrap();
     /// assert_eq!(scalar.dims(), Vec::<usize>::new());
-    /// assert_eq!(scalar.only().real(), 42.0);
+    /// assert_eq!(scalar.only().unwrap().real(), 42.0);
     /// ```
     pub fn scalar<T: TensorElement>(value: T) -> Result<Self> {
         Self::from_dense(vec![], vec![value])
@@ -3826,7 +3740,7 @@ impl TensorDynLen {
     /// assert_eq!(data, &[1.0, 2.0]);
     /// ```
     pub fn to_vec<T: TensorElement>(&self) -> Result<Vec<T>> {
-        native_tensor_primal_to_dense_col_major(self.as_native())
+        native_tensor_primal_to_dense_col_major(self.as_native()?)
     }
 
     fn to_vec_any(&self) -> Result<Vec<AnyScalar>> {

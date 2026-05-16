@@ -8,11 +8,15 @@ use std::ops::{Index, IndexMut};
 
 use tenferro_tensor::{TensorScalar, TypedTensor as TfTensor};
 
-use crate::einsum_helper::{tensor_to_col_major_vec, typed_tensor_from_col_major_slice};
+use crate::einsum_helper::tensor_to_col_major_vec;
+use crate::error::{Result, TensorTrainError};
 
 /// Rank-N tensor backed by `tenferro_tensor::TypedTensor<T>`.
 #[derive(Debug)]
-pub struct Tensor<T: TensorScalar, const N: usize>(TfTensor<T>);
+pub struct Tensor<T: TensorScalar, const N: usize> {
+    inner: TfTensor<T>,
+    dims: [usize; N],
+}
 
 /// Iterator over tensor elements in column-major order.
 pub struct TensorIter<'a, T: TensorScalar, const N: usize> {
@@ -57,13 +61,16 @@ fn col_major_data_to_tensor<T: TensorScalar, const N: usize>(
     dims: [usize; N],
     data: Vec<T>,
 ) -> Tensor<T, N> {
-    let inner = typed_tensor_from_col_major_slice(&data, &dims);
-    Tensor::from_tenferro(inner)
+    let inner = TfTensor::from_vec(dims.to_vec(), data);
+    Tensor::from_tenferro_unchecked(inner)
 }
 
 impl<T: TensorScalar, const N: usize> Clone for Tensor<T, N> {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self {
+            inner: self.inner.clone(),
+            dims: self.dims,
+        }
     }
 }
 
@@ -124,9 +131,26 @@ impl<'a, T: TensorScalar, const N: usize> Iterator for TensorIterMut<'a, T, N> {
 impl<'a, T: TensorScalar, const N: usize> ExactSizeIterator for TensorIterMut<'a, T, N> {}
 
 impl<T: TensorScalar, const N: usize> Tensor<T, N> {
+    pub(crate) fn from_tenferro_unchecked(tensor: TfTensor<T>) -> Self {
+        debug_assert_eq!(
+            tensor.shape.len(),
+            N,
+            "tensor rank mismatch: expected rank {N}, got {}",
+            tensor.shape.len()
+        );
+        let mut dims = [0usize; N];
+        for (dim, value) in dims.iter_mut().zip(tensor.shape.iter().copied()) {
+            *dim = value;
+        }
+        Self {
+            inner: tensor,
+            dims,
+        }
+    }
+
     /// Total number of elements.
     pub fn len(&self) -> usize {
-        self.0.n_elements()
+        self.inner.n_elements()
     }
 
     /// Whether the tensor is empty (zero elements).
@@ -141,23 +165,18 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
 
     /// All dimensions.
     pub fn dims(&self) -> &[usize; N] {
-        self.0.shape.as_slice().try_into().unwrap_or_else(|_| {
-            panic!(
-                "tensor rank mismatch: expected rank {N}, got {}",
-                self.0.shape.len()
-            )
-        })
+        &self.dims
     }
 
     /// Export the tensor as a column-major flat vector.
     pub fn to_col_major_vec(&self) -> Vec<T> {
-        tensor_to_col_major_vec(&self.0)
+        tensor_to_col_major_vec(&self.inner)
     }
 
     /// Iterate over all elements in column-major order.
     pub fn iter(&self) -> TensorIter<'_, T, N> {
         TensorIter {
-            tensor: &self.0,
+            tensor: &self.inner,
             dims: *self.dims(),
             next: 0,
             len: self.len(),
@@ -167,7 +186,7 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     /// Iterate mutably over all elements in column-major order.
     pub fn iter_mut(&mut self) -> TensorIterMut<'_, T, N> {
         TensorIterMut {
-            tensor: &mut self.0,
+            tensor: &mut self.inner,
             dims: *self.dims(),
             next: 0,
             len: self.len(),
@@ -177,28 +196,76 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
 
     /// Borrow the wrapped tenferro tensor.
     pub fn as_inner(&self) -> &TfTensor<T> {
-        &self.0
+        &self.inner
     }
 
     /// Mutably borrow the wrapped tenferro tensor.
     pub fn as_inner_mut(&mut self) -> &mut TfTensor<T> {
-        &mut self.0
+        &mut self.inner
     }
 
     /// Consume this wrapper and return the inner tenferro tensor.
     pub fn into_inner(self) -> TfTensor<T> {
-        self.0
+        self.inner
     }
 
-    /// Wrap an existing tenferro tensor, panicking on rank mismatch.
-    pub fn from_tenferro(tensor: TfTensor<T>) -> Self {
+    /// Try to wrap an existing tenferro tensor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tensor rank does not match `N`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::tensor::{Tensor2, Tensor3};
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let rank_2 = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let tensor = Tensor2::try_from_tenferro(rank_2).unwrap();
+    /// assert_eq!(tensor.dims(), &[2, 2]);
+    ///
+    /// let rank_2 = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// assert!(Tensor3::try_from_tenferro(rank_2).is_err());
+    /// ```
+    pub fn try_from_tenferro(tensor: TfTensor<T>) -> Result<Self> {
+        Self::from_tenferro(tensor)
+    }
+
+    /// Wrap an existing tenferro tensor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tensor rank does not match `N`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::tensor::{Tensor2, Tensor3};
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let rank_2 = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let tensor = Tensor2::from_tenferro(rank_2).unwrap();
+    /// assert_eq!(tensor.dims(), &[2, 2]);
+    ///
+    /// let rank_2 = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// assert!(Tensor3::from_tenferro(rank_2).is_err());
+    /// ```
+    pub fn from_tenferro(tensor: TfTensor<T>) -> Result<Self> {
         if tensor.shape.len() != N {
-            panic!(
-                "tensor rank mismatch: expected rank {N}, got {}",
-                tensor.shape.len()
-            );
+            return Err(TensorTrainError::InvalidOperation {
+                message: format!(
+                    "tensor rank mismatch: expected rank {N}, got {}",
+                    tensor.shape.len()
+                ),
+            });
         }
-        Self(tensor)
+        let mut dims = [0usize; N];
+        dims.copy_from_slice(&tensor.shape);
+        Ok(Self {
+            inner: tensor,
+            dims,
+        })
     }
 
     /// Create a tensor by applying `f` to each multi-index (column-major order).
@@ -226,13 +293,13 @@ impl<T: TensorScalar, const N: usize> Index<[usize; N]> for Tensor<T, N> {
     type Output = T;
 
     fn index(&self, idx: [usize; N]) -> &T {
-        self.0.get(&idx[..])
+        self.inner.get(&idx[..])
     }
 }
 
 impl<T: TensorScalar, const N: usize> IndexMut<[usize; N]> for Tensor<T, N> {
     fn index_mut(&mut self, idx: [usize; N]) -> &mut T {
-        self.0.get_mut(&idx[..])
+        self.inner.get_mut(&idx[..])
     }
 }
 
@@ -305,9 +372,18 @@ mod tests {
     }
 
     #[test]
+    fn dims_remain_available_after_inner_shape_mutation() {
+        let mut t: Tensor2<f64> = Tensor2::from_elem([2, 3], 1.0);
+        t.as_inner_mut().shape.push(4);
+
+        assert_eq!(t.dims(), &[2, 3]);
+    }
+
+    #[test]
     fn test_from_tenferro_roundtrip() {
-        let inner = typed_tensor_from_col_major_slice(&[1.0, 4.0, 2.0, 5.0, 3.0, 6.0], &[2, 3]);
-        let tensor = Tensor2::from_tenferro(inner);
+        let inner =
+            typed_tensor_from_col_major_slice(&[1.0, 4.0, 2.0, 5.0, 3.0, 6.0], &[2, 3]).unwrap();
+        let tensor = Tensor2::from_tenferro(inner).unwrap();
 
         assert_eq!(tensor.dims(), &[2, 3]);
         assert_eq!(
@@ -322,10 +398,21 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "rank")]
-    fn test_from_tenferro_rank_mismatch_panics() {
-        let inner = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]);
-        let _ = Tensor3::from_tenferro(inner);
+    fn test_from_tenferro_rank_mismatch_errors() {
+        let inner = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+        let err = Tensor3::from_tenferro(inner).unwrap_err();
+
+        assert!(err.to_string().contains("expected rank 3"));
+        assert!(err.to_string().contains("got 2"));
+    }
+
+    #[test]
+    fn test_try_from_tenferro_rank_mismatch_errors() {
+        let inner = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+        let err = Tensor3::try_from_tenferro(inner).unwrap_err();
+
+        assert!(err.to_string().contains("expected rank 3"));
+        assert!(err.to_string().contains("got 2"));
     }
 
     #[test]

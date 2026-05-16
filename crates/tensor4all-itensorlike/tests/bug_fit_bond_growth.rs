@@ -35,7 +35,7 @@ fn create_random_mpo(
         if i < length - 1 {
             indices.push(link_indices[i].clone());
         }
-        let tensor = TensorDynLen::random::<f64, _>(rng, indices);
+        let tensor = TensorDynLen::random::<f64, _>(rng, indices).unwrap();
         tensors.push(tensor);
     }
     TensorTrain::new(tensors).unwrap()

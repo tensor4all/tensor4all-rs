@@ -116,8 +116,8 @@ fn main() -> anyhow::Result<()> {
         );
 
         // Inner products with identity
-        let inner_zipup = result_zipup.inner(&result_zipup);
-        let inner_fit = result_fit.inner(&result_fit);
+        let inner_zipup = result_zipup.inner(&result_zipup)?;
+        let inner_fit = result_fit.inner(&result_fit)?;
         println!("\n[zipup] <result, result> = {:?}", inner_zipup);
         println!("[fit]   <result, result> = {:?}", inner_fit);
 
@@ -208,7 +208,7 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
     println!("||v1|| = {:.6}", v1.norm());
 
     // Check: <v1, v1> should be 1
-    let v1v1 = v1.inner(&v1);
+    let v1v1 = v1.inner(&v1)?;
     println!("<v1, v1> = {:?}", v1v1);
 
     // w = A(v1)
@@ -216,7 +216,7 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
     println!("||w|| = ||A(v1)|| = {:.6}", w.norm());
 
     // h11 = <w, v1>
-    let h11 = w.inner(&v1);
+    let h11 = w.inner(&v1)?;
     println!("h11 = <A(v1), v1> = {:?}", h11);
     let h11_val = h11.real();
 
@@ -230,7 +230,7 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
     println!("||v2|| = {:.6}", v2.norm());
 
     // Check orthogonality
-    let v1v2 = v1.inner(&v2);
+    let v1v2 = v1.inner(&v2)?;
     println!("<v1, v2> = {:?}", v1v2);
 
     // w2 = A(v2)
@@ -238,8 +238,8 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
     println!("||w2|| = ||A(v2)|| = {:.6}", w2.norm());
 
     // h12 = <w2, v1>, h22 = <w2, v2>
-    let h12 = w2.inner(&v1);
-    let h22 = w2.inner(&v2);
+    let h12 = w2.inner(&v1)?;
+    let h22 = w2.inner(&v2)?;
     println!("h12 = <A(v2), v1> = {:?}", h12);
     println!("h22 = <A(v2), v2> = {:?}", h22);
     let h12_val = h12.real();
@@ -328,8 +328,8 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
     println!("||x_sol - x_true|| = {:.6e}", sol_error.norm());
 
     // Check inner product with x_true
-    let inner_sol_true = x_sol.inner(&x_true);
-    let inner_true_true = x_true.inner(&x_true);
+    let inner_sol_true = x_sol.inner(&x_true)?;
+    let inner_true_true = x_true.inner(&x_true)?;
     println!("<x_sol, x_true> = {:?}", inner_sol_true);
     println!("<x_true, x_true> = {:?}", inner_true_true);
 
@@ -423,7 +423,7 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
     println!("||A*v0|| = {:.6}", w.norm());
 
     // h00 = <v0, w>
-    let h00 = v0.inner(&w);
+    let h00 = v0.inner(&w)?;
     println!("h00 = <v0, A*v0> = {:?}", h00);
     let h00_val = h00.real();
 
@@ -435,15 +435,15 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
     // v1 = w_orth / h10
     let v1 = w_orth.scale(AnyScalar::new_real(1.0 / h10))?;
     println!("||v1|| = {:.6}", v1.norm());
-    println!("<v0, v1> = {:?}", v0.inner(&v1));
+    println!("<v0, v1> = {:?}", v0.inner(&v1)?);
 
     // Arnoldi iteration 2
     println!("\n=== Arnoldi iteration 2 ===");
     let w2 = apply_a(&v1)?;
     println!("||A*v1|| = {:.6}", w2.norm());
 
-    let h01 = v0.inner(&w2);
-    let h11 = v1.inner(&w2);
+    let h01 = v0.inner(&w2)?;
+    let h11 = v1.inner(&w2)?;
     println!("h01 = <v0, A*v1> = {:?}", h01);
     println!("h11 = <v1, A*v1> = {:?}", h11);
     let h01_val = h01.real();
@@ -653,8 +653,8 @@ fn debug_solution_update() -> anyhow::Result<()> {
     // Check index structure of x0
     println!("\n=== Index structure ===");
     for site in 0..n {
-        let t_zipup = x0_zipup.tensor(site);
-        let t_fit = x0_fit.tensor(site);
+        let t_zipup = x0_zipup.tensor(site)?;
+        let t_fit = x0_fit.tensor(site)?;
         println!(
             "Site {} x0_zipup indices: {:?}",
             site,
@@ -694,7 +694,7 @@ fn debug_solution_update() -> anyhow::Result<()> {
     println!(
         "v0_zipup Site 0 indices: {:?}",
         v0_zipup
-            .tensor(0)
+            .tensor(0)?
             .indices()
             .iter()
             .map(|i| i.id())
@@ -703,7 +703,7 @@ fn debug_solution_update() -> anyhow::Result<()> {
     println!(
         "x0_zipup Site 0 indices: {:?}",
         x0_zipup
-            .tensor(0)
+            .tensor(0)?
             .indices()
             .iter()
             .map(|i| i.id())
@@ -712,14 +712,14 @@ fn debug_solution_update() -> anyhow::Result<()> {
 
     // Check if they share physical indices (required for axpby)
     let v0_phys_ids: std::collections::HashSet<_> = v0_zipup
-        .tensor(0)
+        .tensor(0)?
         .indices()
         .iter()
         .filter(|i| i.dim() == 2)
         .map(|i| i.id())
         .collect();
     let x0_phys_ids: std::collections::HashSet<_> = x0_zipup
-        .tensor(0)
+        .tensor(0)?
         .indices()
         .iter()
         .filter(|i| i.dim() == 2)
@@ -750,7 +750,7 @@ fn debug_solution_update() -> anyhow::Result<()> {
     println!(
         "x_new Site 0 indices: {:?}",
         x_new_zipup
-            .tensor(0)
+            .tensor(0)?
             .indices()
             .iter()
             .map(|i| (i.id(), i.dim()))
@@ -773,14 +773,14 @@ fn debug_solution_update() -> anyhow::Result<()> {
     println!("v0_fit bond dims: {:?}", v0_fit.bond_dims());
 
     let v0_fit_phys_ids: std::collections::HashSet<_> = v0_fit
-        .tensor(0)
+        .tensor(0)?
         .indices()
         .iter()
         .filter(|i| i.dim() == 2)
         .map(|i| i.id())
         .collect();
     let x0_fit_phys_ids: std::collections::HashSet<_> = x0_fit
-        .tensor(0)
+        .tensor(0)?
         .indices()
         .iter()
         .filter(|i| i.dim() == 2)
@@ -810,8 +810,8 @@ fn debug_solution_update() -> anyhow::Result<()> {
 
     // Check actual values
     println!("\nSite 0 data comparison:");
-    println!("x_new_zipup: {:?}", x_new_zipup.tensor(0).to_vec::<f64>()?);
-    println!("x_new_fit:   {:?}", x_new_fit.tensor(0).to_vec::<f64>()?);
+    println!("x_new_zipup: {:?}", x_new_zipup.tensor(0)?.to_vec::<f64>()?);
+    println!("x_new_fit:   {:?}", x_new_fit.tensor(0)?.to_vec::<f64>()?);
 
     Ok(())
 }
@@ -867,7 +867,7 @@ fn test_truncation_effect() -> anyhow::Result<()> {
     println!("w norm: {:.6}", w.norm());
 
     // h10 = <v0, w>
-    let h10 = v0.inner(&w);
+    let h10 = v0.inner(&w)?;
     println!("h10 = <v0, w>: {:?}", h10);
     let h10_val = h10.real();
 
@@ -875,13 +875,13 @@ fn test_truncation_effect() -> anyhow::Result<()> {
     let mut w_orth = w.axpby(AnyScalar::new_real(1.0), &v0, AnyScalar::new_real(-h10_val))?;
     println!("\n=== w_orth before truncation ===");
     println!("w_orth norm: {:.6}", w_orth.norm());
-    println!("<v0, w_orth>: {:?}", v0.inner(&w_orth));
+    println!("<v0, w_orth>: {:?}", v0.inner(&w_orth)?);
 
     // Truncate w_orth
     w_orth.truncate(&truncate_opts)?;
     println!("\n=== w_orth after truncation ===");
     println!("w_orth norm: {:.6}", w_orth.norm());
-    println!("<v0, w_orth>: {:?}", v0.inner(&w_orth)); // Should still be ~0 if truncation preserves orthogonality
+    println!("<v0, w_orth>: {:?}", v0.inner(&w_orth)?); // Should still be ~0 if truncation preserves orthogonality
 
     let h20 = w_orth.norm();
     let mut v1 = w_orth.scale(AnyScalar::new_real(1.0 / h20))?;
@@ -891,7 +891,7 @@ fn test_truncation_effect() -> anyhow::Result<()> {
 
     println!("\n=== v1 after truncation and renormalization ===");
     println!("v1 norm: {:.6}", v1.norm());
-    println!("<v0, v1>: {:?}", v0.inner(&v1)); // This should be ~0, but may not be!
+    println!("<v0, v1>: {:?}", v0.inner(&v1)?); // This should be ~0, but may not be!
 
     // Now check if Arnoldi relation holds
     // A*v0 should = h10*v0 + h20*v1
@@ -908,8 +908,8 @@ fn test_truncation_effect() -> anyhow::Result<()> {
 
     // Second iteration
     let w2 = apply_with_zipup(&pauli_x, &v1, &indices)?;
-    let h11 = v0.inner(&w2);
-    let h21 = v1.inner(&w2);
+    let h11 = v0.inner(&w2)?;
+    let h21 = v1.inner(&w2)?;
     println!("\n=== Second iteration ===");
     println!("h11 = <v0, A*v1>: {:?}", h11);
     println!("h21 = <v1, A*v1>: {:?}", h21);
@@ -925,8 +925,8 @@ fn test_truncation_effect() -> anyhow::Result<()> {
     println!("w2_orth norm after trunc:  {:.6}", w2_orth.norm());
 
     // Check orthogonality after truncation
-    println!("<v0, w2_orth>: {:?}", v0.inner(&w2_orth));
-    println!("<v1, w2_orth>: {:?}", v1.inner(&w2_orth));
+    println!("<v0, w2_orth>: {:?}", v0.inner(&w2_orth)?);
+    println!("<v1, w2_orth>: {:?}", v1.inner(&w2_orth)?);
 
     Ok(())
 }
@@ -949,8 +949,8 @@ fn detailed_debug_n3() -> anyhow::Result<()> {
     // Print tensor data at each site
     for site in 0..n {
         println!("\n--- Site {} tensor data ---", site);
-        let t_zipup = result_zipup.tensor(site);
-        let t_fit = result_fit.tensor(site);
+        let t_zipup = result_zipup.tensor(site)?;
+        let t_fit = result_fit.tensor(site)?;
 
         println!(
             "zipup shape: {:?}",
@@ -1010,10 +1010,10 @@ fn detailed_debug_n3() -> anyhow::Result<()> {
 
     println!("\n=== Step 2: Check inner product computation ===");
     // Test inner product between zipup and fit results
-    let inner_zz = result_zipup.inner(&result_zipup);
-    let inner_ff = result_fit.inner(&result_fit);
-    let inner_zf = result_zipup.inner(&result_fit);
-    let inner_fz = result_fit.inner(&result_zipup);
+    let inner_zz = result_zipup.inner(&result_zipup)?;
+    let inner_ff = result_fit.inner(&result_fit)?;
+    let inner_zf = result_zipup.inner(&result_fit)?;
+    let inner_fz = result_fit.inner(&result_zipup)?;
 
     println!("<zipup, zipup> = {:?}", inner_zz);
     println!("<fit, fit>     = {:?}", inner_ff);
@@ -1079,15 +1079,15 @@ fn detailed_debug_n3() -> anyhow::Result<()> {
     println!("w_fit = A(v1_fit) norm:     {:.6}", w_fit.norm());
 
     // h11 = <w, v1> - this is where the issue might be
-    let h11_zipup = w_zipup.inner(&v1_zipup);
-    let h11_fit = w_fit.inner(&v1_fit);
+    let h11_zipup = w_zipup.inner(&v1_zipup)?;
+    let h11_fit = w_fit.inner(&v1_fit)?;
 
     println!("\nh11_zipup = <w, v1>: {:?}", h11_zipup);
     println!("h11_fit = <w, v1>:   {:?}", h11_fit);
 
     // Check cross inner products
-    let cross1 = w_zipup.inner(&v1_fit);
-    let cross2 = w_fit.inner(&v1_zipup);
+    let cross1 = w_zipup.inner(&v1_fit)?;
+    let cross2 = w_fit.inner(&v1_zipup)?;
     println!("<w_zipup, v1_fit>: {:?}", cross1);
     println!("<w_fit, v1_zipup>: {:?}", cross2);
 
@@ -1120,8 +1120,8 @@ fn detailed_debug_n3() -> anyhow::Result<()> {
     println!("v2_fit norm:   {:.6}", v2_fit.norm());
 
     // Check orthogonality <v1, v2>
-    let v1v2_zipup = v1_zipup.inner(&v2_zipup);
-    let v1v2_fit = v1_fit.inner(&v2_fit);
+    let v1v2_zipup = v1_zipup.inner(&v2_zipup)?;
+    let v1v2_fit = v1_fit.inner(&v2_fit)?;
     println!("\n<v1, v2> zipup: {:?}", v1v2_zipup);
     println!("<v1, v2> fit:   {:?}", v1v2_fit);
 
@@ -1135,10 +1135,10 @@ fn detailed_debug_n3() -> anyhow::Result<()> {
     println!("w2_fit = A(v2) norm:   {:.6}", w2_fit.norm());
 
     // h12 = <w2, v1>, h22 = <w2, v2>
-    let h12_zipup = w2_zipup.inner(&v1_zipup);
-    let h12_fit = w2_fit.inner(&v1_fit);
-    let h22_zipup = w2_zipup.inner(&v2_zipup);
-    let h22_fit = w2_fit.inner(&v2_fit);
+    let h12_zipup = w2_zipup.inner(&v1_zipup)?;
+    let h12_fit = w2_fit.inner(&v1_fit)?;
+    let h22_zipup = w2_zipup.inner(&v2_zipup)?;
+    let h22_fit = w2_fit.inner(&v2_fit)?;
 
     println!("\nh12_zipup = <w2, v1>: {:?}", h12_zipup);
     println!("h12_fit = <w2, v1>:   {:?}", h12_fit);
@@ -1271,9 +1271,9 @@ fn test_gmres_with_both(
     );
 
     // Check inner products with x_true
-    let inner_sol_true_zipup = result_zipup.solution.inner(x_true);
-    let inner_sol_true_fit = result_fit.solution.inner(x_true);
-    let expected_inner = x_true.inner(x_true);
+    let inner_sol_true_zipup = result_zipup.solution.inner(x_true)?;
+    let inner_sol_true_fit = result_fit.solution.inner(x_true)?;
+    let expected_inner = x_true.inner(x_true)?;
     println!(
         "[zipup] <x_sol, x_true>: {:?} (expected: {:?})",
         inner_sol_true_zipup, expected_inner
@@ -1335,8 +1335,8 @@ fn test_gmres_like_operations(
     println!("||r0|| fit: {:.6e}", r0_fit.norm());
 
     // Compute inner products
-    let inner_r0_r0_zipup = r0_zipup.inner(&r0_zipup);
-    let inner_r0_r0_fit = r0_fit.inner(&r0_fit);
+    let inner_r0_r0_zipup = r0_zipup.inner(&r0_zipup)?;
+    let inner_r0_r0_fit = r0_fit.inner(&r0_fit)?;
     println!("<r0, r0> zipup: {:?}", inner_r0_r0_zipup);
     println!("<r0, r0> fit: {:?}", inner_r0_r0_fit);
 
@@ -1348,8 +1348,8 @@ fn test_gmres_like_operations(
     println!("||A(r0)|| fit: {:.6e}", ar0_fit.norm());
 
     // Check <A(r0), r0>
-    let inner_ar0_r0_zipup = ar0_zipup.inner(&r0_zipup);
-    let inner_ar0_r0_fit = ar0_fit.inner(&r0_fit);
+    let inner_ar0_r0_zipup = ar0_zipup.inner(&r0_zipup)?;
+    let inner_ar0_r0_fit = ar0_fit.inner(&r0_fit)?;
     println!("<A(r0), r0> zipup: {:?}", inner_ar0_r0_zipup);
     println!("<A(r0), r0> fit: {:?}", inner_ar0_r0_fit);
 
@@ -1357,9 +1357,9 @@ fn test_gmres_like_operations(
     println!("\n--- Index structure check ---");
     println!(
         "b_zipup indices at site 0: {:?}",
-        b_zipup.tensor(0).indices()
+        b_zipup.tensor(0)?.indices()
     );
-    println!("b_fit indices at site 0: {:?}", b_fit.tensor(0).indices());
+    println!("b_fit indices at site 0: {:?}", b_fit.tensor(0)?.indices());
 
     Ok(())
 }
@@ -1522,8 +1522,8 @@ fn debug_contract_result(
 
     for site in 0..3 {
         println!("\n--- Raw result Site {} ---", site);
-        let t_zipup = raw_zipup.tensor(site);
-        let t_fit = raw_fit.tensor(site);
+        let t_zipup = raw_zipup.tensor(site)?;
+        let t_fit = raw_fit.tensor(site)?;
 
         println!(
             "zipup indices: {:?}",
@@ -1547,7 +1547,7 @@ fn debug_contract_result(
     println!("\n--- Bond index comparison ---");
     println!("zipup link indices:");
     for site in 0..2 {
-        let t = raw_zipup.tensor(site);
+        let t = raw_zipup.tensor(site)?;
         let link_idx = t.indices().iter().find(|i| {
             i.dim() == 1 && site == 0 || t.indices().last().map(|x| x.id()) == Some(i.id())
         });
@@ -1558,7 +1558,7 @@ fn debug_contract_result(
 
     println!("fit link indices:");
     for site in 0..2 {
-        let t = raw_fit.tensor(site);
+        let t = raw_fit.tensor(site)?;
         for idx in t.indices() {
             if idx.dim() == 1 {
                 println!("  Site {} bond dim=1: {:?}", site, idx.id());
@@ -1571,8 +1571,8 @@ fn debug_contract_result(
     println!("TensorTrain expects: [left_bond, physical..., right_bond]");
     println!("");
     for site in 0..3 {
-        let t_zipup = raw_zipup.tensor(site);
-        let t_fit = raw_fit.tensor(site);
+        let t_zipup = raw_zipup.tensor(site)?;
+        let t_fit = raw_fit.tensor(site)?;
 
         let zipup_dims: Vec<_> = t_zipup.indices().iter().map(|i| i.dim()).collect();
         let fit_dims: Vec<_> = t_fit.indices().iter().map(|i| i.dim()).collect();
@@ -1607,7 +1607,7 @@ fn debug_contract_result(
 
     // Check if Site 1 has duplicate bond IDs
     println!("\n=== Site 1 bond ID analysis ===");
-    let t1_fit = raw_fit.tensor(1);
+    let t1_fit = raw_fit.tensor(1)?;
     let bond_ids: Vec<_> = t1_fit
         .indices()
         .iter()
@@ -1642,7 +1642,7 @@ fn debug_contract_result(
     println!(
         "  zipup Site 1: {:?}",
         result_zipup
-            .tensor(1)
+            .tensor(1)?
             .indices()
             .iter()
             .map(|i| i.dim())
@@ -1651,7 +1651,7 @@ fn debug_contract_result(
     println!(
         "  fit Site 1:   {:?}",
         result_fit
-            .tensor(1)
+            .tensor(1)?
             .indices()
             .iter()
             .map(|i| i.dim())
@@ -1662,7 +1662,7 @@ fn debug_contract_result(
     println!(
         "  zipup Site 1: {:?}",
         result_zipup_trunc
-            .tensor(1)
+            .tensor(1)?
             .indices()
             .iter()
             .map(|i| i.dim())
@@ -1671,7 +1671,7 @@ fn debug_contract_result(
     println!(
         "  fit Site 1:   {:?}",
         result_fit_trunc
-            .tensor(1)
+            .tensor(1)?
             .indices()
             .iter()
             .map(|i| i.dim())

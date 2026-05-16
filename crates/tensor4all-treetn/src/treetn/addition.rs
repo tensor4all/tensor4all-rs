@@ -315,7 +315,7 @@ where
     /// let sum = tn.add(&tn).unwrap();
     /// let dense = sum.to_dense().unwrap();
     /// let expected = TensorDynLen::from_dense(vec![s], vec![2.0, 4.0]).unwrap();
-    /// assert!((&dense - &expected).maxabs() < 1e-12);
+    /// assert!(dense.distance(&expected).unwrap() < 1e-12);
     /// ```
     pub fn add(&self, other: &Self) -> Result<Self>
     where
@@ -340,11 +340,19 @@ where
         let mut result_node_names: Vec<V> = Vec::new();
 
         for node_name in self.node_names() {
-            let self_idx = self.node_index(&node_name).unwrap();
-            let other_idx = other.node_index(&node_name).unwrap();
+            let self_idx = self
+                .node_index(&node_name)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in self", node_name))?;
+            let other_idx = other
+                .node_index(&node_name)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in other", node_name))?;
 
-            let tensor_a = self.tensor(self_idx).unwrap();
-            let tensor_b = other.tensor(other_idx).unwrap();
+            let tensor_a = self.tensor(self_idx).ok_or_else(|| {
+                anyhow::anyhow!("Tensor not found for node {:?} in self", node_name)
+            })?;
+            let tensor_b = other.tensor(other_idx).ok_or_else(|| {
+                anyhow::anyhow!("Tensor not found for node {:?} in other", node_name)
+            })?;
 
             // Find bond index pairs for this node and track neighbors
             let mut bond_pairs: Vec<(T::Index, T::Index)> = Vec::new();
@@ -352,12 +360,28 @@ where
 
             for neighbor in self.site_index_network().neighbors(&node_name) {
                 // Get bond index from self
-                let self_edge = self.edge_between(&node_name, &neighbor).unwrap();
-                let self_bond = self.bond_index(self_edge).unwrap();
+                let self_edge = self.edge_between(&node_name, &neighbor).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Edge not found in self between {:?} and {:?}",
+                        node_name,
+                        neighbor
+                    )
+                })?;
+                let self_bond = self
+                    .bond_index(self_edge)
+                    .ok_or_else(|| anyhow::anyhow!("Bond index not found in self"))?;
 
                 // Get bond index from other
-                let other_edge = other.edge_between(&node_name, &neighbor).unwrap();
-                let other_bond = other.bond_index(other_edge).unwrap();
+                let other_edge = other.edge_between(&node_name, &neighbor).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Edge not found in other between {:?} and {:?}",
+                        node_name,
+                        neighbor
+                    )
+                })?;
+                let other_bond = other
+                    .bond_index(other_edge)
+                    .ok_or_else(|| anyhow::anyhow!("Bond index not found in other"))?;
 
                 bond_pairs.push((self_bond.clone(), other_bond.clone()));
                 neighbors_for_edges.push(neighbor);

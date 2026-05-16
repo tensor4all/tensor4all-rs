@@ -5,7 +5,6 @@ use std::ops::{Add, Div, Mul, Neg, Sub};
 use anyhow::{anyhow, Result};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
-use tenferro::DType;
 use tensor4all_tensorbackend::AnyScalar as BackendScalar;
 
 use crate::defaults::tensordynlen::TensorDynLen;
@@ -16,7 +15,6 @@ use tensor4all_tensorbackend::{Storage, SumFromStorage};
 enum ScalarValue {
     F32(f32),
     F64(f64),
-    I64(i64),
     C32(Complex32),
     C64(Complex64),
 }
@@ -26,7 +24,6 @@ impl ScalarValue {
         match self {
             Self::F32(value) => value as f64,
             Self::F64(value) => value,
-            Self::I64(value) => value as f64,
             Self::C32(value) => value.re as f64,
             Self::C64(value) => value.re,
         }
@@ -34,7 +31,7 @@ impl ScalarValue {
 
     fn imag(self) -> f64 {
         match self {
-            Self::F32(_) | Self::F64(_) | Self::I64(_) => 0.0,
+            Self::F32(_) | Self::F64(_) => 0.0,
             Self::C32(value) => value.im as f64,
             Self::C64(value) => value.im,
         }
@@ -44,7 +41,6 @@ impl ScalarValue {
         match self {
             Self::F32(value) => value.abs() as f64,
             Self::F64(value) => value.abs(),
-            Self::I64(value) => value.abs() as f64,
             Self::C32(value) => value.norm() as f64,
             Self::C64(value) => value.norm(),
         }
@@ -58,7 +54,6 @@ impl ScalarValue {
         match self {
             Self::F32(value) => value == 0.0,
             Self::F64(value) => value == 0.0,
-            Self::I64(value) => value == 0,
             Self::C32(value) => value == Complex32::new(0.0, 0.0),
             Self::C64(value) => value == Complex64::new(0.0, 0.0),
         }
@@ -68,10 +63,37 @@ impl ScalarValue {
         match self {
             Self::F32(value) => Complex64::new(value as f64, 0.0),
             Self::F64(value) => Complex64::new(value, 0.0),
-            Self::I64(value) => Complex64::new(value as f64, 0.0),
             Self::C32(value) => Complex64::new(value.re as f64, value.im as f64),
             Self::C64(value) => value,
         }
+    }
+}
+
+trait ScalarTensorElement: TensorElement {
+    fn scalar_value(value: Self) -> ScalarValue;
+}
+
+impl ScalarTensorElement for f32 {
+    fn scalar_value(value: Self) -> ScalarValue {
+        ScalarValue::F32(value)
+    }
+}
+
+impl ScalarTensorElement for f64 {
+    fn scalar_value(value: Self) -> ScalarValue {
+        ScalarValue::F64(value)
+    }
+}
+
+impl ScalarTensorElement for Complex32 {
+    fn scalar_value(value: Self) -> ScalarValue {
+        ScalarValue::C32(value)
+    }
+}
+
+impl ScalarTensorElement for Complex64 {
+    fn scalar_value(value: Self) -> ScalarValue {
+        ScalarValue::C64(value)
     }
 }
 
@@ -82,7 +104,8 @@ impl ScalarValue {
 /// dynamic scalar API shape.
 #[derive(Clone)]
 pub struct AnyScalar {
-    tensor: TensorDynLen,
+    tensor: Option<TensorDynLen>,
+    value: ScalarValue,
 }
 
 impl AnyScalar {
@@ -93,15 +116,18 @@ impl AnyScalar {
             "AnyScalar requires a rank-0 tensor, got dims {:?}",
             dims
         );
-        Ok(Self { tensor })
+        let value = Self::scalar_value_from_tensor(&tensor)?;
+        Ok(Self {
+            tensor: Some(tensor),
+            value,
+        })
     }
 
-    fn from_tensor_result(tensor: Result<TensorDynLen>, op: &'static str) -> Self {
+    fn from_tensor_result(tensor: Result<TensorDynLen>, op: &'static str) -> Result<Self> {
         Self::wrap_tensor(
-            tensor
-                .unwrap_or_else(|e| panic!("AnyScalar::{op} returned invalid scalar tensor: {e}")),
+            tensor.map_err(|e| anyhow!("AnyScalar::{op} returned invalid scalar tensor: {e}"))?,
         )
-        .unwrap_or_else(|e| panic!("AnyScalar::{op} returned non-scalar tensor: {e}"))
+        .map_err(|e| anyhow!("AnyScalar::{op} returned non-scalar tensor: {e}"))
     }
 
     fn from_eager_binary<E>(
@@ -112,12 +138,12 @@ impl AnyScalar {
             &tenferro::EagerTensor<tenferro::CpuBackend>,
             &tenferro::EagerTensor<tenferro::CpuBackend>,
         ) -> std::result::Result<tenferro::EagerTensor<tenferro::CpuBackend>, E>,
-    ) -> Self
+    ) -> Result<Self>
     where
         E: fmt::Display,
     {
-        let result = f(lhs.tensor.as_inner(), rhs.tensor.as_inner())
-            .unwrap_or_else(|e| panic!("AnyScalar::{op} failed: {e}"));
+        let result = f(lhs.as_tensor()?.as_inner()?, rhs.as_tensor()?.as_inner()?)
+            .map_err(|e| anyhow!("AnyScalar::{op} failed: {e}"))?;
         Self::from_tensor_result(TensorDynLen::from_inner(vec![], result), op)
     }
 
@@ -127,45 +153,40 @@ impl AnyScalar {
         f: impl FnOnce(
             &tenferro::EagerTensor<tenferro::CpuBackend>,
         ) -> std::result::Result<tenferro::EagerTensor<tenferro::CpuBackend>, E>,
-    ) -> Self
+    ) -> Result<Self>
     where
         E: fmt::Display,
     {
-        let result =
-            f(input.tensor.as_inner()).unwrap_or_else(|e| panic!("AnyScalar::{op} failed: {e}"));
+        let result = f(input.as_tensor()?.as_inner()?)
+            .map_err(|e| anyhow!("AnyScalar::{op} failed: {e}"))?;
         Self::from_tensor_result(TensorDynLen::from_inner(vec![], result), op)
     }
 
-    fn value(&self) -> ScalarValue {
-        match self.tensor.as_native().dtype() {
-            DType::F32 => ScalarValue::F32(
-                self.tensor
-                    .to_vec::<f32>()
-                    .unwrap_or_else(|e| panic!("failed to read f32 scalar value: {e}"))[0],
-            ),
-            DType::F64 => ScalarValue::F64(
-                self.tensor
-                    .to_vec::<f64>()
-                    .unwrap_or_else(|e| panic!("failed to read f64 scalar value: {e}"))[0],
-            ),
-            DType::I64 => ScalarValue::I64(
-                self.tensor
-                    .as_native()
-                    .as_slice::<i64>()
-                    .and_then(|values| values.first().copied())
-                    .unwrap_or_else(|| panic!("failed to read i64 scalar value")),
-            ),
-            DType::C32 => ScalarValue::C32(
-                self.tensor
-                    .to_vec::<Complex32>()
-                    .unwrap_or_else(|e| panic!("failed to read c32 scalar value: {e}"))[0],
-            ),
-            DType::C64 => ScalarValue::C64(
-                self.tensor
-                    .to_vec::<Complex64>()
-                    .unwrap_or_else(|e| panic!("failed to read c64 scalar value: {e}"))[0],
-            ),
+    fn scalar_value_from_tensor(tensor: &TensorDynLen) -> Result<ScalarValue> {
+        let storage = tensor.storage();
+        if storage.is_c64() {
+            let values = storage
+                .payload_c64_col_major_vec()
+                .map_err(|e| anyhow!("failed to read c64 scalar storage: {e}"))?;
+            values
+                .first()
+                .copied()
+                .map(ScalarValue::C64)
+                .ok_or_else(|| anyhow!("rank-0 c64 scalar storage is empty"))
+        } else {
+            let values = storage
+                .payload_f64_col_major_vec()
+                .map_err(|e| anyhow!("failed to read f64 scalar storage: {e}"))?;
+            values
+                .first()
+                .copied()
+                .map(ScalarValue::F64)
+                .ok_or_else(|| anyhow!("rank-0 f64 scalar storage is empty"))
         }
+    }
+
+    fn value(&self) -> ScalarValue {
+        self.value
     }
 
     fn from_backend_scalar(value: BackendScalar) -> Self {
@@ -176,12 +197,14 @@ impl AnyScalar {
         }
     }
 
-    pub(crate) fn from_tensor_unchecked(tensor: TensorDynLen) -> Self {
-        Self::wrap_tensor(tensor).unwrap_or_else(|e| panic!("AnyScalar tensor wrapper failed: {e}"))
+    pub(crate) fn from_tensor(tensor: TensorDynLen) -> Result<Self> {
+        Self::wrap_tensor(tensor)
     }
 
-    pub(crate) fn as_tensor(&self) -> &TensorDynLen {
-        &self.tensor
+    pub(crate) fn as_tensor(&self) -> Result<&TensorDynLen> {
+        self.tensor
+            .as_ref()
+            .ok_or_else(|| anyhow!("AnyScalar has no backend tensor representation"))
     }
 
     /// Creates an `AnyScalar` from a tensor element.
@@ -206,8 +229,12 @@ impl AnyScalar {
     /// assert_eq!(scalar.real(), 3.0);
     /// assert!(scalar.is_real());
     /// ```
-    pub fn from_value<T: TensorElement>(value: T) -> Self {
-        Self::from_tensor_result(TensorDynLen::scalar(value), "from_value")
+    #[allow(private_bounds)]
+    pub fn from_value<T: ScalarTensorElement>(value: T) -> Self {
+        Self {
+            tensor: TensorDynLen::scalar(value).ok(),
+            value: T::scalar_value(value),
+        }
     }
 
     /// Creates a real-valued `AnyScalar`.
@@ -325,11 +352,11 @@ impl AnyScalar {
     /// ```
     /// use tensor4all_core::AnyScalar;
     ///
-    /// let primal = AnyScalar::new_real(5.0).enable_grad().primal();
+    /// let primal = AnyScalar::new_real(5.0).enable_grad().unwrap().primal().unwrap();
     /// assert_eq!(primal.real(), 5.0);
     /// assert!(!primal.tracks_grad());
     /// ```
-    pub fn primal(&self) -> Self {
+    pub fn primal(&self) -> Result<Self> {
         self.detach()
     }
 
@@ -344,11 +371,14 @@ impl AnyScalar {
     /// ```
     /// use tensor4all_core::AnyScalar;
     ///
-    /// let scalar = AnyScalar::new_real(2.0).enable_grad();
+    /// let scalar = AnyScalar::new_real(2.0).enable_grad().unwrap();
     /// assert!(scalar.tracks_grad());
     /// ```
-    pub fn enable_grad(self) -> Self {
-        Self::from_tensor_unchecked(self.tensor.enable_grad())
+    pub fn enable_grad(self) -> Result<Self> {
+        let tensor = self
+            .tensor
+            .ok_or_else(|| anyhow!("AnyScalar has no backend tensor representation"))?;
+        Self::from_tensor(tensor.enable_grad()?)
     }
 
     /// Returns whether this scalar tracks gradients.
@@ -367,7 +397,7 @@ impl AnyScalar {
     /// assert!(!scalar.tracks_grad());
     /// ```
     pub fn tracks_grad(&self) -> bool {
-        self.tensor.tracks_grad()
+        self.tensor.as_ref().is_some_and(TensorDynLen::tracks_grad)
     }
 
     /// Returns the stored gradient, if any.
@@ -387,7 +417,7 @@ impl AnyScalar {
     /// ```
     /// use tensor4all_core::AnyScalar;
     ///
-    /// let x = AnyScalar::new_real(2.0).enable_grad();
+    /// let x = AnyScalar::new_real(2.0).enable_grad().unwrap();
     /// let y = &x * &x;
     /// y.backward().unwrap();
     ///
@@ -395,9 +425,9 @@ impl AnyScalar {
     /// assert_eq!(grad.real(), 4.0);
     /// ```
     pub fn grad(&self) -> Result<Option<Self>> {
-        self.tensor
+        self.as_tensor()?
             .grad()
-            .map(|maybe_grad| maybe_grad.map(Self::from_tensor_unchecked))
+            .and_then(|maybe_grad| maybe_grad.map(Self::from_tensor).transpose())
     }
 
     /// Clears the stored gradient for this scalar.
@@ -415,7 +445,7 @@ impl AnyScalar {
     /// ```
     /// use tensor4all_core::AnyScalar;
     ///
-    /// let x = AnyScalar::new_real(2.0).enable_grad();
+    /// let x = AnyScalar::new_real(2.0).enable_grad().unwrap();
     /// let y = &x * &x;
     /// y.backward().unwrap();
     /// assert!(x.grad().unwrap().is_some());
@@ -424,7 +454,7 @@ impl AnyScalar {
     /// assert!(x.grad().unwrap().is_none());
     /// ```
     pub fn clear_grad(&self) -> Result<()> {
-        self.tensor.clear_grad()
+        self.as_tensor()?.clear_grad()
     }
 
     /// Runs reverse-mode autodiff starting from this scalar.
@@ -442,7 +472,7 @@ impl AnyScalar {
     /// ```
     /// use tensor4all_core::AnyScalar;
     ///
-    /// let x = AnyScalar::new_real(2.0).enable_grad();
+    /// let x = AnyScalar::new_real(2.0).enable_grad().unwrap();
     /// let y = &x * &x;
     /// y.backward().unwrap();
     ///
@@ -450,7 +480,7 @@ impl AnyScalar {
     /// assert_eq!(grad.real(), 4.0);
     /// ```
     pub fn backward(&self) -> Result<()> {
-        self.tensor.backward()
+        self.as_tensor()?.backward()
     }
 
     /// Returns a detached copy of this scalar.
@@ -464,12 +494,16 @@ impl AnyScalar {
     /// ```
     /// use tensor4all_core::AnyScalar;
     ///
-    /// let detached = AnyScalar::new_real(7.0).enable_grad().detach();
+    /// let detached = AnyScalar::new_real(7.0)
+    ///     .enable_grad()
+    ///     .unwrap()
+    ///     .detach()
+    ///     .unwrap();
     /// assert_eq!(detached.real(), 7.0);
     /// assert!(!detached.tracks_grad());
     /// ```
-    pub fn detach(&self) -> Self {
-        Self::from_tensor_unchecked(self.tensor.detach())
+    pub fn detach(&self) -> Result<Self> {
+        Self::from_tensor(self.as_tensor()?.detach()?)
     }
 
     /// Returns the real part of this scalar.
@@ -601,7 +635,6 @@ impl AnyScalar {
         match self.value() {
             ScalarValue::F32(value) => Some(value as f64),
             ScalarValue::F64(value) => Some(value),
-            ScalarValue::I64(value) => Some(value as f64),
             ScalarValue::C32(_) | ScalarValue::C64(_) => None,
         }
     }
@@ -624,7 +657,7 @@ impl AnyScalar {
     /// ```
     pub fn as_c64(&self) -> Option<Complex64> {
         match self.value() {
-            ScalarValue::F32(_) | ScalarValue::F64(_) | ScalarValue::I64(_) => None,
+            ScalarValue::F32(_) | ScalarValue::F64(_) => None,
             ScalarValue::C32(value) => Some(Complex64::new(value.re as f64, value.im as f64)),
             ScalarValue::C64(value) => Some(value),
         }
@@ -644,8 +677,14 @@ impl AnyScalar {
     /// let scalar = AnyScalar::new_complex(3.0, -4.0).conj();
     /// assert_eq!(scalar.as_c64().map(|z| (z.re, z.im)), Some((3.0, 4.0)));
     /// ```
-    pub fn conj(&self) -> Self {
+    pub fn try_conj(&self) -> Result<Self> {
         Self::from_eager_unary(self, "conj", |tensor| tensor.conj())
+    }
+
+    /// Returns the complex conjugate of this scalar.
+    pub fn conj(&self) -> Self {
+        self.try_conj()
+            .unwrap_or_else(|_| Self::from_backend_scalar(self.to_backend_scalar().conj()))
     }
 
     /// Returns the real part as a real-valued scalar.
@@ -716,14 +755,10 @@ impl AnyScalar {
     /// ```
     pub fn compose_complex(real: Self, imag: Self) -> Result<Self> {
         if !real.is_real() || !imag.is_real() {
-            return Err(anyhow!(
-                "compose_complex requires real-valued inputs, got real={:?}, imag={:?}",
-                real.tensor.as_native().dtype(),
-                imag.tensor.as_native().dtype()
-            ));
+            return Err(anyhow!("compose_complex requires real-valued inputs"));
         }
-        let imag_term = &imag * &Self::new_complex(0.0, 1.0);
-        Ok(&real + &imag_term)
+        let imag_term = imag.try_mul(&Self::new_complex(0.0, 1.0))?;
+        real.try_add(&imag_term)
     }
 
     /// Returns the square root of this scalar.
@@ -747,6 +782,7 @@ impl AnyScalar {
             Self::from_backend_scalar(self.to_backend_scalar().sqrt())
         } else {
             Self::from_eager_unary(self, "sqrt", |tensor| tensor.sqrt())
+                .unwrap_or_else(|_| Self::from_backend_scalar(self.to_backend_scalar().sqrt()))
         }
     }
 
@@ -802,16 +838,22 @@ impl AnyScalar {
 
         while power > 0 {
             if power % 2 == 1 {
-                acc = &acc * &base;
+                acc = acc.try_mul(&base).unwrap_or_else(|_| {
+                    Self::from_backend_scalar(acc.to_backend_scalar() * base.to_backend_scalar())
+                });
             }
             power /= 2;
             if power > 0 {
-                base = &base * &base;
+                base = base.try_mul(&base).unwrap_or_else(|_| {
+                    Self::from_backend_scalar(base.to_backend_scalar() * base.to_backend_scalar())
+                });
             }
         }
 
         if exponent < 0 {
-            Self::one() / acc
+            Self::one().try_div(&acc).unwrap_or_else(|_| {
+                Self::from_backend_scalar(Self::one().to_backend_scalar() / acc.to_backend_scalar())
+            })
         } else {
             acc
         }
@@ -821,10 +863,31 @@ impl AnyScalar {
         match self.value() {
             ScalarValue::F32(value) => BackendScalar::from_value(value),
             ScalarValue::F64(value) => BackendScalar::from_value(value),
-            ScalarValue::I64(value) => BackendScalar::from_value(value as f64),
             ScalarValue::C32(value) => BackendScalar::from_value(value),
             ScalarValue::C64(value) => BackendScalar::from_value(value),
         }
+    }
+
+    pub(crate) fn try_add(&self, rhs: &Self) -> Result<Self> {
+        Self::from_eager_binary(self, rhs, "add", |lhs, rhs| lhs.add(rhs))
+    }
+
+    pub(crate) fn try_mul(&self, rhs: &Self) -> Result<Self> {
+        Self::from_eager_binary(self, rhs, "mul", |lhs, rhs| lhs.mul(rhs))
+    }
+
+    pub(crate) fn try_div(&self, rhs: &Self) -> Result<Self> {
+        if self.as_tensor()?.as_native()?.dtype() == rhs.as_tensor()?.as_native()?.dtype() {
+            Self::from_eager_binary(self, rhs, "div", |lhs, rhs| lhs.div(rhs))
+        } else {
+            Ok(Self::from_backend_scalar(
+                self.to_backend_scalar() / rhs.to_backend_scalar(),
+            ))
+        }
+    }
+
+    pub(crate) fn try_neg(&self) -> Result<Self> {
+        Self::from_eager_unary(self, "neg", |tensor| tensor.neg())
     }
 }
 
@@ -876,7 +939,9 @@ impl Add<&AnyScalar> for &AnyScalar {
     type Output = AnyScalar;
 
     fn add(self, rhs: &AnyScalar) -> Self::Output {
-        AnyScalar::from_eager_binary(self, rhs, "add", |lhs, rhs| lhs.add(rhs))
+        self.try_add(rhs).unwrap_or_else(|_| {
+            AnyScalar::from_backend_scalar(self.to_backend_scalar() + rhs.to_backend_scalar())
+        })
     }
 }
 
@@ -940,7 +1005,9 @@ impl Mul<&AnyScalar> for &AnyScalar {
     type Output = AnyScalar;
 
     fn mul(self, rhs: &AnyScalar) -> Self::Output {
-        AnyScalar::from_eager_binary(self, rhs, "mul", |lhs, rhs| lhs.mul(rhs))
+        self.try_mul(rhs).unwrap_or_else(|_| {
+            AnyScalar::from_backend_scalar(self.to_backend_scalar() * rhs.to_backend_scalar())
+        })
     }
 }
 
@@ -972,11 +1039,9 @@ impl Div<&AnyScalar> for &AnyScalar {
     type Output = AnyScalar;
 
     fn div(self, rhs: &AnyScalar) -> Self::Output {
-        if self.tensor.as_native().dtype() == rhs.tensor.as_native().dtype() {
-            AnyScalar::from_eager_binary(self, rhs, "div", |lhs, rhs| lhs.div(rhs))
-        } else {
+        self.try_div(rhs).unwrap_or_else(|_| {
             AnyScalar::from_backend_scalar(self.to_backend_scalar() / rhs.to_backend_scalar())
-        }
+        })
     }
 }
 
@@ -1008,7 +1073,8 @@ impl Neg for &AnyScalar {
     type Output = AnyScalar;
 
     fn neg(self) -> Self::Output {
-        AnyScalar::from_eager_unary(self, "neg", |tensor| tensor.neg())
+        self.try_neg()
+            .unwrap_or_else(|_| AnyScalar::from_backend_scalar(-self.to_backend_scalar()))
     }
 }
 
@@ -1068,8 +1134,7 @@ impl One for AnyScalar {
 
 impl PartialEq for AnyScalar {
     fn eq(&self, other: &Self) -> bool {
-        self.tensor.as_native().dtype() == other.tensor.as_native().dtype()
-            && self.value() == other.value()
+        self.value() == other.value()
     }
 }
 
@@ -1078,17 +1143,8 @@ impl PartialOrd for AnyScalar {
         match (self.value(), other.value()) {
             (ScalarValue::F32(lhs), ScalarValue::F32(rhs)) => lhs.partial_cmp(&rhs),
             (ScalarValue::F32(lhs), ScalarValue::F64(rhs)) => (lhs as f64).partial_cmp(&rhs),
-            (ScalarValue::F32(lhs), ScalarValue::I64(rhs)) => {
-                (lhs as f64).partial_cmp(&(rhs as f64))
-            }
             (ScalarValue::F64(lhs), ScalarValue::F32(rhs)) => lhs.partial_cmp(&(rhs as f64)),
             (ScalarValue::F64(lhs), ScalarValue::F64(rhs)) => lhs.partial_cmp(&rhs),
-            (ScalarValue::F64(lhs), ScalarValue::I64(rhs)) => lhs.partial_cmp(&(rhs as f64)),
-            (ScalarValue::I64(lhs), ScalarValue::F32(rhs)) => {
-                (lhs as f64).partial_cmp(&(rhs as f64))
-            }
-            (ScalarValue::I64(lhs), ScalarValue::F64(rhs)) => (lhs as f64).partial_cmp(&rhs),
-            (ScalarValue::I64(lhs), ScalarValue::I64(rhs)) => lhs.partial_cmp(&rhs),
             _ => None,
         }
     }
@@ -1099,7 +1155,6 @@ impl fmt::Display for AnyScalar {
         match self.value() {
             ScalarValue::F32(value) => value.fmt(f),
             ScalarValue::F64(value) => value.fmt(f),
-            ScalarValue::I64(value) => value.fmt(f),
             ScalarValue::C32(value) => value.fmt(f),
             ScalarValue::C64(value) => value.fmt(f),
         }
@@ -1108,8 +1163,14 @@ impl fmt::Display for AnyScalar {
 
 impl fmt::Debug for AnyScalar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let dtype = match self.value {
+            ScalarValue::F32(_) => "f32",
+            ScalarValue::F64(_) => "f64",
+            ScalarValue::C32(_) => "c32",
+            ScalarValue::C64(_) => "c64",
+        };
         f.debug_struct("AnyScalar")
-            .field("dtype", &self.tensor.as_native().dtype())
+            .field("dtype", &dtype)
             .field("value", &self.value())
             .field("tracks_grad", &self.tracks_grad())
             .finish()

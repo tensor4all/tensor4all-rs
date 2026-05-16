@@ -298,7 +298,7 @@ where
         // For TreeTN (tree structure), each bond index should appear in exactly 2 tensors.
         for (shared_index, nodes_with_index) in index_map {
             match nodes_with_index.len() {
-                0 => unreachable!(),
+                0 => continue,
                 1 => {
                     // Index appears in only one tensor - this is a physical index, no connection needed
                     continue;
@@ -343,10 +343,34 @@ where
 
     /// Add a tensor to the network using NodeIndex as the node name.
     ///
-    /// This method only works when `V = NodeIndex`.
+    /// This method only works when `V = NodeIndex`. The `tensor` argument
+    /// supplies the node data, and the generated node index is also used as
+    /// the public node name.
     ///
     /// Returns the NodeIndex for the newly added tensor.
-    pub fn add_tensor_auto_name(&mut self, tensor: T) -> NodeIndex
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the generated node name already exists or the
+    /// underlying graph rejects the tensor insertion.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(3);
+    /// let tensor = TensorDynLen::from_dense(vec![i, j], vec![0.0_f64; 6]).unwrap();
+    ///
+    /// let mut tn = TreeTN::<TensorDynLen>::new();
+    /// let node = tn.add_tensor_auto_name(tensor).unwrap();
+    ///
+    /// assert_eq!(node.index(), 0);
+    /// assert_eq!(tn.node_count(), 1);
+    /// ```
+    pub fn add_tensor_auto_name(&mut self, tensor: T) -> Result<NodeIndex>
     where
         V: From<NodeIndex> + Into<NodeIndex>,
     {
@@ -359,7 +383,6 @@ where
 
         // Re-add with the correct name
         self.add_tensor_internal(node_name, tensor)
-            .expect("add_tensor_internal failed for auto-named tensor")
     }
 
     /// Connect two tensors via a specified pair of indices.
@@ -465,7 +488,7 @@ where
             .external_indices()
             .iter()
             .find(|idx| *idx == index_a)
-            .unwrap()
+            .ok_or_else(|| anyhow::anyhow!("Index not found in tensor_a"))?
             .clone();
 
         // Get node names for site_index_network (before mutable borrow)
@@ -1926,4 +1949,19 @@ pub(crate) fn common_inds<I: IndexLike>(inds_a: &[I], inds_b: &[I]) -> Vec<I> {
         .filter(|idx| inds_b.iter().any(|other| other == *idx))
         .cloned()
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tensor4all_core::TensorDynLen;
+
+    #[test]
+    fn from_tensors_empty_returns_empty_network() {
+        let tn = TreeTN::<TensorDynLen, usize>::from_tensors(Vec::new(), Vec::new()).unwrap();
+
+        assert_eq!(tn.node_count(), 0);
+        assert_eq!(tn.edge_count(), 0);
+        assert!(tn.node_names().is_empty());
+    }
 }

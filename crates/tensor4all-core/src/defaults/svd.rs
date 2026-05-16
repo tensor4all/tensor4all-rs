@@ -414,7 +414,10 @@ pub fn svd_with<T>(
     let vh =
         TensorDynLen::from_native(vh_indices, vt_reshaped).map_err(SvdError::ComputationError)?;
     let perm: Vec<usize> = (1..vh.indices.len()).chain(std::iter::once(0)).collect();
-    let v = vh.conj().permute(&perm);
+    let v = vh
+        .conj()
+        .permute(&perm)
+        .map_err(SvdError::ComputationError)?;
 
     Ok((u, s, v))
 }

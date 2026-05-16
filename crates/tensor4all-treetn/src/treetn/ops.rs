@@ -130,10 +130,21 @@ where
             if self.is_canonicalized() && self.canonical_form() == Some(CanonicalForm::Unitary) {
                 if self.canonical_region.len() == 1 {
                     // Already Unitary canonicalized to single site - use it
-                    self.canonical_region.iter().next().unwrap().clone()
+                    self.canonical_region
+                        .iter()
+                        .next()
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("Canonical region is empty"))
+                        .context("log_norm: canonical region must contain one center")?
                 } else {
                     // Unitary canonicalized to multiple sites - canonicalize to min site
-                    let min_center = self.canonical_region.iter().min().unwrap().clone();
+                    let min_center = self
+                        .canonical_region
+                        .iter()
+                        .min()
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("Canonical region is empty"))
+                        .context("log_norm: canonical region must contain centers")?;
                     self.canonicalize_mut(
                         std::iter::once(min_center.clone()),
                         CanonicalizationOptions::default(),
@@ -282,7 +293,7 @@ where
     ///     dense.external_indices(),
     ///     vec![2.0_f64, -4.0],
     /// ).unwrap();
-    /// assert!((&dense - &expected).maxabs() < 1e-12);
+    /// assert!(dense.distance(&expected).unwrap() < 1e-12);
     /// ```
     pub fn scale(&mut self, scalar: AnyScalar) -> Result<()> {
         let min_node = self
@@ -671,7 +682,7 @@ where
     /// // Evaluate at index value 2
     /// let data = [2usize];
     /// let shape = [indices.len(), 1];
-    /// let values = ColMajorArrayRef::new(&data, &shape);
+    /// let values = ColMajorArrayRef::new(&data, &shape).unwrap();
     /// let result = tn.evaluate_at(&indices, values).unwrap();
     /// assert!((result[0].real() - 30.0).abs() < 1e-10);
     /// ```

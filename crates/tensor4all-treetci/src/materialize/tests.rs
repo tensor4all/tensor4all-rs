@@ -63,7 +63,7 @@ fn to_treetn_preserves_two_site_identity_evaluations() {
         data[pos0] = i;
         data[pos1] = j;
         let shape = [indices.len(), 1];
-        let values = ColMajorArrayRef::new(&data, &shape);
+        let values = ColMajorArrayRef::new(&data, &shape).unwrap();
         tn.evaluate(&indices, values).unwrap()[0].real()
     };
 

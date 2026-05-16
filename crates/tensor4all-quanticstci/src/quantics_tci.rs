@@ -16,6 +16,20 @@ use tensor4all_treetci::{
 
 use crate::options::QtciOptions;
 
+fn point_from_batch(batch: GlobalIndexBatch<'_>, point: usize) -> Result<Vec<usize>> {
+    (0..batch.n_sites())
+        .map(|site| {
+            batch.get(site, point).ok_or_else(|| {
+                anyhow!(
+                    "invalid batch index: site {site}, point {point}, batch shape {}x{}",
+                    batch.n_sites(),
+                    batch.n_points()
+                )
+            })
+        })
+        .collect()
+}
+
 /// TCI result wrapped with grid information.
 ///
 /// Combines a [`TensorTrain`] approximation with grid metadata so you
@@ -340,7 +354,7 @@ where
         if n_sites == 1 {
             // Single site: tensor has only site index, shape (site_dim,)
             // Need: (1, site_dim, 1)
-            tensors.push(tensor3_from_data(data, 1, site_dim, 1));
+            tensors.push(tensor3_from_data(data, 1, site_dim, 1)?);
         } else if site == 0 {
             // Root (leftmost): indices = [site, bond_01]
             // Data is column-major with shape (site_dim, bond_dim)
@@ -349,7 +363,7 @@ where
             let bond_dim = dims[1];
             // Column-major (site, bond): data[s + site_dim * b]
             // Target (1, site, bond): data[0 + 1*(s + site_dim * b)] — same layout
-            tensors.push(tensor3_from_data(data, 1, site_dim, bond_dim));
+            tensors.push(tensor3_from_data(data, 1, site_dim, bond_dim)?);
         } else if site == n_sites - 1 {
             // Leaf (rightmost): indices = [site, bond_{n-2,n-1}]
             // Data is column-major with shape (site_dim, left_bond)
@@ -363,7 +377,7 @@ where
                     permuted[l + left_bond * s] = data[s + site_dim * l];
                 }
             }
-            tensors.push(tensor3_from_data(permuted, left_bond, site_dim, 1));
+            tensors.push(tensor3_from_data(permuted, left_bond, site_dim, 1)?);
         } else {
             // Middle node: indices = [site, bond_{k,k+1}, bond_{k-1,k}]
             // Data is column-major with shape (site_dim, right_bond, left_bond)
@@ -396,7 +410,9 @@ where
                     }
                 }
             }
-            tensors.push(tensor3_from_data(permuted, left_bond, site_dim, right_bond));
+            tensors.push(tensor3_from_data(
+                permuted, left_bond, site_dim, right_bond,
+            )?);
         }
     }
 
@@ -489,12 +505,9 @@ where
     // Batch adapter: treetci expects Fn(GlobalIndexBatch) -> Result<Vec<V>>
     let batch_eval = move |batch: GlobalIndexBatch<'_>| -> Result<Vec<V>> {
         let n_points = batch.n_points();
-        let n = batch.n_sites();
         let mut results = Vec::with_capacity(n_points);
         for p in 0..n_points {
-            let point: Vec<usize> = (0..n)
-                .map(|s| batch.get(s, p).expect("valid batch index"))
-                .collect();
+            let point = point_from_batch(batch, p)?;
             results.push(qf(&point));
         }
         Ok(results)
@@ -757,34 +770,33 @@ where
 
     // Wrap function to accept quantics indices (usize 0-indexed for TCI)
     let grid_clone = grid.clone();
-    let qf = move |q: &Vec<usize>| -> V {
+    let qf = move |q: &[usize]| -> Result<V> {
         // Convert 0-indexed TCI values to 1-indexed for quanticsgrids
         let q_i64: Vec<i64> = q.iter().map(|&x| (x + 1) as i64).collect();
 
         // Check cache first
         if let Some(v) = cache_clone.borrow().get(&q_i64) {
             #[allow(clippy::clone_on_copy)]
-            return v.clone();
+            return Ok(v.clone());
         }
 
         // Compute and cache
-        let grididx = grid_clone.quantics_to_grididx(&q_i64).unwrap();
+        let grididx = grid_clone
+            .quantics_to_grididx(&q_i64)
+            .map_err(|err| anyhow!("failed to convert quantics index {q_i64:?}: {err}"))?;
         let value = f(&grididx);
         #[allow(clippy::clone_on_copy)]
         cache_clone.borrow_mut().insert(q_i64, value.clone());
-        value
+        Ok(value)
     };
 
     // Batch adapter: treetci expects Fn(GlobalIndexBatch) -> Result<Vec<V>>
     let batch_eval = move |batch: GlobalIndexBatch<'_>| -> Result<Vec<V>> {
         let n_points = batch.n_points();
-        let n = batch.n_sites();
         let mut results = Vec::with_capacity(n_points);
         for p in 0..n_points {
-            let point: Vec<usize> = (0..n)
-                .map(|s| batch.get(s, p).expect("valid batch index"))
-                .collect();
-            results.push(qf(&point));
+            let point = point_from_batch(batch, p)?;
+            results.push(qf(&point)?);
         }
         Ok(results)
     };

@@ -156,6 +156,58 @@ fn try_add_reports_length_mismatch() {
 }
 
 #[test]
+fn dense_storage_materialization_reports_dimension_mismatch() {
+    let storage = Storage::from_diag_col_major(vec![1.0_f64, 2.0], 2).unwrap();
+
+    let err = storage.to_dense_storage(&[2, 3]).unwrap_err();
+
+    assert!(matches!(err, StorageError::InvalidStructuredStorage(_)));
+    assert!(err.to_string().contains("logical dims"));
+}
+
+#[test]
+fn combine_to_complex_reports_invalid_inputs() {
+    let real = Storage::from_dense_col_major(vec![1.0_f64, 2.0], &[2]).unwrap();
+    let short_imag = Storage::from_dense_col_major(vec![3.0_f64], &[1]).unwrap();
+    let complex_imag =
+        Storage::from_dense_col_major(vec![Complex64::new(0.0, 1.0); 2], &[2]).unwrap();
+
+    assert!(matches!(
+        Storage::combine_to_complex(&real, &short_imag).unwrap_err(),
+        StorageError::LengthMismatch {
+            operation: "combine_to_complex",
+            left: 2,
+            right: 1,
+        }
+    ));
+    assert!(matches!(
+        Storage::combine_to_complex(&real, &complex_imag).unwrap_err(),
+        StorageError::OperationNotSupported {
+            operation: "combine_to_complex",
+            left: "f64",
+            right: "Complex64",
+        }
+    ));
+}
+
+#[test]
+fn contract_storage_reports_invalid_axes_and_dimensions() {
+    let a = Storage::from_dense_col_major(vec![1.0_f64, 2.0], &[2]).unwrap();
+    let b = Storage::from_dense_col_major(vec![3.0_f64, 4.0, 5.0], &[3]).unwrap();
+
+    let dim_err = contract_storage(&a, &[2], &[0], &b, &[3], &[0], &[]).unwrap_err();
+    assert!(matches!(dim_err, StorageError::InvalidStructuredStorage(_)));
+    assert!(dim_err.to_string().contains("contracted dimensions"));
+
+    let axis_err = contract_storage(&a, &[2], &[1], &b, &[3], &[0], &[]).unwrap_err();
+    assert!(matches!(
+        axis_err,
+        StorageError::InvalidStructuredStorage(_)
+    ));
+    assert!(axis_err.to_string().contains("axis"));
+}
+
+#[test]
 fn structured_storage_rejects_noncanonical_axis_classes() {
     let err = StructuredStorage::<f64>::new(
         vec![1.0, 2.0, 3.0, 4.0],
@@ -171,7 +223,8 @@ fn structured_storage_rejects_noncanonical_axis_classes() {
 #[test]
 fn structured_storage_column_major_helpers_cover_contiguous_padded_and_empty_payloads() {
     let dense =
-        StructuredStorage::from_dense_col_major(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        StructuredStorage::from_dense_col_major(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3])
+            .unwrap();
     assert_eq!(dense.logical_dims(), vec![2, 3]);
     assert!(dense.is_dense());
     assert!(!dense.is_diag());
@@ -197,7 +250,7 @@ fn structured_storage_column_major_helpers_cover_contiguous_padded_and_empty_pay
         vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
     );
 
-    let empty = StructuredStorage::from_dense_col_major(Vec::<f64>::new(), &[0, 3]);
+    let empty = StructuredStorage::from_dense_col_major(Vec::<f64>::new(), &[0, 3]).unwrap();
     assert!(empty.is_empty());
     assert_eq!(empty.payload_col_major_vec(), Vec::<f64>::new());
 }
@@ -213,7 +266,7 @@ fn structured_storage_permute_and_map_copy_preserve_metadata() {
     .unwrap();
     assert_eq!(storage.logical_dims(), vec![2, 3, 2]);
 
-    let permuted = storage.permute_logical_axes(&[0, 2, 1]);
+    let permuted = storage.permute_logical_axes(&[0, 2, 1]).unwrap();
     assert_eq!(permuted.axis_classes(), &[0, 0, 1]);
     assert_eq!(permuted.logical_dims(), vec![2, 2, 3]);
 
@@ -234,7 +287,7 @@ fn structured_storage_validates_payload_rank_and_required_len() {
         .unwrap_err();
     assert!(len_err.to_string().contains("required len"));
 
-    let scalar_diag = StructuredStorage::from_diag_col_major(vec![42.0], 0);
+    let scalar_diag = StructuredStorage::from_diag_col_major(vec![42.0], 0).unwrap();
     assert_eq!(scalar_diag.payload_dims(), &[] as &[usize]);
     assert_eq!(scalar_diag.logical_rank(), 0);
     assert!(scalar_diag.is_dense());
@@ -259,7 +312,7 @@ fn test_storage_len_is_empty() {
 
 #[test]
 fn test_storage_new_dense_f64() {
-    let s = Storage::new_dense::<f64>(3);
+    let s = Storage::new_dense::<f64>(3).unwrap();
     assert_eq!(s.len(), 3);
     assert!(s.is_f64());
     let data = extract_f64(&s);
@@ -268,7 +321,7 @@ fn test_storage_new_dense_f64() {
 
 #[test]
 fn test_storage_new_dense_c64() {
-    let s = Storage::new_dense::<Complex64>(2);
+    let s = Storage::new_dense::<Complex64>(2).unwrap();
     assert_eq!(s.len(), 2);
     assert!(s.is_c64());
 }
@@ -326,7 +379,7 @@ fn test_storage_max_abs_and_to_dense_storage_cover_complex_and_diag() {
     )
     .unwrap();
     assert!((dense_c64.max_abs() - 5.0).abs() < 1e-10);
-    match dense_c64.to_dense_storage(&[2]).repr() {
+    match dense_c64.to_dense_storage(&[2]).unwrap().repr() {
         StorageRepr::C64(ds) => assert_eq!(
             ds.payload_col_major_vec().as_slice(),
             &[Complex64::new(3.0, 4.0), Complex64::new(1.0, -1.0)]
@@ -338,7 +391,7 @@ fn test_storage_max_abs_and_to_dense_storage_cover_complex_and_diag() {
         Storage::from_diag_col_major(vec![Complex64::new(0.0, 2.0), Complex64::new(3.0, 4.0)], 2)
             .unwrap();
     assert!((diag_c64.max_abs() - 5.0).abs() < 1e-10);
-    match diag_c64.to_dense_storage(&[2, 2]).repr() {
+    match diag_c64.to_dense_storage(&[2, 2]).unwrap().repr() {
         StorageRepr::C64(ds) => {
             assert_eq!(
                 ds.payload_col_major_vec().as_slice(),
@@ -401,7 +454,7 @@ fn test_storage_projection_promotion_and_conjugation_helpers() {
     }
     let real = Storage::from_dense_col_major(vec![1.0, 2.0], &[2]).unwrap();
     let imag = Storage::from_dense_col_major(vec![0.5, -1.5], &[2]).unwrap();
-    match Storage::combine_to_complex(&real, &imag).repr() {
+    match Storage::combine_to_complex(&real, &imag).unwrap().repr() {
         StorageRepr::C64(ds) => {
             assert_eq!(
                 ds.payload_col_major_vec().as_slice(),
@@ -516,7 +569,7 @@ fn test_storage_try_add_and_try_sub_cover_all_variants_and_errors() {
 #[test]
 fn test_structured_storage_permute_logical_axes_basic() {
     let storage = StructuredStorage::new(vec![1.0, 2.0], vec![2], vec![1], vec![0, 0]).unwrap();
-    let permuted = storage.permute_logical_axes(&[1, 0]);
+    let permuted = storage.permute_logical_axes(&[1, 0]).unwrap();
     // Permuting a diagonal storage: axis_classes should be swapped but are the same
     assert_eq!(permuted.axis_classes(), &[0, 0]);
 }
@@ -590,7 +643,7 @@ fn test_storage_axpby_complex_promotion() {
 
 #[test]
 fn test_storage_new_diag_f64() {
-    let s = Storage::new_diag::<f64>(vec![1.0, 2.0, 3.0]);
+    let s = Storage::new_diag::<f64>(vec![1.0, 2.0, 3.0]).unwrap();
     assert_eq!(s.len(), 3);
     assert!(s.is_f64());
     assert!(s.is_diag());
@@ -599,7 +652,8 @@ fn test_storage_new_diag_f64() {
 #[test]
 fn test_storage_new_diag_c64() {
     let s =
-        Storage::new_diag::<Complex64>(vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)]);
+        Storage::new_diag::<Complex64>(vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)])
+            .unwrap();
     assert_eq!(s.len(), 2);
     assert!(s.is_c64());
     assert!(s.is_diag());
@@ -668,7 +722,7 @@ fn test_storage_max_abs_structured() {
 fn test_storage_permute_storage_structured_diag() {
     // Diagonal structured storage: permuting is trivial (data doesn't change).
     let s = Storage::from_diag_col_major(vec![1.0, 2.0, 3.0], 2).unwrap();
-    let permuted = s.permute_storage(&[3, 3], &[1, 0]);
+    let permuted = s.permute_storage(&[3, 3], &[1, 0]).unwrap();
     assert!(permuted.is_f64());
     assert!(permuted.is_diag());
 }
@@ -678,7 +732,7 @@ fn test_storage_permute_storage_structured_diag_c64() {
     let s =
         Storage::from_diag_col_major(vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)], 2)
             .unwrap();
-    let permuted = s.permute_storage(&[2, 2], &[1, 0]);
+    let permuted = s.permute_storage(&[2, 2], &[1, 0]).unwrap();
     assert!(permuted.is_c64());
     assert!(permuted.is_diag());
 }
@@ -752,7 +806,7 @@ fn test_storage_to_complex_structured() {
 #[test]
 fn test_storage_to_dense_storage_structured_f64() {
     let s = Storage::from_diag_col_major(vec![1.0, 2.0], 2).unwrap();
-    let dense = s.to_dense_storage(&[2, 2]);
+    let dense = s.to_dense_storage(&[2, 2]).unwrap();
     assert!(dense.is_dense());
     assert!(dense.is_f64());
 }
@@ -762,7 +816,7 @@ fn test_storage_to_dense_storage_structured_c64() {
     let s =
         Storage::from_diag_col_major(vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)], 2)
             .unwrap();
-    let dense = s.to_dense_storage(&[2, 2]);
+    let dense = s.to_dense_storage(&[2, 2]).unwrap();
     assert!(dense.is_dense());
     assert!(dense.is_c64());
 }
@@ -899,7 +953,7 @@ fn test_contract_storage_dense_f64_matmul() {
     let a = Storage::from_dense_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
     let b = Storage::from_dense_col_major(vec![5.0, 7.0, 6.0, 8.0], &[2, 2]).unwrap();
 
-    let result = contract_storage(&a, &[2, 2], &[1], &b, &[2, 2], &[0], &[2, 2]);
+    let result = contract_storage(&a, &[2, 2], &[1], &b, &[2, 2], &[0], &[2, 2]).unwrap();
 
     let data = result
         .to_dense_f64_col_major_vec(&[2, 2])
@@ -920,7 +974,7 @@ fn test_contract_storage_diag_f64_partial() {
     let diag1 = Storage::from_diag_col_major(vec![1.0, 2.0, 3.0], 2).unwrap();
     let diag2 = Storage::from_diag_col_major(vec![4.0, 5.0, 6.0], 2).unwrap();
 
-    let result = contract_storage(&diag1, &[3, 3], &[1], &diag2, &[3, 3], &[0], &[3, 3]);
+    let result = contract_storage(&diag1, &[3, 3], &[1], &diag2, &[3, 3], &[0], &[3, 3]).unwrap();
 
     // Materialize as dense to verify
     let dense = result
@@ -938,7 +992,7 @@ fn test_contract_storage_inner_product() {
     let a = Storage::from_dense_col_major(vec![1.0, 2.0, 3.0], &[3]).unwrap();
     let b = Storage::from_dense_col_major(vec![4.0, 5.0, 6.0], &[3]).unwrap();
 
-    let result = contract_storage(&a, &[3], &[0], &b, &[3], &[0], &[]);
+    let result = contract_storage(&a, &[3], &[0], &b, &[3], &[0], &[]).unwrap();
 
     let data = result
         .to_dense_f64_col_major_vec(&[])

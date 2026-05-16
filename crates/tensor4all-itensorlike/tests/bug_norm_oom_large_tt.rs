@@ -54,7 +54,7 @@ fn reference_norm_squared(tt: &TensorTrain) -> f64 {
 
     let mut current = Vec::new();
     for site in 0..tt.len() {
-        let tensor = tt.tensor(site);
+        let tensor = tt.tensor(site).unwrap();
         let data = tensor.to_vec::<f64>().unwrap();
         let left_dim = if site == 0 {
             1

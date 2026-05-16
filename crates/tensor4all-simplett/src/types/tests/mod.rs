@@ -19,7 +19,7 @@ fn test_tensor3_zeros() {
 #[test]
 fn test_tensor3_from_data() {
     let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
-    let t = tensor3_from_data(data, 2, 3, 4);
+    let t = tensor3_from_data(data, 2, 3, 4).unwrap();
 
     assert_eq!(t.left_dim(), 2);
     assert_eq!(t.site_dim(), 3);
@@ -31,6 +31,14 @@ fn test_tensor3_from_data() {
     assert_eq!(*t.get3(0, 0, 1), 6.0);
     assert_eq!(*t.get3(0, 0, 3), 18.0);
     assert_eq!(*t.get3(1, 2, 3), 23.0);
+}
+
+#[test]
+fn tensor3_from_data_rejects_length_mismatch() {
+    let err = tensor3_from_data(vec![1.0, 2.0], 2, 2, 1).unwrap_err();
+
+    assert!(err.to_string().contains("expected 4 elements"));
+    assert!(err.to_string().contains("got 2"));
 }
 
 #[test]
@@ -70,7 +78,7 @@ fn test_slice_site() {
 #[test]
 fn test_as_left_matrix() {
     let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
-    let t = tensor3_from_data(data, 2, 3, 4);
+    let t = tensor3_from_data(data, 2, 3, 4).unwrap();
 
     let (mat, rows, cols) = t.as_left_matrix();
     assert_eq!(rows, 6); // 2 * 3
@@ -89,7 +97,7 @@ fn test_as_left_matrix() {
 #[test]
 fn test_as_right_matrix() {
     let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
-    let t = tensor3_from_data(data, 2, 3, 4);
+    let t = tensor3_from_data(data, 2, 3, 4).unwrap();
 
     let (mat, rows, cols) = t.as_right_matrix();
     assert_eq!(rows, 2); // left_dim

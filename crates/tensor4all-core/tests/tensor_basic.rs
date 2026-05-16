@@ -38,7 +38,7 @@ where
 #[test]
 fn test_storage_dense_f64() {
     // Create a zero-initialized tensor with 10 elements
-    let storage = Storage::new_dense::<f64>(10);
+    let storage = Storage::new_dense::<f64>(10).unwrap();
     assert_eq!(storage.len(), 10);
     assert!(storage.is_dense());
     assert!(storage.is_f64());
@@ -52,7 +52,7 @@ fn test_storage_dense_f64() {
 #[test]
 fn test_storage_dense_c64() {
     // Create a zero-initialized tensor with 10 elements
-    let storage = Storage::new_dense::<Complex64>(10);
+    let storage = Storage::new_dense::<Complex64>(10).unwrap();
     assert_eq!(storage.len(), 10);
     assert!(storage.is_dense());
     assert!(storage.is_c64());
@@ -65,7 +65,7 @@ fn test_storage_dense_c64() {
 
 #[test]
 fn test_storage_factory_f64() {
-    let storage = Storage::new_dense::<f64>(7);
+    let storage = Storage::new_dense::<f64>(7).unwrap();
     assert!(storage.is_dense());
     assert!(storage.is_f64());
     assert_eq!(storage.len(), 7);
@@ -77,7 +77,7 @@ fn test_storage_factory_f64() {
 
 #[test]
 fn test_storage_factory_c64() {
-    let storage = Storage::new_dense::<Complex64>(9);
+    let storage = Storage::new_dense::<Complex64>(9).unwrap();
     assert!(storage.is_dense());
     assert!(storage.is_c64());
     assert_eq!(storage.len(), 9);
@@ -109,7 +109,7 @@ fn test_tensor_dyn_len_creation() {
     let indices = vec![Index::new_dyn(2), Index::new_dyn(3)];
     let storage = Arc::new(Storage::from_dense_col_major(vec![0.0; 6], &[2, 3]).unwrap());
 
-    let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
+    let tensor: TensorDynLen = TensorDynLen::new(indices, storage).unwrap();
     assert_eq!(tensor.indices.len(), 2);
     let dims = tensor.dims();
     assert_eq!(dims.len(), 2);
@@ -306,10 +306,10 @@ fn test_tensor_shared_storage() {
 fn test_tensor_sum_f64_no_match() {
     let indices = vec![Index::new_dyn(3)];
     let t = make_tensor_f64(indices, vec![1.0, 2.0, 3.0]);
-    let sum_f64 = t.sum().real();
+    let sum_f64 = t.sum().unwrap().real();
     assert_eq!(sum_f64, 6.0);
 
-    let sum_any: AnyScalar = t.sum();
+    let sum_any: AnyScalar = t.sum().unwrap();
     assert!(!sum_any.is_complex());
     assert!((sum_any.real() - 6.0).abs() < 1e-10);
 }
@@ -322,7 +322,7 @@ fn test_tensor_sum_c64() {
         vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -1.0)],
     );
 
-    let sum_any: AnyScalar = t.sum();
+    let sum_any: AnyScalar = t.sum().unwrap();
     assert!(sum_any.is_complex());
     let z: Complex64 = sum_any.into();
     assert!((z.re - 4.0).abs() < 1e-10);
@@ -330,25 +330,25 @@ fn test_tensor_sum_c64() {
 }
 
 #[test]
-#[should_panic(expected = "Tensor indices must all be unique")]
 fn test_tensor_duplicate_indices_new() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone(), i.clone()]; // duplicate i
     let storage = Arc::new(Storage::from_dense_col_major(vec![0.0; 12], &[2, 3, 2]).unwrap());
 
-    let _tensor: TensorDynLen = TensorDynLen::new(indices, storage);
+    let err = TensorDynLen::new(indices, storage).unwrap_err();
+    assert!(err.to_string().contains("unique"));
 }
 
 #[test]
-#[should_panic(expected = "Tensor indices must all be unique")]
 fn test_tensor_duplicate_indices_from_indices() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone(), i.clone()]; // duplicate i
     let storage = Arc::new(Storage::from_dense_col_major(vec![0.0; 12], &[2, 3, 2]).unwrap());
 
-    let _tensor: TensorDynLen = TensorDynLen::from_indices(indices, storage);
+    let err = TensorDynLen::from_indices(indices, storage).unwrap_err();
+    assert!(err.to_string().contains("unique"));
 }
 
 // ============================================================================
@@ -366,7 +366,7 @@ fn test_replaceind_basic() {
     let tensor = make_tensor_f64(indices, data);
 
     // Replace index i with new_i
-    let replaced = tensor.replaceind(&i, &new_i);
+    let replaced = tensor.replaceind(&i, &new_i).unwrap();
 
     // Check that the first index was replaced
     assert_eq!(replaced.indices[0].id, new_i.id);
@@ -392,7 +392,7 @@ fn test_replaceind_no_match() {
     let tensor = make_tensor_f64(indices, data);
 
     // Replace index k (not in tensor) - should return unchanged tensor
-    let replaced = tensor.replaceind(&k, &new_k);
+    let replaced = tensor.replaceind(&k, &new_k).unwrap();
 
     // Check that indices are unchanged
     assert_eq!(replaced.indices[0].id, i.id);
@@ -413,10 +413,12 @@ fn test_replaceinds_basic() {
     let tensor = make_tensor_f64(indices, data);
 
     // Replace all indices
-    let replaced = tensor.replaceinds(
-        &[i.clone(), j.clone(), k.clone()],
-        &[new_i.clone(), new_j.clone(), new_k.clone()],
-    );
+    let replaced = tensor
+        .replaceinds(
+            &[i.clone(), j.clone(), k.clone()],
+            &[new_i.clone(), new_j.clone(), new_k.clone()],
+        )
+        .unwrap();
 
     // Check that all indices were replaced
     assert_eq!(replaced.indices[0].id, new_i.id);
@@ -439,7 +441,9 @@ fn test_replaceinds_partial() {
     let tensor = make_tensor_f64(indices, data);
 
     // Replace only i
-    let replaced = tensor.replaceinds(std::slice::from_ref(&i), std::slice::from_ref(&new_i));
+    let replaced = tensor
+        .replaceinds(std::slice::from_ref(&i), std::slice::from_ref(&new_i))
+        .unwrap();
 
     // Check that i was replaced
     assert_eq!(replaced.indices[0].id, new_i.id);
@@ -449,7 +453,6 @@ fn test_replaceinds_partial() {
 }
 
 #[test]
-#[should_panic(expected = "old_indices and new_indices must have the same length")]
 fn test_replaceinds_length_mismatch() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
@@ -460,12 +463,13 @@ fn test_replaceinds_length_mismatch() {
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let tensor = make_tensor_f64(indices, data);
 
-    // Should panic - length mismatch
-    let _replaced = tensor.replaceinds(std::slice::from_ref(&i), &[new_i, new_j]);
+    let err = tensor
+        .replaceinds(std::slice::from_ref(&i), &[new_i, new_j])
+        .unwrap_err();
+    assert!(err.to_string().contains("same length"));
 }
 
 #[test]
-#[should_panic(expected = "Index space mismatch")]
 fn test_replaceind_dimension_mismatch() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
@@ -475,12 +479,11 @@ fn test_replaceind_dimension_mismatch() {
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let tensor = make_tensor_f64(indices, data);
 
-    // Should panic - dimension mismatch
-    let _replaced = tensor.replaceind(&i, &wrong_size);
+    let err = tensor.replaceind(&i, &wrong_size).unwrap_err();
+    assert!(err.to_string().contains("Index space mismatch"));
 }
 
 #[test]
-#[should_panic(expected = "Index space mismatch")]
 fn test_replaceinds_dimension_mismatch() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
@@ -491,8 +494,10 @@ fn test_replaceinds_dimension_mismatch() {
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let tensor = make_tensor_f64(indices, data);
 
-    // Should panic - dimension mismatch
-    let _replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_i, wrong_size]);
+    let err = tensor
+        .replaceinds(&[i.clone(), j.clone()], &[new_i, wrong_size])
+        .unwrap_err();
+    assert!(err.to_string().contains("Index space mismatch"));
 }
 
 #[test]
@@ -512,7 +517,9 @@ fn test_replaceinds_does_not_reorder_data() {
     let new_j = Index::new_dyn(3);
 
     // Use replaceinds to change index IDs (but keep same order)
-    let replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()]);
+    let replaced = tensor
+        .replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()])
+        .unwrap();
 
     // Check indices were replaced
     assert_eq!(replaced.indices[0].id, new_i.id);
@@ -549,7 +556,9 @@ fn test_replaceinds_with_different_order_does_not_reorder_data() {
     // NOTE: replaceinds requires matching dimensions, so we can't directly swap i and j
     // This test demonstrates that replaceinds doesn't reorder data even when used correctly
     // For actual index reordering, use permuteinds instead
-    let replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()]);
+    let replaced = tensor
+        .replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()])
+        .unwrap();
 
     // Check indices were replaced (order unchanged, just IDs changed)
     assert_eq!(replaced.indices[0].id, new_i.id);
@@ -580,7 +589,7 @@ fn test_permuteinds_reorders_data() {
 
     // Use permuteinds to swap indices: [j, i] instead of [i, j]
     // This should reorder both indices AND data
-    let permuted = tensor.permute_indices(&[j.clone(), i.clone()]);
+    let permuted = tensor.permute_indices(&[j.clone(), i.clone()]).unwrap();
 
     // Check indices were permuted
     assert_eq!(permuted.indices[0].id, j.id);
@@ -621,13 +630,15 @@ fn test_replaceinds_vs_permuteinds_comparison() {
     // Note: replaceinds requires matching dimensions, so we can't swap i and j directly
     // This test demonstrates that replaceinds doesn't reorder data
     // In practice, you should use permuteinds when you need to change index order
-    let replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()]);
+    let replaced = tensor
+        .replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()])
+        .unwrap();
     assert_eq!(replaced.dims(), vec![2, 3]);
     let replaced_data = replaced.to_vec::<f64>().unwrap();
 
     // Method 2: permuteinds (CORRECT when order changes)
     // This changes both index order AND data order
-    let permuted = tensor.permute_indices(&[j.clone(), i.clone()]);
+    let permuted = tensor.permute_indices(&[j.clone(), i.clone()]).unwrap();
     assert_eq!(permuted.dims(), vec![3, 2]);
     let permuted_data = permuted.to_vec::<f64>().unwrap();
 
@@ -820,7 +831,7 @@ fn test_from_dense_generic_preserves_column_major_input_order() {
     )
     .unwrap();
 
-    let permuted = tensor.permute_indices(&[j, i]);
+    let permuted = tensor.permute_indices(&[j, i]).unwrap();
     assert_eq!(
         permuted.to_vec::<f64>().unwrap(),
         vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0]

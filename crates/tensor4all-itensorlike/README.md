@@ -58,7 +58,7 @@ let norm = tt.norm();
 assert!(norm.is_finite());
 
 // Inner product: <tt|tt> = norm^2
-let inner = tt.inner(&tt);
+let inner = tt.inner(&tt)?;
 assert!((inner.real() - norm * norm).abs() < 1e-10);
 # Ok(())
 # }
@@ -79,7 +79,7 @@ let tensor = TensorDynLen::from_dense(
 )?;
 let tt = TensorTrain::new(vec![tensor])?;
 
-let inner = tt.inner(&tt);
+let inner = tt.inner(&tt)?;
 assert!((inner.real() - 6.0).abs() < 1e-12);
 assert!(inner.imag().abs() < 1e-12);
 # Ok(())

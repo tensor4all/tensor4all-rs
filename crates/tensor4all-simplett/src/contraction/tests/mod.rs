@@ -1,6 +1,7 @@
 use super::*;
 use crate::einsum_helper::{
-    einsum_tensors, tensor_to_col_major_vec, typed_tensor_from_col_major_slice, EinsumScalar,
+    einsum_tensors, matrix_times_col_vector, row_vector_times_matrix, tensor_to_col_major_vec,
+    typed_tensor_from_col_major_slice, typed_tensor_reshape, EinsumScalar,
 };
 use crate::types::{tensor3_zeros, Tensor3};
 
@@ -70,14 +71,20 @@ fn test_dot_different_tensors() {
 fn test_dot_length_mismatch() {
     let tt1 = TensorTrain::<f64>::constant(&[2, 3], 1.0);
     let tt2 = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
-    assert!(tt1.dot(&tt2).is_err());
+    let err = tt1.dot(&tt2).unwrap_err();
+    assert!(err.to_string().contains("different lengths"));
+    assert!(err.to_string().contains("2 vs 3"));
 }
 
 #[test]
 fn test_dot_site_dim_mismatch() {
     let tt1 = TensorTrain::<f64>::constant(&[2, 3], 1.0);
     let tt2 = TensorTrain::<f64>::constant(&[2, 4], 1.0);
-    assert!(tt1.dot(&tt2).is_err());
+    let err = tt1.dot(&tt2).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("Site dimensions mismatch at site 1"));
+    assert!(err.to_string().contains("3 vs 4"));
 }
 
 #[test]
@@ -98,7 +105,11 @@ fn test_dot_site_dim_mismatch_middle() {
 
     let tt_a = TensorTrain::new(vec![t0.clone(), t1_a]).unwrap();
     let tt_b = TensorTrain::new(vec![t0, t1_b]).unwrap();
-    assert!(tt_a.dot(&tt_b).is_err());
+    let err = tt_a.dot(&tt_b).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("Site dimensions mismatch at site 1"));
+    assert!(err.to_string().contains("3 vs 4"));
 }
 
 #[test]
@@ -140,6 +151,22 @@ fn test_dot_convenience_function() {
 }
 
 #[test]
+fn test_contraction_options_default_values() {
+    let opts = ContractionOptions::default();
+    assert!((opts.tolerance - 1e-12).abs() < 1e-15);
+    assert_eq!(opts.max_bond_dim, usize::MAX);
+    assert!(matches!(opts.method, CompressionMethod::LU));
+}
+
+#[test]
+fn test_contraction_helper_error_formats_context() {
+    let err = contraction_helper_error("while contracting", "backend rejected labels");
+    let message = err.to_string();
+    assert!(message.contains("while contracting"));
+    assert!(message.contains("backend rejected labels"));
+}
+
+#[test]
 fn test_dot_three_sites() {
     // Test dot product with 3 sites to exercise the inner loop more fully
     let tt1 = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
@@ -151,9 +178,57 @@ fn test_dot_three_sites() {
 
 #[test]
 fn test_einsum_tensors_matmul() {
-    let a = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]);
-    let b = typed_tensor_from_col_major_slice(&[5.0, 7.0, 6.0, 8.0], &[2, 2]);
+    let a = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+    let b = typed_tensor_from_col_major_slice(&[5.0, 7.0, 6.0, 8.0], &[2, 2]).unwrap();
 
-    let c = einsum_tensors("ij,jk->ik", &[&a, &b]);
+    let c = einsum_tensors("ij,jk->ik", &[&a, &b]).unwrap();
     assert_eq!(tensor_to_col_major_vec(&c), &[19.0, 43.0, 22.0, 50.0]);
+}
+
+#[test]
+fn test_einsum_tensors_reports_backend_error() {
+    let a = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+
+    let err = einsum_tensors("ij,jk->ik", &[&a]).unwrap_err();
+    assert!(err.to_string().contains("einsum failed"));
+    assert!(err.to_string().contains("ij,jk->ik"));
+}
+
+#[test]
+fn test_row_vector_times_matrix_reports_shape_error() {
+    let err = row_vector_times_matrix::<f64>(&[1.0], &[1.0, 2.0, 3.0, 4.0], 2, 2).unwrap_err();
+
+    assert!(err.to_string().contains("row vector length mismatch"));
+    assert!(err.to_string().contains("expected 2"));
+    assert!(err.to_string().contains("got 1"));
+}
+
+#[test]
+fn test_einsum_helper_error_paths_report_context() {
+    let err = typed_tensor_from_col_major_slice::<f64>(&[], &[usize::MAX, 2]).unwrap_err();
+    assert!(err.to_string().contains("shape element count overflow"));
+
+    let err = typed_tensor_from_col_major_slice::<f64>(&[1.0, 2.0], &[3]).unwrap_err();
+    assert!(err.to_string().contains("tensor data length mismatch"));
+    assert!(err.to_string().contains("expected 3"));
+    assert!(err.to_string().contains("got 2"));
+
+    let tensor = typed_tensor_from_col_major_slice::<f64>(&[1.0, 2.0], &[2]).unwrap();
+    let err = typed_tensor_reshape(&tensor, &[3]).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("tensor reshape element count mismatch"));
+
+    let err = row_vector_times_matrix::<f64>(&[1.0, 2.0], &[1.0, 2.0, 3.0], 2, 2).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("row vector times matrix length mismatch"));
+
+    let err = matrix_times_col_vector::<f64>(&[1.0, 2.0, 3.0], 2, 2, &[1.0, 2.0]).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("matrix times column vector length mismatch"));
+
+    let err = matrix_times_col_vector::<f64>(&[1.0, 2.0, 3.0, 4.0], 2, 2, &[1.0]).unwrap_err();
+    assert!(err.to_string().contains("column vector length mismatch"));
 }

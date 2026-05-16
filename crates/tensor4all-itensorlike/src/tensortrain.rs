@@ -345,7 +345,7 @@ impl TensorTrain {
         let region = self.treetn.canonical_region();
         if region.len() == 1 {
             // Node name IS the site index since V = usize
-            Some(*region.iter().next().unwrap())
+            region.iter().next().copied()
         } else {
             None
         }
@@ -365,16 +365,17 @@ impl TensorTrain {
 
     /// Get a reference to the tensor at the given site.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `site >= len()`.
+    /// Returns `Err` if `site >= len()`.
     #[inline]
-    pub fn tensor(&self, site: usize) -> &TensorDynLen {
-        let node_idx = self.treetn.node_index(&site).expect("Site out of bounds");
-        self.treetn.tensor(node_idx).expect("Tensor not found")
+    pub fn tensor(&self, site: usize) -> Result<&TensorDynLen> {
+        self.tensor_checked(site)
     }
 
     /// Get a reference to the tensor at the given site.
+    ///
+    /// # Errors
     ///
     /// Returns `Err` if `site >= len()`.
     pub fn tensor_checked(&self, site: usize) -> Result<&TensorDynLen> {
@@ -401,13 +402,53 @@ impl TensorTrain {
 
     /// Get a mutable reference to the tensor at the given site.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `site >= len()`.
+    /// Returns `Err` if `site >= len()`.
     #[inline]
-    pub fn tensor_mut(&mut self, site: usize) -> &mut TensorDynLen {
-        let node_idx = self.treetn.node_index(&site).expect("Site out of bounds");
-        self.treetn.tensor_mut(node_idx).expect("Tensor not found")
+    pub fn tensor_mut(&mut self, site: usize) -> Result<&mut TensorDynLen> {
+        self.tensor_mut_checked(site)
+    }
+
+    /// Get a mutable reference to the tensor at the given site.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `site >= len()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynId, Index, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// let s0 = Index::new_with_size(DynId(0), 2);
+    /// let link = Index::new_with_size(DynId(1), 3);
+    /// let s1 = Index::new_with_size(DynId(2), 2);
+    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), link.clone()], vec![1.0; 6]).unwrap();
+    /// let t1 = TensorDynLen::from_dense(vec![link, s1], vec![2.0; 6]).unwrap();
+    /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    ///
+    /// assert_eq!(tt.tensor_mut_checked(0).unwrap().indices()[0], s0);
+    /// assert!(tt.tensor_mut_checked(2).is_err());
+    /// ```
+    pub fn tensor_mut_checked(&mut self, site: usize) -> Result<&mut TensorDynLen> {
+        if site >= self.len() {
+            return Err(TensorTrainError::SiteOutOfBounds {
+                site,
+                length: self.len(),
+            });
+        }
+        let length = self.len();
+        let node_idx = self
+            .treetn
+            .node_index(&site)
+            .ok_or(TensorTrainError::SiteOutOfBounds { site, length })?;
+        self.treetn
+            .tensor_mut(node_idx)
+            .ok_or_else(|| TensorTrainError::InvalidStructure {
+                message: format!("missing tensor storage for site {site}"),
+            })
     }
 
     /// Get a reference to all tensors.
@@ -422,14 +463,55 @@ impl TensorTrain {
     }
 
     /// Get a mutable reference to all tensors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the internal site-to-node mapping is inconsistent.
     #[inline]
-    pub fn tensors_mut(&mut self) -> Vec<&mut TensorDynLen> {
-        let node_indices: Vec<_> = (0..self.len())
-            .map(|site| self.treetn.node_index(&site).expect("Site out of bounds"))
-            .collect();
+    pub fn tensors_mut(&mut self) -> Result<Vec<&mut TensorDynLen>> {
+        self.tensors_mut_checked()
+    }
+
+    /// Get mutable references to all tensors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the internal site-to-node mapping is inconsistent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynId, Index, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// let s0 = Index::new_with_size(DynId(0), 2);
+    /// let link = Index::new_with_size(DynId(1), 3);
+    /// let s1 = Index::new_with_size(DynId(2), 2);
+    /// let t0 = TensorDynLen::from_dense(vec![s0, link.clone()], vec![1.0; 6]).unwrap();
+    /// let t1 = TensorDynLen::from_dense(vec![link, s1], vec![2.0; 6]).unwrap();
+    /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    ///
+    /// let tensors = tt.tensors_mut_checked().unwrap();
+    /// assert_eq!(tensors.len(), 2);
+    /// assert_eq!(tensors[0].indices().len(), 2);
+    /// assert_eq!(tensors[1].indices().len(), 2);
+    /// ```
+    pub fn tensors_mut_checked(&mut self) -> Result<Vec<&mut TensorDynLen>> {
+        let length = self.len();
+        let node_indices: Vec<_> = (0..length)
+            .map(|site| {
+                self.treetn
+                    .node_index(&site)
+                    .ok_or(TensorTrainError::SiteOutOfBounds { site, length })
+            })
+            .collect::<Result<_>>()?;
         let mut tensor_ptrs = Vec::with_capacity(node_indices.len());
-        for node_idx in node_indices {
-            let tensor = self.treetn.tensor_mut(node_idx).expect("Tensor not found");
+        for (site, node_idx) in node_indices.into_iter().enumerate() {
+            let tensor = self.treetn.tensor_mut(node_idx).ok_or_else(|| {
+                TensorTrainError::InvalidStructure {
+                    message: format!("missing tensor storage for site {site}"),
+                }
+            })?;
             tensor_ptrs.push(tensor as *mut TensorDynLen);
         }
 
@@ -437,7 +519,7 @@ impl TensorTrain {
         // distinct TreeTN node. We collect at most one pointer per node and do
         // not mutate the network structure before converting those pointers back
         // into mutable references.
-        unsafe { tensor_ptrs.into_iter().map(|tensor| &mut *tensor).collect() }
+        Ok(unsafe { tensor_ptrs.into_iter().map(|tensor| &mut *tensor).collect() })
     }
 
     /// Get the link index between sites `i` and `i+1`.
@@ -470,9 +552,18 @@ impl TensorTrain {
     /// This is useful for computing inner products where two tensor trains
     /// share link indices. By simulating (replacing) the link indices in one
     /// of the tensor trains, they can be contracted over site indices only.
-    pub fn sim_linkinds(&self) -> Self {
+    ///
+    /// # Returns
+    ///
+    /// A tensor train with the same site indices and fresh link indices.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tensor train's internal site mapping is
+    /// inconsistent or rebuilding the tensor train fails.
+    pub fn sim_linkinds(&self) -> Result<Self> {
         if self.len() <= 1 {
-            return self.clone();
+            return Ok(self.clone());
         }
 
         // Build replacement pairs: (old_link, new_link) for each link index
@@ -487,15 +578,19 @@ impl TensorTrain {
         // Replace link indices in each tensor and rebuild
         let mut new_tensors = Vec::with_capacity(self.len());
         for site in 0..self.len() {
-            let tensor = self.tensor(site);
+            let tensor = self.tensor_checked(site)?;
             let mut new_tensor = tensor.clone();
             for (old_idx, new_idx) in &replacements {
-                new_tensor = new_tensor.replaceind(old_idx, new_idx);
+                new_tensor = new_tensor.replaceind(old_idx, new_idx).map_err(|err| {
+                    TensorTrainError::OperationError {
+                        message: format!("failed to replace simulated link index: {err}"),
+                    }
+                })?;
             }
             new_tensors.push(new_tensor);
         }
 
-        Self::new(new_tensors).expect("sim_linkinds: failed to create new tensor train")
+        Self::new(new_tensors)
     }
 
     fn normalize_site_tensor_orders(&mut self) -> Result<()> {
@@ -511,20 +606,32 @@ impl TensorTrain {
         }
 
         (0..self.len() - 1).all(|site| {
-            let left = self.tensor(site);
-            let right = self.tensor(site + 1);
+            let (Ok(left), Ok(right)) = (self.tensor_checked(site), self.tensor_checked(site + 1))
+            else {
+                return false;
+            };
             common_inds(left.indices(), right.indices()).len() <= 1
         })
     }
 
     fn can_normalize_site_tensor_order(&self, site: usize) -> bool {
         let left_ok = if site > 0 {
-            common_inds(self.tensor(site - 1).indices(), self.tensor(site).indices()).len() <= 1
+            let (Ok(left), Ok(current)) =
+                (self.tensor_checked(site - 1), self.tensor_checked(site))
+            else {
+                return false;
+            };
+            common_inds(left.indices(), current.indices()).len() <= 1
         } else {
             true
         };
         let right_ok = if site + 1 < self.len() {
-            common_inds(self.tensor(site).indices(), self.tensor(site + 1).indices()).len() <= 1
+            let (Ok(current), Ok(right)) =
+                (self.tensor_checked(site), self.tensor_checked(site + 1))
+            else {
+                return false;
+            };
+            common_inds(current.indices(), right.indices()).len() <= 1
         } else {
             true
         };
@@ -591,7 +698,9 @@ impl TensorTrain {
         let mut result = Vec::with_capacity(self.len());
 
         for i in 0..self.len() {
-            let tensor = self.tensor(i);
+            let Ok(tensor) = self.tensor_checked(i) else {
+                return Vec::new();
+            };
             let mut site_inds: Vec<DynIndex> = tensor.indices().to_vec();
 
             // Remove link to left neighbor
@@ -657,7 +766,13 @@ impl TensorTrain {
     ///
     /// This invalidates orthogonality tracking.
     fn set_tensor_raw(&mut self, site: usize, tensor: TensorDynLen) -> Result<()> {
-        let node_idx = self.treetn.node_index(&site).expect("Site out of bounds");
+        let node_idx =
+            self.treetn
+                .node_index(&site)
+                .ok_or_else(|| TensorTrainError::SiteOutOfBounds {
+                    site,
+                    length: self.len(),
+                })?;
         self.treetn.replace_tensor(node_idx, tensor).map_err(|e| {
             TensorTrainError::InvalidStructure {
                 message: format!("Failed to replace tensor at site {}: {}", site, e),
@@ -669,12 +784,69 @@ impl TensorTrain {
     /// Replace the tensor at the given site.
     ///
     /// This invalidates orthogonality tracking.
-    pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `site >= len()` or if replacing the tensor makes the
+    /// tensor train structure invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynId, Index, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// let s0 = Index::new_with_size(DynId(0), 2);
+    /// let link = Index::new_with_size(DynId(1), 3);
+    /// let s1 = Index::new_with_size(DynId(2), 2);
+    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), link.clone()], vec![1.0; 6]).unwrap();
+    /// let t1 = TensorDynLen::from_dense(vec![link.clone(), s1], vec![2.0; 6]).unwrap();
+    /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    ///
+    /// let replacement = TensorDynLen::from_dense(vec![s0, link], vec![3.0; 6]).unwrap();
+    /// tt.set_tensor(0, replacement).unwrap();
+    /// assert_eq!(tt.tensor(0).unwrap().to_vec::<f64>().unwrap(), vec![3.0; 6]);
+    /// ```
+    pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen) -> Result<()> {
+        self.set_tensor_checked(site, tensor)
+    }
+
+    /// Replace the tensor at the given site.
+    ///
+    /// This invalidates orthogonality tracking.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `site >= len()` or if replacing the tensor makes the
+    /// tensor train structure invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynId, Index, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// let s0 = Index::new_with_size(DynId(0), 2);
+    /// let link = Index::new_with_size(DynId(1), 3);
+    /// let s1 = Index::new_with_size(DynId(2), 2);
+    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), link.clone()], vec![1.0; 6]).unwrap();
+    /// let t1 = TensorDynLen::from_dense(vec![link.clone(), s1], vec![2.0; 6]).unwrap();
+    /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    ///
+    /// let replacement = TensorDynLen::from_dense(vec![s0, link], vec![4.0; 6]).unwrap();
+    /// tt.set_tensor_checked(0, replacement).unwrap();
+    /// assert!(tt.set_tensor_checked(2, tt.tensor(0).unwrap().clone()).is_err());
+    /// ```
+    pub fn set_tensor_checked(&mut self, site: usize, tensor: TensorDynLen) -> Result<()> {
         self.set_tensor_raw(site, tensor)
-            .and_then(|()| self.normalize_site_tensor_order(site))
-            .unwrap_or_else(|e| panic!("TensorTrain::set_tensor failed: {}", e));
+            .and_then(|()| self.normalize_site_tensor_order(site))?;
         // Invalidate orthogonality
-        let _ = self.treetn.set_canonical_region(Vec::<usize>::new());
+        self.treetn
+            .set_canonical_region(Vec::<usize>::new())
+            .map_err(|e| TensorTrainError::InvalidStructure {
+                message: format!("Failed to clear canonical region: {}", e),
+            })?;
+        Ok(())
     }
 
     /// Orthogonalize the tensor train to have orthogonality center at the given site.
@@ -834,6 +1006,12 @@ impl TensorTrain {
     /// Both tensor trains must have the same site indices (same IDs).
     /// Link indices may differ between the two tensor trains.
     ///
+    /// # Errors
+    ///
+    /// Returns an error if the tensor trains have different lengths, if the
+    /// internal site mapping is inconsistent, or if the final contraction does
+    /// not produce a scalar.
+    ///
     /// # Examples
     ///
     /// ```
@@ -850,54 +1028,95 @@ impl TensorTrain {
     /// let tt = TensorTrain::new(vec![t]).unwrap();
     ///
     /// // <tt | tt> = 1.0^2 + 0.0^2 = 1.0
-    /// let result = tt.inner(&tt);
+    /// let result = tt.inner(&tt).unwrap();
     /// assert!((result.real() - 1.0).abs() < 1e-10);
     /// ```
-    pub fn inner(&self, other: &Self) -> AnyScalar {
-        assert_eq!(
-            self.len(),
-            other.len(),
-            "Tensor trains must have the same length for inner product"
-        );
+    pub fn inner(&self, other: &Self) -> Result<AnyScalar> {
+        if self.len() != other.len() {
+            return Err(TensorTrainError::InvalidStructure {
+                message: format!(
+                    "Tensor trains must have the same length for inner product: {} vs {}",
+                    self.len(),
+                    other.len()
+                ),
+            });
+        }
 
         if self.is_empty() {
-            return AnyScalar::new_real(0.0);
+            return Ok(AnyScalar::new_real(0.0));
         }
 
         // Sequential bra-ket contraction along the chain: O(N·D²·d).
         // TreeTN::inner() uses contract_naive which is O(d^N) and OOMs for large N.
         let other_sim = other.treetn.sim_internal_inds();
 
-        let n = self.len();
         let node_idx = |ttn: &TreeTN<TensorDynLen, usize>, site: usize| {
-            ttn.node_index(&site).expect("node not found")
+            ttn.node_index(&site)
+                .ok_or_else(|| TensorTrainError::InvalidStructure {
+                    message: format!("missing node for site {site}"),
+                })
         };
 
         // Start with leftmost tensors - contract over site indices only
         let mut env = {
-            let a0_conj = self.tensor(0).conj();
+            let a0_conj = self.tensor_checked(0)?.conj();
+            let b0_node = node_idx(&other_sim, 0)?;
             let b0 = other_sim
-                .tensor(node_idx(&other_sim, 0))
-                .expect("tensor not found")
+                .tensor(b0_node)
+                .ok_or_else(|| TensorTrainError::InvalidStructure {
+                    message: "missing tensor for site 0 in simulated right operand".to_string(),
+                })?
                 .clone();
-            a0_conj.contract(&b0)
+            a0_conj
+                .contract(&b0)
+                .map_err(|err| TensorTrainError::OperationError {
+                    message: format!("failed to contract leftmost tensors: {err}"),
+                })?
         };
 
         // Sweep through remaining sites
-        for i in 1..n {
-            let ai_conj = self.tensor(i).conj();
-            let bi = other_sim
-                .tensor(node_idx(&other_sim, i))
-                .expect("tensor not found");
+        for i in 1..self.len() {
+            let ai_conj = self.tensor_checked(i)?.conj();
+            let bi_node = node_idx(&other_sim, i)?;
+            let bi =
+                other_sim
+                    .tensor(bi_node)
+                    .ok_or_else(|| TensorTrainError::InvalidStructure {
+                        message: format!("missing tensor for site {i} in simulated right operand"),
+                    })?;
 
             // Contract: env * conj(A_i) (over self's link index)
-            env = env.contract(&ai_conj);
+            env = env
+                .contract(&ai_conj)
+                .map_err(|err| TensorTrainError::OperationError {
+                    message: format!("failed to contract environment with site {i}: {err}"),
+                })?;
             // Contract: result * B_i (over other's link index and site indices)
-            env = env.contract(bi);
+            env = env
+                .contract(bi)
+                .map_err(|err| TensorTrainError::OperationError {
+                    message: format!("failed to contract right operand at site {i}: {err}"),
+                })?;
         }
 
         // Result should be a scalar (0-dimensional tensor)
-        env.only()
+        let dims = env.dims();
+        let total_size: usize = if dims.is_empty() {
+            1
+        } else {
+            dims.iter().product()
+        };
+        if total_size != 1 {
+            return Err(TensorTrainError::InvalidStructure {
+                message: format!(
+                    "inner product did not contract to a scalar: got dims {:?}",
+                    dims
+                ),
+            });
+        }
+        env.sum().map_err(|err| TensorTrainError::OperationError {
+            message: format!("failed to sum scalar inner-product tensor: {err}"),
+        })
     }
 
     /// Compute the squared norm of the tensor train.
@@ -910,8 +1129,13 @@ impl TensorTrain {
     /// Due to numerical errors, the final scalar can be very slightly negative,
     /// so the returned value is clamped to be non-negative.
     pub fn norm_squared(&self) -> f64 {
-        self.norm_squared_fast_path()
-            .unwrap_or_else(|| self.inner(self).real().max(0.0))
+        match self.norm_squared_fast_path() {
+            Some(value) => value,
+            None => self
+                .inner(self)
+                .map(|value| value.real().max(0.0))
+                .unwrap_or(f64::NAN),
+        }
     }
 
     /// Compute the norm of the tensor train.
@@ -953,7 +1177,7 @@ impl TensorTrain {
         let mut sites = Vec::with_capacity(tt.len());
 
         for site in 0..tt.len() {
-            let tensor = tt.tensor(site);
+            let tensor = tt.tensor_checked(site).ok()?;
             let left_dim = if site == 0 {
                 1
             } else {
@@ -1190,7 +1414,7 @@ impl TensorTrain {
 
         let mut tensors = Vec::with_capacity(self.len());
         for site in 0..self.len() {
-            let tensor = self.tensor(site);
+            let tensor = self.tensor_checked(site)?;
             if site == 0 {
                 // Scale only the first tensor
                 let scaled =
@@ -1233,7 +1457,10 @@ impl TensorTrain {
 // Implement Default for TensorTrain to allow std::mem::take
 impl Default for TensorTrain {
     fn default() -> Self {
-        Self::new(vec![]).expect("Failed to create empty TensorTrain")
+        Self {
+            treetn: TreeTN::new(),
+            canonical_form: None,
+        }
     }
 }
 
@@ -1284,7 +1511,7 @@ impl TensorLike for TensorTrain {
     }
 
     fn inner_product(&self, other: &Self) -> anyhow::Result<AnyScalar> {
-        Ok(self.inner(other))
+        self.inner(other).map_err(|e| anyhow::anyhow!("{}", e))
     }
 
     fn norm_squared(&self) -> f64 {
@@ -1302,12 +1529,12 @@ impl TensorLike for TensorTrain {
     }
 
     fn conj(&self) -> Self {
-        // Clone and conjugate each site tensor
-        // Note: conj() cannot return Result, so we ensure this never fails
         let mut result = self.clone();
-        for site in 0..result.len() {
-            let t = result.tensor(site).conj();
-            result.set_tensor(site, t);
+        if let Ok(tensors) = result.tensors_mut_checked() {
+            for tensor in tensors {
+                let conjugated = tensor.conj();
+                *tensor = conjugated;
+            }
         }
         result
     }

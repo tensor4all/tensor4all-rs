@@ -75,7 +75,7 @@ fn rust_operator_matrix(
             let shape = [values.len(), 1];
             let result = op
                 .mpo
-                .evaluate_at(&indices, ColMajorArrayRef::new(&values, &shape))
+                .evaluate_at(&indices, ColMajorArrayRef::new(&values, &shape).unwrap())
                 .unwrap();
             matrix[y + nrows * x] = result[0].clone().into();
         }
