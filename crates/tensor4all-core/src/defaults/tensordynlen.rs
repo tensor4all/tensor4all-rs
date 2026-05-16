@@ -16,9 +16,8 @@ use tensor4all_tensorbackend::{
     axpby_native_tensor, contract_native_tensor, default_eager_ctx,
     dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
     native_tensor_primal_to_dense_col_major, native_tensor_primal_to_diag_c64,
-    native_tensor_primal_to_diag_f64, native_tensor_primal_to_storage,
-    reshape_col_major_native_tensor, scale_native_tensor, storage_to_native_tensor, StorageScalar,
-    TensorElement,
+    native_tensor_primal_to_diag_f64, native_tensor_primal_to_storage, scale_native_tensor,
+    storage_to_native_tensor, StorageScalar, TensorElement,
 };
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
@@ -1534,6 +1533,19 @@ impl TensorDynLen {
         Self::from_inner_with_axis_classes(indices, inner, axis_classes)
     }
 
+    pub(crate) fn from_diag_inner(
+        indices: Vec<DynIndex>,
+        payload_inner: EagerTensor<CpuBackend>,
+    ) -> Result<Self> {
+        let dims = Self::expected_dims_from_indices(&indices);
+        Self::validate_indices(&indices)?;
+        Self::validate_diag_dims(&dims)?;
+        Self::validate_diag_payload_len(payload_inner.data().shape().iter().product(), &dims)?;
+        let axis_classes = Self::diag_axis_classes(dims.len());
+        let diag_inner = payload_inner.embed_diag(0, 1)?;
+        Self::from_inner_with_axis_classes(indices, diag_inner, axis_classes)
+    }
+
     pub(crate) fn from_inner_with_axis_classes(
         indices: Vec<DynIndex>,
         inner: EagerTensor<CpuBackend>,
@@ -2897,6 +2909,16 @@ pub fn diag_tensor_dyn_len(indices: Vec<DynIndex>, diag_data: Vec<f64>) -> Resul
     TensorDynLen::from_diag(indices, diag_data)
 }
 
+#[allow(clippy::type_complexity)]
+pub(crate) type UnfoldSplitInnerResult = (
+    EagerTensor<CpuBackend>,
+    usize,
+    usize,
+    usize,
+    Vec<DynIndex>,
+    Vec<DynIndex>,
+);
+
 /// Unfold a tensor into a matrix by splitting indices into left and right groups.
 ///
 /// This function validates the split, permutes the tensor so that left indices
@@ -2955,6 +2977,23 @@ pub fn unfold_split(
     Vec<DynIndex>,
     Vec<DynIndex>,
 )> {
+    let (matrix_inner, left_len, m, n, left_indices, right_indices) =
+        unfold_split_inner(t, left_inds)?;
+
+    Ok((
+        matrix_inner.data().clone(),
+        left_len,
+        m,
+        n,
+        left_indices,
+        right_indices,
+    ))
+}
+
+pub(crate) fn unfold_split_inner(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+) -> Result<UnfoldSplitInnerResult> {
     let rank = t.indices.len();
 
     // Validate rank
@@ -3003,7 +3042,7 @@ pub fn unfold_split(
     let m: usize = unfolded_dims[..left_len].iter().product();
     let n: usize = unfolded_dims[left_len..].iter().product();
 
-    let matrix_tensor = reshape_col_major_native_tensor(unfolded.as_native()?, &[m, n])?;
+    let matrix_tensor = unfolded.try_materialized_inner()?.reshape(&[m, n])?;
 
     Ok((
         matrix_tensor,

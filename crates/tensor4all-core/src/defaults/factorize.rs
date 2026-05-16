@@ -32,6 +32,7 @@
 //! # }
 //! ```
 
+use crate::defaults::tensordynlen::unfold_split_inner;
 use crate::defaults::DynIndex;
 use crate::{unfold_split, TensorDynLen};
 use num_complex::{Complex64, ComplexFloat};
@@ -522,12 +523,13 @@ where
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-    // Unfold tensor into matrix
-    let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
+    // Unfold tensor into an eager matrix. Pivot selection is primal-only, but
+    // fixed-pivot CI factors are rebuilt from this eager value below.
+    let (matrix_inner, _, m, n, left_indices, right_indices) = unfold_split_inner(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
 
     // Convert to Matrix type for MatrixLUCI
-    let a_matrix = native_tensor_to_matrix::<T>(&a_tensor, m, n)?;
+    let a_matrix = native_tensor_to_matrix::<T>(matrix_inner.data(), m, n)?;
 
     // Set up LU options for CI
     let left_orthogonal = canonical == Canonical::Left;
@@ -542,27 +544,65 @@ where
     let ci = MatrixLUCI::from_matrix(&a_matrix, Some(lu_options))?;
     let rank = ci.rank();
 
-    // Get left and right matrices from CI
-    let l_matrix = ci.left();
-    let r_matrix = ci.right();
+    let row_indices = ci.row_indices().to_vec();
+    let col_indices = ci.col_indices().to_vec();
+    let cols_inner = matrix_inner.take_cols(&col_indices).map_err(|e| {
+        FactorizeError::ComputationError(anyhow::anyhow!(
+            "fixed-pivot CI column gather failed: {e}"
+        ))
+    })?;
+    let rows_inner = matrix_inner.take_rows(&row_indices).map_err(|e| {
+        FactorizeError::ComputationError(anyhow::anyhow!("fixed-pivot CI row gather failed: {e}"))
+    })?;
+    let pivot_inner = matrix_inner
+        .take_block(&row_indices, &col_indices)
+        .map_err(|e| {
+            FactorizeError::ComputationError(anyhow::anyhow!(
+                "fixed-pivot CI pivot block gather failed: {e}"
+            ))
+        })?;
+    let (left_inner, right_inner) = match canonical {
+        Canonical::Left => {
+            let left = pivot_inner.right_solve(&cols_inner).map_err(|e| {
+                FactorizeError::ComputationError(anyhow::anyhow!(
+                    "fixed-pivot CI right solve failed: {e}"
+                ))
+            })?;
+            (left, rows_inner)
+        }
+        Canonical::Right => {
+            let right = pivot_inner.solve(&rows_inner).map_err(|e| {
+                FactorizeError::ComputationError(anyhow::anyhow!(
+                    "fixed-pivot CI solve failed: {e}"
+                ))
+            })?;
+            (cols_inner, right)
+        }
+    };
 
     // Create bond index
     let bond_index = DynIndex::new_bond(rank)
         .map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))?;
 
-    // Convert L matrix back to tensor
-    let l_vec = matrix_to_vec(&l_matrix);
     let mut l_indices = left_indices.clone();
     l_indices.push(bond_index.clone());
-    let left =
-        TensorDynLen::from_dense(l_indices, l_vec).map_err(FactorizeError::ComputationError)?;
+    let l_dims: Vec<usize> = l_indices.iter().map(|idx| idx.dim).collect();
+    let left_inner = left_inner.reshape(&l_dims).map_err(|e| {
+        FactorizeError::ComputationError(anyhow::anyhow!("fixed-pivot CI left reshape failed: {e}"))
+    })?;
+    let left = TensorDynLen::from_inner(l_indices, left_inner)
+        .map_err(FactorizeError::ComputationError)?;
 
-    // Convert R matrix back to tensor
-    let r_vec = matrix_to_vec(&r_matrix);
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
-    let right =
-        TensorDynLen::from_dense(r_indices, r_vec).map_err(FactorizeError::ComputationError)?;
+    let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
+    let right_inner = right_inner.reshape(&r_dims).map_err(|e| {
+        FactorizeError::ComputationError(anyhow::anyhow!(
+            "fixed-pivot CI right reshape failed: {e}"
+        ))
+    })?;
+    let right = TensorDynLen::from_inner(r_indices, right_inner)
+        .map_err(FactorizeError::ComputationError)?;
 
     Ok(FactorizeResult {
         left,
