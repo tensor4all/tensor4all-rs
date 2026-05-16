@@ -1,6 +1,9 @@
 use super::*;
 use crate::treetn::contraction::{ContractionMethod, ContractionOptions};
-use crate::{factorize_tensor_to_treetn, SelectedIndexContractionError, TreeTopology};
+use crate::{
+    factorize_tensor_to_treetn, RestructureOptions, SelectedIndexContractionError,
+    SiteIndexNetwork, TreeTopology,
+};
 use num_complex::Complex64;
 use tensor4all_core::{DynIndex, TensorDynLen};
 
@@ -879,6 +882,196 @@ fn test_partial_contract_honors_output_order() {
     assert_eq!(indices.len(), 2);
     assert_eq!(indices[0].id(), a2.id());
     assert_eq!(indices[1].id(), a0.id());
+}
+
+#[test]
+fn test_partial_contract_output_order_rejects_multiple_survivors_on_one_node() {
+    let a_row0 = DynIndex::new_dyn(2);
+    let a_contract = DynIndex::new_dyn(2);
+    let a_row1 = DynIndex::new_dyn(2);
+    let a_b01 = DynIndex::new_dyn(1);
+    let a_b12 = DynIndex::new_dyn(1);
+    let a_b23 = DynIndex::new_dyn(1);
+    let a_b34 = DynIndex::new_dyn(1);
+
+    let b_contract = DynIndex::new_dyn(2);
+    let b_col0 = DynIndex::new_dyn(2);
+    let b_col1 = DynIndex::new_dyn(2);
+    let b_b01 = DynIndex::new_dyn(1);
+    let b_b12 = DynIndex::new_dyn(1);
+    let b_b23 = DynIndex::new_dyn(1);
+    let b_b34 = DynIndex::new_dyn(1);
+
+    let tn_a = TreeTN::<TensorDynLen, usize>::from_tensors(
+        vec![
+            TensorDynLen::from_dense(vec![a_row0.clone(), a_b01.clone()], vec![1.0; 2]).unwrap(),
+            TensorDynLen::from_dense(
+                vec![a_b01.clone(), a_contract.clone(), a_b12.clone()],
+                vec![1.0; 2],
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(
+                vec![a_b12.clone(), a_row1.clone(), a_b23.clone()],
+                vec![1.0; 2],
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(vec![a_b23.clone(), a_b34.clone()], vec![1.0]).unwrap(),
+            TensorDynLen::from_dense(vec![a_b34.clone()], vec![1.0]).unwrap(),
+        ],
+        vec![0, 1, 2, 3, 4],
+    )
+    .unwrap();
+    let tn_b = TreeTN::<TensorDynLen, usize>::from_tensors(
+        vec![
+            TensorDynLen::from_dense(vec![b_b01.clone()], vec![1.0]).unwrap(),
+            TensorDynLen::from_dense(vec![b_b01.clone(), b_b12.clone()], vec![1.0]).unwrap(),
+            TensorDynLen::from_dense(
+                vec![b_b12.clone(), b_col1.clone(), b_b23.clone()],
+                vec![1.0; 2],
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(
+                vec![
+                    b_b23.clone(),
+                    b_contract.clone(),
+                    b_col0.clone(),
+                    b_b34.clone(),
+                ],
+                vec![1.0; 4],
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(vec![b_b34.clone()], vec![1.0]).unwrap(),
+        ],
+        vec![0, 1, 2, 3, 4],
+    )
+    .unwrap();
+
+    let output_order = vec![
+        a_row0.clone(),
+        a_row1.clone(),
+        b_col0.clone(),
+        b_col1.clone(),
+    ];
+    let spec = PartialContractionSpec {
+        contract_pairs: vec![(a_contract, b_contract)],
+        diagonal_pairs: vec![],
+        output_order: Some(output_order.clone()),
+    };
+
+    let result = partial_contract(&tn_a, &tn_b, &spec, &0usize, ContractionOptions::default());
+
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("partial_contract_to_site_network"));
+}
+
+#[test]
+fn test_partial_contract_to_site_network_splits_onto_explicit_target() {
+    let i = DynIndex::new_dyn(2);
+    let k_left = DynIndex::new_dyn(2);
+    let k_right = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+
+    let a = TreeTN::<TensorDynLen, &str>::from_tensors(
+        vec![
+            TensorDynLen::from_dense(vec![i.clone(), k_left.clone()], vec![1.0, 2.0, 3.0, 4.0])
+                .unwrap(),
+        ],
+        vec!["center"],
+    )
+    .unwrap();
+    let b = TreeTN::<TensorDynLen, &str>::from_tensors(
+        vec![
+            TensorDynLen::from_dense(vec![k_right.clone(), j.clone()], vec![5.0, 6.0, 7.0, 8.0])
+                .unwrap(),
+        ],
+        vec!["center"],
+    )
+    .unwrap();
+
+    let spec = PartialContractionSpec {
+        contract_pairs: vec![(k_left, k_right)],
+        diagonal_pairs: vec![],
+        output_order: None,
+    };
+    let mut target = SiteIndexNetwork::new();
+    target
+        .add_node("0_row", std::collections::HashSet::from([i.clone()]))
+        .unwrap();
+    target
+        .add_node("1_col", std::collections::HashSet::from([j.clone()]))
+        .unwrap();
+    target.add_edge(&"0_row", &"1_col").unwrap();
+
+    let result = partial_contract_to_site_network(
+        &a,
+        &b,
+        &spec,
+        &"center",
+        &target,
+        ContractionOptions::default(),
+        &RestructureOptions::default(),
+    )
+    .unwrap();
+    let dense = result.to_dense().unwrap();
+
+    assert_eq!(dense.external_indices(), vec![i.clone(), j.clone()]);
+    assert_eq!(
+        result.site_index_network().find_node_by_index(&i),
+        Some(&"0_row")
+    );
+    assert_eq!(
+        result.site_index_network().find_node_by_index(&j),
+        Some(&"1_col")
+    );
+    for (actual, expected) in dense
+        .to_vec::<f64>()
+        .unwrap()
+        .into_iter()
+        .zip([23.0, 34.0, 31.0, 46.0])
+    {
+        assert!((actual - expected).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn test_partial_contract_to_site_network_rejects_output_order() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+    let a = TreeTN::<TensorDynLen, &str>::from_tensors(
+        vec![TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap()],
+        vec!["center"],
+    )
+    .unwrap();
+    let b = TreeTN::<TensorDynLen, &str>::from_tensors(
+        vec![TensorDynLen::from_dense(vec![j], vec![3.0, 4.0]).unwrap()],
+        vec!["center"],
+    )
+    .unwrap();
+    let spec = PartialContractionSpec {
+        contract_pairs: vec![],
+        diagonal_pairs: vec![],
+        output_order: Some(vec![i.clone()]),
+    };
+    let mut target = SiteIndexNetwork::new();
+    target
+        .add_node("out", std::collections::HashSet::from([i]))
+        .unwrap();
+
+    let result = partial_contract_to_site_network(
+        &a,
+        &b,
+        &spec,
+        &"center",
+        &target,
+        ContractionOptions::default(),
+        &RestructureOptions::default(),
+    );
+
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("output_order"));
 }
 
 #[test]

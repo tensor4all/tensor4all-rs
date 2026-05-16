@@ -67,6 +67,7 @@ pub use treetn::{
     get_boundary_edges,
     hadamard,
     partial_contract,
+    partial_contract_to_site_network,
     sum_over_indices,
     weighted_sum_over_index_pairs,
     BoundaryEdge,

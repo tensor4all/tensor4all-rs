@@ -58,8 +58,8 @@ pub use localupdate::{
 
 // Re-export partial contraction types
 pub use partial_contraction::{
-    hadamard, partial_contract, sum_over_indices, weighted_sum_over_index_pairs,
-    PartialContractionSpec,
+    hadamard, partial_contract, partial_contract_to_site_network, sum_over_indices,
+    weighted_sum_over_index_pairs, PartialContractionSpec,
 };
 
 // Re-export swap types

@@ -15,6 +15,8 @@ use super::decompose::{factorize_tensor_to_treetn_with, TreeTopology};
 use super::swap::SwapOptions;
 use super::TreeTN;
 use crate::error::{format_anyhow_error, SelectedIndexContractionError};
+use crate::options::RestructureOptions;
+use crate::site_index_network::SiteIndexNetwork;
 use tensor4all_core::{
     AllowedPairs, AnyScalar, DynIndex, FactorizeAlg, FactorizeOptions, IndexLike, TensorDynLen,
     TensorIndex, TensorLike,
@@ -450,7 +452,7 @@ where
     let unique_current_nodes: HashSet<_> = current_nodes.iter().cloned().collect();
     if unique_current_nodes.len() != current_nodes.len() {
         bail!(
-            "partial_contract: output_order currently requires at most one surviving site index per node"
+            "partial_contract: output_order currently requires at most one surviving site index per node; use partial_contract_to_site_network with an explicit target network to split surviving indices across nodes"
         );
     }
 
@@ -751,6 +753,124 @@ where
     } else {
         Ok(result)
     }
+}
+
+/// Partially contract two TreeTNs and restructure the result to a target site network.
+///
+/// Use this when the surviving site indices need a specific output topology,
+/// including cases where several surviving indices initially occupy the same
+/// result node. The contraction itself is performed by [`partial_contract`]
+/// without `output_order`; the returned TreeTN is then transformed with
+/// [`TreeTN::restructure_to`].
+///
+/// # Arguments
+/// * `a` - First tensor network. Left indices in `spec` must be site indices of this network.
+/// * `b` - Second tensor network. Right indices in `spec` must be site indices of this network.
+/// * `spec` - Site-index contraction and diagonal-pair specification. `output_order`
+///   must be `None` because `target` supplies the output layout.
+/// * `center` - Canonical center node used for the intermediate contraction.
+/// * `target` - Target site-index network containing exactly the surviving result
+///   indices, assigned to the desired output nodes and topology.
+/// * `options` - Contraction algorithm options.
+/// * `restructure_options` - Split, swap, and optional final truncation settings
+///   used when transforming the intermediate result to `target`.
+///
+/// # Returns
+/// A TreeTN with node names and site-index assignment matching `target`.
+///
+/// # Errors
+/// Returns an error if `spec.output_order` is set, if the partial contraction
+/// fails, or if the contracted result cannot be restructured to `target`.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashSet;
+///
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex};
+/// use tensor4all_treetn::{
+///     contraction::ContractionOptions,
+///     partial_contract_to_site_network,
+///     PartialContractionSpec,
+///     RestructureOptions,
+///     SiteIndexNetwork,
+///     TreeTN,
+/// };
+///
+/// let i = DynIndex::new_dyn(2);
+/// let k_left = DynIndex::new_dyn(2);
+/// let k_right = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+///
+/// let a = TreeTN::<TensorDynLen, &str>::from_tensors(
+///     vec![TensorDynLen::from_dense(
+///         vec![i.clone(), k_left.clone()],
+///         vec![1.0, 2.0, 3.0, 4.0],
+///     ).unwrap()],
+///     vec!["center"],
+/// ).unwrap();
+/// let b = TreeTN::<TensorDynLen, &str>::from_tensors(
+///     vec![TensorDynLen::from_dense(
+///         vec![k_right.clone(), j.clone()],
+///         vec![5.0, 6.0, 7.0, 8.0],
+///     ).unwrap()],
+///     vec!["center"],
+/// ).unwrap();
+///
+/// let spec = PartialContractionSpec {
+///     contract_pairs: vec![(k_left, k_right)],
+///     diagonal_pairs: vec![],
+///     output_order: None,
+/// };
+///
+/// let mut target = SiteIndexNetwork::new();
+/// target.add_node("0_row", HashSet::from([i.clone()])).unwrap();
+/// target.add_node("1_col", HashSet::from([j.clone()])).unwrap();
+/// target.add_edge(&"0_row", &"1_col").unwrap();
+///
+/// let result = partial_contract_to_site_network(
+///     &a,
+///     &b,
+///     &spec,
+///     &"center",
+///     &target,
+///     ContractionOptions::default(),
+///     &RestructureOptions::default(),
+/// ).unwrap();
+/// let dense = result.to_dense().unwrap();
+///
+/// assert_eq!(dense.external_indices(), vec![i.clone(), j.clone()]);
+/// let expected = vec![23.0, 34.0, 31.0, 46.0];
+/// for (actual, expected) in dense.to_vec::<f64>().unwrap().into_iter().zip(expected) {
+///     assert!((actual - expected).abs() < 1e-12);
+/// }
+/// assert_eq!(result.site_index_network().find_node_by_index(&i), Some(&"0_row"));
+/// assert_eq!(result.site_index_network().find_node_by_index(&j), Some(&"1_col"));
+/// ```
+pub fn partial_contract_to_site_network<V, TargetV>(
+    a: &TreeTN<TensorDynLen, V>,
+    b: &TreeTN<TensorDynLen, V>,
+    spec: &PartialContractionSpec<DynIndex>,
+    center: &V,
+    target: &SiteIndexNetwork<TargetV, DynIndex>,
+    options: ContractionOptions,
+    restructure_options: &RestructureOptions,
+) -> Result<TreeTN<TensorDynLen, TargetV>>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+    TargetV: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+    <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+{
+    if spec.output_order.is_some() {
+        bail!(
+            "partial_contract_to_site_network: spec.output_order must be None because the target site network defines the output layout"
+        );
+    }
+
+    let result = partial_contract(a, b, spec, center, options)?;
+    result.restructure_to(target, restructure_options).context(
+        "partial_contract_to_site_network: failed to restructure result to target site network",
+    )
 }
 
 /// Multiply two TreeTNs elementwise along selected external index pairs.
