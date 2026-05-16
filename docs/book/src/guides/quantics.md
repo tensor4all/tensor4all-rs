@@ -115,8 +115,11 @@ assert_eq!(affine_op.mpo.node_count(), r);
 ### Index Mapping Flow
 
 Operators define abstract *input* and *output* indices labeled `0, 1, ..., r-1`.
-To apply an operator, replace the tensor network's site indices with the
-operator's input indices using `replaceind`, then call `apply_linear_operator`.
+To apply an operator, bind those abstract indices to the concrete site indices
+of the target state, then call `apply_linear_operator`. When the target
+TreeTN's quantics sites are tagged as `x=1`, `x=2`, ..., use
+`apply_linear_operator_to_numbered_tags`; otherwise use explicit index binding
+with `apply_linear_operator_to_indices`.
 
 ```text
 Original TreeTN          Operator            Result TreeTN

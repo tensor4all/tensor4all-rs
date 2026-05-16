@@ -70,12 +70,17 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use tensor4all_core::{
-    AllowedPairs, IndexLike, LinearizationOrder, SvdTruncationPolicy, TensorIndex, TensorLike,
+    AllowedPairs, DynIndex, IndexLike, LinearizationOrder, SvdTruncationPolicy, TensorDynLen,
+    TensorIndex, TensorLike,
 };
 
 use super::index_mapping::IndexMapping;
 use super::linear_operator::LinearOperator;
 use super::Operator;
+use crate::error::{
+    format_anyhow_error, LinearOperatorIndexApplyError, LinearOperatorIndexBindingError,
+    LinearOperatorTaggedApplyError,
+};
 use crate::operator::compose::{
     compose_exclusive_linear_operators, compose_exclusive_linear_operators_unchecked,
 };
@@ -365,6 +370,342 @@ where
     Ok(result)
 }
 
+/// Return a copy of `operator` with selected true indices rebound explicitly.
+///
+/// This rewrites only the external true-index side of the operator mappings.
+/// The internal MPO tensors and their internal indices are left unchanged.
+/// Each pair is `(current_operator_true_index, desired_true_index)`.
+///
+/// # Arguments
+/// * `operator` - Operator whose true input/output mappings should be rebound.
+/// * `input_pairs` - Explicit replacements for input true indices.
+/// * `output_pairs` - Explicit replacements for output true indices.
+///
+/// # Returns
+/// A new operator with the requested true-index bindings.
+///
+/// # Errors
+/// Returns an error if a replacement changes dimension, names an index not
+/// present in the corresponding mapping, or names the same source index more
+/// than once.
+///
+/// # Examples
+/// ```
+/// use std::collections::HashMap;
+/// use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+/// use tensor4all_treetn::{
+///     bind_linear_operator_indices, IndexMapping, LinearOperator, TreeTN,
+/// };
+///
+/// let op_input = DynIndex::new_dyn(2);
+/// let op_output = DynIndex::new_dyn(2);
+/// let input_internal = DynIndex::new_dyn(2);
+/// let output_internal = DynIndex::new_dyn(2);
+/// let mpo_tensor = TensorDynLen::from_dense(
+///     vec![input_internal.clone(), output_internal.clone()],
+///     vec![1.0, 0.0, 0.0, 1.0],
+/// ).unwrap();
+/// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
+///
+/// let mut input_mapping = HashMap::new();
+/// input_mapping.insert(0usize, IndexMapping { true_index: op_input.clone(), internal_index: input_internal });
+/// let mut output_mapping = HashMap::new();
+/// output_mapping.insert(0usize, IndexMapping { true_index: op_output.clone(), internal_index: output_internal });
+/// let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+///
+/// let state_index = DynIndex::new_dyn(2);
+/// let rebound = bind_linear_operator_indices(
+///     &operator,
+///     &[(op_input, state_index.clone())],
+///     &[(op_output, state_index.clone())],
+/// ).unwrap();
+/// assert!(rebound.get_input_mapping(&0).unwrap().true_index.same_id(&state_index));
+/// assert!(rebound.get_output_mapping(&0).unwrap().true_index.same_id(&state_index));
+/// ```
+pub fn bind_linear_operator_indices<T, V>(
+    operator: &LinearOperator<T, V>,
+    input_pairs: &[(T::Index, T::Index)],
+    output_pairs: &[(T::Index, T::Index)],
+) -> std::result::Result<LinearOperator<T, V>, LinearOperatorIndexBindingError>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let mut rebound = operator.clone();
+    replace_mapping_true_indices(&mut rebound.input_mapping, input_pairs, "input")?;
+    replace_mapping_true_indices(&mut rebound.output_mapping, output_pairs, "output")?;
+    Ok(rebound)
+}
+
+/// Apply a linear operator after explicitly binding selected external indices.
+///
+/// This is a convenience wrapper around [`bind_linear_operator_indices`] followed
+/// by [`apply_linear_operator`]. It is useful when an operator was constructed
+/// with its own input/output index IDs but should act on selected indices of a
+/// target state.
+///
+/// # Arguments
+/// * `operator` - Operator to apply.
+/// * `state` - State to which the rebound operator is applied.
+/// * `input_pairs` - `(operator_true_input, state_input)` replacements.
+/// * `output_pairs` - `(operator_true_output, desired_output)` replacements.
+/// * `options` - Apply algorithm and truncation options.
+///
+/// # Returns
+/// The result of applying the explicitly rebound operator to `state`.
+///
+/// # Errors
+/// Returns an error if binding fails or if [`apply_linear_operator`] fails.
+///
+/// # Examples
+/// ```
+/// use std::collections::HashMap;
+/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_treetn::{
+///     apply_linear_operator_to_indices, ApplyOptions, IndexMapping, LinearOperator, TreeTN,
+/// };
+///
+/// let state_index = DynIndex::new_dyn(2);
+/// let state_tensor = TensorDynLen::from_dense(vec![state_index.clone()], vec![3.0, 5.0]).unwrap();
+/// let state = TreeTN::<TensorDynLen, usize>::from_tensors(vec![state_tensor], vec![0]).unwrap();
+///
+/// let op_input = DynIndex::new_dyn(2);
+/// let op_output = DynIndex::new_dyn(2);
+/// let input_internal = DynIndex::new_dyn(2);
+/// let output_internal = DynIndex::new_dyn(2);
+/// let mpo_tensor = TensorDynLen::from_dense(
+///     vec![input_internal.clone(), output_internal.clone()],
+///     vec![1.0, 0.0, 0.0, 1.0],
+/// ).unwrap();
+/// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
+///
+/// let mut input_mapping = HashMap::new();
+/// input_mapping.insert(0usize, IndexMapping { true_index: op_input.clone(), internal_index: input_internal });
+/// let mut output_mapping = HashMap::new();
+/// output_mapping.insert(0usize, IndexMapping { true_index: op_output.clone(), internal_index: output_internal });
+/// let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+///
+/// let result = apply_linear_operator_to_indices(
+///     &operator,
+///     &state,
+///     &[(op_input, state_index.clone())],
+///     &[(op_output, state_index.clone())],
+///     ApplyOptions::naive(),
+/// ).unwrap();
+/// assert!(result.to_dense().unwrap().distance(&state.to_dense().unwrap()).unwrap() < 1.0e-12);
+/// ```
+pub fn apply_linear_operator_to_indices<T, V>(
+    operator: &LinearOperator<T, V>,
+    state: &TreeTN<T, V>,
+    input_pairs: &[(T::Index, T::Index)],
+    output_pairs: &[(T::Index, T::Index)],
+    options: ApplyOptions,
+) -> std::result::Result<TreeTN<T, V>, LinearOperatorIndexApplyError>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let rebound = bind_linear_operator_indices(operator, input_pairs, output_pairs)?;
+    apply_linear_operator(&rebound, state, options).map_err(|error| {
+        LinearOperatorIndexApplyError::ApplyFailed {
+            message: format_anyhow_error(error),
+        }
+    })
+}
+
+/// Apply a linear operator to state indices selected by numbered tags.
+///
+/// The selected state indices are resolved with
+/// [`TreeTN::external_indices_with_numbered_tag`]. For example,
+/// `tag_prefix = "k"` and `start_index = 1` selects `"k=1"`, `"k=2"`, ...
+/// in operator node order. The number of selected tags is inferred from the
+/// operator's true input mappings, so this helper works for any operator whose
+/// input and output mapping counts match.
+///
+/// The result keeps the selected state indices as the operator output indices.
+/// If a transform should write to different output indices, use
+/// [`apply_linear_operator_to_indices`] and pass explicit output bindings.
+///
+/// # Arguments
+/// * `operator` - Operator to apply. Its node order defines the bit order.
+/// * `state` - State containing numbered-tagged external indices.
+/// * `tag_prefix` - Prefix before the equals sign, such as `"k"` or `"x"`.
+/// * `start_index` - First numbered tag to select. Use `1` for Quantics.jl-style
+///   tags such as `"k=1"`, `"k=2"`, ...
+/// * `options` - Apply algorithm and truncation options.
+///
+/// # Returns
+/// The result of applying `operator` to the selected state indices.
+///
+/// # Errors
+/// Returns an error if numbered-tag selection fails, if the operator has
+/// unequal input/output mapping counts, if binding selected indices fails, or
+/// if the underlying apply algorithm fails.
+///
+/// # Examples
+/// ```
+/// use std::collections::HashMap;
+/// use tensor4all_core::{DynIndex, TagSet, TensorDynLen, TensorLike};
+/// use tensor4all_treetn::{
+///     apply_linear_operator_to_numbered_tags, ApplyOptions, IndexMapping,
+///     LinearOperator, TreeTN,
+/// };
+///
+/// let k1 = DynIndex::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=1").unwrap());
+/// let state = TreeTN::<TensorDynLen, usize>::from_tensors(
+///     vec![TensorDynLen::from_dense(vec![k1.clone()], vec![1.0, 2.0]).unwrap()],
+///     vec![0],
+/// ).unwrap();
+///
+/// let true_input = DynIndex::new_dyn(2);
+/// let true_output = DynIndex::new_dyn(2);
+/// let internal_input = DynIndex::new_dyn(2);
+/// let internal_output = DynIndex::new_dyn(2);
+/// let mpo_tensor = TensorDynLen::from_dense(
+///     vec![internal_output.clone(), internal_input.clone()],
+///     vec![1.0, 0.0, 0.0, 1.0],
+/// ).unwrap();
+/// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
+/// let mut input_mapping = HashMap::new();
+/// input_mapping.insert(0, IndexMapping {
+///     true_index: true_input,
+///     internal_index: internal_input,
+/// });
+/// let mut output_mapping = HashMap::new();
+/// output_mapping.insert(0, IndexMapping {
+///     true_index: true_output,
+///     internal_index: internal_output,
+/// });
+/// let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+///
+/// let result = apply_linear_operator_to_numbered_tags(
+///     &operator,
+///     &state,
+///     "k",
+///     1,
+///     ApplyOptions::naive(),
+/// ).unwrap();
+/// assert!(result.to_dense().unwrap().distance(&state.to_dense().unwrap()).unwrap() < 1.0e-12);
+/// ```
+pub fn apply_linear_operator_to_numbered_tags<V>(
+    operator: &LinearOperator<TensorDynLen, V>,
+    state: &TreeTN<TensorDynLen, V>,
+    tag_prefix: &str,
+    start_index: usize,
+    options: ApplyOptions,
+) -> std::result::Result<TreeTN<TensorDynLen, V>, LinearOperatorTaggedApplyError>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let input_true_indices = true_indices_in_operator_node_order(operator, &operator.input_mapping);
+    let output_true_indices =
+        true_indices_in_operator_node_order(operator, &operator.output_mapping);
+
+    if input_true_indices.len() != output_true_indices.len() {
+        return Err(LinearOperatorTaggedApplyError::MappingCountMismatch {
+            input_count: input_true_indices.len(),
+            output_count: output_true_indices.len(),
+        });
+    }
+
+    let state_indices = state.external_indices_with_numbered_tag(
+        tag_prefix,
+        start_index,
+        input_true_indices.len(),
+    )?;
+    let input_pairs: Vec<(DynIndex, DynIndex)> = input_true_indices
+        .into_iter()
+        .zip(state_indices.iter().cloned())
+        .collect();
+    let output_pairs: Vec<(DynIndex, DynIndex)> =
+        output_true_indices.into_iter().zip(state_indices).collect();
+
+    Ok(apply_linear_operator_to_indices(
+        operator,
+        state,
+        &input_pairs,
+        &output_pairs,
+        options,
+    )?)
+}
+
+fn true_indices_in_operator_node_order<V>(
+    operator: &LinearOperator<TensorDynLen, V>,
+    mappings_by_node: &HashMap<V, Vec<IndexMapping<DynIndex>>>,
+) -> Vec<DynIndex>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let mut nodes = operator.mpo().node_names();
+    nodes.sort();
+    let mut indices = Vec::new();
+    for node in nodes {
+        if let Some(mappings) = mappings_by_node.get(&node) {
+            indices.extend(mappings.iter().map(|mapping| mapping.true_index.clone()));
+        }
+    }
+    indices
+}
+
+fn replace_mapping_true_indices<I, V>(
+    mappings_by_node: &mut HashMap<V, Vec<IndexMapping<I>>>,
+    pairs: &[(I, I)],
+    role: &'static str,
+) -> std::result::Result<(), LinearOperatorIndexBindingError>
+where
+    I: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
+    <I as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let mut seen = HashSet::new();
+    for (old_index, new_index) in pairs {
+        if old_index.dim() != new_index.dim() {
+            return Err(LinearOperatorIndexBindingError::DimensionMismatch {
+                role,
+                old_dim: old_index.dim(),
+                new_dim: new_index.dim(),
+            });
+        }
+        if !seen.insert(old_index.clone()) {
+            return Err(LinearOperatorIndexBindingError::DuplicateSourceIndex {
+                role,
+                index: format!("{old_index:?}"),
+            });
+        }
+
+        let mut hits = 0usize;
+        for mappings in mappings_by_node.values_mut() {
+            for mapping in mappings {
+                if mapping.true_index == *old_index {
+                    mapping.true_index = new_index.clone();
+                    hits += 1;
+                }
+            }
+        }
+
+        match hits {
+            0 => {
+                return Err(LinearOperatorIndexBindingError::MissingSourceIndex {
+                    role,
+                    index: format!("{old_index:?}"),
+                });
+            }
+            1 => {}
+            _ => {
+                return Err(LinearOperatorIndexBindingError::DuplicateSourceIndex {
+                    role,
+                    index: format!("{old_index:?}"),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Embed a full-coverage operator MPO on the state's topology for local exact apply.
 ///
 /// The local naive apply fuses one state bond and one MPO bond per state edge, so
@@ -591,9 +932,9 @@ where
 
     // Also track true<->internal mappings for gap nodes
     #[allow(clippy::type_complexity)]
-    let mut gap_input_mappings: HashMap<V, IndexMapping<T::Index>> = HashMap::new();
+    let mut gap_input_mappings: HashMap<V, Vec<IndexMapping<T::Index>>> = HashMap::new();
     #[allow(clippy::type_complexity)]
-    let mut gap_output_mappings: HashMap<V, IndexMapping<T::Index>> = HashMap::new();
+    let mut gap_output_mappings: HashMap<V, Vec<IndexMapping<T::Index>>> = HashMap::new();
 
     for gap_name in &gap_nodes {
         let site_space = state
@@ -605,28 +946,25 @@ where
         // - Internal indices = new simulated indices for the MPO tensor
         let mut pairs: Vec<(T::Index, T::Index)> = Vec::new();
 
-        for (i, true_idx) in site_space.iter().enumerate() {
+        for true_idx in site_space {
             let input_internal = true_idx.sim();
             let output_internal = true_idx.sim();
             pairs.push((input_internal.clone(), output_internal.clone()));
 
-            // Store mapping for the first site index of each gap node
-            if i == 0 {
-                gap_input_mappings.insert(
-                    gap_name.clone(),
-                    IndexMapping {
-                        true_index: true_idx.clone(),
-                        internal_index: input_internal,
-                    },
-                );
-                gap_output_mappings.insert(
-                    gap_name.clone(),
-                    IndexMapping {
-                        true_index: true_idx.clone(),
-                        internal_index: output_internal,
-                    },
-                );
-            }
+            gap_input_mappings
+                .entry(gap_name.clone())
+                .or_insert_with(Vec::new)
+                .push(IndexMapping {
+                    true_index: true_idx.clone(),
+                    internal_index: input_internal,
+                });
+            gap_output_mappings
+                .entry(gap_name.clone())
+                .or_insert_with(Vec::new)
+                .push(IndexMapping {
+                    true_index: true_idx.clone(),
+                    internal_index: output_internal,
+                });
         }
 
         gap_site_indices.insert(gap_name.clone(), pairs);
@@ -670,8 +1008,8 @@ fn compose_operator_along_state_paths<T, V>(
     operator: &LinearOperator<T, V>,
     state_network: &crate::site_index_network::SiteIndexNetwork<V, T::Index>,
     gap_site_indices: &HashMap<V, Vec<(T::Index, T::Index)>>,
-    input_mappings: HashMap<V, IndexMapping<T::Index>>,
-    output_mappings: HashMap<V, IndexMapping<T::Index>>,
+    input_mappings: HashMap<V, Vec<IndexMapping<T::Index>>>,
+    output_mappings: HashMap<V, Vec<IndexMapping<T::Index>>>,
 ) -> Result<LinearOperator<T, V>>
 where
     T: TensorLike,
@@ -929,7 +1267,11 @@ where
     let mpo = TreeTN::from_tensors(tensors, state_node_names.clone())
         .context("compose_operator_along_state_paths: failed to create TreeTN")?;
 
-    Ok(LinearOperator::new(mpo, input_mappings, output_mappings))
+    Ok(LinearOperator::new_multi(
+        mpo,
+        input_mappings,
+        output_mappings,
+    ))
 }
 
 /// Transform state's site indices to operator's input indices.
@@ -945,11 +1287,13 @@ where
 {
     let mut result = state.clone();
 
-    for (node, mapping) in operator.input_mappings() {
-        // Replace true_index with internal_index in the state
-        result = result
-            .replaceind(&mapping.true_index, &mapping.internal_index)
-            .with_context(|| format!("Failed to transform input index at node {:?}", node))?;
+    for (node, mappings) in operator.input_mappings() {
+        for mapping in mappings {
+            // Replace true_index with internal_index in the state
+            result = result
+                .replaceind(&mapping.true_index, &mapping.internal_index)
+                .with_context(|| format!("Failed to transform input index at node {:?}", node))?;
+        }
     }
 
     Ok(result)
@@ -966,11 +1310,13 @@ where
     <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    for (node, mapping) in operator.output_mappings() {
-        // Replace internal_index with true_index in the result
-        result = result
-            .replaceind(&mapping.internal_index, &mapping.true_index)
-            .with_context(|| format!("Failed to transform output index at node {:?}", node))?;
+    for (node, mappings) in operator.output_mappings() {
+        for mapping in mappings {
+            // Replace internal_index with true_index in the result
+            result = result
+                .replaceind(&mapping.internal_index, &mapping.true_index)
+                .with_context(|| format!("Failed to transform output index at node {:?}", node))?;
+        }
     }
 
     Ok(result)
@@ -994,14 +1340,19 @@ where
         let mut result: Vec<Self::Index> = self
             .input_mapping
             .values()
-            .map(|m| m.true_index.clone())
+            .flat_map(|mappings| mappings.iter().map(|m| m.true_index.clone()))
             .collect();
-        result.extend(self.output_mapping.values().map(|m| m.true_index.clone()));
+        result.extend(
+            self.output_mapping
+                .values()
+                .flat_map(|mappings| mappings.iter().map(|m| m.true_index.clone())),
+        );
         result
     }
 
     fn num_external_indices(&self) -> usize {
-        self.input_mapping.len() + self.output_mapping.len()
+        self.input_mapping.values().map(Vec::len).sum::<usize>()
+            + self.output_mapping.values().map(Vec::len).sum::<usize>()
     }
 
     /// Replace an external index (true index) in this operator.
@@ -1018,33 +1369,30 @@ where
         }
 
         let mut result = self.clone();
+        let mut found = false;
 
         // Check input mappings
-        for (node, mapping) in &self.input_mapping {
-            if mapping.true_index == *old_index && mapping.true_index.dim() == old_index.dim() {
-                result.input_mapping.insert(
-                    node.clone(),
-                    IndexMapping {
-                        true_index: new_index.clone(),
-                        internal_index: mapping.internal_index.clone(),
-                    },
-                );
-                return Ok(result);
+        for mappings in result.input_mapping.values_mut() {
+            for mapping in mappings {
+                if mapping.true_index == *old_index && mapping.true_index.dim() == old_index.dim() {
+                    mapping.true_index = new_index.clone();
+                    found = true;
+                }
             }
         }
 
         // Check output mappings
-        for (node, mapping) in &self.output_mapping {
-            if mapping.true_index == *old_index && mapping.true_index.dim() == old_index.dim() {
-                result.output_mapping.insert(
-                    node.clone(),
-                    IndexMapping {
-                        true_index: new_index.clone(),
-                        internal_index: mapping.internal_index.clone(),
-                    },
-                );
-                return Ok(result);
+        for mappings in result.output_mapping.values_mut() {
+            for mapping in mappings {
+                if mapping.true_index == *old_index && mapping.true_index.dim() == old_index.dim() {
+                    mapping.true_index = new_index.clone();
+                    found = true;
+                }
             }
+        }
+
+        if found {
+            return Ok(result);
         }
 
         Err(anyhow::anyhow!(
@@ -1065,6 +1413,15 @@ where
                 old_indices.len(),
                 new_indices.len()
             ));
+        }
+        let mut seen = HashSet::new();
+        for old in old_indices {
+            if !seen.insert(old.clone()) {
+                return Err(anyhow::anyhow!(
+                    "Duplicate old index {:?} in LinearOperator::replaceinds",
+                    old.id()
+                ));
+            }
         }
 
         let mut result = self.clone();
@@ -1092,10 +1449,10 @@ where
 {
     /// The MPO with internal index IDs (wrapped in Arc for CoW)
     pub mpo: Arc<TreeTN<T, V>>,
-    /// Input index mapping: node -> (true s_in, internal s_in_tmp)
-    pub input_mapping: HashMap<V, IndexMapping<T::Index>>,
-    /// Output index mapping: node -> (true s_out, internal s_out_tmp)
-    pub output_mapping: HashMap<V, IndexMapping<T::Index>>,
+    /// Input index mappings: node -> [(true s_in, internal s_in_tmp)].
+    pub input_mapping: HashMap<V, Vec<IndexMapping<T::Index>>>,
+    /// Output index mappings: node -> [(true s_out, internal s_out_tmp)].
+    pub output_mapping: HashMap<V, Vec<IndexMapping<T::Index>>>,
 }
 
 impl<T, V> ArcLinearOperator<T, V>
@@ -1119,6 +1476,27 @@ where
         mpo: TreeTN<T, V>,
         input_mapping: HashMap<V, IndexMapping<T::Index>>,
         output_mapping: HashMap<V, IndexMapping<T::Index>>,
+    ) -> Self {
+        let input_mapping = input_mapping
+            .into_iter()
+            .map(|(node, mapping)| (node, vec![mapping]))
+            .collect();
+        let output_mapping = output_mapping
+            .into_iter()
+            .map(|(node, mapping)| (node, vec![mapping]))
+            .collect();
+        Self {
+            mpo: Arc::new(mpo),
+            input_mapping,
+            output_mapping,
+        }
+    }
+
+    /// Create a new ArcLinearOperator with possibly multiple mappings per node.
+    pub fn new_multi(
+        mpo: TreeTN<T, V>,
+        input_mapping: HashMap<V, Vec<IndexMapping<T::Index>>>,
+        output_mapping: HashMap<V, Vec<IndexMapping<T::Index>>>,
     ) -> Self {
         Self {
             mpo: Arc::new(mpo),
@@ -1151,21 +1529,35 @@ where
 
     /// Get input mapping for a node.
     pub fn get_input_mapping(&self, node: &V) -> Option<&IndexMapping<T::Index>> {
-        self.input_mapping.get(node)
+        self.input_mapping
+            .get(node)
+            .and_then(|mappings| mappings.first())
     }
 
     /// Get output mapping for a node.
     pub fn get_output_mapping(&self, node: &V) -> Option<&IndexMapping<T::Index>> {
-        self.output_mapping.get(node)
+        self.output_mapping
+            .get(node)
+            .and_then(|mappings| mappings.first())
+    }
+
+    /// Get all input mappings for a node.
+    pub fn get_input_mappings(&self, node: &V) -> Option<&[IndexMapping<T::Index>]> {
+        self.input_mapping.get(node).map(Vec::as_slice)
+    }
+
+    /// Get all output mappings for a node.
+    pub fn get_output_mappings(&self, node: &V) -> Option<&[IndexMapping<T::Index>]> {
+        self.output_mapping.get(node).map(Vec::as_slice)
     }
 
     /// Get all input mappings.
-    pub fn input_mappings(&self) -> &HashMap<V, IndexMapping<T::Index>> {
+    pub fn input_mappings(&self) -> &HashMap<V, Vec<IndexMapping<T::Index>>> {
         &self.input_mapping
     }
 
     /// Get all output mappings.
-    pub fn output_mappings(&self) -> &HashMap<V, IndexMapping<T::Index>> {
+    pub fn output_mappings(&self) -> &HashMap<V, Vec<IndexMapping<T::Index>>> {
         &self.output_mapping
     }
 

@@ -1,6 +1,9 @@
 use super::*;
 use crate::random::{random_treetn, LinkSpace};
-use crate::SiteIndexNetwork;
+use crate::{
+    LinearOperatorIndexBindingError, LinearOperatorTaggedApplyError, NumberedTagSelectionError,
+    SiteIndexNetwork,
+};
 use std::collections::{HashMap, HashSet};
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::{ColMajorArrayRef, SvdTruncationPolicy, TensorDynLen};
@@ -220,6 +223,234 @@ fn build_chain_state() -> (TreeTN<TensorDynLen, String>, Vec<(String, DynIndex)>
             ("site3".to_string(), s3),
         ],
     )
+}
+
+#[test]
+fn apply_linear_operator_supports_multiple_index_mappings_per_node() {
+    let x = make_index(2);
+    let y = make_index(2);
+    let state_tensor =
+        TensorDynLen::from_dense(vec![x.clone(), y.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let state =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["site".to_string()])
+            .unwrap();
+
+    let x_in = make_index(2);
+    let y_in = make_index(2);
+    let x_out = make_index(2);
+    let y_out = make_index(2);
+    let mut data = vec![0.0; 16];
+    for xi in 0..2 {
+        for yi in 0..2 {
+            let xo = xi;
+            let yo = yi;
+            data[xo + 2 * (yo + 2 * (xi + 2 * yi))] = 1.0;
+        }
+    }
+    let mpo_tensor = TensorDynLen::from_dense(
+        vec![x_out.clone(), y_out.clone(), x_in.clone(), y_in.clone()],
+        data,
+    )
+    .unwrap();
+    let mpo =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![mpo_tensor], vec!["site".to_string()])
+            .unwrap();
+
+    let mut input_mapping = HashMap::new();
+    input_mapping.insert(
+        "site".to_string(),
+        vec![
+            IndexMapping {
+                true_index: x.clone(),
+                internal_index: x_in,
+            },
+            IndexMapping {
+                true_index: y.clone(),
+                internal_index: y_in,
+            },
+        ],
+    );
+    let mut output_mapping = HashMap::new();
+    output_mapping.insert(
+        "site".to_string(),
+        vec![
+            IndexMapping {
+                true_index: x.clone(),
+                internal_index: x_out,
+            },
+            IndexMapping {
+                true_index: y.clone(),
+                internal_index: y_out,
+            },
+        ],
+    );
+
+    let operator = LinearOperator::new_multi(mpo, input_mapping, output_mapping);
+    let result = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+
+    assert!(
+        result
+            .to_dense()
+            .unwrap()
+            .distance(&state.to_dense().unwrap())
+            .unwrap()
+            < 1e-12
+    );
+}
+
+#[test]
+fn apply_linear_operator_to_indices_binds_explicit_external_indices() {
+    let state_index = make_index(2);
+    let state_tensor = TensorDynLen::from_dense(vec![state_index.clone()], vec![2.0, 5.0]).unwrap();
+    let state =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["site".to_string()])
+            .unwrap();
+
+    let op_true_input = make_index(2);
+    let op_true_output = make_index(2);
+    let internal_input = make_index(2);
+    let internal_output = make_index(2);
+    let mpo_tensor = TensorDynLen::from_dense(
+        vec![internal_output.clone(), internal_input.clone()],
+        vec![1.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
+    let mpo =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![mpo_tensor], vec!["site".to_string()])
+            .unwrap();
+
+    let mut input_mapping = HashMap::new();
+    input_mapping.insert(
+        "site".to_string(),
+        IndexMapping {
+            true_index: op_true_input.clone(),
+            internal_index: internal_input,
+        },
+    );
+    let mut output_mapping = HashMap::new();
+    output_mapping.insert(
+        "site".to_string(),
+        IndexMapping {
+            true_index: op_true_output.clone(),
+            internal_index: internal_output,
+        },
+    );
+    let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+
+    let result = apply_linear_operator_to_indices(
+        &operator,
+        &state,
+        &[(op_true_input, state_index.clone())],
+        &[(op_true_output, state_index.clone())],
+        ApplyOptions::naive(),
+    )
+    .unwrap();
+
+    assert!(
+        result
+            .to_dense()
+            .unwrap()
+            .distance(&state.to_dense().unwrap())
+            .unwrap()
+            < 1e-12
+    );
+}
+
+#[test]
+fn bind_linear_operator_indices_reports_typed_error_paths() {
+    let op_true_input = make_index(2);
+    let operator = build_identity_operator(&[("site".to_string(), op_true_input.clone())]);
+    let same_id_prime = op_true_input.prime();
+
+    let missing = bind_linear_operator_indices(&operator, &[(same_id_prime, make_index(2))], &[])
+        .unwrap_err();
+    assert!(matches!(
+        missing,
+        LinearOperatorIndexBindingError::MissingSourceIndex { role: "input", .. }
+    ));
+
+    let mismatch =
+        bind_linear_operator_indices(&operator, &[(op_true_input.clone(), make_index(3))], &[])
+            .unwrap_err();
+    assert!(matches!(
+        mismatch,
+        LinearOperatorIndexBindingError::DimensionMismatch {
+            role: "input",
+            old_dim: 2,
+            new_dim: 3,
+        }
+    ));
+
+    let duplicate = bind_linear_operator_indices(
+        &operator,
+        &[
+            (op_true_input.clone(), make_index(2)),
+            (op_true_input, make_index(2)),
+        ],
+        &[],
+    )
+    .unwrap_err();
+    assert!(matches!(
+        duplicate,
+        LinearOperatorIndexBindingError::DuplicateSourceIndex { role: "input", .. }
+    ));
+}
+
+#[test]
+fn apply_linear_operator_to_numbered_tags_binds_state_indices_in_tag_order() {
+    let k1 = Index::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=1").unwrap());
+    let k2 = Index::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=2").unwrap());
+    let bond = make_index(1);
+    let state = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![
+            TensorDynLen::from_dense(vec![k1.clone(), bond.clone()], vec![1.0, 2.0]).unwrap(),
+            TensorDynLen::from_dense(vec![bond, k2.clone()], vec![3.0, 5.0]).unwrap(),
+        ],
+        vec!["site0".to_string(), "site1".to_string()],
+    )
+    .unwrap();
+    let operator = build_bonded_identity_operator(&[
+        ("site0".to_string(), make_index(2)),
+        ("site1".to_string(), make_index(2)),
+    ]);
+
+    let result =
+        apply_linear_operator_to_numbered_tags(&operator, &state, "k", 1, ApplyOptions::naive())
+            .unwrap();
+
+    assert!(
+        result
+            .to_dense()
+            .unwrap()
+            .distance(&state.to_dense().unwrap())
+            .unwrap()
+            < 1.0e-12
+    );
+}
+
+#[test]
+fn apply_linear_operator_to_numbered_tags_reports_missing_tag() {
+    let k1 = Index::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=1").unwrap());
+    let state = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![TensorDynLen::from_dense(vec![k1], vec![1.0, 2.0]).unwrap()],
+        vec!["site0".to_string()],
+    )
+    .unwrap();
+    let operator = build_identity_operator(&[
+        ("site0".to_string(), make_index(2)),
+        ("site1".to_string(), make_index(2)),
+    ]);
+
+    let err =
+        apply_linear_operator_to_numbered_tags(&operator, &state, "k", 1, ApplyOptions::naive())
+            .unwrap_err();
+
+    assert!(matches!(
+        err,
+        LinearOperatorTaggedApplyError::SelectTaggedIndices(
+            NumberedTagSelectionError::MissingTag { ref tag }
+        ) if tag == "k=2"
+    ));
 }
 
 fn build_tree_state() -> (TreeTN<TensorDynLen, String>, Vec<(String, DynIndex)>) {
@@ -1401,14 +1632,30 @@ fn test_linear_operator_replaceinds() {
             std::slice::from_ref(&new_idx1),
         )
         .unwrap();
-    assert!(replaced.get_input_mapping(&"N0".to_string()).is_some());
+    assert_eq!(
+        replaced
+            .get_input_mapping(&"N0".to_string())
+            .unwrap()
+            .true_index,
+        new_idx1
+    );
+    assert_eq!(
+        replaced
+            .get_output_mapping(&"N0".to_string())
+            .unwrap()
+            .true_index,
+        new_idx1
+    );
 
-    // Test replaceinds with multiple indices
+    // Replacing the same old index twice is ambiguous now that replaceind
+    // updates all matching input/output mappings.
     let new_idx3 = make_index(2);
-    let replaced2 = lin_op
-        .replaceinds(&[true_s0.clone(), true_s0.clone()], &[new_idx2, new_idx3])
-        .unwrap();
-    assert!(replaced2.get_input_mapping(&"N0".to_string()).is_some());
+    let duplicate = lin_op.replaceinds(&[true_s0.clone(), true_s0.clone()], &[new_idx2, new_idx3]);
+    assert!(duplicate.is_err());
+    assert!(duplicate
+        .unwrap_err()
+        .to_string()
+        .contains("Duplicate old index"));
 
     // Test replaceinds error case (length mismatch)
     let result = lin_op.replaceinds(

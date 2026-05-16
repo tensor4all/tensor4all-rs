@@ -32,7 +32,11 @@ mod identity;
 mod index_mapping;
 mod linear_operator;
 
-pub use apply::{apply_linear_operator, ApplyOptions, ArcLinearOperator};
+pub use apply::{
+    apply_linear_operator, apply_linear_operator_to_indices,
+    apply_linear_operator_to_numbered_tags, bind_linear_operator_indices, ApplyOptions,
+    ArcLinearOperator,
+};
 pub use compose::{are_exclusive_operators, compose_exclusive_linear_operators};
 pub use identity::build_identity_operator_tensor;
 pub use index_mapping::IndexMapping;
