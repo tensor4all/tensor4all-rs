@@ -12,6 +12,7 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use super::contraction::{contract, ContractionOptions};
 use super::decompose::{factorize_tensor_to_treetn_with, TreeTopology};
+use super::swap::SwapOptions;
 use super::TreeTN;
 use crate::error::{format_anyhow_error, SelectedIndexContractionError};
 use tensor4all_core::{
@@ -612,6 +613,49 @@ where
     Ok((a_modified, b_modified, restore_from, restore_to))
 }
 
+fn align_contract_pair_site_nodes<V>(
+    a: &TreeTN<TensorDynLen, V>,
+    b: &mut TreeTN<TensorDynLen, V>,
+    contract_pairs: &[(DynIndex, DynIndex)],
+) -> Result<()>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+    <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+{
+    let mut target_assignment = HashMap::new();
+
+    for (idx_a, _) in contract_pairs {
+        let left_node = a
+            .site_index_network()
+            .find_node_by_index(idx_a)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "partial_contract: contract pair left index {:?} is not a site index of the first TreeTN",
+                    idx_a.id()
+                )
+            })?;
+        let right_node = b
+            .site_index_network()
+            .find_node_by_index(idx_a)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "partial_contract: aligned contract index {:?} is not a site index of the second TreeTN",
+                    idx_a.id()
+                )
+            })?;
+
+        if left_node != right_node {
+            target_assignment.insert(idx_a.clone(), left_node);
+        }
+    }
+
+    b.swap_site_indices(&target_assignment, &SwapOptions::default())
+        .context("partial_contract: failed to move aligned contract indices to matching nodes")?;
+    Ok(())
+}
+
 /// Partially contract two TreeTNs according to the given specification.
 ///
 /// # Arguments
@@ -689,6 +733,7 @@ where
     }
 
     let mut result = if a_modified.same_topology(&b_modified) {
+        align_contract_pair_site_nodes(&a_modified, &mut b_modified, &spec.contract_pairs)?;
         contract(&a_modified, &b_modified, center, options)
             .context("partial_contract: contraction failed")?
     } else {

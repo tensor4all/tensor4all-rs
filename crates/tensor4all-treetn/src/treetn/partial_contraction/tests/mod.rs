@@ -562,6 +562,86 @@ fn test_partial_contract_allows_same_node_in_second_network() {
 }
 
 #[test]
+fn test_partial_contract_moves_misaligned_same_topology_contract_pair() {
+    let a_row0 = DynIndex::new_dyn(2);
+    let a_contract = DynIndex::new_dyn(2);
+    let a_row1 = DynIndex::new_dyn(2);
+    let a_b01 = DynIndex::new_dyn(1);
+    let a_b12 = DynIndex::new_dyn(1);
+    let a_b23 = DynIndex::new_dyn(1);
+    let a_b34 = DynIndex::new_dyn(1);
+
+    let b_contract = DynIndex::new_dyn(2);
+    let b_col0 = DynIndex::new_dyn(2);
+    let b_col1 = DynIndex::new_dyn(2);
+    let b_b01 = DynIndex::new_dyn(1);
+    let b_b12 = DynIndex::new_dyn(1);
+    let b_b23 = DynIndex::new_dyn(1);
+    let b_b34 = DynIndex::new_dyn(1);
+
+    let tn_a = TreeTN::<TensorDynLen, usize>::from_tensors(
+        vec![
+            TensorDynLen::from_dense(vec![a_row0.clone(), a_b01.clone()], vec![1.0; 2]).unwrap(),
+            TensorDynLen::from_dense(
+                vec![a_b01.clone(), a_contract.clone(), a_b12.clone()],
+                vec![1.0; 2],
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(
+                vec![a_b12.clone(), a_row1.clone(), a_b23.clone()],
+                vec![1.0; 2],
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(vec![a_b23.clone(), a_b34.clone()], vec![1.0]).unwrap(),
+            TensorDynLen::from_dense(vec![a_b34.clone()], vec![1.0]).unwrap(),
+        ],
+        vec![0, 1, 2, 3, 4],
+    )
+    .unwrap();
+
+    let tn_b = TreeTN::<TensorDynLen, usize>::from_tensors(
+        vec![
+            TensorDynLen::from_dense(vec![b_b01.clone()], vec![1.0]).unwrap(),
+            TensorDynLen::from_dense(vec![b_b01.clone(), b_b12.clone()], vec![1.0]).unwrap(),
+            TensorDynLen::from_dense(vec![b_b12.clone(), b_b23.clone()], vec![1.0]).unwrap(),
+            TensorDynLen::from_dense(
+                vec![
+                    b_b23.clone(),
+                    b_contract.clone(),
+                    b_col0.clone(),
+                    b_b34.clone(),
+                ],
+                vec![1.0; 4],
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(vec![b_b34.clone(), b_col1.clone()], vec![1.0; 2]).unwrap(),
+        ],
+        vec![0, 1, 2, 3, 4],
+    )
+    .unwrap();
+
+    let output_order = vec![
+        a_row0.clone(),
+        a_row1.clone(),
+        b_col0.clone(),
+        b_col1.clone(),
+    ];
+    let spec = PartialContractionSpec {
+        contract_pairs: vec![(a_contract, b_contract)],
+        diagonal_pairs: vec![],
+        output_order: Some(output_order.clone()),
+    };
+
+    let result =
+        partial_contract(&tn_a, &tn_b, &spec, &0usize, ContractionOptions::default()).unwrap();
+    let dense = result.to_dense().unwrap();
+    assert_eq!(dense.external_indices(), output_order);
+    for value in dense.to_vec::<f64>().unwrap() {
+        assert!((value - 2.0).abs() < 1e-12);
+    }
+}
+
+#[test]
 fn test_partial_contract_allows_compatible_topology_mismatch_with_gap_leaf() {
     // tn_a has 1 node, tn_b has 2 nodes. The union topology is still a tree,
     // so partial_contract should treat the missing node in tn_a as a scalar gap.
