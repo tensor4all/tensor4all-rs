@@ -58,8 +58,24 @@ fn rust_operator_matrix(
 
     let mut indices = Vec::with_capacity(2 * nsites);
     for site in 0..nsites {
-        indices.push(op.output_mapping.get(&site).unwrap().internal_index.clone());
-        indices.push(op.input_mapping.get(&site).unwrap().internal_index.clone());
+        indices.push(
+            op.output_mapping
+                .get(&site)
+                .unwrap()
+                .first()
+                .unwrap()
+                .internal_index
+                .clone(),
+        );
+        indices.push(
+            op.input_mapping
+                .get(&site)
+                .unwrap()
+                .first()
+                .unwrap()
+                .internal_index
+                .clone(),
+        );
     }
 
     let mut matrix = vec![Complex64::new(0.0, 0.0); nrows * ncols];

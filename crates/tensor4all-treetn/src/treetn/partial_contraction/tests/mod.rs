@@ -1,6 +1,6 @@
 use super::*;
 use crate::treetn::contraction::{ContractionMethod, ContractionOptions};
-use crate::{factorize_tensor_to_treetn, TreeTopology};
+use crate::{factorize_tensor_to_treetn, SelectedIndexContractionError, TreeTopology};
 use num_complex::Complex64;
 use tensor4all_core::{DynIndex, TensorDynLen};
 
@@ -76,6 +76,130 @@ fn test_partial_contraction_spec_creation() {
     };
     assert_eq!(spec.contract_pairs.len(), 1);
     assert!(spec.diagonal_pairs.is_empty());
+}
+
+#[test]
+fn hadamard_multiplies_paired_external_indices() {
+    let left_index = DynIndex::new_dyn(2);
+    let right_index = DynIndex::new_dyn(2);
+    let lhs = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![TensorDynLen::from_dense(vec![left_index.clone()], vec![2.0, 3.0]).unwrap()],
+        vec!["A".to_string()],
+    )
+    .unwrap();
+    let rhs = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![TensorDynLen::from_dense(vec![right_index.clone()], vec![5.0, 7.0]).unwrap()],
+        vec!["A".to_string()],
+    )
+    .unwrap();
+
+    let result = hadamard(
+        &lhs,
+        &rhs,
+        &[(left_index.clone(), right_index)],
+        &"A".to_string(),
+        ContractionOptions::default(),
+    )
+    .unwrap();
+
+    let dense = result.to_dense().unwrap();
+    assert_eq!(dense.external_indices(), vec![left_index]);
+    assert_eq!(dense.to_vec::<f64>().unwrap(), vec![10.0, 21.0]);
+}
+
+#[test]
+fn weighted_sum_over_index_pairs_contracts_only_selected_axes() {
+    let x = DynIndex::new_dyn(2);
+    let z = DynIndex::new_dyn(3);
+    let wz = DynIndex::new_dyn(3);
+    let state = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![TensorDynLen::from_dense(
+            vec![x.clone(), z.clone()],
+            vec![0.0, 1.0, 10.0, 11.0, 20.0, 21.0],
+        )
+        .unwrap()],
+        vec!["A".to_string()],
+    )
+    .unwrap();
+    let weights = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![TensorDynLen::from_dense(vec![wz.clone()], vec![2.0, 3.0, 5.0]).unwrap()],
+        vec!["A".to_string()],
+    )
+    .unwrap();
+
+    let result = weighted_sum_over_index_pairs(
+        &state,
+        &weights,
+        &[(z, wz)],
+        &"A".to_string(),
+        ContractionOptions::default(),
+    )
+    .unwrap();
+
+    let dense = result.to_dense().unwrap();
+    assert_eq!(dense.external_indices(), vec![x]);
+    assert_eq!(dense.to_vec::<f64>().unwrap(), vec![130.0, 140.0]);
+}
+
+#[test]
+fn sum_over_indices_uses_factorized_ones_weights() {
+    let x = DynIndex::new_dyn(2);
+    let z = DynIndex::new_dyn(3);
+    let state = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![TensorDynLen::from_dense(
+            vec![x.clone(), z.clone()],
+            vec![0.0, 1.0, 10.0, 11.0, 20.0, 21.0],
+        )
+        .unwrap()],
+        vec!["A".to_string()],
+    )
+    .unwrap();
+
+    let result = sum_over_indices(
+        &state,
+        std::slice::from_ref(&z),
+        &"A".to_string(),
+        ContractionOptions::default(),
+    )
+    .unwrap();
+
+    let dense = result.to_dense().unwrap();
+    assert_eq!(dense.external_indices(), vec![x]);
+    assert_eq!(dense.to_vec::<f64>().unwrap(), vec![30.0, 33.0]);
+}
+
+#[test]
+fn sum_over_indices_reports_typed_selection_errors() {
+    let x = DynIndex::new_dyn(2);
+    let state = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![TensorDynLen::from_dense(vec![x.clone()], vec![1.0, 2.0]).unwrap()],
+        vec!["A".to_string()],
+    )
+    .unwrap();
+
+    let duplicate = sum_over_indices(
+        &state,
+        &[x.clone(), x],
+        &"A".to_string(),
+        ContractionOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        duplicate,
+        SelectedIndexContractionError::DuplicateIndex { .. }
+    ));
+
+    let missing = sum_over_indices(
+        &state,
+        &[DynIndex::new_dyn(2)],
+        &"A".to_string(),
+        ContractionOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        missing,
+        SelectedIndexContractionError::IndexNotFound { .. }
+    ));
 }
 
 #[test]

@@ -61,6 +61,7 @@ operator to the state, and applies it. Passing `None` for `initial_pivots` is
 the best starting point for tutorial code because it keeps QTCI on its default
 initialization path. Explicit pivot lists are a later tuning tool for cases
 where you already know important grid points.
+Use `apply_linear_operator_to_numbered_tags` if and only if numbered tags such as `x=1`, `x=2`, ... are the intended operator binding.
 
 ## What It Computes
 

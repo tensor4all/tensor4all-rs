@@ -22,6 +22,7 @@
 pub mod algorithm;
 // dyn_treetn.rs has been removed.
 // TreeTN uses the `T: TensorLike` pattern, making a separate dyn wrapper unnecessary.
+pub mod error;
 pub mod link_index_network;
 pub mod linsolve;
 pub mod named_graph;
@@ -34,6 +35,10 @@ pub mod site_index_network;
 pub mod treetn;
 
 pub use algorithm::{CanonicalForm, CompressionAlgorithm, ContractionAlgorithm};
+pub use error::{
+    LinearOperatorIndexApplyError, LinearOperatorIndexBindingError, LinearOperatorTaggedApplyError,
+    NumberedTagSelectionError, SelectedIndexContractionError,
+};
 pub use treetn::contraction;
 
 // dyn_treetn exports removed - use TreeTN<TensorDynLen, V> directly
@@ -41,9 +46,10 @@ pub use link_index_network::LinkIndexNetwork;
 pub use named_graph::NamedGraph;
 pub use node_name_network::{CanonicalizeEdges, NodeNameNetwork};
 pub use operator::{
-    apply_linear_operator, are_exclusive_operators, build_identity_operator_tensor,
-    compose_exclusive_linear_operators, ApplyOptions, ArcLinearOperator, IndexMapping,
-    LinearOperator, Operator,
+    apply_linear_operator, apply_linear_operator_to_indices,
+    apply_linear_operator_to_numbered_tags, are_exclusive_operators, bind_linear_operator_indices,
+    build_identity_operator_tensor, compose_exclusive_linear_operators, ApplyOptions,
+    ArcLinearOperator, IndexMapping, LinearOperator, Operator,
 };
 pub use options::{CanonicalizationOptions, RestructureOptions, SplitOptions, TruncationOptions};
 pub use random::{random_treetn, LinkSpace};
@@ -59,7 +65,10 @@ pub use treetn::{
     factorize_tensor_to_treetn,
     factorize_tensor_to_treetn_with,
     get_boundary_edges,
+    hadamard,
     partial_contract,
+    sum_over_indices,
+    weighted_sum_over_index_pairs,
     BoundaryEdge,
     CachedEvaluatorOptions,
     CenterSearchResult,

@@ -13,6 +13,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use super::contraction::{contract, ContractionOptions};
 use super::decompose::{factorize_tensor_to_treetn_with, TreeTopology};
 use super::TreeTN;
+use crate::error::{format_anyhow_error, SelectedIndexContractionError};
 use tensor4all_core::{
     AllowedPairs, AnyScalar, DynIndex, FactorizeAlg, FactorizeOptions, IndexLike, TensorDynLen,
     TensorIndex, TensorLike,
@@ -705,6 +706,275 @@ where
     } else {
         Ok(result)
     }
+}
+
+/// Multiply two TreeTNs elementwise along selected external index pairs.
+///
+/// This is a convenience wrapper around [`partial_contract`] using diagonal
+/// pairs. For each `(left_index, right_index)` pair, only matching coordinates
+/// contribute and the left index remains in the result.
+///
+/// # Arguments
+/// * `left` - Left operand. Paired left indices are preserved in the output.
+/// * `right` - Right operand. Paired right indices are matched diagonally.
+/// * `index_pairs` - External index pairs with equal dimensions.
+/// * `center` - Canonical center node for the result.
+/// * `options` - Contraction algorithm options.
+///
+/// # Returns
+/// A TreeTN representing the selected-index Hadamard product.
+///
+/// # Errors
+/// Returns an error if a pair has mismatched dimensions, references a
+/// non-external index, or the underlying contraction fails.
+///
+/// # Examples
+/// ```
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex};
+/// use tensor4all_treetn::{contraction::ContractionOptions, hadamard, TreeTN};
+///
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+/// let left = TreeTN::<TensorDynLen, usize>::from_tensors(
+///     vec![TensorDynLen::from_dense(vec![i.clone()], vec![2.0, 3.0]).unwrap()],
+///     vec![0],
+/// ).unwrap();
+/// let right = TreeTN::<TensorDynLen, usize>::from_tensors(
+///     vec![TensorDynLen::from_dense(vec![j.clone()], vec![5.0, 7.0]).unwrap()],
+///     vec![0],
+/// ).unwrap();
+///
+/// let result = hadamard(&left, &right, &[(i.clone(), j)], &0, ContractionOptions::default()).unwrap();
+/// let dense = result.to_dense().unwrap();
+/// assert_eq!(dense.external_indices(), vec![i]);
+/// assert_eq!(dense.to_vec::<f64>().unwrap(), vec![10.0, 21.0]);
+/// ```
+pub fn hadamard<V>(
+    left: &TreeTN<TensorDynLen, V>,
+    right: &TreeTN<TensorDynLen, V>,
+    index_pairs: &[(DynIndex, DynIndex)],
+    center: &V,
+    options: ContractionOptions,
+) -> std::result::Result<TreeTN<TensorDynLen, V>, SelectedIndexContractionError>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+    <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+{
+    let spec = PartialContractionSpec {
+        contract_pairs: Vec::new(),
+        diagonal_pairs: index_pairs.to_vec(),
+        output_order: None,
+    };
+    partial_contract(left, right, &spec, center, options).map_err(|error| {
+        SelectedIndexContractionError::PartialContractFailed {
+            message: format_anyhow_error(error),
+        }
+    })
+}
+
+/// Sum over selected external index pairs with a weight TreeTN.
+///
+/// This contracts each `(state_index, weight_index)` pair and leaves all
+/// unpaired state and weight indices external.
+///
+/// # Arguments
+/// * `state` - Left operand whose selected indices are summed over.
+/// * `weights` - Right operand providing weights for the selected coordinates.
+/// * `index_pairs` - External index pairs to contract.
+/// * `center` - Canonical center node for the result.
+/// * `options` - Contraction algorithm options.
+///
+/// # Returns
+/// A TreeTN after summing over all selected pairs.
+///
+/// # Errors
+/// Returns an error if a pair has mismatched dimensions, references a
+/// non-external index, or the underlying contraction fails.
+///
+/// # Examples
+/// ```
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex};
+/// use tensor4all_treetn::{
+///     contraction::ContractionOptions,
+///     weighted_sum_over_index_pairs,
+///     TreeTN,
+/// };
+///
+/// let x = DynIndex::new_dyn(2);
+/// let z = DynIndex::new_dyn(2);
+/// let wz = DynIndex::new_dyn(2);
+/// let state = TreeTN::<TensorDynLen, usize>::from_tensors(
+///     vec![TensorDynLen::from_dense(vec![x.clone(), z.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap()],
+///     vec![0],
+/// ).unwrap();
+/// let weights = TreeTN::<TensorDynLen, usize>::from_tensors(
+///     vec![TensorDynLen::from_dense(vec![wz.clone()], vec![10.0, 100.0]).unwrap()],
+///     vec![0],
+/// ).unwrap();
+///
+/// let result = weighted_sum_over_index_pairs(
+///     &state,
+///     &weights,
+///     &[(z, wz)],
+///     &0,
+///     ContractionOptions::default(),
+/// ).unwrap();
+/// let dense = result.to_dense().unwrap();
+/// assert_eq!(dense.external_indices(), vec![x]);
+/// assert_eq!(dense.to_vec::<f64>().unwrap(), vec![310.0, 420.0]);
+/// ```
+pub fn weighted_sum_over_index_pairs<V>(
+    state: &TreeTN<TensorDynLen, V>,
+    weights: &TreeTN<TensorDynLen, V>,
+    index_pairs: &[(DynIndex, DynIndex)],
+    center: &V,
+    options: ContractionOptions,
+) -> std::result::Result<TreeTN<TensorDynLen, V>, SelectedIndexContractionError>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+    <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+{
+    let spec = PartialContractionSpec {
+        contract_pairs: index_pairs.to_vec(),
+        diagonal_pairs: Vec::new(),
+        output_order: None,
+    };
+    partial_contract(state, weights, &spec, center, options).map_err(|error| {
+        SelectedIndexContractionError::PartialContractFailed {
+            message: format_anyhow_error(error),
+        }
+    })
+}
+
+/// Sum a TreeTN over selected external indices using factorized unit weights.
+///
+/// This constructs an all-ones weight TreeTN on the same topology as `state`
+/// and delegates to [`weighted_sum_over_index_pairs`].
+///
+/// # Arguments
+/// * `state` - Input TreeTN.
+/// * `sum_indices` - External indices of `state` to sum over. Each index must
+///   be present exactly once in the list.
+/// * `center` - Canonical center node for the result.
+/// * `options` - Contraction algorithm options.
+///
+/// # Returns
+/// A TreeTN with `sum_indices` contracted away. If `sum_indices` is empty, this
+/// returns `state.clone()`.
+///
+/// # Errors
+/// Returns an error if an index is duplicated, is not external to `state`, or
+/// the underlying contraction fails.
+///
+/// # Examples
+/// ```
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex};
+/// use tensor4all_treetn::{contraction::ContractionOptions, sum_over_indices, TreeTN};
+///
+/// let x = DynIndex::new_dyn(2);
+/// let z = DynIndex::new_dyn(2);
+/// let state = TreeTN::<TensorDynLen, usize>::from_tensors(
+///     vec![TensorDynLen::from_dense(vec![x.clone(), z.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap()],
+///     vec![0],
+/// ).unwrap();
+///
+/// let result = sum_over_indices(&state, &[z], &0, ContractionOptions::default()).unwrap();
+/// let dense = result.to_dense().unwrap();
+/// assert_eq!(dense.external_indices(), vec![x]);
+/// assert_eq!(dense.to_vec::<f64>().unwrap(), vec![4.0, 6.0]);
+/// ```
+pub fn sum_over_indices<V>(
+    state: &TreeTN<TensorDynLen, V>,
+    sum_indices: &[DynIndex],
+    center: &V,
+    options: ContractionOptions,
+) -> std::result::Result<TreeTN<TensorDynLen, V>, SelectedIndexContractionError>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+    <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+{
+    if sum_indices.is_empty() {
+        return Ok(state.clone());
+    }
+
+    let mut seen = HashSet::new();
+    for index in sum_indices {
+        if !seen.insert(index.clone()) {
+            return Err(SelectedIndexContractionError::DuplicateIndex {
+                index: format!("{index:?}"),
+            });
+        }
+    }
+
+    let mut node_names = state.node_names();
+    node_names.sort();
+
+    let mut state_index_to_node: HashMap<DynIndex, V> = HashMap::new();
+    for node in &node_names {
+        let Some(site_space) = state.site_space(node) else {
+            continue;
+        };
+        for index in site_space {
+            if seen.contains(index)
+                && state_index_to_node
+                    .insert(index.clone(), node.clone())
+                    .is_some()
+            {
+                return Err(SelectedIndexContractionError::IndexInMultipleSiteSpaces {
+                    index: format!("{index:?}"),
+                });
+            }
+        }
+    }
+
+    let mut weight_indices_by_node: HashMap<V, Vec<DynIndex>> = HashMap::new();
+    let mut index_pairs = Vec::with_capacity(sum_indices.len());
+    for index in sum_indices {
+        let node = state_index_to_node.get(index).ok_or_else(|| {
+            SelectedIndexContractionError::IndexNotFound {
+                index: format!("{index:?}"),
+            }
+        })?;
+        let weight_index = index.sim();
+        weight_indices_by_node
+            .entry(node.clone())
+            .or_default()
+            .push(weight_index.clone());
+        index_pairs.push((index.clone(), weight_index));
+    }
+
+    let mut link_indices_by_node: HashMap<V, Vec<DynIndex>> = HashMap::new();
+    let mut edges: Vec<_> = state.site_index_network().edges().collect();
+    edges.sort();
+    for (left, right) in edges {
+        let link = DynIndex::new_dyn(1);
+        link_indices_by_node
+            .entry(left.clone())
+            .or_default()
+            .push(link.clone());
+        link_indices_by_node.entry(right).or_default().push(link);
+    }
+
+    let mut tensors = Vec::with_capacity(node_names.len());
+    for node in &node_names {
+        let mut indices = weight_indices_by_node.remove(node).unwrap_or_default();
+        if let Some(mut links) = link_indices_by_node.remove(node) {
+            indices.append(&mut links);
+        }
+        tensors.push(TensorDynLen::ones(&indices).map_err(|error| {
+            SelectedIndexContractionError::BuildOnesTensor {
+                node: format!("{node:?}"),
+                message: format_anyhow_error(error),
+            }
+        })?);
+    }
+
+    let weights = TreeTN::from_tensors(tensors, node_names).map_err(|error| {
+        SelectedIndexContractionError::BuildWeightsTree {
+            message: format_anyhow_error(error),
+        }
+    })?;
+    weighted_sum_over_index_pairs(state, &weights, &index_pairs, center, options)
 }
 
 #[cfg(test)]

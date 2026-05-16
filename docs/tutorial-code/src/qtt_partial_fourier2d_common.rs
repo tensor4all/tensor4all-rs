@@ -313,17 +313,17 @@ fn expand_operator_to_interleaved_state(
 
         input_mapping.insert(
             t_node,
-            IndexMapping {
+            vec![IndexMapping {
                 true_index: true_site.clone(),
                 internal_index: input_internal,
-            },
+            }],
         );
         output_mapping.insert(
             t_node,
-            IndexMapping {
+            vec![IndexMapping {
                 true_index: true_site,
                 internal_index: output_internal,
-            },
+            }],
         );
         tensors_by_node.insert(t_node, identity);
     }
@@ -395,7 +395,11 @@ fn expand_operator_to_interleaved_state(
         .collect::<Result<Vec<_>, _>>()?;
     let mpo = TreeTN::from_tensors(tensors, node_names)?;
 
-    Ok(LinearOperator::new(mpo, input_mapping, output_mapping))
+    Ok(LinearOperator::new_multi(
+        mpo,
+        input_mapping,
+        output_mapping,
+    ))
 }
 
 pub fn transform_x_dimension(

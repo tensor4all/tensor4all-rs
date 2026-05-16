@@ -498,16 +498,16 @@ fn test_linear_operator_transpose_swaps_mappings() {
     // and vice versa.
     assert_eq!(transposed.input_mapping.len(), original_output.len());
     assert_eq!(transposed.output_mapping.len(), original_input.len());
-    let tin = transposed
-        .input_mapping
+    let tin = transposed.get_input_mapping(&"A".to_string()).unwrap();
+    let tout = transposed.get_output_mapping(&"A".to_string()).unwrap();
+    let expected_in = original_output
         .get("A")
-        .expect("transposed input mapping for A");
-    let tout = transposed
-        .output_mapping
+        .and_then(|mappings| mappings.first())
+        .unwrap();
+    let expected_out = original_input
         .get("A")
-        .expect("transposed output mapping for A");
-    let expected_in = original_output.get("A").unwrap();
-    let expected_out = original_input.get("A").unwrap();
+        .and_then(|mappings| mappings.first())
+        .unwrap();
     assert!(tin.true_index.same_id(&expected_in.true_index));
     assert!(tin.internal_index.same_id(&expected_in.internal_index));
     assert!(tout.true_index.same_id(&expected_out.true_index));
@@ -526,10 +526,16 @@ fn test_linear_operator_transpose_is_involutive() {
     // Double transpose == identity on mappings.
     assert_eq!(round_trip.input_mapping.len(), original_input.len());
     assert_eq!(round_trip.output_mapping.len(), original_output.len());
-    let rin = round_trip.input_mapping.get("A").unwrap();
-    let rout = round_trip.output_mapping.get("A").unwrap();
-    let ein = original_input.get("A").unwrap();
-    let eout = original_output.get("A").unwrap();
+    let rin = round_trip.get_input_mapping(&"A".to_string()).unwrap();
+    let rout = round_trip.get_output_mapping(&"A".to_string()).unwrap();
+    let ein = original_input
+        .get("A")
+        .and_then(|mappings| mappings.first())
+        .unwrap();
+    let eout = original_output
+        .get("A")
+        .and_then(|mappings| mappings.first())
+        .unwrap();
     assert!(rin.true_index.same_id(&ein.true_index));
     assert!(rin.internal_index.same_id(&ein.internal_index));
     assert!(rout.true_index.same_id(&eout.true_index));

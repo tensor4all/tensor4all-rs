@@ -69,10 +69,10 @@ where
 {
     /// The MPO with internal index IDs
     pub mpo: TreeTN<T, V>,
-    /// Input index mapping: node -> (true s_in, internal s_in_tmp)
-    pub input_mapping: HashMap<V, IndexMapping<T::Index>>,
-    /// Output index mapping: node -> (true s_out, internal s_out_tmp)
-    pub output_mapping: HashMap<V, IndexMapping<T::Index>>,
+    /// Input index mappings: node -> [(true s_in, internal s_in_tmp)].
+    pub input_mapping: HashMap<V, Vec<IndexMapping<T::Index>>>,
+    /// Output index mappings: node -> [(true s_out, internal s_out_tmp)].
+    pub output_mapping: HashMap<V, Vec<IndexMapping<T::Index>>>,
 }
 
 impl<T, V> LinearOperator<T, V>
@@ -119,6 +119,71 @@ where
         mpo: TreeTN<T, V>,
         input_mapping: HashMap<V, IndexMapping<T::Index>>,
         output_mapping: HashMap<V, IndexMapping<T::Index>>,
+    ) -> Self {
+        let input_mapping = input_mapping
+            .into_iter()
+            .map(|(node, mapping)| (node, vec![mapping]))
+            .collect();
+        let output_mapping = output_mapping
+            .into_iter()
+            .map(|(node, mapping)| (node, vec![mapping]))
+            .collect();
+        Self {
+            mpo,
+            input_mapping,
+            output_mapping,
+        }
+    }
+
+    /// Create a new LinearOperator from an MPO and possibly multiple index mappings per node.
+    ///
+    /// Use this when one tree node owns more than one external input/output
+    /// index, such as tensorized or multi-axis quantics nodes.
+    ///
+    /// # Arguments
+    ///
+    /// * `mpo` - The MPO with internal index IDs.
+    /// * `input_mapping` - Mapping from node names to all true/internal input
+    ///   index pairs for that node.
+    /// * `output_mapping` - Mapping from node names to all true/internal output
+    ///   index pairs for that node.
+    ///
+    /// # Examples
+    /// ```
+    /// use std::collections::HashMap;
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    /// use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
+    ///
+    /// let x = DynIndex::new_dyn(2);
+    /// let y = DynIndex::new_dyn(3);
+    /// let x_in = DynIndex::new_dyn(2);
+    /// let y_in = DynIndex::new_dyn(3);
+    /// let x_out = DynIndex::new_dyn(2);
+    /// let y_out = DynIndex::new_dyn(3);
+    /// let mpo_tensor = TensorDynLen::delta(
+    ///     &[x_in.clone(), y_in.clone()],
+    ///     &[x_out.clone(), y_out.clone()],
+    /// ).unwrap();
+    /// let mpo = TreeTN::<_, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
+    ///
+    /// let mut input_mapping = HashMap::new();
+    /// input_mapping.insert(0usize, vec![
+    ///     IndexMapping { true_index: x.clone(), internal_index: x_in },
+    ///     IndexMapping { true_index: y.clone(), internal_index: y_in },
+    /// ]);
+    /// let mut output_mapping = HashMap::new();
+    /// output_mapping.insert(0usize, vec![
+    ///     IndexMapping { true_index: x, internal_index: x_out },
+    ///     IndexMapping { true_index: y, internal_index: y_out },
+    /// ]);
+    ///
+    /// let op = LinearOperator::new_multi(mpo, input_mapping, output_mapping);
+    /// assert_eq!(op.get_input_mappings(&0).unwrap().len(), 2);
+    /// ```
+    pub fn new_multi(
+        mpo: TreeTN<T, V>,
+        input_mapping: HashMap<V, Vec<IndexMapping<T::Index>>>,
+        output_mapping: HashMap<V, Vec<IndexMapping<T::Index>>>,
     ) -> Self {
         Self {
             mpo,
@@ -187,22 +252,22 @@ where
 
                         // Convention: first matching is s_in_tmp, second is s_out_tmp
                         // (This depends on how the MPO was constructed)
-                        input_mapping.insert(
-                            node.clone(),
-                            IndexMapping {
+                        input_mapping
+                            .entry(node.clone())
+                            .or_insert_with(Vec::new)
+                            .push(IndexMapping {
                                 true_index: state_idx.clone(),
                                 internal_index: matching_mpo[0].clone(),
-                            },
-                        );
+                            });
 
                         // For output, use the same true index (space(x) = space(b))
-                        output_mapping.insert(
-                            node.clone(),
-                            IndexMapping {
+                        output_mapping
+                            .entry(node.clone())
+                            .or_insert_with(Vec::new)
+                            .push(IndexMapping {
                                 true_index: state_idx.clone(),
                                 internal_index: matching_mpo[1].clone(),
-                            },
-                        );
+                            });
                     }
                 }
                 (None, None) => {
@@ -240,9 +305,11 @@ where
         // Step 1: Replace input indices in local_tensor with internal indices
         let mut transformed = local_tensor.clone();
         for node in region {
-            if let Some(mapping) = self.input_mapping.get(node) {
-                transformed =
-                    transformed.replaceind(&mapping.true_index, &mapping.internal_index)?;
+            if let Some(mappings) = self.input_mapping.get(node) {
+                for mapping in mappings {
+                    transformed =
+                        transformed.replaceind(&mapping.true_index, &mapping.internal_index)?;
+                }
             }
         }
 
@@ -273,8 +340,10 @@ where
         // Step 3: Replace output indices back to true indices
         let mut result = contracted;
         for node in region {
-            if let Some(mapping) = self.output_mapping.get(node) {
-                result = result.replaceind(&mapping.internal_index, &mapping.true_index)?;
+            if let Some(mappings) = self.output_mapping.get(node) {
+                for mapping in mappings {
+                    result = result.replaceind(&mapping.internal_index, &mapping.true_index)?;
+                }
             }
         }
 
@@ -288,12 +357,26 @@ where
 
     /// Get input mapping for a node.
     pub fn get_input_mapping(&self, node: &V) -> Option<&IndexMapping<T::Index>> {
-        self.input_mapping.get(node)
+        self.input_mapping
+            .get(node)
+            .and_then(|mappings| mappings.first())
     }
 
     /// Get output mapping for a node.
     pub fn get_output_mapping(&self, node: &V) -> Option<&IndexMapping<T::Index>> {
-        self.output_mapping.get(node)
+        self.output_mapping
+            .get(node)
+            .and_then(|mappings| mappings.first())
+    }
+
+    /// Get all input mappings for a node.
+    pub fn get_input_mappings(&self, node: &V) -> Option<&[IndexMapping<T::Index>]> {
+        self.input_mapping.get(node).map(Vec::as_slice)
+    }
+
+    /// Get all output mappings for a node.
+    pub fn get_output_mappings(&self, node: &V) -> Option<&[IndexMapping<T::Index>]> {
+        self.output_mapping.get(node).map(Vec::as_slice)
     }
 
     fn single_site_index_from_state(state: &TreeTN<T, V>, node: &V) -> Result<T::Index> {
@@ -323,9 +406,18 @@ where
         let nodes: Vec<V> = self.input_mapping.keys().cloned().collect();
         for node in nodes {
             let new_true_index = Self::single_site_index_from_state(state, &node)?;
-            let mapping = self
+            let mappings = self
                 .input_mapping
                 .get_mut(&node)
+                .ok_or_else(|| anyhow::anyhow!("Input mapping missing for node {:?}", node))?;
+            if mappings.len() != 1 {
+                return Err(anyhow::anyhow!(
+                    "Node {:?}: set_input_space_from_state only supports one input mapping per node; use explicit index binding for multi-index nodes",
+                    node
+                ));
+            }
+            let mapping = mappings
+                .first_mut()
                 .ok_or_else(|| anyhow::anyhow!("Input mapping missing for node {:?}", node))?;
             if mapping.internal_index.dim() != new_true_index.dim() {
                 return Err(anyhow::anyhow!(
@@ -347,9 +439,18 @@ where
         let nodes: Vec<V> = self.output_mapping.keys().cloned().collect();
         for node in nodes {
             let new_true_index = Self::single_site_index_from_state(state, &node)?;
-            let mapping = self
+            let mappings = self
                 .output_mapping
                 .get_mut(&node)
+                .ok_or_else(|| anyhow::anyhow!("Output mapping missing for node {:?}", node))?;
+            if mappings.len() != 1 {
+                return Err(anyhow::anyhow!(
+                    "Node {:?}: set_output_space_from_state only supports one output mapping per node; use explicit index binding for multi-index nodes",
+                    node
+                ));
+            }
+            let mapping = mappings
+                .first_mut()
                 .ok_or_else(|| anyhow::anyhow!("Output mapping missing for node {:?}", node))?;
             if mapping.internal_index.dim() != new_true_index.dim() {
                 return Err(anyhow::anyhow!(
@@ -429,8 +530,8 @@ where
     /// let mut op = LinearOperator::new(mpo, input_mapping, output_mapping);
     /// op.align_to_state(&state).unwrap();
     ///
-    /// assert!(op.input_mappings()[&0].true_index.same_id(&state_index));
-    /// assert!(op.output_mappings()[&0].true_index.same_id(&state_index));
+    /// assert!(op.get_input_mapping(&0).unwrap().true_index.same_id(&state_index));
+    /// assert!(op.get_output_mapping(&0).unwrap().true_index.same_id(&state_index));
     /// ```
     pub fn align_to_state(&mut self, state: &TreeTN<T, V>) -> Result<()> {
         self.set_input_space_from_state(state)?;
@@ -482,8 +583,8 @@ where
     /// let t = op.transpose();
     ///
     /// // Input/output mappings are swapped.
-    /// assert!(t.input_mapping[&0].true_index.same_id(&site_out));
-    /// assert!(t.output_mapping[&0].true_index.same_id(&site_in));
+    /// assert!(t.get_input_mapping(&0).unwrap().true_index.same_id(&site_out));
+    /// assert!(t.get_output_mapping(&0).unwrap().true_index.same_id(&site_in));
     /// ```
     pub fn transpose(self) -> Self {
         Self {
@@ -515,9 +616,13 @@ where
         let mut result: HashSet<T::Index> = self
             .input_mapping
             .values()
-            .map(|m| m.true_index.clone())
+            .flat_map(|mappings| mappings.iter().map(|m| m.true_index.clone()))
             .collect();
-        result.extend(self.output_mapping.values().map(|m| m.true_index.clone()));
+        result.extend(
+            self.output_mapping
+                .values()
+                .flat_map(|mappings| mappings.iter().map(|m| m.true_index.clone())),
+        );
         result
     }
 
@@ -545,7 +650,7 @@ where
     pub fn input_site_indices(&self) -> HashSet<T::Index> {
         self.input_mapping
             .values()
-            .map(|m| m.true_index.clone())
+            .flat_map(|mappings| mappings.iter().map(|m| m.true_index.clone()))
             .collect()
     }
 
@@ -553,17 +658,17 @@ where
     pub fn output_site_indices(&self) -> HashSet<T::Index> {
         self.output_mapping
             .values()
-            .map(|m| m.true_index.clone())
+            .flat_map(|mappings| mappings.iter().map(|m| m.true_index.clone()))
             .collect()
     }
 
     /// Get all input mappings.
-    pub fn input_mappings(&self) -> &HashMap<V, IndexMapping<T::Index>> {
+    pub fn input_mappings(&self) -> &HashMap<V, Vec<IndexMapping<T::Index>>> {
         &self.input_mapping
     }
 
     /// Get all output mappings.
-    pub fn output_mappings(&self) -> &HashMap<V, IndexMapping<T::Index>> {
+    pub fn output_mappings(&self) -> &HashMap<V, Vec<IndexMapping<T::Index>>> {
         &self.output_mapping
     }
 }

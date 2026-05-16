@@ -262,8 +262,8 @@ where
     // 5. Build tensors and mappings
     let mut tensors: Vec<T> = Vec::new();
     let mut result_node_names: Vec<V> = Vec::new();
-    let mut combined_input_mapping: HashMap<V, IndexMapping<T::Index>> = HashMap::new();
-    let mut combined_output_mapping: HashMap<V, IndexMapping<T::Index>> = HashMap::new();
+    let mut combined_input_mapping: HashMap<V, Vec<IndexMapping<T::Index>>> = HashMap::new();
+    let mut combined_output_mapping: HashMap<V, Vec<IndexMapping<T::Index>>> = HashMap::new();
 
     // 5a. Add tensors from operators (with dummy links added via outer product)
     for op in operators {
@@ -294,11 +294,11 @@ where
             result_node_names.push(name.clone());
 
             // Copy mappings
-            if let Some(input_map) = op.get_input_mapping(&name) {
-                combined_input_mapping.insert(name.clone(), input_map.clone());
+            if let Some(input_maps) = op.get_input_mappings(&name) {
+                combined_input_mapping.insert(name.clone(), input_maps.to_vec());
             }
-            if let Some(output_map) = op.get_output_mapping(&name) {
-                combined_output_mapping.insert(name.clone(), output_map.clone());
+            if let Some(output_maps) = op.get_output_mappings(&name) {
+                combined_output_mapping.insert(name.clone(), output_maps.to_vec());
             }
         }
     }
@@ -313,26 +313,21 @@ where
         let input_indices: Vec<T::Index> = index_pairs.iter().map(|(i, _)| i.clone()).collect();
         let output_indices: Vec<T::Index> = index_pairs.iter().map(|(_, o)| o.clone()).collect();
 
-        // Store mappings for the first site pair (if any)
-        if let Some((true_input, true_output)) = index_pairs.first() {
-            if !combined_input_mapping.contains_key(&gap_name) {
-                combined_input_mapping.insert(
-                    gap_name.clone(),
-                    IndexMapping {
-                        true_index: true_input.clone(),
-                        internal_index: input_indices[0].clone(),
-                    },
-                );
-            }
-            if !combined_output_mapping.contains_key(&gap_name) {
-                combined_output_mapping.insert(
-                    gap_name.clone(),
-                    IndexMapping {
-                        true_index: true_output.clone(),
-                        internal_index: output_indices[0].clone(),
-                    },
-                );
-            }
+        if !index_pairs.is_empty() {
+            combined_input_mapping
+                .entry(gap_name.clone())
+                .or_insert_with(Vec::new)
+                .extend(input_indices.iter().map(|index| IndexMapping {
+                    true_index: index.clone(),
+                    internal_index: index.clone(),
+                }));
+            combined_output_mapping
+                .entry(gap_name.clone())
+                .or_insert_with(Vec::new)
+                .extend(output_indices.iter().map(|index| IndexMapping {
+                    true_index: index.clone(),
+                    internal_index: index.clone(),
+                }));
         }
 
         // Create delta tensor for site indices
@@ -367,7 +362,7 @@ where
     let mpo = TreeTN::from_tensors(tensors, result_node_names)
         .context("compose_exclusive_linear_operators: failed to create TreeTN")?;
 
-    Ok(LinearOperator::new(
+    Ok(LinearOperator::new_multi(
         mpo,
         combined_input_mapping,
         combined_output_mapping,
