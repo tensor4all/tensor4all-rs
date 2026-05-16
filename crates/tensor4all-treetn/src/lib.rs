@@ -49,7 +49,7 @@ pub use options::{CanonicalizationOptions, RestructureOptions, SplitOptions, Tru
 pub use random::{random_treetn, LinkSpace};
 pub use simplett_bridge::{
     tensor_train_to_treetn, tensor_train_to_treetn_with_names,
-    tensor_train_to_treetn_with_names_and_site_indices,
+    tensor_train_to_treetn_with_names_and_site_indices, treetn_to_tensor_train,
 };
 pub use site_index_network::SiteIndexNetwork;
 pub use treetn::{

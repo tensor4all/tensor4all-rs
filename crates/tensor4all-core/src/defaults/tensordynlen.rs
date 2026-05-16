@@ -131,7 +131,7 @@ pub(crate) struct StructuredAdValue {
 /// | Operation | Method |
 /// |-----------|--------|
 /// | Create from data | [`from_dense`](Self::from_dense), [`from_diag`](Self::from_diag), [`zeros`](Self::zeros) |
-/// | Extract data | [`to_vec`](Self::to_vec), [`sum`](Self::sum), [`only`](Self::only) |
+/// | Extract data | [`to_vec`](Self::to_vec), [`into_dense_col_major_parts`](Self::into_dense_col_major_parts), [`sum`](Self::sum), [`only`](Self::only) |
 /// | Contraction | [`contract`](Self::contract) |
 /// | Arithmetic | [`add`](Self::add), [`scale`](Self::scale), [`axpby`](Self::axpby) |
 /// | Factorization | via [`TensorLike::factorize`] |
@@ -3741,6 +3741,50 @@ impl TensorDynLen {
     /// ```
     pub fn to_vec<T: TensorElement>(&self) -> Result<Vec<T>> {
         native_tensor_primal_to_dense_col_major(self.as_native()?)
+    }
+
+    /// Consume the tensor and return its indices with dense column-major values.
+    ///
+    /// Use this when a caller needs to move index metadata and dense payload
+    /// values across an API boundary. The returned values are ordered with the
+    /// first tensor index varying fastest. Compact diagonal or structured
+    /// storage is materialized into dense logical values.
+    ///
+    /// # Type Parameters
+    /// * `T` - The scalar element type to extract. Use `f64` for real tensors
+    ///   and `Complex64` for complex tensors.
+    ///
+    /// # Returns
+    /// The tensor's original indices and dense column-major flat data.
+    ///
+    /// # Errors
+    /// Returns an error if the tensor has tracked autodiff state, if the
+    /// requested scalar type does not match the tensor payload, or if dense
+    /// materialization fails.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(
+    ///     vec![i.clone(), j.clone()],
+    ///     vec![1.0_f64, 2.0, 3.0, 4.0],
+    /// ).unwrap();
+    ///
+    /// let (indices, data) = tensor.into_dense_col_major_parts::<f64>().unwrap();
+    ///
+    /// assert_eq!(indices, vec![i, j]);
+    /// assert_eq!(data, vec![1.0, 2.0, 3.0, 4.0]);
+    /// ```
+    pub fn into_dense_col_major_parts<T: TensorElement>(self) -> Result<(Vec<DynIndex>, Vec<T>)> {
+        anyhow::ensure!(
+            self.structured_ad.is_none() && !self.tracks_grad(),
+            "TensorDynLen::into_dense_col_major_parts cannot consume tensors with tracked autodiff state"
+        );
+        let data = self.to_vec::<T>()?;
+        Ok((self.indices, data))
     }
 
     fn to_vec_any(&self) -> Result<Vec<AnyScalar>> {
