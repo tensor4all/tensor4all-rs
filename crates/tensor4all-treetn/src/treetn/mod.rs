@@ -793,6 +793,10 @@ where
         self.graph.graph_mut().node_weight_mut(node)
     }
 
+    pub(crate) fn remove_tensor_by_name(&mut self, node_name: &V) -> Option<T> {
+        self.graph.remove_node(node_name)
+    }
+
     /// Replace a tensor at the given node with a new tensor.
     ///
     /// Validates that the new tensor contains all indices used in connections

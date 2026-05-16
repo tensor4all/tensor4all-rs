@@ -7,19 +7,18 @@
 //!
 //! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
 
+use crate::defaults::tensordynlen::unfold_split_inner;
 use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
 use crate::truncation::{
     validate_svd_truncation_policy, SingularValueMeasure, SvdTruncationPolicy, ThresholdScale,
     TruncationRule,
 };
-use crate::{unfold_split, TensorDynLen};
+use crate::TensorDynLen;
 use std::sync::Mutex;
-use tenferro::DType;
+use tenferro::{CpuBackend, DType, EagerTensor};
 use tensor4all_tensorbackend::{
-    dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
     native_tensor_primal_to_dense_c64_col_major, native_tensor_primal_to_dense_f64_col_major,
-    reshape_col_major_native_tensor, svd_native_tensor, TensorElement,
 };
 use thiserror::Error;
 
@@ -219,51 +218,30 @@ fn singular_values_from_native(tensor: &tenferro::Tensor) -> Result<Vec<f64>, Sv
     }
 }
 
-fn truncate_matrix_cols<T: TensorElement>(
-    data: &[T],
-    rows: usize,
-    keep_cols: usize,
-) -> anyhow::Result<tenferro::Tensor> {
-    dense_native_tensor_from_col_major(&data[..rows * keep_cols], &[rows, keep_cols])
-}
-
-fn truncate_matrix_rows<T: TensorElement>(
-    data: &[T],
-    rows: usize,
-    cols: usize,
-    keep_rows: usize,
-) -> anyhow::Result<tenferro::Tensor> {
-    let mut truncated = Vec::with_capacity(keep_rows * cols);
-    for col in 0..cols {
-        let start = col * rows;
-        truncated.extend_from_slice(&data[start..start + keep_rows]);
-    }
-    dense_native_tensor_from_col_major(&truncated, &[keep_rows, cols])
-}
-
-type SvdTruncatedNativeResult = (
-    tenferro::Tensor,
-    tenferro::Tensor,
-    tenferro::Tensor,
+type SvdTruncatedEagerResult = (
+    EagerTensor<CpuBackend>,
+    EagerTensor<CpuBackend>,
+    EagerTensor<CpuBackend>,
     Vec<f64>,
     DynIndex,
     Vec<DynIndex>,
     Vec<DynIndex>,
 );
 
-fn svd_truncated_native(
+fn svd_truncated_inner(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
     options: &SvdOptions,
-) -> Result<SvdTruncatedNativeResult, SvdError> {
-    let (matrix_native, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
+) -> Result<SvdTruncatedEagerResult, SvdError> {
+    let (matrix_inner, _, m, n, left_indices, right_indices) = unfold_split_inner(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
         .map_err(SvdError::ComputationError)?;
     let k = m.min(n);
 
-    let (mut u_native, mut s_native, mut vt_native) =
-        svd_native_tensor(&matrix_native).map_err(SvdError::ComputationError)?;
-    let s_full = singular_values_from_native(&s_native)?;
+    let (mut u_inner, mut s_inner, mut vt_inner) = matrix_inner
+        .svd()
+        .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
+    let s_full = singular_values_from_native(s_inner.data())?;
     let mut r = if options.truncate {
         let policy = options.policy.unwrap_or_else(default_svd_truncation_policy);
         validate_svd_truncation_policy(policy).map_err(|e| SvdError::InvalidThreshold(e.0))?;
@@ -278,35 +256,16 @@ fn svd_truncated_native(
     };
     r = r.min(s_full.len());
     if r < k {
-        match u_native.dtype() {
-            DType::F64 => {
-                let u_values = native_tensor_primal_to_dense_f64_col_major(&u_native)
-                    .map_err(SvdError::ComputationError)?;
-                let vt_values = native_tensor_primal_to_dense_f64_col_major(&vt_native)
-                    .map_err(SvdError::ComputationError)?;
-                u_native =
-                    truncate_matrix_cols(&u_values, m, r).map_err(SvdError::ComputationError)?;
-                vt_native = truncate_matrix_rows(&vt_values, k, n, r)
-                    .map_err(SvdError::ComputationError)?;
-            }
-            DType::C64 => {
-                let u_values = native_tensor_primal_to_dense_c64_col_major(&u_native)
-                    .map_err(SvdError::ComputationError)?;
-                let vt_values = native_tensor_primal_to_dense_c64_col_major(&vt_native)
-                    .map_err(SvdError::ComputationError)?;
-                u_native =
-                    truncate_matrix_cols(&u_values, m, r).map_err(SvdError::ComputationError)?;
-                vt_native = truncate_matrix_rows(&vt_values, k, n, r)
-                    .map_err(SvdError::ComputationError)?;
-            }
-            other => {
-                return Err(SvdError::ComputationError(anyhow::anyhow!(
-                    "native SVD returned unsupported singular-vector scalar type {other:?}"
-                )));
-            }
-        }
-        s_native = dense_native_tensor_from_col_major(&s_full[..r], &[r])
-            .map_err(SvdError::ComputationError)?;
+        let keep: Vec<usize> = (0..r).collect();
+        u_inner = u_inner
+            .take_axis(1, &keep)
+            .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
+        s_inner = s_inner
+            .take_axis(0, &keep)
+            .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
+        vt_inner = vt_inner
+            .take_axis(0, &keep)
+            .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
     }
 
     let bond_index = DynIndex::new_bond(r)
@@ -315,9 +274,9 @@ fn svd_truncated_native(
     let singular_values = s_full[..r].to_vec();
 
     Ok((
-        u_native,
-        s_native,
-        vt_native,
+        u_inner,
+        s_inner,
+        vt_inner,
         singular_values,
         bond_index,
         left_indices,
@@ -389,30 +348,29 @@ pub fn svd_with<T>(
     left_inds: &[DynIndex],
     options: &SvdOptions,
 ) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError> {
-    let (u_native, s_native, vt_native, _singular_values, bond_index, left_indices, right_indices) =
-        svd_truncated_native(t, left_inds, options)?;
+    let (u_inner, s_inner, vt_inner, _singular_values, bond_index, left_indices, right_indices) =
+        svd_truncated_inner(t, left_inds, options)?;
 
     let mut u_indices = left_indices;
     u_indices.push(bond_index.clone());
     let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
-    let u_reshaped = reshape_col_major_native_tensor(&u_native, &u_dims).map_err(|e| {
-        SvdError::ComputationError(anyhow::anyhow!("native SVD U reshape failed: {e}"))
+    let u_reshaped = u_inner.reshape(&u_dims).map_err(|e| {
+        SvdError::ComputationError(anyhow::anyhow!("eager SVD U reshape failed: {e}"))
     })?;
-    let u = TensorDynLen::from_native(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
+    let u = TensorDynLen::from_inner(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
 
     let s_indices = vec![bond_index.clone(), bond_index.sim()];
-    let s_diag = diag_native_tensor_from_col_major(&singular_values_from_native(&s_native)?, 2)
-        .map_err(SvdError::ComputationError)?;
-    let s = TensorDynLen::from_native(s_indices, s_diag).map_err(SvdError::ComputationError)?;
+    let s =
+        TensorDynLen::from_diag_inner(s_indices, s_inner).map_err(SvdError::ComputationError)?;
 
     let mut vh_indices = vec![bond_index.clone()];
     vh_indices.extend(right_indices);
     let vh_dims: Vec<usize> = vh_indices.iter().map(|idx| idx.dim).collect();
-    let vt_reshaped = reshape_col_major_native_tensor(&vt_native, &vh_dims).map_err(|e| {
-        SvdError::ComputationError(anyhow::anyhow!("native SVD V^T reshape failed: {e}"))
+    let vt_reshaped = vt_inner.reshape(&vh_dims).map_err(|e| {
+        SvdError::ComputationError(anyhow::anyhow!("eager SVD V^T reshape failed: {e}"))
     })?;
     let vh =
-        TensorDynLen::from_native(vh_indices, vt_reshaped).map_err(SvdError::ComputationError)?;
+        TensorDynLen::from_inner(vh_indices, vt_reshaped).map_err(SvdError::ComputationError)?;
     let perm: Vec<usize> = (1..vh.indices.len()).chain(std::iter::once(0)).collect();
     let v = vh
         .conj()
@@ -438,31 +396,30 @@ pub(crate) fn svd_for_factorize(
     left_inds: &[DynIndex],
     options: &SvdOptions,
 ) -> Result<SvdFactorizeResult, SvdError> {
-    let (u_native, s_native, vt_native, singular_values, bond_index, left_indices, right_indices) =
-        svd_truncated_native(t, left_inds, options)?;
+    let (u_inner, s_inner, vt_inner, singular_values, bond_index, left_indices, right_indices) =
+        svd_truncated_inner(t, left_inds, options)?;
     let rank = singular_values.len();
 
     let mut u_indices = left_indices;
     u_indices.push(bond_index.clone());
     let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
-    let u_reshaped = reshape_col_major_native_tensor(&u_native, &u_dims).map_err(|e| {
-        SvdError::ComputationError(anyhow::anyhow!("native SVD U reshape failed: {e}"))
+    let u_reshaped = u_inner.reshape(&u_dims).map_err(|e| {
+        SvdError::ComputationError(anyhow::anyhow!("eager SVD U reshape failed: {e}"))
     })?;
-    let u = TensorDynLen::from_native(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
+    let u = TensorDynLen::from_inner(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
 
     let s_indices = vec![bond_index.clone(), bond_index.sim()];
-    let s_diag = diag_native_tensor_from_col_major(&singular_values_from_native(&s_native)?, 2)
-        .map_err(SvdError::ComputationError)?;
-    let s = TensorDynLen::from_native(s_indices, s_diag).map_err(SvdError::ComputationError)?;
+    let s =
+        TensorDynLen::from_diag_inner(s_indices, s_inner).map_err(SvdError::ComputationError)?;
 
     let mut vh_indices = vec![bond_index.clone()];
     vh_indices.extend(right_indices);
     let vh_dims: Vec<usize> = vh_indices.iter().map(|idx| idx.dim).collect();
-    let vt_reshaped = reshape_col_major_native_tensor(&vt_native, &vh_dims).map_err(|e| {
-        SvdError::ComputationError(anyhow::anyhow!("native SVD V^T reshape failed: {e}"))
+    let vt_reshaped = vt_inner.reshape(&vh_dims).map_err(|e| {
+        SvdError::ComputationError(anyhow::anyhow!("eager SVD V^T reshape failed: {e}"))
     })?;
     let vh =
-        TensorDynLen::from_native(vh_indices, vt_reshaped).map_err(SvdError::ComputationError)?;
+        TensorDynLen::from_inner(vh_indices, vt_reshaped).map_err(SvdError::ComputationError)?;
 
     Ok(SvdFactorizeResult {
         u,

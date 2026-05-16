@@ -4,7 +4,7 @@ use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
 use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
 use tensor4all_treetn::{
     tensor_train_to_treetn, tensor_train_to_treetn_with_names,
-    tensor_train_to_treetn_with_names_and_site_indices,
+    tensor_train_to_treetn_with_names_and_site_indices, treetn_to_tensor_train, TreeTN,
 };
 
 fn two_site_tensor_train_f64() -> TensorTrain<f64> {
@@ -157,6 +157,72 @@ fn tensor_train_to_treetn_three_site_preserves_dense_values() -> Result<()> {
 
     assert_eq!(treetn.node_names(), vec![0, 1, 2]);
     assert!(dense.distance(&expected).unwrap() < 1.0e-12);
+    Ok(())
+}
+
+#[test]
+fn treetn_to_tensor_train_roundtrips_three_site_values() -> Result<()> {
+    let tt = three_site_tensor_train_f64();
+    let (treetn, _site_indices) = tensor_train_to_treetn(&tt)?;
+
+    let roundtrip = treetn_to_tensor_train::<f64>(treetn)?;
+
+    assert_eq!(roundtrip.site_dims(), tt.site_dims());
+    assert_eq!(roundtrip.link_dims(), tt.link_dims());
+
+    let (actual, actual_shape) = roundtrip.fulltensor();
+    let (expected, expected_shape) = tt.fulltensor();
+    assert_eq!(actual_shape, expected_shape);
+    assert_eq!(actual, expected);
+    Ok(())
+}
+
+#[test]
+fn treetn_to_tensor_train_roundtrips_complex_values() -> Result<()> {
+    let tt = two_site_tensor_train_c64();
+    let (treetn, _site_indices) = tensor_train_to_treetn(&tt)?;
+
+    let roundtrip = treetn_to_tensor_train::<Complex64>(treetn)?;
+
+    assert_eq!(roundtrip.site_dims(), tt.site_dims());
+    assert_eq!(roundtrip.link_dims(), tt.link_dims());
+
+    let (actual, actual_shape) = roundtrip.fulltensor();
+    let (expected, expected_shape) = tt.fulltensor();
+    assert_eq!(actual_shape, expected_shape);
+    assert_eq!(actual, expected);
+    Ok(())
+}
+
+#[test]
+fn treetn_to_tensor_train_handles_local_axis_permutations() -> Result<()> {
+    let tt = two_site_tensor_train_f64();
+    let site0 = DynIndex::new_dyn(2);
+    let site1 = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_bond(2)?;
+    let t0 = TensorDynLen::from_dense(vec![bond.clone(), site0], vec![1.0_f64, 3.0, 2.0, 4.0])?;
+    let t1 = TensorDynLen::from_dense(vec![site1, bond], vec![1.0_f64, -1.0, 0.5, 2.0])?;
+    let treetn = TreeTN::from_tensors(vec![t0, t1], vec![0, 1])?;
+
+    let roundtrip = treetn_to_tensor_train::<f64>(treetn)?;
+
+    assert_eq!(roundtrip.site_dims(), tt.site_dims());
+    assert_eq!(roundtrip.link_dims(), tt.link_dims());
+    assert_eq!(roundtrip.fulltensor(), tt.fulltensor());
+    Ok(())
+}
+
+#[test]
+fn treetn_to_tensor_train_rejects_ad_tracked_site_tensor() -> Result<()> {
+    let tt = single_site_tensor_train_f64();
+    let (mut treetn, _site_indices) = tensor_train_to_treetn(&tt)?;
+    let node = treetn.node_index(&0).unwrap();
+    let tracked_tensor = treetn.tensor(node).unwrap().clone().enable_grad()?;
+    treetn.replace_tensor(node, tracked_tensor)?;
+
+    let err = treetn_to_tensor_train::<f64>(treetn).unwrap_err();
+
+    assert!(err.to_string().contains("tracked autodiff"));
     Ok(())
 }
 

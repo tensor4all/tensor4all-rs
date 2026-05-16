@@ -2,15 +2,14 @@
 //!
 //! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
 
+use crate::defaults::tensordynlen::unfold_split_inner;
 use crate::defaults::DynIndex;
 use crate::global_default::GlobalDefault;
-use crate::{unfold_split, TensorDynLen};
+use crate::TensorDynLen;
 use num_complex::ComplexFloat;
 use tenferro::DType;
 use tensor4all_tensorbackend::{
-    dense_native_tensor_from_col_major, native_tensor_primal_to_dense_c64_col_major,
-    native_tensor_primal_to_dense_f64_col_major, qr_native_tensor, reshape_col_major_native_tensor,
-    TensorElement,
+    native_tensor_primal_to_dense_c64_col_major, native_tensor_primal_to_dense_f64_col_major,
 };
 use thiserror::Error;
 
@@ -151,28 +150,6 @@ where
     Ok(r.max(1))
 }
 
-fn truncate_matrix_cols<T: TensorElement>(
-    data: &[T],
-    rows: usize,
-    keep_cols: usize,
-) -> anyhow::Result<tenferro::Tensor> {
-    dense_native_tensor_from_col_major(&data[..rows * keep_cols], &[rows, keep_cols])
-}
-
-fn truncate_matrix_rows<T: TensorElement>(
-    data: &[T],
-    rows: usize,
-    cols: usize,
-    keep_rows: usize,
-) -> anyhow::Result<tenferro::Tensor> {
-    let mut truncated = Vec::with_capacity(keep_rows * cols);
-    for col in 0..cols {
-        let start = col * rows;
-        truncated.extend_from_slice(&data[start..start + keep_rows]);
-    }
-    dense_native_tensor_from_col_major(&truncated, &[keep_rows, cols])
-}
-
 /// Compute QR decomposition of a tensor with arbitrary rank, returning (Q, R).
 ///
 /// This function uses the global default rtol for truncation.
@@ -276,13 +253,14 @@ pub fn qr_with<T>(
     left_inds: &[DynIndex],
     options: &QrOptions,
 ) -> Result<(TensorDynLen, TensorDynLen), QrError> {
-    // Unfold tensor into a native rank-2 tensor.
-    let (matrix_native, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
+    // Unfold tensor into an eager rank-2 tensor so linalg AD nodes stay connected.
+    let (matrix_inner, _, m, n, left_indices, right_indices) = unfold_split_inner(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
         .map_err(QrError::ComputationError)?;
     let k = m.min(n);
-    let (mut q_native, mut r_native) =
-        qr_native_tensor(&matrix_native).map_err(QrError::ComputationError)?;
+    let (mut q_inner, mut r_inner) = matrix_inner
+        .qr()
+        .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
 
     let r = if options.truncate {
         // Determine rtol to use
@@ -291,14 +269,14 @@ pub fn qr_with<T>(
             return Err(QrError::InvalidRtol(rtol));
         }
 
-        match r_native.dtype() {
+        match r_inner.data().dtype() {
             DType::F64 => {
-                let values = native_tensor_primal_to_dense_f64_col_major(&r_native)
+                let values = native_tensor_primal_to_dense_f64_col_major(r_inner.data())
                     .map_err(QrError::ComputationError)?;
                 compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
             }
             DType::C64 => {
-                let values = native_tensor_primal_to_dense_c64_col_major(&r_native)
+                let values = native_tensor_primal_to_dense_c64_col_major(r_inner.data())
                     .map_err(QrError::ComputationError)?;
                 compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
             }
@@ -312,33 +290,13 @@ pub fn qr_with<T>(
         k
     };
     if r < k {
-        match q_native.dtype() {
-            DType::F64 => {
-                let q_values = native_tensor_primal_to_dense_f64_col_major(&q_native)
-                    .map_err(QrError::ComputationError)?;
-                let r_values = native_tensor_primal_to_dense_f64_col_major(&r_native)
-                    .map_err(QrError::ComputationError)?;
-                q_native =
-                    truncate_matrix_cols(&q_values, m, r).map_err(QrError::ComputationError)?;
-                r_native =
-                    truncate_matrix_rows(&r_values, k, n, r).map_err(QrError::ComputationError)?;
-            }
-            DType::C64 => {
-                let q_values = native_tensor_primal_to_dense_c64_col_major(&q_native)
-                    .map_err(QrError::ComputationError)?;
-                let r_values = native_tensor_primal_to_dense_c64_col_major(&r_native)
-                    .map_err(QrError::ComputationError)?;
-                q_native =
-                    truncate_matrix_cols(&q_values, m, r).map_err(QrError::ComputationError)?;
-                r_native =
-                    truncate_matrix_rows(&r_values, k, n, r).map_err(QrError::ComputationError)?;
-            }
-            other => {
-                return Err(QrError::ComputationError(anyhow::anyhow!(
-                    "native QR returned unsupported scalar type {other:?}"
-                )));
-            }
-        }
+        let keep: Vec<usize> = (0..r).collect();
+        q_inner = q_inner
+            .take_axis(1, &keep)
+            .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
+        r_inner = r_inner
+            .take_axis(0, &keep)
+            .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
     }
 
     let bond_index = DynIndex::new_bond(r)
@@ -348,18 +306,18 @@ pub fn qr_with<T>(
     let mut q_indices = left_indices.clone();
     q_indices.push(bond_index.clone());
     let q_dims: Vec<usize> = q_indices.iter().map(|idx| idx.dim).collect();
-    let q_reshaped = reshape_col_major_native_tensor(&q_native, &q_dims).map_err(|e| {
-        QrError::ComputationError(anyhow::anyhow!("native QR Q reshape failed: {e}"))
+    let q_reshaped = q_inner.reshape(&q_dims).map_err(|e| {
+        QrError::ComputationError(anyhow::anyhow!("eager QR Q reshape failed: {e}"))
     })?;
-    let q = TensorDynLen::from_native(q_indices, q_reshaped).map_err(QrError::ComputationError)?;
+    let q = TensorDynLen::from_inner(q_indices, q_reshaped).map_err(QrError::ComputationError)?;
 
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
     let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
-    let r_reshaped = reshape_col_major_native_tensor(&r_native, &r_dims).map_err(|e| {
-        QrError::ComputationError(anyhow::anyhow!("native QR R reshape failed: {e}"))
+    let r_reshaped = r_inner.reshape(&r_dims).map_err(|e| {
+        QrError::ComputationError(anyhow::anyhow!("eager QR R reshape failed: {e}"))
     })?;
-    let r = TensorDynLen::from_native(r_indices, r_reshaped).map_err(QrError::ComputationError)?;
+    let r = TensorDynLen::from_inner(r_indices, r_reshaped).map_err(QrError::ComputationError)?;
 
     Ok((q, r))
 }

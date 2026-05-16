@@ -792,6 +792,44 @@ fn test_from_dense_c64() {
     assert_eq!(tensor.to_vec::<Complex64>().unwrap(), data);
 }
 
+#[test]
+fn test_into_dense_col_major_parts_returns_indices_and_values() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data.clone()).unwrap();
+
+    let (indices, values) = tensor.into_dense_col_major_parts::<f64>().unwrap();
+
+    assert_eq!(indices, vec![i, j]);
+    assert_eq!(values, data);
+}
+
+#[test]
+fn test_into_dense_col_major_parts_materializes_diag_storage() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let tensor = TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0]).unwrap();
+
+    let (indices, values) = tensor.into_dense_col_major_parts::<f64>().unwrap();
+
+    assert_eq!(indices, vec![i, j]);
+    assert_eq!(values, vec![1.0, 0.0, 0.0, 2.0]);
+}
+
+#[test]
+fn test_into_dense_col_major_parts_rejects_ad_tracked_tensor() {
+    let i = Index::new_dyn(2);
+    let tensor = TensorDynLen::from_dense(vec![i], vec![1.0_f64, 2.0])
+        .unwrap()
+        .enable_grad()
+        .unwrap();
+
+    let err = tensor.into_dense_col_major_parts::<f64>().unwrap_err();
+
+    assert!(err.to_string().contains("tracked autodiff"));
+}
+
 fn assert_dense_constructor_dims<T>(data: Vec<T>)
 where
     T: TensorElement,
