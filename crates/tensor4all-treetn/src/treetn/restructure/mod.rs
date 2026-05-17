@@ -829,6 +829,162 @@ where
     Ok(Some(assignment))
 }
 
+fn steiner_tree_indices<T, V>(
+    graph: &NamedGraph<V, T, T::Index>,
+    terminals: &HashSet<NodeIndex>,
+) -> HashSet<NodeIndex>
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    if terminals.len() <= 1 {
+        return terminals.clone();
+    }
+
+    let terms: Vec<_> = terminals.iter().copied().collect();
+    let root = terms[0];
+    let mut result = HashSet::from([root]);
+    for &term in &terms[1..] {
+        if let Some((_, path)) = petgraph::algo::astar(
+            graph.graph(),
+            root,
+            |node| node == term,
+            |_| 1usize,
+            |_| 0usize,
+        ) {
+            result.extend(path);
+        }
+    }
+    result
+}
+
+fn target_quotient_matches_topology<T, CurrentV, TargetV>(
+    current: &SiteIndexNetwork<CurrentV, T::Index>,
+    target: &SiteIndexNetwork<TargetV, T::Index>,
+    site_to_target: &HashMap<T::Index, TargetV>,
+    full_graph: &NamedGraph<CurrentV, T, T::Index>,
+) -> Result<bool>
+where
+    T: TensorLike,
+    CurrentV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+{
+    let mut target_to_current: HashMap<TargetV, HashSet<CurrentV>> = HashMap::new();
+    for current_node_name in current.node_names() {
+        let site_space = current.site_space(current_node_name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "restructure_to: current node {:?} has no registered site space",
+                current_node_name
+            )
+        })?;
+        if site_space.is_empty() {
+            continue;
+        }
+
+        let target_names: HashSet<_> = site_space
+            .iter()
+            .map(|site_idx| {
+                site_to_target.get(site_idx).cloned().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "restructure_to: site index {:?} is present in the current network but missing from the target",
+                        site_idx
+                    )
+                })
+            })
+            .collect::<Result<_>>()?;
+        let Some(target_name) = target_names.into_iter().next() else {
+            continue;
+        };
+        target_to_current
+            .entry(target_name)
+            .or_default()
+            .insert(current_node_name.clone());
+    }
+
+    for target_node_name in target.node_names() {
+        if !target_to_current.contains_key(target_node_name) {
+            return Ok(false);
+        }
+    }
+
+    for current_nodes in target_to_current.values_mut() {
+        let seed_indices: HashSet<_> = current_nodes
+            .iter()
+            .filter_map(|name| full_graph.node_index(name))
+            .collect();
+        if seed_indices.len() <= 1 {
+            continue;
+        }
+        for idx in steiner_tree_indices(full_graph, &seed_indices) {
+            let Some(name) = full_graph.node_name(idx) else {
+                continue;
+            };
+            if current
+                .site_space(name)
+                .is_none_or(|site_space| site_space.is_empty())
+            {
+                current_nodes.insert(name.clone());
+            }
+        }
+    }
+
+    let mut current_to_target: HashMap<CurrentV, TargetV> = HashMap::new();
+    for (target_name, current_nodes) in &target_to_current {
+        for current_node_name in current_nodes {
+            if let Some(existing) =
+                current_to_target.insert(current_node_name.clone(), target_name.clone())
+            {
+                if existing != *target_name {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+
+    let mut quotient_edges = HashSet::new();
+    for edge in full_graph.graph().edge_indices() {
+        let Some((left_idx, right_idx)) = full_graph.graph().edge_endpoints(edge) else {
+            continue;
+        };
+        let Some(left_name) = full_graph.node_name(left_idx) else {
+            continue;
+        };
+        let Some(right_name) = full_graph.node_name(right_idx) else {
+            continue;
+        };
+        match (
+            current_to_target.get(left_name),
+            current_to_target.get(right_name),
+        ) {
+            (Some(left_target), Some(right_target)) if left_target == right_target => {}
+            (Some(left_target), Some(right_target)) => {
+                let edge = if left_target <= right_target {
+                    (left_target.clone(), right_target.clone())
+                } else {
+                    (right_target.clone(), left_target.clone())
+                };
+                quotient_edges.insert(edge);
+            }
+            (None, None) => {}
+            _ => return Ok(false),
+        }
+    }
+
+    let target_edges: HashSet<_> = target
+        .edges()
+        .map(|(left, right)| {
+            if left <= right {
+                (left, right)
+            } else {
+                (right, left)
+            }
+        })
+        .collect();
+
+    Ok(quotient_edges == target_edges)
+}
+
 fn clone_tree<T, V>(tree: &TreeTN<T, V>) -> Result<TreeTN<T, V>>
 where
     T: TensorLike,
@@ -885,11 +1041,18 @@ where
         bail!("restructure_to: current and target must contain the same site indices");
     }
 
-    if current_nodes_map_uniquely_to_targets::<T, CurrentV, TargetV>(current, &site_to_target)? {
+    let current_nodes_are_unique =
+        current_nodes_map_uniquely_to_targets::<T, CurrentV, TargetV>(current, &site_to_target)?;
+    if current_nodes_are_unique {
         if target_nodes_span_connected_currents::<T, CurrentV, TargetV>(
             current,
             target,
             &site_to_current,
+            full_graph,
+        )? && target_quotient_matches_topology::<T, CurrentV, TargetV>(
+            current,
+            target,
+            &site_to_target,
             full_graph,
         )? {
             return Ok(RestructurePlan {
@@ -908,7 +1071,15 @@ where
         }
     }
 
-    if target_nodes_map_uniquely_to_currents::<T, CurrentV, TargetV>(target, &site_to_current)? {
+    if target_nodes_map_uniquely_to_currents::<T, CurrentV, TargetV>(target, &site_to_current)?
+        && (!current_nodes_are_unique
+            || target_quotient_matches_topology::<T, CurrentV, TargetV>(
+                current,
+                target,
+                &site_to_target,
+                full_graph,
+            )?)
+    {
         return Ok(RestructurePlan {
             kind: RestructurePlanKind::SplitOnly,
         });
@@ -981,7 +1152,27 @@ where
         }
     }?;
 
-    apply_final_truncation(result, options)
+    let result = apply_final_truncation(result, options)?;
+    if target.edge_count() > 0
+        && !result
+            .site_index_network()
+            .share_equivalent_site_index_network(target)
+    {
+        bail!(
+            "restructure_to: result topology does not match target: expected edges {:?}, got {:?}",
+            target
+                .edges()
+                .map(|(left, right)| (left, right))
+                .collect::<Vec<_>>(),
+            result
+                .site_index_network()
+                .edges()
+                .map(|(left, right)| (left, right))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    Ok(result)
 }
 
 impl<T, V> TreeTN<T, V>
@@ -1471,6 +1662,45 @@ mod tests {
                 .map(|name| name.as_str()),
             Some("Y")
         );
+        assert!(dense_actual.distance(&dense_expected).unwrap() < 1e-10);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_restructure_to_site_permutation_preserves_target_path() -> anyhow::Result<()> {
+        let (treetn, x0, x1, y0, y1) = four_node_interleaved_chain()?;
+
+        let mut target: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
+        target
+            .add_node("0".to_string(), HashSet::from([x1.clone()]))
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_node("1".to_string(), HashSet::from([x0.clone()]))
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_node("2".to_string(), HashSet::from([y1.clone()]))
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_node("3".to_string(), HashSet::from([y0.clone()]))
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_edge(&"0".to_string(), &"1".to_string())
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_edge(&"1".to_string(), &"2".to_string())
+            .map_err(anyhow::Error::msg)?;
+        target
+            .add_edge(&"2".to_string(), &"3".to_string())
+            .map_err(anyhow::Error::msg)?;
+
+        let result = treetn.restructure_to(&target, &RestructureOptions::default())?;
+        let dense_expected = treetn.contract_to_tensor()?;
+        let dense_actual = result.contract_to_tensor()?;
+
+        assert!(result
+            .site_index_network()
+            .share_equivalent_site_index_network(&target));
         assert!(dense_actual.distance(&dense_expected).unwrap() < 1e-10);
 
         Ok(())
