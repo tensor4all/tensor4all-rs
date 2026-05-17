@@ -209,6 +209,51 @@ where
             }
         }
 
+        // Step 4b: Absorb site-free dangling subtrees into the unique adjacent
+        // target group. These nodes carry only gauge/internal factors; dropping
+        // them would change values, while assigning them across two different
+        // target groups would change the requested topology.
+        let mut current_to_target = HashMap::<V, TargetV>::new();
+        for (target_name, current_nodes) in &target_to_current {
+            for current_node in current_nodes {
+                current_to_target.insert(current_node.clone(), target_name.clone());
+            }
+        }
+        loop {
+            let mut additions = Vec::<(TargetV, V)>::new();
+            for current_name in self.node_names() {
+                if current_to_target.contains_key(&current_name)
+                    || self
+                        .site_space(&current_name)
+                        .is_some_and(|site_space| !site_space.is_empty())
+                {
+                    continue;
+                }
+
+                let neighbor_targets: HashSet<TargetV> = self
+                    .site_index_network
+                    .neighbors(&current_name)
+                    .filter_map(|neighbor| current_to_target.get(&neighbor).cloned())
+                    .collect();
+                if neighbor_targets.len() == 1 {
+                    let target_name = neighbor_targets.into_iter().next().unwrap();
+                    additions.push((target_name, current_name));
+                }
+            }
+
+            if additions.is_empty() {
+                break;
+            }
+
+            for (target_name, current_name) in additions {
+                target_to_current
+                    .entry(target_name.clone())
+                    .or_default()
+                    .insert(current_name.clone());
+                current_to_target.insert(current_name, target_name);
+            }
+        }
+
         // Step 5: For each target node, contract all its current nodes into one tensor
         let mut result_tensors: HashMap<TargetV, T> = HashMap::new();
 

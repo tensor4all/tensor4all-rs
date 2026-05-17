@@ -35,7 +35,7 @@ use anyhow::Result;
 use tensor4all_core::{
     print_and_reset_contract_profile, print_and_reset_native_einsum_profile,
     reset_contract_profile, reset_native_einsum_profile, AllowedPairs, Canonical, FactorizeAlg,
-    FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorLike,
+    FactorizeOptions, FactorizeResult, IndexLike, SvdTruncationPolicy, TensorLike,
 };
 
 use super::localupdate::{LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater};
@@ -691,8 +691,8 @@ where
                 node_u
             )
         })?;
-        let mut left_inds: Vec<_> = ab_uv
-            .external_indices()
+        let ab_uv_indices = ab_uv.external_indices();
+        let mut left_inds: Vec<_> = ab_uv_indices
             .iter()
             .filter(|idx| {
                 // Keep site indices of u and link indices to u's other neighbors
@@ -748,9 +748,37 @@ where
 
         // Factorize using TensorLike::factorize
         let factorize_started = fit_profile_enabled().then(Instant::now);
-        let factorize_result = ab_uv
-            .factorize(&left_inds, &options)
-            .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))?;
+        let factorize_result = if left_inds.is_empty() || left_inds.len() == ab_uv_indices.len() {
+            let (dummy_left, dummy_right) = T::Index::create_dummy_link_pair();
+            let dummy_left_tensor = T::ones(std::slice::from_ref(&dummy_left))
+                .map_err(|e| anyhow::anyhow!("Failed to create dummy left tensor: {e}"))?;
+            let dummy_right_tensor = T::ones(std::slice::from_ref(&dummy_right))
+                .map_err(|e| anyhow::anyhow!("Failed to create dummy right tensor: {e}"))?;
+
+            let (left, right) = if left_inds.is_empty() {
+                let right = ab_uv
+                    .outer_product(&dummy_right_tensor)
+                    .map_err(|e| anyhow::anyhow!("Failed to attach dummy right bond: {e}"))?;
+                (dummy_left_tensor, right)
+            } else {
+                let left = ab_uv
+                    .outer_product(&dummy_left_tensor)
+                    .map_err(|e| anyhow::anyhow!("Failed to attach dummy left bond: {e}"))?;
+                (left, dummy_right_tensor)
+            };
+
+            FactorizeResult {
+                left,
+                right,
+                bond_index: dummy_left,
+                singular_values: None,
+                rank: 1,
+            }
+        } else {
+            ab_uv
+                .factorize(&left_inds, &options)
+                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))?
+        };
         if let Some(factorize_started) = factorize_started {
             with_fit_profile(|profile| {
                 profile.factorize_time += factorize_started.elapsed();
@@ -958,9 +986,10 @@ where
         ));
     }
 
-    // Initialize C using the SVD-based zipup contraction.
+    // Initialize C using the SVD-based zipup contraction while preserving
+    // the input topology required by variational sweeps.
     let zipup_started = profile_enabled.then(Instant::now);
-    let mut tn_c = tn_a.contract_zipup_with(
+    let mut tn_c = tn_a.contract_zipup_preserving_topology_with(
         tn_b,
         center,
         CanonicalForm::Unitary,

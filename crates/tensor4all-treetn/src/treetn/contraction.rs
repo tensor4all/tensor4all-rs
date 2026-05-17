@@ -21,6 +21,12 @@ use tensor4all_core::{
 
 use super::TreeTN;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZipupTopologyMode {
+    PruneScalarSubtrees,
+    PreserveInputTopology,
+}
+
 impl<T, V> TreeTN<T, V>
 where
     T: TensorLike,
@@ -300,6 +306,53 @@ where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
+        self.contract_zipup_impl(
+            other,
+            center,
+            form,
+            svd_policy,
+            max_rank,
+            ZipupTopologyMode::PruneScalarSubtrees,
+        )
+    }
+
+    pub(crate) fn contract_zipup_preserving_topology_with(
+        &self,
+        other: &Self,
+        center: &V,
+        form: CanonicalForm,
+        svd_policy: Option<SvdTruncationPolicy>,
+        max_rank: Option<usize>,
+    ) -> Result<Self>
+    where
+        V: Ord,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
+        self.contract_zipup_impl(
+            other,
+            center,
+            form,
+            svd_policy,
+            max_rank,
+            ZipupTopologyMode::PreserveInputTopology,
+        )
+    }
+
+    fn contract_zipup_impl(
+        &self,
+        other: &Self,
+        center: &V,
+        form: CanonicalForm,
+        svd_policy: Option<SvdTruncationPolicy>,
+        max_rank: Option<usize>,
+        topology_mode: ZipupTopologyMode,
+    ) -> Result<Self>
+    where
+        V: Ord,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
         // 1. Verify topologies are compatible
         if !self.same_topology(other) {
             return Err(anyhow::anyhow!(
@@ -452,11 +505,34 @@ where
                 .collect();
 
             if left_inds.is_empty() {
-                // If no left indices remain, pass the tensor directly to destination
-                intermediate_tensors
-                    .entry(destination_name.clone())
-                    .or_default()
-                    .push(c_temp);
+                match topology_mode {
+                    ZipupTopologyMode::PruneScalarSubtrees => {
+                        // If no left indices remain, pass the tensor directly to destination.
+                        intermediate_tensors
+                            .entry(destination_name.clone())
+                            .or_default()
+                            .push(c_temp);
+                    }
+                    ZipupTopologyMode::PreserveInputTopology => {
+                        // Fit sweeps require C to retain A/B's node set. When a
+                        // subtree has no surviving site indices, keep it connected
+                        // by a dimension-1 dummy link instead of pruning the node.
+                        let (dummy_left, dummy_right) = T::Index::create_dummy_link_pair();
+                        let left_tensor = T::ones(std::slice::from_ref(&dummy_left))
+                            .context("Failed to create topology-preserving dummy left tensor")?;
+                        let dummy_right_tensor = T::ones(std::slice::from_ref(&dummy_right))
+                            .context("Failed to create topology-preserving dummy right tensor")?;
+                        let right_tensor = c_temp
+                            .outer_product(&dummy_right_tensor)
+                            .context("Failed to attach topology-preserving dummy bond")?;
+
+                        result_tensors.insert(source_name.clone(), left_tensor);
+                        intermediate_tensors
+                            .entry(destination_name.clone())
+                            .or_default()
+                            .push(right_tensor);
+                    }
+                }
                 continue;
             }
 

@@ -1,6 +1,6 @@
 use super::*;
 use crate::treetn::localupdate::{LocalUpdateStep, LocalUpdater};
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike};
 
 /// Create a simple 2-node TreeTN: A -- bond -- B
 fn make_two_node_treetn() -> TreeTN<TensorDynLen, String> {
@@ -324,7 +324,7 @@ fn test_contract_fit_matches_naive_contraction_on_two_node_tree() {
 
     let fitted_dense = fitted.to_dense().unwrap();
     let expected_dense = tn_a.contract_naive(&tn_b).unwrap();
-    assert!(fitted_dense.distance(&expected_dense).unwrap() < 1e-10);
+    assert!(fitted_dense.sub(&expected_dense).unwrap().maxabs() < 1e-10);
 }
 
 #[test]
@@ -355,5 +355,84 @@ fn test_contract_fit_positive_sweeps_do_not_skip_without_truncation_options() {
 
     let fitted_dense = fitted.to_dense().unwrap();
     let expected_dense = tn_a.contract_naive(&tn_b).unwrap();
+    assert!(fitted_dense.distance(&expected_dense).unwrap() < 1e-10);
+}
+
+#[test]
+fn test_contract_fit_preserves_topology_when_leaf_sites_contract_away() {
+    let left = DynIndex::new_dyn(2);
+    let right = DynIndex::new_dyn(2);
+    let shared_mid = DynIndex::new_dyn(2);
+    let shared_leaf = DynIndex::new_dyn(2);
+
+    let a_ab = DynIndex::new_dyn(2);
+    let a_bc = DynIndex::new_dyn(2);
+    let b_ab = DynIndex::new_dyn(2);
+    let b_bc = DynIndex::new_dyn(2);
+
+    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![
+            TensorDynLen::from_dense(vec![left.clone(), a_ab.clone()], vec![1.0, 2.0, 3.0, 4.0])
+                .unwrap(),
+            TensorDynLen::from_dense(
+                vec![a_ab.clone(), shared_mid.clone(), a_bc.clone()],
+                (1..=8).map(|value| value as f64 / 10.0).collect(),
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(
+                vec![a_bc.clone(), shared_leaf.clone()],
+                vec![0.5, 1.5, -0.5, 2.0],
+            )
+            .unwrap(),
+        ],
+        vec!["A".to_string(), "B".to_string(), "C".to_string()],
+    )
+    .unwrap();
+
+    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![
+            TensorDynLen::from_dense(vec![b_ab.clone()], vec![1.0, -0.5]).unwrap(),
+            TensorDynLen::from_dense(
+                vec![
+                    b_ab.clone(),
+                    shared_mid.clone(),
+                    right.clone(),
+                    b_bc.clone(),
+                ],
+                (1..=16).map(|value| (value as f64 - 3.0) / 7.0).collect(),
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(
+                vec![b_bc.clone(), shared_leaf.clone()],
+                vec![2.0, -1.0, 0.25, 0.75],
+            )
+            .unwrap(),
+        ],
+        vec!["A".to_string(), "B".to_string(), "C".to_string()],
+    )
+    .unwrap();
+
+    let fitted = contract_fit(
+        &tn_a,
+        &tn_b,
+        &"A".to_string(),
+        FitContractionOptions::new(1),
+    )
+    .unwrap();
+
+    assert_eq!(fitted.node_count(), 3);
+    assert_eq!(fitted.edge_count(), 2);
+    assert!(fitted.site_space(&"C".to_string()).unwrap().is_empty());
+
+    let fitted_dense = fitted.to_dense().unwrap();
+    let expected_dense = tn_a.contract_naive(&tn_b).unwrap();
+    let fitted_ids = fitted_dense
+        .external_indices()
+        .into_iter()
+        .map(|index| *index.id())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(fitted_ids.len(), 2);
+    assert!(fitted_ids.contains(left.id()));
+    assert!(fitted_ids.contains(right.id()));
     assert!(fitted_dense.distance(&expected_dense).unwrap() < 1e-10);
 }

@@ -942,6 +942,36 @@ where
         }
     }
 
+    loop {
+        let mut additions = Vec::<(CurrentV, TargetV)>::new();
+        for current_node_name in current.node_names() {
+            if current_to_target.contains_key(current_node_name)
+                || current
+                    .site_space(current_node_name)
+                    .is_some_and(|site_space| !site_space.is_empty())
+            {
+                continue;
+            }
+
+            let neighbor_targets: HashSet<TargetV> = current
+                .neighbors(current_node_name)
+                .filter_map(|neighbor| current_to_target.get(&neighbor).cloned())
+                .collect();
+            if neighbor_targets.len() == 1 {
+                let target_name = neighbor_targets.into_iter().next().unwrap();
+                additions.push((current_node_name.clone(), target_name));
+            }
+        }
+
+        if additions.is_empty() {
+            break;
+        }
+
+        for (current_node_name, target_name) in additions {
+            current_to_target.insert(current_node_name, target_name);
+        }
+    }
+
     let mut quotient_edges = HashSet::new();
     for edge in full_graph.graph().edge_indices() {
         let Some((left_idx, right_idx)) = full_graph.graph().edge_endpoints(edge) else {
@@ -1279,7 +1309,7 @@ where
 mod tests {
     use std::collections::HashSet;
 
-    use tensor4all_core::{DynIndex, TensorDynLen};
+    use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
 
     use super::*;
 
@@ -1394,6 +1424,43 @@ mod tests {
         assert_eq!(result.node_count(), 1);
         assert_eq!(result.site_index_network().node_count(), 1);
         assert!(dense_actual.distance(&dense_expected).unwrap() < 1e-12);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_restructure_to_absorbs_site_free_dangling_leaf() -> anyhow::Result<()> {
+        let left = DynIndex::new_dyn(2);
+        let right = DynIndex::new_dyn(2);
+        let b01 = DynIndex::new_dyn(2);
+        let b12 = DynIndex::new_dyn(2);
+
+        let t0 =
+            TensorDynLen::from_dense(vec![left.clone(), b01.clone()], vec![1.0, 2.0, 3.0, 4.0])?;
+        let t1 = TensorDynLen::from_dense(
+            vec![b01.clone(), right.clone(), b12.clone()],
+            (1..=8).map(|value| value as f64 / 3.0).collect(),
+        )?;
+        let t2 = TensorDynLen::from_dense(vec![b12], vec![0.5, -1.25])?;
+        let treetn = TreeTN::<TensorDynLen, String>::from_tensors(
+            vec![t0, t1, t2],
+            vec!["A".to_string(), "B".to_string(), "C".to_string()],
+        )?;
+
+        let before = treetn.to_dense()?;
+        let mut target: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
+        target.add_node("A".to_string(), HashSet::from([left]))?;
+        target.add_node("B".to_string(), HashSet::from([right]))?;
+        target.add_edge(&"A".to_string(), &"B".to_string())?;
+
+        let result = treetn.restructure_to(&target, &RestructureOptions::default())?;
+
+        assert_eq!(result.node_count(), 2);
+        assert_eq!(result.edge_count(), 1);
+        assert!(result
+            .site_index_network()
+            .share_equivalent_site_index_network(&target));
+        assert!(result.to_dense()?.sub(&before)?.maxabs() < 1.0e-12);
 
         Ok(())
     }
