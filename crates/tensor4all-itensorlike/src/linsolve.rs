@@ -86,12 +86,13 @@ pub fn linsolve(
     // Convert LinsolveOptions → treetn::LinsolveOptions
     let nfullsweeps = options.nhalfsweeps() / 2;
 
+    let (a0, a1) = options.coefficients();
     let treetn_options = tensor4all_treetn::LinsolveOptions::new(nfullsweeps)
         .with_truncation(TruncationOptions::new())
         .with_krylov_tol(options.krylov_tol())
         .with_krylov_maxiter(options.krylov_maxiter())
         .with_krylov_dim(options.krylov_dim())
-        .with_coefficients(options.coefficients().0, options.coefficients().1);
+        .with_coefficients(a0, a1);
 
     let treetn_options = if let Some(policy) = options.svd_policy() {
         treetn_options.with_svd_policy(policy)

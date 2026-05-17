@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use tensor4all_core::SvdTruncationPolicy;
+use tensor4all_core::{AnyScalar, SvdTruncationPolicy};
 
 use crate::error::{Result, TensorTrainError};
 
@@ -325,8 +325,8 @@ pub struct LinsolveOptions {
     krylov_tol: f64,
     krylov_maxiter: usize,
     krylov_dim: usize,
-    a0: f64,
-    a1: f64,
+    a0: AnyScalar,
+    a1: AnyScalar,
     convergence_tol: Option<f64>,
 }
 
@@ -339,8 +339,8 @@ impl Default for LinsolveOptions {
             krylov_tol: 1e-10,
             krylov_maxiter: 100,
             krylov_dim: 30,
-            a0: 0.0,
-            a1: 1.0,
+            a0: AnyScalar::new_real(0.0),
+            a1: AnyScalar::new_real(1.0),
             convergence_tol: None,
         }
     }
@@ -398,9 +398,13 @@ impl LinsolveOptions {
     }
 
     /// Set coefficients `a₀` and `a₁` in `(a₀ + a₁ * A) * x = b`.
-    pub fn with_coefficients(mut self, a0: f64, a1: f64) -> Self {
-        self.a0 = a0;
-        self.a1 = a1;
+    pub fn with_coefficients<A0, A1>(mut self, a0: A0, a1: A1) -> Self
+    where
+        A0: Into<AnyScalar>,
+        A1: Into<AnyScalar>,
+    {
+        self.a0 = a0.into();
+        self.a1 = a1.into();
         self
     }
 
@@ -448,8 +452,8 @@ impl LinsolveOptions {
 
     /// Get coefficients `(a0, a1)`.
     #[inline]
-    pub fn coefficients(&self) -> (f64, f64) {
-        (self.a0, self.a1)
+    pub fn coefficients(&self) -> (AnyScalar, AnyScalar) {
+        (self.a0.clone(), self.a1.clone())
     }
 
     /// Get convergence tolerance.

@@ -1,4 +1,6 @@
 use super::*;
+use num_complex::Complex64;
+use tensor4all_core::AnyScalar;
 use tensor4all_core::SvdTruncationPolicy;
 
 #[test]
@@ -105,7 +107,10 @@ fn test_contract_method_default() {
 fn test_linsolve_options_default() {
     let opts = LinsolveOptions::default();
     assert_eq!(opts.nhalfsweeps(), 10);
-    assert_eq!(opts.coefficients(), (0.0, 1.0));
+    assert_eq!(
+        opts.coefficients(),
+        (AnyScalar::new_real(0.0), AnyScalar::new_real(1.0))
+    );
     assert_eq!(opts.krylov_tol(), 1e-10);
     assert_eq!(opts.krylov_maxiter(), 100);
     assert_eq!(opts.krylov_dim(), 30);
@@ -141,8 +146,25 @@ fn test_linsolve_options_builder() {
     assert_eq!(opts.krylov_tol(), 1e-8);
     assert_eq!(opts.krylov_maxiter(), 200);
     assert_eq!(opts.krylov_dim(), 50);
-    assert_eq!(opts.coefficients(), (1.0, -1.0));
+    assert_eq!(
+        opts.coefficients(),
+        (AnyScalar::new_real(1.0), AnyScalar::new_real(-1.0))
+    );
     assert_eq!(opts.convergence_tol(), Some(1e-6));
+}
+
+#[test]
+fn test_linsolve_options_complex_coefficients() {
+    let opts = LinsolveOptions::default()
+        .with_coefficients(Complex64::new(0.25, -0.5), AnyScalar::new_complex(1.5, 2.0));
+
+    assert_eq!(
+        opts.coefficients(),
+        (
+            AnyScalar::new_complex(0.25, -0.5),
+            AnyScalar::new_complex(1.5, 2.0)
+        )
+    );
 }
 
 #[test]

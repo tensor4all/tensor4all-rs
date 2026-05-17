@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex};
 use tensor4all_treetn::{
     EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, NetworkTopology,
     ProjectedOperator, ProjectedState, SquareLinsolveUpdater, TreeTN,
@@ -161,8 +161,8 @@ fn test_linsolve_options_default() {
     assert_eq!(opts.krylov_tol, 1e-10);
     assert_eq!(opts.krylov_maxiter, 100);
     assert_eq!(opts.krylov_dim, 30);
-    assert_eq!(opts.a0, 0.0);
-    assert_eq!(opts.a1, 1.0);
+    assert_eq!(opts.a0, AnyScalar::new_real(0.0));
+    assert_eq!(opts.a1, AnyScalar::new_real(1.0));
     assert!(opts.convergence_tol.is_none());
 }
 
@@ -180,8 +180,8 @@ fn test_linsolve_options_builder() {
     assert_eq!(opts.krylov_tol, 1e-8);
     assert_eq!(opts.krylov_maxiter, 50);
     assert_eq!(opts.krylov_dim, 20);
-    assert_eq!(opts.a0, 1.0);
-    assert_eq!(opts.a1, -1.0);
+    assert_eq!(opts.a0, AnyScalar::new_real(1.0));
+    assert_eq!(opts.a1, AnyScalar::new_real(-1.0));
     assert_eq!(opts.convergence_tol, Some(1e-6));
 }
 

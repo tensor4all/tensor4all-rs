@@ -1,7 +1,7 @@
 //! Common options for linsolve algorithms.
 
 use crate::TruncationOptions;
-use tensor4all_core::SvdTruncationPolicy;
+use tensor4all_core::{AnyScalar, SvdTruncationPolicy};
 
 /// Options for the linsolve algorithm.
 #[derive(Debug, Clone)]
@@ -19,9 +19,9 @@ pub struct LinsolveOptions {
     /// Krylov subspace dimension (restart parameter).
     pub krylov_dim: usize,
     /// Coefficient a₀ in (a₀ + a₁ * A) * x = b.
-    pub a0: f64,
+    pub a0: AnyScalar,
     /// Coefficient a₁ in (a₀ + a₁ * A) * x = b.
-    pub a1: f64,
+    pub a1: AnyScalar,
     /// Convergence tolerance for early termination.
     /// If Some(tol), stop when relative residual < tol.
     pub convergence_tol: Option<f64>,
@@ -35,8 +35,8 @@ impl Default for LinsolveOptions {
             krylov_tol: 1e-10,
             krylov_maxiter: 100,
             krylov_dim: 30,
-            a0: 0.0,
-            a1: 1.0,
+            a0: AnyScalar::new_real(0.0),
+            a1: AnyScalar::new_real(1.0),
             convergence_tol: None,
         }
     }
@@ -94,9 +94,13 @@ impl LinsolveOptions {
     }
 
     /// Set coefficients a₀ and a₁.
-    pub fn with_coefficients(mut self, a0: f64, a1: f64) -> Self {
-        self.a0 = a0;
-        self.a1 = a1;
+    pub fn with_coefficients<A0, A1>(mut self, a0: A0, a1: A1) -> Self
+    where
+        A0: Into<AnyScalar>,
+        A1: Into<AnyScalar>,
+    {
+        self.a0 = a0.into();
+        self.a1 = a1.into();
         self
     }
 

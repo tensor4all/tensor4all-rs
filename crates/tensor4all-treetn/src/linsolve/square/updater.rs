@@ -10,7 +10,6 @@ use std::sync::RwLock;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::any_scalar::AnyScalar;
 use tensor4all_core::krylov::{gmres, GmresOptions};
 use tensor4all_core::{AllowedPairs, FactorizeOptions, IndexLike, TensorLike};
 
@@ -543,9 +542,8 @@ where
             ));
         };
 
-        // Convert coefficients to AnyScalar
-        let a0 = AnyScalar::new_real(self.options.a0);
-        let a1 = AnyScalar::new_real(self.options.a1);
+        let a0 = self.options.a0.clone();
+        let a1 = self.options.a1.clone();
 
         // Create local linear operator with separate reference_state
         // This prevents unintended bra↔ket link contractions in environment computation
