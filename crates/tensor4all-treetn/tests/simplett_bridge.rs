@@ -3,7 +3,7 @@ use num_complex::Complex64;
 use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
 use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
 use tensor4all_treetn::{
-    tensor_train_to_treetn, tensor_train_to_treetn_with_names,
+    insert_onehot_site_in_treetn_chain, tensor_train_to_treetn, tensor_train_to_treetn_with_names,
     tensor_train_to_treetn_with_names_and_site_indices, treetn_to_tensor_train, TreeTN,
 };
 
@@ -223,6 +223,120 @@ fn treetn_to_tensor_train_rejects_ad_tracked_site_tensor() -> Result<()> {
     let err = treetn_to_tensor_train::<f64>(treetn).unwrap_err();
 
     assert!(err.to_string().contains("tracked autodiff"));
+    Ok(())
+}
+
+#[test]
+fn insert_onehot_site_in_treetn_chain_prepends_fixed_site() -> Result<()> {
+    let tt = two_site_tensor_train_f64();
+    let (treetn, old_sites) = tensor_train_to_treetn(&tt)?;
+    let inserted_site = DynIndex::new_dyn(2);
+
+    let result = insert_onehot_site_in_treetn_chain::<f64>(treetn, 0, inserted_site.clone(), 0)?;
+    let dense = result.contract_to_tensor()?;
+    let (old_values, _) = tt.fulltensor();
+    let expected = TensorDynLen::from_dense(
+        vec![inserted_site, old_sites[0].clone(), old_sites[1].clone()],
+        vec![
+            old_values[0],
+            0.0,
+            old_values[1],
+            0.0,
+            old_values[2],
+            0.0,
+            old_values[3],
+            0.0,
+        ],
+    )?;
+
+    assert_eq!(result.node_names(), vec![0, 1, 2]);
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
+    Ok(())
+}
+
+#[test]
+fn insert_onehot_site_in_treetn_chain_preserves_edge_bond_flow() -> Result<()> {
+    let tt = two_site_tensor_train_f64();
+    let (treetn, old_sites) = tensor_train_to_treetn(&tt)?;
+    let inserted_site = DynIndex::new_dyn(2);
+
+    let result = insert_onehot_site_in_treetn_chain::<f64>(treetn, 1, inserted_site.clone(), 1)?;
+    let dense = result.contract_to_tensor()?;
+    let (old_values, _) = tt.fulltensor();
+    let expected = TensorDynLen::from_dense(
+        vec![old_sites[0].clone(), inserted_site, old_sites[1].clone()],
+        vec![
+            0.0,
+            0.0,
+            old_values[0],
+            old_values[1],
+            0.0,
+            0.0,
+            old_values[2],
+            old_values[3],
+        ],
+    )?;
+
+    assert_eq!(result.node_names(), vec![0, 1, 2]);
+    assert_eq!(
+        treetn_to_tensor_train::<f64>(result.clone())?.site_dims(),
+        vec![2, 2, 2]
+    );
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
+    Ok(())
+}
+
+#[test]
+fn insert_onehot_site_in_treetn_chain_appends_fixed_site() -> Result<()> {
+    let tt = two_site_tensor_train_f64();
+    let (treetn, old_sites) = tensor_train_to_treetn(&tt)?;
+    let inserted_site = DynIndex::new_dyn(2);
+
+    let result = insert_onehot_site_in_treetn_chain::<f64>(treetn, 2, inserted_site.clone(), 1)?;
+    let dense = result.contract_to_tensor()?;
+    let (old_values, _) = tt.fulltensor();
+    let expected = TensorDynLen::from_dense(
+        vec![old_sites[0].clone(), old_sites[1].clone(), inserted_site],
+        vec![
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            old_values[0],
+            old_values[1],
+            old_values[2],
+            old_values[3],
+        ],
+    )?;
+
+    assert_eq!(result.node_names(), vec![0, 1, 2]);
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
+    Ok(())
+}
+
+#[test]
+fn insert_onehot_site_in_treetn_chain_rejects_invalid_position() -> Result<()> {
+    let tt = two_site_tensor_train_f64();
+    let (treetn, _) = tensor_train_to_treetn(&tt)?;
+
+    let err =
+        insert_onehot_site_in_treetn_chain::<f64>(treetn, 3, DynIndex::new_dyn(2), 0).unwrap_err();
+
+    assert!(err.to_string().contains("position 3 is out of range 0..=2"));
+    Ok(())
+}
+
+#[test]
+fn insert_onehot_site_in_treetn_chain_rejects_invalid_fixed_value() -> Result<()> {
+    let tt = two_site_tensor_train_f64();
+    let (treetn, _) = tensor_train_to_treetn(&tt)?;
+
+    let err =
+        insert_onehot_site_in_treetn_chain::<f64>(treetn, 0, DynIndex::new_dyn(2), 2).unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("fixed value 2 exceeds site dimension 2"));
     Ok(())
 }
 

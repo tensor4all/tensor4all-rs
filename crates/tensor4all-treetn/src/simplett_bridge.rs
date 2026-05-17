@@ -1,7 +1,7 @@
 use anyhow::{ensure, Result};
 use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorElement};
 use tensor4all_simplett::{
-    tensor3_from_data, AbstractTensorTrain, TTScalar, Tensor3Ops, TensorTrain,
+    tensor3_from_data, tensor3_zeros, AbstractTensorTrain, TTScalar, Tensor3Ops, TensorTrain,
 };
 
 use crate::TreeTN;
@@ -47,7 +47,7 @@ where
 /// # Examples
 ///
 /// ```
-/// use tensor4all_simplett::{tensor3_from_data, TensorTrain};
+/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
 /// use tensor4all_treetn::tensor_train_to_treetn_with_names;
 ///
 /// let tt = TensorTrain::new(vec![
@@ -247,6 +247,141 @@ where
     }
 
     Ok(TensorTrain::new(tensors)?)
+}
+
+/// Insert a one-hot site into a linear-chain `TreeTN<TensorDynLen, usize>`.
+///
+/// The input and output chains use node names `0..n-1` / `0..n`. `position`
+/// chooses the insertion point:
+/// - `0` inserts before the first site;
+/// - `len` inserts after the last site;
+/// - any `1..len` inserts on the chain edge between `position - 1` and
+///   `position`.
+///
+/// The inserted site is fixed to `value`, so the new tensor evaluates to the
+/// old tensor when the inserted coordinate equals `value` and to zero
+/// otherwise. Existing site indices are preserved in order.
+///
+/// # Arguments
+///
+/// - `treetn`: a linear-chain `TreeTN` whose node names are exactly `0..n`.
+///   Each node must carry exactly one site index.
+/// - `position`: insertion point in `0..=n`; `0` prepends and `n` appends.
+/// - `site_index`: site index to attach to the inserted node.
+/// - `value`: fixed coordinate for the inserted one-hot site.
+///
+/// # Returns
+///
+/// A new linear-chain `TreeTN` with node names `0..=n`. Existing site indices
+/// keep their relative order and the inserted `site_index` appears at
+/// `position`.
+///
+/// # Errors
+///
+/// Returns an error if `position` is out of range, `value` is outside
+/// `site_index`, the input is not a numbered single-site chain, or the
+/// conversion between the chain `TreeTN` and `TensorTrain` fails.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::DynIndex;
+/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
+/// use tensor4all_treetn::{
+///     insert_onehot_site_in_treetn_chain, tensor_train_to_treetn, treetn_to_tensor_train,
+/// };
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let tt = TensorTrain::new(vec![
+///     tensor3_from_data(vec![1.0_f64, 2.0], 1, 2, 1)?,
+/// ])?;
+/// let (tree, _) = tensor_train_to_treetn(&tt)?;
+/// let fixed = DynIndex::new_dyn(2);
+///
+/// let extended = insert_onehot_site_in_treetn_chain::<f64>(tree, 0, fixed, 0)?;
+/// let roundtrip = treetn_to_tensor_train::<f64>(extended)?;
+///
+/// assert_eq!(roundtrip.site_dims(), vec![2, 2]);
+/// # Ok(())
+/// # }
+/// ```
+pub fn insert_onehot_site_in_treetn_chain<T>(
+    treetn: TreeTN<TensorDynLen, usize>,
+    position: usize,
+    site_index: DynIndex,
+    value: usize,
+) -> Result<TreeTN<TensorDynLen, usize>>
+where
+    T: TTScalar + TensorElement + Clone + Default,
+{
+    let old_site_indices = chain_site_indices(&treetn)?;
+    ensure!(
+        position <= old_site_indices.len(),
+        "insert_onehot_site_in_treetn_chain: position {} is out of range 0..={}",
+        position,
+        old_site_indices.len()
+    );
+    ensure!(
+        value < site_index.dim(),
+        "insert_onehot_site_in_treetn_chain: fixed value {} exceeds site dimension {}",
+        value,
+        site_index.dim()
+    );
+
+    let tt = treetn_to_tensor_train::<T>(treetn)?;
+    let mut tensors = Vec::with_capacity(tt.len() + 1);
+    for site in 0..position {
+        tensors.push(tt.site_tensor(site).clone());
+    }
+
+    let bond_dim = if tt.is_empty() || position == 0 {
+        1
+    } else {
+        tt.site_tensor(position - 1).right_dim()
+    };
+    let mut inserted = tensor3_zeros::<T>(bond_dim, site_index.dim(), bond_dim);
+    for bond in 0..bond_dim {
+        inserted.set3(bond, value, bond, T::one());
+    }
+    tensors.push(inserted);
+
+    for site in position..tt.len() {
+        tensors.push(tt.site_tensor(site).clone());
+    }
+
+    let mut site_indices = old_site_indices;
+    site_indices.insert(position, site_index);
+    let tt = TensorTrain::new(tensors)?;
+    tensor_train_to_treetn_with_names_and_site_indices(&tt, (0..tt.len()).collect(), site_indices)
+}
+
+fn chain_site_indices(treetn: &TreeTN<TensorDynLen, usize>) -> Result<Vec<DynIndex>> {
+    let nsites = treetn.node_count();
+    let mut node_names = treetn.node_names();
+    node_names.sort_unstable();
+    ensure!(
+        node_names == (0..nsites).collect::<Vec<_>>(),
+        "insert_onehot_site_in_treetn_chain: expected node names 0..{}, got {:?}",
+        nsites,
+        node_names
+    );
+
+    let mut site_indices = Vec::with_capacity(nsites);
+    for site in 0..nsites {
+        let site_space = treetn.site_space(&site).ok_or_else(|| {
+            anyhow::anyhow!("insert_onehot_site_in_treetn_chain: missing site space at node {site}")
+        })?;
+        ensure!(
+            site_space.len() == 1,
+            "insert_onehot_site_in_treetn_chain: node {site} must have exactly one site index, got {}",
+            site_space.len()
+        );
+        let site_index = site_space.iter().next().ok_or_else(|| {
+            anyhow::anyhow!("insert_onehot_site_in_treetn_chain: node {site} has no site index")
+        })?;
+        site_indices.push(site_index.clone());
+    }
+    Ok(site_indices)
 }
 
 struct ChainSiteMetadata {
