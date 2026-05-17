@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike};
 use tensor4all_treetn::{
     EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, NetworkTopology,
     ProjectedOperator, ProjectedState, SquareLinsolveUpdater, TreeTN,
@@ -891,6 +891,59 @@ fn create_mpo_with_internal_indices(
     let n0 = mpo.add_tensor("site0", t0).unwrap();
     let n1 = mpo.add_tensor("site1", t1).unwrap();
     mpo.connect(n0, &b01, n1, &b01).unwrap();
+
+    (
+        mpo,
+        vec![s0_in_tmp, s1_in_tmp],
+        vec![s0_out_tmp, s1_out_tmp],
+    )
+}
+
+/// Create a 3-node operator where the first two nodes are mapped identity MPO
+/// sites and the last node is a scalar no-op spectator.
+fn create_mapped_identity_mpo_with_spectator_node(
+    phys_dim: usize,
+) -> (
+    TreeTN<TensorDynLen, &'static str>,
+    Vec<DynIndex>,
+    Vec<DynIndex>,
+) {
+    let mut mpo = TreeTN::<TensorDynLen, &'static str>::new();
+
+    let s0_in_tmp = DynIndex::new_dyn(phys_dim);
+    let s1_in_tmp = DynIndex::new_dyn(phys_dim);
+    let s0_out_tmp = DynIndex::new_dyn(phys_dim);
+    let s1_out_tmp = DynIndex::new_dyn(phys_dim);
+    let b01 = DynIndex::new_dyn(1);
+    let b12 = DynIndex::new_dyn(1);
+
+    let mut id_data = vec![0.0; phys_dim * phys_dim];
+    for i in 0..phys_dim {
+        id_data[i * phys_dim + i] = 1.0;
+    }
+
+    let t0 = TensorDynLen::from_dense(
+        vec![s0_out_tmp.clone(), s0_in_tmp.clone(), b01.clone()],
+        id_data.clone(),
+    )
+    .unwrap();
+    let t1 = TensorDynLen::from_dense(
+        vec![
+            b01.clone(),
+            s1_out_tmp.clone(),
+            s1_in_tmp.clone(),
+            b12.clone(),
+        ],
+        id_data,
+    )
+    .unwrap();
+    let t2 = TensorDynLen::from_dense(vec![b12.clone()], vec![1.0]).unwrap();
+
+    let n0 = mpo.add_tensor("site0", t0).unwrap();
+    let n1 = mpo.add_tensor("site1", t1).unwrap();
+    let n2 = mpo.add_tensor("site2", t2).unwrap();
+    mpo.connect(n0, &b01, n1, &b01).unwrap();
+    mpo.connect(n1, &b12, n2, &b12).unwrap();
 
     (
         mpo,
@@ -2233,6 +2286,79 @@ fn test_square_linsolve_with_mappings_identity() {
         rel_error < 1e-6,
         "square_linsolve with mappings: relative error = {}",
         rel_error
+    );
+}
+
+/// Mapped local linsolve should allow operator nodes with no site indices.
+///
+/// This is the generic tensor-network form of an operator acting on selected
+/// sites while later state sites are carried as spectators.
+#[test]
+fn test_square_linsolve_with_mappings_allows_unmapped_spectator_nodes() {
+    use tensor4all_treetn::square_linsolve;
+
+    let phys_dim = 2;
+    let (rhs, site_indices, _bonds) = create_simple_mps_chain();
+    let (mpo, s_in_tmp, s_out_tmp) = create_mapped_identity_mpo_with_spectator_node(phys_dim);
+
+    let (input_mapping, output_mapping) = create_fixed_site_index_mappings(
+        ["site0", "site1"],
+        &site_indices[..2],
+        &s_in_tmp,
+        &s_out_tmp,
+    );
+    assert!(mpo
+        .site_space(&"site2")
+        .is_some_and(|space| space.is_empty()));
+
+    let options = LinsolveOptions::default()
+        .with_nfullsweeps(2)
+        .with_krylov_tol(1e-10)
+        .with_krylov_dim(10)
+        .with_krylov_maxiter(30)
+        .with_max_rank(8);
+    let result = square_linsolve(
+        &mpo,
+        &rhs,
+        rhs.clone(),
+        &"site0",
+        options,
+        Some(input_mapping),
+        Some(output_mapping),
+    )
+    .unwrap();
+
+    assert_eq!(result.solution.node_count(), 3);
+    let got = result
+        .solution
+        .contract_to_tensor()
+        .unwrap()
+        .permuteinds(&site_indices)
+        .unwrap()
+        .to_vec::<f64>()
+        .unwrap();
+    let expected = rhs
+        .contract_to_tensor()
+        .unwrap()
+        .permuteinds(&site_indices)
+        .unwrap()
+        .to_vec::<f64>()
+        .unwrap();
+    let diff_norm: f64 = got
+        .iter()
+        .zip(expected.iter())
+        .map(|(&got, &expected)| (got - expected).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    let expected_norm: f64 = expected
+        .iter()
+        .map(|&value| value.powi(2))
+        .sum::<f64>()
+        .sqrt();
+    assert!(
+        diff_norm / expected_norm < 1e-8,
+        "spectator-node linsolve relative error = {}",
+        diff_norm / expected_norm
     );
 }
 

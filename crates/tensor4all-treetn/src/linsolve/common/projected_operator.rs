@@ -56,6 +56,15 @@ where
     pub output_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
 }
 
+struct LocalIndexMapping<I> {
+    true_in: I,
+    internal_in: I,
+    temp_in: I,
+    true_out: I,
+    internal_out: I,
+    temp_out: I,
+}
+
 impl<T, V> ProjectedOperator<T, V>
 where
     T: TensorLike,
@@ -131,35 +140,55 @@ where
             // MPO-with-mappings path: use unique temp indices to avoid duplicate IDs.
             // Replace true_index -> temp_in on v (never use internal_index on v).
             // Use same temp_in/temp_out on op tensors so they contract with v.
-            let mut per_node: Vec<(T::Index, T::Index, T::Index)> = Vec::new();
+            let mut per_node: Vec<Option<LocalIndexMapping<T::Index>>> = Vec::new();
             for node in region {
-                let im = input_mapping
-                    .get(node)
-                    .ok_or_else(|| anyhow::anyhow!("Missing input_mapping for node {:?}", node))?;
-                let om = output_mapping
-                    .get(node)
-                    .ok_or_else(|| anyhow::anyhow!("Missing output_mapping for node {:?}", node))?;
-                let temp_in = im.internal_index.sim();
-                let temp_out = om.internal_index.sim();
-                per_node.push((temp_in, temp_out, om.true_index.clone()));
+                match (input_mapping.get(node), output_mapping.get(node)) {
+                    (Some(im), Some(om)) => {
+                        let temp_in = im.internal_index.sim();
+                        let temp_out = om.internal_index.sim();
+                        per_node.push(Some(LocalIndexMapping {
+                            true_in: im.true_index.clone(),
+                            internal_in: im.internal_index.clone(),
+                            temp_in,
+                            true_out: om.true_index.clone(),
+                            internal_out: om.internal_index.clone(),
+                            temp_out,
+                        }));
+                    }
+                    (None, None) => {
+                        if self
+                            .operator
+                            .site_space(node)
+                            .is_some_and(|site_space| !site_space.is_empty())
+                        {
+                            return Err(anyhow::anyhow!(
+                                "Missing index mappings for operator node {:?} with non-empty site space",
+                                node
+                            ));
+                        }
+                        per_node.push(None);
+                    }
+                    (None, Some(_)) => {
+                        return Err(anyhow::anyhow!("Missing input_mapping for node {:?}", node));
+                    }
+                    (Some(_), None) => {
+                        return Err(anyhow::anyhow!(
+                            "Missing output_mapping for node {:?}",
+                            node
+                        ));
+                    }
+                }
             }
 
             let mut transformed_v = v.clone();
-            for (node, (temp_in, _temp_out, _)) in region.iter().zip(per_node.iter()) {
-                let im = input_mapping
-                    .get(node)
-                    .ok_or_else(|| anyhow::anyhow!("Missing input_mapping for node {:?}", node))?;
-                transformed_v = transformed_v.replaceind(&im.true_index, temp_in)?;
+            for mapping in &per_node {
+                if let Some(mapping) = mapping {
+                    transformed_v = transformed_v.replaceind(&mapping.true_in, &mapping.temp_in)?;
+                }
             }
             all_tensors.push(transformed_v);
 
-            for (node, (temp_in, temp_out, true_idx)) in region.iter().zip(per_node.iter()) {
-                let im = input_mapping
-                    .get(node)
-                    .ok_or_else(|| anyhow::anyhow!("Missing input_mapping for node {:?}", node))?;
-                let om = output_mapping
-                    .get(node)
-                    .ok_or_else(|| anyhow::anyhow!("Missing output_mapping for node {:?}", node))?;
+            for (node, mapping) in region.iter().zip(per_node.iter()) {
                 let node_idx = self
                     .operator
                     .node_index(node)
@@ -169,10 +198,12 @@ where
                     .tensor(node_idx)
                     .ok_or_else(|| anyhow::anyhow!("Tensor not found in operator"))?
                     .clone();
-                t = t.replaceind(&im.internal_index, temp_in)?;
-                t = t.replaceind(&om.internal_index, temp_out)?;
+                if let Some(mapping) = mapping {
+                    t = t.replaceind(&mapping.internal_in, &mapping.temp_in)?;
+                    t = t.replaceind(&mapping.internal_out, &mapping.temp_out)?;
+                    temp_out_to_true.push((mapping.temp_out.clone(), mapping.true_out.clone()));
+                }
                 all_tensors.push(t);
-                temp_out_to_true.push((temp_out.clone(), true_idx.clone()));
             }
         } else {
             // No mappings: plain path
