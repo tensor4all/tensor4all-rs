@@ -270,34 +270,11 @@ where
         self.contract_zipup_with(other, center, CanonicalForm::Unitary, svd_policy, max_rank)
     }
 
-    /// Contract two TreeTNs with the same topology using the zip-up algorithm with a specified form.
-    ///
-    /// See [`contract_zipup`](Self::contract_zipup) for details.
-    pub fn contract_zipup_with(
-        &self,
-        other: &Self,
-        center: &V,
-        form: CanonicalForm,
-        svd_policy: Option<SvdTruncationPolicy>,
-        max_rank: Option<usize>,
-    ) -> Result<Self>
-    where
-        V: Ord,
-        <T::Index as IndexLike>::Id:
-            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
-    {
-        self.contract_zipup_tree_accumulated(other, center, form, svd_policy, max_rank)
-    }
-
-    /// Contract two TreeTNs using zip-up algorithm with accumulated intermediate tensors.
-    ///
-    /// This is an improved version of zip-up contraction that maintains intermediate tensors
-    /// (environment tensors) as it processes from leaves towards the root, similar to
-    /// ITensors.jl's MPO zip-up algorithm.
+    /// Contract two TreeTNs with the same topology using zip-up and a specified canonical form.
     ///
     /// # Algorithm
     /// 1. Process leaves: contract `A[leaf] * B[leaf]`, factorize, store R at parent
-    /// 2. Process internal nodes: contract `[R_accumulated..., A[node], B[node]]`, factorize, store R\_new at parent
+    /// 2. Process internal nodes: contract incoming factors with `A[node]` and `B[node]`, factorize, store R\_new at parent
     /// 3. Process root: contract `[R_list..., A[root], B[root]]`, store as final result
     /// 4. Set canonical center
     ///
@@ -310,7 +287,7 @@ where
     ///
     /// # Returns
     /// The contracted TreeTN result, or an error if topologies don't match or contraction fails.
-    pub fn contract_zipup_tree_accumulated(
+    pub fn contract_zipup_with(
         &self,
         other: &Self,
         center: &V,
@@ -326,7 +303,7 @@ where
         // 1. Verify topologies are compatible
         if !self.same_topology(other) {
             return Err(anyhow::anyhow!(
-                "contract_zipup_tree_accumulated: networks have incompatible topologies"
+                "contract_zipup_with: networks have incompatible topologies"
             ));
         }
 
@@ -336,32 +313,31 @@ where
 
         // 3. Get traversal edges from leaves to center (post-order DFS)
         let edges = tn_a.edges_to_canonicalize_by_names(center).ok_or_else(|| {
-            anyhow::anyhow!(
-                "contract_zipup_tree_accumulated: center node {:?} not found",
-                center
-            )
+            anyhow::anyhow!("contract_zipup_with: center node {:?} not found", center)
         })?;
 
         // 4. Handle single node case
         if edges.is_empty() && self.node_count() == 1 {
-            let node_idx = tn_a.graph.graph().node_indices().next().ok_or_else(|| {
-                anyhow::anyhow!("contract_zipup_tree_accumulated: no nodes found")
-            })?;
-            let t_a = tn_a.tensor(node_idx).ok_or_else(|| {
-                anyhow::anyhow!("contract_zipup_tree_accumulated: tensor not found in tn_a")
-            })?;
+            let node_idx = tn_a
+                .graph
+                .graph()
+                .node_indices()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup_with: no nodes found"))?;
+            let t_a = tn_a
+                .tensor(node_idx)
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup_with: tensor not found in tn_a"))?;
             let t_b = tn_b
                 .tensor(tn_b.graph.graph().node_indices().next().ok_or_else(|| {
-                    anyhow::anyhow!("contract_zipup_tree_accumulated: tensor not found in tn_b")
+                    anyhow::anyhow!("contract_zipup_with: tensor not found in tn_b")
                 })?)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("contract_zipup_tree_accumulated: tensor not found in tn_b")
-                })?;
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup_with: tensor not found in tn_b"))?;
 
             let contracted = T::contract(&[t_a, t_b], AllowedPairs::All)?;
-            let node_name = tn_a.graph.node_name(node_idx).ok_or_else(|| {
-                anyhow::anyhow!("contract_zipup_tree_accumulated: node name not found")
-            })?;
+            let node_name = tn_a
+                .graph
+                .node_name(node_idx)
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup_with: node name not found"))?;
 
             let mut result = TreeTN::new();
             result.add_tensor(node_name.clone(), contracted)?;
@@ -570,13 +546,13 @@ where
             ) {
                 let tensor_a = result.tensor(node_a_idx).ok_or_else(|| {
                     anyhow::anyhow!(
-                        "contract_zipup_tree_accumulated: result tensor not found for node {:?}",
+                        "contract_zipup_with: result tensor not found for node {:?}",
                         source_name
                     )
                 })?;
                 let tensor_b = result.tensor(node_b_idx).ok_or_else(|| {
                     anyhow::anyhow!(
-                        "contract_zipup_tree_accumulated: result tensor not found for node {:?}",
+                        "contract_zipup_with: result tensor not found for node {:?}",
                         destination_name
                     )
                 })?;

@@ -95,7 +95,7 @@ pub fn contract(
 
     let result_inner = if matches!(options.method(), ContractMethod::Zipup) {
         a.as_treetn()
-            .contract_zipup_tree_accumulated(
+            .contract_zipup_with(
                 b.as_treetn(),
                 &center,
                 CanonicalForm::Unitary,

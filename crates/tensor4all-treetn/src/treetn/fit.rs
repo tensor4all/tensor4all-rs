@@ -960,7 +960,7 @@ where
 
     // Initialize C using the SVD-based zipup contraction.
     let zipup_started = profile_enabled.then(Instant::now);
-    let mut tn_c = tn_a.contract_zipup_tree_accumulated(
+    let mut tn_c = tn_a.contract_zipup_with(
         tn_b,
         center,
         CanonicalForm::Unitary,
