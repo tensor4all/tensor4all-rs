@@ -95,7 +95,7 @@ fn test_square_linsolve_zero_sweeps_returns_solution_wrapper() {
 
     assert_eq!(result.solution.node_count(), 2);
     assert_eq!(result.sweeps, 0);
-    assert_eq!(result.residual, None);
+    assert!(result.residual.is_some_and(|residual| residual < 1.0e-12));
     assert!(!result.converged);
 }
 

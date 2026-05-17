@@ -7,8 +7,9 @@ use std::collections::HashMap;
 
 use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike};
 use tensor4all_treetn::{
-    EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, NetworkTopology,
-    ProjectedOperator, ProjectedState, SquareLinsolveUpdater, TreeTN,
+    relative_linear_system_residual, ApplyOptions, EnvironmentCache, IndexMapping, LinearOperator,
+    LinsolveOptions, NetworkTopology, ProjectedOperator, ProjectedState, SquareLinsolveUpdater,
+    TreeTN,
 };
 
 type FixedSiteMappings = (
@@ -2252,7 +2253,8 @@ fn test_square_linsolve_with_mappings_identity() {
         .with_krylov_tol(1e-10)
         .with_krylov_dim(10)
         .with_krylov_maxiter(30)
-        .with_max_rank(4);
+        .with_max_rank(4)
+        .with_convergence_tol(1e-8);
 
     // This previously failed with index mismatch when mappings were not supported
     let result = square_linsolve(
@@ -2268,6 +2270,8 @@ fn test_square_linsolve_with_mappings_identity() {
 
     assert_eq!(result.solution.node_count(), 2);
     assert!(result.sweeps > 0);
+    assert!(result.converged);
+    assert!(result.residual.is_some_and(|residual| residual < 1.0e-8));
 
     // For identity operator, solution should match RHS
     let contracted = result.solution.contract_to_tensor().unwrap();
@@ -2287,6 +2291,30 @@ fn test_square_linsolve_with_mappings_identity() {
         "square_linsolve with mappings: relative error = {}",
         rel_error
     );
+}
+
+#[test]
+fn test_relative_linear_system_residual_with_mapped_coefficients() {
+    let phys_dim = 2;
+    let (solution, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
+    let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[2.0, 2.0], phys_dim);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
+    let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+    let mut rhs = solution.clone();
+    rhs.scale(AnyScalar::new_real(7.0)).unwrap();
+
+    let residual = relative_linear_system_residual(
+        &operator,
+        &solution,
+        &rhs,
+        AnyScalar::new_real(3.0),
+        AnyScalar::new_real(1.0),
+        ApplyOptions::naive(),
+    )
+    .unwrap();
+
+    assert!(residual < 1.0e-12, "residual={residual}");
 }
 
 /// Mapped local linsolve should allow operator nodes with no site indices.
@@ -2380,7 +2408,8 @@ fn test_square_linsolve_with_mappings_identity_term_only() {
         .with_krylov_tol(1e-12)
         .with_krylov_dim(10)
         .with_krylov_maxiter(30)
-        .with_max_rank(4);
+        .with_max_rank(4)
+        .with_convergence_tol(1e-8);
     let result = square_linsolve(
         &mpo,
         &rhs,
@@ -2423,6 +2452,8 @@ fn test_square_linsolve_with_mappings_identity_term_only() {
         "identity-term-only linsolve relative error = {}",
         diff_norm / expected_norm
     );
+    assert!(result.converged);
+    assert!(result.residual.is_some_and(|residual| residual < 1.0e-8));
 }
 
 /// Test that square_linsolve still works without mappings (backward compat).

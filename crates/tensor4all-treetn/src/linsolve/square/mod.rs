@@ -35,10 +35,10 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::{IndexLike, TensorLike};
+use tensor4all_core::{AnyScalar, IndexLike, TensorLike};
 
 use crate::linsolve::common::LinsolveOptions;
-use crate::operator::IndexMapping;
+use crate::operator::{apply_linear_operator, ApplyOptions, IndexMapping, LinearOperator};
 use crate::{apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan, TreeTN};
 
 /// Result of square_linsolve operation.
@@ -52,7 +52,7 @@ where
     pub solution: TreeTN<T, V>,
     /// Number of sweeps performed
     pub sweeps: usize,
-    /// Final residual norm (if computed)
+    /// Final relative residual norm `||(a0 I + a1 A)x - b|| / ||b||`.
     pub residual: Option<f64>,
     /// Converged flag
     pub converged: bool,
@@ -155,6 +155,9 @@ where
     // Canonicalize initial guess towards center
     let mut x = init.canonicalize([center.clone()], CanonicalizationOptions::default())?;
 
+    let residual_operator =
+        linear_operator_for_residual(operator, &x, input_mapping.clone(), output_mapping.clone())?;
+
     // Create SquareLinsolveUpdater with or without index mappings
     let mut updater = match (input_mapping, output_mapping) {
         (Some(input), Some(output)) => SquareLinsolveUpdater::with_index_mappings(
@@ -178,20 +181,167 @@ where
 
     let mut final_sweeps = 0;
 
+    let mut residual = None;
+    let mut converged = false;
+
     // Perform sweeps
     for sweep in 0..options.nfullsweeps {
         final_sweeps = sweep + 1;
         apply_local_update_sweep(&mut x, &plan, &mut updater)?;
+        if let Some(tol) = options.convergence_tol {
+            let current_residual = relative_linear_system_residual(
+                &residual_operator,
+                &x,
+                rhs,
+                options.a0.clone(),
+                options.a1.clone(),
+                ApplyOptions::naive(),
+            )?;
+            residual = Some(current_residual);
+            if current_residual < tol {
+                converged = true;
+                break;
+            }
+        }
     }
 
-    // Note: Residual computation (||Hx - b|| / ||b||) and convergence checking
-    // are not yet implemented. Currently, all requested sweeps are performed.
+    if residual.is_none() {
+        let final_residual = relative_linear_system_residual(
+            &residual_operator,
+            &x,
+            rhs,
+            options.a0.clone(),
+            options.a1.clone(),
+            ApplyOptions::naive(),
+        )?;
+        converged = options
+            .convergence_tol
+            .is_some_and(|tol| final_residual < tol);
+        residual = Some(final_residual);
+    }
+
     Ok(SquareLinsolveResult {
         solution: x,
         sweeps: final_sweeps,
-        residual: None,
-        converged: false,
+        residual,
+        converged,
     })
+}
+
+fn linear_operator_for_residual<T, V>(
+    operator: &TreeTN<T, V>,
+    state: &TreeTN<T, V>,
+    input_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
+    output_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
+) -> Result<LinearOperator<T, V>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    match (input_mapping, output_mapping) {
+        (Some(input), Some(output)) => Ok(LinearOperator::new(operator.clone(), input, output)),
+        (None, None) => LinearOperator::from_mpo_and_state(operator.clone(), state),
+        _ => Err(anyhow::anyhow!(
+            "input_mapping and output_mapping must both be Some or both be None"
+        )),
+    }
+}
+
+/// Compute the true relative residual of a TreeTN linear system.
+///
+/// This evaluates `||(a0 I + a1 A)x - b|| / ||b||` by applying `operator` to
+/// `solution`, combining the identity and operator terms, and measuring the
+/// TreeTN norm of the resulting residual. When `||b||` is numerically zero, the
+/// absolute residual norm is returned to avoid division by zero.
+///
+/// # Arguments
+/// * `operator` - Linear operator `A` including any input/output index mappings.
+/// * `solution` - Candidate solution `x`.
+/// * `rhs` - Right-hand side `b`.
+/// * `a0` - Identity coefficient.
+/// * `a1` - Operator coefficient.
+/// * `apply_options` - Options for applying `A`; use [`ApplyOptions::naive`] for
+///   an exact residual of the represented TreeTN.
+///
+/// # Returns
+/// The relative residual norm, or the absolute residual norm for zero RHS.
+///
+/// # Errors
+/// Returns an error if operator application, TreeTN addition, scaling, or norm
+/// computation fails.
+///
+/// # Examples
+/// ```
+/// use std::collections::HashMap;
+/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_treetn::{
+///     relative_linear_system_residual, ApplyOptions, IndexMapping, LinearOperator, TreeTN,
+/// };
+///
+/// let site = DynIndex::new_dyn(2);
+/// let s_in = DynIndex::new_dyn(2);
+/// let s_out = DynIndex::new_dyn(2);
+/// let state_tensor = TensorDynLen::from_dense(vec![site.clone()], vec![3.0_f64, 5.0]).unwrap();
+/// let state = TreeTN::<TensorDynLen, usize>::from_tensors(vec![state_tensor], vec![0]).unwrap();
+/// let mpo_tensor = TensorDynLen::from_dense(
+///     vec![s_out.clone(), s_in.clone()],
+///     vec![1.0_f64, 0.0, 0.0, 1.0],
+/// ).unwrap();
+/// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
+/// let mut input_mapping = HashMap::new();
+/// input_mapping.insert(0usize, IndexMapping { true_index: site.clone(), internal_index: s_in });
+/// let mut output_mapping = HashMap::new();
+/// output_mapping.insert(0usize, IndexMapping { true_index: site, internal_index: s_out });
+/// let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+///
+/// let residual = relative_linear_system_residual(
+///     &operator,
+///     &state,
+///     &state,
+///     0.0,
+///     1.0,
+///     ApplyOptions::naive(),
+/// ).unwrap();
+/// assert!(residual < 1.0e-12);
+/// ```
+pub fn relative_linear_system_residual<T, V, A0, A1>(
+    operator: &LinearOperator<T, V>,
+    solution: &TreeTN<T, V>,
+    rhs: &TreeTN<T, V>,
+    a0: A0,
+    a1: A1,
+    apply_options: ApplyOptions,
+) -> Result<f64>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    A0: Into<AnyScalar>,
+    A1: Into<AnyScalar>,
+{
+    let a0 = a0.into();
+    let a1 = a1.into();
+    let mut lhs = solution.clone();
+    lhs.scale(a0)?;
+
+    if !a1.is_zero() {
+        let mut ax = apply_linear_operator(operator, solution, apply_options)?;
+        ax.scale(a1)?;
+        lhs = lhs.add_aligned(&ax)?;
+    }
+
+    let mut negative_rhs = rhs.clone();
+    negative_rhs.scale(AnyScalar::new_real(-1.0))?;
+    let mut residual = lhs.add_aligned(&negative_rhs)?;
+
+    let rhs_norm = rhs.clone().norm()?;
+    if rhs_norm <= 1.0e-15 {
+        return residual.norm();
+    }
+    Ok(residual.norm()? / rhs_norm)
 }
 
 #[cfg(test)]
