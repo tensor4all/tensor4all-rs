@@ -2362,6 +2362,69 @@ fn test_square_linsolve_with_mappings_allows_unmapped_spectator_nodes() {
     );
 }
 
+/// The mapped solver must preserve the identity-term-only linear system.
+#[test]
+fn test_square_linsolve_with_mappings_identity_term_only() {
+    use tensor4all_treetn::square_linsolve;
+
+    let phys_dim = 2;
+    let (rhs, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
+    let init = rhs.clone();
+    let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[0.0, 0.0], phys_dim);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
+
+    let options = LinsolveOptions::default()
+        .with_nfullsweeps(3)
+        .with_coefficients(1.0, 0.0)
+        .with_krylov_tol(1e-12)
+        .with_krylov_dim(10)
+        .with_krylov_maxiter(30)
+        .with_max_rank(4);
+    let result = square_linsolve(
+        &mpo,
+        &rhs,
+        init,
+        &"site0",
+        options,
+        Some(input_mapping),
+        Some(output_mapping),
+    )
+    .unwrap();
+
+    let got = result
+        .solution
+        .contract_to_tensor()
+        .unwrap()
+        .permuteinds(&site_indices)
+        .unwrap()
+        .to_vec::<f64>()
+        .unwrap();
+    let expected = rhs
+        .contract_to_tensor()
+        .unwrap()
+        .permuteinds(&site_indices)
+        .unwrap()
+        .to_vec::<f64>()
+        .unwrap();
+    let diff_norm: f64 = got
+        .iter()
+        .zip(expected.iter())
+        .map(|(&got, &expected)| (got - expected).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    let expected_norm: f64 = expected
+        .iter()
+        .map(|&value| value.powi(2))
+        .sum::<f64>()
+        .sqrt();
+    assert!(
+        diff_norm / expected_norm < 1e-8,
+        "identity-term-only linsolve relative error = {}",
+        diff_norm / expected_norm
+    );
+}
+
 /// Test that square_linsolve still works without mappings (backward compat).
 #[test]
 fn test_square_linsolve_no_mappings_shared_indices() {
