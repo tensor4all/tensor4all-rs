@@ -20,16 +20,21 @@
 //!
 //! When applying to `x`, it automatically handles the index transformations.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 use anyhow::Result;
 
 use tensor4all_core::AllowedPairs;
+use tensor4all_core::DynIndex;
 use tensor4all_core::IndexLike;
+use tensor4all_core::LinearizationOrder;
+use tensor4all_core::TensorDynLen;
 use tensor4all_core::TensorLike;
 
 use super::index_mapping::IndexMapping;
+use crate::options::RestructureOptions;
+use crate::site_index_network::SiteIndexNetwork;
 use crate::treetn::TreeTN;
 
 /// LinearOperator: Wraps an MPO with index mapping for automatic transformations.
@@ -593,16 +598,417 @@ where
             output_mapping: self.input_mapping,
         }
     }
+
+    /// Restructure the internal MPO while preserving input and output mappings.
+    ///
+    /// This is the operator-level counterpart of [`TreeTN::restructure_to`].
+    /// The `target` network is expressed in the operator's internal MPO site
+    /// indices, not in the true input/output indices stored in
+    /// [`IndexMapping`]. After the MPO is restructured, each mapping is moved
+    /// to the target node that owns its internal index, preserving the mapping
+    /// order from the original operator node order.
+    ///
+    /// Use this when an operator has the right local indices but its node
+    /// grouping or topology needs to match another tensor network before
+    /// selected-index application.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - Desired internal MPO site-index network.
+    /// * `options` - Restructure options passed to [`TreeTN::restructure_to`].
+    ///
+    /// # Returns
+    ///
+    /// A new operator whose internal MPO and mapping node keys follow `target`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target is incompatible with the internal MPO, or
+    /// if a mapping's internal index is absent from the target network.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::{HashMap, HashSet};
+    ///
+    /// use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+    /// use tensor4all_treetn::{
+    ///     IndexMapping, LinearOperator, RestructureOptions, SiteIndexNetwork, TreeTN,
+    /// };
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let x_true = DynIndex::new_dyn(2);
+    /// let y_true = DynIndex::new_dyn(2);
+    /// let x_in = DynIndex::new_dyn(2);
+    /// let x_out = DynIndex::new_dyn(2);
+    /// let y_in = DynIndex::new_dyn(2);
+    /// let y_out = DynIndex::new_dyn(2);
+    /// let bond = DynIndex::new_dyn(1);
+    ///
+    /// let left = TensorDynLen::from_dense(
+    ///     vec![x_out.clone(), x_in.clone(), bond.clone()],
+    ///     vec![1.0, 0.0, 0.0, 1.0],
+    /// )?;
+    /// let right = TensorDynLen::from_dense(
+    ///     vec![bond, y_out.clone(), y_in.clone()],
+    ///     vec![1.0, 0.0, 0.0, 1.0],
+    /// )?;
+    /// let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    /// mpo.add_tensor("x".to_string(), left)?;
+    /// mpo.add_tensor("y".to_string(), right)?;
+    /// let x_node = mpo.node_index(&"x".to_string()).unwrap();
+    /// let y_node = mpo.node_index(&"y".to_string()).unwrap();
+    /// let link = mpo.tensor(x_node).unwrap().indices()[2].clone();
+    /// mpo.connect(x_node, &link, y_node, &link)?;
+    ///
+    /// let mut input = HashMap::new();
+    /// input.insert("x".to_string(), IndexMapping { true_index: x_true, internal_index: x_in });
+    /// input.insert("y".to_string(), IndexMapping { true_index: y_true, internal_index: y_in });
+    /// let mut output = HashMap::new();
+    /// output.insert("x".to_string(), IndexMapping { true_index: DynIndex::new_dyn(2), internal_index: x_out.clone() });
+    /// output.insert("y".to_string(), IndexMapping { true_index: DynIndex::new_dyn(2), internal_index: y_out.clone() });
+    /// let op = LinearOperator::new(mpo, input, output);
+    ///
+    /// let mut target = SiteIndexNetwork::new();
+    /// target.add_node("left".to_string(), HashSet::from([y_out, op.get_input_mapping(&"y".to_string()).unwrap().internal_index.clone()]))?;
+    /// target.add_node("right".to_string(), HashSet::from([x_out, op.get_input_mapping(&"x".to_string()).unwrap().internal_index.clone()]))?;
+    /// target.add_edge(&"left".to_string(), &"right".to_string())?;
+    ///
+    /// let moved = op.restructure_to(&target, &RestructureOptions::default())?;
+    /// assert!(moved.get_input_mapping(&"left".to_string()).is_some());
+    /// assert!(moved.get_input_mapping(&"right".to_string()).is_some());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn restructure_to<TargetV>(
+        &self,
+        target: &SiteIndexNetwork<TargetV, T::Index>,
+        options: &RestructureOptions,
+    ) -> Result<LinearOperator<T, TargetV>>
+    where
+        TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    {
+        let mpo = self.mpo.restructure_to(target, options)?;
+        let input_mapping = self.restructure_mapping_nodes(&self.input_mapping, target, "input")?;
+        let output_mapping =
+            self.restructure_mapping_nodes(&self.output_mapping, target, "output")?;
+        Ok(LinearOperator::new_multi(
+            mpo,
+            input_mapping,
+            output_mapping,
+        ))
+    }
+
+    fn restructure_mapping_nodes<TargetV>(
+        &self,
+        mappings_by_node: &HashMap<V, Vec<IndexMapping<T::Index>>>,
+        target: &SiteIndexNetwork<TargetV, T::Index>,
+        kind: &str,
+    ) -> Result<HashMap<TargetV, Vec<IndexMapping<T::Index>>>>
+    where
+        TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    {
+        let mut result: HashMap<TargetV, Vec<IndexMapping<T::Index>>> = HashMap::new();
+        let mut nodes: Vec<V> = mappings_by_node.keys().cloned().collect();
+        nodes.sort();
+
+        for node in nodes {
+            let Some(mappings) = mappings_by_node.get(&node) else {
+                continue;
+            };
+            for mapping in mappings {
+                let target_node = target
+                    .find_node_by_index(&mapping.internal_index)
+                    .cloned()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "LinearOperator::restructure_to: {kind} internal index {:?} from node {:?} is missing from target",
+                            mapping.internal_index.id(),
+                            node
+                        )
+                    })?;
+                result.entry(target_node).or_default().push(mapping.clone());
+            }
+        }
+
+        Ok(result)
+    }
+}
+
+impl<V> LinearOperator<TensorDynLen, V>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    /// Replace one fused input mapping with several ordered input mappings.
+    ///
+    /// The operator's internal input index is exactly unfused inside the MPO
+    /// tensor using [`TensorDynLen::unfuse_index`], then the corresponding
+    /// [`IndexMapping`] entry is replaced by one entry per `new_true_indices`.
+    /// New internal indices are generated automatically with matching
+    /// dimensions and the same order as `new_true_indices`.
+    ///
+    /// Use this for tensorized operators whose local input dimension is a
+    /// product, such as turning one dimension-4 input leg into two binary input
+    /// legs before applying the operator to interleaved QTT groups.
+    ///
+    /// # Arguments
+    ///
+    /// * `old_true_index` - Existing true input index to replace.
+    /// * `new_true_indices` - Ordered true input indices whose dimensions
+    ///   multiply to `old_true_index.dim()`.
+    /// * `order` - Linearization convention used to decode the old fused
+    ///   coordinate into the new coordinates.
+    ///
+    /// # Returns
+    ///
+    /// A new operator with the input mapping unfused.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input mapping is missing or ambiguous, if the
+    /// dimensions do not multiply correctly, or if the internal MPO reshape
+    /// fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::HashMap;
+    ///
+    /// use tensor4all_core::{DynIndex, IndexLike, LinearizationOrder, TensorDynLen};
+    /// use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let x = DynIndex::new_dyn(4);
+    /// let y = DynIndex::new_dyn(4);
+    /// let x_internal = DynIndex::new_dyn(4);
+    /// let y_internal = DynIndex::new_dyn(4);
+    /// let tensor = TensorDynLen::from_dense(
+    ///     vec![y_internal.clone(), x_internal.clone()],
+    ///     vec![1.0, 0.0, 0.0, 0.0,
+    ///          0.0, 1.0, 0.0, 0.0,
+    ///          0.0, 0.0, 1.0, 0.0,
+    ///          0.0, 0.0, 0.0, 1.0],
+    /// )?;
+    /// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0])?;
+    /// let mut input = HashMap::new();
+    /// input.insert(0, IndexMapping { true_index: x.clone(), internal_index: x_internal });
+    /// let mut output = HashMap::new();
+    /// output.insert(0, IndexMapping { true_index: y, internal_index: y_internal });
+    /// let op = LinearOperator::new(mpo, input, output);
+    ///
+    /// let x0 = DynIndex::new_dyn(2);
+    /// let x1 = DynIndex::new_dyn(2);
+    /// let unfused = op.unfuse_input_index(&x, &[x0.clone(), x1.clone()], LinearizationOrder::ColumnMajor)?;
+    ///
+    /// let mappings = unfused.get_input_mappings(&0).unwrap();
+    /// assert_eq!(mappings.len(), 2);
+    /// assert!(mappings[0].true_index.same_id(&x0));
+    /// assert!(mappings[1].true_index.same_id(&x1));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn unfuse_input_index(
+        &self,
+        old_true_index: &DynIndex,
+        new_true_indices: &[DynIndex],
+        order: LinearizationOrder,
+    ) -> Result<Self> {
+        self.unfuse_mapping_index(old_true_index, new_true_indices, order, MappingKind::Input)
+    }
+
+    /// Replace one fused output mapping with several ordered output mappings.
+    ///
+    /// This is the output-space counterpart of
+    /// [`Self::unfuse_input_index`]. The internal MPO output index is exactly
+    /// reshaped, and the output mapping vector is expanded in the order given
+    /// by `new_true_indices`.
+    ///
+    /// # Arguments
+    ///
+    /// * `old_true_index` - Existing true output index to replace.
+    /// * `new_true_indices` - Ordered true output indices whose dimensions
+    ///   multiply to `old_true_index.dim()`.
+    /// * `order` - Linearization convention used to decode the old fused
+    ///   coordinate into the new coordinates.
+    ///
+    /// # Returns
+    ///
+    /// A new operator with the output mapping unfused.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the output mapping is missing or ambiguous, if the
+    /// dimensions do not multiply correctly, or if the internal MPO reshape
+    /// fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::HashMap;
+    ///
+    /// use tensor4all_core::{DynIndex, IndexLike, LinearizationOrder, TensorDynLen};
+    /// use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let x = DynIndex::new_dyn(4);
+    /// let y = DynIndex::new_dyn(4);
+    /// let x_internal = DynIndex::new_dyn(4);
+    /// let y_internal = DynIndex::new_dyn(4);
+    /// let tensor = TensorDynLen::from_dense(
+    ///     vec![y_internal.clone(), x_internal.clone()],
+    ///     vec![1.0, 0.0, 0.0, 0.0,
+    ///          0.0, 1.0, 0.0, 0.0,
+    ///          0.0, 0.0, 1.0, 0.0,
+    ///          0.0, 0.0, 0.0, 1.0],
+    /// )?;
+    /// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0])?;
+    /// let mut input = HashMap::new();
+    /// input.insert(0, IndexMapping { true_index: x, internal_index: x_internal });
+    /// let mut output = HashMap::new();
+    /// output.insert(0, IndexMapping { true_index: y.clone(), internal_index: y_internal });
+    /// let op = LinearOperator::new(mpo, input, output);
+    ///
+    /// let y0 = DynIndex::new_dyn(2);
+    /// let y1 = DynIndex::new_dyn(2);
+    /// let unfused = op.unfuse_output_index(&y, &[y0.clone(), y1.clone()], LinearizationOrder::ColumnMajor)?;
+    ///
+    /// let mappings = unfused.get_output_mappings(&0).unwrap();
+    /// assert_eq!(mappings.len(), 2);
+    /// assert!(mappings[0].true_index.same_id(&y0));
+    /// assert!(mappings[1].true_index.same_id(&y1));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn unfuse_output_index(
+        &self,
+        old_true_index: &DynIndex,
+        new_true_indices: &[DynIndex],
+        order: LinearizationOrder,
+    ) -> Result<Self> {
+        self.unfuse_mapping_index(old_true_index, new_true_indices, order, MappingKind::Output)
+    }
+
+    fn unfuse_mapping_index(
+        &self,
+        old_true_index: &DynIndex,
+        new_true_indices: &[DynIndex],
+        order: LinearizationOrder,
+        kind: MappingKind,
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            !new_true_indices.is_empty(),
+            "LinearOperator::{kind}: replacement indices must not be empty"
+        );
+        let product = new_true_indices
+            .iter()
+            .try_fold(1usize, |acc, index| acc.checked_mul(index.dim()))
+            .ok_or_else(|| anyhow::anyhow!("LinearOperator::{kind}: dimension product overflow"))?;
+        anyhow::ensure!(
+            product == old_true_index.dim(),
+            "LinearOperator::{kind}: replacement dimension product {} does not match old dimension {}",
+            product,
+            old_true_index.dim()
+        );
+
+        let (node, position, old_internal_index) = self.find_mapping_entry(old_true_index, kind)?;
+        let new_internal_indices = new_true_indices
+            .iter()
+            .map(|index| DynIndex::new_dyn(index.dim()))
+            .collect::<Vec<_>>();
+
+        let mpo = self.mpo.replace_site_index_with_indices(
+            &old_internal_index,
+            &new_internal_indices,
+            order,
+        )?;
+
+        let mut result = self.clone();
+        result.mpo = mpo;
+
+        let mappings = match kind {
+            MappingKind::Input => result.input_mapping.get_mut(&node),
+            MappingKind::Output => result.output_mapping.get_mut(&node),
+        }
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "LinearOperator::{kind}: mapping node {:?} disappeared during unfuse",
+                node
+            )
+        })?;
+
+        let replacements = new_true_indices
+            .iter()
+            .cloned()
+            .zip(new_internal_indices)
+            .map(|(true_index, internal_index)| IndexMapping {
+                true_index,
+                internal_index,
+            })
+            .collect::<Vec<_>>();
+        mappings.splice(position..=position, replacements);
+
+        Ok(result)
+    }
+
+    fn find_mapping_entry(
+        &self,
+        old_true_index: &DynIndex,
+        kind: MappingKind,
+    ) -> Result<(V, usize, DynIndex)> {
+        let mappings_by_node = match kind {
+            MappingKind::Input => &self.input_mapping,
+            MappingKind::Output => &self.output_mapping,
+        };
+        let mut nodes: Vec<V> = mappings_by_node.keys().cloned().collect();
+        nodes.sort();
+
+        let mut found = None;
+        for node in nodes {
+            let Some(mappings) = mappings_by_node.get(&node) else {
+                continue;
+            };
+            for (position, mapping) in mappings.iter().enumerate() {
+                if mapping.true_index == *old_true_index {
+                    if found.is_some() {
+                        return Err(anyhow::anyhow!(
+                            "LinearOperator::{kind}: true index {:?} appears in more than one mapping",
+                            old_true_index.id()
+                        ));
+                    }
+                    found = Some((node.clone(), position, mapping.internal_index.clone()));
+                }
+            }
+        }
+
+        found.ok_or_else(|| {
+            anyhow::anyhow!(
+                "LinearOperator::{kind}: true index {:?} not found",
+                old_true_index.id()
+            )
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MappingKind {
+    Input,
+    Output,
+}
+
+impl std::fmt::Display for MappingKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Input => f.write_str("unfuse_input_index"),
+            Self::Output => f.write_str("unfuse_output_index"),
+        }
+    }
 }
 
 // ============================================================================
 // Helper methods
 // ============================================================================
 
-use std::collections::HashSet;
-
 use crate::operator::Operator;
-use crate::SiteIndexNetwork;
 
 // Implement Operator trait for LinearOperator
 impl<T, V> Operator<T, V> for LinearOperator<T, V>

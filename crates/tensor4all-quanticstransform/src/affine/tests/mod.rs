@@ -532,6 +532,74 @@ fn affine_matrix_to_dense_tensor(
     TensorDynLen::from_dense(indices, data).expect("failed to build affine reference tensor")
 }
 
+fn affine_interleaved_matrix_to_dense_tensor(
+    matrix: &CsMat<f64>,
+    op: &QuanticsOperator,
+    r: usize,
+    m: usize,
+    n: usize,
+    template: &TensorDynLen,
+) -> TensorDynLen {
+    let indices = template.indices().to_vec();
+    let dims = template.dims();
+    let mut id_to_pos = std::collections::HashMap::new();
+    for (pos, index) in indices.iter().enumerate() {
+        id_to_pos.insert(*index.id(), pos);
+    }
+
+    let output_positions = (0..r)
+        .map(|site| {
+            op.get_output_mappings(&site)
+                .expect("missing output mappings")
+                .iter()
+                .map(|mapping| {
+                    *id_to_pos
+                        .get(mapping.internal_index.id())
+                        .expect("output index not found in contracted tensor")
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let input_positions = (0..r)
+        .map(|site| {
+            op.get_input_mappings(&site)
+                .expect("missing input mappings")
+                .iter()
+                .map(|mapping| {
+                    *id_to_pos
+                        .get(mapping.internal_index.id())
+                        .expect("input index not found in contracted tensor")
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let mut data = vec![Complex64::new(0.0, 0.0); dims.iter().product()];
+    let mut coords = vec![0usize; dims.len()];
+
+    for (y_flat, row) in matrix.outer_iterator().enumerate() {
+        for (x_flat, value) in row.iter() {
+            coords.fill(0);
+            for site in 0..r {
+                let bit_pos = r - 1 - site;
+                for var in 0..m {
+                    let y_var = (y_flat >> (var * r)) & ((1 << r) - 1);
+                    coords[output_positions[site][var]] = (y_var >> bit_pos) & 1;
+                }
+                for var in 0..n {
+                    let x_var = (x_flat >> (var * r)) & ((1 << r) - 1);
+                    coords[input_positions[site][var]] = (x_var >> bit_pos) & 1;
+                }
+            }
+            let offset = column_major_offset(&dims, &coords);
+            data[offset] = Complex64::new(*value, 0.0);
+        }
+    }
+
+    TensorDynLen::from_dense(indices, data)
+        .expect("failed to build interleaved affine reference tensor")
+}
+
 /// Assert that the MPO representation matches the direct sparse matrix computation
 /// for all elements. This is the primary correctness check: two independent algorithms
 /// (carry-based MPO vs direct enumeration) must agree.
@@ -1001,6 +1069,35 @@ fn test_unfused_vs_fused_equivalence() {
             );
         }
     }
+}
+
+#[test]
+fn test_affine_operator_interleaved_matches_matrix() {
+    let r = 2;
+    let params = AffineParams::from_integers(vec![1, 1, 0, 1], vec![0, 0], 2, 2).unwrap();
+    let bc = vec![BoundaryCondition::Periodic; 2];
+
+    let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+    let op = affine_operator_interleaved(r, &params, &bc).unwrap();
+
+    for site in 0..r {
+        assert_eq!(op.get_output_mappings(&site).unwrap().len(), params.m);
+        assert_eq!(op.get_input_mappings(&site).unwrap().len(), params.n);
+        for mapping in op.get_output_mappings(&site).unwrap() {
+            assert_eq!(mapping.true_index.dim(), 2);
+            assert_eq!(mapping.internal_index.dim(), 2);
+        }
+        for mapping in op.get_input_mappings(&site).unwrap() {
+            assert_eq!(mapping.true_index.dim(), 2);
+            assert_eq!(mapping.internal_index.dim(), 2);
+        }
+    }
+
+    let actual = op.mpo.contract_to_tensor().unwrap();
+    let expected =
+        affine_interleaved_matrix_to_dense_tensor(&matrix, &op, r, params.m, params.n, &actual);
+    let maxabs = actual.distance(&expected).unwrap();
+    assert!(maxabs < 1e-10, "interleaved affine maxabs={maxabs}");
 }
 
 #[test]
