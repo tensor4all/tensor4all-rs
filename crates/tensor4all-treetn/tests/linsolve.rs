@@ -2397,14 +2397,15 @@ fn test_square_linsolve_with_mappings_identity_term_only() {
 
     let phys_dim = 2;
     let (rhs, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
-    let init = rhs.clone();
+    let mut init = rhs.clone();
+    init.scale(AnyScalar::new_real(1.0 + 1.0e-6)).unwrap();
     let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[0.0, 0.0], phys_dim);
     let (input_mapping, output_mapping) =
         create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
 
     let options = LinsolveOptions::default()
         .with_nfullsweeps(3)
-        .with_coefficients(1.0, 0.0)
+        .with_coefficients(1.0, 1.0)
         .with_krylov_tol(1e-12)
         .with_krylov_dim(10)
         .with_krylov_maxiter(30)
@@ -2421,6 +2422,7 @@ fn test_square_linsolve_with_mappings_identity_term_only() {
     )
     .unwrap();
 
+    assert_eq!(result.sweeps, 0);
     let got = result
         .solution
         .contract_to_tensor()

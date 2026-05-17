@@ -33,7 +33,7 @@ pub use updater::{LinsolveVerifyReport, NodeVerifyDetail, SquareLinsolveUpdater}
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use tensor4all_core::{AnyScalar, IndexLike, TensorLike};
 
@@ -152,6 +152,17 @@ where
     // Validate inputs before proceeding
     validate_linsolve_inputs(operator, rhs, &init)?;
 
+    if options.a1.is_zero() || operator_is_zero(operator)? {
+        return solve_identity_term_only(
+            operator,
+            rhs,
+            &init,
+            options,
+            input_mapping,
+            output_mapping,
+        );
+    }
+
     // Canonicalize initial guess towards center
     let mut x = init.canonicalize([center.clone()], CanonicalizationOptions::default())?;
 
@@ -224,6 +235,55 @@ where
         solution: x,
         sweeps: final_sweeps,
         residual,
+        converged,
+    })
+}
+
+fn operator_is_zero<T, V>(operator: &TreeTN<T, V>) -> Result<bool>
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let mut operator = operator.clone();
+    Ok(operator.norm()? <= 1.0e-15)
+}
+
+fn solve_identity_term_only<T, V>(
+    operator: &TreeTN<T, V>,
+    rhs: &TreeTN<T, V>,
+    init: &TreeTN<T, V>,
+    options: LinsolveOptions,
+    input_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
+    output_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
+) -> Result<SquareLinsolveResult<T, V>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    if options.a0.is_zero() {
+        bail!("square_linsolve: a0 and effective operator term are both zero");
+    }
+
+    let residual_operator =
+        linear_operator_for_residual(operator, init, input_mapping, output_mapping)?;
+    let mut solution = rhs.clone();
+    solution.scale(AnyScalar::new_real(1.0) / options.a0.clone())?;
+    let residual = relative_linear_system_residual(
+        &residual_operator,
+        &solution,
+        rhs,
+        options.a0.clone(),
+        options.a1.clone(),
+        ApplyOptions::naive(),
+    )?;
+    let converged = options.convergence_tol.is_some_and(|tol| residual < tol);
+
+    Ok(SquareLinsolveResult {
+        solution,
+        sweeps: 0,
+        residual: Some(residual),
         converged,
     })
 }
