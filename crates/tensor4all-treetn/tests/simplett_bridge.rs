@@ -3,8 +3,10 @@ use num_complex::Complex64;
 use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
 use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
 use tensor4all_treetn::{
-    insert_onehot_site_in_treetn_chain, tensor_train_to_treetn, tensor_train_to_treetn_with_names,
-    tensor_train_to_treetn_with_names_and_site_indices, treetn_to_tensor_train, TreeTN,
+    fix_and_remove_site_from_treetn_chain, insert_onehot_site_in_treetn_chain,
+    tensor_train_to_treetn, tensor_train_to_treetn_with_names,
+    tensor_train_to_treetn_with_names_and_site_indices, treetn_to_tensor_train,
+    weighted_remove_site_from_treetn_chain, TreeTN,
 };
 
 fn two_site_tensor_train_f64() -> TensorTrain<f64> {
@@ -68,6 +70,86 @@ fn two_site_tensor_train_c64() -> TensorTrain<Complex64> {
         .unwrap(),
     ])
     .expect("valid complex two-site tensor train")
+}
+
+fn dense_offset(indices: &[usize], dims: &[usize]) -> usize {
+    let mut stride = 1usize;
+    let mut offset = 0usize;
+    for (&index, &dim) in indices.iter().zip(dims) {
+        offset += index * stride;
+        stride *= dim;
+    }
+    offset
+}
+
+fn decode_col_major(mut offset: usize, dims: &[usize]) -> Vec<usize> {
+    dims.iter()
+        .map(|&dim| {
+            let index = offset % dim;
+            offset /= dim;
+            index
+        })
+        .collect()
+}
+
+fn fixed_removed_dense(
+    values: &[f64],
+    dims: &[usize],
+    position: usize,
+    fixed_value: usize,
+) -> Vec<f64> {
+    let mut new_dims = dims.to_vec();
+    new_dims.remove(position);
+    let total = new_dims.iter().product();
+    let mut result = Vec::with_capacity(total);
+
+    for offset in 0..total {
+        let new_multi = decode_col_major(offset, &new_dims);
+        let mut old_multi = Vec::with_capacity(dims.len());
+        let mut next_new = 0usize;
+        for site in 0..dims.len() {
+            if site == position {
+                old_multi.push(fixed_value);
+            } else {
+                old_multi.push(new_multi[next_new]);
+                next_new += 1;
+            }
+        }
+        result.push(values[dense_offset(&old_multi, dims)]);
+    }
+    result
+}
+
+fn weighted_removed_dense(
+    values: &[f64],
+    dims: &[usize],
+    position: usize,
+    weights: &[f64],
+) -> Vec<f64> {
+    let mut new_dims = dims.to_vec();
+    new_dims.remove(position);
+    let total = new_dims.iter().product();
+    let mut result = Vec::with_capacity(total);
+
+    for offset in 0..total {
+        let new_multi = decode_col_major(offset, &new_dims);
+        let mut value = 0.0;
+        for (removed_value, weight) in weights.iter().enumerate() {
+            let mut old_multi = Vec::with_capacity(dims.len());
+            let mut next_new = 0usize;
+            for site in 0..dims.len() {
+                if site == position {
+                    old_multi.push(removed_value);
+                } else {
+                    old_multi.push(new_multi[next_new]);
+                    next_new += 1;
+                }
+            }
+            value += weight * values[dense_offset(&old_multi, dims)];
+        }
+        result.push(value);
+    }
+    result
 }
 
 #[test]
@@ -337,6 +419,176 @@ fn insert_onehot_site_in_treetn_chain_rejects_invalid_fixed_value() -> Result<()
     assert!(err
         .to_string()
         .contains("fixed value 2 exceeds site dimension 2"));
+    Ok(())
+}
+
+#[test]
+fn fix_and_remove_site_from_treetn_chain_removes_first_site() -> Result<()> {
+    let tt = three_site_tensor_train_f64();
+    let (treetn, site_indices) = tensor_train_to_treetn(&tt)?;
+
+    let result = fix_and_remove_site_from_treetn_chain::<f64>(treetn, 0, 1)?;
+    let dense = result.contract_to_tensor()?;
+    let (old_values, old_dims) = tt.fulltensor();
+    let expected = TensorDynLen::from_dense(
+        vec![site_indices[1].clone(), site_indices[2].clone()],
+        fixed_removed_dense(&old_values, &old_dims, 0, 1),
+    )?;
+
+    assert_eq!(result.node_names(), vec![0, 1]);
+    assert_eq!(
+        treetn_to_tensor_train::<f64>(result.clone())?.site_dims(),
+        vec![2, 2]
+    );
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
+    Ok(())
+}
+
+#[test]
+fn fix_and_remove_site_from_treetn_chain_removes_middle_site() -> Result<()> {
+    let tt = three_site_tensor_train_f64();
+    let (treetn, site_indices) = tensor_train_to_treetn(&tt)?;
+
+    let result = fix_and_remove_site_from_treetn_chain::<f64>(treetn, 1, 0)?;
+    let dense = result.contract_to_tensor()?;
+    let (old_values, old_dims) = tt.fulltensor();
+    let expected = TensorDynLen::from_dense(
+        vec![site_indices[0].clone(), site_indices[2].clone()],
+        fixed_removed_dense(&old_values, &old_dims, 1, 0),
+    )?;
+
+    assert_eq!(result.node_names(), vec![0, 1]);
+    assert_eq!(
+        treetn_to_tensor_train::<f64>(result.clone())?.site_dims(),
+        vec![2, 2]
+    );
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
+    Ok(())
+}
+
+#[test]
+fn fix_and_remove_site_from_treetn_chain_removes_last_site() -> Result<()> {
+    let tt = three_site_tensor_train_f64();
+    let (treetn, site_indices) = tensor_train_to_treetn(&tt)?;
+
+    let result = fix_and_remove_site_from_treetn_chain::<f64>(treetn, 2, 1)?;
+    let dense = result.contract_to_tensor()?;
+    let (old_values, old_dims) = tt.fulltensor();
+    let expected = TensorDynLen::from_dense(
+        vec![site_indices[0].clone(), site_indices[1].clone()],
+        fixed_removed_dense(&old_values, &old_dims, 2, 1),
+    )?;
+
+    assert_eq!(result.node_names(), vec![0, 1]);
+    assert_eq!(
+        treetn_to_tensor_train::<f64>(result.clone())?.site_dims(),
+        vec![2, 2]
+    );
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
+    Ok(())
+}
+
+#[test]
+fn weighted_remove_site_from_treetn_chain_removes_middle_site() -> Result<()> {
+    let tt = three_site_tensor_train_f64();
+    let (treetn, site_indices) = tensor_train_to_treetn(&tt)?;
+    let weights = [0.25, 0.75];
+
+    let result = weighted_remove_site_from_treetn_chain::<f64>(treetn, 1, &weights)?;
+    let dense = result.contract_to_tensor()?;
+    let (old_values, old_dims) = tt.fulltensor();
+    let expected = TensorDynLen::from_dense(
+        vec![site_indices[0].clone(), site_indices[2].clone()],
+        weighted_removed_dense(&old_values, &old_dims, 1, &weights),
+    )?;
+
+    assert_eq!(result.node_names(), vec![0, 1]);
+    assert_eq!(
+        treetn_to_tensor_train::<f64>(result.clone())?.site_dims(),
+        vec![2, 2]
+    );
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
+    Ok(())
+}
+
+#[test]
+fn weighted_remove_site_from_treetn_chain_removes_boundary_site() -> Result<()> {
+    let tt = three_site_tensor_train_f64();
+    let (treetn, site_indices) = tensor_train_to_treetn(&tt)?;
+    let weights = [1.5, -0.5];
+
+    let result = weighted_remove_site_from_treetn_chain::<f64>(treetn, 2, &weights)?;
+    let dense = result.contract_to_tensor()?;
+    let (old_values, old_dims) = tt.fulltensor();
+    let expected = TensorDynLen::from_dense(
+        vec![site_indices[0].clone(), site_indices[1].clone()],
+        weighted_removed_dense(&old_values, &old_dims, 2, &weights),
+    )?;
+
+    assert_eq!(result.node_names(), vec![0, 1]);
+    assert_eq!(
+        treetn_to_tensor_train::<f64>(result.clone())?.site_dims(),
+        vec![2, 2]
+    );
+    assert!(dense.distance(&expected).unwrap() < 1.0e-12);
+    Ok(())
+}
+
+#[test]
+fn fix_and_remove_site_from_treetn_chain_rejects_invalid_position() -> Result<()> {
+    let tt = two_site_tensor_train_f64();
+    let (treetn, _) = tensor_train_to_treetn(&tt)?;
+
+    let err = fix_and_remove_site_from_treetn_chain::<f64>(treetn, 2, 0).unwrap_err();
+
+    assert!(err.to_string().contains("position 2 is out of range 0..2"));
+    Ok(())
+}
+
+#[test]
+fn fix_and_remove_site_from_treetn_chain_rejects_invalid_fixed_value() -> Result<()> {
+    let tt = two_site_tensor_train_f64();
+    let (treetn, _) = tensor_train_to_treetn(&tt)?;
+
+    let err = fix_and_remove_site_from_treetn_chain::<f64>(treetn, 0, 2).unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("fixed value 2 exceeds site dimension 2"));
+    Ok(())
+}
+
+#[test]
+fn weighted_remove_site_from_treetn_chain_rejects_weight_length_mismatch() -> Result<()> {
+    let tt = two_site_tensor_train_f64();
+    let (treetn, _) = tensor_train_to_treetn(&tt)?;
+
+    let err = weighted_remove_site_from_treetn_chain::<f64>(treetn, 1, &[1.0]).unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("weights length 1 must match site dimension 2"));
+    Ok(())
+}
+
+#[test]
+fn remove_site_from_treetn_chain_rejects_single_site_chain() -> Result<()> {
+    let tt = single_site_tensor_train_f64();
+    let (treetn, _) = tensor_train_to_treetn(&tt)?;
+
+    let err = fix_and_remove_site_from_treetn_chain::<f64>(treetn, 0, 1).unwrap_err();
+
+    assert!(err.to_string().contains(
+        "cannot remove the only site because scalar zero-site TreeTN chains are not supported"
+    ));
+
+    let (treetn, _) = tensor_train_to_treetn(&tt)?;
+    let err =
+        weighted_remove_site_from_treetn_chain::<f64>(treetn, 0, &[1.0, 1.0, 1.0]).unwrap_err();
+
+    assert!(err.to_string().contains(
+        "cannot remove the only site because scalar zero-site TreeTN chains are not supported"
+    ));
     Ok(())
 }
 

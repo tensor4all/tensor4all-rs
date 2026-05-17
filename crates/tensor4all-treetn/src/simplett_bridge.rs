@@ -314,7 +314,7 @@ pub fn insert_onehot_site_in_treetn_chain<T>(
 where
     T: TTScalar + TensorElement + Clone + Default,
 {
-    let old_site_indices = chain_site_indices(&treetn)?;
+    let old_site_indices = chain_site_indices(&treetn, "insert_onehot_site_in_treetn_chain")?;
     ensure!(
         position <= old_site_indices.len(),
         "insert_onehot_site_in_treetn_chain: position {} is out of range 0..={}",
@@ -355,33 +355,311 @@ where
     tensor_train_to_treetn_with_names_and_site_indices(&tt, (0..tt.len()).collect(), site_indices)
 }
 
-fn chain_site_indices(treetn: &TreeTN<TensorDynLen, usize>) -> Result<Vec<DynIndex>> {
+/// Fix a site in a linear-chain `TreeTN<TensorDynLen, usize>` and remove it.
+///
+/// `position` selects the chain site to remove, and `value` selects the local
+/// coordinate kept at that site. The returned chain has one fewer site, node
+/// names `0..n-2`, and all remaining site indices preserved in their original
+/// order.
+///
+/// # Arguments
+///
+/// - `treetn`: a linear-chain `TreeTN` whose node names are exactly `0..n`.
+///   Each node must carry exactly one site index.
+/// - `position`: chain site to fix and remove, in `0..n`.
+/// - `value`: local coordinate retained at the removed site.
+///
+/// # Returns
+///
+/// A new linear-chain `TreeTN` representing the original tensor restricted to
+/// `site[position] == value`, with that site removed from the external index
+/// list.
+///
+/// # Errors
+///
+/// Returns an error if `position` is out of range, `value` is outside the site
+/// dimension, removing the only site would require an unsupported scalar
+/// zero-site `TreeTN`, the input is not a numbered single-site chain, or the
+/// conversion between the chain `TreeTN` and `TensorTrain` fails.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
+/// use tensor4all_treetn::{
+///     fix_and_remove_site_from_treetn_chain, tensor_train_to_treetn, treetn_to_tensor_train,
+/// };
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let tt = TensorTrain::new(vec![
+///     tensor3_from_data(vec![1.0_f64, 2.0], 1, 2, 1)?,
+///     tensor3_from_data(vec![10.0_f64, 20.0], 1, 2, 1)?,
+/// ])?;
+/// let (tree, _) = tensor_train_to_treetn(&tt)?;
+///
+/// let reduced = fix_and_remove_site_from_treetn_chain::<f64>(tree, 0, 1)?;
+/// let roundtrip = treetn_to_tensor_train::<f64>(reduced)?;
+///
+/// assert_eq!(roundtrip.site_dims(), vec![2]);
+/// assert!((roundtrip.evaluate(&[0])? - 20.0).abs() < 1.0e-12);
+/// assert!((roundtrip.evaluate(&[1])? - 40.0).abs() < 1.0e-12);
+/// # Ok(())
+/// # }
+/// ```
+pub fn fix_and_remove_site_from_treetn_chain<T>(
+    treetn: TreeTN<TensorDynLen, usize>,
+    position: usize,
+    value: usize,
+) -> Result<TreeTN<TensorDynLen, usize>>
+where
+    T: TTScalar + TensorElement + Clone + Default,
+{
+    let site_indices = chain_site_indices(&treetn, "fix_and_remove_site_from_treetn_chain")?;
+    ensure!(
+        position < site_indices.len(),
+        "fix_and_remove_site_from_treetn_chain: position {} is out of range 0..{}",
+        position,
+        site_indices.len()
+    );
+    ensure!(
+        site_indices.len() > 1,
+        "fix_and_remove_site_from_treetn_chain: cannot remove the only site because scalar zero-site TreeTN chains are not supported"
+    );
+
+    let tt = treetn_to_tensor_train::<T>(treetn)?;
+    ensure!(
+        value < tt.site_dim(position),
+        "fix_and_remove_site_from_treetn_chain: fixed value {} exceeds site dimension {}",
+        value,
+        tt.site_dim(position)
+    );
+
+    let reduced_site = fixed_site_matrix(tt.site_tensor(position), value);
+    remove_site_with_reduced_matrix(tt, site_indices, position, &reduced_site)
+}
+
+/// Contract a site of a linear-chain `TreeTN<TensorDynLen, usize>` with weights and remove it.
+///
+/// The removed site is summed as `sum_s weights[s] * tensor[..., s, ...]`.
+/// Pass already scaled weights, such as `1/d` averaging weights, when a
+/// normalized reduction is desired. The returned chain has one fewer site, node
+/// names `0..n-2`, and all remaining site indices preserved in their original
+/// order.
+///
+/// # Arguments
+///
+/// - `treetn`: a linear-chain `TreeTN` whose node names are exactly `0..n`.
+///   Each node must carry exactly one site index.
+/// - `position`: chain site to contract and remove, in `0..n`.
+/// - `weights`: one weight per local coordinate of the removed site.
+///
+/// # Returns
+///
+/// A new linear-chain `TreeTN` representing the weighted local reduction with
+/// the selected site removed from the external index list.
+///
+/// # Errors
+///
+/// Returns an error if `position` is out of range, `weights.len()` does not
+/// match the removed site dimension, removing the only site would require an
+/// unsupported scalar zero-site `TreeTN`, the input is not a numbered
+/// single-site chain, or the conversion between the chain `TreeTN` and
+/// `TensorTrain` fails.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
+/// use tensor4all_treetn::{
+///     tensor_train_to_treetn, treetn_to_tensor_train, weighted_remove_site_from_treetn_chain,
+/// };
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let tt = TensorTrain::new(vec![
+///     tensor3_from_data(vec![1.0_f64, 3.0], 1, 2, 1)?,
+///     tensor3_from_data(vec![2.0_f64, 4.0], 1, 2, 1)?,
+/// ])?;
+/// let (tree, _) = tensor_train_to_treetn(&tt)?;
+///
+/// let reduced = weighted_remove_site_from_treetn_chain::<f64>(tree, 0, &[0.25, 0.75])?;
+/// let roundtrip = treetn_to_tensor_train::<f64>(reduced)?;
+///
+/// assert_eq!(roundtrip.site_dims(), vec![2]);
+/// assert!((roundtrip.evaluate(&[0])? - 5.0).abs() < 1.0e-12);
+/// assert!((roundtrip.evaluate(&[1])? - 10.0).abs() < 1.0e-12);
+/// # Ok(())
+/// # }
+/// ```
+pub fn weighted_remove_site_from_treetn_chain<T>(
+    treetn: TreeTN<TensorDynLen, usize>,
+    position: usize,
+    weights: &[T],
+) -> Result<TreeTN<TensorDynLen, usize>>
+where
+    T: TTScalar + TensorElement + Clone + Default,
+{
+    let site_indices = chain_site_indices(&treetn, "weighted_remove_site_from_treetn_chain")?;
+    ensure!(
+        position < site_indices.len(),
+        "weighted_remove_site_from_treetn_chain: position {} is out of range 0..{}",
+        position,
+        site_indices.len()
+    );
+    ensure!(
+        site_indices.len() > 1,
+        "weighted_remove_site_from_treetn_chain: cannot remove the only site because scalar zero-site TreeTN chains are not supported"
+    );
+
+    let tt = treetn_to_tensor_train::<T>(treetn)?;
+    ensure!(
+        weights.len() == tt.site_dim(position),
+        "weighted_remove_site_from_treetn_chain: weights length {} must match site dimension {}",
+        weights.len(),
+        tt.site_dim(position)
+    );
+
+    let reduced_site = weighted_site_matrix(tt.site_tensor(position), weights);
+    remove_site_with_reduced_matrix(tt, site_indices, position, &reduced_site)
+}
+
+fn chain_site_indices(
+    treetn: &TreeTN<TensorDynLen, usize>,
+    context: &str,
+) -> Result<Vec<DynIndex>> {
     let nsites = treetn.node_count();
     let mut node_names = treetn.node_names();
     node_names.sort_unstable();
     ensure!(
         node_names == (0..nsites).collect::<Vec<_>>(),
-        "insert_onehot_site_in_treetn_chain: expected node names 0..{}, got {:?}",
+        "{context}: expected node names 0..{}, got {:?}",
         nsites,
         node_names
     );
 
     let mut site_indices = Vec::with_capacity(nsites);
     for site in 0..nsites {
-        let site_space = treetn.site_space(&site).ok_or_else(|| {
-            anyhow::anyhow!("insert_onehot_site_in_treetn_chain: missing site space at node {site}")
-        })?;
+        let site_space = treetn
+            .site_space(&site)
+            .ok_or_else(|| anyhow::anyhow!("{context}: missing site space at node {site}"))?;
         ensure!(
             site_space.len() == 1,
-            "insert_onehot_site_in_treetn_chain: node {site} must have exactly one site index, got {}",
+            "{context}: node {site} must have exactly one site index, got {}",
             site_space.len()
         );
-        let site_index = site_space.iter().next().ok_or_else(|| {
-            anyhow::anyhow!("insert_onehot_site_in_treetn_chain: node {site} has no site index")
-        })?;
+        let site_index = site_space
+            .iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("{context}: node {site} has no site index"))?;
         site_indices.push(site_index.clone());
     }
     Ok(site_indices)
+}
+
+fn fixed_site_matrix<T>(tensor: &tensor4all_simplett::Tensor3<T>, value: usize) -> Vec<T>
+where
+    T: TTScalar + Clone + Default,
+{
+    tensor.slice_site(value)
+}
+
+fn weighted_site_matrix<T>(tensor: &tensor4all_simplett::Tensor3<T>, weights: &[T]) -> Vec<T>
+where
+    T: TTScalar + Clone + Default,
+{
+    let mut matrix = vec![T::default(); tensor.left_dim() * tensor.right_dim()];
+    for (s, &weight) in weights.iter().enumerate() {
+        for r in 0..tensor.right_dim() {
+            for l in 0..tensor.left_dim() {
+                let offset = l + tensor.left_dim() * r;
+                matrix[offset] = matrix[offset] + *tensor.get3(l, s, r) * weight;
+            }
+        }
+    }
+    matrix
+}
+
+fn remove_site_with_reduced_matrix<T>(
+    tt: TensorTrain<T>,
+    mut site_indices: Vec<DynIndex>,
+    position: usize,
+    reduced_site: &[T],
+) -> Result<TreeTN<TensorDynLen, usize>>
+where
+    T: TTScalar + TensorElement + Clone + Default,
+{
+    let mut tensors = Vec::with_capacity(tt.len().saturating_sub(1));
+    for site in 0..position {
+        if site + 1 == position && position + 1 == tt.len() {
+            tensors.push(absorb_reduced_site_into_left(
+                tt.site_tensor(site),
+                reduced_site,
+            ));
+        } else {
+            tensors.push(tt.site_tensor(site).clone());
+        }
+    }
+
+    if position + 1 < tt.len() {
+        tensors.push(absorb_reduced_site_into_right(
+            reduced_site,
+            tt.site_tensor(position),
+            tt.site_tensor(position + 1),
+        ));
+        for site in position + 2..tt.len() {
+            tensors.push(tt.site_tensor(site).clone());
+        }
+    }
+
+    site_indices.remove(position);
+    let tt = TensorTrain::new(tensors)?;
+    tensor_train_to_treetn_with_names_and_site_indices(&tt, (0..tt.len()).collect(), site_indices)
+}
+
+fn absorb_reduced_site_into_right<T>(
+    reduced_site: &[T],
+    removed: &tensor4all_simplett::Tensor3<T>,
+    right: &tensor4all_simplett::Tensor3<T>,
+) -> tensor4all_simplett::Tensor3<T>
+where
+    T: TTScalar + Clone + Default,
+{
+    let left_dim = removed.left_dim();
+    let removed_right_dim = removed.right_dim();
+    let mut tensor = tensor3_zeros::<T>(left_dim, right.site_dim(), right.right_dim());
+
+    for l in 0..left_dim {
+        for s in 0..right.site_dim() {
+            for r in 0..right.right_dim() {
+                let mut value = T::default();
+                for bridge in 0..removed_right_dim {
+                    value = value + reduced_site[l + left_dim * bridge] * *right.get3(bridge, s, r);
+                }
+                tensor.set3(l, s, r, value);
+            }
+        }
+    }
+    tensor
+}
+
+fn absorb_reduced_site_into_left<T>(
+    left: &tensor4all_simplett::Tensor3<T>,
+    reduced_site: &[T],
+) -> tensor4all_simplett::Tensor3<T>
+where
+    T: TTScalar + Clone + Default,
+{
+    let mut tensor = tensor3_zeros::<T>(left.left_dim(), left.site_dim(), 1);
+
+    for l in 0..left.left_dim() {
+        for s in 0..left.site_dim() {
+            let mut value = T::default();
+            for (bridge, &weight) in reduced_site.iter().enumerate().take(left.right_dim()) {
+                value = value + *left.get3(l, s, bridge) * weight;
+            }
+            tensor.set3(l, s, 0, value);
+        }
+    }
+    tensor
 }
 
 struct ChainSiteMetadata {

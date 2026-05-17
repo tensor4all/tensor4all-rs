@@ -54,8 +54,10 @@ pub use operator::{
 pub use options::{CanonicalizationOptions, RestructureOptions, SplitOptions, TruncationOptions};
 pub use random::{random_treetn, LinkSpace};
 pub use simplett_bridge::{
-    insert_onehot_site_in_treetn_chain, tensor_train_to_treetn, tensor_train_to_treetn_with_names,
+    fix_and_remove_site_from_treetn_chain, insert_onehot_site_in_treetn_chain,
+    tensor_train_to_treetn, tensor_train_to_treetn_with_names,
     tensor_train_to_treetn_with_names_and_site_indices, treetn_to_tensor_train,
+    weighted_remove_site_from_treetn_chain,
 };
 pub use site_index_network::SiteIndexNetwork;
 pub use treetn::{
