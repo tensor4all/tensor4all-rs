@@ -153,6 +153,43 @@ pub fn save_itensor(filepath: &str, name: &str, tensor: &TensorDynLen) -> Result
     itensor::write_itensor(&group, tensor)
 }
 
+/// Append a [`TensorDynLen`] as an ITensors.jl-compatible `ITensor` to an HDF5 file.
+///
+/// Opens `filepath` read/write if it exists, or creates it otherwise, then
+/// writes the tensor under `name`. This is useful for files containing multiple
+/// tensor objects. The target group must not already exist.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened for appending, if `name`
+/// already exists, or if the tensor storage type is unsupported.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_hdf5::{append_itensor, load_itensor};
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let dir = tempfile::tempdir()?;
+/// let path = dir.path().join("append_itensor.h5");
+/// let path = path.to_str().unwrap();
+/// let a = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![1.0, 2.0])?;
+/// let b = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![3.0, 4.0])?;
+///
+/// append_itensor(path, "a", &a)?;
+/// append_itensor(path, "b", &b)?;
+/// assert_eq!(load_itensor(path, "a")?.to_vec::<f64>()?, vec![1.0, 2.0]);
+/// assert_eq!(load_itensor(path, "b")?.to_vec::<f64>()?, vec![3.0, 4.0]);
+/// # Ok(())
+/// # }
+/// ```
+pub fn append_itensor(filepath: &str, name: &str, tensor: &TensorDynLen) -> Result<()> {
+    let file = File::append(filepath)?;
+    let group = file.create_group(name)?;
+    itensor::write_itensor(&group, tensor)
+}
+
 /// Load a [`TensorDynLen`] from an ITensors.jl-compatible `ITensor` in an HDF5 file.
 ///
 /// Opens the file in read-only mode and reads the tensor from the group named
@@ -260,6 +297,47 @@ pub fn load_itensor(filepath: &str, name: &str) -> Result<TensorDynLen> {
 /// ```
 pub fn save_mps(filepath: &str, name: &str, tt: &TensorTrain) -> Result<()> {
     let file = File::create(filepath)?;
+    let group = file.create_group(name)?;
+    mps::write_mps(&group, tt)
+}
+
+/// Append a [`TensorTrain`] as an ITensorMPS.jl-compatible `MPS` to an HDF5 file.
+///
+/// Opens `filepath` read/write if it exists, or creates it otherwise, then
+/// writes the MPS under `name`. This keeps the same `MPS` v1 schema as
+/// [`save_mps`] while allowing multiple named MPS objects in a single file.
+/// The target group must not already exist.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened for appending, if `name`
+/// already exists, or if any site tensor uses unsupported storage.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_hdf5::{append_mps, load_mps};
+/// use tensor4all_itensorlike::TensorTrain;
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let dir = tempfile::tempdir()?;
+/// let path = dir.path().join("append_mps.h5");
+/// let path = path.to_str().unwrap();
+/// let s0 = DynIndex::new_dyn(2);
+/// let s1 = DynIndex::new_dyn(2);
+/// let a = TensorTrain::new(vec![TensorDynLen::from_dense(vec![s0], vec![1.0, 2.0])?])?;
+/// let b = TensorTrain::new(vec![TensorDynLen::from_dense(vec![s1], vec![3.0, 4.0])?])?;
+///
+/// append_mps(path, "a", &a)?;
+/// append_mps(path, "b", &b)?;
+/// assert_eq!(load_mps(path, "a")?.len(), 1);
+/// assert_eq!(load_mps(path, "b")?.siteinds()[0][0].size(), 2);
+/// # Ok(())
+/// # }
+/// ```
+pub fn append_mps(filepath: &str, name: &str, tt: &TensorTrain) -> Result<()> {
+    let file = File::append(filepath)?;
     let group = file.create_group(name)?;
     mps::write_mps(&group, tt)
 }

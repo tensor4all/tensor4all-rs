@@ -245,6 +245,69 @@ impl TensorTrain {
         Ok(tt)
     }
 
+    /// Create a tensor train from a linear-chain [`TreeTN`].
+    ///
+    /// The input tree must use `usize` node names and represent a tensor-train
+    /// chain. Node names are renumbered to `0..len` when necessary, and simple
+    /// site tensor orders are normalized to left-link, site, right-link order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tree cannot be interpreted as a valid tensor
+    /// train, for example because adjacent site tensors have incompatible
+    /// shared indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let site0 = DynIndex::new_dyn(2);
+    /// let link = DynIndex::new_bond(1)?;
+    /// let site1 = DynIndex::new_dyn(2);
+    /// let t0 = TensorDynLen::from_dense(vec![site0, link.clone()], vec![1.0, 0.0])?;
+    /// let t1 = TensorDynLen::from_dense(vec![link, site1], vec![2.0, 0.0])?;
+    /// let tree = TreeTN::from_tensors(vec![t0, t1], vec![0usize, 1usize])?;
+    ///
+    /// let tt = TensorTrain::from_treetn(tree)?;
+    /// assert_eq!(tt.len(), 2);
+    /// assert_eq!(tt.site_dims(), vec![2, 2]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_treetn(treetn: TreeTN<TensorDynLen, usize>) -> Result<Self> {
+        Self::from_inner(treetn, None)
+    }
+
+    /// Consume this tensor train and return its underlying [`TreeTN`].
+    ///
+    /// Use this when a chain MPS must be passed to APIs that operate on general
+    /// tree tensor networks. The returned tree preserves the tensor and index
+    /// metadata stored in the tensor train.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let site = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(vec![site], vec![1.0, 2.0])?;
+    /// let tt = TensorTrain::new(vec![tensor])?;
+    ///
+    /// let tree = tt.into_treetn();
+    /// assert_eq!(tree.node_count(), 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn into_treetn(self) -> TreeTN<TensorDynLen, usize> {
+        self.treetn
+    }
+
     /// Get a reference to the underlying TreeTN.
     ///
     /// This is a crate-internal accessor used by `contract` and `linsolve`.
