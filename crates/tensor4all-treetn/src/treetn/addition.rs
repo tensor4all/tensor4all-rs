@@ -137,16 +137,22 @@ where
         self.replaceinds(&old_indices, &new_indices)
     }
 
-    /// Add two TreeTNs after aligning the second operand's site index IDs to the first.
+    /// Add two TreeTNs after reindexing the second operand's site space to match `self`.
     ///
-    /// This is useful when two states share the same topology and site dimensions
-    /// but were constructed with different site index IDs.
+    /// This method first calls [`reindex_site_space_like`](Self::reindex_site_space_like)
+    /// on `other`, then performs strict direct-sum addition. Use it only when
+    /// the node-by-node site-space matching is the intended operation. Use
+    /// [`add`](Self::add) when site indices must already match exactly.
     ///
     /// # Arguments
-    /// * `other` - The other TreeTN to align and add
+    /// * `other` - The other TreeTN to reindex and add
     ///
     /// # Returns
     /// The direct-sum addition result with site IDs matching `self`.
+    ///
+    /// # Errors
+    /// Returns an error if the two TreeTNs cannot be reindexed to the same site
+    /// space, or if the strict addition fails after reindexing.
     ///
     /// # Examples
     /// ```
@@ -162,11 +168,11 @@ where
     /// let state_a = make_chain(DynIndex::new_dyn(2), DynIndex::new_dyn(2));
     /// let state_b = make_chain(DynIndex::new_dyn(2), DynIndex::new_dyn(2));
     ///
-    /// let sum = state_a.add_aligned(&state_b).unwrap();
+    /// let sum = state_a.add_reindexed_like_self(&state_b).unwrap();
     /// assert_eq!(sum.node_count(), 2);
     /// assert!(sum.share_equivalent_site_index_network(&state_a));
     /// ```
-    pub fn add_aligned(&self, other: &Self) -> Result<Self>
+    pub fn add_reindexed_like_self(&self, other: &Self) -> Result<Self>
     where
         V: Ord,
         T::Index: Clone,
@@ -290,7 +296,8 @@ where
     /// This creates a new TreeTN where each tensor is the direct sum of the
     /// corresponding tensors from self and other, with bond dimensions merged.
     /// The two networks must share the same topology **and** the same site
-    /// index IDs. Use [`add_aligned`](Self::add_aligned) if site index IDs differ.
+    /// index IDs. Use [`add_reindexed_like_self`](Self::add_reindexed_like_self)
+    /// if site index IDs differ and implicit node-by-node reindexing is intended.
     ///
     /// # Arguments
     /// * `other` - The other TreeTN to add
@@ -320,6 +327,7 @@ where
     pub fn add(&self, other: &Self) -> Result<Self>
     where
         V: Ord,
+        T::Index: Eq + Hash,
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
@@ -329,6 +337,7 @@ where
                 "Cannot add TreeTNs with different topologies"
             ));
         }
+        self.ensure_same_site_spaces(other)?;
 
         // Track merged indices for each edge.
         // Key: (smaller_node_name, larger_node_name) for canonical ordering
@@ -429,6 +438,80 @@ where
 
         // Build result TreeTN
         TreeTN::from_tensors(result_tensors, result_node_names)
+    }
+
+    /// Compute a strict linear combination `a * self + b * other`.
+    ///
+    /// This scales two TreeTNs and adds them with [`add`](Self::add), so the two
+    /// operands must already have the same topology and the same site index IDs.
+    /// No site reindexing or truncation is performed.
+    ///
+    /// # Arguments
+    /// * `a` - Scalar coefficient multiplying `self`.
+    /// * `other` - Second TreeTN in the same site-index space.
+    /// * `b` - Scalar coefficient multiplying `other`.
+    ///
+    /// # Returns
+    /// A direct-sum TreeTN representing `a * self + b * other`.
+    ///
+    /// # Errors
+    /// Returns an error if scaling fails, or if strict direct-sum addition fails
+    /// because topology or site indices do not match.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let a = TensorDynLen::from_dense(vec![site.clone()], vec![1.0_f64, 2.0]).unwrap();
+    /// let b = TensorDynLen::from_dense(vec![site.clone()], vec![3.0_f64, 4.0]).unwrap();
+    /// let tn_a = TreeTN::<_, usize>::from_tensors(vec![a], vec![0]).unwrap();
+    /// let tn_b = TreeTN::<_, usize>::from_tensors(vec![b], vec![0]).unwrap();
+    ///
+    /// let result = tn_a
+    ///     .axpby(AnyScalar::new_real(2.0), &tn_b, AnyScalar::new_real(-1.0))
+    ///     .unwrap();
+    /// let dense = result.contract_to_tensor().unwrap();
+    /// let expected = TensorDynLen::from_dense(vec![site], vec![-1.0, 0.0]).unwrap();
+    /// assert!(dense.isapprox(&expected, 1.0e-12, 0.0));
+    /// ```
+    pub fn axpby<A, B>(&self, a: A, other: &Self, b: B) -> Result<Self>
+    where
+        V: Ord,
+        T::Index: Eq + Hash,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        A: Into<AnyScalar>,
+        B: Into<AnyScalar>,
+    {
+        let mut lhs = self.clone();
+        lhs.scale(a.into())?;
+        let mut rhs = other.clone();
+        rhs.scale(b.into())?;
+        lhs.add(&rhs)
+    }
+
+    fn ensure_same_site_spaces(&self, other: &Self) -> Result<()>
+    where
+        V: Ord,
+        T::Index: Eq + Hash,
+    {
+        for node_name in self.node_names() {
+            let self_site_space = self
+                .site_space(&node_name)
+                .ok_or_else(|| anyhow::anyhow!("site space not found for node {:?}", node_name))?;
+            let other_site_space = other
+                .site_space(&node_name)
+                .ok_or_else(|| anyhow::anyhow!("site space not found for node {:?}", node_name))?;
+            if self_site_space != other_site_space {
+                bail!(
+                    "Cannot add TreeTNs with different site indices at node {:?}",
+                    node_name
+                );
+            }
+        }
+        Ok(())
     }
 }
 

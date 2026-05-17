@@ -330,13 +330,13 @@ fn test_reindex_site_space_like_rejects_incompatible_inputs() {
 }
 
 #[test]
-fn test_add_aligned_accepts_equivalent_site_space_with_different_ids() {
+fn test_add_reindexed_like_self_accepts_equivalent_site_space_with_different_ids() {
     let (tn_a, tn_b) = make_two_matching_treetns_different_site_ids();
     let tn_b_aligned = tn_b.reindex_site_space_like(&tn_a).unwrap();
 
     assert!(!tn_a.share_equivalent_site_index_network(&tn_b));
 
-    let sum = tn_a.add_aligned(&tn_b).unwrap();
+    let sum = tn_a.add_reindexed_like_self(&tn_b).unwrap();
     assert!(sum.share_equivalent_site_index_network(&tn_a));
 
     let dense_sum = sum.contract_to_tensor().unwrap();
@@ -351,8 +351,24 @@ fn test_add_aligned_accepts_equivalent_site_space_with_different_ids() {
         .unwrap();
     assert!(
         dense_sum.isapprox(&dense_expected, 1e-10, 0.0),
-        "add_aligned failed: maxabs diff = {}",
+        "add_reindexed_like_self failed: maxabs diff = {}",
         dense_sum.distance(&dense_expected).unwrap()
+    );
+}
+
+#[test]
+fn test_axpby_is_strict_about_site_index_ids() {
+    let (tn_a, tn_b) = make_two_matching_treetns_different_site_ids();
+    let err = tn_a
+        .axpby(
+            tensor4all_core::AnyScalar::new_real(1.0),
+            &tn_b,
+            tensor4all_core::AnyScalar::new_real(1.0),
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("site") || err.to_string().contains("index"),
+        "unexpected error: {err}"
     );
 }
 

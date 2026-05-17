@@ -390,12 +390,12 @@ where
     if !a1.is_zero() {
         let mut ax = apply_linear_operator(operator, solution, apply_options)?;
         ax.scale(a1)?;
-        lhs = lhs.add_aligned(&ax)?;
+        lhs = lhs.add_reindexed_like_self(&ax)?;
     }
 
     let mut negative_rhs = rhs.clone();
     negative_rhs.scale(AnyScalar::new_real(-1.0))?;
-    let mut residual = lhs.add_aligned(&negative_rhs)?;
+    let mut residual = lhs.add_reindexed_like_self(&negative_rhs)?;
 
     let rhs_norm = rhs.clone().norm()?;
     if rhs_norm <= 1.0e-15 {
