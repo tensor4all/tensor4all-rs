@@ -893,8 +893,10 @@ pub struct ContractionOptions {
     /// Maximum dense elements allowed for explicit mismatched-topology
     /// reference fallback in `partial_contract`.
     ///
-    /// `None` rejects the fallback. Set this only for small reference/debug
-    /// cases where full dense materialization is expected and bounded.
+    /// `None` rejects the fallback; compatible tree-union mismatches are first
+    /// handled by structural dimension-1 topology alignment without dense
+    /// materialization. Set this only for small reference/debug cases where
+    /// full dense materialization is acceptable if structural alignment fails.
     pub mismatched_topology_dense_limit: Option<usize>,
 }
 
@@ -993,7 +995,7 @@ impl ContractionOptions {
     }
 
     /// Allow `partial_contract` to use its mismatched-topology dense reference
-    /// fallback up to `max_elements` elements.
+    /// fallback up to `max_elements` elements if structural alignment fails.
     ///
     /// # Arguments
     /// * `max_elements` - Maximum number of elements allowed in each dense
@@ -1001,7 +1003,9 @@ impl ContractionOptions {
     ///   remain small and test-sized.
     ///
     /// # Returns
-    /// Updated options with the dense/reference fallback limit enabled.
+    /// Updated options with the dense/reference fallback limit enabled. This
+    /// does not force dense materialization; compatible tree-union topology
+    /// mismatches are handled by structural dimension-1 alignment first.
     ///
     /// # Examples
     ///

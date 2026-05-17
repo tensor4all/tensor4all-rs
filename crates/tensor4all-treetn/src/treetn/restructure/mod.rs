@@ -858,6 +858,37 @@ where
     result
 }
 
+fn canonical_node_pair<NodeName>(left: &NodeName, right: &NodeName) -> (NodeName, NodeName)
+where
+    NodeName: Clone + Ord,
+{
+    if left <= right {
+        (left.clone(), right.clone())
+    } else {
+        (right.clone(), left.clone())
+    }
+}
+
+fn choose_site_free_absorption_target<NodeName>(
+    neighbor_targets: &HashSet<NodeName>,
+    target_edges: &HashSet<(NodeName, NodeName)>,
+) -> Option<NodeName>
+where
+    NodeName: Clone + Hash + Eq + Ord,
+{
+    if neighbor_targets.is_empty() {
+        return None;
+    }
+
+    let mut candidates = neighbor_targets.iter().cloned().collect::<Vec<_>>();
+    candidates.sort();
+    candidates.into_iter().find(|candidate| {
+        neighbor_targets.iter().all(|other| {
+            candidate == other || target_edges.contains(&canonical_node_pair(candidate, other))
+        })
+    })
+}
+
 fn target_quotient_matches_topology<T, CurrentV, TargetV>(
     current: &SiteIndexNetwork<CurrentV, T::Index>,
     target: &SiteIndexNetwork<TargetV, T::Index>,
@@ -942,6 +973,11 @@ where
         }
     }
 
+    let target_edges: HashSet<_> = target
+        .edges()
+        .map(|(left, right)| canonical_node_pair(&left, &right))
+        .collect();
+
     loop {
         let mut additions = Vec::<(CurrentV, TargetV)>::new();
         for current_node_name in current.node_names() {
@@ -957,8 +993,9 @@ where
                 .neighbors(current_node_name)
                 .filter_map(|neighbor| current_to_target.get(&neighbor).cloned())
                 .collect();
-            if neighbor_targets.len() == 1 {
-                let target_name = neighbor_targets.into_iter().next().unwrap();
+            if let Some(target_name) =
+                choose_site_free_absorption_target(&neighbor_targets, &target_edges)
+            {
                 additions.push((current_node_name.clone(), target_name));
             }
         }
@@ -989,28 +1026,12 @@ where
         ) {
             (Some(left_target), Some(right_target)) if left_target == right_target => {}
             (Some(left_target), Some(right_target)) => {
-                let edge = if left_target <= right_target {
-                    (left_target.clone(), right_target.clone())
-                } else {
-                    (right_target.clone(), left_target.clone())
-                };
-                quotient_edges.insert(edge);
+                quotient_edges.insert(canonical_node_pair(left_target, right_target));
             }
             (None, None) => {}
             _ => return Ok(false),
         }
     }
-
-    let target_edges: HashSet<_> = target
-        .edges()
-        .map(|(left, right)| {
-            if left <= right {
-                (left, right)
-            } else {
-                (right, left)
-            }
-        })
-        .collect();
 
     Ok(quotient_edges == target_edges)
 }
@@ -1445,6 +1466,41 @@ mod tests {
         let treetn = TreeTN::<TensorDynLen, String>::from_tensors(
             vec![t0, t1, t2],
             vec!["A".to_string(), "B".to_string(), "C".to_string()],
+        )?;
+
+        let before = treetn.to_dense()?;
+        let mut target: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
+        target.add_node("A".to_string(), HashSet::from([left]))?;
+        target.add_node("B".to_string(), HashSet::from([right]))?;
+        target.add_edge(&"A".to_string(), &"B".to_string())?;
+
+        let result = treetn.restructure_to(&target, &RestructureOptions::default())?;
+
+        assert_eq!(result.node_count(), 2);
+        assert_eq!(result.edge_count(), 1);
+        assert!(result
+            .site_index_network()
+            .share_equivalent_site_index_network(&target));
+        assert!(result.to_dense()?.sub(&before)?.maxabs() < 1.0e-12);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_restructure_to_absorbs_site_free_internal_node() -> anyhow::Result<()> {
+        let left = DynIndex::new_dyn(2);
+        let right = DynIndex::new_dyn(2);
+        let b01 = DynIndex::new_dyn(2);
+        let b12 = DynIndex::new_dyn(2);
+
+        let t0 =
+            TensorDynLen::from_dense(vec![left.clone(), b01.clone()], vec![1.0, 2.0, 3.0, 4.0])?;
+        let t1 =
+            TensorDynLen::from_dense(vec![b01.clone(), b12.clone()], vec![0.5, -1.0, 1.25, 0.75])?;
+        let t2 = TensorDynLen::from_dense(vec![b12, right.clone()], vec![2.0, -0.5, 1.5, 3.0])?;
+        let treetn = TreeTN::<TensorDynLen, String>::from_tensors(
+            vec![t0, t1, t2],
+            vec!["A".to_string(), "M".to_string(), "B".to_string()],
         )?;
 
         let before = treetn.to_dense()?;

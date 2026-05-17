@@ -45,6 +45,37 @@ fn steiner_tree_indices<T: TensorLike>(
     result
 }
 
+fn canonical_node_pair<NodeName>(left: &NodeName, right: &NodeName) -> (NodeName, NodeName)
+where
+    NodeName: Clone + Ord,
+{
+    if left <= right {
+        (left.clone(), right.clone())
+    } else {
+        (right.clone(), left.clone())
+    }
+}
+
+fn choose_site_free_absorption_target<NodeName>(
+    neighbor_targets: &HashSet<NodeName>,
+    target_edges: &HashSet<(NodeName, NodeName)>,
+) -> Option<NodeName>
+where
+    NodeName: Clone + Hash + Eq + Ord,
+{
+    if neighbor_targets.is_empty() {
+        return None;
+    }
+
+    let mut candidates = neighbor_targets.iter().cloned().collect::<Vec<_>>();
+    candidates.sort();
+    candidates.into_iter().find(|candidate| {
+        neighbor_targets.iter().all(|other| {
+            candidate == other || target_edges.contains(&canonical_node_pair(candidate, other))
+        })
+    })
+}
+
 /// Check if nodes form a connected induced subgraph in the given graph.
 /// DFS restricted to edges where both endpoints are in `nodes`.
 fn is_connected_subset_on_graph<T: TensorLike>(
@@ -210,9 +241,13 @@ where
         }
 
         // Step 4b: Absorb site-free dangling subtrees into the unique adjacent
-        // target group. These nodes carry only gauge/internal factors; dropping
-        // them would change values, while assigning them across two different
-        // target groups would change the requested topology.
+        // target group, or into an adjacent target group that preserves all
+        // requested quotient edges. These nodes carry only gauge/internal
+        // factors; dropping them would change values.
+        let target_edges: HashSet<_> = target
+            .edges()
+            .map(|(left, right)| canonical_node_pair(&left, &right))
+            .collect();
         let mut current_to_target = HashMap::<V, TargetV>::new();
         for (target_name, current_nodes) in &target_to_current {
             for current_node in current_nodes {
@@ -235,8 +270,9 @@ where
                     .neighbors(&current_name)
                     .filter_map(|neighbor| current_to_target.get(&neighbor).cloned())
                     .collect();
-                if neighbor_targets.len() == 1 {
-                    let target_name = neighbor_targets.into_iter().next().unwrap();
+                if let Some(target_name) =
+                    choose_site_free_absorption_target(&neighbor_targets, &target_edges)
+                {
                     additions.push((target_name, current_name));
                 }
             }

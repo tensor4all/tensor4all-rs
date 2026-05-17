@@ -293,19 +293,69 @@ where
     Ok(TreeTopology::new(nodes, union_edges))
 }
 
-fn validate_mismatched_union_topology<V>(
-    a: &TreeTN<TensorDynLen, V>,
-    b: &TreeTN<TensorDynLen, V>,
-) -> Result<()>
+fn align_to_union_topology<V>(
+    tn: &TreeTN<TensorDynLen, V>,
+    node_names: &[V],
+    union_edges: &[(V, V)],
+) -> Result<TreeTN<TensorDynLen, V>>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+    <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
 {
-    let node_names = compatible_union_node_names(a, b);
-    let mut union_edges = sorted_edge_set(a);
-    union_edges.extend(sorted_edge_set(b));
-    union_edges.sort();
-    union_edges.dedup();
-    validate_union_topology(&node_names, &union_edges)
+    let existing_nodes: HashSet<_> = tn.node_names().into_iter().collect();
+    let existing_edges: HashSet<_> = sorted_edge_set(tn).into_iter().collect();
+    let mut structural_links = HashMap::<V, Vec<DynIndex>>::new();
+
+    for (u, v) in union_edges {
+        if existing_edges.contains(&(u.clone(), v.clone())) {
+            continue;
+        }
+
+        let link = DynIndex::new_dyn(1);
+        structural_links
+            .entry(u.clone())
+            .or_default()
+            .push(link.clone());
+        structural_links.entry(v.clone()).or_default().push(link);
+    }
+
+    let mut tensors = Vec::with_capacity(node_names.len());
+    let mut names = Vec::with_capacity(node_names.len());
+
+    for node_name in node_names {
+        let links = structural_links.remove(node_name).unwrap_or_default();
+        let tensor = if existing_nodes.contains(node_name) {
+            let node = tn.node_index(node_name).ok_or_else(|| {
+                anyhow!(
+                    "partial_contract: missing node {:?} while aligning topology",
+                    node_name
+                )
+            })?;
+            let mut tensor = tn.tensor(node).cloned().ok_or_else(|| {
+                anyhow!(
+                    "partial_contract: missing tensor for node {:?} while aligning topology",
+                    node_name
+                )
+            })?;
+            if !links.is_empty() {
+                let link_tensor = <TensorDynLen as TensorLike>::ones(&links)
+                    .context("partial_contract: failed to build dimension-1 structural links")?;
+                tensor = tensor
+                    .outer_product(&link_tensor)
+                    .context("partial_contract: failed to attach dimension-1 structural links")?;
+            }
+            tensor
+        } else {
+            <TensorDynLen as TensorLike>::ones(&links)
+                .context("partial_contract: failed to build missing-node scalar tensor")?
+        };
+
+        tensors.push(tensor);
+        names.push(node_name.clone());
+    }
+
+    TreeTN::from_tensors(tensors, names)
+        .context("partial_contract: failed to align TreeTN to union topology")
 }
 
 fn dense_element_count(indices: &[DynIndex]) -> Result<usize> {
@@ -384,7 +434,28 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
 {
-    validate_mismatched_union_topology(a, b)?;
+    let node_names = compatible_union_node_names(a, b);
+    let mut union_edges = sorted_edge_set(a);
+    union_edges.extend(sorted_edge_set(b));
+    union_edges.sort();
+    union_edges.dedup();
+    validate_union_topology(&node_names, &union_edges)?;
+
+    let structural_result = (|| {
+        let aligned_a = align_to_union_topology(a, &node_names, &union_edges)?;
+        let aligned_b = align_to_union_topology(b, &node_names, &union_edges)?;
+        contract(&aligned_a, &aligned_b, center, options.clone())
+            .context("partial_contract: failed contraction after aligning mismatched topologies")
+    })();
+
+    match structural_result {
+        Ok(result) => return Ok(result),
+        Err(err) if options.mismatched_topology_dense_limit.is_none() => {
+            return Err(err);
+        }
+        Err(_) => {}
+    }
+
     validate_mismatched_dense_reference_fallback(a, b, &options)?;
 
     let a_dense = a

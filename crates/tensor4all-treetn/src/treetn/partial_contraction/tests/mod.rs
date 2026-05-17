@@ -675,7 +675,7 @@ fn test_partial_contract_allows_compatible_topology_mismatch_with_gap_leaf() {
         &tn_b,
         &spec,
         &"A".to_string(),
-        ContractionOptions::default().with_mismatched_topology_dense_limit(64),
+        ContractionOptions::default(),
     );
     assert!(result.is_ok(), "{result:?}");
 
@@ -688,7 +688,7 @@ fn test_partial_contract_allows_compatible_topology_mismatch_with_gap_leaf() {
 }
 
 #[test]
-fn test_partial_contract_rejects_mismatched_topology_dense_fallback_without_explicit_limit() {
+fn test_partial_contract_aligns_long_mismatched_chain_without_dense_limit() {
     fn binary_chain(node_count: usize) -> TreeTN<TensorDynLen, usize> {
         let mut tensors = Vec::with_capacity(node_count);
         let mut names = Vec::with_capacity(node_count);
@@ -723,9 +723,11 @@ fn test_partial_contract_rejects_mismatched_topology_dense_fallback_without_expl
         output_order: None,
     };
 
-    let err =
-        partial_contract(&tn_a, &tn_b, &spec, &0usize, ContractionOptions::default()).unwrap_err();
-    assert!(err.to_string().contains("explicit dense/reference limit"));
+    let result =
+        partial_contract(&tn_a, &tn_b, &spec, &0usize, ContractionOptions::default()).unwrap();
+    assert_eq!(result.node_count(), 25);
+    assert_eq!(result.edge_count(), 24);
+    assert_eq!(result.external_indices().len(), 49);
 }
 
 #[test]
