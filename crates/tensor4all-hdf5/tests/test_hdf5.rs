@@ -269,6 +269,34 @@ fn test_mps_roundtrip() {
 }
 
 #[test]
+fn test_mps_load_preserves_site_tensor_index_order() {
+    let path = temp_path("mps_preserve_index_order");
+
+    let site0 = Index::new_with_size(DynId(10), 2);
+    let link = Index::new_with_size(DynId(11), 3);
+    let site1 = Index::new_with_size(DynId(12), 2);
+    let left = TensorDynLen::from_dense(
+        vec![link.clone(), site0.clone()],
+        vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+    )
+    .unwrap();
+    let right = TensorDynLen::from_dense(
+        vec![site1.clone(), link.clone()],
+        vec![6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
+    )
+    .unwrap();
+    let mps = TensorTrain::new(vec![left, right]).unwrap();
+
+    save_mps(&path, "mps", &mps).unwrap();
+    let loaded = load_mps(&path, "mps").unwrap();
+
+    assert_eq!(loaded.tensor(0).unwrap().indices(), &[link.clone(), site0]);
+    assert_eq!(loaded.tensor(1).unwrap().indices(), &[site1, link]);
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn test_append_mps_keeps_multiple_named_objects() {
     let path = temp_path("append_mps_multiple");
     std::fs::remove_file(&path).ok();

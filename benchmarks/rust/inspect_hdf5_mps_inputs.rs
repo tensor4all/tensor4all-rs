@@ -56,7 +56,7 @@ fn main() -> anyhow::Result<()> {
     summarize("rhs", &rhs);
     summarize("init", &init);
 
-    println!("--- Raw HDF5 site tensors before TensorTrain normalization ---");
+    println!("--- Raw HDF5 site tensors ---");
     let last_operator_site = format!("operator_as_mps/MPS[{}]", operator_as_mps.len());
     summarize_raw_tensor(&path, "operator_as_mps/MPS[1]")?;
     summarize_raw_tensor(&path, &last_operator_site)?;

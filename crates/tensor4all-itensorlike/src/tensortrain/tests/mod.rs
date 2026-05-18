@@ -103,6 +103,52 @@ fn test_multi_site_indices() {
 }
 
 #[test]
+fn test_new_preserves_site_tensor_index_order() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![l01.clone(), s0.clone()]);
+    let t1 = make_tensor(vec![s1.clone(), l01.clone()]);
+
+    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+    assert_eq!(tt.tensor(0).unwrap().indices(), &[l01.clone(), s0]);
+    assert_eq!(tt.tensor(1).unwrap().indices(), &[s1, l01]);
+}
+
+#[test]
+fn test_with_ortho_preserves_site_tensor_index_order() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![l01.clone(), s0.clone()]);
+    let t1 = make_tensor(vec![s1.clone(), l01.clone()]);
+
+    let tt = TensorTrain::with_ortho(vec![t0, t1], -1, 1, Some(CanonicalForm::Unitary)).unwrap();
+
+    assert_eq!(tt.tensor(0).unwrap().indices(), &[l01.clone(), s0]);
+    assert_eq!(tt.tensor(1).unwrap().indices(), &[s1, l01]);
+}
+
+#[test]
+fn test_from_treetn_preserves_site_tensor_index_order() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![l01.clone(), s0.clone()]);
+    let t1 = make_tensor(vec![s1.clone(), l01.clone()]);
+    let tree = tensor4all_treetn::TreeTN::from_tensors(vec![t0, t1], vec![0usize, 1usize]).unwrap();
+
+    let tt = TensorTrain::from_treetn(tree).unwrap();
+
+    assert_eq!(tt.tensor(0).unwrap().indices(), &[l01.clone(), s0]);
+    assert_eq!(tt.tensor(1).unwrap().indices(), &[s1, l01]);
+}
+
+#[test]
 fn test_ortho_tracking() {
     let s0 = idx(0, 2);
     let l01 = idx(1, 3);
@@ -299,7 +345,15 @@ fn test_contract_with_fit_method() {
     let result = tt1.contract(&tt2, &options);
     assert!(result.is_ok());
     let result_tt = result.unwrap();
-    assert_eq!(result_tt.len(), 1);
+    let naive_result = tt1
+        .to_dense()
+        .unwrap()
+        .contract(&tt2.to_dense().unwrap())
+        .unwrap();
+    assert!(result_tt
+        .to_dense()
+        .unwrap()
+        .isapprox(&naive_result, 1e-10, 0.0));
 }
 
 #[test]
@@ -320,7 +374,15 @@ fn test_contract_with_naive_method() {
     let result = tt1.contract(&tt2, &options);
     assert!(result.is_ok());
     let result_tt = result.unwrap();
-    assert_eq!(result_tt.len(), 1);
+    let naive_result = tt1
+        .to_dense()
+        .unwrap()
+        .contract(&tt2.to_dense().unwrap())
+        .unwrap();
+    assert!(result_tt
+        .to_dense()
+        .unwrap()
+        .isapprox(&naive_result, 1e-10, 0.0));
 }
 
 #[test]
@@ -347,7 +409,15 @@ fn test_contract_nhalfsweeps_conversion() {
     let result = tt1.contract(&tt2, &options);
     assert!(result.is_ok());
     let result_tt = result.unwrap();
-    assert_eq!(result_tt.len(), 1);
+    let naive_result = tt1
+        .to_dense()
+        .unwrap()
+        .contract(&tt2.to_dense().unwrap())
+        .unwrap();
+    assert!(result_tt
+        .to_dense()
+        .unwrap()
+        .isapprox(&naive_result, 1e-10, 0.0));
 }
 
 #[test]
@@ -686,6 +756,22 @@ fn test_set_tensor_checked_invalid_site_errors() {
         err,
         TensorTrainError::SiteOutOfBounds { site: 2, length: 2 }
     ));
+}
+
+#[test]
+fn test_set_tensor_checked_preserves_replacement_index_order() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+    let t1 = make_tensor(vec![l01.clone(), s1]);
+    let replacement = make_tensor(vec![l01.clone(), s0.clone()]);
+
+    let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    tt.set_tensor_checked(0, replacement).unwrap();
+
+    assert_eq!(tt.tensor(0).unwrap().indices(), &[l01, s0]);
 }
 
 #[test]

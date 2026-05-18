@@ -176,11 +176,10 @@ impl TensorTrain {
                 }
             })?;
 
-        let mut tt = Self {
+        let tt = Self {
             treetn,
             canonical_form: None,
         };
-        tt.normalize_site_tensor_orders()?;
         Ok(tt)
     }
 
@@ -239,17 +238,14 @@ impl TensorTrain {
                 })?;
             }
         }
-        if tt.has_simple_linear_links() {
-            tt.normalize_site_tensor_orders()?;
-        }
         Ok(tt)
     }
 
     /// Create a tensor train from a linear-chain [`TreeTN`].
     ///
     /// The input tree must use `usize` node names and represent a tensor-train
-    /// chain. Node names are renumbered to `0..len` when necessary, and simple
-    /// site tensor orders are normalized to left-link, site, right-link order.
+    /// chain. Node names are renumbered to `0..len` when necessary. Site tensor
+    /// index order is preserved.
     ///
     /// # Errors
     ///
@@ -274,7 +270,13 @@ impl TensorTrain {
     ///
     /// let tt = TensorTrain::from_treetn(tree)?;
     /// assert_eq!(tt.len(), 2);
-    /// assert_eq!(tt.site_dims(), vec![2, 2]);
+    /// assert_eq!(
+    ///     tt.siteinds()
+    ///         .into_iter()
+    ///         .map(|indices| indices.into_iter().map(|idx| idx.size()).collect::<Vec<_>>())
+    ///         .collect::<Vec<_>>(),
+    ///     vec![vec![2], vec![2]]
+    /// );
     /// # Ok(())
     /// # }
     /// ```
@@ -901,8 +903,7 @@ impl TensorTrain {
     /// assert!(tt.set_tensor_checked(2, tt.tensor(0).unwrap().clone()).is_err());
     /// ```
     pub fn set_tensor_checked(&mut self, site: usize, tensor: TensorDynLen) -> Result<()> {
-        self.set_tensor_raw(site, tensor)
-            .and_then(|()| self.normalize_site_tensor_order(site))?;
+        self.set_tensor_raw(site, tensor)?;
         // Invalidate orthogonality
         self.treetn
             .set_canonical_region(Vec::<usize>::new())

@@ -269,7 +269,26 @@ fn test_contract_fit_two_sites() {
 
     let options = ContractOptions::fit().with_max_rank(10).with_nhalfsweeps(4);
     let result = contract(&tt1, &tt2, &options).unwrap();
-    assert_eq!(result.len(), 1);
+    assert_matches_naive(&tt1, &tt2, &result);
+}
+
+#[test]
+fn test_contract_fit_accepts_non_chain_ordered_site_tensors() {
+    let s0 = idx(1080, 2);
+    let s1 = idx(1081, 2);
+    let l01_a = idx(1082, 3);
+    let l01_b = idx(1083, 3);
+
+    let t1_0 = make_tensor(vec![l01_a.clone(), s0.clone()]);
+    let t1_1 = make_tensor(vec![s1.clone(), l01_a.clone()]);
+    let tt1 = TensorTrain::new(vec![t1_0, t1_1]).unwrap();
+
+    let t2_0 = make_tensor(vec![l01_b.clone(), s0.clone()]);
+    let t2_1 = make_tensor(vec![s1.clone(), l01_b.clone()]);
+    let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
+
+    let options = ContractOptions::fit().with_max_rank(10).with_nhalfsweeps(4);
+    let result = contract(&tt1, &tt2, &options).unwrap();
     assert_matches_naive(&tt1, &tt2, &result);
 }
 

@@ -24,38 +24,42 @@ cargo run -p tensor4all-hdf5 --example inspect_mps_inputs --release -- benchmark
   - `rhs.length = init.length = 38`
   - `rhs.bond_dims = init.bond_dims = [32, ..., 32]`
 - Raw site tensors loaded with `load_itensor("operator_as_mps/MPS[i]")`
-  preserve the Julia HDF5 index order. Loading the whole object with
-  `load_mps` normalizes site tensors into `TensorTrain` chain order, so
-  endpoint link indices may move relative to the raw HDF5 order. The index
-  identities, prime levels, dimensions, and tags are preserved.
+  preserve the Julia HDF5 index order. After `de51179` identified the
+  unwanted behavior and the follow-up TensorTrain fix, loading the whole object
+  with `load_mps` also preserves the site tensor index order. The index
+  identities, prime levels, dimensions, tags, and axis order are preserved.
 
-## Follow-up: relax TensorTrain index-order normalization
+## TensorTrain index-order normalization relaxation
 
-The current `TensorTrain` constructor path permutes site tensor indices into a
+The old `TensorTrain` constructor path permuted site tensor indices into a
 chain-friendly convention:
 
 ```text
 [left_link, site_indices..., right_link]
 ```
 
-This is useful for APIs that require a simple chain layout, likely including
-conversion to or from `tensor4all-simplett::TensorTrain`. It is not obviously
-needed at the ITensor-like `TensorTrain` boundary itself. In particular, HDF5
-interoperability and Julia/Rust parity debugging are easier if `load_mps`
-preserves the raw ITensors.jl site tensor index order.
+This can be useful for APIs that require a simple chain layout, likely including
+conversion to or from `tensor4all-simplett::TensorTrain`. It is not needed at
+the ITensor-like `TensorTrain` boundary itself. In particular, HDF5
+interoperability and Julia/Rust parity debugging require `load_mps` to preserve
+the raw ITensors.jl site tensor index order.
 
-Design note:
+Implemented policy:
 
 - Keep raw `ITensor` HDF5 load/store order-preserving.
-- Prefer making chain-order normalization explicit and local to operations that
-  actually require it.
-- Consider relaxing `TensorTrain::new` / `TensorTrain::with_ortho` so they
-  validate adjacent shared links without permuting tensors.
-- If some SimpleTT conversion or dense evaluation path needs canonical chain
+- Keep `TensorTrain::new`, `TensorTrain::with_ortho`, `TensorTrain::from_treetn`,
+  and `TensorTrain::set_tensor_checked` order-preserving.
+- Keep chain-order normalization explicit and local to operations that actually
+  require it. The current `norm_squared_fast_path` still applies it only to a
+  clone before packing sites.
+- Do not reorder fit-contraction inputs to satisfy an algorithm precondition.
+  Fit contraction is covered by a regression with non-chain-ordered site tensor
+  axes and must rely on index identity/topology rather than axis position.
+- If a future SimpleTT conversion or dense evaluation path needs canonical chain
   axis order, move the `permuteinds` step into that conversion path or expose an
   explicitly named helper such as `into_chain_ordered`.
-- Add a regression test that Julia HDF5 `MPS[1]` raw order matches the tensor
-  obtained after `load_mps` when no explicit chain-order conversion is requested.
+- Regression tests now cover constructor, `with_ortho`, `from_treetn`, setter,
+  and HDF5 `load_mps` order preservation.
 
 ## Generated files
 
