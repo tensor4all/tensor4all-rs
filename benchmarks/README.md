@@ -23,6 +23,12 @@ Projected local-operator apply:
 RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_projected_apply --release -- 38 32 32 3 0
 ```
 
+Prepared local linsolve:
+
+```bash
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_local_linsolve --release -- 38 32 32 1 10 30 0
+```
+
 ### Julia
 
 ```bash
@@ -34,6 +40,12 @@ Projected local-operator apply:
 
 ```bash
 BLAS_NUM_THREADS=1 julia --project=benchmarks/julia benchmarks/julia/benchmark_projected_apply.jl 38 32 32 3 0
+```
+
+Prepared local linsolve:
+
+```bash
+BLAS_NUM_THREADS=1 julia --project=benchmarks/julia benchmarks/julia/benchmark_local_linsolve.jl 38 32 32 1 1 10
 ```
 
 ## Benchmark Details
@@ -50,3 +62,9 @@ used by two-site TreeTN/ITensor-style local solves. The Rust source of truth is
 `benchmarks/rust/benchmark_projected_apply.rs`, included by the cargo example
 target under `tensor4all-treetn`; the Julia counterpart is
 `benchmarks/julia/benchmark_projected_apply.jl`.
+
+The prepared local linsolve benchmarks construct the operator, right-hand side,
+and initial state once, then time the local solve body. They also report local
+GMRES/apply/RHS/factorization buckets. Use Julia `maxiter=1, krylovdim=10` as a
+rough match to Rust's `krylov_maxiter=10` total-iteration cap; KrylovKit's
+`maxiter=10, krylovdim=30` performs far more local operator applications.
