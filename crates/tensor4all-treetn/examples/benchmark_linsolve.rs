@@ -187,9 +187,9 @@ fn main() -> anyhow::Result<()> {
     let a0 = 0.0_f64;
     let a1 = 1.0_f64;
 
-    let krylov_tol = 1e-6_f64;
-    let krylov_maxiter = 20usize;
-    let krylov_dim = 30usize;
+    let gmres_tol = 1e-6_f64;
+    let gmres_max_restarts = 20usize;
+    let gmres_restart_dim = 30usize;
 
     let n_runs = 10usize;
 
@@ -201,7 +201,7 @@ fn main() -> anyhow::Result<()> {
     println!("max_rank = {max_rank}");
     println!("cutoff = {cutoff}");
     println!("rtol = sqrt(cutoff) = {rtol:.6}");
-    println!("GMRES: tol={krylov_tol}, maxiter={krylov_maxiter}, krylov_dim={krylov_dim}");
+    println!("GMRES: tol={gmres_tol}, maxiter={gmres_max_restarts}, gmres_restart_dim={gmres_restart_dim}");
     println!("coefficients: a0={a0}, a1={a1}");
     println!("seed = {seed} (used for random MPO)");
     println!("n_runs = {n_runs} (excluding warmup)");
@@ -233,9 +233,9 @@ fn main() -> anyhow::Result<()> {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(n_sweeps)
         .with_truncation(truncation)
-        .with_krylov_tol(krylov_tol)
-        .with_krylov_maxiter(krylov_maxiter)
-        .with_krylov_dim(krylov_dim)
+        .with_gmres_tol(gmres_tol)
+        .with_gmres_max_restarts(gmres_max_restarts)
+        .with_gmres_restart_dim(gmres_restart_dim)
         .with_coefficients(a0, a1);
 
     let compute_rel_residual = |x: &TreeTN<TensorDynLen, String>| -> anyhow::Result<f64> {

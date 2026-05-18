@@ -407,9 +407,9 @@ fn main() -> anyhow::Result<()> {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(10)
         .with_max_rank(bond_dim)
-        .with_krylov_tol(1e-10)
-        .with_krylov_maxiter(30)
-        .with_krylov_dim(30)
+        .with_gmres_tol(1e-10)
+        .with_gmres_max_restarts(30)
+        .with_gmres_restart_dim(30)
         .with_coefficients(0.0, 1.0);
 
     let n_sweeps = 10usize;

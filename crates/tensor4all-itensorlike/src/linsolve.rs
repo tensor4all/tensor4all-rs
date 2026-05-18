@@ -54,24 +54,24 @@ pub fn linsolve(
 
     validate_svd_truncation_options(options.max_rank(), options.svd_policy())?;
 
-    if !options.krylov_tol().is_finite() || options.krylov_tol() <= 0.0 {
+    if !options.gmres_tol().is_finite() || options.gmres_tol() <= 0.0 {
         return Err(TensorTrainError::OperationError {
             message: format!(
-                "krylov_tol must be finite and > 0, got {}",
-                options.krylov_tol()
+                "gmres_tol must be finite and > 0, got {}",
+                options.gmres_tol()
             ),
         });
     }
 
-    if options.krylov_maxiter() == 0 {
+    if options.gmres_max_restarts() == 0 {
         return Err(TensorTrainError::OperationError {
-            message: "krylov_maxiter must be >= 1".to_string(),
+            message: "gmres_max_restarts must be >= 1".to_string(),
         });
     }
 
-    if options.krylov_dim() == 0 {
+    if options.gmres_restart_dim() == 0 {
         return Err(TensorTrainError::OperationError {
-            message: "krylov_dim must be >= 1".to_string(),
+            message: "gmres_restart_dim must be >= 1".to_string(),
         });
     }
 
@@ -89,9 +89,9 @@ pub fn linsolve(
     let (a0, a1) = options.coefficients();
     let treetn_options = tensor4all_treetn::LinsolveOptions::new(nfullsweeps)
         .with_truncation(TruncationOptions::new())
-        .with_krylov_tol(options.krylov_tol())
-        .with_krylov_maxiter(options.krylov_maxiter())
-        .with_krylov_dim(options.krylov_dim())
+        .with_gmres_tol(options.gmres_tol())
+        .with_gmres_max_restarts(options.gmres_max_restarts())
+        .with_gmres_restart_dim(options.gmres_restart_dim())
         .with_coefficients(a0, a1);
 
     let treetn_options = if let Some(policy) = options.svd_policy() {
@@ -111,6 +111,7 @@ pub fn linsolve(
     } else {
         treetn_options
     };
+    let treetn_options = treetn_options.with_residual_check(options.check_residual());
 
     // Use the last site as the sweep center
     let center = init.len() - 1;

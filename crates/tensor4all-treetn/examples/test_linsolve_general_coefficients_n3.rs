@@ -505,7 +505,7 @@ fn run_test_case(
     // Setup linsolve options and updater
     let options = LinsolveOptions::default()
         .with_nfullsweeps(10)
-        .with_krylov_tol(1e-10)
+        .with_gmres_tol(1e-10)
         .with_max_rank(50)
         .with_coefficients(a0, a1);
 

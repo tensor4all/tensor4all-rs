@@ -159,9 +159,9 @@ fn test_linsolve_options_default() {
     let opts = LinsolveOptions::default();
 
     assert_eq!(opts.nfullsweeps, 5);
-    assert_eq!(opts.krylov_tol, 1e-10);
-    assert_eq!(opts.krylov_maxiter, 100);
-    assert_eq!(opts.krylov_dim, 30);
+    assert_eq!(opts.gmres_tol, 1e-10);
+    assert_eq!(opts.gmres_max_restarts, 100);
+    assert_eq!(opts.gmres_restart_dim, 30);
     assert_eq!(opts.a0, AnyScalar::new_real(0.0));
     assert_eq!(opts.a1, AnyScalar::new_real(1.0));
     assert!(opts.convergence_tol.is_none());
@@ -171,16 +171,16 @@ fn test_linsolve_options_default() {
 fn test_linsolve_options_builder() {
     let opts = LinsolveOptions::default()
         .with_nfullsweeps(5)
-        .with_krylov_tol(1e-8)
-        .with_krylov_maxiter(50)
-        .with_krylov_dim(20)
+        .with_gmres_tol(1e-8)
+        .with_gmres_max_restarts(50)
+        .with_gmres_restart_dim(20)
         .with_coefficients(1.0, -1.0)
         .with_convergence_tol(1e-6);
 
     assert_eq!(opts.nfullsweeps, 5);
-    assert_eq!(opts.krylov_tol, 1e-8);
-    assert_eq!(opts.krylov_maxiter, 50);
-    assert_eq!(opts.krylov_dim, 20);
+    assert_eq!(opts.gmres_tol, 1e-8);
+    assert_eq!(opts.gmres_max_restarts, 50);
+    assert_eq!(opts.gmres_restart_dim, 20);
     assert_eq!(opts.a0, AnyScalar::new_real(1.0));
     assert_eq!(opts.a1, AnyScalar::new_real(-1.0));
     assert_eq!(opts.convergence_tol, Some(1e-6));
@@ -495,9 +495,9 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
     // for a 2-site diagonal operator.
     let options = LinsolveOptions::default()
         .with_nfullsweeps(5)
-        .with_krylov_tol(1e-10)
-        .with_krylov_dim(10)
-        .with_krylov_maxiter(30)
+        .with_gmres_tol(1e-10)
+        .with_gmres_restart_dim(10)
+        .with_gmres_max_restarts(30)
         .with_max_rank(4);
     let nsweeps = options.nfullsweeps;
 
@@ -810,7 +810,7 @@ fn test_linsolve_3site_identity() {
     // Solve I * x = b
     let options = LinsolveOptions::default()
         .with_nfullsweeps(2)
-        .with_krylov_tol(1e-8)
+        .with_gmres_tol(1e-8)
         .with_max_rank(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -1268,7 +1268,7 @@ fn test_linsolve_with_index_mappings_identity() {
     // Create SquareLinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
-        .with_krylov_tol(1e-10)
+        .with_gmres_tol(1e-10)
         .with_max_rank(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -1319,7 +1319,7 @@ fn test_linsolve_with_index_mappings_diagonal() {
     // Create SquareLinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
         .with_nfullsweeps(3)
-        .with_krylov_tol(1e-10)
+        .with_gmres_tol(1e-10)
         .with_max_rank(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -1475,7 +1475,7 @@ fn test_linsolve_with_index_mappings_three_site_identity() {
     // Create SquareLinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
-        .with_krylov_tol(1e-10)
+        .with_gmres_tol(1e-10)
         .with_max_rank(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -1532,7 +1532,7 @@ fn test_linsolve_with_index_mappings_three_site_diagonal() {
     // Create SquareLinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
         .with_nfullsweeps(5)
-        .with_krylov_tol(1e-10)
+        .with_gmres_tol(1e-10)
         .with_max_rank(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -1666,7 +1666,7 @@ fn test_linsolve_pauli_x() {
     // Solve X * x = b
     let options = LinsolveOptions::default()
         .with_nfullsweeps(20)
-        .with_krylov_tol(1e-12)
+        .with_gmres_tol(1e-12)
         .with_max_rank(8);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -1835,7 +1835,7 @@ fn test_linsolve_general_matrix() {
     // Solve A * x = b
     let options = LinsolveOptions::default()
         .with_nfullsweeps(30)
-        .with_krylov_tol(1e-12)
+        .with_gmres_tol(1e-12)
         .with_max_rank(8);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -1923,7 +1923,7 @@ fn test_linsolve_general_matrix_nonsymmetric() {
 
     let options = LinsolveOptions::default()
         .with_nfullsweeps(30)
-        .with_krylov_tol(1e-12)
+        .with_gmres_tol(1e-12)
         .with_max_rank(8);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -2194,7 +2194,7 @@ fn test_linsolve_n_site_identity_impl(n_sites: usize) {
     // Create SquareLinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
-        .with_krylov_tol(1e-10)
+        .with_gmres_tol(1e-10)
         .with_max_rank(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -2250,9 +2250,9 @@ fn test_square_linsolve_with_mappings_identity() {
     let init = rhs.clone();
     let options = LinsolveOptions::default()
         .with_nfullsweeps(3)
-        .with_krylov_tol(1e-10)
-        .with_krylov_dim(10)
-        .with_krylov_maxiter(30)
+        .with_gmres_tol(1e-10)
+        .with_gmres_restart_dim(10)
+        .with_gmres_max_restarts(30)
         .with_max_rank(4)
         .with_convergence_tol(1e-8);
 
@@ -2341,9 +2341,9 @@ fn test_square_linsolve_with_mappings_allows_unmapped_spectator_nodes() {
 
     let options = LinsolveOptions::default()
         .with_nfullsweeps(2)
-        .with_krylov_tol(1e-10)
-        .with_krylov_dim(10)
-        .with_krylov_maxiter(30)
+        .with_gmres_tol(1e-10)
+        .with_gmres_restart_dim(10)
+        .with_gmres_max_restarts(30)
         .with_max_rank(8);
     let result = square_linsolve(
         &mpo,
@@ -2406,9 +2406,9 @@ fn test_square_linsolve_with_mappings_identity_term_only() {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(3)
         .with_coefficients(1.0, 1.0)
-        .with_krylov_tol(1e-12)
-        .with_krylov_dim(10)
-        .with_krylov_maxiter(30)
+        .with_gmres_tol(1e-12)
+        .with_gmres_restart_dim(10)
+        .with_gmres_max_restarts(30)
         .with_max_rank(4)
         .with_convergence_tol(1e-8);
     let result = square_linsolve(

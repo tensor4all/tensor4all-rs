@@ -9,6 +9,7 @@ fn test_default_options() {
     assert_eq!(opts.a0, AnyScalar::new_real(0.0));
     assert_eq!(opts.a1, AnyScalar::new_real(1.0));
     assert!(opts.convergence_tol.is_none());
+    assert!(opts.check_residual);
 }
 
 #[test]
@@ -19,17 +20,19 @@ fn test_builder_pattern() {
     let opts = LinsolveOptions::new(5)
         .with_max_rank(100)
         .with_svd_policy(policy)
-        .with_krylov_tol(1e-8)
+        .with_gmres_tol(1e-8)
         .with_coefficients(1.0, -1.0)
-        .with_convergence_tol(1e-6);
+        .with_convergence_tol(1e-6)
+        .with_residual_check(false);
 
     assert_eq!(opts.nfullsweeps, 5);
     assert_eq!(opts.truncation.max_rank(), Some(100));
     assert_eq!(opts.truncation.svd_policy(), Some(policy));
-    assert_eq!(opts.krylov_tol, 1e-8);
+    assert_eq!(opts.gmres_tol, 1e-8);
     assert_eq!(opts.a0, AnyScalar::new_real(1.0));
     assert_eq!(opts.a1, AnyScalar::new_real(-1.0));
     assert_eq!(opts.convergence_tol, Some(1e-6));
+    assert!(!opts.check_residual);
 }
 
 #[test]

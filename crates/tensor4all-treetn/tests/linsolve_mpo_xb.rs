@@ -107,9 +107,9 @@ fn test_linsolve_allows_two_site_indices_per_node_for_rhs_alignment() -> anyhow:
 
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
-        .with_krylov_tol(1e-8)
-        .with_krylov_maxiter(10)
-        .with_krylov_dim(10)
+        .with_gmres_tol(1e-8)
+        .with_gmres_max_restarts(10)
+        .with_gmres_restart_dim(10)
         .with_max_rank(4)
         .with_coefficients(0.0, 1.0);
 
@@ -154,9 +154,9 @@ fn test_linsolve_precheck_fails_when_init_rhs_index_structure_mismatch() {
 
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
-        .with_krylov_tol(1e-8)
-        .with_krylov_maxiter(10)
-        .with_krylov_dim(10)
+        .with_gmres_tol(1e-8)
+        .with_gmres_max_restarts(10)
+        .with_gmres_restart_dim(10)
         .with_max_rank(4)
         .with_coefficients(0.0, 1.0);
 

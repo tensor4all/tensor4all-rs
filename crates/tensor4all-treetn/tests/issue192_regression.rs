@@ -178,9 +178,9 @@ fn issue192_regression_no_svd_nan_n5_identity_ones() -> anyhow::Result<()> {
     let cutoff = 1e-8_f64;
     let rtol = cutoff.sqrt();
 
-    let krylov_tol = 1e-6_f64;
-    let krylov_maxiter = 20usize;
-    let krylov_dim = 30usize;
+    let gmres_tol = 1e-6_f64;
+    let gmres_max_restarts = 20usize;
+    let gmres_restart_dim = 30usize;
 
     let (rhs, site_indices) = create_n_site_ones_mps(n_sites, phys_dim, bond_dim)?;
     let (mpo, s_in_tmp, s_out_tmp) =
@@ -206,9 +206,9 @@ fn issue192_regression_no_svd_nan_n5_identity_ones() -> anyhow::Result<()> {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(n_sweeps)
         .with_truncation(truncation)
-        .with_krylov_tol(krylov_tol)
-        .with_krylov_maxiter(krylov_maxiter)
-        .with_krylov_dim(krylov_dim)
+        .with_gmres_tol(gmres_tol)
+        .with_gmres_max_restarts(gmres_max_restarts)
+        .with_gmres_restart_dim(gmres_restart_dim)
         .with_coefficients(a0, a1);
 
     let plan = LocalUpdateSweepPlan::from_treetn(&x, &center, 2)

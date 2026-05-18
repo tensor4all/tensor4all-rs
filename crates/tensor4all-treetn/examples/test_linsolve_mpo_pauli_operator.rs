@@ -602,9 +602,9 @@ fn main() -> anyhow::Result<()> {
     let options_1 = LinsolveOptions::default()
         .with_nfullsweeps(5)
         .with_max_rank(4)
-        .with_krylov_tol(1e-8)
-        .with_krylov_maxiter(20)
-        .with_krylov_dim(30)
+        .with_gmres_tol(1e-8)
+        .with_gmres_max_restarts(20)
+        .with_gmres_restart_dim(30)
         .with_coefficients(0.0, 1.0); // a0=0, a1=1 => A * x = b
 
     println!("--- Solving A*x = b with init=rhs (i.e., init=b) ---");
@@ -703,9 +703,9 @@ fn main() -> anyhow::Result<()> {
     let options_2 = LinsolveOptions::default()
         .with_nfullsweeps(5)
         .with_max_rank(4)
-        .with_krylov_tol(1e-8)
-        .with_krylov_maxiter(20)
-        .with_krylov_dim(30)
+        .with_gmres_tol(1e-8)
+        .with_gmres_max_restarts(20)
+        .with_gmres_restart_dim(30)
         .with_coefficients(2.0, 1.0); // a0=2, a1=1 => (2I + A) * x = b
 
     println!("--- Solving (2I + A)*x = b with init=rhs (i.e., init=b) ---");

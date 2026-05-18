@@ -600,15 +600,15 @@ fn run_test_case(
     // Adjust GMRES parameters for better convergence
     let options = LinsolveOptions::default()
         .with_nfullsweeps(10)
-        .with_krylov_tol(1e-8) // Slightly relaxed from 1e-10
-        .with_krylov_maxiter(200) // Increased from default 100
-        .with_krylov_dim(50) // Increased from default 30
+        .with_gmres_tol(1e-8) // Slightly relaxed from 1e-10
+        .with_gmres_max_restarts(200) // Increased from default 100
+        .with_gmres_restart_dim(50) // Increased from default 30
         .with_max_rank(max_rank)
         .with_coefficients(a0, a1)
         .with_convergence_tol(1e-6); // Early termination if residual < 1e-6
 
     if verbose {
-        println!("Linsolve options: max_rank={max_rank}, nfullsweeps=10, krylov_tol=1e-8, krylov_maxiter=200, krylov_dim=50, convergence_tol=1e-6");
+        println!("Linsolve options: max_rank={max_rank}, nfullsweeps=10, gmres_tol=1e-8, gmres_max_restarts=200, gmres_restart_dim=50, convergence_tol=1e-6");
     }
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(

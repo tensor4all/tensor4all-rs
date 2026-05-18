@@ -66,8 +66,8 @@ fn test_linsolve_identity_mpo_distinct_output_indices() {
 
     // This previously failed with "Index count mismatch" or "index structure mismatch"
     let options = LinsolveOptions::new(3)
-        .with_krylov_tol(1e-10)
-        .with_krylov_dim(10)
+        .with_gmres_tol(1e-10)
+        .with_gmres_restart_dim(10)
         .with_max_rank(4);
 
     let result = operator.linsolve(&rhs, init, &options).unwrap();
@@ -124,8 +124,8 @@ fn test_linsolve_identity_mpo_accepts_complex_coefficients() {
     let operator = TensorTrain::new(vec![t0_mpo, t1_mpo]).unwrap();
 
     let options = LinsolveOptions::new(3)
-        .with_krylov_tol(1e-10)
-        .with_krylov_dim(10)
+        .with_gmres_tol(1e-10)
+        .with_gmres_restart_dim(10)
         .with_max_rank(4)
         .with_coefficients(0.0, Complex64::new(0.0, 1.0));
 

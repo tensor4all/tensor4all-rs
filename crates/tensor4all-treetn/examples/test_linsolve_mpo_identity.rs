@@ -431,9 +431,9 @@ fn main() -> anyhow::Result<()> {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(5)
         .with_max_rank(4)
-        .with_krylov_tol(1e-8)
-        .with_krylov_maxiter(20)
-        .with_krylov_dim(30)
+        .with_gmres_tol(1e-8)
+        .with_gmres_max_restarts(20)
+        .with_gmres_restart_dim(30)
         .with_coefficients(1.0, 0.0); // a0=1, a1=0 => I * x = b
 
     let (operator_a, a_input_mapping, a_output_mapping) =
@@ -560,9 +560,9 @@ fn main() -> anyhow::Result<()> {
     let options_case3 = LinsolveOptions::default()
         .with_nfullsweeps(5)
         .with_max_rank(4)
-        .with_krylov_tol(1e-8)
-        .with_krylov_maxiter(20)
-        .with_krylov_dim(30)
+        .with_gmres_tol(1e-8)
+        .with_gmres_max_restarts(20)
+        .with_gmres_restart_dim(30)
         .with_coefficients(0.0, 1.0); // a0=0, a1=1 => (i*I)*x = b
 
     for init_mode in ["rhs", "random"] {

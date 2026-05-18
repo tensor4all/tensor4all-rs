@@ -4,7 +4,7 @@
 //   RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_local_linsolve --release
 //
 // Optional args:
-//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_local_linsolve --release -- <N> <state_bond_dim> <operator_bond_dim> <nsweeps> <krylov_maxiter> <krylov_dim> <step_index>
+//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_local_linsolve --release -- <N> <state_bond_dim> <operator_bond_dim> <nsweeps> <gmres_max_restarts> <gmres_restart_dim> <step_index>
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -195,8 +195,8 @@ fn main() -> anyhow::Result<()> {
     let state_bond_dim: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8);
     let operator_bond_dim: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(8);
     let nfullsweeps: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(1);
-    let krylov_maxiter: usize = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(10);
-    let krylov_dim: usize = args.get(6).and_then(|s| s.parse().ok()).unwrap_or(30);
+    let gmres_max_restarts: usize = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(10);
+    let gmres_restart_dim: usize = args.get(6).and_then(|s| s.parse().ok()).unwrap_or(30);
     let step_index: usize = args.get(7).and_then(|s| s.parse().ok()).unwrap_or(0);
 
     anyhow::ensure!(
@@ -204,14 +204,14 @@ fn main() -> anyhow::Result<()> {
         "N must be at least 2 for a two-site local step"
     );
     anyhow::ensure!(nfullsweeps > 0, "nsweeps must be greater than zero");
-    anyhow::ensure!(krylov_maxiter > 0, "krylov_maxiter must be greater than zero");
-    anyhow::ensure!(krylov_dim > 0, "krylov_dim must be greater than zero");
+    anyhow::ensure!(gmres_max_restarts > 0, "gmres_max_restarts must be greater than zero");
+    anyhow::ensure!(gmres_restart_dim > 0, "gmres_restart_dim must be greater than zero");
 
     let phys_dim = 2usize;
     let seed = 20260518_u64;
     let a0 = AnyScalar::new_real(1.0);
     let a1 = AnyScalar::new_real(0.01);
-    let krylov_tol = 1.0e-30;
+    let gmres_tol = 1.0e-30;
     let mut used_ids = HashSet::<DynId>::new();
     let mut rng = StdRng::seed_from_u64(seed);
 
@@ -259,9 +259,9 @@ fn main() -> anyhow::Result<()> {
     println!("state_bond_dim = {state_bond_dim}");
     println!("operator_bond_dim = {operator_bond_dim}");
     println!("nsweeps = {nfullsweeps}");
-    println!("krylov_maxiter = {krylov_maxiter}");
-    println!("krylov_dim = {krylov_dim}");
-    println!("krylov_tol = {krylov_tol:.1e}");
+    println!("gmres_max_restarts = {gmres_max_restarts}");
+    println!("gmres_restart_dim = {gmres_restart_dim}");
+    println!("gmres_tol = {gmres_tol:.1e}");
     println!("coefficients = ({a0:?}, {a1:?})");
     println!("center = {center}");
     println!("sweep_plan_steps = {}", plan.steps.len());
@@ -291,9 +291,9 @@ fn main() -> anyhow::Result<()> {
     let combine_time_ref = Rc::clone(&combine_time);
 
     let gmres_options = GmresOptions {
-        max_iter: krylov_dim,
-        rtol: krylov_tol,
-        max_restarts: krylov_maxiter,
+        max_iter: gmres_restart_dim,
+        rtol: gmres_tol,
+        max_restarts: gmres_max_restarts,
         verbose: false,
         check_true_residual: false,
     };
@@ -357,9 +357,9 @@ fn main() -> anyhow::Result<()> {
 
     let options = LinsolveOptions::new(nfullsweeps)
         .with_coefficients(a0, a1)
-        .with_krylov_tol(krylov_tol)
-        .with_krylov_maxiter(krylov_maxiter)
-        .with_krylov_dim(krylov_dim)
+        .with_gmres_tol(gmres_tol)
+        .with_gmres_max_restarts(gmres_max_restarts)
+        .with_gmres_restart_dim(gmres_restart_dim)
         .with_max_rank(state_bond_dim)
         .with_svd_policy(SvdTruncationPolicy::new(0.0))
         .with_residual_check(false);

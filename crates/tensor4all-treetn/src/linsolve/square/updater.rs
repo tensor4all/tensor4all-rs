@@ -974,17 +974,17 @@ where
 }
 
 fn local_gmres_options(options: &LinsolveOptions) -> Result<GmresOptions> {
-    if options.krylov_dim == 0 {
-        anyhow::bail!("LinsolveOptions::krylov_dim must be greater than zero");
+    if options.gmres_restart_dim == 0 {
+        anyhow::bail!("LinsolveOptions::gmres_restart_dim must be greater than zero");
     }
-    if options.krylov_maxiter == 0 {
-        anyhow::bail!("LinsolveOptions::krylov_maxiter must be greater than zero");
+    if options.gmres_max_restarts == 0 {
+        anyhow::bail!("LinsolveOptions::gmres_max_restarts must be greater than zero");
     }
 
     Ok(GmresOptions {
-        max_iter: options.krylov_dim,
-        rtol: options.krylov_tol,
-        max_restarts: options.krylov_maxiter,
+        max_iter: options.gmres_restart_dim,
+        rtol: options.gmres_tol,
+        max_restarts: options.gmres_max_restarts,
         verbose: false,
         check_true_residual: false,
     })
@@ -1013,9 +1013,9 @@ mod tests {
     #[test]
     fn local_gmres_options_match_krylovkit_restart_convention() {
         let options = LinsolveOptions::default()
-            .with_krylov_dim(30)
-            .with_krylov_maxiter(10)
-            .with_krylov_tol(1.0e-8);
+            .with_gmres_restart_dim(30)
+            .with_gmres_max_restarts(10)
+            .with_gmres_tol(1.0e-8);
 
         let gmres_options = local_gmres_options(&options).unwrap();
 
@@ -1027,8 +1027,8 @@ mod tests {
     #[test]
     fn local_gmres_options_does_not_convert_maxiter_to_total_step_limit() {
         let options = LinsolveOptions::default()
-            .with_krylov_dim(30)
-            .with_krylov_maxiter(100);
+            .with_gmres_restart_dim(30)
+            .with_gmres_max_restarts(100);
 
         let gmres_options = local_gmres_options(&options).unwrap();
 
@@ -1038,7 +1038,11 @@ mod tests {
 
     #[test]
     fn local_gmres_options_reject_zero_iteration_parameters() {
-        assert!(local_gmres_options(&LinsolveOptions::default().with_krylov_dim(0)).is_err());
-        assert!(local_gmres_options(&LinsolveOptions::default().with_krylov_maxiter(0)).is_err());
+        assert!(
+            local_gmres_options(&LinsolveOptions::default().with_gmres_restart_dim(0)).is_err()
+        );
+        assert!(
+            local_gmres_options(&LinsolveOptions::default().with_gmres_max_restarts(0)).is_err()
+        );
     }
 }

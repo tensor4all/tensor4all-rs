@@ -245,9 +245,9 @@ fn case_ok_identity_single_1site_step() -> anyhow::Result<()> {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
         .with_max_rank(state_bond_dim)
-        .with_krylov_tol(1e-6)
-        .with_krylov_maxiter(20)
-        .with_krylov_dim(30)
+        .with_gmres_tol(1e-6)
+        .with_gmres_max_restarts(20)
+        .with_gmres_restart_dim(30)
         .with_coefficients(0.0, 1.0);
 
     let mut x = init.canonicalize([center.clone()], CanonicalizationOptions::default())?;
@@ -289,9 +289,9 @@ fn case_fail_identity_2site_sweep() -> anyhow::Result<()> {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
         .with_max_rank(state_bond_dim)
-        .with_krylov_tol(1e-6)
-        .with_krylov_maxiter(20)
-        .with_krylov_dim(30)
+        .with_gmres_tol(1e-6)
+        .with_gmres_max_restarts(20)
+        .with_gmres_restart_dim(30)
         .with_coefficients(1.0, 1.0);
 
     let seed = 1234u64;

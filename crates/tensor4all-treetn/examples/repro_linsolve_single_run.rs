@@ -286,9 +286,9 @@ fn main() -> anyhow::Result<()> {
     let cutoff = 1e-8_f64;
     let rtol = cutoff.sqrt();
 
-    let krylov_tol = 1e-6_f64;
-    let krylov_maxiter = 20usize;
-    let krylov_dim = 30usize;
+    let gmres_tol = 1e-6_f64;
+    let gmres_max_restarts = 20usize;
+    let gmres_restart_dim = 30usize;
 
     println!("=== repro_linsolve_single_run ===");
     println!("N = {n_sites}");
@@ -300,7 +300,7 @@ fn main() -> anyhow::Result<()> {
     println!("max_rank = {max_rank}");
     println!("cutoff = {cutoff}");
     println!("rtol = sqrt(cutoff) = {rtol:.6}");
-    println!("GMRES: tol={krylov_tol}, maxiter={krylov_maxiter}, krylov_dim={krylov_dim}");
+    println!("GMRES: tol={gmres_tol}, maxiter={gmres_max_restarts}, gmres_restart_dim={gmres_restart_dim}");
     println!("coefficients: a0={a0}, a1={a1}"); // This line remains unchanged
     println!();
 
@@ -342,9 +342,9 @@ fn main() -> anyhow::Result<()> {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(n_sweeps)
         .with_truncation(truncation)
-        .with_krylov_tol(krylov_tol)
-        .with_krylov_maxiter(krylov_maxiter)
-        .with_krylov_dim(krylov_dim)
+        .with_gmres_tol(gmres_tol)
+        .with_gmres_max_restarts(gmres_max_restarts)
+        .with_gmres_restart_dim(gmres_restart_dim)
         .with_coefficients(a0, a1);
 
     let plan = LocalUpdateSweepPlan::from_treetn(&x, &center, 2)

@@ -13,14 +13,14 @@ pub struct LinsolveOptions {
     /// Truncation options for factorization.
     pub truncation: TruncationOptions,
     /// Tolerance for GMRES convergence.
-    pub krylov_tol: f64,
+    pub gmres_tol: f64,
     /// Maximum number of GMRES restart cycles per local solve.
     ///
     /// This matches KrylovKit's `maxiter` convention. The maximum number of
-    /// operator expansion steps is roughly `krylov_maxiter * krylov_dim`.
-    pub krylov_maxiter: usize,
-    /// Krylov subspace dimension (restart parameter).
-    pub krylov_dim: usize,
+    /// operator expansion steps is roughly `gmres_max_restarts * gmres_restart_dim`.
+    pub gmres_max_restarts: usize,
+    /// GMRES restart cycle length.
+    pub gmres_restart_dim: usize,
     /// Coefficient a₀ in (a₀ + a₁ * A) * x = b.
     pub a0: AnyScalar,
     /// Coefficient a₁ in (a₀ + a₁ * A) * x = b.
@@ -40,9 +40,9 @@ impl Default for LinsolveOptions {
         Self {
             nfullsweeps: 5,
             truncation: TruncationOptions::default(),
-            krylov_tol: 1e-10,
-            krylov_maxiter: 100,
-            krylov_dim: 30,
+            gmres_tol: 1e-10,
+            gmres_max_restarts: 100,
+            gmres_restart_dim: 30,
             a0: AnyScalar::new_real(0.0),
             a1: AnyScalar::new_real(1.0),
             convergence_tol: None,
@@ -85,22 +85,22 @@ impl LinsolveOptions {
     }
 
     /// Set GMRES tolerance.
-    pub fn with_krylov_tol(mut self, tol: f64) -> Self {
-        self.krylov_tol = tol;
+    pub fn with_gmres_tol(mut self, tol: f64) -> Self {
+        self.gmres_tol = tol;
         self
     }
 
     /// Set maximum number of GMRES restart cycles.
     ///
     /// This follows KrylovKit's `maxiter` convention.
-    pub fn with_krylov_maxiter(mut self, maxiter: usize) -> Self {
-        self.krylov_maxiter = maxiter;
+    pub fn with_gmres_max_restarts(mut self, max_restarts: usize) -> Self {
+        self.gmres_max_restarts = max_restarts;
         self
     }
 
-    /// Set Krylov subspace dimension.
-    pub fn with_krylov_dim(mut self, dim: usize) -> Self {
-        self.krylov_dim = dim;
+    /// Set GMRES restart cycle length.
+    pub fn with_gmres_restart_dim(mut self, dim: usize) -> Self {
+        self.gmres_restart_dim = dim;
         self
     }
 

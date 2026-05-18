@@ -302,7 +302,7 @@ fn run_case(phys_dim: usize) -> anyhow::Result<()> {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(5)
         .with_max_rank(bond_dim)
-        .with_krylov_tol(1e-8);
+        .with_gmres_tol(1e-8);
 
     let mut x = x_true.clone();
 

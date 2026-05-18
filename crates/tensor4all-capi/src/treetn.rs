@@ -1912,9 +1912,9 @@ pub extern "C" fn t4a_treetn_linsolve(
     policy: *const t4a_svd_truncation_policy,
     maxdim: libc::size_t,
     nfullsweeps: libc::size_t,
-    krylov_tol: libc::c_double,
-    krylov_maxiter: libc::size_t,
-    krylov_dim: libc::size_t,
+    gmres_tol: libc::c_double,
+    gmres_max_restarts: libc::size_t,
+    gmres_restart_dim: libc::size_t,
     a0: libc::c_double,
     a1: libc::c_double,
     convergence_tol: libc::c_double,
@@ -1945,20 +1945,23 @@ pub extern "C" fn t4a_treetn_linsolve(
     run_catching(out, || {
         require_node(init.inner(), center_vertex)?;
 
-        if !krylov_tol.is_finite() || krylov_tol <= 0.0 {
+        if !gmres_tol.is_finite() || gmres_tol <= 0.0 {
             return Err(capi_error(
                 T4A_INVALID_ARGUMENT,
-                format!("krylov_tol must be finite and > 0, got {krylov_tol}"),
+                format!("gmres_tol must be finite and > 0, got {gmres_tol}"),
             ));
         }
-        if krylov_maxiter == 0 {
+        if gmres_max_restarts == 0 {
             return Err(capi_error(
                 T4A_INVALID_ARGUMENT,
-                "krylov_maxiter must be >= 1",
+                "gmres_max_restarts must be >= 1",
             ));
         }
-        if krylov_dim == 0 {
-            return Err(capi_error(T4A_INVALID_ARGUMENT, "krylov_dim must be >= 1"));
+        if gmres_restart_dim == 0 {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "gmres_restart_dim must be >= 1",
+            ));
         }
         if !a0.is_finite() || !a1.is_finite() {
             return Err(capi_error(
@@ -1989,9 +1992,9 @@ pub extern "C" fn t4a_treetn_linsolve(
 
         let mut options = LinsolveOptions::new(nfullsweeps)
             .with_truncation(TruncationOptions::new())
-            .with_krylov_tol(krylov_tol)
-            .with_krylov_maxiter(krylov_maxiter)
-            .with_krylov_dim(krylov_dim)
+            .with_gmres_tol(gmres_tol)
+            .with_gmres_max_restarts(gmres_max_restarts)
+            .with_gmres_restart_dim(gmres_restart_dim)
             .with_coefficients(a0, a1);
         if let Some(policy) = resolve_svd_policy(policy) {
             options = options.with_svd_policy(policy);
