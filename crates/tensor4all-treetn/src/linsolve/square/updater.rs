@@ -550,8 +550,8 @@ where
         let linop = LocalLinOp::new(
             Arc::clone(&self.projected_operator),
             region.to_vec(),
-            state.clone(),
-            self.reference_state.clone(),
+            state,
+            &self.reference_state,
             a0,
             a1,
         );
@@ -559,14 +559,7 @@ where
         // Create closure for GMRES that applies the linear operator
         let apply_a = |x: &T| linop.apply(x);
 
-        // Set up GMRES options
-        let gmres_options = GmresOptions {
-            max_iter: self.options.krylov_dim,
-            rtol: self.options.krylov_tol,
-            max_restarts: (self.options.krylov_maxiter / self.options.krylov_dim).max(1),
-            verbose: false,
-            check_true_residual: false,
-        };
+        let gmres_options = local_gmres_options(&self.options)?;
 
         // Solve using GMRES (works directly with TensorDynLen)
         let result = gmres(apply_a, &rhs_local, init, &gmres_options)?;
@@ -980,6 +973,23 @@ where
     }
 }
 
+fn local_gmres_options(options: &LinsolveOptions) -> Result<GmresOptions> {
+    if options.krylov_dim == 0 {
+        anyhow::bail!("LinsolveOptions::krylov_dim must be greater than zero");
+    }
+    if options.krylov_maxiter == 0 {
+        anyhow::bail!("LinsolveOptions::krylov_maxiter must be greater than zero");
+    }
+
+    Ok(GmresOptions {
+        max_iter: options.krylov_dim,
+        rtol: options.krylov_tol,
+        max_restarts: options.krylov_maxiter,
+        verbose: false,
+        check_true_residual: false,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use tensor4all_core::{DynIndex, TensorDynLen};
@@ -998,5 +1008,37 @@ mod tests {
 
         assert!(updater.index_sets_match(std::slice::from_ref(&i), std::slice::from_ref(&i)));
         assert!(!updater.index_sets_match(&[i], &[i_prime]));
+    }
+
+    #[test]
+    fn local_gmres_options_match_krylovkit_restart_convention() {
+        let options = LinsolveOptions::default()
+            .with_krylov_dim(30)
+            .with_krylov_maxiter(10)
+            .with_krylov_tol(1.0e-8);
+
+        let gmres_options = local_gmres_options(&options).unwrap();
+
+        assert_eq!(gmres_options.max_iter, 30);
+        assert_eq!(gmres_options.max_restarts, 10);
+        assert_eq!(gmres_options.rtol, 1.0e-8);
+    }
+
+    #[test]
+    fn local_gmres_options_does_not_convert_maxiter_to_total_step_limit() {
+        let options = LinsolveOptions::default()
+            .with_krylov_dim(30)
+            .with_krylov_maxiter(100);
+
+        let gmres_options = local_gmres_options(&options).unwrap();
+
+        assert_eq!(gmres_options.max_iter, 30);
+        assert_eq!(gmres_options.max_restarts, 100);
+    }
+
+    #[test]
+    fn local_gmres_options_reject_zero_iteration_parameters() {
+        assert!(local_gmres_options(&LinsolveOptions::default().with_krylov_dim(0)).is_err());
+        assert!(local_gmres_options(&LinsolveOptions::default().with_krylov_maxiter(0)).is_err());
     }
 }

@@ -12,6 +12,7 @@ Rust:
 ```bash
 RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_local_linsolve --release -- 8 4 4 1 4 4 0
 RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_local_linsolve --release -- 38 32 32 1 10 30 0
+RAYON_NUM_THREADS=1 T4A_PROFILE_CONTRACT=1 cargo run -p tensor4all-treetn --example benchmark_local_linsolve --release -- 38 32 32 1 1 10 0
 ```
 
 Julia:
@@ -36,14 +37,20 @@ BLAS_NUM_THREADS=1 julia --project=benchmarks/julia benchmarks/julia/benchmark_l
 
 | Implementation | N | Bonds | Sweep steps | Solve total | Local operator apps | Apply time | RHS time | Other solve overhead |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Rust `krylov_maxiter=10,krylov_dim=30` | 38 | 32/32 | 74 | 6.69 s | single step: 12 | single step: 139.9 ms | single step: 89.7 ms | single step GMRES overhead: 5.4 ms |
+| Rust `krylov_maxiter=10,krylov_dim=30` before convention fix | 38 | 32/32 | 74 | 6.69 s | single step: 12 | single step: 139.9 ms | single step: 89.7 ms | single step GMRES overhead: 5.4 ms |
+| Rust `krylov_maxiter=1,krylov_dim=10` after KrylovKit convention fix | 38 | 32/32 | 74 | 6.89 s | single step: 12 | single step: 144.0 ms | single step: 91.3 ms | single step GMRES overhead: 5.9 ms |
 | Julia `maxiter=1,krylovdim=10` | 38 | 32/32 | 74 | 10.47 s | 814 | 9.85 s | 7.0 ms | 0.30 s |
 
 `Julia maxiter=10,krylovdim=30` was intentionally interrupted after more than
-two minutes: under KrylovKit semantics it can perform far more local projected
-operator applications than Rust's current total-iteration cap of 10. That run
-is not a fair solve-body comparison unless Rust is configured to allow a similar
-number of local operator applications.
+two minutes before the Rust convention was fixed. KrylovKit defines `maxiter`
+as the number of restart cycles, so the maximum number of expansion steps is
+roughly `maxiter * krylovdim`. Rust now follows that convention: `krylov_maxiter`
+maps to `GmresOptions::max_restarts`, while `krylov_dim` maps to the restart
+cycle length.
+
+The comparable one-restart case is therefore Julia `maxiter=1,krylovdim=10`
+against Rust `krylov_maxiter=1,krylov_dim=10`. Both perform 74 local updates and
+about 814 local operator applications in this benchmark.
 
 ## Finding
 
@@ -53,10 +60,10 @@ approximately 94% of solve time. In the Rust single local GMRES measurement,
 `ProjectedOperator::apply` accounts for approximately 96% of local GMRES time.
 
 For comparable local operator application counts, the synthetic prepared
-benchmark does not show Rust as slower than Julia. If QuanticsNEGF's full Dyson
-case is slower in Rust, the likely causes are problem-specific rank/topology
-distribution and the number of local projected applications performed, not the
-outer setup code.
+benchmark does not show Rust as slower than Julia. The larger remaining gap to
+track in QuanticsNEGF should therefore be problem-specific rank/topology
+distribution, vector-space operation overhead, or a difference in the local
+operator applications actually performed.
 
 The isolated Rust single-step numbers include cold environment construction, so
 they intentionally overestimate one step inside a full sweep. The full `N=38`

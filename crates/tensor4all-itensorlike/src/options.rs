@@ -328,6 +328,7 @@ pub struct LinsolveOptions {
     a0: AnyScalar,
     a1: AnyScalar,
     convergence_tol: Option<f64>,
+    check_residual: bool,
 }
 
 impl Default for LinsolveOptions {
@@ -342,6 +343,7 @@ impl Default for LinsolveOptions {
             a0: AnyScalar::new_real(0.0),
             a1: AnyScalar::new_real(1.0),
             convergence_tol: None,
+            check_residual: true,
         }
     }
 }
@@ -385,7 +387,10 @@ impl LinsolveOptions {
         self
     }
 
-    /// Set maximum GMRES iterations per local solve.
+    /// Set maximum number of GMRES restart cycles per local solve.
+    ///
+    /// This matches KrylovKit's `maxiter` convention. The maximum number of
+    /// operator expansion steps is roughly `krylov_maxiter * krylov_dim`.
     pub fn with_krylov_maxiter(mut self, maxiter: usize) -> Self {
         self.krylov_maxiter = maxiter;
         self
@@ -414,6 +419,12 @@ impl LinsolveOptions {
         self
     }
 
+    /// Set whether to compute the final true residual after the sweep.
+    pub fn with_residual_check(mut self, check_residual: bool) -> Self {
+        self.check_residual = check_residual;
+        self
+    }
+
     /// Get the maximum retained bond dimension.
     #[inline]
     pub fn max_rank(&self) -> Option<usize> {
@@ -438,7 +449,7 @@ impl LinsolveOptions {
         self.krylov_tol
     }
 
-    /// Get maximum GMRES iterations per local solve.
+    /// Get maximum number of GMRES restart cycles per local solve.
     #[inline]
     pub fn krylov_maxiter(&self) -> usize {
         self.krylov_maxiter
@@ -460,6 +471,12 @@ impl LinsolveOptions {
     #[inline]
     pub fn convergence_tol(&self) -> Option<f64> {
         self.convergence_tol
+    }
+
+    /// Get whether the final true residual is computed after the sweep.
+    #[inline]
+    pub fn check_residual(&self) -> bool {
+        self.check_residual
     }
 }
 

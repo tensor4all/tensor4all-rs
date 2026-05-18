@@ -14,7 +14,10 @@ pub struct LinsolveOptions {
     pub truncation: TruncationOptions,
     /// Tolerance for GMRES convergence.
     pub krylov_tol: f64,
-    /// Maximum GMRES iterations per local solve.
+    /// Maximum number of GMRES restart cycles per local solve.
+    ///
+    /// This matches KrylovKit's `maxiter` convention. The maximum number of
+    /// operator expansion steps is roughly `krylov_maxiter * krylov_dim`.
     pub krylov_maxiter: usize,
     /// Krylov subspace dimension (restart parameter).
     pub krylov_dim: usize,
@@ -25,6 +28,11 @@ pub struct LinsolveOptions {
     /// Convergence tolerance for early termination.
     /// If Some(tol), stop when relative residual < tol.
     pub convergence_tol: Option<f64>,
+    /// Whether to compute and return a final true residual after the sweep.
+    ///
+    /// Disabling this skips an extra operator application after the requested sweeps. A residual
+    /// is still computed when `convergence_tol` is set because early stopping depends on it.
+    pub check_residual: bool,
 }
 
 impl Default for LinsolveOptions {
@@ -38,6 +46,7 @@ impl Default for LinsolveOptions {
             a0: AnyScalar::new_real(0.0),
             a1: AnyScalar::new_real(1.0),
             convergence_tol: None,
+            check_residual: true,
         }
     }
 }
@@ -81,7 +90,9 @@ impl LinsolveOptions {
         self
     }
 
-    /// Set maximum GMRES iterations.
+    /// Set maximum number of GMRES restart cycles.
+    ///
+    /// This follows KrylovKit's `maxiter` convention.
     pub fn with_krylov_maxiter(mut self, maxiter: usize) -> Self {
         self.krylov_maxiter = maxiter;
         self
@@ -107,6 +118,16 @@ impl LinsolveOptions {
     /// Set convergence tolerance for early termination.
     pub fn with_convergence_tol(mut self, tol: f64) -> Self {
         self.convergence_tol = Some(tol);
+        self
+    }
+
+    /// Set whether `square_linsolve` computes a final true residual.
+    ///
+    /// Use `false` when the caller only needs the swept solution and wants to avoid the extra
+    /// post-solve operator application. The residual is still evaluated if `convergence_tol` is
+    /// enabled, because it is required for early stopping.
+    pub fn with_residual_check(mut self, check_residual: bool) -> Self {
+        self.check_residual = check_residual;
         self
     }
 }

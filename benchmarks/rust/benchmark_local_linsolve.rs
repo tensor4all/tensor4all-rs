@@ -16,7 +16,8 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tensor4all_core::{
     index::{DynId, Index},
-    krylov::{gmres_with_total_iteration_limit, GmresOptions},
+    krylov::{gmres, GmresOptions},
+    print_and_reset_contract_profile, reset_contract_profile,
     AnyScalar, DynIndex, IndexLike, SvdTruncationPolicy, TensorDynLen, TensorIndex, TensorLike,
 };
 use tensor4all_treetn::{
@@ -269,6 +270,7 @@ fn main() -> anyhow::Result<()> {
     println!("local_dims = {:?}", local_tensor.dims());
     println!();
 
+    reset_contract_profile();
     let mut projected_state = ProjectedState::new(rhs.clone());
     let rhs_start = Instant::now();
     let rhs_local_raw =
@@ -291,13 +293,13 @@ fn main() -> anyhow::Result<()> {
     let gmres_options = GmresOptions {
         max_iter: krylov_dim,
         rtol: krylov_tol,
-        max_restarts: krylov_maxiter.div_ceil(krylov_dim),
+        max_restarts: krylov_maxiter,
         verbose: false,
         check_true_residual: false,
     };
 
     let gmres_start = Instant::now();
-    let gmres_result = gmres_with_total_iteration_limit(
+    let gmres_result = gmres(
         |x: &TensorDynLen| {
             apply_count_ref.set(apply_count_ref.get() + 1);
             let apply_start = Instant::now();
@@ -318,7 +320,6 @@ fn main() -> anyhow::Result<()> {
         &rhs_local,
         &local_tensor,
         &gmres_options,
-        krylov_maxiter,
     )?;
     let gmres_time = gmres_start.elapsed();
 
@@ -390,6 +391,7 @@ fn main() -> anyhow::Result<()> {
         "solution max bond dim = {}",
         max_bond_dim(&full_result.solution)
     );
+    print_and_reset_contract_profile();
 
     Ok(())
 }

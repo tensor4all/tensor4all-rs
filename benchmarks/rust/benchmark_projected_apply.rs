@@ -14,6 +14,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tensor4all_core::{
     index::{DynId, Index},
+    print_and_reset_contract_profile, reset_contract_profile,
     DynIndex, TensorDynLen, TensorIndex,
 };
 use tensor4all_treetn::{IndexMapping, LocalUpdateSweepPlan, ProjectedOperator, TreeTN};
@@ -223,6 +224,7 @@ fn main() -> anyhow::Result<()> {
     println!("local_dims = {:?}", local_tensor.dims());
     println!();
 
+    reset_contract_profile();
     let mut projected_cold = ProjectedOperator::with_index_mappings(
         operator.clone(),
         input_mapping.clone(),
@@ -277,6 +279,7 @@ fn main() -> anyhow::Result<()> {
         cold_times.push(start.elapsed());
     }
     summarize("cold apply repeated (fresh environment cache)", &cold_times);
+    print_and_reset_contract_profile();
 
     Ok(())
 }
