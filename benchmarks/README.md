@@ -29,6 +29,12 @@ Prepared local linsolve:
 RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_local_linsolve --release -- 38 32 32 1 10 30 0
 ```
 
+Inspect Julia-dumped local linsolve inputs:
+
+```bash
+cargo run -p tensor4all-hdf5 --example inspect_mps_inputs --release -- benchmarks/results/local_linsolve_inputs_N38_b32_o32.h5
+```
+
 ### Julia
 
 ```bash
@@ -46,6 +52,12 @@ Prepared local linsolve:
 
 ```bash
 BLAS_NUM_THREADS=1 julia --project=benchmarks/julia benchmarks/julia/benchmark_local_linsolve.jl 38 32 32 1 1 10
+```
+
+Dump local linsolve inputs as ITensorMPS-compatible HDF5:
+
+```bash
+BLAS_NUM_THREADS=1 julia --project=benchmarks/julia benchmarks/julia/dump_local_linsolve_inputs.jl benchmarks/results/local_linsolve_inputs_N38_b32_o32.h5 38 32 32
 ```
 
 ## Benchmark Details
@@ -68,3 +80,9 @@ and initial state once, then time the local solve body. They also report local
 GMRES/apply/RHS/factorization buckets. Use Julia `maxiter=1, krylovdim=10` as a
 rough match to Rust's `krylov_maxiter=10` total-iteration cap; KrylovKit's
 `maxiter=10, krylovdim=30` performs far more local operator applications.
+
+`dump_local_linsolve_inputs.jl` writes the prepared local operator as
+`operator_as_mps`, plus `rhs` and `init`, in one HDF5 file. The operator is a
+Julia `MPO` stored through the `MPS` schema by saving its site tensors as
+`MPS([H[i] for i in 1:length(H)])`; Rust reads all three groups with
+`tensor4all_hdf5::load_mps`.

@@ -26,6 +26,7 @@ build/
 Manifest.toml
 LocalPreferences.toml
 .julia-tests/
+benchmarks/results/*.h5
 
 # Avoid accidentally committing ad-hoc analysis notes at repo root
 /*.md
