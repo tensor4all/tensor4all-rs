@@ -4,7 +4,7 @@ use tensor4all_core::{
     default_svd_truncation_policy, set_default_svd_truncation_policy, svd, svd_with, SvdOptions,
     SvdTruncationPolicy,
 };
-use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+use tensor4all_core::{DynIndex, TensorContractionLike, TensorDynLen};
 
 fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
     TensorDynLen::from_dense(indices, data).unwrap()
@@ -28,11 +28,11 @@ fn vh_from_v(v: &TensorDynLen) -> TensorDynLen {
 
 fn reconstruct_from_svd(u: &TensorDynLen, s: &TensorDynLen, v: &TensorDynLen) -> TensorDynLen {
     let vh = vh_from_v(v);
-    let svh = s.contract(&vh).unwrap();
+    let svh = s.contract_pair(&vh).unwrap();
     let sim_bond = s.indices[1].clone();
     let bond = v.indices[v.indices.len() - 1].clone();
     let svh = svh.replaceind(&sim_bond, &bond).unwrap();
-    u.contract(&svh).unwrap()
+    u.contract_pair(&svh).unwrap()
 }
 
 #[test]

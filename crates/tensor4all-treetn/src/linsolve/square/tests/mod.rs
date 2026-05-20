@@ -95,7 +95,30 @@ fn test_square_linsolve_zero_sweeps_returns_solution_wrapper() {
 
     assert_eq!(result.solution.node_count(), 2);
     assert_eq!(result.sweeps, 0);
-    assert_eq!(result.residual, None);
+    assert!(result.residual.is_some_and(|residual| residual < 1.0e-12));
+    assert!(!result.converged);
+}
+
+#[test]
+fn test_square_linsolve_can_skip_final_residual() {
+    let operator = create_simple_2site_mpo();
+    let rhs = create_simple_2site_mps();
+    let init = create_simple_2site_mps();
+
+    let result = square_linsolve(
+        &operator,
+        &rhs,
+        init,
+        &"site0".to_string(),
+        LinsolveOptions::new(0).with_residual_check(false),
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.solution.node_count(), 2);
+    assert_eq!(result.sweeps, 0);
+    assert!(result.residual.is_none());
     assert!(!result.converged);
 }
 

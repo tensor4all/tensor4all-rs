@@ -3,7 +3,7 @@ use hdf5_metno::File;
 use num_complex::Complex64;
 use tensor4all_core::index::{DynId, DynIndex, Index, TagSet};
 use tensor4all_core::TensorDynLen;
-use tensor4all_hdf5::{load_itensor, load_mps, save_itensor, save_mps};
+use tensor4all_hdf5::{append_itensor, append_mps, load_itensor, load_mps, save_itensor, save_mps};
 use tensor4all_itensorlike::{CanonicalForm, TensorTrain};
 
 fn temp_path(name: &str) -> String {
@@ -108,6 +108,34 @@ fn test_itensor_c64_roundtrip() {
         assert_abs_diff_eq!(a.re, b.re, epsilon = 1e-15);
         assert_abs_diff_eq!(a.im, b.im, epsilon = 1e-15);
     }
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_append_itensor_keeps_multiple_named_objects() {
+    let path = temp_path("append_itensor_multiple");
+    std::fs::remove_file(&path).ok();
+    let first = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![1.0, 2.0]).unwrap();
+    let second = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![3.0, 4.0]).unwrap();
+
+    append_itensor(&path, "first", &first).unwrap();
+    append_itensor(&path, "second", &second).unwrap();
+
+    assert_eq!(
+        load_itensor(&path, "first")
+            .unwrap()
+            .to_vec::<f64>()
+            .unwrap(),
+        vec![1.0, 2.0]
+    );
+    assert_eq!(
+        load_itensor(&path, "second")
+            .unwrap()
+            .to_vec::<f64>()
+            .unwrap(),
+        vec![3.0, 4.0]
+    );
 
     std::fs::remove_file(&path).ok();
 }
@@ -236,6 +264,65 @@ fn test_mps_roundtrip() {
             assert_abs_diff_eq!(a, b, epsilon = 1e-15);
         }
     }
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_mps_load_preserves_site_tensor_index_order() {
+    let path = temp_path("mps_preserve_index_order");
+
+    let site0 = Index::new_with_size(DynId(10), 2);
+    let link = Index::new_with_size(DynId(11), 3);
+    let site1 = Index::new_with_size(DynId(12), 2);
+    let left = TensorDynLen::from_dense(
+        vec![link.clone(), site0.clone()],
+        vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+    )
+    .unwrap();
+    let right = TensorDynLen::from_dense(
+        vec![site1.clone(), link.clone()],
+        vec![6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
+    )
+    .unwrap();
+    let mps = TensorTrain::new(vec![left, right]).unwrap();
+
+    save_mps(&path, "mps", &mps).unwrap();
+    let loaded = load_mps(&path, "mps").unwrap();
+
+    assert_eq!(loaded.tensor(0).unwrap().indices(), &[link.clone(), site0]);
+    assert_eq!(loaded.tensor(1).unwrap().indices(), &[site1, link]);
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_append_mps_keeps_multiple_named_objects() {
+    let path = temp_path("append_mps_multiple");
+    std::fs::remove_file(&path).ok();
+    let first = TensorTrain::new(vec![TensorDynLen::from_dense(
+        vec![DynIndex::new_dyn(2)],
+        vec![1.0, 2.0],
+    )
+    .unwrap()])
+    .unwrap();
+    let second = TensorTrain::new(vec![TensorDynLen::from_dense(
+        vec![DynIndex::new_dyn(2)],
+        vec![3.0, 4.0],
+    )
+    .unwrap()])
+    .unwrap();
+
+    append_mps(&path, "first", &first).unwrap();
+    append_mps(&path, "second", &second).unwrap();
+
+    assert_eq!(load_mps(&path, "first").unwrap().siteinds()[0][0].size(), 2);
+    assert_eq!(
+        load_mps(&path, "second").unwrap().tensors()[0]
+            .to_vec::<f64>()
+            .unwrap(),
+        vec![3.0, 4.0]
+    );
 
     std::fs::remove_file(&path).ok();
 }

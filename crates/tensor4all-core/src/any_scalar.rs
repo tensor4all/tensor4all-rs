@@ -678,6 +678,9 @@ impl AnyScalar {
     /// assert_eq!(scalar.as_c64().map(|z| (z.re, z.im)), Some((3.0, 4.0)));
     /// ```
     pub fn try_conj(&self) -> Result<Self> {
+        if !self.tracks_grad() {
+            return Ok(Self::from_backend_scalar(self.to_backend_scalar().conj()));
+        }
         Self::from_eager_unary(self, "conj", |tensor| tensor.conj())
     }
 
@@ -778,7 +781,7 @@ impl AnyScalar {
     /// assert!(scalar.is_real());
     /// ```
     pub fn sqrt(&self) -> Self {
-        if self.is_complex() || self.real() < 0.0 {
+        if !self.tracks_grad() || self.is_complex() || self.real() < 0.0 {
             Self::from_backend_scalar(self.to_backend_scalar().sqrt())
         } else {
             Self::from_eager_unary(self, "sqrt", |tensor| tensor.sqrt())
@@ -869,14 +872,29 @@ impl AnyScalar {
     }
 
     pub(crate) fn try_add(&self, rhs: &Self) -> Result<Self> {
+        if !self.tracks_grad() && !rhs.tracks_grad() {
+            return Ok(Self::from_backend_scalar(
+                self.to_backend_scalar() + rhs.to_backend_scalar(),
+            ));
+        }
         Self::from_eager_binary(self, rhs, "add", |lhs, rhs| lhs.add(rhs))
     }
 
     pub(crate) fn try_mul(&self, rhs: &Self) -> Result<Self> {
+        if !self.tracks_grad() && !rhs.tracks_grad() {
+            return Ok(Self::from_backend_scalar(
+                self.to_backend_scalar() * rhs.to_backend_scalar(),
+            ));
+        }
         Self::from_eager_binary(self, rhs, "mul", |lhs, rhs| lhs.mul(rhs))
     }
 
     pub(crate) fn try_div(&self, rhs: &Self) -> Result<Self> {
+        if !self.tracks_grad() && !rhs.tracks_grad() {
+            return Ok(Self::from_backend_scalar(
+                self.to_backend_scalar() / rhs.to_backend_scalar(),
+            ));
+        }
         if self.as_tensor()?.as_native()?.dtype() == rhs.as_tensor()?.as_native()?.dtype() {
             Self::from_eager_binary(self, rhs, "div", |lhs, rhs| lhs.div(rhs))
         } else {
@@ -887,6 +905,9 @@ impl AnyScalar {
     }
 
     pub(crate) fn try_neg(&self) -> Result<Self> {
+        if !self.tracks_grad() {
+            return Ok(Self::from_backend_scalar(-self.to_backend_scalar()));
+        }
         Self::from_eager_unary(self, "neg", |tensor| tensor.neg())
     }
 }
@@ -1174,5 +1195,35 @@ impl fmt::Debug for AnyScalar {
             .field("value", &self.value())
             .field("tracks_grad", &self.tracks_grad())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_grad_scalar_arithmetic_uses_plain_values() {
+        let a = AnyScalar::new_real(3.0);
+        let b = AnyScalar::new_real(4.0);
+
+        let value = ((a.clone() + b.clone()) * b.clone() - AnyScalar::new_real(8.0))
+            / AnyScalar::new_real(2.0);
+
+        assert_eq!(value.as_f64(), Some(10.0));
+        assert!(!value.tracks_grad());
+        assert!(value.as_tensor().is_ok());
+    }
+
+    #[test]
+    fn tracked_scalar_arithmetic_preserves_autodiff() {
+        let x = AnyScalar::new_real(2.0).enable_grad().unwrap();
+        let y = &x * &x;
+
+        assert!(y.tracks_grad());
+        y.backward().unwrap();
+
+        let grad = x.grad().unwrap().unwrap();
+        assert_eq!(grad.as_f64(), Some(4.0));
     }
 }

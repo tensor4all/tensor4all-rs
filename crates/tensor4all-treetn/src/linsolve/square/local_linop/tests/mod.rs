@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use tensor4all_core::index::DynId;
-use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
 
 use crate::operator::IndexMapping;
 use crate::treetn::TreeTN;
@@ -32,20 +32,16 @@ fn test_local_linop_new() {
     let linop = LocalLinOp::new(
         projected_op,
         vec!["site0".to_string()],
-        state,
-        reference_state,
-        AnyScalar::new_real(1.0),
-        AnyScalar::new_real(0.0),
+        &state,
+        &reference_state,
     );
 
     assert_eq!(linop.region.len(), 1);
-    assert_eq!(linop.a0, AnyScalar::new_real(1.0));
-    assert_eq!(linop.a1, AnyScalar::new_real(0.0));
 }
 
-/// Apply with a0=0 hits the early return path (scale only, no index alignment).
+/// Projected apply requires output to stay in the input local vector space.
 #[test]
-fn test_local_linop_apply_a0_zero() {
+fn test_local_linop_apply_projected_rejects_mismatch() {
     use crate::linsolve::common::ProjectedOperator;
 
     let mut state = TreeTN::<TensorDynLen, String>::new();
@@ -59,10 +55,8 @@ fn test_local_linop_apply_a0_zero() {
     let linop = LocalLinOp::new(
         projected_op,
         vec!["site0".to_string()],
-        state.clone(),
-        reference_state,
-        AnyScalar::new_real(0.0),
-        AnyScalar::new_real(1.0),
+        &state,
+        &reference_state,
     );
 
     let site0 = "site0".to_string();
@@ -70,8 +64,8 @@ fn test_local_linop_apply_a0_zero() {
         .tensor(state.node_index(&site0).unwrap())
         .unwrap()
         .clone();
-    let y = linop.apply(&x).unwrap();
-    assert_eq!(y.external_indices().len(), 0);
+    let err = linop.apply_projected(&x).unwrap_err();
+    assert!(err.to_string().contains("index structure mismatch"));
 }
 
 /// Apply with x whose index structure differs from operator output triggers index mismatch error.
@@ -90,15 +84,13 @@ fn test_local_linop_apply_index_mismatch() {
     let linop = LocalLinOp::new(
         projected_op,
         vec!["site0".to_string()],
-        state,
-        reference_state,
-        AnyScalar::new_real(1.0),
-        AnyScalar::new_real(0.0),
+        &state,
+        &reference_state,
     );
 
     let other = DynIndex::new_dyn(2);
     let x = TensorDynLen::from_dense(vec![other], vec![1.0, 0.0]).unwrap();
-    let err = linop.apply(&x).unwrap_err();
+    let err = linop.apply_projected(&x).unwrap_err();
     assert!(err.to_string().contains("index structure mismatch"));
 }
 
@@ -154,10 +146,8 @@ fn test_local_linop_apply_success_mappings() {
     let linop = LocalLinOp::new(
         projected_op,
         vec!["site0".to_string()],
-        state.clone(),
-        reference_state,
-        AnyScalar::new_real(1.0),
-        AnyScalar::new_real(0.0),
+        &state,
+        &reference_state,
     );
 
     let site0 = "site0".to_string();
@@ -165,7 +155,7 @@ fn test_local_linop_apply_success_mappings() {
         .tensor(state.node_index(&site0).unwrap())
         .unwrap()
         .clone();
-    let y = linop.apply(&x).unwrap();
+    let y = linop.apply_projected(&x).unwrap();
     let x_ids: HashSet<_> = x
         .external_indices()
         .iter()

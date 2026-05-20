@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use num_complex::Complex64;
 use tensor4all_core::{
-    contract_multi_with_options, qr_with, svd_with, AllowedPairs, ContractionOptions, QrOptions,
-    SvdOptions, SvdTruncationPolicy,
+    contract_pair, contract_pair_with_options, contract_with_options, qr_with, svd_with,
+    ContractionOptions, QrOptions, SvdOptions, SvdTruncationPolicy,
 };
 use tensor4all_tensorbackend::Storage;
 
@@ -635,9 +635,7 @@ pub extern "C" fn t4a_tensor_contract(
     }
 
     run_catching(out, || unsafe {
-        let tensor = (*a)
-            .inner()
-            .contract((*b).inner())
+        let tensor = contract_pair((*a).inner(), (*b).inner())
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         Ok(t4a_tensor::new(tensor))
     })
@@ -656,11 +654,8 @@ pub extern "C" fn t4a_tensor_contract_retain(
         let a = require_tensor(a)?;
         let b = require_tensor(b)?;
         let retain_indices = read_indices_from_ptrs(n_retain, retain_indices)?;
-        let options =
-            ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
-        let result = a
-            .inner()
-            .contract_with_options(b.inner(), options)
+        let options = ContractionOptions::new().with_retain_indices(&retain_indices);
+        let result = contract_pair_with_options(a.inner(), b.inner(), options)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         Ok(t4a_tensor::new(result))
     })
@@ -668,7 +663,7 @@ pub extern "C" fn t4a_tensor_contract_retain(
 
 /// Contract multiple tensors while retaining selected shared indices as output legs.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_tensor_contract_multi(
+pub extern "C" fn t4a_tensor_contract_many_retain(
     tensors: *const *const t4a_tensor,
     n_tensors: usize,
     retain_indices: *const *const t4a_index,
@@ -678,9 +673,8 @@ pub extern "C" fn t4a_tensor_contract_multi(
     run_catching(out, || {
         let tensors = read_tensor_refs(tensors, n_tensors)?;
         let retain_indices = read_indices_from_ptrs(n_retain, retain_indices)?;
-        let options =
-            ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
-        let result = contract_multi_with_options(&tensors, options)
+        let options = ContractionOptions::new().with_retain_indices(&retain_indices);
+        let result = contract_with_options(&tensors, options)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         Ok(t4a_tensor::new(result))
     })

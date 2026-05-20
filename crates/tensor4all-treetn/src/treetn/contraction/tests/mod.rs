@@ -1,5 +1,7 @@
 use super::*;
-use tensor4all_core::{DynIndex, IndexLike, SvdTruncationPolicy, TensorDynLen, TensorIndex};
+use tensor4all_core::{
+    DynIndex, IndexLike, SvdTruncationPolicy, TensorContractionLike, TensorDynLen, TensorIndex,
+};
 
 /// Helper to create a simple 2-node TreeTN: A -- bond -- B
 fn make_two_node_treetn() -> (TreeTN<TensorDynLen, String>, DynIndex, DynIndex, DynIndex) {
@@ -158,7 +160,7 @@ fn test_contract_to_tensor_two_nodes() {
         vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     )
     .unwrap();
-    let expected = t0.contract(&t1).unwrap().to_vec::<f64>().unwrap();
+    let expected = t0.contract_pair(&t1).unwrap().to_vec::<f64>().unwrap();
 
     let result_data = result.to_vec::<f64>().unwrap();
     assert_eq!(result_data.len(), expected.len());

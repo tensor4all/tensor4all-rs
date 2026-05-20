@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use tensor4all_core::SvdTruncationPolicy;
+use tensor4all_core::{AnyScalar, SvdTruncationPolicy};
 
 use crate::error::{Result, TensorTrainError};
 
@@ -310,7 +310,7 @@ impl ContractOptions {
 /// let opts = LinsolveOptions::new(5)
 ///     .with_svd_policy(SvdTruncationPolicy::new(1e-10))
 ///     .with_max_rank(64)
-///     .with_krylov_tol(1e-8)
+///     .with_gmres_tol(1e-8)
 ///     .with_coefficients(1.0, -1.0);
 ///
 /// assert_eq!(opts.max_rank(), Some(64));
@@ -322,12 +322,13 @@ pub struct LinsolveOptions {
     nhalfsweeps: usize,
     max_rank: Option<usize>,
     svd_policy: Option<SvdTruncationPolicy>,
-    krylov_tol: f64,
-    krylov_maxiter: usize,
-    krylov_dim: usize,
-    a0: f64,
-    a1: f64,
+    gmres_tol: f64,
+    gmres_max_restarts: usize,
+    gmres_restart_dim: usize,
+    a0: AnyScalar,
+    a1: AnyScalar,
     convergence_tol: Option<f64>,
+    check_residual: bool,
 }
 
 impl Default for LinsolveOptions {
@@ -336,12 +337,13 @@ impl Default for LinsolveOptions {
             nhalfsweeps: 10,
             max_rank: None,
             svd_policy: None,
-            krylov_tol: 1e-10,
-            krylov_maxiter: 100,
-            krylov_dim: 30,
-            a0: 0.0,
-            a1: 1.0,
+            gmres_tol: 1e-10,
+            gmres_max_restarts: 100,
+            gmres_restart_dim: 30,
+            a0: AnyScalar::new_real(0.0),
+            a1: AnyScalar::new_real(1.0),
             convergence_tol: None,
+            check_residual: true,
         }
     }
 }
@@ -380,33 +382,46 @@ impl LinsolveOptions {
     }
 
     /// Set GMRES tolerance.
-    pub fn with_krylov_tol(mut self, tol: f64) -> Self {
-        self.krylov_tol = tol;
+    pub fn with_gmres_tol(mut self, tol: f64) -> Self {
+        self.gmres_tol = tol;
         self
     }
 
-    /// Set maximum GMRES iterations per local solve.
-    pub fn with_krylov_maxiter(mut self, maxiter: usize) -> Self {
-        self.krylov_maxiter = maxiter;
+    /// Set maximum number of GMRES restart cycles per local solve.
+    ///
+    /// This matches KrylovKit's `maxiter` convention. The maximum number of
+    /// operator expansion steps is roughly `gmres_max_restarts * gmres_restart_dim`.
+    pub fn with_gmres_max_restarts(mut self, max_restarts: usize) -> Self {
+        self.gmres_max_restarts = max_restarts;
         self
     }
 
-    /// Set Krylov subspace dimension (restart parameter).
-    pub fn with_krylov_dim(mut self, dim: usize) -> Self {
-        self.krylov_dim = dim;
+    /// Set GMRES restart cycle length.
+    pub fn with_gmres_restart_dim(mut self, dim: usize) -> Self {
+        self.gmres_restart_dim = dim;
         self
     }
 
     /// Set coefficients `a₀` and `a₁` in `(a₀ + a₁ * A) * x = b`.
-    pub fn with_coefficients(mut self, a0: f64, a1: f64) -> Self {
-        self.a0 = a0;
-        self.a1 = a1;
+    pub fn with_coefficients<A0, A1>(mut self, a0: A0, a1: A1) -> Self
+    where
+        A0: Into<AnyScalar>,
+        A1: Into<AnyScalar>,
+    {
+        self.a0 = a0.into();
+        self.a1 = a1.into();
         self
     }
 
     /// Set convergence tolerance for early termination.
     pub fn with_convergence_tol(mut self, tol: f64) -> Self {
         self.convergence_tol = Some(tol);
+        self
+    }
+
+    /// Set whether to compute the final true residual after the sweep.
+    pub fn with_residual_check(mut self, check_residual: bool) -> Self {
+        self.check_residual = check_residual;
         self
     }
 
@@ -430,32 +445,38 @@ impl LinsolveOptions {
 
     /// Get GMRES tolerance.
     #[inline]
-    pub fn krylov_tol(&self) -> f64 {
-        self.krylov_tol
+    pub fn gmres_tol(&self) -> f64 {
+        self.gmres_tol
     }
 
-    /// Get maximum GMRES iterations per local solve.
+    /// Get maximum number of GMRES restart cycles per local solve.
     #[inline]
-    pub fn krylov_maxiter(&self) -> usize {
-        self.krylov_maxiter
+    pub fn gmres_max_restarts(&self) -> usize {
+        self.gmres_max_restarts
     }
 
-    /// Get Krylov subspace dimension.
+    /// Get GMRES restart cycle length.
     #[inline]
-    pub fn krylov_dim(&self) -> usize {
-        self.krylov_dim
+    pub fn gmres_restart_dim(&self) -> usize {
+        self.gmres_restart_dim
     }
 
     /// Get coefficients `(a0, a1)`.
     #[inline]
-    pub fn coefficients(&self) -> (f64, f64) {
-        (self.a0, self.a1)
+    pub fn coefficients(&self) -> (AnyScalar, AnyScalar) {
+        (self.a0.clone(), self.a1.clone())
     }
 
     /// Get convergence tolerance.
     #[inline]
     pub fn convergence_tol(&self) -> Option<f64> {
         self.convergence_tol
+    }
+
+    /// Get whether the final true residual is computed after the sweep.
+    #[inline]
+    pub fn check_residual(&self) -> bool {
+        self.check_residual
     }
 }
 

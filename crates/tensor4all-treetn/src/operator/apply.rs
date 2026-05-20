@@ -70,8 +70,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use tensor4all_core::{
-    AllowedPairs, DynIndex, IndexLike, LinearizationOrder, SvdTruncationPolicy, TensorDynLen,
-    TensorIndex, TensorLike,
+    DynIndex, IndexLike, LinearizationOrder, SvdTruncationPolicy, TensorDynLen, TensorIndex,
+    TensorLike,
 };
 
 use super::index_mapping::IndexMapping;
@@ -804,8 +804,21 @@ where
             )
         })?;
 
-        let contracted = T::contract(&[state_tensor, mpo_tensor], AllowedPairs::All)
-            .with_context(|| format!("apply_linear_operator_naive_local: failed at {:?}", node))?;
+        let contracted = if mpo
+            .site_space(node)
+            .is_some_and(|site_space| site_space.is_empty())
+        {
+            state_tensor.contract_pair(mpo_tensor).with_context(|| {
+                format!(
+                    "apply_linear_operator_naive_local: failed spectator product at {:?}",
+                    node
+                )
+            })?
+        } else {
+            T::contract(&[state_tensor, mpo_tensor]).with_context(|| {
+                format!("apply_linear_operator_naive_local: failed at {:?}", node)
+            })?
+        };
         tensors_by_node.insert(node.clone(), contracted);
     }
 

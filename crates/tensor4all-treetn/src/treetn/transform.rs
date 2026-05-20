@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use petgraph::stable_graph::{NodeIndex, StableGraph};
 
 use tensor4all_core::{
-    index_ops, AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
+    index_ops, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
 };
 
 use super::TreeTN;
@@ -43,6 +43,37 @@ fn steiner_tree_indices<T: TensorLike>(
         }
     }
     result
+}
+
+fn canonical_node_pair<NodeName>(left: &NodeName, right: &NodeName) -> (NodeName, NodeName)
+where
+    NodeName: Clone + Ord,
+{
+    if left <= right {
+        (left.clone(), right.clone())
+    } else {
+        (right.clone(), left.clone())
+    }
+}
+
+fn choose_site_free_absorption_target<NodeName>(
+    neighbor_targets: &HashSet<NodeName>,
+    target_edges: &HashSet<(NodeName, NodeName)>,
+) -> Option<NodeName>
+where
+    NodeName: Clone + Hash + Eq + Ord,
+{
+    if neighbor_targets.is_empty() {
+        return None;
+    }
+
+    let mut candidates = neighbor_targets.iter().cloned().collect::<Vec<_>>();
+    candidates.sort();
+    candidates.into_iter().find(|candidate| {
+        neighbor_targets.iter().all(|other| {
+            candidate == other || target_edges.contains(&canonical_node_pair(candidate, other))
+        })
+    })
 }
 
 /// Check if nodes form a connected induced subgraph in the given graph.
@@ -209,6 +240,56 @@ where
             }
         }
 
+        // Step 4b: Absorb site-free dangling subtrees into the unique adjacent
+        // target group, or into an adjacent target group that preserves all
+        // requested quotient edges. These nodes carry only gauge/internal
+        // factors; dropping them would change values.
+        let target_edges: HashSet<_> = target
+            .edges()
+            .map(|(left, right)| canonical_node_pair(&left, &right))
+            .collect();
+        let mut current_to_target = HashMap::<V, TargetV>::new();
+        for (target_name, current_nodes) in &target_to_current {
+            for current_node in current_nodes {
+                current_to_target.insert(current_node.clone(), target_name.clone());
+            }
+        }
+        loop {
+            let mut additions = Vec::<(TargetV, V)>::new();
+            for current_name in self.node_names() {
+                if current_to_target.contains_key(&current_name)
+                    || self
+                        .site_space(&current_name)
+                        .is_some_and(|site_space| !site_space.is_empty())
+                {
+                    continue;
+                }
+
+                let neighbor_targets: HashSet<TargetV> = self
+                    .site_index_network
+                    .neighbors(&current_name)
+                    .filter_map(|neighbor| current_to_target.get(&neighbor).cloned())
+                    .collect();
+                if let Some(target_name) =
+                    choose_site_free_absorption_target(&neighbor_targets, &target_edges)
+                {
+                    additions.push((target_name, current_name));
+                }
+            }
+
+            if additions.is_empty() {
+                break;
+            }
+
+            for (target_name, current_name) in additions {
+                target_to_current
+                    .entry(target_name.clone())
+                    .or_default()
+                    .insert(current_name.clone());
+                current_to_target.insert(current_name, target_name);
+            }
+        }
+
         // Step 5: For each target node, contract all its current nodes into one tensor
         let mut result_tensors: HashMap<TargetV, T> = HashMap::new();
 
@@ -330,9 +411,9 @@ where
                 .remove(&to)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", to))?;
 
-            // Contract using TensorLike::contract
+            // Contract using TensorContractionLike::contract
             // (bond indices are auto-detected via is_contractable)
-            let contracted = T::contract(&[&to_tensor, &from_tensor], AllowedPairs::All)
+            let contracted = T::contract(&[&to_tensor, &from_tensor])
                 .map_err(|e| anyhow::anyhow!("Failed to contract tensors: {}", e))?;
 
             tensors.insert(to, contracted);

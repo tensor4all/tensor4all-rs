@@ -1,4 +1,6 @@
-use tensor4all_core::{factorize_full_rank, svd, Canonical, FactorizeAlg, Index, TensorDynLen};
+use tensor4all_core::{
+    factorize_full_rank, svd, Canonical, FactorizeAlg, Index, TensorContractionLike, TensorDynLen,
+};
 
 fn assert_f64_slice_close(actual: &[f64], expected: &[f64], tol: f64) {
     assert_eq!(actual.len(), expected.len());
@@ -73,7 +75,7 @@ fn factorize_qr_reconstruction_preserves_gradient_to_input() {
         Canonical::Left,
     )
     .unwrap();
-    let reconstructed = result.left.contract(&result.right).unwrap();
+    let reconstructed = result.left.contract_pair(&result.right).unwrap();
     let loss = reconstructed.sum().unwrap();
     assert!(loss.tracks_grad());
     loss.backward().unwrap();
@@ -92,7 +94,7 @@ fn assert_ci_reconstruction_gradient(canonical: Canonical) {
 
     let result =
         factorize_full_rank(&x, std::slice::from_ref(&i), FactorizeAlg::CI, canonical).unwrap();
-    let reconstructed = result.left.contract(&result.right).unwrap();
+    let reconstructed = result.left.contract_pair(&result.right).unwrap();
     let loss = reconstructed.sum().unwrap();
     assert!(loss.tracks_grad());
     loss.backward().unwrap();

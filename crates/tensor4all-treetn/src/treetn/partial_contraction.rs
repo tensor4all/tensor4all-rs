@@ -12,11 +12,14 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use super::contraction::{contract, ContractionOptions};
 use super::decompose::{factorize_tensor_to_treetn_with, TreeTopology};
+use super::swap::SwapOptions;
 use super::TreeTN;
 use crate::error::{format_anyhow_error, SelectedIndexContractionError};
+use crate::options::RestructureOptions;
+use crate::site_index_network::SiteIndexNetwork;
 use tensor4all_core::{
-    AllowedPairs, AnyScalar, DynIndex, FactorizeAlg, FactorizeOptions, IndexLike, TensorDynLen,
-    TensorIndex, TensorLike,
+    tensordot, AnyScalar, DynIndex, FactorizeAlg, FactorizeOptions, IndexLike,
+    TensorConstructionLike, TensorContractionLike, TensorDynLen, TensorIndex, TensorLike,
 };
 
 type DiagonalPairApplication<V> = (
@@ -290,19 +293,69 @@ where
     Ok(TreeTopology::new(nodes, union_edges))
 }
 
-fn validate_mismatched_union_topology<V>(
-    a: &TreeTN<TensorDynLen, V>,
-    b: &TreeTN<TensorDynLen, V>,
-) -> Result<()>
+fn align_to_union_topology<V>(
+    tn: &TreeTN<TensorDynLen, V>,
+    node_names: &[V],
+    union_edges: &[(V, V)],
+) -> Result<TreeTN<TensorDynLen, V>>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+    <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
 {
-    let node_names = compatible_union_node_names(a, b);
-    let mut union_edges = sorted_edge_set(a);
-    union_edges.extend(sorted_edge_set(b));
-    union_edges.sort();
-    union_edges.dedup();
-    validate_union_topology(&node_names, &union_edges)
+    let existing_nodes: HashSet<_> = tn.node_names().into_iter().collect();
+    let existing_edges: HashSet<_> = sorted_edge_set(tn).into_iter().collect();
+    let mut structural_links = HashMap::<V, Vec<DynIndex>>::new();
+
+    for (u, v) in union_edges {
+        if existing_edges.contains(&(u.clone(), v.clone())) {
+            continue;
+        }
+
+        let link = DynIndex::new_dyn(1);
+        structural_links
+            .entry(u.clone())
+            .or_default()
+            .push(link.clone());
+        structural_links.entry(v.clone()).or_default().push(link);
+    }
+
+    let mut tensors = Vec::with_capacity(node_names.len());
+    let mut names = Vec::with_capacity(node_names.len());
+
+    for node_name in node_names {
+        let links = structural_links.remove(node_name).unwrap_or_default();
+        let tensor = if existing_nodes.contains(node_name) {
+            let node = tn.node_index(node_name).ok_or_else(|| {
+                anyhow!(
+                    "partial_contract: missing node {:?} while aligning topology",
+                    node_name
+                )
+            })?;
+            let mut tensor = tn.tensor(node).cloned().ok_or_else(|| {
+                anyhow!(
+                    "partial_contract: missing tensor for node {:?} while aligning topology",
+                    node_name
+                )
+            })?;
+            if !links.is_empty() {
+                let link_tensor = <TensorDynLen as TensorConstructionLike>::ones(&links)
+                    .context("partial_contract: failed to build dimension-1 structural links")?;
+                tensor = tensor
+                    .outer_product(&link_tensor)
+                    .context("partial_contract: failed to attach dimension-1 structural links")?;
+            }
+            tensor
+        } else {
+            <TensorDynLen as TensorConstructionLike>::ones(&links)
+                .context("partial_contract: failed to build missing-node scalar tensor")?
+        };
+
+        tensors.push(tensor);
+        names.push(node_name.clone());
+    }
+
+    TreeTN::from_tensors(tensors, names)
+        .context("partial_contract: failed to align TreeTN to union topology")
 }
 
 fn dense_element_count(indices: &[DynIndex]) -> Result<usize> {
@@ -381,7 +434,28 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
 {
-    validate_mismatched_union_topology(a, b)?;
+    let node_names = compatible_union_node_names(a, b);
+    let mut union_edges = sorted_edge_set(a);
+    union_edges.extend(sorted_edge_set(b));
+    union_edges.sort();
+    union_edges.dedup();
+    validate_union_topology(&node_names, &union_edges)?;
+
+    let structural_result = (|| {
+        let aligned_a = align_to_union_topology(a, &node_names, &union_edges)?;
+        let aligned_b = align_to_union_topology(b, &node_names, &union_edges)?;
+        contract(&aligned_a, &aligned_b, center, options.clone())
+            .context("partial_contract: failed contraction after aligning mismatched topologies")
+    })();
+
+    match structural_result {
+        Ok(result) => return Ok(result),
+        Err(err) if options.mismatched_topology_dense_limit.is_none() => {
+            return Err(err);
+        }
+        Err(_) => {}
+    }
+
     validate_mismatched_dense_reference_fallback(a, b, &options)?;
 
     let a_dense = a
@@ -392,9 +466,9 @@ where
         .sim_internal_inds()
         .contract_to_tensor()
         .context("partial_contract: failed to contract second mismatched-topology TreeTN")?;
-    let contracted_tensor =
-        <TensorDynLen as TensorLike>::contract(&[&a_dense, &b_dense], AllowedPairs::All)
-            .context("partial_contract: failed dense contraction for mismatched topologies")?;
+    let contracted_tensor = a_dense
+        .contract_pair(&b_dense)
+        .context("partial_contract: failed dense contraction for mismatched topologies")?;
 
     if contracted_tensor.external_indices().is_empty() {
         let mut result = TreeTN::<TensorDynLen, V>::new();
@@ -449,7 +523,7 @@ where
     let unique_current_nodes: HashSet<_> = current_nodes.iter().cloned().collect();
     if unique_current_nodes.len() != current_nodes.len() {
         bail!(
-            "partial_contract: output_order currently requires at most one surviving site index per node"
+            "partial_contract: output_order currently requires at most one surviving site index per node; use partial_contract_to_site_network with an explicit target network to split surviving indices across nodes"
         );
     }
 
@@ -571,15 +645,18 @@ where
                 idx_b.id()
             )
         })?;
-        let expanded_tensor = local_tensor
-            .tensordot(&copy_tensor, &[(idx_a.clone(), idx_a.clone())])
-            .with_context(|| {
-                format!(
-                    "partial_contract: failed to apply diagonal structure for pair {:?} <- {:?}",
-                    idx_a.id(),
-                    idx_b.id()
-                )
-            })?;
+        let expanded_tensor = tensordot(
+            &local_tensor,
+            &copy_tensor,
+            &[(idx_a.clone(), idx_a.clone())],
+        )
+        .with_context(|| {
+            format!(
+                "partial_contract: failed to apply diagonal structure for pair {:?} <- {:?}",
+                idx_a.id(),
+                idx_b.id()
+            )
+        })?;
         a_modified
             .replace_tensor(node_idx, expanded_tensor)
             .with_context(|| {
@@ -610,6 +687,49 @@ where
     }
 
     Ok((a_modified, b_modified, restore_from, restore_to))
+}
+
+fn align_contract_pair_site_nodes<V>(
+    a: &TreeTN<TensorDynLen, V>,
+    b: &mut TreeTN<TensorDynLen, V>,
+    contract_pairs: &[(DynIndex, DynIndex)],
+) -> Result<()>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+    <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+{
+    let mut target_assignment = HashMap::new();
+
+    for (idx_a, _) in contract_pairs {
+        let left_node = a
+            .site_index_network()
+            .find_node_by_index(idx_a)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "partial_contract: contract pair left index {:?} is not a site index of the first TreeTN",
+                    idx_a.id()
+                )
+            })?;
+        let right_node = b
+            .site_index_network()
+            .find_node_by_index(idx_a)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "partial_contract: aligned contract index {:?} is not a site index of the second TreeTN",
+                    idx_a.id()
+                )
+            })?;
+
+        if left_node != right_node {
+            target_assignment.insert(idx_a.clone(), left_node);
+        }
+    }
+
+    b.swap_site_indices(&target_assignment, &SwapOptions::default())
+        .context("partial_contract: failed to move aligned contract indices to matching nodes")?;
+    Ok(())
 }
 
 /// Partially contract two TreeTNs according to the given specification.
@@ -689,6 +809,7 @@ where
     }
 
     let mut result = if a_modified.same_topology(&b_modified) {
+        align_contract_pair_site_nodes(&a_modified, &mut b_modified, &spec.contract_pairs)?;
         contract(&a_modified, &b_modified, center, options)
             .context("partial_contract: contraction failed")?
     } else {
@@ -706,6 +827,124 @@ where
     } else {
         Ok(result)
     }
+}
+
+/// Partially contract two TreeTNs and restructure the result to a target site network.
+///
+/// Use this when the surviving site indices need a specific output topology,
+/// including cases where several surviving indices initially occupy the same
+/// result node. The contraction itself is performed by [`partial_contract`]
+/// without `output_order`; the returned TreeTN is then transformed with
+/// [`TreeTN::restructure_to`].
+///
+/// # Arguments
+/// * `a` - First tensor network. Left indices in `spec` must be site indices of this network.
+/// * `b` - Second tensor network. Right indices in `spec` must be site indices of this network.
+/// * `spec` - Site-index contraction and diagonal-pair specification. `output_order`
+///   must be `None` because `target` supplies the output layout.
+/// * `center` - Canonical center node used for the intermediate contraction.
+/// * `target` - Target site-index network containing exactly the surviving result
+///   indices, assigned to the desired output nodes and topology.
+/// * `options` - Contraction algorithm options.
+/// * `restructure_options` - Split, swap, and optional final truncation settings
+///   used when transforming the intermediate result to `target`.
+///
+/// # Returns
+/// A TreeTN with node names and site-index assignment matching `target`.
+///
+/// # Errors
+/// Returns an error if `spec.output_order` is set, if the partial contraction
+/// fails, or if the contracted result cannot be restructured to `target`.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashSet;
+///
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex};
+/// use tensor4all_treetn::{
+///     contraction::ContractionOptions,
+///     partial_contract_to_site_network,
+///     PartialContractionSpec,
+///     RestructureOptions,
+///     SiteIndexNetwork,
+///     TreeTN,
+/// };
+///
+/// let i = DynIndex::new_dyn(2);
+/// let k_left = DynIndex::new_dyn(2);
+/// let k_right = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+///
+/// let a = TreeTN::<TensorDynLen, &str>::from_tensors(
+///     vec![TensorDynLen::from_dense(
+///         vec![i.clone(), k_left.clone()],
+///         vec![1.0, 2.0, 3.0, 4.0],
+///     ).unwrap()],
+///     vec!["center"],
+/// ).unwrap();
+/// let b = TreeTN::<TensorDynLen, &str>::from_tensors(
+///     vec![TensorDynLen::from_dense(
+///         vec![k_right.clone(), j.clone()],
+///         vec![5.0, 6.0, 7.0, 8.0],
+///     ).unwrap()],
+///     vec!["center"],
+/// ).unwrap();
+///
+/// let spec = PartialContractionSpec {
+///     contract_pairs: vec![(k_left, k_right)],
+///     diagonal_pairs: vec![],
+///     output_order: None,
+/// };
+///
+/// let mut target = SiteIndexNetwork::new();
+/// target.add_node("0_row", HashSet::from([i.clone()])).unwrap();
+/// target.add_node("1_col", HashSet::from([j.clone()])).unwrap();
+/// target.add_edge(&"0_row", &"1_col").unwrap();
+///
+/// let result = partial_contract_to_site_network(
+///     &a,
+///     &b,
+///     &spec,
+///     &"center",
+///     &target,
+///     ContractionOptions::default(),
+///     &RestructureOptions::default(),
+/// ).unwrap();
+/// let dense = result.to_dense().unwrap();
+///
+/// assert_eq!(dense.external_indices(), vec![i.clone(), j.clone()]);
+/// let expected = vec![23.0, 34.0, 31.0, 46.0];
+/// for (actual, expected) in dense.to_vec::<f64>().unwrap().into_iter().zip(expected) {
+///     assert!((actual - expected).abs() < 1e-12);
+/// }
+/// assert_eq!(result.site_index_network().find_node_by_index(&i), Some(&"0_row"));
+/// assert_eq!(result.site_index_network().find_node_by_index(&j), Some(&"1_col"));
+/// ```
+pub fn partial_contract_to_site_network<V, TargetV>(
+    a: &TreeTN<TensorDynLen, V>,
+    b: &TreeTN<TensorDynLen, V>,
+    spec: &PartialContractionSpec<DynIndex>,
+    center: &V,
+    target: &SiteIndexNetwork<TargetV, DynIndex>,
+    options: ContractionOptions,
+    restructure_options: &RestructureOptions,
+) -> Result<TreeTN<TensorDynLen, TargetV>>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+    TargetV: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+    <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+{
+    if spec.output_order.is_some() {
+        bail!(
+            "partial_contract_to_site_network: spec.output_order must be None because the target site network defines the output layout"
+        );
+    }
+
+    let result = partial_contract(a, b, spec, center, options)?;
+    result.restructure_to(target, restructure_options).context(
+        "partial_contract_to_site_network: failed to restructure result to target site network",
+    )
 }
 
 /// Multiply two TreeTNs elementwise along selected external index pairs.
@@ -961,12 +1200,14 @@ where
         if let Some(mut links) = link_indices_by_node.remove(node) {
             indices.append(&mut links);
         }
-        tensors.push(TensorDynLen::ones(&indices).map_err(|error| {
-            SelectedIndexContractionError::BuildOnesTensor {
-                node: format!("{node:?}"),
-                message: format_anyhow_error(error),
-            }
-        })?);
+        tensors.push(
+            <TensorDynLen as TensorConstructionLike>::ones(&indices).map_err(|error| {
+                SelectedIndexContractionError::BuildOnesTensor {
+                    node: format!("{node:?}"),
+                    message: format_anyhow_error(error),
+                }
+            })?,
+        );
     }
 
     let weights = TreeTN::from_tensors(tensors, node_names).map_err(|error| {

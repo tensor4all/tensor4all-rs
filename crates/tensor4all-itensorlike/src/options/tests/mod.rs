@@ -1,4 +1,6 @@
 use super::*;
+use num_complex::Complex64;
+use tensor4all_core::AnyScalar;
 use tensor4all_core::SvdTruncationPolicy;
 
 #[test]
@@ -105,11 +107,15 @@ fn test_contract_method_default() {
 fn test_linsolve_options_default() {
     let opts = LinsolveOptions::default();
     assert_eq!(opts.nhalfsweeps(), 10);
-    assert_eq!(opts.coefficients(), (0.0, 1.0));
-    assert_eq!(opts.krylov_tol(), 1e-10);
-    assert_eq!(opts.krylov_maxiter(), 100);
-    assert_eq!(opts.krylov_dim(), 30);
+    assert_eq!(
+        opts.coefficients(),
+        (AnyScalar::new_real(0.0), AnyScalar::new_real(1.0))
+    );
+    assert_eq!(opts.gmres_tol(), 1e-10);
+    assert_eq!(opts.gmres_max_restarts(), 100);
+    assert_eq!(opts.gmres_restart_dim(), 30);
     assert_eq!(opts.convergence_tol(), None);
+    assert!(opts.check_residual());
     assert_eq!(opts.svd_policy(), None);
     assert_eq!(opts.max_rank(), None);
 }
@@ -129,20 +135,39 @@ fn test_linsolve_options_builder() {
         .with_nsweeps(10)
         .with_svd_policy(policy)
         .with_max_rank(100)
-        .with_krylov_tol(1e-8)
-        .with_krylov_maxiter(200)
-        .with_krylov_dim(50)
+        .with_gmres_tol(1e-8)
+        .with_gmres_max_restarts(200)
+        .with_gmres_restart_dim(50)
         .with_coefficients(1.0, -1.0)
-        .with_convergence_tol(1e-6);
+        .with_convergence_tol(1e-6)
+        .with_residual_check(false);
 
     assert_eq!(opts.nhalfsweeps(), 20);
     assert_eq!(opts.svd_policy(), Some(policy));
     assert_eq!(opts.max_rank(), Some(100));
-    assert_eq!(opts.krylov_tol(), 1e-8);
-    assert_eq!(opts.krylov_maxiter(), 200);
-    assert_eq!(opts.krylov_dim(), 50);
-    assert_eq!(opts.coefficients(), (1.0, -1.0));
+    assert_eq!(opts.gmres_tol(), 1e-8);
+    assert_eq!(opts.gmres_max_restarts(), 200);
+    assert_eq!(opts.gmres_restart_dim(), 50);
+    assert_eq!(
+        opts.coefficients(),
+        (AnyScalar::new_real(1.0), AnyScalar::new_real(-1.0))
+    );
     assert_eq!(opts.convergence_tol(), Some(1e-6));
+    assert!(!opts.check_residual());
+}
+
+#[test]
+fn test_linsolve_options_complex_coefficients() {
+    let opts = LinsolveOptions::default()
+        .with_coefficients(Complex64::new(0.25, -0.5), AnyScalar::new_complex(1.5, 2.0));
+
+    assert_eq!(
+        opts.coefficients(),
+        (
+            AnyScalar::new_complex(0.25, -0.5),
+            AnyScalar::new_complex(1.5, 2.0)
+        )
+    );
 }
 
 #[test]

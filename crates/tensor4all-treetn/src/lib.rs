@@ -54,8 +54,10 @@ pub use operator::{
 pub use options::{CanonicalizationOptions, RestructureOptions, SplitOptions, TruncationOptions};
 pub use random::{random_treetn, LinkSpace};
 pub use simplett_bridge::{
+    fix_and_remove_site_from_treetn_chain, insert_onehot_site_in_treetn_chain,
     tensor_train_to_treetn, tensor_train_to_treetn_with_names,
     tensor_train_to_treetn_with_names_and_site_indices, treetn_to_tensor_train,
+    weighted_remove_site_from_treetn_chain,
 };
 pub use site_index_network::SiteIndexNetwork;
 pub use treetn::{
@@ -67,6 +69,7 @@ pub use treetn::{
     get_boundary_edges,
     hadamard,
     partial_contract,
+    partial_contract_to_site_network,
     sum_over_indices,
     weighted_sum_over_index_pairs,
     BoundaryEdge,
@@ -91,9 +94,9 @@ pub use treetn::{
 
 // Re-export linsolve types from new location
 pub use linsolve::{
-    square_linsolve, EnvironmentCache, LinsolveOptions, LinsolveVerifyReport, NetworkTopology,
-    NodeVerifyDetail, ProjectedOperator, ProjectedState, SquareLinsolveResult,
-    SquareLinsolveUpdater,
+    relative_linear_system_residual, square_linsolve, EnvironmentCache, LinsolveOptions,
+    LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator, ProjectedState,
+    SquareLinsolveResult, SquareLinsolveUpdater,
 };
 
 use petgraph::graph::NodeIndex;

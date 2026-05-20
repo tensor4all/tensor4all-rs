@@ -7,7 +7,6 @@ use std::hash::Hash;
 use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
-use tensor4all_core::any_scalar::AnyScalar;
 use tensor4all_core::{IndexLike, TensorLike};
 
 use crate::linsolve::common::ProjectedOperator;
@@ -15,12 +14,13 @@ use crate::treetn::TreeTN;
 
 /// LocalLinOp: Wraps the projected operator for local GMRES solving.
 ///
-/// This applies the local linear operator: `y = a₀ * x + a₁ * H * x`
-/// where H is the projected operator.
+/// This applies only the projected local operator `H * x`.
+/// Affine coefficients such as `a₀ I + a₁ H` belong to the Krylov solver
+/// so the Arnoldi basis is built from the same unshifted operator as KrylovKit.
 ///
 /// This is the V_in = V_out specialized version that maintains a separate
 /// reference state for stable environment computation.
-pub struct LocalLinOp<T, V>
+pub struct LocalLinOp<'a, T, V>
 where
     T: TensorLike + 'static,
     <T::Index as IndexLike>::Id:
@@ -32,17 +32,13 @@ where
     /// The region being updated
     pub region: Vec<V>,
     /// Current state for ket in environment computation
-    pub state: TreeTN<T, V>,
+    pub state: &'a TreeTN<T, V>,
     /// Reference state for bra in environment computation
     /// Uses separate bond indices to prevent unintended contractions
-    pub reference_state: TreeTN<T, V>,
-    /// Coefficient a₀ (can be real or complex)
-    pub a0: AnyScalar,
-    /// Coefficient a₁ (can be real or complex)
-    pub a1: AnyScalar,
+    pub reference_state: &'a TreeTN<T, V>,
 }
 
-impl<T, V> LocalLinOp<T, V>
+impl<'a, T, V> LocalLinOp<'a, T, V>
 where
     T: TensorLike + 'static,
     T::Index: IndexLike,
@@ -57,27 +53,81 @@ where
     pub fn new(
         projected_operator: Arc<RwLock<ProjectedOperator<T, V>>>,
         region: Vec<V>,
-        state: TreeTN<T, V>,
-        reference_state: TreeTN<T, V>,
-        a0: AnyScalar,
-        a1: AnyScalar,
+        state: &'a TreeTN<T, V>,
+        reference_state: &'a TreeTN<T, V>,
     ) -> Self {
         Self {
             projected_operator,
             region,
             state,
             reference_state,
-            a0,
-            a1,
         }
     }
 
-    /// Apply the local linear operator: `y = a₀ * x + a₁ * H * x`
-    ///
-    /// This is used by `tensor4all_core::krylov::gmres` to solve the local problem.
-    pub fn apply(&self, x: &T) -> Result<T> {
-        // Apply operator: H * x
-        // ProjectedOperator handles environment computation and index mappings
+    fn local_input_indices(&self) -> Result<Vec<T::Index>> {
+        let Some((first_node, rest_nodes)) = self.region.split_first() else {
+            return Err(anyhow::anyhow!(
+                "LocalLinOp::apply_projected: region must not be empty"
+            ));
+        };
+        let first_idx = self.state.node_index(first_node).ok_or_else(|| {
+            anyhow::anyhow!(
+                "LocalLinOp::apply_projected: node {:?} not found in state",
+                first_node
+            )
+        })?;
+        let mut local = self
+            .state
+            .tensor(first_idx)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "LocalLinOp::apply_projected: tensor for node {:?} not found in state",
+                    first_node
+                )
+            })?
+            .clone();
+
+        for node in rest_nodes {
+            let node_idx = self.state.node_index(node).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "LocalLinOp::apply_projected: node {:?} not found in state",
+                    node
+                )
+            })?;
+            let tensor = self.state.tensor(node_idx).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "LocalLinOp::apply_projected: tensor for node {:?} not found in state",
+                    node
+                )
+            })?;
+            local = local.contract_pair(tensor)?;
+        }
+
+        Ok(local.external_indices())
+    }
+
+    fn same_index_set(left: &[T::Index], right: &[T::Index]) -> bool {
+        let left_keys: std::collections::HashSet<_> =
+            left.iter().map(|idx| (idx.clone(), idx.dim())).collect();
+        let right_keys: std::collections::HashSet<_> =
+            right.iter().map(|idx| (idx.clone(), idx.dim())).collect();
+        left.len() == right.len() && left_keys == right_keys
+    }
+
+    /// Apply the projected local operator: `y = H * x`.
+    pub fn apply_projected(&self, x: &T) -> Result<T> {
+        let x_indices = x.external_indices();
+        let expected_input_indices = self.local_input_indices()?;
+        if !Self::same_index_set(&x_indices, &expected_input_indices) {
+            return Err(anyhow::anyhow!(
+                "LocalLinOp::apply_projected: index structure mismatch between input (x) and the local state vector space:\n  x has {} indices: {:?}\n  expected {} indices: {:?}",
+                x_indices.len(),
+                x_indices.iter().map(|i| format!("{:?}:{}", i.id(), i.dim())).collect::<Vec<_>>(),
+                expected_input_indices.len(),
+                expected_input_indices.iter().map(|i| format!("{:?}:{}", i.id(), i.dim())).collect::<Vec<_>>(),
+            ));
+        }
+
         let mut proj_op = self
             .projected_operator
             .write()
@@ -86,75 +136,31 @@ where
             })
             .context("LocalLinOp::apply: lock poisoned")?;
 
-        let mut hx = proj_op.apply(
+        let hx = proj_op.apply(
             x,
             &self.region,
-            &self.state,
-            &self.reference_state,
+            self.state,
+            self.reference_state,
             self.state.site_index_network(),
         )?;
 
-        // Map output tensor's boundary bond indices back to ket space
-        // The projected operator application produces output with bra-side boundary bonds
-        for node in &self.region {
-            for neighbor in self.state.site_index_network().neighbors(node) {
-                if !self.region.contains(&neighbor) {
-                    let ket_edge = match self.state.edge_between(node, &neighbor) {
-                        Some(e) => e,
-                        None => continue,
-                    };
-                    let bra_edge = match self.reference_state.edge_between(node, &neighbor) {
-                        Some(e) => e,
-                        None => continue,
-                    };
-                    let ket_bond = match self.state.bond_index(ket_edge) {
-                        Some(b) => b,
-                        None => continue,
-                    };
-                    let bra_bond = match self.reference_state.bond_index(bra_edge) {
-                        Some(b) => b,
-                        None => continue,
-                    };
-
-                    // Only replace if hx actually contains the exact bra bond.
-                    if hx.external_indices().iter().any(|idx| idx == bra_bond) {
-                        hx = hx.replaceind(bra_bond, ket_bond)?;
-                    }
-                }
-            }
-        }
-
-        // When a0 = 0, just return a1 * H * x (avoids axpby which requires same indices)
-        if self.a0.is_zero() {
-            return hx.scale(self.a1.clone());
-        }
-
-        // Align hx indices to match x's index order for axpby.
-        // Check that hx and x have the same full index structure.
-        let x_indices = x.external_indices();
         let hx_indices = hx.external_indices();
-        let x_index_keys: std::collections::HashSet<_> =
-            x_indices.iter().map(|i| (i.clone(), i.dim())).collect();
-        let hx_index_keys: std::collections::HashSet<_> =
-            hx_indices.iter().map(|i| (i.clone(), i.dim())).collect();
-
-        let hx_aligned = if x_index_keys == hx_index_keys && x_indices.len() == hx_indices.len() {
-            // Same index set and count - permute to match order
-            hx.permuteinds(&x_indices)?
-        } else {
+        let indices_match = x_indices.len() == hx_indices.len()
+            && x_indices
+                .iter()
+                .zip(hx_indices.iter())
+                .all(|(x_idx, hx_idx)| x_idx == hx_idx && x_idx.dim() == hx_idx.dim());
+        if !indices_match {
             return Err(anyhow::anyhow!(
-                "LocalLinOp::apply: index structure mismatch between operator output (hx) and input (x):\n  x has {} indices: {:?}\n  hx has {} indices: {:?}\n  x index keys: {:?}\n  hx index keys: {:?}\n\nThis suggests the projected operator application produced output with different index structure than expected.",
+                "LocalLinOp::apply_projected: index structure mismatch between operator output (hx) and input (x):\n  x has {} indices: {:?}\n  hx has {} indices: {:?}\n\nProjectedOperator::apply is expected to return output in the same local vector space and index order as its input.",
                 x_indices.len(),
                 x_indices.iter().map(|i| format!("{:?}:{}", i.id(), i.dim())).collect::<Vec<_>>(),
                 hx_indices.len(),
                 hx_indices.iter().map(|i| format!("{:?}:{}", i.id(), i.dim())).collect::<Vec<_>>(),
-                x_index_keys.iter().map(|(i, dim)| format!("{i:?}:{dim}")).collect::<Vec<_>>(),
-                hx_index_keys.iter().map(|(i, dim)| format!("{i:?}:{dim}")).collect::<Vec<_>>(),
             ));
-        };
+        }
 
-        // Compute y = a₀ * x + a₁ * H * x
-        x.axpby(self.a0.clone(), &hx_aligned, self.a1.clone())
+        Ok(hx)
     }
 }
 

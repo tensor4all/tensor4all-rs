@@ -15,7 +15,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tensor4all_core::{
     index::{DynId, Index},
-    DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike,
+    DynIndex, IndexLike, TensorContractionLike, TensorDynLen, TensorIndex,
 };
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
@@ -390,9 +390,9 @@ fn run_linsolve_test(
     let options = LinsolveOptions::default()
         .with_nfullsweeps(n_sweeps)
         .with_max_rank(max_rank)
-        .with_krylov_tol(1e-8)
-        .with_krylov_maxiter(50)
-        .with_krylov_dim(30)
+        .with_gmres_tol(1e-8)
+        .with_gmres_max_restarts(50)
+        .with_gmres_restart_dim(30)
         .with_coefficients(a0, a1);
 
     // Initial guess: x0 = rhs

@@ -21,13 +21,14 @@ use super::{localupdate::LocalUpdateSweepPlan, TreeTN};
 
 /// Factorize a tensor into left and right parts connected by a bond index.
 ///
-/// Extends [`TensorLike::factorize`] to handle degenerate cases where all
+/// Extends [`TensorFactorizationLike::factorize`](tensor4all_core::TensorFactorizationLike::factorize)
+/// to handle degenerate cases where all
 /// indices go to one side (empty `left_inds` or `left_inds == all_inds`).
 /// For these cases a dimension-1 trivial bond is created so that
 /// `contract(left, right)` recovers the input tensor exactly.
 ///
 /// With `Canonical::Left` (the only mode used by swap):
-/// - **Normal case**: delegates to `TensorLike::factorize`.
+/// - **Normal case**: delegates to `TensorFactorizationLike::factorize`.
 /// - **Empty `left_inds`**: `left = [1]` (dim-1 scalar isometry),
 ///   `right = tensor ⊗ [1]` (acquires the trivial bond).
 /// - **Full `left_inds`**: `left = (tensor ⊗ [1]) / ‖tensor‖`,
@@ -89,7 +90,7 @@ where
         });
     }
 
-    // Normal case: delegate to TensorLike::factorize
+    // Normal case: delegate to TensorFactorizationLike::factorize
     tensor
         .factorize(left_inds, factorize_options)
         .map_err(|e| anyhow::anyhow!("factorize_or_trivial: factorize: {}", e))

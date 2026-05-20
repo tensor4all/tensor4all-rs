@@ -95,7 +95,7 @@ pub fn contract(
 
     let result_inner = if matches!(options.method(), ContractMethod::Zipup) {
         a.as_treetn()
-            .contract_zipup_tree_accumulated(
+            .contract_zipup_with(
                 b.as_treetn(),
                 &center,
                 CanonicalForm::Unitary,
@@ -136,6 +136,19 @@ impl TensorTrain {
     /// - The contraction algorithm fails
     pub fn contract(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
         contract(self, other, options)
+    }
+
+    /// Contract two tensor trains with explicit contraction options.
+    ///
+    /// This is an alias for [`TensorTrain::contract`]. It exists for callers
+    /// that use `contract_pair` to mean pairwise tensor-train contraction with
+    /// compression, rather than the dense tensor-level pair contraction.
+    ///
+    /// # Errors
+    /// Returns an error if the tensor trains cannot be contracted with the
+    /// requested options.
+    pub fn contract_pair(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
+        self.contract(other, options)
     }
 }
 

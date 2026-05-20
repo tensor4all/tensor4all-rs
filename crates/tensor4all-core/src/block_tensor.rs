@@ -34,8 +34,9 @@ use std::collections::HashSet;
 use crate::any_scalar::AnyScalar;
 use crate::tensor_index::TensorIndex;
 use crate::tensor_like::{
-    AllowedPairs, DirectSumResult, FactorizeError, FactorizeOptions, FactorizeResult,
-    LinearizationOrder, TensorLike,
+    DirectSumResult, FactorizeError, FactorizeOptions, FactorizeResult, LinearizationOrder,
+    TensorConstructionLike, TensorContractionLike, TensorFactorizationLike, TensorLike,
+    TensorVectorSpace,
 };
 use anyhow::Result;
 
@@ -412,7 +413,7 @@ impl<T: TensorLike> TensorIndex for BlockTensor<T> {
 // TensorLike implementation
 // ============================================================================
 
-impl<T: TensorLike> TensorLike for BlockTensor<T> {
+impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
     // ------------------------------------------------------------------------
     // Vector space operations (required for GMRES)
     // ------------------------------------------------------------------------
@@ -476,41 +477,22 @@ impl<T: TensorLike> TensorLike for BlockTensor<T> {
         Ok(sum)
     }
 
+    fn validate(&self) -> Result<()> {
+        self.validate_indices()
+    }
+}
+
+impl<T: TensorLike> TensorContractionLike for BlockTensor<T> {
+    // ------------------------------------------------------------------------
+    // Tensor network operations
+    // ------------------------------------------------------------------------
+
     fn conj(&self) -> Self {
         let conjugated: Vec<T> = self.blocks.iter().map(|b| b.conj()).collect();
         Self {
             blocks: conjugated,
             shape: self.shape,
         }
-    }
-
-    fn validate(&self) -> Result<()> {
-        self.validate_indices()
-    }
-
-    // ------------------------------------------------------------------------
-    // Operations not supported for BlockTensor (return error, don't panic)
-    // ------------------------------------------------------------------------
-
-    fn factorize(
-        &self,
-        _left_inds: &[<Self as TensorIndex>::Index],
-        _options: &FactorizeOptions,
-    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
-        Err(FactorizeError::ComputationError(anyhow::anyhow!(
-            "BlockTensor does not support factorize"
-        )))
-    }
-
-    fn factorize_full_rank(
-        &self,
-        _left_inds: &[<Self as TensorIndex>::Index],
-        _alg: crate::FactorizeAlg,
-        _canonical: crate::Canonical,
-    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
-        Err(FactorizeError::ComputationError(anyhow::anyhow!(
-            "BlockTensor does not support factorize_full_rank"
-        )))
     }
 
     fn direct_sum(
@@ -546,14 +528,35 @@ impl<T: TensorLike> TensorLike for BlockTensor<T> {
         })
     }
 
-    fn contract(_tensors: &[&Self], _allowed: AllowedPairs<'_>) -> Result<Self> {
+    fn contract(_tensors: &[&Self]) -> Result<Self> {
         anyhow::bail!("BlockTensor does not support contract")
     }
+}
 
-    fn contract_connected(_tensors: &[&Self], _allowed: AllowedPairs<'_>) -> Result<Self> {
-        anyhow::bail!("BlockTensor does not support contract_connected")
+impl<T: TensorLike> TensorFactorizationLike for BlockTensor<T> {
+    fn factorize(
+        &self,
+        _left_inds: &[<Self as TensorIndex>::Index],
+        _options: &FactorizeOptions,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        Err(FactorizeError::ComputationError(anyhow::anyhow!(
+            "BlockTensor does not support factorize"
+        )))
     }
 
+    fn factorize_full_rank(
+        &self,
+        _left_inds: &[<Self as TensorIndex>::Index],
+        _alg: crate::FactorizeAlg,
+        _canonical: crate::Canonical,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        Err(FactorizeError::ComputationError(anyhow::anyhow!(
+            "BlockTensor does not support factorize_full_rank"
+        )))
+    }
+}
+
+impl<T: TensorLike> TensorConstructionLike for BlockTensor<T> {
     fn diagonal(
         _input_index: &<Self as TensorIndex>::Index,
         _output_index: &<Self as TensorIndex>::Index,

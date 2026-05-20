@@ -3,11 +3,11 @@
 //! When composing exclusive operators, gap positions (nodes not covered by any operator)
 //! need identity tensors that pass information through unchanged.
 //!
-//! This module provides convenience wrappers around `TensorLike::delta()`.
+//! This module provides convenience wrappers around `TensorConstructionLike::delta()`.
 
 use anyhow::Result;
 
-use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+use tensor4all_core::{DynIndex, TensorConstructionLike, TensorDynLen};
 
 /// Build an identity operator tensor for a gap node.
 ///
@@ -16,7 +16,7 @@ use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
 /// - Each site index `s` gets a primed version `s'` (output index)
 /// - The tensor is diagonal: `T[s1, s1', s2, s2', ...] = δ_{s1,s1'} × δ_{s2,s2'} × ...`
 ///
-/// This is a convenience wrapper around `TensorDynLen::delta()`.
+/// This is a convenience wrapper around `TensorConstructionLike::delta()`.
 ///
 /// # Arguments
 ///
@@ -37,7 +37,7 @@ pub fn build_identity_operator_tensor(
     site_indices: &[DynIndex],
     output_site_indices: &[DynIndex],
 ) -> Result<TensorDynLen> {
-    TensorDynLen::delta(site_indices, output_site_indices)
+    <TensorDynLen as TensorConstructionLike>::delta(site_indices, output_site_indices)
 }
 
 #[cfg(test)]

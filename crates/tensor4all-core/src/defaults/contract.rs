@@ -8,8 +8,8 @@
 //!
 //! # Main Functions
 //!
-//! - [`contract_multi`]: Contracts tensors, handling disconnected components via outer product
-//! - [`contract_connected`]: Contracts tensors that must form a connected graph
+//! - [`contract`]: Contracts one connected tensor network
+//! - [`contract_with_options`]: Contracts one connected tensor network with retained indices
 //!
 //! # Diag Tensor Handling
 //!
@@ -27,14 +27,13 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use petgraph::algo::connected_components;
 use petgraph::prelude::*;
-use tenferro::eager_einsum::eager_einsum_ad;
+use tenferro::eager_tensor::einsum_subscripts as eager_einsum_ad;
+use tenferro::EinsumSubscripts;
 use tensor4all_tensorbackend::{einsum_native_tensors, einsum_native_tensors_owned};
 
 use crate::defaults::{DynId, DynIndex, TensorDynLen};
 
 use crate::index_like::IndexLike;
-use crate::tensor_like::AllowedPairs;
-
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct ContractOperandSignature {
     dims: Vec<usize>,
@@ -95,7 +94,7 @@ pub fn print_and_reset_contract_profile() {
         state.borrow_mut().clear();
         entries.sort_by_key(|(_, entry)| Reverse(entry.total_time));
 
-        eprintln!("=== contract_multi Profile ===");
+        eprintln!("=== contract Profile ===");
         for (idx, (signature, entry)) in entries.into_iter().take(20).enumerate() {
             let operands = signature
                 .operands
@@ -129,34 +128,30 @@ pub fn print_and_reset_contract_profile() {
 
 /// Options for multi-tensor contraction.
 ///
-/// Use this to choose which tensor pairs may contract and which shared indices
-/// should be retained in the output instead of summed over.
+/// Use this to choose which shared indices should be retained in the output
+/// instead of summed over.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{AllowedPairs, ContractionOptions, DynIndex};
+/// use tensor4all_core::{ContractionOptions, DynIndex};
 ///
 /// let batch = DynIndex::new_dyn(2);
 /// let retain = [batch.clone()];
-/// let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain);
+/// let options = ContractionOptions::new().with_retain_indices(&retain);
 ///
-/// assert!(matches!(options.allowed, AllowedPairs::All));
 /// assert_eq!(options.retain_indices, &[batch]);
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct ContractionOptions<'a> {
-    /// Contractability policy for tensor pairs.
-    pub allowed: AllowedPairs<'a>,
     /// Indices that should remain in the result even if they appear more than once.
     pub retain_indices: &'a [DynIndex],
 }
 
 impl<'a> ContractionOptions<'a> {
     /// Create contraction options with no retained indices.
-    pub fn new(allowed: AllowedPairs<'a>) -> Self {
+    pub fn new() -> Self {
         Self {
-            allowed,
             retain_indices: &[],
         }
     }
@@ -168,200 +163,234 @@ impl<'a> ContractionOptions<'a> {
     }
 }
 
-/// Contract multiple tensors into a single tensor, handling disconnected components.
-///
-/// This function automatically handles disconnected tensor graphs by:
-/// 1. Finding connected components based on contractable indices
-/// 2. Contracting each connected component separately
-/// 3. Combining results using outer product
-///
-/// # Arguments
-/// * `tensors` - Slice of tensors to contract
-/// * `allowed` - Specifies which tensor pairs can have their indices contracted
-///
-/// # Returns
-/// The result of contracting all tensors over allowed contractable indices.
-/// If tensors form disconnected components, they are combined via outer product.
-///
-/// # Behavior by N
-/// - N=0: Error
-/// - N=1: Clone of input
-/// - N>=2: Contract connected components, combine with outer product
-///
-/// # Errors
-/// - `AllowedPairs::Specified` contains a pair with no contractable indices
-///
-/// # Examples
-///
-/// ```
-/// use tensor4all_core::{TensorDynLen, DynIndex, contract_multi, AllowedPairs};
-///
-/// // A[i, j] and B[j, k] share index j — contract to get C[i, k]
-/// let i = DynIndex::new_dyn(2);
-/// let j = DynIndex::new_dyn(3);
-/// let k = DynIndex::new_dyn(4);
-///
-/// let a = TensorDynLen::from_dense(
-///     vec![i.clone(), j.clone()],
-///     vec![1.0_f64; 6],
-/// ).unwrap();
-/// let b = TensorDynLen::from_dense(
-///     vec![j.clone(), k.clone()],
-///     vec![1.0_f64; 12],
-/// ).unwrap();
-///
-/// let c = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
-/// assert_eq!(c.dims(), vec![2, 4]);
-/// ```
-pub fn contract_multi(
-    tensors: &[&TensorDynLen],
-    allowed: AllowedPairs<'_>,
-) -> Result<TensorDynLen> {
-    contract_multi_with_options(tensors, ContractionOptions::new(allowed))
+impl Default for ContractionOptions<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-/// Contract multiple tensors into a single tensor with additional options.
+/// Options for pairwise tensor contraction.
 ///
-/// This behaves like [`contract_multi`] but also allows selected shared indices
-/// to be retained in the output.
-///
-/// # Arguments
-/// * `tensors` - Slice of tensors to contract
-/// * `options` - Pair-selection policy and retained indices
-///
-/// # Returns
-/// The contracted tensor, possibly with retained shared indices in the result.
-///
-/// # Errors
-/// Returns an error if:
-/// - no tensors are provided
-/// - `AllowedPairs::Specified` contains a pair with no contractable indices
-/// - a retained index does not appear in the inputs
-/// - a shared internal label has inconsistent dimensions
+/// The conjugation flags are semantically equivalent to contracting
+/// `lhs.conj()` or `rhs.conj()`, but allow implementations to pass conjugation
+/// to the backend without materializing a conjugated tensor.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{contract_multi_with_options, AllowedPairs, ContractionOptions, DynIndex, TensorDynLen};
+/// use num_complex::Complex64;
+/// use tensor4all_core::{
+///     contract_pair, contract_pair_with_operand_options, DynIndex,
+///     PairwiseContractionOptions, TensorDynLen,
+/// };
 ///
 /// let i = DynIndex::new_dyn(2);
-/// let j = DynIndex::new_dyn(3);
-/// let k = DynIndex::new_dyn(4);
+/// let lhs = TensorDynLen::from_dense(
+///     vec![i.clone()],
+///     vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -1.0)],
+/// ).unwrap();
+/// let rhs = TensorDynLen::from_dense(
+///     vec![i],
+///     vec![Complex64::new(2.0, 0.5), Complex64::new(-1.0, 4.0)],
+/// ).unwrap();
 ///
-/// let a = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64; 6]).unwrap();
-/// let b = TensorDynLen::from_dense(vec![j.clone(), k.clone()], vec![1.0_f64; 12]).unwrap();
-/// let retain_indices = [j.clone()];
-/// let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
-/// let c = contract_multi_with_options(&[&a, &b], options).unwrap();
-/// assert_eq!(c.dims(), vec![2, 3, 4]);
+/// let options = PairwiseContractionOptions::new().with_lhs_conj(true);
+/// let flagged = contract_pair_with_operand_options(&lhs, &rhs, options).unwrap();
+/// let materialized = contract_pair(&lhs.conj(), &rhs).unwrap();
+///
+/// assert!((flagged.sum().unwrap() - materialized.sum().unwrap()).abs() < 1e-12);
 /// ```
-pub fn contract_multi_with_options(
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PairwiseContractionOptions {
+    /// Whether to conjugate the left operand before contraction.
+    pub lhs_conj: bool,
+    /// Whether to conjugate the right operand before contraction.
+    pub rhs_conj: bool,
+}
+
+impl PairwiseContractionOptions {
+    /// Create pairwise contraction options with no operand conjugation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::PairwiseContractionOptions;
+    ///
+    /// let options = PairwiseContractionOptions::new();
+    /// assert!(!options.lhs_conj);
+    /// assert!(!options.rhs_conj);
+    /// ```
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set whether the left operand is conjugated during contraction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::PairwiseContractionOptions;
+    ///
+    /// let options = PairwiseContractionOptions::new().with_lhs_conj(true);
+    /// assert!(options.lhs_conj);
+    /// assert!(!options.rhs_conj);
+    /// ```
+    pub fn with_lhs_conj(mut self, lhs_conj: bool) -> Self {
+        self.lhs_conj = lhs_conj;
+        self
+    }
+
+    /// Set whether the right operand is conjugated during contraction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::PairwiseContractionOptions;
+    ///
+    /// let options = PairwiseContractionOptions::new().with_rhs_conj(true);
+    /// assert!(!options.lhs_conj);
+    /// assert!(options.rhs_conj);
+    /// ```
+    pub fn with_rhs_conj(mut self, rhs_conj: bool) -> Self {
+        self.rhs_conj = rhs_conj;
+        self
+    }
+
+    pub(crate) fn has_conj(self) -> bool {
+        self.lhs_conj || self.rhs_conj
+    }
+}
+
+/// Contract a connected tensor network with the default semantics.
+///
+/// This is the normal public entry point for N-ary tensor contraction. It
+/// contracts all common contractable indices and requires the input tensors to
+/// form one connected tensor graph. Disconnected inputs are rejected so missing
+/// links do not silently become outer products.
+///
+/// Use explicit [`outer_product`] calls when an outer product of disconnected
+/// components is intentional.
+pub fn contract(tensors: &[&TensorDynLen]) -> Result<TensorDynLen> {
+    contract_with_options(tensors, ContractionOptions::new())
+}
+
+/// Contract a connected tensor network with advanced options.
+pub fn contract_with_options(
     tensors: &[&TensorDynLen],
     options: ContractionOptions<'_>,
 ) -> Result<TensorDynLen> {
-    match tensors.len() {
-        0 => Err(anyhow::anyhow!("No tensors to contract")),
-        _ => {
-            validate_retained_indices_exist(tensors, options.retain_indices)?;
-            if tensors.len() == 1 {
-                return Ok((*tensors[0]).clone());
-            }
+    contract_with_options_impl(tensors, options)
+}
 
-            // Validate AllowedPairs::Specified pairs have contractable indices
-            if let AllowedPairs::Specified(pairs) = options.allowed {
-                for &(i, j) in pairs {
-                    if !has_contractable_indices(tensors[i], tensors[j]) {
-                        return Err(anyhow::anyhow!(
-                            "Specified pair ({}, {}) has no contractable indices",
-                            i,
-                            j
-                        ));
-                    }
-                }
-            }
+/// Contract owned tensors with the default connected-network semantics.
+pub fn contract_owned(tensors: Vec<TensorDynLen>) -> Result<TensorDynLen> {
+    contract_owned_with_options(tensors, ContractionOptions::new())
+}
 
-            // Find connected components
-            let components = find_tensor_connected_components_with_retained(
-                tensors,
-                options.allowed,
-                options.retain_indices,
-            );
-
-            if components.len() == 1 {
-                // All tensors connected - use optimized contraction (skip connectivity check)
-                contract_multi_impl(tensors, options)
-            } else {
-                // Multiple components - contract each and combine with outer product
-                let mut results: Vec<TensorDynLen> = Vec::new();
-                for component in &components {
-                    let component_tensors: Vec<&TensorDynLen> =
-                        component.iter().map(|&i| tensors[i]).collect();
-                    let component_retain_indices =
-                        retained_indices_for_component(tensors, component, options.retain_indices);
-
-                    // Remap AllowedPairs for the component (connectivity already verified)
-                    let remapped_allowed = remap_allowed_pairs(options.allowed, component);
-                    let component_options = ContractionOptions {
-                        allowed: remapped_allowed.as_ref(),
-                        retain_indices: &component_retain_indices,
-                    };
-                    let contracted = contract_multi_impl(&component_tensors, component_options)?;
-                    results.push(contracted);
-                }
-
-                // Combine with outer product
-                let mut results_iter = results.into_iter();
-                let Some(mut result) = results_iter.next() else {
-                    return Err(anyhow::anyhow!("No contracted components produced"));
-                };
-                for other in results_iter {
-                    result = result.outer_product(&other)?;
-                }
-                Ok(result)
-            }
-        }
+/// Contract owned tensors with advanced connected-network options.
+pub fn contract_owned_with_options(
+    tensors: Vec<TensorDynLen>,
+    options: ContractionOptions<'_>,
+) -> Result<TensorDynLen> {
+    let tensor_refs = tensors.iter().collect::<Vec<_>>();
+    let components =
+        find_tensor_connected_components_with_retained(&tensor_refs, options.retain_indices);
+    if components.len() > 1 {
+        return Err(anyhow::anyhow!(
+            "Tensors form disconnected components; use explicit outer_product operations for an intentional disconnected product"
+        ));
     }
+    drop(tensor_refs);
+    contract_owned_with_options_impl(tensors, options)
+}
+
+/// Contract two tensors with the default pairwise semantics.
+///
+/// This is the concrete `TensorDynLen` entry point for binary contraction. It
+/// contracts all common indices and preserves the pairwise structured fast
+/// paths used by [`TensorContractionLike::contract_pair`].
+pub fn contract_pair(lhs: &TensorDynLen, rhs: &TensorDynLen) -> Result<TensorDynLen> {
+    lhs.try_contract_pairwise_default_with_options(rhs, PairwiseContractionOptions::new())
+}
+
+/// Contract two tensors with operand-level conjugation options.
+///
+/// This has the same index semantics as [`contract_pair`], with optional
+/// conjugation applied to either operand before matching and contracting common
+/// indices. Implementations may pass conjugation to the backend to avoid
+/// materializing conjugated payloads.
+///
+/// # Examples
+///
+/// ```
+/// use num_complex::Complex64;
+/// use tensor4all_core::{
+///     contract_pair, contract_pair_with_operand_options, DynIndex,
+///     PairwiseContractionOptions, TensorDynLen,
+/// };
+///
+/// let i = DynIndex::new_dyn(2);
+/// let lhs = TensorDynLen::from_dense(
+///     vec![i.clone()],
+///     vec![Complex64::new(1.0, 1.0), Complex64::new(0.0, 2.0)],
+/// ).unwrap();
+/// let rhs = TensorDynLen::from_dense(
+///     vec![i],
+///     vec![Complex64::new(2.0, 0.0), Complex64::new(3.0, -1.0)],
+/// ).unwrap();
+///
+/// let flagged = contract_pair_with_operand_options(
+///     &lhs,
+///     &rhs,
+///     PairwiseContractionOptions::new().with_lhs_conj(true),
+/// ).unwrap();
+/// let materialized = contract_pair(&lhs.conj(), &rhs).unwrap();
+///
+/// assert!((flagged.sum().unwrap() - materialized.sum().unwrap()).abs() < 1e-12);
+/// ```
+pub fn contract_pair_with_operand_options(
+    lhs: &TensorDynLen,
+    rhs: &TensorDynLen,
+    options: PairwiseContractionOptions,
+) -> Result<TensorDynLen> {
+    lhs.try_contract_pairwise_default_with_options(rhs, options)
+}
+
+/// Contract two tensors with explicit contraction options.
+pub fn contract_pair_with_options(
+    lhs: &TensorDynLen,
+    rhs: &TensorDynLen,
+    options: ContractionOptions<'_>,
+) -> Result<TensorDynLen> {
+    contract_with_options(&[lhs, rhs], options)
+}
+
+/// Contract two tensors along explicitly specified index pairs.
+pub fn tensordot(
+    lhs: &TensorDynLen,
+    rhs: &TensorDynLen,
+    pairs: &[(DynIndex, DynIndex)],
+) -> Result<TensorDynLen> {
+    lhs.try_tensordot_pairwise_explicit(rhs, pairs)
+}
+
+/// Compute the outer product of two tensors.
+///
+/// This is an explicit tensor product, not a dense-only operation. Compact
+/// structured storage is preserved when the operand layouts allow it.
+pub fn outer_product(lhs: &TensorDynLen, rhs: &TensorDynLen) -> Result<TensorDynLen> {
+    lhs.try_outer_product_pairwise(rhs)
 }
 
 /// Contract multiple owned tensors into a single tensor.
 ///
-/// This is the consuming counterpart to [`contract_multi_with_options`]. It
+/// This is the consuming implementation for [`contract_owned_with_options`]. It
 /// preserves the same contraction semantics while allowing eligible non-AD
 /// dense inputs to use tenferro's owned eager einsum executor. When any input
 /// tracks gradients, or when compact structured metadata needs the borrowed
 /// path, this function falls back to the shared borrowed execution so semantics
 /// and reverse-mode AD remain intact.
-///
-/// # Arguments
-/// * `tensors` - Owned tensors to contract.
-/// * `options` - Pair-selection policy and retained indices.
-///
-/// # Returns
-/// The contracted tensor, with retained shared indices preserved in the output.
-///
-/// # Errors
-/// Returns an error for the same conditions as
-/// [`contract_multi_with_options`], including empty input, invalid retained
-/// indices, and incompatible contraction pairs.
-///
-/// # Examples
-///
-/// ```
-/// use tensor4all_core::{contract_multi_owned, contract_multi_with_options, AllowedPairs, ContractionOptions, DynIndex, TensorDynLen};
-///
-/// let i = DynIndex::new_dyn(2);
-/// let j = DynIndex::new_dyn(3);
-/// let k = DynIndex::new_dyn(4);
-/// let a = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64; 6]).unwrap();
-/// let b = TensorDynLen::from_dense(vec![j.clone(), k.clone()], vec![1.0_f64; 12]).unwrap();
-/// let options = ContractionOptions::new(AllowedPairs::All);
-///
-/// let owned = contract_multi_owned(vec![a.clone(), b.clone()], options).unwrap();
-/// let borrowed = contract_multi_with_options(&[&a, &b], options).unwrap();
-/// assert_eq!(owned.indices(), borrowed.indices());
-/// assert_eq!(owned.to_vec::<f64>().unwrap(), borrowed.to_vec::<f64>().unwrap());
-/// ```
-pub fn contract_multi_owned(
+fn contract_owned_with_options_impl(
     tensors: Vec<TensorDynLen>,
     options: ContractionOptions<'_>,
 ) -> Result<TensorDynLen> {
@@ -379,33 +408,22 @@ pub fn contract_multi_owned(
                 return Ok(tensor);
             }
 
-            if let AllowedPairs::Specified(pairs) = options.allowed {
-                for &(i, j) in pairs {
-                    if !has_contractable_indices(tensor_refs[i], tensor_refs[j]) {
-                        return Err(anyhow::anyhow!(
-                            "Specified pair ({}, {}) has no contractable indices",
-                            i,
-                            j
-                        ));
-                    }
-                }
-            }
-
             let requires_borrowed_path = tensor_refs.iter().any(|tensor| tensor.tracks_grad())
                 || tensor_refs
                     .iter()
                     .any(|tensor| !has_dense_axis_classes(tensor));
             if requires_borrowed_path {
-                return contract_multi_with_options(&tensor_refs, options);
+                return contract_with_options(&tensor_refs, options);
             }
 
             let components = find_tensor_connected_components_with_retained(
                 &tensor_refs,
-                options.allowed,
                 options.retain_indices,
             );
             if components.len() > 1 {
-                return contract_multi_with_options(&tensor_refs, options);
+                return Err(anyhow::anyhow!(
+                    "Tensors form disconnected components; use explicit outer_product operations for an intentional disconnected product"
+                ));
             }
 
             let mut diag_uf = AxisUnionFind::new();
@@ -440,104 +458,7 @@ fn has_dense_axis_classes(tensor: &TensorDynLen) -> bool {
         .eq(0..tensor.indices().len())
 }
 
-/// Contract multiple tensors that form a connected graph.
-///
-/// Uses einsum optimization via tensorbackend.
-///
-/// # Arguments
-/// * `tensors` - Slice of tensors to contract (must form a connected graph)
-/// * `allowed` - Specifies which tensor pairs can have their indices contracted
-///
-/// # Returns
-/// The result of contracting all tensors over allowed contractable indices.
-///
-/// # Connectivity Requirement
-/// All tensors must form a connected graph through contractable indices.
-/// Two tensors are connected if they share a contractable index (same ID, dual direction).
-/// If the tensors form disconnected components, this function returns an error.
-///
-/// Use [`contract_multi`] if you want automatic handling of disconnected components.
-///
-/// # Behavior by N
-/// - N=0: Error
-/// - N=1: Clone of input
-/// - N>=2: Optimized order via the tensorbackend einsum path
-///
-/// # Examples
-///
-/// ```
-/// use tensor4all_core::{TensorDynLen, DynIndex, contract_connected, AllowedPairs};
-///
-/// // A[i, j] contracted with B[j, k]
-/// let i = DynIndex::new_dyn(2);
-/// let j = DynIndex::new_dyn(3);
-/// let k = DynIndex::new_dyn(4);
-///
-/// let a = TensorDynLen::from_dense(
-///     vec![i.clone(), j.clone()],
-///     vec![1.0_f64; 6],
-/// ).unwrap();
-/// let b = TensorDynLen::from_dense(
-///     vec![j.clone(), k.clone()],
-///     vec![1.0_f64; 12],
-/// ).unwrap();
-///
-/// let c = contract_connected(&[&a, &b], AllowedPairs::All).unwrap();
-/// assert_eq!(c.dims(), vec![2, 4]);
-/// ```
-pub fn contract_connected(
-    tensors: &[&TensorDynLen],
-    allowed: AllowedPairs<'_>,
-) -> Result<TensorDynLen> {
-    contract_connected_with_options(tensors, ContractionOptions::new(allowed))
-}
-
-/// Contract a connected tensor network with additional options.
-///
-/// This behaves like [`contract_connected`] but also allows selected shared
-/// indices to be retained in the output.
-///
-/// # Arguments
-/// * `tensors` - Slice of tensors to contract
-/// * `options` - Pair-selection policy and retained indices
-///
-/// # Returns
-/// The contracted tensor.
-///
-/// # Errors
-/// Returns an error if the tensors are disconnected, no tensors are provided,
-/// or retained indices are invalid.
-///
-/// # Examples
-///
-/// ```
-/// use tensor4all_core::{
-///     contract_connected_with_options, AllowedPairs, ContractionOptions, DynIndex, TensorDynLen,
-/// };
-///
-/// let batch = DynIndex::new_dyn(2);
-/// let i = DynIndex::new_dyn(2);
-/// let k = DynIndex::new_dyn(3);
-/// let j = DynIndex::new_dyn(2);
-///
-/// let a = TensorDynLen::from_dense(
-///     vec![batch.clone(), i.clone(), k.clone()],
-///     vec![1.0_f64; 12],
-/// )
-/// .unwrap();
-/// let b = TensorDynLen::from_dense(
-///     vec![batch.clone(), k, j.clone()],
-///     vec![1.0_f64; 12],
-/// )
-/// .unwrap();
-/// let retain = [batch.clone()];
-/// let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain);
-///
-/// let c = contract_connected_with_options(&[&a, &b], options).unwrap();
-/// assert_eq!(c.indices(), &[batch, i, j]);
-/// assert_eq!(c.to_vec::<f64>().unwrap(), vec![3.0; 8]);
-/// ```
-pub fn contract_connected_with_options(
+fn contract_with_options_impl(
     tensors: &[&TensorDynLen],
     options: ContractionOptions<'_>,
 ) -> Result<TensorDynLen> {
@@ -550,11 +471,8 @@ pub fn contract_connected_with_options(
             }
 
             // Check connectivity first
-            let components = find_tensor_connected_components_with_retained(
-                tensors,
-                options.allowed,
-                options.retain_indices,
-            );
+            let components =
+                find_tensor_connected_components_with_retained(tensors, options.retain_indices);
             if components.len() > 1 {
                 return Err(anyhow::anyhow!(
                     "Disconnected tensor network: {} components found",
@@ -562,7 +480,7 @@ pub fn contract_connected_with_options(
                 ));
             }
             // Connectivity verified - skip check in impl
-            contract_multi_impl(tensors, options)
+            contract_impl(tensors, options)
         }
     }
 }
@@ -727,7 +645,7 @@ pub fn collect_sizes(tensors: &[&TensorDynLen], uf: &mut AxisUnionFind) -> HashM
 ///
 /// This implementation preserves storage type: if all inputs are F64, the result
 /// is F64; if any input is C64, the result is C64.
-fn contract_multi_impl(
+fn contract_impl(
     tensors: &[&TensorDynLen],
     options: ContractionOptions<'_>,
 ) -> Result<TensorDynLen> {
@@ -739,7 +657,7 @@ fn contract_multi_impl(
     // 2. Build the contraction plan from internal labels.
     let plan = build_contraction_plan(tensors, options, &mut diag_uf)?;
 
-    // Note: Connectivity check is done by caller (contract_multi or contract_connected)
+    // Note: Connectivity check is done by caller.
     // via find_tensor_connected_components before calling this function
 
     // 3. Build sizes from unique internal IDs.
@@ -830,7 +748,7 @@ fn execute_contraction_plan(
         };
         let mut result = (*first).clone();
         for tensor in iter {
-            result = result.try_contract_pairwise_default(tensor)?;
+            result = contract_pair(&result, tensor)?;
         }
         return Ok(result);
     }
@@ -867,28 +785,26 @@ fn execute_contraction_plan(
 fn build_einsum_subscripts_from_usize_ids(
     input_ids: &[Vec<usize>],
     output_ids: &[usize],
-) -> Result<String> {
-    fn ids_to_subscript(ids: &[usize]) -> Result<String> {
-        const LETTERS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-        let mut out = String::with_capacity(ids.len());
-        for &id in ids {
-            let letter = LETTERS.get(id).ok_or_else(|| {
-                anyhow::anyhow!("einsum label {id} exceeds supported label range")
-            })?;
-            out.push(char::from(*letter));
-        }
-        Ok(out)
-    }
-
+) -> Result<EinsumSubscripts> {
     let inputs = input_ids
         .iter()
-        .map(|ids| ids_to_subscript(ids))
+        .map(|ids| {
+            ids.iter()
+                .map(|&id| {
+                    u32::try_from(id)
+                        .map_err(|_| anyhow::anyhow!("einsum label {id} exceeds u32 range"))
+                })
+                .collect::<Result<Vec<_>>>()
+        })
         .collect::<Result<Vec<_>>>()?;
-    Ok(format!(
-        "{}->{}",
-        inputs.join(","),
-        ids_to_subscript(output_ids)?
-    ))
+    let output = output_ids
+        .iter()
+        .map(|&id| {
+            u32::try_from(id).map_err(|_| anyhow::anyhow!("einsum label {id} exceeds u32 range"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let input_refs = inputs.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    Ok(EinsumSubscripts::new(&input_refs, &output))
 }
 
 /// A contraction plan with internal labels and result ordering.
@@ -907,7 +823,7 @@ fn build_contraction_plan(
 ) -> Result<ContractionPlan> {
     let retained_indices: HashSet<DynIndex> = options.retain_indices.iter().cloned().collect();
     let (input_ids, internal_id_to_original) =
-        build_internal_ids(tensors, options.allowed, diag_uf, &retained_indices)?;
+        build_internal_ids(tensors, diag_uf, &retained_indices)?;
 
     let mut counts: HashMap<usize, usize> = HashMap::new();
     for ids in &input_ids {
@@ -976,28 +892,6 @@ fn validate_retained_indices_exist(
         }
     }
     Ok(())
-}
-
-fn retained_indices_for_component(
-    tensors: &[&TensorDynLen],
-    component: &[usize],
-    retain_indices: &[DynIndex],
-) -> Vec<DynIndex> {
-    let mut seen = HashSet::new();
-    let mut retained = Vec::new();
-    for retain in retain_indices {
-        if seen.insert(retain.clone())
-            && component.iter().any(|&tensor_idx| {
-                tensors[tensor_idx]
-                    .indices()
-                    .iter()
-                    .any(|idx| idx == retain)
-            })
-        {
-            retained.push(retain.clone());
-        }
-    }
-    retained
 }
 
 fn validate_unique_output_indices(indices: &[DynIndex]) -> Result<()> {
@@ -1097,7 +991,6 @@ fn output_axis_classes(
 #[allow(clippy::type_complexity)]
 fn build_internal_ids(
     tensors: &[&TensorDynLen],
-    allowed: AllowedPairs<'_>,
     _diag_uf: &mut AxisUnionFind,
     retained_indices: &HashSet<DynIndex>,
 ) -> Result<(Vec<Vec<usize>>, HashMap<usize, (usize, usize)>)> {
@@ -1107,54 +1000,42 @@ fn build_internal_ids(
     let mut assigned: HashMap<(usize, usize), usize> = HashMap::new();
     let mut internal_id_to_original: HashMap<usize, (usize, usize)> = HashMap::new();
 
-    // Process contractable pairs
-    let pairs_to_process: Vec<(usize, usize)> = match allowed {
-        AllowedPairs::All => {
-            let mut pairs = Vec::new();
-            for ti in 0..tensors.len() {
-                for tj in (ti + 1)..tensors.len() {
-                    pairs.push((ti, tj));
-                }
-            }
-            pairs
-        }
-        AllowedPairs::Specified(pairs) => pairs.to_vec(),
-    };
+    for ti in 0..tensors.len() {
+        for tj in (ti + 1)..tensors.len() {
+            for (pi, idx_i) in tensors[ti].indices.iter().enumerate() {
+                for (pj, idx_j) in tensors[tj].indices.iter().enumerate() {
+                    if idx_i.is_contractable(idx_j) {
+                        let key_i = (ti, pi);
+                        let key_j = (tj, pj);
 
-    for (ti, tj) in pairs_to_process {
-        for (pi, idx_i) in tensors[ti].indices.iter().enumerate() {
-            for (pj, idx_j) in tensors[tj].indices.iter().enumerate() {
-                if idx_i.is_contractable(idx_j) {
-                    let key_i = (ti, pi);
-                    let key_j = (tj, pj);
-
-                    match (assigned.get(&key_i).copied(), assigned.get(&key_j).copied()) {
-                        (None, None) => {
-                            let internal_id = if let Some(&id) = index_to_internal.get(idx_i) {
-                                id
-                            } else {
-                                let id = next_id;
-                                next_id += 1;
-                                index_to_internal.insert(idx_i.clone(), id);
-                                internal_id_to_original.insert(id, key_i);
-                                id
-                            };
-                            assigned.insert(key_i, internal_id);
-                            assigned.insert(key_j, internal_id);
-                            if idx_i != idx_j {
-                                index_to_internal.insert(idx_j.clone(), internal_id);
+                        match (assigned.get(&key_i).copied(), assigned.get(&key_j).copied()) {
+                            (None, None) => {
+                                let internal_id = if let Some(&id) = index_to_internal.get(idx_i) {
+                                    id
+                                } else {
+                                    let id = next_id;
+                                    next_id += 1;
+                                    index_to_internal.insert(idx_i.clone(), id);
+                                    internal_id_to_original.insert(id, key_i);
+                                    id
+                                };
+                                assigned.insert(key_i, internal_id);
+                                assigned.insert(key_j, internal_id);
+                                if idx_i != idx_j {
+                                    index_to_internal.insert(idx_j.clone(), internal_id);
+                                }
                             }
-                        }
-                        (Some(id), None) => {
-                            assigned.insert(key_j, id);
-                            index_to_internal.insert(idx_j.clone(), id);
-                        }
-                        (None, Some(id)) => {
-                            assigned.insert(key_i, id);
-                            index_to_internal.insert(idx_i.clone(), id);
-                        }
-                        (Some(_id_i), Some(_id_j)) => {
-                            // Both already assigned
+                            (Some(id), None) => {
+                                assigned.insert(key_j, id);
+                                index_to_internal.insert(idx_j.clone(), id);
+                            }
+                            (None, Some(id)) => {
+                                assigned.insert(key_i, id);
+                                index_to_internal.insert(idx_i.clone(), id);
+                            }
+                            (Some(_id_i), Some(_id_j)) => {
+                                // Both already assigned
+                            }
                         }
                     }
                 }
@@ -1217,16 +1098,12 @@ fn has_contractable_indices(a: &TensorDynLen, b: &TensorDynLen) -> bool {
 ///
 /// Uses petgraph for O(V+E) connected component detection.
 #[allow(dead_code)]
-fn find_tensor_connected_components(
-    tensors: &[&TensorDynLen],
-    allowed: AllowedPairs<'_>,
-) -> Vec<Vec<usize>> {
-    find_tensor_connected_components_with_retained(tensors, allowed, &[])
+fn find_tensor_connected_components(tensors: &[&TensorDynLen]) -> Vec<Vec<usize>> {
+    find_tensor_connected_components_with_retained(tensors, &[])
 }
 
 fn find_tensor_connected_components_with_retained(
     tensors: &[&TensorDynLen],
-    allowed: AllowedPairs<'_>,
     retain_indices: &[DynIndex],
 ) -> Vec<Vec<usize>> {
     let n = tensors.len();
@@ -1241,22 +1118,10 @@ fn find_tensor_connected_components_with_retained(
     let mut graph = UnGraph::<(), ()>::new_undirected();
     let nodes: Vec<_> = (0..n).map(|_| graph.add_node(())).collect();
 
-    // Add edges based on connectivity
-    match allowed {
-        AllowedPairs::All => {
-            for i in 0..n {
-                for j in (i + 1)..n {
-                    if has_contractable_indices(tensors[i], tensors[j]) {
-                        graph.add_edge(nodes[i], nodes[j], ());
-                    }
-                }
-            }
-        }
-        AllowedPairs::Specified(pairs) => {
-            for &(i, j) in pairs {
-                if has_contractable_indices(tensors[i], tensors[j]) {
-                    graph.add_edge(nodes[i], nodes[j], ());
-                }
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if has_contractable_indices(tensors[i], tensors[j]) {
+                graph.add_edge(nodes[i], nodes[j], ());
             }
         }
     }
@@ -1308,47 +1173,6 @@ fn shares_retained_index(a: &TensorDynLen, b: &TensorDynLen, retain_indices: &[D
         a.indices().iter().any(|idx_a| idx_a == retain)
             && b.indices().iter().any(|idx_b| idx_b == retain)
     })
-}
-
-/// Remap AllowedPairs for a subset of tensors.
-fn remap_allowed_pairs(allowed: AllowedPairs<'_>, component: &[usize]) -> RemappedAllowedPairs {
-    match allowed {
-        AllowedPairs::All => RemappedAllowedPairs::All,
-        AllowedPairs::Specified(pairs) => {
-            let orig_to_local: HashMap<usize, usize> = component
-                .iter()
-                .enumerate()
-                .map(|(local, &orig)| (orig, local))
-                .collect();
-
-            let remapped: Vec<(usize, usize)> = pairs
-                .iter()
-                .filter_map(
-                    |&(i, j)| match (orig_to_local.get(&i), orig_to_local.get(&j)) {
-                        (Some(&li), Some(&lj)) => Some((li, lj)),
-                        _ => None,
-                    },
-                )
-                .collect();
-
-            RemappedAllowedPairs::Specified(remapped)
-        }
-    }
-}
-
-/// Owned version of AllowedPairs for remapped components.
-enum RemappedAllowedPairs {
-    All,
-    Specified(Vec<(usize, usize)>),
-}
-
-impl RemappedAllowedPairs {
-    fn as_ref(&self) -> AllowedPairs<'_> {
-        match self {
-            RemappedAllowedPairs::All => AllowedPairs::All,
-            RemappedAllowedPairs::Specified(pairs) => AllowedPairs::Specified(pairs),
-        }
-    }
 }
 
 #[cfg(test)]

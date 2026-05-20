@@ -13,7 +13,7 @@ use std::path::Path;
 
 use num_complex::Complex64;
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::{ColMajorArrayRef, IndexLike, TensorDynLen, TensorLike};
+use tensor4all_core::{outer_product, ColMajorArrayRef, IndexLike, TensorDynLen};
 use tensor4all_quanticstci::{
     quanticscrossinterpolate, DiscretizedGrid, QtciOptions, QuanticsTensorCI2, UnfoldingScheme,
 };
@@ -360,7 +360,7 @@ fn expand_operator_to_interleaved_state(
             let tensor = tensors_by_node
                 .get_mut(&mid)
                 .ok_or_else(|| format!("missing tensor at expanded node {mid}"))?;
-            *tensor = tensor.outer_product(&bridge)?;
+            *tensor = outer_product(tensor, &bridge)?;
         }
     }
 
@@ -374,13 +374,13 @@ fn expand_operator_to_interleaved_state(
             let tensor = tensors_by_node
                 .get_mut(&last_x)
                 .ok_or_else(|| format!("missing tensor at final x node {last_x}"))?;
-            *tensor = tensor.outer_product(&left_ones)?;
+            *tensor = outer_product(tensor, &left_ones)?;
         }
         {
             let tensor = tensors_by_node
                 .get_mut(&last_t)
                 .ok_or_else(|| format!("missing tensor at final t node {last_t}"))?;
-            *tensor = tensor.outer_product(&right_ones)?;
+            *tensor = outer_product(tensor, &right_ones)?;
         }
     }
 

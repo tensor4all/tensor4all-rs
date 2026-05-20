@@ -7,17 +7,71 @@
 //! `TreeTN<TensorDynLen, usize>` where node names are site indices (0, 1, 2, ...).
 
 use num_complex::Complex64;
+use std::env;
 use std::ops::Range;
-use tensor4all_core::{common_inds, hascommoninds, DynIndex, IndexLike};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use tensor4all_core::{
-    AllowedPairs, AnyScalar, Canonical, CommonScalar, DirectSumResult, FactorizeAlg,
-    FactorizeError, FactorizeOptions, FactorizeResult, LinearizationOrder, TensorDynLen,
-    TensorElement, TensorIndex, TensorLike,
+    common_inds, contract_pair, contract_pair_with_operand_options, hascommoninds, DynIndex,
+    IndexLike, PairwiseContractionOptions,
+};
+use tensor4all_core::{
+    AnyScalar, Canonical, CommonScalar, DirectSumResult, FactorizeAlg, FactorizeError,
+    FactorizeOptions, FactorizeResult, LinearizationOrder, TensorConstructionLike,
+    TensorContractionLike, TensorDynLen, TensorElement, TensorFactorizationLike, TensorIndex,
+    TensorVectorSpace,
 };
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
 use crate::error::{Result, TensorTrainError};
 use crate::options::{validate_svd_truncation_options, CanonicalForm, TruncateOptions};
+
+#[derive(Debug, Default)]
+struct TensorTrainInnerProfile {
+    sim_internal_inds: Duration,
+    node_lookup: Duration,
+    right_tensor_clone: Duration,
+    conj: Duration,
+    contract: Duration,
+    final_dims: Duration,
+    sum: Duration,
+}
+
+fn tensortrain_inner_profile_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env::var("T4A_PROFILE_TT_INNER").is_ok())
+}
+
+fn profile_tt_inner_section<T>(enabled: bool, slot: &mut Duration, f: impl FnOnce() -> T) -> T {
+    if !enabled {
+        return f();
+    }
+    let started = Instant::now();
+    let result = f();
+    *slot += started.elapsed();
+    result
+}
+
+fn print_tt_inner_profile(profile: &TensorTrainInnerProfile, length: usize) {
+    let total = profile.sim_internal_inds
+        + profile.node_lookup
+        + profile.right_tensor_clone
+        + profile.conj
+        + profile.contract
+        + profile.final_dims
+        + profile.sum;
+    eprintln!(
+        "tt_inner_profile,L={length},total_ms={:.6},sim_internal_inds_ms={:.6},node_lookup_ms={:.6},right_tensor_clone_ms={:.6},conj_ms={:.6},contract_ms={:.6},final_dims_ms={:.6},sum_ms={:.6}",
+        total.as_secs_f64() * 1.0e3,
+        profile.sim_internal_inds.as_secs_f64() * 1.0e3,
+        profile.node_lookup.as_secs_f64() * 1.0e3,
+        profile.right_tensor_clone.as_secs_f64() * 1.0e3,
+        profile.conj.as_secs_f64() * 1.0e3,
+        profile.contract.as_secs_f64() * 1.0e3,
+        profile.final_dims.as_secs_f64() * 1.0e3,
+        profile.sum.as_secs_f64() * 1.0e3,
+    );
+}
 
 /// Tensor Train with orthogonality tracking.
 ///
@@ -176,11 +230,10 @@ impl TensorTrain {
                 }
             })?;
 
-        let mut tt = Self {
+        let tt = Self {
             treetn,
             canonical_form: None,
         };
-        tt.normalize_site_tensor_orders()?;
         Ok(tt)
     }
 
@@ -239,10 +292,76 @@ impl TensorTrain {
                 })?;
             }
         }
-        if tt.has_simple_linear_links() {
-            tt.normalize_site_tensor_orders()?;
-        }
         Ok(tt)
+    }
+
+    /// Create a tensor train from a linear-chain [`TreeTN`].
+    ///
+    /// The input tree must use `usize` node names and represent a tensor-train
+    /// chain. Node names are renumbered to `0..len` when necessary. Site tensor
+    /// index order is preserved.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tree cannot be interpreted as a valid tensor
+    /// train, for example because adjacent site tensors have incompatible
+    /// shared indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let site0 = DynIndex::new_dyn(2);
+    /// let link = DynIndex::new_bond(1)?;
+    /// let site1 = DynIndex::new_dyn(2);
+    /// let t0 = TensorDynLen::from_dense(vec![site0, link.clone()], vec![1.0, 0.0])?;
+    /// let t1 = TensorDynLen::from_dense(vec![link, site1], vec![2.0, 0.0])?;
+    /// let tree = TreeTN::from_tensors(vec![t0, t1], vec![0usize, 1usize])?;
+    ///
+    /// let tt = TensorTrain::from_treetn(tree)?;
+    /// assert_eq!(tt.len(), 2);
+    /// assert_eq!(
+    ///     tt.siteinds()
+    ///         .into_iter()
+    ///         .map(|indices| indices.into_iter().map(|idx| idx.size()).collect::<Vec<_>>())
+    ///         .collect::<Vec<_>>(),
+    ///     vec![vec![2], vec![2]]
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_treetn(treetn: TreeTN<TensorDynLen, usize>) -> Result<Self> {
+        Self::from_inner(treetn, None)
+    }
+
+    /// Consume this tensor train and return its underlying [`TreeTN`].
+    ///
+    /// Use this when a chain MPS must be passed to APIs that operate on general
+    /// tree tensor networks. The returned tree preserves the tensor and index
+    /// metadata stored in the tensor train.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let site = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(vec![site], vec![1.0, 2.0])?;
+    /// let tt = TensorTrain::new(vec![tensor])?;
+    ///
+    /// let tree = tt.into_treetn();
+    /// assert_eq!(tree.node_count(), 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn into_treetn(self) -> TreeTN<TensorDynLen, usize> {
+        self.treetn
     }
 
     /// Get a reference to the underlying TreeTN.
@@ -638,6 +757,69 @@ impl TensorTrain {
         left_ok && right_ok
     }
 
+    fn with_explicit_unit_links(&self) -> Result<Self> {
+        if self.len() <= 1 {
+            return Ok(self.clone());
+        }
+
+        let mut tensors = (0..self.len())
+            .map(|site| self.tensor_checked(site).cloned())
+            .collect::<Result<Vec<_>>>()?;
+        for site in 0..tensors.len() - 1 {
+            let common = common_inds(tensors[site].indices(), tensors[site + 1].indices());
+            if common.len() > 1 {
+                let fused_dim = common.iter().try_fold(1usize, |acc, index| {
+                    acc.checked_mul(index.dim())
+                        .ok_or_else(|| TensorTrainError::InvalidStructure {
+                            message: "parallel link fusion would overflow index dimension"
+                                .to_string(),
+                        })
+                })?;
+                let fused_link = DynIndex::new_dyn(fused_dim);
+                tensors[site] = tensors[site]
+                    .fuse_indices(&common, fused_link.clone(), LinearizationOrder::ColumnMajor)
+                    .map_err(|e| TensorTrainError::OperationError {
+                        message: format!("failed to fuse parallel TT links: {e}"),
+                    })?;
+                tensors[site + 1] = tensors[site + 1]
+                    .fuse_indices(&common, fused_link, LinearizationOrder::ColumnMajor)
+                    .map_err(|e| TensorTrainError::OperationError {
+                        message: format!("failed to fuse parallel TT links: {e}"),
+                    })?;
+                continue;
+            }
+            if common.len() == 1 {
+                continue;
+            }
+
+            let link = DynIndex::new_dyn(1);
+            let left_link =
+                <TensorDynLen as TensorConstructionLike>::ones(std::slice::from_ref(&link))
+                    .map_err(|e| TensorTrainError::OperationError {
+                        message: format!("failed to build implicit unit link tensor: {e}"),
+                    })?;
+            tensors[site] = tensors[site].outer_product(&left_link).map_err(|e| {
+                TensorTrainError::OperationError {
+                    message: format!("failed to attach implicit unit link: {e}"),
+                }
+            })?;
+
+            let right_link =
+                <TensorDynLen as TensorConstructionLike>::ones(&[link]).map_err(|e| {
+                    TensorTrainError::OperationError {
+                        message: format!("failed to build implicit unit link tensor: {e}"),
+                    }
+                })?;
+            tensors[site + 1] = tensors[site + 1].outer_product(&right_link).map_err(|e| {
+                TensorTrainError::OperationError {
+                    message: format!("failed to attach implicit unit link: {e}"),
+                }
+            })?;
+        }
+
+        Self::new(tensors)
+    }
+
     fn normalize_site_tensor_order(&mut self, site: usize) -> Result<()> {
         if !self.can_normalize_site_tensor_order(site) {
             return Ok(());
@@ -838,8 +1020,7 @@ impl TensorTrain {
     /// assert!(tt.set_tensor_checked(2, tt.tensor(0).unwrap().clone()).is_err());
     /// ```
     pub fn set_tensor_checked(&mut self, site: usize, tensor: TensorDynLen) -> Result<()> {
-        self.set_tensor_raw(site, tensor)
-            .and_then(|()| self.normalize_site_tensor_order(site))?;
+        self.set_tensor_raw(site, tensor)?;
         // Invalidate orthogonality
         self.treetn
             .set_canonical_region(Vec::<usize>::new())
@@ -1048,7 +1229,12 @@ impl TensorTrain {
 
         // Sequential bra-ket contraction along the chain: O(N·D²·d).
         // TreeTN::inner() uses contract_naive which is O(d^N) and OOMs for large N.
-        let other_sim = other.treetn.sim_internal_inds();
+        let profile_enabled = tensortrain_inner_profile_enabled();
+        let mut profile = TensorTrainInnerProfile::default();
+        let other_sim =
+            profile_tt_inner_section(profile_enabled, &mut profile.sim_internal_inds, || {
+                other.treetn.sim_internal_inds()
+            });
 
         let node_idx = |ttn: &TreeTN<TensorDynLen, usize>, site: usize| {
             ttn.node_index(&site)
@@ -1059,48 +1245,76 @@ impl TensorTrain {
 
         // Start with leftmost tensors - contract over site indices only
         let mut env = {
-            let a0_conj = self.tensor_checked(0)?.conj();
-            let b0_node = node_idx(&other_sim, 0)?;
-            let b0 = other_sim
-                .tensor(b0_node)
-                .ok_or_else(|| TensorTrainError::InvalidStructure {
-                    message: "missing tensor for site 0 in simulated right operand".to_string(),
-                })?
-                .clone();
-            a0_conj
-                .contract(&b0)
+            let a0 = profile_tt_inner_section(profile_enabled, &mut profile.node_lookup, || {
+                self.tensor_checked(0)
+            })?;
+            let b0_node =
+                profile_tt_inner_section(profile_enabled, &mut profile.node_lookup, || {
+                    node_idx(&other_sim, 0)
+                })?;
+            let b0 =
+                profile_tt_inner_section(profile_enabled, &mut profile.right_tensor_clone, || {
+                    Ok::<TensorDynLen, TensorTrainError>(
+                        other_sim
+                            .tensor(b0_node)
+                            .ok_or_else(|| TensorTrainError::InvalidStructure {
+                                message: "missing tensor for site 0 in simulated right operand"
+                                    .to_string(),
+                            })?
+                            .clone(),
+                    )
+                })?;
+            profile_tt_inner_section(profile_enabled, &mut profile.contract, || {
+                contract_pair_with_operand_options(
+                    a0,
+                    &b0,
+                    PairwiseContractionOptions::new().with_lhs_conj(true),
+                )
                 .map_err(|err| TensorTrainError::OperationError {
                     message: format!("failed to contract leftmost tensors: {err}"),
-                })?
+                })
+            })?
         };
 
         // Sweep through remaining sites
         for i in 1..self.len() {
-            let ai_conj = self.tensor_checked(i)?.conj();
-            let bi_node = node_idx(&other_sim, i)?;
-            let bi =
+            let ai = profile_tt_inner_section(profile_enabled, &mut profile.node_lookup, || {
+                self.tensor_checked(i)
+            })?;
+            let bi_node =
+                profile_tt_inner_section(profile_enabled, &mut profile.node_lookup, || {
+                    node_idx(&other_sim, i)
+                })?;
+            let bi = profile_tt_inner_section(profile_enabled, &mut profile.node_lookup, || {
                 other_sim
                     .tensor(bi_node)
                     .ok_or_else(|| TensorTrainError::InvalidStructure {
                         message: format!("missing tensor for site {i} in simulated right operand"),
-                    })?;
+                    })
+            })?;
 
             // Contract: env * conj(A_i) (over self's link index)
-            env = env
-                .contract(&ai_conj)
+            env = profile_tt_inner_section(profile_enabled, &mut profile.contract, || {
+                contract_pair_with_operand_options(
+                    &env,
+                    ai,
+                    PairwiseContractionOptions::new().with_rhs_conj(true),
+                )
                 .map_err(|err| TensorTrainError::OperationError {
                     message: format!("failed to contract environment with site {i}: {err}"),
-                })?;
+                })
+            })?;
             // Contract: result * B_i (over other's link index and site indices)
-            env = env
-                .contract(bi)
-                .map_err(|err| TensorTrainError::OperationError {
+            env = profile_tt_inner_section(profile_enabled, &mut profile.contract, || {
+                contract_pair(&env, bi).map_err(|err| TensorTrainError::OperationError {
                     message: format!("failed to contract right operand at site {i}: {err}"),
-                })?;
+                })
+            })?;
         }
 
         // Result should be a scalar (0-dimensional tensor)
-        let dims = env.dims();
+        let dims =
+            profile_tt_inner_section(profile_enabled, &mut profile.final_dims, || env.dims());
         let total_size: usize = if dims.is_empty() {
             1
         } else {
@@ -1114,9 +1328,15 @@ impl TensorTrain {
                 ),
             });
         }
-        env.sum().map_err(|err| TensorTrainError::OperationError {
-            message: format!("failed to sum scalar inner-product tensor: {err}"),
-        })
+        let result = profile_tt_inner_section(profile_enabled, &mut profile.sum, || {
+            env.sum().map_err(|err| TensorTrainError::OperationError {
+                message: format!("failed to sum scalar inner-product tensor: {err}"),
+            })
+        });
+        if profile_enabled {
+            print_tt_inner_profile(&profile, self.len());
+        }
+        result
     }
 
     /// Compute the squared norm of the tensor train.
@@ -1375,6 +1595,86 @@ impl TensorTrain {
                     message: format!("TT addition failed: {}", e),
                 })?;
 
+        Self::from_inner(result_inner, None)?.with_explicit_unit_links()
+    }
+
+    /// Add two tensor trains after reindexing `other` to this tensor train's site space.
+    ///
+    /// This method is useful when two tensor trains represent the same logical
+    /// vector space but carry distinct site-index IDs, for example after
+    /// independent contractions. It pairs site indices site-by-site by
+    /// dimension, rewrites `other` to use `self`'s site-index IDs, then performs
+    /// strict tensor-train addition.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - The tensor train to reindex and add. It must have the same
+    ///   chain length and compatible site dimensions as `self`.
+    ///
+    /// # Returns
+    ///
+    /// A tensor train representing `self + other`, with site indices matching
+    /// `self`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the two tensor trains have incompatible chain
+    /// topology, site counts, or site dimensions, or if the strict addition
+    /// fails after reindexing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynId, Index, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// fn one_site(id: u64, values: Vec<f64>) -> TensorTrain {
+    ///     let site = Index::new_with_size(DynId(id), 2);
+    ///     let tensor = TensorDynLen::from_dense(vec![site], values).unwrap();
+    ///     TensorTrain::new(vec![tensor]).unwrap()
+    /// }
+    ///
+    /// let lhs = one_site(0, vec![1.0, 2.0]);
+    /// let rhs = one_site(1, vec![3.0, 4.0]);
+    /// let sum = lhs.add_reindexed_like_self(&rhs).unwrap();
+    ///
+    /// let dense = sum.to_dense().unwrap();
+    /// assert_eq!(dense.to_vec::<f64>().unwrap(), vec![4.0, 6.0]);
+    /// assert_eq!(dense.indices()[0], lhs.siteinds()[0][0]);
+    /// ```
+    pub fn add_reindexed_like_self(&self, other: &Self) -> Result<Self> {
+        if self.is_empty() && other.is_empty() {
+            return Ok(Self::default());
+        }
+
+        if self.is_empty() {
+            return Ok(other.clone());
+        }
+
+        if other.is_empty() {
+            return Ok(self.clone());
+        }
+
+        if self.len() != other.len() {
+            return Err(TensorTrainError::InvalidStructure {
+                message: format!(
+                    "Tensor trains must have the same length for reindexed addition: {} vs {}",
+                    self.len(),
+                    other.len()
+                ),
+            });
+        }
+
+        let lhs = self.with_explicit_unit_links()?;
+        let rhs = other.with_explicit_unit_links()?;
+
+        let result_inner = lhs
+            .treetn
+            .add_reindexed_like_self(&rhs.treetn)
+            .map_err(|e| TensorTrainError::InvalidStructure {
+                message: format!("TT reindexed addition failed: {}", e),
+            })?;
+
         Self::from_inner(result_inner, None)
     }
 
@@ -1497,7 +1797,7 @@ impl TensorIndex for TensorTrain {
 // TensorLike implementation for TensorTrain
 // ============================================================================
 
-impl TensorLike for TensorTrain {
+impl TensorVectorSpace for TensorTrain {
     // ========================================================================
     // GMRES-required methods (fully supported)
     // ========================================================================
@@ -1520,13 +1820,19 @@ impl TensorLike for TensorTrain {
 
     fn try_maxabs(&self) -> anyhow::Result<f64> {
         anyhow::bail!(
-            "TensorTrain does not support TensorLike::maxabs without explicit dense materialization; use TensorTrain::dense_maxabs() for small reference checks or norm-based residuals for long tensor trains"
+            "TensorTrain does not support TensorVectorSpace::maxabs without explicit dense materialization; use TensorTrain::dense_maxabs() for small reference checks or norm-based residuals for long tensor trains"
         )
     }
 
     fn maxabs(&self) -> f64 {
         f64::NAN
     }
+}
+
+impl TensorContractionLike for TensorTrain {
+    // ========================================================================
+    // Tensor network operations
+    // ========================================================================
 
     fn conj(&self) -> Self {
         let mut result = self.clone();
@@ -1539,37 +1845,8 @@ impl TensorLike for TensorTrain {
         result
     }
 
-    // ========================================================================
-    // Methods not supported by TensorTrain
-    // ========================================================================
-
-    fn factorize(
-        &self,
-        _left_inds: &[Self::Index],
-        _options: &FactorizeOptions,
-    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
-        Err(FactorizeError::UnsupportedStorage(
-            "TensorTrain does not support factorize; use orthogonalize() instead",
-        ))
-    }
-
-    fn factorize_full_rank(
-        &self,
-        _left_inds: &[Self::Index],
-        _alg: FactorizeAlg,
-        _canonical: Canonical,
-    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
-        Err(FactorizeError::UnsupportedStorage(
-            "TensorTrain does not support factorize_full_rank; use orthogonalize() instead",
-        ))
-    }
-
-    fn contract(_tensors: &[&Self], _allowed: AllowedPairs<'_>) -> anyhow::Result<Self> {
-        anyhow::bail!("TensorTrain does not support TensorLike::contract; use TensorTrain::contract() method instead")
-    }
-
-    fn contract_connected(_tensors: &[&Self], _allowed: AllowedPairs<'_>) -> anyhow::Result<Self> {
-        anyhow::bail!("TensorTrain does not support TensorLike::contract_connected; use TensorTrain::contract() method instead")
+    fn contract(_tensors: &[&Self]) -> anyhow::Result<Self> {
+        anyhow::bail!("TensorTrain does not support TensorContractionLike::contract; use TensorTrain::contract() method instead")
     }
 
     fn direct_sum(
@@ -1594,9 +1871,34 @@ impl TensorLike for TensorTrain {
         _new_index: Self::Index,
         _order: LinearizationOrder,
     ) -> anyhow::Result<Self> {
-        anyhow::bail!("TensorTrain does not support TensorLike::fuse_indices")
+        anyhow::bail!("TensorTrain does not support TensorContractionLike::fuse_indices")
+    }
+}
+
+impl TensorFactorizationLike for TensorTrain {
+    fn factorize(
+        &self,
+        _left_inds: &[Self::Index],
+        _options: &FactorizeOptions,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        Err(FactorizeError::UnsupportedStorage(
+            "TensorTrain does not support factorize; use orthogonalize() instead",
+        ))
     }
 
+    fn factorize_full_rank(
+        &self,
+        _left_inds: &[Self::Index],
+        _alg: FactorizeAlg,
+        _canonical: Canonical,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        Err(FactorizeError::UnsupportedStorage(
+            "TensorTrain does not support factorize_full_rank; use orthogonalize() instead",
+        ))
+    }
+}
+
+impl TensorConstructionLike for TensorTrain {
     fn diagonal(input: &Self::Index, output: &Self::Index) -> anyhow::Result<Self> {
         // Create a single-site TensorTrain with an identity tensor
         let delta = TensorDynLen::diagonal(input, output)?;

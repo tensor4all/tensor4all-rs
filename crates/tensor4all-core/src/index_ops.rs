@@ -1,4 +1,16 @@
 use crate::IndexLike;
+use smallvec::SmallVec;
+
+const SMALL_CONTRACTION_INLINE: usize = 8;
+const LINEAR_CONTRACTION_SCAN_LIMIT: usize = 64;
+
+/// Small axis list used by contraction preparation.
+pub(crate) type AxisVec = SmallVec<[usize; SMALL_CONTRACTION_INLINE]>;
+/// Small index list used by contraction preparation.
+pub(crate) type IndexVec<I> = SmallVec<[I; SMALL_CONTRACTION_INLINE]>;
+
+type AxisPairVec = SmallVec<[(usize, usize); SMALL_CONTRACTION_INLINE]>;
+type BoolVec = SmallVec<[bool; SMALL_CONTRACTION_INLINE]>;
 
 /// Error type for index replacement operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -495,10 +507,46 @@ pub fn common_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> {
 /// assert_eq!(positions, vec![(1, 0)]); // j is at position 1 in a, position 0 in b
 /// ```
 pub fn common_ind_positions<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<(usize, usize)> {
-    let mut positions = Vec::new();
+    common_ind_positions_small(indices_a, indices_b).into_vec()
+}
+
+fn common_ind_positions_small<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> AxisPairVec {
+    let scan_work = indices_a.len().saturating_mul(indices_b.len());
+    if scan_work <= LINEAR_CONTRACTION_SCAN_LIMIT {
+        return common_ind_positions_linear(indices_a, indices_b);
+    }
+    common_ind_positions_hashed(indices_a, indices_b)
+}
+
+fn common_ind_positions_linear<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> AxisPairVec {
+    let mut positions = AxisPairVec::new();
     for (pos_a, idx_a) in indices_a.iter().enumerate() {
         for (pos_b, idx_b) in indices_b.iter().enumerate() {
             if idx_a.is_contractable(idx_b) {
+                positions.push((pos_a, pos_b));
+                break; // Each index in a can match at most one in b
+            }
+        }
+    }
+    positions
+}
+
+fn common_ind_positions_hashed<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> AxisPairVec {
+    use std::collections::HashMap;
+
+    let mut positions_by_id: HashMap<&I::Id, SmallVec<[usize; 2]>> =
+        HashMap::with_capacity(indices_b.len());
+    for (pos_b, idx_b) in indices_b.iter().enumerate() {
+        positions_by_id.entry(idx_b.id()).or_default().push(pos_b);
+    }
+
+    let mut positions = AxisPairVec::new();
+    for (pos_a, idx_a) in indices_a.iter().enumerate() {
+        let Some(candidate_positions) = positions_by_id.get(idx_a.id()) else {
+            continue;
+        };
+        for &pos_b in candidate_positions {
+            if idx_a.is_contractable(&indices_b[pos_b]) {
                 positions.push((pos_a, pos_b));
                 break; // Each index in a can match at most one in b
             }
@@ -511,22 +559,20 @@ pub fn common_ind_positions<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> V
 ///
 /// Contains all the information needed to perform the contraction:
 /// - Which axes to contract from each tensor
-/// - The resulting indices and dimensions after contraction
+/// - The resulting indices after contraction
 #[derive(Debug, Clone)]
-pub struct ContractionSpec<I: IndexLike> {
+pub(crate) struct ContractionSpec<I: IndexLike> {
     /// Axes to contract from the first tensor (positions in `indices_a`).
-    pub axes_a: Vec<usize>,
+    pub axes_a: AxisVec,
     /// Axes to contract from the second tensor (positions in `indices_b`).
-    pub axes_b: Vec<usize>,
+    pub axes_b: AxisVec,
     /// Indices of the result tensor (non-contracted indices from both tensors).
-    pub result_indices: Vec<I>,
-    /// Dimensions of the result tensor.
-    pub result_dims: Vec<usize>,
+    pub result_indices: IndexVec<I>,
 }
 
 /// Error type for contraction preparation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ContractionError {
+pub(crate) enum ContractionError {
     /// No common indices found for contraction.
     NoCommonIndices,
     /// Dimension mismatch for a common index.
@@ -591,29 +637,9 @@ impl std::error::Error for ContractionError {}
 
 /// Prepare contraction data for two tensors that share common indices.
 ///
-/// This function finds common indices and computes the axes to contract
-/// and the resulting indices/dimensions.
-///
-/// # Example
-/// ```
-/// use tensor4all_core::index::DefaultIndex as Index;
-/// use tensor4all_core::index_ops::prepare_contraction;
-///
-/// let i = Index::new_dyn(2);
-/// let j = Index::new_dyn(3);
-/// let k = Index::new_dyn(4);
-///
-/// let indices_a = vec![i.clone(), j.clone()];
-/// let dims_a = vec![2, 3];
-/// let indices_b = vec![j.clone(), k.clone()];
-/// let dims_b = vec![3, 4];
-///
-/// let spec = prepare_contraction(&indices_a, &dims_a, &indices_b, &dims_b).unwrap();
-/// assert_eq!(spec.axes_a, vec![1]);  // j is at position 1 in a
-/// assert_eq!(spec.axes_b, vec![0]);  // j is at position 0 in b
-/// assert_eq!(spec.result_dims, vec![2, 4]);  // [i, k]
-/// ```
-pub fn prepare_contraction<I: IndexLike>(
+/// This internal helper finds common indices and computes the axes to contract
+/// together with the resulting non-contracted indices.
+pub(crate) fn prepare_contraction<I: IndexLike>(
     indices_a: &[I],
     dims_a: &[usize],
     indices_b: &[I],
@@ -621,9 +647,14 @@ pub fn prepare_contraction<I: IndexLike>(
 ) -> Result<ContractionSpec<I>, ContractionError> {
     // Find common indices and their positions.
     // If no common indices exist, this becomes an outer product (empty axes).
-    let positions = common_ind_positions(indices_a, indices_b);
+    let positions = common_ind_positions_small(indices_a, indices_b);
 
-    let (axes_a, axes_b): (Vec<_>, Vec<_>) = positions.iter().copied().unzip();
+    let mut axes_a = AxisVec::with_capacity(positions.len());
+    let mut axes_b = AxisVec::with_capacity(positions.len());
+    for &(pos_a, pos_b) in &positions {
+        axes_a.push(pos_a);
+        axes_b.push(pos_b);
+    }
 
     // Verify dimensions match
     for &(pos_a, pos_b) in &positions {
@@ -637,92 +668,52 @@ pub fn prepare_contraction<I: IndexLike>(
         }
     }
 
-    // Build result indices and dimensions (non-contracted indices)
-    let mut result_indices = Vec::new();
-    let mut result_dims = Vec::new();
-
-    for (i, idx) in indices_a.iter().enumerate() {
-        if !axes_a.contains(&i) {
-            result_indices.push(idx.clone());
-            result_dims.push(dims_a[i]);
-        }
-    }
-
-    for (i, idx) in indices_b.iter().enumerate() {
-        if !axes_b.contains(&i) {
-            result_indices.push(idx.clone());
-            result_dims.push(dims_b[i]);
-        }
-    }
+    let result_indices = build_contraction_result_indices(indices_a, &axes_a, indices_b, &axes_b);
 
     Ok(ContractionSpec {
         axes_a,
         axes_b,
         result_indices,
-        result_dims,
     })
 }
 
 /// Prepare contraction data for explicit index pairs (like tensordot).
 ///
-/// Unlike `prepare_contraction`, this function takes explicit pairs of indices
-/// to contract, allowing contraction of indices with different IDs.
-///
-/// # Example
-/// ```
-/// use tensor4all_core::index::DefaultIndex as Index;
-/// use tensor4all_core::index_ops::prepare_contraction_pairs;
-///
-/// let i = Index::new_dyn(2);
-/// let j = Index::new_dyn(3);
-/// let k = Index::new_dyn(3);  // Same dim as j but different ID
-/// let l = Index::new_dyn(4);
-///
-/// let indices_a = vec![i.clone(), j.clone()];
-/// let dims_a = vec![2, 3];
-/// let indices_b = vec![k.clone(), l.clone()];
-/// let dims_b = vec![3, 4];
-///
-/// // Contract j with k
-/// let spec = prepare_contraction_pairs(
-///     &indices_a, &dims_a,
-///     &indices_b, &dims_b,
-///     &[(j.clone(), k.clone())]
-/// ).unwrap();
-/// assert_eq!(spec.axes_a, vec![1]);
-/// assert_eq!(spec.axes_b, vec![0]);
-/// assert_eq!(spec.result_dims, vec![2, 4]);
-/// ```
-pub fn prepare_contraction_pairs<I: IndexLike>(
+/// Unlike `prepare_contraction`, this internal helper takes explicit pairs of
+/// indices to contract, allowing contraction of indices with different IDs.
+pub(crate) fn prepare_contraction_pairs<I: IndexLike>(
     indices_a: &[I],
     dims_a: &[usize],
     indices_b: &[I],
     dims_b: &[usize],
     pairs: &[(I, I)],
 ) -> Result<ContractionSpec<I>, ContractionError> {
-    use std::collections::HashSet;
-
     if pairs.is_empty() {
         return Err(ContractionError::NoCommonIndices);
     }
 
     // Check for batch contraction (common indices not in pairs). The explicit
     // pair list identifies axes by full index metadata, not by ID alone.
-    let contracted_a_indices: HashSet<_> = pairs.iter().map(|(idx, _)| idx).collect();
-    let contracted_b_indices: HashSet<_> = pairs.iter().map(|(_, idx)| idx).collect();
-
-    let common_positions = common_ind_positions(indices_a, indices_b);
+    let common_positions = common_ind_positions_small(indices_a, indices_b);
     for (pos_a, pos_b) in &common_positions {
         let idx_a = &indices_a[*pos_a];
         let idx_b = &indices_b[*pos_b];
-        if !contracted_a_indices.contains(idx_a) || !contracted_b_indices.contains(idx_b) {
+        if !pairs
+            .iter()
+            .any(|(contracted_idx, _)| contracted_idx == idx_a)
+            || !pairs
+                .iter()
+                .any(|(_, contracted_idx)| contracted_idx == idx_b)
+        {
             return Err(ContractionError::BatchContractionNotImplemented);
         }
     }
 
     // Find positions and validate
-    let mut axes_a = Vec::new();
-    let mut axes_b = Vec::new();
+    let mut axes_a = AxisVec::with_capacity(pairs.len());
+    let mut axes_b = AxisVec::with_capacity(pairs.len());
+    let mut contracted_a = bool_flags(indices_a.len());
+    let mut contracted_b = bool_flags(indices_b.len());
 
     for (idx_a, idx_b) in pairs {
         let pos_a = indices_a
@@ -746,45 +737,115 @@ pub fn prepare_contraction_pairs<I: IndexLike>(
         }
 
         // Check for duplicate axes
-        if axes_a.contains(&pos_a) {
+        if contracted_a[pos_a] {
             return Err(ContractionError::DuplicateAxis {
                 tensor: "self",
                 pos: pos_a,
             });
         }
-        if axes_b.contains(&pos_b) {
+        if contracted_b[pos_b] {
             return Err(ContractionError::DuplicateAxis {
                 tensor: "other",
                 pos: pos_b,
             });
         }
 
+        contracted_a[pos_a] = true;
+        contracted_b[pos_b] = true;
         axes_a.push(pos_a);
         axes_b.push(pos_b);
     }
 
-    // Build result indices and dimensions
-    let mut result_indices = Vec::new();
-    let mut result_dims = Vec::new();
-
-    for (i, idx) in indices_a.iter().enumerate() {
-        if !axes_a.contains(&i) {
-            result_indices.push(idx.clone());
-            result_dims.push(dims_a[i]);
-        }
-    }
-
-    for (i, idx) in indices_b.iter().enumerate() {
-        if !axes_b.contains(&i) {
-            result_indices.push(idx.clone());
-            result_dims.push(dims_b[i]);
-        }
-    }
+    let result_indices = build_contraction_result_indices(indices_a, &axes_a, indices_b, &axes_b);
 
     Ok(ContractionSpec {
         axes_a,
         axes_b,
         result_indices,
-        result_dims,
     })
+}
+
+fn bool_flags(len: usize) -> BoolVec {
+    let mut flags = BoolVec::with_capacity(len);
+    flags.resize(len, false);
+    flags
+}
+
+fn build_contraction_result_indices<I: IndexLike>(
+    indices_a: &[I],
+    axes_a: &[usize],
+    indices_b: &[I],
+    axes_b: &[usize],
+) -> IndexVec<I> {
+    let mut contracted_a = bool_flags(indices_a.len());
+    let mut contracted_b = bool_flags(indices_b.len());
+    for &axis in axes_a {
+        contracted_a[axis] = true;
+    }
+    for &axis in axes_b {
+        contracted_b[axis] = true;
+    }
+
+    let result_len = indices_a.len() + indices_b.len() - axes_a.len() - axes_b.len();
+    let mut result_indices = IndexVec::with_capacity(result_len);
+
+    for (i, idx) in indices_a.iter().enumerate() {
+        if !contracted_a[i] {
+            result_indices.push(idx.clone());
+        }
+    }
+
+    for (i, idx) in indices_b.iter().enumerate() {
+        if !contracted_b[i] {
+            result_indices.push(idx.clone());
+        }
+    }
+
+    result_indices
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{prepare_contraction, prepare_contraction_pairs};
+    use crate::index::DefaultIndex as Index;
+
+    #[test]
+    fn prepare_contraction_pairs_selects_exact_same_id_prime_index() {
+        let i = Index::new_dyn(2);
+        let i_prime = i.prime();
+        let spec = prepare_contraction_pairs(
+            &[i.clone(), i_prime.clone()],
+            &[2, 2],
+            std::slice::from_ref(&i_prime),
+            &[2],
+            &[(i_prime.clone(), i_prime.clone())],
+        )
+        .unwrap();
+
+        assert_eq!(spec.axes_a.as_slice(), &[1]);
+        assert_eq!(spec.axes_b.as_slice(), &[0]);
+        assert_eq!(spec.result_indices.as_slice(), &[i]);
+    }
+
+    #[test]
+    fn prepare_contraction_large_rank_uses_hash_fallback_semantics() {
+        let mut lhs: Vec<_> = (0..9).map(|_| Index::new_dyn(2)).collect();
+        let shared = lhs[7].clone();
+        let mut rhs: Vec<_> = (0..9).map(|_| Index::new_dyn(2)).collect();
+        rhs[5] = shared;
+
+        let lhs_dims = vec![2; lhs.len()];
+        let rhs_dims = vec![2; rhs.len()];
+        let spec = prepare_contraction(&lhs, &lhs_dims, &rhs, &rhs_dims).unwrap();
+
+        assert_eq!(spec.axes_a.as_slice(), &[7]);
+        assert_eq!(spec.axes_b.as_slice(), &[5]);
+        assert_eq!(spec.result_indices.len(), lhs.len() + rhs.len() - 2);
+
+        lhs.remove(7);
+        rhs.remove(5);
+        let mut expected = lhs;
+        expected.extend(rhs);
+        assert_eq!(spec.result_indices.as_slice(), expected.as_slice());
+    }
 }

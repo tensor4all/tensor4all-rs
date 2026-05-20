@@ -34,8 +34,8 @@ use anyhow::Result;
 
 use tensor4all_core::{
     print_and_reset_contract_profile, print_and_reset_native_einsum_profile,
-    reset_contract_profile, reset_native_einsum_profile, AllowedPairs, Canonical, FactorizeAlg,
-    FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorLike,
+    reset_contract_profile, reset_native_einsum_profile, Canonical, FactorizeAlg, FactorizeOptions,
+    FactorizeResult, IndexLike, SvdTruncationPolicy, TensorLike,
 };
 
 use super::localupdate::{LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater};
@@ -422,9 +422,9 @@ where
     let tensor_b = tensor_at_node(tn_b, node, "tn_b")?;
     let tensor_c = tensor_at_node(tn_c, node, "tn_c")?;
 
-    // Contract A × B × conj(C) with a single multi-tensor call.
+    // A, B, and C must form one connected local environment.
     let c_conj = tensor_c.conj();
-    let env = T::contract(&[tensor_a, tensor_b, &c_conj], AllowedPairs::All)
+    let env = T::contract(&[tensor_a, tensor_b, &c_conj])
         .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
     if let Some(started) = started {
@@ -465,12 +465,13 @@ where
         return compute_leaf_environment(node, towards, tn_a, tn_b, tn_c);
     }
 
-    // Non-leaf: contract A × B × conj(C) × child_envs in one multi-tensor call.
+    // Non-leaf: all local tensors and child environments must form one
+    // connected contraction graph.
     let c_conj = tensor_c.conj();
     let mut tensor_refs: Vec<&T> = vec![tensor_a, tensor_b, &c_conj];
     tensor_refs.extend(child_envs.iter());
-    let result = T::contract(&tensor_refs, AllowedPairs::All)
-        .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
+    let result =
+        T::contract(&tensor_refs).map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
     if let Some(started) = started {
         with_fit_profile(|profile| {
@@ -667,13 +668,13 @@ where
             env_tensors.push(env);
         }
 
-        // Compute optimal 2-site tensor: env × A[u] × B[u] × A[v] × B[v] × env
-        // Collect all tensors and let contract() find the optimal contraction order
+        // Compute optimal 2-site tensor: env × A[u] × B[u] × A[v] × B[v] × env.
+        // Collect all tensors and let contract() find the optimal contraction order.
         let contract_started = fit_profile_enabled().then(Instant::now);
         let mut tensor_refs: Vec<&T> = vec![a_u, b_u, a_v, b_v];
         tensor_refs.extend(env_tensors.iter());
-        let ab_uv = T::contract(&tensor_refs, AllowedPairs::All)
-            .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
+        let ab_uv =
+            T::contract(&tensor_refs).map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
         if let Some(contract_started) = contract_started {
             with_fit_profile(|profile| {
                 profile.two_site_contract_time += contract_started.elapsed();
@@ -691,8 +692,8 @@ where
                 node_u
             )
         })?;
-        let mut left_inds: Vec<_> = ab_uv
-            .external_indices()
+        let ab_uv_indices = ab_uv.external_indices();
+        let mut left_inds: Vec<_> = ab_uv_indices
             .iter()
             .filter(|idx| {
                 // Keep site indices of u and link indices to u's other neighbors
@@ -746,11 +747,39 @@ where
             options = options.with_max_rank(cap);
         }
 
-        // Factorize using TensorLike::factorize
+        // Factorize using TensorFactorizationLike::factorize
         let factorize_started = fit_profile_enabled().then(Instant::now);
-        let factorize_result = ab_uv
-            .factorize(&left_inds, &options)
-            .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))?;
+        let factorize_result = if left_inds.is_empty() || left_inds.len() == ab_uv_indices.len() {
+            let (dummy_left, dummy_right) = T::Index::create_dummy_link_pair();
+            let dummy_left_tensor = T::ones(std::slice::from_ref(&dummy_left))
+                .map_err(|e| anyhow::anyhow!("Failed to create dummy left tensor: {e}"))?;
+            let dummy_right_tensor = T::ones(std::slice::from_ref(&dummy_right))
+                .map_err(|e| anyhow::anyhow!("Failed to create dummy right tensor: {e}"))?;
+
+            let (left, right) = if left_inds.is_empty() {
+                let right = ab_uv
+                    .outer_product(&dummy_right_tensor)
+                    .map_err(|e| anyhow::anyhow!("Failed to attach dummy right bond: {e}"))?;
+                (dummy_left_tensor, right)
+            } else {
+                let left = ab_uv
+                    .outer_product(&dummy_left_tensor)
+                    .map_err(|e| anyhow::anyhow!("Failed to attach dummy left bond: {e}"))?;
+                (left, dummy_right_tensor)
+            };
+
+            FactorizeResult {
+                left,
+                right,
+                bond_index: dummy_left,
+                singular_values: None,
+                rank: 1,
+            }
+        } else {
+            ab_uv
+                .factorize(&left_inds, &options)
+                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))?
+        };
         if let Some(factorize_started) = factorize_started {
             with_fit_profile(|profile| {
                 profile.factorize_time += factorize_started.elapsed();
@@ -958,9 +987,10 @@ where
         ));
     }
 
-    // Initialize C using the SVD-based zipup contraction.
+    // Initialize C using the SVD-based zipup contraction while preserving
+    // the input topology required by variational sweeps.
     let zipup_started = profile_enabled.then(Instant::now);
-    let mut tn_c = tn_a.contract_zipup_tree_accumulated(
+    let mut tn_c = tn_a.contract_zipup_preserving_topology_with(
         tn_b,
         center,
         CanonicalForm::Unitary,

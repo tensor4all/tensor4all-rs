@@ -2123,7 +2123,7 @@ fn test_fit_vs_naive_5node_chain() {
 */
 
 // ============================================================================
-// Tests for contract_zipup_tree_accumulated
+// Tests for contract_zipup_with
 // ============================================================================
 
 /// Helper: Create a simple 2-node TreeTN with String node names for testing
@@ -2151,13 +2151,14 @@ fn create_two_node_treetn_string() -> TreeTN<TensorDynLen, String> {
 
 /// Test single node contraction
 #[test]
-fn test_zipup_accumulated_single_node() {
+fn test_zipup_with_single_node() {
     let mut tn_a = TreeTN::<TensorDynLen, String>::new();
     let mut tn_b = TreeTN::<TensorDynLen, String>::new();
 
-    // Use different indices so contraction produces a result with indices
+    // Use the same site index so this is a real contraction, not an implicit
+    // outer product of unrelated inputs.
     let phys_a = DynIndex::new_dyn(2);
-    let phys_b = DynIndex::new_dyn(2);
+    let phys_b = phys_a.clone();
     let tensor_a = TensorDynLen::from_dense(vec![phys_a.clone()], vec![1.0, 2.0]).unwrap();
     let tensor_b = TensorDynLen::from_dense(vec![phys_b.clone()], vec![3.0, 4.0]).unwrap();
 
@@ -2165,41 +2166,25 @@ fn test_zipup_accumulated_single_node() {
     tn_b.add_tensor("X".to_string(), tensor_b).unwrap();
 
     let result = tn_a
-        .contract_zipup_tree_accumulated(
-            &tn_b,
-            &"X".to_string(),
-            CanonicalForm::Unitary,
-            None,
-            None,
-        )
+        .contract_zipup_with(&tn_b, &"X".to_string(), CanonicalForm::Unitary, None, None)
         .unwrap();
 
     assert_eq!(result.node_count(), 1);
     let result_tensor = result
         .tensor(result.node_index(&"X".to_string()).unwrap())
         .unwrap();
-    // When indices are different, result should have 2 indices (outer product)
-    // When indices are the same, result is a scalar (0 indices)
-    assert!(
-        result_tensor.external_indices().is_empty() || result_tensor.external_indices().len() == 2
-    );
+    assert!(result_tensor.external_indices().is_empty());
     assert!(result.canonical_region().contains(&"X".to_string()));
 }
 
 /// Test 2-node chain contraction
 #[test]
-fn test_zipup_accumulated_two_node_chain() {
+fn test_zipup_with_two_node_chain() {
     let tn_a = create_two_node_treetn_string();
     let tn_b = create_two_node_treetn_string();
 
     let result = tn_a
-        .contract_zipup_tree_accumulated(
-            &tn_b,
-            &"B".to_string(),
-            CanonicalForm::Unitary,
-            None,
-            None,
-        )
+        .contract_zipup_with(&tn_b, &"B".to_string(), CanonicalForm::Unitary, None, None)
         .unwrap();
 
     assert_eq!(result.node_count(), 2);
@@ -2211,7 +2196,7 @@ fn test_zipup_accumulated_two_node_chain() {
 
 /// Test 3-node chain contraction
 #[test]
-fn test_zipup_accumulated_three_node_chain() {
+fn test_zipup_with_three_node_chain() {
     let mut tn_a = TreeTN::<TensorDynLen, String>::new();
     let mut tn_b = TreeTN::<TensorDynLen, String>::new();
 
@@ -2265,13 +2250,7 @@ fn test_zipup_accumulated_three_node_chain() {
     tn_b.connect(n_b_b, &bond23_b, n_c_b, &bond23_b).unwrap();
 
     let result = tn_a
-        .contract_zipup_tree_accumulated(
-            &tn_b,
-            &"C".to_string(),
-            CanonicalForm::Unitary,
-            None,
-            None,
-        )
+        .contract_zipup_with(&tn_b, &"C".to_string(), CanonicalForm::Unitary, None, None)
         .unwrap();
 
     assert_eq!(result.node_count(), 3);
@@ -2280,7 +2259,7 @@ fn test_zipup_accumulated_three_node_chain() {
 
 /// Test star topology (multiple leaves connected to root)
 #[test]
-fn test_zipup_accumulated_star_topology() {
+fn test_zipup_with_star_topology() {
     let mut tn_a = TreeTN::<TensorDynLen, String>::new();
     let mut tn_b = TreeTN::<TensorDynLen, String>::new();
 
@@ -2368,13 +2347,7 @@ fn test_zipup_accumulated_star_topology() {
     tn_b.connect(n_c_b, &bond_cd_b, n_d_b, &bond_cd_b).unwrap();
 
     let result = tn_a
-        .contract_zipup_tree_accumulated(
-            &tn_b,
-            &"D".to_string(),
-            CanonicalForm::Unitary,
-            None,
-            None,
-        )
+        .contract_zipup_with(&tn_b, &"D".to_string(), CanonicalForm::Unitary, None, None)
         .unwrap();
 
     assert_eq!(result.node_count(), 4);

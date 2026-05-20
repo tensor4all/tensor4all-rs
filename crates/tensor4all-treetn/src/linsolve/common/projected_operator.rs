@@ -13,7 +13,7 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::{AllowedPairs, IndexLike, TensorLike};
+use tensor4all_core::{IndexLike, TensorLike};
 
 use super::environment::{EnvironmentCache, NetworkTopology};
 use crate::operator::IndexMapping;
@@ -54,6 +54,29 @@ where
     pub input_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
     /// Output index mapping (true site index -> MPO's internal output index)
     pub output_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
+}
+
+struct LocalIndexMapping<I> {
+    true_in: I,
+    internal_in: I,
+    temp_in: I,
+    true_out: I,
+    internal_out: I,
+    temp_out: I,
+}
+
+enum ContractOperand<'a, T> {
+    Borrowed(&'a T),
+    Owned(T),
+}
+
+impl<'a, T> ContractOperand<'a, T> {
+    fn as_ref(&'a self) -> &'a T {
+        match self {
+            Self::Borrowed(tensor) => tensor,
+            Self::Owned(tensor) => tensor,
+        }
+    }
 }
 
 impl<T, V> ProjectedOperator<T, V>
@@ -122,7 +145,7 @@ where
         // Ensure environments are computed
         self.ensure_environments(region, ket_state, bra_state, topology)?;
 
-        let mut all_tensors: Vec<T> = Vec::new();
+        let mut all_tensors = Vec::new();
         let mut temp_out_to_true: Vec<(T::Index, T::Index)> = Vec::new();
 
         if let (Some(ref input_mapping), Some(ref output_mapping)) =
@@ -131,52 +154,78 @@ where
             // MPO-with-mappings path: use unique temp indices to avoid duplicate IDs.
             // Replace true_index -> temp_in on v (never use internal_index on v).
             // Use same temp_in/temp_out on op tensors so they contract with v.
-            let mut per_node: Vec<(T::Index, T::Index, T::Index)> = Vec::new();
+            let mut per_node: Vec<Option<LocalIndexMapping<T::Index>>> = Vec::new();
             for node in region {
-                let im = input_mapping
-                    .get(node)
-                    .ok_or_else(|| anyhow::anyhow!("Missing input_mapping for node {:?}", node))?;
-                let om = output_mapping
-                    .get(node)
-                    .ok_or_else(|| anyhow::anyhow!("Missing output_mapping for node {:?}", node))?;
-                let temp_in = im.internal_index.sim();
-                let temp_out = om.internal_index.sim();
-                per_node.push((temp_in, temp_out, om.true_index.clone()));
+                match (input_mapping.get(node), output_mapping.get(node)) {
+                    (Some(im), Some(om)) => {
+                        let temp_in = im.internal_index.sim();
+                        let temp_out = om.internal_index.sim();
+                        per_node.push(Some(LocalIndexMapping {
+                            true_in: im.true_index.clone(),
+                            internal_in: im.internal_index.clone(),
+                            temp_in,
+                            true_out: om.true_index.clone(),
+                            internal_out: om.internal_index.clone(),
+                            temp_out,
+                        }));
+                    }
+                    (None, None) => {
+                        if self
+                            .operator
+                            .site_space(node)
+                            .is_some_and(|site_space| !site_space.is_empty())
+                        {
+                            return Err(anyhow::anyhow!(
+                                "Missing index mappings for operator node {:?} with non-empty site space",
+                                node
+                            ));
+                        }
+                        per_node.push(None);
+                    }
+                    (None, Some(_)) => {
+                        return Err(anyhow::anyhow!("Missing input_mapping for node {:?}", node));
+                    }
+                    (Some(_), None) => {
+                        return Err(anyhow::anyhow!(
+                            "Missing output_mapping for node {:?}",
+                            node
+                        ));
+                    }
+                }
             }
 
-            let mut transformed_v = v.clone();
-            for (node, (temp_in, _temp_out, _)) in region.iter().zip(per_node.iter()) {
-                let im = input_mapping
-                    .get(node)
-                    .ok_or_else(|| anyhow::anyhow!("Missing input_mapping for node {:?}", node))?;
-                transformed_v = transformed_v.replaceind(&im.true_index, temp_in)?;
+            if per_node.iter().any(Option::is_some) {
+                let mut transformed_v = v.clone();
+                for mapping in per_node.iter().flatten() {
+                    transformed_v = transformed_v.replaceind(&mapping.true_in, &mapping.temp_in)?;
+                }
+                all_tensors.push(ContractOperand::Owned(transformed_v));
+            } else {
+                all_tensors.push(ContractOperand::Borrowed(v));
             }
-            all_tensors.push(transformed_v);
 
-            for (node, (temp_in, temp_out, true_idx)) in region.iter().zip(per_node.iter()) {
-                let im = input_mapping
-                    .get(node)
-                    .ok_or_else(|| anyhow::anyhow!("Missing input_mapping for node {:?}", node))?;
-                let om = output_mapping
-                    .get(node)
-                    .ok_or_else(|| anyhow::anyhow!("Missing output_mapping for node {:?}", node))?;
+            for (node, mapping) in region.iter().zip(per_node.iter()) {
                 let node_idx = self
                     .operator
                     .node_index(node)
                     .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in operator", node))?;
-                let mut t = self
+                let tensor = self
                     .operator
                     .tensor(node_idx)
-                    .ok_or_else(|| anyhow::anyhow!("Tensor not found in operator"))?
-                    .clone();
-                t = t.replaceind(&im.internal_index, temp_in)?;
-                t = t.replaceind(&om.internal_index, temp_out)?;
-                all_tensors.push(t);
-                temp_out_to_true.push((temp_out.clone(), true_idx.clone()));
+                    .ok_or_else(|| anyhow::anyhow!("Tensor not found in operator"))?;
+                if let Some(mapping) = mapping {
+                    let mut t = tensor.clone();
+                    t = t.replaceind(&mapping.internal_in, &mapping.temp_in)?;
+                    t = t.replaceind(&mapping.internal_out, &mapping.temp_out)?;
+                    temp_out_to_true.push((mapping.temp_out.clone(), mapping.true_out.clone()));
+                    all_tensors.push(ContractOperand::Owned(t));
+                } else {
+                    all_tensors.push(ContractOperand::Borrowed(tensor));
+                }
             }
         } else {
             // No mappings: plain path
-            all_tensors.push(v.clone());
+            all_tensors.push(ContractOperand::Borrowed(v));
             for node in region {
                 let node_idx = self
                     .operator
@@ -185,9 +234,8 @@ where
                 let tensor = self
                     .operator
                     .tensor(node_idx)
-                    .ok_or_else(|| anyhow::anyhow!("Tensor not found in operator"))?
-                    .clone();
-                all_tensors.push(tensor);
+                    .ok_or_else(|| anyhow::anyhow!("Tensor not found in operator"))?;
+                all_tensors.push(ContractOperand::Borrowed(tensor));
             }
         }
 
@@ -198,13 +246,13 @@ where
                     continue;
                 }
                 if let Some(env) = self.envs.get(&neighbor, node) {
-                    all_tensors.push(env.clone());
+                    all_tensors.push(ContractOperand::Borrowed(env));
                 }
             }
         }
 
-        let tensor_refs: Vec<&T> = all_tensors.iter().collect();
-        let mut contracted = T::contract(&tensor_refs, AllowedPairs::All)?;
+        let tensor_refs: Vec<&T> = all_tensors.iter().map(ContractOperand::as_ref).collect();
+        let mut contracted = T::contract(&tensor_refs)?;
 
         // Replace temp_out -> true_index
         for (temp_out, true_idx) in &temp_out_to_true {
@@ -301,9 +349,9 @@ where
         }
 
         // Collect child environments
-        let child_envs: Vec<T> = child_neighbors
+        let child_envs: Vec<&T> = child_neighbors
             .iter()
-            .filter_map(|child| self.envs.get(child, from).cloned())
+            .filter_map(|child| self.envs.get(child, from))
             .collect();
 
         // Get tensors from bra (V_out), operator, and ket (V_in) at this node
@@ -339,33 +387,65 @@ where
 
         let bra_conj = tensor_bra.conj();
 
+        let input_unmapped = self
+            .input_mapping
+            .as_ref()
+            .is_none_or(|mapping| !mapping.contains_key(from));
+        let output_unmapped = self
+            .output_mapping
+            .as_ref()
+            .is_none_or(|mapping| !mapping.contains_key(from));
+        let operator_site_is_empty = self
+            .operator
+            .site_space(from)
+            .is_some_and(|site_space| site_space.is_empty());
+        let no_site_spectator = input_unmapped && output_unmapped && operator_site_is_empty;
+
+        let mut tensor_refs = Vec::with_capacity(3 + child_envs.len());
+
         // Transform ket tensor for contraction with operator
-        let transformed_ket = if let Some(ref input_mapping) = self.input_mapping {
+        if let Some(ref input_mapping) = self.input_mapping {
             if let Some(mapping) = input_mapping.get(from) {
-                tensor_ket.replaceind(&mapping.true_index, &mapping.internal_index)?
+                tensor_refs.push(ContractOperand::Owned(
+                    tensor_ket.replaceind(&mapping.true_index, &mapping.internal_index)?,
+                ));
             } else {
-                tensor_ket.clone()
+                tensor_refs.push(ContractOperand::Borrowed(tensor_ket));
             }
         } else {
-            tensor_ket.clone()
-        };
+            tensor_refs.push(ContractOperand::Borrowed(tensor_ket));
+        }
+
+        if !no_site_spectator {
+            tensor_refs.push(ContractOperand::Borrowed(tensor_op));
+        }
 
         // Transform bra_conj tensor for contraction with operator
-        let transformed_bra_conj = if let Some(ref output_mapping) = self.output_mapping {
+        if let Some(ref output_mapping) = self.output_mapping {
             if let Some(mapping) = output_mapping.get(from) {
-                bra_conj.replaceind(&mapping.true_index, &mapping.internal_index)?
+                tensor_refs.push(ContractOperand::Owned(
+                    bra_conj.replaceind(&mapping.true_index, &mapping.internal_index)?,
+                ));
             } else {
-                bra_conj.clone()
+                tensor_refs.push(ContractOperand::Owned(bra_conj));
             }
         } else {
-            bra_conj.clone()
-        };
+            tensor_refs.push(ContractOperand::Owned(bra_conj));
+        }
 
         // Contract ket, op, bra, and child environments together
         // Let contract() find the optimal contraction order
-        let mut tensor_refs: Vec<&T> = vec![&transformed_ket, tensor_op, &transformed_bra_conj];
-        tensor_refs.extend(child_envs.iter());
-        T::contract(&tensor_refs, AllowedPairs::All)
+        tensor_refs.extend(child_envs.into_iter().map(ContractOperand::Borrowed));
+        let tensor_refs = tensor_refs
+            .iter()
+            .map(ContractOperand::as_ref)
+            .collect::<Vec<_>>();
+        let contracted = T::contract(&tensor_refs)?;
+        if no_site_spectator {
+            contracted.contract_pair(tensor_op)
+        } else {
+            Ok(contracted)
+        }
     }
 
     /// Compute the local dimension (size of the local Hilbert space).

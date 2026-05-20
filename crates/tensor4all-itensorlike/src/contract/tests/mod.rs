@@ -1,6 +1,6 @@
 use super::*;
 use crate::TensorTrainError;
-use tensor4all_core::{DynId, DynIndex, Index, TensorDynLen, TensorLike};
+use tensor4all_core::{DynId, DynIndex, Index, TensorContractionLike, TensorDynLen};
 
 /// Helper to create a simple tensor for testing
 fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
@@ -23,7 +23,7 @@ fn assert_matches_naive(tt1: &TensorTrain, tt2: &TensorTrain, result: &TensorTra
     let naive_result = tt1
         .to_dense()
         .unwrap()
-        .contract(&tt2.to_dense().unwrap())
+        .contract_pair(&tt2.to_dense().unwrap())
         .unwrap();
     let result_dense = result.to_dense().unwrap();
     assert!(
@@ -181,7 +181,7 @@ fn test_contract_zipup_matches_naive_for_zero_masked_inputs() {
     .unwrap();
 
     let tt2 = TensorTrain::new(vec![
-        make_tensor(vec![s1.clone(), l12.clone()]),
+        make_tensor(vec![s0.clone(), l12.clone()]),
         TensorDynLen::from_dense(
             vec![l12.clone(), s2.clone()],
             vec![1.0, 0.0, 3.0, 0.0, 5.0, 0.0],
@@ -191,7 +191,7 @@ fn test_contract_zipup_matches_naive_for_zero_masked_inputs() {
     .unwrap();
 
     let result = contract(&tt1, &tt2, &ContractOptions::zipup()).unwrap();
-    assert_eq!(result.len(), 2);
+    assert_eq!(result.len(), 1);
     assert_matches_naive(&tt1, &tt2, &result);
 }
 
@@ -214,7 +214,7 @@ fn test_treetn_zipup_matches_naive_for_zero_masked_inputs() {
     .unwrap();
 
     let tt2 = TensorTrain::new(vec![
-        make_tensor(vec![s1.clone(), l12.clone()]),
+        make_tensor(vec![s0.clone(), l12.clone()]),
         TensorDynLen::from_dense(
             vec![l12.clone(), s2.clone()],
             vec![1.0, 0.0, 3.0, 0.0, 5.0, 0.0],
@@ -232,7 +232,7 @@ fn test_treetn_zipup_matches_naive_for_zero_masked_inputs() {
     )
     .unwrap();
     let result = TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary)).unwrap();
-    assert_eq!(result.len(), 2);
+    assert_eq!(result.len(), 1);
     assert_matches_naive(&tt1, &tt2, &result);
 }
 
@@ -269,7 +269,26 @@ fn test_contract_fit_two_sites() {
 
     let options = ContractOptions::fit().with_max_rank(10).with_nhalfsweeps(4);
     let result = contract(&tt1, &tt2, &options).unwrap();
-    assert_eq!(result.len(), 1);
+    assert_matches_naive(&tt1, &tt2, &result);
+}
+
+#[test]
+fn test_contract_fit_accepts_non_chain_ordered_site_tensors() {
+    let s0 = idx(1080, 2);
+    let s1 = idx(1081, 2);
+    let l01_a = idx(1082, 3);
+    let l01_b = idx(1083, 3);
+
+    let t1_0 = make_tensor(vec![l01_a.clone(), s0.clone()]);
+    let t1_1 = make_tensor(vec![s1.clone(), l01_a.clone()]);
+    let tt1 = TensorTrain::new(vec![t1_0, t1_1]).unwrap();
+
+    let t2_0 = make_tensor(vec![l01_b.clone(), s0.clone()]);
+    let t2_1 = make_tensor(vec![s1.clone(), l01_b.clone()]);
+    let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
+
+    let options = ContractOptions::fit().with_max_rank(10).with_nhalfsweeps(4);
+    let result = contract(&tt1, &tt2, &options).unwrap();
     assert_matches_naive(&tt1, &tt2, &result);
 }
 
@@ -310,7 +329,7 @@ fn test_contract_method_uses_tt_contract() {
 
     let options = ContractOptions::zipup();
     let result_free = contract(&tt1, &tt2, &options).unwrap();
-    let result_method = tt1.contract(&tt2, &options).unwrap();
+    let result_method = tt1.contract_pair(&tt2, &options).unwrap();
 
     // Both should produce TTs with the same length
     assert_eq!(result_free.len(), result_method.len());
@@ -376,7 +395,7 @@ fn test_contract_zipup_with_truncation() {
     let naive_result = tt1
         .to_dense()
         .unwrap()
-        .contract(&tt2.to_dense().unwrap())
+        .contract_pair(&tt2.to_dense().unwrap())
         .unwrap();
     let naive_data = naive_result.to_vec::<f64>().unwrap();
     let result_data = result.to_dense().unwrap().to_vec::<f64>().unwrap();

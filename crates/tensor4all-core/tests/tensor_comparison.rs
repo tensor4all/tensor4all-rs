@@ -1,6 +1,6 @@
 use num_complex::Complex64;
 use tensor4all_core::index::DefaultIndex as Index;
-use tensor4all_core::{diag_tensor_dyn_len, TensorDynLen, TensorLike};
+use tensor4all_core::{diag_tensor_dyn_len, TensorDynLen};
 
 #[test]
 fn test_sub_identical_tensors_is_zero() {

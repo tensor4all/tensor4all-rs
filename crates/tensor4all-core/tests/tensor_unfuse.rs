@@ -1,6 +1,6 @@
 use num_complex::Complex64;
 use tensor4all_core::{
-    DynIndex, IndexLike, LinearizationOrder, TensorDynLen, TensorIndex, TensorLike,
+    DynIndex, IndexLike, LinearizationOrder, TensorContractionLike, TensorDynLen, TensorIndex,
 };
 
 #[test]
@@ -92,7 +92,7 @@ fn fuse_indices_trait_dispatch_on_tensordynlen_uses_old_index_order() {
     let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
     let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone(), k.clone()], data).unwrap();
 
-    let fused_tensor = <TensorDynLen as TensorLike>::fuse_indices(
+    let fused_tensor = <TensorDynLen as TensorContractionLike>::fuse_indices(
         &tensor,
         &[j.clone(), i.clone()],
         fused.clone(),

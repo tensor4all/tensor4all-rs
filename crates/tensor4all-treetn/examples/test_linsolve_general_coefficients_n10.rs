@@ -394,7 +394,7 @@ fn run_test_case(a0: f64, a1: f64, init_mode: &str, bond_dim: usize) -> anyhow::
     // For N=10, we need higher max_rank to handle the larger system
     let options = LinsolveOptions::default()
         .with_nfullsweeps(10)
-        .with_krylov_tol(1e-10)
+        .with_gmres_tol(1e-10)
         .with_max_rank(100)
         .with_coefficients(a0, a1);
 

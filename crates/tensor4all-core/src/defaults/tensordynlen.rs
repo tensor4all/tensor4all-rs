@@ -8,23 +8,129 @@ use num_complex::Complex64;
 use num_traits::Zero;
 use rand::Rng;
 use rand_distr::{Distribution, StandardNormal};
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::cmp::Reverse;
+use std::collections::{HashMap, HashSet};
+use std::env;
 use std::sync::{Arc, OnceLock};
-use tenferro::eager_einsum::eager_einsum_ad;
-use tenferro::{CpuBackend, DType, EagerTensor, Tensor as NativeTensor};
+use std::time::{Duration, Instant};
+use tenferro::eager_tensor::einsum_subscripts as eager_einsum_ad;
+use tenferro::{
+    CpuBackend, DType, DotGeneralConfig, EagerTensor, EinsumSubscripts, Tensor as NativeTensor,
+};
 use tensor4all_tensorbackend::{
     axpby_native_tensor, contract_native_tensor, default_eager_ctx,
     dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
     native_tensor_primal_to_dense_col_major, native_tensor_primal_to_diag_c64,
     native_tensor_primal_to_diag_f64, native_tensor_primal_to_storage, scale_native_tensor,
-    storage_to_native_tensor, StorageScalar, TensorElement,
+    storage_payload_native_read_input, storage_to_native_tensor, AnyScalar as BackendScalar,
+    StorageScalar, TensorElement,
 };
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
+use super::contract::PairwiseContractionOptions;
 use super::structured_contraction::{
-    normalize_payload_for_roots, storage_from_payload_native, storage_payload_native,
+    normalize_payload_read_for_roots, storage_from_payload_native, storage_payload_native,
     OperandLayout, StructuredContractionPlan, StructuredContractionSpec,
 };
+
+#[derive(Debug, Default, Clone)]
+struct PairwiseContractProfileEntry {
+    calls: usize,
+    total_time: Duration,
+    total_bytes: usize,
+}
+
+thread_local! {
+    static PAIRWISE_CONTRACT_PROFILE_STATE: RefCell<HashMap<&'static str, PairwiseContractProfileEntry>> =
+        RefCell::new(HashMap::new());
+}
+
+fn pairwise_contract_profile_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env::var("T4A_PROFILE_PAIRWISE_CONTRACT").is_ok())
+}
+
+fn record_pairwise_contract_profile(section: &'static str, elapsed: Duration) {
+    if !pairwise_contract_profile_enabled() {
+        return;
+    }
+    PAIRWISE_CONTRACT_PROFILE_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let entry = state.entry(section).or_default();
+        entry.calls += 1;
+        entry.total_time += elapsed;
+    });
+}
+
+fn record_pairwise_contract_profile_bytes(section: &'static str, bytes: usize) {
+    if !pairwise_contract_profile_enabled() {
+        return;
+    }
+    PAIRWISE_CONTRACT_PROFILE_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let entry = state.entry(section).or_default();
+        entry.total_bytes += bytes;
+    });
+}
+
+fn profile_pairwise_contract_section<T>(section: &'static str, f: impl FnOnce() -> T) -> T {
+    if !pairwise_contract_profile_enabled() {
+        return f();
+    }
+    let started = Instant::now();
+    let result = f();
+    record_pairwise_contract_profile(section, started.elapsed());
+    result
+}
+
+/// Reset the aggregated pairwise `TensorDynLen` contraction profile.
+pub fn reset_pairwise_contract_profile() {
+    PAIRWISE_CONTRACT_PROFILE_STATE.with(|state| state.borrow_mut().clear());
+}
+
+/// Print and clear the aggregated pairwise `TensorDynLen` contraction profile.
+pub fn print_and_reset_pairwise_contract_profile() {
+    if !pairwise_contract_profile_enabled() {
+        return;
+    }
+    PAIRWISE_CONTRACT_PROFILE_STATE.with(|state| {
+        let mut entries: Vec<_> = state
+            .borrow()
+            .iter()
+            .map(|(section, entry)| (*section, entry.clone()))
+            .collect();
+        state.borrow_mut().clear();
+        entries.sort_by_key(|(_, entry)| Reverse(entry.total_time));
+
+        eprintln!("=== TensorDynLen pairwise contract profile ===");
+        for (section, entry) in entries {
+            let per_call_us = if entry.calls == 0 {
+                0.0
+            } else {
+                entry.total_time.as_secs_f64() * 1.0e6 / entry.calls as f64
+            };
+            eprintln!(
+                "{section}: calls={} total={:.6}ms per_call={:.3}us bytes={}",
+                entry.calls,
+                entry.total_time.as_secs_f64() * 1.0e3,
+                per_call_us,
+                entry.total_bytes,
+            );
+        }
+    });
+}
+
+fn native_tensor_profile_bytes(native: &NativeTensor) -> usize {
+    let element_size = match native.dtype() {
+        DType::F32 => 4,
+        DType::F64 => 8,
+        DType::C32 => 8,
+        DType::C64 => 16,
+        DType::I64 => 8,
+    };
+    native.shape().iter().product::<usize>() * element_size
+}
 
 /// Trait for scalar types that can generate random values from a standard
 /// normal distribution.
@@ -115,6 +221,148 @@ pub(crate) struct StructuredAdValue {
     axis_classes: Vec<usize>,
 }
 
+#[derive(Clone)]
+pub(crate) enum TensorDynLenStorage {
+    Materialized(Arc<Storage>),
+    Eager {
+        inner: Arc<EagerTensor<CpuBackend>>,
+        axis_classes: Vec<usize>,
+    },
+}
+
+impl TensorDynLenStorage {
+    fn from_storage(storage: Arc<Storage>) -> Self {
+        Self::Materialized(storage)
+    }
+
+    fn from_eager_dense(inner: EagerTensor<CpuBackend>, rank: usize) -> Self {
+        Self::Eager {
+            inner: Arc::new(inner),
+            axis_classes: TensorDynLen::dense_axis_classes(rank),
+        }
+    }
+
+    fn eager(&self) -> Option<&EagerTensor<CpuBackend>> {
+        match self {
+            Self::Materialized(_) => None,
+            Self::Eager { inner, .. } => Some(inner.as_ref()),
+        }
+    }
+
+    fn axis_classes(&self) -> &[usize] {
+        match self {
+            Self::Materialized(storage) => storage.axis_classes(),
+            Self::Eager { axis_classes, .. } => axis_classes,
+        }
+    }
+
+    fn payload_dims(&self) -> &[usize] {
+        match self {
+            Self::Materialized(storage) => storage.payload_dims(),
+            Self::Eager { inner, .. } => inner.data().shape(),
+        }
+    }
+
+    fn payload_strides_vec(&self) -> Vec<isize> {
+        match self {
+            Self::Materialized(storage) => storage.payload_strides().to_vec(),
+            Self::Eager { inner, .. } => {
+                let mut stride = 1isize;
+                inner
+                    .data()
+                    .shape()
+                    .iter()
+                    .map(|&dim| {
+                        let current = stride;
+                        stride *= isize::try_from(dim).unwrap_or(isize::MAX);
+                        current
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    fn is_f64(&self) -> bool {
+        match self {
+            Self::Materialized(storage) => storage.is_f64(),
+            Self::Eager { inner, .. } => inner.data().dtype() == DType::F64,
+        }
+    }
+
+    fn is_c64(&self) -> bool {
+        match self {
+            Self::Materialized(storage) => storage.is_c64(),
+            Self::Eager { inner, .. } => inner.data().dtype() == DType::C64,
+        }
+    }
+
+    fn is_complex(&self) -> bool {
+        match self {
+            Self::Materialized(storage) => storage.is_complex(),
+            Self::Eager { inner, .. } => matches!(inner.data().dtype(), DType::C32 | DType::C64),
+        }
+    }
+
+    fn is_diag(&self) -> bool {
+        match self {
+            Self::Materialized(storage) => storage.is_diag(),
+            Self::Eager { axis_classes, .. } => TensorDynLen::is_diag_axis_classes(axis_classes),
+        }
+    }
+
+    fn storage_kind(&self) -> StorageKind {
+        match self {
+            Self::Materialized(storage) => storage.storage_kind(),
+            Self::Eager { axis_classes, .. } => {
+                if axis_classes.iter().copied().eq(0..axis_classes.len()) {
+                    StorageKind::Dense
+                } else if TensorDynLen::is_diag_axis_classes(axis_classes) {
+                    StorageKind::Diagonal
+                } else {
+                    StorageKind::Structured
+                }
+            }
+        }
+    }
+
+    fn materialize(&self, logical_rank: usize) -> Result<Arc<Storage>> {
+        match self {
+            Self::Materialized(storage) => Ok(Arc::clone(storage)),
+            Self::Eager {
+                inner,
+                axis_classes,
+            } => Ok(Arc::new(
+                TensorDynLen::storage_from_native_with_axis_classes(
+                    inner.data(),
+                    axis_classes,
+                    logical_rank,
+                )?,
+            )),
+        }
+    }
+
+    fn scale(&self, scalar: &BackendScalar) -> Result<Storage> {
+        Ok(self.materialize(self.axis_classes().len())?.scale(scalar))
+    }
+
+    fn conj(&self) -> Result<Self> {
+        match self {
+            Self::Materialized(storage) => Ok(Self::Materialized(Arc::new(storage.conj()))),
+            Self::Eager {
+                inner,
+                axis_classes,
+            } => Ok(Self::Eager {
+                inner: Arc::new(inner.conj()?),
+                axis_classes: axis_classes.clone(),
+            }),
+        }
+    }
+
+    fn max_abs(&self) -> Result<f64> {
+        Ok(self.materialize(self.axis_classes().len())?.max_abs())
+    }
+}
+
 /// Dynamic-rank tensor with structured payload storage -- the central data type
 /// of tensor4all.
 ///
@@ -133,7 +381,7 @@ pub(crate) struct StructuredAdValue {
 /// | Extract data | [`to_vec`](Self::to_vec), [`into_dense_col_major_parts`](Self::into_dense_col_major_parts), [`sum`](Self::sum), [`only`](Self::only) |
 /// | Contraction | [`contract`](Self::contract) |
 /// | Arithmetic | [`add`](Self::add), [`scale`](Self::scale), [`axpby`](Self::axpby) |
-/// | Factorization | via [`TensorLike::factorize`] |
+/// | Factorization | via [`TensorFactorizationLike::factorize`](crate::TensorFactorizationLike::factorize) |
 /// | Norms | [`norm`](Self::norm), [`norm_squared`](Self::norm_squared), [`maxabs`](Self::maxabs) |
 /// | Index ops | [`replaceind`](Self::replaceind), [`permute_indices`](Self::permute_indices) |
 ///
@@ -171,7 +419,7 @@ pub struct TensorDynLen {
     /// Full index information (includes tags and other metadata).
     pub indices: Vec<DynIndex>,
     /// Authoritative compact payload storage.
-    pub(crate) storage: Arc<Storage>,
+    pub(crate) storage: TensorDynLenStorage,
     /// Optional tracked compact payload used to preserve structured AD layouts.
     pub(crate) structured_ad: Option<Arc<StructuredAdValue>>,
     /// Lazily materialized eager payload for native execution and AD.
@@ -179,8 +427,6 @@ pub struct TensorDynLen {
 }
 
 impl TensorDynLen {
-    const EINSUM_LABELS: &'static [u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-
     fn dense_axis_classes(rank: usize) -> Vec<usize> {
         (0..rank).collect()
     }
@@ -231,15 +477,30 @@ impl TensorDynLen {
         axis_classes.len() >= 2 && axis_classes.iter().all(|&class_id| class_id == 0)
     }
 
-    fn einsum_labels(ids: &[usize]) -> Result<String> {
-        let mut out = String::with_capacity(ids.len());
-        for &id in ids {
-            let label = Self::EINSUM_LABELS.get(id).ok_or_else(|| {
-                anyhow::anyhow!("einsum label {id} exceeds supported label range")
-            })?;
-            out.push(char::from(*label));
-        }
-        Ok(out)
+    fn einsum_subscripts_from_usize_ids(
+        inputs: &[Vec<usize>],
+        output: &[usize],
+    ) -> Result<EinsumSubscripts> {
+        let input_labels = inputs
+            .iter()
+            .map(|ids| {
+                ids.iter()
+                    .map(|&id| {
+                        u32::try_from(id)
+                            .map_err(|_| anyhow::anyhow!("einsum label {id} exceeds u32 range"))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let output_labels = output
+            .iter()
+            .map(|&id| {
+                u32::try_from(id)
+                    .map_err(|_| anyhow::anyhow!("einsum label {id} exceeds u32 range"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let input_refs = input_labels.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        Ok(EinsumSubscripts::new(&input_refs, &output_labels))
     }
 
     fn build_binary_einsum_subscripts(
@@ -247,7 +508,7 @@ impl TensorDynLen {
         axes_a: &[usize],
         rhs_rank: usize,
         axes_b: &[usize],
-    ) -> Result<String> {
+    ) -> Result<EinsumSubscripts> {
         anyhow::ensure!(
             axes_a.len() == axes_b.len(),
             "contract axis length mismatch: lhs {:?}, rhs {:?}",
@@ -302,12 +563,22 @@ impl TensorDynLen {
             }
         }
 
-        Ok(format!(
-            "{},{}->{}",
-            Self::einsum_labels(&lhs_ids)?,
-            Self::einsum_labels(&rhs_ids)?,
-            Self::einsum_labels(&output_ids)?,
-        ))
+        Self::einsum_subscripts_from_usize_ids(&[lhs_ids, rhs_ids], &output_ids)
+    }
+
+    fn binary_dot_general_config(axes_a: &[usize], axes_b: &[usize]) -> Result<DotGeneralConfig> {
+        anyhow::ensure!(
+            axes_a.len() == axes_b.len(),
+            "contract axis length mismatch: lhs {:?}, rhs {:?}",
+            axes_a,
+            axes_b
+        );
+        Ok(DotGeneralConfig {
+            lhs_contracting_dims: axes_a.to_vec(),
+            rhs_contracting_dims: axes_b.to_vec(),
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+        })
     }
 
     fn binary_contraction_axis_classes(
@@ -395,14 +666,9 @@ impl TensorDynLen {
         axis_classes
     }
 
-    fn scale_subscripts(rank: usize) -> Result<String> {
-        if rank == 0 {
-            Ok("->".to_string())
-        } else {
-            let ids: Vec<usize> = (0..rank).collect();
-            let labels = Self::einsum_labels(&ids)?;
-            Ok(format!("{labels},->{labels}"))
-        }
+    fn scale_subscripts(rank: usize) -> Result<EinsumSubscripts> {
+        let ids: Vec<usize> = (0..rank).collect();
+        Self::einsum_subscripts_from_usize_ids(&[ids.clone(), Vec::new()], &ids)
     }
 
     fn validate_indices(indices: &[DynIndex]) -> Result<()> {
@@ -447,7 +713,7 @@ impl TensorDynLen {
 
     fn compact_payload_inner(&self) -> Result<EagerTensor<CpuBackend>> {
         Ok(EagerTensor::from_tensor_in(
-            storage_payload_native(self.storage.as_ref())?,
+            storage_payload_native(self.storage.materialize(self.indices.len())?.as_ref())?,
             default_eager_ctx(),
         ))
     }
@@ -472,6 +738,14 @@ impl TensorDynLen {
             "{op_name}: structured AD tensors with compact storage are not supported because materializing compact storage would detach gradients"
         );
         Ok(())
+    }
+
+    fn operand_indices_for_contraction(&self, conjugate: bool) -> Vec<DynIndex> {
+        if conjugate {
+            self.indices.iter().map(|index| index.conj()).collect()
+        } else {
+            self.indices.clone()
+        }
     }
 
     fn build_binary_contraction_labels(
@@ -540,13 +814,8 @@ impl TensorDynLen {
     fn build_payload_einsum_subscripts(
         input_roots: &[Vec<usize>],
         output_roots: &[usize],
-    ) -> Result<String> {
-        let input_labels = input_roots
-            .iter()
-            .map(|roots| Self::einsum_labels(roots))
-            .collect::<Result<Vec<_>>>()?;
-        let output = Self::einsum_labels(output_roots)?;
-        Ok(format!("{}->{}", input_labels.join(","), output))
+    ) -> Result<EinsumSubscripts> {
+        Self::einsum_subscripts_from_usize_ids(input_roots, output_roots)
     }
 
     fn normalize_eager_payload_for_roots(
@@ -629,7 +898,7 @@ impl TensorDynLen {
         Self::validate_storage_matches_indices(&indices, &storage)?;
         Ok(Self {
             indices,
-            storage: Arc::new(storage),
+            storage: TensorDynLenStorage::from_storage(Arc::new(storage)),
             structured_ad: Some(Arc::new(StructuredAdValue {
                 payload: Arc::new(payload_inner),
                 payload_dims,
@@ -743,16 +1012,18 @@ impl TensorDynLen {
             );
         }
 
-        let lhs = storage_payload_native(self.storage.as_ref())?;
-        let rhs = storage_payload_native(other.storage.as_ref())?;
+        let lhs_storage = self.storage.materialize(self.indices.len())?;
+        let rhs_storage = other.storage.materialize(other.indices.len())?;
+        let lhs = storage_payload_native_read_input(lhs_storage.as_ref())?;
+        let rhs = storage_payload_native_read_input(rhs_storage.as_ref())?;
         if lhs.dtype() != rhs.dtype() {
             return Err(anyhow::anyhow!(
                 "structured payload contraction requires matching payload dtypes"
             ));
         }
-        let (lhs, lhs_labels) = normalize_payload_for_roots(&lhs, &lhs_roots)?;
-        let (rhs, rhs_labels) = normalize_payload_for_roots(&rhs, &rhs_roots)?;
-        let payload = tensor4all_tensorbackend::einsum_native_tensors(
+        let (lhs, lhs_labels) = normalize_payload_read_for_roots(lhs, &lhs_roots)?;
+        let (rhs, rhs_labels) = normalize_payload_read_for_roots(rhs, &rhs_roots)?;
+        let payload = tensor4all_tensorbackend::einsum_native_tensor_reads(
             &[(&lhs, lhs_labels.as_slice()), (&rhs, rhs_labels.as_slice())],
             &plan.output_payload_roots,
         )?;
@@ -836,15 +1107,15 @@ impl TensorDynLen {
         positions: &[usize],
     ) -> Result<Self> {
         if self.storage.is_f64() {
-            let payload = self
-                .storage
+            let storage = self.storage.materialize(self.indices.len())?;
+            let payload = storage
                 .payload_f64_col_major_vec()
                 .map_err(anyhow::Error::msg)?;
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
             Self::from_dense(kept_indices, data)
         } else if self.storage.is_c64() {
-            let payload = self
-                .storage
+            let storage = self.storage.materialize(self.indices.len())?;
+            let payload = storage
                 .payload_c64_col_major_vec()
                 .map_err(anyhow::Error::msg)?;
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions);
@@ -1033,8 +1304,8 @@ impl TensorDynLen {
         positions: &[usize],
     ) -> Result<Self> {
         if self.storage.is_f64() {
-            let payload = self
-                .storage
+            let storage = self.storage.materialize(self.indices.len())?;
+            let payload = storage
                 .payload_f64_col_major_vec()
                 .map_err(anyhow::Error::msg)?;
             self.select_structured_indices_typed(
@@ -1046,8 +1317,8 @@ impl TensorDynLen {
                 positions,
             )
         } else if self.storage.is_c64() {
-            let payload = self
-                .storage
+            let storage = self.storage.materialize(self.indices.len())?;
+            let payload = storage
                 .payload_c64_col_major_vec()
                 .map_err(anyhow::Error::msg)?;
             self.select_structured_indices_typed(
@@ -1087,9 +1358,20 @@ impl TensorDynLen {
                 return Ok(value.payload.as_ref());
             }
         }
+        if let Some(inner) = self.storage.eager() {
+            return Ok(inner);
+        }
         if self.eager_cache.get().is_none() {
-            let native = Self::seed_native_payload(self.storage.as_ref(), &self.dims())
-                .context("TensorDynLen materialization failed")?;
+            let dims = self.dims();
+            let native = profile_pairwise_contract_section("materialize_storage_to_native", || {
+                let storage = self.storage.materialize(self.indices.len())?;
+                Self::seed_native_payload(storage.as_ref(), &dims)
+            })
+            .context("TensorDynLen materialization failed")?;
+            record_pairwise_contract_profile_bytes(
+                "materialize_storage_to_native",
+                native_tensor_profile_bytes(&native),
+            );
             let _ = self.eager_cache.set(Arc::new(EagerTensor::from_tensor_in(
                 native,
                 default_eager_ctx(),
@@ -1474,7 +1756,7 @@ impl TensorDynLen {
         Self::validate_storage_matches_indices(&indices, storage.as_ref())?;
         Ok(Self {
             indices,
-            storage,
+            storage: TensorDynLenStorage::from_storage(storage),
             structured_ad: None,
             eager_cache: Self::empty_eager_cache(),
         })
@@ -1551,8 +1833,12 @@ impl TensorDynLen {
         inner: EagerTensor<CpuBackend>,
         axis_classes: Vec<usize>,
     ) -> Result<Self> {
-        let dims = Self::expected_dims_from_indices(&indices);
-        Self::validate_indices(&indices)?;
+        let dims = profile_pairwise_contract_section("from_inner_expected_dims", || {
+            Self::expected_dims_from_indices(&indices)
+        });
+        profile_pairwise_contract_section("from_inner_validate_indices", || {
+            Self::validate_indices(&indices)
+        })?;
         if dims != inner.data().shape() {
             return Err(anyhow::anyhow!(
                 "native payload dims {:?} do not match indices dims {:?}",
@@ -1561,18 +1847,39 @@ impl TensorDynLen {
             ));
         }
         if Self::is_diag_axis_classes(&axis_classes) {
-            Self::validate_diag_dims(&dims)?;
+            profile_pairwise_contract_section("from_inner_validate_diag_dims", || {
+                Self::validate_diag_dims(&dims)
+            })?;
         }
-        let storage = Self::storage_from_native_with_axis_classes(
-            inner.data(),
-            &axis_classes,
-            indices.len(),
-        )?;
+        let (storage, eager_cache) = if axis_classes == Self::dense_axis_classes(indices.len()) {
+            (
+                TensorDynLenStorage::from_eager_dense(inner, indices.len()),
+                Self::empty_eager_cache(),
+            )
+        } else {
+            let storage = profile_pairwise_contract_section("from_inner_storage_snapshot", || {
+                Self::storage_from_native_with_axis_classes(
+                    inner.data(),
+                    &axis_classes,
+                    indices.len(),
+                )
+            })?;
+            record_pairwise_contract_profile_bytes(
+                "from_inner_storage_snapshot",
+                native_tensor_profile_bytes(inner.data()),
+            );
+            (
+                TensorDynLenStorage::from_storage(Arc::new(storage)),
+                profile_pairwise_contract_section("from_inner_eager_cache", || {
+                    Self::eager_cache_with(inner)
+                }),
+            )
+        };
         Ok(Self {
             indices,
-            storage: Arc::new(storage),
+            storage,
             structured_ad: None,
-            eager_cache: Self::eager_cache_with(inner),
+            eager_cache,
         })
     }
 
@@ -1588,7 +1895,8 @@ impl TensorDynLen {
 
     /// Enable reverse-mode AD tracking on this tensor by creating a tracked leaf.
     pub fn enable_grad(self) -> Result<Self> {
-        let payload = storage_payload_native(self.storage.as_ref())
+        let materialized = self.storage.materialize(self.indices.len())?;
+        let payload = storage_payload_native(materialized.as_ref())
             .context("TensorDynLen::enable_grad failed")?;
         let payload_dims = self.storage.payload_dims().to_vec();
         let axis_classes = self.storage.axis_classes().to_vec();
@@ -1609,6 +1917,7 @@ impl TensorDynLen {
         self.structured_ad
             .as_ref()
             .is_some_and(|value| value.payload.tracks_grad())
+            || self.storage.eager().is_some_and(EagerTensor::tracks_grad)
             || self
                 .eager_cache
                 .get()
@@ -1648,6 +1957,9 @@ impl TensorDynLen {
         if let Some(value) = self.tracked_compact_payload_value() {
             value.payload.clear_grad();
         }
+        if let Some(inner) = self.storage.eager() {
+            inner.clear_grad();
+        }
         if let Some(inner) = self.eager_cache.get() {
             inner.clear_grad();
         }
@@ -1672,7 +1984,10 @@ impl TensorDynLen {
     /// Detach this tensor from the reverse graph.
     pub fn detach(&self) -> Result<Self> {
         if self.tracked_compact_payload_value().is_some() {
-            return Self::from_storage(self.indices.clone(), Arc::clone(&self.storage));
+            return Self::from_storage(
+                self.indices.clone(),
+                self.storage.materialize(self.indices.len())?,
+            );
         }
         Self::from_inner_with_axis_classes(
             self.indices.clone(),
@@ -1688,12 +2003,14 @@ impl TensorDynLen {
 
     /// Materialize the primal snapshot as storage.
     pub fn to_storage(&self) -> Result<Arc<Storage>> {
-        Ok(Arc::clone(&self.storage))
+        self.storage.materialize(self.indices.len())
     }
 
     /// Returns the authoritative compact storage.
     pub fn storage(&self) -> Arc<Storage> {
-        Arc::clone(&self.storage)
+        self.storage
+            .materialize(self.indices.len())
+            .expect("TensorDynLen storage materialization failed")
     }
 
     /// Sum all elements, returning `AnyScalar`.
@@ -1785,7 +2102,7 @@ impl TensorDynLen {
         if perm.iter().copied().eq(0..perm.len()) {
             return Ok(Self {
                 indices: new_indices.to_vec(),
-                storage: Arc::clone(&self.storage),
+                storage: self.storage.clone(),
                 structured_ad: self.structured_ad.clone(),
                 eager_cache: Arc::clone(&self.eager_cache),
             });
@@ -1848,194 +2165,154 @@ impl TensorDynLen {
         Self::from_inner_with_axis_classes(new_indices, permuted, axis_classes)
     }
 
-    /// Contract this tensor with another tensor along common indices.
-    ///
-    /// This method finds common indices between `self` and `other`, then contracts
-    /// along those indices. The result tensor contains all non-contracted indices
-    /// from both tensors, with indices from `self` appearing first, followed by
-    /// indices from `other` that are not common.
-    ///
-    /// # Arguments
-    /// * `other` - The tensor to contract with
-    ///
-    /// # Returns
-    /// A new tensor resulting from the contraction.
-    ///
-    /// # Panics
-    /// Panics if there are no common indices, if common indices have mismatched
-    /// dimensions, or if storage types don't match.
-    ///
-    /// # Example
-    /// ```
-    /// use tensor4all_core::TensorDynLen;
-    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    ///
-    /// // Create two tensors: A[i, j] and B[j, k]
-    /// let i = Index::new_dyn(2);
-    /// let j = Index::new_dyn(3);
-    /// let k = Index::new_dyn(4);
-    ///
-    /// let indices_a = vec![i.clone(), j.clone()];
-    /// let tensor_a: TensorDynLen = TensorDynLen::from_dense(indices_a, vec![0.0; 6]).unwrap();
-    ///
-    /// let indices_b = vec![j.clone(), k.clone()];
-    /// let tensor_b: TensorDynLen = TensorDynLen::from_dense(indices_b, vec![0.0; 12]).unwrap();
-    ///
-    /// // Contract along j with the default pairwise semantics: result is C[i, k]
-    /// let result = tensor_a.contract(&tensor_b).unwrap();
-    /// assert_eq!(result.dims(), vec![2, 4]);
-    /// ```
-    pub fn contract(&self, other: &Self) -> Result<Self> {
-        self.try_contract_pairwise_default(other)
+    pub(crate) fn try_contract_pairwise_default(&self, other: &Self) -> Result<Self> {
+        self.try_contract_pairwise_default_with_options(other, PairwiseContractionOptions::new())
     }
 
-    /// Contract this tensor with another tensor using explicit contraction options.
-    ///
-    /// # Arguments
-    /// * `other` - The tensor to contract with.
-    /// * `options` - Pair-selection policy and retained indices.
-    ///
-    /// # Returns
-    /// The contracted tensor, or an error if the contraction cannot be built.
-    ///
-    /// # Errors
-    /// Returns an error if the tensors are disconnected, retained indices are
-    /// invalid, or the contraction plan cannot be executed.
-    ///
-    /// # Examples
-    /// ```
-    /// use tensor4all_core::{AllowedPairs, ContractionOptions, DynIndex, TensorDynLen};
-    ///
-    /// let batch = DynIndex::new_dyn(2);
-    /// let i = DynIndex::new_dyn(2);
-    /// let k = DynIndex::new_dyn(3);
-    /// let j = DynIndex::new_dyn(2);
-    ///
-    /// let a = TensorDynLen::from_dense(
-    ///     vec![batch.clone(), i.clone(), k.clone()],
-    ///     vec![1.0_f64; 12],
-    /// ).unwrap();
-    /// let b = TensorDynLen::from_dense(
-    ///     vec![batch.clone(), k.clone(), j.clone()],
-    ///     vec![1.0_f64; 12],
-    /// ).unwrap();
-    /// let retain = [batch.clone()];
-    /// let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain);
-    /// let result = a.contract_with_options(&b, options).unwrap();
-    ///
-    /// assert_eq!(result.indices(), &[batch, i, j]);
-    /// assert_eq!(result.dims(), vec![2, 2, 2]);
-    /// assert_eq!(result.to_vec::<f64>().unwrap(), vec![3.0; 8]);
-    /// ```
-    pub fn contract_with_options(
+    pub(crate) fn try_contract_pairwise_default_with_options(
         &self,
         other: &Self,
-        options: crate::defaults::contract::ContractionOptions<'_>,
+        options: PairwiseContractionOptions,
     ) -> Result<Self> {
-        crate::defaults::contract::contract_multi_with_options(&[self, other], options)
-    }
-
-    pub(crate) fn try_contract_pairwise_default(&self, other: &Self) -> Result<Self> {
-        let self_dims = Self::expected_dims_from_indices(&self.indices);
-        let other_dims = Self::expected_dims_from_indices(&other.indices);
-        let spec = prepare_contraction(&self.indices, &self_dims, &other.indices, &other_dims)
-            .context("contraction preparation failed")?;
-        let result_axis_classes = Self::binary_contraction_axis_classes(
-            self.storage.axis_classes(),
-            &spec.axes_a,
-            other.storage.axis_classes(),
-            &spec.axes_b,
-        );
-
-        if self.should_use_structured_payload_contract(other) {
-            return self.contract_structured_payloads(
-                other,
-                spec.result_indices,
+        let self_indices = profile_pairwise_contract_section("operand_indices", || {
+            self.operand_indices_for_contraction(options.lhs_conj)
+        });
+        let other_indices = profile_pairwise_contract_section("operand_indices", || {
+            other.operand_indices_for_contraction(options.rhs_conj)
+        });
+        let self_dims = profile_pairwise_contract_section("expected_dims", || {
+            Self::expected_dims_from_indices(&self_indices)
+        });
+        let other_dims = profile_pairwise_contract_section("expected_dims", || {
+            Self::expected_dims_from_indices(&other_indices)
+        });
+        let spec = profile_pairwise_contract_section("prepare_contraction", || {
+            prepare_contraction(&self_indices, &self_dims, &other_indices, &other_dims)
+        })
+        .context("contraction preparation failed")?;
+        let result_axis_classes = profile_pairwise_contract_section("result_axis_classes", || {
+            Self::binary_contraction_axis_classes(
+                self.storage.axis_classes(),
                 &spec.axes_a,
+                other.storage.axis_classes(),
                 &spec.axes_b,
-            );
+            )
+        });
+
+        if profile_pairwise_contract_section("structured_check", || {
+            self.should_use_structured_payload_contract(other)
+        }) {
+            if options.has_conj() {
+                let lhs = if options.lhs_conj {
+                    self.conj()
+                } else {
+                    self.clone()
+                };
+                let rhs = if options.rhs_conj {
+                    other.conj()
+                } else {
+                    other.clone()
+                };
+                return profile_pairwise_contract_section("structured_conj_fallback", || {
+                    lhs.try_contract_pairwise_default(&rhs)
+                });
+            }
+            return profile_pairwise_contract_section("structured_payload_contract", || {
+                self.contract_structured_payloads(
+                    other,
+                    spec.result_indices.into_vec(),
+                    &spec.axes_a,
+                    &spec.axes_b,
+                )
+            });
         }
 
         if self.indices.is_empty() && other.indices.is_empty() {
-            let result = self
-                .try_materialized_inner()?
-                .mul(other.try_materialized_inner()?)?;
-            return Self::from_inner(spec.result_indices, result);
+            if options.has_conj() {
+                let lhs = if options.lhs_conj {
+                    self.conj()
+                } else {
+                    self.clone()
+                };
+                let rhs = if options.rhs_conj {
+                    other.conj()
+                } else {
+                    other.clone()
+                };
+                return lhs.try_contract_pairwise_default(&rhs);
+            }
+            let result = profile_pairwise_contract_section("scalar_mul", || {
+                Ok::<_, anyhow::Error>(
+                    self.try_materialized_inner()?
+                        .mul(other.try_materialized_inner()?)?,
+                )
+            })?;
+            return profile_pairwise_contract_section("from_inner", || {
+                Self::from_inner(spec.result_indices.into_vec(), result)
+            });
         }
 
-        let self_native = self.as_native()?;
-        let other_native = other.as_native()?;
+        let self_native = profile_pairwise_contract_section("as_native", || self.as_native())?;
+        let other_native = profile_pairwise_contract_section("as_native", || other.as_native())?;
         if self_native.dtype() != other_native.dtype() {
-            let result_native =
-                contract_native_tensor(self_native, &spec.axes_a, other_native, &spec.axes_b)?;
-            return Self::from_native_with_axis_classes(
-                spec.result_indices,
-                result_native,
-                result_axis_classes,
-            );
+            if options.has_conj() {
+                let lhs = if options.lhs_conj {
+                    self.conj()
+                } else {
+                    self.clone()
+                };
+                let rhs = if options.rhs_conj {
+                    other.conj()
+                } else {
+                    other.clone()
+                };
+                return lhs.try_contract_pairwise_default(&rhs);
+            }
+            let result_native = profile_pairwise_contract_section("native_contract", || {
+                contract_native_tensor(self_native, &spec.axes_a, other_native, &spec.axes_b)
+            })?;
+            return profile_pairwise_contract_section("from_native", || {
+                Self::from_native_with_axis_classes(
+                    spec.result_indices.into_vec(),
+                    result_native,
+                    result_axis_classes,
+                )
+            });
         }
 
-        let subscripts = Self::build_binary_einsum_subscripts(
-            self.indices.len(),
-            &spec.axes_a,
-            other.indices.len(),
-            &spec.axes_b,
-        )?;
-        let result = eager_einsum_ad(
-            &[
-                self.try_materialized_inner()?,
-                other.try_materialized_inner()?,
-            ],
-            &subscripts,
-        )?;
-        Self::from_inner_with_axis_classes(spec.result_indices, result, result_axis_classes)
+        let config = profile_pairwise_contract_section("build_dot_general_config", || {
+            Self::binary_dot_general_config(&spec.axes_a, &spec.axes_b)
+        })?;
+        let result = profile_pairwise_contract_section("dot_general_with_conj", || {
+            let lhs = profile_pairwise_contract_section("lhs_try_materialized_inner", || {
+                self.try_materialized_inner()
+            })?;
+            let rhs = profile_pairwise_contract_section("rhs_try_materialized_inner", || {
+                other.try_materialized_inner()
+            })?;
+            profile_pairwise_contract_section("dot_general_execute", || {
+                lhs.dot_general_with_conj(rhs, &config, options.lhs_conj, options.rhs_conj)
+            })
+            .map_err(anyhow::Error::from)
+        })?;
+        record_pairwise_contract_profile_bytes(
+            "dot_general_output",
+            native_tensor_profile_bytes(result.data()),
+        );
+        profile_pairwise_contract_section("from_inner_axis_classes", || {
+            Self::from_inner_with_axis_classes(
+                spec.result_indices.into_vec(),
+                result,
+                result_axis_classes,
+            )
+        })
     }
 
-    /// Contract this tensor with another tensor along explicitly specified index pairs.
-    ///
-    /// Similar to NumPy's `tensordot`, this method contracts only along the explicitly
-    /// specified pairs of indices. Unlike `contract()` which automatically contracts
-    /// all common indices, `tensordot` gives you explicit control over which indices
-    /// to contract.
-    ///
-    /// # Arguments
-    /// * `other` - The tensor to contract with
-    /// * `pairs` - Pairs of indices to contract: `(index_from_self, index_from_other)`
-    ///
-    /// # Returns
-    /// A new tensor resulting from the contraction, or an error if:
-    /// - Any specified index is not found in the respective tensor
-    /// - Dimensions don't match for any pair
-    /// - The same axis is specified multiple times in `self` or `other`
-    /// - There are common indices (same ID) that are not in the contraction pairs
-    ///   (batch contraction is not yet implemented)
-    ///
-    /// # Future: Batch Contraction
-    /// In a future version, common indices not specified in `pairs` will be treated
-    /// as batch dimensions (like batched GEMM). Currently, this case returns an error.
-    ///
-    /// # Example
-    /// ```
-    /// use tensor4all_core::TensorDynLen;
-    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    ///
-    /// // Create two tensors: A[i, j] and B[k, l] where j and k have same dimension but different IDs
-    /// let i = Index::new_dyn(2);
-    /// let j = Index::new_dyn(3);
-    /// let k = Index::new_dyn(3);  // Same dimension as j, but different ID
-    /// let l = Index::new_dyn(4);
-    ///
-    /// let indices_a = vec![i.clone(), j.clone()];
-    /// let tensor_a: TensorDynLen = TensorDynLen::from_dense(indices_a, vec![0.0; 6]).unwrap();
-    ///
-    /// let indices_b = vec![k.clone(), l.clone()];
-    /// let tensor_b: TensorDynLen = TensorDynLen::from_dense(indices_b, vec![0.0; 12]).unwrap();
-    ///
-    /// // Contract j (from A) with k (from B): result is C[i, l]
-    /// let result = tensor_a.tensordot(&tensor_b, &[(j.clone(), k.clone())]).unwrap();
-    /// assert_eq!(result.dims(), vec![2, 4]);
-    /// ```
-    pub fn tensordot(&self, other: &Self, pairs: &[(DynIndex, DynIndex)]) -> Result<Self> {
+    pub(crate) fn try_tensordot_pairwise_explicit(
+        &self,
+        other: &Self,
+        pairs: &[(DynIndex, DynIndex)],
+    ) -> Result<Self> {
         use crate::index_ops::ContractionError;
 
         let self_dims = Self::expected_dims_from_indices(&self.indices);
@@ -2084,7 +2361,7 @@ impl TensorDynLen {
         if self.should_use_structured_payload_contract(other) {
             return self.contract_structured_payloads(
                 other,
-                spec.result_indices,
+                spec.result_indices.into_vec(),
                 &spec.axes_a,
                 &spec.axes_b,
             );
@@ -2095,7 +2372,7 @@ impl TensorDynLen {
                 .try_materialized_inner()?
                 .mul(other.try_materialized_inner()?)
                 .map_err(|e| anyhow::anyhow!("tensordot scalar multiply failed: {e}"))?;
-            return Self::from_inner(spec.result_indices, result);
+            return Self::from_inner(spec.result_indices.into_vec(), result);
         }
 
         let self_native = self.as_native()?;
@@ -2104,7 +2381,7 @@ impl TensorDynLen {
             let result_native =
                 contract_native_tensor(self_native, &spec.axes_a, other_native, &spec.axes_b)?;
             return Self::from_native_with_axis_classes(
-                spec.result_indices,
+                spec.result_indices.into_vec(),
                 result_native,
                 result_axis_classes,
             );
@@ -2124,39 +2401,14 @@ impl TensorDynLen {
             &subscripts,
         )
         .map_err(|e| anyhow::anyhow!("tensordot failed: {e}"))?;
-        Self::from_inner_with_axis_classes(spec.result_indices, result, result_axis_classes)
+        Self::from_inner_with_axis_classes(
+            spec.result_indices.into_vec(),
+            result,
+            result_axis_classes,
+        )
     }
 
-    /// Compute the outer product (tensor product) of two tensors.
-    ///
-    /// Creates a new tensor whose indices are the concatenation of the indices
-    /// from both input tensors. The result has shape `[...self.dims, ...other.dims]`.
-    ///
-    /// This is equivalent to numpy's `np.outer` or `np.tensordot(a, b, axes=0)`,
-    /// or ITensor's `*` operator when there are no common indices.
-    ///
-    /// # Arguments
-    /// * `other` - The other tensor to compute outer product with
-    ///
-    /// # Returns
-    /// A new tensor with indices from both tensors.
-    ///
-    /// # Example
-    /// ```
-    /// use tensor4all_core::TensorDynLen;
-    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    ///
-    /// let i = Index::new_dyn(2);
-    /// let j = Index::new_dyn(3);
-    /// let tensor_a: TensorDynLen = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
-    /// let tensor_b: TensorDynLen =
-    ///     TensorDynLen::from_dense(vec![j.clone()], vec![1.0, 2.0, 3.0]).unwrap();
-    ///
-    /// // Outer product: C[i, j] = A[i] * B[j]
-    /// let result = tensor_a.outer_product(&tensor_b).unwrap();
-    /// assert_eq!(result.dims(), vec![2, 3]);
-    /// ```
-    pub fn outer_product(&self, other: &Self) -> Result<Self> {
+    pub(crate) fn try_outer_product_pairwise(&self, other: &Self) -> Result<Self> {
         use anyhow::Context;
 
         // Check for common indices - outer product should have none
@@ -2406,7 +2658,7 @@ impl TensorDynLen {
 
         let same_compact_layout = self.storage.payload_dims()
             == other_aligned.storage.payload_dims()
-            && self.storage.payload_strides() == other_aligned.storage.payload_strides()
+            && self.storage.payload_strides_vec() == other_aligned.storage.payload_strides_vec()
             && self.storage.axis_classes() == other_aligned.storage.axis_classes();
         if same_compact_layout
             && !self.tracks_grad()
@@ -2414,11 +2666,14 @@ impl TensorDynLen {
             && !a.tracks_grad()
             && !b.tracks_grad()
         {
-            let combined = self
+            let lhs_storage = self.storage.materialize(self.indices.len())?;
+            let rhs_storage = other_aligned
                 .storage
+                .materialize(other_aligned.indices.len())?;
+            let combined = lhs_storage
                 .axpby(
                     &a.to_backend_scalar(),
-                    other_aligned.storage.as_ref(),
+                    rhs_storage.as_ref(),
                     &b.to_backend_scalar(),
                 )
                 .map_err(|e| anyhow::anyhow!("storage axpby failed: {e}"))?;
@@ -2470,6 +2725,11 @@ impl TensorDynLen {
     /// assert_eq!(scaled.to_vec::<f64>().unwrap(), vec![2.0, 4.0, 6.0]);
     /// ```
     pub fn scale(&self, scalar: AnyScalar) -> Result<Self> {
+        if !self.tracks_grad() && !scalar.tracks_grad() {
+            let scaled = self.storage.scale(&scalar.to_backend_scalar())?;
+            return Self::from_storage(self.indices.clone(), Arc::new(scaled));
+        }
+
         let self_native = self.as_native()?;
         let scalar_native = scalar.as_tensor()?.as_native()?;
         if self_native.dtype() != scalar_native.dtype() {
@@ -2526,15 +2786,21 @@ impl TensorDynLen {
             let other_set: HashSet<_> = other.indices.iter().collect();
             if self_set == other_set {
                 let other_aligned = other.permute_indices(&self.indices)?;
-                let result = self.conj().contract(&other_aligned)?;
+                let result = super::contract::contract_pair_with_operand_options(
+                    self,
+                    &other_aligned,
+                    PairwiseContractionOptions::new().with_lhs_conj(true),
+                )?;
                 return result.sum();
             }
         }
 
         // Contract self.conj() with other over all indices
-        let conj_self = self.conj();
-        let result =
-            super::contract::contract_multi(&[&conj_self, other], crate::AllowedPairs::All)?;
+        let result = super::contract::contract_pair_with_operand_options(
+            self,
+            other,
+            PairwiseContractionOptions::new().with_lhs_conj(true),
+        )?;
         // Result should be a scalar (no indices)
         result.sum()
     }
@@ -2602,7 +2868,7 @@ impl TensorDynLen {
 
         Ok(Self {
             indices: new_indices,
-            storage: Arc::clone(&self.storage),
+            storage: self.storage.clone(),
             structured_ad: self.structured_ad.clone(),
             eager_cache: Arc::clone(&self.eager_cache),
         })
@@ -2680,7 +2946,7 @@ impl TensorDynLen {
 
         Ok(Self {
             indices: new_indices_vec,
-            storage: Arc::clone(&self.storage),
+            storage: self.storage.clone(),
             structured_ad: self.structured_ad.clone(),
             eager_cache: Arc::clone(&self.eager_cache),
         })
@@ -2736,7 +3002,9 @@ impl TensorDynLen {
             .unwrap_or_else(Self::empty_eager_cache);
         Self {
             indices: new_indices,
-            storage: Arc::new(self.storage.conj()),
+            storage: self.storage.conj().unwrap_or_else(|_| {
+                TensorDynLenStorage::from_storage(Arc::new(self.storage().conj()))
+            }),
             structured_ad,
             eager_cache,
         }
@@ -2785,7 +3053,7 @@ impl TensorDynLen {
         // Contract tensor with its conjugate over all indices → scalar
         // ||T||² = Σ T_ijk... * conj(T_ijk...) = Σ |T_ijk...|²
         let conj = self.conj();
-        let scalar = self.contract(&conj)?;
+        let scalar = super::contract::contract_pair(self, &conj)?;
         // The mathematical result is nonnegative and real. Clamp tiny negative
         // roundoff so downstream `sqrt` stays well-defined for complex tensors.
         Ok(scalar.sum()?.real().max(0.0))
@@ -2820,9 +3088,80 @@ impl TensorDynLen {
     /// assert!((t.maxabs() - 5.0).abs() < 1e-12);
     /// ```
     pub fn maxabs(&self) -> f64 {
-        self.to_storage()
-            .map(|storage| storage.max_abs())
-            .unwrap_or(0.0)
+        self.storage.max_abs().unwrap_or(0.0)
+    }
+
+    /// Element-wise subtraction with index alignment.
+    ///
+    /// This computes `self - other` using the same vector-space semantics as
+    /// [`TensorVectorSpace`](crate::TensorVectorSpace).
+    ///
+    /// # Errors
+    /// Returns an error if the tensors cannot be aligned or subtracted.
+    pub fn sub(&self, other: &Self) -> Result<Self> {
+        self.axpby(AnyScalar::new_real(1.0), other, AnyScalar::new_real(-1.0))
+    }
+
+    /// Negate all elements.
+    ///
+    /// # Errors
+    /// Returns an error if scalar multiplication fails for the tensor storage.
+    pub fn neg(&self) -> Result<Self> {
+        self.scale(AnyScalar::new_real(-1.0))
+    }
+
+    /// Approximate equality check using Julia `isapprox`-style semantics.
+    ///
+    /// Returns `true` when `||self - other|| <= max(atol, rtol *
+    /// max(||self||, ||other||))`.
+    pub fn isapprox(&self, other: &Self, atol: f64, rtol: f64) -> bool {
+        let diff = match self.sub(other) {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+        let diff_norm = diff.norm();
+        diff_norm <= atol.max(rtol * self.norm().max(other.norm()))
+    }
+
+    /// Create a diagonal Kronecker-delta tensor for one input/output index pair.
+    ///
+    /// # Errors
+    /// Returns an error if the two indices have different dimensions.
+    pub fn diagonal(input_index: &DynIndex, output_index: &DynIndex) -> Result<Self> {
+        <Self as TensorConstructionLike>::diagonal(input_index, output_index)
+    }
+
+    /// Create a product of Kronecker-delta tensors for paired index lists.
+    ///
+    /// # Errors
+    /// Returns an error if the index lists have different lengths or paired
+    /// dimensions do not match.
+    pub fn delta(input_indices: &[DynIndex], output_indices: &[DynIndex]) -> Result<Self> {
+        <Self as TensorConstructionLike>::delta(input_indices, output_indices)
+    }
+
+    /// Create a scalar tensor equal to one.
+    ///
+    /// # Errors
+    /// Returns an error if dense scalar construction fails.
+    pub fn scalar_one() -> Result<Self> {
+        <Self as TensorConstructionLike>::scalar_one()
+    }
+
+    /// Create a tensor filled with ones over the given indices.
+    ///
+    /// # Errors
+    /// Returns an error if the tensor size overflows or dense construction fails.
+    pub fn ones(indices: &[DynIndex]) -> Result<Self> {
+        <Self as TensorConstructionLike>::ones(indices)
+    }
+
+    /// Create a one-hot tensor with value one at the specified index positions.
+    ///
+    /// # Errors
+    /// Returns an error if any coordinate is outside its index dimension.
+    pub fn onehot(index_vals: &[(DynIndex, usize)]) -> Result<Self> {
+        <Self as TensorConstructionLike>::onehot(index_vals)
     }
 
     /// Compute the relative distance between two tensors.
@@ -3087,9 +3426,34 @@ impl TensorIndex for TensorDynLen {
 // TensorLike implementation for TensorDynLen
 // ============================================================================
 
-use crate::tensor_like::{FactorizeError, FactorizeOptions, FactorizeResult, TensorLike};
+use crate::tensor_like::{
+    FactorizeError, FactorizeOptions, FactorizeResult, TensorConstructionLike,
+    TensorContractionLike, TensorFactorizationLike, TensorVectorSpace,
+};
 
-impl TensorLike for TensorDynLen {
+impl TensorVectorSpace for TensorDynLen {
+    fn norm_squared(&self) -> f64 {
+        TensorDynLen::norm_squared(self)
+    }
+
+    fn maxabs(&self) -> f64 {
+        TensorDynLen::maxabs(self)
+    }
+
+    fn axpby(&self, a: crate::AnyScalar, other: &Self, b: crate::AnyScalar) -> Result<Self> {
+        TensorDynLen::axpby(self, a, other, b)
+    }
+
+    fn scale(&self, scalar: crate::AnyScalar) -> Result<Self> {
+        TensorDynLen::scale(self, scalar)
+    }
+
+    fn inner_product(&self, other: &Self) -> Result<crate::AnyScalar> {
+        TensorDynLen::inner_product(self, other)
+    }
+}
+
+impl TensorFactorizationLike for TensorDynLen {
     fn factorize(
         &self,
         left_inds: &[DynIndex],
@@ -3106,7 +3470,9 @@ impl TensorLike for TensorDynLen {
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
         crate::factorize::factorize_full_rank(self, left_inds, alg, canonical)
     }
+}
 
+impl TensorContractionLike for TensorDynLen {
     fn conj(&self) -> Self {
         // Delegate to the inherent method (complex conjugate for dense tensors)
         TensorDynLen::conj(self)
@@ -3125,17 +3491,7 @@ impl TensorLike for TensorDynLen {
     }
 
     fn outer_product(&self, other: &Self) -> Result<Self> {
-        // Delegate to the inherent method
-        TensorDynLen::outer_product(self, other)
-    }
-
-    fn norm_squared(&self) -> f64 {
-        // Delegate to the inherent method
-        TensorDynLen::norm_squared(self)
-    }
-
-    fn maxabs(&self) -> f64 {
-        TensorDynLen::maxabs(self)
+        super::contract::outer_product(self, other)
     }
 
     fn permuteinds(&self, new_order: &[DynIndex]) -> Result<Self> {
@@ -3152,37 +3508,18 @@ impl TensorLike for TensorDynLen {
         TensorDynLen::fuse_indices(self, old_indices, new_index, order)
     }
 
-    fn contract(tensors: &[&Self], allowed: crate::AllowedPairs<'_>) -> Result<Self> {
-        // Delegate to contract_multi which handles disconnected components
-        super::contract::contract_multi(tensors, allowed)
+    fn contract(tensors: &[&Self]) -> Result<Self> {
+        super::contract::contract(tensors)
     }
 
     fn contract_pair(&self, other: &Self) -> Result<Self> {
-        self.try_contract_pairwise_default(other)
+        super::contract::contract_pair(self, other)
     }
+}
 
-    fn contract_connected(tensors: &[&Self], allowed: crate::AllowedPairs<'_>) -> Result<Self> {
-        // Delegate to contract_connected which requires connected graph
-        super::contract::contract_connected(tensors, allowed)
-    }
-
+impl TensorConstructionLike for TensorDynLen {
     fn select_indices(&self, selected_indices: &[DynIndex], positions: &[usize]) -> Result<Self> {
         TensorDynLen::select_indices(self, selected_indices, positions)
-    }
-
-    fn axpby(&self, a: crate::AnyScalar, other: &Self, b: crate::AnyScalar) -> Result<Self> {
-        // Delegate to the inherent method
-        TensorDynLen::axpby(self, a, other, b)
-    }
-
-    fn scale(&self, scalar: crate::AnyScalar) -> Result<Self> {
-        // Delegate to the inherent method
-        TensorDynLen::scale(self, scalar)
-    }
-
-    fn inner_product(&self, other: &Self) -> Result<crate::AnyScalar> {
-        // Delegate to the inherent method
-        TensorDynLen::inner_product(self, other)
     }
 
     fn diagonal(input_index: &DynIndex, output_index: &DynIndex) -> Result<Self> {
@@ -3529,7 +3866,7 @@ impl TensorDynLen {
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen, TensorLike};
+    /// use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen};
     ///
     /// let i = DynIndex::new_dyn(2);
     /// let j = DynIndex::new_dyn(2);
@@ -3652,7 +3989,7 @@ impl TensorDynLen {
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen, TensorLike};
+    /// use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen};
     ///
     /// let fused = DynIndex::new_dyn(4);
     /// let i = DynIndex::new_dyn(2);

@@ -1,5 +1,12 @@
 [deps]
 FastMPOContractions = "f6e391d2-8ffa-4d7a-98cd-7e70024481ca"
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
 ITensorMPS = "0d1a4710-d33b-49a5-8f18-73bdf49b47e2"
+ITensorTDVP = "25707e16-a4db-4a07-99d9-4d67b7af0342"
+ITensors = "9136182c-28ba-11e9-034c-db9fb085ebd5"
 KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
 VectorInterface = "409d34a3-91d5-4945-b6ec-7529ddf182d8"
+
+[compat]
+ITensorTDVP = "^0.4"
+ITensors = "^0.6"

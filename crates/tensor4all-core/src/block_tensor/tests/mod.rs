@@ -3,6 +3,7 @@ use crate::defaults::tensordynlen::TensorDynLen;
 use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
 use crate::krylov::{gmres, GmresOptions};
+use crate::tensor_like::TensorContractionLike;
 
 /// Helper to create a 1D tensor (vector) with given data and shared index.
 fn make_vector_with_index(data: Vec<f64>, idx: &DynIndex) -> TensorDynLen {
@@ -80,13 +81,14 @@ fn test_fuse_indices_delegates_to_blocks_and_preserves_shape() {
         TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![5.0, 6.0, 7.0, 8.0]).unwrap();
     let block = BlockTensor::new(vec![block_a, block_b], (1, 2)).unwrap();
 
-    let fused_block = <BlockTensor<TensorDynLen> as crate::tensor_like::TensorLike>::fuse_indices(
-        &block,
-        &[i, j],
-        fused,
-        crate::tensor_like::LinearizationOrder::ColumnMajor,
-    )
-    .unwrap();
+    let fused_block =
+        <BlockTensor<TensorDynLen> as crate::tensor_like::TensorContractionLike>::fuse_indices(
+            &block,
+            &[i, j],
+            fused,
+            crate::tensor_like::LinearizationOrder::ColumnMajor,
+        )
+        .unwrap();
 
     assert_eq!(fused_block.shape(), (1, 2));
     assert_eq!(fused_block.num_blocks(), 2);
@@ -647,17 +649,7 @@ fn test_contract_unsupported() {
     let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
     let block = BlockTensor::new(vec![b1], (1, 1)).unwrap();
 
-    let result = BlockTensor::<TensorDynLen>::contract(&[&block], AllowedPairs::All);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_contract_connected_unsupported() {
-    let idx = DynIndex::new_dyn(2);
-    let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
-    let block = BlockTensor::new(vec![b1], (1, 1)).unwrap();
-
-    let result = BlockTensor::<TensorDynLen>::contract_connected(&[&block], AllowedPairs::All);
+    let result = BlockTensor::<TensorDynLen>::contract(&[&block]);
     assert!(result.is_err());
 }
 

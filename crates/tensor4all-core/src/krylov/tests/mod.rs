@@ -1,6 +1,549 @@
 use super::*;
 use crate::defaults::tensordynlen::TensorDynLen;
 use crate::defaults::DynIndex;
+use crate::tensor_index::TensorIndex;
+use crate::TensorVectorSpace;
+use num_complex::Complex64;
+use std::sync::Mutex;
+
+static GMRES_PROFILE_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct GmresProfileEnvGuard;
+
+impl GmresProfileEnvGuard {
+    fn set() -> Self {
+        unsafe {
+            std::env::set_var("T4A_GMRES_OP_PROFILE", "1");
+        }
+        Self
+    }
+}
+
+impl Drop for GmresProfileEnvGuard {
+    fn drop(&mut self) {
+        unsafe {
+            std::env::remove_var("T4A_GMRES_OP_PROFILE");
+        }
+    }
+}
+
+fn with_gmres_profile_env<R>(f: impl FnOnce() -> R) -> R {
+    let _lock = GMRES_PROFILE_ENV_LOCK.lock().unwrap();
+    let _guard = GmresProfileEnvGuard::set();
+    f()
+}
+
+#[derive(Debug, Clone)]
+struct PlainVector {
+    data: Vec<f64>,
+}
+
+impl TensorIndex for PlainVector {
+    type Index = DynIndex;
+
+    fn external_indices(&self) -> Vec<Self::Index> {
+        Vec::new()
+    }
+
+    fn replaceind(&self, _old_index: &Self::Index, _new_index: &Self::Index) -> Result<Self> {
+        Ok(self.clone())
+    }
+
+    fn replaceinds(
+        &self,
+        _old_indices: &[Self::Index],
+        _new_indices: &[Self::Index],
+    ) -> Result<Self> {
+        Ok(self.clone())
+    }
+}
+
+impl TensorVectorSpace for PlainVector {
+    fn norm_squared(&self) -> f64 {
+        self.data.iter().map(|x| x * x).sum()
+    }
+
+    fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
+        anyhow::ensure!(
+            self.data.len() == other.data.len(),
+            "vector lengths must match"
+        );
+        anyhow::ensure!(
+            a.is_real() && b.is_real(),
+            "PlainVector test helper only supports real coefficients"
+        );
+        let data = self
+            .data
+            .iter()
+            .zip(other.data.iter())
+            .map(|(&x, &y)| a.real() * x + b.real() * y)
+            .collect();
+        Ok(Self { data })
+    }
+
+    fn scale(&self, scalar: AnyScalar) -> Result<Self> {
+        anyhow::ensure!(
+            scalar.is_real(),
+            "PlainVector test helper only supports real coefficients"
+        );
+        Ok(Self {
+            data: self.data.iter().map(|&x| scalar.real() * x).collect(),
+        })
+    }
+
+    fn inner_product(&self, other: &Self) -> Result<AnyScalar> {
+        anyhow::ensure!(
+            self.data.len() == other.data.len(),
+            "vector lengths must match"
+        );
+        Ok(AnyScalar::new_real(
+            self.data
+                .iter()
+                .zip(other.data.iter())
+                .map(|(&x, &y)| x * y)
+                .sum(),
+        ))
+    }
+
+    fn maxabs(&self) -> f64 {
+        self.data.iter().map(|x| x.abs()).fold(0.0, f64::max)
+    }
+}
+
+#[test]
+fn gmres_accepts_vector_space_without_tensorlike() {
+    let b = PlainVector {
+        data: vec![1.0, -2.0],
+    };
+    let x0 = PlainVector {
+        data: vec![0.0, 0.0],
+    };
+    let result = gmres(
+        |x: &PlainVector| Ok(x.clone()),
+        &b,
+        &x0,
+        &GmresOptions::default(),
+    )
+    .expect("GMRES should accept TensorVectorSpace-only values");
+
+    assert!(result.converged);
+    assert!(result.solution.sub(&b).unwrap().maxabs() < 1e-12);
+}
+
+#[test]
+fn gmres_absolute_tolerance_and_total_iteration_limit_paths() {
+    let idx = DynIndex::new_dyn(2);
+    let b = make_vector_with_index(vec![4.0, 9.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
+    let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { scale_vector_f64(x, &[2.0, 3.0]) };
+    let options = GmresOptions {
+        max_iter: 4,
+        rtol: 1e-12,
+        max_restarts: 2,
+        verbose: false,
+        check_true_residual: true,
+    };
+
+    let result = gmres_with_absolute_tolerance(apply_a, &b, &x0, &options, 1e-10).unwrap();
+    assert!(result.converged);
+    let expected = make_vector_with_index(vec![2.0, 3.0], &idx);
+    assert!(result.solution.sub(&expected).unwrap().maxabs() < 1e-10);
+
+    let limited = gmres_with_total_iteration_limit(
+        |x: &TensorDynLen| scale_vector_f64(x, &[2.0, 3.0]),
+        &b,
+        &x0,
+        &options,
+        0,
+    )
+    .unwrap();
+    assert!(!limited.converged);
+    assert_eq!(limited.iterations, 0);
+}
+
+#[test]
+fn gmres_affine_matches_shifted_system_and_scalar_shortcuts() {
+    let idx = DynIndex::new_dyn(2);
+    let b = make_vector_with_index(vec![10.0, 28.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
+    let options = GmresOptions {
+        max_iter: 4,
+        rtol: 1e-12,
+        max_restarts: 2,
+        verbose: true,
+        check_true_residual: true,
+    };
+
+    let result = gmres_affine_with_absolute_tolerance(
+        |x: &TensorDynLen| scale_vector_f64(x, &[2.0, 5.0]),
+        &b,
+        &x0,
+        AnyScalar::new_real(1.0),
+        AnyScalar::new_real(2.0),
+        &options,
+        1e-10,
+    )
+    .unwrap();
+    assert!(result.converged);
+    let expected = make_vector_with_index(vec![2.0, 28.0 / 11.0], &idx);
+    assert!(result.solution.sub(&expected).unwrap().maxabs() < 1e-10);
+
+    let scaled = gmres_affine(
+        |x: &TensorDynLen| scale_vector_f64(x, &[100.0, 100.0]),
+        &b,
+        &x0,
+        AnyScalar::new_real(2.0),
+        AnyScalar::new_real(0.0),
+        &options,
+    )
+    .unwrap();
+    assert!(scaled.converged);
+    assert_eq!(scaled.iterations, 0);
+    assert!(
+        scaled
+            .solution
+            .sub(&make_vector_with_index(vec![5.0, 14.0], &idx))
+            .unwrap()
+            .maxabs()
+            < 1e-12
+    );
+
+    let err = gmres_affine(
+        |x: &TensorDynLen| Ok(x.clone()),
+        &b,
+        &x0,
+        AnyScalar::new_real(0.0),
+        AnyScalar::new_real(0.0),
+        &options,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("at least one affine coefficient"));
+}
+
+#[test]
+fn gmres_affine_profile_and_zero_rhs_paths() {
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![0.0], &idx);
+    let x0 = make_vector_with_index(vec![7.0], &idx);
+    let options = GmresOptions {
+        max_iter: 1,
+        rtol: 1e-12,
+        max_restarts: 1,
+        verbose: false,
+        check_true_residual: false,
+    };
+
+    let result = with_gmres_profile_env(|| {
+        gmres_affine(
+            |x: &TensorDynLen| Ok(x.clone()),
+            &b,
+            &x0,
+            AnyScalar::new_real(1.0),
+            AnyScalar::new_real(1.0),
+            &options,
+        )
+        .unwrap()
+    });
+
+    assert!(result.converged);
+    assert_eq!(result.iterations, 0);
+    assert!(result.solution.sub(&x0).unwrap().maxabs() < 1e-12);
+}
+
+#[test]
+fn restart_gmres_options_builder_sets_all_fields() {
+    let options = RestartGmresOptions::new()
+        .with_max_outer_iters(3)
+        .with_rtol(1e-7)
+        .with_inner_max_iter(5)
+        .with_inner_max_restarts(2)
+        .with_min_reduction(0.8)
+        .with_inner_rtol(0.25)
+        .with_verbose(true);
+
+    assert_eq!(options.max_outer_iters, 3);
+    assert_eq!(options.rtol, 1e-7);
+    assert_eq!(options.inner_max_iter, 5);
+    assert_eq!(options.inner_max_restarts, 2);
+    assert_eq!(options.min_reduction, Some(0.8));
+    assert_eq!(options.inner_rtol, Some(0.25));
+    assert!(options.verbose);
+}
+
+#[test]
+fn gmres_affine_profile_covers_nonconverged_restart_and_final_paths() {
+    let idx = DynIndex::new_dyn(2);
+    let b = make_vector_with_index(vec![1.0, 1.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
+    let options = GmresOptions {
+        max_iter: 1,
+        rtol: 1e-30,
+        max_restarts: 1,
+        verbose: true,
+        check_true_residual: false,
+    };
+
+    let result = with_gmres_profile_env(|| {
+        gmres_affine(
+            |x: &TensorDynLen| scale_vector_f64(x, &[2.0, 5.0]),
+            &b,
+            &x0,
+            AnyScalar::new_real(0.5),
+            AnyScalar::new_real(1.25),
+            &options,
+        )
+        .unwrap()
+    });
+
+    assert!(!result.converged);
+    assert_eq!(result.iterations, 1);
+    assert!(result.residual_norm.is_finite());
+}
+
+#[test]
+fn gmres_affine_profile_covers_scalar_shortcut() {
+    let idx = DynIndex::new_dyn(2);
+    let b = make_vector_with_index(vec![2.0, 4.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
+    let options = GmresOptions::default();
+
+    let result = with_gmres_profile_env(|| {
+        gmres_affine(
+            |x: &TensorDynLen| Ok(x.clone()),
+            &b,
+            &x0,
+            AnyScalar::new_real(2.0),
+            AnyScalar::new_real(0.0),
+            &options,
+        )
+        .unwrap()
+    });
+
+    assert!(result.converged);
+    assert_eq!(result.iterations, 0);
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![1.0, 2.0]);
+}
+
+#[test]
+fn gmres_lucky_breakdown_paths_are_reachable_with_zero_tolerance() {
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![3.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let options = GmresOptions {
+        max_iter: 1,
+        rtol: 0.0,
+        max_restarts: 1,
+        verbose: false,
+        check_true_residual: false,
+    };
+
+    let result = gmres(|x: &TensorDynLen| Ok(x.clone()), &b, &x0, &options).unwrap();
+    assert!(!result.converged);
+    assert_eq!(result.iterations, 1);
+    assert!(result.solution.sub(&b).unwrap().maxabs() < 1e-12);
+
+    let affine = gmres_affine(
+        |x: &TensorDynLen| Ok(x.clone()),
+        &b,
+        &x0,
+        AnyScalar::new_real(0.0),
+        AnyScalar::new_real(1.0),
+        &options,
+    )
+    .unwrap();
+    assert!(!affine.converged);
+    assert_eq!(affine.iterations, 1);
+    assert!(affine.solution.sub(&b).unwrap().maxabs() < 1e-12);
+
+    let truncated = gmres_with_truncation(
+        |x: &TensorDynLen| Ok(x.clone()),
+        &b,
+        &x0,
+        &options,
+        |_: &mut TensorDynLen| Ok(()),
+    )
+    .unwrap();
+    assert!(!truncated.converged);
+    assert_eq!(truncated.iterations, 1);
+    assert!(truncated.solution.sub(&b).unwrap().maxabs() < 1e-12);
+}
+
+#[test]
+fn gmres_convergence_branches_cover_true_residual_and_affine_fast_finish() {
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![3.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let options = GmresOptions {
+        max_iter: 1,
+        rtol: 1e-12,
+        max_restarts: 1,
+        verbose: true,
+        check_true_residual: true,
+    };
+
+    let checked = gmres(|x: &TensorDynLen| Ok(x.clone()), &b, &x0, &options).unwrap();
+    assert!(checked.converged);
+    assert!(checked.solution.sub(&b).unwrap().maxabs() < 1e-12);
+
+    let truncated = gmres_with_truncation(
+        |x: &TensorDynLen| Ok(x.clone()),
+        &b,
+        &x0,
+        &options,
+        |_: &mut TensorDynLen| Ok(()),
+    )
+    .unwrap();
+    assert!(truncated.converged);
+    assert!(truncated.solution.sub(&b).unwrap().maxabs() < 1e-12);
+
+    let no_true_check = GmresOptions {
+        check_true_residual: false,
+        ..options
+    };
+    let affine = gmres_affine(
+        |x: &TensorDynLen| Ok(x.clone()),
+        &b,
+        &x0,
+        AnyScalar::new_real(0.0),
+        AnyScalar::new_real(1.0),
+        &no_true_check,
+    )
+    .unwrap();
+    assert!(affine.converged);
+    assert!(affine.solution.sub(&b).unwrap().maxabs() < 1e-12);
+}
+
+#[test]
+fn gmres_affine_profile_covers_true_residual_rejection_and_lucky_breakdown() {
+    use std::cell::Cell;
+
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![1.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let checked_options = GmresOptions {
+        max_iter: 1,
+        rtol: 1e-12,
+        max_restarts: 1,
+        verbose: true,
+        check_true_residual: true,
+    };
+
+    let calls = Cell::new(0usize);
+    let checked = with_gmres_profile_env(|| {
+        gmres_affine(
+            |x: &TensorDynLen| {
+                let call = calls.get();
+                calls.set(call + 1);
+                if call == 2 {
+                    x.scale(AnyScalar::new_real(2.0))
+                } else {
+                    Ok(x.clone())
+                }
+            },
+            &b,
+            &x0,
+            AnyScalar::new_real(0.0),
+            AnyScalar::new_real(1.0),
+            &checked_options,
+        )
+        .unwrap()
+    });
+    assert!(checked.converged);
+    assert!(checked.solution.sub(&b).unwrap().maxabs() < 1e-12);
+
+    let lucky_options = GmresOptions {
+        check_true_residual: false,
+        rtol: 0.0,
+        ..checked_options
+    };
+    let lucky = with_gmres_profile_env(|| {
+        gmres_affine(
+            |x: &TensorDynLen| Ok(x.clone()),
+            &b,
+            &x0,
+            AnyScalar::new_real(0.0),
+            AnyScalar::new_real(1.0),
+            &lucky_options,
+        )
+        .unwrap()
+    });
+    assert!(!lucky.converged);
+    assert_eq!(lucky.iterations, 1);
+    assert!(lucky.solution.sub(&b).unwrap().maxabs() < 1e-12);
+}
+
+#[test]
+fn gmres_zero_cycle_and_restart_nonzero_update_paths() {
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![2.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let zero_cycle_options = GmresOptions {
+        max_iter: 0,
+        rtol: 1e-12,
+        max_restarts: 1,
+        verbose: false,
+        check_true_residual: false,
+    };
+
+    let zero_cycle = gmres_with_total_iteration_limit(
+        |x: &TensorDynLen| Ok(x.clone()),
+        &b,
+        &x0,
+        &zero_cycle_options,
+        1,
+    )
+    .unwrap();
+    assert!(!zero_cycle.converged);
+    assert_eq!(zero_cycle.iterations, 0);
+
+    let restart_options = RestartGmresOptions {
+        max_outer_iters: 2,
+        rtol: 0.0,
+        inner_max_iter: 1,
+        inner_max_restarts: 0,
+        min_reduction: None,
+        inner_rtol: Some(0.0),
+        verbose: true,
+    };
+    let restarted = restart_gmres_with_truncation(
+        |x: &TensorDynLen| Ok(x.clone()),
+        &b,
+        None,
+        &restart_options,
+        |_: &mut TensorDynLen| Ok(()),
+    )
+    .unwrap();
+    assert!(!restarted.converged);
+    assert_eq!(restarted.outer_iterations, 2);
+    assert!(restarted.solution.sub(&b).unwrap().maxabs() < 1e-12);
+}
+
+#[test]
+fn gmres_private_helpers_cover_edge_paths() {
+    let zero = AnyScalar::new_real(0.0);
+    let (c, s) = compute_givens_rotation(&zero, &zero);
+    assert!(c.is_real());
+    assert!(s.is_real());
+    assert_eq!(c.real(), 1.0);
+    assert_eq!(s.real(), 0.0);
+
+    let empty = solve_upper_triangular(&[], &[]).unwrap();
+    assert!(empty.is_empty());
+
+    let singular = solve_upper_triangular(
+        &[vec![AnyScalar::new_real(0.0)]],
+        &[AnyScalar::new_real(1.0)],
+    )
+    .unwrap_err();
+    assert!(singular.to_string().contains("Near-singular"));
+
+    let idx = DynIndex::new_dyn(2);
+    let x = make_vector_with_index(vec![1.0, 1.0], &idx);
+    let v = make_vector_with_index(vec![2.0, -1.0], &idx);
+    let updated = update_solution(&x, &[v], &[AnyScalar::new_real(3.0)]).unwrap();
+    assert_eq!(updated.to_vec::<f64>().unwrap(), vec![7.0, -2.0]);
+}
+
 /// Helper to create a 1D tensor (vector) with given data and shared index.
 fn make_vector_with_index(data: Vec<f64>, idx: &DynIndex) -> TensorDynLen {
     TensorDynLen::from_dense(vec![idx.clone()], data).unwrap()
@@ -18,6 +561,19 @@ fn scale_vector_f64(x: &TensorDynLen, diag: &[f64]) -> Result<TensorDynLen> {
 
 fn apply_matrix2_f64(x: &TensorDynLen, a_data: &[f64; 4]) -> Result<TensorDynLen> {
     let x_data = x.to_vec::<f64>()?;
+    let result_data = vec![
+        a_data[0] * x_data[0] + a_data[1] * x_data[1],
+        a_data[2] * x_data[0] + a_data[3] * x_data[1],
+    ];
+    Ok(TensorDynLen::from_dense(x.indices.clone(), result_data).unwrap())
+}
+
+fn make_vector_c64(data: Vec<Complex64>, idx: &DynIndex) -> TensorDynLen {
+    TensorDynLen::from_dense(vec![idx.clone()], data).unwrap()
+}
+
+fn apply_matrix2_c64(x: &TensorDynLen, a_data: &[Complex64; 4]) -> Result<TensorDynLen> {
+    let x_data = x.to_vec::<Complex64>()?;
     let result_data = vec![
         a_data[0] * x_data[0] + a_data[1] * x_data[1],
         a_data[2] * x_data[0] + a_data[3] * x_data[1],
@@ -61,20 +617,19 @@ fn test_givens_rotation_complex() {
     let b = AnyScalar::new_complex(1.0, -2.0);
     let (c, s) = compute_givens_rotation(&a, &b);
 
-    assert!(c.is_complex());
+    assert!(c.is_real());
     assert!(s.is_complex());
-    assert_eq!(c.is_real(), s.is_real());
 
-    // c*a + s*b should recover sqrt(|a|^2 + |b|^2) on the real axis.
-    let rotated = c.clone() * a + s.clone() * b;
-    assert!(rotated.is_complex());
-    assert!(rotated.real().is_finite());
-    assert!(rotated.imag().is_finite());
+    let (first, second) = apply_givens_rotation(&c, &s, &a, &b);
+    let expected_norm = (3.0_f64 * 3.0 + 4.0 * 4.0 + 1.0 * 1.0 + 2.0 * 2.0).sqrt();
+    assert!((first.abs() - expected_norm).abs() < 1e-12);
+    assert!(second.abs() < 1e-12, "{second:?}");
+    assert!(((c.abs() * c.abs() + s.abs() * s.abs()) - 1.0).abs() < 1e-12);
 }
 
 #[test]
 fn test_apply_givens_rotation_complex() {
-    let c = AnyScalar::new_complex(0.6, 0.1);
+    let c = AnyScalar::new_real(0.6);
     let s = AnyScalar::new_complex(0.8, -0.2);
     let x = AnyScalar::new_complex(3.0, 1.0);
     let y = AnyScalar::new_complex(4.0, -2.0);
@@ -85,6 +640,30 @@ fn test_apply_givens_rotation_complex() {
     assert!(new_y.is_complex());
     assert!(new_x.real().is_finite() && new_x.imag().is_finite());
     assert!(new_y.real().is_finite() && new_y.imag().is_finite());
+}
+
+#[test]
+fn test_complex_givens_rotation_eliminates_second_component() {
+    let cases = [
+        (
+            AnyScalar::new_complex(2.0, -3.0),
+            AnyScalar::new_complex(-1.5, 0.75),
+        ),
+        (
+            AnyScalar::new_complex(0.0, 0.0),
+            AnyScalar::new_complex(1.0, -2.0),
+        ),
+        (
+            AnyScalar::new_complex(-0.25, 0.5),
+            AnyScalar::new_complex(3.0, 4.0),
+        ),
+    ];
+
+    for (a, b) in cases {
+        let (c, s) = compute_givens_rotation(&a, &b);
+        let (_first, second) = apply_givens_rotation(&c, &s, &a, &b);
+        assert!(second.abs() < 1e-12, "a={a:?}, b={b:?}, second={second:?}");
+    }
 }
 
 #[test]
@@ -167,6 +746,87 @@ fn test_gmres_diagonal_matrix() {
         "Solution error too large: {}",
         diff.norm()
     );
+}
+
+#[test]
+fn test_gmres_complex_nonsymmetric_matrix() {
+    let idx = DynIndex::new_dyn(2);
+    let expected_x = make_vector_c64(
+        vec![Complex64::new(1.0, -0.5), Complex64::new(-2.0, 0.75)],
+        &idx,
+    );
+    let x0 = make_vector_c64(vec![Complex64::new(0.0, 0.0); 2], &idx);
+    let a_data = [
+        Complex64::new(2.0, 0.5),
+        Complex64::new(-1.0, 0.25),
+        Complex64::new(0.75, -0.5),
+        Complex64::new(1.5, 1.0),
+    ];
+    let b = apply_matrix2_c64(&expected_x, &a_data).unwrap();
+    let apply_a = move |x: &TensorDynLen| apply_matrix2_c64(x, &a_data);
+    let options = GmresOptions {
+        max_iter: 2,
+        rtol: 1e-12,
+        max_restarts: 1,
+        verbose: false,
+        check_true_residual: true,
+    };
+
+    let result = gmres(apply_a, &b, &x0, &options).unwrap();
+    assert!(result.converged, "residual={}", result.residual_norm);
+    let diff = result
+        .solution
+        .axpby(
+            AnyScalar::new_real(1.0),
+            &expected_x,
+            AnyScalar::new_real(-1.0),
+        )
+        .unwrap();
+    assert!(diff.norm() < 1e-10, "solution error={}", diff.norm());
+}
+
+#[test]
+fn test_gmres_with_total_iteration_limit_shortens_final_restart() {
+    let idx = DynIndex::new_dyn(6);
+    let b = make_vector_with_index(vec![1.0; 6], &idx);
+    let x0 = make_vector_with_index(vec![0.0; 6], &idx);
+
+    let diag = [1.0, 1.7, 2.3, 3.1, 4.2, 5.6];
+    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let options = GmresOptions {
+        max_iter: 3,
+        rtol: 0.0,
+        max_restarts: 3,
+        verbose: false,
+        check_true_residual: false,
+    };
+
+    let result = gmres_with_total_iteration_limit(apply_a, &b, &x0, &options, 4).unwrap();
+
+    assert_eq!(result.iterations, 4);
+    assert!(!result.converged);
+}
+
+#[test]
+fn test_gmres_with_total_iteration_limit_allows_zero_iterations() {
+    let idx = DynIndex::new_dyn(3);
+    let b = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
+
+    let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { Ok(x.clone()) };
+    let options = GmresOptions {
+        max_iter: 3,
+        rtol: 1e-10,
+        max_restarts: 2,
+        verbose: false,
+        check_true_residual: false,
+    };
+
+    let result = gmres_with_total_iteration_limit(apply_a, &b, &x0, &options, 0).unwrap();
+
+    assert_eq!(result.iterations, 0);
+    assert!(!result.converged);
+    assert!(result.solution.sub(&x0).unwrap().norm() < 1.0e-12);
 }
 
 #[test]

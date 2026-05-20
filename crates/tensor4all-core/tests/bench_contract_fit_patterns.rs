@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use tensor4all_core::{AllowedPairs, DynIndex, TensorDynLen, TensorLike};
+use tensor4all_core::{DynIndex, TensorContractionLike, TensorDynLen};
 use tensor4all_tensorbackend::{dense_native_tensor_from_col_major, einsum_native_tensors};
 
 fn make_data(dims: &[usize], offset: usize) -> Vec<f64> {
@@ -217,8 +217,7 @@ fn bench_contract_fit_patterns_vs_native() {
 
     eprintln!("\n=== TensorDynLen contract vs native einsum ===");
     let env3_contract = time_best_of("env3 TensorDynLen::contract", 2_000, || {
-        <TensorDynLen as TensorLike>::contract(&[&env3_a, &env3_b, &env3_c], AllowedPairs::All)
-            .unwrap()
+        <TensorDynLen as TensorContractionLike>::contract(&[&env3_a, &env3_b, &env3_c]).unwrap()
     });
     let env3_native = time_best_of("env3 native einsum", 2_000, || {
         einsum_native_tensors(
@@ -233,11 +232,8 @@ fn bench_contract_fit_patterns_vs_native() {
     });
 
     let env4_contract = time_best_of("env4 TensorDynLen::contract", 600, || {
-        <TensorDynLen as TensorLike>::contract(
-            &[&env4_a, &env4_b, &env4_c, &env4_d],
-            AllowedPairs::All,
-        )
-        .unwrap()
+        <TensorDynLen as TensorContractionLike>::contract(&[&env4_a, &env4_b, &env4_c, &env4_d])
+            .unwrap()
     });
     let env4_native = time_best_of("env4 native einsum", 600, || {
         einsum_native_tensors(
@@ -252,10 +248,9 @@ fn bench_contract_fit_patterns_vs_native() {
         .unwrap()
     });
     let env6_contract = time_best_of("env6 TensorDynLen::contract", 400, || {
-        <TensorDynLen as TensorLike>::contract(
-            &[&env6_a, &env6_b, &env6_c, &env6_d, &env6_e, &env6_f],
-            AllowedPairs::All,
-        )
+        <TensorDynLen as TensorContractionLike>::contract(&[
+            &env6_a, &env6_b, &env6_c, &env6_d, &env6_e, &env6_f,
+        ])
         .unwrap()
     });
     let env6_native = time_best_of("env6 native einsum", 400, || {

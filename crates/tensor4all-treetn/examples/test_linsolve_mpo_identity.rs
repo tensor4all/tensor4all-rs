@@ -16,7 +16,7 @@ use num_complex::Complex64;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{
-    index::DynId, AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike,
+    index::DynId, AnyScalar, DynIndex, IndexLike, TensorContractionLike, TensorDynLen, TensorIndex,
 };
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
@@ -381,7 +381,7 @@ fn compute_residual(
         let mut b2 = 0.0_f64;
         for ((ax_i, x_i), b_i) in ax_vec.iter().zip(x_vec.iter()).zip(b_vec.iter()) {
             let opx_i = x_i * a0 + ax_i * a1;
-            let ri = opx_i - b_i;
+            let ri: Complex64 = opx_i - *b_i;
             r2 += ri.norm_sqr();
             b2 += b_i.norm_sqr();
         }
@@ -431,9 +431,9 @@ fn main() -> anyhow::Result<()> {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(5)
         .with_max_rank(4)
-        .with_krylov_tol(1e-8)
-        .with_krylov_maxiter(20)
-        .with_krylov_dim(30)
+        .with_gmres_tol(1e-8)
+        .with_gmres_max_restarts(20)
+        .with_gmres_restart_dim(30)
         .with_coefficients(1.0, 0.0); // a0=1, a1=0 => I * x = b
 
     let (operator_a, a_input_mapping, a_output_mapping) =
@@ -560,9 +560,9 @@ fn main() -> anyhow::Result<()> {
     let options_case3 = LinsolveOptions::default()
         .with_nfullsweeps(5)
         .with_max_rank(4)
-        .with_krylov_tol(1e-8)
-        .with_krylov_maxiter(20)
-        .with_krylov_dim(30)
+        .with_gmres_tol(1e-8)
+        .with_gmres_max_restarts(20)
+        .with_gmres_restart_dim(30)
         .with_coefficients(0.0, 1.0); // a0=0, a1=1 => (i*I)*x = b
 
     for init_mode in ["rhs", "random"] {

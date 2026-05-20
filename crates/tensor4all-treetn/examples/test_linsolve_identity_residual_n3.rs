@@ -289,7 +289,7 @@ fn run_test_case(init_mode: &str, bond_dim: usize) -> anyhow::Result<()> {
     // Setup linsolve options and updater
     let options = LinsolveOptions::default()
         .with_nfullsweeps(20)
-        .with_krylov_tol(1e-10)
+        .with_gmres_tol(1e-10)
         .with_max_rank(4)
         .with_coefficients(a0, a1);
 

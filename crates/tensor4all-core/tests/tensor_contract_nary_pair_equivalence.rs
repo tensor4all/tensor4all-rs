@@ -1,6 +1,7 @@
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::{
-    factorize, svd, AllowedPairs, Canonical, DynIndex, FactorizeOptions, TensorDynLen, TensorLike,
+    factorize, outer_product, svd, Canonical, DynIndex, FactorizeOptions, TensorContractionLike,
+    TensorDynLen,
 };
 
 fn make_tensor(indices: Vec<DynIndex>, data: Vec<f64>, dims: &[usize]) -> TensorDynLen {
@@ -44,7 +45,7 @@ fn permute_col_major(data: &[f64], dims: &[usize], perm: &[usize]) -> Vec<f64> {
 }
 
 #[test]
-fn test_contract_multi_pair_matches_binary_contract() {
+fn test_contract_nary_pair_matches_binary_contract() {
     let l01 = Index::new_dyn(3);
     let s1 = Index::new_dyn(2);
     let l12 = Index::new_dyn(3);
@@ -63,19 +64,18 @@ fn test_contract_multi_pair_matches_binary_contract() {
         &[3, 2],
     );
 
-    let binary = t1.contract(&t2).unwrap();
-    let multi =
-        <TensorDynLen as TensorLike>::contract(&[&t1, &t2], AllowedPairs::All).expect("contract");
+    let binary = t1.contract_pair(&t2).unwrap();
+    let multi = <TensorDynLen as TensorContractionLike>::contract(&[&t1, &t2]).expect("contract");
 
     assert!(
         multi.isapprox(&binary, 1e-12, 0.0),
-        "multi-contract and binary contract differ: maxabs diff = {}",
+        "nary contract and binary contract differ: maxabs diff = {}",
         multi.sub(&binary).unwrap().maxabs()
     );
 }
 
 #[test]
-fn test_contract_multi_three_matches_sequential_binary_contract() {
+fn test_contract_nary_three_matches_sequential_binary_contract() {
     let i = Index::new_dyn(2);
     let a = Index::new_dyn(3);
     let b = Index::new_dyn(2);
@@ -98,19 +98,19 @@ fn test_contract_multi_three_matches_sequential_binary_contract() {
         &[3, 2],
     );
 
-    let sequential = t0.contract(&t1).unwrap().contract(&t2).unwrap();
-    let multi = <TensorDynLen as TensorLike>::contract(&[&t0, &t1, &t2], AllowedPairs::All)
-        .expect("contract");
+    let sequential = t0.contract_pair(&t1).unwrap().contract_pair(&t2).unwrap();
+    let multi =
+        <TensorDynLen as TensorContractionLike>::contract(&[&t0, &t1, &t2]).expect("contract");
 
     assert!(
         multi.isapprox(&sequential, 1e-12, 0.0),
-        "3-tensor multi-contract and sequential contract differ: maxabs diff = {}",
+        "3-tensor nary contract and sequential contract differ: maxabs diff = {}",
         multi.sub(&sequential).unwrap().maxabs()
     );
 }
 
 #[test]
-fn test_contract_multi_pair_matches_binary_contract_for_zero_masked_inputs() {
+fn test_contract_nary_pair_matches_binary_contract_for_zero_masked_inputs() {
     let s0 = Index::new_dyn(2);
     let l01 = Index::new_dyn(3);
     let s1 = Index::new_dyn(2);
@@ -122,19 +122,18 @@ fn test_contract_multi_pair_matches_binary_contract_for_zero_masked_inputs() {
     );
     let t1 = make_tensor(vec![l01, s1], (1..=6).map(|x| x as f64).collect(), &[3, 2]);
 
-    let binary = t0.contract(&t1).unwrap();
-    let multi =
-        <TensorDynLen as TensorLike>::contract(&[&t0, &t1], AllowedPairs::All).expect("contract");
+    let binary = t0.contract_pair(&t1).unwrap();
+    let multi = <TensorDynLen as TensorContractionLike>::contract(&[&t0, &t1]).expect("contract");
 
     assert!(
         multi.isapprox(&binary, 1e-12, 0.0),
-        "zero-masked multi-contract and binary contract differ: maxabs diff = {}",
+        "zero-masked nary contract and binary contract differ: maxabs diff = {}",
         multi.sub(&binary).unwrap().maxabs()
     );
 }
 
 #[test]
-fn test_zipup_zero_masked_root_multi_matches_sequential_binary_contract() {
+fn test_zipup_zero_masked_root_nary_matches_sequential_binary_contract() {
     let s0 = Index::new_dyn(2);
     let s1 = Index::new_dyn(2);
     let s2 = Index::new_dyn(2);
@@ -162,8 +161,7 @@ fn test_zipup_zero_masked_root_multi_matches_sequential_binary_contract() {
         &[3, 2],
     );
 
-    let leaf = <TensorDynLen as TensorLike>::contract(&[&a0, &b0], AllowedPairs::All)
-        .expect("leaf contract");
+    let leaf = outer_product(&a0, &b0).expect("leaf outer product");
     let permuted_leaf = leaf
         .permute_indices(&[s0.clone(), s1.clone(), l01.clone(), l12.clone()])
         .unwrap();
@@ -180,14 +178,14 @@ fn test_zipup_zero_masked_root_multi_matches_sequential_binary_contract() {
 
     let (u, s, v) = svd::<f64>(&leaf, &[s0.clone(), s1.clone()]).expect("svd");
     let vh = v.conj().permute(&[2, 0, 1]).unwrap();
-    let svh = s.contract(&vh).unwrap();
+    let svh = s.contract_pair(&vh).unwrap();
     let svh = svh
         .replaceind(
             &s.indices[1].clone(),
             &v.indices[v.indices.len() - 1].clone(),
         )
         .unwrap();
-    let svd_reconstructed = u.contract(&svh).unwrap();
+    let svd_reconstructed = u.contract_pair(&svh).unwrap();
     assert!(
         svd_reconstructed.isapprox(&leaf, 1e-10, 0.0),
         "svd leaf does not reconstruct: maxabs diff = {}",
@@ -201,7 +199,7 @@ fn test_zipup_zero_masked_root_multi_matches_sequential_binary_contract() {
     )
     .expect("factorize");
 
-    let reconstructed_leaf = factorized.left.contract(&factorized.right).unwrap();
+    let reconstructed_leaf = factorized.left.contract_pair(&factorized.right).unwrap();
     assert!(
         reconstructed_leaf.isapprox(&leaf, 1e-10, 0.0),
         "factorized leaf does not reconstruct: maxabs diff = {}",
@@ -210,17 +208,16 @@ fn test_zipup_zero_masked_root_multi_matches_sequential_binary_contract() {
 
     let sequential = factorized
         .right
-        .contract(&a1)
+        .contract_pair(&a1)
         .unwrap()
-        .contract(&b1)
+        .contract_pair(&b1)
         .unwrap();
-    let multi =
-        <TensorDynLen as TensorLike>::contract(&[&factorized.right, &a1, &b1], AllowedPairs::All)
-            .expect("root contract");
+    let multi = <TensorDynLen as TensorContractionLike>::contract(&[&factorized.right, &a1, &b1])
+        .expect("root contract");
 
     assert!(
         multi.isapprox(&sequential, 1e-10, 0.0),
-        "zipup root multi-contract and sequential binary contract differ: maxabs diff = {}",
+        "zipup root nary contract and sequential binary contract differ: maxabs diff = {}",
         multi.sub(&sequential).unwrap().maxabs()
     );
 }

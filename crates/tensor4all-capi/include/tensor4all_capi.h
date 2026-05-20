@@ -619,11 +619,11 @@ enum t4a_status_code t4a_tensor_contract(const struct t4a_tensor *a,
 /**
  * Contract multiple tensors while retaining selected shared indices as output legs.
  */
-enum t4a_status_code t4a_tensor_contract_multi(const struct t4a_tensor *const *tensors,
-                                               size_t n_tensors,
-                                               const struct t4a_index *const *retain_indices,
-                                               size_t n_retain,
-                                               struct t4a_tensor **out);
+enum t4a_status_code t4a_tensor_contract_many_retain(const struct t4a_tensor *const *tensors,
+                                                     size_t n_tensors,
+                                                     const struct t4a_index *const *retain_indices,
+                                                     size_t n_retain,
+                                                     struct t4a_tensor **out);
 
 /**
  * Contract two tensors while retaining selected shared indices as output legs.
@@ -1045,9 +1045,9 @@ enum t4a_status_code t4a_treetn_linsolve(const struct t4a_treetn *operator_,
                                          const struct t4a_svd_truncation_policy *policy,
                                          size_t maxdim,
                                          size_t nfullsweeps,
-                                         double krylov_tol,
-                                         size_t krylov_maxiter,
-                                         size_t krylov_dim,
+                                         double gmres_tol,
+                                         size_t gmres_max_restarts,
+                                         size_t gmres_restart_dim,
                                          double a0,
                                          double a1,
                                          double convergence_tol,

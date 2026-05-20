@@ -67,8 +67,8 @@ mod phase_rotation;
 mod shift;
 
 pub use affine::{
-    affine_operator, affine_transform_matrix, affine_transform_tensors_unfused, AffineParams,
-    LinearConstraintRow, UnfusedTensorInfo,
+    affine_operator, affine_operator_interleaved, affine_transform_matrix,
+    affine_transform_tensors_unfused, AffineParams, LinearConstraintRow, UnfusedTensorInfo,
 };
 pub use common::{BoundaryCondition, CarryDirection};
 pub use cumsum::{cumsum_operator, triangle_operator, TriangleType};

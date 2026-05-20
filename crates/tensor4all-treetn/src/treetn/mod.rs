@@ -32,9 +32,7 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 
 use crate::algorithm::CanonicalForm;
-use tensor4all_core::{
-    AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
-};
+use tensor4all_core::{Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
 
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
@@ -58,8 +56,8 @@ pub use localupdate::{
 
 // Re-export partial contraction types
 pub use partial_contraction::{
-    hadamard, partial_contract, sum_over_indices, weighted_sum_over_index_pairs,
-    PartialContractionSpec,
+    hadamard, partial_contract, partial_contract_to_site_network, sum_over_indices,
+    weighted_sum_over_index_pairs, PartialContractionSpec,
 };
 
 // Re-export swap types
@@ -751,13 +749,12 @@ where
             .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
             .with_context(|| format!("{}: dst tensor not found", context_name))?;
 
-        let updated_dst_tensor = T::contract(&[tensor_dst, &right_tensor], AllowedPairs::All)
-            .with_context(|| {
-                format!(
-                    "{}: failed to absorb right factor into dst tensor",
-                    context_name
-                )
-            })?;
+        let updated_dst_tensor = T::contract(&[tensor_dst, &right_tensor]).with_context(|| {
+            format!(
+                "{}: failed to absorb right factor into dst tensor",
+                context_name
+            )
+        })?;
 
         // Update bond index FIRST, so replace_tensor validation matches
         let new_bond_index = factorize_result.bond_index;
@@ -1576,8 +1573,7 @@ where
             ));
         }
 
-        let tensor_ab = T::contract(&[&tensor_a, &tensor_b], AllowedPairs::All)
-            .context("swap_on_edge: contract")?;
+        let tensor_ab = T::contract(&[&tensor_a, &tensor_b]).context("swap_on_edge: contract")?;
 
         let ab_indices = tensor_ab.external_indices();
         let left_inds: Vec<T::Index> = ab_indices

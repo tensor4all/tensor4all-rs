@@ -30,7 +30,7 @@ pub enum QrError {
 ///
 /// ```
 /// use tensor4all_core::qr::{QrOptions, qr_with};
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, TensorContractionLike, TensorDynLen};
 ///
 /// let i = DynIndex::new_dyn(3);
 /// let j = DynIndex::new_dyn(3);
@@ -41,7 +41,7 @@ pub enum QrError {
 /// let (q, r) = qr_with::<f64>(&tensor, &[i], &opts).unwrap();
 ///
 /// // Q * R recovers the original tensor
-/// let recovered = q.contract(&r).unwrap();
+/// let recovered = q.contract_pair(&r).unwrap();
 /// assert!(tensor.distance(&recovered).unwrap() < 1e-12);
 /// ```
 #[derive(Debug, Clone, Copy)]

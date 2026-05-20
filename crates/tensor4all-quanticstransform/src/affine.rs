@@ -14,6 +14,8 @@ use num_integer::Integer;
 use num_rational::Rational64;
 use num_traits::One;
 use sprs::CsMat;
+use tensor4all_core::index::{DynId, Index, TagSet};
+use tensor4all_core::LinearizationOrder;
 use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
 
 use crate::common::{
@@ -486,6 +488,93 @@ pub fn affine_operator(
     let input_dims = vec![input_dim; r];
     let output_dims = vec![output_dim; r];
     tensortrain_to_linear_operator_asymmetric(&remapped_mpo, &input_dims, &output_dims)
+}
+
+/// Create an affine operator with interleaved binary variable indices.
+///
+/// This is the same forward coordinate map as [`affine_operator`], but each bit
+/// node carries one binary output index per output variable and one binary input
+/// index per input variable instead of fusing variables into local dimensions
+/// `2^M` and `2^N`. The mapping order at each node is
+/// `(y0, y1, ..., yM-1)` for outputs and `(x0, x1, ..., xN-1)` for inputs.
+///
+/// Use this form when the state stores variables as separate interleaved QTT
+/// site indices and should bind them through [`LinearOperator::new_multi`].
+///
+/// # Arguments
+///
+/// * `r` - Bits per variable. Node `0` is the most significant bit.
+/// * `params` - Rational affine map `y = A*x + b`.
+/// * `bc` - Boundary condition for each output variable.
+///
+/// # Returns
+///
+/// A [`LinearOperator`] whose node `i` has `params.n` input mappings and
+/// `params.m` output mappings, all with binary dimension.
+///
+/// # Errors
+///
+/// Returns an error when `r == 0`, when `bc.len() != params.m`, or when the
+/// affine tensor network cannot be constructed.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::{
+///     affine_operator_interleaved, AffineParams, BoundaryCondition,
+/// };
+///
+/// let params = AffineParams::from_integers(vec![1, 0, 0, 1], vec![0, 0], 2, 2).unwrap();
+/// let bc = vec![BoundaryCondition::Periodic; 2];
+/// let op = affine_operator_interleaved(3, &params, &bc).unwrap();
+///
+/// assert_eq!(op.mpo().node_count(), 3);
+/// assert_eq!(op.get_output_mappings(&0).unwrap().len(), 2);
+/// assert_eq!(op.get_input_mappings(&0).unwrap().len(), 2);
+/// ```
+pub fn affine_operator_interleaved(
+    r: usize,
+    params: &AffineParams,
+    bc: &[BoundaryCondition],
+) -> Result<QuanticsOperator> {
+    let mut op = affine_operator(r, params, bc)?;
+
+    let fused_output_indices = (0..r)
+        .map(|site| {
+            op.get_output_mapping(&site)
+                .ok_or_else(|| anyhow::anyhow!("missing affine output mapping for site {site}"))
+                .map(|mapping| mapping.true_index.clone())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let fused_input_indices = (0..r)
+        .map(|site| {
+            op.get_input_mapping(&site)
+                .ok_or_else(|| anyhow::anyhow!("missing affine input mapping for site {site}"))
+                .map(|mapping| mapping.true_index.clone())
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    for site in 0..r {
+        let output_indices = (0..params.m)
+            .map(|_| Index::<DynId, TagSet>::new_dyn(2))
+            .collect::<Vec<_>>();
+        op = op.unfuse_output_index(
+            &fused_output_indices[site],
+            &output_indices,
+            LinearizationOrder::ColumnMajor,
+        )?;
+
+        let input_indices = (0..params.n)
+            .map(|_| Index::<DynId, TagSet>::new_dyn(2))
+            .collect::<Vec<_>>();
+        op = op.unfuse_input_index(
+            &fused_input_indices[site],
+            &input_indices,
+            LinearizationOrder::ColumnMajor,
+        )?;
+    }
+
+    Ok(op)
 }
 
 /// Compute the full affine transformation matrix directly (for verification).

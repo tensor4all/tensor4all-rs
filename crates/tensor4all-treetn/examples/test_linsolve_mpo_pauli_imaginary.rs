@@ -17,7 +17,9 @@ use num_complex::Complex64;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::index::DynId;
-use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike};
+use tensor4all_core::{
+    AnyScalar, DynIndex, IndexLike, TensorContractionLike, TensorDynLen, TensorIndex,
+};
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
     IndexMapping, LinearOperator, LinsolveOptions, LocalUpdateSweepPlan, SquareLinsolveUpdater,
@@ -828,9 +830,9 @@ fn main() -> anyhow::Result<()> {
     let options = LinsolveOptions::default()
         .with_nfullsweeps(10)
         .with_max_rank(50)
-        .with_krylov_tol(1e-10)
-        .with_krylov_maxiter(30)
-        .with_krylov_dim(30)
+        .with_gmres_tol(1e-10)
+        .with_gmres_max_restarts(30)
+        .with_gmres_restart_dim(30)
         .with_coefficients(0.0, 1.0); // a0=0, a1=1 => (i*X) * x = b
 
     let center = make_node_name(n / 2);

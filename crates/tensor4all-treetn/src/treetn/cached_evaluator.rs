@@ -7,8 +7,8 @@ use std::hash::Hash;
 use anyhow::{bail, Context, Result};
 use num_complex::Complex64;
 use tensor4all_core::{
-    contract_multi_with_options, AllowedPairs, AnyScalar, ColMajorArrayRef, ContractionOptions,
-    DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike,
+    contract_with_options, AnyScalar, ColMajorArrayRef, ContractionOptions, DynIndex, IndexLike,
+    TensorContractionLike, TensorDynLen, TensorIndex, TensorLike,
 };
 
 use super::TreeTN;
@@ -960,9 +960,9 @@ where
         }
 
         let retain = [assignment_index.clone()];
-        let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain);
+        let options = ContractionOptions::new().with_retain_indices(&retain);
         let operand_refs = operands.iter().collect::<Vec<_>>();
-        let tensor = contract_multi_with_options(&operand_refs, options).context(
+        let tensor = contract_with_options(&operand_refs, options).context(
             "TreeTNCachedEvaluator::evaluate_batch: failed to contract batched directed message",
         )?;
         let tensor = ensure_assignment_axis_last(tensor, &assignment_index)?;
@@ -1040,9 +1040,9 @@ where
             operands.remove(0)
         } else {
             let retain = [point_index.clone()];
-            let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain);
+            let options = ContractionOptions::new().with_retain_indices(&retain);
             let operand_refs = operands.iter().collect::<Vec<_>>();
-            contract_multi_with_options(&operand_refs, options)
+            contract_with_options(&operand_refs, options)
                 .context("TreeTNCachedEvaluator::evaluate_batch: failed to contract center batch")?
         };
         let result_tensor = ensure_assignment_axis_last(result_tensor, &point_index)?;

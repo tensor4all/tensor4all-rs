@@ -1,10 +1,13 @@
 use super::*;
-use std::collections::HashMap;
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+use std::collections::{HashMap, HashSet};
+use tensor4all_core::{
+    DynIndex, IndexLike, LinearizationOrder, TensorConstructionLike, TensorDynLen,
+};
 
 use crate::operator::index_mapping::IndexMapping;
 use crate::operator::Operator;
 use crate::treetn::TreeTN;
+use crate::{RestructureOptions, SiteIndexNetwork};
 
 /// Create a simple "MPO" TreeTN with two site indices per node (input + output).
 /// Structure: single node "A" with indices (s_in_tmp, s_out_tmp)
@@ -68,6 +71,54 @@ fn make_linear_operator() -> (
 
     let op = LinearOperator::new(mpo, input_mapping, output_mapping);
     (op, s, s_in_tmp, s_out_tmp)
+}
+
+fn make_fused_identity_operator() -> (
+    LinearOperator<TensorDynLen, String>,
+    DynIndex,
+    DynIndex,
+    DynIndex,
+    DynIndex,
+) {
+    let input_true = DynIndex::new_dyn(4);
+    let output_true = DynIndex::new_dyn(4);
+    let input_internal = DynIndex::new_dyn(4);
+    let output_internal = DynIndex::new_dyn(4);
+
+    let mut data = vec![0.0; 16];
+    for value in 0..4 {
+        data[value + 4 * value] = 1.0;
+    }
+    let tensor =
+        TensorDynLen::from_dense(vec![output_internal.clone(), input_internal.clone()], data)
+            .unwrap();
+    let mpo =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+
+    let mut input_mapping = HashMap::new();
+    input_mapping.insert(
+        "A".to_string(),
+        IndexMapping {
+            true_index: input_true.clone(),
+            internal_index: input_internal.clone(),
+        },
+    );
+    let mut output_mapping = HashMap::new();
+    output_mapping.insert(
+        "A".to_string(),
+        IndexMapping {
+            true_index: output_true.clone(),
+            internal_index: output_internal.clone(),
+        },
+    );
+
+    (
+        LinearOperator::new(mpo, input_mapping, output_mapping),
+        input_true,
+        output_true,
+        input_internal,
+        output_internal,
+    )
 }
 
 #[test]
@@ -550,4 +601,108 @@ fn test_linear_operator_transpose_preserves_mpo() {
     let transposed = op.transpose();
 
     assert_eq!(transposed.mpo().node_count(), original_node_count);
+}
+
+#[test]
+fn test_unfuse_input_and_output_indices_splits_internal_mpo_axes() {
+    let (op, input_true, output_true, _input_internal, _output_internal) =
+        make_fused_identity_operator();
+    let input0 = DynIndex::new_dyn(2);
+    let input1 = DynIndex::new_dyn(2);
+    let output0 = DynIndex::new_dyn(2);
+    let output1 = DynIndex::new_dyn(2);
+
+    let op = op
+        .unfuse_output_index(
+            &output_true,
+            &[output0.clone(), output1.clone()],
+            LinearizationOrder::ColumnMajor,
+        )
+        .unwrap()
+        .unfuse_input_index(
+            &input_true,
+            &[input0.clone(), input1.clone()],
+            LinearizationOrder::ColumnMajor,
+        )
+        .unwrap();
+
+    let input_mappings = op.get_input_mappings(&"A".to_string()).unwrap();
+    assert_eq!(input_mappings.len(), 2);
+    assert!(input_mappings[0].true_index.same_id(&input0));
+    assert!(input_mappings[1].true_index.same_id(&input1));
+
+    let output_mappings = op.get_output_mappings(&"A".to_string()).unwrap();
+    assert_eq!(output_mappings.len(), 2);
+    assert!(output_mappings[0].true_index.same_id(&output0));
+    assert!(output_mappings[1].true_index.same_id(&output1));
+
+    let output_internal = output_mappings
+        .iter()
+        .map(|mapping| mapping.internal_index.clone())
+        .collect::<Vec<_>>();
+    let input_internal = input_mappings
+        .iter()
+        .map(|mapping| mapping.internal_index.clone())
+        .collect::<Vec<_>>();
+    let expected =
+        <TensorDynLen as TensorConstructionLike>::delta(&output_internal, &input_internal).unwrap();
+    let actual = op.mpo().contract_to_tensor().unwrap();
+
+    assert!(actual.distance(&expected).unwrap() < 1.0e-12);
+}
+
+#[test]
+fn test_linear_operator_restructure_to_moves_mapping_nodes() {
+    let (op, s0, s1) = make_two_node_mpo_and_operator();
+    let node_a = "A".to_string();
+    let node_b = "B".to_string();
+    let a_in = op
+        .get_input_mapping(&node_a)
+        .unwrap()
+        .internal_index
+        .clone();
+    let a_out = op
+        .get_output_mapping(&node_a)
+        .unwrap()
+        .internal_index
+        .clone();
+    let b_in = op
+        .get_input_mapping(&node_b)
+        .unwrap()
+        .internal_index
+        .clone();
+    let b_out = op
+        .get_output_mapping(&node_b)
+        .unwrap()
+        .internal_index
+        .clone();
+
+    let mut target = SiteIndexNetwork::<String, DynIndex>::new();
+    target
+        .add_node("left".to_string(), HashSet::from([b_in, b_out]))
+        .unwrap();
+    target
+        .add_node("right".to_string(), HashSet::from([a_in, a_out]))
+        .unwrap();
+    target
+        .add_edge(&"left".to_string(), &"right".to_string())
+        .unwrap();
+
+    let expected = op.mpo().contract_to_tensor().unwrap();
+    let moved = op
+        .restructure_to(&target, &RestructureOptions::default())
+        .unwrap();
+    let actual = moved.mpo().contract_to_tensor().unwrap();
+
+    assert!(actual.distance(&expected).unwrap() < 1.0e-12);
+    assert!(moved
+        .get_input_mapping(&"left".to_string())
+        .unwrap()
+        .true_index
+        .same_id(&s1));
+    assert!(moved
+        .get_input_mapping(&"right".to_string())
+        .unwrap()
+        .true_index
+        .same_id(&s0));
 }

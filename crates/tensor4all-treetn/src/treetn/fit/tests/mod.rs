@@ -5,8 +5,12 @@ use tensor4all_core::{DynIndex, TensorDynLen};
 /// Create a simple 2-node TreeTN: A -- bond -- B
 fn make_two_node_treetn() -> TreeTN<TensorDynLen, String> {
     let s0 = DynIndex::new_dyn(2);
-    let bond = DynIndex::new_dyn(3);
     let s1 = DynIndex::new_dyn(2);
+    make_two_node_treetn_with_sites(&s0, &s1)
+}
+
+fn make_two_node_treetn_with_sites(s0: &DynIndex, s1: &DynIndex) -> TreeTN<TensorDynLen, String> {
+    let bond = DynIndex::new_dyn(3);
 
     let t0 = TensorDynLen::from_dense(
         vec![s0.clone(), bond.clone()],
@@ -22,6 +26,77 @@ fn make_two_node_treetn() -> TreeTN<TensorDynLen, String> {
     TreeTN::<TensorDynLen, String>::from_tensors(
         vec![t0, t1],
         vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap()
+}
+
+fn make_contractible_two_node_pair() -> (TreeTN<TensorDynLen, String>, TreeTN<TensorDynLen, String>)
+{
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    (
+        make_two_node_treetn_with_sites(&s0, &s1),
+        make_two_node_treetn_with_sites(&s0, &s1),
+    )
+}
+
+fn make_contractible_two_node_pair_with_surviving_sites(
+) -> (TreeTN<TensorDynLen, String>, TreeTN<TensorDynLen, String>) {
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let a0 = DynIndex::new_dyn(2);
+    let a1 = DynIndex::new_dyn(2);
+    let b0 = DynIndex::new_dyn(2);
+    let b1 = DynIndex::new_dyn(2);
+    let bond_a = DynIndex::new_dyn(2);
+    let bond_b = DynIndex::new_dyn(2);
+
+    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![
+            TensorDynLen::from_dense(
+                vec![s0.clone(), a0, bond_a.clone()],
+                (1..=8).map(|value| value as f64 / 8.0).collect(),
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(
+                vec![bond_a, s1.clone(), a1],
+                (1..=8).map(|value| value as f64 / 10.0).collect(),
+            )
+            .unwrap(),
+        ],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![
+            TensorDynLen::from_dense(
+                vec![s0, b0, bond_b.clone()],
+                (1..=8).map(|value| (value as f64 - 2.0) / 9.0).collect(),
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(
+                vec![bond_b, s1, b1],
+                (1..=8).map(|value| (value as f64 + 1.0) / 11.0).collect(),
+            )
+            .unwrap(),
+        ],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+    (tn_a, tn_b)
+}
+
+fn make_fit_initial_c(
+    tn_a: &TreeTN<TensorDynLen, String>,
+    tn_b: &TreeTN<TensorDynLen, String>,
+    center: &str,
+) -> TreeTN<TensorDynLen, String> {
+    tn_a.contract_zipup_preserving_topology_with(
+        tn_b,
+        &center.to_string(),
+        crate::CanonicalForm::Unitary,
+        None,
+        None,
     )
     .unwrap()
 }
@@ -160,9 +235,8 @@ fn test_fit_environment_verify_structural_consistency_valid() {
 
 #[test]
 fn test_fit_environment_get_or_compute_caches_leaf_environment() {
-    let tn_a = make_two_node_treetn();
-    let tn_b = make_two_node_treetn();
-    let tn_c = make_two_node_treetn();
+    let (tn_a, tn_b) = make_contractible_two_node_pair_with_surviving_sites();
+    let tn_c = make_fit_initial_c(&tn_a, &tn_b, "A");
     let mut env = FitEnvironment::<TensorDynLen, String>::new();
 
     let from = "A".to_string();
@@ -311,8 +385,7 @@ fn test_contract_fit_rejects_topology_mismatch() {
 
 #[test]
 fn test_contract_fit_matches_naive_contraction_on_two_node_tree() {
-    let tn_a = make_two_node_treetn();
-    let tn_b = make_two_node_treetn();
+    let (tn_a, tn_b) = make_contractible_two_node_pair();
 
     let fitted = contract_fit(
         &tn_a,
@@ -324,7 +397,7 @@ fn test_contract_fit_matches_naive_contraction_on_two_node_tree() {
 
     let fitted_dense = fitted.to_dense().unwrap();
     let expected_dense = tn_a.contract_naive(&tn_b).unwrap();
-    assert!(fitted_dense.distance(&expected_dense).unwrap() < 1e-10);
+    assert!(fitted_dense.sub(&expected_dense).unwrap().maxabs() < 1e-10);
 }
 
 #[test]
@@ -334,8 +407,7 @@ fn test_contract_fit_positive_sweeps_do_not_skip_without_truncation_options() {
         *state.borrow_mut() = None;
     });
 
-    let tn_a = make_two_node_treetn();
-    let tn_b = make_two_node_treetn();
+    let (tn_a, tn_b) = make_contractible_two_node_pair();
 
     let fitted = contract_fit(
         &tn_a,
@@ -356,4 +428,78 @@ fn test_contract_fit_positive_sweeps_do_not_skip_without_truncation_options() {
     let fitted_dense = fitted.to_dense().unwrap();
     let expected_dense = tn_a.contract_naive(&tn_b).unwrap();
     assert!(fitted_dense.distance(&expected_dense).unwrap() < 1e-10);
+}
+
+#[test]
+fn test_contract_fit_rejects_leaf_site_space_that_contracts_away() {
+    let left = DynIndex::new_dyn(2);
+    let right = DynIndex::new_dyn(2);
+    let shared_left = DynIndex::new_dyn(2);
+    let shared_mid = DynIndex::new_dyn(2);
+    let shared_leaf = DynIndex::new_dyn(2);
+
+    let a_ab = DynIndex::new_dyn(2);
+    let a_bc = DynIndex::new_dyn(2);
+    let b_ab = DynIndex::new_dyn(2);
+    let b_bc = DynIndex::new_dyn(2);
+
+    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![
+            TensorDynLen::from_dense(
+                vec![left.clone(), shared_left.clone(), a_ab.clone()],
+                (1..=8).map(|value| value as f64 / 8.0).collect(),
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(
+                vec![a_ab.clone(), shared_mid.clone(), a_bc.clone()],
+                (1..=8).map(|value| value as f64 / 10.0).collect(),
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(
+                vec![a_bc.clone(), shared_leaf.clone()],
+                vec![0.5, 1.5, -0.5, 2.0],
+            )
+            .unwrap(),
+        ],
+        vec!["A".to_string(), "B".to_string(), "C".to_string()],
+    )
+    .unwrap();
+
+    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![
+            TensorDynLen::from_dense(
+                vec![b_ab.clone(), shared_left.clone()],
+                vec![1.0, -0.5, 0.25, 0.75],
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(
+                vec![
+                    b_ab.clone(),
+                    shared_mid.clone(),
+                    right.clone(),
+                    b_bc.clone(),
+                ],
+                (1..=16).map(|value| (value as f64 - 3.0) / 7.0).collect(),
+            )
+            .unwrap(),
+            TensorDynLen::from_dense(
+                vec![b_bc.clone(), shared_leaf.clone()],
+                vec![2.0, -1.0, 0.25, 0.75],
+            )
+            .unwrap(),
+        ],
+        vec!["A".to_string(), "B".to_string(), "C".to_string()],
+    )
+    .unwrap();
+
+    let err = contract_fit(
+        &tn_a,
+        &tn_b,
+        &"A".to_string(),
+        FitContractionOptions::new(1),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(err.contains("Disconnected tensor network"));
 }

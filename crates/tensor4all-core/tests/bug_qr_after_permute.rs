@@ -7,7 +7,9 @@
 //! SVD gives ~1e-14 on the same data.
 
 use num_complex::Complex64;
-use tensor4all_core::{factorize, svd, DynIndex, FactorizeOptions, TensorDynLen};
+use tensor4all_core::{
+    factorize, svd, DynIndex, FactorizeOptions, TensorContractionLike, TensorDynLen,
+};
 
 /// Create a [5,2,2,5] tensor with data that triggers the QR bug.
 fn make_buggy_tensor() -> TensorDynLen {
@@ -126,7 +128,7 @@ fn make_buggy_tensor() -> TensorDynLen {
 
 fn reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex], opts: &FactorizeOptions) -> f64 {
     let result = factorize(t, left_inds, opts).unwrap();
-    let recon = result.left.contract(&result.right).unwrap();
+    let recon = result.left.contract_pair(&result.right).unwrap();
     let neg = recon
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();
@@ -140,11 +142,11 @@ fn svd_reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
     perm.extend(0..v.indices.len() - 1);
     let vh = v.conj().permute(&perm).unwrap();
     let svh = s
-        .contract(&vh)
+        .contract_pair(&vh)
         .unwrap()
         .replaceind(&s.indices[1], &u.indices[u.indices.len() - 1])
         .unwrap();
-    let recon = u.contract(&svh).unwrap();
+    let recon = u.contract_pair(&svh).unwrap();
     let neg = recon
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))
         .unwrap();

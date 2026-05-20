@@ -13,7 +13,7 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::{AllowedPairs, IndexLike, TensorLike};
+use tensor4all_core::{IndexLike, TensorLike};
 
 use crate::linsolve::common::{EnvironmentCache, NetworkTopology};
 use crate::treetn::TreeTN;
@@ -70,6 +70,9 @@ where
     ///
     /// For the square case, the `reference_state` is used as the bra (conjugated),
     /// and `rhs` is used as the ket, i.e. environments are constructed for `<ref|b>`.
+    /// If the reference and RHS networks share link indices, the reference links
+    /// are relabeled for this local contraction so bra/ket boundary links are
+    /// not accidentally traced out.
     ///
     /// # Arguments
     /// * `region` - The nodes in the local update region
@@ -81,6 +84,18 @@ where
         reference_state: &TreeTN<T, V>,
         topology: &NT,
     ) -> Result<T> {
+        let reference_storage;
+        let reference_state = if self.has_link_collision_with_rhs(reference_state, topology)? {
+            // A bra/ket overlap needs two independent copies of every open link:
+            // the RHS-side link is contracted with the local RHS tensor, while
+            // the reference-side link remains as the output local vector space.
+            self.envs.clear();
+            reference_storage = Some(reference_state.sim_linkinds()?);
+            reference_storage.as_ref().unwrap()
+        } else {
+            reference_state
+        };
+
         // Ensure environments are computed
         self.ensure_environments(region, reference_state, topology)?;
 
@@ -114,7 +129,47 @@ where
 
         // Use T::contract for optimal contraction ordering
         let tensor_refs: Vec<&T> = all_tensors.iter().collect();
-        T::contract(&tensor_refs, AllowedPairs::All)
+        T::contract(&tensor_refs)
+    }
+
+    fn has_link_collision_with_rhs<NT: NetworkTopology<V>>(
+        &self,
+        reference_state: &TreeTN<T, V>,
+        topology: &NT,
+    ) -> Result<bool> {
+        for node in reference_state.node_names() {
+            for neighbor in topology.neighbors(&node) {
+                if node > neighbor {
+                    continue;
+                }
+
+                let Some(ref_edge) = reference_state.edge_between(&node, &neighbor) else {
+                    continue;
+                };
+                let Some(rhs_edge) = self.rhs.edge_between(&node, &neighbor) else {
+                    continue;
+                };
+                let ref_bond = reference_state.bond_index(ref_edge).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Reference bond index not found for edge {:?}-{:?}",
+                        node,
+                        neighbor
+                    )
+                })?;
+                let rhs_bond = self.rhs.bond_index(rhs_edge).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "RHS bond index not found for edge {:?}-{:?}",
+                        node,
+                        neighbor
+                    )
+                })?;
+
+                if ref_bond == rhs_bond {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// Ensure environments are computed for neighbors of the region.
@@ -157,9 +212,9 @@ where
         }
 
         // Collect child environments
-        let child_envs: Vec<T> = child_neighbors
+        let child_envs: Vec<&T> = child_neighbors
             .iter()
-            .filter_map(|child| self.envs.get(child, from).cloned())
+            .filter_map(|child| self.envs.get(child, from))
             .collect();
 
         // Contract bra (reference_state) with ket (RHS) at this node
@@ -182,15 +237,15 @@ where
         let bra_conj = tensor_ref.conj();
 
         // Contract bra and ket - T::contract auto-detects contractable pairs
-        let bra_ket = T::contract(&[&bra_conj, tensor_b], AllowedPairs::All)?;
+        let bra_ket = T::contract(&[&bra_conj, tensor_b])?;
 
         // Contract bra*ket with child environments using T::contract
         if child_envs.is_empty() {
             Ok(bra_ket)
         } else {
             let mut all_tensors: Vec<&T> = vec![&bra_ket];
-            all_tensors.extend(child_envs.iter());
-            T::contract(&all_tensors, AllowedPairs::All)
+            all_tensors.extend(child_envs);
+            T::contract(&all_tensors)
         }
     }
 

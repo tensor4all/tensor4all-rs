@@ -5,10 +5,13 @@
 
 use std::collections::HashMap;
 
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{
+    AnyScalar, DynIndex, IndexLike, TensorContractionLike, TensorDynLen, TensorIndex,
+};
 use tensor4all_treetn::{
-    EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, NetworkTopology,
-    ProjectedOperator, ProjectedState, SquareLinsolveUpdater, TreeTN,
+    relative_linear_system_residual, ApplyOptions, EnvironmentCache, IndexMapping, LinearOperator,
+    LinsolveOptions, NetworkTopology, ProjectedOperator, ProjectedState, SquareLinsolveUpdater,
+    TreeTN,
 };
 
 type FixedSiteMappings = (
@@ -158,11 +161,11 @@ fn test_linsolve_options_default() {
     let opts = LinsolveOptions::default();
 
     assert_eq!(opts.nfullsweeps, 5);
-    assert_eq!(opts.krylov_tol, 1e-10);
-    assert_eq!(opts.krylov_maxiter, 100);
-    assert_eq!(opts.krylov_dim, 30);
-    assert_eq!(opts.a0, 0.0);
-    assert_eq!(opts.a1, 1.0);
+    assert_eq!(opts.gmres_tol, 1e-10);
+    assert_eq!(opts.gmres_max_restarts, 100);
+    assert_eq!(opts.gmres_restart_dim, 30);
+    assert_eq!(opts.a0, AnyScalar::new_real(0.0));
+    assert_eq!(opts.a1, AnyScalar::new_real(1.0));
     assert!(opts.convergence_tol.is_none());
 }
 
@@ -170,18 +173,18 @@ fn test_linsolve_options_default() {
 fn test_linsolve_options_builder() {
     let opts = LinsolveOptions::default()
         .with_nfullsweeps(5)
-        .with_krylov_tol(1e-8)
-        .with_krylov_maxiter(50)
-        .with_krylov_dim(20)
+        .with_gmres_tol(1e-8)
+        .with_gmres_max_restarts(50)
+        .with_gmres_restart_dim(20)
         .with_coefficients(1.0, -1.0)
         .with_convergence_tol(1e-6);
 
     assert_eq!(opts.nfullsweeps, 5);
-    assert_eq!(opts.krylov_tol, 1e-8);
-    assert_eq!(opts.krylov_maxiter, 50);
-    assert_eq!(opts.krylov_dim, 20);
-    assert_eq!(opts.a0, 1.0);
-    assert_eq!(opts.a1, -1.0);
+    assert_eq!(opts.gmres_tol, 1e-8);
+    assert_eq!(opts.gmres_max_restarts, 50);
+    assert_eq!(opts.gmres_restart_dim, 20);
+    assert_eq!(opts.a0, AnyScalar::new_real(1.0));
+    assert_eq!(opts.a1, AnyScalar::new_real(-1.0));
     assert_eq!(opts.convergence_tol, Some(1e-6));
 }
 
@@ -494,9 +497,9 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
     // for a 2-site diagonal operator.
     let options = LinsolveOptions::default()
         .with_nfullsweeps(5)
-        .with_krylov_tol(1e-10)
-        .with_krylov_dim(10)
-        .with_krylov_maxiter(30)
+        .with_gmres_tol(1e-10)
+        .with_gmres_restart_dim(10)
+        .with_gmres_max_restarts(30)
         .with_max_rank(4);
     let nsweeps = options.nfullsweeps;
 
@@ -809,7 +812,7 @@ fn test_linsolve_3site_identity() {
     // Solve I * x = b
     let options = LinsolveOptions::default()
         .with_nfullsweeps(2)
-        .with_krylov_tol(1e-8)
+        .with_gmres_tol(1e-8)
         .with_max_rank(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -891,6 +894,59 @@ fn create_mpo_with_internal_indices(
     let n0 = mpo.add_tensor("site0", t0).unwrap();
     let n1 = mpo.add_tensor("site1", t1).unwrap();
     mpo.connect(n0, &b01, n1, &b01).unwrap();
+
+    (
+        mpo,
+        vec![s0_in_tmp, s1_in_tmp],
+        vec![s0_out_tmp, s1_out_tmp],
+    )
+}
+
+/// Create a 3-node operator where the first two nodes are mapped identity MPO
+/// sites and the last node is a scalar no-op spectator.
+fn create_mapped_identity_mpo_with_spectator_node(
+    phys_dim: usize,
+) -> (
+    TreeTN<TensorDynLen, &'static str>,
+    Vec<DynIndex>,
+    Vec<DynIndex>,
+) {
+    let mut mpo = TreeTN::<TensorDynLen, &'static str>::new();
+
+    let s0_in_tmp = DynIndex::new_dyn(phys_dim);
+    let s1_in_tmp = DynIndex::new_dyn(phys_dim);
+    let s0_out_tmp = DynIndex::new_dyn(phys_dim);
+    let s1_out_tmp = DynIndex::new_dyn(phys_dim);
+    let b01 = DynIndex::new_dyn(1);
+    let b12 = DynIndex::new_dyn(1);
+
+    let mut id_data = vec![0.0; phys_dim * phys_dim];
+    for i in 0..phys_dim {
+        id_data[i * phys_dim + i] = 1.0;
+    }
+
+    let t0 = TensorDynLen::from_dense(
+        vec![s0_out_tmp.clone(), s0_in_tmp.clone(), b01.clone()],
+        id_data.clone(),
+    )
+    .unwrap();
+    let t1 = TensorDynLen::from_dense(
+        vec![
+            b01.clone(),
+            s1_out_tmp.clone(),
+            s1_in_tmp.clone(),
+            b12.clone(),
+        ],
+        id_data,
+    )
+    .unwrap();
+    let t2 = TensorDynLen::from_dense(vec![b12.clone()], vec![1.0]).unwrap();
+
+    let n0 = mpo.add_tensor("site0", t0).unwrap();
+    let n1 = mpo.add_tensor("site1", t1).unwrap();
+    let n2 = mpo.add_tensor("site2", t2).unwrap();
+    mpo.connect(n0, &b01, n1, &b01).unwrap();
+    mpo.connect(n1, &b12, n2, &b12).unwrap();
 
     (
         mpo,
@@ -1214,7 +1270,7 @@ fn test_linsolve_with_index_mappings_identity() {
     // Create SquareLinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
-        .with_krylov_tol(1e-10)
+        .with_gmres_tol(1e-10)
         .with_max_rank(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -1265,7 +1321,7 @@ fn test_linsolve_with_index_mappings_diagonal() {
     // Create SquareLinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
         .with_nfullsweeps(3)
-        .with_krylov_tol(1e-10)
+        .with_gmres_tol(1e-10)
         .with_max_rank(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -1421,7 +1477,7 @@ fn test_linsolve_with_index_mappings_three_site_identity() {
     // Create SquareLinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
-        .with_krylov_tol(1e-10)
+        .with_gmres_tol(1e-10)
         .with_max_rank(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -1478,7 +1534,7 @@ fn test_linsolve_with_index_mappings_three_site_diagonal() {
     // Create SquareLinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
         .with_nfullsweeps(5)
-        .with_krylov_tol(1e-10)
+        .with_gmres_tol(1e-10)
         .with_max_rank(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -1612,7 +1668,7 @@ fn test_linsolve_pauli_x() {
     // Solve X * x = b
     let options = LinsolveOptions::default()
         .with_nfullsweeps(20)
-        .with_krylov_tol(1e-12)
+        .with_gmres_tol(1e-12)
         .with_max_rank(8);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -1781,7 +1837,7 @@ fn test_linsolve_general_matrix() {
     // Solve A * x = b
     let options = LinsolveOptions::default()
         .with_nfullsweeps(30)
-        .with_krylov_tol(1e-12)
+        .with_gmres_tol(1e-12)
         .with_max_rank(8);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -1869,7 +1925,7 @@ fn test_linsolve_general_matrix_nonsymmetric() {
 
     let options = LinsolveOptions::default()
         .with_nfullsweeps(30)
-        .with_krylov_tol(1e-12)
+        .with_gmres_tol(1e-12)
         .with_max_rank(8);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -2140,7 +2196,7 @@ fn test_linsolve_n_site_identity_impl(n_sites: usize) {
     // Create SquareLinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
-        .with_krylov_tol(1e-10)
+        .with_gmres_tol(1e-10)
         .with_max_rank(4);
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -2196,10 +2252,11 @@ fn test_square_linsolve_with_mappings_identity() {
     let init = rhs.clone();
     let options = LinsolveOptions::default()
         .with_nfullsweeps(3)
-        .with_krylov_tol(1e-10)
-        .with_krylov_dim(10)
-        .with_krylov_maxiter(30)
-        .with_max_rank(4);
+        .with_gmres_tol(1e-10)
+        .with_gmres_restart_dim(10)
+        .with_gmres_max_restarts(30)
+        .with_max_rank(4)
+        .with_convergence_tol(1e-8);
 
     // This previously failed with index mismatch when mappings were not supported
     let result = square_linsolve(
@@ -2215,6 +2272,8 @@ fn test_square_linsolve_with_mappings_identity() {
 
     assert_eq!(result.solution.node_count(), 2);
     assert!(result.sweeps > 0);
+    assert!(result.converged);
+    assert!(result.residual.is_some_and(|residual| residual < 1.0e-8));
 
     // For identity operator, solution should match RHS
     let contracted = result.solution.contract_to_tensor().unwrap();
@@ -2234,6 +2293,171 @@ fn test_square_linsolve_with_mappings_identity() {
         "square_linsolve with mappings: relative error = {}",
         rel_error
     );
+}
+
+#[test]
+fn test_relative_linear_system_residual_with_mapped_coefficients() {
+    let phys_dim = 2;
+    let (solution, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
+    let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[2.0, 2.0], phys_dim);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
+    let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+    let mut rhs = solution.clone();
+    rhs.scale(AnyScalar::new_real(7.0)).unwrap();
+
+    let residual = relative_linear_system_residual(
+        &operator,
+        &solution,
+        &rhs,
+        AnyScalar::new_real(3.0),
+        AnyScalar::new_real(1.0),
+        ApplyOptions::naive(),
+    )
+    .unwrap();
+
+    assert!(residual < 1.0e-12, "residual={residual}");
+}
+
+/// Mapped local linsolve should allow operator nodes with no site indices.
+///
+/// This is the generic tensor-network form of an operator acting on selected
+/// sites while later state sites are carried as spectators.
+#[test]
+fn test_square_linsolve_with_mappings_allows_unmapped_spectator_nodes() {
+    use tensor4all_treetn::square_linsolve;
+
+    let phys_dim = 2;
+    let (rhs, site_indices, _bonds) = create_simple_mps_chain();
+    let (mpo, s_in_tmp, s_out_tmp) = create_mapped_identity_mpo_with_spectator_node(phys_dim);
+
+    let (input_mapping, output_mapping) = create_fixed_site_index_mappings(
+        ["site0", "site1"],
+        &site_indices[..2],
+        &s_in_tmp,
+        &s_out_tmp,
+    );
+    assert!(mpo
+        .site_space(&"site2")
+        .is_some_and(|space| space.is_empty()));
+
+    let options = LinsolveOptions::default()
+        .with_nfullsweeps(2)
+        .with_gmres_tol(1e-10)
+        .with_gmres_restart_dim(10)
+        .with_gmres_max_restarts(30)
+        .with_max_rank(8);
+    let result = square_linsolve(
+        &mpo,
+        &rhs,
+        rhs.clone(),
+        &"site0",
+        options,
+        Some(input_mapping),
+        Some(output_mapping),
+    )
+    .unwrap();
+
+    assert_eq!(result.solution.node_count(), 3);
+    let got = result
+        .solution
+        .contract_to_tensor()
+        .unwrap()
+        .permuteinds(&site_indices)
+        .unwrap()
+        .to_vec::<f64>()
+        .unwrap();
+    let expected = rhs
+        .contract_to_tensor()
+        .unwrap()
+        .permuteinds(&site_indices)
+        .unwrap()
+        .to_vec::<f64>()
+        .unwrap();
+    let diff_norm: f64 = got
+        .iter()
+        .zip(expected.iter())
+        .map(|(&got, &expected)| (got - expected).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    let expected_norm: f64 = expected
+        .iter()
+        .map(|&value| value.powi(2))
+        .sum::<f64>()
+        .sqrt();
+    assert!(
+        diff_norm / expected_norm < 1e-8,
+        "spectator-node linsolve relative error = {}",
+        diff_norm / expected_norm
+    );
+}
+
+/// The mapped solver must preserve the identity-term-only linear system.
+#[test]
+fn test_square_linsolve_with_mappings_identity_term_only() {
+    use tensor4all_treetn::square_linsolve;
+
+    let phys_dim = 2;
+    let (rhs, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
+    let mut init = rhs.clone();
+    init.scale(AnyScalar::new_real(1.0 + 1.0e-6)).unwrap();
+    let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[0.0, 0.0], phys_dim);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
+
+    let options = LinsolveOptions::default()
+        .with_nfullsweeps(3)
+        .with_coefficients(1.0, 1.0)
+        .with_gmres_tol(1e-12)
+        .with_gmres_restart_dim(10)
+        .with_gmres_max_restarts(30)
+        .with_max_rank(4)
+        .with_convergence_tol(1e-8);
+    let result = square_linsolve(
+        &mpo,
+        &rhs,
+        init,
+        &"site0",
+        options,
+        Some(input_mapping),
+        Some(output_mapping),
+    )
+    .unwrap();
+
+    assert_eq!(result.sweeps, 0);
+    let got = result
+        .solution
+        .contract_to_tensor()
+        .unwrap()
+        .permuteinds(&site_indices)
+        .unwrap()
+        .to_vec::<f64>()
+        .unwrap();
+    let expected = rhs
+        .contract_to_tensor()
+        .unwrap()
+        .permuteinds(&site_indices)
+        .unwrap()
+        .to_vec::<f64>()
+        .unwrap();
+    let diff_norm: f64 = got
+        .iter()
+        .zip(expected.iter())
+        .map(|(&got, &expected)| (got - expected).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    let expected_norm: f64 = expected
+        .iter()
+        .map(|&value| value.powi(2))
+        .sum::<f64>()
+        .sqrt();
+    assert!(
+        diff_norm / expected_norm < 1e-8,
+        "identity-term-only linsolve relative error = {}",
+        diff_norm / expected_norm
+    );
+    assert!(result.converged);
+    assert!(result.residual.is_some_and(|residual| residual < 1.0e-8));
 }
 
 /// Test that square_linsolve still works without mappings (backward compat).

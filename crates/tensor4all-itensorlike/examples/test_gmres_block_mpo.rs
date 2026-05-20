@@ -17,7 +17,7 @@ use tensor4all_core::block_tensor::BlockTensor;
 use tensor4all_core::krylov::{
     gmres_with_truncation, restart_gmres_with_truncation, GmresOptions, RestartGmresOptions,
 };
-use tensor4all_core::TensorLike;
+use tensor4all_core::TensorVectorSpace;
 use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
