@@ -793,10 +793,11 @@ impl TensorTrain {
             }
 
             let link = DynIndex::new_dyn(1);
-            let left_link = <TensorDynLen as TensorConstructionLike>::ones(&[link.clone()])
-                .map_err(|e| TensorTrainError::OperationError {
-                    message: format!("failed to build implicit unit link tensor: {e}"),
-                })?;
+            let left_link =
+                <TensorDynLen as TensorConstructionLike>::ones(std::slice::from_ref(&link))
+                    .map_err(|e| TensorTrainError::OperationError {
+                        message: format!("failed to build implicit unit link tensor: {e}"),
+                    })?;
             tensors[site] = tensors[site].outer_product(&left_link).map_err(|e| {
                 TensorTrainError::OperationError {
                     message: format!("failed to attach implicit unit link: {e}"),

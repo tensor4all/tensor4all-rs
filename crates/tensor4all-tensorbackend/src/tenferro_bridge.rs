@@ -572,7 +572,7 @@ fn cached_einsum_native_tensors(
         .map_err(|e| anyhow!("native einsum failed: {e}"))?;
         result
             .eval_with_inputs(engine, &bindings)
-            .map(Clone::clone)
+            .cloned()
             .map_err(|e| anyhow!("native einsum failed: {e}"))
     })?;
     if trace_pool {

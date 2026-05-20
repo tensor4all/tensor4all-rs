@@ -163,6 +163,12 @@ impl<'a> ContractionOptions<'a> {
     }
 }
 
+impl Default for ContractionOptions<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Options for pairwise tensor contraction.
 ///
 /// The conjugation flags are semantically equivalent to contracting

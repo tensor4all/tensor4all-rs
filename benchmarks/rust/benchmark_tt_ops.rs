@@ -119,7 +119,7 @@ fn parse_args() -> Result<Options> {
     if opts.length == 0 || opts.zipup_length == 0 || opts.phys_dim == 0 {
         bail!("lengths and physical dimension must be positive");
     }
-    if opts.chis.is_empty() || opts.chis.iter().any(|&chi| chi == 0) {
+    if opts.chis.is_empty() || opts.chis.contains(&0) {
         bail!("all bond dimensions must be positive");
     }
     if opts.warmup_seconds < 0.0 || opts.measurement_seconds < 0.0 {
@@ -154,7 +154,7 @@ fn deterministic_tensor(indices: Vec<DynIndex>, seed: usize) -> Result<TensorDyn
     let data = (0..len)
         .map(|idx| deterministic_value(idx, seed))
         .collect::<Vec<_>>();
-    Ok(TensorDynLen::from_dense(indices, data)?)
+    TensorDynLen::from_dense(indices, data)
 }
 
 fn deterministic_native_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
@@ -375,7 +375,7 @@ fn stats_ms(times: &[f64]) -> (f64, f64, f64, f64) {
     let min = sorted[0];
     let max = *sorted.last().expect("non-empty timings");
     let mean = sorted.iter().sum::<f64>() / sorted.len() as f64;
-    let median = if sorted.len() % 2 == 0 {
+    let median = if sorted.len().is_multiple_of(2) {
         let hi = sorted.len() / 2;
         0.5 * (sorted[hi - 1] + sorted[hi])
     } else {
@@ -443,8 +443,8 @@ fn inner_sitewise_pair_preconj_no_sim(
     let mut env = contract_pair(&bra_conj[0], ket.tensor(0)?)
         .context("failed to contract leftmost site tensors")?;
 
-    for site in 1..bra_conj.len() {
-        env = contract_pair(&env, &bra_conj[site])
+    for (site, bra_site) in bra_conj.iter().enumerate().skip(1) {
+        env = contract_pair(&env, bra_site)
             .with_context(|| format!("failed to contract environment with site {site}"))?;
         env = contract_pair(&env, ket.tensor(site)?)
             .with_context(|| format!("failed to contract ket tensor at site {site}"))?;

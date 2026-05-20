@@ -196,11 +196,8 @@ where
 
             if per_node.iter().any(Option::is_some) {
                 let mut transformed_v = v.clone();
-                for mapping in &per_node {
-                    if let Some(mapping) = mapping {
-                        transformed_v =
-                            transformed_v.replaceind(&mapping.true_in, &mapping.temp_in)?;
-                    }
+                for mapping in per_node.iter().flatten() {
+                    transformed_v = transformed_v.replaceind(&mapping.true_in, &mapping.temp_in)?;
                 }
                 all_tensors.push(ContractOperand::Owned(transformed_v));
             } else {

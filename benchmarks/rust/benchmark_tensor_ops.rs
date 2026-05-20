@@ -37,7 +37,7 @@ fn parse_args() -> Result<(usize, Vec<usize>)> {
     } else {
         vec![6, 2, 2, 6]
     };
-    if dims.is_empty() || dims.iter().any(|&dim| dim == 0) {
+    if dims.is_empty() || dims.contains(&0) {
         bail!("all dimensions must be positive");
     }
     Ok((repeats, dims))

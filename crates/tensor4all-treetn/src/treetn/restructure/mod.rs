@@ -1211,15 +1211,8 @@ where
     {
         bail!(
             "restructure_to: result topology does not match target: expected edges {:?}, got {:?}",
-            target
-                .edges()
-                .map(|(left, right)| (left, right))
-                .collect::<Vec<_>>(),
-            result
-                .site_index_network()
-                .edges()
-                .map(|(left, right)| (left, right))
-                .collect::<Vec<_>>()
+            target.edges().collect::<Vec<_>>(),
+            result.site_index_network().edges().collect::<Vec<_>>()
         );
     }
 

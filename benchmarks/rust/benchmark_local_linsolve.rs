@@ -65,9 +65,9 @@ fn create_state_chain(
         .collect();
 
     let mut nodes = Vec::with_capacity(n);
-    for i in 0..n {
+    for (i, spectator_site) in spectator_sites.iter().enumerate().take(n) {
         let mut indices = chain_node_indices(n, i, &bonds, acted_sites);
-        indices.insert(0, spectator_sites[i].clone());
+        indices.insert(0, spectator_site.clone());
         let tensor = TensorDynLen::random::<f64, _>(rng, indices)?;
         let node = tree.add_tensor(make_node_name(i), tensor)?;
         nodes.push(node);
