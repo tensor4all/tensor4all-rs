@@ -489,6 +489,69 @@ fn test_partial_contract_contract_only() {
 }
 
 #[test]
+fn partial_contract_fit_inserts_dummy_links_for_nodewise_outer_product_spectators() {
+    let k_left = DynIndex::new_dyn(2);
+    let k_right = DynIndex::new_dyn(2);
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+    let bond_left = DynIndex::new_dyn(2);
+    let bond_right = DynIndex::new_dyn(2);
+
+    let a0 = TensorDynLen::from_dense(
+        vec![k_left.clone(), bond_left.clone()],
+        vec![1.0, 2.0, 3.0, 4.0],
+    )
+    .unwrap();
+    let a1 = TensorDynLen::from_dense(vec![bond_left.clone(), i.clone()], vec![5.0, 6.0, 7.0, 8.0])
+        .unwrap();
+    let b0 = TensorDynLen::from_dense(
+        vec![k_right.clone(), bond_right.clone()],
+        vec![0.5, 1.5, 2.5, 3.5],
+    )
+    .unwrap();
+    let b1 = TensorDynLen::from_dense(
+        vec![bond_right.clone(), j.clone()],
+        vec![1.0, -1.0, 2.0, -2.0],
+    )
+    .unwrap();
+    let lhs = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![a0, a1],
+        vec!["left".to_string(), "right".to_string()],
+    )
+    .unwrap();
+    let rhs = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![b0, b1],
+        vec!["left".to_string(), "right".to_string()],
+    )
+    .unwrap();
+    let spec = PartialContractionSpec {
+        contract_pairs: vec![(k_left.clone(), k_right.clone())],
+        diagonal_pairs: vec![],
+        output_order: None,
+    };
+
+    let rhs_aligned = rhs.replaceind(&k_right, &k_left).unwrap();
+    let reference = tensordot(
+        &lhs.contract_to_tensor().unwrap(),
+        &rhs_aligned.contract_to_tensor().unwrap(),
+        &[(k_left.clone(), k_left)],
+    )
+    .unwrap();
+    let actual = partial_contract(
+        &lhs,
+        &rhs,
+        &spec,
+        &"right".to_string(),
+        ContractionOptions::fit(),
+    )
+    .unwrap()
+    .to_dense()
+    .unwrap();
+
+    assert!(actual.distance(&reference).unwrap() < 1.0e-10);
+}
+
+#[test]
 fn test_partial_contract_empty_spec() {
     // Empty spec: no contract, no diagonal pair → full outer product
     let s_a = DynIndex::new_dyn(2);

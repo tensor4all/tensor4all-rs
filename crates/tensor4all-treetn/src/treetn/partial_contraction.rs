@@ -442,8 +442,9 @@ where
     validate_union_topology(&node_names, &union_edges)?;
 
     let structural_result = (|| {
-        let aligned_a = align_to_union_topology(a, &node_names, &union_edges)?;
-        let aligned_b = align_to_union_topology(b, &node_names, &union_edges)?;
+        let mut aligned_a = align_to_union_topology(a, &node_names, &union_edges)?;
+        let mut aligned_b = align_to_union_topology(b, &node_names, &union_edges)?;
+        connect_nodewise_outer_product_spectators(&mut aligned_a, &mut aligned_b)?;
         contract(&aligned_a, &aligned_b, center, options.clone())
             .context("partial_contract: failed contraction after aligning mismatched topologies")
     })();
@@ -732,6 +733,77 @@ where
     Ok(())
 }
 
+fn has_contractable_index_pair(left: &[DynIndex], right: &[DynIndex]) -> bool {
+    left.iter().any(|idx_left| {
+        right
+            .iter()
+            .any(|idx_right| idx_left.is_contractable(idx_right))
+    })
+}
+
+fn connect_nodewise_outer_product_spectators<V>(
+    a: &mut TreeTN<TensorDynLen, V>,
+    b: &mut TreeTN<TensorDynLen, V>,
+) -> Result<()>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+    <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+{
+    let mut node_names = a.node_names();
+    node_names.retain(|node_name| b.node_index(node_name).is_some());
+    node_names.sort();
+
+    for node_name in node_names {
+        let node_a = a
+            .node_index(&node_name)
+            .context("partial_contract: node disappeared while adding dummy contraction links")?;
+        let node_b = b.node_index(&node_name).context(
+            "partial_contract: matching node disappeared while adding dummy contraction links",
+        )?;
+
+        let tensor_a = a
+            .tensor(node_a)
+            .cloned()
+            .context("partial_contract: missing tensor while adding dummy contraction links")?;
+        let tensor_b = b.tensor(node_b).cloned().context(
+            "partial_contract: missing matching tensor while adding dummy contraction links",
+        )?;
+
+        if has_contractable_index_pair(&tensor_a.external_indices(), &tensor_b.external_indices()) {
+            continue;
+        }
+
+        let (dummy_a, dummy_b) = DynIndex::create_dummy_link_pair();
+        let dummy_tensor_a =
+            <TensorDynLen as TensorConstructionLike>::ones(std::slice::from_ref(&dummy_a))
+                .context("partial_contract: failed to build dummy contraction link")?;
+        let dummy_tensor_b =
+            <TensorDynLen as TensorConstructionLike>::ones(std::slice::from_ref(&dummy_b))
+                .context("partial_contract: failed to build matching dummy contraction link")?;
+        let expanded_a = tensor_a
+            .outer_product(&dummy_tensor_a)
+            .context("partial_contract: failed to attach dummy contraction link")?;
+        let expanded_b = tensor_b
+            .outer_product(&dummy_tensor_b)
+            .context("partial_contract: failed to attach matching dummy contraction link")?;
+
+        a.replace_tensor(node_a, expanded_a)
+            .context(
+                "partial_contract: failed to replace tensor after adding dummy contraction link",
+            )?
+            .context("partial_contract: node disappeared after adding dummy contraction link")?;
+        b.replace_tensor(node_b, expanded_b)
+            .context(
+                "partial_contract: failed to replace matching tensor after adding dummy contraction link",
+            )?
+            .context(
+                "partial_contract: matching node disappeared after adding dummy contraction link",
+            )?;
+    }
+
+    Ok(())
+}
+
 /// Partially contract two TreeTNs according to the given specification.
 ///
 /// # Arguments
@@ -795,7 +867,7 @@ where
 {
     validate_partial_contraction_spec(a, b, spec)?;
 
-    let (a_modified, mut b_modified, restore_from, restore_to) =
+    let (mut a_modified, mut b_modified, restore_from, restore_to) =
         apply_diagonal_pairs(a, b, &spec.diagonal_pairs)?;
 
     for (idx_a, idx_b) in &spec.contract_pairs {
@@ -810,6 +882,7 @@ where
 
     let mut result = if a_modified.same_topology(&b_modified) {
         align_contract_pair_site_nodes(&a_modified, &mut b_modified, &spec.contract_pairs)?;
+        connect_nodewise_outer_product_spectators(&mut a_modified, &mut b_modified)?;
         contract(&a_modified, &b_modified, center, options)
             .context("partial_contract: contraction failed")?
     } else {
