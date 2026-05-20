@@ -54,9 +54,7 @@ pub use index_like::{ConjState, IndexLike};
 pub mod index_ops;
 pub use index_ops::{
     check_unique_indices, common_ind_positions, common_inds, hascommoninds, hasind, hasinds,
-    noncommon_inds, prepare_contraction, prepare_contraction_pairs, replaceinds,
-    replaceinds_in_place, union_inds, unique_inds, ContractionError, ContractionSpec,
-    ReplaceIndsError,
+    noncommon_inds, replaceinds, replaceinds_in_place, union_inds, unique_inds, ReplaceIndsError,
 };
 pub use smallstring::{SmallChar, SmallString, SmallStringError};
 pub use tagset::{Tag, TagSetError, TagSetLike};
@@ -85,16 +83,19 @@ pub use tensor4all_tensorbackend::{
     print_and_reset_native_einsum_profile, reset_native_einsum_profile,
 };
 pub use tensor_like::{
-    AllowedPairs, Canonical, DirectSumResult, FactorizeAlg, FactorizeError, FactorizeOptions,
-    FactorizeResult, LinearizationOrder, TensorLike,
+    Canonical, DirectSumResult, FactorizeAlg, FactorizeError, FactorizeOptions, FactorizeResult,
+    LinearizationOrder, TensorConstructionLike, TensorContractionLike, TensorFactorizationLike,
+    TensorLike, TensorVectorSpace,
 };
 
-// Contraction - backwards compatibility
-pub use defaults::contract;
 pub use defaults::contract::{
-    contract_connected, contract_connected_with_options, contract_multi, contract_multi_owned,
-    contract_multi_with_options, print_and_reset_contract_profile, reset_contract_profile,
-    ContractionOptions,
+    contract, contract_owned, contract_owned_with_options, contract_pair,
+    contract_pair_with_operand_options, contract_pair_with_options, contract_with_options,
+    outer_product, print_and_reset_contract_profile, reset_contract_profile, tensordot,
+    ContractionOptions, PairwiseContractionOptions,
+};
+pub use defaults::tensordynlen::{
+    print_and_reset_pairwise_contract_profile, reset_pairwise_contract_profile,
 };
 
 // Re-export linear algebra modules from defaults for backwards compatibility

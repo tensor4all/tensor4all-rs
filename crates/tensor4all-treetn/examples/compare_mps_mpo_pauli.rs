@@ -11,7 +11,9 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use tensor4all_core::{index::DynId, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike};
+use tensor4all_core::{
+    index::DynId, DynIndex, IndexLike, TensorContractionLike, TensorDynLen, TensorIndex,
+};
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalForm,
     CanonicalizationOptions, IndexMapping, LinearOperator, LinsolveOptions, LocalUpdateSweepPlan,

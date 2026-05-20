@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use rand_chacha::rand_core::{RngCore, SeedableRng};
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorLike};
+use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
 use tensor4all_treetn::{SwapOptions, TreeTN};
 
 fn build_tn(

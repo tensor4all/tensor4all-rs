@@ -14,7 +14,9 @@ use std::time::{Duration, Instant};
 
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use tensor4all_core::{index::DynId, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike};
+use tensor4all_core::{
+    index::DynId, DynIndex, IndexLike, TensorContractionLike, TensorDynLen, TensorIndex,
+};
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, random_treetn, ApplyOptions, CanonicalForm,
     CanonicalizationOptions, IndexMapping, LinearOperator, LinkSpace, LinsolveOptions,

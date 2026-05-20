@@ -307,11 +307,9 @@ where
             let onehot = T::onehot(&index_vals)
                 .context("TreeTNEvaluator::evaluate_batch: failed to create one-hot tensor")?;
 
-            let result = T::contract(
-                &[&entry.tensor, &onehot],
-                tensor4all_core::AllowedPairs::All,
-            )
-            .context("TreeTNEvaluator::evaluate_batch: failed to contract tensor with one-hot")?;
+            let result = T::contract(&[&entry.tensor, &onehot]).context(
+                "TreeTNEvaluator::evaluate_batch: failed to contract tensor with one-hot",
+            )?;
 
             contracted_tensors.push(result);
             contracted_names.push(entry.name.clone());

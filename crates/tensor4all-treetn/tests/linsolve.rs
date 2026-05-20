@@ -5,7 +5,9 @@
 
 use std::collections::HashMap;
 
-use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike};
+use tensor4all_core::{
+    AnyScalar, DynIndex, IndexLike, TensorContractionLike, TensorDynLen, TensorIndex,
+};
 use tensor4all_treetn::{
     relative_linear_system_residual, ApplyOptions, EnvironmentCache, IndexMapping, LinearOperator,
     LinsolveOptions, NetworkTopology, ProjectedOperator, ProjectedState, SquareLinsolveUpdater,

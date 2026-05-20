@@ -2,7 +2,10 @@
 
 use tensor4all_core::index::{DynId, Index};
 use tensor4all_core::DynIndex;
-use tensor4all_core::{AllowedPairs, TensorDynLen, TensorIndex, TensorLike};
+use tensor4all_core::{
+    outer_product, TensorConstructionLike, TensorContractionLike, TensorDynLen, TensorIndex,
+    TensorVectorSpace,
+};
 
 /// Helper to create a simple tensor with given dimensions
 fn make_tensor(dims: &[usize]) -> TensorDynLen {
@@ -51,8 +54,8 @@ fn test_tensor_like_contract_basic() {
     let b_data: Vec<f64> = (0..12).map(|x| x as f64).collect();
     let b = TensorDynLen::from_dense(vec![j_copy.clone(), k.clone()], b_data).unwrap();
 
-    // Use TensorLike::contract - auto-detects contractable pairs via is_contractable
-    let c = <TensorDynLen as TensorLike>::contract(&[&a, &b], AllowedPairs::All)
+    // Use TensorContractionLike::contract - auto-detects contractable pairs via is_contractable
+    let c = <TensorDynLen as TensorContractionLike>::contract(&[&a, &b])
         .expect("contract should succeed");
 
     // Result should be 2x4
@@ -60,11 +63,49 @@ fn test_tensor_like_contract_basic() {
 }
 
 #[test]
-fn test_contract_allowed_pairs_specified() {
+fn tensor_vector_space_default_methods_cover_common_paths() {
+    let i = Index::<DynId>::new_dyn(3);
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, -2.0, 3.0]).unwrap();
+    let b = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, -2.0, 3.0 + 1.0e-13]).unwrap();
+
+    let neg = TensorVectorSpace::neg(&a).unwrap();
+    assert_eq!(neg.to_vec::<f64>().unwrap(), vec![-1.0, 2.0, -3.0]);
+    assert!(a.isapprox(&b, 1.0e-12, 0.0));
+
+    let j = Index::<DynId>::new_dyn(2);
+    let incompatible = TensorDynLen::from_dense(vec![j], vec![1.0, 2.0]).unwrap();
+    assert!(!a.isapprox(&incompatible, 1.0e-12, 0.0));
+}
+
+#[test]
+fn tensor_contraction_and_construction_default_methods_cover_paths() {
+    let i = Index::<DynId>::new_dyn(2);
+    let j = Index::<DynId>::new_dyn(3);
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![2.0, 5.0]).unwrap();
+    let b = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0; 6]).unwrap();
+
+    let contracted = a.contract_pair(&b).unwrap();
+    assert_eq!(contracted.indices, vec![j.clone()]);
+    assert_eq!(contracted.to_vec::<f64>().unwrap(), vec![7.0, 7.0, 7.0]);
+    TensorContractionLike::validate(&contracted).unwrap();
+
+    let unchanged = TensorConstructionLike::select_indices(&b, &[], &[]).unwrap();
+    assert!(unchanged.isapprox(&b, 0.0, 0.0));
+
+    let selected =
+        TensorConstructionLike::select_indices(&b, std::slice::from_ref(&i), &[1]).unwrap();
+    assert_eq!(selected.indices, vec![j.clone()]);
+    assert_eq!(selected.to_vec::<f64>().unwrap(), vec![1.0, 1.0, 1.0]);
+
+    let err =
+        TensorConstructionLike::select_indices(&b, std::slice::from_ref(&i), &[2]).unwrap_err();
+    assert!(err.to_string().contains("out of range"));
+}
+
+#[test]
+fn test_contract_three_tensor_chain() {
     // Create three tensors: A(i,j), B(j,k), C(k,l)
-    // With AllowedPairs::Specified(&[(0, 1), (1, 2)]) - A-B and B-C pairs allowed
-    // j is shared between A and B, k is shared between B and C
-    // All tensors form a connected chain: A-j-B-k-C
+    // j is shared between A and B, k is shared between B and C.
     let i = Index::<DynId>::new_dyn(2);
     let j = Index::<DynId>::new_dyn(3);
     let k = Index::<DynId>::new_dyn(4);
@@ -84,14 +125,8 @@ fn test_contract_allowed_pairs_specified() {
     let c_data: Vec<f64> = (0..20).map(|x| x as f64).collect();
     let c = TensorDynLen::from_dense(vec![k_copy.clone(), l.clone()], c_data).unwrap();
 
-    // Contract with specified pairs
-    // j is contracted between A and B (in pair (0,1))
-    // k is contracted between B and C (in pair (1,2))
-    let result = <TensorDynLen as TensorLike>::contract(
-        &[&a, &b, &c],
-        AllowedPairs::Specified(&[(0, 1), (1, 2)]),
-    )
-    .expect("contract should succeed");
+    let result = <TensorDynLen as TensorContractionLike>::contract(&[&a, &b, &c])
+        .expect("contract should succeed");
 
     // Result should have: i (from A, dim=2), l (from C, dim=5)
     // j and k are contracted
@@ -102,9 +137,7 @@ fn test_contract_allowed_pairs_specified() {
 }
 
 #[test]
-fn test_contract_specified_empty_with_common_indices_errors() {
-    // AllowedPairs::Specified(&[]) with tensors that share index IDs should error
-    // because outer_product requires tensors to have no common indices
+fn test_outer_product_with_common_indices_errors() {
     let i = Index::<DynId>::new_dyn(2);
     let j = Index::<DynId>::new_dyn(3);
 
@@ -118,19 +151,16 @@ fn test_contract_specified_empty_with_common_indices_errors() {
     let b_data: Vec<f64> = (0..6).map(|x| x as f64).collect();
     let b = TensorDynLen::from_dense(vec![i_copy.clone(), j_copy.clone()], b_data).unwrap();
 
-    // With empty allowed pairs and tensors that share index IDs,
-    // outer_product will fail because tensors have common indices
-    let result = <TensorDynLen as TensorLike>::contract(&[&a, &b], AllowedPairs::Specified(&[]));
+    let result = outer_product(&a, &b);
 
     assert!(result.is_err());
-    let err_msg = result.unwrap_err().to_string();
+    let err_msg = result.unwrap_err().to_string().to_lowercase();
     assert!(err_msg.contains("common indices"));
 }
 
 #[test]
-fn test_contract_specified_empty_outer_product() {
-    // AllowedPairs::Specified(&[]) with tensors that have different index IDs
-    // should succeed via outer product
+fn test_outer_product_disconnected_tensors() {
+    // Disconnected inputs require an explicit outer product.
     let i = Index::<DynId>::new_dyn(2);
     let j = Index::<DynId>::new_dyn(3);
     let k = Index::<DynId>::new_dyn(4);
@@ -144,9 +174,7 @@ fn test_contract_specified_empty_outer_product() {
     let b_data: Vec<f64> = (0..20).map(|x| x as f64).collect();
     let b = TensorDynLen::from_dense(vec![k.clone(), l.clone()], b_data).unwrap();
 
-    // With empty allowed pairs and different index IDs, outer product succeeds
-    let result =
-        <TensorDynLen as TensorLike>::contract(&[&a, &b], AllowedPairs::Specified(&[])).unwrap();
+    let result = outer_product(&a, &b).unwrap();
 
     // Result should have 4 indices (i, j, k, l)
     let mut sorted_dims = result.dims();
@@ -156,15 +184,14 @@ fn test_contract_specified_empty_outer_product() {
 }
 
 #[test]
-fn test_contract_specified_empty_outer_product_preserves_input_component_order() {
+fn test_outer_product_preserves_input_component_order() {
     let i = Index::<DynId>::new_dyn(2);
     let j = Index::<DynId>::new_dyn(3);
 
     let a = TensorDynLen::from_dense(vec![i.clone()], vec![2.0, -1.0]).unwrap();
     let b = TensorDynLen::from_dense(vec![j.clone()], vec![3.0, 4.0, -2.0]).unwrap();
 
-    let result =
-        <TensorDynLen as TensorLike>::contract(&[&a, &b], AllowedPairs::Specified(&[])).unwrap();
+    let result = outer_product(&a, &b).unwrap();
 
     assert_eq!(result.indices, vec![i, j]);
     let expected = TensorDynLen::from_dense(
@@ -179,10 +206,7 @@ fn test_contract_specified_empty_outer_product_preserves_input_component_order()
 }
 
 #[test]
-fn test_contract_specified_disconnected_outer_product() {
-    // AllowedPairs::Specified(&[(0,1), (2,3)]) with 4 tensors
-    // This creates a disconnected graph: {A,B} and {C,D}
-    // Each component contracts within itself, then outer product combines them
+fn test_contract_components_then_outer_product() {
     let i = Index::<DynId>::new_dyn(2);
     let j = Index::<DynId>::new_dyn(3);
 
@@ -193,13 +217,9 @@ fn test_contract_specified_disconnected_outer_product() {
     let j_copy = Index::new(j.id, j.dim);
     let d = TensorDynLen::from_dense(vec![j_copy.clone()], vec![8.0, 9.0, 10.0]).unwrap();
 
-    // Disconnected pairs: (0,1) and (2,3)
-    // A and B contract i, C and D contract j, then outer product combines results
-    let result = <TensorDynLen as TensorLike>::contract(
-        &[&a, &b, &c, &d],
-        AllowedPairs::Specified(&[(0, 1), (2, 3)]),
-    )
-    .unwrap();
+    let left = <TensorDynLen as TensorContractionLike>::contract(&[&a, &b]).unwrap();
+    let right = <TensorDynLen as TensorContractionLike>::contract(&[&c, &d]).unwrap();
+    let result = outer_product(&left, &right).unwrap();
 
     // A(i) * B(i) contracts to scalar (dim 0)
     // C(j) * D(j) contracts to scalar (dim 0)
@@ -264,8 +284,6 @@ fn test_onehot_empty() {
 
 #[test]
 fn test_onehot_contraction() {
-    use tensor4all_core::AllowedPairs;
-
     // Create a tensor A(i,j) and a onehot V(i)
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(4);
@@ -279,7 +297,7 @@ fn test_onehot_contraction() {
     let v = TensorDynLen::onehot(&[(i.clone(), 1)]).unwrap();
 
     // Contract: V(i) * A(i,j) = A[1,:]
-    let result = <TensorDynLen as TensorLike>::contract(&[&v, &a], AllowedPairs::All).unwrap();
+    let result = <TensorDynLen as TensorContractionLike>::contract(&[&v, &a]).unwrap();
     assert_eq!(result.dims(), vec![4]);
     let data = result.to_vec::<f64>().unwrap();
     // Row i=1 of the column-major 3×4 matrix: [1, 4, 7, 10]

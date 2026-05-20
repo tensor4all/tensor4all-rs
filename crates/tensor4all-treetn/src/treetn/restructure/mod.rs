@@ -1330,7 +1330,7 @@ where
 mod tests {
     use std::collections::HashSet;
 
-    use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    use tensor4all_core::{DynIndex, TensorDynLen};
 
     use super::*;
 

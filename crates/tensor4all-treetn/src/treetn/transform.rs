@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use petgraph::stable_graph::{NodeIndex, StableGraph};
 
 use tensor4all_core::{
-    index_ops, AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
+    index_ops, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
 };
 
 use super::TreeTN;
@@ -411,9 +411,9 @@ where
                 .remove(&to)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", to))?;
 
-            // Contract using TensorLike::contract
+            // Contract using TensorContractionLike::contract
             // (bond indices are auto-detected via is_contractable)
-            let contracted = T::contract(&[&to_tensor, &from_tensor], AllowedPairs::All)
+            let contracted = T::contract(&[&to_tensor, &from_tensor])
                 .map_err(|e| anyhow::anyhow!("Failed to contract tensors: {}", e))?;
 
             tensors.insert(to, contracted);

@@ -5,7 +5,9 @@ use crate::{
     SiteIndexNetwork, TreeTopology,
 };
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{
+    DynIndex, FactorizeAlg, SvdTruncationPolicy, TensorContractionLike, TensorDynLen, TensorIndex,
+};
 
 struct PartialContractionInputs {
     tn_a: TreeTN<TensorDynLen, String>,
@@ -79,6 +81,78 @@ fn test_partial_contraction_spec_creation() {
     };
     assert_eq!(spec.contract_pairs.len(), 1);
     assert!(spec.diagonal_pairs.is_empty());
+}
+
+#[test]
+fn helper_topology_and_dense_limit_paths_are_exercised() {
+    assert_eq!(canonical_edge(&2usize, &1usize), (1, 2));
+
+    let empty = validate_union_topology::<usize>(&[], &[]).unwrap_err();
+    assert!(empty.to_string().contains("at least one node"));
+
+    let unknown = validate_union_topology(&[0usize], &[(0usize, 1usize)]).unwrap_err();
+    assert!(
+        unknown.to_string().contains("unknown node")
+            || unknown.to_string().contains("incompatible topologies")
+    );
+
+    let disconnected = validate_union_topology(&[0usize, 1usize], &[]).unwrap_err();
+    assert!(disconnected.to_string().contains("incompatible topologies"));
+
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    assert_eq!(dense_element_count(&[i.clone(), j.clone()]).unwrap(), 6);
+    assert_eq!(
+        dense_contract_output_indices(&[i.clone(), j.clone()], std::slice::from_ref(&j)),
+        vec![i.clone()]
+    );
+    assert!(
+        ensure_dense_reference_limit("lhs", &[i.clone(), j.clone()], 5)
+            .unwrap_err()
+            .to_string()
+            .contains("exceeding limit")
+    );
+    ensure_dense_reference_limit("lhs", &[i.clone(), j.clone()], 6).unwrap();
+}
+
+#[test]
+fn helper_factorize_options_and_union_topology_paths_are_exercised() {
+    let policy = SvdTruncationPolicy::new(1.0e-8);
+    let options = ContractionOptions::default()
+        .with_factorize_alg(FactorizeAlg::SVD)
+        .with_max_rank(3)
+        .with_svd_policy(policy);
+    let factorize_options = factorize_options_from_contraction_options(&options).unwrap();
+    assert_eq!(factorize_options.alg, FactorizeAlg::SVD);
+    assert_eq!(factorize_options.max_rank, Some(3));
+    assert_eq!(factorize_options.svd_policy, Some(policy));
+
+    let qr_options = factorize_options_from_contraction_options(
+        &ContractionOptions::default()
+            .with_factorize_alg(FactorizeAlg::QR)
+            .with_qr_rtol(1.0e-7),
+    )
+    .unwrap();
+    assert_eq!(qr_options.alg, FactorizeAlg::QR);
+    assert_eq!(qr_options.qr_rtol, Some(1.0e-7));
+
+    let PartialContractionInputs { tn_a, tn_b, .. } = make_partial_contraction_inputs();
+    let dense_a = tn_a.contract_to_tensor().unwrap();
+    let dense_b = tn_b.contract_to_tensor().unwrap();
+    let contracted = dense_a.contract_pair(&dense_b).unwrap();
+    let topology = union_result_topology(&tn_a, &tn_b, &contracted).unwrap();
+    assert_eq!(topology.nodes.len(), 2);
+
+    validate_mismatched_dense_reference_fallback(
+        &tn_a,
+        &tn_b,
+        &ContractionOptions::default().with_mismatched_topology_dense_limit(4096),
+    )
+    .unwrap();
+    let err =
+        validate_mismatched_dense_reference_fallback(&tn_a, &tn_b, &ContractionOptions::default())
+            .unwrap_err();
+    assert!(err.to_string().contains("explicit dense/reference limit"));
 }
 
 #[test]

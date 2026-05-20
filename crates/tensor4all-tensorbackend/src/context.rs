@@ -2,18 +2,21 @@
 //!
 //! tensor4all-rs routes tenferro CPU execution through one process-global
 //! `CpuContext`, matching tenferro's `cpu:0` default-global thread-pool model.
-//! Plain tensor operations and eager AD currently use separate `CpuBackend`
-//! values because tenferro does not yet expose a public API for borrowing the
-//! backend owned by an `EagerContext<CpuBackend>`. Both backends are created
-//! from the same global CPU context, so thread-pool configuration is shared.
+//! Plain tensor operations, cached traced execution, and eager AD currently use
+//! separate `CpuBackend` values because tenferro does not yet expose a public
+//! API for borrowing the backend owned by an `EagerContext<CpuBackend>`. All
+//! backends are created from the same global CPU context, so thread-pool
+//! configuration is shared.
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use tenferro::{CpuBackend, EagerContext};
+use tenferro::{CpuBackend, EagerContext, Engine};
+use tenferro_tensor::buffer_pool::BufferPoolStats;
 use tenferro_tensor::cpu::CpuContext;
 
 static DEFAULT_CPU_CONTEXT: OnceLock<Arc<CpuContext>> = OnceLock::new();
 static DEFAULT_BACKEND: OnceLock<Mutex<CpuBackend>> = OnceLock::new();
+static DEFAULT_ENGINE: OnceLock<Mutex<Engine<CpuBackend>>> = OnceLock::new();
 static DEFAULT_EAGER_CTX: OnceLock<Arc<EagerContext<CpuBackend>>> = OnceLock::new();
 
 fn default_cpu_context() -> Arc<CpuContext> {
@@ -24,6 +27,18 @@ fn default_cpu_context() -> Arc<CpuContext> {
 
 fn default_backend() -> &'static Mutex<CpuBackend> {
     DEFAULT_BACKEND.get_or_init(|| Mutex::new(CpuBackend::from_context(default_cpu_context())))
+}
+
+fn default_engine() -> &'static Mutex<Engine<CpuBackend>> {
+    DEFAULT_ENGINE
+        .get_or_init(|| Mutex::new(Engine::new(CpuBackend::from_context(default_cpu_context()))))
+}
+
+fn lock_default_engine() -> std::sync::MutexGuard<'static, Engine<CpuBackend>> {
+    match default_engine().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 /// Run a closure against the process-global CPU backend.
@@ -38,10 +53,40 @@ pub fn with_default_backend<R>(f: impl FnOnce(&mut CpuBackend) -> R) -> R {
     f(&mut backend)
 }
 
+/// Run a closure against the process-global tenferro execution engine.
+///
+/// This is used for native tensor operations that benefit from tenferro's
+/// persistent execution caches, such as N-ary einsum contraction paths.
+pub(crate) fn with_default_engine<R>(f: impl FnOnce(&mut Engine<CpuBackend>) -> R) -> R {
+    let mut engine = lock_default_engine();
+    f(&mut engine)
+}
+
+/// Return retained-buffer statistics for the process-global execution engine.
+pub(crate) fn default_engine_buffer_pool_stats() -> BufferPoolStats {
+    lock_default_engine().buffer_pool_stats()
+}
+
+/// Reset retained buffers in the process-global execution engine.
+pub(crate) fn reset_default_engine_buffer_pool() {
+    lock_default_engine().reset_buffer_pool();
+}
+
+/// Drop and recreate the process-global execution engine.
+///
+/// This releases tenferro's retained execution buffers and cached contraction
+/// paths. It is intended for diagnostics and memory-pressure recovery, not for
+/// normal hot loops where the caches are valuable.
+pub(crate) fn reset_default_engine() {
+    let mut engine = lock_default_engine();
+    *engine = Engine::new(CpuBackend::from_context(default_cpu_context()));
+}
+
 /// Return the process-global eager context used for reverse-mode AD.
 ///
-/// This context owns a separate `CpuBackend` from [`with_default_backend`], but
-/// both backends share the same process-global tenferro CPU context.
+/// This context owns a separate `CpuBackend` from [`with_default_backend`] and
+/// the cached execution engine, but all backends share the same process-global
+/// tenferro CPU context.
 pub fn default_eager_ctx() -> Arc<EagerContext<CpuBackend>> {
     DEFAULT_EAGER_CTX
         .get_or_init(|| EagerContext::with_backend(CpuBackend::from_context(default_cpu_context())))
@@ -75,6 +120,17 @@ mod tests {
         let main_threads = with_default_backend(|backend| backend.num_threads());
         let worker_threads =
             std::thread::spawn(|| with_default_backend(|backend| backend.num_threads()))
+                .join()
+                .expect("worker thread should complete");
+
+        assert_eq!(main_threads, worker_threads);
+    }
+
+    #[test]
+    fn default_engine_is_shared_across_threads() {
+        let main_threads = with_default_engine(|engine| engine.backend().num_threads());
+        let worker_threads =
+            std::thread::spawn(|| with_default_engine(|engine| engine.backend().num_threads()))
                 .join()
                 .expect("worker thread should complete");
 

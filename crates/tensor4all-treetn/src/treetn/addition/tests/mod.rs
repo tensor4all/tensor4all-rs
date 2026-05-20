@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike};
+use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
 
 use crate::treetn::TreeTN;
 

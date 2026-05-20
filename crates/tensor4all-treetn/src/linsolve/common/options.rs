@@ -3,6 +3,15 @@
 use crate::TruncationOptions;
 use tensor4all_core::{AnyScalar, SvdTruncationPolicy};
 
+/// Residual tolerance convention for local GMRES solves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GmresToleranceMode {
+    /// Stop when `||b - A*x|| / ||b|| < gmres_tol`.
+    Relative,
+    /// Stop when `||b - A*x|| < gmres_tol`.
+    Absolute,
+}
+
 /// Options for the linsolve algorithm.
 #[derive(Debug, Clone)]
 pub struct LinsolveOptions {
@@ -14,6 +23,8 @@ pub struct LinsolveOptions {
     pub truncation: TruncationOptions,
     /// Tolerance for GMRES convergence.
     pub gmres_tol: f64,
+    /// Residual tolerance convention for GMRES convergence.
+    pub gmres_tolerance_mode: GmresToleranceMode,
     /// Maximum number of GMRES restart cycles per local solve.
     ///
     /// This matches KrylovKit's `maxiter` convention. The maximum number of
@@ -41,6 +52,7 @@ impl Default for LinsolveOptions {
             nfullsweeps: 5,
             truncation: TruncationOptions::default(),
             gmres_tol: 1e-10,
+            gmres_tolerance_mode: GmresToleranceMode::Relative,
             gmres_max_restarts: 100,
             gmres_restart_dim: 30,
             a0: AnyScalar::new_real(0.0),
@@ -87,6 +99,24 @@ impl LinsolveOptions {
     /// Set GMRES tolerance.
     pub fn with_gmres_tol(mut self, tol: f64) -> Self {
         self.gmres_tol = tol;
+        self
+    }
+
+    /// Set the residual tolerance convention for GMRES.
+    pub fn with_gmres_tolerance_mode(mut self, mode: GmresToleranceMode) -> Self {
+        self.gmres_tolerance_mode = mode;
+        self
+    }
+
+    /// Use relative residual convergence for GMRES.
+    pub fn with_gmres_relative_tolerance(mut self) -> Self {
+        self.gmres_tolerance_mode = GmresToleranceMode::Relative;
+        self
+    }
+
+    /// Use absolute residual convergence for GMRES.
+    pub fn with_gmres_absolute_tolerance(mut self) -> Self {
+        self.gmres_tolerance_mode = GmresToleranceMode::Absolute;
         self
     }
 

@@ -1,6 +1,6 @@
 //! Tests for reverse-mode automatic differentiation through TreeTN operations.
 
-use tensor4all_core::{contract_multi, AllowedPairs, DynIndex, IndexLike, TensorDynLen};
+use tensor4all_core::{contract, DynIndex, IndexLike, TensorDynLen};
 use tensor4all_treetn::TreeTN;
 
 fn make_three_site_mps_data() -> (Vec<Vec<DynIndex>>, Vec<Vec<f64>>) {
@@ -49,7 +49,7 @@ fn backward_ad_to_dense_propagates_gradients() {
         vec![1.0; dense.indices().iter().map(|i| i.dim()).product::<usize>()],
     )
     .unwrap();
-    let scalar = contract_multi(&[&dense, &ones], AllowedPairs::All).unwrap();
+    let scalar = contract(&[&dense, &ones]).unwrap();
 
     scalar.backward().unwrap();
 
@@ -83,7 +83,7 @@ fn backward_ad_gradient_matches_finite_diff() {
         vec![1.0; dense.indices().iter().map(|i| i.dim()).product::<usize>()],
     )
     .unwrap();
-    let scalar = contract_multi(&[&dense, &ones], AllowedPairs::All).unwrap();
+    let scalar = contract(&[&dense, &ones]).unwrap();
 
     scalar.backward().unwrap();
 
@@ -148,7 +148,7 @@ fn backward_accumulates_until_clear_grad_across_treetn_nodes() {
     )
     .unwrap();
 
-    let scalar = contract_multi(&[&dense, &ones], AllowedPairs::All).unwrap();
+    let scalar = contract(&[&dense, &ones]).unwrap();
     scalar.backward().unwrap();
 
     let first_grads: Vec<Vec<f64>> = ttn
@@ -165,7 +165,7 @@ fn backward_accumulates_until_clear_grad_across_treetn_nodes() {
         })
         .collect();
 
-    let scalar = contract_multi(&[&dense, &ones], AllowedPairs::All).unwrap();
+    let scalar = contract(&[&dense, &ones]).unwrap();
     scalar.backward().unwrap();
 
     for (node_pos, (&ni, first_grad)) in ttn.node_indices().iter().zip(&first_grads).enumerate() {

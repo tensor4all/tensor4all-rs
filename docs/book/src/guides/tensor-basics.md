@@ -112,7 +112,7 @@ Think of it as a generalization of matrix multiplication.
 ### Pairwise contraction
 
 ```rust
-use tensor4all_core::{TensorDynLen, Index};
+use tensor4all_core::{TensorDynLen, Index, contract};
 use tensor4all_core::index::DynId;
 
 // A[i,j] and B[j,k] — contracting over j gives C[i,k].
@@ -123,18 +123,20 @@ let k = Index::new_dyn(4);
 let a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 let b = TensorDynLen::zeros::<f64>(vec![j.clone(), k.clone()]).unwrap();
 
-let c = a.contract(&b).unwrap();      // or equivalently: &a * &b
+let c = contract(&[&a, &b]).unwrap();
 assert_eq!(c.dims(), vec![2, 4]);  // j is summed away
 ```
 
 ### Multi-tensor contraction
 
-`contract_multi` contracts a list of tensors, handling disconnected components
-via outer products. `contract_connected` is the same but returns an error if the
-contraction graph is disconnected.
+`contract` contracts a connected list of tensors. Disconnected inputs are an
+error; use `outer_product` explicitly when a tensor product of disconnected
+pieces is intended.
 
 ```rust
-use tensor4all_core::{TensorDynLen, Index, contract_multi, contract_connected, AllowedPairs};
+use tensor4all_core::{
+    TensorDynLen, Index, contract, outer_product,
+};
 use tensor4all_core::index::DynId;
 
 let i = Index::new_dyn(2);
@@ -154,20 +156,13 @@ let c: TensorDynLen =
     TensorDynLen::random::<f64, _>(&mut rng, vec![k.clone(), l.clone()]).unwrap();
 
 // Contract A(i,j) * B(j,k) * C(k,l) -> result(i,l)
-let result = contract_multi(&[&a, &b, &c], AllowedPairs::All).unwrap();
+let result = contract(&[&a, &b, &c]).unwrap();
 assert_eq!(result.dims().iter().product::<usize>(), 2 * 5); // i * l
 
-// Restrict which tensor pairs may contract (useful for tree tensor networks).
-// Here only (A,B) and (B,C) are connected, so j and k are contracted.
-let pairs = [(0usize, 1usize), (1, 2)];
-let result2 = contract_multi(&[&a, &b, &c], AllowedPairs::Specified(&pairs)).unwrap();
-assert_eq!(result2.dims().iter().product::<usize>(), 2 * 5);
+// Disconnected products are explicit.
+let product = outer_product(&a, &c).unwrap();
+assert_eq!(product.dims().iter().product::<usize>(), 2 * 3 * 4 * 5);
 ```
-
-`AllowedPairs::All` contracts all tensor pairs with matching indices.
-`AllowedPairs::Specified` takes a slice of `(usize, usize)` tensor-index pairs
-and only contracts between those pairs — useful when the connectivity is known
-(e.g. tree tensor networks).
 
 ## Factorization
 

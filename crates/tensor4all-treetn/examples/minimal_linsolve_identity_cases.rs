@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use tensor4all_core::{index::DynId, DynIndex, IndexLike, TensorDynLen};
+use tensor4all_core::{index::DynId, DynIndex, IndexLike, TensorContractionLike, TensorDynLen};
 use tensor4all_treetn::{
     apply_local_update_sweep, CanonicalizationOptions, IndexMapping, LinsolveOptions,
     LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, SquareLinsolveUpdater, TreeTN,

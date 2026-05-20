@@ -61,6 +61,28 @@ Implemented policy:
 - Regression tests now cover constructor, `with_ortho`, `from_treetn`, setter,
   and HDF5 `load_mps` order preservation.
 
+## Conjugation optimization policy
+
+Profiling the local GMRES path showed that repeated complex inner products spend
+most of their time in `conj`-then-contract style work on small dense tensors.
+The preferred fix is not an `inner_product`-only hand-written storage loop. That
+kind of local fast path would make this one workload faster, but it would bypass
+the general tensor/contraction path and make AD, layout variants, and backend
+behavior harder to keep consistent.
+
+Policy:
+
+- Optimize the general traced/contraction path first.
+- In `tenferro-rs`, fold `Conj -> DotGeneral` into a conjugated GEMM/dot operand
+  when the backend and layout can support it, with materializing fallback.
+- In `tensor4all-rs`, keep Krylov and TreeTN code expressed through the general
+  vector-space/tensor operations so they benefit from backend improvements.
+- Avoid adding ad hoc `TensorDynLen::inner_product` or `norm` special cases that
+  only recognize the current QuanticsNEGF workload.
+- If a lower-level helper is introduced, make it a general backend operation
+  with clear semantics, tests for real and complex dtypes, and no downstream
+  reach-through into storage internals.
+
 ## Generated files
 
 The generated `.h5` files are local benchmark artifacts and are ignored by git:

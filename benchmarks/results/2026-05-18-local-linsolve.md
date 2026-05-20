@@ -70,3 +70,38 @@ they intentionally overestimate one step inside a full sweep. The full `N=38`
 Rust solve is consistent with warm projected apply cost: about 74 local update
 steps times about 12 local matvecs per step times about 6 ms per warm apply is
 already about 5.3 s, close to the measured 6.69 s before other sweep overhead.
+
+## Follow-up: 2026-05-20 After Spectator Handling Fix
+
+Reran the one-thread Rust prepared local linsolve benchmark after fixing
+`ProjectedState` reference-link handling and no-site operator spectators.
+
+```bash
+RAYON_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+cargo run -q -p tensor4all-treetn --example benchmark_local_linsolve \
+  --release -- 38 32 32 1 1 10 0
+```
+
+| Implementation | N | Bonds | Sweep steps | Solve total | Local operator apps | Apply time | RHS time | Other solve overhead |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Rust `gmres_max_restarts=1,gmres_restart_dim=10` after spectator fix | 38 | 32/32 | 74 | 4.45 s | single step: 12 | single step: 108.2 ms | single step: 63.9 ms | single step GMRES overhead: 4.3 ms |
+
+This is faster than the previous comparable Rust row (`6.89 s`).  The single
+local solve still spends almost all GMRES time in projected local operator
+application: about `108.2 ms / 12 = 9.0 ms` per local matvec, consistent with
+the isolated cached projected-apply benchmark.
+
+The heavier diagnostic command
+
+```bash
+RAYON_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+cargo run -q -p tensor4all-treetn --example benchmark_local_linsolve \
+  --release -- 38 32 32 1 10 30 0
+```
+
+ran the single local GMRES to `300` iterations without convergence
+(`apply_count=311`, projected apply inside GMRES `1456.5 ms`) and the full
+sweep took `120.0 s`.  This setting is therefore a stress test of repeated
+local matvecs, not the Julia-comparable one-restart timing.

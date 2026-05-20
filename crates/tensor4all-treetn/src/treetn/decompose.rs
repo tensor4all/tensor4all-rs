@@ -338,7 +338,7 @@ where
             ));
         }
 
-        // Perform factorization using TensorLike::factorize
+        // Perform factorization using TensorFactorizationLike::factorize
         // left will have the node's physical indices + bond index
         // right will have bond index + remaining indices
         let factorize_result = current_tensor

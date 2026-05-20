@@ -19,7 +19,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tensor4all_core::{
     index::{DynId, Index},
-    DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike,
+    DynIndex, IndexLike, TensorContractionLike, TensorDynLen, TensorIndex,
 };
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalForm,

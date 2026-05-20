@@ -37,3 +37,23 @@ Interpretation: both implementations show that the warm local projected apply
 is already O(10 ms) at bond 32 and O(100 ms) at bond 64. A long local Dyson
 test with thousands of local GMRES matvecs can therefore be slow from this hot
 path alone, even when environment caches are effective.
+
+## Follow-up: 2026-05-20 After Spectator Handling Fix
+
+Reran the one-thread Rust projected apply benchmark after fixing linsolve
+spectator-node handling:
+
+```bash
+RAYON_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+cargo run -q -p tensor4all-treetn --example benchmark_projected_apply \
+  --release -- 38 32 32 3 0
+```
+
+| Implementation | N | State bond | Operator bond | Cold apply | Warm apply mean | Cold repeated mean |
+|---|---:|---:|---:|---:|---:|---:|
+| Rust `ProjectedOperator::apply` | 38 | 32 | 32 | 77.4 ms | 7.1 ms | 67.6 ms |
+
+The warm cached local matvec remains about `7 ms`, consistent with the earlier
+O(10 ms) estimate for bond 32.  The fix did not introduce a new hot-path cost
+in the cached projected apply path.

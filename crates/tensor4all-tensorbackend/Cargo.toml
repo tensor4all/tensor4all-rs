@@ -23,6 +23,7 @@ thiserror.workspace = true
 anyhow.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
+omeco.workspace = true
 tenferro.workspace = true
 tenferro-device.workspace = true
 tenferro-einsum.workspace = true

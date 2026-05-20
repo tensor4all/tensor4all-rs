@@ -1,4 +1,4 @@
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 use tensor4all_core::AnyScalar;
 
@@ -6,6 +6,31 @@ use tensor4all_core::AnyScalar;
 fn test_is_complex() {
     assert!(!AnyScalar::new_real(1.0).is_complex());
     assert!(AnyScalar::new_complex(1.0, 0.0).is_complex());
+}
+
+#[test]
+fn test_from_f32_and_complex32_scalar_paths() {
+    let real = AnyScalar::from_value(1.25_f32);
+    assert_eq!(real.as_f64(), Some(1.25));
+    assert_eq!(real.real(), 1.25);
+    assert_eq!(real.imag(), 0.0);
+    assert_eq!(real.abs(), 1.25);
+    assert!(!real.is_zero());
+    assert_eq!(Complex64::from(real), Complex64::new(1.25, 0.0));
+
+    let zero = AnyScalar::from_value(0.0_f32);
+    assert!(zero.is_zero());
+
+    let complex = AnyScalar::from_value(Complex32::new(3.0, -4.0));
+    assert!(complex.is_complex());
+    assert_eq!(complex.real(), 3.0);
+    assert_eq!(complex.imag(), -4.0);
+    assert_eq!(complex.abs(), 5.0);
+    assert_eq!(complex.as_c64(), Some(Complex64::new(3.0, -4.0)));
+    assert_eq!(Complex64::from(complex), Complex64::new(3.0, -4.0));
+
+    let complex_zero = AnyScalar::from_value(Complex32::new(0.0, 0.0));
+    assert!(complex_zero.is_zero());
 }
 
 #[test]

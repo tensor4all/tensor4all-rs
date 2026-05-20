@@ -2,7 +2,7 @@
 
 use num_complex::Complex64;
 use tensor4all_core::{
-    AnyScalar, ColMajorArrayRef, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike,
+    AnyScalar, ColMajorArrayRef, DynIndex, IndexLike, TensorDynLen, TensorIndex,
 };
 use tensor4all_treetn::TreeTN;
 

@@ -1,6 +1,5 @@
 use tensor4all_core::{
-    contract_multi, contract_multi_with_options, AllowedPairs, ContractionOptions, Index,
-    TensorDynLen,
+    contract, contract_with_options, ContractionOptions, Index, TensorContractionLike, TensorDynLen,
 };
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
@@ -47,7 +46,7 @@ fn contraction_without_grad_returns_rank_zero_scalar() {
     let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0, 3.0]).unwrap();
     let ones = TensorDynLen::from_dense(vec![i], vec![1.0, 1.0, 1.0]).unwrap();
 
-    let result = contract_multi(&[&a, &ones], AllowedPairs::All).unwrap();
+    let result = contract(&[&a, &ones]).unwrap();
 
     assert!(result.indices().is_empty());
     assert_eq!(result.to_vec::<f64>().unwrap(), vec![6.0]);
@@ -62,13 +61,13 @@ fn backward_accumulates_until_clear_grad() {
         .unwrap();
     let ones = TensorDynLen::from_dense(vec![i], vec![1.0, 1.0, 1.0]).unwrap();
 
-    let loss = contract_multi(&[&x, &ones], AllowedPairs::All).unwrap();
+    let loss = contract(&[&x, &ones]).unwrap();
     loss.backward().unwrap();
 
     let grad = x.grad().unwrap().unwrap();
     assert_eq!(grad.to_vec::<f64>().unwrap(), vec![1.0, 1.0, 1.0]);
 
-    let loss = contract_multi(&[&x, &ones], AllowedPairs::All).unwrap();
+    let loss = contract(&[&x, &ones]).unwrap();
     loss.backward().unwrap();
 
     let grad = x.grad().unwrap().unwrap();
@@ -97,7 +96,7 @@ fn general_structured_grad_preserves_input_axis_classes() {
         .unwrap();
     let ones = TensorDynLen::from_dense(vec![i, j, k], vec![1.0; 12]).unwrap();
 
-    let loss = contract_multi(&[&x, &ones], AllowedPairs::All).unwrap();
+    let loss = contract(&[&x, &ones]).unwrap();
     loss.backward().unwrap();
 
     let grad = x.grad().unwrap().unwrap();
@@ -128,7 +127,7 @@ fn clone_shares_tracked_leaf_gradient_slot() {
     let x = TensorDynLen::scalar(2.0).unwrap().enable_grad().unwrap();
     let alias = x.clone();
 
-    let loss = x.contract(&alias).unwrap();
+    let loss = x.contract_pair(&alias).unwrap();
     loss.backward().unwrap();
 
     let grad_x = x.grad().unwrap().unwrap();
@@ -154,9 +153,9 @@ fn retained_multi_contraction_preserves_grad_path() {
     let y =
         TensorDynLen::from_dense(vec![batch.clone(), k.clone(), j.clone()], vec![1.0; 12]).unwrap();
     let retain_indices = [batch.clone()];
-    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
+    let options = ContractionOptions::new().with_retain_indices(&retain_indices);
 
-    let result = contract_multi_with_options(&[&x, &y], options).unwrap();
+    let result = contract_with_options(&[&x, &y], options).unwrap();
     assert_eq!(result.dims(), vec![2, 2, 2]);
     assert_eq!(
         result.to_vec::<f64>().unwrap(),
@@ -164,7 +163,7 @@ fn retained_multi_contraction_preserves_grad_path() {
     );
 
     let ones = TensorDynLen::from_dense(result.indices().to_vec(), vec![1.0; 8]).unwrap();
-    let loss = contract_multi(&[&result, &ones], AllowedPairs::All).unwrap();
+    let loss = contract(&[&result, &ones]).unwrap();
     loss.backward().unwrap();
 
     let grad = x.grad().unwrap().unwrap();
@@ -193,9 +192,9 @@ fn structured_retained_multi_contraction_errors_before_detaching_grad() {
     let y =
         TensorDynLen::from_dense(vec![batch.clone(), k.clone(), j.clone()], vec![1.0; 8]).unwrap();
     let retain_indices = [batch.clone()];
-    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
+    let options = ContractionOptions::new().with_retain_indices(&retain_indices);
 
-    let err = contract_multi_with_options(&[&x, &y], options).unwrap_err();
+    let err = contract_with_options(&[&x, &y], options).unwrap_err();
     let message = err.to_string();
     assert!(
         message.contains("structured storage") || message.contains("not yet supported"),

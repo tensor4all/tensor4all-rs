@@ -112,13 +112,19 @@ the square linsolve keeps a persistent reference state:
 Operationally:
 - `solve_local` constructs `LocalLinOp` with a reference state, so
   `ProjectedOperator::apply(..., ket_state=state, reference_state=self.reference_state, ...)` uses distinct
-  ket/reference link namespaces and avoids spurious traces when contracting with `AllowedPairs::All`.
+  ket/reference link namespaces and avoids spurious traces when contracting with `full contraction`.
 
 ### 4) Local RHS construction: `ProjectedState`
 
 The local RHS tensor `b_local` is constructed via environments of the RHS state network:
 
-- `ProjectedState::local_constant_term(region, ket_state, topology)` (2-chain contraction)
+- `ProjectedState::local_constant_term(region, reference_state, topology)` (2-chain contraction)
+
+`reference_state` uses a link-index namespace independent of the RHS/ket network
+so `<ref|b>` environments keep the reference-side boundary links open instead
+of accidentally tracing over bra/ket boundary bonds.  `solve_local` then maps
+those open reference boundary bonds back to the current state bonds before
+calling GMRES.
 
 Relevant file:
 - `crates/tensor4all-treetn/src/linsolve/square/projected_state.rs`
@@ -175,13 +181,13 @@ Source:
 ## Known pitfall: unintended contraction due to shared index IDs
 
 The contraction engine treats indices as contractable if they share the same ID (plus compatible
-`ConjState`, dimensions). When bra/ket share the same index IDs, `AllowedPairs::All` can contract
+`ConjState`, dimensions). When bra/ket share the same index IDs, `full contraction` can contract
 more aggressively than intended if the implementation does not explicitly separate bra/ket index
 namespaces or restrict contraction pairs.
 
 This is the direction for "root-cause" fixes:
 - separate bra/ket index identities (e.g. via priming / directed indices), and/or
-- constrain contractions (e.g. `AllowedPairs::Specified`) so environments do not introduce
+- use TreeTN-level topology-aware contractions so environments do not introduce
   unintended traces.
 
 Related reproducer examples:
@@ -201,9 +207,9 @@ apply_local_update_sweep(state: TreeTN, plan, updater)
        │    ├─ contract_region(subtree, step.nodes) -> init_local: T
        │    ├─ solve_local(region, init_local, state=full_treetn) -> solved_local: T
        │    │    ├─ ProjectedState::local_constant_term(...) -> rhs_local: T
-       │    │    ├─ linop = LocalLinOp::new(projected_operator, region, state.clone(), reference_state.clone(), a0, a1)
-       │    │    └─ gmres(apply_a, rhs_local, init_local, gmres_options)
-       │    │         └─ apply_a(x_local: &T) = LocalLinOp::apply(x_local)
+       │    │    ├─ linop = LocalLinOp::new(projected_operator, region, state, reference_state)
+       │    │    └─ gmres_affine(apply_a, rhs_local, init_local, a0, a1, gmres_options)
+       │    │         └─ apply_a(x_local: &T) = LocalLinOp::apply_projected(x_local)
        │    │              ├─ ProjectedOperator::apply(v=x_local, region, ket_state=state, reference_state, topology)
        │    │              │    ├─ ensure_environments(...)
        │    │              │    │    └─ compute_environment(from, to, ket_state, reference_state, topology)   // recursive

@@ -9,7 +9,7 @@ use num_complex::Complex64;
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tensor4all_core::{index::DynId, DynIndex, IndexLike, TensorDynLen};
+use tensor4all_core::{index::DynId, DynIndex, IndexLike, TensorContractionLike, TensorDynLen};
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
     IndexMapping, LinearOperator, LinsolveOptions, LocalUpdateSweepPlan, SquareLinsolveUpdater,

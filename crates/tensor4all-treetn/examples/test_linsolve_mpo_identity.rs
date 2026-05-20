@@ -16,7 +16,7 @@ use num_complex::Complex64;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{
-    index::DynId, AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike,
+    index::DynId, AnyScalar, DynIndex, IndexLike, TensorContractionLike, TensorDynLen, TensorIndex,
 };
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
@@ -381,7 +381,7 @@ fn compute_residual(
         let mut b2 = 0.0_f64;
         for ((ax_i, x_i), b_i) in ax_vec.iter().zip(x_vec.iter()).zip(b_vec.iter()) {
             let opx_i = x_i * a0 + ax_i * a1;
-            let ri = opx_i - b_i;
+            let ri: Complex64 = opx_i - *b_i;
             r2 += ri.norm_sqr();
             b2 += b_i.norm_sqr();
         }

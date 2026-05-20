@@ -8,6 +8,7 @@ fn test_default_options() {
     assert_eq!(opts.nfullsweeps, 5);
     assert_eq!(opts.a0, AnyScalar::new_real(0.0));
     assert_eq!(opts.a1, AnyScalar::new_real(1.0));
+    assert_eq!(opts.gmres_tolerance_mode, GmresToleranceMode::Relative);
     assert!(opts.convergence_tol.is_none());
     assert!(opts.check_residual);
 }
@@ -21,6 +22,7 @@ fn test_builder_pattern() {
         .with_max_rank(100)
         .with_svd_policy(policy)
         .with_gmres_tol(1e-8)
+        .with_gmres_absolute_tolerance()
         .with_coefficients(1.0, -1.0)
         .with_convergence_tol(1e-6)
         .with_residual_check(false);
@@ -29,6 +31,7 @@ fn test_builder_pattern() {
     assert_eq!(opts.truncation.max_rank(), Some(100));
     assert_eq!(opts.truncation.svd_policy(), Some(policy));
     assert_eq!(opts.gmres_tol, 1e-8);
+    assert_eq!(opts.gmres_tolerance_mode, GmresToleranceMode::Absolute);
     assert_eq!(opts.a0, AnyScalar::new_real(1.0));
     assert_eq!(opts.a1, AnyScalar::new_real(-1.0));
     assert_eq!(opts.convergence_tol, Some(1e-6));

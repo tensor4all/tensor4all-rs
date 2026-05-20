@@ -1,6 +1,8 @@
 use super::*;
 use std::collections::{HashMap, HashSet};
-use tensor4all_core::{DynIndex, IndexLike, LinearizationOrder, TensorDynLen, TensorLike};
+use tensor4all_core::{
+    DynIndex, IndexLike, LinearizationOrder, TensorConstructionLike, TensorDynLen,
+};
 
 use crate::operator::index_mapping::IndexMapping;
 use crate::operator::Operator;
@@ -642,7 +644,8 @@ fn test_unfuse_input_and_output_indices_splits_internal_mpo_axes() {
         .iter()
         .map(|mapping| mapping.internal_index.clone())
         .collect::<Vec<_>>();
-    let expected = <TensorDynLen as TensorLike>::delta(&output_internal, &input_internal).unwrap();
+    let expected =
+        <TensorDynLen as TensorConstructionLike>::delta(&output_internal, &input_internal).unwrap();
     let actual = op.mpo().contract_to_tensor().unwrap();
 
     assert!(actual.distance(&expected).unwrap() < 1.0e-12);

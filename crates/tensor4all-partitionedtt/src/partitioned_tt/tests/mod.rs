@@ -1,6 +1,6 @@
 use super::*;
 use tensor4all_core::index::Index;
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::{TensorContractionLike, TensorDynLen};
 
 fn make_index(size: usize) -> DynIndex {
     Index::new_dyn(size)
@@ -245,7 +245,7 @@ fn test_partitioned_tt_contract_numerical() {
         // Project t2 to s2=s2_val
         let t2_proj = project_dense_tensor_at_index(&t2_full, &s2, s2_val);
 
-        let expected = t1_proj.contract(&t2_proj).unwrap();
+        let expected = t1_proj.contract_pair(&t2_proj).unwrap();
         let expected_data = expected.to_vec::<f64>().unwrap();
 
         assert_eq!(

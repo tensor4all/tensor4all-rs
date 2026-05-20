@@ -1,5 +1,6 @@
 use super::*;
-use tensor4all_core::{DynId, Index, LinearizationOrder, TensorLike};
+use std::time::Duration;
+use tensor4all_core::{DynId, Index, LinearizationOrder, TensorContractionLike, TensorVectorSpace};
 
 /// Helper to create a simple tensor for testing
 fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
@@ -35,13 +36,80 @@ fn test_single_site_tt() {
 }
 
 #[test]
+fn profile_helpers_and_basic_accessors_cover_paths() {
+    let mut elapsed = Duration::ZERO;
+    let value = profile_tt_inner_section(true, &mut elapsed, || 42usize);
+    assert_eq!(value, 42);
+    assert!(elapsed >= Duration::ZERO);
+    print_tt_inner_profile(&TensorTrainInnerProfile::default(), 0);
+
+    let tensor = make_tensor(vec![idx(0, 2)]);
+    let tt = TensorTrain::new(vec![tensor]).unwrap();
+    assert_eq!(tt.tensors().len(), 1);
+    assert!(tt
+        .tensor_checked(5)
+        .unwrap_err()
+        .to_string()
+        .contains("out of bounds"));
+    assert_eq!(tt.clone().into_treetn().node_count(), 1);
+    assert!(tt.norm_squared() >= 0.0);
+}
+
+#[test]
+fn add_reindexed_like_self_aligns_site_indices_before_addition() {
+    let i0 = idx(0, 2);
+    let i1 = idx(1, 2);
+    let link = idx(2, 2);
+    let j0 = idx(10, 2);
+    let j1 = idx(11, 2);
+    let rhs_link = idx(12, 2);
+
+    let lhs = TensorTrain::new(vec![
+        TensorDynLen::from_dense(vec![i0.clone(), link.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+        TensorDynLen::from_dense(vec![link.clone(), i1.clone()], vec![5.0, 6.0, 7.0, 8.0]).unwrap(),
+    ])
+    .unwrap();
+    let rhs = TensorTrain::new(vec![
+        TensorDynLen::from_dense(vec![j0.clone(), rhs_link.clone()], vec![2.0, 3.0, 4.0, 5.0])
+            .unwrap(),
+        TensorDynLen::from_dense(
+            vec![rhs_link.clone(), j1.clone()],
+            vec![7.0, 11.0, 13.0, 17.0],
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+
+    let sum = lhs.add_reindexed_like_self(&rhs).unwrap();
+    assert_eq!(sum.len(), 2);
+    assert_eq!(sum.siteinds(), vec![vec![i0.clone()], vec![i1.clone()]]);
+
+    let dense = sum.to_dense().unwrap();
+    let rhs_dense = rhs
+        .to_dense()
+        .unwrap()
+        .replaceinds(&[j0, j1], &[i0, i1])
+        .unwrap();
+    let expected = lhs
+        .to_dense()
+        .unwrap()
+        .axpby(
+            AnyScalar::new_real(1.0),
+            &rhs_dense,
+            AnyScalar::new_real(1.0),
+        )
+        .unwrap();
+    assert!(dense.sub(&expected).unwrap().maxabs() < 1e-12);
+}
+
+#[test]
 fn test_fuse_indices_trait_dispatch_returns_unsupported_error() {
     let i = idx(0, 2);
     let fused = idx(1, 2);
     let tensor = make_tensor(vec![i.clone()]);
     let tt = TensorTrain::new(vec![tensor]).unwrap();
 
-    let err = <TensorTrain as TensorLike>::fuse_indices(
+    let err = <TensorTrain as TensorContractionLike>::fuse_indices(
         &tt,
         &[i],
         fused,
@@ -51,7 +119,7 @@ fn test_fuse_indices_trait_dispatch_returns_unsupported_error() {
 
     assert!(err
         .to_string()
-        .contains("TensorTrain does not support TensorLike::fuse_indices"));
+        .contains("TensorTrain does not support TensorContractionLike::fuse_indices"));
 }
 
 #[test]
@@ -342,13 +410,13 @@ fn test_contract_with_fit_method() {
 
     // Test contract with Fit method
     let options = ContractOptions::fit().with_max_rank(10).with_nhalfsweeps(4); // 4 half-sweeps = 2 full sweeps
-    let result = tt1.contract(&tt2, &options);
+    let result = tt1.contract_pair(&tt2, &options);
     assert!(result.is_ok());
     let result_tt = result.unwrap();
     let naive_result = tt1
         .to_dense()
         .unwrap()
-        .contract(&tt2.to_dense().unwrap())
+        .contract_pair(&tt2.to_dense().unwrap())
         .unwrap();
     assert!(result_tt
         .to_dense()
@@ -371,13 +439,13 @@ fn test_contract_with_naive_method() {
 
     // Test contract with Naive method
     let options = ContractOptions::naive().with_dense_reference_limit(2);
-    let result = tt1.contract(&tt2, &options);
+    let result = tt1.contract_pair(&tt2, &options);
     assert!(result.is_ok());
     let result_tt = result.unwrap();
     let naive_result = tt1
         .to_dense()
         .unwrap()
-        .contract(&tt2.to_dense().unwrap())
+        .contract_pair(&tt2.to_dense().unwrap())
         .unwrap();
     assert!(result_tt
         .to_dense()
@@ -406,13 +474,13 @@ fn test_contract_nhalfsweeps_conversion() {
     // Test that nhalfsweeps is correctly converted to nfullsweeps
     // nhalfsweeps=6 should become nfullsweeps=3
     let options = ContractOptions::fit().with_nhalfsweeps(6).with_max_rank(10);
-    let result = tt1.contract(&tt2, &options);
+    let result = tt1.contract_pair(&tt2, &options);
     assert!(result.is_ok());
     let result_tt = result.unwrap();
     let naive_result = tt1
         .to_dense()
         .unwrap()
-        .contract(&tt2.to_dense().unwrap())
+        .contract_pair(&tt2.to_dense().unwrap())
         .unwrap();
     assert!(result_tt
         .to_dense()
@@ -438,7 +506,7 @@ fn test_contract_fit_odd_nhalfsweeps_errors() {
     let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
 
     let options = ContractOptions::fit().with_nhalfsweeps(1).with_max_rank(10);
-    let err = tt1.contract(&tt2, &options).unwrap_err();
+    let err = tt1.contract_pair(&tt2, &options).unwrap_err();
     assert!(matches!(err, TensorTrainError::OperationError { .. }));
 }
 
@@ -494,7 +562,7 @@ fn test_to_dense() {
     let dense = tt.to_dense().unwrap();
 
     // Expected: contract t0 and t1 along l01
-    let expected = t0.contract(&t1).unwrap();
+    let expected = t0.contract_pair(&t1).unwrap();
 
     // Compare results
     let dense_data = dense.to_vec::<f64>().unwrap();
@@ -553,7 +621,7 @@ fn test_to_dense_three_sites() {
     let dense = tt.to_dense().unwrap();
 
     // Expected: contract t0, t1, t2 sequentially
-    let expected = t0.contract(&t1).unwrap().contract(&t2).unwrap();
+    let expected = t0.contract_pair(&t1).unwrap().contract_pair(&t2).unwrap();
 
     let dense_data = dense.to_vec::<f64>().unwrap();
     let expected_data = expected.to_vec::<f64>().unwrap();
@@ -916,8 +984,6 @@ fn test_axpby() {
 
 #[test]
 fn test_tensor_like_scale() {
-    use tensor4all_core::TensorLike;
-
     let s0 = idx(0, 2);
     let l01 = idx(1, 3);
     let s1 = idx(2, 2);
@@ -927,11 +993,11 @@ fn test_tensor_like_scale() {
 
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
-    // Use TensorLike::scale
-    let scaled = TensorLike::scale(&tt, AnyScalar::new_real(2.0)).unwrap();
+    // Use TensorVectorSpace::scale
+    let scaled = TensorVectorSpace::scale(&tt, AnyScalar::new_real(2.0)).unwrap();
 
     let orig_norm = tt.norm();
-    let scaled_norm = TensorLike::norm(&scaled);
+    let scaled_norm = TensorVectorSpace::norm(&scaled);
     assert!(
         (scaled_norm - 2.0 * orig_norm).abs() < 1e-10,
         "Expected scaled_norm = {}, got {}",
@@ -942,7 +1008,7 @@ fn test_tensor_like_scale() {
 
 #[test]
 fn test_tensor_like_inner_product() {
-    use tensor4all_core::TensorLike;
+    use tensor4all_core::TensorVectorSpace;
 
     let s0 = idx(0, 2);
     let l01 = idx(1, 3);
@@ -953,8 +1019,8 @@ fn test_tensor_like_inner_product() {
 
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
-    // TensorLike::inner_product should equal TensorTrain::inner
-    let inner_via_trait = TensorLike::inner_product(&tt, &tt).unwrap();
+    // TensorVectorSpace::inner_product should equal TensorTrain::inner
+    let inner_via_trait = TensorVectorSpace::inner_product(&tt, &tt).unwrap();
     let inner_direct = tt.inner(&tt).unwrap();
 
     assert!(
@@ -1311,8 +1377,6 @@ fn test_dense_maxabs_is_explicit_dense_reference_api() {
 
 #[test]
 fn test_tensor_like_maxabs_is_not_hidden_dense_for_tensor_train() {
-    use tensor4all_core::TensorLike;
-
     let s0 = idx(0, 2);
     let l01 = idx(1, 3);
     let s1 = idx(2, 2);
@@ -1322,14 +1386,14 @@ fn test_tensor_like_maxabs_is_not_hidden_dense_for_tensor_train() {
 
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
-    let err = TensorLike::try_maxabs(&tt).unwrap_err();
+    let err = TensorVectorSpace::try_maxabs(&tt).unwrap_err();
     assert!(err.to_string().contains("explicit dense materialization"));
-    assert!(TensorLike::maxabs(&tt).is_nan());
+    assert!(TensorVectorSpace::maxabs(&tt).is_nan());
 }
 
 #[test]
 fn test_tensor_like_conj() {
-    use tensor4all_core::TensorLike;
+    use tensor4all_core::TensorContractionLike;
 
     let s0 = idx(0, 2);
     let l01 = idx(1, 3);
@@ -1341,7 +1405,7 @@ fn test_tensor_like_conj() {
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
     // For real tensors, conj should be identical
-    let conj_tt = TensorLike::conj(&tt);
+    let conj_tt = TensorContractionLike::conj(&tt);
     assert_eq!(conj_tt.len(), tt.len());
 
     let orig_dense = tt.to_dense().unwrap();

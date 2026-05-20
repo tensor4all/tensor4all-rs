@@ -34,7 +34,7 @@
 
 use crate::defaults::tensordynlen::unfold_split_inner;
 use crate::defaults::DynIndex;
-use crate::{unfold_split, TensorDynLen};
+use crate::{contract_pair, unfold_split, TensorDynLen};
 use num_complex::{Complex64, ComplexFloat};
 use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use tensor4all_tensorbackend::{Matrix, TensorElement};
@@ -123,7 +123,7 @@ pub fn factorize(
 ///
 /// ```
 /// use tensor4all_core::{
-///     factorize_full_rank, Canonical, DynIndex, FactorizeAlg, TensorDynLen, TensorLike,
+///     factorize_full_rank, Canonical, DynIndex, FactorizeAlg, TensorContractionLike, TensorDynLen,
 /// };
 ///
 /// let i = DynIndex::new_dyn(2);
@@ -139,7 +139,7 @@ pub fn factorize(
 ///     FactorizeAlg::QR,
 ///     Canonical::Left,
 /// )?;
-/// let reconstructed = result.left.contract(&result.right).unwrap();
+/// let reconstructed = result.left.contract_pair(&result.right).unwrap();
 /// assert!(tensor.sub(&reconstructed)?.maxabs() < 1.0e-18);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -264,7 +264,7 @@ fn factorize_svd_with_options(
     match canonical {
         Canonical::Left => {
             // L = U (orthogonal), R = S * V^H
-            let right_contracted = s.contract(&vh)?;
+            let right_contracted = contract_pair(&s, &vh)?;
             let right = right_contracted.replaceind(&sim_bond_index, &bond_index)?;
             Ok(FactorizeResult {
                 left: u,
@@ -276,7 +276,7 @@ fn factorize_svd_with_options(
         }
         Canonical::Right => {
             // L = U * S, R = V^H
-            let left_contracted = u.contract(&s)?;
+            let left_contracted = contract_pair(&u, &s)?;
             let left = left_contracted.replaceind(&sim_bond_index, &bond_index)?;
             Ok(FactorizeResult {
                 left,

@@ -2155,9 +2155,10 @@ fn test_zipup_with_single_node() {
     let mut tn_a = TreeTN::<TensorDynLen, String>::new();
     let mut tn_b = TreeTN::<TensorDynLen, String>::new();
 
-    // Use different indices so contraction produces a result with indices
+    // Use the same site index so this is a real contraction, not an implicit
+    // outer product of unrelated inputs.
     let phys_a = DynIndex::new_dyn(2);
-    let phys_b = DynIndex::new_dyn(2);
+    let phys_b = phys_a.clone();
     let tensor_a = TensorDynLen::from_dense(vec![phys_a.clone()], vec![1.0, 2.0]).unwrap();
     let tensor_b = TensorDynLen::from_dense(vec![phys_b.clone()], vec![3.0, 4.0]).unwrap();
 
@@ -2172,11 +2173,7 @@ fn test_zipup_with_single_node() {
     let result_tensor = result
         .tensor(result.node_index(&"X".to_string()).unwrap())
         .unwrap();
-    // When indices are different, result should have 2 indices (outer product)
-    // When indices are the same, result is a scalar (0 indices)
-    assert!(
-        result_tensor.external_indices().is_empty() || result_tensor.external_indices().len() == 2
-    );
+    assert!(result_tensor.external_indices().is_empty());
     assert!(result.canonical_region().contains(&"X".to_string()));
 }
 

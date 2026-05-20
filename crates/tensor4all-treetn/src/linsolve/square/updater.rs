@@ -3,24 +3,29 @@
 //! Uses GMRES (via tensor4all_core::krylov) to solve the local linear problem at each sweep step.
 //! This is the V_in = V_out specialized version.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::krylov::{gmres, GmresOptions};
-use tensor4all_core::{AllowedPairs, FactorizeOptions, IndexLike, TensorLike};
+use tensor4all_core::krylov::{gmres_affine, gmres_affine_with_absolute_tolerance, GmresOptions};
+use tensor4all_core::{FactorizeOptions, IndexLike, TensorLike};
 
 use super::local_linop::LocalLinOp;
 use super::projected_state::ProjectedState;
-use crate::linsolve::common::{LinsolveOptions, ProjectedOperator};
+use crate::linsolve::common::{GmresToleranceMode, LinsolveOptions, ProjectedOperator};
 use crate::operator::IndexMapping;
 use crate::{
     factorize_tensor_to_treetn_with, get_boundary_edges, LocalUpdateStep, LocalUpdater, TreeTN,
     TreeTopology,
 };
+
+static LOCAL_SOLVE_TRACE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Report from SquareLinsolveUpdater::verify().
 #[derive(Debug, Clone)]
@@ -364,9 +369,9 @@ where
             })
             .collect::<Result<_>>()?;
 
-        // Use TensorLike::contract for contraction
+        // Use TensorContractionLike::contract for contraction
         let tensor_refs: Vec<&T> = tensors.iter().collect();
-        T::contract(&tensor_refs, AllowedPairs::All)
+        T::contract(&tensor_refs)
     }
 
     /// Build TreeTopology for the subtree region from the solved tensor.
@@ -500,13 +505,25 @@ where
     ///
     /// Solves: (a₀ + a₁ * H_local) |x_local⟩ = |b_local⟩
     fn solve_local(&mut self, region: &[V], init: &T, state: &TreeTN<T, V>) -> Result<T> {
+        let solve_index = LOCAL_SOLVE_TRACE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let trace_limit = std::env::var("T4A_LINSOLVE_TRACE_LIMIT")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok());
+        let trace = trace_limit.is_some_and(|limit| solve_index < limit);
+        let abort_after = std::env::var("T4A_LINSOLVE_ABORT_AFTER")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok());
+        let solve_started = Instant::now();
+
         // Use state's SiteIndexNetwork directly (implements NetworkTopology)
         let topology = state.site_index_network();
 
         // Get local RHS: <b|_local
-        let rhs_local_raw = self
-            .projected_state
-            .local_constant_term(region, state, topology)?;
+        let rhs_local_raw =
+            self.projected_state
+                .local_constant_term(region, &self.reference_state, topology)?;
+        let rhs_local_raw =
+            self.replace_reference_boundary_bonds_with_state(rhs_local_raw, region, state)?;
 
         // Align RHS indices with init indices.
         // The RHS may have indices from the `rhs` TreeTN, while init has indices from
@@ -537,13 +554,10 @@ where
                     &init_indices,
                     &rhs_indices,
                     "Index structure mismatch between init and RHS (local tensors)",
-                    "This suggests:\n  - ProjectedState environment construction may have contracted/left open unexpected indices\n  - External indices may not be properly aligned between x and b\n  - AllowedPairs::All may have over-contracted external indices in the environment\n\nSee `plan/linsolve-mpo.md` for analysis of external index handling.",
+                    "This suggests:\n  - ProjectedState environment construction may have contracted/left open unexpected indices\n  - External indices may not be properly aligned between x and b\n  - full contraction may have over-contracted external indices in the environment\n\nSee `plan/linsolve-mpo.md` for analysis of external index handling.",
                 )
             ));
         };
-
-        let a0 = self.options.a0.clone();
-        let a1 = self.options.a1.clone();
 
         // Create local linear operator with separate reference_state
         // This prevents unintended bra↔ket link contractions in environment computation
@@ -552,17 +566,65 @@ where
             region.to_vec(),
             state,
             &self.reference_state,
-            a0,
-            a1,
         );
 
-        // Create closure for GMRES that applies the linear operator
-        let apply_a = |x: &T| linop.apply(x);
+        // KrylovKit builds Arnoldi from the unshifted local operator H.
+        // The affine coefficients `(a0 I + a1 H)` are applied in GMRES'
+        // projected Hessenberg problem, not inside LocalLinOp.
+        let apply_calls = Cell::new(0usize);
+        let apply_elapsed_micros = Cell::new(0u128);
+        let apply_a = |x: &T| {
+            let apply_started = Instant::now();
+            let result = linop.apply_projected(x);
+            apply_calls.set(apply_calls.get() + 1);
+            apply_elapsed_micros
+                .set(apply_elapsed_micros.get() + apply_started.elapsed().as_micros());
+            result
+        };
 
-        let gmres_options = local_gmres_options(&self.options)?;
+        let mut gmres_options = local_gmres_options(&self.options)?;
+        if trace && std::env::var_os("T4A_LINSOLVE_VERBOSE_GMRES").is_some() {
+            gmres_options.verbose = true;
+        }
 
         // Solve using GMRES (works directly with TensorDynLen)
-        let result = gmres(apply_a, &rhs_local, init, &gmres_options)?;
+        let result = match self.options.gmres_tolerance_mode {
+            GmresToleranceMode::Relative => gmres_affine(
+                apply_a,
+                &rhs_local,
+                init,
+                self.options.a0.clone(),
+                self.options.a1.clone(),
+                &gmres_options,
+            )?,
+            GmresToleranceMode::Absolute => gmres_affine_with_absolute_tolerance(
+                apply_a,
+                &rhs_local,
+                init,
+                self.options.a0.clone(),
+                self.options.a1.clone(),
+                &gmres_options,
+                self.options.gmres_tol,
+            )?,
+        };
+
+        if trace {
+            eprintln!(
+                "T4A local_solve #{solve_index}: region={region:?} mode={:?} rhs_norm={:.6e} init_norm={:.6e} iterations={} residual={:.6e} converged={} apply_calls={} apply_ms={:.3} total_ms={:.3}",
+                self.options.gmres_tolerance_mode,
+                rhs_local.norm(),
+                init.norm(),
+                result.iterations,
+                result.residual_norm,
+                result.converged,
+                apply_calls.get(),
+                apply_elapsed_micros.get() as f64 / 1000.0,
+                solve_started.elapsed().as_secs_f64() * 1000.0,
+            );
+        }
+        if abort_after.is_some_and(|limit| solve_index + 1 >= limit) {
+            anyhow::bail!("T4A_LINSOLVE_ABORT_AFTER reached after local solve #{solve_index}");
+        }
 
         Ok(result.solution)
     }
@@ -855,6 +917,48 @@ where
         )
     }
 
+    fn replace_reference_boundary_bonds_with_state(
+        &self,
+        tensor: T,
+        region: &[V],
+        state: &TreeTN<T, V>,
+    ) -> Result<T> {
+        let mut result = tensor;
+        for node in region {
+            for neighbor in state.site_index_network().neighbors(node) {
+                if region.contains(&neighbor) {
+                    continue;
+                }
+
+                let Some(state_edge) = state.edge_between(node, &neighbor) else {
+                    continue;
+                };
+                let Some(reference_edge) = self.reference_state.edge_between(node, &neighbor)
+                else {
+                    continue;
+                };
+                let Some(state_bond) = state.bond_index(state_edge) else {
+                    continue;
+                };
+                let Some(reference_bond) = self.reference_state.bond_index(reference_edge) else {
+                    continue;
+                };
+
+                if reference_bond == state_bond {
+                    continue;
+                }
+                if result
+                    .external_indices()
+                    .iter()
+                    .any(|index| index == reference_bond)
+                {
+                    result = result.replaceind(reference_bond, state_bond)?;
+                }
+            }
+        }
+        Ok(result)
+    }
+
     fn precheck_ref_bra_ket_convention(
         &mut self,
         step: &LocalUpdateStep<V>,
@@ -864,9 +968,16 @@ where
         let init_local = self.contract_region(&subtree, &step.nodes)?;
 
         let topology = full_treetn_before.site_index_network();
-        let rhs_local_raw =
-            self.projected_state
-                .local_constant_term(&step.nodes, full_treetn_before, topology)?;
+        let rhs_local_raw = self.projected_state.local_constant_term(
+            &step.nodes,
+            &self.reference_state,
+            topology,
+        )?;
+        let rhs_local_raw = self.replace_reference_boundary_bonds_with_state(
+            rhs_local_raw,
+            &step.nodes,
+            full_treetn_before,
+        )?;
 
         let init_indices = init_local.external_indices();
         let rhs_indices = rhs_local_raw.external_indices();
@@ -986,7 +1097,7 @@ fn local_gmres_options(options: &LinsolveOptions) -> Result<GmresOptions> {
         rtol: options.gmres_tol,
         max_restarts: options.gmres_max_restarts,
         verbose: false,
-        check_true_residual: false,
+        check_true_residual: true,
     })
 }
 

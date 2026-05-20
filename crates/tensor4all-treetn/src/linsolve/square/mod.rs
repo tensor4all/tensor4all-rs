@@ -166,8 +166,17 @@ where
     // Canonicalize initial guess towards center
     let mut x = init.canonicalize([center.clone()], CanonicalizationOptions::default())?;
 
-    let residual_operator =
-        linear_operator_for_residual(operator, &x, input_mapping.clone(), output_mapping.clone())?;
+    let needs_residual_operator = options.check_residual || options.convergence_tol.is_some();
+    let residual_operator = if needs_residual_operator {
+        Some(linear_operator_for_residual(
+            operator,
+            &x,
+            input_mapping.clone(),
+            output_mapping.clone(),
+        )?)
+    } else {
+        None
+    };
 
     // Create SquareLinsolveUpdater with or without index mappings
     let mut updater = match (input_mapping, output_mapping) {
@@ -201,7 +210,9 @@ where
         apply_local_update_sweep(&mut x, &plan, &mut updater)?;
         if let Some(tol) = options.convergence_tol {
             let current_residual = relative_linear_system_residual(
-                &residual_operator,
+                residual_operator
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("missing residual operator"))?,
                 &x,
                 rhs,
                 options.a0.clone(),
@@ -216,9 +227,11 @@ where
         }
     }
 
-    if residual.is_none() {
+    if residual.is_none() && options.check_residual {
         let final_residual = relative_linear_system_residual(
-            &residual_operator,
+            residual_operator
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("missing residual operator"))?,
             &x,
             rhs,
             options.a0.clone(),
@@ -266,24 +279,31 @@ where
         bail!("square_linsolve: a0 and effective operator term are both zero");
     }
 
-    let residual_operator =
-        linear_operator_for_residual(operator, init, input_mapping, output_mapping)?;
     let mut solution = rhs.clone();
     solution.scale(AnyScalar::new_real(1.0) / options.a0.clone())?;
-    let residual = relative_linear_system_residual(
-        &residual_operator,
-        &solution,
-        rhs,
-        options.a0.clone(),
-        options.a1.clone(),
-        ApplyOptions::naive(),
-    )?;
-    let converged = options.convergence_tol.is_some_and(|tol| residual < tol);
+    let residual = if options.check_residual || options.convergence_tol.is_some() {
+        let residual_operator =
+            linear_operator_for_residual(operator, init, input_mapping, output_mapping)?;
+        Some(relative_linear_system_residual(
+            &residual_operator,
+            &solution,
+            rhs,
+            options.a0.clone(),
+            options.a1.clone(),
+            ApplyOptions::naive(),
+        )?)
+    } else {
+        None
+    };
+    let converged = options
+        .convergence_tol
+        .zip(residual)
+        .is_some_and(|(tol, residual)| residual < tol);
 
     Ok(SquareLinsolveResult {
         solution,
         sweeps: 0,
-        residual: Some(residual),
+        residual,
         converged,
     })
 }

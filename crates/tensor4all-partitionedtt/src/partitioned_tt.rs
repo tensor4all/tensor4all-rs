@@ -257,12 +257,15 @@ impl PartitionedTT {
                 // Check if we already have a subdomain with the same projector
                 if let Some(existing) = result.get_mut(&proj) {
                     // Sum the subdomains using TT addition
-                    let mut summed_tt = existing.data().add(contracted.data()).map_err(|e| {
-                        PartitionedTTError::TensorTrainError(format!(
-                            "TT addition in contract failed: {}",
-                            e
-                        ))
-                    })?;
+                    let mut summed_tt = existing
+                        .data()
+                        .add_reindexed_like_self(contracted.data())
+                        .map_err(|e| {
+                            PartitionedTTError::TensorTrainError(format!(
+                                "TT addition in contract failed: {}",
+                                e
+                            ))
+                        })?;
                     // Truncate after addition using the same truncation params as contraction
                     let mut truncate_opts = TruncateOptions::svd();
                     if let Some(policy) = options.svd_policy() {

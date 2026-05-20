@@ -36,6 +36,16 @@ fn recorded_native_einsum_call_count(path: NativeEinsumPath) -> usize {
     })
 }
 
+fn default_engine_contains_einsum_subscripts_key(
+    inputs: &[&[u32]],
+    output: &[u32],
+    shapes: Vec<Vec<usize>>,
+) -> bool {
+    crate::context::with_default_engine(|engine| {
+        engine.einsum_cache_contains_subscripts(&(EinsumSubscripts::new(inputs, output), shapes))
+    })
+}
+
 struct ProfileGuard;
 
 impl ProfileGuard {
@@ -282,6 +292,27 @@ fn einsum_native_tensors_supports_retained_shared_nary_label() {
 }
 
 #[test]
+fn einsum_native_tensors_populates_process_global_path_cache() {
+    let a = NativeTensor::from_vec(vec![2, 3, 4], vec![1.0_f64; 24]);
+    let b = NativeTensor::from_vec(vec![4, 5], vec![2.0_f64; 20]);
+    let c = NativeTensor::from_vec(vec![3, 2], vec![3.0_f64; 6]);
+
+    let out =
+        einsum_native_tensors(&[(&a, &[0, 1, 2]), (&b, &[2, 3]), (&c, &[1, 0])], &[3]).unwrap();
+
+    assert_eq!(out.shape(), &[5]);
+    assert_eq!(
+        native_tensor_primal_to_dense_f64_col_major(&out).unwrap(),
+        vec![144.0; 5]
+    );
+    assert!(default_engine_contains_einsum_subscripts_key(
+        &[&[0, 1, 2], &[2, 3], &[1, 0]],
+        &[3],
+        vec![vec![2, 3, 4], vec![4, 5], vec![3, 2]]
+    ));
+}
+
+#[test]
 fn einsum_native_tensors_mixed_dtype_records_borrowed_conversion_profile() {
     let _guard = ProfileGuard::enable();
     let lhs = NativeTensor::from_vec(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]);
@@ -332,6 +363,112 @@ fn einsum_native_tensors_dense_binary_records_borrowed_profile() {
     );
     assert_eq!(
         recorded_native_einsum_call_count(NativeEinsumPath::BorrowedWithConversions),
+        0
+    );
+}
+
+#[test]
+fn native_read_input_owned_and_plan_helpers_cover_debug_paths() {
+    let tensor = NativeTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let input = NativeTensorReadInput::Owned(tensor.clone());
+    assert_eq!(input.dtype(), DType::F64);
+    assert_eq!(input.shape(), &[2]);
+    assert_eq!(input.as_read().shape(), &[2]);
+
+    assert_eq!(native_einsum_path_trace_min_bytes(), 0);
+    assert_eq!(native_einsum_path_trace_max_signatures(), 64);
+    assert_eq!(native_einsum_pool_trace_min_output_bytes(), 0);
+    assert_eq!(native_einsum_pool_trace_min_retained_bytes(), 0);
+
+    assert_eq!(dtype_size_bytes(DType::F32), 4);
+    assert_eq!(dtype_size_bytes(DType::F64), 8);
+    assert_eq!(dtype_size_bytes(DType::C32), 8);
+    assert_eq!(dtype_size_bytes(DType::C64), 16);
+    assert_eq!(dtype_size_bytes(DType::I64), 8);
+    assert_eq!(native_tensor_bytes(&tensor), 16);
+    assert_eq!(format_label('x' as u32), "x");
+    assert_eq!(format_label(0x110000), "1114112");
+    assert_eq!(format_labels(&[]), "scalar");
+    assert_eq!(format_labels(&['a' as u32, 'b' as u32]), "ab");
+
+    let subscripts = Subscripts {
+        inputs: vec![vec![0, 1], vec![1, 2]],
+        output: vec![0, 2],
+    };
+    let dims = label_dims(&subscripts, &[vec![2, 3], vec![3, 4]]).unwrap();
+    assert_eq!(labels_size(&[0, 2], &dims), 8);
+    assert_eq!(union_labels(&[0, 1], &[1, 2]), vec![0, 1, 2]);
+
+    let bad_len = label_dims(&subscripts, &[vec![2], vec![3, 4]]).unwrap_err();
+    assert!(bad_len.to_string().contains("do not match shape"));
+    let bad_dim = label_dims(&subscripts, &[vec![2, 3], vec![4, 4]]).unwrap_err();
+    assert!(bad_dim.to_string().contains("inconsistent dimension"));
+
+    let signature = NativeEinsumSignature {
+        path: NativeEinsumPath::Borrowed,
+        operands: vec![
+            NativeOperandSignature {
+                shape: vec![2, 3],
+                ids: vec![0, 1],
+                dtype: DType::F64,
+            },
+            NativeOperandSignature {
+                shape: vec![3, 4],
+                ids: vec![1, 2],
+                dtype: DType::F64,
+            },
+        ],
+        output_ids: vec![0, 2],
+    };
+    let time_report = native_einsum_time_optimized_plan_report(&signature).unwrap();
+    let balanced_report = native_einsum_balanced_plan_report(&signature).unwrap();
+    assert!(time_report.peak_intermediate_bytes >= 8);
+    assert!(!time_report.lines.is_empty());
+    assert!(!balanced_report.lines.is_empty());
+}
+
+#[test]
+fn native_einsum_profile_print_and_c32_arithmetic_paths() {
+    let _guard = ProfileGuard::enable();
+
+    let lhs = NativeTensor::from_vec(
+        vec![2],
+        vec![Complex32::new(1.0, 2.0), Complex32::new(-3.0, 0.5)],
+    );
+    let rhs = NativeTensor::from_vec(
+        vec![2],
+        vec![Complex32::new(0.5, -1.0), Complex32::new(4.0, 2.0)],
+    );
+
+    let scaled = scale_native_tensor(
+        &lhs,
+        &crate::AnyScalar::from_value(Complex32::new(2.0, -1.0)),
+    )
+    .unwrap();
+    assert_eq!(scaled.dtype(), DType::C32);
+    assert_eq!(
+        scaled.as_slice::<Complex32>().unwrap(),
+        &[Complex32::new(4.0, 3.0), Complex32::new(-5.5, 4.0)]
+    );
+
+    let combined = axpby_native_tensor(
+        &lhs,
+        &crate::AnyScalar::from_value(Complex32::new(1.0, 0.0)),
+        &rhs,
+        &crate::AnyScalar::from_value(Complex32::new(0.0, 1.0)),
+    )
+    .unwrap();
+    assert_eq!(combined.dtype(), DType::C32);
+    assert_eq!(
+        combined.as_slice::<Complex32>().unwrap(),
+        &[Complex32::new(2.0, 2.5), Complex32::new(-5.0, 4.5)]
+    );
+
+    let contraction = einsum_native_tensors(&[(&lhs, &[0]), (&rhs, &[0])], &[]).unwrap();
+    assert_eq!(contraction.shape(), &[] as &[usize]);
+    print_and_reset_native_einsum_profile();
+    assert_eq!(
+        recorded_native_einsum_call_count(NativeEinsumPath::Borrowed),
         0
     );
 }

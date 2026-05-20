@@ -8,5 +8,5 @@ mod options;
 mod projected_operator;
 
 pub use environment::{EnvironmentCache, NetworkTopology};
-pub use options::LinsolveOptions;
+pub use options::{GmresToleranceMode, LinsolveOptions};
 pub use projected_operator::ProjectedOperator;

@@ -35,6 +35,7 @@ rand.workspace = true
 rand_distr.workspace = true
 omeco.workspace = true
 petgraph.workspace = true
+smallvec.workspace = true
 tenferro.workspace = true
 tenferro-tensor.workspace = true
 

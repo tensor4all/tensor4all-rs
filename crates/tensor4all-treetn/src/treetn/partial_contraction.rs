@@ -18,8 +18,8 @@ use crate::error::{format_anyhow_error, SelectedIndexContractionError};
 use crate::options::RestructureOptions;
 use crate::site_index_network::SiteIndexNetwork;
 use tensor4all_core::{
-    AllowedPairs, AnyScalar, DynIndex, FactorizeAlg, FactorizeOptions, IndexLike, TensorDynLen,
-    TensorIndex, TensorLike,
+    tensordot, AnyScalar, DynIndex, FactorizeAlg, FactorizeOptions, IndexLike,
+    TensorConstructionLike, TensorContractionLike, TensorDynLen, TensorIndex, TensorLike,
 };
 
 type DiagonalPairApplication<V> = (
@@ -338,7 +338,7 @@ where
                 )
             })?;
             if !links.is_empty() {
-                let link_tensor = <TensorDynLen as TensorLike>::ones(&links)
+                let link_tensor = <TensorDynLen as TensorConstructionLike>::ones(&links)
                     .context("partial_contract: failed to build dimension-1 structural links")?;
                 tensor = tensor
                     .outer_product(&link_tensor)
@@ -346,7 +346,7 @@ where
             }
             tensor
         } else {
-            <TensorDynLen as TensorLike>::ones(&links)
+            <TensorDynLen as TensorConstructionLike>::ones(&links)
                 .context("partial_contract: failed to build missing-node scalar tensor")?
         };
 
@@ -466,9 +466,9 @@ where
         .sim_internal_inds()
         .contract_to_tensor()
         .context("partial_contract: failed to contract second mismatched-topology TreeTN")?;
-    let contracted_tensor =
-        <TensorDynLen as TensorLike>::contract(&[&a_dense, &b_dense], AllowedPairs::All)
-            .context("partial_contract: failed dense contraction for mismatched topologies")?;
+    let contracted_tensor = a_dense
+        .contract_pair(&b_dense)
+        .context("partial_contract: failed dense contraction for mismatched topologies")?;
 
     if contracted_tensor.external_indices().is_empty() {
         let mut result = TreeTN::<TensorDynLen, V>::new();
@@ -645,15 +645,18 @@ where
                 idx_b.id()
             )
         })?;
-        let expanded_tensor = local_tensor
-            .tensordot(&copy_tensor, &[(idx_a.clone(), idx_a.clone())])
-            .with_context(|| {
-                format!(
-                    "partial_contract: failed to apply diagonal structure for pair {:?} <- {:?}",
-                    idx_a.id(),
-                    idx_b.id()
-                )
-            })?;
+        let expanded_tensor = tensordot(
+            &local_tensor,
+            &copy_tensor,
+            &[(idx_a.clone(), idx_a.clone())],
+        )
+        .with_context(|| {
+            format!(
+                "partial_contract: failed to apply diagonal structure for pair {:?} <- {:?}",
+                idx_a.id(),
+                idx_b.id()
+            )
+        })?;
         a_modified
             .replace_tensor(node_idx, expanded_tensor)
             .with_context(|| {
@@ -1197,12 +1200,14 @@ where
         if let Some(mut links) = link_indices_by_node.remove(node) {
             indices.append(&mut links);
         }
-        tensors.push(TensorDynLen::ones(&indices).map_err(|error| {
-            SelectedIndexContractionError::BuildOnesTensor {
-                node: format!("{node:?}"),
-                message: format_anyhow_error(error),
-            }
-        })?);
+        tensors.push(
+            <TensorDynLen as TensorConstructionLike>::ones(&indices).map_err(|error| {
+                SelectedIndexContractionError::BuildOnesTensor {
+                    node: format!("{node:?}"),
+                    message: format_anyhow_error(error),
+                }
+            })?,
+        );
     }
 
     let weights = TreeTN::from_tensors(tensors, node_names).map_err(|error| {

@@ -18,7 +18,8 @@ use tensor4all_core::{
     index::{DynId, Index},
     krylov::{gmres, GmresOptions},
     print_and_reset_contract_profile, reset_contract_profile,
-    AnyScalar, DynIndex, IndexLike, SvdTruncationPolicy, TensorDynLen, TensorIndex, TensorLike,
+    AnyScalar, DynIndex, IndexLike, SvdTruncationPolicy, TensorContractionLike, TensorDynLen,
+    TensorIndex,
 };
 use tensor4all_treetn::{
     square_linsolve, CanonicalizationOptions, IndexMapping, LinsolveOptions, LocalUpdateSweepPlan,

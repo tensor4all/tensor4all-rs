@@ -4,7 +4,8 @@ use tensor4all_core::block_tensor::BlockTensor;
 use tensor4all_core::col_major_array::{ColMajorArrayError, ColMajorArrayRef};
 use tensor4all_core::index_like::IndexLike;
 use tensor4all_core::{
-    compute_permutation_from_indices, diag_tensor_dyn_len, DynIndex, TensorDynLen,
+    compute_permutation_from_indices, diag_tensor_dyn_len, DynIndex, TensorContractionLike,
+    TensorDynLen,
 };
 use tensor4all_tensorbackend::Storage;
 
@@ -51,7 +52,7 @@ fn tensor_contract_rejects_mismatched_common_dimension() {
     let a = TensorDynLen::from_dense(vec![shared_left], vec![1.0_f64, 2.0]).unwrap();
     let b = TensorDynLen::from_dense(vec![shared_right], vec![1.0_f64, 2.0, 3.0]).unwrap();
 
-    let err = a.contract(&b).unwrap_err();
+    let err = a.contract_pair(&b).unwrap_err();
 
     let message = err.to_string();
     assert!(

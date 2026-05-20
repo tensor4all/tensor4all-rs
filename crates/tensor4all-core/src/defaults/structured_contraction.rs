@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{anyhow, ensure, Result};
 use num_complex::Complex64;
 use tenferro::{DType, Tensor as NativeTensor};
-use tensor4all_tensorbackend::{einsum_native_tensors, Storage};
+use tensor4all_tensorbackend::{einsum_native_tensors, NativeTensorReadInput, Storage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OperandLayout {
@@ -262,6 +262,7 @@ fn unique_first_appearance(values: &[usize]) -> Vec<usize> {
     result
 }
 
+#[allow(dead_code)]
 pub(crate) fn normalize_payload_for_roots(
     payload: &NativeTensor,
     roots: &[usize],
@@ -293,6 +294,39 @@ pub(crate) fn normalize_payload_for_roots(
     }
 
     Ok((current_payload, current_roots))
+}
+
+pub(crate) fn normalize_payload_read_for_roots<'a>(
+    payload: NativeTensorReadInput<'a>,
+    roots: &[usize],
+) -> Result<(NativeTensorReadInput<'a>, Vec<usize>)> {
+    ensure!(
+        payload.shape().len() == roots.len(),
+        "payload rank {} does not match root label count {}",
+        payload.shape().len(),
+        roots.len()
+    );
+
+    if unique_first_appearance(roots).len() == roots.len() {
+        return Ok((payload, roots.to_vec()));
+    }
+
+    let mut current_payload = payload.as_read().to_tensor();
+    let mut current_roots = roots.to_vec();
+    while let Some((axis_a, axis_b)) = first_duplicate_pair(&current_roots) {
+        let mut input_ids: Vec<usize> = (0..current_roots.len()).collect();
+        input_ids[axis_b] = input_ids[axis_a];
+        let output_ids: Vec<usize> = input_ids
+            .iter()
+            .enumerate()
+            .filter_map(|(axis, &label)| (axis != axis_b).then_some(label))
+            .collect();
+
+        current_payload = einsum_native_tensors(&[(&current_payload, &input_ids)], &output_ids)?;
+        current_roots.remove(axis_b);
+    }
+
+    Ok((NativeTensorReadInput::Owned(current_payload), current_roots))
 }
 
 pub(crate) fn storage_payload_native(storage: &Storage) -> Result<NativeTensor> {

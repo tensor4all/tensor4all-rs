@@ -532,6 +532,16 @@ impl<T> StructuredStorage<T> {
             None
         }
     }
+
+    /// Returns a borrowed compact-payload view when the payload is already
+    /// stored contiguously in column-major order.
+    pub fn payload_col_major_view_if_contiguous(&self) -> Option<&[T]> {
+        if matches!(col_major_strides(&self.payload_dims), Ok(strides) if strides == self.strides) {
+            Some(&self.data)
+        } else {
+            None
+        }
+    }
 }
 
 impl<T: Clone> StructuredStorage<T> {
@@ -1292,6 +1302,19 @@ impl Storage {
         }
     }
 
+    /// Borrows the compact `f64` payload when it is already contiguous in
+    /// column-major payload order.
+    pub fn payload_f64_col_major_view_if_contiguous(&self) -> StorageResult<Option<&[f64]>> {
+        match &self.0 {
+            StorageRepr::F64(value) => Ok(value.payload_col_major_view_if_contiguous()),
+            StorageRepr::C64(_) => Err(StorageError::ScalarKindMismatch {
+                expected: "f64",
+                actual: storage_scalar_kind(&self.0),
+                operation: "borrowing f64 payload",
+            }),
+        }
+    }
+
     /// Copies the compact `Complex64` payload in column-major payload order.
     ///
     /// This does not materialize logical dense values. Complex payloads are
@@ -1318,6 +1341,19 @@ impl Storage {
                 expected: "Complex64",
                 actual: storage_scalar_kind(&self.0),
                 operation: "copying c64 payload",
+            }),
+        }
+    }
+
+    /// Borrows the compact `Complex64` payload when it is already contiguous in
+    /// column-major payload order.
+    pub fn payload_c64_col_major_view_if_contiguous(&self) -> StorageResult<Option<&[Complex64]>> {
+        match &self.0 {
+            StorageRepr::C64(value) => Ok(value.payload_col_major_view_if_contiguous()),
+            StorageRepr::F64(_) => Err(StorageError::ScalarKindMismatch {
+                expected: "Complex64",
+                actual: storage_scalar_kind(&self.0),
+                operation: "borrowing c64 payload",
             }),
         }
     }

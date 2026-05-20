@@ -29,6 +29,18 @@ Prepared local linsolve:
 RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_local_linsolve --release -- 38 32 32 1 10 30 0
 ```
 
+Non-AD local tensor operations:
+
+```bash
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-core --example benchmark_tensor_ops --release -- 20000 6 2 2 6
+```
+
+TensorTrain-level operations against ITensorMPS:
+
+```bash
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-itensorlike --example benchmark_tt_ops --release -- --L 32 --zipup-L 10 --chis 4,8,16,32,64
+```
+
 Inspect Julia-dumped local linsolve inputs:
 
 ```bash
@@ -52,6 +64,18 @@ Prepared local linsolve:
 
 ```bash
 BLAS_NUM_THREADS=1 julia --project=benchmarks/julia benchmarks/julia/benchmark_local_linsolve.jl 38 32 32 1 1 10
+```
+
+Non-AD local tensor operations:
+
+```bash
+BLAS_NUM_THREADS=1 julia --project=benchmarks/julia benchmarks/julia/benchmark_tensor_ops.jl 20000 6 2 2 6
+```
+
+TensorTrain-level operations against tensor4all:
+
+```bash
+BLAS_NUM_THREADS=1 julia --project=benchmarks/julia benchmarks/julia/benchmark_tt_ops.jl --L 32 --zipup-L 10 --chis 4,8,16,32,64
 ```
 
 Dump local linsolve inputs as ITensorMPS-compatible HDF5:
@@ -80,6 +104,21 @@ and initial state once, then time the local solve body. They also report local
 GMRES/apply/RHS/factorization buckets. Use Julia `maxiter=1, krylovdim=10` as a
 rough match to Rust's `krylov_maxiter=10` total-iteration cap; KrylovKit's
 `maxiter=10, krylovdim=30` performs far more local operator applications.
+
+The non-AD local tensor operation benchmarks isolate `inner`, `norm`, affine
+addition, and explicit `conj`-then-contract on a small dense tensor. The default
+shape `[6, 2, 2, 6]` mirrors the small two-site local tensors observed in the
+QuanticsNEGF long-time local Krylov test, where dispatch/allocation overhead can
+dominate floating-point work.
+
+The TensorTrain-level operation benchmarks compare tensor4all's
+`TensorTrain::inner`, strict direct-sum MPS addition, and prepared MPO×MPO zipup
+contraction against ITensorMPS.jl. They use deterministic Complex64 fixtures and
+print CSV-style rows with sample counts, min/median/mean/max milliseconds,
+result max bond dimension, and a checksum. The Rust source of truth is
+`benchmarks/rust/benchmark_tt_ops.rs`, included by
+`tensor4all-itensorlike/examples/benchmark_tt_ops.rs`; the Julia counterpart is
+`benchmarks/julia/benchmark_tt_ops.jl`.
 
 `dump_local_linsolve_inputs.jl` writes the prepared local operator as
 `operator_as_mps`, plus `rhs` and `init`, in one HDF5 file. The operator is a

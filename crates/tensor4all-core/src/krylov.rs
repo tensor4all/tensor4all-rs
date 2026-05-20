@@ -1,6 +1,6 @@
 //! Krylov subspace methods for solving linear equations with abstract tensors.
 //!
-//! This module provides iterative solvers that work with any type implementing [`TensorLike`],
+//! This module provides iterative solvers that work with any type implementing [`TensorVectorSpace`],
 //! enabling their use in tensor network algorithms without requiring dense vector representations.
 //!
 //! # Solvers
@@ -17,7 +17,7 @@
 //! ```
 //! use tensor4all_core::{
 //!     krylov::{gmres, GmresOptions},
-//!     DynIndex, TensorDynLen, TensorLike,
+//!     DynIndex, TensorDynLen, TensorVectorSpace,
 //! };
 //!
 //! # fn main() -> anyhow::Result<()> {
@@ -35,8 +35,93 @@
 //! ```
 
 use crate::any_scalar::AnyScalar;
-use crate::TensorLike;
+use crate::TensorVectorSpace;
 use anyhow::Result;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
+
+static GMRES_OP_PROFILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug, Clone)]
+struct GmresOpProfile {
+    started: Instant,
+    b_norm: Duration,
+    apply: Duration,
+    inner_product: Duration,
+    axpby: Duration,
+    norm: Duration,
+    scale: Duration,
+    triangular_solve: Duration,
+    solution_update: Duration,
+    apply_calls: usize,
+    inner_product_calls: usize,
+    axpby_calls: usize,
+    norm_calls: usize,
+    scale_calls: usize,
+    triangular_solve_calls: usize,
+    solution_update_calls: usize,
+}
+
+impl Default for GmresOpProfile {
+    fn default() -> Self {
+        Self {
+            started: Instant::now(),
+            b_norm: Duration::ZERO,
+            apply: Duration::ZERO,
+            inner_product: Duration::ZERO,
+            axpby: Duration::ZERO,
+            norm: Duration::ZERO,
+            scale: Duration::ZERO,
+            triangular_solve: Duration::ZERO,
+            solution_update: Duration::ZERO,
+            apply_calls: 0,
+            inner_product_calls: 0,
+            axpby_calls: 0,
+            norm_calls: 0,
+            scale_calls: 0,
+            triangular_solve_calls: 0,
+            solution_update_calls: 0,
+        }
+    }
+}
+
+impl GmresOpProfile {
+    fn measured(&self) -> Duration {
+        self.b_norm
+            + self.apply
+            + self.inner_product
+            + self.axpby
+            + self.norm
+            + self.scale
+            + self.triangular_solve
+            + self.solution_update
+    }
+
+    fn print(&self, id: usize, iterations: usize, residual_norm: f64, converged: bool) {
+        let total = self.started.elapsed();
+        let other = total.saturating_sub(self.measured());
+        eprintln!(
+            "T4A gmres_op_profile #{id}: iterations={iterations} residual={residual_norm:.6e} converged={converged} total_ms={:.3} apply_ms={:.3} apply_calls={} inner_ms={:.3} inner_calls={} axpby_ms={:.3} axpby_calls={} norm_ms={:.3} norm_calls={} scale_ms={:.3} scale_calls={} update_ms={:.3} update_calls={} triangular_ms={:.3} triangular_calls={} b_norm_ms={:.3} other_ms={:.3}",
+            total.as_secs_f64() * 1000.0,
+            self.apply.as_secs_f64() * 1000.0,
+            self.apply_calls,
+            self.inner_product.as_secs_f64() * 1000.0,
+            self.inner_product_calls,
+            self.axpby.as_secs_f64() * 1000.0,
+            self.axpby_calls,
+            self.norm.as_secs_f64() * 1000.0,
+            self.norm_calls,
+            self.scale.as_secs_f64() * 1000.0,
+            self.scale_calls,
+            self.solution_update.as_secs_f64() * 1000.0,
+            self.solution_update_calls,
+            self.triangular_solve.as_secs_f64() * 1000.0,
+            self.triangular_solve_calls,
+            self.b_norm.as_secs_f64() * 1000.0,
+            other.as_secs_f64() * 1000.0,
+        );
+    }
+}
 
 /// Options for GMRES solver.
 ///
@@ -95,6 +180,28 @@ impl Default for GmresOptions {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum GmresTolerance {
+    Relative(f64),
+    Absolute(f64),
+}
+
+impl GmresTolerance {
+    fn residual_value(self, residual_norm: f64, b_norm: f64) -> f64 {
+        match self {
+            Self::Relative(_) => residual_norm / b_norm,
+            Self::Absolute(_) => residual_norm,
+        }
+    }
+
+    fn is_converged(self, residual_norm: f64, b_norm: f64) -> bool {
+        match self {
+            Self::Relative(rtol) => residual_norm / b_norm < rtol,
+            Self::Absolute(atol) => residual_norm < atol,
+        }
+    }
+}
+
 /// Result of GMRES solver.
 ///
 /// Contains the solution, iteration count, final residual norm, and
@@ -103,7 +210,7 @@ impl Default for GmresOptions {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace};
 /// use tensor4all_core::krylov::{gmres, GmresOptions};
 ///
 /// let i = DynIndex::new_dyn(2);
@@ -132,7 +239,7 @@ pub struct GmresResult<T> {
 /// Solve `A x = b` using GMRES (Generalized Minimal Residual Method).
 ///
 /// This implements the restarted GMRES algorithm that works with abstract tensor types
-/// through the [`TensorLike`] trait's vector space operations.
+/// through the [`TensorVectorSpace`] trait's vector space operations.
 ///
 /// # Algorithm
 ///
@@ -142,7 +249,7 @@ pub struct GmresResult<T> {
 ///
 /// # Type Parameters
 ///
-/// * `T` - A tensor type implementing `TensorLike`
+/// * `T` - A tensor type implementing `TensorVectorSpace`
 /// * `F` - A function that applies the linear operator: `F(x) = A x`
 ///
 /// # Arguments
@@ -163,7 +270,547 @@ pub struct GmresResult<T> {
 /// - The linear operator application fails
 pub fn gmres<T, F>(apply_a: F, b: &T, x0: &T, options: &GmresOptions) -> Result<GmresResult<T>>
 where
-    T: TensorLike,
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+{
+    gmres_impl(
+        apply_a,
+        b,
+        x0,
+        options,
+        GmresTolerance::Relative(options.rtol),
+        None,
+    )
+}
+
+/// Solve `A x = b` using GMRES with an absolute residual tolerance.
+///
+/// This variant stops when `||b - A*x|| < atol`. The default [`gmres`] API uses
+/// relative residual tolerance and is preferred for scale-independent solves.
+pub fn gmres_with_absolute_tolerance<T, F>(
+    apply_a: F,
+    b: &T,
+    x0: &T,
+    options: &GmresOptions,
+    atol: f64,
+) -> Result<GmresResult<T>>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+{
+    gmres_impl(
+        apply_a,
+        b,
+        x0,
+        options,
+        GmresTolerance::Absolute(atol),
+        None,
+    )
+}
+
+/// Solve `(a0 I + a1 A) x = b` using GMRES with relative residual tolerance.
+///
+/// The Arnoldi basis is built from the unshifted `A` callback, while affine
+/// coefficients are applied in the projected Hessenberg problem, matching
+/// KrylovKit's affine linear-solve convention.
+pub fn gmres_affine<T, F>(
+    apply_a: F,
+    b: &T,
+    x0: &T,
+    a0: AnyScalar,
+    a1: AnyScalar,
+    options: &GmresOptions,
+) -> Result<GmresResult<T>>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+{
+    gmres_affine_impl(
+        apply_a,
+        b,
+        x0,
+        a0,
+        a1,
+        options,
+        GmresTolerance::Relative(options.rtol),
+    )
+}
+
+/// Solve `(a0 I + a1 A) x = b` using GMRES with an absolute residual tolerance.
+///
+/// The Arnoldi basis is built from the unshifted `A` callback, while the affine
+/// coefficients are applied to the small Hessenberg problem. This mirrors
+/// KrylovKit's `linsolve(operator, b, a0, a1)` algorithm and avoids changing the
+/// Krylov basis when affine coefficients are present.
+pub fn gmres_affine_with_absolute_tolerance<T, F>(
+    apply_a: F,
+    b: &T,
+    x0: &T,
+    a0: AnyScalar,
+    a1: AnyScalar,
+    options: &GmresOptions,
+    atol: f64,
+) -> Result<GmresResult<T>>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+{
+    gmres_affine_impl(
+        apply_a,
+        b,
+        x0,
+        a0,
+        a1,
+        options,
+        GmresTolerance::Absolute(atol),
+    )
+}
+
+fn gmres_affine_impl<T, F>(
+    apply_a: F,
+    b: &T,
+    x0: &T,
+    a0: AnyScalar,
+    a1: AnyScalar,
+    options: &GmresOptions,
+    tolerance: GmresTolerance,
+) -> Result<GmresResult<T>>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+{
+    b.validate()?;
+    x0.validate()?;
+
+    let profile_enabled = std::env::var_os("T4A_GMRES_OP_PROFILE").is_some();
+    let profile_id = if profile_enabled {
+        GMRES_OP_PROFILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    } else {
+        0
+    };
+    let mut profile = GmresOpProfile::default();
+    let mut total_iters = 0usize;
+
+    macro_rules! finish {
+        ($result:expr) => {{
+            let result = $result;
+            if profile_enabled {
+                profile.print(
+                    profile_id,
+                    result.iterations,
+                    result.residual_norm,
+                    result.converged,
+                );
+            }
+            return Ok(result);
+        }};
+    }
+
+    let started = Instant::now();
+    let b_norm = b.norm();
+    if profile_enabled {
+        profile.b_norm += started.elapsed();
+    }
+    if b_norm < 1e-15 {
+        finish!(GmresResult {
+            solution: x0.clone(),
+            iterations: 0,
+            residual_norm: 0.0,
+            converged: true,
+        });
+    }
+    if a0.is_zero() && a1.is_zero() {
+        anyhow::bail!("gmres_affine: at least one affine coefficient must be nonzero");
+    }
+    if a1.is_zero() {
+        let started = Instant::now();
+        let solution = b.scale(AnyScalar::new_real(1.0) / a0)?;
+        if profile_enabled {
+            profile.scale += started.elapsed();
+            profile.scale_calls += 1;
+        }
+        finish!(GmresResult {
+            solution,
+            iterations: 0,
+            residual_norm: 0.0,
+            converged: true,
+        });
+    }
+
+    let mut x = x0.clone();
+
+    for restart in 0..options.max_restarts {
+        let started = Instant::now();
+        let ax = apply_a(&x)?;
+        if profile_enabled {
+            profile.apply += started.elapsed();
+            profile.apply_calls += 1;
+        }
+        if restart == 0 {
+            ax.validate()?;
+        }
+        let started = Instant::now();
+        let affine_x = x.axpby(a0.clone(), &ax, a1.clone())?;
+        if profile_enabled {
+            profile.axpby += started.elapsed();
+            profile.axpby_calls += 1;
+        }
+        let started = Instant::now();
+        let r = b.axpby(
+            AnyScalar::new_real(1.0),
+            &affine_x,
+            AnyScalar::new_real(-1.0),
+        )?;
+        if profile_enabled {
+            profile.axpby += started.elapsed();
+            profile.axpby_calls += 1;
+        }
+        let started = Instant::now();
+        let r_norm = r.norm();
+        if profile_enabled {
+            profile.norm += started.elapsed();
+            profile.norm_calls += 1;
+        }
+        let residual_value = tolerance.residual_value(r_norm, b_norm);
+        if options.verbose {
+            eprintln!(
+                "GMRES restart {}: initial residual = {:.6e}",
+                restart, residual_value
+            );
+        }
+        if tolerance.is_converged(r_norm, b_norm) {
+            finish!(GmresResult {
+                solution: x,
+                iterations: total_iters,
+                residual_norm: residual_value,
+                converged: true,
+            });
+        }
+
+        let cycle_max_iter = options.max_iter;
+        let mut v_basis: Vec<T> = Vec::with_capacity(cycle_max_iter + 1);
+        let started = Instant::now();
+        v_basis.push(r.scale(AnyScalar::new_real(1.0 / r_norm))?);
+        if profile_enabled {
+            profile.scale += started.elapsed();
+            profile.scale_calls += 1;
+        }
+
+        let mut h_matrix: Vec<Vec<AnyScalar>> = Vec::with_capacity(cycle_max_iter);
+        let mut cs: Vec<AnyScalar> = Vec::with_capacity(cycle_max_iter);
+        let mut sn: Vec<AnyScalar> = Vec::with_capacity(cycle_max_iter);
+        let mut g: Vec<AnyScalar> = vec![AnyScalar::new_real(r_norm)];
+        let mut solution_already_updated = false;
+
+        for j in 0..cycle_max_iter {
+            total_iters += 1;
+
+            let started = Instant::now();
+            let w = apply_a(&v_basis[j])?;
+            if profile_enabled {
+                profile.apply += started.elapsed();
+                profile.apply_calls += 1;
+            }
+            let mut h_a_col: Vec<AnyScalar> = Vec::with_capacity(j + 2);
+            let mut w_orth = w;
+
+            for v_i in v_basis.iter().take(j + 1) {
+                let started = Instant::now();
+                let h_ij = v_i.inner_product(&w_orth)?;
+                if profile_enabled {
+                    profile.inner_product += started.elapsed();
+                    profile.inner_product_calls += 1;
+                }
+                h_a_col.push(h_ij.clone());
+                let neg_h_ij = AnyScalar::new_real(0.0) - h_ij;
+                let started = Instant::now();
+                w_orth = w_orth.axpby(AnyScalar::new_real(1.0), v_i, neg_h_ij)?;
+                if profile_enabled {
+                    profile.axpby += started.elapsed();
+                    profile.axpby_calls += 1;
+                }
+            }
+            for (i, v_i) in v_basis.iter().take(j + 1).enumerate() {
+                let started = Instant::now();
+                let correction = v_i.inner_product(&w_orth)?;
+                if profile_enabled {
+                    profile.inner_product += started.elapsed();
+                    profile.inner_product_calls += 1;
+                }
+                h_a_col[i] = h_a_col[i].clone() + correction.clone();
+                let neg_correction = AnyScalar::new_real(0.0) - correction;
+                let started = Instant::now();
+                w_orth = w_orth.axpby(AnyScalar::new_real(1.0), v_i, neg_correction)?;
+                if profile_enabled {
+                    profile.axpby += started.elapsed();
+                    profile.axpby_calls += 1;
+                }
+            }
+
+            let started = Instant::now();
+            let h_jp1_j_real = w_orth.norm();
+            if profile_enabled {
+                profile.norm += started.elapsed();
+                profile.norm_calls += 1;
+            }
+            h_a_col.push(AnyScalar::new_real(h_jp1_j_real));
+
+            let mut h_col: Vec<AnyScalar> = Vec::with_capacity(j + 2);
+            for h in h_a_col.iter().take(j) {
+                h_col.push(a1.clone() * h.clone());
+            }
+            h_col.push(a0.clone() + a1.clone() * h_a_col[j].clone());
+            h_col.push(a1.clone() * h_a_col[j + 1].clone());
+
+            #[allow(clippy::needless_range_loop)]
+            for i in 0..j {
+                let h_i = h_col[i].clone();
+                let h_ip1 = h_col[i + 1].clone();
+                let (new_hi, new_hip1) = apply_givens_rotation(&cs[i], &sn[i], &h_i, &h_ip1);
+                h_col[i] = new_hi;
+                h_col[i + 1] = new_hip1;
+            }
+
+            let (c_j, s_j) = compute_givens_rotation(&h_col[j], &h_col[j + 1]);
+            cs.push(c_j.clone());
+            sn.push(s_j.clone());
+
+            let (new_hj, _) = apply_givens_rotation(&c_j, &s_j, &h_col[j], &h_col[j + 1]);
+            h_col[j] = new_hj;
+            h_col[j + 1] = AnyScalar::new_real(0.0);
+
+            let g_j = g[j].clone();
+            let g_jp1 = AnyScalar::new_real(0.0);
+            let (new_gj, new_gjp1) = apply_givens_rotation(&c_j, &s_j, &g_j, &g_jp1);
+            g[j] = new_gj;
+            let res_norm = new_gjp1.abs();
+            g.push(new_gjp1);
+
+            h_matrix.push(h_col);
+            let residual_value = tolerance.residual_value(res_norm, b_norm);
+            if options.verbose {
+                eprintln!("GMRES iter {}: residual = {:.6e}", j + 1, residual_value);
+            }
+
+            if tolerance.is_converged(res_norm, b_norm) {
+                let started = Instant::now();
+                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                if profile_enabled {
+                    profile.triangular_solve += started.elapsed();
+                    profile.triangular_solve_calls += 1;
+                }
+                let started = Instant::now();
+                x = update_solution(&x, &v_basis[..=j], &y)?;
+                if profile_enabled {
+                    profile.solution_update += started.elapsed();
+                    profile.solution_update_calls += 1;
+                }
+                if options.check_true_residual {
+                    let started = Instant::now();
+                    let ax_check = apply_a(&x)?;
+                    if profile_enabled {
+                        profile.apply += started.elapsed();
+                        profile.apply_calls += 1;
+                    }
+                    let started = Instant::now();
+                    let affine_check = x.axpby(a0.clone(), &ax_check, a1.clone())?;
+                    if profile_enabled {
+                        profile.axpby += started.elapsed();
+                        profile.axpby_calls += 1;
+                    }
+                    let started = Instant::now();
+                    let r_check = b.axpby(
+                        AnyScalar::new_real(1.0),
+                        &affine_check,
+                        AnyScalar::new_real(-1.0),
+                    )?;
+                    if profile_enabled {
+                        profile.axpby += started.elapsed();
+                        profile.axpby_calls += 1;
+                    }
+                    let started = Instant::now();
+                    let true_abs_res = r_check.norm();
+                    if profile_enabled {
+                        profile.norm += started.elapsed();
+                        profile.norm_calls += 1;
+                    }
+                    let true_residual_value = tolerance.residual_value(true_abs_res, b_norm);
+                    if options.verbose {
+                        eprintln!(
+                            "GMRES true residual check: hessenberg={:.6e}, checked={:.6e}",
+                            residual_value, true_residual_value
+                        );
+                    }
+                    if tolerance.is_converged(true_abs_res, b_norm) {
+                        finish!(GmresResult {
+                            solution: x,
+                            iterations: total_iters,
+                            residual_norm: true_residual_value,
+                            converged: true,
+                        });
+                    }
+                    solution_already_updated = true;
+                    break;
+                } else {
+                    finish!(GmresResult {
+                        solution: x,
+                        iterations: total_iters,
+                        residual_norm: residual_value,
+                        converged: true,
+                    });
+                }
+            }
+
+            if h_jp1_j_real > 1e-14 {
+                let started = Instant::now();
+                v_basis.push(w_orth.scale(AnyScalar::new_real(1.0 / h_jp1_j_real))?);
+                if profile_enabled {
+                    profile.scale += started.elapsed();
+                    profile.scale_calls += 1;
+                }
+            } else {
+                let started = Instant::now();
+                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                if profile_enabled {
+                    profile.triangular_solve += started.elapsed();
+                    profile.triangular_solve_calls += 1;
+                }
+                let started = Instant::now();
+                x = update_solution(&x, &v_basis[..=j], &y)?;
+                if profile_enabled {
+                    profile.solution_update += started.elapsed();
+                    profile.solution_update_calls += 1;
+                }
+                let started = Instant::now();
+                let ax_final = apply_a(&x)?;
+                if profile_enabled {
+                    profile.apply += started.elapsed();
+                    profile.apply_calls += 1;
+                }
+                let started = Instant::now();
+                let affine_final = x.axpby(a0.clone(), &ax_final, a1.clone())?;
+                if profile_enabled {
+                    profile.axpby += started.elapsed();
+                    profile.axpby_calls += 1;
+                }
+                let started = Instant::now();
+                let r_final = b.axpby(
+                    AnyScalar::new_real(1.0),
+                    &affine_final,
+                    AnyScalar::new_real(-1.0),
+                )?;
+                if profile_enabled {
+                    profile.axpby += started.elapsed();
+                    profile.axpby_calls += 1;
+                }
+                let started = Instant::now();
+                let final_abs_res = r_final.norm();
+                if profile_enabled {
+                    profile.norm += started.elapsed();
+                    profile.norm_calls += 1;
+                }
+                let final_res = tolerance.residual_value(final_abs_res, b_norm);
+                finish!(GmresResult {
+                    solution: x,
+                    iterations: total_iters,
+                    residual_norm: final_res,
+                    converged: tolerance.is_converged(final_abs_res, b_norm),
+                });
+            }
+        }
+
+        if !solution_already_updated {
+            let actual_iters = h_matrix.len();
+            let started = Instant::now();
+            let y = solve_upper_triangular(&h_matrix, &g[..actual_iters])?;
+            if profile_enabled {
+                profile.triangular_solve += started.elapsed();
+                profile.triangular_solve_calls += 1;
+            }
+            let started = Instant::now();
+            x = update_solution(&x, &v_basis[..actual_iters], &y)?;
+            if profile_enabled {
+                profile.solution_update += started.elapsed();
+                profile.solution_update_calls += 1;
+            }
+        }
+    }
+
+    let started = Instant::now();
+    let ax_final = apply_a(&x)?;
+    if profile_enabled {
+        profile.apply += started.elapsed();
+        profile.apply_calls += 1;
+    }
+    let started = Instant::now();
+    let affine_final = x.axpby(a0, &ax_final, a1)?;
+    if profile_enabled {
+        profile.axpby += started.elapsed();
+        profile.axpby_calls += 1;
+    }
+    let started = Instant::now();
+    let r_final = b.axpby(
+        AnyScalar::new_real(1.0),
+        &affine_final,
+        AnyScalar::new_real(-1.0),
+    )?;
+    if profile_enabled {
+        profile.axpby += started.elapsed();
+        profile.axpby_calls += 1;
+    }
+    let started = Instant::now();
+    let final_abs_res = r_final.norm();
+    if profile_enabled {
+        profile.norm += started.elapsed();
+        profile.norm_calls += 1;
+    }
+    let final_res = tolerance.residual_value(final_abs_res, b_norm);
+
+    finish!(GmresResult {
+        solution: x,
+        iterations: total_iters,
+        residual_norm: final_res,
+        converged: tolerance.is_converged(final_abs_res, b_norm),
+    })
+}
+
+/// Solve `A x = b` using GMRES while enforcing a total iteration limit.
+///
+/// [`GmresOptions::max_iter`] remains the restart cycle length and
+/// [`GmresOptions::max_restarts`] remains the maximum number of restart cycles.
+/// `max_total_iter` caps the total number of Arnoldi steps across all restart
+/// cycles; the final cycle is shortened when necessary.
+pub fn gmres_with_total_iteration_limit<T, F>(
+    apply_a: F,
+    b: &T,
+    x0: &T,
+    options: &GmresOptions,
+    max_total_iter: usize,
+) -> Result<GmresResult<T>>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+{
+    gmres_impl(
+        apply_a,
+        b,
+        x0,
+        options,
+        GmresTolerance::Relative(options.rtol),
+        Some(max_total_iter),
+    )
+}
+
+fn gmres_impl<T, F>(
+    apply_a: F,
+    b: &T,
+    x0: &T,
+    options: &GmresOptions,
+    tolerance: GmresTolerance,
+    max_total_iter: Option<usize>,
+) -> Result<GmresResult<T>>
+where
+    T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
 {
     // Validate structural consistency of inputs
@@ -185,6 +832,20 @@ where
     let mut total_iters = 0;
 
     for _restart in 0..options.max_restarts {
+        let cycle_max_iter = match max_total_iter {
+            Some(limit) => {
+                let remaining = limit.saturating_sub(total_iters);
+                if remaining == 0 {
+                    break;
+                }
+                options.max_iter.min(remaining)
+            }
+            None => options.max_iter,
+        };
+        if cycle_max_iter == 0 {
+            break;
+        }
+
         // Compute initial residual: r = b - A*x
         let ax = apply_a(&x)?;
         // Validate operator output on first restart
@@ -194,38 +855,39 @@ where
         // r = 1.0 * b + (-1.0) * ax
         let r = b.axpby(AnyScalar::new_real(1.0), &ax, AnyScalar::new_real(-1.0))?;
         let r_norm = r.norm();
-        let rel_res = r_norm / b_norm;
+        let residual_value = tolerance.residual_value(r_norm, b_norm);
 
         if options.verbose {
             eprintln!(
                 "GMRES restart {}: initial residual = {:.6e}",
-                _restart, rel_res
+                _restart, residual_value
             );
         }
 
-        if rel_res < options.rtol {
+        if tolerance.is_converged(r_norm, b_norm) {
             return Ok(GmresResult {
                 solution: x,
                 iterations: total_iters,
-                residual_norm: rel_res,
+                residual_norm: residual_value,
                 converged: true,
             });
         }
 
         // Arnoldi process with modified Gram-Schmidt
-        let mut v_basis: Vec<T> = Vec::with_capacity(options.max_iter + 1);
-        let mut h_matrix: Vec<Vec<AnyScalar>> = Vec::with_capacity(options.max_iter);
+        let mut v_basis: Vec<T> = Vec::with_capacity(cycle_max_iter + 1);
+        let mut h_matrix: Vec<Vec<AnyScalar>> = Vec::with_capacity(cycle_max_iter);
 
         // v_0 = r / ||r||
         let v0 = r.scale(AnyScalar::new_real(1.0 / r_norm))?;
         v_basis.push(v0);
 
         // Initialize Givens rotation storage
-        let mut cs: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
-        let mut sn: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
+        let mut cs: Vec<AnyScalar> = Vec::with_capacity(cycle_max_iter);
+        let mut sn: Vec<AnyScalar> = Vec::with_capacity(cycle_max_iter);
         let mut g: Vec<AnyScalar> = vec![AnyScalar::new_real(r_norm)]; // residual in upper Hessenberg space
+        let mut solution_already_updated = false;
 
-        for j in 0..options.max_iter {
+        for j in 0..cycle_max_iter {
             total_iters += 1;
 
             // w = A * v_j
@@ -241,6 +903,16 @@ where
                 // w_orth = w_orth - h_ij * v_i = 1.0 * w_orth + (-h_ij) * v_i
                 let neg_h_ij = AnyScalar::new_real(0.0) - h_ij;
                 w_orth = w_orth.axpby(AnyScalar::new_real(1.0), v_i, neg_h_ij)?;
+            }
+
+            // KrylovKit's default orthogonalizer is ModifiedGramSchmidt2.
+            // The second pass is important for long Krylov bases and complex
+            // non-Hermitian local problems.
+            for (i, v_i) in v_basis.iter().take(j + 1).enumerate() {
+                let correction = v_i.inner_product(&w_orth)?;
+                h_col[i] = h_col[i].clone() + correction.clone();
+                let neg_correction = AnyScalar::new_real(0.0) - correction;
+                w_orth = w_orth.axpby(AnyScalar::new_real(1.0), v_i, neg_correction)?;
             }
 
             let h_jp1_j_real = w_orth.norm();
@@ -278,22 +950,51 @@ where
             h_matrix.push(h_col);
 
             // Check convergence
-            let rel_res = res_norm / b_norm;
+            let residual_value = tolerance.residual_value(res_norm, b_norm);
 
             if options.verbose {
-                eprintln!("GMRES iter {}: residual = {:.6e}", j + 1, rel_res);
+                eprintln!("GMRES iter {}: residual = {:.6e}", j + 1, residual_value);
             }
 
-            if rel_res < options.rtol {
+            if tolerance.is_converged(res_norm, b_norm) {
                 // Solve upper triangular system and update x
                 let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
                 x = update_solution(&x, &v_basis[..=j], &y)?;
-                return Ok(GmresResult {
-                    solution: x,
-                    iterations: total_iters,
-                    residual_norm: rel_res,
-                    converged: true,
-                });
+                if options.check_true_residual {
+                    let ax_check = apply_a(&x)?;
+                    let r_check = b.axpby(
+                        AnyScalar::new_real(1.0),
+                        &ax_check,
+                        AnyScalar::new_real(-1.0),
+                    )?;
+                    let true_abs_res = r_check.norm();
+                    let true_residual_value = tolerance.residual_value(true_abs_res, b_norm);
+
+                    if options.verbose {
+                        eprintln!(
+                            "GMRES true residual check: hessenberg={:.6e}, checked={:.6e}",
+                            residual_value, true_residual_value
+                        );
+                    }
+
+                    if tolerance.is_converged(true_abs_res, b_norm) {
+                        return Ok(GmresResult {
+                            solution: x,
+                            iterations: total_iters,
+                            residual_norm: true_residual_value,
+                            converged: true,
+                        });
+                    }
+                    solution_already_updated = true;
+                    break;
+                } else {
+                    return Ok(GmresResult {
+                        solution: x,
+                        iterations: total_iters,
+                        residual_norm: residual_value,
+                        converged: true,
+                    });
+                }
             }
 
             // Add new basis vector (if not converged and h_jp1_j is not too small)
@@ -310,19 +1011,23 @@ where
                     &ax_final,
                     AnyScalar::new_real(-1.0),
                 )?;
-                let final_res = r_final.norm() / b_norm;
+                let final_abs_res = r_final.norm();
+                let final_res = tolerance.residual_value(final_abs_res, b_norm);
                 return Ok(GmresResult {
                     solution: x,
                     iterations: total_iters,
                     residual_norm: final_res,
-                    converged: final_res < options.rtol,
+                    converged: tolerance.is_converged(final_abs_res, b_norm),
                 });
             }
         }
 
         // End of restart cycle - update x with current solution
-        let y = solve_upper_triangular(&h_matrix, &g[..options.max_iter])?;
-        x = update_solution(&x, &v_basis[..options.max_iter], &y)?;
+        if !solution_already_updated {
+            let actual_iters = h_matrix.len();
+            let y = solve_upper_triangular(&h_matrix, &g[..actual_iters])?;
+            x = update_solution(&x, &v_basis[..actual_iters], &y)?;
+        }
     }
 
     // Compute final residual
@@ -332,13 +1037,14 @@ where
         &ax_final,
         AnyScalar::new_real(-1.0),
     )?;
-    let final_res = r_final.norm() / b_norm;
+    let final_abs_res = r_final.norm();
+    let final_res = tolerance.residual_value(final_abs_res, b_norm);
 
     Ok(GmresResult {
         solution: x,
         iterations: total_iters,
         residual_norm: final_res,
-        converged: final_res < options.rtol,
+        converged: tolerance.is_converged(final_abs_res, b_norm),
     })
 }
 
@@ -349,7 +1055,7 @@ where
 ///
 /// # Type Parameters
 ///
-/// * `T` - A tensor type implementing `TensorLike`
+/// * `T` - A tensor type implementing `TensorVectorSpace`
 /// * `F` - A function that applies the linear operator: `F(x) = A x`
 /// * `Tr` - A function that truncates a tensor in-place: `Tr(&mut x)`
 ///
@@ -372,7 +1078,7 @@ where
 /// Solve `2x = b` with a no-op truncation function:
 ///
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike, AnyScalar};
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace, AnyScalar};
 /// use tensor4all_core::krylov::{gmres_with_truncation, GmresOptions};
 ///
 /// let i = DynIndex::new_dyn(2);
@@ -398,7 +1104,7 @@ pub fn gmres_with_truncation<T, F, Tr>(
     truncate: Tr,
 ) -> Result<GmresResult<T>>
 where
-    T: TensorLike,
+    T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
     Tr: Fn(&mut T) -> Result<()>,
 {
@@ -848,7 +1554,7 @@ pub struct RestartGmresResult<T> {
 ///
 /// # Type Parameters
 ///
-/// * `T` - A tensor type implementing `TensorLike`
+/// * `T` - A tensor type implementing `TensorVectorSpace`
 /// * `F` - A function that applies the linear operator: `F(x) = A x`
 /// * `Tr` - A function that truncates a tensor in-place: `Tr(&mut x)`
 ///
@@ -869,7 +1575,7 @@ pub struct RestartGmresResult<T> {
 /// Solve `5x = b` with no truncation:
 ///
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike, AnyScalar};
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace, AnyScalar};
 /// use tensor4all_core::krylov::{restart_gmres_with_truncation, RestartGmresOptions};
 ///
 /// let i = DynIndex::new_dyn(3);
@@ -894,7 +1600,7 @@ pub fn restart_gmres_with_truncation<T, F, Tr>(
     truncate: Tr,
 ) -> Result<RestartGmresResult<T>>
 where
-    T: TensorLike,
+    T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
     Tr: Fn(&mut T) -> Result<()>,
 {
@@ -1044,13 +1750,22 @@ where
 /// This function keeps computation in `AnyScalar` space to preserve AD metadata
 /// as much as possible.
 fn compute_givens_rotation(a: &AnyScalar, b: &AnyScalar) -> (AnyScalar, AnyScalar) {
-    // r^2 = conj(a)*a + conj(b)*b (works for both real and complex)
-    let norm2 = a.clone().conj() * a.clone() + b.clone().conj() * b.clone();
-    let r = norm2.sqrt();
-    if r.abs() < 1e-15 {
+    let a_abs = a.abs();
+    let b_abs = b.abs();
+    let r = (a_abs * a_abs + b_abs * b_abs).sqrt();
+    if r < 1e-15 {
         (AnyScalar::new_real(1.0), AnyScalar::new_real(0.0))
+    } else if a_abs < 1e-15 {
+        (
+            AnyScalar::new_real(0.0),
+            b.clone().conj() / AnyScalar::new_real(r),
+        )
     } else {
-        (a.clone() / r.clone(), b.clone() / r)
+        let phase = a.clone() / AnyScalar::new_real(a_abs);
+        (
+            AnyScalar::new_real(a_abs / r),
+            phase * b.clone().conj() / AnyScalar::new_real(r),
+        )
     }
 }
 
@@ -1102,7 +1817,7 @@ fn solve_upper_triangular(h: &[Vec<AnyScalar>], g: &[AnyScalar]) -> Result<Vec<A
 }
 
 /// Update solution: x_new = x + sum_i y_i * v_i
-fn update_solution<T: TensorLike>(x: &T, v_basis: &[T], y: &[AnyScalar]) -> Result<T> {
+fn update_solution<T: TensorVectorSpace>(x: &T, v_basis: &[T], y: &[AnyScalar]) -> Result<T> {
     let mut result = x.clone();
 
     for (vi, yi) in v_basis.iter().zip(y.iter()) {
@@ -1126,7 +1841,7 @@ fn update_solution_truncated<T, Tr>(
     truncate: &Tr,
 ) -> Result<T>
 where
-    T: TensorLike,
+    T: TensorVectorSpace,
     Tr: Fn(&mut T) -> Result<()>,
 {
     let mut result = x.clone();

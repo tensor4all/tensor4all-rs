@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use tensor4all_core::{AllowedPairs, AnyScalar, ColMajorArrayRef, IndexLike, TensorLike};
+use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike, TensorLike};
 
 use super::{TreeTN, TreeTNEvaluator};
 
@@ -437,7 +437,7 @@ where
                         node_name
                     )
                 })?;
-                env = T::contract(&[&env, &child_env], AllowedPairs::All)
+                env = T::contract(&[&env, &child_env])
                     .context("inner: failed to absorb child environment")?;
             }
 
@@ -445,7 +445,7 @@ where
                 .tensor(node_idx_other)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_name))
                 .context("inner: other tensor must exist")?;
-            env = T::contract(&[&env, other_tensor], AllowedPairs::All)
+            env = T::contract(&[&env, other_tensor])
                 .context("inner: failed to contract node bra-ket tensors")?;
 
             envs.insert(node_name, env);

@@ -5,7 +5,7 @@ use crate::types::{
 };
 use num_complex::Complex64;
 use std::ffi::CStr;
-use tensor4all_core::AnyScalar;
+use tensor4all_core::{AnyScalar, TensorContractionLike};
 
 fn last_error() -> String {
     let mut len = 0usize;
@@ -195,15 +195,15 @@ fn reconstruct_svd(
     let mut perm = vec![v.indices.len() - 1];
     perm.extend(0..(v.indices.len() - 1));
     let vh = v.conj().permute(&perm).unwrap();
-    let svh = s.contract(&vh).unwrap();
+    let svh = s.contract_pair(&vh).unwrap();
     let sim_bond = s.indices[1].clone();
     let bond = v.indices[v.indices.len() - 1].clone();
     let svh = svh.replaceind(&sim_bond, &bond).unwrap();
-    unsafe { (*u).inner().contract(&svh).unwrap() }
+    unsafe { (*u).inner().contract_pair(&svh).unwrap() }
 }
 
 fn reconstruct_qr(q: *const t4a_tensor, r: *const t4a_tensor) -> InternalTensor {
-    unsafe { (*q).inner().contract((*r).inner()).unwrap() }
+    unsafe { (*q).inner().contract_pair((*r).inner()).unwrap() }
 }
 
 fn internal_tensor_f64(indices: &[*const t4a_index], data: &[f64]) -> InternalTensor {
@@ -838,7 +838,7 @@ fn test_tensor_contract_retain_preserves_shared_index() {
 }
 
 #[test]
-fn test_tensor_contract_multi_retain_preserves_batch_index() {
+fn test_tensor_contract_many_retain_preserves_batch_index() {
     let i = new_index(2);
     let j = new_index(3);
     let k = new_index(2);
@@ -864,7 +864,7 @@ fn test_tensor_contract_multi_retain_preserves_batch_index() {
     let retain = [j as *const t4a_index];
     let mut out = std::ptr::null_mut();
     assert_eq!(
-        t4a_tensor_contract_multi(
+        t4a_tensor_contract_many_retain(
             tensors.as_ptr(),
             tensors.len(),
             retain.as_ptr(),

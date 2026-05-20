@@ -31,7 +31,9 @@ use thiserror::Error;
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{factorize, Canonical, DynIndex, FactorizeOptions, TensorDynLen};
+/// use tensor4all_core::{
+///     factorize, Canonical, DynIndex, FactorizeOptions, TensorContractionLike, TensorDynLen,
+/// };
 ///
 /// let i = DynIndex::new_dyn(3);
 /// let j = DynIndex::new_dyn(3);
@@ -104,7 +106,7 @@ pub enum FactorizeError {
 
 /// Factorization algorithm.
 ///
-/// Determines which matrix decomposition is used by [`TensorLike::factorize`].
+/// Determines which matrix decomposition is used by [`TensorFactorizationLike::factorize`].
 ///
 /// # Examples
 ///
@@ -135,7 +137,9 @@ pub enum FactorizeAlg {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{factorize, Canonical, DynIndex, FactorizeOptions, TensorDynLen};
+/// use tensor4all_core::{
+///     factorize, Canonical, DynIndex, FactorizeOptions, TensorContractionLike, TensorDynLen,
+/// };
 ///
 /// let i = DynIndex::new_dyn(3);
 /// let j = DynIndex::new_dyn(3);
@@ -157,8 +161,8 @@ pub enum FactorizeAlg {
 /// ).unwrap();
 ///
 /// // Both recover the same tensor
-/// let recovered_left = left_result.left.contract(&left_result.right).unwrap();
-/// let recovered_right = right_result.left.contract(&right_result.right).unwrap();
+/// let recovered_left = left_result.left.contract_pair(&left_result.right).unwrap();
+/// let recovered_right = right_result.left.contract_pair(&right_result.right).unwrap();
 /// assert!(recovered_left.distance(&recovered_right).unwrap() < 1e-12);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -179,7 +183,7 @@ pub enum Canonical {
 /// Options for tensor factorization.
 ///
 /// Controls the algorithm, canonical direction, and truncation parameters
-/// for [`TensorLike::factorize`].
+/// for [`TensorFactorizationLike::factorize`].
 ///
 /// # Defaults
 ///
@@ -426,7 +430,9 @@ impl FactorizeOptions {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{factorize, DynIndex, FactorizeOptions, TensorDynLen};
+/// use tensor4all_core::{
+///     factorize, DynIndex, FactorizeOptions, TensorContractionLike, TensorDynLen,
+/// };
 ///
 /// let i = DynIndex::new_dyn(3);
 /// let j = DynIndex::new_dyn(4);
@@ -436,7 +442,7 @@ impl FactorizeOptions {
 /// let result = factorize(&tensor, &[i.clone()], &FactorizeOptions::svd()).unwrap();
 ///
 /// // Contracting left * right recovers the original tensor
-/// let recovered = result.left.contract(&result.right).unwrap();
+/// let recovered = result.left.contract_pair(&result.right).unwrap();
 /// assert!(tensor.distance(&recovered).unwrap() < 1e-12);
 ///
 /// // SVD provides singular values
@@ -444,7 +450,7 @@ impl FactorizeOptions {
 /// assert_eq!(result.singular_values.as_ref().unwrap().len(), result.rank);
 /// ```
 #[derive(Debug, Clone)]
-pub struct FactorizeResult<T: TensorLike> {
+pub struct FactorizeResult<T: TensorIndex> {
     /// Left factor tensor.
     pub left: T,
     /// Right factor tensor.
@@ -460,61 +466,6 @@ pub struct FactorizeResult<T: TensorLike> {
 // ============================================================================
 // Contraction types
 // ============================================================================
-
-/// Specifies which tensor pairs are allowed to contract.
-///
-/// This enum controls which tensor pairs can have their indices contracted
-/// in multi-tensor contraction operations. This is useful for tensor networks
-/// where the graph structure determines which tensors are connected.
-///
-/// # Example
-///
-/// ```
-/// use tensor4all_core::{AllowedPairs, DynIndex, TensorDynLen, TensorLike};
-///
-/// # fn main() -> anyhow::Result<()> {
-/// let i = DynIndex::new_dyn(2);
-/// let j = DynIndex::new_dyn(2);
-/// let k = DynIndex::new_dyn(2);
-///
-/// let a = TensorDynLen::from_dense(
-///     vec![i.clone(), j.clone()],
-///     vec![1.0, 0.0, 0.0, 1.0],
-/// )?;
-/// let b = TensorDynLen::from_dense(
-///     vec![j.clone(), k.clone()],
-///     vec![1.0, 2.0, 3.0, 4.0],
-/// )?;
-/// let c = TensorDynLen::from_dense(vec![k.clone()], vec![1.0, 10.0])?;
-///
-/// let tensor_refs: Vec<&TensorDynLen> = vec![&a, &b, &c];
-/// let all = <TensorDynLen as TensorLike>::contract(&tensor_refs, AllowedPairs::All)?;
-///
-/// let edges = vec![(0, 1), (1, 2)];
-/// let specified =
-///     <TensorDynLen as TensorLike>::contract(&tensor_refs, AllowedPairs::Specified(&edges))?;
-///
-/// assert_eq!(all.dims(), vec![2]);
-/// assert!(all.sub(&specified)?.maxabs() < 1e-12);
-/// # Ok(())
-/// # }
-/// ```
-#[derive(Debug, Clone, Copy)]
-pub enum AllowedPairs<'a> {
-    /// All tensor pairs are allowed to contract.
-    ///
-    /// Indices with matching IDs across any two tensors will be contracted.
-    /// This is the default behavior, equivalent to ITensor's `*` operator.
-    All,
-    /// Only specified tensor pairs are allowed to contract.
-    ///
-    /// Each pair is `(tensor_idx_a, tensor_idx_b)` into the input tensor slice.
-    /// Indices are only contracted if they belong to an allowed pair.
-    ///
-    /// This is useful for tensor networks where the graph structure
-    /// determines which tensors are connected (e.g., TreeTN edges).
-    Specified(&'a [(usize, usize)]),
-}
 
 /// Linearization order used when fusing or unfusing multiple logical indices
 /// into one physical index.
@@ -557,7 +508,216 @@ impl LinearizationOrder {
 }
 
 // ============================================================================
-// TensorLike trait (fully generic)
+// Capability traits (fully generic)
+// ============================================================================
+
+/// Vector-space operations for iterative linear algebra over tensor-like values.
+///
+/// This trait intentionally does not require tensor contraction/einsum,
+/// factorization, or tensor-network construction. Krylov solvers should depend
+/// on this trait instead of [`TensorLike`] so block vectors and other abstract
+/// state types do not have to provide unrelated tensor-network operations.
+pub trait TensorVectorSpace: TensorIndex {
+    /// Compute the squared Frobenius norm of the tensor.
+    fn norm_squared(&self) -> f64;
+
+    /// Compute a linear combination: `a * self + b * other`.
+    fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self>;
+
+    /// Scalar multiplication.
+    fn scale(&self, scalar: AnyScalar) -> Result<Self>;
+
+    /// Inner product (dot product) of two tensors.
+    ///
+    /// Computes `⟨self, other⟩ = Σ conj(self)_i * other_i`.
+    fn inner_product(&self, other: &Self) -> Result<AnyScalar>;
+
+    /// Compute the Frobenius norm of the tensor.
+    fn norm(&self) -> f64 {
+        self.norm_squared().sqrt()
+    }
+
+    /// Try to compute the maximum absolute value of all tensor elements.
+    fn try_maxabs(&self) -> Result<f64> {
+        Ok(self.maxabs())
+    }
+
+    /// Maximum absolute value of all elements (L-infinity norm).
+    fn maxabs(&self) -> f64;
+
+    /// Element-wise subtraction: `self - other`.
+    fn sub(&self, other: &Self) -> Result<Self> {
+        self.axpby(AnyScalar::new_real(1.0), other, AnyScalar::new_real(-1.0))
+    }
+
+    /// Negate all elements: `-self`.
+    fn neg(&self) -> Result<Self> {
+        self.scale(AnyScalar::new_real(-1.0))
+    }
+
+    /// Approximate equality check (Julia `isapprox` semantics).
+    fn isapprox(&self, other: &Self, atol: f64, rtol: f64) -> bool {
+        let diff = match self.sub(other) {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+        let diff_norm = diff.norm();
+        diff_norm <= atol.max(rtol * self.norm().max(other.norm()))
+    }
+
+    /// Validate structural consistency of this tensor-like vector.
+    fn validate(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Contraction/einsum-style operations for tensor-like values.
+///
+/// Types that only need vector-space algebra should not implement or require
+/// this trait. Tree tensor-network algorithms should use this trait when they
+/// truly need index-based contraction.
+pub trait TensorContractionLike: TensorIndex {
+    /// Tensor conjugate operation.
+    fn conj(&self) -> Self;
+
+    /// Direct sum of two tensors along specified index pairs.
+    fn direct_sum(
+        &self,
+        other: &Self,
+        pairs: &[(<Self as TensorIndex>::Index, <Self as TensorIndex>::Index)],
+    ) -> Result<DirectSumResult<Self>>;
+
+    /// Outer product (tensor product) of two tensors.
+    fn outer_product(&self, other: &Self) -> Result<Self>;
+
+    /// Permute tensor indices to match the specified order.
+    fn permuteinds(&self, new_order: &[<Self as TensorIndex>::Index]) -> Result<Self>;
+
+    /// Fuse local tensor indices into one replacement index.
+    fn fuse_indices(
+        &self,
+        old_indices: &[<Self as TensorIndex>::Index],
+        new_index: <Self as TensorIndex>::Index,
+        order: LinearizationOrder,
+    ) -> Result<Self>;
+
+    /// Contract a connected tensor network over its contractable indices.
+    fn contract(tensors: &[&Self]) -> Result<Self>;
+
+    /// Contract this tensor with one other tensor using default pairwise semantics.
+    fn contract_pair(&self, other: &Self) -> Result<Self> {
+        Self::contract(&[self, other])
+    }
+
+    /// Validate structural consistency of this tensor.
+    fn validate(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Factorization operations for tensor-like values.
+pub trait TensorFactorizationLike: TensorIndex {
+    /// Factorize this tensor into left and right factors.
+    fn factorize(
+        &self,
+        left_inds: &[<Self as TensorIndex>::Index],
+        options: &FactorizeOptions,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
+
+    /// Factorize this tensor without applying truncation controls.
+    fn factorize_full_rank(
+        &self,
+        left_inds: &[<Self as TensorIndex>::Index],
+        alg: FactorizeAlg,
+        canonical: Canonical,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
+}
+
+/// Constructors and selection helpers for index-labelled tensors.
+pub trait TensorConstructionLike: TensorContractionLike {
+    /// Create a diagonal (Kronecker delta) tensor for a single index pair.
+    fn diagonal(
+        input_index: &<Self as TensorIndex>::Index,
+        output_index: &<Self as TensorIndex>::Index,
+    ) -> Result<Self>;
+
+    /// Create a delta (identity) tensor as outer product of diagonals.
+    fn delta(
+        input_indices: &[<Self as TensorIndex>::Index],
+        output_indices: &[<Self as TensorIndex>::Index],
+    ) -> Result<Self> {
+        if input_indices.len() != output_indices.len() {
+            return Err(anyhow::anyhow!(
+                "Number of input indices ({}) must match output indices ({})",
+                input_indices.len(),
+                output_indices.len()
+            ));
+        }
+
+        if input_indices.is_empty() {
+            return Self::scalar_one();
+        }
+
+        let mut result = Self::diagonal(&input_indices[0], &output_indices[0])?;
+        for (inp, out) in input_indices[1..].iter().zip(output_indices[1..].iter()) {
+            let diag = Self::diagonal(inp, out)?;
+            result = result.outer_product(&diag)?;
+        }
+        Ok(result)
+    }
+
+    /// Create a scalar tensor with value 1.0.
+    fn scalar_one() -> Result<Self>;
+
+    /// Create a tensor filled with 1.0 for the given indices.
+    fn ones(indices: &[<Self as TensorIndex>::Index]) -> Result<Self>;
+
+    /// Select fixed coordinates for a subset of this tensor's external indices.
+    fn select_indices(
+        &self,
+        selected_indices: &[<Self as TensorIndex>::Index],
+        positions: &[usize],
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            selected_indices.len() == positions.len(),
+            "selected_indices length {} does not match positions length {}",
+            selected_indices.len(),
+            positions.len()
+        );
+        if selected_indices.is_empty() {
+            return Ok(self.clone());
+        }
+
+        let mut seen = HashSet::with_capacity(selected_indices.len());
+        for (index, &position) in selected_indices.iter().zip(positions.iter()) {
+            anyhow::ensure!(
+                seen.insert(index.clone()),
+                "selected index appears more than once"
+            );
+            anyhow::ensure!(
+                position < index.dim(),
+                "selected coordinate {} is out of range for index {:?} with dim {}",
+                position,
+                index,
+                index.dim()
+            );
+        }
+
+        let index_vals = selected_indices
+            .iter()
+            .cloned()
+            .zip(positions.iter().copied())
+            .collect::<Vec<_>>();
+        let onehot = Self::onehot(&index_vals)?;
+        Self::contract(&[self, &onehot])
+    }
+
+    /// Create a one-hot tensor with value 1.0 at the specified index positions.
+    fn onehot(index_vals: &[(<Self as TensorIndex>::Index, usize)]) -> Result<Self>;
+}
+
+// ============================================================================
+// TensorLike trait (fully generic composite)
 // ============================================================================
 
 /// Trait for tensor-like objects that expose external indices and support contraction.
@@ -568,7 +728,7 @@ impl LinearizationOrder {
 ///
 /// # Design Principles
 ///
-/// - **Minimal interface**: Only external indices and automatic contraction
+/// - **Capability composition**: combines vector-space, factorization, construction, and contraction traits
 /// - **Fully generic**: Uses associated type for `Index`, returns `Self`
 /// - **Stable ordering**: `external_indices()` returns indices in deterministic order
 /// - **No trait objects**: Requires `Sized`, cannot use `dyn TensorLike`
@@ -576,10 +736,10 @@ impl LinearizationOrder {
 /// # Example
 ///
 /// ```
-/// use tensor4all_core::{AllowedPairs, DynIndex, TensorDynLen, TensorLike};
+/// use tensor4all_core::{DynIndex, TensorContractionLike, TensorDynLen};
 ///
 /// fn contract_pair(a: &TensorDynLen, b: &TensorDynLen) -> anyhow::Result<TensorDynLen> {
-///     Ok(<TensorDynLen as TensorLike>::contract(&[a, b], AllowedPairs::All)?)
+///     Ok(<TensorDynLen as TensorContractionLike>::contract(&[a, b])?)
 /// }
 ///
 /// # fn main() -> anyhow::Result<()> {
@@ -619,800 +779,20 @@ impl LinearizationOrder {
 ///
 /// # Supertrait
 ///
-/// `TensorLike` extends `TensorIndex`, which provides:
+/// `TensorLike` extends several capability traits. Through those traits it provides:
 /// - `external_indices()` - Get all external indices
 /// - `num_external_indices()` - Count external indices
 /// - `replaceind()` / `replaceinds()` - Replace indices
+/// - vector-space operations such as `axpby`, `inner_product`, and `norm`
+/// - tensor-network operations such as contraction, construction, and factorization
 ///
-/// This separation allows tensor networks (like `TreeTN`) to implement
-/// index operations without implementing contraction/factorization.
-pub trait TensorLike: TensorIndex {
-    /// Factorize this tensor into left and right factors.
-    ///
-    /// This function dispatches to the appropriate algorithm based on `options.alg`:
-    /// - `SVD`: Singular Value Decomposition
-    /// - `QR`: QR decomposition
-    /// - `LU`: Rank-revealing LU decomposition
-    /// - `CI`: Cross Interpolation
-    ///
-    /// The `canonical` option controls which factor is "canonical":
-    /// - `Canonical::Left`: Left factor is orthogonal (SVD/QR) or unit-diagonal (LU/CI)
-    /// - `Canonical::Right`: Right factor is orthogonal (SVD) or unit-diagonal (LU/CI)
-    ///
-    /// # Arguments
-    /// * `left_inds` - Indices to place on the left side
-    /// * `options` - Factorization options
-    ///
-    /// # Returns
-    /// A `FactorizeResult` containing the left and right factors, bond index,
-    /// singular values (for SVD), and rank.
-    ///
-    /// # Errors
-    /// Returns `FactorizeError` if:
-    /// - The storage type is not supported (only DenseF64 and DenseC64)
-    /// - QR is used with `Canonical::Right`
-    /// - The underlying algorithm fails
-    fn factorize(
-        &self,
-        left_inds: &[<Self as TensorIndex>::Index],
-        options: &FactorizeOptions,
-    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
+/// Use narrower traits such as [`TensorVectorSpace`] or
+/// [`TensorContractionLike`] when an algorithm does not need the full surface.
+pub trait TensorLike: TensorVectorSpace + TensorFactorizationLike + TensorConstructionLike {}
 
-    /// Factorize this tensor without applying truncation controls.
-    ///
-    /// Use this for exact tensor rewrites such as canonicalization, where the
-    /// contracted factors must preserve the represented tensor up to numerical
-    /// roundoff. Unlike [`Self::factorize`], this method must not consult global
-    /// SVD/QR/LU truncation defaults or apply maximum-rank limits.
-    ///
-    /// # Arguments
-    /// * `left_inds` - Indices to place on the left side.
-    /// * `alg` - Decomposition algorithm to use.
-    /// * `canonical` - Which factor should carry the canonical form.
-    ///
-    /// # Returns
-    /// A `FactorizeResult` containing the left and right factors, bond index,
-    /// singular values for SVD, and retained exact numerical rank.
-    ///
-    /// # Errors
-    /// Returns [`FactorizeError`] if:
-    /// - the storage type is not supported,
-    /// - the requested canonical direction is unsupported for the algorithm, or
-    /// - the underlying decomposition fails.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_core::{
-    ///     Canonical, DynIndex, FactorizeAlg, TensorDynLen, TensorLike,
-    /// };
-    ///
-    /// let i = DynIndex::new_dyn(2);
-    /// let j = DynIndex::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense(
-    ///     vec![i.clone(), j.clone()],
-    ///     vec![1.0_f64, 0.0, 0.0, 1.0e-16],
-    /// )?;
-    ///
-    /// let result = tensor.factorize_full_rank(
-    ///     std::slice::from_ref(&i),
-    ///     FactorizeAlg::QR,
-    ///     Canonical::Left,
-    /// )?;
-    /// let reconstructed = result.left.contract(&result.right)?;
-    /// assert!(tensor.distance(&reconstructed)? < 1.0e-18);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    fn factorize_full_rank(
-        &self,
-        left_inds: &[<Self as TensorIndex>::Index],
-        alg: FactorizeAlg,
-        canonical: Canonical,
-    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
-
-    /// Tensor conjugate operation.
-    ///
-    /// This is a generalized conjugate operation that depends on the tensor type:
-    /// - For dense tensors (TensorDynLen): element-wise complex conjugate
-    /// - For symmetric tensors: tensor conjugate considering symmetry sectors
-    ///
-    /// This operation is essential for computing inner products and overlaps
-    /// in tensor network algorithms like fitting.
-    ///
-    /// # Returns
-    /// A new tensor representing the tensor conjugate.
-    fn conj(&self) -> Self;
-
-    /// Direct sum of two tensors along specified index pairs.
-    ///
-    /// For tensors A and B with indices to be summed specified as pairs,
-    /// creates a new tensor C where each paired index has dimension = dim_A + dim_B.
-    /// Non-paired indices must match exactly between A and B (same ID).
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - Second tensor
-    /// * `pairs` - Pairs of (self_index, other_index) to be summed. Each pair creates
-    ///   a new index in the result with dimension = dim(self_index) + dim(other_index).
-    ///
-    /// # Returns
-    ///
-    /// A `DirectSumResult` containing the result tensor and new indices created
-    /// for the summed dimensions (one per pair).
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
-    ///
-    /// # fn main() -> anyhow::Result<()> {
-    /// let j = DynIndex::new_dyn(2);
-    /// let k = DynIndex::new_dyn(3);
-    ///
-    /// let a = TensorDynLen::from_dense(vec![j.clone()], vec![1.0, 2.0])?;
-    /// let b = TensorDynLen::from_dense(vec![k.clone()], vec![3.0, 4.0, 5.0])?;
-    /// let result = a.direct_sum(&b, &[(j.clone(), k.clone())])?;
-    ///
-    /// assert_eq!(result.new_indices.len(), 1);
-    /// assert_eq!(result.tensor.dims(), vec![5]);
-    /// assert_eq!(result.tensor.to_vec::<f64>()?, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
-    /// # Ok(())
-    /// # }
-    /// ```
-    fn direct_sum(
-        &self,
-        other: &Self,
-        pairs: &[(<Self as TensorIndex>::Index, <Self as TensorIndex>::Index)],
-    ) -> Result<DirectSumResult<Self>>;
-
-    /// Outer product (tensor product) of two tensors.
-    ///
-    /// Computes the tensor product of `self` and `other`, resulting in a tensor
-    /// with all indices from both tensors. No indices are contracted.
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - The other tensor to compute outer product with
-    ///
-    /// # Returns
-    ///
-    /// A new tensor representing the outer product.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the tensors have common indices (by ID).
-    /// Use `tensordot` for contraction when indices overlap.
-    fn outer_product(&self, other: &Self) -> Result<Self>;
-
-    /// Compute the squared Frobenius norm of the tensor.
-    ///
-    /// The squared Frobenius norm is defined as the sum of squared absolute values
-    /// of all tensor elements: `||T||_F^2 = sum_i |T_i|^2`.
-    ///
-    /// This is used for computing norms in tensor network algorithms,
-    /// convergence checks, and normalization.
-    ///
-    /// # Returns
-    /// The squared Frobenius norm as a non-negative f64.
-    fn norm_squared(&self) -> f64;
-
-    /// Permute tensor indices to match the specified order.
-    ///
-    /// This reorders the tensor's axes to match the order specified by `new_order`.
-    /// The indices in `new_order` are matched by ID with the tensor's current indices.
-    ///
-    /// # Arguments
-    ///
-    /// * `new_order` - The desired order of indices (matched by ID)
-    ///
-    /// # Returns
-    ///
-    /// A new tensor with permuted indices.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The number of indices doesn't match
-    /// - An index ID in `new_order` is not found in the tensor
-    fn permuteinds(&self, new_order: &[<Self as TensorIndex>::Index]) -> Result<Self>;
-
-    /// Fuse local tensor indices into one replacement index.
-    ///
-    /// This is a local axis fusion operation: it reshapes the tensor so
-    /// `old_indices` are replaced by `new_index`. Indices are matched by ID,
-    /// and `old_indices` must be non-empty. The order of `old_indices` defines
-    /// the fused coordinate linearization, while `order` defines how those
-    /// coordinates map to the replacement axis. `new_index.dim()` must equal
-    /// the product of the matched axis dimensions. The replacement index is
-    /// inserted at the earliest fused axis position, and the remaining indices
-    /// retain their relative order.
-    ///
-    /// Implementations should return `Err` if this operation is unsupported or
-    /// if exact local fusion cannot be represented by the tensor type.
-    ///
-    /// # Arguments
-    ///
-    /// * `old_indices` - Existing local indices to fuse, matched by ID. Must be non-empty.
-    /// * `new_index` - Replacement index whose dimension is the fused product.
-    /// * `order` - Linearization order for mapping old coordinates to the fused axis.
-    ///
-    /// # Returns
-    ///
-    /// A new tensor with `old_indices` replaced by `new_index`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - `old_indices` is empty
-    /// - Any requested index ID is missing from the tensor
-    /// - The replacement dimension does not match the product of fused axis dimensions
-    /// - The tensor type does not support local axis fusion
-    /// - Exact local fusion cannot be represented by the tensor type
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_core::{
-    ///     DynIndex, IndexLike, LinearizationOrder, TensorDynLen, TensorLike,
-    /// };
-    ///
-    /// # fn main() -> anyhow::Result<()> {
-    /// let i = DynIndex::new_dyn(2);
-    /// let j = DynIndex::new_dyn(3);
-    /// let k = DynIndex::new_dyn(2);
-    /// let fused = DynIndex::new_link(6)?;
-    /// let data: Vec<f64> = (0..12).map(|value| value as f64).collect();
-    /// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone(), k.clone()], data)?;
-    ///
-    /// let fused_tensor = <TensorDynLen as TensorLike>::fuse_indices(
-    ///     &tensor,
-    ///     &[j.clone(), i.clone()],
-    ///     fused.clone(),
-    ///     LinearizationOrder::ColumnMajor,
-    /// )?;
-    ///
-    /// assert_eq!(fused_tensor.indices(), &[fused.clone(), k.clone()]);
-    /// assert_eq!(fused_tensor.dims(), vec![6, 2]);
-    ///
-    /// let roundtrip = fused_tensor
-    ///     .unfuse_index(&fused, &[j, i], LinearizationOrder::ColumnMajor)?
-    ///     .permuteinds(tensor.indices())?;
-    /// assert!(roundtrip.isapprox(&tensor, 1e-12, 0.0));
-    /// # Ok(())
-    /// # }
-    /// ```
-    fn fuse_indices(
-        &self,
-        old_indices: &[<Self as TensorIndex>::Index],
-        new_index: <Self as TensorIndex>::Index,
-        order: LinearizationOrder,
-    ) -> Result<Self>;
-
-    /// Contract multiple tensors over their contractable indices.
-    ///
-    /// This method contracts 2 or more tensors. Pairs of indices that satisfy
-    /// `is_contractable()` (same ID, same dimension, compatible ConjState)
-    /// are contracted based on the `allowed` parameter.
-    ///
-    /// Handles disconnected tensor graphs automatically by:
-    /// 1. Finding connected components based on contractable indices
-    /// 2. Contracting each connected component separately
-    /// 3. Combining results using outer product
-    ///
-    /// # Arguments
-    ///
-    /// * `tensors` - Slice of tensor references to contract (must have length >= 1)
-    /// * `allowed` - Specifies which tensor pairs can have their indices contracted:
-    ///   - `AllowedPairs::All`: Contract all contractable index pairs (default behavior)
-    ///   - `AllowedPairs::Specified(&[(i, j)])`: Only contract indices between specified tensor pairs
-    ///
-    /// # Returns
-    ///
-    /// A new tensor representing the contracted result.
-    /// If tensors form disconnected components, they are combined via outer product.
-    ///
-    /// # Behavior by N
-    /// - N=0: Error
-    /// - N=1: Clone of input
-    /// - N>=2: Contract connected components, combine with outer product
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - No tensors are provided
-    /// - `AllowedPairs::Specified` contains a pair with no contractable indices
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use tensor4all_core::{AllowedPairs, DynIndex, TensorDynLen, TensorLike};
-    ///
-    /// # fn main() -> anyhow::Result<()> {
-    /// let i = DynIndex::new_dyn(2);
-    /// let j = DynIndex::new_dyn(2);
-    /// let k = DynIndex::new_dyn(2);
-    ///
-    /// let a = TensorDynLen::from_dense(
-    ///     vec![i.clone(), j.clone()],
-    ///     vec![1.0, 0.0, 0.0, 1.0],
-    /// )?;
-    /// let b = TensorDynLen::from_dense(
-    ///     vec![j.clone(), k.clone()],
-    ///     vec![1.0, 2.0, 3.0, 4.0],
-    /// )?;
-    /// let c = TensorDynLen::from_dense(vec![k.clone()], vec![1.0, 10.0])?;
-    ///
-    /// let all = <TensorDynLen as TensorLike>::contract(&[&a, &b, &c], AllowedPairs::All)?;
-    /// let specified = <TensorDynLen as TensorLike>::contract(
-    ///     &[&a, &b, &c],
-    ///     AllowedPairs::Specified(&[(0, 1), (1, 2)]),
-    /// )?;
-    ///
-    /// assert_eq!(all.dims(), vec![2]);
-    /// assert!(all.sub(&specified)?.maxabs() < 1e-12);
-    /// # Ok(())
-    /// # }
-    /// ```
-    fn contract(tensors: &[&Self], allowed: AllowedPairs<'_>) -> Result<Self>;
-
-    /// Contract this tensor with one other tensor using default pairwise semantics.
-    ///
-    /// This contracts all compatible common indices between `self` and `other`.
-    /// Implementations may override it with a specialized two-tensor path. The
-    /// default implementation calls [`Self::contract`] with two inputs and
-    /// [`AllowedPairs::All`].
-    ///
-    /// # Arguments
-    /// * `other` - The tensor to contract with. It should share at least one
-    ///   compatible common index unless the implementation supports outer
-    ///   products through its default pairwise semantics.
-    ///
-    /// # Returns
-    /// The tensor produced by contracting `self` and `other`.
-    ///
-    /// # Errors
-    /// Returns an error if pairwise contraction cannot be performed, for example
-    /// because common indices have incompatible dimensions or the contraction
-    /// executor fails.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
-    ///
-    /// let i = DynIndex::new_dyn(2);
-    /// let j = DynIndex::new_dyn(2);
-    /// let k = DynIndex::new_dyn(2);
-    /// let a = TensorDynLen::from_dense(
-    ///     vec![i.clone(), j.clone()],
-    ///     vec![1.0_f64, 0.0, 0.0, 1.0],
-    /// )?;
-    /// let b = TensorDynLen::from_dense(vec![j.clone(), k.clone()], vec![2.0, 3.0, 4.0, 5.0])?;
-    ///
-    /// let result = a.contract_pair(&b)?;
-    /// assert_eq!(result.dims(), vec![2, 2]);
-    /// assert_eq!(result.to_vec::<f64>()?, vec![2.0, 3.0, 4.0, 5.0]);
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    fn contract_pair(&self, other: &Self) -> Result<Self> {
-        Self::contract(&[self, other], AllowedPairs::All)
-    }
-
-    /// Contract multiple tensors that must form a connected graph.
-    ///
-    /// This is the core contraction method that requires all tensors to be
-    /// connected through contractable indices. Use [`Self::contract`] if you want
-    /// automatic handling of disconnected components via outer product.
-    ///
-    /// # Arguments
-    ///
-    /// * `tensors` - Slice of tensor references to contract (must form a connected graph)
-    /// * `allowed` - Specifies which tensor pairs can have their indices contracted
-    ///
-    /// # Returns
-    ///
-    /// A new tensor representing the contracted result.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - No tensors are provided
-    /// - The tensors form a disconnected graph
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use tensor4all_core::{AllowedPairs, DynIndex, TensorDynLen, TensorLike};
-    ///
-    /// # fn main() -> anyhow::Result<()> {
-    /// let i = DynIndex::new_dyn(2);
-    /// let j = DynIndex::new_dyn(2);
-    /// let k = DynIndex::new_dyn(2);
-    ///
-    /// let a = TensorDynLen::from_dense(
-    ///     vec![i.clone(), j.clone()],
-    ///     vec![1.0, 0.0, 0.0, 1.0],
-    /// )?;
-    /// let b = TensorDynLen::from_dense(
-    ///     vec![j.clone(), k.clone()],
-    ///     vec![1.0, 2.0, 3.0, 4.0],
-    /// )?;
-    /// let c = TensorDynLen::from_dense(vec![k.clone()], vec![1.0, 10.0])?;
-    ///
-    /// let result = TensorDynLen::contract_connected(&[&a, &b, &c], AllowedPairs::All)?;
-    /// assert_eq!(result.dims(), vec![2]);
-    /// # Ok(())
-    /// # }
-    /// ```
-    fn contract_connected(tensors: &[&Self], allowed: AllowedPairs<'_>) -> Result<Self>;
-
-    // ========================================================================
-    // Vector space operations (for Krylov solvers)
-    // ========================================================================
-
-    /// Compute a linear combination: `a * self + b * other`.
-    ///
-    /// This is the fundamental vector space operation.
-    fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self>;
-
-    /// Scalar multiplication.
-    fn scale(&self, scalar: AnyScalar) -> Result<Self>;
-
-    /// Inner product (dot product) of two tensors.
-    ///
-    /// Computes `⟨self, other⟩ = Σ conj(self)_i * other_i`.
-    fn inner_product(&self, other: &Self) -> Result<AnyScalar>;
-
-    /// Compute the Frobenius norm of the tensor.
-    fn norm(&self) -> f64 {
-        self.norm_squared().sqrt()
-    }
-
-    /// Try to compute the maximum absolute value of all tensor elements.
-    ///
-    /// This is the error-aware form of [`Self::maxabs`]. Tensor
-    /// implementations should return an error when an exact elementwise maximum
-    /// would require hidden full-network materialization or another unsupported
-    /// operation.
-    ///
-    /// # Returns
-    /// The L-infinity norm when it is available without violating the tensor
-    /// representation's scalability contract.
-    ///
-    /// # Errors
-    /// Returns an error when the tensor type cannot compute an exact maximum
-    /// absolute value through a safe/scalable implementation.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
-    ///
-    /// let i = DynIndex::new_dyn(3);
-    /// let tensor = TensorDynLen::from_dense(vec![i], vec![1.0, -3.0, 2.0])?;
-    /// assert_eq!(tensor.try_maxabs()?, 3.0);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    fn try_maxabs(&self) -> Result<f64> {
-        Ok(self.maxabs())
-    }
-
-    /// Maximum absolute value of all elements (L-infinity norm).
-    ///
-    /// This infallible method is kept for dense/reference tensor code. Generic
-    /// code should prefer [`Self::try_maxabs`] so tensor-network
-    /// implementations can report that exact elementwise maxima are
-    /// unsupported instead of hiding dense materialization. Implementations
-    /// that cannot compute this value safely may return `NaN`.
-    fn maxabs(&self) -> f64;
-
-    /// Element-wise subtraction: `self - other`.
-    ///
-    /// Indices are automatically permuted to match `self`'s order via `axpby`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
-    ///
-    /// let i = DynIndex::new_dyn(2);
-    /// let a = TensorDynLen::from_dense(vec![i.clone()], vec![5.0, 3.0]).unwrap();
-    /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 1.0]).unwrap();
-    /// let diff = a.sub(&b).unwrap();
-    /// assert_eq!(diff.to_vec::<f64>().unwrap(), vec![4.0, 2.0]);
-    /// ```
-    fn sub(&self, other: &Self) -> Result<Self> {
-        self.axpby(AnyScalar::new_real(1.0), other, AnyScalar::new_real(-1.0))
-    }
-
-    /// Negate all elements: `-self`.
-    fn neg(&self) -> Result<Self> {
-        self.scale(AnyScalar::new_real(-1.0))
-    }
-
-    /// Approximate equality check (Julia `isapprox` semantics).
-    ///
-    /// Returns `true` if `||self - other|| <= max(atol, rtol * max(||self||, ||other||))`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
-    ///
-    /// let i = DynIndex::new_dyn(3);
-    /// let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0, 3.0]).unwrap();
-    /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0, 3.0]).unwrap();
-    /// assert!(a.isapprox(&b, 1e-12, 0.0));
-    ///
-    /// let c = TensorDynLen::from_dense(vec![i.clone()], vec![1.1, 2.0, 3.0]).unwrap();
-    /// assert!(!a.isapprox(&c, 1e-3, 0.0));
-    /// ```
-    fn isapprox(&self, other: &Self, atol: f64, rtol: f64) -> bool {
-        let diff = match self.sub(other) {
-            Ok(d) => d,
-            Err(_) => return false,
-        };
-        let diff_norm = diff.norm();
-        diff_norm <= atol.max(rtol * self.norm().max(other.norm()))
-    }
-
-    /// Validate structural consistency of this tensor.
-    ///
-    /// The default implementation does nothing (always succeeds).
-    /// Types with internal structure (for example, block-sparse tensors) can override
-    /// this to check invariants such as index sharing between blocks.
-    fn validate(&self) -> Result<()> {
-        Ok(())
-    }
-
-    /// Create a diagonal (Kronecker delta) tensor for a single index pair.
-    ///
-    /// Creates a 2D tensor `T[i, o]` where `T[i, o] = δ_{i,o}` (1 if i==o, 0 otherwise).
-    ///
-    /// # Arguments
-    ///
-    /// * `input_index` - Input index
-    /// * `output_index` - Output index (must have same dimension as input)
-    ///
-    /// # Returns
-    ///
-    /// A 2D tensor with shape `[dim, dim]` representing the identity matrix.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if dimensions don't match.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
-    ///
-    /// let i = DynIndex::new_dyn(3);
-    /// let o = DynIndex::new_dyn(3);
-    /// let delta = TensorDynLen::diagonal(&i, &o).unwrap();
-    ///
-    /// assert_eq!(delta.dims(), vec![3, 3]);
-    /// let data = delta.to_vec::<f64>().unwrap();
-    /// // Identity matrix in column-major: [1,0,0, 0,1,0, 0,0,1]
-    /// assert!((data[0] - 1.0).abs() < 1e-12);
-    /// assert!((data[4] - 1.0).abs() < 1e-12);
-    /// assert!((data[8] - 1.0).abs() < 1e-12);
-    /// assert!((data[1]).abs() < 1e-12);
-    /// ```
-    fn diagonal(
-        input_index: &<Self as TensorIndex>::Index,
-        output_index: &<Self as TensorIndex>::Index,
-    ) -> Result<Self>;
-
-    /// Create a delta (identity) tensor as outer product of diagonals.
-    ///
-    /// For paired indices `(i1, o1), (i2, o2), ...`, creates a tensor where:
-    /// `T[i1, o1, i2, o2, ...] = δ_{i1,o1} × δ_{i2,o2} × ...`
-    ///
-    /// This is computed as the outer product of individual diagonal tensors.
-    ///
-    /// # Arguments
-    ///
-    /// * `input_indices` - Input indices
-    /// * `output_indices` - Output indices (must have same length and matching dimensions)
-    ///
-    /// # Returns
-    ///
-    /// A tensor representing the identity operator on the given index space.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Number of input and output indices don't match
-    /// - Dimensions of paired indices don't match
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
-    ///
-    /// let i1 = DynIndex::new_dyn(2);
-    /// let o1 = DynIndex::new_dyn(2);
-    /// let i2 = DynIndex::new_dyn(3);
-    /// let o2 = DynIndex::new_dyn(3);
-    ///
-    /// let d = TensorDynLen::delta(&[i1, i2], &[o1, o2]).unwrap();
-    /// assert_eq!(d.dims(), vec![2, 2, 3, 3]);
-    /// ```
-    fn delta(
-        input_indices: &[<Self as TensorIndex>::Index],
-        output_indices: &[<Self as TensorIndex>::Index],
-    ) -> Result<Self> {
-        // Validate same number of input and output indices
-        if input_indices.len() != output_indices.len() {
-            return Err(anyhow::anyhow!(
-                "Number of input indices ({}) must match output indices ({})",
-                input_indices.len(),
-                output_indices.len()
-            ));
-        }
-
-        if input_indices.is_empty() {
-            // Return a scalar tensor with value 1.0
-            return Self::scalar_one();
-        }
-
-        // Build as outer product of diagonal tensors
-        let mut result = Self::diagonal(&input_indices[0], &output_indices[0])?;
-        for (inp, out) in input_indices[1..].iter().zip(output_indices[1..].iter()) {
-            let diag = Self::diagonal(inp, out)?;
-            result = result.outer_product(&diag)?;
-        }
-        Ok(result)
-    }
-
-    /// Create a scalar tensor with value 1.0.
-    ///
-    /// This is used as the identity element for outer products.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_core::{TensorDynLen, TensorLike};
-    ///
-    /// let one = TensorDynLen::scalar_one().unwrap();
-    /// assert_eq!(one.dims(), Vec::<usize>::new());
-    /// assert!((one.only().unwrap().real() - 1.0).abs() < 1e-12);
-    /// ```
-    fn scalar_one() -> Result<Self>;
-
-    /// Create a tensor filled with 1.0 for the given indices.
-    ///
-    /// This is useful for adding indices to tensors via outer product
-    /// without changing tensor values (since multiplying by 1 is identity).
-    ///
-    /// # Example
-    /// To add a dummy index `l` to tensor `T`:
-    /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
-    ///
-    /// # fn main() -> anyhow::Result<()> {
-    /// let i = DynIndex::new_dyn(2);
-    /// let l = DynIndex::new_dyn(3);
-    /// let t = TensorDynLen::from_dense(vec![i.clone()], vec![2.0, 4.0])?;
-    ///
-    /// let ones = TensorDynLen::ones(&[l.clone()])?;
-    /// let t_with_l = t.outer_product(&ones)?;
-    ///
-    /// assert_eq!(t_with_l.dims(), vec![2, 3]);
-    /// assert_eq!(t_with_l.to_vec::<f64>()?, vec![2.0, 4.0, 2.0, 4.0, 2.0, 4.0]);
-    /// # Ok(())
-    /// # }
-    /// ```
-    fn ones(indices: &[<Self as TensorIndex>::Index]) -> Result<Self>;
-
-    /// Select fixed coordinates for a subset of this tensor's external indices.
-    ///
-    /// This returns a new tensor with `selected_indices` removed and the
-    /// corresponding coordinates fixed to `positions`. Implementations may
-    /// override this with direct slicing. The default implementation contracts
-    /// with a one-hot tensor, so it works for any tensor type that supports
-    /// [`Self::onehot`] and [`Self::contract`].
-    ///
-    /// # Arguments
-    /// * `selected_indices` - External indices to fix. Each index must appear
-    ///   at most once and should be present in the tensor.
-    /// * `positions` - Zero-based coordinates, one for each selected index.
-    ///
-    /// # Returns
-    /// A tensor with the selected indices removed. If no indices are selected,
-    /// this returns a clone of `self`.
-    ///
-    /// # Errors
-    /// Returns an error if the argument lengths differ, if an index is repeated,
-    /// if a coordinate is outside the index dimension, or if the one-hot
-    /// contraction fails.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
-    ///
-    /// let i = DynIndex::new_dyn(2);
-    /// let j = DynIndex::new_dyn(3);
-    /// let tensor = TensorDynLen::from_dense(
-    ///     vec![i.clone(), j.clone()],
-    ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    /// )?;
-    ///
-    /// let selected =
-    ///     <TensorDynLen as TensorLike>::select_indices(&tensor, &[j], &[1])?;
-    /// assert_eq!(selected.dims(), vec![2]);
-    /// assert_eq!(selected.to_vec::<f64>()?, vec![3.0, 4.0]);
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    fn select_indices(
-        &self,
-        selected_indices: &[<Self as TensorIndex>::Index],
-        positions: &[usize],
-    ) -> Result<Self> {
-        anyhow::ensure!(
-            selected_indices.len() == positions.len(),
-            "selected_indices length {} does not match positions length {}",
-            selected_indices.len(),
-            positions.len()
-        );
-        if selected_indices.is_empty() {
-            return Ok(self.clone());
-        }
-
-        let mut seen = HashSet::with_capacity(selected_indices.len());
-        for (index, &position) in selected_indices.iter().zip(positions.iter()) {
-            anyhow::ensure!(
-                seen.insert(index.clone()),
-                "selected index appears more than once"
-            );
-            anyhow::ensure!(
-                position < index.dim(),
-                "selected coordinate {} is out of range for index {:?} with dim {}",
-                position,
-                index,
-                index.dim()
-            );
-        }
-
-        let index_vals = selected_indices
-            .iter()
-            .cloned()
-            .zip(positions.iter().copied())
-            .collect::<Vec<_>>();
-        let onehot = Self::onehot(&index_vals)?;
-        Self::contract(&[self, &onehot], AllowedPairs::All)
-    }
-
-    /// Create a one-hot tensor with value 1.0 at the specified index positions.
-    ///
-    /// Similar to ITensors.jl's `onehot(i => 1, j => 2)`.
-    ///
-    /// # Arguments
-    /// * `index_vals` - Pairs of (Index, 0-indexed position)
-    ///
-    /// # Errors
-    /// Returns error if any value >= corresponding index dimension.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
-    ///
-    /// let i = DynIndex::new_dyn(3);
-    /// let j = DynIndex::new_dyn(2);
-    ///
-    /// // One-hot at i=1, j=0
-    /// let t = TensorDynLen::onehot(&[(i, 1), (j, 0)]).unwrap();
-    /// assert_eq!(t.dims(), vec![3, 2]);
-    ///
-    /// let data = t.to_vec::<f64>().unwrap();
-    /// // column-major 3x2: element at (1,0) = index 1
-    /// assert!((data[1] - 1.0).abs() < 1e-12);
-    /// assert!((t.sum().unwrap().real() - 1.0).abs() < 1e-12);  // exactly one non-zero
-    /// ```
-    fn onehot(index_vals: &[(<Self as TensorIndex>::Index, usize)]) -> Result<Self>;
+impl<T> TensorLike for T where
+    T: TensorVectorSpace + TensorFactorizationLike + TensorConstructionLike
+{
 }
 
 /// Result of direct sum operation.
@@ -1423,7 +803,7 @@ pub trait TensorLike: TensorIndex {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike, IndexLike};
+/// use tensor4all_core::{DynIndex, IndexLike, TensorContractionLike, TensorDynLen};
 ///
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(3);
@@ -1439,7 +819,7 @@ pub trait TensorLike: TensorIndex {
 /// assert_eq!(result.tensor.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0, 5.0]);
 /// ```
 #[derive(Debug, Clone)]
-pub struct DirectSumResult<T: TensorLike> {
+pub struct DirectSumResult<T: TensorIndex> {
     /// The resulting tensor from direct sum.
     pub tensor: T,
     /// New indices created for the summed dimensions (one per pair).

@@ -263,7 +263,7 @@ where
 
             // Create merged bond index using direct_sum on dummy tensors
             // For now, we just store dimensions; the actual merged index will be
-            // created during the direct sum operation using TensorLike::direct_sum
+            // created during the direct sum operation using TensorContractionLike::direct_sum
             //
             // Note: We need a way to create a new index with dim_a + dim_b.
             // This requires the TensorLike implementation to handle index creation.

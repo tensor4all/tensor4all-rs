@@ -15,8 +15,8 @@ use anyhow::{Context, Result};
 
 use crate::algorithm::CanonicalForm;
 use tensor4all_core::{
-    AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, SvdTruncationPolicy,
-    TensorIndex, TensorLike,
+    Canonical, FactorizeAlg, FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorIndex,
+    TensorLike,
 };
 
 use super::TreeTN;
@@ -192,7 +192,7 @@ where
 
             // Contract and store result at `to`
             // (bond indices are auto-detected via is_contractable)
-            let contracted = T::contract(&[&to_tensor, &from_tensor], AllowedPairs::All)
+            let contracted = T::contract(&[&to_tensor, &from_tensor])
                 .context("Failed to contract along edge")?;
             tensors.insert(to, contracted);
         }
@@ -386,7 +386,7 @@ where
                 })?)
                 .ok_or_else(|| anyhow::anyhow!("contract_zipup_with: tensor not found in tn_b"))?;
 
-            let contracted = T::contract(&[t_a, t_b], AllowedPairs::All)?;
+            let contracted = t_a.contract_pair(t_b)?;
             let node_name = tn_a
                 .graph
                 .node_name(node_idx)
@@ -474,7 +474,8 @@ where
 
             let c_temp = if is_leaf {
                 // Leaf node: contract A[source] * B[source]
-                T::contract(&[&tensor_a, &tensor_b], AllowedPairs::All)
+                tensor_a
+                    .contract_pair(&tensor_b)
                     .context("Failed to contract leaf tensors")?
             } else {
                 // Internal node: contract [R_accumulated..., A[source], B[source]]
@@ -485,8 +486,7 @@ where
                 tensor_list.push(tensor_a);
                 tensor_list.push(tensor_b);
                 let tensor_refs: Vec<&T> = tensor_list.iter().collect();
-                T::contract(&tensor_refs, AllowedPairs::All)
-                    .context("Failed to contract internal node tensors")?
+                T::contract(&tensor_refs).context("Failed to contract internal node tensors")?
             };
 
             // Factorize child tensor and pass the right factor to destination (even if destination is root)
@@ -576,8 +576,8 @@ where
             tensor_list.push(root_tensor_a);
             tensor_list.push(root_tensor_b);
             let tensor_refs: Vec<&T> = tensor_list.iter().collect();
-            let root_result = T::contract(&tensor_refs, AllowedPairs::All)
-                .context("Failed to contract root node tensors")?;
+            let root_result =
+                T::contract(&tensor_refs).context("Failed to contract root node tensors")?;
 
             // Store root result (no factorization needed)
             result_tensors.insert(root_name.clone(), root_result);
@@ -599,7 +599,7 @@ where
                     .tensor(root_b_idx)
                     .ok_or_else(|| anyhow::anyhow!("Root tensor not found in tn_b"))?;
 
-                let root_result = T::contract(&[root_tensor_a, root_tensor_b], AllowedPairs::All)
+                let root_result = T::contract(&[root_tensor_a, root_tensor_b])
                     .context("Failed to contract root node tensors")?;
 
                 result_tensors.insert(root_name.clone(), root_result);
@@ -697,9 +697,11 @@ where
             .contract_to_tensor()
             .map_err(|e| anyhow::anyhow!("contract_naive: failed to contract tn2: {}", e))?;
 
-        // 4. Contract along common indices
-        // T::contract auto-contracts all is_contractable pairs
-        T::contract(&[&tensor1, &tensor2], AllowedPairs::All)
+        // 4. Exact pairwise product over common site indices. If the caller
+        // explicitly asks for a reference product with no common site indices
+        // (for example partial_contract with an empty spec), this is the
+        // corresponding outer product reference.
+        tensor1.contract_pair(&tensor2)
     }
 
     /// Validate that `canonical_region` and edge `ortho_towards` are consistent.

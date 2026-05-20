@@ -1,6 +1,5 @@
 use super::*;
 use crate::defaults::Index;
-use crate::tensor_like::TensorLike;
 use num_complex::Complex64;
 use std::ffi::OsString;
 use std::time::Duration;
@@ -69,34 +68,74 @@ fn col_major_offset(coords: &[usize], dims: &[usize]) -> usize {
 }
 
 // ========================================================================
-// contract_multi tests
+// contract tests
 // ========================================================================
 
 #[test]
-fn test_contract_multi_empty() {
+fn test_contract_empty() {
     let tensors: Vec<&TensorDynLen> = vec![];
-    let result = contract_multi(&tensors, AllowedPairs::All);
+    let result = contract(&tensors);
     assert!(result.is_err());
 }
 
 #[test]
-fn test_contract_multi_single() {
+fn test_contract_single() {
     let tensor = make_test_tensor(&[2, 3], &[1, 2]);
-    let result = contract_multi(&[&tensor], AllowedPairs::All).unwrap();
+    let result = contract(&[&tensor]).unwrap();
     assert_eq!(result.dims(), tensor.dims());
 }
 
 #[test]
-fn test_contract_multi_pair() {
+fn test_contract_pair_nary_entry() {
     // A[i,j] * B[j,k] -> C[i,k]
     let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
     let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
-    let result = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
+    let result = contract(&[&a, &b]).unwrap();
     assert_eq!(result.dims(), vec![2, 4]); // i, k
 }
 
 #[test]
-fn test_contract_multi_diag_diag_partial_preserves_diagonal_storage() {
+fn test_contract_default_entry_rejects_disconnected_inputs() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+
+    let a = TensorDynLen::from_dense(vec![i], vec![1.0_f64, 2.0]).unwrap();
+    let b = TensorDynLen::from_dense(vec![j], vec![3.0_f64, 4.0, 5.0]).unwrap();
+
+    let err = contract(&[&a, &b]).unwrap_err();
+    assert!(err.to_string().contains("Disconnected"));
+}
+
+#[test]
+fn test_outer_product_is_explicit_disconnected_entry() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
+    let b = TensorDynLen::from_dense(vec![j.clone()], vec![3.0_f64, 4.0, 5.0]).unwrap();
+
+    let result = outer_product(&a, &b).unwrap();
+    assert_eq!(result.indices(), &[i, j]);
+    assert_eq!(
+        result.to_vec::<f64>().unwrap(),
+        vec![3.0, 6.0, 4.0, 8.0, 5.0, 10.0]
+    );
+}
+
+#[test]
+fn test_contract_owned_rejects_disconnected_inputs() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+
+    let a = TensorDynLen::from_dense(vec![i], vec![1.0_f64, 2.0]).unwrap();
+    let b = TensorDynLen::from_dense(vec![j], vec![3.0_f64, 4.0]).unwrap();
+
+    let err = contract_owned(vec![a, b]).unwrap_err();
+    assert!(err.to_string().contains("disconnected"));
+}
+
+#[test]
+fn test_contract_diag_diag_partial_preserves_diagonal_storage() {
     let i = Index::new(DynId(1), 3);
     let j = Index::new(DynId(2), 3);
     let k = Index::new(DynId(3), 3);
@@ -104,7 +143,7 @@ fn test_contract_multi_diag_diag_partial_preserves_diagonal_storage() {
     let a = TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let b = TensorDynLen::from_diag(vec![j, k.clone()], vec![4.0_f64, 5.0, 6.0]).unwrap();
 
-    let result = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
+    let result = contract(&[&a, &b]).unwrap();
 
     assert_eq!(result.dims(), vec![3, 3]);
     assert!(result.is_diag());
@@ -115,36 +154,36 @@ fn test_contract_multi_diag_diag_partial_preserves_diagonal_storage() {
 }
 
 #[test]
-fn test_contract_multi_three() {
+fn test_contract_three() {
     // A[i,j] * B[j,k] * C[k,l] -> D[i,l]
     let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
     let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
     let c = make_test_tensor(&[4, 5], &[3, 4]); // k=3, l=4
-    let result = contract_multi(&[&a, &b, &c], AllowedPairs::All).unwrap();
+    let result = contract(&[&a, &b, &c]).unwrap();
     let mut sorted_dims = result.dims();
     sorted_dims.sort();
     assert_eq!(sorted_dims, vec![2, 5]); // i=2, l=5
 }
 
 #[test]
-fn test_contract_multi_four() {
+fn test_contract_four() {
     // A[i,j] * B[j,k] * C[k,l] * D[l,m] -> E[i,m]
     let a = make_test_tensor(&[2, 3], &[1, 2]);
     let b = make_test_tensor(&[3, 4], &[2, 3]);
     let c = make_test_tensor(&[4, 5], &[3, 4]);
     let d = make_test_tensor(&[5, 6], &[4, 5]);
-    let result = contract_multi(&[&a, &b, &c, &d], AllowedPairs::All).unwrap();
+    let result = contract(&[&a, &b, &c, &d]).unwrap();
     let mut sorted_dims = result.dims();
     sorted_dims.sort();
     assert_eq!(sorted_dims, vec![2, 6]); // i=2, m=6
 }
 
 #[test]
-fn test_contract_multi_outer_product() {
+fn test_outer_product_matrix_matrix() {
     // A[i,j] * B[k,l] (no common indices) -> outer product C[i,j,k,l]
     let a = make_test_tensor(&[2, 3], &[1, 2]);
     let b = make_test_tensor(&[4, 5], &[3, 4]);
-    let result = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
+    let result = outer_product(&a, &b).unwrap();
     let result_dims = result.dims();
     let total_elements: usize = result_dims.iter().product();
     assert_eq!(total_elements, 2 * 3 * 4 * 5);
@@ -152,11 +191,11 @@ fn test_contract_multi_outer_product() {
 }
 
 #[test]
-fn test_contract_multi_vector_outer_product() {
+fn test_outer_product_vector_vector() {
     // A[i] * B[j] (no common indices) -> outer product C[i,j]
     let a = make_test_tensor(&[2], &[1]); // i=1
     let b = make_test_tensor(&[3], &[2]); // j=2
-    let result = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
+    let result = outer_product(&a, &b).unwrap();
     let result_dims = result.dims();
     let total_elements: usize = result_dims.iter().product();
     assert_eq!(total_elements, 2 * 3);
@@ -164,10 +203,10 @@ fn test_contract_multi_vector_outer_product() {
 }
 
 #[test]
-fn test_contract_connected_disconnected_error() {
+fn test_contract_disconnected_error() {
     let a = make_test_tensor(&[2, 3], &[1, 2]);
     let b = make_test_tensor(&[4, 5], &[3, 4]);
-    let result = contract_connected(&[&a, &b], AllowedPairs::All);
+    let result = contract(&[&a, &b]);
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
@@ -177,21 +216,7 @@ fn test_contract_connected_disconnected_error() {
 }
 
 #[test]
-fn test_contract_connected_specified_no_contractable_error() {
-    let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
-    let b = make_test_tensor(&[4, 5], &[3, 4]); // k=3, l=4 (no common with a)
-    let result = contract_connected(&[&a, &b], AllowedPairs::Specified(&[(0, 1)]));
-    assert!(result.is_err());
-    let err_msg = result.unwrap_err().to_string().to_lowercase();
-    assert!(
-        err_msg.contains("disconnected") || err_msg.contains("no contractable"),
-        "Expected error about disconnected or no contractable indices, got: {}",
-        err_msg
-    );
-}
-
-#[test]
-fn test_contract_multi_with_options_retains_shared_batch_index() {
+fn test_contract_with_options_retains_shared_batch_index() {
     let batch = Index::new(DynId(10), 2);
     let i = Index::new(DynId(11), 2);
     let k = Index::new(DynId(12), 3);
@@ -209,8 +234,8 @@ fn test_contract_multi_with_options_retains_shared_batch_index() {
     );
 
     let retain_indices = [batch.clone()];
-    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
-    let result = contract_multi_with_options(&[&a, &b], options).unwrap();
+    let options = ContractionOptions::new().with_retain_indices(&retain_indices);
+    let result = contract_with_options(&[&a, &b], options).unwrap();
 
     assert_eq!(result.indices(), &[batch.clone(), i.clone(), j.clone()]);
     assert_eq!(result.dims(), vec![2, 2, 2]);
@@ -255,13 +280,12 @@ fn test_tensor_contract_with_options_retains_shared_index() {
         vec![1.0; 12],
     );
 
-    let result = a
-        .contract_with_options(
-            &b,
-            ContractionOptions::new(AllowedPairs::All)
-                .with_retain_indices(std::slice::from_ref(&batch)),
-        )
-        .unwrap();
+    let result = contract_pair_with_options(
+        &a,
+        &b,
+        ContractionOptions::new().with_retain_indices(std::slice::from_ref(&batch)),
+    )
+    .unwrap();
 
     assert_eq!(result.indices(), &[batch, i, j]);
     assert_eq!(result.dims(), vec![2, 2, 2]);
@@ -286,8 +310,8 @@ fn test_contract_retains_exact_same_id_prime_index() {
     );
 
     let retain_indices = [batch_prime.clone()];
-    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
-    let result = contract_multi_with_options(&[&a, &b], options).unwrap();
+    let options = ContractionOptions::new().with_retain_indices(&retain_indices);
+    let result = contract_with_options(&[&a, &b], options).unwrap();
 
     assert_eq!(result.indices(), &[batch_prime]);
     assert_eq!(result.dims(), vec![2]);
@@ -295,7 +319,7 @@ fn test_contract_retains_exact_same_id_prime_index() {
 }
 
 #[test]
-fn test_contract_multi_with_options_supports_three_way_retained_label() {
+fn test_contract_with_options_supports_three_way_retained_label() {
     let batch = Index::new(DynId(20), 2);
     let i = Index::new(DynId(21), 2);
     let j = Index::new(DynId(22), 3);
@@ -318,8 +342,8 @@ fn test_contract_multi_with_options_supports_three_way_retained_label() {
     );
 
     let retain_indices = [batch.clone()];
-    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
-    let result = contract_multi_with_options(&[&a, &b, &c], options).unwrap();
+    let options = ContractionOptions::new().with_retain_indices(&retain_indices);
+    let result = contract_with_options(&[&a, &b, &c], options).unwrap();
 
     assert_eq!(
         result.indices(),
@@ -351,7 +375,7 @@ fn test_contract_multi_with_options_supports_three_way_retained_label() {
 }
 
 #[test]
-fn test_contract_multi_with_options_errors_for_missing_retained_index() {
+fn test_contract_with_options_errors_for_missing_retained_index() {
     let i = Index::new(DynId(30), 2);
     let j = Index::new(DynId(31), 3);
     let missing = Index::new(DynId(32), 2);
@@ -360,14 +384,14 @@ fn test_contract_multi_with_options_errors_for_missing_retained_index() {
     let b = make_test_tensor_from_data(&[3], vec![j.clone()], vec![3.0, 4.0, 5.0]);
 
     let retain_indices = [missing];
-    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
-    let result = contract_multi_with_options(&[&a, &b], options);
+    let options = ContractionOptions::new().with_retain_indices(&retain_indices);
+    let result = contract_with_options(&[&a, &b], options);
 
     assert!(result.is_err());
 }
 
 #[test]
-fn test_contract_multi_with_options_retained_index_connects_components() {
+fn test_contract_with_options_retained_index_connects_components() {
     let batch = Index::new(DynId(40), 2);
     let i = Index::new(DynId(41), 2);
     let j = Index::new(DynId(42), 3);
@@ -384,9 +408,8 @@ fn test_contract_multi_with_options_retained_index_connects_components() {
     );
 
     let retain_indices = [batch.clone()];
-    let options =
-        ContractionOptions::new(AllowedPairs::Specified(&[])).with_retain_indices(&retain_indices);
-    let result = contract_multi_with_options(&[&a, &b], options).unwrap();
+    let options = ContractionOptions::new().with_retain_indices(&retain_indices);
+    let result = contract_with_options(&[&a, &b], options).unwrap();
 
     assert_eq!(result.indices(), &[batch.clone(), i.clone(), j.clone()]);
     assert_eq!(result.dims(), vec![2, 2, 3]);
@@ -410,32 +433,7 @@ fn test_contract_multi_with_options_retained_index_connects_components() {
 }
 
 #[test]
-fn test_contract_multi_with_options_does_not_contract_unretained_shared_index_between_retained_components(
-) {
-    let batch = Index::new(DynId(50), 2);
-    let i = Index::new(DynId(51), 2);
-
-    let a = make_test_tensor_from_data(
-        &[2, 2],
-        vec![batch.clone(), i.clone()],
-        vec![1.0, 2.0, 3.0, 4.0],
-    );
-    let b = make_test_tensor_from_data(
-        &[2, 2],
-        vec![batch.clone(), i.clone()],
-        vec![5.0, 6.0, 7.0, 8.0],
-    );
-
-    let retain_indices = [batch.clone()];
-    let options =
-        ContractionOptions::new(AllowedPairs::Specified(&[])).with_retain_indices(&retain_indices);
-    let result = contract_multi_with_options(&[&a, &b], options);
-
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_contract_multi_owned_matches_borrowed_with_options() {
+fn test_contract_owned_with_options_matches_borrowed_with_options() {
     let batch = Index::new(DynId(70), 2);
     let i = Index::new(DynId(71), 2);
     let k = Index::new(DynId(72), 3);
@@ -453,9 +451,9 @@ fn test_contract_multi_owned_matches_borrowed_with_options() {
     );
 
     let retain_indices = [batch.clone()];
-    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
-    let owned = contract_multi_owned(vec![a.clone(), b.clone()], options).unwrap();
-    let borrowed = contract_multi_with_options(&[&a, &b], options).unwrap();
+    let options = ContractionOptions::new().with_retain_indices(&retain_indices);
+    let owned = contract_owned_with_options(vec![a.clone(), b.clone()], options).unwrap();
+    let borrowed = contract_with_options(&[&a, &b], options).unwrap();
 
     assert_eq!(owned.indices(), borrowed.indices());
     assert_eq!(owned.dims(), borrowed.dims());
@@ -466,16 +464,16 @@ fn test_contract_multi_owned_matches_borrowed_with_options() {
 }
 
 #[test]
-fn test_contract_multi_owned_single_matches_borrowed_with_specified_pairs() {
+fn test_contract_owned_with_options_single_matches_borrowed() {
     let a = make_test_tensor_from_data(
         &[2, 3],
         vec![Index::new(DynId(74), 2), Index::new(DynId(75), 3)],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     );
-    let options = ContractionOptions::new(AllowedPairs::Specified(&[(0, 1)]));
+    let options = ContractionOptions::new();
 
-    let owned = contract_multi_owned(vec![a.clone()], options).unwrap();
-    let borrowed = contract_multi_with_options(&[&a], options).unwrap();
+    let owned = contract_owned_with_options(vec![a.clone()], options).unwrap();
+    let borrowed = contract_with_options(&[&a], options).unwrap();
 
     assert_eq!(owned.indices(), borrowed.indices());
     assert_eq!(
@@ -485,17 +483,17 @@ fn test_contract_multi_owned_single_matches_borrowed_with_specified_pairs() {
 }
 
 #[test]
-fn test_contract_multi_owned_falls_back_for_structured_storage() {
+fn test_contract_owned_with_options_falls_back_for_structured_storage() {
     let i = Index::new(DynId(76), 3);
     let j = Index::new(DynId(77), 3);
     let k = Index::new(DynId(78), 3);
 
     let a = TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let b = TensorDynLen::from_diag(vec![j, k.clone()], vec![4.0_f64, 5.0, 6.0]).unwrap();
-    let options = ContractionOptions::new(AllowedPairs::All);
+    let options = ContractionOptions::new();
 
-    let owned = contract_multi_owned(vec![a.clone(), b.clone()], options).unwrap();
-    let borrowed = contract_multi_with_options(&[&a, &b], options).unwrap();
+    let owned = contract_owned_with_options(vec![a.clone(), b.clone()], options).unwrap();
+    let borrowed = contract_with_options(&[&a, &b], options).unwrap();
 
     assert_eq!(owned.indices(), borrowed.indices());
     assert_eq!(owned.storage().storage_kind(), StorageKind::Diagonal);
@@ -505,7 +503,7 @@ fn test_contract_multi_owned_falls_back_for_structured_storage() {
 }
 
 #[test]
-fn test_contract_multi_owned_supports_three_way_retained_label() {
+fn test_contract_owned_with_options_supports_three_way_retained_label() {
     let batch = Index::new(DynId(80), 2);
     let i = Index::new(DynId(81), 2);
     let j = Index::new(DynId(82), 3);
@@ -528,9 +526,10 @@ fn test_contract_multi_owned_supports_three_way_retained_label() {
     );
 
     let retain_indices = [batch.clone()];
-    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
-    let owned = contract_multi_owned(vec![a.clone(), b.clone(), c.clone()], options).unwrap();
-    let borrowed = contract_multi_with_options(&[&a, &b, &c], options).unwrap();
+    let options = ContractionOptions::new().with_retain_indices(&retain_indices);
+    let owned =
+        contract_owned_with_options(vec![a.clone(), b.clone(), c.clone()], options).unwrap();
+    let borrowed = contract_with_options(&[&a, &b, &c], options).unwrap();
 
     assert_eq!(
         owned.indices(),
@@ -545,7 +544,7 @@ fn test_contract_multi_owned_supports_three_way_retained_label() {
 }
 
 #[test]
-fn test_contract_multi_owned_falls_back_to_borrowed_for_grad_tensors() {
+fn test_contract_owned_with_options_falls_back_to_borrowed_for_grad_tensors() {
     let batch = Index::new(DynId(90), 2);
     let i = Index::new(DynId(91), 2);
     let k = Index::new(DynId(92), 3);
@@ -565,11 +564,11 @@ fn test_contract_multi_owned_falls_back_to_borrowed_for_grad_tensors() {
     );
 
     let retain_indices = [batch.clone()];
-    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
-    let owned = contract_multi_owned(vec![x.clone(), y], options).unwrap();
+    let options = ContractionOptions::new().with_retain_indices(&retain_indices);
+    let owned = contract_owned_with_options(vec![x.clone(), y], options).unwrap();
 
     let ones = TensorDynLen::from_dense(owned.indices().to_vec(), vec![1.0; 8]).unwrap();
-    let loss = contract_multi(&[&owned, &ones], AllowedPairs::All).unwrap();
+    let loss = contract(&[&owned, &ones]).unwrap();
     loss.backward().unwrap();
 
     let grad = x.grad().unwrap().unwrap();
@@ -580,13 +579,10 @@ fn test_contract_multi_owned_falls_back_to_borrowed_for_grad_tensors() {
 #[test]
 fn test_find_tensor_connected_components_trivial_cases() {
     let empty: Vec<&TensorDynLen> = Vec::new();
-    assert!(find_tensor_connected_components(&empty, AllowedPairs::All).is_empty());
+    assert!(find_tensor_connected_components(&empty).is_empty());
 
     let a = make_test_tensor(&[2, 3], &[1, 2]);
-    assert_eq!(
-        find_tensor_connected_components(&[&a], AllowedPairs::All),
-        vec![vec![0]]
-    );
+    assert_eq!(find_tensor_connected_components(&[&a]), vec![vec![0]]);
 }
 
 #[test]
@@ -596,18 +592,9 @@ fn test_find_tensor_connected_components_multiple_components() {
     let c = make_test_tensor(&[5, 6], &[4, 5]);
 
     assert_eq!(
-        find_tensor_connected_components(&[&a, &b, &c], AllowedPairs::All),
+        find_tensor_connected_components(&[&a, &b, &c]),
         vec![vec![0, 1], vec![2]]
     );
-}
-
-#[test]
-fn test_remap_allowed_pairs_filters_pairs_outside_component() {
-    let remapped = remap_allowed_pairs(AllowedPairs::Specified(&[(0, 1), (1, 3), (2, 3)]), &[1, 3]);
-    match remapped {
-        RemappedAllowedPairs::All => panic!("expected specified remapped pairs"),
-        RemappedAllowedPairs::Specified(pairs) => assert_eq!(pairs, vec![(0, 1)]),
-    }
 }
 
 #[test]
@@ -662,45 +649,44 @@ fn test_contract_profile_helpers() {
 }
 
 // ========================================================================
-// AllowedPairs::Specified tests
+// Connected contraction semantics
 // ========================================================================
 
 #[test]
-fn test_contract_specified_pairs() {
+fn test_contract_all_pairs() {
     // A[i,j], B[j,k], C[i,l] - tensors 0, 1, 2
     let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
     let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
     let c = make_test_tensor(&[2, 5], &[1, 4]); // i=1, l=4
-    let result = contract_multi(&[&a, &b, &c], AllowedPairs::Specified(&[(0, 1), (0, 2)])).unwrap();
+    let result = contract(&[&a, &b, &c]).unwrap();
     let mut sorted_dims = result.dims();
     sorted_dims.sort();
     assert_eq!(sorted_dims, vec![4, 5]); // k=4, l=5
 }
 
 #[test]
-fn test_contract_specified_no_contractable_indices_error() {
+fn test_contract_disconnected_component_error() {
     let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
     let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
     let c = make_test_tensor(&[6, 5], &[5, 4]); // m=5, l=4 (no common with B)
-    let result = contract_multi(&[&a, &b, &c], AllowedPairs::Specified(&[(0, 1), (1, 2)]));
+    let result = contract(&[&a, &b, &c]);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("no contractable indices"));
+    let err_msg = result.unwrap_err().to_string().to_lowercase();
+    assert!(
+        err_msg.contains("disconnected") || err_msg.contains("no contractable indices"),
+        "Expected error about disconnected tensors or missing contractable indices, got: {err_msg}"
+    );
 }
 
 #[test]
-fn test_contract_specified_disconnected_outer_product() {
+fn test_contract_components_then_explicit_outer_product() {
     let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
     let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
     let c = make_test_tensor(&[4, 5], &[4, 5]); // m=4, n=5
     let d = make_test_tensor(&[5, 6], &[5, 6]); // n=5, p=6
-    let result = contract_multi(
-        &[&a, &b, &c, &d],
-        AllowedPairs::Specified(&[(0, 1), (2, 3)]),
-    )
-    .unwrap();
+    let left = contract(&[&a, &b]).unwrap();
+    let right = contract(&[&c, &d]).unwrap();
+    let result = outer_product(&left, &right).unwrap();
     assert_eq!(result.dims().len(), 4);
     let mut sorted_dims = result.dims();
     sorted_dims.sort();
@@ -1007,7 +993,7 @@ fn test_remap_preserves_order() {
 }
 
 // ========================================================================
-// contract_connected tests
+// dense contract tests
 // ========================================================================
 
 fn make_dense_tensor(shape: &[usize], ids: &[u64]) -> TensorDynLen {
@@ -1024,35 +1010,35 @@ fn make_dense_tensor(shape: &[usize], ids: &[u64]) -> TensorDynLen {
 }
 
 #[test]
-fn test_contract_connected_empty() {
+fn test_contract_empty_dense_entry() {
     let tensors: Vec<&TensorDynLen> = vec![];
-    let result = contract_connected(&tensors, AllowedPairs::All);
+    let result = contract(&tensors);
     assert!(result.is_err());
 }
 
 #[test]
-fn test_contract_connected_single() {
+fn test_contract_single_dense_entry() {
     let tensor = make_dense_tensor(&[2, 3], &[1, 2]);
-    let result = contract_connected(&[&tensor], AllowedPairs::All).unwrap();
+    let result = contract(&[&tensor]).unwrap();
     assert_eq!(result.dims(), tensor.dims());
 }
 
 #[test]
-fn test_contract_connected_pair_dense() {
+fn test_contract_pair_dense() {
     // A[i,j] * B[j,k] -> C[i,k]
     let a = make_dense_tensor(&[2, 3], &[1, 2]); // i=1, j=2
     let b = make_dense_tensor(&[3, 4], &[2, 3]); // j=2, k=3
-    let result = contract_connected(&[&a, &b], AllowedPairs::All).unwrap();
+    let result = contract(&[&a, &b]).unwrap();
     assert_eq!(result.dims(), vec![2, 4]); // i, k
 }
 
 #[test]
-fn test_contract_connected_three_dense() {
+fn test_contract_three_dense() {
     // A[i,j] * B[j,k] * C[k,l] -> D[i,l]
     let a = make_dense_tensor(&[2, 3], &[1, 2]); // i=1, j=2
     let b = make_dense_tensor(&[3, 4], &[2, 3]); // j=2, k=3
     let c = make_dense_tensor(&[4, 5], &[3, 4]); // k=3, l=4
-    let result = contract_connected(&[&a, &b, &c], AllowedPairs::All).unwrap();
+    let result = contract(&[&a, &b, &c]).unwrap();
     let mut sorted_dims = result.dims();
     sorted_dims.sort();
     assert_eq!(sorted_dims, vec![2, 5]); // i=2, l=5
