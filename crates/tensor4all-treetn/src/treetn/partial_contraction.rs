@@ -754,111 +754,51 @@ where
     node_names.sort();
 
     for node_name in node_names {
-        let node_a = a.node_index(&node_name).ok_or_else(|| {
-            anyhow!(
-                "partial_contract: node {:?} disappeared while adding dummy contraction links",
-                node_name
-            )
-        })?;
-        let node_b = b.node_index(&node_name).ok_or_else(|| {
-            anyhow!(
-                "partial_contract: matching node {:?} disappeared while adding dummy contraction links",
-                node_name
-            )
-        })?;
+        let node_a = a
+            .node_index(&node_name)
+            .context("partial_contract: node disappeared while adding dummy contraction links")?;
+        let node_b = b.node_index(&node_name).context(
+            "partial_contract: matching node disappeared while adding dummy contraction links",
+        )?;
 
-        let indices_a = a
+        let tensor_a = a
             .tensor(node_a)
-            .ok_or_else(|| {
-                anyhow!(
-                    "partial_contract: missing tensor at node {:?} while adding dummy contraction links",
-                    node_name
-                )
-            })?
-            .external_indices();
-        let indices_b = b
-            .tensor(node_b)
-            .ok_or_else(|| {
-                anyhow!(
-                    "partial_contract: missing matching tensor at node {:?} while adding dummy contraction links",
-                    node_name
-                )
-            })?
-            .external_indices();
+            .cloned()
+            .context("partial_contract: missing tensor while adding dummy contraction links")?;
+        let tensor_b = b.tensor(node_b).cloned().context(
+            "partial_contract: missing matching tensor while adding dummy contraction links",
+        )?;
 
-        if has_contractable_index_pair(&indices_a, &indices_b) {
+        if has_contractable_index_pair(&tensor_a.external_indices(), &tensor_b.external_indices()) {
             continue;
         }
 
         let (dummy_a, dummy_b) = DynIndex::create_dummy_link_pair();
         let dummy_tensor_a =
             <TensorDynLen as TensorConstructionLike>::ones(std::slice::from_ref(&dummy_a))
-                .with_context(|| {
-                    format!(
-                        "partial_contract: failed to build dummy contraction link for node {:?}",
-                        node_name
-                    )
-                })?;
+                .context("partial_contract: failed to build dummy contraction link")?;
         let dummy_tensor_b =
             <TensorDynLen as TensorConstructionLike>::ones(std::slice::from_ref(&dummy_b))
-                .with_context(|| {
-                    format!(
-                "partial_contract: failed to build matching dummy contraction link for node {:?}",
-                node_name
-            )
-                })?;
-
-        let tensor_a = a.tensor(node_a).cloned().ok_or_else(|| {
-            anyhow!(
-                "partial_contract: missing tensor at node {:?} while attaching dummy contraction link",
-                node_name
-            )
-        })?;
-        let tensor_b = b.tensor(node_b).cloned().ok_or_else(|| {
-            anyhow!(
-                "partial_contract: missing matching tensor at node {:?} while attaching dummy contraction link",
-                node_name
-            )
-        })?;
-        let expanded_a = tensor_a.outer_product(&dummy_tensor_a).with_context(|| {
-            format!(
-                "partial_contract: failed to attach dummy contraction link to node {:?}",
-                node_name
-            )
-        })?;
-        let expanded_b = tensor_b.outer_product(&dummy_tensor_b).with_context(|| {
-            format!(
-                "partial_contract: failed to attach matching dummy contraction link to node {:?}",
-                node_name
-            )
-        })?;
+                .context("partial_contract: failed to build matching dummy contraction link")?;
+        let expanded_a = tensor_a
+            .outer_product(&dummy_tensor_a)
+            .context("partial_contract: failed to attach dummy contraction link")?;
+        let expanded_b = tensor_b
+            .outer_product(&dummy_tensor_b)
+            .context("partial_contract: failed to attach matching dummy contraction link")?;
 
         a.replace_tensor(node_a, expanded_a)
-            .with_context(|| {
-                format!(
-                    "partial_contract: failed to replace tensor at node {:?} after adding dummy contraction link",
-                    node_name
-                )
-            })?
-            .ok_or_else(|| {
-                anyhow!(
-                    "partial_contract: node {:?} disappeared after adding dummy contraction link",
-                    node_name
-                )
-            })?;
+            .context(
+                "partial_contract: failed to replace tensor after adding dummy contraction link",
+            )?
+            .context("partial_contract: node disappeared after adding dummy contraction link")?;
         b.replace_tensor(node_b, expanded_b)
-            .with_context(|| {
-                format!(
-                    "partial_contract: failed to replace matching tensor at node {:?} after adding dummy contraction link",
-                    node_name
-                )
-            })?
-            .ok_or_else(|| {
-                anyhow!(
-                    "partial_contract: matching node {:?} disappeared after adding dummy contraction link",
-                    node_name
-                )
-            })?;
+            .context(
+                "partial_contract: failed to replace matching tensor after adding dummy contraction link",
+            )?
+            .context(
+                "partial_contract: matching node disappeared after adding dummy contraction link",
+            )?;
     }
 
     Ok(())
