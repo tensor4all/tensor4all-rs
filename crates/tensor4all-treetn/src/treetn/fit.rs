@@ -149,6 +149,99 @@ where
         .ok_or_else(|| anyhow::anyhow!("Tensor for node {:?} not found in {}", node, tree_name))
 }
 
+fn tensors_share_contractable_index<T>(left: &T, right: &T) -> bool
+where
+    T: TensorLike,
+{
+    let left_indices = left.external_indices();
+    let right_indices = right.external_indices();
+    left_indices.iter().any(|left_index| {
+        right_indices
+            .iter()
+            .any(|right_index| left_index.is_contractable(right_index))
+    })
+}
+
+fn tensor_connected_components<T>(tensors: &[&T]) -> Vec<Vec<usize>>
+where
+    T: TensorLike,
+{
+    let mut visited = vec![false; tensors.len()];
+    let mut components = Vec::new();
+
+    for start in 0..tensors.len() {
+        if visited[start] {
+            continue;
+        }
+
+        let mut component = Vec::new();
+        let mut stack = vec![start];
+        visited[start] = true;
+
+        while let Some(current) = stack.pop() {
+            component.push(current);
+            for candidate in 0..tensors.len() {
+                if visited[candidate] {
+                    continue;
+                }
+                if tensors_share_contractable_index(tensors[current], tensors[candidate]) {
+                    visited[candidate] = true;
+                    stack.push(candidate);
+                }
+            }
+        }
+
+        component.sort_unstable();
+        components.push(component);
+    }
+
+    components
+}
+
+fn contract_fit_tensor_refs<T>(tensors: &[&T]) -> Result<T>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+{
+    if tensors.is_empty() {
+        return Err(anyhow::anyhow!(
+            "fit contraction requires at least one tensor"
+        ));
+    }
+
+    let components = tensor_connected_components(tensors);
+    if components.len() == 1 {
+        return T::contract(tensors).map_err(|e| anyhow::anyhow!("contract failed: {}", e));
+    }
+
+    let mut contracted_components = Vec::with_capacity(components.len());
+    for component in components {
+        let component_refs = component
+            .iter()
+            .map(|&tensor_index| tensors[tensor_index])
+            .collect::<Vec<_>>();
+        let contracted = if component_refs.len() == 1 {
+            component_refs[0].clone()
+        } else {
+            T::contract(&component_refs)
+                .map_err(|e| anyhow::anyhow!("component contract failed: {}", e))?
+        };
+        contracted_components.push(contracted);
+    }
+
+    let mut iter = contracted_components.into_iter();
+    let mut result = iter
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("fit contraction produced no components"))?;
+    for component in iter {
+        result = result
+            .outer_product(&component)
+            .map_err(|e| anyhow::anyhow!("component outer product failed: {}", e))?;
+    }
+
+    Ok(result)
+}
+
 // ============================================================================
 // FitEnvironment: Environment tensor cache
 // ============================================================================
@@ -424,8 +517,7 @@ where
 
     // A, B, and C must form one connected local environment.
     let c_conj = tensor_c.conj();
-    let env = T::contract(&[tensor_a, tensor_b, &c_conj])
-        .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
+    let env = contract_fit_tensor_refs(&[tensor_a, tensor_b, &c_conj])?;
 
     if let Some(started) = started {
         with_fit_profile(|profile| {
@@ -470,8 +562,7 @@ where
     let c_conj = tensor_c.conj();
     let mut tensor_refs: Vec<&T> = vec![tensor_a, tensor_b, &c_conj];
     tensor_refs.extend(child_envs.iter());
-    let result =
-        T::contract(&tensor_refs).map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
+    let result = contract_fit_tensor_refs(&tensor_refs)?;
 
     if let Some(started) = started {
         with_fit_profile(|profile| {
@@ -673,8 +764,7 @@ where
         let contract_started = fit_profile_enabled().then(Instant::now);
         let mut tensor_refs: Vec<&T> = vec![a_u, b_u, a_v, b_v];
         tensor_refs.extend(env_tensors.iter());
-        let ab_uv =
-            T::contract(&tensor_refs).map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
+        let ab_uv = contract_fit_tensor_refs(&tensor_refs)?;
         if let Some(contract_started) = contract_started {
             with_fit_profile(|profile| {
                 profile.two_site_contract_time += contract_started.elapsed();

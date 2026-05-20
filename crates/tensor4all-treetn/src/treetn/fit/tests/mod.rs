@@ -431,7 +431,7 @@ fn test_contract_fit_positive_sweeps_do_not_skip_without_truncation_options() {
 }
 
 #[test]
-fn test_contract_fit_rejects_leaf_site_space_that_contracts_away() {
+fn test_contract_fit_handles_leaf_site_space_that_contracts_away() {
     let left = DynIndex::new_dyn(2);
     let right = DynIndex::new_dyn(2);
     let shared_left = DynIndex::new_dyn(2);
@@ -492,14 +492,16 @@ fn test_contract_fit_rejects_leaf_site_space_that_contracts_away() {
     )
     .unwrap();
 
-    let err = contract_fit(
+    let fitted = contract_fit(
         &tn_a,
         &tn_b,
         &"A".to_string(),
         FitContractionOptions::new(1),
     )
-    .unwrap_err()
-    .to_string();
+    .unwrap();
 
-    assert!(err.contains("Disconnected tensor network"));
+    assert_eq!(fitted.node_count(), 3);
+    let fitted_dense = fitted.to_dense().unwrap();
+    let expected_dense = tn_a.contract_naive(&tn_b).unwrap();
+    assert!(fitted_dense.distance(&expected_dense).unwrap() < 1e-10);
 }
