@@ -41,6 +41,18 @@ TensorTrain-level operations against ITensorMPS:
 RAYON_NUM_THREADS=1 cargo run -p tensor4all-itensorlike --example benchmark_tt_ops --release -- --L 32 --zipup-L 10 --chis 4,8,16,32,64
 ```
 
+ACI elementwise TT chi scaling:
+
+```bash
+RAYON_NUM_THREADS=1 cargo bench -p tensor4all-aci --bench elementwise_scaling -- --sample-size 10
+```
+
+Optional long `chi = 32` case:
+
+```bash
+RAYON_NUM_THREADS=1 cargo bench -p tensor4all-aci --bench elementwise_scaling -- aci_elementwise_chi_scaling_long --sample-size 10
+```
+
 Inspect Julia-dumped local linsolve inputs:
 
 ```bash
@@ -76,6 +88,12 @@ TensorTrain-level operations against tensor4all:
 
 ```bash
 BLAS_NUM_THREADS=1 julia --project=benchmarks/julia benchmarks/julia/benchmark_tt_ops.jl --L 32 --zipup-L 10 --chis 4,8,16,32,64
+```
+
+ACI elementwise TT chi scaling:
+
+```bash
+BLAS_NUM_THREADS=1 julia --project=benchmarks/julia benchmarks/julia/benchmark_aci_elementwise.jl --chis 2,4,8,16
 ```
 
 Dump local linsolve inputs as ITensorMPS-compatible HDF5:
@@ -119,6 +137,14 @@ result max bond dimension, and a checksum. The Rust source of truth is
 `benchmarks/rust/benchmark_tt_ops.rs`, included by
 `tensor4all-itensorlike/examples/benchmark_tt_ops.rs`; the Julia counterpart is
 `benchmarks/julia/benchmark_tt_ops.jl`.
+
+The ACI elementwise benchmarks compare `tensor4all_aci::elementwise_batched`
+with upstream `AlternatingCrossInterpolation.jl` on deterministic two-input TT
+multiplication. The scaling axis is `chi`/`χ`, the maximum TT bond dimension of
+the inputs and initial guess. The default smoke run covers `chi = 2, 4, 8, 16`.
+`chi = 32` is a longer optional Rust case available through the
+`aci_elementwise_chi_scaling_long` Criterion filter, and Julia can run the same
+long case with `--chis 2,4,8,16,32`.
 
 `dump_local_linsolve_inputs.jl` writes the prepared local operator as
 `operator_as_mps`, plus `rhs` and `init`, in one HDF5 file. The operator is a
