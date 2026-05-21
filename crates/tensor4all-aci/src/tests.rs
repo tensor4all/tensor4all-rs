@@ -756,7 +756,7 @@ fn local_block_evaluator_serves_duplicate_entries_from_cache() {
         .fill_local_block(&rows, &cols, &mut second)
         .unwrap();
 
-    assert!(calls.get() < first.len() + second.len());
+    assert_eq!(calls.get(), 2);
     assert_eq!(first[0], first[1]);
     assert_eq!(first, second);
 }
