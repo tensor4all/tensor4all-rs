@@ -153,6 +153,28 @@ fn elementwise_problem_updates_left_frame_for_selected_rows() {
 }
 
 #[test]
+fn elementwise_problem_updates_left_frame_values() {
+    let input = TensorTrain::new(vec![
+        tensor3_from_data(vec![1.0, 2.0, 10.0, 20.0], 1, 2, 2).unwrap(),
+        tensor3_from_data(vec![3.0, 4.0, 5.0, 6.0], 2, 2, 1).unwrap(),
+    ])
+    .unwrap();
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+
+    problem.update_left_frame(0, 0, &[0, 1]).unwrap();
+
+    assert_eq!(problem.left_frame_shape(0, 1), Some((2, 2)));
+    assert_eq!(problem.left_frame_value(0, 1, 0, 0), Some(1.0));
+    assert_eq!(problem.left_frame_value(0, 1, 1, 0), Some(2.0));
+    assert_eq!(problem.left_frame_value(0, 1, 0, 1), Some(10.0));
+    assert_eq!(problem.left_frame_value(0, 1, 1, 1), Some(20.0));
+    assert_eq!(problem.left_frame_value(1, 1, 0, 0), None);
+    assert_eq!(problem.left_frame_value(0, 2, 0, 0), None);
+    assert_eq!(problem.left_frame_value(0, 1, 2, 0), None);
+    assert_eq!(problem.left_frame_value(0, 1, 0, 2), None);
+}
+
+#[test]
 fn elementwise_problem_updates_all_left_frames_for_selected_rows() {
     let a = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let b = TensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
@@ -172,6 +194,28 @@ fn elementwise_problem_updates_right_frame_for_selected_columns() {
     problem.update_right_frame(0, 2, &[0, 1]).unwrap();
 
     assert_eq!(problem.right_frame_shape(0, 2), Some((1, 2)));
+}
+
+#[test]
+fn elementwise_problem_updates_right_frame_values() {
+    let input = TensorTrain::new(vec![
+        tensor3_from_data(vec![1.0, 2.0, 10.0, 20.0], 1, 2, 2).unwrap(),
+        tensor3_from_data(vec![3.0, 30.0, 4.0, 40.0], 2, 2, 1).unwrap(),
+    ])
+    .unwrap();
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+
+    problem.update_right_frame(0, 1, &[0, 1]).unwrap();
+
+    assert_eq!(problem.right_frame_shape(0, 1), Some((2, 2)));
+    assert_eq!(problem.right_frame_value(0, 1, 0, 0), Some(3.0));
+    assert_eq!(problem.right_frame_value(0, 1, 1, 0), Some(30.0));
+    assert_eq!(problem.right_frame_value(0, 1, 0, 1), Some(4.0));
+    assert_eq!(problem.right_frame_value(0, 1, 1, 1), Some(40.0));
+    assert_eq!(problem.right_frame_value(1, 1, 0, 0), None);
+    assert_eq!(problem.right_frame_value(0, 3, 0, 0), None);
+    assert_eq!(problem.right_frame_value(0, 1, 2, 0), None);
+    assert_eq!(problem.right_frame_value(0, 1, 0, 2), None);
 }
 
 #[test]

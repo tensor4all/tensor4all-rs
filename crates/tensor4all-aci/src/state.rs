@@ -62,6 +62,26 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             .map(|frame| (frame.nrows(), frame.ncols()))
     }
 
+    pub(crate) fn left_frame_value(
+        &self,
+        input: usize,
+        site: usize,
+        row: usize,
+        col: usize,
+    ) -> Option<T> {
+        frame_value(&self.left_frames, input, site, row, col)
+    }
+
+    pub(crate) fn right_frame_value(
+        &self,
+        input: usize,
+        site: usize,
+        row: usize,
+        col: usize,
+    ) -> Option<T> {
+        frame_value(&self.right_frames, input, site, row, col)
+    }
+
     pub(crate) fn update_left_frame(
         &mut self,
         input: usize,
@@ -238,6 +258,20 @@ impl<T: AciScalar> ElementwiseProblem<T> {
 
 fn unit_frame<T: AciScalar>() -> Matrix<T> {
     Matrix::from_col_major_vec(1, 1, vec![T::one()])
+}
+
+fn frame_value<T: AciScalar>(
+    frames: &[Vec<Option<Matrix<T>>>],
+    input: usize,
+    site: usize,
+    row: usize,
+    col: usize,
+) -> Option<T> {
+    let frame = frames.get(input)?.get(site)?.as_ref()?;
+    if row >= frame.nrows() || col >= frame.ncols() {
+        return None;
+    }
+    Some(frame[[row, col]])
 }
 
 fn validate_input_site(input: usize, site: usize, n_inputs: usize, n_sites: usize) -> Result<()> {
