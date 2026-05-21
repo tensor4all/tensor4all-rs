@@ -5,12 +5,13 @@ use crate::{
         initial_guess_core_entry_count, initial_guess_existing_entry_count,
         initial_guess_total_entry_count, MAX_INITIAL_GUESS_CORE_ENTRIES,
     },
-    AciError, AciOptions, ElementwiseBatch, ElementwiseProblem,
+    AciError, AciOptions, ElementwiseBatch, ElementwiseProblem, LocalBlockEvaluator,
 };
 use num_complex::Complex64;
 use tensor4all_simplett::{
     tensor3_from_data, tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain,
 };
+use tensor4all_tensorbackend::Matrix;
 
 fn tensor_train_with_link_dims(site_dims: &[usize], link_dims: &[usize]) -> TensorTrain<f64> {
     assert_eq!(link_dims.len(), site_dims.len().saturating_sub(1));
@@ -24,6 +25,93 @@ fn tensor_train_with_link_dims(site_dims: &[usize], link_dims: &[usize]) -> Tens
         })
         .collect();
     TensorTrain::new(cores).unwrap()
+}
+
+fn local_test_problem() -> ElementwiseProblem<f64> {
+    let input_a = TensorTrain::new(vec![
+        tensor3_from_data(vec![1.0, 2.0, 10.0, 20.0], 1, 2, 2).unwrap(),
+        tensor3_from_data(
+            vec![
+                1.0, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0, 40.0, 100.0, 200.0, 300.0, 400.0,
+            ],
+            2,
+            2,
+            3,
+        )
+        .unwrap(),
+        tensor3_from_data(
+            vec![
+                5.0, 6.0, 7.0, 50.0, 60.0, 70.0, 500.0, 600.0, 700.0, 8.0, 9.0, 10.0,
+            ],
+            3,
+            2,
+            2,
+        )
+        .unwrap(),
+        tensor3_from_data(vec![1.0, 2.0, 3.0, 4.0], 2, 2, 1).unwrap(),
+    ])
+    .unwrap();
+    let input_b = TensorTrain::new(vec![
+        tensor3_from_data(vec![2.0, 3.0, 20.0, 30.0], 1, 2, 2).unwrap(),
+        tensor3_from_data(
+            vec![
+                2.0, 3.0, 4.0, 5.0, 20.0, 30.0, 40.0, 50.0, 200.0, 300.0, 400.0, 500.0,
+            ],
+            2,
+            2,
+            3,
+        )
+        .unwrap(),
+        tensor3_from_data(
+            vec![
+                6.0, 7.0, 8.0, 60.0, 70.0, 80.0, 600.0, 700.0, 800.0, 9.0, 10.0, 11.0,
+            ],
+            3,
+            2,
+            2,
+        )
+        .unwrap(),
+        tensor3_from_data(vec![2.0, 3.0, 4.0, 5.0], 2, 2, 1).unwrap(),
+    ])
+    .unwrap();
+    let mut problem =
+        ElementwiseProblem::new(vec![input_a, input_b], AciOptions::default()).unwrap();
+    for input in 0..problem.n_inputs() {
+        problem.left_frames[input][1] =
+            Some(Matrix::from_col_major_vec(2, 2, vec![1.0, 2.0, 10.0, 20.0]));
+        problem.right_frames[input][3] =
+            Some(Matrix::from_col_major_vec(2, 2, vec![3.0, 4.0, 30.0, 40.0]));
+    }
+    problem
+}
+
+fn explicit_local_value(
+    problem: &ElementwiseProblem<f64>,
+    input: usize,
+    bond: usize,
+    row: usize,
+    col: usize,
+) -> f64 {
+    let left_frame = problem.left_frames[input][bond].as_ref().unwrap();
+    let right_frame = problem.right_frames[input][bond + 2].as_ref().unwrap();
+    let left_core = problem.inputs[input].site_tensor(bond);
+    let right_core = problem.inputs[input].site_tensor(bond + 1);
+    let left_pivot = row % left_frame.nrows();
+    let site_left = row / left_frame.nrows();
+    let site_right = col % right_core.site_dim();
+    let right_pivot = col / right_core.site_dim();
+    let mut sum = 0.0;
+    for a in 0..left_core.left_dim() {
+        for m in 0..left_core.right_dim() {
+            for b in 0..right_core.right_dim() {
+                sum += left_frame[[left_pivot, a]]
+                    * *left_core.get3(a, site_left, m)
+                    * *right_core.get3(m, site_right, b)
+                    * right_frame[[b, right_pivot]];
+            }
+        }
+    }
+    sum
 }
 
 #[test]
@@ -268,6 +356,150 @@ fn elementwise_problem_rejects_invalid_frame_selection_indices() {
     let right_err = problem.update_right_frame(0, 2, &[2]).unwrap_err();
     assert!(matches!(right_err, AciError::InvalidInitialGuess { .. }));
     assert!(right_err.to_string().contains("column index"));
+}
+
+#[test]
+fn local_input_value_matches_explicit_two_site_contraction() {
+    let problem = local_test_problem();
+
+    let value = problem.local_input_value(0, 1, 3, 2).unwrap();
+    let expected = explicit_local_value(&problem, 0, 1, 3, 2);
+
+    assert_eq!(value, expected);
+    assert_eq!(value, 265_133_700.0);
+}
+
+#[test]
+fn local_block_evaluator_uses_matrix_luci_point_order_and_batch_layout() {
+    let problem = local_test_problem();
+    let evaluator = LocalBlockEvaluator::new(&problem, 1).unwrap();
+    let rows = [0, 3];
+    let cols = [1, 2];
+    let mut out = vec![0.0; rows.len() * cols.len()];
+    let observed_batches = std::cell::RefCell::new(Vec::new());
+
+    evaluator
+        .fill_local_block(&rows, &cols, &mut out, |batch, output| {
+            assert_eq!(batch.n_inputs(), problem.n_inputs());
+            assert_eq!(batch.n_points(), rows.len() * cols.len());
+            observed_batches
+                .borrow_mut()
+                .push(batch.as_col_major_slice().to_vec());
+            for (point, value) in output.iter_mut().enumerate().take(batch.n_points()) {
+                *value = batch.get(0, point).unwrap() + 10.0 * batch.get(1, point).unwrap();
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    let mut expected_values = Vec::new();
+    for &col in &cols {
+        for &row in &rows {
+            for input in 0..problem.n_inputs() {
+                expected_values.push(problem.local_input_value(input, 1, row, col).unwrap());
+            }
+        }
+    }
+    assert_eq!(observed_batches.into_inner(), vec![expected_values]);
+
+    let mut expected_out = Vec::new();
+    for &col in &cols {
+        for &row in &rows {
+            expected_out.push(
+                problem.local_input_value(0, 1, row, col).unwrap()
+                    + 10.0 * problem.local_input_value(1, 1, row, col).unwrap(),
+            );
+        }
+    }
+    assert_eq!(out, expected_out);
+}
+
+#[test]
+fn local_block_evaluator_serves_duplicate_entries_from_cache() {
+    let problem = local_test_problem();
+    let evaluator = LocalBlockEvaluator::new(&problem, 1).unwrap();
+    let rows = [0, 0, 1];
+    let cols = [0];
+    let mut first = vec![0.0; rows.len() * cols.len()];
+    let mut second = vec![0.0; rows.len() * cols.len()];
+    let observed_points = std::cell::RefCell::new(Vec::new());
+
+    let operator = |batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        observed_points.borrow_mut().push(batch.n_points());
+        for (point, value) in output.iter_mut().enumerate().take(batch.n_points()) {
+            *value = batch.get(0, point).unwrap() + batch.get(1, point).unwrap();
+        }
+        Ok(())
+    };
+
+    evaluator
+        .fill_local_block(&rows, &cols, &mut first, operator)
+        .unwrap();
+    evaluator
+        .fill_local_block(&rows, &cols, &mut second, operator)
+        .unwrap();
+
+    assert_eq!(observed_points.into_inner(), vec![2]);
+    assert_eq!(first[0], first[1]);
+    assert_eq!(first, second);
+}
+
+#[test]
+fn local_block_evaluator_cache_can_be_cleared() {
+    let problem = local_test_problem();
+    let evaluator = LocalBlockEvaluator::new(&problem, 1).unwrap();
+    let rows = [0];
+    let cols = [0];
+    let mut out = vec![0.0];
+    let observed_points = std::cell::RefCell::new(Vec::new());
+
+    let operator = |batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        observed_points.borrow_mut().push(batch.n_points());
+        output[0] = batch.get(0, 0).unwrap();
+        Ok(())
+    };
+
+    evaluator
+        .fill_local_block(&rows, &cols, &mut out, operator)
+        .unwrap();
+    evaluator.clear_cache();
+    evaluator
+        .fill_local_block(&rows, &cols, &mut out, operator)
+        .unwrap();
+
+    assert_eq!(observed_points.into_inner(), vec![1, 1]);
+}
+
+#[test]
+fn local_input_value_rejects_out_of_range_indices() {
+    let problem = local_test_problem();
+
+    let input_err = problem.local_input_value(2, 1, 0, 0).unwrap_err();
+    assert!(matches!(input_err, AciError::InvalidInitialGuess { .. }));
+    assert!(input_err.to_string().contains("input index"));
+
+    let bond_err = problem.local_input_value(0, 3, 0, 0).unwrap_err();
+    assert!(matches!(bond_err, AciError::InvalidInitialGuess { .. }));
+    assert!(bond_err.to_string().contains("bond index"));
+
+    let row_err = problem.local_input_value(0, 1, 4, 0).unwrap_err();
+    assert!(matches!(row_err, AciError::InvalidInitialGuess { .. }));
+    assert!(row_err.to_string().contains("row index"));
+
+    let col_err = problem.local_input_value(0, 1, 0, 4).unwrap_err();
+    assert!(matches!(col_err, AciError::InvalidInitialGuess { .. }));
+    assert!(col_err.to_string().contains("column index"));
+}
+
+#[test]
+fn local_input_value_rejects_missing_frames() {
+    let input = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+
+    let err = problem.local_input_value(0, 1, 0, 0).unwrap_err();
+
+    assert!(matches!(err, AciError::InvalidInitialGuess { .. }));
+    assert!(err.to_string().contains("left frame"));
 }
 
 #[test]

@@ -82,6 +82,58 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         frame_value(&self.right_frames, input, site, row, col)
     }
 
+    pub(crate) fn local_input_shape(&self, input: usize, bond: usize) -> Result<(usize, usize)> {
+        let context = self.local_input_context(input, bond)?;
+        Ok((context.nrows, context.ncols))
+    }
+
+    pub(crate) fn local_input_value(
+        &self,
+        input: usize,
+        bond: usize,
+        row: usize,
+        col: usize,
+    ) -> Result<T> {
+        let context = self.local_input_context(input, bond)?;
+        if row >= context.nrows {
+            return Err(AciError::InvalidInitialGuess {
+                message: format!(
+                    "local row index {row} out of bounds for bond {bond} with {} rows",
+                    context.nrows
+                ),
+            });
+        }
+        if col >= context.ncols {
+            return Err(AciError::InvalidInitialGuess {
+                message: format!(
+                    "local column index {col} out of bounds for bond {bond} with {} columns",
+                    context.ncols
+                ),
+            });
+        }
+
+        let r_left = context.left_frame.nrows();
+        let d_right = context.right_core.site_dim();
+        let left_pivot = row % r_left;
+        let site_left = row / r_left;
+        let site_right = col % d_right;
+        let right_pivot = col / d_right;
+
+        let mut sum = T::zero();
+        for a in 0..context.left_core.left_dim() {
+            for m in 0..context.left_core.right_dim() {
+                for b in 0..context.right_core.right_dim() {
+                    sum = sum
+                        + context.left_frame[[left_pivot, a]]
+                            * *context.left_core.get3(a, site_left, m)
+                            * *context.right_core.get3(m, site_right, b)
+                            * context.right_frame[[b, right_pivot]];
+                }
+            }
+        }
+        Ok(sum)
+    }
+
     pub(crate) fn update_left_frame(
         &mut self,
         input: usize,
@@ -229,6 +281,108 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         self.solution = TensorTrain::new(solution_cores)?;
         Ok(())
     }
+
+    fn local_input_context(&self, input: usize, bond: usize) -> Result<LocalInputContext<'_, T>> {
+        let n = self.len();
+        if input >= self.n_inputs() {
+            return Err(AciError::InvalidInitialGuess {
+                message: format!(
+                    "input index {input} out of bounds for {} inputs",
+                    self.n_inputs()
+                ),
+            });
+        }
+        if bond >= n.saturating_sub(1) {
+            return Err(AciError::InvalidInitialGuess {
+                message: format!("bond index {bond} out of bounds for tensor train length {n}"),
+            });
+        }
+
+        let right_frame_site = bond + 2;
+        let left_frame = self
+            .left_frames
+            .get(input)
+            .and_then(|frames| frames.get(bond))
+            .and_then(|frame| frame.as_ref())
+            .ok_or_else(|| missing_frame("left", input, bond))?;
+        let right_frame = self
+            .right_frames
+            .get(input)
+            .and_then(|frames| frames.get(right_frame_site))
+            .and_then(|frame| frame.as_ref())
+            .ok_or_else(|| missing_frame("right", input, right_frame_site))?;
+        let left_core = self.inputs[input].site_tensor(bond);
+        let right_core = self.inputs[input].site_tensor(bond + 1);
+
+        if left_frame.nrows() == 0
+            || left_core.site_dim() == 0
+            || right_core.site_dim() == 0
+            || right_frame.ncols() == 0
+        {
+            return Err(AciError::InvalidInitialGuess {
+                message: format!("local block at input {input}, bond {bond} has a zero dimension"),
+            });
+        }
+        if left_frame.ncols() != left_core.left_dim() {
+            return Err(AciError::InvalidInitialGuess {
+                message: format!(
+                    "left frame/input bond mismatch at input {input}, bond {bond}: \
+                     frame has {} columns, left core left bond is {}",
+                    left_frame.ncols(),
+                    left_core.left_dim()
+                ),
+            });
+        }
+        if left_core.right_dim() != right_core.left_dim() {
+            return Err(AciError::InvalidInitialGuess {
+                message: format!(
+                    "adjacent input core bond mismatch at input {input}, bond {bond}: \
+                     left core right bond is {}, right core left bond is {}",
+                    left_core.right_dim(),
+                    right_core.left_dim()
+                ),
+            });
+        }
+        if right_core.right_dim() != right_frame.nrows() {
+            return Err(AciError::InvalidInitialGuess {
+                message: format!(
+                    "right frame/input bond mismatch at input {input}, bond {bond}: \
+                     right core right bond is {}, frame has {} rows",
+                    right_core.right_dim(),
+                    right_frame.nrows()
+                ),
+            });
+        }
+
+        let nrows = checked_frame_mul(
+            left_frame.nrows(),
+            left_core.site_dim(),
+            "local block row count",
+        )?;
+        let ncols = checked_frame_mul(
+            right_core.site_dim(),
+            right_frame.ncols(),
+            "local block column count",
+        )?;
+
+        Ok(LocalInputContext {
+            left_frame,
+            right_frame,
+            left_core,
+            right_core,
+            nrows,
+            ncols,
+        })
+    }
+}
+
+struct LocalInputContext<'a, T: AciScalar> {
+    left_frame: &'a Matrix<T>,
+    right_frame: &'a Matrix<T>,
+    left_core: &'a Tensor3<T>,
+    right_core: &'a Tensor3<T>,
+    nrows: usize,
+    ncols: usize,
 }
 
 fn unit_frame<T: AciScalar>() -> Matrix<T> {

@@ -7,6 +7,8 @@
 
 mod batch;
 mod error;
+#[allow(dead_code)]
+mod local;
 mod options;
 #[allow(dead_code)]
 mod random_tt;
@@ -20,6 +22,8 @@ pub(crate) mod validation;
 
 pub use batch::ElementwiseBatch;
 pub use error::{AciError, Result};
+#[allow(unused_imports)]
+pub(crate) use local::LocalBlockEvaluator;
 pub use options::AciOptions;
 #[allow(unused_imports)]
 pub(crate) use random_tt::initial_guess;
