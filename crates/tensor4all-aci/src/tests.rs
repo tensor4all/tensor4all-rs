@@ -372,25 +372,25 @@ fn local_input_value_matches_explicit_two_site_contraction() {
 #[test]
 fn local_block_evaluator_uses_matrix_luci_point_order_and_batch_layout() {
     let problem = local_test_problem();
-    let evaluator = LocalBlockEvaluator::new(&problem, 1).unwrap();
     let rows = [0, 3];
     let cols = [1, 2];
     let mut out = vec![0.0; rows.len() * cols.len()];
     let observed_batches = std::cell::RefCell::new(Vec::new());
 
-    evaluator
-        .fill_local_block(&rows, &cols, &mut out, |batch, output| {
-            assert_eq!(batch.n_inputs(), problem.n_inputs());
-            assert_eq!(batch.n_points(), rows.len() * cols.len());
-            observed_batches
-                .borrow_mut()
-                .push(batch.as_col_major_slice().to_vec());
-            for (point, value) in output.iter_mut().enumerate().take(batch.n_points()) {
-                *value = batch.get(0, point).unwrap() + 10.0 * batch.get(1, point).unwrap();
-            }
-            Ok(())
-        })
-        .unwrap();
+    let operator = |batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        assert_eq!(batch.n_inputs(), problem.n_inputs());
+        assert_eq!(batch.n_points(), rows.len() * cols.len());
+        observed_batches
+            .borrow_mut()
+            .push(batch.as_col_major_slice().to_vec());
+        for (point, value) in output.iter_mut().enumerate().take(batch.n_points()) {
+            *value = batch.get(0, point).unwrap() + 10.0 * batch.get(1, point).unwrap();
+        }
+        Ok(())
+    };
+    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator).unwrap();
+
+    evaluator.fill_local_block(&rows, &cols, &mut out).unwrap();
 
     let mut expected_values = Vec::new();
     for &col in &cols {
@@ -417,7 +417,6 @@ fn local_block_evaluator_uses_matrix_luci_point_order_and_batch_layout() {
 #[test]
 fn local_block_evaluator_serves_duplicate_entries_from_cache() {
     let problem = local_test_problem();
-    let evaluator = LocalBlockEvaluator::new(&problem, 1).unwrap();
     let rows = [0, 0, 1];
     let cols = [0];
     let mut first = vec![0.0; rows.len() * cols.len()];
@@ -431,12 +430,13 @@ fn local_block_evaluator_serves_duplicate_entries_from_cache() {
         }
         Ok(())
     };
+    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator).unwrap();
 
     evaluator
-        .fill_local_block(&rows, &cols, &mut first, operator)
+        .fill_local_block(&rows, &cols, &mut first)
         .unwrap();
     evaluator
-        .fill_local_block(&rows, &cols, &mut second, operator)
+        .fill_local_block(&rows, &cols, &mut second)
         .unwrap();
 
     assert_eq!(observed_points.into_inner(), vec![2]);
@@ -447,7 +447,6 @@ fn local_block_evaluator_serves_duplicate_entries_from_cache() {
 #[test]
 fn local_block_evaluator_cache_can_be_cleared() {
     let problem = local_test_problem();
-    let evaluator = LocalBlockEvaluator::new(&problem, 1).unwrap();
     let rows = [0];
     let cols = [0];
     let mut out = vec![0.0];
@@ -458,16 +457,87 @@ fn local_block_evaluator_cache_can_be_cleared() {
         output[0] = batch.get(0, 0).unwrap();
         Ok(())
     };
+    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator).unwrap();
 
-    evaluator
-        .fill_local_block(&rows, &cols, &mut out, operator)
-        .unwrap();
+    evaluator.fill_local_block(&rows, &cols, &mut out).unwrap();
     evaluator.clear_cache();
-    evaluator
-        .fill_local_block(&rows, &cols, &mut out, operator)
-        .unwrap();
+    evaluator.fill_local_block(&rows, &cols, &mut out).unwrap();
 
     assert_eq!(observed_points.into_inner(), vec![1, 1]);
+}
+
+#[test]
+fn local_block_evaluators_with_different_operators_have_separate_caches() {
+    let problem = local_test_problem();
+    let rows = [0];
+    let cols = [0];
+    let mut first = vec![0.0];
+    let mut second = vec![0.0];
+
+    let first_operator = |batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        output[0] = batch.get(0, 0).unwrap();
+        Ok(())
+    };
+    let second_operator = |batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        output[0] = batch.get(0, 0).unwrap() + 1.0;
+        Ok(())
+    };
+
+    let first_evaluator = LocalBlockEvaluator::new(&problem, 1, &first_operator).unwrap();
+    let second_evaluator = LocalBlockEvaluator::new(&problem, 1, &second_operator).unwrap();
+
+    first_evaluator
+        .fill_local_block(&rows, &cols, &mut first)
+        .unwrap();
+    second_evaluator
+        .fill_local_block(&rows, &cols, &mut second)
+        .unwrap();
+
+    assert_eq!(second, vec![first[0] + 1.0]);
+}
+
+#[test]
+fn local_block_evaluator_or_zero_records_operator_error_once() {
+    let problem = local_test_problem();
+    let rows = [0];
+    let cols = [0];
+    let mut out = vec![123.0];
+    let calls = std::cell::Cell::new(0);
+    let operator = |_batch: ElementwiseBatch<'_, f64>, _output: &mut [f64]| {
+        calls.set(calls.get() + 1);
+        Err(AciError::Operator {
+            message: format!("operator failed on call {}", calls.get()),
+        })
+    };
+    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator).unwrap();
+
+    evaluator.fill_local_block_or_zero(&rows, &cols, &mut out);
+    assert_eq!(out, vec![0.0]);
+    evaluator.fill_local_block_or_zero(&rows, &cols, &mut out);
+    assert_eq!(out, vec![0.0]);
+
+    let err = evaluator.take_error().unwrap();
+    assert!(err.to_string().contains("call 1"));
+    assert!(evaluator.take_error().is_none());
+}
+
+#[test]
+fn local_block_evaluator_or_zero_records_local_error_once() {
+    let problem = local_test_problem();
+    let rows = [4];
+    let cols = [0];
+    let mut out = vec![123.0];
+    let operator = |_batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        output[0] = 1.0;
+        Ok(())
+    };
+    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator).unwrap();
+
+    evaluator.fill_local_block_or_zero(&rows, &cols, &mut out);
+
+    assert_eq!(out, vec![0.0]);
+    let err = evaluator.take_error().unwrap();
+    assert!(err.to_string().contains("row index"));
 }
 
 #[test]

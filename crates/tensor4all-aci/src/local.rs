@@ -4,16 +4,28 @@ use std::collections::HashMap;
 use crate::scalar::AciScalar;
 use crate::{AciError, ElementwiseBatch, ElementwiseProblem, Result};
 
+type LocalOperator<'a, T> =
+    dyn for<'batch> Fn(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()> + 'a;
+
 pub(crate) struct LocalBlockEvaluator<'a, T: AciScalar> {
     problem: &'a ElementwiseProblem<T>,
+    operator: &'a LocalOperator<'a, T>,
     bond: usize,
     nrows: usize,
     ncols: usize,
     cache: RefCell<HashMap<usize, T>>,
+    first_error: RefCell<Option<AciError>>,
 }
 
 impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
-    pub(crate) fn new(problem: &'a ElementwiseProblem<T>, bond: usize) -> Result<Self> {
+    pub(crate) fn new<F>(
+        problem: &'a ElementwiseProblem<T>,
+        bond: usize,
+        operator: &'a F,
+    ) -> Result<Self>
+    where
+        F: for<'batch> Fn(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()> + 'a,
+    {
         if problem.n_inputs() == 0 {
             return Err(AciError::EmptyInputs);
         }
@@ -33,10 +45,12 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
 
         Ok(Self {
             problem,
+            operator,
             bond,
             nrows,
             ncols,
             cache: RefCell::new(HashMap::new()),
+            first_error: RefCell::new(None),
         })
     }
 
@@ -48,16 +62,12 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
         self.ncols
     }
 
-    pub(crate) fn fill_local_block<F>(
+    pub(crate) fn fill_local_block(
         &self,
         rows: &[usize],
         cols: &[usize],
         out: &mut [T],
-        operator: F,
-    ) -> Result<()>
-    where
-        F: for<'batch> Fn(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
-    {
+    ) -> Result<()> {
         let n_points = checked_local_mul(rows.len(), cols.len(), "local block point count")?;
         if out.len() != n_points {
             return Err(AciError::LengthMismatch {
@@ -114,7 +124,7 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
 
         let batch = ElementwiseBatch::new(&input_values, n_inputs, n_missing)?;
         let mut missing_output = vec![T::zero(); n_missing];
-        operator(batch, &mut missing_output)?;
+        (self.operator)(batch, &mut missing_output)?;
 
         {
             let mut cache = self.cache.borrow_mut();
@@ -131,8 +141,26 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
         Ok(())
     }
 
+    pub(crate) fn fill_local_block_or_zero(&self, rows: &[usize], cols: &[usize], out: &mut [T]) {
+        if let Err(err) = self.fill_local_block(rows, cols, out) {
+            self.record_error(err);
+            out.fill(T::zero());
+        }
+    }
+
+    pub(crate) fn take_error(&self) -> Option<AciError> {
+        self.first_error.borrow_mut().take()
+    }
+
     pub(crate) fn clear_cache(&self) {
         self.cache.borrow_mut().clear();
+    }
+
+    fn record_error(&self, err: AciError) {
+        let mut first_error = self.first_error.borrow_mut();
+        if first_error.is_none() {
+            *first_error = Some(err);
+        }
     }
 
     fn entry_key(&self, row: usize, col: usize) -> Result<usize> {
