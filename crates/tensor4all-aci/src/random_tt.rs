@@ -6,6 +6,7 @@ use rand_chacha::ChaCha8Rng;
 use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, Tensor3, TensorTrain};
 
 pub(crate) const MAX_INITIAL_GUESS_CORE_ENTRIES: usize = 10_000_000;
+pub(crate) const MAX_INITIAL_GUESS_TOTAL_ENTRIES: usize = 10_000_000;
 
 pub(crate) fn initial_guess<T: AciScalar>(
     inputs: &[TensorTrain<T>],
@@ -28,16 +29,29 @@ pub(crate) fn initial_guess<T: AciScalar>(
     }
 
     let link_dims = default_link_dims(inputs, &site_dims, options.max_bond_dim)?;
-    let mut rng = ChaCha8Rng::seed_from_u64(options.rng_seed);
-    let mut cores = Vec::with_capacity(site_dims.len());
+    let core_dims = initial_guess_core_dims(&site_dims, &link_dims);
+    initial_guess_total_entry_count(&core_dims)?;
 
-    for (site, &site_dim) in site_dims.iter().enumerate() {
-        let left_dim = if site == 0 { 1 } else { link_dims[site - 1] };
-        let right_dim = link_dims.get(site).copied().unwrap_or(1);
+    let mut rng = ChaCha8Rng::seed_from_u64(options.rng_seed);
+    let mut cores = Vec::with_capacity(core_dims.len());
+
+    for (left_dim, site_dim, right_dim) in core_dims {
         cores.push(random_core(left_dim, site_dim, right_dim, &mut rng)?);
     }
 
     Ok(TensorTrain::new(cores)?)
+}
+
+fn initial_guess_core_dims(site_dims: &[usize], link_dims: &[usize]) -> Vec<(usize, usize, usize)> {
+    site_dims
+        .iter()
+        .enumerate()
+        .map(|(site, &site_dim)| {
+            let left_dim = if site == 0 { 1 } else { link_dims[site - 1] };
+            let right_dim = link_dims.get(site).copied().unwrap_or(1);
+            (left_dim, site_dim, right_dim)
+        })
+        .collect()
 }
 
 fn default_link_dims<T: AciScalar>(
@@ -113,6 +127,32 @@ pub(crate) fn initial_guess_core_entry_count(
         });
     }
     Ok(len)
+}
+
+pub(crate) fn initial_guess_total_entry_count(
+    core_dims: &[(usize, usize, usize)],
+) -> Result<usize> {
+    let mut total = 0usize;
+    for &(left_dim, site_dim, right_dim) in core_dims {
+        let len = initial_guess_core_entry_count(left_dim, site_dim, right_dim)?;
+        total = checked_add(total, len, "initial guess total size")?;
+        if total > MAX_INITIAL_GUESS_TOTAL_ENTRIES {
+            return Err(AciError::InvalidOptions {
+                message: format!(
+                    "initial guess total size {total} exceeds internal limit of \
+                     {MAX_INITIAL_GUESS_TOTAL_ENTRIES} entries"
+                ),
+            });
+        }
+    }
+    Ok(total)
+}
+
+fn checked_add(lhs: usize, rhs: usize, description: &str) -> Result<usize> {
+    lhs.checked_add(rhs)
+        .ok_or_else(|| AciError::InvalidOptions {
+            message: format!("{description} overflows usize"),
+        })
 }
 
 fn checked_mul(lhs: usize, rhs: usize, description: &str) -> Result<usize> {

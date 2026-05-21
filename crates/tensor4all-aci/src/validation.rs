@@ -8,6 +8,12 @@ pub(crate) fn validate_options<T: TTScalar>(options: &crate::AciOptions<T>) -> R
         });
     }
 
+    if options.max_bond_dim == 0 {
+        return Err(AciError::InvalidOptions {
+            message: "max_bond_dim must be at least 1".to_string(),
+        });
+    }
+
     if options.min_iters > options.max_iters {
         return Err(AciError::InvalidOptions {
             message: format!(
@@ -33,6 +39,11 @@ pub(crate) fn validate_inputs<T: TTScalar>(inputs: &[TensorTrain<T>]) -> Result<
 
     let site_dims = first.site_dims();
     let expected_len = site_dims.len();
+    if expected_len == 0 {
+        return Err(AciError::InvalidOptions {
+            message: "input tensor trains must have at least one site".to_string(),
+        });
+    }
 
     for input in &inputs[1..] {
         if input.len() != expected_len {

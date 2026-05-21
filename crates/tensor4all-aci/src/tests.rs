@@ -1,10 +1,13 @@
 use crate::validation::{validate_inputs, validate_options};
 use crate::{
     initial_guess,
-    random_tt::{initial_guess_core_entry_count, MAX_INITIAL_GUESS_CORE_ENTRIES},
+    random_tt::{
+        initial_guess_core_entry_count, initial_guess_total_entry_count,
+        MAX_INITIAL_GUESS_CORE_ENTRIES,
+    },
     AciError, AciOptions, ElementwiseBatch,
 };
-use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops, TensorTrain};
 
 #[test]
 fn default_options_are_conservative() {
@@ -104,6 +107,14 @@ fn validate_inputs_rejects_empty_inputs() {
 }
 
 #[test]
+fn validate_inputs_rejects_zero_site_tensor_train() {
+    let input = TensorTrain::<f64>::new(vec![]).unwrap();
+    let err = validate_inputs(&[input]).unwrap_err();
+    assert!(matches!(err, AciError::InvalidOptions { .. }));
+    assert!(err.to_string().contains("at least one site"));
+}
+
+#[test]
 fn validate_inputs_rejects_length_mismatch() {
     let a = TensorTrain::<f64>::constant(&[2, 2], 1.0);
     let b = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
@@ -128,6 +139,17 @@ fn validate_options_rejects_zero_max_iters() {
     let err = validate_options(&options).unwrap_err();
     assert!(matches!(err, AciError::InvalidOptions { .. }));
     assert!(err.to_string().contains("max_iters"));
+}
+
+#[test]
+fn validate_options_rejects_zero_max_bond_dim() {
+    let options = AciOptions::<f64> {
+        max_bond_dim: 0,
+        ..AciOptions::default()
+    };
+    let err = validate_options(&options).unwrap_err();
+    assert!(matches!(err, AciError::InvalidOptions { .. }));
+    assert!(err.to_string().contains("max_bond_dim"));
 }
 
 #[test]
@@ -184,8 +206,70 @@ fn default_initial_guess_matches_input_site_dims() {
 }
 
 #[test]
+fn initial_guess_is_deterministic_for_same_seed() {
+    let a = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+    let b = TensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
+    let options = AciOptions::<f64> {
+        max_bond_dim: 2,
+        rng_seed: 1234,
+        ..AciOptions::default()
+    };
+
+    let guess_a = initial_guess(&[a.clone(), b.clone()], &options).unwrap();
+    let guess_b = initial_guess(&[a, b], &options).unwrap();
+
+    for indices in [[0, 0, 0], [1, 2, 1], [0, 1, 1]] {
+        assert_eq!(
+            guess_a.evaluate(&indices).unwrap(),
+            guess_b.evaluate(&indices).unwrap()
+        );
+    }
+}
+
+#[test]
+fn initial_guess_accepts_compatible_explicit_guess() {
+    let input = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+    let explicit = TensorTrain::<f64>::constant(&[2, 3], 7.0);
+    let options = AciOptions {
+        initial_guess: Some(explicit),
+        ..AciOptions::default()
+    };
+
+    let guess = initial_guess(&[input], &options).unwrap();
+
+    assert_eq!(guess.site_dims(), vec![2, 3]);
+    assert_eq!(guess.site_tensor(0).site_dim(), 2);
+    assert_eq!(guess.site_tensor(1).site_dim(), 3);
+    assert!((guess.evaluate(&[0, 0]).unwrap() - 7.0).abs() < 1e-12);
+    assert!((guess.evaluate(&[1, 2]).unwrap() - 7.0).abs() < 1e-12);
+}
+
+#[test]
+fn initial_guess_rejects_incompatible_explicit_guess_site_dims() {
+    let input = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+    let explicit = TensorTrain::<f64>::constant(&[2, 4], 7.0);
+    let options = AciOptions {
+        initial_guess: Some(explicit),
+        ..AciOptions::default()
+    };
+
+    let err = initial_guess(&[input], &options).unwrap_err();
+
+    assert!(matches!(err, AciError::InvalidInitialGuess { .. }));
+    assert!(err.to_string().contains("site dimensions"));
+}
+
+#[test]
 fn initial_guess_rejects_huge_non_overflowing_core_size() {
     let err = initial_guess_core_entry_count(MAX_INITIAL_GUESS_CORE_ENTRIES + 1, 1, 1).unwrap_err();
     assert!(matches!(err, AciError::InvalidOptions { .. }));
     assert!(err.to_string().contains("initial guess core size"));
+}
+
+#[test]
+fn initial_guess_rejects_oversized_total_entries() {
+    let err = initial_guess_total_entry_count(&[(MAX_INITIAL_GUESS_CORE_ENTRIES, 1, 1), (1, 1, 1)])
+        .unwrap_err();
+    assert!(matches!(err, AciError::InvalidOptions { .. }));
+    assert!(err.to_string().contains("initial guess total size"));
 }
