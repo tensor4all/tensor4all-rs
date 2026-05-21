@@ -152,8 +152,8 @@ impl<'a, T> ElementwiseBatch<'a, T> {
     ///
     /// # Errors
     ///
-    /// Returns [`AciError::SiteDimMismatch`] if `input` is out of range and
-    /// [`AciError::LengthMismatch`] if `point` is out of range.
+    /// Returns [`AciError::BatchIndexOutOfBounds`] if `input` or `point` is
+    /// outside the corresponding batch axis.
     ///
     /// # Examples
     ///
@@ -165,21 +165,38 @@ impl<'a, T> ElementwiseBatch<'a, T> {
     /// assert_eq!(batch.get(0, 1).unwrap(), 11);
     /// assert_eq!(batch.get(1, 1).unwrap(), 21);
     /// ```
+    ///
+    /// ```
+    /// use tensor4all_aci::{AciError, ElementwiseBatch};
+    ///
+    /// let values = [10, 20, 11, 21];
+    /// let batch = ElementwiseBatch::new(&values, 2, 2).unwrap();
+    /// let err = batch.get(2, 0).unwrap_err();
+    /// assert!(matches!(
+    ///     err,
+    ///     AciError::BatchIndexOutOfBounds {
+    ///         axis: "input",
+    ///         index: 2,
+    ///         len: 2
+    ///     }
+    /// ));
+    /// ```
     pub fn get(&self, input: usize, point: usize) -> Result<T>
     where
         T: Copy,
     {
         if input >= self.n_inputs {
-            return Err(AciError::SiteDimMismatch {
-                site: point,
-                expected: self.n_inputs,
-                got: input.saturating_add(1),
+            return Err(AciError::BatchIndexOutOfBounds {
+                axis: "input",
+                index: input,
+                len: self.n_inputs,
             });
         }
         if point >= self.n_points {
-            return Err(AciError::LengthMismatch {
-                expected: self.n_points,
-                got: point.saturating_add(1),
+            return Err(AciError::BatchIndexOutOfBounds {
+                axis: "point",
+                index: point,
+                len: self.n_points,
             });
         }
 

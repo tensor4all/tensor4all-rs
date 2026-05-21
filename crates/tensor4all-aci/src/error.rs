@@ -26,6 +26,13 @@ pub type Result<T> = std::result::Result<T, AciError>;
 ///     message: "operator failed at point 3".to_string(),
 /// };
 /// assert!(err.to_string().contains("operator failed"));
+///
+/// let err = AciError::BatchIndexOutOfBounds {
+///     axis: "input",
+///     index: 4,
+///     len: 3,
+/// };
+/// assert!(err.to_string().contains("input index out of bounds"));
 /// ```
 #[derive(Debug, Error)]
 pub enum AciError {
@@ -51,6 +58,17 @@ pub enum AciError {
         expected: usize,
         /// Actual site dimension.
         got: usize,
+    },
+
+    /// A batch input or point index was outside the corresponding axis length.
+    #[error("ACI batch {axis} index out of bounds: index {index}, len {len}")]
+    BatchIndexOutOfBounds {
+        /// Batch axis name, such as `"input"` or `"point"`.
+        axis: &'static str,
+        /// Zero-based index requested by the caller.
+        index: usize,
+        /// Number of valid entries along the axis.
+        len: usize,
     },
 
     /// A configuration value or combination of values is invalid.
