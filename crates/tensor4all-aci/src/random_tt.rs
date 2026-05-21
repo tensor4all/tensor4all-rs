@@ -5,6 +5,8 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, Tensor3, TensorTrain};
 
+pub(crate) const MAX_INITIAL_GUESS_CORE_ENTRIES: usize = 10_000_000;
+
 pub(crate) fn initial_guess<T: AciScalar>(
     inputs: &[TensorTrain<T>],
     options: &AciOptions<T>,
@@ -85,15 +87,32 @@ fn random_core<T: AciScalar>(
     right_dim: usize,
     rng: &mut ChaCha8Rng,
 ) -> Result<Tensor3<T>> {
+    let len = initial_guess_core_entry_count(left_dim, site_dim, right_dim)?;
+    let data = (0..len)
+        .map(|_| T::sample_standard_normal(rng))
+        .collect::<Vec<_>>();
+    Ok(tensor3_from_data(data, left_dim, site_dim, right_dim)?)
+}
+
+pub(crate) fn initial_guess_core_entry_count(
+    left_dim: usize,
+    site_dim: usize,
+    right_dim: usize,
+) -> Result<usize> {
     let len = checked_mul(
         checked_mul(left_dim, site_dim, "initial guess core size")?,
         right_dim,
         "initial guess core size",
     )?;
-    let data = (0..len)
-        .map(|_| T::sample_standard_normal(rng))
-        .collect::<Vec<_>>();
-    Ok(tensor3_from_data(data, left_dim, site_dim, right_dim)?)
+    if len > MAX_INITIAL_GUESS_CORE_ENTRIES {
+        return Err(AciError::InvalidOptions {
+            message: format!(
+                "initial guess core size {len} exceeds internal limit of \
+                 {MAX_INITIAL_GUESS_CORE_ENTRIES} entries"
+            ),
+        });
+    }
+    Ok(len)
 }
 
 fn checked_mul(lhs: usize, rhs: usize, description: &str) -> Result<usize> {

@@ -1,5 +1,9 @@
 use crate::validation::{validate_inputs, validate_options};
-use crate::{initial_guess, AciError, AciOptions, ElementwiseBatch};
+use crate::{
+    initial_guess,
+    random_tt::{initial_guess_core_entry_count, MAX_INITIAL_GUESS_CORE_ENTRIES},
+    AciError, AciOptions, ElementwiseBatch,
+};
 use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
 
 #[test]
@@ -177,4 +181,11 @@ fn default_initial_guess_matches_input_site_dims() {
     let b = TensorTrain::<f64>::constant(&[2, 3, 4], 2.0);
     let guess = initial_guess(&[a, b], &AciOptions::default()).unwrap();
     assert_eq!(guess.site_dims(), vec![2, 3, 4]);
+}
+
+#[test]
+fn initial_guess_rejects_huge_non_overflowing_core_size() {
+    let err = initial_guess_core_entry_count(MAX_INITIAL_GUESS_CORE_ENTRIES + 1, 1, 1).unwrap_err();
+    assert!(matches!(err, AciError::InvalidOptions { .. }));
+    assert!(err.to_string().contains("initial guess core size"));
 }
