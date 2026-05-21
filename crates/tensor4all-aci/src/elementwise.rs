@@ -105,10 +105,11 @@ where
             }
         }
 
-        let max_pivot_error = problem.pivot_errors.iter().copied().fold(0.0_f64, f64::max);
-        let max_sampled_scale = problem.pivot_scales.iter().copied().fold(0.0_f64, f64::max);
-        let max_error_metric =
-            error_metric(max_pivot_error, max_sampled_scale, options.scale_tolerance);
+        let max_error_metric = max_error_metric(
+            &problem.pivot_errors,
+            &problem.pivot_scales,
+            options.scale_tolerance,
+        );
         ranks.push(problem.solution.rank());
         errors.push(max_error_metric);
 
@@ -259,4 +260,19 @@ pub(crate) fn error_metric(
     } else {
         max_pivot_error
     }
+}
+
+pub(crate) fn max_error_metric(
+    pivot_errors: &[f64],
+    pivot_scales: &[f64],
+    scale_tolerance: bool,
+) -> f64 {
+    pivot_errors
+        .iter()
+        .enumerate()
+        .map(|(bond, &error)| {
+            let scale = pivot_scales.get(bond).copied().unwrap_or(0.0);
+            error_metric(error, scale, scale_tolerance)
+        })
+        .fold(0.0_f64, f64::max)
 }

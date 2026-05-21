@@ -1,7 +1,7 @@
 use crate::validation::{validate_inputs, validate_options};
 use crate::{
     elementwise,
-    elementwise::error_metric,
+    elementwise::{error_metric, max_error_metric},
     elementwise_batched, initial_guess,
     random_tt::{
         initial_guess_core_entry_count, initial_guess_existing_entry_count,
@@ -304,6 +304,15 @@ fn relative_error_metric_normalizes_by_sampled_scale() {
     assert_eq!(error_metric(2.0, 100.0, true), 0.02);
     assert_eq!(error_metric(2.0, 100.0, false), 2.0);
     assert_eq!(error_metric(2.0, 0.0, true), 2.0);
+}
+
+#[test]
+fn relative_error_metric_pairs_each_bond_with_its_scale() {
+    let errors = [1.0, 10.0];
+    let scales = [1.0, 10_000.0];
+
+    assert_eq!(max_error_metric(&errors, &scales, true), 1.0);
+    assert_eq!(max_error_metric(&errors, &scales, false), 10.0);
 }
 
 #[test]
