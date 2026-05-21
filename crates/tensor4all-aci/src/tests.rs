@@ -752,6 +752,27 @@ fn validate_inputs_rejects_zero_physical_dim_in_later_input() {
 }
 
 #[test]
+fn validate_inputs_rejects_zero_internal_bond_dim_in_first_input() {
+    let input = tensor_train_with_link_dims(&[2, 3], &[0]);
+    let err = validate_inputs(&[input]).unwrap_err();
+    assert!(matches!(err, AciError::InvalidOptions { .. }));
+    let message = err.to_string();
+    assert!(message.contains("bond dimension"));
+    assert!(message.contains("positive"));
+}
+
+#[test]
+fn validate_inputs_rejects_zero_internal_bond_dim_in_later_input() {
+    let first = tensor_train_with_link_dims(&[2, 3], &[1]);
+    let later = tensor_train_with_link_dims(&[2, 3], &[0]);
+    let err = validate_inputs(&[first, later]).unwrap_err();
+    assert!(matches!(err, AciError::InvalidOptions { .. }));
+    let message = err.to_string();
+    assert!(message.contains("bond dimension"));
+    assert!(message.contains("positive"));
+}
+
+#[test]
 fn validate_inputs_rejects_length_mismatch() {
     let a = TensorTrain::<f64>::constant(&[2, 2], 1.0);
     let b = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);

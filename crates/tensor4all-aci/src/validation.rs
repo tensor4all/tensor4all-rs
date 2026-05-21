@@ -1,5 +1,5 @@
 use crate::{AciError, Result};
-use tensor4all_simplett::{AbstractTensorTrain, TTScalar, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, TTScalar, Tensor3Ops, TensorTrain};
 
 pub(crate) fn validate_options<T: TTScalar>(options: &crate::AciOptions<T>) -> Result<()> {
     if options.max_iters == 0 {
@@ -45,8 +45,10 @@ pub(crate) fn validate_inputs<T: TTScalar>(inputs: &[TensorTrain<T>]) -> Result<
         });
     }
     validate_positive_site_dims(&site_dims)?;
+    validate_positive_core_dims(first, 0)?;
 
-    for input in &inputs[1..] {
+    for (input_index, input) in inputs[1..].iter().enumerate() {
+        let input_index = input_index + 1;
         if input.len() != expected_len {
             return Err(AciError::LengthMismatch {
                 expected: expected_len,
@@ -56,6 +58,7 @@ pub(crate) fn validate_inputs<T: TTScalar>(inputs: &[TensorTrain<T>]) -> Result<
 
         let input_site_dims = input.site_dims();
         validate_positive_site_dims(&input_site_dims)?;
+        validate_positive_core_dims(input, input_index)?;
 
         for (site, (expected, got)) in site_dims.iter().zip(input_site_dims).enumerate() {
             if *expected != got {
@@ -76,6 +79,27 @@ fn validate_positive_site_dims(site_dims: &[usize]) -> Result<()> {
         if site_dim == 0 {
             return Err(AciError::InvalidOptions {
                 message: format!("site {site} dimension must be positive, got 0"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_positive_core_dims<T: TTScalar>(
+    input: &TensorTrain<T>,
+    input_index: usize,
+) -> Result<()> {
+    for site in 0..input.len() {
+        let core = input.site_tensor(site);
+        if core.left_dim() == 0 || core.site_dim() == 0 || core.right_dim() == 0 {
+            return Err(AciError::InvalidOptions {
+                message: format!(
+                    "input {input_index} site {site} core bond dimension must be positive, \
+                     got ({}, {}, {})",
+                    core.left_dim(),
+                    core.site_dim(),
+                    core.right_dim()
+                ),
             });
         }
     }
