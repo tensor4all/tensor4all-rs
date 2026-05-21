@@ -56,8 +56,9 @@ pub struct AciOptions<T: TTScalar> {
     /// The default is `1e-12`. When [`scale_tolerance`](Self::scale_tolerance)
     /// is `false`, this is interpreted as an absolute tolerance. When
     /// `scale_tolerance` is `true`, the public sweep APIs compare this value to
-    /// a relative error metric obtained by dividing the pivot error by the
-    /// largest sampled operator-output magnitude from the completed sweep.
+    /// the largest per-bond relative metric, obtained by dividing each bond's
+    /// pivot error by that bond's largest sampled operator-output magnitude
+    /// from the completed sweep.
     pub tolerance: f64,
 
     /// Whether to scale [`tolerance`](Self::tolerance) by the output magnitude.

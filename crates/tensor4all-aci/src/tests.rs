@@ -313,6 +313,7 @@ fn relative_error_metric_pairs_each_bond_with_its_scale() {
 
     assert_eq!(max_error_metric(&errors, &scales, true), 1.0);
     assert_eq!(max_error_metric(&errors, &scales, false), 10.0);
+    assert_eq!(max_error_metric(&errors, &[], true), 10.0);
 }
 
 #[test]

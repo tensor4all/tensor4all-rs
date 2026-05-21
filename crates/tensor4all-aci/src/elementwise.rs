@@ -13,8 +13,9 @@ use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
 /// Forward and backward sweeps alternate until the configured iteration limit
 /// is reached or the conservative convergence rule accepts the current ranks
 /// and maximum error metric. When [`AciOptions::scale_tolerance`] is enabled,
-/// the metric is the maximum pivot error divided by the largest sampled
-/// operator-output magnitude from the completed sweep.
+/// each bond's pivot error is divided by that bond's largest sampled
+/// operator-output magnitude from the completed sweep, and the largest
+/// normalized value is used.
 ///
 /// For single-site tensor trains there are no bonds to sweep. In that case the
 /// operator is evaluated once over all site points, and the returned
