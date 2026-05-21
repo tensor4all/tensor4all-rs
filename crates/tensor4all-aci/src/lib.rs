@@ -5,7 +5,15 @@
 //! `AlternatingCrossInterpolation.jl`, originally authored by
 //! Marc Ritter <mritter@flatironinstitute.org> and contributors.
 
-/// Placeholder item until the public API is implemented.
-pub fn crate_ready() -> bool {
-    true
-}
+mod batch;
+mod error;
+mod options;
+mod result;
+
+pub use batch::ElementwiseBatch;
+pub use error::{AciError, Result};
+pub use options::AciOptions;
+pub use result::AciResult;
+
+#[cfg(test)]
+mod tests;
