@@ -8,11 +8,19 @@
 mod batch;
 mod error;
 mod options;
+#[allow(dead_code)]
+mod random_tt;
 mod result;
+#[allow(dead_code)]
+mod scalar;
+#[allow(dead_code)]
+pub(crate) mod validation;
 
 pub use batch::ElementwiseBatch;
 pub use error::{AciError, Result};
 pub use options::AciOptions;
+#[allow(unused_imports)]
+pub(crate) use random_tt::initial_guess;
 pub use result::AciResult;
 
 #[cfg(test)]

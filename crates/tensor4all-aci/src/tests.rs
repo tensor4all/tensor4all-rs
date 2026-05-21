@@ -1,4 +1,6 @@
-use crate::{AciError, AciOptions, ElementwiseBatch};
+use crate::validation::{validate_inputs, validate_options};
+use crate::{initial_guess, AciError, AciOptions, ElementwiseBatch};
+use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
 
 #[test]
 fn default_options_are_conservative() {
@@ -89,4 +91,90 @@ fn elementwise_batch_rejects_out_of_range_point_index() {
     assert!(message.contains("point index"));
     assert!(message.contains("out of bounds"));
     assert!(message.contains("len 2"));
+}
+
+#[test]
+fn validate_inputs_rejects_empty_inputs() {
+    let err = validate_inputs::<f64>(&[]).unwrap_err();
+    assert!(err.to_string().contains("at least one"));
+}
+
+#[test]
+fn validate_inputs_rejects_length_mismatch() {
+    let a = TensorTrain::<f64>::constant(&[2, 2], 1.0);
+    let b = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let err = validate_inputs(&[a, b]).unwrap_err();
+    assert!(err.to_string().contains("length mismatch"));
+}
+
+#[test]
+fn validate_inputs_rejects_site_dim_mismatch() {
+    let a = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let b = TensorTrain::<f64>::constant(&[2, 4], 1.0);
+    let err = validate_inputs(&[a, b]).unwrap_err();
+    assert!(err.to_string().contains("site dimension mismatch"));
+}
+
+#[test]
+fn validate_options_rejects_zero_max_iters() {
+    let options = AciOptions::<f64> {
+        max_iters: 0,
+        ..AciOptions::default()
+    };
+    let err = validate_options(&options).unwrap_err();
+    assert!(matches!(err, AciError::InvalidOptions { .. }));
+    assert!(err.to_string().contains("max_iters"));
+}
+
+#[test]
+fn validate_options_rejects_min_iters_above_max_iters() {
+    let options = AciOptions::<f64> {
+        min_iters: 3,
+        max_iters: 2,
+        ..AciOptions::default()
+    };
+    let err = validate_options(&options).unwrap_err();
+    assert!(matches!(err, AciError::InvalidOptions { .. }));
+    assert!(err.to_string().contains("min_iters"));
+}
+
+#[test]
+fn validate_options_rejects_negative_tolerance() {
+    let options = AciOptions::<f64> {
+        tolerance: -1e-12,
+        ..AciOptions::default()
+    };
+    let err = validate_options(&options).unwrap_err();
+    assert!(matches!(err, AciError::InvalidOptions { .. }));
+    assert!(err.to_string().contains("tolerance"));
+}
+
+#[test]
+fn validate_options_rejects_nan_tolerance() {
+    let options = AciOptions::<f64> {
+        tolerance: f64::NAN,
+        ..AciOptions::default()
+    };
+    let err = validate_options(&options).unwrap_err();
+    assert!(matches!(err, AciError::InvalidOptions { .. }));
+    assert!(err.to_string().contains("tolerance"));
+}
+
+#[test]
+fn validate_options_rejects_infinite_tolerance() {
+    let options = AciOptions::<f64> {
+        tolerance: f64::INFINITY,
+        ..AciOptions::default()
+    };
+    let err = validate_options(&options).unwrap_err();
+    assert!(matches!(err, AciError::InvalidOptions { .. }));
+    assert!(err.to_string().contains("tolerance"));
+}
+
+#[test]
+fn default_initial_guess_matches_input_site_dims() {
+    let a = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+    let b = TensorTrain::<f64>::constant(&[2, 3, 4], 2.0);
+    let guess = initial_guess(&[a, b], &AciOptions::default()).unwrap();
+    assert_eq!(guess.site_dims(), vec![2, 3, 4]);
 }
