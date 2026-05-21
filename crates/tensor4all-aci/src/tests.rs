@@ -7,7 +7,10 @@ use crate::{
     },
     AciError, AciOptions, ElementwiseBatch,
 };
-use tensor4all_simplett::{tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
+use num_complex::Complex64;
+use tensor4all_simplett::{
+    tensor3_from_data, tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain,
+};
 
 fn tensor_train_with_link_dims(site_dims: &[usize], link_dims: &[usize]) -> TensorTrain<f64> {
     assert_eq!(link_dims.len(), site_dims.len().saturating_sub(1));
@@ -325,6 +328,70 @@ fn initial_guess_rejects_incompatible_explicit_guess_site_dims() {
 
     assert!(matches!(err, AciError::InvalidInitialGuess { .. }));
     assert!(err.to_string().contains("site dimensions"));
+}
+
+#[test]
+fn explicit_initial_guess_rejects_rank_above_max_bond_dim() {
+    let input = TensorTrain::<f64>::constant(&[2, 2], 1.0);
+    let explicit = TensorTrain::new(vec![
+        tensor3_from_data(vec![1.0; 4], 1, 2, 2).unwrap(),
+        tensor3_from_data(vec![1.0; 4], 2, 2, 1).unwrap(),
+    ])
+    .unwrap();
+    let options = AciOptions {
+        max_bond_dim: 1,
+        initial_guess: Some(explicit),
+        ..AciOptions::default()
+    };
+
+    let err = initial_guess(&[input], &options).unwrap_err();
+
+    assert!(matches!(err, AciError::InvalidInitialGuess { .. }));
+    let message = err.to_string();
+    assert!(message.contains("bond dimension"));
+    assert!(message.contains("max_bond_dim"));
+}
+
+#[test]
+fn explicit_initial_guess_rejects_zero_bond_dimension() {
+    let input = TensorTrain::<f64>::constant(&[2, 2], 1.0);
+    let explicit = TensorTrain::new(vec![
+        tensor3_from_data(Vec::<f64>::new(), 1, 2, 0).unwrap(),
+        tensor3_from_data(Vec::<f64>::new(), 0, 2, 1).unwrap(),
+    ])
+    .unwrap();
+    let options = AciOptions {
+        initial_guess: Some(explicit),
+        ..AciOptions::default()
+    };
+
+    let err = initial_guess(&[input], &options).unwrap_err();
+
+    assert!(matches!(err, AciError::InvalidInitialGuess { .. }));
+    let message = err.to_string();
+    assert!(message.contains("dimension"));
+    assert!(message.contains("positive"));
+}
+
+#[test]
+fn complex_initial_guess_is_deterministic() {
+    let a = TensorTrain::<Complex64>::constant(&[2, 3, 2], Complex64::new(1.0, 0.0));
+    let b = TensorTrain::<Complex64>::constant(&[2, 3, 2], Complex64::new(2.0, 0.0));
+    let options = AciOptions::<Complex64> {
+        max_bond_dim: 2,
+        rng_seed: 4321,
+        ..AciOptions::default()
+    };
+
+    let guess_a = initial_guess(&[a.clone(), b.clone()], &options).unwrap();
+    let guess_b = initial_guess(&[a, b], &options).unwrap();
+
+    assert_eq!(guess_a.site_dims(), vec![2, 3, 2]);
+    assert_eq!(guess_b.site_dims(), vec![2, 3, 2]);
+    assert_eq!(
+        guess_a.evaluate(&[1, 2, 1]).unwrap(),
+        guess_b.evaluate(&[1, 2, 1]).unwrap()
+    );
 }
 
 #[test]

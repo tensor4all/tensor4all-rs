@@ -7,6 +7,8 @@ use tensor4all_simplett::{
     tensor3_from_data, AbstractTensorTrain, Tensor3, Tensor3Ops, TensorTrain,
 };
 
+// Protective internal allocation guard for generated or supplied guesses; this
+// is not a public tuning knob.
 pub(crate) const MAX_INITIAL_GUESS_CORE_ENTRIES: usize = 10_000_000;
 pub(crate) const MAX_INITIAL_GUESS_TOTAL_ENTRIES: usize = 10_000_000;
 
@@ -18,16 +20,7 @@ pub(crate) fn initial_guess<T: AciScalar>(
     validate_options(options)?;
 
     if let Some(guess) = &options.initial_guess {
-        let guess_site_dims = guess.site_dims();
-        if guess_site_dims != site_dims {
-            return Err(AciError::InvalidInitialGuess {
-                message: format!(
-                    "site dimensions must match inputs: expected {:?}, got {:?}",
-                    site_dims, guess_site_dims
-                ),
-            });
-        }
-        initial_guess_existing_entry_count(guess)?;
+        validate_existing_initial_guess(guess, &site_dims, options.max_bond_dim)?;
         return Ok(guess.clone());
     }
 
@@ -43,6 +36,50 @@ pub(crate) fn initial_guess<T: AciScalar>(
     }
 
     Ok(TensorTrain::new(cores)?)
+}
+
+fn validate_existing_initial_guess<T: AciScalar>(
+    guess: &TensorTrain<T>,
+    site_dims: &[usize],
+    max_bond_dim: usize,
+) -> Result<()> {
+    let guess_site_dims = guess.site_dims();
+    if guess_site_dims != site_dims {
+        return Err(AciError::InvalidInitialGuess {
+            message: format!(
+                "site dimensions must match inputs: expected {:?}, got {:?}",
+                site_dims, guess_site_dims
+            ),
+        });
+    }
+
+    for (site, core) in guess.site_tensors().iter().enumerate() {
+        if core.left_dim() == 0 || core.site_dim() == 0 || core.right_dim() == 0 {
+            return Err(AciError::InvalidInitialGuess {
+                message: format!(
+                    "initial guess core {site} dimensions must be positive: got \
+                     ({}, {}, {})",
+                    core.left_dim(),
+                    core.site_dim(),
+                    core.right_dim()
+                ),
+            });
+        }
+    }
+
+    for (bond, link_dim) in guess.link_dims().into_iter().enumerate() {
+        if link_dim > max_bond_dim {
+            return Err(AciError::InvalidInitialGuess {
+                message: format!(
+                    "initial guess bond dimension at bond {bond} exceeds max_bond_dim: \
+                     got {link_dim}, max {max_bond_dim}"
+                ),
+            });
+        }
+    }
+
+    initial_guess_existing_entry_count(guess)?;
+    Ok(())
 }
 
 fn initial_guess_core_dims(site_dims: &[usize], link_dims: &[usize]) -> Vec<(usize, usize, usize)> {
