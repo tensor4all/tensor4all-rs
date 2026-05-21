@@ -2,12 +2,26 @@ use crate::validation::{validate_inputs, validate_options};
 use crate::{
     initial_guess,
     random_tt::{
-        initial_guess_core_entry_count, initial_guess_total_entry_count,
-        MAX_INITIAL_GUESS_CORE_ENTRIES,
+        initial_guess_core_entry_count, initial_guess_existing_entry_count,
+        initial_guess_total_entry_count, MAX_INITIAL_GUESS_CORE_ENTRIES,
     },
     AciError, AciOptions, ElementwiseBatch,
 };
-use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
+
+fn tensor_train_with_link_dims(site_dims: &[usize], link_dims: &[usize]) -> TensorTrain<f64> {
+    assert_eq!(link_dims.len(), site_dims.len().saturating_sub(1));
+    let cores = site_dims
+        .iter()
+        .enumerate()
+        .map(|(site, &site_dim)| {
+            let left_dim = if site == 0 { 1 } else { link_dims[site - 1] };
+            let right_dim = link_dims.get(site).copied().unwrap_or(1);
+            tensor3_zeros(left_dim, site_dim, right_dim)
+        })
+        .collect();
+    TensorTrain::new(cores).unwrap()
+}
 
 #[test]
 fn default_options_are_conservative() {
@@ -115,6 +129,27 @@ fn validate_inputs_rejects_zero_site_tensor_train() {
 }
 
 #[test]
+fn validate_inputs_rejects_zero_physical_dim_in_first_input() {
+    let input = tensor_train_with_link_dims(&[0, 3], &[1]);
+    let err = validate_inputs(&[input]).unwrap_err();
+    assert!(matches!(err, AciError::InvalidOptions { .. }));
+    let message = err.to_string();
+    assert!(message.contains("site 0"));
+    assert!(message.contains("dimension must be positive"));
+}
+
+#[test]
+fn validate_inputs_rejects_zero_physical_dim_in_later_input() {
+    let first = tensor_train_with_link_dims(&[2, 3], &[1]);
+    let later = tensor_train_with_link_dims(&[2, 0], &[1]);
+    let err = validate_inputs(&[first, later]).unwrap_err();
+    assert!(matches!(err, AciError::InvalidOptions { .. }));
+    let message = err.to_string();
+    assert!(message.contains("site 1"));
+    assert!(message.contains("dimension must be positive"));
+}
+
+#[test]
 fn validate_inputs_rejects_length_mismatch() {
     let a = TensorTrain::<f64>::constant(&[2, 2], 1.0);
     let b = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
@@ -206,6 +241,39 @@ fn default_initial_guess_matches_input_site_dims() {
 }
 
 #[test]
+fn initial_guess_link_dims_are_empty_for_one_site_input() {
+    let input = TensorTrain::<f64>::constant(&[5], 1.0);
+    let guess = initial_guess(&[input], &AciOptions::default()).unwrap();
+    assert_eq!(guess.link_dims(), Vec::<usize>::new());
+}
+
+#[test]
+fn initial_guess_link_dims_are_limited_by_max_bond_dim() {
+    let input = tensor_train_with_link_dims(&[8, 8, 8], &[8, 8]);
+    let options = AciOptions::<f64> {
+        max_bond_dim: 3,
+        ..AciOptions::default()
+    };
+    let guess = initial_guess(&[input], &options).unwrap();
+    assert_eq!(guess.link_dims(), vec![3, 3]);
+}
+
+#[test]
+fn initial_guess_link_dims_are_limited_by_physical_left_right_products() {
+    let input = tensor_train_with_link_dims(&[2, 3, 5, 7], &[20, 20, 20]);
+    let guess = initial_guess(&[input], &AciOptions::default()).unwrap();
+    assert_eq!(guess.link_dims(), vec![2, 6, 7]);
+}
+
+#[test]
+fn initial_guess_link_dims_are_limited_by_minimum_input_link_dim() {
+    let wide = tensor_train_with_link_dims(&[8, 8, 8], &[8, 8]);
+    let narrow = tensor_train_with_link_dims(&[8, 8, 8], &[5, 2]);
+    let guess = initial_guess(&[wide, narrow], &AciOptions::default()).unwrap();
+    assert_eq!(guess.link_dims(), vec![5, 2]);
+}
+
+#[test]
 fn initial_guess_is_deterministic_for_same_seed() {
     let a = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
     let b = TensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
@@ -257,6 +325,13 @@ fn initial_guess_rejects_incompatible_explicit_guess_site_dims() {
 
     assert!(matches!(err, AciError::InvalidInitialGuess { .. }));
     assert!(err.to_string().contains("site dimensions"));
+}
+
+#[test]
+fn initial_guess_existing_entry_count_matches_explicit_guess_cores() {
+    let guess = tensor_train_with_link_dims(&[2, 3, 5], &[4, 6]);
+    let entry_count = initial_guess_existing_entry_count(&guess).unwrap();
+    assert_eq!(entry_count, 8 + 72 + 30);
 }
 
 #[test]

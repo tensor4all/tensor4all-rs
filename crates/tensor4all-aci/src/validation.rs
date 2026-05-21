@@ -44,6 +44,7 @@ pub(crate) fn validate_inputs<T: TTScalar>(inputs: &[TensorTrain<T>]) -> Result<
             message: "input tensor trains must have at least one site".to_string(),
         });
     }
+    validate_positive_site_dims(&site_dims)?;
 
     for input in &inputs[1..] {
         if input.len() != expected_len {
@@ -53,7 +54,10 @@ pub(crate) fn validate_inputs<T: TTScalar>(inputs: &[TensorTrain<T>]) -> Result<
             });
         }
 
-        for (site, (expected, got)) in site_dims.iter().zip(input.site_dims()).enumerate() {
+        let input_site_dims = input.site_dims();
+        validate_positive_site_dims(&input_site_dims)?;
+
+        for (site, (expected, got)) in site_dims.iter().zip(input_site_dims).enumerate() {
             if *expected != got {
                 return Err(AciError::SiteDimMismatch {
                     site,
@@ -65,4 +69,15 @@ pub(crate) fn validate_inputs<T: TTScalar>(inputs: &[TensorTrain<T>]) -> Result<
     }
 
     Ok(site_dims)
+}
+
+fn validate_positive_site_dims(site_dims: &[usize]) -> Result<()> {
+    for (site, &site_dim) in site_dims.iter().enumerate() {
+        if site_dim == 0 {
+            return Err(AciError::InvalidOptions {
+                message: format!("site {site} dimension must be positive, got 0"),
+            });
+        }
+    }
+    Ok(())
 }

@@ -3,7 +3,9 @@ use crate::validation::{validate_inputs, validate_options};
 use crate::{AciError, AciOptions, Result};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, Tensor3, TensorTrain};
+use tensor4all_simplett::{
+    tensor3_from_data, AbstractTensorTrain, Tensor3, Tensor3Ops, TensorTrain,
+};
 
 pub(crate) const MAX_INITIAL_GUESS_CORE_ENTRIES: usize = 10_000_000;
 pub(crate) const MAX_INITIAL_GUESS_TOTAL_ENTRIES: usize = 10_000_000;
@@ -25,6 +27,7 @@ pub(crate) fn initial_guess<T: AciScalar>(
                 ),
             });
         }
+        initial_guess_existing_entry_count(guess)?;
         return Ok(guess.clone());
     }
 
@@ -135,6 +138,26 @@ pub(crate) fn initial_guess_total_entry_count(
     let mut total = 0usize;
     for &(left_dim, site_dim, right_dim) in core_dims {
         let len = initial_guess_core_entry_count(left_dim, site_dim, right_dim)?;
+        total = checked_add(total, len, "initial guess total size")?;
+        if total > MAX_INITIAL_GUESS_TOTAL_ENTRIES {
+            return Err(AciError::InvalidOptions {
+                message: format!(
+                    "initial guess total size {total} exceeds internal limit of \
+                     {MAX_INITIAL_GUESS_TOTAL_ENTRIES} entries"
+                ),
+            });
+        }
+    }
+    Ok(total)
+}
+
+pub(crate) fn initial_guess_existing_entry_count<T: AciScalar>(
+    guess: &TensorTrain<T>,
+) -> Result<usize> {
+    let mut total = 0usize;
+    for core in guess.site_tensors() {
+        let len =
+            initial_guess_core_entry_count(core.left_dim(), core.site_dim(), core.right_dim())?;
         total = checked_add(total, len, "initial guess total size")?;
         if total > MAX_INITIAL_GUESS_TOTAL_ENTRIES {
             return Err(AciError::InvalidOptions {
