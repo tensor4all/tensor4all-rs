@@ -6,6 +6,7 @@
 //! Marc Ritter <mritter@flatironinstitute.org> and contributors.
 
 mod batch;
+mod elementwise;
 mod error;
 #[allow(dead_code)]
 mod local;
@@ -21,6 +22,7 @@ mod state;
 pub(crate) mod validation;
 
 pub use batch::ElementwiseBatch;
+pub use elementwise::{elementwise, elementwise_batched};
 pub use error::{AciError, Result};
 #[allow(unused_imports)]
 pub(crate) use local::LocalBlockEvaluator;
@@ -28,6 +30,7 @@ pub use options::AciOptions;
 #[allow(unused_imports)]
 pub(crate) use random_tt::initial_guess;
 pub use result::AciResult;
+pub use scalar::AciScalar;
 #[allow(unused_imports)]
 pub(crate) use state::ElementwiseProblem;
 

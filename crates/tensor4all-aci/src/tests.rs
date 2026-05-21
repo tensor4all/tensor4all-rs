@@ -1,6 +1,6 @@
 use crate::validation::{validate_inputs, validate_options};
 use crate::{
-    initial_guess,
+    elementwise, elementwise_batched, initial_guess,
     random_tt::{
         initial_guess_core_entry_count, initial_guess_existing_entry_count,
         initial_guess_total_entry_count, MAX_INITIAL_GUESS_CORE_ENTRIES,
@@ -141,6 +141,83 @@ fn assert_solution_is_zero_on_binary_three_site_grid(problem: &ElementwiseProble
     ] {
         assert_eq!(problem.solution.evaluate(&indices).unwrap(), 0.0);
     }
+}
+
+#[test]
+fn elementwise_multiplies_constant_tensor_trains() {
+    let input_a = TensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
+    let input_b = TensorTrain::<f64>::constant(&[2, 3, 2], 4.0);
+
+    let result = elementwise(
+        |values| values[0] * values[1],
+        &[input_a, input_b],
+        &AciOptions::default(),
+    )
+    .unwrap();
+
+    for i in 0..2 {
+        for j in 0..3 {
+            for k in 0..2 {
+                let value = result.tensor_train.evaluate(&[i, j, k]).unwrap();
+                assert!((value - 8.0).abs() < 1e-12);
+            }
+        }
+    }
+}
+
+#[test]
+fn scalar_and_batched_paths_match() {
+    let input_a = TensorTrain::<f64>::constant(&[2, 2], 2.0);
+    let input_b = TensorTrain::<f64>::constant(&[2, 2], 5.0);
+    let inputs = [input_a, input_b];
+    let options = AciOptions::default();
+
+    let scalar_result = elementwise(|values| values[0] + values[1], &inputs, &options).unwrap();
+    let batched_result = elementwise_batched(
+        |batch, output| {
+            for (point, value) in output.iter_mut().enumerate().take(batch.n_points()) {
+                *value = batch.get(0, point)? + batch.get(1, point)?;
+            }
+            Ok(())
+        },
+        &inputs,
+        &options,
+    )
+    .unwrap();
+
+    for i in 0..2 {
+        for j in 0..2 {
+            let scalar_value = scalar_result.tensor_train.evaluate(&[i, j]).unwrap();
+            let batched_value = batched_result.tensor_train.evaluate(&[i, j]).unwrap();
+            assert!((scalar_value - batched_value).abs() < 1e-12);
+            assert!((scalar_value - 7.0).abs() < 1e-12);
+        }
+    }
+}
+
+#[test]
+fn elementwise_batched_propagates_operator_error() {
+    let input_a = TensorTrain::<f64>::constant(&[2, 2], 2.0);
+    let input_b = TensorTrain::<f64>::constant(&[2, 2], 4.0);
+    let options = AciOptions {
+        max_iters: 1,
+        min_iters: 1,
+        ..AciOptions::default()
+    };
+
+    let err = elementwise_batched(
+        |_batch, _output| {
+            Err(AciError::Operator {
+                message: "public operator failed".to_string(),
+            })
+        },
+        &[input_a, input_b],
+        &options,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, AciError::Operator { .. }));
+    assert!(err.to_string().contains("public operator failed"));
 }
 
 #[test]
