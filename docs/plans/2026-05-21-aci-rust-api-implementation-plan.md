@@ -6,7 +6,7 @@
 
 **Architecture:** Implement a new `tensor4all-aci` crate that depends on `tensor4all-simplett`, `tensor4all-tcicore`, and `tensor4all-tensorbackend`. The public API exposes scalar and batched elementwise entry points, while the internal algorithm uses persistent ACI frames, one-bond local entry caches, and lazy MatrixLUCI block requests.
 
-**Tech Stack:** Rust 2021, `thiserror`, `rand`, `rand_chacha`, `rand_distr`, `tensor4all-simplett`, `tensor4all-tcicore::matrix_luci_factors_from_blocks`, `tensor4all-tensorbackend::Matrix`.
+**Tech Stack:** Rust 2021, `thiserror`, `rand`, `rand_chacha`, `rand_distr`, `criterion`, `tensor4all-simplett`, `tensor4all-tcicore::matrix_luci_factors_from_blocks`, `tensor4all-tensorbackend::Matrix`, Julia 1.10+, `BenchmarkTools.jl`, `AlternatingCrossInterpolation.jl`.
 
 ---
 
@@ -24,6 +24,10 @@
   - `crates/tensor4all-simplett/src/traits.rs`
   - `crates/tensor4all-tcicore/src/matrix_luci.rs`
   - `crates/tensor4all-tensorbackend/src/matrix.rs` or the current `Matrix` module path
+- Benchmark references:
+  - `benchmarks/README.md`
+  - `benchmarks/julia/Project.toml`
+  - Existing Rust/Julia paired benchmark scripts under `benchmarks/rust/` and `benchmarks/julia/`
 
 ## Task 1: Scaffold `tensor4all-aci`
 
@@ -1079,7 +1083,153 @@ git add crates/tensor4all-aci README.md docs/api
 git commit -m "Document ACI Rust API"
 ```
 
-## Task 10: Final Verification
+## Task 10: Add Julia Parity and Chi-Scaling Benchmarks
+
+**Files:**
+- Modify: `crates/tensor4all-aci/Cargo.toml`
+- Create: `crates/tensor4all-aci/benches/elementwise_scaling.rs`
+- Modify: `benchmarks/julia/Project.toml`
+- Create: `benchmarks/julia/benchmark_aci_elementwise.jl`
+- Modify: `benchmarks/README.md`
+- Create: `benchmarks/results/<date>-aci-elementwise.md`
+
+**Step 1: Add Criterion benchmark target**
+
+In the existing `crates/tensor4all-aci/Cargo.toml` `[dev-dependencies]`
+section, add `criterion.workspace = true`, preserving existing entries:
+
+```toml
+[dev-dependencies]
+approx.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "elementwise_scaling"
+harness = false
+```
+
+Do not create a second `[dev-dependencies]` section.
+
+**Step 2: Implement Rust chi-scaling benchmark**
+
+Create `crates/tensor4all-aci/benches/elementwise_scaling.rs`.
+
+Benchmark requirements:
+
+- Benchmark group name: `aci_elementwise_chi_scaling`.
+- Fixed parameters for the primary comparison:
+  - `n_sites = 12`
+  - `local_dim = 2`
+  - `n_inputs = 2`
+  - `tolerance = 1e-10`
+  - `max_iters = 20`
+  - `chi_values = [2, 4, 8, 16]`
+- Add `chi = 32` as an optional long case behind a command-line filter or a
+  separate benchmark group so the smoke run remains practical.
+- Build deterministic input tensor trains from the same closed-form core formula
+  used by the Julia script. Do not rely on Rust and Julia RNG streams matching.
+- Time the batched public API path as the primary benchmark. The scalar wrapper
+  can be included as a secondary callback-overhead benchmark, but the completion
+  criterion is the batched path.
+- Record enough observable metadata to compare with Julia:
+  - `chi`
+  - final maximum output bond dimension
+  - number of sweeps recorded in `AciResult::ranks`
+  - final maximum pivot error from `AciResult::errors`
+  - sampled max absolute error against direct dense point evaluation
+- Use `criterion::{criterion_group, criterion_main, BenchmarkId, Criterion}` and
+  `black_box`.
+
+The sampled correctness check should evaluate at least 64 deterministic points
+for each `chi` and assert the sampled max absolute error is less than `1e-8`.
+This check must run outside the timed closure so benchmark timing measures ACI,
+not validation.
+
+**Step 3: Implement Julia comparison benchmark**
+
+Add `BenchmarkTools` to `benchmarks/julia/Project.toml`:
+
+```toml
+BenchmarkTools = "6e4b80f9-dda5-5e3a-8b7e-868b0140f7fe"
+```
+
+Create `benchmarks/julia/benchmark_aci_elementwise.jl` that:
+
+- Loads upstream `AlternatingCrossInterpolation.jl` as `ACI`.
+  - If `ENV["ACI_JL_PATH"]` is set, use `Pkg.develop(path=ENV["ACI_JL_PATH"])`.
+  - Otherwise use `Pkg.add(url="https://github.com/tensor4all/AlternatingCrossInterpolation.jl.git")`.
+- Uses the same benchmark parameters and the same deterministic core formula as
+  the Rust benchmark.
+- Uses `ACI.TruncationParameters(typemax(Int), 1e-10, false)` unless the Rust
+  benchmark uses a smaller `max_bond_dim`; keep the two sides matched.
+- Runs `ACI.elementwise(*, inputs; truncationparameters=...)`.
+- Prints CSV rows with this schema:
+
+```text
+impl,n_sites,local_dim,chi,tolerance,median_ms,min_ms,mean_ms,max_ms,output_max_chi,n_sweeps,final_error,sampled_max_abs_error
+```
+
+Use `BenchmarkTools.@benchmark` or equivalent repeated timing. Do not include
+package installation time or input construction in the measured closure.
+
+**Step 4: Update benchmark README**
+
+In `benchmarks/README.md`, add commands:
+
+```bash
+RAYON_NUM_THREADS=1 cargo bench -p tensor4all-aci --bench elementwise_scaling -- --sample-size 10
+BLAS_NUM_THREADS=1 julia --project=benchmarks/julia benchmarks/julia/benchmark_aci_elementwise.jl --chis 2,4,8,16
+```
+
+Document that `chi`/`χ` is the TT bond dimension scaling axis and that `chi=32`
+is a longer optional run.
+
+**Step 5: Run Rust benchmark smoke check**
+
+Run:
+
+```bash
+cargo bench --no-run -p tensor4all-aci --bench elementwise_scaling
+RAYON_NUM_THREADS=1 cargo bench -p tensor4all-aci --bench elementwise_scaling -- --sample-size 10 --measurement-time 1 --warm-up-time 1
+```
+
+Expected: benchmark compiles and prints timings for `chi = 2, 4, 8, 16`.
+
+**Step 6: Run Julia comparison**
+
+Run:
+
+```bash
+ACI_JL_PATH=/tmp/AlternatingCrossInterpolation.jl BLAS_NUM_THREADS=1 julia --project=benchmarks/julia benchmarks/julia/benchmark_aci_elementwise.jl --chis 2,4,8,16
+```
+
+Expected: Julia benchmark prints the same CSV schema and reports sampled errors
+below `1e-8`. If `/tmp/AlternatingCrossInterpolation.jl` is absent, clone the
+upstream repository or let the script install by URL.
+
+**Step 7: Record comparison results**
+
+Create `benchmarks/results/<date>-aci-elementwise.md` with:
+
+- Exact Rust and Julia commands.
+- Host CPU/thread settings if available.
+- A table comparing Rust and Julia for each `chi`.
+- A short interpretation of scaling versus `chi`, including whether runtime
+  growth appears consistent with the expected local two-site block cost.
+- Numerical parity notes: sampled max absolute errors for both implementations
+  and any rank/error trajectory differences.
+
+Do not claim Rust is faster or slower in docs unless the benchmark was actually
+run in the current branch and the raw commands/results are recorded.
+
+**Step 8: Commit**
+
+```bash
+git add crates/tensor4all-aci/Cargo.toml crates/tensor4all-aci/benches benchmarks/julia/Project.toml benchmarks/julia/benchmark_aci_elementwise.jl benchmarks/README.md benchmarks/results
+git commit -m "Benchmark ACI elementwise chi scaling"
+```
+
+## Task 11: Final Verification
 
 **Files:**
 - No planned edits unless verification finds a bug.
@@ -1127,7 +1277,28 @@ cargo nextest run --release --workspace
 
 Expected: PASS.
 
-**Step 5: Commit any verification fixes**
+**Step 5: Benchmark compile check**
+
+Run:
+
+```bash
+cargo bench --no-run -p tensor4all-aci --bench elementwise_scaling
+```
+
+Expected: PASS.
+
+**Step 6: Confirm Julia comparison was recorded**
+
+Check:
+
+```bash
+ls benchmarks/results/*aci-elementwise*.md
+```
+
+Expected: at least one result file from Task 10 containing the Rust/Julia
+comparison and chi-scaling table.
+
+**Step 7: Commit any verification fixes**
 
 If formatting or test fixes were required:
 
