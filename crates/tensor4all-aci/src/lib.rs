@@ -14,6 +14,8 @@ mod result;
 #[allow(dead_code)]
 mod scalar;
 #[allow(dead_code)]
+mod state;
+#[allow(dead_code)]
 pub(crate) mod validation;
 
 pub use batch::ElementwiseBatch;
@@ -22,6 +24,8 @@ pub use options::AciOptions;
 #[allow(unused_imports)]
 pub(crate) use random_tt::initial_guess;
 pub use result::AciResult;
+#[allow(unused_imports)]
+pub(crate) use state::ElementwiseProblem;
 
 #[cfg(test)]
 mod tests;

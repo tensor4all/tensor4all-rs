@@ -5,7 +5,7 @@ use crate::{
         initial_guess_core_entry_count, initial_guess_existing_entry_count,
         initial_guess_total_entry_count, MAX_INITIAL_GUESS_CORE_ENTRIES,
     },
-    AciError, AciOptions, ElementwiseBatch,
+    AciError, AciOptions, ElementwiseBatch, ElementwiseProblem,
 };
 use num_complex::Complex64;
 use tensor4all_simplett::{
@@ -115,6 +115,77 @@ fn elementwise_batch_rejects_out_of_range_point_index() {
     assert!(message.contains("point index"));
     assert!(message.contains("out of bounds"));
     assert!(message.contains("len 2"));
+}
+
+#[test]
+fn elementwise_problem_initializes_boundary_frames() {
+    let a = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let b = TensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
+    let problem = ElementwiseProblem::new(vec![a, b], AciOptions::default()).unwrap();
+    assert_eq!(problem.len(), 3);
+    assert_eq!(problem.n_inputs(), 2);
+    assert_eq!(problem.left_frame_shape(0, 0), Some((1, 1)));
+    assert_eq!(problem.right_frame_shape(0, 3), Some((1, 1)));
+    assert_eq!(problem.pivot_errors, vec![0.0, 0.0]);
+}
+
+#[test]
+fn elementwise_problem_initializes_all_rank_one_right_frames() {
+    let a = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let b = TensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
+    let problem = ElementwiseProblem::new(vec![a, b], AciOptions::default()).unwrap();
+
+    for input in 0..problem.n_inputs() {
+        for site in 0..=problem.len() {
+            assert_eq!(problem.right_frame_shape(input, site), Some((1, 1)));
+        }
+    }
+}
+
+#[test]
+fn elementwise_problem_updates_left_frame_for_selected_rows() {
+    let input = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+
+    problem.update_left_frame(0, 0, &[0, 1]).unwrap();
+
+    assert_eq!(problem.left_frame_shape(0, 1), Some((2, 1)));
+}
+
+#[test]
+fn elementwise_problem_updates_all_left_frames_for_selected_rows() {
+    let a = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let b = TensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
+    let mut problem = ElementwiseProblem::new(vec![a, b], AciOptions::default()).unwrap();
+
+    problem.update_left_frames(0, &[0, 1]).unwrap();
+
+    assert_eq!(problem.left_frame_shape(0, 1), Some((2, 1)));
+    assert_eq!(problem.left_frame_shape(1, 1), Some((2, 1)));
+}
+
+#[test]
+fn elementwise_problem_updates_right_frame_for_selected_columns() {
+    let input = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+
+    problem.update_right_frame(0, 2, &[0, 1]).unwrap();
+
+    assert_eq!(problem.right_frame_shape(0, 2), Some((1, 2)));
+}
+
+#[test]
+fn elementwise_problem_rejects_invalid_frame_selection_indices() {
+    let input = TensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+
+    let left_err = problem.update_left_frame(0, 0, &[2]).unwrap_err();
+    assert!(matches!(left_err, AciError::InvalidInitialGuess { .. }));
+    assert!(left_err.to_string().contains("row index"));
+
+    let right_err = problem.update_right_frame(0, 2, &[2]).unwrap_err();
+    assert!(matches!(right_err, AciError::InvalidInitialGuess { .. }));
+    assert!(right_err.to_string().contains("column index"));
 }
 
 #[test]
