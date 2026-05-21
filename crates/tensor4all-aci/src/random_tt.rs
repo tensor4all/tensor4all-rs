@@ -1,4 +1,4 @@
-use crate::scalar::AciScalar;
+use crate::scalar::{sample_standard_normal, AciScalar};
 use crate::validation::{validate_inputs, validate_options};
 use crate::{AciError, AciOptions, Result};
 use rand::SeedableRng;
@@ -143,7 +143,7 @@ fn random_core<T: AciScalar>(
 ) -> Result<Tensor3<T>> {
     let len = initial_guess_core_entry_count(left_dim, site_dim, right_dim)?;
     let data = (0..len)
-        .map(|_| T::sample_standard_normal(rng))
+        .map(|_| sample_standard_normal(rng))
         .collect::<Vec<_>>();
     Ok(tensor3_from_data(data, left_dim, site_dim, right_dim)?)
 }

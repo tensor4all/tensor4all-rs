@@ -1,12 +1,34 @@
 use num_complex::Complex64;
 use rand_distr::{Distribution, StandardNormal};
 
+mod private {
+    use super::*;
+
+    pub(super) trait Sealed {
+        fn sample_standard_normal(rng: &mut rand_chacha::ChaCha8Rng) -> Self;
+    }
+
+    impl Sealed for f64 {
+        fn sample_standard_normal(rng: &mut rand_chacha::ChaCha8Rng) -> Self {
+            StandardNormal.sample(rng)
+        }
+    }
+
+    impl Sealed for Complex64 {
+        fn sample_standard_normal(rng: &mut rand_chacha::ChaCha8Rng) -> Self {
+            let re = StandardNormal.sample(rng);
+            let im = StandardNormal.sample(rng);
+            Complex64::new(re, im)
+        }
+    }
+}
+
 /// Scalar types supported by Alternating Cross Interpolation.
 ///
 /// Use this trait bound when writing generic helpers around ACI elementwise
-/// operations. It combines the tensor-train scalar requirements, matrix-CI
-/// scalar requirements, and deterministic random initialization support needed
-/// by the sweep algorithm.
+/// operations. It combines the tensor-train and matrix-CI scalar requirements
+/// needed by the sweep algorithm. The trait is sealed; use `f64` or
+/// [`num_complex::Complex64`].
 ///
 /// Related types: [`AciOptions`](crate::AciOptions) configures ACI runs for an
 /// `AciScalar`, and [`AciResult`](crate::AciResult) returns a tensor train with
@@ -23,23 +45,20 @@ use rand_distr::{Distribution, StandardNormal};
 ///
 /// assert_eq!(accepts_aci_scalar(3.0_f64), 3.0);
 /// ```
+#[allow(private_bounds)]
 pub trait AciScalar:
-    tensor4all_simplett::TTScalar + tensor4all_tcicore::MatrixLuciScalar + Copy
+    tensor4all_simplett::TTScalar + tensor4all_tcicore::MatrixLuciScalar + Copy + private::Sealed
 {
-    #[doc(hidden)]
-    fn sample_standard_normal(rng: &mut rand_chacha::ChaCha8Rng) -> Self;
 }
 
-impl AciScalar for f64 {
-    fn sample_standard_normal(rng: &mut rand_chacha::ChaCha8Rng) -> Self {
-        StandardNormal.sample(rng)
-    }
+impl<T> AciScalar for T where
+    T: tensor4all_simplett::TTScalar
+        + tensor4all_tcicore::MatrixLuciScalar
+        + Copy
+        + private::Sealed
+{
 }
 
-impl AciScalar for Complex64 {
-    fn sample_standard_normal(rng: &mut rand_chacha::ChaCha8Rng) -> Self {
-        let re = StandardNormal.sample(rng);
-        let im = StandardNormal.sample(rng);
-        Complex64::new(re, im)
-    }
+pub(crate) fn sample_standard_normal<T: AciScalar>(rng: &mut rand_chacha::ChaCha8Rng) -> T {
+    <T as private::Sealed>::sample_standard_normal(rng)
 }

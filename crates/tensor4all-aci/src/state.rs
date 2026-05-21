@@ -16,6 +16,7 @@ pub(crate) struct ElementwiseProblem<T: AciScalar> {
     pub(crate) left_frames: Vec<Vec<Option<Matrix<T>>>>,
     pub(crate) right_frames: Vec<Vec<Option<Matrix<T>>>>,
     pub(crate) pivot_errors: Vec<f64>,
+    pub(crate) pivot_scales: Vec<f64>,
 }
 
 impl<T: AciScalar> ElementwiseProblem<T> {
@@ -37,6 +38,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             left_frames,
             right_frames,
             pivot_errors: vec![0.0; n.saturating_sub(1)],
+            pivot_scales: vec![0.0; n.saturating_sub(1)],
         };
         problem.initialize_right_frames()?;
         Ok(problem)
@@ -289,7 +291,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             "solution local block column count",
         )?;
 
-        let factors = {
+        let (factors, sampled_scale) = {
             let op_cell = RefCell::new(op);
             let operator = |batch: ElementwiseBatch<'_, T>, output: &mut [T]| {
                 let mut op_ref = op_cell.borrow_mut();
@@ -331,7 +333,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             if let Some(err) = evaluator.take_error() {
                 return Err(err);
             }
-            factors_result?
+            (factors_result?, evaluator.max_output_abs())
         };
 
         let pivot_error = match factors.pivot_errors.last() {
@@ -377,6 +379,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             self.update_right_frames(bond + 1, &col_indices)?;
         }
         self.pivot_errors[bond] = pivot_error;
+        self.pivot_scales[bond] = sampled_scale;
 
         Ok(())
     }

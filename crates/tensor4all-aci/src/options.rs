@@ -55,15 +55,17 @@ pub struct AciOptions<T: TTScalar> {
     ///
     /// The default is `1e-12`. When [`scale_tolerance`](Self::scale_tolerance)
     /// is `false`, this is interpreted as an absolute tolerance. When
-    /// `scale_tolerance` is `true`, implementations may scale it by an estimate
-    /// of the operator output magnitude.
+    /// `scale_tolerance` is `true`, the public sweep APIs compare this value to
+    /// a relative error metric obtained by dividing the pivot error by the
+    /// largest sampled operator-output magnitude from the completed sweep.
     pub tolerance: f64,
 
     /// Whether to scale [`tolerance`](Self::tolerance) by the output magnitude.
     ///
     /// The default is `false`, giving absolute tolerance behavior. Set this to
     /// `true` when outputs have problem-dependent scales and relative stopping
-    /// behavior is more appropriate.
+    /// behavior is more appropriate. When in doubt, keep the default `false`
+    /// for absolute tolerance behavior.
     pub scale_tolerance: bool,
 
     /// Optional tensor train used to initialize interpolation pivots and ranks.

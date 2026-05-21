@@ -15,6 +15,7 @@ pub(crate) struct LocalBlockEvaluator<'a, T: AciScalar> {
     ncols: usize,
     cache: RefCell<HashMap<usize, T>>,
     first_error: RefCell<Option<AciError>>,
+    max_output_abs: RefCell<f64>,
 }
 
 impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
@@ -51,6 +52,7 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
             ncols,
             cache: RefCell::new(HashMap::new()),
             first_error: RefCell::new(None),
+            max_output_abs: RefCell::new(0.0),
         })
     }
 
@@ -125,6 +127,7 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
         let batch = ElementwiseBatch::new(&input_values, n_inputs, n_missing)?;
         let mut missing_output = vec![T::zero(); n_missing];
         (self.operator)(batch, &mut missing_output)?;
+        self.record_output_scale(&missing_output);
 
         {
             let mut cache = self.cache.borrow_mut();
@@ -156,6 +159,10 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
         self.cache.borrow_mut().clear();
     }
 
+    pub(crate) fn max_output_abs(&self) -> f64 {
+        *self.max_output_abs.borrow()
+    }
+
     fn record_error(&self, err: AciError) {
         let mut first_error = self.first_error.borrow_mut();
         if first_error.is_none() {
@@ -170,6 +177,14 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
             .ok_or_else(|| AciError::InvalidInitialGuess {
                 message: "local block cache key overflows usize".to_string(),
             })
+    }
+
+    fn record_output_scale(&self, values: &[T]) {
+        let mut max_output_abs = self.max_output_abs.borrow_mut();
+        for &value in values {
+            *max_output_abs =
+                max_output_abs.max(tensor4all_tcicore::MatrixLuciScalar::abs_val(value));
+        }
     }
 }
 

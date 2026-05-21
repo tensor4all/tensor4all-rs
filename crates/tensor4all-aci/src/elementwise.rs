@@ -3,7 +3,7 @@
 use crate::scalar::AciScalar;
 use crate::validation::{validate_inputs, validate_options};
 use crate::{AciOptions, AciResult, ElementwiseBatch, ElementwiseProblem, Result};
-use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
 
 /// Runs batched elementwise ACI over tensor-train inputs.
 ///
@@ -12,11 +12,13 @@ use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
 /// [`ElementwiseBatch`] and writes one output value per interpolation point.
 /// Forward and backward sweeps alternate until the configured iteration limit
 /// is reached or the conservative convergence rule accepts the current ranks
-/// and maximum pivot error.
+/// and maximum error metric. When [`AciOptions::scale_tolerance`] is enabled,
+/// the metric is the maximum pivot error divided by the largest sampled
+/// operator-output magnitude from the completed sweep.
 ///
-/// For single-site tensor trains there are no bonds to sweep, so the returned
-/// [`AciResult`] contains the initialized tensor train and empty `ranks` and
-/// `errors` histories.
+/// For single-site tensor trains there are no bonds to sweep. In that case the
+/// operator is evaluated once over all site points, and the returned
+/// [`AciResult`] contains empty `ranks` and `errors` histories.
 ///
 /// # Arguments
 ///
@@ -82,14 +84,11 @@ where
     validate_options(options)?;
     validate_inputs(inputs)?;
 
-    let mut problem = ElementwiseProblem::new(inputs.to_vec(), options.clone())?;
-    if problem.len() == 1 {
-        return Ok(AciResult {
-            tensor_train: problem.solution,
-            ranks: Vec::new(),
-            errors: Vec::new(),
-        });
+    if inputs[0].len() == 1 {
+        return elementwise_batched_one_site(op, inputs);
     }
+
+    let mut problem = ElementwiseProblem::new(inputs.to_vec(), options.clone())?;
 
     let mut ranks = Vec::new();
     let mut errors = Vec::new();
@@ -106,12 +105,15 @@ where
             }
         }
 
-        let max_error = problem.pivot_errors.iter().copied().fold(0.0_f64, f64::max);
+        let max_pivot_error = problem.pivot_errors.iter().copied().fold(0.0_f64, f64::max);
+        let max_sampled_scale = problem.pivot_scales.iter().copied().fold(0.0_f64, f64::max);
+        let max_error_metric =
+            error_metric(max_pivot_error, max_sampled_scale, options.scale_tolerance);
         ranks.push(problem.solution.rank());
-        errors.push(max_error);
+        errors.push(max_error_metric);
 
         if iteration + 1 >= options.min_iters
-            && max_error <= options.tolerance
+            && max_error_metric <= options.tolerance
             && ranks_are_stable(&ranks, options.min_iters)
         {
             break;
@@ -122,6 +124,32 @@ where
         tensor_train: problem.solution,
         ranks,
         errors,
+    })
+}
+
+fn elementwise_batched_one_site<T, F>(mut op: F, inputs: &[TensorTrain<T>]) -> Result<AciResult<T>>
+where
+    T: AciScalar,
+    F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
+{
+    let n_inputs = inputs.len();
+    let n_points = inputs[0].site_dim(0);
+    let mut input_values = vec![T::zero(); n_inputs * n_points];
+    for point in 0..n_points {
+        for input in 0..n_inputs {
+            input_values[input + n_inputs * point] = inputs[input].evaluate(&[point])?;
+        }
+    }
+
+    let batch = ElementwiseBatch::new(&input_values, n_inputs, n_points)?;
+    let mut output = vec![T::zero(); n_points];
+    op(batch, &mut output)?;
+
+    let core = tensor3_from_data(output, 1, n_points, 1)?;
+    Ok(AciResult {
+        tensor_train: TensorTrain::new(vec![core])?,
+        ranks: Vec::new(),
+        errors: Vec::new(),
     })
 }
 
@@ -218,5 +246,17 @@ fn ranks_are_stable(ranks: &[usize], min_iters: usize) -> bool {
     } else {
         let baseline = ranks[0];
         ranks.iter().all(|&rank| rank <= baseline)
+    }
+}
+
+pub(crate) fn error_metric(
+    max_pivot_error: f64,
+    max_sampled_scale: f64,
+    scale_tolerance: bool,
+) -> f64 {
+    if scale_tolerance && max_sampled_scale > 0.0 {
+        max_pivot_error / max_sampled_scale
+    } else {
+        max_pivot_error
     }
 }

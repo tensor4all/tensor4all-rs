@@ -1,6 +1,8 @@
 use crate::validation::{validate_inputs, validate_options};
 use crate::{
-    elementwise, elementwise_batched, initial_guess,
+    elementwise,
+    elementwise::error_metric,
+    elementwise_batched, initial_guess,
     random_tt::{
         initial_guess_core_entry_count, initial_guess_existing_entry_count,
         initial_guess_total_entry_count, MAX_INITIAL_GUESS_CORE_ENTRIES,
@@ -218,6 +220,90 @@ fn elementwise_batched_propagates_operator_error() {
 
     assert!(matches!(err, AciError::Operator { .. }));
     assert!(err.to_string().contains("public operator failed"));
+}
+
+#[test]
+fn elementwise_single_site_scalar_evaluates_operator() {
+    let input_a = TensorTrain::<f64>::constant(&[3], 2.0);
+    let input_b = TensorTrain::<f64>::constant(&[3], 4.0);
+
+    let result = elementwise(
+        |values| values[0] * values[1] + 1.0,
+        &[input_a, input_b],
+        &AciOptions::default(),
+    )
+    .unwrap();
+
+    assert_eq!(result.tensor_train.rank(), 1);
+    assert!(result.ranks.is_empty());
+    assert!(result.errors.is_empty());
+    for i in 0..3 {
+        let value = result.tensor_train.evaluate(&[i]).unwrap();
+        assert!((value - 9.0).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn elementwise_batched_single_site_uses_column_major_batch_layout() {
+    let input_a = TensorTrain::new(vec![
+        tensor3_from_data(vec![1.0, 2.0, 3.0], 1, 3, 1).unwrap()
+    ])
+    .unwrap();
+    let input_b = TensorTrain::new(vec![
+        tensor3_from_data(vec![10.0, 20.0, 30.0], 1, 3, 1).unwrap()
+    ])
+    .unwrap();
+    let observed_batches = std::cell::RefCell::new(Vec::new());
+
+    let result = elementwise_batched(
+        |batch, output| {
+            observed_batches
+                .borrow_mut()
+                .push(batch.as_col_major_slice().to_vec());
+            for (point, value) in output.iter_mut().enumerate().take(batch.n_points()) {
+                *value = batch.get(0, point)? + batch.get(1, point)?;
+            }
+            Ok(())
+        },
+        &[input_a, input_b],
+        &AciOptions::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        observed_batches.into_inner(),
+        vec![vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0]]
+    );
+    assert_eq!(result.tensor_train.evaluate(&[0]).unwrap(), 11.0);
+    assert_eq!(result.tensor_train.evaluate(&[1]).unwrap(), 22.0);
+    assert_eq!(result.tensor_train.evaluate(&[2]).unwrap(), 33.0);
+}
+
+#[test]
+fn elementwise_batched_single_site_propagates_operator_error() {
+    let input_a = TensorTrain::<f64>::constant(&[3], 2.0);
+    let input_b = TensorTrain::<f64>::constant(&[3], 4.0);
+
+    let err = elementwise_batched(
+        |_batch, _output| {
+            Err(AciError::Operator {
+                message: "single-site operator failed".to_string(),
+            })
+        },
+        &[input_a, input_b],
+        &AciOptions::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, AciError::Operator { .. }));
+    assert!(err.to_string().contains("single-site operator failed"));
+}
+
+#[test]
+fn relative_error_metric_normalizes_by_sampled_scale() {
+    assert_eq!(error_metric(2.0, 100.0, true), 0.02);
+    assert_eq!(error_metric(2.0, 100.0, false), 2.0);
+    assert_eq!(error_metric(2.0, 0.0, true), 2.0);
 }
 
 #[test]
