@@ -4,7 +4,7 @@ use tensor4all_simplett::{
     tensor3_from_data, AbstractTensorTrain, Tensor3, Tensor3Ops, TensorTrain,
 };
 use tensor4all_tcicore::{matrix_luci_factors_from_matrix, RrLUOptions};
-use tensor4all_tensorbackend::Matrix;
+use tensor4all_tensorbackend::{mat_mul, Matrix};
 
 pub(crate) struct ElementwiseProblem<T: AciScalar> {
     pub(crate) inputs: Vec<TensorTrain<T>>,
@@ -226,31 +226,6 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             self.update_right_frames(site, &factors.col_indices)?;
         }
 
-        if n > 0 {
-            let current = &solution_cores[0];
-            let site_dim = current.site_dim();
-            let right_dim = current.right_dim();
-            let matrix = right_matrix_julia_order(current);
-            let factors = matrix_luci_factors_from_matrix(
-                &matrix,
-                Some(RrLUOptions {
-                    left_orthogonal: false,
-                    rel_tol: 0.0,
-                    abs_tol: 0.0,
-                    max_rank: usize::MAX,
-                }),
-            )?;
-
-            validate_selection(
-                "column",
-                &factors.col_indices,
-                checked_frame_mul(site_dim, right_dim, "solution right matrix column count")?,
-            )?;
-            let product = matmul_checked(&factors.left, &factors.right, 0)?;
-            solution_cores[0] = right_factor_to_tensor3(&product, 1, site_dim, right_dim)?;
-            self.update_right_frames(0, &factors.col_indices)?;
-        }
-
         self.solution = TensorTrain::new(solution_cores)?;
         Ok(())
     }
@@ -408,15 +383,7 @@ fn matmul_checked<T: AciScalar>(
         });
     }
 
-    let mut product = Matrix::zeros(left.nrows(), right.ncols());
-    for row in 0..left.nrows() {
-        for col in 0..right.ncols() {
-            let mut sum = T::zero();
-            for k in 0..left.ncols() {
-                sum = sum + left[[row, k]] * right[[k, col]];
-            }
-            product[[row, col]] = sum;
-        }
-    }
-    Ok(product)
+    mat_mul(left, right).map_err(|err| AciError::InvalidInitialGuess {
+        message: format!("solution core update at site {site} failed: {err}"),
+    })
 }

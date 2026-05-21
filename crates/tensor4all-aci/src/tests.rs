@@ -136,9 +136,47 @@ fn elementwise_problem_initializes_all_rank_one_right_frames() {
     let problem = ElementwiseProblem::new(vec![a, b], AciOptions::default()).unwrap();
 
     for input in 0..problem.n_inputs() {
-        for site in 0..=problem.len() {
+        assert_eq!(
+            problem.right_frame_shape(input, problem.len()),
+            Some((1, 1))
+        );
+        for site in 1..problem.len() {
             assert_eq!(problem.right_frame_shape(input, site), Some((1, 1)));
         }
+        assert_eq!(problem.right_frame_shape(input, 0), None);
+    }
+}
+
+#[test]
+fn elementwise_problem_handles_one_site_input() {
+    let input = TensorTrain::<f64>::constant(&[2], 3.0);
+    let problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+    assert_eq!(problem.len(), 1);
+    assert_eq!(problem.left_frame_shape(0, 0), Some((1, 1)));
+    assert_eq!(problem.right_frame_shape(0, 1), Some((1, 1)));
+    assert_eq!(problem.right_frame_shape(0, 0), None);
+}
+
+#[test]
+fn elementwise_problem_preserves_initial_guess_values() {
+    let input = TensorTrain::<f64>::constant(&[2, 2], 1.0);
+    let tt = TensorTrain::new(vec![
+        tensor3_from_data(vec![1.0, 2.0, 3.0, 4.0], 1, 2, 2).unwrap(),
+        tensor3_from_data(vec![5.0, 6.0, 7.0, 8.0], 2, 2, 1).unwrap(),
+    ])
+    .unwrap();
+    let options = AciOptions {
+        initial_guess: Some(tt.clone()),
+        ..AciOptions::default()
+    };
+
+    let problem = ElementwiseProblem::new(vec![input], options).unwrap();
+
+    for indices in [[0, 0], [0, 1], [1, 0], [1, 1]] {
+        assert!(
+            (problem.solution.evaluate(&indices).unwrap() - tt.evaluate(&indices).unwrap()).abs()
+                < 1e-12
+        );
     }
 }
 
