@@ -915,6 +915,34 @@ fn initial_guess_accepts_compatible_explicit_guess() {
 }
 
 #[test]
+fn initial_guess_zero_initializes_nonzero_dimensional_right_frames() {
+    let input_a = TensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
+    let input_b = TensorTrain::<f64>::constant(&[2, 2, 2], 3.0);
+    let zero_guess = tensor_train_with_link_dims(&[2, 2, 2], &[1, 1]);
+    let options = AciOptions {
+        initial_guess: Some(zero_guess),
+        ..AciOptions::default()
+    };
+
+    let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
+
+    assert_solution_is_zero_on_binary_three_site_grid(&problem);
+    for input in 0..problem.n_inputs() {
+        assert_eq!(problem.right_frame_shape(input, 1), Some((1, 1)));
+        assert_eq!(problem.right_frame_shape(input, 2), Some((1, 1)));
+        assert_eq!(problem.right_frame_shape(input, 3), Some((1, 1)));
+    }
+    problem.update_left_frames(0, &[0]).unwrap();
+    assert!(problem.local_input_value(0, 1, 0, 0).is_ok());
+
+    let mut operator = zero_batch;
+    problem
+        .local_update(1, false, &options, &mut operator)
+        .unwrap();
+    assert_solution_is_zero_on_binary_three_site_grid(&problem);
+}
+
+#[test]
 fn initial_guess_rejects_incompatible_explicit_guess_site_dims() {
     let input = TensorTrain::<f64>::constant(&[2, 3], 2.0);
     let explicit = TensorTrain::<f64>::constant(&[2, 4], 7.0);

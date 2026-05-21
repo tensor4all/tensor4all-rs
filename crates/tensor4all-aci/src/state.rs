@@ -400,23 +400,46 @@ impl<T: AciScalar> ElementwiseProblem<T> {
                 }),
             )?;
 
-            validate_selection(
-                "column",
-                &factors.col_indices,
-                checked_frame_mul(site_dim, right_dim, "solution right matrix column count")?,
-            )?;
+            let ncols =
+                checked_frame_mul(site_dim, right_dim, "solution right matrix column count")?;
+            let (new_rank, left_factor, right_factor, col_indices) = if factors.rank == 0 {
+                if matrix.nrows() == 0 || ncols == 0 {
+                    return Err(AciError::InvalidInitialGuess {
+                        message: format!(
+                            "zero-rank right-frame initialization at site {site} requires positive \
+                             matrix shape, got ({}, {ncols})",
+                            matrix.nrows()
+                        ),
+                    });
+                }
+                (
+                    1,
+                    Matrix::zeros(matrix.nrows(), 1),
+                    Matrix::zeros(1, ncols),
+                    vec![0],
+                )
+            } else {
+                (
+                    factors.rank,
+                    factors.left,
+                    factors.right,
+                    factors.col_indices,
+                )
+            };
+
+            validate_selection("column", &col_indices, ncols)?;
             solution_cores[site] =
-                right_factor_to_tensor3(&factors.right, factors.rank, site_dim, right_dim)?;
+                right_factor_to_tensor3(&right_factor, new_rank, site_dim, right_dim)?;
 
             let previous = &solution_cores[site - 1];
             let previous_left_dim = previous.left_dim();
             let previous_site_dim = previous.site_dim();
             let previous_matrix = left_matrix_julia_order(previous);
-            let product = matmul_checked(&previous_matrix, &factors.left, site - 1)?;
+            let product = matmul_checked(&previous_matrix, &left_factor, site - 1)?;
             solution_cores[site - 1] =
-                matrix_to_tensor3(&product, previous_left_dim, previous_site_dim, factors.rank)?;
+                matrix_to_tensor3(&product, previous_left_dim, previous_site_dim, new_rank)?;
 
-            self.update_right_frames(site, &factors.col_indices)?;
+            self.update_right_frames(site, &col_indices)?;
         }
 
         self.solution = TensorTrain::new(solution_cores)?;
