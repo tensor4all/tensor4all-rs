@@ -334,27 +334,49 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             factors_result?
         };
 
+        let pivot_error = match factors.pivot_errors.last() {
+            Some(&error) => error,
+            None => 0.0,
+        };
+        let (new_rank, left_factor, right_factor, row_indices, col_indices) = if factors.rank == 0 {
+            if nrows == 0 || ncols == 0 {
+                return Err(AciError::InvalidInitialGuess {
+                    message: format!(
+                        "zero-rank local update at bond {bond} requires positive local block \
+                             shape, got ({nrows}, {ncols})"
+                    ),
+                });
+            }
+            (
+                1,
+                Matrix::zeros(nrows, 1),
+                Matrix::zeros(1, ncols),
+                vec![0],
+                vec![0],
+            )
+        } else {
+            (
+                factors.rank,
+                factors.left,
+                factors.right,
+                factors.row_indices,
+                factors.col_indices,
+            )
+        };
+
         let mut solution_cores = self.solution.site_tensors().to_vec();
-        solution_cores[bond] = matrix_to_tensor3(
-            &factors.left,
-            left_solution_rank,
-            site_dim_left,
-            factors.rank,
-        )?;
-        solution_cores[bond + 1] = right_factor_to_tensor3(
-            &factors.right,
-            factors.rank,
-            site_dim_right,
-            right_solution_rank,
-        )?;
+        solution_cores[bond] =
+            matrix_to_tensor3(&left_factor, left_solution_rank, site_dim_left, new_rank)?;
+        solution_cores[bond + 1] =
+            right_factor_to_tensor3(&right_factor, new_rank, site_dim_right, right_solution_rank)?;
         self.solution = TensorTrain::new(solution_cores)?;
 
         if left_orthogonal {
-            self.update_left_frames(bond, &factors.row_indices)?;
+            self.update_left_frames(bond, &row_indices)?;
         } else {
-            self.update_right_frames(bond + 1, &factors.col_indices)?;
+            self.update_right_frames(bond + 1, &col_indices)?;
         }
-        self.pivot_errors[bond] = factors.pivot_errors.last().copied().unwrap_or(0.0);
+        self.pivot_errors[bond] = pivot_error;
 
         Ok(())
     }

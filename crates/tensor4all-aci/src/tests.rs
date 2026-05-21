@@ -122,6 +122,27 @@ fn multiply_batch(batch: ElementwiseBatch<'_, f64>, output: &mut [f64]) -> crate
     Ok(())
 }
 
+fn zero_batch(batch: ElementwiseBatch<'_, f64>, output: &mut [f64]) -> crate::Result<()> {
+    assert_eq!(output.len(), batch.n_points());
+    output.fill(0.0);
+    Ok(())
+}
+
+fn assert_solution_is_zero_on_binary_three_site_grid(problem: &ElementwiseProblem<f64>) {
+    for indices in [
+        [0, 0, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+        [1, 1, 0],
+        [0, 0, 1],
+        [1, 0, 1],
+        [0, 1, 1],
+        [1, 1, 1],
+    ] {
+        assert_eq!(problem.solution.evaluate(&indices).unwrap(), 0.0);
+    }
+}
+
 #[test]
 fn default_options_are_conservative() {
     let options = AciOptions::<f64>::default();
@@ -429,6 +450,56 @@ fn elementwise_problem_one_bond_local_update_returns_operator_error_side_channel
 
     assert!(matches!(err, AciError::Operator { .. }));
     assert!(err.to_string().contains("side-channel operator failure"));
+}
+
+#[test]
+fn elementwise_problem_one_bond_zero_update_keeps_left_frames_nonzero_dimensional() {
+    let input_a = TensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
+    let input_b = TensorTrain::<f64>::constant(&[2, 2, 2], 3.0);
+    let options = AciOptions::<f64>::default();
+    let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
+    let mut operator = zero_batch;
+
+    problem
+        .local_update(0, true, &options, &mut operator)
+        .unwrap();
+
+    assert_solution_is_zero_on_binary_three_site_grid(&problem);
+    assert_eq!(problem.left_frame_shape(0, 1), Some((1, 1)));
+    assert_eq!(problem.left_frame_shape(1, 1), Some((1, 1)));
+    assert!(problem.local_input_value(0, 1, 0, 0).is_ok());
+
+    problem
+        .local_update(1, true, &options, &mut operator)
+        .unwrap();
+    assert_solution_is_zero_on_binary_three_site_grid(&problem);
+}
+
+#[test]
+fn elementwise_problem_one_bond_zero_update_keeps_right_frames_nonzero_dimensional() {
+    let input_a = TensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
+    let input_b = TensorTrain::<f64>::constant(&[2, 2, 2], 3.0);
+    let options = AciOptions::<f64>::default();
+    let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
+    problem.update_left_frames(0, &[0]).unwrap();
+    for input in 0..problem.n_inputs() {
+        problem.right_frames[input][2] = None;
+    }
+    let mut operator = zero_batch;
+
+    problem
+        .local_update(1, false, &options, &mut operator)
+        .unwrap();
+
+    assert_solution_is_zero_on_binary_three_site_grid(&problem);
+    assert_eq!(problem.right_frame_shape(0, 2), Some((1, 1)));
+    assert_eq!(problem.right_frame_shape(1, 2), Some((1, 1)));
+    assert!(problem.local_input_value(0, 0, 0, 0).is_ok());
+
+    problem
+        .local_update(0, false, &options, &mut operator)
+        .unwrap();
+    assert_solution_is_zero_on_binary_three_site_grid(&problem);
 }
 
 #[test]
