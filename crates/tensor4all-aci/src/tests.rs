@@ -114,6 +114,14 @@ fn explicit_local_value(
     sum
 }
 
+fn multiply_batch(batch: ElementwiseBatch<'_, f64>, output: &mut [f64]) -> crate::Result<()> {
+    assert_eq!(output.len(), batch.n_points());
+    for (point, value) in output.iter_mut().enumerate().take(batch.n_points()) {
+        *value = batch.get(0, point).unwrap() * batch.get(1, point).unwrap();
+    }
+    Ok(())
+}
+
 #[test]
 fn default_options_are_conservative() {
     let options = AciOptions::<f64>::default();
@@ -356,6 +364,71 @@ fn elementwise_problem_rejects_invalid_frame_selection_indices() {
     let right_err = problem.update_right_frame(0, 2, &[2]).unwrap_err();
     assert!(matches!(right_err, AciError::InvalidInitialGuess { .. }));
     assert!(right_err.to_string().contains("column index"));
+}
+
+#[test]
+fn elementwise_problem_one_bond_local_update_matches_dense_product_left_orthogonal() {
+    let input_a = TensorTrain::<f64>::constant(&[2, 2], 2.0);
+    let input_b = TensorTrain::<f64>::constant(&[2, 2], 3.0);
+    let options = AciOptions::<f64>::default();
+    let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
+    let mut operator = multiply_batch;
+
+    problem
+        .local_update(0, true, &options, &mut operator)
+        .unwrap();
+
+    for indices in [[0, 0], [1, 0], [0, 1], [1, 1]] {
+        assert!((problem.solution.evaluate(&indices).unwrap() - 6.0).abs() < 1e-12);
+    }
+    assert_eq!(problem.left_frame_shape(0, 1), Some((1, 1)));
+    assert_eq!(problem.left_frame_shape(1, 1), Some((1, 1)));
+    assert_eq!(problem.pivot_errors.len(), 1);
+    assert!(problem.pivot_errors[0] <= 1e-12);
+}
+
+#[test]
+fn elementwise_problem_one_bond_local_update_matches_dense_product_right_orthogonal() {
+    let input_a = TensorTrain::<f64>::constant(&[2, 2], 2.0);
+    let input_b = TensorTrain::<f64>::constant(&[2, 2], 3.0);
+    let options = AciOptions::<f64>::default();
+    let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
+    for input in 0..problem.n_inputs() {
+        problem.right_frames[input][1] = None;
+    }
+    let mut operator = multiply_batch;
+
+    problem
+        .local_update(0, false, &options, &mut operator)
+        .unwrap();
+
+    for indices in [[0, 0], [1, 0], [0, 1], [1, 1]] {
+        assert!((problem.solution.evaluate(&indices).unwrap() - 6.0).abs() < 1e-12);
+    }
+    assert_eq!(problem.right_frame_shape(0, 1), Some((1, 1)));
+    assert_eq!(problem.right_frame_shape(1, 1), Some((1, 1)));
+    assert_eq!(problem.pivot_errors.len(), 1);
+    assert!(problem.pivot_errors[0] <= 1e-12);
+}
+
+#[test]
+fn elementwise_problem_one_bond_local_update_returns_operator_error_side_channel() {
+    let input_a = TensorTrain::<f64>::constant(&[2, 2], 2.0);
+    let input_b = TensorTrain::<f64>::constant(&[2, 2], 3.0);
+    let options = AciOptions::<f64>::default();
+    let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
+    let mut operator = |_batch: ElementwiseBatch<'_, f64>, _output: &mut [f64]| {
+        Err(AciError::Operator {
+            message: "side-channel operator failure".to_string(),
+        })
+    };
+
+    let err = problem
+        .local_update(0, true, &options, &mut operator)
+        .unwrap_err();
+
+    assert!(matches!(err, AciError::Operator { .. }));
+    assert!(err.to_string().contains("side-channel operator failure"));
 }
 
 #[test]

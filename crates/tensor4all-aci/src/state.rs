@@ -1,9 +1,13 @@
+use std::cell::RefCell;
+
 use crate::scalar::AciScalar;
-use crate::{initial_guess, AciError, AciOptions, Result};
+use crate::{initial_guess, AciError, AciOptions, ElementwiseBatch, LocalBlockEvaluator, Result};
 use tensor4all_simplett::{
     tensor3_from_data, AbstractTensorTrain, Tensor3, Tensor3Ops, TensorTrain,
 };
-use tensor4all_tcicore::{matrix_luci_factors_from_matrix, RrLUOptions};
+use tensor4all_tcicore::{
+    matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix, RrLUOptions,
+};
 use tensor4all_tensorbackend::{mat_mul, Matrix};
 
 pub(crate) struct ElementwiseProblem<T: AciScalar> {
@@ -237,6 +241,121 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         for input in 0..self.n_inputs() {
             self.update_right_frame(input, site, col_indices)?;
         }
+        Ok(())
+    }
+
+    pub(crate) fn local_update<F>(
+        &mut self,
+        bond: usize,
+        left_orthogonal: bool,
+        options: &AciOptions<T>,
+        op: &mut F,
+    ) -> Result<()>
+    where
+        F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
+    {
+        let n = self.len();
+        if bond >= n.saturating_sub(1) {
+            return Err(AciError::InvalidInitialGuess {
+                message: format!("bond index {bond} out of bounds for tensor train length {n}"),
+            });
+        }
+
+        let left_core = self.solution.site_tensor(bond);
+        let right_core = self.solution.site_tensor(bond + 1);
+        if left_core.right_dim() != right_core.left_dim() {
+            return Err(AciError::InvalidInitialGuess {
+                message: format!(
+                    "adjacent solution core bond mismatch at bond {bond}: \
+                     left core right bond is {}, right core left bond is {}",
+                    left_core.right_dim(),
+                    right_core.left_dim()
+                ),
+            });
+        }
+
+        let left_solution_rank = left_core.left_dim();
+        let site_dim_left = left_core.site_dim();
+        let site_dim_right = right_core.site_dim();
+        let right_solution_rank = right_core.right_dim();
+        let nrows = checked_frame_mul(
+            left_solution_rank,
+            site_dim_left,
+            "solution local block row count",
+        )?;
+        let ncols = checked_frame_mul(
+            site_dim_right,
+            right_solution_rank,
+            "solution local block column count",
+        )?;
+
+        let factors = {
+            let op_cell = RefCell::new(op);
+            let operator = |batch: ElementwiseBatch<'_, T>, output: &mut [T]| {
+                let mut op_ref = op_cell.borrow_mut();
+                (*op_ref)(batch, output)
+            };
+            let evaluator = LocalBlockEvaluator::new(self, bond, &operator)?;
+            if evaluator.nrows() != nrows || evaluator.ncols() != ncols {
+                return Err(AciError::InvalidInitialGuess {
+                    message: format!(
+                        "local block shape mismatch at bond {bond}: solution implies \
+                         ({nrows}, {ncols}), evaluator has ({}, {})",
+                        evaluator.nrows(),
+                        evaluator.ncols()
+                    ),
+                });
+            }
+
+            let factors_result = matrix_luci_factors_from_blocks(
+                nrows,
+                ncols,
+                |rows, cols, out: &mut [T]| {
+                    evaluator.fill_local_block_or_zero(rows, cols, out);
+                },
+                RrLUOptions {
+                    max_rank: options.max_bond_dim,
+                    rel_tol: if options.scale_tolerance {
+                        options.tolerance
+                    } else {
+                        0.0
+                    },
+                    abs_tol: if options.scale_tolerance {
+                        0.0
+                    } else {
+                        options.tolerance
+                    },
+                    left_orthogonal,
+                },
+            );
+            if let Some(err) = evaluator.take_error() {
+                return Err(err);
+            }
+            factors_result?
+        };
+
+        let mut solution_cores = self.solution.site_tensors().to_vec();
+        solution_cores[bond] = matrix_to_tensor3(
+            &factors.left,
+            left_solution_rank,
+            site_dim_left,
+            factors.rank,
+        )?;
+        solution_cores[bond + 1] = right_factor_to_tensor3(
+            &factors.right,
+            factors.rank,
+            site_dim_right,
+            right_solution_rank,
+        )?;
+        self.solution = TensorTrain::new(solution_cores)?;
+
+        if left_orthogonal {
+            self.update_left_frames(bond, &factors.row_indices)?;
+        } else {
+            self.update_right_frames(bond + 1, &factors.col_indices)?;
+        }
+        self.pivot_errors[bond] = factors.pivot_errors.last().copied().unwrap_or(0.0);
+
         Ok(())
     }
 
