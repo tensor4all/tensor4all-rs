@@ -330,7 +330,7 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
     pub(crate) fn apply_operator_to_input_values(&self, input_values: &[T]) -> Result<Matrix<T>> {
         let n_points = checked_local_mul(self.nrows, self.ncols, "local matrix entry count")?;
         let n_inputs = self.problem.n_inputs();
-        let batch = ElementwiseBatch::new(&input_values, n_inputs, n_points)?;
+        let batch = ElementwiseBatch::new(input_values, n_inputs, n_points)?;
         let mut output = vec![T::zero(); n_points];
         (self.operator)(batch, &mut output)?;
         self.record_output_scale(&output);
@@ -611,8 +611,8 @@ fn build_left_factor<T: AciScalar>(
 ) -> Result<Vec<T>> {
     let frame = local_left_frame(problem, input, bond)?;
     let core_matrix = problem.input_core_left_matrix(input, bond);
-    let product = mat_mul(frame, &core_matrix)
-        .map_err(|err| local_factor_error("left factor matmul", err))?;
+    let product =
+        mat_mul(frame, core_matrix).map_err(|err| local_factor_error("left factor matmul", err))?;
     Ok(product.as_col_major_slice().to_vec())
 }
 
@@ -623,7 +623,7 @@ fn build_right_factor<T: AciScalar>(
 ) -> Result<Vec<T>> {
     let frame = local_right_frame(problem, input, bond)?;
     let core_matrix = problem.input_core_right_matrix(input, bond + 1);
-    let product = mat_mul(&core_matrix, frame)
+    let product = mat_mul(core_matrix, frame)
         .map_err(|err| local_factor_error("right factor matmul", err))?;
     Ok(product.as_col_major_slice().to_vec())
 }
@@ -647,11 +647,11 @@ fn validate_local_shapes<T: AciScalar>(
     Ok((nrows, ncols))
 }
 
-fn local_left_frame<'a, T: AciScalar>(
-    problem: &'a ElementwiseProblem<T>,
+fn local_left_frame<T: AciScalar>(
+    problem: &ElementwiseProblem<T>,
     input: usize,
     bond: usize,
-) -> Result<&'a tensor4all_tensorbackend::Matrix<T>> {
+) -> Result<&tensor4all_tensorbackend::Matrix<T>> {
     problem
         .left_frames
         .get(input)
@@ -662,11 +662,11 @@ fn local_left_frame<'a, T: AciScalar>(
         })
 }
 
-fn local_right_frame<'a, T: AciScalar>(
-    problem: &'a ElementwiseProblem<T>,
+fn local_right_frame<T: AciScalar>(
+    problem: &ElementwiseProblem<T>,
     input: usize,
     bond: usize,
-) -> Result<&'a tensor4all_tensorbackend::Matrix<T>> {
+) -> Result<&tensor4all_tensorbackend::Matrix<T>> {
     let site = bond + 2;
     problem
         .right_frames

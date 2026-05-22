@@ -223,7 +223,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         validate_selection("row", row_indices, full_rows)?;
 
         let core_matrix = self.input_core_left_matrix(input, site);
-        let full_frame = frame_matmul_checked(&source, &core_matrix, "left", input, site)?;
+        let full_frame = frame_matmul_checked(&source, core_matrix, "left", input, site)?;
         let full_data = full_frame.as_col_major_slice();
         let mut selected = Matrix::zeros(row_indices.len(), core.right_dim());
         for (selected_row, &full_row) in row_indices.iter().enumerate() {
@@ -267,7 +267,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         validate_selection("column", col_indices, full_cols)?;
 
         let core_matrix = self.input_core_right_matrix(input, site);
-        let full_frame = frame_matmul_checked(&core_matrix, &source, "right", input, site)?;
+        let full_frame = frame_matmul_checked(core_matrix, &source, "right", input, site)?;
         let full_data = full_frame.as_col_major_slice();
         let mut selected = Matrix::zeros(core.left_dim(), col_indices.len());
         for (selected_col, &full_col) in col_indices.iter().enumerate() {

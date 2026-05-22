@@ -521,8 +521,8 @@ pub fn submatrix_argmax<T: MatrixScalar>(
     let col_end = cols.end;
 
     for c in col_start..col_end {
-        let mut offset = row_start + a.nrows * c;
-        for r in row_start..row_end {
+        let col_start_offset = row_start + a.nrows * c;
+        for (offset, r) in (col_start_offset..).zip(row_start..row_end) {
             // SAFETY: row and column loops stay within the checked ranges.
             let value = unsafe { *data.get_unchecked(offset) };
             let val: f64 = value.matrix_abs_sq();
@@ -531,7 +531,6 @@ pub fn submatrix_argmax<T: MatrixScalar>(
                 max_row = r;
                 max_col = c;
             }
-            offset += 1;
         }
     }
 

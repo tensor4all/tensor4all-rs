@@ -478,8 +478,8 @@ fn submatrix_argmax_col_major<T: Scalar>(
     let mut max_col = col_start;
 
     for col in col_start..col_end {
-        let mut offset = col_major_offset(nrows, row_start, col);
-        for row in row_start..row_end {
+        let col_start_offset = col_major_offset(nrows, row_start, col);
+        for (offset, row) in (col_start_offset..).zip(row_start..row_end) {
             // SAFETY: row and column loops stay within the prechecked region.
             let value = unsafe { *data.get_unchecked(offset) };
             let value_abs = value.abs_sq();
@@ -488,7 +488,6 @@ fn submatrix_argmax_col_major<T: Scalar>(
                 max_row = row;
                 max_col = col;
             }
-            offset += 1;
         }
     }
 

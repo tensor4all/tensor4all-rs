@@ -226,7 +226,7 @@ fn timing_ms(duration: Duration) -> f64 {
 fn timing_median(mut values: Vec<f64>) -> f64 {
     values.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mid = values.len() / 2;
-    if values.len() % 2 == 0 {
+    if values.len().is_multiple_of(2) {
         0.5 * (values[mid - 1] + values[mid])
     } else {
         values[mid]

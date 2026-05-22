@@ -739,11 +739,11 @@ fn local_input_factors_match_explicit_two_site_contraction_for_all_inputs() {
     let factors = crate::local::local_input_factors_for_problem(&problem, 1).unwrap();
 
     assert_eq!(factors.len(), problem.n_inputs());
-    for input in 0..problem.n_inputs() {
+    for (input, factors) in factors.iter().enumerate().take(problem.n_inputs()) {
         let (nrows, ncols) = problem.local_input_shape(input, 1).unwrap();
         for row in 0..nrows {
             for col in 0..ncols {
-                let actual = factors[input].value(row, col).unwrap();
+                let actual = factors.value(row, col).unwrap();
                 let expected = explicit_local_value(&problem, input, 1, row, col);
                 assert_eq!(actual, expected);
             }
@@ -1681,7 +1681,7 @@ fn duration_ms(duration: Duration) -> f64 {
 fn median_ms(mut values: Vec<f64>) -> f64 {
     values.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mid = values.len() / 2;
-    if values.len() % 2 == 0 {
+    if values.len().is_multiple_of(2) {
         0.5 * (values[mid - 1] + values[mid])
     } else {
         values[mid]
