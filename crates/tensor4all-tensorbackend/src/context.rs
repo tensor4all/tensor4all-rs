@@ -4,7 +4,7 @@
 //! `CpuContext`, matching tenferro's `cpu:0` default-global thread-pool model.
 //! Plain tensor operations, cached traced execution, and eager AD currently use
 //! separate `CpuBackend` values because tenferro does not yet expose a public
-//! API for borrowing the backend owned by an `EagerContext<CpuBackend>`. All
+//! API for borrowing the backend owned by an `EagerContext`. All
 //! backends are created from the same global CPU context, so thread-pool
 //! configuration is shared.
 
@@ -17,7 +17,7 @@ use tenferro_tensor::cpu::CpuContext;
 static DEFAULT_CPU_CONTEXT: OnceLock<Arc<CpuContext>> = OnceLock::new();
 static DEFAULT_BACKEND: OnceLock<Mutex<CpuBackend>> = OnceLock::new();
 static DEFAULT_ENGINE: OnceLock<Mutex<Engine<CpuBackend>>> = OnceLock::new();
-static DEFAULT_EAGER_CTX: OnceLock<Arc<EagerContext<CpuBackend>>> = OnceLock::new();
+static DEFAULT_EAGER_CTX: OnceLock<Arc<EagerContext>> = OnceLock::new();
 
 fn default_cpu_context() -> Arc<CpuContext> {
     DEFAULT_CPU_CONTEXT
@@ -87,9 +87,11 @@ pub(crate) fn reset_default_engine() {
 /// This context owns a separate `CpuBackend` from [`with_default_backend`] and
 /// the cached execution engine, but all backends share the same process-global
 /// tenferro CPU context.
-pub fn default_eager_ctx() -> Arc<EagerContext<CpuBackend>> {
+pub fn default_eager_ctx() -> Arc<EagerContext> {
     DEFAULT_EAGER_CTX
-        .get_or_init(|| EagerContext::with_backend(CpuBackend::from_context(default_cpu_context())))
+        .get_or_init(|| {
+            EagerContext::with_cpu_backend(CpuBackend::from_context(default_cpu_context()))
+        })
         .clone()
 }
 

@@ -1,4 +1,6 @@
-use crate::matrixluci::{DenseLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions};
+use crate::matrixluci::{
+    DenseLuKernel, DenseMatrixSource, LazyMatrixSource, PivotKernel, PivotKernelOptions,
+};
 use crate::{rrlu, RrLUOptions};
 use approx::assert_abs_diff_eq;
 use tensor4all_tensorbackend::from_vec2d;
@@ -24,6 +26,71 @@ fn dense_kernel_reports_zero_rank_for_zero_matrix() {
         .factorize(&src, &PivotKernelOptions::no_truncation())
         .unwrap();
     assert_eq!(out.rank, 0);
+}
+
+#[test]
+fn pivot_errors_cover_empty_and_zero_pivot_stops() {
+    assert_eq!(
+        DenseLuKernel::compute_pivot_errors(&[], 0, 3, &PivotKernelOptions::default()),
+        vec![0.0]
+    );
+    assert_eq!(
+        DenseLuKernel::compute_pivot_errors(
+            &[2.0, 0.0],
+            2,
+            2,
+            &PivotKernelOptions::no_truncation()
+        ),
+        vec![2.0, 0.0]
+    );
+    assert_eq!(
+        DenseLuKernel::compute_pivot_errors(&[0.0], 1, 1, &PivotKernelOptions::default()),
+        vec![0.0]
+    );
+}
+
+#[test]
+fn dense_kernel_uses_rectangular_rrlu_fallback() {
+    let out = dense_factorize(
+        &[vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 7.0]],
+        PivotKernelOptions::no_truncation(),
+    );
+
+    assert_eq!(out.rank, 2);
+    assert_eq!(out.row_indices.len(), 2);
+    assert_eq!(out.col_indices.len(), 2);
+    assert_eq!(out.pivot_errors.last().copied(), Some(0.0));
+}
+
+#[test]
+fn dense_kernel_materializes_lazy_source() {
+    let data = col_major_from_rows(&[vec![1.0, 0.0], vec![0.0, 1.0]]);
+    let source = LazyMatrixSource::new(2, 2, |rows: &[usize], cols: &[usize], out: &mut [f64]| {
+        for (j, &col) in cols.iter().enumerate() {
+            for (i, &row) in rows.iter().enumerate() {
+                out[i + rows.len() * j] = data[row + 2 * col];
+            }
+        }
+    });
+
+    let out = DenseLuKernel
+        .factorize(&source, &PivotKernelOptions::no_truncation())
+        .unwrap();
+
+    assert_eq!(out.rank, 2);
+    assert_eq!(out.row_indices, vec![0, 1]);
+    assert_eq!(out.col_indices, vec![0, 1]);
+}
+
+#[test]
+fn permutation_indices_reject_invalid_permutation_rows() {
+    let multiple =
+        DenseLuKernel::permutation_indices_from_matrix(&[1.0, 0.0, 1.0, 1.0], 2, "P").unwrap_err();
+    assert!(multiple.to_string().contains("multiple entries"));
+
+    let missing =
+        DenseLuKernel::permutation_indices_from_matrix(&[0.0, 0.0, 0.0, 1.0], 2, "Q").unwrap_err();
+    assert!(missing.to_string().contains("no entry"));
 }
 
 fn col_major_from_rows(rows: &[Vec<f64>]) -> Vec<f64> {

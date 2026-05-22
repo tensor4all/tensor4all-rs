@@ -1,14 +1,14 @@
 //! Lazy pivot-kernel implementations.
 
 use crate::matrixluci::error::MatrixLuciError;
-use crate::matrixluci::factors::{invert_square, load_block, subtract_inplace};
+use crate::matrixluci::factors::{load_block, subtract_inplace};
 use crate::matrixluci::kernel::PivotKernel;
 use crate::matrixluci::scalar::Scalar;
 use crate::matrixluci::source::CandidateMatrixSource;
 use crate::matrixluci::types::{PivotKernelOptions, PivotSelectionCore};
 use crate::matrixluci::Result;
 use num_complex::{Complex32, Complex64};
-use tensor4all_tensorbackend::{mat_mul, Matrix};
+use tensor4all_tensorbackend::{mat_mul, solve_matrix, Matrix};
 
 /// Lazy pivot kernel based on residual row/column rook search.
 ///
@@ -24,23 +24,20 @@ fn residual_block<T: Scalar, S: CandidateMatrixSource<T>>(
     cols: &[usize],
     selected_rows: &[usize],
     selected_cols: &[usize],
-    pivot_inv: Option<&Matrix<T>>,
 ) -> Result<Matrix<T>> {
     let mut residual = load_block(source, rows, cols);
     if selected_rows.is_empty() {
         return Ok(residual);
     }
 
-    let pivot_inv = pivot_inv.ok_or_else(|| MatrixLuciError::InvalidArgument {
-        message: "pivot inverse is required after pivots have been selected".to_string(),
-    })?;
+    let pivot = load_block(source, selected_rows, selected_cols);
     let a_rj = load_block(source, rows, selected_cols);
     let a_ic = load_block(source, selected_rows, cols);
-    let temp = mat_mul(&a_rj, pivot_inv).map_err(|err| MatrixLuciError::InvalidArgument {
-        message: format!("residual left multiplication failed: {err}"),
+    let solved = solve_matrix(&pivot, &a_ic).map_err(|err| MatrixLuciError::InvalidArgument {
+        message: format!("residual pivot solve failed: {err}"),
     })?;
-    let approx = mat_mul(&temp, &a_ic).map_err(|err| MatrixLuciError::InvalidArgument {
-        message: format!("residual right multiplication failed: {err}"),
+    let approx = mat_mul(&a_rj, &solved).map_err(|err| MatrixLuciError::InvalidArgument {
+        message: format!("residual multiplication failed: {err}"),
     })?;
     subtract_inplace(&mut residual, &approx);
     Ok(residual)
@@ -77,7 +74,6 @@ fn rook_pivot<T: Scalar, S: CandidateMatrixSource<T>>(
     remaining_cols: &[usize],
     selected_rows: &[usize],
     selected_cols: &[usize],
-    pivot_inv: Option<&Matrix<T>>,
 ) -> Result<(usize, usize, f64)> {
     let mut current_col = remaining_cols[0];
     let mut current_row = remaining_rows[0];
@@ -90,7 +86,6 @@ fn rook_pivot<T: Scalar, S: CandidateMatrixSource<T>>(
             &[current_col],
             selected_rows,
             selected_cols,
-            pivot_inv,
         )?;
         let (best_row_pos, _, _) = argmax_abs(&col_residual);
         current_row = remaining_rows[best_row_pos];
@@ -101,7 +96,6 @@ fn rook_pivot<T: Scalar, S: CandidateMatrixSource<T>>(
             remaining_cols,
             selected_rows,
             selected_cols,
-            pivot_inv,
         )?;
         let (_, best_col_pos, best_abs) = argmax_abs(&row_residual);
         let next_col = remaining_cols[best_col_pos];
@@ -118,7 +112,6 @@ fn rook_pivot<T: Scalar, S: CandidateMatrixSource<T>>(
         remaining_cols,
         selected_rows,
         selected_cols,
-        pivot_inv,
     )?;
     let (_, best_col_pos, best_abs) = argmax_abs(&row_residual);
     Ok((current_row, remaining_cols[best_col_pos], best_abs))
@@ -154,20 +147,12 @@ fn factorize_lazy<T: Scalar, S: CandidateMatrixSource<T>>(
             break;
         }
 
-        let pivot_inv = if selected_rows.is_empty() {
-            None
-        } else {
-            let pivot = load_block(source, &selected_rows, &selected_cols);
-            Some(invert_square(&pivot)?)
-        };
-
         let (pivot_row, pivot_col, pivot_abs) = rook_pivot(
             source,
             &remaining_rows,
             &remaining_cols,
             &selected_rows,
             &selected_cols,
-            pivot_inv.as_ref(),
         )?;
         last_error = pivot_abs;
 

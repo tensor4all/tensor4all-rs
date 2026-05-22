@@ -1,0 +1,6 @@
+This crate ports AlternatingCrossInterpolation.jl, originally authored by
+Marc Ritter <mritter@flatironinstitute.org> and contributors.
+
+Upstream copyright:
+
+Copyright (c) 2026 Marc Ritter <mritter@flatironinstitute.org> and contributors

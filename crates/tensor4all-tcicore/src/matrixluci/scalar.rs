@@ -6,7 +6,9 @@ use num_traits::{Float, One, Zero};
 use crate::error::Result;
 use crate::matrix_luci::MatrixLuciFactors;
 use crate::matrixlu::RrLUOptions;
-use tensor4all_tensorbackend::{BackendLinalgScalar, Matrix, MatrixScalar, MatrixSolveScalar};
+use tensor4all_tensorbackend::{
+    BackendLinalgScalar, Matrix, MatrixScalar, MatrixSolveScalar, MatrixTriangularSolveScalar,
+};
 
 /// Common scalar trait for matrix LUCI operations.
 pub trait Scalar:
@@ -25,6 +27,7 @@ pub trait Scalar:
     + BackendLinalgScalar
     + MatrixScalar
     + MatrixSolveScalar
+    + MatrixTriangularSolveScalar
     + 'static
 {
     /// Complex conjugate.

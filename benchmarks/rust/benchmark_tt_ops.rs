@@ -215,9 +215,9 @@ fn make_native_mps_t4a_shapes(
 }
 
 fn eager_mps_tensors(
-    ctx: &Arc<EagerContext<CpuBackend>>,
+    ctx: &Arc<EagerContext>,
     tensors: Vec<Tensor>,
-) -> Vec<EagerTensor<CpuBackend>> {
+) -> Vec<EagerTensor> {
     tensors
         .into_iter()
         .map(|tensor| EagerTensor::from_tensor_in(tensor, Arc::clone(ctx)))
@@ -256,15 +256,15 @@ impl RawEagerInnerConfigs {
     }
 }
 
-fn maybe_snapshot_output(tensor: &EagerTensor<CpuBackend>, snapshot_outputs: bool) {
+fn maybe_snapshot_output(tensor: &EagerTensor, snapshot_outputs: bool) {
     if snapshot_outputs {
         black_box(tensor.data().clone());
     }
 }
 
 fn raw_eager_inner_t4a_shapes(
-    bra: &[EagerTensor<CpuBackend>],
-    ket: &[EagerTensor<CpuBackend>],
+    bra: &[EagerTensor],
+    ket: &[EagerTensor],
     configs: &RawEagerInnerConfigs,
     snapshot_outputs: bool,
 ) -> Result<Complex64> {
@@ -666,7 +666,7 @@ fn main() -> Result<()> {
         let bra = make_mps(&sites, chi, 0)?;
         let ket = make_mps(&sites, chi, opts.length)?;
         let bra_conj = preconjugate_sites(&bra)?;
-        let raw_ctx = EagerContext::with_backend(CpuBackend::with_threads(1));
+        let raw_ctx = EagerContext::with_cpu_backend(CpuBackend::with_threads(1));
         let raw_bra = eager_mps_tensors(
             &raw_ctx,
             make_native_mps_t4a_shapes(opts.length, opts.phys_dim, chi, 0),

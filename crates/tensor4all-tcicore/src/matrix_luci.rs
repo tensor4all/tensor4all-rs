@@ -5,16 +5,15 @@
 //! via LU cross interpolation and implements [`AbstractMatrixCI`].
 
 use crate::error::{MatrixCIError, Result};
-use crate::matrixlu::RrLUOptions;
+use crate::matrixlu::{rrlu, rrlu_inplace, RrLU, RrLUOptions};
 use crate::matrixluci::block_rook::LazyBlockRookKernel;
-use crate::matrixluci::dense::DenseLuKernel;
 use crate::matrixluci::factors::CrossFactors;
-use crate::matrixluci::source::{DenseMatrixSource, LazyMatrixSource};
+use crate::matrixluci::source::LazyMatrixSource;
 use crate::matrixluci::types::{PivotKernelOptions, PivotSelectionCore};
 use crate::matrixluci::PivotKernel;
 use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
-use tensor4all_tensorbackend::Matrix;
+use tensor4all_tensorbackend::{mat_mul_owned, submatrix, triangular_solve_matrix_owned, Matrix};
 
 /// Matrix LU-based Cross Interpolation.
 ///
@@ -116,14 +115,14 @@ where
     T: Scalar + crate::MatrixLuciScalar,
 {
     let left = if left_orthogonal {
-        factors.cols_times_pivot_inv().map_err(map_backend_error)?
+        factors.cols_solve_pivot().map_err(map_backend_error)?
     } else {
         factors.pivot_cols.clone()
     };
     let right = if left_orthogonal {
         factors.pivot_rows.clone()
     } else {
-        factors.pivot_inv_times_rows().map_err(map_backend_error)?
+        factors.solve_pivot_rows().map_err(map_backend_error)?
     };
 
     Ok(MatrixLuciFactors {
@@ -136,27 +135,169 @@ where
     })
 }
 
+fn backend_linalg_error(message: impl Into<String>) -> MatrixCIError {
+    MatrixCIError::InvalidArgument {
+        message: message.into(),
+    }
+}
+
+fn index_range(start: usize, end: usize) -> Vec<usize> {
+    (start..end).collect()
+}
+
+fn identity_rect<T: Scalar>(nrows: usize, ncols: usize) -> Matrix<T> {
+    let mut result = Matrix::zeros(nrows, ncols);
+    for i in 0..nrows.min(ncols) {
+        result[[i, i]] = T::one();
+    }
+    result
+}
+
+fn apply_row_permutation<T: Scalar>(matrix: &Matrix<T>, permutation: &[usize]) -> Matrix<T> {
+    let mut result = Matrix::zeros(matrix.nrows(), matrix.ncols());
+    for col in 0..matrix.ncols() {
+        for (new_row, &old_row) in permutation.iter().enumerate().take(matrix.nrows()) {
+            result[[old_row, col]] = matrix[[new_row, col]];
+        }
+    }
+    result
+}
+
+fn apply_col_permutation<T: Scalar>(matrix: &Matrix<T>, permutation: &[usize]) -> Matrix<T> {
+    let mut result = Matrix::zeros(matrix.nrows(), matrix.ncols());
+    for (new_col, &old_col) in permutation.iter().enumerate().take(matrix.ncols()) {
+        for row in 0..matrix.nrows() {
+            result[[row, old_col]] = matrix[[row, new_col]];
+        }
+    }
+    result
+}
+
+pub(crate) fn rrlu_colmatrix<T>(lu: &RrLU<T>) -> Result<Matrix<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+{
+    let rank = lu.npivots();
+    if rank == 0 {
+        return Ok(Matrix::zeros(lu.nrows(), 0));
+    }
+    let rows = index_range(0, rank);
+    let cols = index_range(0, rank);
+    let right_pivot_cols = submatrix(lu.right_unpermuted(), &rows, &cols);
+    mat_mul_owned(lu.left(true), right_pivot_cols)
+        .map_err(|err| backend_linalg_error(format!("MatrixLUCI colmatrix multiply failed: {err}")))
+}
+
+pub(crate) fn rrlu_rowmatrix<T>(lu: &RrLU<T>) -> Result<Matrix<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+{
+    let rank = lu.npivots();
+    if rank == 0 {
+        return Ok(Matrix::zeros(0, lu.ncols()));
+    }
+    let rows = index_range(0, rank);
+    let cols = index_range(0, rank);
+    let left_pivot_rows = submatrix(lu.left_unpermuted(), &rows, &cols);
+    mat_mul_owned(left_pivot_rows, lu.right(true))
+        .map_err(|err| backend_linalg_error(format!("MatrixLUCI rowmatrix multiply failed: {err}")))
+}
+
+pub(crate) fn rrlu_cols_times_pivot_solve<T>(lu: &RrLU<T>) -> Result<Matrix<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+{
+    let rank = lu.npivots();
+    let mut result = identity_rect(lu.nrows(), rank);
+    if rank > 0 && rank < lu.nrows() {
+        let pivot_rows = index_range(0, rank);
+        let pivot_cols = index_range(0, rank);
+        let rest_rows = index_range(rank, lu.nrows());
+        let pivot = submatrix(lu.left_unpermuted(), &pivot_rows, &pivot_cols);
+        let rest = submatrix(lu.left_unpermuted(), &rest_rows, &pivot_cols);
+        let solved = triangular_solve_matrix_owned(pivot, rest, false, true, false, false)
+            .map_err(|err| {
+                backend_linalg_error(format!("MatrixLUCI lower triangular solve failed: {err}"))
+            })?;
+        for row in 0..solved.nrows() {
+            for col in 0..solved.ncols() {
+                result[[rank + row, col]] = solved[[row, col]];
+            }
+        }
+    }
+    Ok(apply_row_permutation(&result, lu.row_permutation()))
+}
+
+pub(crate) fn rrlu_pivot_solve_times_rows<T>(lu: &RrLU<T>) -> Result<Matrix<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+{
+    let rank = lu.npivots();
+    let mut result = identity_rect(rank, lu.ncols());
+    if rank > 0 && rank < lu.ncols() {
+        let pivot_rows = index_range(0, rank);
+        let pivot_cols = index_range(0, rank);
+        let rest_cols = index_range(rank, lu.ncols());
+        let pivot = submatrix(lu.right_unpermuted(), &pivot_rows, &pivot_cols);
+        let rest = submatrix(lu.right_unpermuted(), &pivot_rows, &rest_cols);
+        let solved = triangular_solve_matrix_owned(pivot, rest, true, false, false, false)
+            .map_err(|err| {
+                backend_linalg_error(format!("MatrixLUCI upper triangular solve failed: {err}"))
+            })?;
+        for row in 0..solved.nrows() {
+            for col in 0..solved.ncols() {
+                result[[row, rank + col]] = solved[[row, col]];
+            }
+        }
+    }
+    Ok(apply_col_permutation(&result, lu.col_permutation()))
+}
+
+fn factors_from_rrlu<T>(lu: &RrLU<T>) -> Result<MatrixLuciFactors<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+{
+    let left = if lu.is_left_orthogonal() {
+        rrlu_cols_times_pivot_solve(lu)?
+    } else {
+        rrlu_colmatrix(lu)?
+    };
+    let right = if lu.is_left_orthogonal() {
+        rrlu_rowmatrix(lu)?
+    } else {
+        rrlu_pivot_solve_times_rows(lu)?
+    };
+
+    Ok(MatrixLuciFactors {
+        row_indices: lu.row_indices(),
+        col_indices: lu.col_indices(),
+        pivot_errors: lu.pivot_errors(),
+        rank: lu.npivots(),
+        left,
+        right,
+    })
+}
+
 pub(crate) fn dense_matrix_luci_factors_from_matrix<T>(
     a: &Matrix<T>,
     options: RrLUOptions,
 ) -> Result<MatrixLuciFactors<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
-    DenseLuKernel: PivotKernel<T>,
 {
-    let source = DenseMatrixSource::from_column_major(a.as_col_major_slice(), a.nrows(), a.ncols());
-    let kernel_options = PivotKernelOptions {
-        max_rank: options.max_rank,
-        rel_tol: options.rel_tol,
-        abs_tol: options.abs_tol,
-        left_orthogonal: options.left_orthogonal,
-    };
+    let lu = rrlu(a, Some(options))?;
+    factors_from_rrlu(&lu)
+}
 
-    let selection = DenseLuKernel
-        .factorize(&source, &kernel_options)
-        .map_err(map_backend_error)?;
-    let factors = CrossFactors::from_source(&source, &selection).map_err(map_backend_error)?;
-    factors_to_public(selection, factors, options.left_orthogonal)
+pub(crate) fn dense_matrix_luci_factors_from_matrix_owned<T>(
+    mut a: Matrix<T>,
+    options: RrLUOptions,
+) -> Result<MatrixLuciFactors<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+{
+    let lu = rrlu_inplace(&mut a, Some(options))?;
+    factors_from_rrlu(&lu)
 }
 
 pub(crate) fn lazy_matrix_luci_factors_from_blocks<T, F>(
@@ -229,6 +370,25 @@ where
     T: Scalar + crate::MatrixLuciScalar,
 {
     <T as crate::MatrixLuciScalar>::matrix_luci_factors_from_matrix(a, options.unwrap_or_default())
+}
+
+/// Factorize a dense matrix with MatrixLUCI while consuming the input matrix.
+///
+/// This is the owned-buffer counterpart of [`matrix_luci_factors_from_matrix`].
+/// It reuses the local matrix storage for the rrLU pivot selection step.
+///
+/// # Errors
+///
+/// Returns a [`MatrixCIError`] if the factorization fails, for example if the
+/// pivot block is singular or the backend rejects a factor solve.
+pub fn matrix_luci_factors_from_matrix_owned<T>(
+    a: Matrix<T>,
+    options: Option<RrLUOptions>,
+) -> Result<MatrixLuciFactors<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+{
+    dense_matrix_luci_factors_from_matrix_owned(a, options.unwrap_or_default())
 }
 
 /// Factorize a lazily supplied matrix with MatrixLUCI block-rook search.

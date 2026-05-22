@@ -29,13 +29,16 @@ mod tensor_element;
 
 pub use any_scalar::AnyScalar;
 pub use backend::{
-    full_piv_lu_backend, full_piv_lu_matrix, qr_backend, solve_backend, solve_matrix, svd_backend,
-    BackendLinalgScalar, FullPivLuMatrixResult, FullPivLuResult, MatrixSolveScalar, SvdResult,
+    full_piv_lu_backend, full_piv_lu_matrix, qr_backend, solve_backend, solve_matrix,
+    solve_matrix_owned, svd_backend, triangular_solve_backend, triangular_solve_matrix,
+    triangular_solve_matrix_owned, BackendLinalgScalar, FullPivLuMatrixResult, FullPivLuResult,
+    MatrixSolveScalar, MatrixTriangularSolveScalar, SvdResult,
 };
 pub use context::{default_eager_ctx, with_default_backend};
 pub use matrix::{
-    from_vec2d, mat_mul, submatrix, submatrix_argmax, swap_cols, swap_rows, transpose, BlasMul,
-    Matrix, MatrixScalar,
+    batched_mat_mul_same_shape, batched_mat_mul_same_shape_owned, from_vec2d, mat_mul,
+    mat_mul_owned, submatrix, submatrix_argmax, swap_cols, swap_rows, transpose, BlasMul, Matrix,
+    MatrixScalar, MatrixTensorConversionError,
 };
 pub use memory::{release_process_allocator_cached_memory, AllocatorPressureRelief};
 pub use storage::{

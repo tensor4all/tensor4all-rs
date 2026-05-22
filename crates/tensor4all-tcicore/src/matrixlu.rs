@@ -27,7 +27,7 @@
 
 use crate::error::{MatrixCIError, Result};
 use crate::scalar::Scalar;
-use tensor4all_tensorbackend::{submatrix_argmax, swap_cols, swap_rows, transpose, Matrix};
+use tensor4all_tensorbackend::{transpose, Matrix};
 
 /// Rank-Revealing LU decomposition.
 ///
@@ -263,8 +263,8 @@ impl<T: Scalar> RrLU<T> {
     pub fn left(&self, permute: bool) -> Matrix<T> {
         if permute {
             let mut result = Matrix::zeros(self.l.nrows(), self.l.ncols());
-            for (new_i, &old_i) in self.row_permutation.iter().enumerate() {
-                for j in 0..self.l.ncols() {
+            for j in 0..self.l.ncols() {
+                for (new_i, &old_i) in self.row_permutation.iter().enumerate() {
                     result[[old_i, j]] = self.l[[new_i, j]];
                 }
             }
@@ -295,8 +295,8 @@ impl<T: Scalar> RrLU<T> {
     pub fn right(&self, permute: bool) -> Matrix<T> {
         if permute {
             let mut result = Matrix::zeros(self.u.nrows(), self.u.ncols());
-            for i in 0..self.u.nrows() {
-                for (new_j, &old_j) in self.col_permutation.iter().enumerate() {
+            for (new_j, &old_j) in self.col_permutation.iter().enumerate() {
+                for i in 0..self.u.nrows() {
                     result[[i, old_j]] = self.u[[i, new_j]];
                 }
             }
@@ -304,6 +304,14 @@ impl<T: Scalar> RrLU<T> {
         } else {
             self.u.clone()
         }
+    }
+
+    pub(crate) fn left_unpermuted(&self) -> &Matrix<T> {
+        &self.l
+    }
+
+    pub(crate) fn right_unpermuted(&self) -> &Matrix<T> {
+        &self.u
     }
 
     /// Get diagonal elements
@@ -424,6 +432,221 @@ impl<T: Scalar> RrLU<T> {
     }
 }
 
+#[inline]
+fn col_major_offset(nrows: usize, row: usize, col: usize) -> usize {
+    row + nrows * col
+}
+
+#[inline]
+fn col_major_get<T: Copy>(data: &[T], nrows: usize, row: usize, col: usize) -> T {
+    let offset = col_major_offset(nrows, row, col);
+    debug_assert!(row < nrows);
+    debug_assert!(offset < data.len());
+    // SAFETY: callers pass matrix-derived dimensions and prechecked ranges.
+    unsafe { *data.get_unchecked(offset) }
+}
+
+#[inline]
+fn col_major_set<T>(data: &mut [T], nrows: usize, row: usize, col: usize, value: T) {
+    let offset = col_major_offset(nrows, row, col);
+    debug_assert!(row < nrows);
+    debug_assert!(offset < data.len());
+    // SAFETY: callers pass matrix-derived dimensions and prechecked ranges.
+    unsafe {
+        *data.get_unchecked_mut(offset) = value;
+    }
+}
+
+fn submatrix_argmax_col_major<T: Scalar>(
+    data: &[T],
+    nrows: usize,
+    ncols: usize,
+    row_start: usize,
+    row_end: usize,
+    col_start: usize,
+    col_end: usize,
+) -> (usize, usize, T) {
+    debug_assert!(row_start < row_end);
+    debug_assert!(col_start < col_end);
+    debug_assert!(row_end <= nrows);
+    debug_assert!(col_end <= ncols);
+    debug_assert_eq!(data.len(), nrows * ncols);
+
+    let first = col_major_get(data, nrows, row_start, col_start);
+    let mut max_val = first.abs_sq();
+    let mut max_row = row_start;
+    let mut max_col = col_start;
+
+    for col in col_start..col_end {
+        let col_start_offset = col_major_offset(nrows, row_start, col);
+        for (offset, row) in (col_start_offset..).zip(row_start..row_end) {
+            // SAFETY: row and column loops stay within the prechecked region.
+            let value = unsafe { *data.get_unchecked(offset) };
+            let value_abs = value.abs_sq();
+            if value_abs > max_val {
+                max_val = value_abs;
+                max_row = row;
+                max_col = col;
+            }
+        }
+    }
+
+    (
+        max_row,
+        max_col,
+        col_major_get(data, nrows, max_row, max_col),
+    )
+}
+
+fn swap_rows_col_major<T>(data: &mut [T], nrows: usize, ncols: usize, row_a: usize, row_b: usize) {
+    debug_assert!(row_a < nrows);
+    debug_assert!(row_b < nrows);
+    debug_assert_eq!(data.len(), nrows * ncols);
+    if row_a == row_b {
+        return;
+    }
+
+    let ptr = data.as_mut_ptr();
+    for col in 0..ncols {
+        let offset_a = col_major_offset(nrows, row_a, col);
+        let offset_b = col_major_offset(nrows, row_b, col);
+        // SAFETY: row_a/row_b are in range, and each column offset is within
+        // the matrix-sized backing slice.
+        unsafe {
+            std::ptr::swap(ptr.add(offset_a), ptr.add(offset_b));
+        }
+    }
+}
+
+fn swap_cols_col_major<T>(data: &mut [T], nrows: usize, ncols: usize, col_a: usize, col_b: usize) {
+    debug_assert!(col_a < ncols);
+    debug_assert!(col_b < ncols);
+    debug_assert_eq!(data.len(), nrows * ncols);
+    if col_a == col_b || nrows == 0 {
+        return;
+    }
+
+    let start_a = col_major_offset(nrows, 0, col_a);
+    let start_b = col_major_offset(nrows, 0, col_b);
+    // SAFETY: distinct columns are non-overlapping contiguous ranges of
+    // length nrows in column-major storage.
+    unsafe {
+        std::ptr::swap_nonoverlapping(
+            data.as_mut_ptr().add(start_a),
+            data.as_mut_ptr().add(start_b),
+            nrows,
+        );
+    }
+}
+
+fn scale_column_tail<T: Scalar>(
+    data: &mut [T],
+    nrows: usize,
+    col: usize,
+    row_start: usize,
+    pivot: T,
+) {
+    if row_start >= nrows {
+        return;
+    }
+    let start = col_major_offset(nrows, row_start, col);
+    let end = col_major_offset(nrows, nrows - 1, col) + 1;
+    for value in &mut data[start..end] {
+        *value = *value / pivot;
+    }
+}
+
+fn scale_row_tail<T: Scalar>(
+    data: &mut [T],
+    nrows: usize,
+    ncols: usize,
+    row: usize,
+    col_start: usize,
+    pivot: T,
+) {
+    for col in col_start..ncols {
+        let value = col_major_get(data, nrows, row, col) / pivot;
+        col_major_set(data, nrows, row, col, value);
+    }
+}
+
+fn update_trailing_submatrix<T: Scalar>(data: &mut [T], nrows: usize, ncols: usize, pivot: usize) {
+    let tail_row_start = pivot + 1;
+    let tail_col_start = pivot + 1;
+    if tail_row_start >= nrows || tail_col_start >= ncols {
+        return;
+    }
+
+    let tail_len = nrows - tail_row_start;
+    let pivot_col_tail_start = col_major_offset(nrows, tail_row_start, pivot);
+    for col in tail_col_start..ncols {
+        let y = col_major_get(data, nrows, pivot, col);
+        let target_start = col_major_offset(nrows, tail_row_start, col);
+        let (before_target, target_and_after) = data.split_at_mut(target_start);
+        let pivot_col_tail = &before_target[pivot_col_tail_start..pivot_col_tail_start + tail_len];
+        let target_tail = &mut target_and_after[..tail_len];
+        for (target, &x) in target_tail.iter_mut().zip(pivot_col_tail.iter()) {
+            *target = *target - x * y;
+        }
+    }
+}
+
+fn extract_lu_from_factorized<T: Scalar>(
+    data: &[T],
+    nrows: usize,
+    ncols: usize,
+    rank: usize,
+    left_orthogonal: bool,
+) -> Result<(Matrix<T>, Matrix<T>)> {
+    debug_assert!(rank <= nrows.min(ncols));
+    debug_assert_eq!(data.len(), nrows * ncols);
+
+    let mut l_data = vec![T::zero(); nrows * rank];
+    for col in 0..rank {
+        let src_start = col_major_offset(nrows, col, col);
+        let src_end = col_major_offset(nrows, nrows - 1, col) + 1;
+        let dst_start = col_major_offset(nrows, col, col);
+        l_data[dst_start..dst_start + (nrows - col)].copy_from_slice(&data[src_start..src_end]);
+    }
+
+    let mut u_data = vec![T::zero(); rank * ncols];
+    for col in 0..ncols {
+        let rows_to_copy = rank.min(col + 1);
+        if rows_to_copy > 0 {
+            let src_start = col_major_offset(nrows, 0, col);
+            let dst_start = col_major_offset(rank, 0, col);
+            u_data[dst_start..dst_start + rows_to_copy]
+                .copy_from_slice(&data[src_start..src_start + rows_to_copy]);
+        }
+    }
+
+    if left_orthogonal {
+        for i in 0..rank {
+            l_data[col_major_offset(nrows, i, i)] = T::one();
+        }
+    } else {
+        for i in 0..rank {
+            u_data[col_major_offset(rank, i, i)] = T::one();
+        }
+    }
+
+    if l_data.iter().any(|&value| value.is_nan()) {
+        return Err(MatrixCIError::NaNEncountered {
+            matrix: "L".to_string(),
+        });
+    }
+    if u_data.iter().any(|&value| value.is_nan()) {
+        return Err(MatrixCIError::NaNEncountered {
+            matrix: "U".to_string(),
+        });
+    }
+
+    Ok((
+        Matrix::from_col_major_vec(nrows, rank, l_data),
+        Matrix::from_col_major_vec(rank, ncols, u_data),
+    ))
+}
+
 /// Options for rank-revealing LU decomposition.
 ///
 /// # Examples
@@ -491,6 +714,8 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
     let opts = options.unwrap_or_default();
     let nr = a.nrows();
     let nc = a.ncols();
+    let data = a.as_col_major_mut_slice();
+    debug_assert_eq!(data.len(), nr * nc);
 
     let mut lu = RrLU::new(nr, nc, opts.left_orthogonal);
     let max_rank = opts.max_rank.min(nr).min(nc);
@@ -503,8 +728,8 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
             break;
         }
 
-        // Find pivot with maximum absolute value in submatrix
-        let (pivot_row, pivot_col, pivot_val) = submatrix_argmax(a, k..nr, k..nc);
+        let (pivot_row, pivot_col, pivot_val) =
+            submatrix_argmax_col_major(data, nr, nc, k, nr, k, nc);
 
         let pivot_abs = f64::sqrt(pivot_val.abs_sq());
         lu.error = pivot_abs;
@@ -534,93 +759,30 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
 
         // Swap rows and columns
         if pivot_row != k {
-            swap_rows(a, k, pivot_row);
+            swap_rows_col_major(data, nr, nc, k, pivot_row);
             lu.row_permutation.swap(k, pivot_row);
         }
         if pivot_col != k {
-            swap_cols(a, k, pivot_col);
+            swap_cols_col_major(data, nr, nc, k, pivot_col);
             lu.col_permutation.swap(k, pivot_col);
         }
 
-        let pivot = a[[k, k]];
+        let pivot = col_major_get(data, nr, k, k);
 
         // Eliminate
         if opts.left_orthogonal {
-            // Scale column below pivot
-            for i in (k + 1)..nr {
-                let val = a[[i, k]] / pivot;
-                a[[i, k]] = val;
-            }
+            scale_column_tail(data, nr, k, k + 1, pivot);
         } else {
-            // Scale row to the right of pivot
-            for j in (k + 1)..nc {
-                let val = a[[k, j]] / pivot;
-                a[[k, j]] = val;
-            }
+            scale_row_tail(data, nr, nc, k, k + 1, pivot);
         }
 
-        // Update submatrix: A[k+1:, k+1:] -= A[k+1:, k] * A[k, k+1:]
-        for i in (k + 1)..nr {
-            for j in (k + 1)..nc {
-                let x = a[[i, k]];
-                let y = a[[k, j]];
-                let old = a[[i, j]];
-                a[[i, j]] = old - x * y;
-            }
-        }
+        update_trailing_submatrix(data, nr, nc, k);
 
         lu.n_pivot += 1;
     }
 
-    // Extract L and U
     let n = lu.n_pivot;
-
-    // L is lower triangular part
-    let mut l = Matrix::zeros(nr, n);
-    for i in 0..nr {
-        for j in 0..n.min(i + 1) {
-            l[[i, j]] = a[[i, j]];
-        }
-    }
-
-    // U is upper triangular part
-    let mut u = Matrix::zeros(n, nc);
-    for i in 0..n {
-        for j in i..nc {
-            u[[i, j]] = a[[i, j]];
-        }
-    }
-
-    // Set diagonal to 1 for the orthogonal factor
-    if opts.left_orthogonal {
-        for i in 0..n {
-            l[[i, i]] = T::one();
-        }
-    } else {
-        for i in 0..n {
-            u[[i, i]] = T::one();
-        }
-    }
-
-    // Check for NaNs (return error instead of panicking)
-    for i in 0..l.nrows() {
-        for j in 0..l.ncols() {
-            if l[[i, j]].is_nan() {
-                return Err(MatrixCIError::NaNEncountered {
-                    matrix: "L".to_string(),
-                });
-            }
-        }
-    }
-    for i in 0..u.nrows() {
-        for j in 0..u.ncols() {
-            if u[[i, j]].is_nan() {
-                return Err(MatrixCIError::NaNEncountered {
-                    matrix: "U".to_string(),
-                });
-            }
-        }
-    }
+    let (l, u) = extract_lu_from_factorized(data, nr, nc, n, opts.left_orthogonal)?;
 
     // Set error to 0 if full rank
     if n >= nr.min(nc) {

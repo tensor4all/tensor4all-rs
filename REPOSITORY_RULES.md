@@ -145,12 +145,21 @@
 - Use high-level APIs. If downstream code needs low-level access, add or refine
   the appropriate high-level API rather than exposing or reaching into internal
   details.
+- When the same scalar-specific implementation is needed for several Rust
+  scalar types, use a generic helper or a macro-generated implementation rather
+  than copy-pasting per-type code. This includes typed tensor conversion
+  wrappers such as `TypedTensor<T>` to dynamic tensor variants.
 
 ## Dense Layout And Linear Algebra
 
 - Dense flat-buffer APIs use column-major linearization. New public flat-buffer
   constructors, exports, examples, FFI contracts, and docs must state or
   preserve column-major semantics.
+- In hot dense loops over `Matrix`, validate shapes and ranges once, then
+  iterate over column-major slices such as `as_col_major_slice()` or
+  `as_col_major_mut_slice()`. If bounds-check removal needs `unsafe`, keep it
+  inside small helper functions with explicit safety comments rather than
+  scattering unchecked indexing through algorithm code.
 - Do not add row-major compatibility shims or hidden row-major round-trips in
   library code. When an external dependency or test fixture naturally provides
   row-shaped data, convert at that explicit boundary and keep the conversion
@@ -162,6 +171,15 @@
   `tensor4all-tensorbackend` route for SVD, QR, einsum, and dense tensor
   linear algebra. Do not reimplement these algorithms locally in feature
   crates.
+- Do not write hand-rolled dense matrix kernels in feature crates. In
+  particular, local GEMM, triangular solve, LU/QR/SVD, or pivot-block solve
+  loops must use `tensor4all-tensorbackend` wrappers instead of custom
+  arithmetic kernels.
+- Do not form explicit inverses of pivot blocks in MatrixLUCI, cross
+  interpolation, tensor-network compression, or related factor construction.
+  Pivot systems such as `A[:, J] * A[I, J]^{-1}` and
+  `A[I, J]^{-1} * A[I, :]` must be implemented with linear solves, triangular
+  solves, or equivalent numerically stable solve-based formulations.
 - Do not instantiate `CpuBackend` directly outside
   `tensor4all-tensorbackend`. Use `tensor4all-tensorbackend` wrappers or
   `with_default_backend` so tenferro CPU execution uses the repository's shared

@@ -79,7 +79,8 @@ pub use cached_function::CachedFunction;
 pub use error::{MatrixCIError, Result};
 pub use indexset::{IndexSet, LocalIndex, MultiIndex};
 pub use matrix_luci::{
-    matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix, MatrixLUCI, MatrixLuciFactors,
+    matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix,
+    matrix_luci_factors_from_matrix_owned, MatrixLUCI, MatrixLuciFactors,
 };
 pub use matrixaca::MatrixACA;
 pub use matrixlu::{rrlu, rrlu_inplace, RrLU, RrLUOptions};

@@ -131,6 +131,49 @@ fn solve_matrix_solves_real_system() {
 }
 
 #[test]
+fn solve_matrix_owned_solves_real_system() {
+    let a = crate::from_vec2d(vec![vec![2.0_f64, 1.0], vec![1.0, 2.0]]);
+    let b = crate::from_vec2d(vec![vec![1.0_f64], vec![0.0]]);
+
+    let x = solve_matrix_owned(a, b).unwrap();
+
+    assert_eq!(x.nrows(), 2);
+    assert_eq!(x.ncols(), 1);
+    assert!((x[[0, 0]] - 2.0 / 3.0).abs() < 1.0e-12);
+    assert!((x[[1, 0]] + 1.0 / 3.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn solve_matrix_owned_promotes_f32_system() {
+    let a = crate::from_vec2d(vec![vec![2.0_f32, 1.0], vec![1.0, 2.0]]);
+    let b = crate::from_vec2d(vec![vec![1.0_f32], vec![0.0]]);
+
+    let x = solve_matrix_owned(a, b).unwrap();
+
+    assert!((x[[0, 0]] - 2.0 / 3.0).abs() < 1.0e-6);
+    assert!((x[[1, 0]] + 1.0 / 3.0).abs() < 1.0e-6);
+}
+
+#[test]
+fn solve_matrix_owned_solves_complex64_system() {
+    let a = crate::from_vec2d(vec![
+        vec![Complex64::new(2.0, 0.0), Complex64::new(1.0, 0.0)],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+    ]);
+    let b = crate::from_vec2d(vec![
+        vec![Complex64::new(1.0, 0.0)],
+        vec![Complex64::new(0.0, 0.0)],
+    ]);
+
+    let x = solve_matrix_owned(a, b).unwrap();
+
+    assert!((x[[0, 0]].re - 2.0 / 3.0).abs() < 1.0e-12);
+    assert!((x[[1, 0]].re + 1.0 / 3.0).abs() < 1.0e-12);
+    assert!(x[[0, 0]].im.abs() < 1.0e-12);
+    assert!(x[[1, 0]].im.abs() < 1.0e-12);
+}
+
+#[test]
 fn solve_matrix_promotes_f32_system() {
     let a = crate::from_vec2d(vec![vec![2.0_f32, 1.0], vec![1.0, 2.0]]);
     let b = crate::from_vec2d(vec![vec![1.0_f32], vec![0.0]]);
@@ -158,6 +201,115 @@ fn solve_matrix_promotes_complex32_system() {
     assert!((x[[1, 0]].re + 1.0 / 3.0).abs() < 1.0e-6);
     assert!(x[[0, 0]].im.abs() < 1.0e-6);
     assert!(x[[1, 0]].im.abs() < 1.0e-6);
+}
+
+#[test]
+fn triangular_solve_matrix_solves_left_lower_system() {
+    let a = crate::from_vec2d(vec![vec![2.0_f64, 0.0], vec![1.0, 3.0]]);
+    let b = crate::from_vec2d(vec![vec![2.0_f64], vec![7.0]]);
+
+    let x = triangular_solve_matrix(&a, &b, true, true, false, false).unwrap();
+
+    assert_eq!(x.nrows(), 2);
+    assert_eq!(x.ncols(), 1);
+    assert!((x[[0, 0]] - 1.0).abs() < 1.0e-12);
+    assert!((x[[1, 0]] - 2.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn triangular_solve_matrix_owned_solves_left_lower_system() {
+    let a = crate::from_vec2d(vec![vec![2.0_f64, 0.0], vec![1.0, 3.0]]);
+    let b = crate::from_vec2d(vec![vec![2.0_f64], vec![7.0]]);
+
+    let x = triangular_solve_matrix_owned(a, b, true, true, false, false).unwrap();
+
+    assert_eq!(x.nrows(), 2);
+    assert_eq!(x.ncols(), 1);
+    assert!((x[[0, 0]] - 1.0).abs() < 1.0e-12);
+    assert!((x[[1, 0]] - 2.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn triangular_solve_matrix_solves_right_upper_system() {
+    let a = crate::from_vec2d(vec![vec![2.0_f64, 1.0], vec![0.0, 3.0]]);
+    let b = crate::from_vec2d(vec![vec![2.0_f64, 7.0]]);
+
+    let x = triangular_solve_matrix(&a, &b, false, false, false, false).unwrap();
+
+    assert_eq!(x.nrows(), 1);
+    assert_eq!(x.ncols(), 2);
+    assert!((x[[0, 0]] - 1.0).abs() < 1.0e-12);
+    assert!((x[[0, 1]] - 2.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn triangular_solve_matrix_owned_promotes_f32_system() {
+    let a = crate::from_vec2d(vec![vec![2.0_f32, 0.0], vec![1.0, 3.0]]);
+    let b = crate::from_vec2d(vec![vec![2.0_f32], vec![7.0]]);
+
+    let x = triangular_solve_matrix_owned(a, b, true, true, false, false).unwrap();
+
+    assert!((x[[0, 0]] - 1.0).abs() < 1.0e-6);
+    assert!((x[[1, 0]] - 2.0).abs() < 1.0e-6);
+}
+
+#[test]
+fn triangular_solve_matrix_promotes_complex32_system() {
+    let a = crate::from_vec2d(vec![
+        vec![Complex32::new(2.0, 0.0), Complex32::new(0.0, 0.0)],
+        vec![Complex32::new(1.0, 0.0), Complex32::new(3.0, 0.0)],
+    ]);
+    let b = crate::from_vec2d(vec![
+        vec![Complex32::new(2.0, 0.0)],
+        vec![Complex32::new(7.0, 0.0)],
+    ]);
+
+    let x = triangular_solve_matrix(&a, &b, true, true, false, false).unwrap();
+
+    assert!((x[[0, 0]].re - 1.0).abs() < 1.0e-6);
+    assert!((x[[1, 0]].re - 2.0).abs() < 1.0e-6);
+    assert!(x[[0, 0]].im.abs() < 1.0e-6);
+    assert!(x[[1, 0]].im.abs() < 1.0e-6);
+}
+
+#[test]
+fn triangular_solve_matrix_owned_solves_complex64_system() {
+    let a = crate::from_vec2d(vec![
+        vec![Complex64::new(2.0, 0.0), Complex64::new(0.0, 0.0)],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(3.0, 0.0)],
+    ]);
+    let b = crate::from_vec2d(vec![
+        vec![Complex64::new(2.0, 0.0)],
+        vec![Complex64::new(7.0, 0.0)],
+    ]);
+
+    let x = triangular_solve_matrix_owned(a, b, true, true, false, false).unwrap();
+
+    assert!((x[[0, 0]].re - 1.0).abs() < 1.0e-12);
+    assert!((x[[1, 0]].re - 2.0).abs() < 1.0e-12);
+    assert!(x[[0, 0]].im.abs() < 1.0e-12);
+    assert!(x[[1, 0]].im.abs() < 1.0e-12);
+}
+
+#[test]
+fn triangular_solve_backend_solves_typed_tensor_system() {
+    let a = TypedTensor::from_vec(vec![2, 2], vec![2.0_f64, 1.0, 0.0, 3.0]);
+    let b = TypedTensor::from_vec(vec![2, 1], vec![2.0_f64, 7.0]);
+
+    let x = triangular_solve_backend(&a, &b, true, true, false, false).unwrap();
+
+    assert_eq!(x.shape, vec![2, 1]);
+    assert!((x.as_slice()[0] - 1.0).abs() < 1.0e-12);
+    assert!((x.as_slice()[1] - 2.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn try_into_typed_result_reports_dtype_mismatch() {
+    let tensor = Complex64::into_tensor(vec![1], vec![Complex64::new(1.0, 0.0)]);
+
+    let err = try_into_typed_result::<f64>("test_op", tensor).unwrap_err();
+
+    assert!(err.to_string().contains("test_op: dtype mismatch"));
 }
 
 #[test]

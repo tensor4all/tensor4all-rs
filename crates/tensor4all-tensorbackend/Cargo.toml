@@ -13,6 +13,7 @@ categories = ["science", "mathematics"]
 default = ["backend-tenferro", "tenferro-cpu-faer"]
 backend-tenferro = []
 tenferro-cpu-faer = ["tenferro/cpu-faer"]
+tenferro-system-blas = ["tenferro/cpu-blas", "tenferro-tensor/cpu-blas"]
 tenferro-provider-inject = ["tenferro/cpu-blas", "tenferro-tensor/provider-inject"]
 einsum-dispatch-profile = []
 
