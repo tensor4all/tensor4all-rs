@@ -757,6 +757,82 @@ fn local_input_factors_match_explicit_two_site_contraction_for_all_inputs() {
 }
 
 #[test]
+fn local_input_factors_report_bounds_errors_and_record_timing() {
+    let problem = local_test_problem();
+    let factors = crate::local::local_input_factors_for_problem(&problem, 1).unwrap();
+    let (nrows, ncols) = problem.local_input_shape(0, 1).unwrap();
+
+    let row_err = match factors[0].value(nrows, 0) {
+        Ok(_) => panic!("expected row bounds error"),
+        Err(err) => err,
+    };
+    assert!(row_err.to_string().contains("local row index"));
+
+    let col_err = match factors[0].value(0, ncols) {
+        Ok(_) => panic!("expected column bounds error"),
+        Err(err) => err,
+    };
+    assert!(col_err.to_string().contains("local column index"));
+
+    let mut timing = LocalInputSetupTiming::default();
+    let timed = crate::local::local_input_factors_for_problem_with_timing(&problem, 1, &mut timing)
+        .unwrap();
+
+    assert_eq!(timed.len(), factors.len());
+}
+
+#[test]
+fn tensor3_reshape_helpers_accept_and_reject_shapes() {
+    let left_factor = Matrix::from_col_major_vec(2, 2, vec![1.0, 2.0, 3.0, 4.0]);
+
+    let core = crate::state::matrix_to_tensor3(&left_factor, 1, 2, 2).unwrap();
+    assert_eq!(core.left_dim(), 1);
+    assert_eq!(core.site_dim(), 2);
+    assert_eq!(core.right_dim(), 2);
+
+    let core = crate::state::matrix_into_tensor3(left_factor.clone(), 1, 2, 2).unwrap();
+    assert_eq!(core.left_dim(), 1);
+    assert_eq!(core.site_dim(), 2);
+    assert_eq!(core.right_dim(), 2);
+
+    let err = match crate::state::matrix_to_tensor3(&left_factor, 2, 2, 1) {
+        Ok(_) => panic!("expected left factor shape error"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("cannot reshape matrix"));
+
+    let err = match crate::state::matrix_into_tensor3(left_factor, 2, 2, 1) {
+        Ok(_) => panic!("expected owned left factor shape error"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("cannot reshape matrix"));
+
+    let right_factor =
+        Matrix::from_col_major_vec(2, 6, (0..12).map(|value| value as f64).collect());
+    let core = crate::state::right_factor_to_tensor3(&right_factor, 2, 3, 2).unwrap();
+    assert_eq!(core.left_dim(), 2);
+    assert_eq!(core.site_dim(), 3);
+    assert_eq!(core.right_dim(), 2);
+
+    let core = crate::state::right_factor_into_tensor3(right_factor.clone(), 2, 3, 2).unwrap();
+    assert_eq!(core.left_dim(), 2);
+    assert_eq!(core.site_dim(), 3);
+    assert_eq!(core.right_dim(), 2);
+
+    let err = match crate::state::right_factor_to_tensor3(&right_factor, 3, 2, 2) {
+        Ok(_) => panic!("expected right factor shape error"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("cannot reshape right factor"));
+
+    let err = match crate::state::right_factor_into_tensor3(right_factor, 3, 2, 2) {
+        Ok(_) => panic!("expected owned right factor shape error"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("cannot reshape right factor"));
+}
+
+#[test]
 fn local_block_evaluator_uses_matrix_luci_point_order_and_batch_layout() {
     let problem = local_test_problem();
     let rows = [0, 3];
