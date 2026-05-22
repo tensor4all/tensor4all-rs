@@ -53,6 +53,14 @@ Optional long `chi = 32` case:
 RAYON_NUM_THREADS=1 cargo bench -p tensor4all-aci --bench elementwise_scaling -- aci_elementwise_chi_scaling_long --sample-size 10
 ```
 
+MatrixLUCI Hilbert step timing:
+
+```bash
+RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+T4A_MATRIX_LUCI_REPEATS=20 T4A_MATRIX_LUCI_SIZES=16,32,64 \
+cargo test --release -p tensor4all-tcicore matrix_luci_hilbert_timing -- --ignored --nocapture
+```
+
 Inspect Julia-dumped local linsolve inputs:
 
 ```bash
@@ -94,6 +102,14 @@ ACI elementwise TT chi scaling:
 
 ```bash
 BLAS_NUM_THREADS=1 julia --project=benchmarks/julia benchmarks/julia/benchmark_aci_elementwise.jl --chis 2,4,8,16
+```
+
+MatrixLUCI Hilbert step timing:
+
+```bash
+JULIA_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+T4A_MATRIX_LUCI_REPEATS=20 \
+julia benchmarks/julia/benchmark_matrix_luci.jl --sizes 16,32,64
 ```
 
 Dump local linsolve inputs as ITensorMPS-compatible HDF5:
@@ -145,6 +161,12 @@ the inputs and initial guess. The default smoke run covers `chi = 2, 4, 8, 16`.
 `chi = 32` is a longer optional Rust case available through the
 `aci_elementwise_chi_scaling_long` Criterion filter, and Julia can run the same
 long case with `--chis 2,4,8,16,32`.
+
+The MatrixLUCI Hilbert benchmarks isolate the matrix cross-interpolation step
+used inside ACI local updates. They print CSV-style timing buckets for rrLU
+pivot selection and factor construction on deterministic Hilbert matrices, with
+both left- and right-orthogonal variants. Keep these benchmarks out of normal
+test runs by using the ignored Rust test and the standalone Julia script.
 
 `dump_local_linsolve_inputs.jl` writes the prepared local operator as
 `operator_as_mps`, plus `rhs` and `init`, in one HDF5 file. The operator is a

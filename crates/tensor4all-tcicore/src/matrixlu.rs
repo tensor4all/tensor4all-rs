@@ -263,8 +263,8 @@ impl<T: Scalar> RrLU<T> {
     pub fn left(&self, permute: bool) -> Matrix<T> {
         if permute {
             let mut result = Matrix::zeros(self.l.nrows(), self.l.ncols());
-            for (new_i, &old_i) in self.row_permutation.iter().enumerate() {
-                for j in 0..self.l.ncols() {
+            for j in 0..self.l.ncols() {
+                for (new_i, &old_i) in self.row_permutation.iter().enumerate() {
                     result[[old_i, j]] = self.l[[new_i, j]];
                 }
             }
@@ -295,8 +295,8 @@ impl<T: Scalar> RrLU<T> {
     pub fn right(&self, permute: bool) -> Matrix<T> {
         if permute {
             let mut result = Matrix::zeros(self.u.nrows(), self.u.ncols());
-            for i in 0..self.u.nrows() {
-                for (new_j, &old_j) in self.col_permutation.iter().enumerate() {
+            for (new_j, &old_j) in self.col_permutation.iter().enumerate() {
+                for i in 0..self.u.nrows() {
                     result[[i, old_j]] = self.u[[i, new_j]];
                 }
             }
@@ -304,6 +304,14 @@ impl<T: Scalar> RrLU<T> {
         } else {
             self.u.clone()
         }
+    }
+
+    pub(crate) fn left_unpermuted(&self) -> &Matrix<T> {
+        &self.l
+    }
+
+    pub(crate) fn right_unpermuted(&self) -> &Matrix<T> {
+        &self.u
     }
 
     /// Get diagonal elements
@@ -560,8 +568,8 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
         }
 
         // Update submatrix: A[k+1:, k+1:] -= A[k+1:, k] * A[k, k+1:]
-        for i in (k + 1)..nr {
-            for j in (k + 1)..nc {
+        for j in (k + 1)..nc {
+            for i in (k + 1)..nr {
                 let x = a[[i, k]];
                 let y = a[[k, j]];
                 let old = a[[i, j]];
@@ -577,8 +585,8 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
 
     // L is lower triangular part
     let mut l = Matrix::zeros(nr, n);
-    for i in 0..nr {
-        for j in 0..n.min(i + 1) {
+    for j in 0..n {
+        for i in j..nr {
             l[[i, j]] = a[[i, j]];
         }
     }

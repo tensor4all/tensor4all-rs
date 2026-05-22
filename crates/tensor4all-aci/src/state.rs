@@ -5,18 +5,51 @@ use crate::{initial_guess, AciError, AciOptions, ElementwiseBatch, LocalBlockEva
 use tensor4all_simplett::{
     tensor3_from_data, AbstractTensorTrain, Tensor3, Tensor3Ops, TensorTrain,
 };
-use tensor4all_tcicore::{
-    matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix, RrLUOptions,
-};
-use tensor4all_tensorbackend::{mat_mul, Matrix};
+use tensor4all_tcicore::{matrix_luci_factors_from_matrix, RrLUOptions};
+use tensor4all_tensorbackend::{batched_mat_mul_same_shape, mat_mul, Matrix};
+
+#[cfg(test)]
+fn frame_batching_enabled() -> bool {
+    std::env::var("T4A_ACI_DISABLE_BATCHED_FRAME").as_deref() != Ok("1")
+}
+
+#[cfg(not(test))]
+fn frame_batching_enabled() -> bool {
+    true
+}
 
 pub(crate) struct ElementwiseProblem<T: AciScalar> {
     pub(crate) inputs: Vec<TensorTrain<T>>,
     pub(crate) solution: TensorTrain<T>,
+    input_core_matrices: Vec<Vec<InputCoreMatrices<T>>>,
     pub(crate) left_frames: Vec<Vec<Option<Matrix<T>>>>,
     pub(crate) right_frames: Vec<Vec<Option<Matrix<T>>>>,
     pub(crate) pivot_errors: Vec<f64>,
     pub(crate) pivot_scales: Vec<f64>,
+}
+
+#[derive(Clone)]
+struct InputCoreMatrices<T> {
+    left_grouped: Matrix<T>,
+    right_grouped: Matrix<T>,
+}
+
+impl<T: AciScalar> InputCoreMatrices<T> {
+    fn from_core(core: &Tensor3<T>) -> Self {
+        let data = core.to_col_major_vec();
+        Self {
+            left_grouped: Matrix::from_col_major_vec(
+                core.left_dim(),
+                core.site_dim() * core.right_dim(),
+                data.clone(),
+            ),
+            right_grouped: Matrix::from_col_major_vec(
+                core.left_dim() * core.site_dim(),
+                core.right_dim(),
+                data,
+            ),
+        }
+    }
 }
 
 impl<T: AciScalar> ElementwiseProblem<T> {
@@ -24,6 +57,16 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         let solution = initial_guess(&inputs, &options)?;
         let n = solution.len();
         let n_inputs = inputs.len();
+        let input_core_matrices = inputs
+            .iter()
+            .map(|input| {
+                input
+                    .site_tensors()
+                    .iter()
+                    .map(InputCoreMatrices::from_core)
+                    .collect()
+            })
+            .collect();
         let mut left_frames = vec![vec![None; n + 1]; n_inputs];
         let mut right_frames = vec![vec![None; n + 1]; n_inputs];
 
@@ -35,6 +78,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         let mut problem = Self {
             inputs,
             solution,
+            input_core_matrices,
             left_frames,
             right_frames,
             pivot_errors: vec![0.0; n.saturating_sub(1)],
@@ -50,6 +94,14 @@ impl<T: AciScalar> ElementwiseProblem<T> {
 
     pub(crate) fn n_inputs(&self) -> usize {
         self.inputs.len()
+    }
+
+    pub(crate) fn input_core_left_matrix(&self, input: usize, site: usize) -> &Matrix<T> {
+        &self.input_core_matrices[input][site].left_grouped
+    }
+
+    pub(crate) fn input_core_right_matrix(&self, input: usize, site: usize) -> &Matrix<T> {
+        &self.input_core_matrices[input][site].right_grouped
     }
 
     pub(crate) fn left_frame_shape(&self, input: usize, site: usize) -> Option<(usize, usize)> {
@@ -168,16 +220,13 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         let full_rows = checked_frame_mul(source.nrows(), core.site_dim(), "left frame row count")?;
         validate_selection("row", row_indices, full_rows)?;
 
+        let core_matrix = self.input_core_left_matrix(input, site);
+        let full_frame = frame_matmul_checked(&source, &core_matrix, "left", input, site)?;
+        let full_data = full_frame.as_col_major_slice();
         let mut selected = Matrix::zeros(row_indices.len(), core.right_dim());
         for (selected_row, &full_row) in row_indices.iter().enumerate() {
-            let source_row = full_row % source.nrows();
-            let physical = full_row / source.nrows();
             for right in 0..core.right_dim() {
-                let mut sum = T::zero();
-                for left in 0..core.left_dim() {
-                    sum = sum + source[[source_row, left]] * *core.get3(left, physical, right);
-                }
-                selected[[selected_row, right]] = sum;
+                selected[[selected_row, right]] = full_data[full_row + full_rows * right];
             }
         }
 
@@ -215,16 +264,13 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             checked_frame_mul(core.site_dim(), source.ncols(), "right frame column count")?;
         validate_selection("column", col_indices, full_cols)?;
 
+        let core_matrix = self.input_core_right_matrix(input, site);
+        let full_frame = frame_matmul_checked(&core_matrix, &source, "right", input, site)?;
+        let full_data = full_frame.as_col_major_slice();
         let mut selected = Matrix::zeros(core.left_dim(), col_indices.len());
-        for left in 0..core.left_dim() {
-            for (selected_col, &full_col) in col_indices.iter().enumerate() {
-                let physical = full_col % core.site_dim();
-                let source_col = full_col / core.site_dim();
-                let mut sum = T::zero();
-                for right in 0..core.right_dim() {
-                    sum = sum + *core.get3(left, physical, right) * source[[right, source_col]];
-                }
-                selected[[left, selected_col]] = sum;
+        for (selected_col, &full_col) in col_indices.iter().enumerate() {
+            for left in 0..core.left_dim() {
+                selected[[left, selected_col]] = full_data[left + core.left_dim() * full_col];
             }
         }
 
@@ -233,6 +279,15 @@ impl<T: AciScalar> ElementwiseProblem<T> {
     }
 
     pub(crate) fn update_left_frames(&mut self, site: usize, row_indices: &[usize]) -> Result<()> {
+        if frame_batching_enabled() {
+            if let Some(frames) = self.batched_left_frame_updates(site, row_indices)? {
+                for (input, frame) in frames.into_iter().enumerate() {
+                    self.left_frames[input][site + 1] = Some(frame);
+                }
+                return Ok(());
+            }
+        }
+
         for input in 0..self.n_inputs() {
             self.update_left_frame(input, site, row_indices)?;
         }
@@ -240,10 +295,200 @@ impl<T: AciScalar> ElementwiseProblem<T> {
     }
 
     pub(crate) fn update_right_frames(&mut self, site: usize, col_indices: &[usize]) -> Result<()> {
+        if frame_batching_enabled() {
+            if let Some(frames) = self.batched_right_frame_updates(site, col_indices)? {
+                for (input, frame) in frames.into_iter().enumerate() {
+                    self.right_frames[input][site] = Some(frame);
+                }
+                return Ok(());
+            }
+        }
+
         for input in 0..self.n_inputs() {
             self.update_right_frame(input, site, col_indices)?;
         }
         Ok(())
+    }
+
+    fn batched_left_frame_updates(
+        &self,
+        site: usize,
+        row_indices: &[usize],
+    ) -> Result<Option<Vec<Matrix<T>>>> {
+        let n = self.len();
+        let n_inputs = self.n_inputs();
+        if n_inputs <= 1 {
+            return Ok(None);
+        }
+
+        let mut shared: Option<(usize, usize, usize, usize, usize)> = None;
+        let mut frame_batch = Vec::new();
+        let mut core_batch = Vec::new();
+
+        for input in 0..n_inputs {
+            validate_input_site(input, site, n_inputs, n)?;
+            let source = self.left_frames[input][site]
+                .as_ref()
+                .ok_or_else(|| missing_frame("left", input, site))?;
+            let core = self.inputs[input].site_tensor(site);
+
+            if source.ncols() != core.left_dim() {
+                return Err(AciError::InvalidInitialGuess {
+                    message: format!(
+                        "left frame/input bond mismatch at input {input}, site {site}: \
+                         frame has {} columns, core left bond is {}",
+                        source.ncols(),
+                        core.left_dim()
+                    ),
+                });
+            }
+
+            let full_rows =
+                checked_frame_mul(source.nrows(), core.site_dim(), "left frame row count")?;
+            validate_selection("row", row_indices, full_rows)?;
+
+            let dims = (
+                source.nrows(),
+                source.ncols(),
+                core.site_dim(),
+                core.right_dim(),
+                full_rows,
+            );
+            if let Some(shared) = shared {
+                if shared != dims {
+                    return Ok(None);
+                }
+            } else {
+                shared = Some(dims);
+            }
+
+            frame_batch.extend_from_slice(source.as_col_major_slice());
+            core_batch.extend_from_slice(
+                self.input_core_left_matrix(input, site)
+                    .as_col_major_slice(),
+            );
+        }
+
+        let Some((source_rows, source_cols, site_dim, right_dim, full_rows)) = shared else {
+            return Ok(None);
+        };
+        let output_cols = site_dim * right_dim;
+        let values = batched_mat_mul_same_shape(
+            n_inputs,
+            source_rows,
+            source_cols,
+            output_cols,
+            &frame_batch,
+            &core_batch,
+        )
+        .map_err(|err| frame_matmul_error("batched left", err))?;
+        let item_len = source_rows * output_cols;
+
+        let frames = (0..n_inputs)
+            .map(|input| {
+                let offset = input * item_len;
+                let full_data = &values[offset..offset + item_len];
+                let mut selected = Matrix::zeros(row_indices.len(), right_dim);
+                for (selected_row, &full_row) in row_indices.iter().enumerate() {
+                    for right in 0..right_dim {
+                        selected[[selected_row, right]] = full_data[full_row + full_rows * right];
+                    }
+                }
+                selected
+            })
+            .collect();
+        Ok(Some(frames))
+    }
+
+    fn batched_right_frame_updates(
+        &self,
+        site: usize,
+        col_indices: &[usize],
+    ) -> Result<Option<Vec<Matrix<T>>>> {
+        let n = self.len();
+        let n_inputs = self.n_inputs();
+        if n_inputs <= 1 {
+            return Ok(None);
+        }
+
+        let mut shared: Option<(usize, usize, usize, usize, usize)> = None;
+        let mut core_batch = Vec::new();
+        let mut frame_batch = Vec::new();
+        let source_site = site + 1;
+
+        for input in 0..n_inputs {
+            validate_input_site(input, site, n_inputs, n)?;
+            let source = self.right_frames[input][source_site]
+                .as_ref()
+                .ok_or_else(|| missing_frame("right", input, source_site))?;
+            let core = self.inputs[input].site_tensor(site);
+
+            if core.right_dim() != source.nrows() {
+                return Err(AciError::InvalidInitialGuess {
+                    message: format!(
+                        "right frame/input bond mismatch at input {input}, site {site}: \
+                         core right bond is {}, frame has {} rows",
+                        core.right_dim(),
+                        source.nrows()
+                    ),
+                });
+            }
+
+            let full_cols =
+                checked_frame_mul(core.site_dim(), source.ncols(), "right frame column count")?;
+            validate_selection("column", col_indices, full_cols)?;
+
+            let dims = (
+                core.left_dim(),
+                core.site_dim(),
+                core.right_dim(),
+                source.ncols(),
+                full_cols,
+            );
+            if let Some(shared) = shared {
+                if shared != dims {
+                    return Ok(None);
+                }
+            } else {
+                shared = Some(dims);
+            }
+
+            core_batch.extend_from_slice(
+                self.input_core_right_matrix(input, site)
+                    .as_col_major_slice(),
+            );
+            frame_batch.extend_from_slice(source.as_col_major_slice());
+        }
+
+        let Some((left_dim, site_dim, right_dim, source_cols, _full_cols)) = shared else {
+            return Ok(None);
+        };
+        let core_rows = left_dim * site_dim;
+        let values = batched_mat_mul_same_shape(
+            n_inputs,
+            core_rows,
+            right_dim,
+            source_cols,
+            &core_batch,
+            &frame_batch,
+        )
+        .map_err(|err| frame_matmul_error("batched right", err))?;
+        let item_len = core_rows * source_cols;
+
+        let frames = (0..n_inputs)
+            .map(|input| {
+                let offset = input * item_len;
+                let full_data = &values[offset..offset + item_len];
+                let mut selected = Matrix::zeros(left_dim, col_indices.len());
+                for (selected_col, &full_col) in col_indices.iter().enumerate() {
+                    for left in 0..left_dim {
+                        selected[[left, selected_col]] = full_data[left + left_dim * full_col];
+                    }
+                }
+                selected
+            })
+            .collect();
+        Ok(Some(frames))
     }
 
     pub(crate) fn local_update<F>(
@@ -309,13 +554,10 @@ impl<T: AciScalar> ElementwiseProblem<T> {
                 });
             }
 
-            let factors_result = matrix_luci_factors_from_blocks(
-                nrows,
-                ncols,
-                |rows, cols, out: &mut [T]| {
-                    evaluator.fill_local_block_or_zero(rows, cols, out);
-                },
-                RrLUOptions {
+            let local_matrix = evaluator.materialize_local_matrix()?;
+            let factors_result = matrix_luci_factors_from_matrix(
+                &local_matrix,
+                Some(RrLUOptions {
                     max_rank: options.max_bond_dim,
                     rel_tol: if options.scale_tolerance {
                         options.tolerance
@@ -328,11 +570,8 @@ impl<T: AciScalar> ElementwiseProblem<T> {
                         options.tolerance
                     },
                     left_orthogonal,
-                },
+                }),
             );
-            if let Some(err) = evaluator.take_error() {
-                return Err(err);
-            }
             (factors_result?, evaluator.max_output_abs())
         };
 
@@ -638,7 +877,7 @@ fn left_matrix_julia_order<T: AciScalar>(core: &Tensor3<T>) -> Matrix<T> {
     Matrix::from_col_major_vec(left_dim * site_dim, right_dim, data)
 }
 
-fn matrix_to_tensor3<T: AciScalar>(
+pub(crate) fn matrix_to_tensor3<T: AciScalar>(
     matrix: &Matrix<T>,
     left_dim: usize,
     site_dim: usize,
@@ -662,7 +901,7 @@ fn matrix_to_tensor3<T: AciScalar>(
     )?)
 }
 
-fn right_factor_to_tensor3<T: AciScalar>(
+pub(crate) fn right_factor_to_tensor3<T: AciScalar>(
     matrix: &Matrix<T>,
     left_dim: usize,
     site_dim: usize,
@@ -707,4 +946,35 @@ fn matmul_checked<T: AciScalar>(
     mat_mul(left, right).map_err(|err| AciError::InvalidInitialGuess {
         message: format!("solution core update at site {site} failed: {err}"),
     })
+}
+
+fn frame_matmul_checked<T: AciScalar>(
+    left: &Matrix<T>,
+    right: &Matrix<T>,
+    direction: &'static str,
+    input: usize,
+    site: usize,
+) -> Result<Matrix<T>> {
+    if left.ncols() != right.nrows() {
+        return Err(AciError::InvalidInitialGuess {
+            message: format!(
+                "{direction} frame update at input {input}, site {site} has incompatible matrix \
+                 shapes: left ({}, {}), right ({}, {})",
+                left.nrows(),
+                left.ncols(),
+                right.nrows(),
+                right.ncols()
+            ),
+        });
+    }
+
+    mat_mul(left, right).map_err(|err| AciError::InvalidInitialGuess {
+        message: format!("{direction} frame update at input {input}, site {site} failed: {err}"),
+    })
+}
+
+fn frame_matmul_error(direction: &'static str, err: impl std::fmt::Display) -> AciError {
+    AciError::InvalidInitialGuess {
+        message: format!("{direction} frame update failed: {err}"),
+    }
 }

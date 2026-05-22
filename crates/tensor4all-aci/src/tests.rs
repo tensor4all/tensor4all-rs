@@ -1,7 +1,8 @@
+use crate::local::LocalInputSetupTiming;
 use crate::validation::{validate_inputs, validate_options};
 use crate::{
     elementwise,
-    elementwise::{error_metric, max_error_metric},
+    elementwise::{error_metric, max_error_metric, ranks_are_stable},
     elementwise_batched, initial_guess,
     random_tt::{
         initial_guess_core_entry_count, initial_guess_existing_entry_count,
@@ -10,9 +11,12 @@ use crate::{
     AciError, AciOptions, ElementwiseBatch, ElementwiseProblem, LocalBlockEvaluator,
 };
 use num_complex::Complex64;
+use std::cell::RefCell;
+use std::time::{Duration, Instant};
 use tensor4all_simplett::{
     tensor3_from_data, tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain,
 };
+use tensor4all_tcicore::{matrix_luci_factors_from_matrix, RrLUOptions};
 use tensor4all_tensorbackend::Matrix;
 
 fn tensor_train_with_link_dims(site_dims: &[usize], link_dims: &[usize]) -> TensorTrain<f64> {
@@ -314,6 +318,14 @@ fn relative_error_metric_pairs_each_bond_with_its_scale() {
     assert_eq!(max_error_metric(&errors, &scales, true), 1.0);
     assert_eq!(max_error_metric(&errors, &scales, false), 10.0);
     assert_eq!(max_error_metric(&errors, &[], true), 10.0);
+}
+
+#[test]
+fn rank_stability_matches_julia_min_iter_window() {
+    assert!(ranks_are_stable(&[10, 12, 12], 2));
+    assert!(!ranks_are_stable(&[10, 12, 13], 2));
+    assert!(!ranks_are_stable(&[10, 12], 2));
+    assert!(ranks_are_stable(&[10, 10], 2));
 }
 
 #[test]
@@ -687,6 +699,29 @@ fn local_input_value_matches_explicit_two_site_contraction() {
 }
 
 #[test]
+fn local_input_factors_match_explicit_two_site_contraction_for_all_inputs() {
+    let problem = local_test_problem();
+    let factors = crate::local::local_input_factors_for_problem(&problem, 1).unwrap();
+
+    assert_eq!(factors.len(), problem.n_inputs());
+    for input in 0..problem.n_inputs() {
+        let (nrows, ncols) = problem.local_input_shape(input, 1).unwrap();
+        for row in 0..nrows {
+            for col in 0..ncols {
+                let actual = factors[input].value(row, col).unwrap();
+                let expected = explicit_local_value(&problem, input, 1, row, col);
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    assert_ne!(
+        factors[0].value(3, 2).unwrap(),
+        factors[1].value(3, 2).unwrap()
+    );
+}
+
+#[test]
 fn local_block_evaluator_uses_matrix_luci_point_order_and_batch_layout() {
     let problem = local_test_problem();
     let rows = [0, 3];
@@ -729,6 +764,30 @@ fn local_block_evaluator_uses_matrix_luci_point_order_and_batch_layout() {
         }
     }
     assert_eq!(out, expected_out);
+}
+
+#[test]
+fn local_block_evaluator_materializes_full_matrix_in_column_major_order() {
+    let problem = local_test_problem();
+    let operator = |batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        for (point, value) in output.iter_mut().enumerate().take(batch.n_points()) {
+            *value = batch.get(0, point).unwrap() + 10.0 * batch.get(1, point).unwrap();
+        }
+        Ok(())
+    };
+    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator).unwrap();
+    let matrix = evaluator.materialize_local_matrix().unwrap();
+    let rows = (0..evaluator.nrows()).collect::<Vec<_>>();
+    let cols = (0..evaluator.ncols()).collect::<Vec<_>>();
+    let mut expected = vec![0.0; rows.len() * cols.len()];
+
+    evaluator
+        .fill_local_block(&rows, &cols, &mut expected)
+        .unwrap();
+
+    assert_eq!(matrix.nrows(), evaluator.nrows());
+    assert_eq!(matrix.ncols(), evaluator.ncols());
+    assert_eq!(matrix.as_col_major_slice(), expected);
 }
 
 #[test]
@@ -1235,4 +1294,374 @@ fn initial_guess_rejects_oversized_total_entries() {
         .unwrap_err();
     assert!(matches!(err, AciError::InvalidOptions { .. }));
     assert!(err.to_string().contains("initial guess total size"));
+}
+
+const STEP_TIMING_N_SITES: usize = 12;
+const STEP_TIMING_LOCAL_DIM: usize = 2;
+const STEP_TIMING_N_INPUTS: usize = 2;
+const STEP_TIMING_TOLERANCE: f64 = 1e-10;
+
+#[derive(Clone, Copy, Default)]
+struct LocalStepTiming {
+    setup: Duration,
+    setup_shape_validation: Duration,
+    setup_dims: Duration,
+    setup_left_factor: Duration,
+    setup_right_factor: Duration,
+    input_values: Duration,
+    operator: Duration,
+    matrix_luci: Duration,
+    core_update: Duration,
+    frame_update: Duration,
+    updates: usize,
+    sweeps: usize,
+    final_rank: usize,
+    final_error: f64,
+}
+
+impl LocalStepTiming {
+    fn total(self) -> Duration {
+        self.setup
+            + self.input_values
+            + self.operator
+            + self.matrix_luci
+            + self.core_update
+            + self.frame_update
+    }
+
+    fn setup_other(self) -> Duration {
+        self.setup
+            .checked_sub(
+                self.setup_shape_validation
+                    + self.setup_dims
+                    + self.setup_left_factor
+                    + self.setup_right_factor,
+            )
+            .unwrap_or_default()
+    }
+}
+
+fn step_timing_link_dims(n_sites: usize, local_dim: usize, chi: usize) -> Vec<usize> {
+    (0..n_sites.saturating_sub(1))
+        .map(|bond| {
+            let left_sites = bond + 1;
+            let right_sites = n_sites - left_sites;
+            let max_exact_rank = local_dim.pow(left_sites.min(right_sites) as u32);
+            chi.min(max_exact_rank).max(1)
+        })
+        .collect()
+}
+
+fn step_timing_core_value(
+    input_index: usize,
+    site: usize,
+    physical: usize,
+    left: usize,
+    right: usize,
+    left_dim: usize,
+    right_dim: usize,
+) -> f64 {
+    let input = input_index as f64 + 1.0;
+    let site = site as f64 + 1.0;
+    let physical = physical as f64 + 1.0;
+    let left = left as f64 + 1.0;
+    let right = right as f64 + 1.0;
+    let left_coord = left / (left_dim as f64 + 1.0);
+    let right_coord = right / (right_dim as f64 + 1.0);
+    let phase = 0.173 * input * site
+        + 0.193 * physical
+        + 0.071 * left * right
+        + 0.109 * input * left
+        + 0.131 * site * right;
+    let bond_mix = 0.29 * phase.sin()
+        + 0.23 * (0.157 * input * physical * right + 0.211 * site * left).cos()
+        + 0.17 * (left_coord - right_coord) * physical;
+    let site_value = 0.31 + bond_mix;
+    let scale = ((left_dim * right_dim) as f64).powf(0.25);
+    site_value / scale
+}
+
+fn step_timing_deterministic_tt(input_index: usize, chi: usize) -> TensorTrain<f64> {
+    let links = step_timing_link_dims(STEP_TIMING_N_SITES, STEP_TIMING_LOCAL_DIM, chi);
+    let cores = (0..STEP_TIMING_N_SITES)
+        .map(|site| {
+            let left_dim = if site == 0 { 1 } else { links[site - 1] };
+            let right_dim = links.get(site).copied().unwrap_or(1);
+            let mut data = vec![0.0; left_dim * STEP_TIMING_LOCAL_DIM * right_dim];
+            for right in 0..right_dim {
+                for physical in 0..STEP_TIMING_LOCAL_DIM {
+                    for left in 0..left_dim {
+                        data[left + left_dim * (physical + STEP_TIMING_LOCAL_DIM * right)] =
+                            step_timing_core_value(
+                                input_index,
+                                site,
+                                physical,
+                                left,
+                                right,
+                                left_dim,
+                                right_dim,
+                            );
+                    }
+                }
+            }
+            tensor3_from_data(data, left_dim, STEP_TIMING_LOCAL_DIM, right_dim)
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    TensorTrain::new(cores).unwrap()
+}
+
+fn step_timing_inputs(chi: usize) -> Vec<TensorTrain<f64>> {
+    (0..STEP_TIMING_N_INPUTS)
+        .map(|input| step_timing_deterministic_tt(input, chi))
+        .collect()
+}
+
+fn step_timing_multiply_batch(
+    batch: ElementwiseBatch<'_, f64>,
+    output: &mut [f64],
+) -> crate::Result<()> {
+    for (point, value) in output.iter_mut().enumerate().take(batch.n_points()) {
+        let mut product = 1.0;
+        for input in 0..batch.n_inputs() {
+            product *= batch.get(input, point)?;
+        }
+        *value = product;
+    }
+    Ok(())
+}
+
+fn timed_local_update<F>(
+    problem: &mut ElementwiseProblem<f64>,
+    bond: usize,
+    left_orthogonal: bool,
+    options: &AciOptions<f64>,
+    op: &mut F,
+    timing: &mut LocalStepTiming,
+) -> crate::Result<()>
+where
+    F: for<'batch> FnMut(ElementwiseBatch<'batch, f64>, &mut [f64]) -> crate::Result<()>,
+{
+    let left_core = problem.solution.site_tensor(bond);
+    let right_core = problem.solution.site_tensor(bond + 1);
+    let left_solution_rank = left_core.left_dim();
+    let site_dim_left = left_core.site_dim();
+    let site_dim_right = right_core.site_dim();
+    let right_solution_rank = right_core.right_dim();
+
+    let (factors, sampled_scale) = {
+        let op_cell = RefCell::new(op);
+        let operator = |batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {
+            let mut op_ref = op_cell.borrow_mut();
+            (*op_ref)(batch, output)
+        };
+
+        let start = Instant::now();
+        let mut setup_timing = LocalInputSetupTiming::default();
+        let evaluator = LocalBlockEvaluator::new_with_setup_timing(
+            problem,
+            bond,
+            &operator,
+            &mut setup_timing,
+        )?;
+        timing.setup += start.elapsed();
+        timing.setup_shape_validation += setup_timing.shape_validation;
+        timing.setup_dims += setup_timing.dims;
+        timing.setup_left_factor += setup_timing.left_factor;
+        timing.setup_right_factor += setup_timing.right_factor;
+
+        let start = Instant::now();
+        let input_values = evaluator.materialize_input_values()?;
+        timing.input_values += start.elapsed();
+
+        let start = Instant::now();
+        let local_matrix = evaluator.apply_operator_to_input_values(&input_values)?;
+        timing.operator += start.elapsed();
+        let sampled_scale = evaluator.max_output_abs();
+
+        let start = Instant::now();
+        let factors = matrix_luci_factors_from_matrix(
+            &local_matrix,
+            Some(RrLUOptions {
+                max_rank: options.max_bond_dim,
+                rel_tol: if options.scale_tolerance {
+                    options.tolerance
+                } else {
+                    0.0
+                },
+                abs_tol: if options.scale_tolerance {
+                    0.0
+                } else {
+                    options.tolerance
+                },
+                left_orthogonal,
+            }),
+        )?;
+        timing.matrix_luci += start.elapsed();
+        (factors, sampled_scale)
+    };
+
+    let pivot_error = factors.pivot_errors.last().copied().unwrap_or(0.0);
+    let new_rank = factors.rank.max(1);
+    let left_factor = if factors.rank == 0 {
+        Matrix::zeros(left_solution_rank * site_dim_left, 1)
+    } else {
+        factors.left
+    };
+    let right_factor = if factors.rank == 0 {
+        Matrix::zeros(1, site_dim_right * right_solution_rank)
+    } else {
+        factors.right
+    };
+    let row_indices = if factors.rank == 0 {
+        vec![0]
+    } else {
+        factors.row_indices
+    };
+    let col_indices = if factors.rank == 0 {
+        vec![0]
+    } else {
+        factors.col_indices
+    };
+
+    let start = Instant::now();
+    let mut solution_cores = problem.solution.site_tensors().to_vec();
+    solution_cores[bond] =
+        crate::state::matrix_to_tensor3(&left_factor, left_solution_rank, site_dim_left, new_rank)?;
+    solution_cores[bond + 1] = crate::state::right_factor_to_tensor3(
+        &right_factor,
+        new_rank,
+        site_dim_right,
+        right_solution_rank,
+    )?;
+    problem.solution = TensorTrain::new(solution_cores)?;
+    timing.core_update += start.elapsed();
+
+    let start = Instant::now();
+    if left_orthogonal {
+        problem.update_left_frames(bond, &row_indices)?;
+    } else {
+        problem.update_right_frames(bond + 1, &col_indices)?;
+    }
+    problem.pivot_errors[bond] = pivot_error;
+    problem.pivot_scales[bond] = sampled_scale;
+    timing.frame_update += start.elapsed();
+    timing.updates += 1;
+    Ok(())
+}
+
+fn timed_aci_run(chi: usize) -> LocalStepTiming {
+    let inputs = step_timing_inputs(chi);
+    let options = AciOptions {
+        max_iters: 20,
+        tolerance: STEP_TIMING_TOLERANCE,
+        initial_guess: Some(step_timing_deterministic_tt(STEP_TIMING_N_INPUTS, chi)),
+        ..AciOptions::default()
+    };
+    let mut problem = ElementwiseProblem::new(inputs, options.clone()).unwrap();
+    let mut timing = LocalStepTiming::default();
+    let mut op = step_timing_multiply_batch;
+    let mut ranks = Vec::new();
+
+    for iteration in 0..options.max_iters {
+        let forward = iteration % 2 == 0;
+        if forward {
+            for bond in 0..problem.len() - 1 {
+                timed_local_update(&mut problem, bond, true, &options, &mut op, &mut timing)
+                    .unwrap();
+            }
+        } else {
+            for bond in (0..problem.len() - 1).rev() {
+                timed_local_update(&mut problem, bond, false, &options, &mut op, &mut timing)
+                    .unwrap();
+            }
+        }
+
+        let max_error = max_error_metric(
+            &problem.pivot_errors,
+            &problem.pivot_scales,
+            options.scale_tolerance,
+        );
+        ranks.push(problem.solution.rank());
+        timing.sweeps += 1;
+        timing.final_rank = problem.solution.rank();
+        timing.final_error = max_error;
+
+        if iteration + 1 >= options.min_iters
+            && max_error <= options.tolerance
+            && ranks_are_stable(&ranks, options.min_iters)
+        {
+            break;
+        }
+    }
+    timing
+}
+
+fn duration_ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1_000.0
+}
+
+fn median_ms(mut values: Vec<f64>) -> f64 {
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mid = values.len() / 2;
+    if values.len() % 2 == 0 {
+        0.5 * (values[mid - 1] + values[mid])
+    } else {
+        values[mid]
+    }
+}
+
+#[test]
+#[ignore]
+fn local_update_step_timing() {
+    let repeats = std::env::var("T4A_STEP_TIMING_REPEATS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(10);
+    let chis = std::env::var("T4A_STEP_TIMING_CHIS")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .map(|item| item.parse::<usize>().unwrap())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| vec![2, 4, 8, 16]);
+    println!(
+        "impl,chi,repeats,n_sweeps,n_updates,setup_ms,setup_shape_ms,setup_dims_ms,setup_left_factor_ms,setup_right_factor_ms,setup_other_ms,input_values_ms,operator_ms,matrix_luci_ms,core_update_ms,frame_update_ms,total_ms,final_rank,final_error"
+    );
+    for chi in chis {
+        let runs = (0..repeats).map(|_| timed_aci_run(chi)).collect::<Vec<_>>();
+        let sweeps = runs[0].sweeps;
+        let updates = runs[0].updates;
+        let final_rank = runs[0].final_rank;
+        let final_error = runs[0].final_error;
+        println!(
+            "rust,{chi},{repeats},{sweeps},{updates},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{final_rank},{final_error:.6e}",
+            median_ms(runs.iter().map(|run| duration_ms(run.setup)).collect()),
+            median_ms(
+                runs.iter()
+                    .map(|run| duration_ms(run.setup_shape_validation))
+                    .collect()
+            ),
+            median_ms(runs.iter().map(|run| duration_ms(run.setup_dims)).collect()),
+            median_ms(
+                runs.iter()
+                    .map(|run| duration_ms(run.setup_left_factor))
+                    .collect()
+            ),
+            median_ms(
+                runs.iter()
+                    .map(|run| duration_ms(run.setup_right_factor))
+                    .collect()
+            ),
+            median_ms(runs.iter().map(|run| duration_ms(run.setup_other())).collect()),
+            median_ms(runs.iter().map(|run| duration_ms(run.input_values)).collect()),
+            median_ms(runs.iter().map(|run| duration_ms(run.operator)).collect()),
+            median_ms(runs.iter().map(|run| duration_ms(run.matrix_luci)).collect()),
+            median_ms(runs.iter().map(|run| duration_ms(run.core_update)).collect()),
+            median_ms(runs.iter().map(|run| duration_ms(run.frame_update)).collect()),
+            median_ms(runs.iter().map(|run| duration_ms(run.total())).collect()),
+        );
+    }
 }

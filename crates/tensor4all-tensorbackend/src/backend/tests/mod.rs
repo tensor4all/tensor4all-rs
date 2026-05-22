@@ -131,6 +131,19 @@ fn solve_matrix_solves_real_system() {
 }
 
 #[test]
+fn solve_matrix_owned_solves_real_system() {
+    let a = crate::from_vec2d(vec![vec![2.0_f64, 1.0], vec![1.0, 2.0]]);
+    let b = crate::from_vec2d(vec![vec![1.0_f64], vec![0.0]]);
+
+    let x = solve_matrix_owned(a, b).unwrap();
+
+    assert_eq!(x.nrows(), 2);
+    assert_eq!(x.ncols(), 1);
+    assert!((x[[0, 0]] - 2.0 / 3.0).abs() < 1.0e-12);
+    assert!((x[[1, 0]] + 1.0 / 3.0).abs() < 1.0e-12);
+}
+
+#[test]
 fn solve_matrix_promotes_f32_system() {
     let a = crate::from_vec2d(vec![vec![2.0_f32, 1.0], vec![1.0, 2.0]]);
     let b = crate::from_vec2d(vec![vec![1.0_f32], vec![0.0]]);
@@ -158,6 +171,45 @@ fn solve_matrix_promotes_complex32_system() {
     assert!((x[[1, 0]].re + 1.0 / 3.0).abs() < 1.0e-6);
     assert!(x[[0, 0]].im.abs() < 1.0e-6);
     assert!(x[[1, 0]].im.abs() < 1.0e-6);
+}
+
+#[test]
+fn triangular_solve_matrix_solves_left_lower_system() {
+    let a = crate::from_vec2d(vec![vec![2.0_f64, 0.0], vec![1.0, 3.0]]);
+    let b = crate::from_vec2d(vec![vec![2.0_f64], vec![7.0]]);
+
+    let x = triangular_solve_matrix(&a, &b, true, true, false, false).unwrap();
+
+    assert_eq!(x.nrows(), 2);
+    assert_eq!(x.ncols(), 1);
+    assert!((x[[0, 0]] - 1.0).abs() < 1.0e-12);
+    assert!((x[[1, 0]] - 2.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn triangular_solve_matrix_owned_solves_left_lower_system() {
+    let a = crate::from_vec2d(vec![vec![2.0_f64, 0.0], vec![1.0, 3.0]]);
+    let b = crate::from_vec2d(vec![vec![2.0_f64], vec![7.0]]);
+
+    let x = triangular_solve_matrix_owned(a, b, true, true, false, false).unwrap();
+
+    assert_eq!(x.nrows(), 2);
+    assert_eq!(x.ncols(), 1);
+    assert!((x[[0, 0]] - 1.0).abs() < 1.0e-12);
+    assert!((x[[1, 0]] - 2.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn triangular_solve_matrix_solves_right_upper_system() {
+    let a = crate::from_vec2d(vec![vec![2.0_f64, 1.0], vec![0.0, 3.0]]);
+    let b = crate::from_vec2d(vec![vec![2.0_f64, 7.0]]);
+
+    let x = triangular_solve_matrix(&a, &b, false, false, false, false).unwrap();
+
+    assert_eq!(x.nrows(), 1);
+    assert_eq!(x.ncols(), 2);
+    assert!((x[[0, 0]] - 1.0).abs() < 1.0e-12);
+    assert!((x[[0, 1]] - 2.0).abs() < 1.0e-12);
 }
 
 #[test]

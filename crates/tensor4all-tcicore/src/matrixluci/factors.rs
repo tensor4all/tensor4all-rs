@@ -9,7 +9,7 @@ use crate::matrixluci::scalar::Scalar;
 use crate::matrixluci::source::CandidateMatrixSource;
 use crate::matrixluci::types::PivotSelectionCore;
 use crate::matrixluci::Result;
-use tensor4all_tensorbackend::{mat_mul, solve_matrix, Matrix};
+use tensor4all_tensorbackend::{solve_matrix, transpose, Matrix};
 
 /// Gather a dense column-major block from a source.
 pub(crate) fn load_block<T: Scalar, S: CandidateMatrixSource<T>>(
@@ -31,25 +31,6 @@ pub(crate) fn subtract_inplace<T: Scalar>(lhs: &mut Matrix<T>, rhs: &Matrix<T>) 
             lhs[[i, j]] = lhs[[i, j]] - rhs[[i, j]];
         }
     }
-}
-
-/// Invert a square dense matrix via the configured tensor backend.
-pub(crate) fn invert_square<T: Scalar>(matrix: &Matrix<T>) -> Result<Matrix<T>> {
-    if matrix.nrows() != matrix.ncols() {
-        return Err(MatrixLuciError::InvalidArgument {
-            message: "pivot block must be square".to_string(),
-        });
-    }
-
-    let n = matrix.nrows();
-    let mut identity = Matrix::zeros(n, n);
-    for i in 0..n {
-        identity[[i, i]] = T::one();
-    }
-
-    solve_matrix(matrix, &identity).map_err(|err| MatrixLuciError::InvalidArgument {
-        message: format!("pivot block solve failed: {err}"),
-    })
 }
 
 /// Dense factors derived from a pivot selection.
@@ -93,24 +74,24 @@ impl<T: Scalar> CrossFactors<T> {
         })
     }
 
-    /// Invert the pivot block.
-    pub fn pivot_inverse(&self) -> Result<Matrix<T>> {
-        invert_square(&self.pivot)
+    /// Solve for `A[:, J] * A[I, J]^{-1}` without forming an explicit inverse.
+    pub fn cols_solve_pivot(&self) -> Result<Matrix<T>> {
+        let pivot_t = transpose(&self.pivot);
+        let pivot_cols_t = transpose(&self.pivot_cols);
+        let solved_t = solve_matrix(&pivot_t, &pivot_cols_t).map_err(|err| {
+            MatrixLuciError::InvalidArgument {
+                message: format!("left factor solve failed: {err}"),
+            }
+        })?;
+        Ok(transpose(&solved_t))
     }
 
-    /// Form `A[:, J] * A[I, J]^{-1}`.
-    pub fn cols_times_pivot_inv(&self) -> Result<Matrix<T>> {
-        let pivot_inv = self.pivot_inverse()?;
-        mat_mul(&self.pivot_cols, &pivot_inv).map_err(|err| MatrixLuciError::InvalidArgument {
-            message: format!("left factor multiplication failed: {err}"),
-        })
-    }
-
-    /// Form `A[I, J]^{-1} * A[I, :]`.
-    pub fn pivot_inv_times_rows(&self) -> Result<Matrix<T>> {
-        let pivot_inv = self.pivot_inverse()?;
-        mat_mul(&pivot_inv, &self.pivot_rows).map_err(|err| MatrixLuciError::InvalidArgument {
-            message: format!("right factor multiplication failed: {err}"),
+    /// Solve for `A[I, J]^{-1} * A[I, :]` without forming an explicit inverse.
+    pub fn solve_pivot_rows(&self) -> Result<Matrix<T>> {
+        solve_matrix(&self.pivot, &self.pivot_rows).map_err(|err| {
+            MatrixLuciError::InvalidArgument {
+                message: format!("right factor solve failed: {err}"),
+            }
         })
     }
 }

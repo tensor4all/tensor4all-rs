@@ -6,6 +6,7 @@
 //! the internal rrLU implementation for rectangular fallback coverage.
 
 pub(crate) mod block_rook;
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod dense;
 pub(crate) mod error;
 pub(crate) mod factors;

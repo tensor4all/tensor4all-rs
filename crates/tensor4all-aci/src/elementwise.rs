@@ -234,21 +234,14 @@ where
     )
 }
 
-fn ranks_are_stable(ranks: &[usize], min_iters: usize) -> bool {
+pub(crate) fn ranks_are_stable(ranks: &[usize], min_iters: usize) -> bool {
     if ranks.is_empty() || min_iters == 0 {
         return min_iters == 0;
     }
 
-    if ranks.len() > min_iters {
-        let baseline_index = ranks.len() - min_iters - 1;
-        let baseline = ranks[baseline_index];
-        ranks[baseline_index + 1..]
-            .iter()
-            .all(|&rank| rank <= baseline)
-    } else {
-        let baseline = ranks[0];
-        ranks.iter().all(|&rank| rank <= baseline)
-    }
+    let baseline_index = ranks.len().saturating_sub(min_iters);
+    let baseline = ranks[baseline_index];
+    ranks[baseline_index..].iter().all(|&rank| rank <= baseline)
 }
 
 pub(crate) fn error_metric(

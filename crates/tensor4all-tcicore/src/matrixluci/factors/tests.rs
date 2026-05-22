@@ -61,8 +61,8 @@ fn reconstruct_cross_factors_can_form_inverse_scaled_factors() {
         .unwrap();
 
     let factors = CrossFactors::from_source(&src, &selection).unwrap();
-    let left = factors.cols_times_pivot_inv().unwrap();
-    let right = factors.pivot_inv_times_rows().unwrap();
+    let left = factors.cols_solve_pivot().unwrap();
+    let right = factors.solve_pivot_rows().unwrap();
 
     assert_eq!(left.nrows(), 4);
     assert_eq!(left.ncols(), selection.rank);
