@@ -14,7 +14,7 @@ import AlternatingCrossInterpolation as ACI
 
 const TCI = ACI.TCI
 
-const N_SITES = 12
+const DEFAULT_N_SITES = 12
 const LOCAL_DIM = 2
 const N_INPUTS = 2
 const TOLERANCE = 1e-10
@@ -40,19 +40,38 @@ end
 
 StepTiming() = StepTiming(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0)
 
-function parse_chis(args)
+function parse_args(args)
     chis = [2, 4, 8, 16]
+    n_sites = parse(Int, get(ENV, "T4A_STEP_TIMING_N_SITES", string(DEFAULT_N_SITES)))
+    min_iters = parse(Int, get(ENV, "T4A_STEP_TIMING_MIN_ITERS", string(MIN_ITERS)))
+    fixed_sweeps_env = get(ENV, "T4A_STEP_TIMING_FIXED_SWEEPS", "")
+    fixed_sweeps = isempty(fixed_sweeps_env) ? nothing : parse(Int, fixed_sweeps_env)
     i = 1
     while i <= length(args)
         if args[i] == "--chis"
             i == length(args) && error("--chis requires a comma-separated value list")
             chis = parse.(Int, split(args[i + 1], ","))
             i += 2
+        elseif args[i] == "--sites"
+            i == length(args) && error("--sites requires a site count")
+            n_sites = parse(Int, args[i + 1])
+            i += 2
+        elseif args[i] == "--min-iters"
+            i == length(args) && error("--min-iters requires an iteration count")
+            min_iters = parse(Int, args[i + 1])
+            i += 2
+        elseif args[i] == "--fixed-sweeps"
+            i == length(args) && error("--fixed-sweeps requires a sweep count")
+            fixed_sweeps = parse(Int, args[i + 1])
+            i += 2
         else
             error("unknown argument: $(args[i])")
         end
     end
-    return chis
+    n_sites < 2 && error("--sites must be at least 2")
+    min_iters < 1 && error("--min-iters must be at least 1")
+    fixed_sweeps !== nothing && fixed_sweeps < 1 && error("--fixed-sweeps must be at least 1")
+    return chis, n_sites, min_iters, fixed_sweeps
 end
 
 function link_dims(n_sites::Int, local_dim::Int, chi::Int)
@@ -83,10 +102,10 @@ function core_value(input_index::Int, site::Int, physical::Int, left::Int, right
     return site_value / scale
 end
 
-function deterministic_tt(input_index::Int, chi::Int)
-    links = link_dims(N_SITES, LOCAL_DIM, chi)
-    tensors = Vector{Array{Float64,3}}(undef, N_SITES)
-    for site in 1:N_SITES
+function deterministic_tt(input_index::Int, n_sites::Int, chi::Int)
+    links = link_dims(n_sites, LOCAL_DIM, chi)
+    tensors = Vector{Array{Float64,3}}(undef, n_sites)
+    for site in 1:n_sites
         left_dim = site == 1 ? 1 : links[site - 1]
         right_dim = site <= length(links) ? links[site] : 1
         tensor = Array{Float64,3}(undef, left_dim, LOCAL_DIM, right_dim)
@@ -106,8 +125,8 @@ function deterministic_tt(input_index::Int, chi::Int)
     return TCI.TensorTrain(tensors)
 end
 
-function deterministic_inputs(chi::Int)
-    return [deterministic_tt(input_index, chi) for input_index in 0:(N_INPUTS - 1)]
+function deterministic_inputs(n_sites::Int, chi::Int)
+    return [deterministic_tt(input_index, n_sites, chi) for input_index in 0:(N_INPUTS - 1)]
 end
 
 function timed_pitensor(problem, inputindex::Integer, bondindex::Integer, timing::StepTiming)
@@ -172,9 +191,9 @@ function timed_localupdate!(op, problem, bondindex::Integer; leftorthogonal::Boo
     nothing
 end
 
-function timed_run(chi::Int)
-    inputs = deterministic_inputs(chi)
-    initial_guess = deterministic_tt(N_INPUTS, chi)
+function timed_run(n_sites::Int, chi::Int, min_iters::Int, fixed_sweeps::Union{Nothing,Int})
+    inputs = deterministic_inputs(n_sites, chi)
+    initial_guess = deterministic_tt(N_INPUTS, n_sites, chi)
     truncationparameters = ACI.TruncationParameters(typemax(Int), TOLERANCE, false)
     problem = ACI.ElementwiseProblem(inputs, initial_guess)
     timing = StepTiming()
@@ -200,9 +219,13 @@ function timed_run(chi::Int)
         timing.final_rank = last(ranks)
         timing.final_error = last(errors)
 
-        if iteration >= MIN_ITERS &&
+        if fixed_sweeps !== nothing && timing.sweeps >= fixed_sweeps
+            break
+        end
+
+        if iteration >= min_iters &&
            errors[iteration] <= truncationparameters.tolerance &&
-           !any(last(ranks, MIN_ITERS) .> ranks[iteration-MIN_ITERS+1])
+           !any(last(ranks, min_iters) .> ranks[iteration-min_iters+1])
             break
         end
     end
@@ -217,10 +240,11 @@ setup_other_ns(run::StepTiming) = max(
 
 function main()
     repeats = parse(Int, get(ENV, "T4A_STEP_TIMING_REPEATS", "10"))
-    chis = parse_chis(ARGS)
-    println("impl,chi,repeats,n_sweeps,n_updates,setup_ms,setup_shape_ms,setup_dims_ms,setup_left_factor_ms,setup_right_factor_ms,setup_other_ms,input_values_ms,operator_ms,matrix_luci_ms,core_update_ms,frame_update_ms,total_ms,final_rank,final_error")
+    chis, n_sites, min_iters, fixed_sweeps = parse_args(ARGS)
+    fixed_sweeps_value = fixed_sweeps === nothing ? 0 : fixed_sweeps
+    println("impl,chi,n_sites,repeats,min_iters,fixed_sweeps,n_sweeps,n_updates,setup_ms,setup_shape_ms,setup_dims_ms,setup_left_factor_ms,setup_right_factor_ms,setup_other_ms,input_values_ms,operator_ms,matrix_luci_ms,core_update_ms,frame_update_ms,total_ms,final_rank,final_error")
     for chi in chis
-        runs = [timed_run(chi) for _ in 1:repeats]
+        runs = [timed_run(n_sites, chi, min_iters, fixed_sweeps) for _ in 1:repeats]
         total_ms = [
             ns_to_ms(run.setup_ns + run.input_values_ns + run.operator_ns + run.matrix_luci_ns + run.core_update_ns + run.frame_update_ns)
             for run in runs
@@ -229,7 +253,10 @@ function main()
         println(join([
             "julia",
             chi,
+            n_sites,
             repeats,
+            min_iters,
+            fixed_sweeps_value,
             first.sweeps,
             first.updates,
             median(ns_to_ms.(getfield.(runs, :setup_ns))),

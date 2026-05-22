@@ -18,6 +18,30 @@ fn test_matrixluci_from_matrix() {
 }
 
 #[test]
+fn matrix_luci_factors_from_matrix_owned_matches_borrowed() {
+    let m = from_vec2d(vec![
+        vec![1.0, 2.0, 3.0],
+        vec![4.0, 5.0, 6.0],
+        vec![7.0, 8.0, 10.0],
+    ]);
+
+    let borrowed = matrix_luci_factors_from_matrix(&m, None).unwrap();
+    let owned = matrix_luci_factors_from_matrix_owned(m, None).unwrap();
+
+    assert_eq!(owned.rank, borrowed.rank);
+    assert_eq!(owned.row_indices, borrowed.row_indices);
+    assert_eq!(owned.col_indices, borrowed.col_indices);
+    assert_eq!(
+        owned.left.as_col_major_slice(),
+        borrowed.left.as_col_major_slice()
+    );
+    assert_eq!(
+        owned.right.as_col_major_slice(),
+        borrowed.right.as_col_major_slice()
+    );
+}
+
+#[test]
 fn test_matrixluci_reconstruct() {
     let m = from_vec2d(vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
 

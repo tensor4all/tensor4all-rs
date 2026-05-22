@@ -114,10 +114,13 @@ where
         ranks.push(problem.solution.rank());
         errors.push(max_error_metric);
 
-        if iteration + 1 >= options.min_iters
-            && max_error_metric <= options.tolerance
-            && ranks_are_stable(&ranks, options.min_iters)
-        {
+        if convergence_criterion_like_julia(
+            iteration + 1,
+            &ranks,
+            &errors,
+            options.min_iters,
+            options.tolerance,
+        ) {
             break;
         }
     }
@@ -234,6 +237,7 @@ where
     )
 }
 
+#[cfg(test)]
 pub(crate) fn ranks_are_stable(ranks: &[usize], min_iters: usize) -> bool {
     if ranks.is_empty() || min_iters == 0 {
         return min_iters == 0;
@@ -242,6 +246,33 @@ pub(crate) fn ranks_are_stable(ranks: &[usize], min_iters: usize) -> bool {
     let baseline_index = ranks.len().saturating_sub(min_iters);
     let baseline = ranks[baseline_index];
     ranks[baseline_index..].iter().all(|&rank| rank <= baseline)
+}
+
+pub(crate) fn convergence_criterion_like_julia(
+    iteration: usize,
+    ranks: &[usize],
+    errors: &[f64],
+    min_iters: usize,
+    tolerance: f64,
+) -> bool {
+    debug_assert!(iteration > 0);
+    debug_assert_eq!(ranks.len(), iteration);
+    debug_assert_eq!(errors.len(), iteration);
+
+    if iteration == 0 || min_iters == 0 {
+        return false;
+    }
+    if iteration < min_iters {
+        return false;
+    }
+    if errors[iteration - 1] > tolerance {
+        return false;
+    }
+
+    let baseline = ranks[iteration - min_iters];
+    !ranks[(iteration - min_iters)..iteration]
+        .iter()
+        .any(|&rank| rank > baseline)
 }
 
 pub(crate) fn error_metric(

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use crate::scalar::AciScalar;
 use crate::{AciError, ElementwiseBatch, ElementwiseProblem, Result};
 use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops};
-use tensor4all_tensorbackend::{batched_mat_mul_same_shape, mat_mul, Matrix};
+use tensor4all_tensorbackend::{batched_mat_mul_same_shape_owned, mat_mul, mat_mul_owned, Matrix};
 
 type LocalOperator<'a, T> =
     dyn for<'batch> Fn(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()> + 'a;
@@ -102,9 +102,9 @@ impl<T: AciScalar> LocalInputFactors<T> {
             Matrix::from_col_major_vec(self.nrows, self.middle_dim, self.left_values.clone());
         let right =
             Matrix::from_col_major_vec(self.middle_dim, self.ncols, self.right_values.clone());
-        let product = mat_mul(&left, &right)
+        let product = mat_mul_owned(left, right)
             .map_err(|err| local_factor_error("local input materialization matmul", err))?;
-        Ok(product.as_col_major_slice().to_vec())
+        Ok(product.into_col_major_vec())
     }
 
     fn left_offset(&self, left_pivot: usize, site_left: usize, middle: usize) -> usize {
@@ -286,13 +286,13 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
                     left_batch.extend_from_slice(&factors.left_values);
                     right_batch.extend_from_slice(&factors.right_values);
                 }
-                let values = batched_mat_mul_same_shape(
+                let values = batched_mat_mul_same_shape_owned(
                     n_inputs,
                     self.nrows,
                     middle_dim,
                     self.ncols,
-                    &left_batch,
-                    &right_batch,
+                    left_batch,
+                    right_batch,
                 )
                 .map_err(|err| local_factor_error("batched local input materialization", err))?;
                 for input in 0..n_inputs {
@@ -540,13 +540,13 @@ fn build_left_factors<T: AciScalar>(
                         .as_col_major_slice(),
                 );
             }
-            let values = batched_mat_mul_same_shape(
+            let values = batched_mat_mul_same_shape_owned(
                 n_inputs,
                 shared.left_rows,
                 shared.input_left_dim,
                 left_cols,
-                &frame_batch,
-                &core_batch,
+                frame_batch,
+                core_batch,
             )
             .map_err(|err| local_factor_error("batched left factor matmul", err))?;
             let item_len = shared.left_rows * left_cols;
@@ -583,13 +583,13 @@ fn build_right_factors<T: AciScalar>(
                     local_right_frame(problem, input, bond)?.as_col_major_slice(),
                 );
             }
-            let values = batched_mat_mul_same_shape(
+            let values = batched_mat_mul_same_shape_owned(
                 n_inputs,
                 right_rows,
                 shared.input_right_dim,
                 shared.right_cols,
-                &core_batch,
-                &frame_batch,
+                core_batch,
+                frame_batch,
             )
             .map_err(|err| local_factor_error("batched right factor matmul", err))?;
             let item_len = right_rows * shared.right_cols;

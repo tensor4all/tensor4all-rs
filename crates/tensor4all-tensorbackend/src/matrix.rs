@@ -118,6 +118,24 @@ impl<T> Matrix<T> {
         &self.data
     }
 
+    /// View the underlying column-major data as a mutable contiguous slice.
+    ///
+    /// The slice uses `row + nrows * col` ordering. This is useful for kernels
+    /// that validate dimensions once and then operate over contiguous columns.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Matrix;
+    ///
+    /// let mut m = Matrix::from_col_major_vec(2, 2, vec![1, 3, 2, 4]);
+    /// m.as_col_major_mut_slice()[1] = 30;
+    /// assert_eq!(m[[1, 0]], 30);
+    /// ```
+    pub fn as_col_major_mut_slice(&mut self) -> &mut [T] {
+        &mut self.data
+    }
+
     /// Consume the matrix and return its owned column-major buffer.
     ///
     /// The returned buffer uses `row + nrows * col` ordering. Use this when
@@ -348,13 +366,27 @@ pub fn from_vec2d<T: Clone + Zero>(data: Vec<Vec<T>>) -> Matrix<T> {
 /// assert_eq!(sub[[1, 1]], 9.0); // m[2, 2]
 /// ```
 pub fn submatrix<T: Clone + Zero>(m: &Matrix<T>, rows: &[usize], cols: &[usize]) -> Matrix<T> {
-    let mut result = Matrix::zeros(rows.len(), cols.len());
-    for (ci, &c) in cols.iter().enumerate() {
-        for (ri, &r) in rows.iter().enumerate() {
-            result[[ri, ci]] = m[[r, c]].clone();
+    assert!(
+        rows.iter().all(|&row| row < m.nrows),
+        "submatrix row index out of bounds"
+    );
+    assert!(
+        cols.iter().all(|&col| col < m.ncols),
+        "submatrix column index out of bounds"
+    );
+
+    let mut data = Vec::with_capacity(rows.len() * cols.len());
+    let source = m.as_col_major_slice();
+    for &col in cols {
+        let col_start = col * m.nrows;
+        for &row in rows {
+            let offset = col_start + row;
+            // SAFETY: rows and cols are range-checked above, and Matrix stores
+            // exactly nrows * ncols values in column-major order.
+            data.push(unsafe { source.get_unchecked(offset).clone() });
         }
     }
-    result
+    Matrix::from_col_major_vec(rows.len(), cols.len(), data)
 }
 
 /// Swap two rows in a matrix in-place.
@@ -375,10 +407,13 @@ pub fn swap_rows<T>(m: &mut Matrix<T>, a: usize, b: usize) {
     if a == b {
         return;
     }
-    for j in 0..m.ncols {
-        let idx_a = m.offset(a, j);
-        let idx_b = m.offset(b, j);
-        m.data.swap(idx_a, idx_b);
+    assert!(a < m.nrows, "row index out of bounds");
+    assert!(b < m.nrows, "row index out of bounds");
+    let nrows = m.nrows;
+    let ncols = m.ncols;
+    let data = m.as_col_major_mut_slice();
+    for j in 0..ncols {
+        data.swap(a + nrows * j, b + nrows * j);
     }
 }
 
@@ -400,10 +435,18 @@ pub fn swap_cols<T>(m: &mut Matrix<T>, a: usize, b: usize) {
     if a == b {
         return;
     }
-    for i in 0..m.nrows {
-        let idx_a = m.offset(i, a);
-        let idx_b = m.offset(i, b);
-        m.data.swap(idx_a, idx_b);
+    assert!(a < m.ncols, "column index out of bounds");
+    assert!(b < m.ncols, "column index out of bounds");
+    let nrows = m.nrows;
+    let start_a = nrows * a;
+    let start_b = nrows * b;
+    let data = m.as_col_major_mut_slice();
+    if start_a < start_b {
+        let (left, right) = data.split_at_mut(start_b);
+        left[start_a..start_a + nrows].swap_with_slice(&mut right[..nrows]);
+    } else {
+        let (left, right) = data.split_at_mut(start_a);
+        right[..nrows].swap_with_slice(&mut left[start_b..start_b + nrows]);
     }
 }
 
@@ -462,8 +505,14 @@ pub fn submatrix_argmax<T: MatrixScalar>(
 ) -> (usize, usize, T) {
     assert!(!rows.is_empty(), "rows must not be empty");
     assert!(!cols.is_empty(), "cols must not be empty");
+    assert!(rows.end <= a.nrows, "row range out of bounds");
+    assert!(cols.end <= a.ncols, "column range out of bounds");
 
-    let mut max_val: f64 = a[[rows.start, cols.start]].matrix_abs_sq();
+    let data = a.as_col_major_slice();
+    let first_offset = rows.start + a.nrows * cols.start;
+    // SAFETY: the non-empty ranges are checked against the matrix shape above.
+    let first = unsafe { *data.get_unchecked(first_offset) };
+    let mut max_val: f64 = first.matrix_abs_sq();
     let mut max_row = rows.start;
     let mut max_col = cols.start;
     let row_start = rows.start;
@@ -472,17 +521,23 @@ pub fn submatrix_argmax<T: MatrixScalar>(
     let col_end = cols.end;
 
     for c in col_start..col_end {
+        let mut offset = row_start + a.nrows * c;
         for r in row_start..row_end {
-            let val: f64 = a[[r, c]].matrix_abs_sq();
+            // SAFETY: row and column loops stay within the checked ranges.
+            let value = unsafe { *data.get_unchecked(offset) };
+            let val: f64 = value.matrix_abs_sq();
             if val > max_val {
                 max_val = val;
                 max_row = r;
                 max_col = c;
             }
+            offset += 1;
         }
     }
 
-    (max_row, max_col, a[[max_row, max_col]])
+    let max_offset = max_row + a.nrows * max_col;
+    // SAFETY: max_row/max_col were selected from the checked ranges.
+    (max_row, max_col, unsafe { *data.get_unchecked(max_offset) })
 }
 
 /// BLAS-backed matrix multiplication dispatch.
@@ -717,32 +772,37 @@ pub fn batched_mat_mul_same_shape<T>(
 where
     T: tenferro::TensorScalar + Copy,
 {
+    batched_mat_mul_same_shape_owned(batch, m, k, n, a.to_vec(), b.to_vec())
+}
+
+/// Batched matrix multiplication while consuming column-major input buffers.
+///
+/// This is the owned-buffer counterpart of [`batched_mat_mul_same_shape`].
+/// It avoids cloning the two input batches when callers have just built the
+/// contiguous buffers for a backend call.
+///
+/// # Errors
+///
+/// Returns an error if the input buffer lengths do not match the declared
+/// shapes or if the backend rejects the batched GEMM.
+pub fn batched_mat_mul_same_shape_owned<T>(
+    batch: usize,
+    m: usize,
+    k: usize,
+    n: usize,
+    a: Vec<T>,
+    b: Vec<T>,
+) -> Result<Vec<T>>
+where
+    T: tenferro::TensorScalar + Copy,
+{
     use crate::with_default_backend;
     use tenferro::{DotGeneralConfig, TensorBackend};
 
-    let a_len = batch
-        .checked_mul(m)
-        .and_then(|value| value.checked_mul(k))
-        .ok_or_else(|| anyhow::anyhow!("batched matrix multiplication left shape overflows"))?;
-    let b_len = batch
-        .checked_mul(k)
-        .and_then(|value| value.checked_mul(n))
-        .ok_or_else(|| anyhow::anyhow!("batched matrix multiplication right shape overflows"))?;
-    ensure!(
-        a.len() == a_len,
-        "batched matrix multiplication left buffer has length {}, expected {}",
-        a.len(),
-        a_len
-    );
-    ensure!(
-        b.len() == b_len,
-        "batched matrix multiplication right buffer has length {}, expected {}",
-        b.len(),
-        b_len
-    );
+    validate_batched_mat_mul_inputs(batch, m, k, n, a.len(), b.len())?;
 
-    let a_tensor = T::into_tensor(vec![m, k, batch], a.to_vec());
-    let b_tensor = T::into_tensor(vec![k, n, batch], b.to_vec());
+    let a_tensor = T::into_tensor(vec![m, k, batch], a);
+    let b_tensor = T::into_tensor(vec![k, n, batch], b);
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -755,7 +815,7 @@ where
     .context("batched matrix multiplication failed")?;
     let c = T::try_into_typed(c)
         .ok_or_else(|| anyhow::anyhow!("batched matrix multiplication returned wrong dtype"))?;
-    let data = c.as_slice().to_vec();
+    let (_shape, data) = c.try_into_vec()?;
     let expected_len = batch
         .checked_mul(m)
         .and_then(|value| value.checked_mul(n))
@@ -769,6 +829,37 @@ where
         batch
     );
     Ok(data)
+}
+
+fn validate_batched_mat_mul_inputs(
+    batch: usize,
+    m: usize,
+    k: usize,
+    n: usize,
+    a_len: usize,
+    b_len: usize,
+) -> Result<()> {
+    let expected_a_len = batch
+        .checked_mul(m)
+        .and_then(|value| value.checked_mul(k))
+        .ok_or_else(|| anyhow::anyhow!("batched matrix multiplication left shape overflows"))?;
+    let expected_b_len = batch
+        .checked_mul(k)
+        .and_then(|value| value.checked_mul(n))
+        .ok_or_else(|| anyhow::anyhow!("batched matrix multiplication right shape overflows"))?;
+    ensure!(
+        a_len == expected_a_len,
+        "batched matrix multiplication left buffer has length {}, expected {}",
+        a_len,
+        expected_a_len
+    );
+    ensure!(
+        b_len == expected_b_len,
+        "batched matrix multiplication right buffer has length {}, expected {}",
+        b_len,
+        expected_b_len
+    );
+    Ok(())
 }
 
 #[cfg(test)]

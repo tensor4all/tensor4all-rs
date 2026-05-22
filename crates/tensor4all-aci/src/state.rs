@@ -5,8 +5,10 @@ use crate::{initial_guess, AciError, AciOptions, ElementwiseBatch, LocalBlockEva
 use tensor4all_simplett::{
     tensor3_from_data, AbstractTensorTrain, Tensor3, Tensor3Ops, TensorTrain,
 };
-use tensor4all_tcicore::{matrix_luci_factors_from_matrix, RrLUOptions};
-use tensor4all_tensorbackend::{batched_mat_mul_same_shape, mat_mul, Matrix};
+use tensor4all_tcicore::{
+    matrix_luci_factors_from_matrix, matrix_luci_factors_from_matrix_owned, RrLUOptions,
+};
+use tensor4all_tensorbackend::{batched_mat_mul_same_shape_owned, mat_mul, mat_mul_owned, Matrix};
 
 #[cfg(test)]
 fn frame_batching_enabled() -> bool {
@@ -373,13 +375,13 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             return Ok(None);
         };
         let output_cols = site_dim * right_dim;
-        let values = batched_mat_mul_same_shape(
+        let values = batched_mat_mul_same_shape_owned(
             n_inputs,
             source_rows,
             source_cols,
             output_cols,
-            &frame_batch,
-            &core_batch,
+            frame_batch,
+            core_batch,
         )
         .map_err(|err| frame_matmul_error("batched left", err))?;
         let item_len = source_rows * output_cols;
@@ -464,13 +466,13 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             return Ok(None);
         };
         let core_rows = left_dim * site_dim;
-        let values = batched_mat_mul_same_shape(
+        let values = batched_mat_mul_same_shape_owned(
             n_inputs,
             core_rows,
             right_dim,
             source_cols,
-            &core_batch,
-            &frame_batch,
+            core_batch,
+            frame_batch,
         )
         .map_err(|err| frame_matmul_error("batched right", err))?;
         let item_len = core_rows * source_cols;
@@ -555,8 +557,8 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             }
 
             let local_matrix = evaluator.materialize_local_matrix()?;
-            let factors_result = matrix_luci_factors_from_matrix(
-                &local_matrix,
+            let factors_result = matrix_luci_factors_from_matrix_owned(
+                local_matrix,
                 Some(RrLUOptions {
                     max_rank: options.max_bond_dim,
                     rel_tol: if options.scale_tolerance {
@@ -605,12 +607,13 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             )
         };
 
-        let mut solution_cores = self.solution.site_tensors().to_vec();
-        solution_cores[bond] =
-            matrix_to_tensor3(&left_factor, left_solution_rank, site_dim_left, new_rank)?;
-        solution_cores[bond + 1] =
-            right_factor_to_tensor3(&right_factor, new_rank, site_dim_right, right_solution_rank)?;
-        self.solution = TensorTrain::new(solution_cores)?;
+        let new_left_core =
+            matrix_into_tensor3(left_factor, left_solution_rank, site_dim_left, new_rank)?;
+        let new_right_core =
+            right_factor_into_tensor3(right_factor, new_rank, site_dim_right, right_solution_rank)?;
+        let solution_cores = self.solution.site_tensors_mut();
+        solution_cores[bond] = new_left_core;
+        solution_cores[bond + 1] = new_right_core;
 
         if left_orthogonal {
             self.update_left_frames(bond, &row_indices)?;
@@ -671,15 +674,15 @@ impl<T: AciScalar> ElementwiseProblem<T> {
 
             validate_selection("column", &col_indices, ncols)?;
             solution_cores[site] =
-                right_factor_to_tensor3(&right_factor, new_rank, site_dim, right_dim)?;
+                right_factor_into_tensor3(right_factor, new_rank, site_dim, right_dim)?;
 
             let previous = &solution_cores[site - 1];
             let previous_left_dim = previous.left_dim();
             let previous_site_dim = previous.site_dim();
             let previous_matrix = left_matrix_julia_order(previous);
-            let product = matmul_checked(&previous_matrix, &left_factor, site - 1)?;
+            let product = matmul_checked_owned(previous_matrix, left_factor, site - 1)?;
             solution_cores[site - 1] =
-                matrix_to_tensor3(&product, previous_left_dim, previous_site_dim, new_rank)?;
+                matrix_into_tensor3(product, previous_left_dim, previous_site_dim, new_rank)?;
 
             self.update_right_frames(site, &col_indices)?;
         }
@@ -901,6 +904,30 @@ pub(crate) fn matrix_to_tensor3<T: AciScalar>(
     )?)
 }
 
+pub(crate) fn matrix_into_tensor3<T: AciScalar>(
+    matrix: Matrix<T>,
+    left_dim: usize,
+    site_dim: usize,
+    right_dim: usize,
+) -> Result<Tensor3<T>> {
+    if matrix.nrows() != left_dim * site_dim || matrix.ncols() != right_dim {
+        return Err(AciError::InvalidInitialGuess {
+            message: format!(
+                "cannot reshape matrix of shape ({}, {}) to tensor core ({left_dim}, \
+                 {site_dim}, {right_dim})",
+                matrix.nrows(),
+                matrix.ncols()
+            ),
+        });
+    }
+    Ok(tensor3_from_data(
+        matrix.into_col_major_vec(),
+        left_dim,
+        site_dim,
+        right_dim,
+    )?)
+}
+
 pub(crate) fn right_factor_to_tensor3<T: AciScalar>(
     matrix: &Matrix<T>,
     left_dim: usize,
@@ -925,9 +952,33 @@ pub(crate) fn right_factor_to_tensor3<T: AciScalar>(
     )?)
 }
 
-fn matmul_checked<T: AciScalar>(
-    left: &Matrix<T>,
-    right: &Matrix<T>,
+pub(crate) fn right_factor_into_tensor3<T: AciScalar>(
+    matrix: Matrix<T>,
+    left_dim: usize,
+    site_dim: usize,
+    right_dim: usize,
+) -> Result<Tensor3<T>> {
+    if matrix.nrows() != left_dim || matrix.ncols() != site_dim * right_dim {
+        return Err(AciError::InvalidInitialGuess {
+            message: format!(
+                "cannot reshape right factor of shape ({}, {}) to tensor core ({left_dim}, \
+                 {site_dim}, {right_dim})",
+                matrix.nrows(),
+                matrix.ncols()
+            ),
+        });
+    }
+    Ok(tensor3_from_data(
+        matrix.into_col_major_vec(),
+        left_dim,
+        site_dim,
+        right_dim,
+    )?)
+}
+
+fn matmul_checked_owned<T: AciScalar>(
+    left: Matrix<T>,
+    right: Matrix<T>,
     site: usize,
 ) -> Result<Matrix<T>> {
     if left.ncols() != right.nrows() {
@@ -943,7 +994,7 @@ fn matmul_checked<T: AciScalar>(
         });
     }
 
-    mat_mul(left, right).map_err(|err| AciError::InvalidInitialGuess {
+    mat_mul_owned(left, right).map_err(|err| AciError::InvalidInitialGuess {
         message: format!("solution core update at site {site} failed: {err}"),
     })
 }

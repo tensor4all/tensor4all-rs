@@ -16,7 +16,7 @@ use crate::truncation::{
 };
 use crate::TensorDynLen;
 use std::sync::Mutex;
-use tenferro::{CpuBackend, DType, EagerTensor};
+use tenferro::{DType, EagerTensor};
 use tensor4all_tensorbackend::{
     native_tensor_primal_to_dense_c64_col_major, native_tensor_primal_to_dense_f64_col_major,
 };
@@ -219,9 +219,9 @@ fn singular_values_from_native(tensor: &tenferro::Tensor) -> Result<Vec<f64>, Sv
 }
 
 type SvdTruncatedEagerResult = (
-    EagerTensor<CpuBackend>,
-    EagerTensor<CpuBackend>,
-    EagerTensor<CpuBackend>,
+    EagerTensor,
+    EagerTensor,
+    EagerTensor,
     Vec<f64>,
     DynIndex,
     Vec<DynIndex>,

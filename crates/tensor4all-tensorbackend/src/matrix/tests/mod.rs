@@ -157,6 +157,17 @@ fn batched_mat_mul_same_shape_preserves_column_major_batches() {
 }
 
 #[test]
+fn batched_mat_mul_same_shape_owned_matches_borrowed() {
+    let a = vec![1.0, 3.0, 2.0, 4.0, 2.0, 0.0, 0.0, 3.0];
+    let b = vec![5.0, 7.0, 6.0, 8.0, 1.0, 4.0, 2.0, 5.0];
+
+    let borrowed = batched_mat_mul_same_shape(2, 2, 2, 2, &a, &b).unwrap();
+    let owned = batched_mat_mul_same_shape_owned(2, 2, 2, 2, a, b).unwrap();
+
+    assert_eq!(owned, borrowed);
+}
+
+#[test]
 fn mat_mul_reports_dimension_mismatch() {
     let a = Matrix::from_col_major_vec(2, 3, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
     let b = Matrix::from_col_major_vec(2, 2, vec![1.0, 3.0, 2.0, 4.0]);

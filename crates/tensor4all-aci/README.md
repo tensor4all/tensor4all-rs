@@ -14,7 +14,13 @@ originally authored by Marc Ritter and contributors.
 - `AciOptions` - tolerance, sweep, rank, and pivot-search controls
 - `AciResult` - output tensor train and convergence diagnostics
 
-## Example
+## Examples
+
+### Julia-style elementwise multiplication
+
+`elementwise()` is the Rust counterpart of Julia
+`AlternatingCrossInterpolation.elementwise`. The operator receives one slice of
+input values per interpolation point.
 
 ```rust
 use tensor4all_aci::{elementwise, AciOptions};
@@ -33,6 +39,71 @@ let result = elementwise(
 assert_eq!(result.tensor_train.site_dims(), vec![2, 3]);
 assert!((result.tensor_train.evaluate(&[1, 2]).unwrap() - 8.0).abs() < 1e-10);
 ```
+
+### Batched operator callback
+
+`elementwise_batched()` is a Rust extension for amortizing operator calls. The
+batch is a borrowed column-major view with `n_inputs` rows and `n_points`
+columns. Use `batch.get(input, point)` for checked access.
+
+```rust
+use tensor4all_aci::{elementwise_batched, AciOptions, ElementwiseBatch};
+use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+
+let a = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+let b = TensorTrain::<f64>::constant(&[2, 3], 4.0);
+
+let result = elementwise_batched(
+    |batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        for point in 0..batch.n_points() {
+            let a = batch.get(0, point)?;
+            let b = batch.get(1, point)?;
+            output[point] = a * b + 1.0;
+        }
+        Ok(())
+    },
+    &[a, b],
+    &AciOptions::default(),
+)
+.unwrap();
+
+assert_eq!(result.tensor_train.site_dims(), vec![2, 3]);
+assert!((result.tensor_train.evaluate(&[1, 2]).unwrap() - 9.0).abs() < 1e-10);
+```
+
+For hot callbacks, the flat batch slice can be read directly. Values are stored
+as `data[input + n_inputs * point]`.
+
+```rust
+use tensor4all_aci::{elementwise_batched, AciOptions, ElementwiseBatch};
+use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+
+let a = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+let b = TensorTrain::<f64>::constant(&[2, 3], 4.0);
+
+let result = elementwise_batched(
+    |batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        let data = batch.as_col_major_slice();
+        let n_inputs = batch.n_inputs();
+
+        for point in 0..batch.n_points() {
+            let base = n_inputs * point;
+            output[point] = data[base] * data[base + 1];
+        }
+        Ok(())
+    },
+    &[a, b],
+    &AciOptions::default(),
+)
+.unwrap();
+
+assert_eq!(result.tensor_train.site_dims(), vec![2, 3]);
+assert!((result.tensor_train.evaluate(&[0, 1]).unwrap() - 8.0).abs() < 1e-10);
+```
+
+`ElementwiseBatch` is not `tensor4all_simplett::TTCache`. ACI maintains
+left/right frames internally and uses `ElementwiseBatch` only to pass local
+matrix entries to the user operator efficiently.
 
 ## Citation
 

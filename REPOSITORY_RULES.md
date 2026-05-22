@@ -155,6 +155,11 @@
 - Dense flat-buffer APIs use column-major linearization. New public flat-buffer
   constructors, exports, examples, FFI contracts, and docs must state or
   preserve column-major semantics.
+- In hot dense loops over `Matrix`, validate shapes and ranges once, then
+  iterate over column-major slices such as `as_col_major_slice()` or
+  `as_col_major_mut_slice()`. If bounds-check removal needs `unsafe`, keep it
+  inside small helper functions with explicit safety comments rather than
+  scattering unchecked indexing through algorithm code.
 - Do not add row-major compatibility shims or hidden row-major round-trips in
   library code. When an external dependency or test fixture naturally provides
   row-shaped data, convert at that explicit boundary and keep the conversion

@@ -4,9 +4,17 @@ This directory contains benchmark code for comparing Rust and Julia implementati
 
 ## Structure
 
-- `rust/`: Rust benchmark code using `tensor4all-rs`
-- `julia/`: Julia benchmark code using `ITensors.jl` and `ITensorMPS.jl`
-- `results/`: saved benchmark commands and representative local outputs
+- `rust/`: shared Rust benchmark bodies. Prefer putting reusable benchmark
+  source here, then include it from a thin crate example.
+- `julia/`: Julia benchmark code using `ITensors.jl`, `ITensorMPS.jl`, or
+  `AlternatingCrossInterpolation.jl`.
+- `results/`: saved benchmark commands and representative local outputs.
+- Crate-local `benches/`: Criterion microbenchmarks that are useful for Rust
+  regression tracking but not meant as the cross-language source of truth.
+
+Use ignored unit tests only when the benchmark needs crate-private state or
+instrumentation. Once the required hooks can be exposed cleanly, move the
+runner body into `benchmarks/rust/` and keep the crate-local entry point thin.
 
 ## Running Benchmarks
 
@@ -47,6 +55,42 @@ ACI elementwise TT chi scaling:
 RAYON_NUM_THREADS=1 cargo bench -p tensor4all-aci --bench elementwise_scaling -- --sample-size 10
 ```
 
+For Julia parity runs on macOS/Homebrew, build Rust against the same system
+OpenBLAS backend instead of the default faer backend:
+
+```bash
+OPENBLAS_ROOT=${OPENBLAS_ROOT:-$(brew --prefix openblas)}
+env \
+RUSTFLAGS="-L native=${OPENBLAS_ROOT}/lib -l dylib=openblas" \
+DYLD_LIBRARY_PATH="${OPENBLAS_ROOT}/lib:${DYLD_LIBRARY_PATH:-}" \
+RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+cargo bench -p tensor4all-aci \
+  --no-default-features --features tenferro-system-blas \
+  --bench elementwise_scaling -- --sample-size 10
+```
+
+ACI local-step bucket timing with system OpenBLAS:
+
+```bash
+OPENBLAS_ROOT=${OPENBLAS_ROOT:-$(brew --prefix openblas)}
+env \
+RUSTFLAGS="-L native=${OPENBLAS_ROOT}/lib -l dylib=openblas" \
+DYLD_LIBRARY_PATH="${OPENBLAS_ROOT}/lib:${DYLD_LIBRARY_PATH:-}" \
+RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+T4A_STEP_TIMING_REPEATS=50 T4A_STEP_TIMING_N_SITES=16 \
+T4A_STEP_TIMING_FIXED_SWEEPS=3 \
+T4A_STEP_TIMING_CHIS=16,32,64,128 \
+cargo test --release -p tensor4all-aci \
+  --no-default-features --features tenferro-system-blas \
+  local_update_step_timing -- --ignored --nocapture
+```
+
+When running Rust doctests with `tenferro-system-blas`, also set
+`RUSTDOCFLAGS="-L native=${OPENBLAS_ROOT}/lib"`. `RUSTFLAGS` is not enough for
+rustdoc's final link step.
+
 Optional long `chi = 32` case:
 
 ```bash
@@ -56,10 +100,30 @@ RAYON_NUM_THREADS=1 cargo bench -p tensor4all-aci --bench elementwise_scaling --
 MatrixLUCI Hilbert step timing:
 
 ```bash
-RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+OPENBLAS_ROOT=${OPENBLAS_ROOT:-$(brew --prefix openblas)}
+env \
+RUSTFLAGS="-L native=${OPENBLAS_ROOT}/lib -l dylib=openblas" \
+DYLD_LIBRARY_PATH="${OPENBLAS_ROOT}/lib:${DYLD_LIBRARY_PATH:-}" \
+RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 T4A_MATRIX_LUCI_REPEATS=20 T4A_MATRIX_LUCI_SIZES=16,32,64 \
-cargo test --release -p tensor4all-tcicore matrix_luci_hilbert_timing -- --ignored --nocapture
+cargo test --release -p tensor4all-tcicore \
+  --no-default-features --features tenferro-system-blas \
+  matrix_luci_hilbert_timing -- --ignored --nocapture
 ```
+
+MatrixLU standalone Hilbert timing:
+
+```bash
+env \
+RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+T4A_MATRIX_LU_REPEATS=20 T4A_MATRIX_LU_SIZES=16,32,64,128 \
+cargo run --release -p tensor4all-tcicore --example benchmark_matrix_lu
+```
+
+MatrixLU itself does not call BLAS, so no system-BLAS feature is required for
+this standalone runner.
 
 Inspect Julia-dumped local linsolve inputs:
 
@@ -104,12 +168,28 @@ ACI elementwise TT chi scaling:
 BLAS_NUM_THREADS=1 julia --project=benchmarks/julia benchmarks/julia/benchmark_aci_elementwise.jl --chis 2,4,8,16
 ```
 
+ACI local-step bucket timing:
+
+```bash
+JULIA_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+T4A_STEP_TIMING_REPEATS=50 \
+julia benchmarks/julia/benchmark_aci_local_steps.jl --sites 16 --fixed-sweeps 3 --chis 16,32,64,128
+```
+
 MatrixLUCI Hilbert step timing:
 
 ```bash
 JULIA_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 T4A_MATRIX_LUCI_REPEATS=20 \
 julia benchmarks/julia/benchmark_matrix_luci.jl --sizes 16,32,64
+```
+
+MatrixLU standalone Hilbert timing:
+
+```bash
+JULIA_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+T4A_MATRIX_LU_REPEATS=20 \
+julia benchmarks/julia/benchmark_matrix_lu.jl --sizes 16,32,64,128
 ```
 
 Dump local linsolve inputs as ITensorMPS-compatible HDF5:
@@ -162,11 +242,22 @@ the inputs and initial guess. The default smoke run covers `chi = 2, 4, 8, 16`.
 `aci_elementwise_chi_scaling_long` Criterion filter, and Julia can run the same
 long case with `--chis 2,4,8,16,32`.
 
+The ACI local-step benchmark isolates the local update buckets inside
+elementwise ACI. Use `T4A_STEP_TIMING_N_SITES=16` and fixed sweeps when checking
+`chi <= 128`; the old default `L = 12` has a central exact-rank bound of only
+`64` for `local_dim = 2`, so it clamps `chi = 128`.
+
 The MatrixLUCI Hilbert benchmarks isolate the matrix cross-interpolation step
 used inside ACI local updates. They print CSV-style timing buckets for rrLU
 pivot selection and factor construction on deterministic Hilbert matrices, with
 both left- and right-orthogonal variants. Keep these benchmarks out of normal
 test runs by using the ignored Rust test and the standalone Julia script.
+
+The MatrixLU standalone Hilbert benchmarks isolate `rrlu_inplace` and `rrlu`
+without MatrixLUCI factor wrappers. The Rust source of truth is
+`benchmarks/rust/benchmark_matrix_lu.rs`, included by
+`tensor4all-tcicore/examples/benchmark_matrix_lu.rs`; the Julia counterpart is
+`benchmarks/julia/benchmark_matrix_lu.jl`.
 
 `dump_local_linsolve_inputs.jl` writes the prepared local operator as
 `operator_as_mps`, plus `rhs` and `init`, in one HDF5 file. The operator is a

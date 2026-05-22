@@ -15,9 +15,7 @@ use std::env;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tenferro::eager_tensor::einsum_subscripts as eager_einsum_ad;
-use tenferro::{
-    CpuBackend, DType, DotGeneralConfig, EagerTensor, EinsumSubscripts, Tensor as NativeTensor,
-};
+use tenferro::{DType, DotGeneralConfig, EagerTensor, EinsumSubscripts, Tensor as NativeTensor};
 use tensor4all_tensorbackend::{
     axpby_native_tensor, contract_native_tensor, default_eager_ctx,
     dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
@@ -216,7 +214,7 @@ pub fn compute_permutation_from_indices(
 
 #[derive(Clone)]
 pub(crate) struct StructuredAdValue {
-    payload: Arc<EagerTensor<CpuBackend>>,
+    payload: Arc<EagerTensor>,
     payload_dims: Vec<usize>,
     axis_classes: Vec<usize>,
 }
@@ -225,7 +223,7 @@ pub(crate) struct StructuredAdValue {
 pub(crate) enum TensorDynLenStorage {
     Materialized(Arc<Storage>),
     Eager {
-        inner: Arc<EagerTensor<CpuBackend>>,
+        inner: Arc<EagerTensor>,
         axis_classes: Vec<usize>,
     },
 }
@@ -235,14 +233,14 @@ impl TensorDynLenStorage {
         Self::Materialized(storage)
     }
 
-    fn from_eager_dense(inner: EagerTensor<CpuBackend>, rank: usize) -> Self {
+    fn from_eager_dense(inner: EagerTensor, rank: usize) -> Self {
         Self::Eager {
             inner: Arc::new(inner),
             axis_classes: TensorDynLen::dense_axis_classes(rank),
         }
     }
 
-    fn eager(&self) -> Option<&EagerTensor<CpuBackend>> {
+    fn eager(&self) -> Option<&EagerTensor> {
         match self {
             Self::Materialized(_) => None,
             Self::Eager { inner, .. } => Some(inner.as_ref()),
@@ -423,7 +421,7 @@ pub struct TensorDynLen {
     /// Optional tracked compact payload used to preserve structured AD layouts.
     pub(crate) structured_ad: Option<Arc<StructuredAdValue>>,
     /// Lazily materialized eager payload for native execution and AD.
-    pub(crate) eager_cache: Arc<OnceLock<Arc<EagerTensor<CpuBackend>>>>,
+    pub(crate) eager_cache: Arc<OnceLock<Arc<EagerTensor>>>,
 }
 
 impl TensorDynLen {
@@ -699,19 +697,17 @@ impl TensorDynLen {
         storage_to_native_tensor(storage, dims)
     }
 
-    fn empty_eager_cache() -> Arc<OnceLock<Arc<EagerTensor<CpuBackend>>>> {
+    fn empty_eager_cache() -> Arc<OnceLock<Arc<EagerTensor>>> {
         Arc::new(OnceLock::new())
     }
 
-    fn eager_cache_with(
-        inner: EagerTensor<CpuBackend>,
-    ) -> Arc<OnceLock<Arc<EagerTensor<CpuBackend>>>> {
+    fn eager_cache_with(inner: EagerTensor) -> Arc<OnceLock<Arc<EagerTensor>>> {
         let cache = Arc::new(OnceLock::new());
         let _ = cache.set(Arc::new(inner));
         cache
     }
 
-    fn compact_payload_inner(&self) -> Result<EagerTensor<CpuBackend>> {
+    fn compact_payload_inner(&self) -> Result<EagerTensor> {
         Ok(EagerTensor::from_tensor_in(
             storage_payload_native(self.storage.materialize(self.indices.len())?.as_ref())?,
             default_eager_ctx(),
@@ -819,9 +815,9 @@ impl TensorDynLen {
     }
 
     fn normalize_eager_payload_for_roots(
-        payload: &EagerTensor<CpuBackend>,
+        payload: &EagerTensor,
         roots: &[usize],
-    ) -> Result<(Option<EagerTensor<CpuBackend>>, Vec<usize>)> {
+    ) -> Result<(Option<EagerTensor>, Vec<usize>)> {
         anyhow::ensure!(
             payload.data().shape().len() == roots.len(),
             "payload rank {} does not match root label count {}",
@@ -878,7 +874,7 @@ impl TensorDynLen {
 
     fn from_structured_payload_inner(
         indices: Vec<DynIndex>,
-        payload_inner: EagerTensor<CpuBackend>,
+        payload_inner: EagerTensor,
         payload_dims: Vec<usize>,
         axis_classes: Vec<usize>,
     ) -> Result<Self> {
@@ -1352,7 +1348,7 @@ impl TensorDynLen {
         Ok(())
     }
 
-    fn try_materialized_inner(&self) -> Result<&EagerTensor<CpuBackend>> {
+    fn try_materialized_inner(&self) -> Result<&EagerTensor> {
         if let Some(value) = self.tracked_compact_payload_value() {
             if self.compact_payload_is_logical_dense(&value.payload_dims) {
                 return Ok(value.payload.as_ref());
@@ -1385,7 +1381,7 @@ impl TensorDynLen {
             })
     }
 
-    pub(crate) fn as_inner(&self) -> Result<&EagerTensor<CpuBackend>> {
+    pub(crate) fn as_inner(&self) -> Result<&EagerTensor> {
         self.try_materialized_inner()
     }
 
@@ -1807,17 +1803,14 @@ impl TensorDynLen {
         )
     }
 
-    pub(crate) fn from_inner(
-        indices: Vec<DynIndex>,
-        inner: EagerTensor<CpuBackend>,
-    ) -> Result<Self> {
+    pub(crate) fn from_inner(indices: Vec<DynIndex>, inner: EagerTensor) -> Result<Self> {
         let axis_classes = Self::dense_axis_classes(indices.len());
         Self::from_inner_with_axis_classes(indices, inner, axis_classes)
     }
 
     pub(crate) fn from_diag_inner(
         indices: Vec<DynIndex>,
-        payload_inner: EagerTensor<CpuBackend>,
+        payload_inner: EagerTensor,
     ) -> Result<Self> {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices)?;
@@ -1830,7 +1823,7 @@ impl TensorDynLen {
 
     pub(crate) fn from_inner_with_axis_classes(
         indices: Vec<DynIndex>,
-        inner: EagerTensor<CpuBackend>,
+        inner: EagerTensor,
         axis_classes: Vec<usize>,
     ) -> Result<Self> {
         let dims = profile_pairwise_contract_section("from_inner_expected_dims", || {
@@ -3250,7 +3243,7 @@ pub fn diag_tensor_dyn_len(indices: Vec<DynIndex>, diag_data: Vec<f64>) -> Resul
 
 #[allow(clippy::type_complexity)]
 pub(crate) type UnfoldSplitInnerResult = (
-    EagerTensor<CpuBackend>,
+    EagerTensor,
     usize,
     usize,
     usize,

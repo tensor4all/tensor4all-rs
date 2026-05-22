@@ -5,7 +5,7 @@
 //! via LU cross interpolation and implements [`AbstractMatrixCI`].
 
 use crate::error::{MatrixCIError, Result};
-use crate::matrixlu::{rrlu, RrLU, RrLUOptions};
+use crate::matrixlu::{rrlu, rrlu_inplace, RrLU, RrLUOptions};
 use crate::matrixluci::block_rook::LazyBlockRookKernel;
 use crate::matrixluci::factors::CrossFactors;
 use crate::matrixluci::source::LazyMatrixSource;
@@ -289,6 +289,17 @@ where
     factors_from_rrlu(&lu)
 }
 
+pub(crate) fn dense_matrix_luci_factors_from_matrix_owned<T>(
+    mut a: Matrix<T>,
+    options: RrLUOptions,
+) -> Result<MatrixLuciFactors<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+{
+    let lu = rrlu_inplace(&mut a, Some(options))?;
+    factors_from_rrlu(&lu)
+}
+
 pub(crate) fn lazy_matrix_luci_factors_from_blocks<T, F>(
     nrows: usize,
     ncols: usize,
@@ -359,6 +370,25 @@ where
     T: Scalar + crate::MatrixLuciScalar,
 {
     <T as crate::MatrixLuciScalar>::matrix_luci_factors_from_matrix(a, options.unwrap_or_default())
+}
+
+/// Factorize a dense matrix with MatrixLUCI while consuming the input matrix.
+///
+/// This is the owned-buffer counterpart of [`matrix_luci_factors_from_matrix`].
+/// It reuses the local matrix storage for the rrLU pivot selection step.
+///
+/// # Errors
+///
+/// Returns a [`MatrixCIError`] if the factorization fails, for example if the
+/// pivot block is singular or the backend rejects a factor solve.
+pub fn matrix_luci_factors_from_matrix_owned<T>(
+    a: Matrix<T>,
+    options: Option<RrLUOptions>,
+) -> Result<MatrixLuciFactors<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+{
+    dense_matrix_luci_factors_from_matrix_owned(a, options.unwrap_or_default())
 }
 
 /// Factorize a lazily supplied matrix with MatrixLUCI block-rook search.

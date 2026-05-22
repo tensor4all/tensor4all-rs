@@ -2,7 +2,9 @@ use crate::local::LocalInputSetupTiming;
 use crate::validation::{validate_inputs, validate_options};
 use crate::{
     elementwise,
-    elementwise::{error_metric, max_error_metric, ranks_are_stable},
+    elementwise::{
+        convergence_criterion_like_julia, error_metric, max_error_metric, ranks_are_stable,
+    },
     elementwise_batched, initial_guess,
     random_tt::{
         initial_guess_core_entry_count, initial_guess_existing_entry_count,
@@ -16,7 +18,7 @@ use std::time::{Duration, Instant};
 use tensor4all_simplett::{
     tensor3_from_data, tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain,
 };
-use tensor4all_tcicore::{matrix_luci_factors_from_matrix, RrLUOptions};
+use tensor4all_tcicore::{matrix_luci_factors_from_matrix_owned, RrLUOptions};
 use tensor4all_tensorbackend::Matrix;
 
 fn tensor_train_with_link_dims(site_dims: &[usize], link_dims: &[usize]) -> TensorTrain<f64> {
@@ -326,6 +328,39 @@ fn rank_stability_matches_julia_min_iter_window() {
     assert!(!ranks_are_stable(&[10, 12, 13], 2));
     assert!(!ranks_are_stable(&[10, 12], 2));
     assert!(ranks_are_stable(&[10, 10], 2));
+}
+
+#[test]
+fn convergence_criterion_matches_julia_algorithm() {
+    let ranks = [10, 12, 12];
+    let errors = [1.0e-8, 2.0e-11, 3.0e-11];
+
+    assert!(!convergence_criterion_like_julia(
+        1,
+        &ranks[..1],
+        &errors[..1],
+        2,
+        1.0e-10
+    ));
+    assert!(!convergence_criterion_like_julia(
+        2,
+        &ranks[..2],
+        &errors[..2],
+        2,
+        1.0e-10
+    ));
+    assert!(convergence_criterion_like_julia(
+        3, &ranks, &errors, 2, 1.0e-10
+    ));
+
+    let increasing_ranks = [10, 12, 13];
+    assert!(!convergence_criterion_like_julia(
+        3,
+        &increasing_ranks,
+        &errors,
+        2,
+        1.0e-10
+    ));
 }
 
 #[test]
@@ -1055,6 +1090,17 @@ fn validate_options_rejects_min_iters_above_max_iters() {
 }
 
 #[test]
+fn validate_options_rejects_zero_min_iters() {
+    let options = AciOptions::<f64> {
+        min_iters: 0,
+        ..AciOptions::default()
+    };
+    let err = validate_options(&options).unwrap_err();
+    assert!(matches!(err, AciError::InvalidOptions { .. }));
+    assert!(err.to_string().contains("min_iters"));
+}
+
+#[test]
 fn validate_options_rejects_negative_tolerance() {
     let options = AciOptions::<f64> {
         tolerance: -1e-12,
@@ -1296,7 +1342,7 @@ fn initial_guess_rejects_oversized_total_entries() {
     assert!(err.to_string().contains("initial guess total size"));
 }
 
-const STEP_TIMING_N_SITES: usize = 12;
+const STEP_TIMING_DEFAULT_N_SITES: usize = 12;
 const STEP_TIMING_LOCAL_DIM: usize = 2;
 const STEP_TIMING_N_INPUTS: usize = 2;
 const STEP_TIMING_TOLERANCE: f64 = 1e-10;
@@ -1381,9 +1427,13 @@ fn step_timing_core_value(
     site_value / scale
 }
 
-fn step_timing_deterministic_tt(input_index: usize, chi: usize) -> TensorTrain<f64> {
-    let links = step_timing_link_dims(STEP_TIMING_N_SITES, STEP_TIMING_LOCAL_DIM, chi);
-    let cores = (0..STEP_TIMING_N_SITES)
+fn step_timing_deterministic_tt(
+    input_index: usize,
+    n_sites: usize,
+    chi: usize,
+) -> TensorTrain<f64> {
+    let links = step_timing_link_dims(n_sites, STEP_TIMING_LOCAL_DIM, chi);
+    let cores = (0..n_sites)
         .map(|site| {
             let left_dim = if site == 0 { 1 } else { links[site - 1] };
             let right_dim = links.get(site).copied().unwrap_or(1);
@@ -1411,9 +1461,9 @@ fn step_timing_deterministic_tt(input_index: usize, chi: usize) -> TensorTrain<f
     TensorTrain::new(cores).unwrap()
 }
 
-fn step_timing_inputs(chi: usize) -> Vec<TensorTrain<f64>> {
+fn step_timing_inputs(n_sites: usize, chi: usize) -> Vec<TensorTrain<f64>> {
     (0..STEP_TIMING_N_INPUTS)
-        .map(|input| step_timing_deterministic_tt(input, chi))
+        .map(|input| step_timing_deterministic_tt(input, n_sites, chi))
         .collect()
 }
 
@@ -1480,8 +1530,8 @@ where
         let sampled_scale = evaluator.max_output_abs();
 
         let start = Instant::now();
-        let factors = matrix_luci_factors_from_matrix(
-            &local_matrix,
+        let factors = matrix_luci_factors_from_matrix_owned(
+            local_matrix,
             Some(RrLUOptions {
                 max_rank: options.max_bond_dim,
                 rel_tol: if options.scale_tolerance {
@@ -1525,16 +1575,21 @@ where
     };
 
     let start = Instant::now();
-    let mut solution_cores = problem.solution.site_tensors().to_vec();
-    solution_cores[bond] =
-        crate::state::matrix_to_tensor3(&left_factor, left_solution_rank, site_dim_left, new_rank)?;
-    solution_cores[bond + 1] = crate::state::right_factor_to_tensor3(
-        &right_factor,
+    let new_left_core = crate::state::matrix_into_tensor3(
+        left_factor,
+        left_solution_rank,
+        site_dim_left,
+        new_rank,
+    )?;
+    let new_right_core = crate::state::right_factor_into_tensor3(
+        right_factor,
         new_rank,
         site_dim_right,
         right_solution_rank,
     )?;
-    problem.solution = TensorTrain::new(solution_cores)?;
+    let solution_cores = problem.solution.site_tensors_mut();
+    solution_cores[bond] = new_left_core;
+    solution_cores[bond + 1] = new_right_core;
     timing.core_update += start.elapsed();
 
     let start = Instant::now();
@@ -1550,18 +1605,30 @@ where
     Ok(())
 }
 
-fn timed_aci_run(chi: usize) -> LocalStepTiming {
-    let inputs = step_timing_inputs(chi);
+fn timed_aci_run(
+    n_sites: usize,
+    chi: usize,
+    min_iters: usize,
+    fixed_sweeps: Option<usize>,
+) -> LocalStepTiming {
+    let inputs = step_timing_inputs(n_sites, chi);
+    let max_iters = fixed_sweeps.unwrap_or(20).max(20);
     let options = AciOptions {
-        max_iters: 20,
+        max_iters,
+        min_iters,
         tolerance: STEP_TIMING_TOLERANCE,
-        initial_guess: Some(step_timing_deterministic_tt(STEP_TIMING_N_INPUTS, chi)),
+        initial_guess: Some(step_timing_deterministic_tt(
+            STEP_TIMING_N_INPUTS,
+            n_sites,
+            chi,
+        )),
         ..AciOptions::default()
     };
     let mut problem = ElementwiseProblem::new(inputs, options.clone()).unwrap();
     let mut timing = LocalStepTiming::default();
     let mut op = step_timing_multiply_batch;
     let mut ranks = Vec::new();
+    let mut errors = Vec::new();
 
     for iteration in 0..options.max_iters {
         let forward = iteration % 2 == 0;
@@ -1583,13 +1650,23 @@ fn timed_aci_run(chi: usize) -> LocalStepTiming {
             options.scale_tolerance,
         );
         ranks.push(problem.solution.rank());
+        errors.push(max_error);
         timing.sweeps += 1;
         timing.final_rank = problem.solution.rank();
         timing.final_error = max_error;
 
-        if iteration + 1 >= options.min_iters
-            && max_error <= options.tolerance
-            && ranks_are_stable(&ranks, options.min_iters)
+        if fixed_sweeps.is_some_and(|target| timing.sweeps >= target) {
+            break;
+        }
+
+        if fixed_sweeps.is_none()
+            && convergence_criterion_like_julia(
+                iteration + 1,
+                &ranks,
+                &errors,
+                options.min_iters,
+                options.tolerance,
+            )
         {
             break;
         }
@@ -1618,6 +1695,22 @@ fn local_update_step_timing() {
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(10);
+    let n_sites = std::env::var("T4A_STEP_TIMING_N_SITES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(STEP_TIMING_DEFAULT_N_SITES);
+    assert!(n_sites >= 2, "T4A_STEP_TIMING_N_SITES must be at least 2");
+    let min_iters = std::env::var("T4A_STEP_TIMING_MIN_ITERS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(AciOptions::<f64>::default().min_iters);
+    assert!(
+        min_iters >= 1,
+        "T4A_STEP_TIMING_MIN_ITERS must be at least 1"
+    );
+    let fixed_sweeps = std::env::var("T4A_STEP_TIMING_FIXED_SWEEPS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok());
     let chis = std::env::var("T4A_STEP_TIMING_CHIS")
         .ok()
         .map(|value| {
@@ -1628,16 +1721,19 @@ fn local_update_step_timing() {
         })
         .unwrap_or_else(|| vec![2, 4, 8, 16]);
     println!(
-        "impl,chi,repeats,n_sweeps,n_updates,setup_ms,setup_shape_ms,setup_dims_ms,setup_left_factor_ms,setup_right_factor_ms,setup_other_ms,input_values_ms,operator_ms,matrix_luci_ms,core_update_ms,frame_update_ms,total_ms,final_rank,final_error"
+        "impl,chi,n_sites,repeats,min_iters,fixed_sweeps,n_sweeps,n_updates,setup_ms,setup_shape_ms,setup_dims_ms,setup_left_factor_ms,setup_right_factor_ms,setup_other_ms,input_values_ms,operator_ms,matrix_luci_ms,core_update_ms,frame_update_ms,total_ms,final_rank,final_error"
     );
     for chi in chis {
-        let runs = (0..repeats).map(|_| timed_aci_run(chi)).collect::<Vec<_>>();
+        let runs = (0..repeats)
+            .map(|_| timed_aci_run(n_sites, chi, min_iters, fixed_sweeps))
+            .collect::<Vec<_>>();
         let sweeps = runs[0].sweeps;
         let updates = runs[0].updates;
         let final_rank = runs[0].final_rank;
         let final_error = runs[0].final_error;
+        let fixed_sweeps_value = fixed_sweeps.unwrap_or(0);
         println!(
-            "rust,{chi},{repeats},{sweeps},{updates},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{final_rank},{final_error:.6e}",
+            "rust,{chi},{n_sites},{repeats},{min_iters},{fixed_sweeps_value},{sweeps},{updates},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{final_rank},{final_error:.6e}",
             median_ms(runs.iter().map(|run| duration_ms(run.setup)).collect()),
             median_ms(
                 runs.iter()

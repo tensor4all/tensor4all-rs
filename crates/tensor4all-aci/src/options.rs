@@ -40,8 +40,8 @@ pub struct AciOptions<T: TTScalar> {
     /// Minimum number of ACI sweeps to run before convergence checks may stop.
     ///
     /// The default is `2`, which gives the interpolation pivots at least one
-    /// forward and backward refinement opportunity. Keep this below or equal to
-    /// [`max_iters`](Self::max_iters).
+    /// forward and backward refinement opportunity. Keep this at least `1` and
+    /// below or equal to [`max_iters`](Self::max_iters).
     pub min_iters: usize,
 
     /// Maximum allowed tensor-train bond dimension.
