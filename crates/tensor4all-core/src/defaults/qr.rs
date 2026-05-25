@@ -8,6 +8,7 @@ use crate::global_default::GlobalDefault;
 use crate::TensorDynLen;
 use num_complex::ComplexFloat;
 use tenferro::DType;
+use tenferro_linalg::eager_tensor::qr as eager_qr;
 use tensor4all_tensorbackend::{
     native_tensor_primal_to_dense_c64_col_major, native_tensor_primal_to_dense_f64_col_major,
 };
@@ -258,9 +259,8 @@ pub fn qr_with<T>(
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
         .map_err(QrError::ComputationError)?;
     let k = m.min(n);
-    let (mut q_inner, mut r_inner) = matrix_inner
-        .qr()
-        .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
+    let (mut q_inner, mut r_inner) =
+        eager_qr(&matrix_inner).map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
 
     let r = if options.truncate {
         // Determine rtol to use

@@ -52,8 +52,9 @@ macro_rules! impl_full_piv_lu_scalar {
 
                 let lhs_t = transpose_column_major(lhs_values, lhs_rows, lhs_cols);
                 let pivot_t = transpose_column_major(pivot_values, pivot_rows, pivot_cols);
-                let pivot_tensor = Tensor::from_vec(vec![pivot_cols, pivot_rows], pivot_t);
-                let lhs_tensor = Tensor::from_vec(vec![lhs_cols, lhs_rows], lhs_t);
+                let pivot_tensor =
+                    Tensor::from_vec_col_major(vec![pivot_cols, pivot_rows], pivot_t);
+                let lhs_tensor = Tensor::from_vec_col_major(vec![lhs_cols, lhs_rows], lhs_t);
                 let solved_t = with_default_backend(|backend| {
                     pivot_tensor.full_piv_lu_solve(&lhs_tensor, backend)
                 })?;

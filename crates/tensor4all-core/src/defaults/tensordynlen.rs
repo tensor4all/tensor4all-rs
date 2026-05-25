@@ -14,8 +14,9 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
-use tenferro::eager_tensor::einsum_subscripts as eager_einsum_ad;
-use tenferro::{DType, DotGeneralConfig, EagerTensor, EinsumSubscripts, Tensor as NativeTensor};
+use tenferro::{DType, DotGeneralConfig, EagerTensor, Tensor as NativeTensor};
+use tenferro_einsum::eager_tensor::einsum_subscripts as eager_einsum_ad;
+use tenferro_einsum::EinsumSubscripts;
 use tensor4all_tensorbackend::{
     axpby_native_tensor, contract_native_tensor, default_eager_ctx,
     dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
@@ -125,7 +126,9 @@ fn native_tensor_profile_bytes(native: &NativeTensor) -> usize {
         DType::F64 => 8,
         DType::C32 => 8,
         DType::C64 => 16,
+        DType::I32 => 4,
         DType::I64 => 8,
+        DType::Bool => 1,
     };
     native.shape().iter().product::<usize>() * element_size
 }
@@ -1048,10 +1051,12 @@ impl TensorDynLen {
     ) -> Result<Storage> {
         if Self::is_diag_axis_classes(axis_classes) {
             match native.dtype() {
-                DType::F32 | DType::F64 | DType::I64 => Storage::from_diag_col_major(
-                    native_tensor_primal_to_diag_f64(native)?,
-                    logical_rank,
-                ),
+                DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => {
+                    Storage::from_diag_col_major(
+                        native_tensor_primal_to_diag_f64(native)?,
+                        logical_rank,
+                    )
+                }
                 DType::C32 | DType::C64 => Storage::from_diag_col_major(
                     native_tensor_primal_to_diag_c64(native)?,
                     logical_rank,
@@ -1535,7 +1540,7 @@ impl TensorDynLen {
         }
 
         let starts_tensor = EagerTensor::from_tensor_in(
-            NativeTensor::from_vec(vec![rank], starts),
+            NativeTensor::from_vec_col_major(vec![rank], starts),
             default_eager_ctx(),
         );
         let sliced = self

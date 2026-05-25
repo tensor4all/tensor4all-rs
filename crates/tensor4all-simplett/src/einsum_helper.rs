@@ -1,9 +1,9 @@
 use std::error::Error;
 use std::fmt;
 
-use tenferro_einsum::typed_eager_einsum;
-use tenferro_tensor::{TensorScalar, TypedTensor};
-use tensor4all_tensorbackend::with_default_backend;
+use tenferro_einsum::Subscripts;
+use tenferro_tensor::{Tensor, TensorScalar, TypedTensor};
+use tensor4all_tensorbackend::einsum_native_tensors;
 
 pub(crate) type Result<T> = std::result::Result<T, EinsumHelperError>;
 
@@ -91,12 +91,44 @@ pub(crate) fn einsum_tensors<T: EinsumScalar>(
     subscripts: &str,
     operands: &[&TypedTensor<T>],
 ) -> Result<TypedTensor<T>> {
-    with_default_backend(|backend| typed_eager_einsum(backend, operands, subscripts)).map_err(
-        |err| EinsumHelperError::Backend {
+    let parsed = Subscripts::parse(subscripts).map_err(|err| EinsumHelperError::Backend {
+        subscripts: subscripts.to_string(),
+        message: err.to_string(),
+    })?;
+    let tensors: Vec<Tensor> = operands
+        .iter()
+        .map(|tensor| T::into_tensor(tensor.shape.clone(), tensor.host_data().to_vec()))
+        .collect();
+    let input_ids = parsed
+        .inputs
+        .iter()
+        .map(|ids| ids.iter().map(|&id| id as usize).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let operand_refs = tensors
+        .iter()
+        .zip(input_ids.iter())
+        .map(|(tensor, ids)| (tensor, ids.as_slice()))
+        .collect::<Vec<_>>();
+    let output_ids = parsed
+        .output
+        .iter()
+        .map(|&id| id as usize)
+        .collect::<Vec<_>>();
+
+    let result = einsum_native_tensors(&operand_refs, &output_ids).map_err(|err| {
+        EinsumHelperError::Backend {
             subscripts: subscripts.to_string(),
             message: err.to_string(),
-        },
-    )
+        }
+    })?;
+    let actual = result.dtype();
+    T::try_into_typed(result).ok_or_else(|| EinsumHelperError::Backend {
+        subscripts: subscripts.to_string(),
+        message: format!(
+            "dtype mismatch: result has {actual:?}, expected {:?}",
+            T::dtype()
+        ),
+    })
 }
 
 pub(crate) fn typed_tensor_from_col_major_slice<T: TensorScalar>(
@@ -112,7 +144,10 @@ pub(crate) fn typed_tensor_from_col_major_slice<T: TensorScalar>(
         });
     }
 
-    Ok(TypedTensor::from_vec(shape.to_vec(), data.to_vec()))
+    Ok(TypedTensor::from_vec_col_major(
+        shape.to_vec(),
+        data.to_vec(),
+    ))
 }
 
 pub(crate) fn typed_tensor_reshape<T: TensorScalar>(
@@ -130,7 +165,7 @@ pub(crate) fn typed_tensor_reshape<T: TensorScalar>(
         });
     }
 
-    Ok(TypedTensor::from_vec(
+    Ok(TypedTensor::from_vec_col_major(
         shape.to_vec(),
         tensor.host_data().to_vec(),
     ))

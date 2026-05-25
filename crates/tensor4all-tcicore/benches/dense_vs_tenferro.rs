@@ -46,7 +46,7 @@ fn bench_dense_vs_tenferro(c: &mut Criterion) {
             &size,
             |b, &n| {
                 b.iter(|| {
-                    let mat = Tensor::from_vec(vec![n, n], data.clone());
+                    let mat = Tensor::from_vec_col_major(vec![n, n], data.clone());
                     black_box(with_default_backend(|backend| mat.full_piv_lu(backend)).unwrap());
                 });
             },

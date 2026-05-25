@@ -17,6 +17,7 @@ use crate::truncation::{
 use crate::TensorDynLen;
 use std::sync::Mutex;
 use tenferro::{DType, EagerTensor};
+use tenferro_linalg::eager_tensor::svd as eager_svd;
 use tensor4all_tensorbackend::{
     native_tensor_primal_to_dense_c64_col_major, native_tensor_primal_to_dense_f64_col_major,
 };
@@ -238,9 +239,8 @@ fn svd_truncated_inner(
         .map_err(SvdError::ComputationError)?;
     let k = m.min(n);
 
-    let (mut u_inner, mut s_inner, mut vt_inner) = matrix_inner
-        .svd()
-        .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
+    let (mut u_inner, mut s_inner, mut vt_inner) =
+        eager_svd(&matrix_inner).map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
     let s_full = singular_values_from_native(s_inner.data())?;
     let mut r = if options.truncate {
         let policy = options.policy.unwrap_or_else(default_svd_truncation_policy);
