@@ -238,7 +238,9 @@ pub(crate) fn promote_scalar_native(native: &NativeTensor, target: DType) -> Res
         (ScalarValue::I64(value), DType::C64) => {
             Scalar::from_value(Complex64::new(value as f64, 0.0))
         }
-        (ScalarValue::Bool(value), DType::F32) => Scalar::from_value(if value { 1.0 } else { 0.0 }),
+        (ScalarValue::Bool(value), DType::F32) => {
+            Scalar::from_value(if value { 1.0_f32 } else { 0.0_f32 })
+        }
         (ScalarValue::Bool(value), DType::F64) => Scalar::from_value(if value { 1.0 } else { 0.0 }),
         (ScalarValue::Bool(value), DType::I32) => {
             return Ok(NativeTensor::from_vec_col_major(
