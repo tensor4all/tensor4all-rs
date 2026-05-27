@@ -61,7 +61,7 @@ fn col_major_data_to_tensor<T: TensorScalar, const N: usize>(
     dims: [usize; N],
     data: Vec<T>,
 ) -> Tensor<T, N> {
-    let inner = TfTensor::from_vec(dims.to_vec(), data);
+    let inner = TfTensor::from_vec_col_major(dims.to_vec(), data);
     Tensor::from_tenferro_unchecked(inner)
 }
 
@@ -221,11 +221,11 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     /// use tensor4all_simplett::tensor::{Tensor2, Tensor3};
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let rank_2 = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let rank_2 = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     /// let tensor = Tensor2::try_from_tenferro(rank_2).unwrap();
     /// assert_eq!(tensor.dims(), &[2, 2]);
     ///
-    /// let rank_2 = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let rank_2 = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     /// assert!(Tensor3::try_from_tenferro(rank_2).is_err());
     /// ```
     pub fn try_from_tenferro(tensor: TfTensor<T>) -> Result<Self> {
@@ -244,11 +244,11 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     /// use tensor4all_simplett::tensor::{Tensor2, Tensor3};
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let rank_2 = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let rank_2 = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     /// let tensor = Tensor2::from_tenferro(rank_2).unwrap();
     /// assert_eq!(tensor.dims(), &[2, 2]);
     ///
-    /// let rank_2 = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let rank_2 = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     /// assert!(Tensor3::from_tenferro(rank_2).is_err());
     /// ```
     pub fn from_tenferro(tensor: TfTensor<T>) -> Result<Self> {

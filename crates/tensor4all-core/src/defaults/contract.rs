@@ -27,8 +27,8 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use petgraph::algo::connected_components;
 use petgraph::prelude::*;
-use tenferro::eager_tensor::einsum_subscripts as eager_einsum_ad;
-use tenferro::EinsumSubscripts;
+use tenferro_einsum::eager_tensor::einsum_subscripts as eager_einsum_ad;
+use tenferro_einsum::EinsumSubscripts;
 use tensor4all_tensorbackend::{einsum_native_tensors, einsum_native_tensors_owned};
 
 use crate::defaults::{DynId, DynIndex, TensorDynLen};

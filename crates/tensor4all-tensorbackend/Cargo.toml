@@ -12,9 +12,26 @@ categories = ["science", "mathematics"]
 [features]
 default = ["backend-tenferro", "tenferro-cpu-faer"]
 backend-tenferro = []
-tenferro-cpu-faer = ["tenferro/cpu-faer"]
-tenferro-system-blas = ["tenferro/cpu-blas", "tenferro-tensor/cpu-blas"]
-tenferro-provider-inject = ["tenferro/cpu-blas", "tenferro-tensor/provider-inject"]
+tenferro-cpu-faer = [
+    "tenferro/autodiff",
+    "tenferro/cpu-faer",
+    "tenferro-einsum/autodiff",
+    "tenferro-einsum/cpu-faer",
+]
+tenferro-system-blas = [
+    "tenferro/autodiff",
+    "tenferro/cpu-blas",
+    "tenferro-einsum/autodiff",
+    "tenferro-einsum/cpu-blas",
+    "tenferro-tensor/cpu-blas",
+]
+tenferro-provider-inject = [
+    "tenferro/autodiff",
+    "tenferro/cpu-blas",
+    "tenferro-einsum/autodiff",
+    "tenferro-einsum/cpu-blas",
+    "tenferro-tensor/provider-inject",
+]
 einsum-dispatch-profile = []
 
 [dependencies]

@@ -25,7 +25,7 @@ use tensor4all_core::{
     TensorContractionLike, TensorDynLen,
 };
 use tensor4all_itensorlike::{CanonicalForm, ContractOptions, TensorTrain};
-use tenferro::{CpuBackend, DotGeneralConfig, EagerContext, EagerTensor, Tensor, TypedTensor};
+use tenferro::{CpuBackend, DotGeneralConfig, EagerRuntime, EagerTensor, Tensor, TypedTensor};
 
 #[derive(Debug, Clone)]
 struct Options {
@@ -162,7 +162,7 @@ fn deterministic_native_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
     let data = (0..len)
         .map(|idx| deterministic_value(idx, seed))
         .collect::<Vec<_>>();
-    Tensor::C64(TypedTensor::from_vec(shape, data))
+    Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn make_sites(length: usize, phys_dim: usize) -> Vec<DynIndex> {
@@ -214,10 +214,7 @@ fn make_native_mps_t4a_shapes(
         .collect()
 }
 
-fn eager_mps_tensors(
-    ctx: &Arc<EagerContext>,
-    tensors: Vec<Tensor>,
-) -> Vec<EagerTensor> {
+fn eager_mps_tensors(ctx: &Arc<EagerRuntime>, tensors: Vec<Tensor>) -> Vec<EagerTensor> {
     tensors
         .into_iter()
         .map(|tensor| EagerTensor::from_tensor_in(tensor, Arc::clone(ctx)))
@@ -666,7 +663,7 @@ fn main() -> Result<()> {
         let bra = make_mps(&sites, chi, 0)?;
         let ket = make_mps(&sites, chi, opts.length)?;
         let bra_conj = preconjugate_sites(&bra)?;
-        let raw_ctx = EagerContext::with_cpu_backend(CpuBackend::with_threads(1));
+        let raw_ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1));
         let raw_bra = eager_mps_tensors(
             &raw_ctx,
             make_native_mps_t4a_shapes(opts.length, opts.phys_dim, chi, 0),

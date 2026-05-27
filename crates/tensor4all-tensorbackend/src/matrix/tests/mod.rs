@@ -58,7 +58,7 @@ fn matrix_into_typed_tensor_consumes_column_major_layout() {
 
 #[test]
 fn matrix_from_typed_tensor_consumes_column_major_layout() {
-    let tensor = TypedTensor::from_vec(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]);
+    let tensor = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]);
 
     let m = Matrix::try_from_typed_tensor(tensor).unwrap();
 
@@ -70,7 +70,7 @@ fn matrix_from_typed_tensor_consumes_column_major_layout() {
 
 #[test]
 fn matrix_from_typed_tensor_rejects_non_matrix_rank() {
-    let tensor = TypedTensor::from_vec(vec![2, 1, 1], vec![1.0, 2.0]);
+    let tensor = TypedTensor::from_vec_col_major(vec![2, 1, 1], vec![1.0, 2.0]);
 
     let err = Matrix::try_from_typed_tensor(tensor).unwrap_err();
 

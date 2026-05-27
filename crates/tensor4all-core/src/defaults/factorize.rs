@@ -35,7 +35,10 @@
 use crate::defaults::tensordynlen::unfold_split_inner;
 use crate::defaults::DynIndex;
 use crate::{contract_pair, unfold_split, TensorDynLen};
+use anyhow::Result as AnyhowResult;
 use num_complex::{Complex64, ComplexFloat};
+use tenferro::EagerTensor;
+use tenferro_linalg::eager_tensor::full_piv_lu_solve as eager_full_piv_lu_solve;
 use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use tensor4all_tensorbackend::{Matrix, TensorElement};
 
@@ -563,7 +566,7 @@ where
         })?;
     let (left_inner, right_inner) = match canonical {
         Canonical::Left => {
-            let left = pivot_inner.right_solve(&cols_inner).map_err(|e| {
+            let left = eager_right_solve(&pivot_inner, &cols_inner).map_err(|e| {
                 FactorizeError::ComputationError(anyhow::anyhow!(
                     "fixed-pivot CI right solve failed: {e}"
                 ))
@@ -571,7 +574,7 @@ where
             (left, rows_inner)
         }
         Canonical::Right => {
-            let right = pivot_inner.solve(&rows_inner).map_err(|e| {
+            let right = eager_full_piv_lu_solve(&pivot_inner, &rows_inner).map_err(|e| {
                 FactorizeError::ComputationError(anyhow::anyhow!(
                     "fixed-pivot CI solve failed: {e}"
                 ))
@@ -611,6 +614,12 @@ where
         singular_values: None,
         rank,
     })
+}
+
+fn eager_right_solve(a: &EagerTensor, rhs: &EagerTensor) -> AnyhowResult<EagerTensor> {
+    let a_t = a.transpose(&[1, 0])?;
+    let rhs_t = rhs.transpose(&[1, 0])?;
+    Ok(eager_full_piv_lu_solve(&a_t, &rhs_t)?.transpose(&[1, 0])?)
 }
 
 /// Convert a native rank-2 tensor into a backend [`Matrix`].

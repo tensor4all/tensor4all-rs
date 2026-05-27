@@ -21,7 +21,7 @@ use crate::matrix::Matrix;
 /// use tensor4all_tensorbackend::svd_backend;
 /// use tenferro::TypedTensor;
 ///
-/// let a = TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]);
+/// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]);
 /// let result = svd_backend(&a).unwrap();
 ///
 /// assert_eq!(result.u.shape, vec![2, 2]);
@@ -479,7 +479,7 @@ fn matrix_to_typed_tensor<T>(matrix: &Matrix<T>) -> TypedTensor<T>
 where
     T: TensorScalar + Copy,
 {
-    TypedTensor::from_vec(
+    TypedTensor::from_vec_col_major(
         vec![matrix.nrows(), matrix.ncols()],
         matrix.as_col_major_slice().to_vec(),
     )

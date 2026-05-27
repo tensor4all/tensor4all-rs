@@ -54,7 +54,7 @@ fn scale_columns_complex(
 
 #[test]
 fn qr_backend_reconstructs_real_matrix() {
-    let input = TypedTensor::from_vec(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
+    let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
 
     let (q, r) = qr_backend(&input).unwrap();
     assert_eq!(q.shape, vec![2, 2]);
@@ -75,7 +75,7 @@ fn qr_backend_reconstructs_real_matrix() {
 
 #[test]
 fn svd_backend_reconstructs_complex_matrix() {
-    let input = TypedTensor::from_vec(
+    let input = TypedTensor::from_vec_col_major(
         vec![2, 2],
         vec![
             Complex64::new(1.0, -0.5),
@@ -107,8 +107,8 @@ fn svd_backend_reconstructs_complex_matrix() {
 
 #[test]
 fn solve_backend_solves_real_system() {
-    let a = TypedTensor::from_vec(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0]);
-    let b = TypedTensor::from_vec(vec![2, 1], vec![1.0_f64, 0.0]);
+    let a = TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0]);
+    let b = TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 0.0]);
 
     let x = solve_backend(&a, &b).unwrap();
 
@@ -293,8 +293,8 @@ fn triangular_solve_matrix_owned_solves_complex64_system() {
 
 #[test]
 fn triangular_solve_backend_solves_typed_tensor_system() {
-    let a = TypedTensor::from_vec(vec![2, 2], vec![2.0_f64, 1.0, 0.0, 3.0]);
-    let b = TypedTensor::from_vec(vec![2, 1], vec![2.0_f64, 7.0]);
+    let a = TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 0.0, 3.0]);
+    let b = TypedTensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 7.0]);
 
     let x = triangular_solve_backend(&a, &b, true, true, false, false).unwrap();
 
@@ -314,7 +314,7 @@ fn try_into_typed_result_reports_dtype_mismatch() {
 
 #[test]
 fn full_piv_lu_backend_returns_square_factors() {
-    let input = TypedTensor::from_vec(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]);
+    let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]);
 
     let decomp = full_piv_lu_backend(&input).unwrap();
 

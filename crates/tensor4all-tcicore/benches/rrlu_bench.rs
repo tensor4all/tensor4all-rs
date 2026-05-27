@@ -24,7 +24,7 @@ fn random_tenferro_matrix(n: usize, m: usize, seed: u64) -> Tensor {
             data[row + n * col] = rng.random::<f64>();
         }
     }
-    Tensor::from_vec(vec![n, m], data)
+    Tensor::from_vec_col_major(vec![n, m], data)
 }
 
 fn bench_rrlu(c: &mut Criterion) {

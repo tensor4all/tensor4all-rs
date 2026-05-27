@@ -36,13 +36,9 @@ fn recorded_native_einsum_call_count(path: NativeEinsumPath) -> usize {
     })
 }
 
-fn default_engine_contains_einsum_subscripts_key(
-    inputs: &[&[u32]],
-    output: &[u32],
-    shapes: Vec<Vec<usize>>,
-) -> bool {
-    crate::context::with_default_engine(|engine| {
-        engine.einsum_cache_contains_subscripts(&(EinsumSubscripts::new(inputs, output), shapes))
+fn default_graph_runtime_has_einsum_extension_cache_entries() -> bool {
+    crate::context::with_default_graph_runtime(|compiler, _| {
+        compiler.cache_stats().extensions.entries > 0
     })
 }
 
@@ -258,9 +254,9 @@ fn native_einsum_accepts_unsorted_nonfirst_operand_labels() {
 
 #[test]
 fn einsum_native_tensors_supports_retained_shared_nary_label() {
-    let a = NativeTensor::from_vec(vec![2, 2], vec![5.0_f64, 7.0, 11.0, 13.0]);
-    let b = NativeTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let c = NativeTensor::from_vec(vec![2, 2], vec![11.0_f64, 13.0, 17.0, 19.0]);
+    let a = NativeTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 11.0, 13.0]);
+    let b = NativeTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let c = NativeTensor::from_vec_col_major(vec![2, 2], vec![11.0_f64, 13.0, 17.0, 19.0]);
 
     let out = einsum_native_tensors(
         &[(&a, &[0, 1]), (&b, &[0, 2]), (&c, &[0, 3])],
@@ -293,9 +289,9 @@ fn einsum_native_tensors_supports_retained_shared_nary_label() {
 
 #[test]
 fn einsum_native_tensors_populates_process_global_path_cache() {
-    let a = NativeTensor::from_vec(vec![2, 3, 4], vec![1.0_f64; 24]);
-    let b = NativeTensor::from_vec(vec![4, 5], vec![2.0_f64; 20]);
-    let c = NativeTensor::from_vec(vec![3, 2], vec![3.0_f64; 6]);
+    let a = NativeTensor::from_vec_col_major(vec![2, 3, 4], vec![1.0_f64; 24]);
+    let b = NativeTensor::from_vec_col_major(vec![4, 5], vec![2.0_f64; 20]);
+    let c = NativeTensor::from_vec_col_major(vec![3, 2], vec![3.0_f64; 6]);
 
     let out =
         einsum_native_tensors(&[(&a, &[0, 1, 2]), (&b, &[2, 3]), (&c, &[1, 0])], &[3]).unwrap();
@@ -305,18 +301,14 @@ fn einsum_native_tensors_populates_process_global_path_cache() {
         native_tensor_primal_to_dense_f64_col_major(&out).unwrap(),
         vec![144.0; 5]
     );
-    assert!(default_engine_contains_einsum_subscripts_key(
-        &[&[0, 1, 2], &[2, 3], &[1, 0]],
-        &[3],
-        vec![vec![2, 3, 4], vec![4, 5], vec![3, 2]]
-    ));
+    assert!(default_graph_runtime_has_einsum_extension_cache_entries());
 }
 
 #[test]
 fn einsum_native_tensors_mixed_dtype_records_borrowed_conversion_profile() {
     let _guard = ProfileGuard::enable();
-    let lhs = NativeTensor::from_vec(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]);
-    let rhs = NativeTensor::from_vec(vec![2, 3], vec![5.0_f64, 6.0, 7.0, 8.0, 9.0, 10.0]);
+    let lhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]);
+    let rhs = NativeTensor::from_vec_col_major(vec![2, 3], vec![5.0_f64, 6.0, 7.0, 8.0, 9.0, 10.0]);
 
     let owned = einsum_native_tensors_owned(
         vec![(lhs.clone(), vec![0, 1]), (rhs.clone(), vec![1, 2])],
@@ -369,7 +361,7 @@ fn einsum_native_tensors_dense_binary_records_borrowed_profile() {
 
 #[test]
 fn native_read_input_owned_and_plan_helpers_cover_debug_paths() {
-    let tensor = NativeTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let tensor = NativeTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     let input = NativeTensorReadInput::Owned(tensor.clone());
     assert_eq!(input.dtype(), DType::F64);
     assert_eq!(input.shape(), &[2]);
@@ -431,11 +423,11 @@ fn native_read_input_owned_and_plan_helpers_cover_debug_paths() {
 fn native_einsum_profile_print_and_c32_arithmetic_paths() {
     let _guard = ProfileGuard::enable();
 
-    let lhs = NativeTensor::from_vec(
+    let lhs = NativeTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(1.0, 2.0), Complex32::new(-3.0, 0.5)],
     );
-    let rhs = NativeTensor::from_vec(
+    let rhs = NativeTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(0.5, -1.0), Complex32::new(4.0, 2.0)],
     );

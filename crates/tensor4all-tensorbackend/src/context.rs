@@ -3,21 +3,22 @@
 //! tensor4all-rs routes tenferro CPU execution through one process-global
 //! `CpuContext`, matching tenferro's `cpu:0` default-global thread-pool model.
 //! Plain tensor operations, cached traced execution, and eager AD currently use
-//! separate `CpuBackend` values because tenferro does not yet expose a public
-//! API for borrowing the backend owned by an `EagerContext`. All
-//! backends are created from the same global CPU context, so thread-pool
-//! configuration is shared.
+//! separate `CpuBackend` values because tenferro does not expose a public API
+//! for borrowing the backend owned by an `EagerRuntime`. All backends are
+//! created from the same global CPU context, so thread-pool configuration is
+//! shared.
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use tenferro::{CpuBackend, EagerContext, Engine};
+use tenferro::{CpuBackend, EagerRuntime, GraphCompiler, GraphExecutor};
 use tenferro_tensor::buffer_pool::BufferPoolStats;
 use tenferro_tensor::cpu::CpuContext;
 
 static DEFAULT_CPU_CONTEXT: OnceLock<Arc<CpuContext>> = OnceLock::new();
 static DEFAULT_BACKEND: OnceLock<Mutex<CpuBackend>> = OnceLock::new();
-static DEFAULT_ENGINE: OnceLock<Mutex<Engine<CpuBackend>>> = OnceLock::new();
-static DEFAULT_EAGER_CTX: OnceLock<Arc<EagerContext>> = OnceLock::new();
+static DEFAULT_GRAPH_COMPILER: OnceLock<Mutex<GraphCompiler>> = OnceLock::new();
+static DEFAULT_GRAPH_EXECUTOR: OnceLock<Mutex<GraphExecutor<CpuBackend>>> = OnceLock::new();
+static DEFAULT_EAGER_RUNTIME: OnceLock<Arc<EagerRuntime>> = OnceLock::new();
 
 fn default_cpu_context() -> Arc<CpuContext> {
     DEFAULT_CPU_CONTEXT
@@ -29,13 +30,27 @@ fn default_backend() -> &'static Mutex<CpuBackend> {
     DEFAULT_BACKEND.get_or_init(|| Mutex::new(CpuBackend::from_context(default_cpu_context())))
 }
 
-fn default_engine() -> &'static Mutex<Engine<CpuBackend>> {
-    DEFAULT_ENGINE
-        .get_or_init(|| Mutex::new(Engine::new(CpuBackend::from_context(default_cpu_context()))))
+fn default_graph_compiler() -> &'static Mutex<GraphCompiler> {
+    DEFAULT_GRAPH_COMPILER.get_or_init(|| Mutex::new(GraphCompiler::new()))
 }
 
-fn lock_default_engine() -> std::sync::MutexGuard<'static, Engine<CpuBackend>> {
-    match default_engine().lock() {
+fn default_graph_executor() -> &'static Mutex<GraphExecutor<CpuBackend>> {
+    DEFAULT_GRAPH_EXECUTOR.get_or_init(|| {
+        Mutex::new(GraphExecutor::new(CpuBackend::from_context(
+            default_cpu_context(),
+        )))
+    })
+}
+
+fn lock_default_graph_compiler() -> std::sync::MutexGuard<'static, GraphCompiler> {
+    match default_graph_compiler().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn lock_default_graph_executor() -> std::sync::MutexGuard<'static, GraphExecutor<CpuBackend>> {
+    match default_graph_executor().lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
@@ -53,44 +68,49 @@ pub fn with_default_backend<R>(f: impl FnOnce(&mut CpuBackend) -> R) -> R {
     f(&mut backend)
 }
 
-/// Run a closure against the process-global tenferro execution engine.
+/// Run a closure against the process-global tenferro graph compiler/executor.
 ///
 /// This is used for native tensor operations that benefit from tenferro's
 /// persistent execution caches, such as N-ary einsum contraction paths.
-pub(crate) fn with_default_engine<R>(f: impl FnOnce(&mut Engine<CpuBackend>) -> R) -> R {
-    let mut engine = lock_default_engine();
-    f(&mut engine)
+pub(crate) fn with_default_graph_runtime<R>(
+    f: impl FnOnce(&mut GraphCompiler, &mut GraphExecutor<CpuBackend>) -> R,
+) -> R {
+    let mut compiler = lock_default_graph_compiler();
+    let mut executor = lock_default_graph_executor();
+    f(&mut compiler, &mut executor)
 }
 
-/// Return retained-buffer statistics for the process-global execution engine.
+/// Return retained-buffer statistics for the process-global graph executor.
 pub(crate) fn default_engine_buffer_pool_stats() -> BufferPoolStats {
-    lock_default_engine().buffer_pool_stats()
+    lock_default_graph_executor().buffer_pool_stats()
 }
 
-/// Reset retained buffers in the process-global execution engine.
+/// Reset retained buffers in the process-global graph executor.
 pub(crate) fn reset_default_engine_buffer_pool() {
-    lock_default_engine().reset_buffer_pool();
+    lock_default_graph_executor().reset_buffer_pool();
 }
 
-/// Drop and recreate the process-global execution engine.
+/// Drop and recreate the process-global graph compiler/executor.
 ///
 /// This releases tenferro's retained execution buffers and cached contraction
 /// paths. It is intended for diagnostics and memory-pressure recovery, not for
 /// normal hot loops where the caches are valuable.
 pub(crate) fn reset_default_engine() {
-    let mut engine = lock_default_engine();
-    *engine = Engine::new(CpuBackend::from_context(default_cpu_context()));
+    let mut compiler = lock_default_graph_compiler();
+    *compiler = GraphCompiler::new();
+    let mut executor = lock_default_graph_executor();
+    *executor = GraphExecutor::new(CpuBackend::from_context(default_cpu_context()));
 }
 
 /// Return the process-global eager context used for reverse-mode AD.
 ///
 /// This context owns a separate `CpuBackend` from [`with_default_backend`] and
-/// the cached execution engine, but all backends share the same process-global
+/// the cached graph executor, but all backends share the same process-global
 /// tenferro CPU context.
-pub fn default_eager_ctx() -> Arc<EagerContext> {
-    DEFAULT_EAGER_CTX
+pub fn default_eager_ctx() -> Arc<EagerRuntime> {
+    DEFAULT_EAGER_RUNTIME
         .get_or_init(|| {
-            EagerContext::with_cpu_backend(CpuBackend::from_context(default_cpu_context()))
+            EagerRuntime::with_cpu_backend(CpuBackend::from_context(default_cpu_context()))
         })
         .clone()
 }
@@ -130,11 +150,13 @@ mod tests {
 
     #[test]
     fn default_engine_is_shared_across_threads() {
-        let main_threads = with_default_engine(|engine| engine.backend().num_threads());
-        let worker_threads =
-            std::thread::spawn(|| with_default_engine(|engine| engine.backend().num_threads()))
-                .join()
-                .expect("worker thread should complete");
+        let main_threads =
+            with_default_graph_runtime(|_, executor| executor.backend().num_threads());
+        let worker_threads = std::thread::spawn(|| {
+            with_default_graph_runtime(|_, executor| executor.backend().num_threads())
+        })
+        .join()
+        .expect("worker thread should complete");
 
         assert_eq!(main_threads, worker_threads);
     }

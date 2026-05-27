@@ -9,17 +9,17 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, ensure, Result};
 use num_complex::{Complex32, Complex64};
 use omeco::ScoreFunction;
-use tenferro::traced_tensor::{einsum_subscripts_with, EinsumOptimize};
 use tenferro::{
-    DType, EinsumSubscripts, Tensor as NativeTensor, TensorBackend, TensorRead, TensorView,
-    TracedTensor,
+    DType, Tensor as NativeTensor, TensorBackend, TensorRead, TensorView, TracedTensor,
 };
-use tenferro_einsum::{ContractionOptimizerOptions, ContractionTree, Subscripts};
+use tenferro_einsum::{
+    ContractionOptimizerOptions, ContractionTree, EinsumOptimize, EinsumSubscripts, Subscripts,
+};
 
 use crate::any_scalar::promote_scalar_native;
 use crate::context::{
     default_engine_buffer_pool_stats, reset_default_engine, reset_default_engine_buffer_pool,
-    with_default_backend, with_default_engine,
+    with_default_backend, with_default_graph_runtime,
 };
 use crate::memory::release_process_allocator_cached_memory;
 use crate::storage::Storage;
@@ -209,7 +209,9 @@ fn dtype_size_bytes(dtype: DType) -> usize {
         DType::F64 => 8,
         DType::C32 => 8,
         DType::C64 => 16,
+        DType::I32 => 4,
         DType::I64 => 8,
+        DType::Bool => 1,
     }
 }
 
@@ -499,14 +501,18 @@ fn common_dtype(dtypes: &[DType]) -> DType {
     let has_f64 = dtypes.contains(&DType::F64);
     let has_c64 = dtypes.contains(&DType::C64);
     let has_c32 = dtypes.contains(&DType::C32);
+    let has_i32 = dtypes.contains(&DType::I32);
     let has_i64 = dtypes.contains(&DType::I64);
+    let has_bool = dtypes.contains(&DType::Bool);
     let has_complex = has_c64 || has_c32;
     if has_c64 || (has_f64 && has_complex) {
         DType::C64
     } else if has_c32 {
         DType::C32
-    } else if has_f64 || has_i64 {
+    } else if has_f64 || has_i64 || has_i32 {
         DType::F64
+    } else if has_bool {
+        DType::Bool
     } else {
         DType::F32
     }
@@ -559,20 +565,34 @@ fn cached_einsum_native_tensors(
         .zip(inputs.iter())
         .map(|(placeholder, tensor)| (placeholder, *tensor))
         .collect::<Vec<_>>();
+    let input_specs = placeholders
+        .iter()
+        .zip(inputs.iter())
+        .map(|(placeholder, tensor)| (placeholder, tensor.dtype(), tensor.shape()))
+        .collect::<Vec<_>>();
 
     let trace_pool = native_einsum_pool_trace_enabled();
     let pool_before = trace_pool.then(default_engine_buffer_pool_stats);
-    let result = with_default_engine(|engine| {
-        let mut result = einsum_subscripts_with(
-            engine,
+    let result = with_default_graph_runtime(|compiler, executor| {
+        executor
+            .register_extension(tenferro_einsum::register_runtime)
+            .map_err(|e| anyhow!("native einsum runtime registration failed: {e}"))?;
+        let result = tenferro_einsum::einsum_subscripts_with(
+            compiler,
             &placeholder_refs,
             subscripts,
             EinsumOptimize::default(),
         )
         .map_err(|e| anyhow!("native einsum failed: {e}"))?;
-        result
-            .eval_with_inputs(engine, &bindings)
-            .cloned()
+        // Native einsum creates fresh placeholder tensors for each call.
+        // tenferro's compiled-program cache retains those placeholder keys, so
+        // reuse can leave the program expecting bindings from a previous call.
+        compiler.clear_compile_cache();
+        let program = compiler
+            .compile_with_input_specs(&result, &input_specs)
+            .map_err(|e| anyhow!("native einsum graph compilation failed: {e}"))?;
+        executor
+            .run_with_inputs(&program, &bindings)
             .map_err(|e| anyhow!("native einsum failed: {e}"))
     })?;
     if trace_pool {
@@ -648,10 +668,11 @@ fn cached_einsum_native_reads(
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
 ) -> Result<NativeTensor> {
-    with_default_backend(|backend| {
-        tenferro_einsum::eager_einsum_read_subscripts(backend, inputs, subscripts)
-            .map_err(|e| anyhow!("native read einsum failed: {e}"))
-    })
+    let tensors = inputs.iter().map(TensorRead::to_tensor).collect::<Vec<_>>();
+    let tensor_refs = tensors.iter().collect::<Vec<_>>();
+    let einsum_subscripts = EinsumSubscripts::from(subscripts);
+    cached_einsum_native_tensors(&tensor_refs, &einsum_subscripts)
+        .map_err(|e| anyhow!("native read einsum failed: {e}"))
 }
 
 /// Build native einsum ids for a binary contraction.
@@ -769,12 +790,14 @@ pub fn storage_payload_native_read_input(storage: &Storage) -> Result<NativeTens
                 TensorView::f64(storage.payload_dims(), view)?,
             )));
         }
-        Ok(NativeTensorReadInput::Owned(NativeTensor::from_vec(
-            storage.payload_dims().to_vec(),
-            storage
-                .payload_f64_col_major_vec()
-                .map_err(anyhow::Error::msg)?,
-        )))
+        Ok(NativeTensorReadInput::Owned(
+            NativeTensor::from_vec_col_major(
+                storage.payload_dims().to_vec(),
+                storage
+                    .payload_f64_col_major_vec()
+                    .map_err(anyhow::Error::msg)?,
+            ),
+        ))
     } else if storage.is_c64() {
         if let Some(view) = storage
             .payload_c64_col_major_view_if_contiguous()
@@ -784,12 +807,14 @@ pub fn storage_payload_native_read_input(storage: &Storage) -> Result<NativeTens
                 TensorView::c64(storage.payload_dims(), view)?,
             )));
         }
-        Ok(NativeTensorReadInput::Owned(NativeTensor::from_vec(
-            storage.payload_dims().to_vec(),
-            storage
-                .payload_c64_col_major_vec()
-                .map_err(anyhow::Error::msg)?,
-        )))
+        Ok(NativeTensorReadInput::Owned(
+            NativeTensor::from_vec_col_major(
+                storage.payload_dims().to_vec(),
+                storage
+                    .payload_c64_col_major_vec()
+                    .map_err(anyhow::Error::msg)?,
+            ),
+        ))
     } else {
         Err(anyhow!("unsupported storage scalar type"))
     }
@@ -814,12 +839,30 @@ pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage>
                 .to_vec(),
             tensor.shape(),
         ),
+        DType::I32 => Storage::from_dense_col_major(
+            tensor
+                .as_slice::<i32>()
+                .ok_or_else(|| anyhow!("failed to read i32 native tensor"))?
+                .iter()
+                .map(|&value| value as f64)
+                .collect::<Vec<_>>(),
+            tensor.shape(),
+        ),
         DType::I64 => Storage::from_dense_col_major(
             tensor
                 .as_slice::<i64>()
                 .ok_or_else(|| anyhow!("failed to read i64 native tensor"))?
                 .iter()
                 .map(|&value| value as f64)
+                .collect::<Vec<_>>(),
+            tensor.shape(),
+        ),
+        DType::Bool => Storage::from_dense_col_major(
+            tensor
+                .as_slice::<bool>()
+                .ok_or_else(|| anyhow!("failed to read bool native tensor"))?
+                .iter()
+                .map(|&value| if value { 1.0 } else { 0.0 })
                 .collect::<Vec<_>>(),
             tensor.shape(),
         ),
@@ -853,11 +896,23 @@ pub fn native_tensor_primal_to_dense_f64_col_major(tensor: &NativeTensor) -> Res
             .map(|&value| value as f64)
             .collect()),
         DType::F64 => <f64 as TensorElement>::dense_values_from_native_col_major(tensor),
+        DType::I32 => Ok(tensor
+            .as_slice::<i32>()
+            .ok_or_else(|| anyhow!("failed to read i32 native tensor"))?
+            .iter()
+            .map(|&value| value as f64)
+            .collect()),
         DType::I64 => Ok(tensor
             .as_slice::<i64>()
             .ok_or_else(|| anyhow!("failed to read i64 native tensor"))?
             .iter()
             .map(|&value| value as f64)
+            .collect()),
+        DType::Bool => Ok(tensor
+            .as_slice::<bool>()
+            .ok_or_else(|| anyhow!("failed to read bool native tensor"))?
+            .iter()
+            .map(|&value| if value { 1.0 } else { 0.0 })
             .collect()),
         other => Err(anyhow!("expected real native tensor, got dtype {other:?}")),
     }
@@ -896,7 +951,15 @@ pub fn native_tensor_primal_to_diag_f64(tensor: &NativeTensor) -> Result<Vec<f64
             <f64 as TensorElement>::diag_values_from_native_temp(&promoted)
         }
         DType::F64 => <f64 as TensorElement>::diag_values_from_native_temp(tensor),
+        DType::I32 => {
+            let promoted = convert_tensor(tensor, DType::F64)?;
+            <f64 as TensorElement>::diag_values_from_native_temp(&promoted)
+        }
         DType::I64 => {
+            let promoted = convert_tensor(tensor, DType::F64)?;
+            <f64 as TensorElement>::diag_values_from_native_temp(&promoted)
+        }
+        DType::Bool => {
             let promoted = convert_tensor(tensor, DType::F64)?;
             <f64 as TensorElement>::diag_values_from_native_temp(&promoted)
         }
@@ -978,7 +1041,10 @@ pub fn scale_native_tensor(tensor: &NativeTensor, scalar: &AnyScalar) -> Result<
                 .iter()
                 .map(|&value| value * factor)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec(tensor.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec_col_major(
+                tensor.shape().to_vec(),
+                values,
+            ))
         }
         DType::F64 => {
             let factor = scalar
@@ -991,7 +1057,10 @@ pub fn scale_native_tensor(tensor: &NativeTensor, scalar: &AnyScalar) -> Result<
                 .iter()
                 .map(|&value| value * factor)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec(tensor.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec_col_major(
+                tensor.shape().to_vec(),
+                values,
+            ))
         }
         DType::C32 => {
             let factor = scalar
@@ -1004,7 +1073,10 @@ pub fn scale_native_tensor(tensor: &NativeTensor, scalar: &AnyScalar) -> Result<
                 .iter()
                 .map(|&value| value * factor)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec(tensor.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec_col_major(
+                tensor.shape().to_vec(),
+                values,
+            ))
         }
         DType::C64 => {
             let factor = scalar
@@ -1017,9 +1089,14 @@ pub fn scale_native_tensor(tensor: &NativeTensor, scalar: &AnyScalar) -> Result<
                 .iter()
                 .map(|&value| value * factor)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec(tensor.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec_col_major(
+                tensor.shape().to_vec(),
+                values,
+            ))
         }
-        DType::I64 => Err(anyhow!("scale_native_tensor does not support i64 tensors")),
+        DType::I32 | DType::I64 | DType::Bool => Err(anyhow!(
+            "scale_native_tensor does not support integer/bool tensors"
+        )),
     }
 }
 
@@ -1069,7 +1146,10 @@ pub fn axpby_native_tensor(
                 .zip(rhs_values.iter())
                 .map(|(&x, &y)| a * x + b * y)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec(lhs.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec_col_major(
+                lhs.shape().to_vec(),
+                values,
+            ))
         }
         DType::F64 => {
             let a = a
@@ -1091,7 +1171,10 @@ pub fn axpby_native_tensor(
                 .zip(rhs_values.iter())
                 .map(|(&x, &y)| a * x + b * y)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec(lhs.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec_col_major(
+                lhs.shape().to_vec(),
+                values,
+            ))
         }
         DType::C32 => {
             let a = a
@@ -1113,7 +1196,10 @@ pub fn axpby_native_tensor(
                 .zip(rhs_values.iter())
                 .map(|(&x, &y)| a * x + b * y)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec(lhs.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec_col_major(
+                lhs.shape().to_vec(),
+                values,
+            ))
         }
         DType::C64 => {
             let a = a
@@ -1135,9 +1221,14 @@ pub fn axpby_native_tensor(
                 .zip(rhs_values.iter())
                 .map(|(&x, &y)| a * x + b * y)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::from_vec(lhs.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec_col_major(
+                lhs.shape().to_vec(),
+                values,
+            ))
         }
-        DType::I64 => Err(anyhow!("axpby_native_tensor does not support i64 tensors")),
+        DType::I32 | DType::I64 | DType::Bool => Err(anyhow!(
+            "axpby_native_tensor does not support integer/bool tensors"
+        )),
     }
 }
 
@@ -1165,8 +1256,8 @@ pub fn axpby_native_tensor(
 /// use tensor4all_tensorbackend::einsum_native_tensors_owned;
 /// use tenferro::Tensor as NativeTensor;
 ///
-/// let lhs = NativeTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
-/// let rhs = NativeTensor::from_vec(vec![3, 2], vec![1.0_f64; 6]);
+/// let lhs = NativeTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+/// let rhs = NativeTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
 /// let result = einsum_native_tensors_owned(vec![(lhs, vec![0, 1]), (rhs, vec![1, 2])], &[0, 2]).unwrap();
 ///
 /// assert_eq!(result.shape(), &[2, 2]);
@@ -1258,8 +1349,8 @@ pub fn einsum_native_tensors_owned(
 /// use tensor4all_tensorbackend::einsum_native_tensors;
 /// use tenferro::Tensor as NativeTensor;
 ///
-/// let lhs = NativeTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
-/// let rhs = NativeTensor::from_vec(vec![3, 2], vec![1.0_f64; 6]);
+/// let lhs = NativeTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+/// let rhs = NativeTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
 /// let result = einsum_native_tensors(&[(&lhs, &[0, 1]), (&rhs, &[1, 2])], &[0, 2]).unwrap();
 ///
 /// assert_eq!(result.shape(), &[2, 2]);
@@ -1412,8 +1503,8 @@ pub fn outer_product_native_tensor(lhs: &NativeTensor, rhs: &NativeTensor) -> Re
 /// Conjugate a native tensor.
 pub fn conj_native_tensor(tensor: &NativeTensor) -> Result<NativeTensor> {
     match tensor.dtype() {
-        DType::F32 | DType::F64 | DType::I64 => Ok(tensor.clone()),
-        DType::C32 => Ok(NativeTensor::from_vec(
+        DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => Ok(tensor.clone()),
+        DType::C32 => Ok(NativeTensor::from_vec_col_major(
             tensor.shape().to_vec(),
             tensor
                 .as_slice::<Complex32>()
@@ -1422,7 +1513,7 @@ pub fn conj_native_tensor(tensor: &NativeTensor) -> Result<NativeTensor> {
                 .map(|&value| value.conj())
                 .collect::<Vec<_>>(),
         )),
-        DType::C64 => Ok(NativeTensor::from_vec(
+        DType::C64 => Ok(NativeTensor::from_vec_col_major(
             tensor.shape().to_vec(),
             tensor
                 .as_slice::<Complex64>()

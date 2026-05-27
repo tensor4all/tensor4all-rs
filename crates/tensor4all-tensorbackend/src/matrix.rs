@@ -61,7 +61,7 @@ pub struct Matrix<T> {
 /// use tenferro::TypedTensor;
 /// use tensor4all_tensorbackend::Matrix;
 ///
-/// let tensor = TypedTensor::from_vec(vec![2, 1, 1], vec![1.0_f64, 2.0]);
+/// let tensor = TypedTensor::from_vec_col_major(vec![2, 1, 1], vec![1.0_f64, 2.0]);
 /// let err = Matrix::try_from_typed_tensor(tensor).unwrap_err();
 /// assert!(err.to_string().contains("rank-2 tensor"));
 /// ```
@@ -175,7 +175,7 @@ impl<T> Matrix<T> {
     where
         T: TensorScalar,
     {
-        TypedTensor::from_vec(vec![self.nrows, self.ncols], self.data.clone())
+        TypedTensor::from_vec_col_major(vec![self.nrows, self.ncols], self.data.clone())
     }
 
     /// Consume this matrix as a tenferro [`TypedTensor`] without cloning.
@@ -197,7 +197,7 @@ impl<T> Matrix<T> {
     where
         T: TensorScalar,
     {
-        TypedTensor::from_vec(vec![self.nrows, self.ncols], self.data)
+        TypedTensor::from_vec_col_major(vec![self.nrows, self.ncols], self.data)
     }
 
     /// Consume a rank-2 tenferro [`TypedTensor`] as a [`Matrix`].
@@ -218,7 +218,7 @@ impl<T> Matrix<T> {
     /// use tenferro::TypedTensor;
     /// use tensor4all_tensorbackend::Matrix;
     ///
-    /// let tensor = TypedTensor::from_vec(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
+    /// let tensor = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
     /// let m = Matrix::try_from_typed_tensor(tensor).unwrap();
     /// assert_eq!(m.nrows(), 2);
     /// assert_eq!(m.ncols(), 2);
@@ -230,12 +230,11 @@ impl<T> Matrix<T> {
     where
         T: Clone,
     {
-        let (shape, data) =
-            tensor
-                .try_into_vec()
-                .map_err(|source| MatrixTensorConversionError::HostBuffer {
-                    message: source.to_string(),
-                })?;
+        let (shape, data) = tensor.try_into_vec_col_major().map_err(|source| {
+            MatrixTensorConversionError::HostBuffer {
+                message: source.to_string(),
+            }
+        })?;
         if shape.len() != 2 {
             return Err(MatrixTensorConversionError::Rank { shape });
         }
@@ -814,7 +813,7 @@ where
     .context("batched matrix multiplication failed")?;
     let c = T::try_into_typed(c)
         .ok_or_else(|| anyhow::anyhow!("batched matrix multiplication returned wrong dtype"))?;
-    let (_shape, data) = c.try_into_vec()?;
+    let (_shape, data) = c.try_into_vec_col_major()?;
     let expected_len = batch
         .checked_mul(m)
         .and_then(|value| value.checked_mul(n))

@@ -41,7 +41,9 @@ fn tensor_dtype_name(dtype: DType) -> &'static str {
     match dtype {
         DType::F32 => "f32",
         DType::F64 => "f64",
+        DType::I32 => "i32",
         DType::I64 => "i64",
+        DType::Bool => "bool",
         DType::C32 => "c32",
         DType::C64 => "c64",
     }
@@ -84,7 +86,10 @@ macro_rules! impl_tensor_element {
                     dims,
                     expected_len
                 );
-                Ok(NativeTensor::from_vec(dims.to_vec(), data.to_vec()))
+                Ok(NativeTensor::from_vec_col_major(
+                    dims.to_vec(),
+                    data.to_vec(),
+                ))
             }
 
             fn diag_native_tensor_from_col_major(
@@ -97,7 +102,7 @@ macro_rules! impl_tensor_element {
             }
 
             fn scalar_native_tensor(value: Self) -> Result<NativeTensor> {
-                Ok(NativeTensor::from_vec(vec![], vec![value]))
+                Ok(NativeTensor::from_vec_col_major(vec![], vec![value]))
             }
 
             fn dense_values_from_native_col_major(tensor: &NativeTensor) -> Result<Vec<Self>> {

@@ -184,7 +184,7 @@ pub fn tensor3_from_data<T: TensorScalar>(
         });
     }
     let dims = [left_dim, site_dim, right_dim];
-    let inner = TfTensor::from_vec(dims.to_vec(), data);
+    let inner = TfTensor::from_vec_col_major(dims.to_vec(), data);
     Ok(Tensor::from_tenferro_unchecked(inner))
 }
 
