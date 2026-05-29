@@ -23,6 +23,9 @@ fn main() {
     }];
 
     for case in &cases {
+        // Match the Julia benchmark: warm up lazy backend state before timing.
+        let _ = run_case(case);
+
         let mut durations = Vec::with_capacity(repeats);
         let mut rank = 0;
         let mut last_error = 0.0;
