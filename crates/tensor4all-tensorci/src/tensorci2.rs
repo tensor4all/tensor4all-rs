@@ -8,7 +8,7 @@ use crate::error::{Result, TCIError};
 use crate::globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput};
 use rand::SeedableRng;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
 use tensor4all_tcicore::{
     matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix, MatrixLuciScalar, MultiIndex,
@@ -301,6 +301,173 @@ where
             i_set_history: Vec::new(),
             j_set_history: Vec::new(),
         })
+    }
+
+    pub(crate) fn from_parts_for_conversion(
+        local_dims: Vec<usize>,
+        i_set: Vec<Vec<MultiIndex>>,
+        j_set: Vec<Vec<MultiIndex>>,
+        site_tensors: Vec<Tensor3<T>>,
+        pivot_errors: Vec<f64>,
+        bond_errors: Vec<f64>,
+        max_sample_value: f64,
+    ) -> Result<Self> {
+        if local_dims.len() < 2 {
+            return Err(TCIError::DimensionMismatch {
+                message: "local_dims should have at least 2 elements".to_string(),
+            });
+        }
+        let n = local_dims.len();
+        if i_set.len() != n || j_set.len() != n || site_tensors.len() != n {
+            return Err(TCIError::DimensionMismatch {
+                message: format!(
+                    "conversion parts should have length {n}; got I={}, J={}, tensors={}",
+                    i_set.len(),
+                    j_set.len(),
+                    site_tensors.len()
+                ),
+            });
+        }
+        Ok(Self {
+            i_set,
+            j_set,
+            local_dims,
+            site_tensors,
+            pivot_errors,
+            bond_errors,
+            max_sample_value,
+            i_set_history: Vec::new(),
+            j_set_history: Vec::new(),
+        })
+    }
+
+    /// Construct a [`TensorCI2`] from an existing tensor train, consuming the train.
+    ///
+    /// # Arguments
+    ///
+    /// * `tt` -- Tensor train whose site tensors are consumed by the
+    ///   resulting `TensorCI2`.
+    /// * `options` -- One-site index extraction tolerance, rank cap, and
+    ///   sweep count.
+    ///
+    /// # Returns
+    ///
+    /// A `TensorCI2` with site tensors and index sets extracted from `tt`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TCIError`] if the tensor train has fewer than two sites, if
+    /// options are invalid, or if one-site LU index extraction fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+    /// use tensor4all_tensorci::{TensorCI2, TensorCI2FromTensorTrainOptions};
+    ///
+    /// let tt = TensorTrain::<f64>::constant(&[2, 3], 2.5);
+    /// let tci = TensorCI2::from_tensor_train(
+    ///     tt,
+    ///     TensorCI2FromTensorTrainOptions::default(),
+    /// )
+    /// .unwrap();
+    ///
+    /// let roundtrip = tci.to_tensor_train().unwrap();
+    /// assert!((roundtrip.evaluate(&[1, 2]).unwrap() - 2.5).abs() < 1e-12);
+    /// assert_eq!(tci.link_dims(), vec![1]);
+    /// ```
+    pub fn from_tensor_train(
+        tt: TensorTrain<T>,
+        options: crate::conversion::TensorCI2FromTensorTrainOptions,
+    ) -> Result<Self>
+    where
+        T: tensor4all_tensorbackend::BlasMul,
+    {
+        crate::conversion::tensorci2_from_tensor_train(tt, options)
+    }
+
+    /// Construct a [`TensorCI2`] from explicit pivot index sets.
+    ///
+    /// This constructor is the strict Rust boundary for index-set based
+    /// conversion code. The index sets are represented as
+    /// `Vec<Vec<MultiIndex>>`: one outer entry per site, and one multi-index
+    /// per pivot key at that site.
+    ///
+    /// # Arguments
+    ///
+    /// * `local_dims` -- Number of values at each site. Every dimension must
+    ///   be nonzero and at least two sites are required.
+    /// * `i_set` -- Left index sets. `i_set[p]` contains prefixes of length
+    ///   `p`, and `i_set[0]` must be `[[]]`.
+    /// * `j_set` -- Right index sets. `j_set[p]` contains suffixes of length
+    ///   `n - p - 1`, and `j_set[n - 1]` must be `[[]]`.
+    /// * `f` -- Function used to populate site tensors from the explicit
+    ///   pivot sets.
+    ///
+    /// # Returns
+    ///
+    /// A `TensorCI2` with validated index sets and freshly populated site
+    /// tensors.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TCIError`] if dimensions are invalid, index-set lengths do
+    /// not match the number of sites, indices are out of range, boundary
+    /// conventions are violated, adjacent bond ranks are inconsistent, all
+    /// sampled values are zero, duplicate pivot keys are present, or the
+    /// one-site interpolation solve fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::AbstractTensorTrain;
+    /// use tensor4all_tensorci::TensorCI2;
+    /// use tensor4all_tcicore::MultiIndex;
+    ///
+    /// let f = |idx: &MultiIndex| (idx[0] + idx[1] + 1) as f64;
+    /// let tci = TensorCI2::from_index_sets(
+    ///     vec![4, 4],
+    ///     vec![vec![vec![]], vec![vec![0], vec![1]]],
+    ///     vec![vec![vec![0], vec![1]], vec![vec![]]],
+    ///     &f,
+    /// )
+    /// .unwrap();
+    ///
+    /// let tt = tci.to_tensor_train().unwrap();
+    /// assert!((tt.evaluate(&[2, 3]).unwrap() - 6.0).abs() < 1e-10);
+    /// assert_eq!(tci.link_dims(), vec![2]);
+    /// ```
+    pub fn from_index_sets<F>(
+        local_dims: Vec<usize>,
+        i_set: Vec<Vec<MultiIndex>>,
+        j_set: Vec<Vec<MultiIndex>>,
+        f: &F,
+    ) -> Result<Self>
+    where
+        F: Fn(&MultiIndex) -> T,
+    {
+        validate_explicit_index_sets(&local_dims, &i_set, &j_set)?;
+        let max_sample_value = max_sample_over_index_sets(&local_dims, &i_set, &j_set, f);
+        if max_sample_value < 1e-30 {
+            return Err(TCIError::InvalidPivot {
+                message: "explicit TensorCI2 index sets only sample zero values".to_string(),
+            });
+        }
+
+        let n = local_dims.len();
+        let mut tci = Self {
+            i_set,
+            j_set,
+            local_dims: local_dims.clone(),
+            site_tensors: local_dims.iter().map(|&d| tensor3_zeros(0, d, 0)).collect(),
+            pivot_errors: Vec::new(),
+            bond_errors: vec![0.0; n - 1],
+            max_sample_value,
+            i_set_history: Vec::new(),
+            j_set_history: Vec::new(),
+        };
+        tci.fill_site_tensors(f)?;
+        Ok(tci)
     }
 
     /// Number of sites
@@ -850,6 +1017,161 @@ where
     }
 }
 
+fn validate_explicit_index_sets(
+    local_dims: &[usize],
+    i_set: &[Vec<MultiIndex>],
+    j_set: &[Vec<MultiIndex>],
+) -> Result<()> {
+    if local_dims.len() < 2 {
+        return Err(TCIError::DimensionMismatch {
+            message: "local_dims should have at least 2 elements".to_string(),
+        });
+    }
+    if let Some((site, _)) = local_dims.iter().enumerate().find(|&(_, &dim)| dim == 0) {
+        return Err(TCIError::DimensionMismatch {
+            message: format!("local_dims[{site}] must be nonzero"),
+        });
+    }
+    let n = local_dims.len();
+    if i_set.len() != n || j_set.len() != n {
+        return Err(TCIError::DimensionMismatch {
+            message: format!(
+                "I/J set length must match number of sites {n}; got I={}, J={}",
+                i_set.len(),
+                j_set.len()
+            ),
+        });
+    }
+    if i_set[0] != [Vec::<usize>::new()] {
+        return Err(TCIError::DimensionMismatch {
+            message: "I set at site 0 must be exactly [[]]".to_string(),
+        });
+    }
+    if j_set[n - 1] != [Vec::<usize>::new()] {
+        return Err(TCIError::DimensionMismatch {
+            message: "J set at the last site must be exactly [[]]".to_string(),
+        });
+    }
+
+    for site in 0..n {
+        if i_set[site].is_empty() || j_set[site].is_empty() {
+            return Err(TCIError::DimensionMismatch {
+                message: format!("I/J set at site {site} must be nonempty"),
+            });
+        }
+        validate_left_index_set(local_dims, site, &i_set[site])?;
+        validate_right_index_set(local_dims, site, &j_set[site])?;
+        validate_unique_index_set("I", site, &i_set[site])?;
+        validate_unique_index_set("J", site, &j_set[site])?;
+    }
+
+    for bond in 0..n - 1 {
+        if i_set[bond + 1].len() != j_set[bond].len() {
+            return Err(TCIError::DimensionMismatch {
+                message: format!(
+                    "I/J set rank mismatch at bond {bond}: I[{}] has {}, J[{bond}] has {}",
+                    bond + 1,
+                    i_set[bond + 1].len(),
+                    j_set[bond].len()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_unique_index_set(name: &str, site: usize, values: &[MultiIndex]) -> Result<()> {
+    let mut seen = HashSet::with_capacity(values.len());
+    for value in values {
+        if !seen.insert(value.as_slice()) {
+            return Err(TCIError::DimensionMismatch {
+                message: format!("{name}[{site}] contains duplicate index {value:?}"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_left_index_set(local_dims: &[usize], site: usize, values: &[MultiIndex]) -> Result<()> {
+    for value in values {
+        if value.len() != site {
+            return Err(TCIError::DimensionMismatch {
+                message: format!(
+                    "I[{site}] contains index {value:?} with length {}, expected {site}",
+                    value.len()
+                ),
+            });
+        }
+        for (axis, &index) in value.iter().enumerate() {
+            let dim = local_dims[axis];
+            if index >= dim {
+                return Err(TCIError::IndexOutOfBounds {
+                    message: format!(
+                        "I[{site}] contains coordinate {index} at axis {axis}, outside 0..{dim}"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_right_index_set(
+    local_dims: &[usize],
+    site: usize,
+    values: &[MultiIndex],
+) -> Result<()> {
+    let expected_len = local_dims.len() - site - 1;
+    for value in values {
+        if value.len() != expected_len {
+            return Err(TCIError::DimensionMismatch {
+                message: format!(
+                    "J[{site}] contains index {value:?} with length {}, expected {expected_len}",
+                    value.len()
+                ),
+            });
+        }
+        for (offset, &index) in value.iter().enumerate() {
+            let axis = site + 1 + offset;
+            let dim = local_dims[axis];
+            if index >= dim {
+                return Err(TCIError::IndexOutOfBounds {
+                    message: format!(
+                        "J[{site}] contains coordinate {index} at axis {axis}, outside 0..{dim}"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn max_sample_over_index_sets<T, F>(
+    local_dims: &[usize],
+    i_set: &[Vec<MultiIndex>],
+    j_set: &[Vec<MultiIndex>],
+    f: &F,
+) -> f64
+where
+    T: Scalar + TTScalar,
+    F: Fn(&MultiIndex) -> T,
+{
+    let mut max_sample = 0.0_f64;
+    for site in 0..local_dims.len() {
+        for i_multi in &i_set[site] {
+            for local in 0..local_dims[site] {
+                for j_multi in &j_set[site] {
+                    let mut full_idx = i_multi.clone();
+                    full_idx.push(local);
+                    full_idx.extend(j_multi.iter().copied());
+                    max_sample = max_sample.max(Scalar::abs_sq(f(&full_idx)).sqrt());
+                }
+            }
+        }
+    }
+    max_sample
+}
+
 /// Check convergence based on history of ranks, errors, and global pivots.
 ///
 /// Port of Julia's `convergencecriterion`.
@@ -996,26 +1318,105 @@ where
         });
     }
 
-    let n = tci.len();
-    let mut errors = Vec::new();
-    let mut ranks = Vec::new();
-    let mut nglobal_pivots_history: Vec<usize> = Vec::new();
-
-    // Create RNG
-    let mut rng = if let Some(seed) = options.seed {
-        rand::rngs::StdRng::seed_from_u64(seed)
-    } else {
-        rand::rngs::StdRng::from_os_rng()
-    };
-
-    // Create global pivot finder
     let finder = DefaultGlobalPivotFinder::new(
         options.nsearch,
         options.max_nglobal_pivot,
         options.tol_margin_global_search,
     );
 
-    // Main optimization loop
+    optimize_with_finder(tci, f, batched_f, options, finder)
+}
+
+/// Optimize an existing [`TensorCI2`] state with an injected global pivot finder.
+///
+/// Use this when the default random global pivot search is not appropriate for
+/// the function being interpolated. The input state must already contain at
+/// least one pivot, usually by calling [`TensorCI2::add_global_pivots`].
+///
+/// # Arguments
+///
+/// * `tci` -- Existing TCI2 state to optimize. It is consumed and returned
+///   after optimization.
+/// * `f` -- Scalar function to interpolate on zero-based multi-indices.
+/// * `batched_f` -- Optional Torch-style batch callback. It receives a slice of
+///   multi-indices and must return one value per input index.
+/// * `options` -- Sweep, convergence, and truncation settings.
+/// * `finder` -- Global pivot finder used after each two-site sweep.
+///
+/// # Returns
+///
+/// Returns `(tci, ranks, errors)`, matching [`crossinterpolate2`]. `ranks` and
+/// `errors` contain one entry per half-sweep.
+///
+/// # Errors
+///
+/// Returns [`TCIError::InvalidPivot`] when the input state has no pivots. It
+/// also forwards errors from two-site sweeps, tensor-train conversion, callback
+/// length validation, and final one-site cleanup.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::AbstractTensorTrain;
+/// use tensor4all_tensorci::{
+///     optimize_with_finder, DefaultGlobalPivotFinder, TCI2Options, TensorCI2,
+/// };
+///
+/// let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
+/// let mut tci = TensorCI2::<f64>::new(vec![4, 4]).unwrap();
+/// tci.add_global_pivots(&[vec![3, 3]]).unwrap();
+///
+/// let finder = DefaultGlobalPivotFinder::new(0, 0, 10.0);
+/// let (tci, ranks, errors) =
+///     optimize_with_finder::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>, _>(
+///         tci,
+///         f,
+///         None,
+///         TCI2Options {
+///             tolerance: 1e-10,
+///             max_iter: 5,
+///             ..TCI2Options::default()
+///         },
+///         finder,
+///     )
+///     .unwrap();
+///
+/// assert!(!ranks.is_empty());
+/// assert!(!errors.is_empty());
+/// let tt = tci.to_tensor_train().unwrap();
+/// assert!((tt.evaluate(&[2, 3]).unwrap() - 6.0).abs() < 1e-10);
+/// ```
+pub fn optimize_with_finder<T, F, B, G>(
+    mut tci: TensorCI2<T>,
+    f: F,
+    batched_f: Option<B>,
+    options: TCI2Options,
+    finder: G,
+) -> Result<(TensorCI2<T>, Vec<usize>, Vec<f64>)>
+where
+    T: Scalar + TTScalar + Default + MatrixLuciScalar,
+    F: Fn(&MultiIndex) -> T,
+    B: Fn(&[MultiIndex]) -> Vec<T>,
+    G: GlobalPivotFinder,
+{
+    if tci.rank() == 0 {
+        return Err(TCIError::InvalidPivot {
+            message: "TensorCI2 state must contain at least one pivot before optimization"
+                .to_string(),
+        });
+    }
+
+    let n = tci.len();
+    let mut errors = Vec::new();
+    let mut ranks = Vec::new();
+    let mut nglobal_pivots_history: Vec<usize> = Vec::new();
+
+    let mut rng = if let Some(seed) = options.seed {
+        rand::rngs::StdRng::seed_from_u64(seed)
+    } else {
+        rand::rngs::StdRng::from_os_rng()
+    };
+
     for iter in 0..options.max_iter {
         let error_normalization = if options.normalize_error && tci.max_sample_value > 0.0 {
             tci.max_sample_value
@@ -1144,10 +1545,7 @@ where
     let abs_tol = options.tolerance * error_normalization;
     tci.sweep1site(&f, true, 1e-14, abs_tol, options.max_bond_dim, true)?;
 
-    // Normalize errors for return
-    let normalized_errors = errors.to_vec();
-
-    Ok((tci, ranks, normalized_errors))
+    Ok((tci, ranks, errors))
 }
 
 /// Update pivots at bond b using LU-based cross interpolation

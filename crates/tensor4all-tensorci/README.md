@@ -1,12 +1,16 @@
 # tensor4all-tensorci
 
-Tensor Cross Interpolation algorithms. TCI2 is the maintained tensor cross interpolation implementation.
+Tensor Cross Interpolation algorithms. TCI2 is the primary maintained implementation; TCI1 is available for legacy one-site workflows and parity with TensorCrossInterpolation.jl.
 
 ## Key Types
 
 - `crossinterpolate2()` — main entry point for two-site TCI
 - `TCI2Options` — tolerance, pivot strategy, and convergence settings
-- `CachedFunction` — wrapper that caches function evaluations to avoid redundant calls
+- `TensorCI2` — two-site TCI state; convert it to `TensorTrain` for repeated evaluation
+- `TensorCI2::from_tensor_train()` and `TensorCI2::from_index_sets()` — non-dense conversion constructors
+- `crossinterpolate1()` — legacy one-site TCI entry point
+- `TCI1Options` and `TCI1SweepStrategy` — tolerance, sweep direction, and pivot settings for TCI1
+- `TensorCI1` — one-site TCI state; convert it to `TensorTrain` for repeated evaluation
 
 ## Example
 

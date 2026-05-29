@@ -2,7 +2,7 @@
 
 tensor4all-rs is a Rust implementation of tensor network algorithms, focused on:
 
-- **Tensor Cross Interpolation (TCI / TCI2)** — adaptive low-rank tensor approximation
+- **Tensor Cross Interpolation (TCI)** — adaptive low-rank tensor approximation with TCI2 primary and TCI1 legacy algorithms
 - **Quantics Tensor Train (QTT)** — representation of functions in exponentially fine grids
 - **Tree Tensor Networks (TreeTN)** — tensor networks with arbitrary tree topology
 
@@ -31,7 +31,7 @@ examples live in this guide and the guide examples are exercised in CI.
 ## Feature highlights
 
 - **Dynamic Index/Tensor system** inspired by ITensors.jl: indices carry semantic identity, tensor contraction aligns axes by index rather than position
-- **Tensor Cross Interpolation (TCI2)**: approximates high-dimensional tensors from a small number of evaluations using cross-approximation
+- **Tensor Cross Interpolation (TCI)**: approximates high-dimensional tensors from a small number of evaluations using cross-approximation; TCI2 is the primary algorithm and TCI1 is available for legacy parity
 - **Quantics Tensor Train (QTT)**: represents smooth functions on exponentially fine grids; includes transformation operators (affine, shift, sum)
 - **Tree Tensor Networks**: arbitrary-topology TTN, not limited to chains (MPS/MPO); supports standard MPS/MPO as special cases with runtime topology checks
 - **C API** (`tensor4all-capi`): stable FFI surface for language bindings, currently used by [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl)

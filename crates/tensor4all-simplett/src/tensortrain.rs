@@ -214,6 +214,38 @@ impl<T: TTScalar> TensorTrain<T> {
         &mut self.tensors
     }
 
+    /// Consume this tensor train and return its rank-3 core tensors.
+    ///
+    /// Use this when another representation needs to take ownership of the
+    /// tensor train cores without cloning them. The returned tensors keep the
+    /// same site order and bond dimensions as the original tensor train.
+    ///
+    /// # Returns
+    ///
+    /// The owned rank-3 site tensors in left-to-right site order.
+    ///
+    /// # Panics
+    ///
+    /// This method does not panic.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+    ///
+    /// let tt = TensorTrain::<f64>::constant(&[2, 3], 4.0);
+    /// let link_dims = tt.link_dims();
+    /// let cores = tt.into_site_tensors();
+    ///
+    /// assert_eq!(cores.len(), 2);
+    /// assert_eq!(link_dims, vec![1]);
+    /// assert_eq!(cores[0].dim(1), 2);
+    /// assert_eq!(cores[1].dim(1), 3);
+    /// ```
+    pub fn into_site_tensors(self) -> Vec<Tensor3<T>> {
+        self.tensors
+    }
+
     /// Multiply every entry of the tensor train by `factor` in place.
     ///
     /// Only the last core tensor is rescaled, so this is an O(d * r^2) operation

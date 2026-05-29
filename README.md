@@ -9,7 +9,7 @@ Related project: [tenferro-rs](https://github.com/tensor4all/tenferro-rs) provid
 ## Features
 
 - **ITensors.jl-like dynamic tensors**: Flexible `Index` system with dynamic-rank `Tensor`
-- **Tensor Cross Interpolation**: TCI2 algorithm for efficient high-dimensional function approximation
+- **Tensor Cross Interpolation**: TCI2 primary algorithm plus legacy TCI1 compatibility for efficient high-dimensional function approximation
 - **Quantics Tensor Train**: Binary encoding of continuous variables with transformation operators
 - **Tree Tensor Networks**: Arbitrary topology with canonicalization, truncation, and contraction
 - **C API**: Minimal Julia-facing FFI surface for indices, structured tensors, TreeTN, and quantics materialization
@@ -52,7 +52,7 @@ validated in CI. Longer runnable examples live in the
 | [tensor4all-aci](crates/tensor4all-aci/) | Alternating Cross Interpolation for elementwise tensor train operations |
 | [tensor4all-itensorlike](crates/tensor4all-itensorlike/) | ITensors.jl-like TensorTrain API |
 | [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology |
-| [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI2) |
+| [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI2 primary, TCI1 legacy) |
 | [tensor4all-quanticstci](crates/tensor4all-quanticstci/) | High-level Quantics TCI interface |
 | [tensor4all-interpolativeqtt](crates/tensor4all-interpolativeqtt/) | Interpolative QTT construction |
 | [tensor4all-quanticstransform](crates/tensor4all-quanticstransform/) | Quantics transformation operators |

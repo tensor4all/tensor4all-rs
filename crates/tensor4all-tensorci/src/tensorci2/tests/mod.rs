@@ -255,6 +255,35 @@ fn test_crossinterpolate2_rank2_function_rook_search() {
     );
 }
 
+/// Port of Julia test_tensorci2.jl: "pivoterrors".
+#[test]
+fn test_crossinterpolate2_pivot_errors_match_diagonal_values() {
+    let diagonal = [1.0_f64, 1e-5, 0.0];
+    let f = |idx: &MultiIndex| {
+        if idx[0] == idx[1] {
+            diagonal[idx[0]]
+        } else {
+            0.0
+        }
+    };
+    let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+        f,
+        None,
+        vec![3, 3],
+        vec![vec![0, 0]],
+        TCI2Options {
+            tolerance: 1e-8,
+            ..TCI2Options::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(tci.pivot_errors().len(), diagonal.len());
+    for (&actual, &expected) in tci.pivot_errors().iter().zip(diagonal.iter()) {
+        assert!((actual - expected).abs() < 1e-14);
+    }
+}
+
 #[test]
 fn test_crossinterpolate2_rook_search_uses_partial_batch_requests() {
     let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
@@ -998,4 +1027,55 @@ fn test_custom_global_pivot_finder() {
             (tt_val - f_val).abs()
         );
     }
+}
+
+#[test]
+fn test_optimize_with_finder_invokes_custom_finder() {
+    use crate::globalpivot::{GlobalPivotFinder, GlobalPivotSearchInput};
+    use rand::Rng;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct CountingFinder {
+        calls: Rc<Cell<usize>>,
+    }
+
+    impl GlobalPivotFinder for CountingFinder {
+        fn find_global_pivots<T, F>(
+            &self,
+            input: &GlobalPivotSearchInput<T>,
+            _f: &F,
+            _abs_tol: f64,
+            _rng: &mut impl Rng,
+        ) -> Vec<MultiIndex>
+        where
+            T: tensor4all_tcicore::Scalar + tensor4all_simplett::TTScalar,
+            F: Fn(&MultiIndex) -> T,
+        {
+            self.calls.set(self.calls.get() + 1);
+            vec![vec![input.local_dims[0] - 1, input.local_dims[1] - 1]]
+        }
+    }
+
+    let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 2)) as f64;
+    let mut tci = TensorCI2::<f64>::new(vec![4, 4]).unwrap();
+    tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+
+    let calls = Rc::new(Cell::new(0));
+    let finder = CountingFinder {
+        calls: Rc::clone(&calls),
+    };
+    let (tci, ranks, errors) = optimize_with_finder::<f64, _, fn(&[MultiIndex]) -> Vec<f64>, _>(
+        tci,
+        f,
+        None,
+        TCI2Options::default(),
+        finder,
+    )
+    .unwrap();
+
+    assert!(!ranks.is_empty());
+    assert!(!errors.is_empty());
+    assert!(tci.rank() >= 1);
+    assert!(calls.get() > 0);
 }
