@@ -9,6 +9,39 @@ use tensor4all_tensorbackend::{solve_matrix, transpose, Matrix, MatrixSolveScala
 
 mod matrix_ci;
 
+/// Direction of one-site TCI1 sweeps.
+///
+/// Use this with [`TCI1Options::sweep_strategy`] to match legacy TCI1
+/// workflows that require deterministic forward-only, backward-only, or
+/// alternating sweeps.
+///
+/// Related types: [`Sweep2Strategy`](crate::Sweep2Strategy) controls the
+/// primary two-site TCI2 sweeps; `TCI1SweepStrategy` is the one-site TCI1
+/// counterpart.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::TCI1SweepStrategy;
+///
+/// let strategy = TCI1SweepStrategy::default();
+/// assert_eq!(strategy, TCI1SweepStrategy::BackAndForth);
+/// assert_ne!(TCI1SweepStrategy::Forward, TCI1SweepStrategy::Backward);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TCI1SweepStrategy {
+    /// Sweep left-to-right only.
+    Forward,
+    /// Sweep right-to-left only.
+    Backward,
+    /// Alternate between forward and backward sweeps.
+    ///
+    /// This is the default and generally the most robust choice when no
+    /// legacy workflow requires a fixed direction.
+    #[default]
+    BackAndForth,
+}
+
 /// Configuration for [`crossinterpolate1`].
 ///
 /// Use this to control convergence tolerance, sweep count, local pivot
@@ -31,19 +64,43 @@ mod matrix_ci;
 ///
 /// assert!((options.tolerance - 1e-12).abs() < 1e-20);
 /// assert_eq!(options.max_iter, 32);
+/// assert_eq!(options.sweep_strategy, tensor4all_tensorci::TCI1SweepStrategy::BackAndForth);
 /// assert!(options.normalize_error);
 /// ```
 #[derive(Debug, Clone)]
 pub struct TCI1Options {
-    /// Relative convergence tolerance.
+    /// Relative convergence tolerance when [`normalize_error`](Self::normalize_error) is `true`.
+    ///
+    /// The default is `1e-8`. Use smaller values such as `1e-12` for
+    /// high-accuracy tests; use larger values to stop earlier on expensive
+    /// functions.
     pub tolerance: f64,
-    /// Maximum number of sweeps.
+    /// Maximum rank target reached by local sweeps.
+    ///
+    /// The initial rank is one. Each iteration tries to add one pivot per
+    /// bond and then records the new rank. The default is `200`.
     pub max_iter: usize,
-    /// Tolerance for accepting one new local pivot.
+    /// Absolute tolerance for accepting one new local pivot.
+    ///
+    /// The default is `1e-12`. Increase it to skip numerically tiny pivots;
+    /// decrease it when reproducing legacy TCI1 rank growth exactly.
     pub pivot_tolerance: f64,
+    /// Sweep direction policy.
+    ///
+    /// The default is [`TCI1SweepStrategy::BackAndForth`]. Use
+    /// [`TCI1SweepStrategy::Forward`] or [`TCI1SweepStrategy::Backward`] when
+    /// matching a fixed-direction legacy run.
+    pub sweep_strategy: TCI1SweepStrategy,
     /// Whether to normalize pivot errors by the maximum sampled value.
+    ///
+    /// The default is `true`, so [`tolerance`](Self::tolerance) is relative
+    /// to the largest absolute sample observed so far. Set to `false` to use
+    /// `tolerance` as an absolute threshold.
     pub normalize_error: bool,
-    /// Additional global pivots inserted before sweeps.
+    /// Additional global pivots inserted before local sweeps.
+    ///
+    /// Each pivot must contain one in-range zero-based index per site. The
+    /// default is empty. Duplicate pivots are ignored by the index sets.
     pub additional_pivots: Vec<MultiIndex>,
 }
 
@@ -53,6 +110,7 @@ impl Default for TCI1Options {
             tolerance: 1e-8,
             max_iter: 200,
             pivot_tolerance: 1e-12,
+            sweep_strategy: TCI1SweepStrategy::BackAndForth,
             normalize_error: true,
             additional_pivots: Vec::new(),
         }
@@ -841,7 +899,12 @@ where
     }
 
     for iter in tci.rank() + 1..=options.max_iter {
-        if iter % 2 == 1 {
+        let is_forward = match options.sweep_strategy {
+            TCI1SweepStrategy::Forward => true,
+            TCI1SweepStrategy::Backward => false,
+            TCI1SweepStrategy::BackAndForth => iter % 2 == 1,
+        };
+        if is_forward {
             for bond in 0..tci.len() - 1 {
                 tci.add_pivot(bond, &f, options.pivot_tolerance)?;
             }

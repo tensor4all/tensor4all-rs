@@ -12,11 +12,14 @@
 //! | Entry point | Algorithm | State type | Notes |
 //! |---|---|---|---|
 //! | [`crossinterpolate2`] | TCI2 (two-site) | [`TensorCI2`] | **Primary, actively maintained** |
+//! | [`crossinterpolate1`] | TCI1 (one-site) | [`TensorCI1`] | Legacy parity with TensorCrossInterpolation.jl |
 //!
 //! `TCI2` uses [`MatrixLUCI`](tensor4all_tcicore::MatrixLUCI) for pivot
 //! updates and supports batch evaluation, global pivot search, and two pivot
 //! search strategies ([`PivotSearchStrategy::Full`] and
 //! [`PivotSearchStrategy::Rook`]).
+//! `TCI1` exposes the legacy one-site state, local/global pivot updates, and
+//! sweep-direction control through [`TCI1SweepStrategy`].
 //!
 //! # Quick start
 //!
@@ -74,7 +77,7 @@ pub use error::{Result, TCIError};
 pub use globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput};
 pub use globalsearch::{estimate_true_error, floating_zone};
 pub use optfirstpivot::opt_first_pivot;
-pub use tensorci1::{crossinterpolate1, TCI1Options, TensorCI1};
+pub use tensorci1::{crossinterpolate1, TCI1Options, TCI1SweepStrategy, TensorCI1};
 pub use tensorci2::{
     crossinterpolate2, optimize_with_finder, PivotSearchStrategy, Sweep2Strategy, TCI2Options,
     TensorCI2,

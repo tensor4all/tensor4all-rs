@@ -141,6 +141,88 @@ fn test_tensorci1_global_pivot_is_inserted_and_deduplicated() {
 }
 
 #[test]
+fn test_crossinterpolate1_forward_sweep_matches_manual_local_pivots() {
+    let local_dims = vec![10; 5];
+    let f = |idx: &MultiIndex| {
+        let denom = idx
+            .iter()
+            .map(|&i| {
+                let x = (i + 1) as f64;
+                x * x
+            })
+            .sum::<f64>()
+            + 1.0;
+        1.0 / denom
+    };
+
+    let mut manual = TensorCI1::from_function(&f, local_dims.clone(), vec![0; 5]).unwrap();
+    for expected_rank in 2..=8 {
+        for bond in 0..manual.len() - 1 {
+            manual.add_pivot(bond, &f, 1e-8).unwrap();
+        }
+        assert_eq!(manual.link_dims(), vec![expected_rank; manual.len() - 1]);
+    }
+
+    let (automatic, ranks, _errors) = crossinterpolate1::<f64, _>(
+        f,
+        local_dims,
+        vec![0; 5],
+        TCI1Options {
+            tolerance: 0.0,
+            max_iter: 8,
+            pivot_tolerance: 1e-8,
+            sweep_strategy: TCI1SweepStrategy::Forward,
+            ..TCI1Options::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(automatic.link_dims(), manual.link_dims());
+    assert_eq!(ranks, (2..=8).collect::<Vec<_>>());
+}
+
+#[test]
+fn test_crossinterpolate1_backward_sweep_matches_manual_local_pivots() {
+    let local_dims = vec![6; 4];
+    let f = |idx: &MultiIndex| {
+        let denom = idx
+            .iter()
+            .map(|&i| {
+                let x = (i + 1) as f64;
+                x * x
+            })
+            .sum::<f64>()
+            + 1.0;
+        1.0 / denom
+    };
+
+    let mut manual = TensorCI1::from_function(&f, local_dims.clone(), vec![0; 4]).unwrap();
+    for expected_rank in 2..=5 {
+        for bond in (0..manual.len() - 1).rev() {
+            manual.add_pivot(bond, &f, 1e-8).unwrap();
+        }
+        assert_eq!(manual.link_dims(), vec![expected_rank; manual.len() - 1]);
+    }
+
+    let (automatic, ranks, _errors) = crossinterpolate1::<f64, _>(
+        f,
+        local_dims,
+        vec![0; 4],
+        TCI1Options {
+            tolerance: 0.0,
+            max_iter: 5,
+            pivot_tolerance: 1e-8,
+            sweep_strategy: TCI1SweepStrategy::Backward,
+            ..TCI1Options::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(automatic.link_dims(), manual.link_dims());
+    assert_eq!(ranks, (2..=5).collect::<Vec<_>>());
+}
+
+#[test]
 fn test_crossinterpolate1_lorentz_converges_and_matches_tensor_train() {
     let local_dims = vec![10; 5];
     let f = |idx: &MultiIndex| {
