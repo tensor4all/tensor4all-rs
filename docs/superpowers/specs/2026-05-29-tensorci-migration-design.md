@@ -47,6 +47,15 @@ Implementation notes:
   `AinvtimesB` behavior with solve-based formulations.
 - Add real and complex tests ported from `test_tensorci1.jl`, including
   additional/global pivot behavior.
+- Port the major Julia TCI1 test scenarios, converted to Rust's zero-based
+  indices: trivial constant MPS initialization/update behavior, real and complex
+  Lorentz functions, duplicate global pivots, `crossinterpolate1` convergence,
+  additional pivots, and TensorTrain/evaluate parity on a small dense grid.
+- Add a pre-PR speed gate comparing Rust TCI1 against
+  `../TensorCrossInterpolation.jl` TCI1 on the same benchmark cases. The gate
+  must report Rust seconds, Julia seconds, and the Rust/Julia ratio, and the PR
+  should not be marked ready without explicit approval if Rust is more than 2x
+  slower on the median wall-clock time for the shared TCI1 benchmark.
 
 ## TCI2 Optimization
 
@@ -123,3 +132,6 @@ For each implementation issue:
 - Run `cargo test --release -p tensor4all-tensorci`.
 - Run broader workspace checks when public APIs, shared helpers, or docs change.
 - Add rustdoc examples for new public APIs, with assertions.
+- For the TCI1 issue, run the Julia comparison speed gate against the sibling
+  `../TensorCrossInterpolation.jl` checkout before PR creation and include the
+  measured Rust/Julia timing ratio in the PR notes.
