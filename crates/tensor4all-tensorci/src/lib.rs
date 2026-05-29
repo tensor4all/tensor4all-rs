@@ -64,6 +64,7 @@
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
 
+pub mod conversion;
 pub mod error;
 pub mod globalpivot;
 pub mod globalsearch;
@@ -73,6 +74,7 @@ pub mod tensorci1;
 pub mod tensorci2;
 
 // Re-export main types
+pub use conversion::TensorCI2FromTensorTrainOptions;
 pub use error::{Result, TCIError};
 pub use globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput};
 pub use globalsearch::{estimate_true_error, floating_zone};

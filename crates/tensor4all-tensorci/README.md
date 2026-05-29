@@ -7,6 +7,7 @@ Tensor Cross Interpolation algorithms. TCI2 is the primary maintained implementa
 - `crossinterpolate2()` — main entry point for two-site TCI
 - `TCI2Options` — tolerance, pivot strategy, and convergence settings
 - `TensorCI2` — two-site TCI state; convert it to `TensorTrain` for repeated evaluation
+- `TensorCI2::from_tensor_train()` and `TensorCI2::from_index_sets()` — non-dense conversion constructors
 - `crossinterpolate1()` — legacy one-site TCI entry point
 - `TCI1Options` and `TCI1SweepStrategy` — tolerance, sweep direction, and pivot settings for TCI1
 - `TensorCI1` — one-site TCI state; convert it to `TensorTrain` for repeated evaluation
