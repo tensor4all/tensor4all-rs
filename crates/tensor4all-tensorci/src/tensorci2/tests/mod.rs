@@ -255,6 +255,35 @@ fn test_crossinterpolate2_rank2_function_rook_search() {
     );
 }
 
+/// Port of Julia test_tensorci2.jl: "pivoterrors".
+#[test]
+fn test_crossinterpolate2_pivot_errors_match_diagonal_values() {
+    let diagonal = [1.0_f64, 1e-5, 0.0];
+    let f = |idx: &MultiIndex| {
+        if idx[0] == idx[1] {
+            diagonal[idx[0]]
+        } else {
+            0.0
+        }
+    };
+    let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+        f,
+        None,
+        vec![3, 3],
+        vec![vec![0, 0]],
+        TCI2Options {
+            tolerance: 1e-8,
+            ..TCI2Options::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(tci.pivot_errors().len(), diagonal.len());
+    for (&actual, &expected) in tci.pivot_errors().iter().zip(diagonal.iter()) {
+        assert!((actual - expected).abs() < 1e-14);
+    }
+}
+
 #[test]
 fn test_crossinterpolate2_rook_search_uses_partial_batch_requests() {
     let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
