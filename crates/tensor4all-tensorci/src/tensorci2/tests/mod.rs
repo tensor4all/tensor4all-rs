@@ -999,3 +999,54 @@ fn test_custom_global_pivot_finder() {
         );
     }
 }
+
+#[test]
+fn test_optimize_with_finder_invokes_custom_finder() {
+    use crate::globalpivot::{GlobalPivotFinder, GlobalPivotSearchInput};
+    use rand::Rng;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct CountingFinder {
+        calls: Rc<Cell<usize>>,
+    }
+
+    impl GlobalPivotFinder for CountingFinder {
+        fn find_global_pivots<T, F>(
+            &self,
+            input: &GlobalPivotSearchInput<T>,
+            _f: &F,
+            _abs_tol: f64,
+            _rng: &mut impl Rng,
+        ) -> Vec<MultiIndex>
+        where
+            T: tensor4all_tcicore::Scalar + tensor4all_simplett::TTScalar,
+            F: Fn(&MultiIndex) -> T,
+        {
+            self.calls.set(self.calls.get() + 1);
+            vec![vec![input.local_dims[0] - 1, input.local_dims[1] - 1]]
+        }
+    }
+
+    let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 2)) as f64;
+    let mut tci = TensorCI2::<f64>::new(vec![4, 4]).unwrap();
+    tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+
+    let calls = Rc::new(Cell::new(0));
+    let finder = CountingFinder {
+        calls: Rc::clone(&calls),
+    };
+    let (tci, ranks, errors) = optimize_with_finder::<f64, _, fn(&[MultiIndex]) -> Vec<f64>, _>(
+        tci,
+        f,
+        None,
+        TCI2Options::default(),
+        finder,
+    )
+    .unwrap();
+
+    assert!(!ranks.is_empty());
+    assert!(!errors.is_empty());
+    assert!(tci.rank() >= 1);
+    assert!(calls.get() > 0);
+}

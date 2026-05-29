@@ -74,5 +74,6 @@ pub use globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSe
 pub use globalsearch::{estimate_true_error, floating_zone};
 pub use optfirstpivot::opt_first_pivot;
 pub use tensorci2::{
-    crossinterpolate2, PivotSearchStrategy, Sweep2Strategy, TCI2Options, TensorCI2,
+    crossinterpolate2, optimize_with_finder, PivotSearchStrategy, Sweep2Strategy, TCI2Options,
+    TensorCI2,
 };

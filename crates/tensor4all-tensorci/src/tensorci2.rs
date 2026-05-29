@@ -996,26 +996,105 @@ where
         });
     }
 
-    let n = tci.len();
-    let mut errors = Vec::new();
-    let mut ranks = Vec::new();
-    let mut nglobal_pivots_history: Vec<usize> = Vec::new();
-
-    // Create RNG
-    let mut rng = if let Some(seed) = options.seed {
-        rand::rngs::StdRng::seed_from_u64(seed)
-    } else {
-        rand::rngs::StdRng::from_os_rng()
-    };
-
-    // Create global pivot finder
     let finder = DefaultGlobalPivotFinder::new(
         options.nsearch,
         options.max_nglobal_pivot,
         options.tol_margin_global_search,
     );
 
-    // Main optimization loop
+    optimize_with_finder(tci, f, batched_f, options, finder)
+}
+
+/// Optimize an existing [`TensorCI2`] state with an injected global pivot finder.
+///
+/// Use this when the default random global pivot search is not appropriate for
+/// the function being interpolated. The input state must already contain at
+/// least one pivot, usually by calling [`TensorCI2::add_global_pivots`].
+///
+/// # Arguments
+///
+/// * `tci` -- Existing TCI2 state to optimize. It is consumed and returned
+///   after optimization.
+/// * `f` -- Scalar function to interpolate on zero-based multi-indices.
+/// * `batched_f` -- Optional Torch-style batch callback. It receives a slice of
+///   multi-indices and must return one value per input index.
+/// * `options` -- Sweep, convergence, and truncation settings.
+/// * `finder` -- Global pivot finder used after each two-site sweep.
+///
+/// # Returns
+///
+/// Returns `(tci, ranks, errors)`, matching [`crossinterpolate2`]. `ranks` and
+/// `errors` contain one entry per half-sweep.
+///
+/// # Errors
+///
+/// Returns [`TCIError::InvalidPivot`] when the input state has no pivots. It
+/// also forwards errors from two-site sweeps, tensor-train conversion, callback
+/// length validation, and final one-site cleanup.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::AbstractTensorTrain;
+/// use tensor4all_tensorci::{
+///     optimize_with_finder, DefaultGlobalPivotFinder, TCI2Options, TensorCI2,
+/// };
+///
+/// let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
+/// let mut tci = TensorCI2::<f64>::new(vec![4, 4]).unwrap();
+/// tci.add_global_pivots(&[vec![3, 3]]).unwrap();
+///
+/// let finder = DefaultGlobalPivotFinder::new(0, 0, 10.0);
+/// let (tci, ranks, errors) =
+///     optimize_with_finder::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>, _>(
+///         tci,
+///         f,
+///         None,
+///         TCI2Options {
+///             tolerance: 1e-10,
+///             max_iter: 5,
+///             ..TCI2Options::default()
+///         },
+///         finder,
+///     )
+///     .unwrap();
+///
+/// assert!(!ranks.is_empty());
+/// assert!(!errors.is_empty());
+/// let tt = tci.to_tensor_train().unwrap();
+/// assert!((tt.evaluate(&[2, 3]).unwrap() - 6.0).abs() < 1e-10);
+/// ```
+pub fn optimize_with_finder<T, F, B, G>(
+    mut tci: TensorCI2<T>,
+    f: F,
+    batched_f: Option<B>,
+    options: TCI2Options,
+    finder: G,
+) -> Result<(TensorCI2<T>, Vec<usize>, Vec<f64>)>
+where
+    T: Scalar + TTScalar + Default + MatrixLuciScalar,
+    F: Fn(&MultiIndex) -> T,
+    B: Fn(&[MultiIndex]) -> Vec<T>,
+    G: GlobalPivotFinder,
+{
+    if tci.rank() == 0 {
+        return Err(TCIError::InvalidPivot {
+            message: "TensorCI2 state must contain at least one pivot before optimization"
+                .to_string(),
+        });
+    }
+
+    let n = tci.len();
+    let mut errors = Vec::new();
+    let mut ranks = Vec::new();
+    let mut nglobal_pivots_history: Vec<usize> = Vec::new();
+
+    let mut rng = if let Some(seed) = options.seed {
+        rand::rngs::StdRng::seed_from_u64(seed)
+    } else {
+        rand::rngs::StdRng::from_os_rng()
+    };
+
     for iter in 0..options.max_iter {
         let error_normalization = if options.normalize_error && tci.max_sample_value > 0.0 {
             tci.max_sample_value
@@ -1144,10 +1223,7 @@ where
     let abs_tol = options.tolerance * error_normalization;
     tci.sweep1site(&f, true, 1e-14, abs_tol, options.max_bond_dim, true)?;
 
-    // Normalize errors for return
-    let normalized_errors = errors.to_vec();
-
-    Ok((tci, ranks, normalized_errors))
+    Ok((tci, ranks, errors))
 }
 
 /// Update pivots at bond b using LU-based cross interpolation
