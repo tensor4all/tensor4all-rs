@@ -231,8 +231,8 @@ where
     })?;
 
     let u = Matrix::from_col_major_vec(
-        svd_result.u.shape[0],
-        svd_result.u.shape[1],
+        svd_result.u.shape()[0],
+        svd_result.u.shape()[1],
         tensor_to_col_major_vec(&svd_result.u),
     );
     let s_data: Vec<f64> = tensor_to_col_major_vec(&svd_result.s)
@@ -240,8 +240,8 @@ where
         .map(f64::from)
         .collect();
     let vt = Matrix::from_col_major_vec(
-        svd_result.vt.shape[0],
-        svd_result.vt.shape[1],
+        svd_result.vt.shape()[0],
+        svd_result.vt.shape()[1],
         tensor_to_col_major_vec(&svd_result.vt),
     );
 

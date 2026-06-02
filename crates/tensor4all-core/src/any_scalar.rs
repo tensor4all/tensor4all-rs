@@ -135,9 +135,9 @@ impl AnyScalar {
         rhs: &Self,
         op: &'static str,
         f: impl FnOnce(
-            &tenferro::EagerTensor,
-            &tenferro::EagerTensor,
-        ) -> std::result::Result<tenferro::EagerTensor, E>,
+            &tenferro_ad::EagerTensor,
+            &tenferro_ad::EagerTensor,
+        ) -> std::result::Result<tenferro_ad::EagerTensor, E>,
     ) -> Result<Self>
     where
         E: fmt::Display,
@@ -150,7 +150,7 @@ impl AnyScalar {
     fn from_eager_unary<E>(
         input: &Self,
         op: &'static str,
-        f: impl FnOnce(&tenferro::EagerTensor) -> std::result::Result<tenferro::EagerTensor, E>,
+        f: impl FnOnce(&tenferro_ad::EagerTensor) -> std::result::Result<tenferro_ad::EagerTensor, E>,
     ) -> Result<Self>
     where
         E: fmt::Display,

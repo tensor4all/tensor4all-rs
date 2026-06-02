@@ -138,11 +138,11 @@ fn typed_tensor_to_matrix2<T>(tensor: &TypedTensor<T>, op: &'static str) -> Resu
 where
     T: crate::traits::TTScalar + Default,
 {
-    if tensor.shape.len() != 2 {
+    if tensor.shape().len() != 2 {
         return Err(MPOError::FactorizationError {
             message: format!(
                 "{op} returned rank-{} tensor, expected matrix",
-                tensor.shape.len()
+                tensor.shape().len()
             ),
         });
     }

@@ -6,9 +6,9 @@ fn row_major_values<T>(tensor: &TypedTensor<T>) -> Vec<T>
 where
     T: Copy,
 {
-    assert_eq!(tensor.shape.len(), 2, "test helper expects a matrix");
-    let rows = tensor.shape[0];
-    let cols = tensor.shape[1];
+    assert_eq!(tensor.shape().len(), 2, "test helper expects a matrix");
+    let rows = tensor.shape()[0];
+    let cols = tensor.shape()[1];
     let values = tensor.as_slice();
     let mut out = Vec::with_capacity(values.len());
     for row in 0..rows {
@@ -57,8 +57,8 @@ fn qr_backend_reconstructs_real_matrix() {
     let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
 
     let (q, r) = qr_backend(&input).unwrap();
-    assert_eq!(q.shape, vec![2, 2]);
-    assert_eq!(r.shape, vec![2, 2]);
+    assert_eq!(q.shape(), &[2, 2]);
+    assert_eq!(r.shape(), &[2, 2]);
 
     let q_values = row_major_values(&q);
     let r_values = row_major_values(&r);
@@ -86,9 +86,9 @@ fn svd_backend_reconstructs_complex_matrix() {
     );
 
     let decomp = svd_backend(&input).unwrap();
-    assert_eq!(decomp.u.shape, vec![2, 2]);
-    assert_eq!(decomp.s.shape, vec![2]);
-    assert_eq!(decomp.vt.shape, vec![2, 2]);
+    assert_eq!(decomp.u.shape(), &[2, 2]);
+    assert_eq!(decomp.s.shape(), &[2]);
+    assert_eq!(decomp.vt.shape(), &[2, 2]);
 
     let u = row_major_values(&decomp.u);
     let s = decomp.s.as_slice().to_vec();
@@ -112,7 +112,7 @@ fn solve_backend_solves_real_system() {
 
     let x = solve_backend(&a, &b).unwrap();
 
-    assert_eq!(x.shape, vec![2, 1]);
+    assert_eq!(x.shape(), &[2, 1]);
     assert!((x.as_slice()[0] - 2.0 / 3.0).abs() < 1.0e-12);
     assert!((x.as_slice()[1] + 1.0 / 3.0).abs() < 1.0e-12);
 }
@@ -298,7 +298,7 @@ fn triangular_solve_backend_solves_typed_tensor_system() {
 
     let x = triangular_solve_backend(&a, &b, true, true, false, false).unwrap();
 
-    assert_eq!(x.shape, vec![2, 1]);
+    assert_eq!(x.shape(), &[2, 1]);
     assert!((x.as_slice()[0] - 1.0).abs() < 1.0e-12);
     assert!((x.as_slice()[1] - 2.0).abs() < 1.0e-12);
 }
@@ -318,10 +318,10 @@ fn full_piv_lu_backend_returns_square_factors() {
 
     let decomp = full_piv_lu_backend(&input).unwrap();
 
-    assert_eq!(decomp.p.shape, vec![2, 2]);
-    assert_eq!(decomp.l.shape, vec![2, 2]);
-    assert_eq!(decomp.u.shape, vec![2, 2]);
-    assert_eq!(decomp.q.shape, vec![2, 2]);
+    assert_eq!(decomp.p.shape(), &[2, 2]);
+    assert_eq!(decomp.l.shape(), &[2, 2]);
+    assert_eq!(decomp.u.shape(), &[2, 2]);
+    assert_eq!(decomp.q.shape(), &[2, 2]);
 }
 
 #[test]

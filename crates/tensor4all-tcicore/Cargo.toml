@@ -12,17 +12,14 @@ default = ["tenferro-cpu-faer"]
 tenferro-cpu-faer = [
     "tensor4all-tensorbackend/tenferro-cpu-faer",
     "tenferro-einsum/cpu-faer",
-    "tenferro-tensor/cpu-faer",
 ]
 tenferro-system-blas = [
     "tensor4all-tensorbackend/tenferro-system-blas",
     "tenferro-einsum/cpu-blas",
-    "tenferro-tensor/cpu-blas",
 ]
 tenferro-provider-inject = [
     "tensor4all-tensorbackend/tenferro-provider-inject",
     "tenferro-einsum/cpu-blas",
-    "tenferro-tensor/provider-inject",
 ]
 
 [dependencies]
@@ -41,6 +38,7 @@ approx.workspace = true
 criterion.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
+tenferro-linalg.workspace = true
 tensor4all-tensorci = { path = "../tensor4all-tensorci", default-features = false, features = ["tenferro-cpu-faer"] }
 uint.workspace = true
 

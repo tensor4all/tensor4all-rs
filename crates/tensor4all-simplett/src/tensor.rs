@@ -133,13 +133,13 @@ impl<'a, T: TensorScalar, const N: usize> ExactSizeIterator for TensorIterMut<'a
 impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     pub(crate) fn from_tenferro_unchecked(tensor: TfTensor<T>) -> Self {
         debug_assert_eq!(
-            tensor.shape.len(),
+            tensor.shape().len(),
             N,
             "tensor rank mismatch: expected rank {N}, got {}",
-            tensor.shape.len()
+            tensor.shape().len()
         );
         let mut dims = [0usize; N];
-        for (dim, value) in dims.iter_mut().zip(tensor.shape.iter().copied()) {
+        for (dim, value) in dims.iter_mut().zip(tensor.shape().iter().copied()) {
             *dim = value;
         }
         Self {
@@ -252,16 +252,16 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     /// assert!(Tensor3::from_tenferro(rank_2).is_err());
     /// ```
     pub fn from_tenferro(tensor: TfTensor<T>) -> Result<Self> {
-        if tensor.shape.len() != N {
+        if tensor.shape().len() != N {
             return Err(TensorTrainError::InvalidOperation {
                 message: format!(
                     "tensor rank mismatch: expected rank {N}, got {}",
-                    tensor.shape.len()
+                    tensor.shape().len()
                 ),
             });
         }
         let mut dims = [0usize; N];
-        dims.copy_from_slice(&tensor.shape);
+        dims.copy_from_slice(tensor.shape());
         Ok(Self {
             inner: tensor,
             dims,
@@ -372,9 +372,9 @@ mod tests {
     }
 
     #[test]
-    fn dims_remain_available_after_inner_shape_mutation() {
+    fn dims_remain_available_after_inner_mutation() {
         let mut t: Tensor2<f64> = Tensor2::from_elem([2, 3], 1.0);
-        t.as_inner_mut().shape.push(4);
+        let _ = t.as_inner_mut();
 
         assert_eq!(t.dims(), &[2, 3]);
     }

@@ -97,7 +97,7 @@ pub(crate) fn einsum_tensors<T: EinsumScalar>(
     })?;
     let tensors: Vec<Tensor> = operands
         .iter()
-        .map(|tensor| T::into_tensor(tensor.shape.clone(), tensor.host_data().to_vec()))
+        .map(|tensor| T::into_tensor(tensor.shape().to_vec(), tensor.host_data().to_vec()))
         .collect();
     let input_ids = parsed
         .inputs
@@ -155,10 +155,10 @@ pub(crate) fn typed_tensor_reshape<T: TensorScalar>(
     shape: &[usize],
 ) -> Result<TypedTensor<T>> {
     let target_elements = shape_element_count(shape)?;
-    let source_elements = shape_element_count(&tensor.shape)?;
+    let source_elements = shape_element_count(tensor.shape())?;
     if target_elements != source_elements {
         return Err(EinsumHelperError::ReshapeElementCountMismatch {
-            source_shape: tensor.shape.clone(),
+            source_shape: tensor.shape().to_vec(),
             target_shape: shape.to_vec(),
             source_elements,
             target_elements,
