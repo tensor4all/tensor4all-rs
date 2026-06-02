@@ -2,6 +2,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
+use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::Tensor;
 use tensor4all_tcicore::{matrix_luci_factors_from_matrix, RrLUOptions};
 use tensor4all_tensorbackend::{with_default_backend, Matrix};
@@ -47,7 +48,7 @@ fn bench_dense_vs_tenferro(c: &mut Criterion) {
             |b, &n| {
                 b.iter(|| {
                     let mat = Tensor::from_vec_col_major(vec![n, n], data.clone());
-                    black_box(with_default_backend(|backend| mat.full_piv_lu(backend)).unwrap());
+                    black_box(with_default_backend(|backend| backend.full_piv_lu(&mat)).unwrap());
                 });
             },
         );

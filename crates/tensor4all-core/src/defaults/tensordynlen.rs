@@ -14,7 +14,8 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
-use tenferro::{DType, DotGeneralConfig, EagerTensor, Tensor as NativeTensor};
+use tenferro::{DType, DotGeneralConfig, Tensor as NativeTensor};
+use tenferro_ad::EagerTensor;
 use tenferro_einsum::eager_tensor::einsum_subscripts as eager_einsum_ad;
 use tenferro_einsum::EinsumSubscripts;
 use tensor4all_tensorbackend::{

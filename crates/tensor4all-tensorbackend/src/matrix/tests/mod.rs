@@ -41,7 +41,7 @@ fn matrix_to_typed_tensor_preserves_column_major_layout() {
 
     let tensor = m.to_typed_tensor();
 
-    assert_eq!(tensor.shape, vec![2, 2]);
+    assert_eq!(tensor.shape(), &[2, 2]);
     assert_eq!(tensor.as_slice(), &[1.0, 3.0, 2.0, 4.0]);
     assert_eq!(m.as_col_major_slice(), &[1.0, 3.0, 2.0, 4.0]);
 }
@@ -52,7 +52,7 @@ fn matrix_into_typed_tensor_consumes_column_major_layout() {
 
     let tensor = m.into_typed_tensor();
 
-    assert_eq!(tensor.shape, vec![2, 2]);
+    assert_eq!(tensor.shape(), &[2, 2]);
     assert_eq!(tensor.as_slice(), &[1.0, 3.0, 2.0, 4.0]);
 }
 

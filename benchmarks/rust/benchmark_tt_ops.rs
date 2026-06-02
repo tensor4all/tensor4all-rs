@@ -25,7 +25,9 @@ use tensor4all_core::{
     TensorContractionLike, TensorDynLen,
 };
 use tensor4all_itensorlike::{CanonicalForm, ContractOptions, TensorTrain};
-use tenferro::{CpuBackend, DotGeneralConfig, EagerRuntime, EagerTensor, Tensor, TypedTensor};
+use tenferro::{DotGeneralConfig, Tensor, TypedTensor};
+use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_cpu::CpuBackend;
 
 #[derive(Debug, Clone)]
 struct Options {

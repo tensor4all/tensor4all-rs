@@ -16,7 +16,8 @@ use crate::truncation::{
 };
 use crate::TensorDynLen;
 use std::sync::Mutex;
-use tenferro::{DType, EagerTensor};
+use tenferro::DType;
+use tenferro_ad::EagerTensor;
 use tenferro_linalg::eager_tensor::svd as eager_svd;
 use tensor4all_tensorbackend::{
     native_tensor_primal_to_dense_c64_col_major, native_tensor_primal_to_dense_f64_col_major,

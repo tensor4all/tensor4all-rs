@@ -6,6 +6,7 @@ use crate::{
 use anyhow::{ensure, Result};
 use num_complex::{Complex32, Complex64};
 use std::collections::HashMap;
+use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{Tensor, TensorScalar};
 use tensor4all_core::{ColMajorArray, DynIndex, TensorDynLen, TensorElement};
 use tensor4all_tcicore::MatrixLuciScalar as Scalar;
@@ -56,7 +57,7 @@ macro_rules! impl_full_piv_lu_scalar {
                     Tensor::from_vec_col_major(vec![pivot_cols, pivot_rows], pivot_t);
                 let lhs_tensor = Tensor::from_vec_col_major(vec![lhs_cols, lhs_rows], lhs_t);
                 let solved_t = with_default_backend(|backend| {
-                    pivot_tensor.full_piv_lu_solve(&lhs_tensor, backend)
+                    backend.full_piv_lu_solve(&pivot_tensor, &lhs_tensor, false)
                 })?;
 
                 let solved_t_values = solved_t.as_slice::<Self>().ok_or_else(|| {

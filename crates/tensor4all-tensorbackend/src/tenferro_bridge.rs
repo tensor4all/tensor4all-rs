@@ -9,12 +9,12 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, ensure, Result};
 use num_complex::{Complex32, Complex64};
 use omeco::ScoreFunction;
-use tenferro::{
-    DType, Tensor as NativeTensor, TensorBackend, TensorRead, TensorView, TracedTensor,
-};
+use tenferro::{DType, Tensor as NativeTensor, TensorRead, TensorView, TracedTensor};
 use tenferro_einsum::{
     ContractionOptimizerOptions, ContractionTree, EinsumOptimize, EinsumSubscripts, Subscripts,
 };
+use tenferro_linalg::LinalgBackend;
+use tenferro_tensor::BackendSessionHost;
 
 use crate::any_scalar::promote_scalar_native;
 use crate::context::{
@@ -41,7 +41,7 @@ impl<'a> NativeTensorReadInput<'a> {
     /// Return this input as a read-only tenferro tensor input.
     pub fn as_read(&'a self) -> TensorRead<'a> {
         match self {
-            Self::Borrowed(read) => *read,
+            Self::Borrowed(read) => read.clone(),
             Self::Owned(tensor) => TensorRead::from_tensor(tensor),
         }
     }
@@ -522,7 +522,7 @@ fn convert_tensor(tensor: &NativeTensor, to: DType) -> Result<NativeTensor> {
     if tensor.dtype() == to {
         return Ok(tensor.clone());
     }
-    with_default_backend(|backend| backend.with_exec_session(|exec| exec.convert(tensor, to)))
+    with_default_backend(|backend| backend.with_backend_session(|exec| exec.convert(tensor, to)))
         .map_err(|e| anyhow!("tensor conversion to {to:?} failed: {e}"))
 }
 
@@ -986,21 +986,31 @@ pub fn reshape_col_major_native_tensor(
     tensor: &NativeTensor,
     logical_dims: &[usize],
 ) -> Result<NativeTensor> {
-    with_default_backend(|backend| tensor.reshape(logical_dims, backend))
+    with_default_backend(|backend| tenferro::tensor::reshape(tensor, logical_dims, backend))
         .map_err(|e| anyhow!("native reshape failed: {e}"))
 }
 
 /// Compute a QR decomposition on a native tensor.
 pub fn qr_native_tensor(tensor: &NativeTensor) -> Result<(NativeTensor, NativeTensor)> {
-    with_default_backend(|backend| tensor.qr(backend)).map_err(|e| anyhow!("native QR failed: {e}"))
+    let outputs = with_default_backend(|backend| backend.qr(tensor))
+        .map_err(|e| anyhow!("native QR failed: {e}"))?;
+    let [q, r]: [NativeTensor; 2] = outputs.try_into().map_err(|outputs: Vec<NativeTensor>| {
+        anyhow!("native QR expected 2 outputs, got {}", outputs.len())
+    })?;
+    Ok((q, r))
 }
 
 /// Compute an SVD on a native tensor.
 pub fn svd_native_tensor(
     tensor: &NativeTensor,
 ) -> Result<(NativeTensor, NativeTensor, NativeTensor)> {
-    with_default_backend(|backend| tensor.svd(backend))
-        .map_err(|e| anyhow!("native SVD failed: {e}"))
+    let outputs = with_default_backend(|backend| backend.svd(tensor))
+        .map_err(|e| anyhow!("native SVD failed: {e}"))?;
+    let [u, s, vt]: [NativeTensor; 3] =
+        outputs.try_into().map_err(|outputs: Vec<NativeTensor>| {
+            anyhow!("native SVD expected 3 outputs, got {}", outputs.len())
+        })?;
+    Ok((u, s, vt))
 }
 
 /// Sum all elements of a native tensor, returning a dynamic scalar.
@@ -1009,7 +1019,7 @@ pub fn sum_native_tensor(tensor: &NativeTensor) -> Result<AnyScalar> {
         tensor.clone()
     } else {
         let axes: Vec<usize> = (0..tensor.shape().len()).collect();
-        with_default_backend(|backend| tensor.reduce_sum(&axes, backend))
+        with_default_backend(|backend| tenferro::tensor::reduce_sum(tensor, &axes, backend))
             .map_err(|e| anyhow!("native sum failed: {e}"))?
     };
     AnyScalar::from_native(reduced)
@@ -1472,7 +1482,7 @@ pub fn einsum_native_tensor_reads(
 
 /// Permute axes of a native tensor.
 pub fn permute_native_tensor(tensor: &NativeTensor, perm: &[usize]) -> Result<NativeTensor> {
-    with_default_backend(|backend| tensor.transpose(perm, backend))
+    with_default_backend(|backend| tenferro::tensor::transpose(tensor, perm, backend))
         .map_err(|e| anyhow!("native permute failed: {e}"))
 }
 

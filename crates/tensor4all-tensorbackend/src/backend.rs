@@ -5,7 +5,9 @@
 
 use anyhow::{anyhow, Result};
 use num_complex::{Complex32, Complex64};
-use tenferro::{DType, Tensor, TensorBackend, TensorScalar, TypedTensor};
+use tenferro::{DType, Tensor, TensorScalar, TypedTensor};
+use tenferro_linalg::LinalgBackend;
+use tenferro_tensor::BackendSessionHost;
 
 use crate::context::with_default_backend;
 use crate::matrix::Matrix;
@@ -24,9 +26,9 @@ use crate::matrix::Matrix;
 /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]);
 /// let result = svd_backend(&a).unwrap();
 ///
-/// assert_eq!(result.u.shape, vec![2, 2]);
-/// assert_eq!(result.s.shape, vec![2]);
-/// assert_eq!(result.vt.shape, vec![2, 2]);
+/// assert_eq!(result.u.shape(), &[2, 2]);
+/// assert_eq!(result.s.shape(), &[2]);
+/// assert_eq!(result.vt.shape(), &[2, 2]);
 /// ```
 #[derive(Debug, Clone)]
 pub struct SvdResult<T: TensorScalar> {
@@ -172,7 +174,7 @@ where
 {
     let a_tensor: Tensor = a.into_typed_tensor().into();
     let b_tensor: Tensor = b.into_typed_tensor().into();
-    let result = with_default_backend(|backend| a_tensor.solve(&b_tensor, backend))
+    let result = with_default_backend(|backend| backend.solve(&a_tensor, &b_tensor))
         .map_err(|e| anyhow!("linear solve failed via tenferro-tensor: {e}"))?;
     let x = try_into_typed_result::<T>("solve", result)?;
     typed_tensor_to_matrix("solve", x)
@@ -215,13 +217,13 @@ where
     let a_tensor: Tensor = a.into_typed_tensor().into();
     let b_tensor: Tensor = b.into_typed_tensor().into();
     let result = with_default_backend(|backend| {
-        a_tensor.triangular_solve(
+        backend.triangular_solve(
+            &a_tensor,
             &b_tensor,
             left_side,
             lower,
             transpose_a,
             unit_diagonal,
-            backend,
         )
     })
     .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?;
@@ -468,7 +470,7 @@ fn convert_for_typed<T: TensorScalar>(op: &'static str, tensor: Tensor) -> Resul
         tensor
     } else {
         with_default_backend(|backend| {
-            backend.with_exec_session(|exec| exec.convert(&tensor, expected))
+            backend.with_backend_session(|exec| exec.convert(&tensor, expected))
         })
         .map_err(|e| anyhow!("{op}: dtype conversion to {expected:?} failed: {e}"))?
     };
@@ -502,9 +504,12 @@ pub fn svd_backend<T>(a: &TypedTensor<T>) -> Result<SvdResult<T>>
 where
     T: BackendLinalgScalar,
 {
-    let tensor = T::into_tensor(a.shape.clone(), a.host_data().to_vec());
-    let (u, s, vt) = with_default_backend(|backend| tensor.svd(backend))
+    let tensor = T::into_tensor(a.shape().to_vec(), a.host_data().to_vec());
+    let outputs = with_default_backend(|backend| backend.svd(&tensor))
         .map_err(|e| anyhow!("SVD computation failed via tenferro-tensor: {e}"))?;
+    let [u, s, vt]: [Tensor; 3] = outputs.try_into().map_err(|outputs: Vec<Tensor>| {
+        anyhow!("svd: expected 3 outputs, got {}", outputs.len())
+    })?;
     Ok(SvdResult {
         u: convert_for_typed::<T>("svd", u)?,
         s: convert_for_typed::<T::Real>("svd", s)?,
@@ -522,8 +527,16 @@ pub fn qr_backend<T>(a: &TypedTensor<T>) -> Result<(TypedTensor<T>, TypedTensor<
 where
     T: BackendLinalgScalar,
 {
-    with_default_backend(|backend| a.qr(backend))
-        .map_err(|e| anyhow!("QR computation failed via tenferro-tensor: {e}"))
+    let tensor = T::into_tensor(a.shape().to_vec(), a.host_data().to_vec());
+    let outputs = with_default_backend(|backend| backend.qr(&tensor))
+        .map_err(|e| anyhow!("QR computation failed via tenferro-tensor: {e}"))?;
+    let [q, r]: [Tensor; 2] = outputs
+        .try_into()
+        .map_err(|outputs: Vec<Tensor>| anyhow!("qr: expected 2 outputs, got {}", outputs.len()))?;
+    Ok((
+        convert_for_typed::<T>("qr", q)?,
+        convert_for_typed::<T>("qr", r)?,
+    ))
 }
 
 /// Solve `A X = B` with the configured tenferro backend.
@@ -536,9 +549,9 @@ pub fn solve_backend<T>(a: &TypedTensor<T>, b: &TypedTensor<T>) -> Result<TypedT
 where
     T: BackendLinalgScalar,
 {
-    let a_tensor = T::into_tensor(a.shape.clone(), a.host_data().to_vec());
-    let b_tensor = T::into_tensor(b.shape.clone(), b.host_data().to_vec());
-    let result = with_default_backend(|backend| a_tensor.solve(&b_tensor, backend))
+    let a_tensor = T::into_tensor(a.shape().to_vec(), a.host_data().to_vec());
+    let b_tensor = T::into_tensor(b.shape().to_vec(), b.host_data().to_vec());
+    let result = with_default_backend(|backend| backend.solve(&a_tensor, &b_tensor))
         .map_err(|e| anyhow!("linear solve failed via tenferro-tensor: {e}"))?;
     try_into_typed_result::<T>("solve", result)
 }
@@ -564,16 +577,16 @@ pub fn triangular_solve_backend<T>(
 where
     T: BackendLinalgScalar,
 {
-    let a_tensor = T::into_tensor(a.shape.clone(), a.host_data().to_vec());
-    let b_tensor = T::into_tensor(b.shape.clone(), b.host_data().to_vec());
+    let a_tensor = T::into_tensor(a.shape().to_vec(), a.host_data().to_vec());
+    let b_tensor = T::into_tensor(b.shape().to_vec(), b.host_data().to_vec());
     let result = with_default_backend(|backend| {
-        a_tensor.triangular_solve(
+        backend.triangular_solve(
+            &a_tensor,
             &b_tensor,
             left_side,
             lower,
             transpose_a,
             unit_diagonal,
-            backend,
         )
     })
     .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?;
@@ -719,9 +732,13 @@ pub fn full_piv_lu_backend<T>(a: &TypedTensor<T>) -> Result<FullPivLuResult<T>>
 where
     T: BackendLinalgScalar,
 {
-    let tensor = T::into_tensor(a.shape.clone(), a.host_data().to_vec());
-    let (p, l, u, q, _parity) = with_default_backend(|backend| tensor.full_piv_lu(backend))
+    let tensor = T::into_tensor(a.shape().to_vec(), a.host_data().to_vec());
+    let outputs = with_default_backend(|backend| backend.full_piv_lu(&tensor))
         .map_err(|e| anyhow!("complete-pivoting LU failed via tenferro-tensor: {e}"))?;
+    let [p, l, u, q, _parity]: [Tensor; 5] =
+        outputs.try_into().map_err(|outputs: Vec<Tensor>| {
+            anyhow!("full_piv_lu: expected 5 outputs, got {}", outputs.len())
+        })?;
     Ok(FullPivLuResult {
         p: convert_for_typed::<T>("full_piv_lu", p)?,
         l: convert_for_typed::<T>("full_piv_lu", l)?,

@@ -13,24 +13,31 @@ categories = ["science", "mathematics"]
 default = ["backend-tenferro", "tenferro-cpu-faer"]
 backend-tenferro = []
 tenferro-cpu-faer = [
-    "tenferro/autodiff",
     "tenferro/cpu-faer",
+    "tenferro-ad/cpu-faer",
+    "tenferro-cpu/cpu-faer",
     "tenferro-einsum/autodiff",
     "tenferro-einsum/cpu-faer",
+    "tenferro-linalg/autodiff",
+    "tenferro-linalg/cpu-faer",
 ]
 tenferro-system-blas = [
-    "tenferro/autodiff",
     "tenferro/cpu-blas",
+    "tenferro-ad/cpu-blas",
+    "tenferro-cpu/cpu-blas",
     "tenferro-einsum/autodiff",
     "tenferro-einsum/cpu-blas",
-    "tenferro-tensor/cpu-blas",
+    "tenferro-linalg/autodiff",
+    "tenferro-linalg/cpu-blas",
 ]
 tenferro-provider-inject = [
-    "tenferro/autodiff",
     "tenferro/cpu-blas",
+    "tenferro-ad/cpu-blas",
+    "tenferro-cpu/provider-inject",
     "tenferro-einsum/autodiff",
     "tenferro-einsum/cpu-blas",
-    "tenferro-tensor/provider-inject",
+    "tenferro-linalg/autodiff",
+    "tenferro-linalg/provider-inject",
 ]
 einsum-dispatch-profile = []
 
@@ -43,8 +50,10 @@ rand.workspace = true
 rand_distr.workspace = true
 omeco.workspace = true
 tenferro.workspace = true
-tenferro-device.workspace = true
+tenferro-ad.workspace = true
+tenferro-cpu.workspace = true
 tenferro-einsum.workspace = true
+tenferro-linalg.workspace = true
 tenferro-tensor.workspace = true
 
 [dev-dependencies]

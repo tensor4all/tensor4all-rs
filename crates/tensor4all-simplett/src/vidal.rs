@@ -36,17 +36,17 @@ fn typed_tensor_to_matrix<T>(tensor: &TypedTensor<T>, op: &'static str) -> Resul
 where
     T: TTScalar + Scalar + Default,
 {
-    if tensor.shape.len() != 2 {
+    if tensor.shape().len() != 2 {
         return Err(TensorTrainError::InvalidOperation {
             message: format!(
                 "{op} returned rank-{} tensor, expected matrix",
-                tensor.shape.len()
+                tensor.shape().len()
             ),
         });
     }
 
-    let rows = tensor.shape[0];
-    let cols = tensor.shape[1];
+    let rows = tensor.shape()[0];
+    let cols = tensor.shape()[1];
     Ok(Matrix::from_col_major_vec(
         rows,
         cols,

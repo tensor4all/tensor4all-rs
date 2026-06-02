@@ -23,7 +23,8 @@ use anyhow::{ensure, Context, Result};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 use std::ops::{Index, IndexMut};
-use tenferro::{Tensor, TensorBackend, TensorScalar, TypedTensor};
+use tenferro::{Tensor, TensorScalar, TypedTensor};
+use tenferro_tensor::BackendSessionHost;
 
 /// A dense 2D matrix in column-major layout.
 ///
@@ -167,7 +168,7 @@ impl<T> Matrix<T> {
     ///
     /// let m = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 3.0, 2.0, 4.0]);
     /// let tensor = m.to_typed_tensor();
-    /// assert_eq!(tensor.shape, vec![2, 2]);
+    /// assert_eq!(tensor.shape(), &[2, 2]);
     /// assert_eq!(tensor.as_slice(), &[1.0, 3.0, 2.0, 4.0]);
     /// assert_eq!(m.as_col_major_slice(), &[1.0, 3.0, 2.0, 4.0]);
     /// ```
@@ -190,7 +191,7 @@ impl<T> Matrix<T> {
     ///
     /// let m = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 3.0, 2.0, 4.0]);
     /// let tensor = m.into_typed_tensor();
-    /// assert_eq!(tensor.shape, vec![2, 2]);
+    /// assert_eq!(tensor.shape(), &[2, 2]);
     /// assert_eq!(tensor.as_slice(), &[1.0, 3.0, 2.0, 4.0]);
     /// ```
     pub fn into_typed_tensor(self) -> TypedTensor<T>
@@ -570,7 +571,7 @@ where
         rhs_batch_dims: vec![],
     };
     let c = with_default_backend(|backend| {
-        backend.with_exec_session(|exec| exec.dot_general(&a_tensor, &b_tensor, &config))
+        backend.with_backend_session(|exec| exec.dot_general(&a_tensor, &b_tensor, &config))
     })
     .context("matrix multiplication failed")?;
     let c = T::try_into_typed(c)
@@ -795,7 +796,7 @@ where
     T: tenferro::TensorScalar + Copy,
 {
     use crate::with_default_backend;
-    use tenferro::{DotGeneralConfig, TensorBackend};
+    use tenferro::DotGeneralConfig;
 
     validate_batched_mat_mul_inputs(batch, m, k, n, a.len(), b.len())?;
 
@@ -808,7 +809,7 @@ where
         rhs_batch_dims: vec![2],
     };
     let c = with_default_backend(|backend| {
-        backend.with_exec_session(|exec| exec.dot_general(&a_tensor, &b_tensor, &config))
+        backend.with_backend_session(|exec| exec.dot_general(&a_tensor, &b_tensor, &config))
     })
     .context("batched matrix multiplication failed")?;
     let c = T::try_into_typed(c)

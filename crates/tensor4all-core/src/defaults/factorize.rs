@@ -37,7 +37,7 @@ use crate::defaults::DynIndex;
 use crate::{contract_pair, unfold_split, TensorDynLen};
 use anyhow::Result as AnyhowResult;
 use num_complex::{Complex64, ComplexFloat};
-use tenferro::EagerTensor;
+use tenferro_ad::EagerTensor;
 use tenferro_linalg::eager_tensor::full_piv_lu_solve as eager_full_piv_lu_solve;
 use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use tensor4all_tensorbackend::{Matrix, TensorElement};

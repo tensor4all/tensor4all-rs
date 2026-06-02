@@ -10,9 +10,9 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use tenferro::{CpuBackend, EagerRuntime, GraphCompiler, GraphExecutor};
-use tenferro_tensor::buffer_pool::BufferPoolStats;
-use tenferro_tensor::cpu::CpuContext;
+use tenferro::{GraphCompiler, GraphExecutor};
+use tenferro_ad::EagerRuntime;
+use tenferro_cpu::{buffer_pool::BufferPoolStats, CpuBackend, CpuContext};
 
 static DEFAULT_CPU_CONTEXT: OnceLock<Arc<CpuContext>> = OnceLock::new();
 static DEFAULT_BACKEND: OnceLock<Mutex<CpuBackend>> = OnceLock::new();
@@ -82,12 +82,13 @@ pub(crate) fn with_default_graph_runtime<R>(
 
 /// Return retained-buffer statistics for the process-global graph executor.
 pub(crate) fn default_engine_buffer_pool_stats() -> BufferPoolStats {
-    lock_default_graph_executor().buffer_pool_stats()
+    lock_default_graph_executor().backend().buffer_pool_stats()
 }
 
 /// Reset retained buffers in the process-global graph executor.
 pub(crate) fn reset_default_engine_buffer_pool() {
-    lock_default_graph_executor().reset_buffer_pool();
+    let mut executor = lock_default_graph_executor();
+    *executor = GraphExecutor::new(CpuBackend::from_context(default_cpu_context()));
 }
 
 /// Drop and recreate the process-global graph compiler/executor.
@@ -110,6 +111,8 @@ pub(crate) fn reset_default_engine() {
 pub fn default_eager_ctx() -> Arc<EagerRuntime> {
     DEFAULT_EAGER_RUNTIME
         .get_or_init(|| {
+            tenferro_linalg::register_extension_rule()
+                .expect("tenferro linalg AD rule should register once");
             EagerRuntime::with_cpu_backend(CpuBackend::from_context(default_cpu_context()))
         })
         .clone()
