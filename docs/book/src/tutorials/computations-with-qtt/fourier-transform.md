@@ -38,7 +38,7 @@ let options = QtciOptions::default()
 let (state, _, _) = quanticscrossinterpolate(&grid, gaussian, None, options)?;
 
 let mut operator = quantics_fourier_operator(bits, FourierOptions::forward())?;
-assert_eq!(operator.mpo.node_count(), bits);
+assert_eq!(operator.mpo().node_count(), bits);
 
 let tt = state.tensor_train();
 let (state_tn, _indices) = tensor_train_to_treetn(&tt)?;

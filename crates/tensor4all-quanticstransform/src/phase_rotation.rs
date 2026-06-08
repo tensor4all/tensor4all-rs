@@ -44,7 +44,7 @@ use crate::common::{
 /// let op = phase_rotation_operator(4, PI / 4.0).unwrap();
 ///
 /// // The operator has one MPO tensor per bit
-/// assert_eq!(op.mpo.node_count(), 4);
+/// assert_eq!(op.mpo().node_count(), 4);
 ///
 /// // Phase rotation is a diagonal operator (bond dimension 1)
 /// // Error on invalid input
@@ -90,7 +90,7 @@ pub fn phase_rotation_operator(r: usize, theta: f64) -> Result<QuanticsOperator>
 ///
 /// // Phase rotate only the x-variable of a 2-variable function f(x, y)
 /// let op = phase_rotation_operator_multivar(4, PI / 4.0, 2, 0).unwrap();
-/// assert_eq!(op.mpo.node_count(), 4);
+/// assert_eq!(op.mpo().node_count(), 4);
 /// ```
 pub fn phase_rotation_operator_multivar(
     r: usize,

@@ -3,7 +3,6 @@
 //! These helpers keep the Gaussian Fourier example focused on the operator
 //! flow instead of file output and coordinate plumbing.
 
-use std::collections::HashSet;
 use std::error::Error;
 use std::f64::consts::PI;
 use std::fs::File;
@@ -12,7 +11,7 @@ use std::path::Path;
 
 use num_complex::Complex64;
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::{ColMajorArrayRef, IndexLike, TensorDynLen};
+use tensor4all_core::TensorDynLen;
 use tensor4all_quanticstci::{
     quanticscrossinterpolate, DiscretizedGrid, QtciOptions, QuanticsTensorCI2, UnfoldingScheme,
 };
@@ -170,12 +169,7 @@ pub fn evaluate_tree_point(
     site_indices: &[SiteIndex],
     site_values: &[usize],
 ) -> Result<Complex64, Box<dyn Error>> {
-    let shape = [site_indices.len(), 1];
-    let values = ColMajorArrayRef::new(site_values, &shape)?;
-    let result = tn.evaluate_at(site_indices, values)?;
-    let value = result
-        .first()
-        .ok_or_else(|| "TreeTN evaluation returned no values".to_string())?;
+    let value = tn.evaluate_point(site_indices, site_values)?;
     Ok(Complex64::new(value.real(), value.imag()))
 }
 
@@ -231,26 +225,6 @@ pub fn collect_bond_dims_from_profiles(
         .enumerate()
         .map(|(i, (&input_dim, &transformed_dim))| (i + 1, input_dim, transformed_dim))
         .collect()
-}
-
-/// Inspect a TreeTN once and read out its bond dimensions.
-pub fn tree_link_dims(tn: &TreeTN<TensorDynLen, usize>) -> Vec<usize> {
-    let mut dims = Vec::new();
-    let mut seen_edges = HashSet::new();
-
-    for node_name in tn.node_names() {
-        if let Some(node_idx) = tn.node_index(&node_name) {
-            for (edge, _neighbor) in tn.edges_for_node(node_idx) {
-                if seen_edges.insert(edge) {
-                    if let Some(bond) = tn.bond_index(edge) {
-                        dims.push(bond.dim());
-                    }
-                }
-            }
-        }
-    }
-
-    dims
 }
 
 /// Print a compact summary for the Gaussian Fourier tutorial.

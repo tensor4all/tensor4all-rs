@@ -596,6 +596,114 @@ where
         TreeTNEvaluator::new(self, indices)?.evaluate_batch(values)
     }
 
+    /// Evaluate the TreeTN at one multi-index.
+    ///
+    /// This is a convenience wrapper around [`Self::evaluate`] for the common
+    /// single-point case.
+    ///
+    /// # Arguments
+    ///
+    /// * `indices` - Identifies each site index by full `Index` value. It must
+    ///   enumerate every site index exactly once.
+    /// * `values` - One site value for each entry in `indices`.
+    ///
+    /// # Returns
+    ///
+    /// The scalar value of this TreeTN at the requested multi-index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `values.len() != indices.len()`, if the index list is
+    /// invalid, if any value is out of bounds, or if contraction fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let s = DynIndex::new_dyn(3);
+    /// let tensor = TensorDynLen::from_dense(vec![s.clone()], vec![10.0, 20.0, 30.0])?;
+    /// let tree = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0])?;
+    ///
+    /// let value = tree.evaluate_point(&[s], &[2])?;
+    /// assert!((value.real() - 30.0).abs() < 1e-12);
+    /// assert!(value.imag().abs() < 1e-12);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn evaluate_point(&self, indices: &[T::Index], values: &[usize]) -> Result<AnyScalar>
+    where
+        T::Index: Clone + Hash + Eq,
+        <T::Index as IndexLike>::Id: Ord,
+    {
+        anyhow::ensure!(
+            values.len() == indices.len(),
+            "TreeTN::evaluate_point: values.len() ({}) != indices.len() ({})",
+            values.len(),
+            indices.len()
+        );
+
+        let shape = [indices.len(), 1usize];
+        let values = ColMajorArrayRef::new(values, &shape)
+            .context("TreeTN::evaluate_point: values must contain one point")?;
+        let result = self.evaluate(indices, values)?;
+
+        result
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("TreeTN::evaluate_point: evaluation returned no values"))
+    }
+
+    /// Return the dimensions of all internal bond links.
+    ///
+    /// The dimensions are ordered by sorted node-name edge pairs, giving a stable
+    /// profile for reports and examples. Site dimensions are not included.
+    ///
+    /// # Returns
+    ///
+    /// A vector containing one dimension for each TreeTN edge.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let s0 = DynIndex::new_dyn(2);
+    /// let s1 = DynIndex::new_dyn(2);
+    /// let bond = DynIndex::new_dyn(3);
+    /// let left = TensorDynLen::from_dense(
+    ///     vec![s0, bond.clone()],
+    ///     vec![1.0_f64; 2 * 3],
+    /// )?;
+    /// let right = TensorDynLen::from_dense(
+    ///     vec![bond, s1],
+    ///     vec![1.0_f64; 3 * 2],
+    /// )?;
+    /// let tree = TreeTN::<TensorDynLen, usize>::from_tensors(vec![left, right], vec![0, 1])?;
+    ///
+    /// assert_eq!(tree.link_dims(), vec![3]);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn link_dims(&self) -> Vec<usize> {
+        let mut edges = self.site_index_network.edges().collect::<Vec<_>>();
+        for (left, right) in &mut edges {
+            if right < left {
+                std::mem::swap(left, right);
+            }
+        }
+        edges.sort();
+        edges.dedup();
+
+        edges
+            .into_iter()
+            .filter_map(|(left, right)| {
+                let edge = self.edge_between(&left, &right)?;
+                self.bond_index(edge).map(IndexLike::dim)
+            })
+            .collect()
+    }
+
     /// Returns all site indices and their owning vertex names.
     ///
     /// Returns `(indices, vertex_names)` where `indices[i]` belongs to

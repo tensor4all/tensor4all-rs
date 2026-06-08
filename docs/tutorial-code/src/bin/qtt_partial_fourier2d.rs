@@ -7,9 +7,8 @@ use std::path::Path;
 use tensor4all_tutorial_code::output_paths;
 use tensor4all_tutorial_code::qtt_partial_fourier2d_common::{
     build_frequency_grid, build_input_grid, build_partial_fourier_operator, build_source_qtt,
-    collect_bond_dims, collect_samples, print_summary, transform_x_dimension, tree_link_dims,
-    write_bond_dims_csv, write_operator_bond_dims_csv, write_samples_csv,
-    DEFAULT_PARTIAL_FOURIER2D_CONFIG,
+    collect_bond_dims, collect_samples, print_summary, transform_x_dimension, write_bond_dims_csv,
+    write_operator_bond_dims_csv, write_samples_csv, DEFAULT_PARTIAL_FOURIER2D_CONFIG,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -26,8 +25,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (transformed, site_indices) = transform_x_dimension(&qtci, &operator)?;
     let samples = collect_samples(&transformed, &site_indices, &frequency_grid, &config)?;
 
-    let bond_dims = collect_bond_dims(&qtci.link_dims(), &tree_link_dims(&transformed));
-    let operator_bond_dims = tree_link_dims(&operator.mpo);
+    let bond_dims = collect_bond_dims(&qtci.link_dims(), &transformed.link_dims());
+    let operator_bond_dims = operator.mpo().link_dims();
 
     print_summary(&qtci, &transformed, &ranks, &errors, &samples, &config);
 

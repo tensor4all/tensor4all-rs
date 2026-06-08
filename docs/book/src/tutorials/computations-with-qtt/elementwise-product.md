@@ -16,7 +16,6 @@ pointwise product. The two target functions are `f(x) = x^2` and
 ```rust
 # fn main() -> anyhow::Result<()> {
 # use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
-# use tensor4all_core::ColMajorArrayRef;
 # use tensor4all_treetn::{
 #     contraction::ContractionOptions,
 #     partial_contract, tensor_train_to_treetn, PartialContractionSpec,
@@ -61,12 +60,10 @@ let product = partial_contract(
     &tn_a, &tn_b, &spec, &center, ContractionOptions::default(),
 )?;
 
-let shape = [site_indices_a.len(), 1];
-let site_values = ColMajorArrayRef::new(&[0usize, 1, 1], &shape)?;
-let value = product.evaluate_at(&site_indices_a, site_values)?;
+let value = product.evaluate_point(&site_indices_a, &[0usize, 1, 1])?;
 let x = (4.0 - 1.0) / npoints as f64;
 let expected = x.powi(2) * (10.0 * x).sin();
-assert!((value[0].real() - expected).abs() < 1e-8);
+assert!((value.real() - expected).abs() < 1e-8);
 assert_eq!(product.node_count(), 3);
 # Ok(())
 # }

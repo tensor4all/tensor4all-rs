@@ -9,13 +9,12 @@
 //!
 //! All output formatting, CSV writing, and reusable bookkeeping lives here so
 //! the binary remains readable for beginners.
-use std::collections::HashSet;
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use tensor4all_core::{ColMajorArrayRef, DynIndex, IndexLike, TensorDynLen};
+use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
 use tensor4all_quanticstci::QuanticsTensorCI2;
 use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops, TensorTrain};
 use tensor4all_treetn::TreeTN;
@@ -147,7 +146,7 @@ pub fn print_treetn_summary(
     println!("{label}");
     println!("node_count = {}", tn.node_count());
     println!("edge_count = {}", tn.edge_count());
-    println!("link_dims = {:?}", tree_link_dims(tn));
+    println!("link_dims = {:?}", tn.link_dims());
     let (site_indices, owners) = tn.all_site_indices()?;
     println!("site indices = {}", site_indices.len());
     for (index, owner) in site_indices.iter().zip(owners.iter()) {
@@ -157,42 +156,12 @@ pub fn print_treetn_summary(
     Ok(())
 }
 
-/// Collect the bond dimensions from a TreeTN by walking its edges once.
-///
-/// This is a small inspection helper around the TreeTN API. It does not change
-/// the network; it only reads out the bond sizes.
-pub fn tree_link_dims(tn: &TreeTN<TensorDynLen, usize>) -> Vec<usize> {
-    let mut dims = Vec::new();
-    let mut seen_edges = HashSet::new();
-
-    for node_name in tn.node_names() {
-        if let Some(node_idx) = tn.node_index(&node_name) {
-            for (edge, _neighbor) in tn.edges_for_node(node_idx) {
-                if seen_edges.insert(edge) {
-                    if let Some(bond) = tn.bond_index(edge) {
-                        dims.push(bond.dim());
-                    }
-                }
-            }
-        }
-    }
-
-    dims
-}
-
 fn evaluate_tree_point(
     tn: &TreeTN<TensorDynLen, usize>,
     site_indices: &[DynIndex],
     site_values: &[usize],
 ) -> Result<f64, Box<dyn Error>> {
-    // Library call: evaluate the TreeTN at a specific set of site values.
-    // We wrap it here so the sampling code stays simple.
-    let shape = [site_indices.len(), 1];
-    let values = ColMajorArrayRef::new(site_values, &shape)?;
-    let result = tn.evaluate_at(site_indices, values)?;
-    let value = result
-        .first()
-        .ok_or_else(|| "TreeTN evaluation returned no values".to_string())?;
+    let value = tn.evaluate_point(site_indices, site_values)?;
     Ok(value.real())
 }
 
@@ -201,7 +170,7 @@ fn evaluate_tree_point(
 ///
 /// This function is mostly bookkeeping:
 /// - the QTT library gives us `evaluate(...)` for the factor QTTs
-/// - the TreeTN library gives us `evaluate_at(...)` for the product networks
+/// - the TreeTN library gives us `evaluate_point(...)` for the product networks
 /// - we combine all values into one row per grid point
 #[allow(clippy::too_many_arguments)]
 pub fn collect_samples<F, G>(
@@ -257,7 +226,7 @@ where
 /// Collect the bond-dimension profile for the two factors and their product.
 ///
 /// The factor QTTs are simple tensor trains, so we use `link_dims()` there.
-/// The product lives as TreeTN, so we use `tree_link_dims()` for those rows.
+/// The product lives as TreeTN, so we use `TreeTN::link_dims()` for those rows.
 pub fn collect_bond_profile(
     cosh_tt: &TensorTrain<f64>,
     factor_b_tt: &TensorTrain<f64>,
@@ -266,8 +235,8 @@ pub fn collect_bond_profile(
 ) -> Result<Vec<BondProfileRow>, Box<dyn Error>> {
     let cosh_bonds = cosh_tt.link_dims();
     let factor_b_bonds = factor_b_tt.link_dims();
-    let raw_bonds = tree_link_dims(product_raw_tn);
-    let compressed_bonds = tree_link_dims(product_compressed_tn);
+    let raw_bonds = product_raw_tn.link_dims();
+    let compressed_bonds = product_compressed_tn.link_dims();
 
     let len = [
         cosh_bonds.len(),

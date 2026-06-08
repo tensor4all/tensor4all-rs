@@ -25,11 +25,11 @@ use crate::common::{tensortrain_to_linear_operator, QuanticsOperator};
 ///
 /// // Prefix sum (lower triangle)
 /// let lower = triangle_operator(4, TriangleType::Lower).unwrap();
-/// assert_eq!(lower.mpo.node_count(), 4);
+/// assert_eq!(lower.mpo().node_count(), 4);
 ///
 /// // Suffix sum (upper triangle)
 /// let upper = triangle_operator(4, TriangleType::Upper).unwrap();
-/// assert_eq!(upper.mpo.node_count(), 4);
+/// assert_eq!(upper.mpo().node_count(), 4);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TriangleType {
@@ -63,7 +63,7 @@ pub enum TriangleType {
 /// use tensor4all_quanticstransform::cumsum_operator;
 ///
 /// let op = cumsum_operator(4).unwrap();
-/// assert_eq!(op.mpo.node_count(), 4);
+/// assert_eq!(op.mpo().node_count(), 4);
 ///
 /// // Requires at least 2 sites
 /// assert!(cumsum_operator(1).is_err());
@@ -98,7 +98,7 @@ pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
 /// use tensor4all_quanticstransform::{triangle_operator, TriangleType};
 ///
 /// let op = triangle_operator(4, TriangleType::Lower).unwrap();
-/// assert_eq!(op.mpo.node_count(), 4);
+/// assert_eq!(op.mpo().node_count(), 4);
 ///
 /// // Requires at least 2 sites
 /// assert!(triangle_operator(1, TriangleType::Lower).is_err());

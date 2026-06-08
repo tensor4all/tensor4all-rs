@@ -99,10 +99,10 @@ impl FourierOptions {
 /// assert_eq!(ft.r(), 4);
 ///
 /// let fwd_op = ft.forward().unwrap();
-/// assert_eq!(fwd_op.mpo.node_count(), 4);
+/// assert_eq!(fwd_op.mpo().node_count(), 4);
 ///
 /// let bwd_op = ft.backward().unwrap();
-/// assert_eq!(bwd_op.mpo.node_count(), 4);
+/// assert_eq!(bwd_op.mpo().node_count(), 4);
 /// ```
 #[derive(Clone)]
 pub struct FTCore {
@@ -197,7 +197,7 @@ impl FTCore {
 /// let op = quantics_fourier_operator(4, FourierOptions::forward()).unwrap();
 ///
 /// // The operator has one MPO tensor per bit
-/// assert_eq!(op.mpo.node_count(), 4);
+/// assert_eq!(op.mpo().node_count(), 4);
 /// ```
 pub fn quantics_fourier_operator(r: usize, options: FourierOptions) -> Result<QuanticsOperator> {
     if r < 2 {
