@@ -11,9 +11,8 @@ use tensor4all_quanticstci::DiscretizedGrid;
 use tensor4all_tutorial_code::output_paths;
 use tensor4all_tutorial_code::qtt_fourier_common::{
     build_fourier_operator, build_gaussian_qtt, collect_bond_dims_from_profiles, collect_samples,
-    physical_frequency_bounds, print_summary, transform_gaussian, tree_link_dims,
-    write_bond_dims_csv, write_fourier_operator_bond_dims_csv, write_samples_csv,
-    DEFAULT_FOURIER_CONFIG,
+    physical_frequency_bounds, print_summary, transform_gaussian, write_bond_dims_csv,
+    write_fourier_operator_bond_dims_csv, write_samples_csv, DEFAULT_FOURIER_CONFIG,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -59,10 +58,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let input_bond_dims = qtci.link_dims();
 
     // The transformed state is a TreeTN, so inspect its internal bonds separately.
-    let transformed_bond_dims = tree_link_dims(&transformed);
+    let transformed_bond_dims = transformed.link_dims();
 
     // The Fourier operator is represented as an MPO; its bonds are the operator ranks.
-    let operator_bond_dims = tree_link_dims(&operator.mpo);
+    let operator_bond_dims = operator.mpo().link_dims();
 
     let bond_dims = collect_bond_dims_from_profiles(&input_bond_dims, &transformed_bond_dims);
 

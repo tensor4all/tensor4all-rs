@@ -2,7 +2,7 @@ use super::*;
 use crate::{t4a_index, t4a_treetn_release, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
 use num_complex::Complex64;
 use num_rational::Rational64;
-use tensor4all_core::{ColMajorArrayRef, TensorDynLen};
+use tensor4all_core::TensorDynLen;
 use tensor4all_quanticstransform::{
     affine_operator, cumsum_operator, flip_operator, phase_rotation_operator,
     quantics_fourier_operator, shift_operator, AffineParams, BoundaryCondition, FourierOptions,
@@ -59,8 +59,7 @@ fn rust_operator_matrix(
     let mut indices = Vec::with_capacity(2 * nsites);
     for site in 0..nsites {
         indices.push(
-            op.output_mapping
-                .get(&site)
+            op.get_output_mappings(&site)
                 .unwrap()
                 .first()
                 .unwrap()
@@ -68,8 +67,7 @@ fn rust_operator_matrix(
                 .clone(),
         );
         indices.push(
-            op.input_mapping
-                .get(&site)
+            op.get_input_mappings(&site)
                 .unwrap()
                 .first()
                 .unwrap()
@@ -88,12 +86,8 @@ fn rust_operator_matrix(
                 values.push(out_values[site]);
                 values.push(in_values[site]);
             }
-            let shape = [values.len(), 1];
-            let result = op
-                .mpo
-                .evaluate_at(&indices, ColMajorArrayRef::new(&values, &shape).unwrap())
-                .unwrap();
-            matrix[y + nrows * x] = result[0].clone().into();
+            let result = op.mpo().evaluate_point(&indices, &values).unwrap();
+            matrix[y + nrows * x] = result.into();
         }
     }
     matrix

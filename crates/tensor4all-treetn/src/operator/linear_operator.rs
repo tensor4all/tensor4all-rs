@@ -46,7 +46,8 @@ use crate::treetn::TreeTN;
 /// # Examples
 ///
 /// A `LinearOperator` is typically obtained from a constructor function rather
-/// than built directly. The `mpo` field contains the underlying TreeTN:
+/// than built directly. The [`mpo()`](Self::mpo) method exposes the underlying
+/// TreeTN:
 ///
 /// ```
 /// use tensor4all_treetn::LinearOperator;
@@ -72,11 +73,11 @@ where
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// The MPO with internal index IDs
-    pub mpo: TreeTN<T, V>,
+    pub(crate) mpo: TreeTN<T, V>,
     /// Input index mappings: node -> [(true s_in, internal s_in_tmp)].
-    pub input_mapping: HashMap<V, Vec<IndexMapping<T::Index>>>,
+    pub(crate) input_mapping: HashMap<V, Vec<IndexMapping<T::Index>>>,
     /// Output index mappings: node -> [(true s_out, internal s_out_tmp)].
-    pub output_mapping: HashMap<V, Vec<IndexMapping<T::Index>>>,
+    pub(crate) output_mapping: HashMap<V, Vec<IndexMapping<T::Index>>>,
 }
 
 impl<T, V> LinearOperator<T, V>
@@ -357,6 +358,192 @@ where
     /// Get the internal MPO.
     pub fn mpo(&self) -> &TreeTN<T, V> {
         &self.mpo
+    }
+
+    /// Consume the operator and return its internal MPO.
+    ///
+    /// Use this when the caller needs to take ownership of the TreeTN rather
+    /// than inspect it through [`Self::mpo`]. The input/output index mappings
+    /// are discarded.
+    ///
+    /// # Returns
+    ///
+    /// The underlying MPO TreeTN.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::HashMap;
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
+    ///
+    /// let true_site = DynIndex::new_dyn(2);
+    /// let input_internal = DynIndex::new_dyn(2);
+    /// let output_internal = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(
+    ///     vec![input_internal.clone(), output_internal.clone()],
+    ///     vec![1.0_f64, 0.0, 0.0, 1.0],
+    /// )?;
+    /// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0])?;
+    ///
+    /// let mut input_mapping = HashMap::new();
+    /// input_mapping.insert(0, IndexMapping {
+    ///     true_index: true_site.clone(),
+    ///     internal_index: input_internal,
+    /// });
+    /// let mut output_mapping = HashMap::new();
+    /// output_mapping.insert(0, IndexMapping {
+    ///     true_index: true_site,
+    ///     internal_index: output_internal,
+    /// });
+    ///
+    /// let op = LinearOperator::new(mpo, input_mapping, output_mapping);
+    /// let mpo = op.into_mpo();
+    /// assert_eq!(mpo.node_count(), 1);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn into_mpo(self) -> TreeTN<T, V> {
+        self.mpo
+    }
+
+    /// Rename operator nodes and update all mapping keys consistently.
+    ///
+    /// The method consumes the operator and returns a renamed operator. It
+    /// rebuilds the internal MPO from the same tensors, so mappings such as
+    /// `0 -> 1, 1 -> 2` work even though they would collide during a sequential
+    /// in-place rename.
+    ///
+    /// # Arguments
+    ///
+    /// * `mapping` - Pairs of `(old_node, new_node)`. Nodes not listed in the
+    ///   mapping keep their existing names.
+    ///
+    /// # Returns
+    ///
+    /// A `LinearOperator` with the same tensor data and index mappings attached
+    /// to the renamed nodes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an old node is unknown, if the mapping contains a
+    /// duplicate old node, if the resulting node names would contain
+    /// duplicates, or if rebuilding the MPO fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::HashMap;
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
+    ///
+    /// let true_site = DynIndex::new_dyn(2);
+    /// let input_internal = DynIndex::new_dyn(2);
+    /// let output_internal = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(
+    ///     vec![input_internal.clone(), output_internal.clone()],
+    ///     vec![1.0_f64, 0.0, 0.0, 1.0],
+    /// )?;
+    /// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0])?;
+    ///
+    /// let mut input_mapping = HashMap::new();
+    /// input_mapping.insert(0, IndexMapping {
+    ///     true_index: true_site.clone(),
+    ///     internal_index: input_internal,
+    /// });
+    /// let mut output_mapping = HashMap::new();
+    /// output_mapping.insert(0, IndexMapping {
+    ///     true_index: true_site,
+    ///     internal_index: output_internal,
+    /// });
+    ///
+    /// let op = LinearOperator::new(mpo, input_mapping, output_mapping);
+    /// let renamed = op.rename_nodes(&[(0, 2)])?;
+    ///
+    /// assert!(renamed.mpo().node_index(&0).is_none());
+    /// assert!(renamed.mpo().node_index(&2).is_some());
+    /// assert!(renamed.get_input_mapping(&2).is_some());
+    /// assert!(renamed.get_output_mapping(&2).is_some());
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn rename_nodes(mut self, mapping: &[(V, V)]) -> Result<Self> {
+        let mut rename_map = HashMap::with_capacity(mapping.len());
+        for (old_node, new_node) in mapping {
+            let previous = rename_map.insert(old_node.clone(), new_node.clone());
+            anyhow::ensure!(
+                previous.is_none(),
+                "LinearOperator::rename_nodes: duplicate old node {:?}",
+                old_node
+            );
+        }
+
+        for old_node in rename_map.keys() {
+            anyhow::ensure!(
+                self.mpo.node_index(old_node).is_some(),
+                "LinearOperator::rename_nodes: unknown old node {:?}",
+                old_node
+            );
+        }
+
+        let old_names = self.mpo.node_names();
+        let mut new_names = Vec::with_capacity(old_names.len());
+        let mut seen_names = HashSet::with_capacity(old_names.len());
+        for old_name in &old_names {
+            let new_name = rename_map
+                .get(old_name)
+                .cloned()
+                .unwrap_or_else(|| old_name.clone());
+            anyhow::ensure!(
+                seen_names.insert(new_name.clone()),
+                "LinearOperator::rename_nodes: duplicate node name {:?} after renaming",
+                new_name
+            );
+            new_names.push(new_name);
+        }
+
+        let tensors = old_names
+            .iter()
+            .map(|old_name| {
+                let node = self.mpo.node_index(old_name).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "LinearOperator::rename_nodes: node {:?} disappeared during rename",
+                        old_name
+                    )
+                })?;
+                self.mpo.tensor(node).cloned().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "LinearOperator::rename_nodes: tensor for node {:?} not found",
+                        old_name
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        self.mpo = TreeTN::from_tensors(tensors, new_names)?;
+        self.input_mapping = Self::rename_mapping_keys(self.input_mapping, &rename_map, "input")?;
+        self.output_mapping =
+            Self::rename_mapping_keys(self.output_mapping, &rename_map, "output")?;
+
+        Ok(self)
+    }
+
+    fn rename_mapping_keys(
+        mappings_by_node: HashMap<V, Vec<IndexMapping<T::Index>>>,
+        rename_map: &HashMap<V, V>,
+        kind: &str,
+    ) -> Result<HashMap<V, Vec<IndexMapping<T::Index>>>> {
+        let mut renamed = HashMap::with_capacity(mappings_by_node.len());
+        for (old_node, mappings) in mappings_by_node {
+            let new_node = rename_map
+                .get(&old_node)
+                .cloned()
+                .unwrap_or_else(|| old_node.clone());
+            anyhow::ensure!(
+                renamed.insert(new_node.clone(), mappings).is_none(),
+                "LinearOperator::rename_nodes: duplicate {kind} mapping node {:?}",
+                new_node
+            );
+        }
+        Ok(renamed)
     }
 
     /// Get input mapping for a node.

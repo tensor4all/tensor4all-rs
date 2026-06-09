@@ -4,7 +4,6 @@
 //! operator only to the x-sites, and compares the result with an analytic
 //! partial Fourier transform.
 
-use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::f64::consts::PI;
 use std::fs::File;
@@ -13,14 +12,13 @@ use std::path::Path;
 
 use num_complex::Complex64;
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::{outer_product, ColMajorArrayRef, IndexLike, TensorDynLen};
+use tensor4all_core::TensorDynLen;
 use tensor4all_quanticstci::{
     quanticscrossinterpolate, DiscretizedGrid, QtciOptions, QuanticsTensorCI2, UnfoldingScheme,
 };
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 use tensor4all_treetn::{
-    apply_linear_operator, tensor_train_to_treetn, ApplyOptions, IndexMapping, LinearOperator,
-    TreeTN,
+    apply_linear_operator, tensor_train_to_treetn, ApplyOptions, LinearOperator, TreeTN,
 };
 
 pub type SiteIndex = Index<DynId, TagSet>;
@@ -200,44 +198,6 @@ pub fn build_source_qtt(
         options,
     )?)
 }
-pub fn rename_operator_nodes(
-    mut operator: LinearOperator<TensorDynLen, usize>,
-    mapping: &[(usize, usize)],
-) -> Result<LinearOperator<TensorDynLen, usize>, Box<dyn Error>> {
-    let offset = 1_000_000usize;
-
-    for &(old, _) in mapping {
-        operator.mpo.rename_node(&old, old + offset)?;
-    }
-    for &(old, new) in mapping {
-        operator.mpo.rename_node(&(old + offset), new)?;
-    }
-
-    let mut new_input = std::collections::HashMap::new();
-    for (node, mapping_value) in operator.input_mapping.drain() {
-        let new_node = mapping
-            .iter()
-            .find(|&&(old, _)| old == node)
-            .map(|&(_, new)| new)
-            .unwrap_or(node);
-        new_input.insert(new_node, mapping_value);
-    }
-    operator.input_mapping = new_input;
-
-    let mut new_output = std::collections::HashMap::new();
-    for (node, mapping_value) in operator.output_mapping.drain() {
-        let new_node = mapping
-            .iter()
-            .find(|&&(old, _)| old == node)
-            .map(|&(_, new)| new)
-            .unwrap_or(node);
-        new_output.insert(new_node, mapping_value);
-    }
-    operator.output_mapping = new_output;
-
-    Ok(operator)
-}
-
 pub fn build_partial_fourier_operator(
     config: &PartialFourier2dConfig,
 ) -> Result<LinearOperator<TensorDynLen, usize>, Box<dyn Error>> {
@@ -247,7 +207,7 @@ pub fn build_partial_fourier_operator(
         ..FourierOptions::forward()
     };
     let operator = quantics_fourier_operator(config.bits, options)?;
-    rename_operator_nodes(operator, &x_site_node_mapping(config.bits))
+    Ok(operator.rename_nodes(&x_site_node_mapping(config.bits))?)
 }
 
 fn single_site_index_from_state(
@@ -271,144 +231,13 @@ fn single_site_index_from_state(
         .ok_or_else(|| format!("state node {node} has an empty site space").into())
 }
 
-fn expand_operator_to_interleaved_state(
-    operator: &LinearOperator<TensorDynLen, usize>,
-    state: &TreeTN<TensorDynLen, usize>,
-) -> Result<LinearOperator<TensorDynLen, usize>, Box<dyn Error>> {
-    let bits = operator.input_mappings().len();
-    let expected_state_nodes = 2 * bits;
-    if state.node_count() != expected_state_nodes {
-        return Err(format!(
-            "partial Fourier state should have {expected_state_nodes} nodes for {bits} x-sites, got {}",
-            state.node_count()
-        )
-        .into());
-    }
-
-    let mut tensors_by_node: HashMap<usize, TensorDynLen> = HashMap::new();
-    let mut input_mapping = operator.input_mapping.clone();
-    let mut output_mapping = operator.output_mapping.clone();
-
-    for x_node in (0..expected_state_nodes).step_by(2) {
-        let node_idx = operator
-            .mpo
-            .node_index(&x_node)
-            .ok_or_else(|| format!("partial Fourier MPO is missing x node {x_node}"))?;
-        let tensor = operator
-            .mpo
-            .tensor(node_idx)
-            .ok_or_else(|| format!("partial Fourier MPO has no tensor at x node {x_node}"))?
-            .clone();
-        tensors_by_node.insert(x_node, tensor);
-    }
-
-    for t_node in (1..expected_state_nodes).step_by(2) {
-        let true_site = single_site_index_from_state(state, t_node)?;
-        let input_internal = true_site.sim();
-        let output_internal = true_site.sim();
-        let identity = TensorDynLen::delta(
-            std::slice::from_ref(&input_internal),
-            std::slice::from_ref(&output_internal),
-        )?;
-
-        input_mapping.insert(
-            t_node,
-            vec![IndexMapping {
-                true_index: true_site.clone(),
-                internal_index: input_internal,
-            }],
-        );
-        output_mapping.insert(
-            t_node,
-            vec![IndexMapping {
-                true_index: true_site,
-                internal_index: output_internal,
-            }],
-        );
-        tensors_by_node.insert(t_node, identity);
-    }
-
-    for x_site in 0..bits.saturating_sub(1) {
-        let start = 2 * x_site;
-        let mid = start + 1;
-        let end = start + 2;
-        let edge = operator
-            .mpo
-            .edge_between(&start, &end)
-            .ok_or_else(|| format!("partial Fourier MPO is missing edge {start}-{end}"))?;
-        let bond = operator
-            .mpo
-            .bond_index(edge)
-            .ok_or_else(|| format!("partial Fourier MPO edge {start}-{end} has no bond"))?;
-        let left_bridge = bond.sim();
-        let right_bridge = left_bridge.sim();
-
-        {
-            let tensor = tensors_by_node
-                .get_mut(&start)
-                .ok_or_else(|| format!("missing tensor at expanded node {start}"))?;
-            *tensor = tensor.replaceind(bond, &left_bridge)?;
-        }
-        {
-            let tensor = tensors_by_node
-                .get_mut(&end)
-                .ok_or_else(|| format!("missing tensor at expanded node {end}"))?;
-            *tensor = tensor.replaceind(bond, &right_bridge)?;
-        }
-        {
-            let bridge = TensorDynLen::delta(&[left_bridge], &[right_bridge])?;
-            let tensor = tensors_by_node
-                .get_mut(&mid)
-                .ok_or_else(|| format!("missing tensor at expanded node {mid}"))?;
-            *tensor = outer_product(tensor, &bridge)?;
-        }
-    }
-
-    if expected_state_nodes > 1 {
-        let last_x = expected_state_nodes - 2;
-        let last_t = expected_state_nodes - 1;
-        let (left_link, right_link) = <SiteIndex as IndexLike>::create_dummy_link_pair();
-        let left_ones = TensorDynLen::ones(std::slice::from_ref(&left_link))?;
-        let right_ones = TensorDynLen::ones(std::slice::from_ref(&right_link))?;
-        {
-            let tensor = tensors_by_node
-                .get_mut(&last_x)
-                .ok_or_else(|| format!("missing tensor at final x node {last_x}"))?;
-            *tensor = outer_product(tensor, &left_ones)?;
-        }
-        {
-            let tensor = tensors_by_node
-                .get_mut(&last_t)
-                .ok_or_else(|| format!("missing tensor at final t node {last_t}"))?;
-            *tensor = outer_product(tensor, &right_ones)?;
-        }
-    }
-
-    let node_names: Vec<usize> = (0..expected_state_nodes).collect();
-    let tensors = node_names
-        .iter()
-        .map(|node| {
-            tensors_by_node
-                .remove(node)
-                .ok_or_else(|| format!("missing expanded operator tensor at node {node}"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let mpo = TreeTN::from_tensors(tensors, node_names)?;
-
-    Ok(LinearOperator::new_multi(
-        mpo,
-        input_mapping,
-        output_mapping,
-    ))
-}
-
 pub fn transform_x_dimension(
     qtci: &QuanticsTensorCI2<f64>,
     operator: &LinearOperator<TensorDynLen, usize>,
 ) -> Result<PartialFourier2dTransformOutput, Box<dyn Error>> {
     let tt = qtci.tensor_train();
     let (state, _state_site_indices) = tensor_train_to_treetn(&tt)?;
-    let mut aligned_operator = expand_operator_to_interleaved_state(operator, &state)?;
+    let mut aligned_operator = operator.clone();
     aligned_operator.align_to_state(&state)?;
 
     let transformed = apply_linear_operator(&aligned_operator, &state, ApplyOptions::naive())?;
@@ -423,12 +252,7 @@ pub fn evaluate_tree_point(
     site_indices: &[SiteIndex],
     site_values: &[usize],
 ) -> Result<Complex64, Box<dyn Error>> {
-    let shape = [site_indices.len(), 1];
-    let values = ColMajorArrayRef::new(site_values, &shape)?;
-    let result = tn.evaluate_at(site_indices, values)?;
-    let value = result
-        .first()
-        .ok_or_else(|| "TreeTN evaluation returned no values".to_string())?;
+    let value = tn.evaluate_point(site_indices, site_values)?;
     Ok(Complex64::new(value.real(), value.imag()))
 }
 pub fn collect_samples(
@@ -489,25 +313,6 @@ pub fn collect_samples(
     }
 
     Ok(rows)
-}
-
-pub fn tree_link_dims(tn: &TreeTN<TensorDynLen, usize>) -> Vec<usize> {
-    let mut dims = Vec::new();
-    let mut seen_edges = HashSet::new();
-
-    for node_name in tn.node_names() {
-        if let Some(node_idx) = tn.node_index(&node_name) {
-            for (edge, _neighbor) in tn.edges_for_node(node_idx) {
-                if seen_edges.insert(edge) {
-                    if let Some(bond) = tn.bond_index(edge) {
-                        dims.push(bond.dim());
-                    }
-                }
-            }
-        }
-    }
-
-    dims
 }
 
 pub fn collect_bond_dims(

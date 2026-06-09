@@ -36,7 +36,7 @@ use crate::common::{
 /// let op = flip_operator(4, BoundaryCondition::Periodic).unwrap();
 ///
 /// // The operator has one MPO tensor per bit
-/// assert_eq!(op.mpo.node_count(), 4);
+/// assert_eq!(op.mpo().node_count(), 4);
 /// ```
 pub fn flip_operator(r: usize, bc: BoundaryCondition) -> Result<QuanticsOperator> {
     if r == 0 {
@@ -76,7 +76,7 @@ pub fn flip_operator(r: usize, bc: BoundaryCondition) -> Result<QuanticsOperator
 ///
 /// // Flip only the x-variable of a 2-variable function f(x, y)
 /// let op = flip_operator_multivar(4, BoundaryCondition::Periodic, 2, 0).unwrap();
-/// assert_eq!(op.mpo.node_count(), 4);
+/// assert_eq!(op.mpo().node_count(), 4);
 /// ```
 pub fn flip_operator_multivar(
     r: usize,

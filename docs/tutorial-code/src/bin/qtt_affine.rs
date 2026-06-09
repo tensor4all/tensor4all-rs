@@ -12,8 +12,8 @@ use tensor4all_treetn::{apply_linear_operator, tensor_train_to_treetn, ApplyOpti
 use tensor4all_tutorial_code::output_paths;
 use tensor4all_tutorial_code::qtt_affine_common::{
     collect_bond_dims, collect_operator_bond_dims, collect_samples, point_count, print_summary,
-    source_function, tree_link_dims, write_bond_dims_csv, write_operator_bond_dims_csv,
-    write_samples_csv, DEFAULT_AFFINE_CONFIG,
+    source_function, write_bond_dims_csv, write_operator_bond_dims_csv, write_samples_csv,
+    DEFAULT_AFFINE_CONFIG,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -106,14 +106,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         &config,
     )?;
 
-    let bond_dims = collect_bond_dims(
-        &tree_link_dims(&state),
-        &tree_link_dims(&periodic),
-        &tree_link_dims(&open),
-    );
+    let bond_dims = collect_bond_dims(&state.link_dims(), &periodic.link_dims(), &open.link_dims());
     let operator_bond_dims = collect_operator_bond_dims(
-        &tree_link_dims(&periodic_operator.mpo),
-        &tree_link_dims(&open_operator.mpo),
+        &periodic_operator.mpo().link_dims(),
+        &open_operator.mpo().link_dims(),
     );
 
     print_summary(&source, &periodic, &open, &samples, &config);

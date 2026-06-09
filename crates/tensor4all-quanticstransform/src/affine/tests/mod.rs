@@ -624,7 +624,7 @@ fn assert_affine_mpo_matches_matrix(r: usize, params: &AffineParams, bc: &[Bound
 
     let matrix = affine_transform_matrix(r, params, bc).unwrap();
     let op = affine_operator(r, params, bc).unwrap();
-    let actual = op.mpo.contract_to_tensor().unwrap();
+    let actual = op.mpo().contract_to_tensor().unwrap();
     let expected = affine_matrix_to_dense_tensor(&matrix, &op, r, m, n, &actual);
     let maxabs = actual.distance(&expected).unwrap();
 
@@ -1093,7 +1093,7 @@ fn test_affine_operator_interleaved_matches_matrix() {
         }
     }
 
-    let actual = op.mpo.contract_to_tensor().unwrap();
+    let actual = op.mpo().contract_to_tensor().unwrap();
     let expected =
         affine_interleaved_matrix_to_dense_tensor(&matrix, &op, r, params.m, params.n, &actual);
     let maxabs = actual.distance(&expected).unwrap();

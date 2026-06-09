@@ -33,8 +33,8 @@ let fwd = ft.forward().unwrap();
 let bwd = ft.backward().unwrap();
 
 // Each operator has r sites
-assert_eq!(fwd.mpo.node_count(), r);
-assert_eq!(bwd.mpo.node_count(), r);
+assert_eq!(fwd.mpo().node_count(), r);
+assert_eq!(bwd.mpo().node_count(), r);
 
 // Both operators have input and output mappings for all sites
 for i in 0..r {
@@ -196,30 +196,13 @@ let batch_eval = move |batch: tensor4all_treetci::GlobalIndexBatch<'_>|
 let state = to_treetn(tci_state, batch_eval, Some(0)).unwrap();
 
 // Build 1D Fourier operator (nodes 0,1,2)
-let mut fourier_op = quantics_fourier_operator(
+let fourier_op = quantics_fourier_operator(
     r, FourierOptions { normalize: true, ..Default::default() },
 ).unwrap();
 
 // Rename nodes to x-variable sites: 0->0, 1->2, 2->4
-// Use two-phase rename to avoid collisions
-let offset = 1_000_000;
-for i in 0..r {
-    fourier_op.mpo.rename_node(&i, i + offset).unwrap();
-}
-for i in 0..r {
-    fourier_op.mpo.rename_node(&(i + offset), 2 * i).unwrap();
-}
-// Update mappings
-let mut new_input = std::collections::HashMap::new();
-for (k, v) in fourier_op.input_mapping.drain() {
-    new_input.insert(2 * k, v);
-}
-fourier_op.input_mapping = new_input;
-let mut new_output = std::collections::HashMap::new();
-for (k, v) in fourier_op.output_mapping.drain() {
-    new_output.insert(2 * k, v);
-}
-fourier_op.output_mapping = new_output;
+let x_site_mapping: Vec<_> = (0..r).map(|i| (i, 2 * i)).collect();
+let mut fourier_op = fourier_op.rename_nodes(&x_site_mapping).unwrap();
 
 // Match operator's true indices to state's site indices
 fourier_op.set_input_space_from_state(&state).unwrap();

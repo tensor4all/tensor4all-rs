@@ -36,8 +36,8 @@ let shift_op = shift_operator(r, 3, BoundaryCondition::Periodic)?;
 let flip_op = flip_operator(r, BoundaryCondition::Periodic)?;
 
 // Operators are LinearOperator (TreeTN form).
-assert_eq!(shift_op.mpo.node_count(), r);
-assert_eq!(flip_op.mpo.node_count(), r);
+assert_eq!(shift_op.mpo().node_count(), r);
+assert_eq!(flip_op.mpo().node_count(), r);
 # Ok(())
 # }
 ```

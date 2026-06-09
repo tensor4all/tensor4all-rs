@@ -67,23 +67,23 @@ let r = 8;
 
 // Flip: f(x) = g(2^R - x)
 let flip_op = flip_operator(r, BoundaryCondition::Periodic).unwrap();
-assert_eq!(flip_op.mpo.node_count(), r);
+assert_eq!(flip_op.mpo().node_count(), r);
 
 // Shift by 10: f(x) = g(x + 10) mod 2^R
 let shift_op = shift_operator(r, 10, BoundaryCondition::Periodic).unwrap();
-assert_eq!(shift_op.mpo.node_count(), r);
+assert_eq!(shift_op.mpo().node_count(), r);
 
 // Phase rotation: f(x) = exp(i*pi/4*x) * g(x)
 let phase_op = phase_rotation_operator(r, std::f64::consts::PI / 4.0).unwrap();
-assert_eq!(phase_op.mpo.node_count(), r);
+assert_eq!(phase_op.mpo().node_count(), r);
 
 // Cumulative sum
 let cumsum_op = cumsum_operator(r).unwrap();
-assert_eq!(cumsum_op.mpo.node_count(), r);
+assert_eq!(cumsum_op.mpo().node_count(), r);
 
 // Fourier transform (forward)
 let ft_op = quantics_fourier_operator(r, FourierOptions::forward()).unwrap();
-assert_eq!(ft_op.mpo.node_count(), r);
+assert_eq!(ft_op.mpo().node_count(), r);
 ```
 
 ### Affine Transform
@@ -105,7 +105,7 @@ let b = vec![Rational64::from_integer(0), Rational64::from_integer(0)];
 let params = AffineParams::new(a, b, 2, 2).unwrap();
 let bc = vec![BoundaryCondition::Periodic; 2];
 let affine_op = affine_operator(r, &params, &bc).unwrap();
-assert_eq!(affine_op.mpo.node_count(), r);
+assert_eq!(affine_op.mpo().node_count(), r);
 ```
 
 ---
@@ -241,11 +241,11 @@ use tensor4all_quanticstransform::{shift_operator, BoundaryCondition};
 
 // Periodic: shift(7, 2) in 3-bit (mod 8) wraps to 1
 let shift_periodic = shift_operator(3, 2, BoundaryCondition::Periodic).unwrap();
-assert_eq!(shift_periodic.mpo.node_count(), 3);
+assert_eq!(shift_periodic.mpo().node_count(), 3);
 
 // Open: shift(7, 2) in 3-bit goes to 9 >= 8, producing zero
 let shift_open = shift_operator(3, 2, BoundaryCondition::Open).unwrap();
-assert_eq!(shift_open.mpo.node_count(), 3);
+assert_eq!(shift_open.mpo().node_count(), 3);
 ```
 
 ---
@@ -264,11 +264,11 @@ let r = 4;
 
 // Forward QFT (bit-reversed output)
 let fwd = quantics_fourier_operator(r, FourierOptions::forward()).unwrap();
-assert_eq!(fwd.mpo.node_count(), r);
+assert_eq!(fwd.mpo().node_count(), r);
 
 // Inverse QFT
 let inv = quantics_fourier_operator(r, FourierOptions::inverse()).unwrap();
-assert_eq!(inv.mpo.node_count(), r);
+assert_eq!(inv.mpo().node_count(), r);
 ```
 
 ---

@@ -557,7 +557,7 @@ pub extern "C" fn t4a_qtransform_shift_materialize(
         let r = layout_ref.resolution(target_var);
         let source = shift_operator(r, offset, bc.into())
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
-        let treetn = materialize_single_var_operator(layout_ref, target_var, source.mpo)?;
+        let treetn = materialize_single_var_operator(layout_ref, target_var, source.into_mpo())?;
         Ok(t4a_treetn::new(treetn))
     })
 }
@@ -582,7 +582,7 @@ pub extern "C" fn t4a_qtransform_flip_materialize(
         let r = layout_ref.resolution(target_var);
         let source =
             flip_operator(r, bc.into()).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
-        let treetn = materialize_single_var_operator(layout_ref, target_var, source.mpo)?;
+        let treetn = materialize_single_var_operator(layout_ref, target_var, source.into_mpo())?;
         Ok(t4a_treetn::new(treetn))
     })
 }
@@ -607,7 +607,7 @@ pub extern "C" fn t4a_qtransform_phase_rotation_materialize(
         let r = layout_ref.resolution(target_var);
         let source = phase_rotation_operator(r, theta)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
-        let treetn = materialize_single_var_operator(layout_ref, target_var, source.mpo)?;
+        let treetn = materialize_single_var_operator(layout_ref, target_var, source.into_mpo())?;
         Ok(t4a_treetn::new(treetn))
     })
 }
@@ -630,7 +630,7 @@ pub extern "C" fn t4a_qtransform_cumsum_materialize(
         }
         let r = layout_ref.resolution(target_var);
         let source = cumsum_operator(r).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
-        let treetn = materialize_single_var_operator(layout_ref, target_var, source.mpo)?;
+        let treetn = materialize_single_var_operator(layout_ref, target_var, source.into_mpo())?;
         Ok(t4a_treetn::new(treetn))
     })
 }
@@ -668,7 +668,7 @@ pub extern "C" fn t4a_qtransform_fourier_materialize(
         }
         let source = quantics_fourier_operator(r, options)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
-        let treetn = materialize_single_var_operator(layout_ref, target_var, source.mpo)?;
+        let treetn = materialize_single_var_operator(layout_ref, target_var, source.into_mpo())?;
         Ok(t4a_treetn::new(treetn))
     })
 }
@@ -728,7 +728,7 @@ pub extern "C" fn t4a_qtransform_affine_materialize(
             AffineParams::new(a, b, m, n).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         let source = affine_operator(layout_ref.nsites(), &params, &bc)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
-        Ok(t4a_treetn::new(source.mpo))
+        Ok(t4a_treetn::new(source.into_mpo()))
     })
 }
 

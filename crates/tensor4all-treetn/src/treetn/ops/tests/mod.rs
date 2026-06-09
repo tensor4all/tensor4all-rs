@@ -112,6 +112,50 @@ fn evaluator_evaluate_batch_matches_evaluate_at_sugar() {
 }
 
 #[test]
+fn evaluate_point_matches_single_column_batch() {
+    let tn = make_three_node_chain();
+    let (indices, _) = tn.all_site_indices().unwrap();
+    let values = [1usize, 0, 1];
+    let shape = [indices.len(), 1usize];
+
+    let point = tn.evaluate_point(&indices, &values).unwrap();
+    let batch = tn
+        .evaluate_at(&indices, ColMajorArrayRef::new(&values, &shape).unwrap())
+        .unwrap();
+
+    assert_eq!(batch.len(), 1);
+    assert!((point.real() - batch[0].real()).abs() < 1.0e-12);
+    assert!((point.imag() - batch[0].imag()).abs() < 1.0e-12);
+}
+
+#[test]
+fn evaluate_point_rejects_value_count_mismatch() {
+    let tn = make_three_node_chain();
+    let (indices, _) = tn.all_site_indices().unwrap();
+
+    let err = tn.evaluate_point(&indices, &[0usize, 1]).unwrap_err();
+
+    assert!(err.to_string().contains("values.len()"));
+}
+
+#[test]
+fn link_dims_reports_bond_dimensions_in_node_order() {
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let s2 = DynIndex::new_dyn(2);
+    let bond01 = DynIndex::new_dyn(2);
+    let bond12 = DynIndex::new_dyn(3);
+
+    let t0 = TensorDynLen::from_dense(vec![s0, bond01.clone()], vec![1.0_f64; 2 * 2]).unwrap();
+    let t1 = TensorDynLen::from_dense(vec![bond01, s1, bond12.clone()], vec![1.0_f64; 2 * 2 * 3])
+        .unwrap();
+    let t2 = TensorDynLen::from_dense(vec![bond12, s2], vec![1.0_f64; 3 * 2]).unwrap();
+    let tn = TreeTN::from_tensors(vec![t0, t1, t2], vec![0usize, 1, 2]).unwrap();
+
+    assert_eq!(tn.link_dims(), vec![2, 3]);
+}
+
+#[test]
 fn evaluator_rejects_incomplete_site_index_list() {
     let tn = make_three_node_chain();
     let (indices, _) = tn.all_site_indices().unwrap();

@@ -439,7 +439,7 @@ fn remap_affine_site_indices(
 /// let params = AffineParams::new(a, b, 2, 2).unwrap();
 /// let bc = vec![BoundaryCondition::Periodic; 2];
 /// let op = affine_operator(4, &params, &bc).unwrap();
-/// assert_eq!(op.mpo.node_count(), 4);
+/// assert_eq!(op.mpo().node_count(), 4);
 /// ```
 ///
 /// Using integer convenience constructor:
@@ -451,7 +451,7 @@ fn remap_affine_site_indices(
 /// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
 /// let bc = vec![BoundaryCondition::Periodic];
 /// let op = affine_operator(4, &params, &bc).unwrap();
-/// assert_eq!(op.mpo.node_count(), 4);
+/// assert_eq!(op.mpo().node_count(), 4);
 /// ```
 pub fn affine_operator(
     r: usize,

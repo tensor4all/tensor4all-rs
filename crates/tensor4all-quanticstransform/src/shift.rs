@@ -40,7 +40,7 @@ use crate::common::{
 /// let op = shift_operator(4, 3, BoundaryCondition::Periodic).unwrap();
 ///
 /// // The operator has one MPO tensor per bit
-/// assert_eq!(op.mpo.node_count(), 4);
+/// assert_eq!(op.mpo().node_count(), 4);
 /// ```
 pub fn shift_operator(r: usize, offset: i64, bc: BoundaryCondition) -> Result<QuanticsOperator> {
     if r == 0 {
@@ -76,7 +76,7 @@ pub fn shift_operator(r: usize, offset: i64, bc: BoundaryCondition) -> Result<Qu
 ///
 /// // Shift only the x-variable of a 2-variable function f(x, y) by 3
 /// let op = shift_operator_multivar(4, 3, BoundaryCondition::Periodic, 2, 0).unwrap();
-/// assert_eq!(op.mpo.node_count(), 4);
+/// assert_eq!(op.mpo().node_count(), 4);
 /// ```
 pub fn shift_operator_multivar(
     r: usize,

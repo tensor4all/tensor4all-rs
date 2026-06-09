@@ -73,6 +73,85 @@ fn make_linear_operator() -> (
     (op, s, s_in_tmp, s_out_tmp)
 }
 
+fn make_three_node_linear_operator() -> LinearOperator<TensorDynLen, usize> {
+    let site0 = DynIndex::new_dyn(2);
+    let site1 = DynIndex::new_dyn(2);
+    let site2 = DynIndex::new_dyn(2);
+    let in0 = DynIndex::new_dyn(2);
+    let in1 = DynIndex::new_dyn(2);
+    let in2 = DynIndex::new_dyn(2);
+    let out0 = DynIndex::new_dyn(2);
+    let out1 = DynIndex::new_dyn(2);
+    let out2 = DynIndex::new_dyn(2);
+    let bond01 = DynIndex::new_dyn(2);
+    let bond12 = DynIndex::new_dyn(3);
+
+    let t0 = TensorDynLen::from_dense(
+        vec![in0.clone(), out0.clone(), bond01.clone()],
+        vec![1.0_f64; 2 * 2 * 2],
+    )
+    .unwrap();
+    let t1 = TensorDynLen::from_dense(
+        vec![bond01.clone(), in1.clone(), out1.clone(), bond12.clone()],
+        vec![1.0_f64; 2 * 2 * 2 * 3],
+    )
+    .unwrap();
+    let t2 = TensorDynLen::from_dense(
+        vec![bond12.clone(), in2.clone(), out2.clone()],
+        vec![1.0_f64; 3 * 2 * 2],
+    )
+    .unwrap();
+    let mpo = TreeTN::from_tensors(vec![t0, t1, t2], vec![0usize, 1, 2]).unwrap();
+
+    let mut input_mapping = HashMap::new();
+    input_mapping.insert(
+        0,
+        IndexMapping {
+            true_index: site0.clone(),
+            internal_index: in0,
+        },
+    );
+    input_mapping.insert(
+        1,
+        IndexMapping {
+            true_index: site1.clone(),
+            internal_index: in1,
+        },
+    );
+    input_mapping.insert(
+        2,
+        IndexMapping {
+            true_index: site2.clone(),
+            internal_index: in2,
+        },
+    );
+
+    let mut output_mapping = HashMap::new();
+    output_mapping.insert(
+        0,
+        IndexMapping {
+            true_index: site0,
+            internal_index: out0,
+        },
+    );
+    output_mapping.insert(
+        1,
+        IndexMapping {
+            true_index: site1,
+            internal_index: out1,
+        },
+    );
+    output_mapping.insert(
+        2,
+        IndexMapping {
+            true_index: site2,
+            internal_index: out2,
+        },
+    );
+
+    LinearOperator::new(mpo, input_mapping, output_mapping)
+}
+
 fn make_fused_identity_operator() -> (
     LinearOperator<TensorDynLen, String>,
     DynIndex,
@@ -140,6 +219,15 @@ fn test_linear_operator_mpo_accessor() {
 }
 
 #[test]
+fn test_linear_operator_into_mpo_consumes_operator() {
+    let (op, _s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
+
+    let mpo = op.into_mpo();
+
+    assert_eq!(mpo.node_count(), 1);
+}
+
+#[test]
 fn test_linear_operator_input_output_site_indices() {
     let (op, s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
 
@@ -150,6 +238,35 @@ fn test_linear_operator_input_output_site_indices() {
     let output_indices = op.output_site_indices();
     assert_eq!(output_indices.len(), 1);
     assert!(output_indices.iter().any(|i| i.id() == s.id()));
+}
+
+#[test]
+fn rename_nodes_rebuilds_mpo_and_mappings_for_colliding_targets() {
+    let op = make_three_node_linear_operator();
+
+    let renamed = op.rename_nodes(&[(0, 0), (1, 2), (2, 4)]).unwrap();
+
+    assert!(renamed.mpo().node_index(&0).is_some());
+    assert!(renamed.mpo().node_index(&1).is_none());
+    assert!(renamed.mpo().node_index(&2).is_some());
+    assert!(renamed.mpo().node_index(&4).is_some());
+    assert!(renamed.mpo().edge_between(&0, &2).is_some());
+    assert!(renamed.mpo().edge_between(&2, &4).is_some());
+    assert!(renamed.get_input_mapping(&0).is_some());
+    assert!(renamed.get_input_mapping(&2).is_some());
+    assert!(renamed.get_input_mapping(&4).is_some());
+    assert!(renamed.get_output_mapping(&0).is_some());
+    assert!(renamed.get_output_mapping(&2).is_some());
+    assert!(renamed.get_output_mapping(&4).is_some());
+}
+
+#[test]
+fn rename_nodes_rejects_duplicate_new_names() {
+    let op = make_three_node_linear_operator();
+
+    let err = op.rename_nodes(&[(0, 1)]).unwrap_err();
+
+    assert!(err.to_string().contains("duplicate node name"));
 }
 
 #[test]

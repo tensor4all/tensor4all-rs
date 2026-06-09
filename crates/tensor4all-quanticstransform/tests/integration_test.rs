@@ -281,7 +281,10 @@ fn contract_operator_to_dense_matrix(
     let dim: usize = site_dim.pow(n_sites as u32);
 
     // Contract the MPO to a single dense tensor
-    let dense_tensor = op.mpo.contract_to_tensor().expect("Failed to contract MPO");
+    let dense_tensor = op
+        .mpo()
+        .contract_to_tensor()
+        .expect("Failed to contract MPO");
 
     let ext_indices = &dense_tensor.indices;
     let data = dense_tensor

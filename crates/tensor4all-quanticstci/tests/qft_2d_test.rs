@@ -10,48 +10,7 @@ use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions, Unf
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 use tensor4all_treetci::materialize::to_treetn;
 use tensor4all_treetn::operator::{apply_linear_operator, ApplyOptions};
-use tensor4all_treetn::LinearOperator;
 use tensor4all_treetn::Operator;
-
-/// Rename LinearOperator nodes according to a mapping: old_name -> new_name.
-/// Uses a two-phase rename (old → temp → new) to avoid collisions.
-fn rename_operator_nodes(
-    mut op: LinearOperator<tensor4all_core::TensorDynLen, usize>,
-    mapping: &[(usize, usize)],
-) -> Result<LinearOperator<tensor4all_core::TensorDynLen, usize>> {
-    // Phase 1: rename old → temp (use large offsets to avoid collisions)
-    let offset = 1_000_000;
-    for &(old, _) in mapping {
-        op.mpo.rename_node(&old, old + offset)?;
-    }
-    // Phase 2: rename temp → new
-    for &(old, new) in mapping {
-        op.mpo.rename_node(&(old + offset), new)?;
-    }
-    // Rename in input_mapping
-    let mut new_input = std::collections::HashMap::new();
-    for (k, v) in op.input_mapping.drain() {
-        let new_k = mapping
-            .iter()
-            .find(|&&(o, _)| o == k)
-            .map(|&(_, n)| n)
-            .unwrap_or(k);
-        new_input.insert(new_k, v);
-    }
-    op.input_mapping = new_input;
-    // Rename in output_mapping
-    let mut new_output = std::collections::HashMap::new();
-    for (k, v) in op.output_mapping.drain() {
-        let new_k = mapping
-            .iter()
-            .find(|&&(o, _)| o == k)
-            .map(|&(_, n)| n)
-            .unwrap_or(k);
-        new_output.insert(new_k, v);
-    }
-    op.output_mapping = new_output;
-    Ok(op)
-}
 
 /// Test that 1D QFT applied to x-variable in a 2D interleaved QTT works.
 ///
@@ -123,7 +82,7 @@ fn test_2d_qft_x_only_interleaved() -> Result<()> {
 
     // Rename operator nodes: 0→0, 1→2, 2→4 (x-variable sites in interleaved layout)
     let node_mapping: Vec<(usize, usize)> = (0..r).map(|i| (i, 2 * i)).collect();
-    let mut renamed_op = rename_operator_nodes(fourier_op, &node_mapping)?;
+    let mut renamed_op = fourier_op.rename_nodes(&node_mapping)?;
 
     // Verify renamed operator nodes are {0, 2, 4}
     let op_nodes = renamed_op.node_names();

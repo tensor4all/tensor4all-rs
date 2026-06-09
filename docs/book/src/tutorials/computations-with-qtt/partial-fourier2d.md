@@ -10,10 +10,10 @@ Runnable source: [`docs/tutorial-code/src/bin/qtt_partial_fourier2d.rs`](../../.
 
 For an interleaved two-variable QTT, the state nodes are ordered
 `x0, t0, x1, t1, ...`. A one-dimensional Fourier MPO has only `x` nodes, so the
-operator nodes must be renamed onto the even state nodes before the operator is
-expanded with identity tensors on the `t` nodes. The runnable source linked
-above performs that expansion in `transform_x_dimension`. The source function
-is `f(x, t) = exp(-x^2 / 2) * cos(2πt)`.
+operator nodes are renamed onto the even state nodes. `apply_linear_operator`
+then handles the partial operator and leaves the missing `t` nodes as identity
+gaps. The source function is
+`f(x, t) = exp(-x^2 / 2) * cos(2πt)`.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
@@ -43,24 +43,25 @@ let options = QtciOptions::default()
 let (state, _ranks, _errors) = quanticscrossinterpolate(&grid, f, None, options)?;
 
 let operator = quantics_fourier_operator(bits, FourierOptions::forward())?;
-assert_eq!(operator.mpo.node_count(), bits);
+assert_eq!(operator.mpo().node_count(), bits);
 
 let x_site_mapping: Vec<_> = (0..bits).map(|site| (site, 2 * site)).collect();
+let renamed_operator = operator.rename_nodes(&x_site_mapping)?;
 
 assert_eq!(state.tensor_train().len(), 2 * bits);
 assert_eq!(x_site_mapping.len(), bits);
 assert_eq!(x_site_mapping[0], (0, 0));
 assert_eq!(x_site_mapping[bits - 1], (bits - 1, 2 * (bits - 1)));
+assert_eq!(renamed_operator.mpo().node_count(), bits);
 # Ok(())
 # }
 ```
 
-The full source then renames the operator nodes with this mapping, expands the
-operator with identity tensors on the odd `t` nodes, aligns the resulting
-operator to the state, and applies it. Passing `None` for `initial_pivots` is
-the best starting point for tutorial code because it keeps QTCI on its default
-initialization path. Explicit pivot lists are a later tuning tool for cases
-where you already know important grid points.
+The full source then aligns the renamed partial operator to the state and
+applies it. Passing `None` for `initial_pivots` is the best starting point for
+tutorial code because it keeps QTCI on its default initialization path. Explicit
+pivot lists are a later tuning tool for cases where you already know important
+grid points.
 Use `apply_linear_operator_to_numbered_tags` if and only if numbered tags such as `x=1`, `x=2`, ... are the intended operator binding.
 
 ## What It Computes
@@ -73,7 +74,8 @@ partial transform.
 
 ![Partial Fourier error](qtt_partial_fourier2d_error.png)
 
-Only the x-sites receive the operator, so the implementation must map the
-one-dimensional operator nodes onto the even nodes of the interleaved state.
+Only the x-sites receive the operator, so the implementation maps the
+one-dimensional operator nodes onto the even nodes of the interleaved state and
+lets partial apply supply the identity behavior on the t-sites.
 
 ![Bond dimensions for the partial Fourier result](qtt_partial_fourier2d_bond_dims.png)

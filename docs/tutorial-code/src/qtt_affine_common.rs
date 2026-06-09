@@ -3,7 +3,6 @@
 //! This helper keeps affine-operator construction, fused quantics grid conversion,
 //! dense sampling, CSV writing, and summary printing out of the tutorial binary.
 
-use std::collections::HashSet;
 use std::error::Error;
 use std::f64::consts::PI;
 use std::fs::File;
@@ -12,7 +11,7 @@ use std::path::Path;
 
 use num_complex::Complex64;
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::{ColMajorArrayRef, IndexLike, TensorDynLen};
+use tensor4all_core::TensorDynLen;
 use tensor4all_quanticstci::{
     quanticscrossinterpolate_discrete, InherentDiscreteGrid, QtciOptions, QuanticsTensorCI2,
     UnfoldingScheme,
@@ -168,12 +167,7 @@ pub fn evaluate_tree_point(
     site_indices: &[SiteIndex],
     site_values: &[usize],
 ) -> Result<Complex64, Box<dyn Error>> {
-    let shape = [site_indices.len(), 1];
-    let values = ColMajorArrayRef::new(site_values, &shape)?;
-    let result = tn.evaluate_at(site_indices, values)?;
-    let value = result
-        .first()
-        .ok_or_else(|| "TreeTN evaluation returned no values".to_string())?;
+    let value = tn.evaluate_point(site_indices, site_values)?;
     Ok(Complex64::new(value.real(), value.imag()))
 }
 
@@ -239,26 +233,6 @@ pub fn collect_samples(
     }
 
     Ok(samples)
-}
-
-/// Inspect a TreeTN once and read out its bond dimensions.
-pub fn tree_link_dims(tn: &TreeTN<TensorDynLen, usize>) -> Vec<usize> {
-    let mut dims = Vec::new();
-    let mut seen_edges = HashSet::new();
-
-    for node_name in tn.node_names() {
-        if let Some(node_idx) = tn.node_index(&node_name) {
-            for (edge, _neighbor) in tn.edges_for_node(node_idx) {
-                if seen_edges.insert(edge) {
-                    if let Some(bond) = tn.bond_index(edge) {
-                        dims.push(bond.dim());
-                    }
-                }
-            }
-        }
-    }
-
-    dims
 }
 
 /// Pair input and transformed bond dimensions for the tutorial CSV output.
@@ -403,4 +377,98 @@ pub fn print_summary(
     println!("open transformed node count = {}", open.node_count());
     println!("max periodic abs error = {:.3e}", max_periodic_error);
     println!("max open abs error = {:.3e}", max_open_error);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn scratch_csv(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time is after the Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{name}-{nonce}.csv"))
+    }
+
+    #[test]
+    fn transformed_reference_applies_boundary_modes() {
+        let bits = 3;
+        let n = point_count(bits);
+
+        let periodic = transformed_reference(n - 1, 2, bits, AffineBoundaryMode::Periodic);
+        assert!((periodic - source_function(1, 2, n)).abs() < 1e-12);
+
+        let open_outside = transformed_reference(n - 1, 2, bits, AffineBoundaryMode::Open);
+        assert_eq!(open_outside, 0.0);
+
+        let open_inside = transformed_reference(1, 2, bits, AffineBoundaryMode::Open);
+        assert!((open_inside - source_function(3, 2, n)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn bond_dim_rows_pad_missing_profiles() {
+        assert_eq!(
+            collect_bond_dims(&[2, 3], &[5], &[7, 11, 13]),
+            vec![
+                (1, Some(2), Some(5), Some(7)),
+                (2, Some(3), None, Some(11)),
+                (3, None, None, Some(13)),
+            ]
+        );
+
+        assert_eq!(
+            collect_operator_bond_dims(&[2], &[3, 5]),
+            vec![(1, Some(2), Some(3)), (2, None, Some(5))]
+        );
+    }
+
+    #[test]
+    fn csv_writers_keep_headers_and_empty_optional_cells() -> Result<(), Box<dyn Error>> {
+        let samples_path = scratch_csv("affine-samples");
+        write_samples_csv(
+            &samples_path,
+            &[AffineSamplePoint {
+                x_index: 1,
+                y_index: 2,
+                x: 0,
+                y: 1,
+                source_u_periodic: 1,
+                source_v: 1,
+                source_exact: 0.5,
+                periodic_exact: 0.25,
+                periodic_qtt: 0.125,
+                periodic_abs_error: 0.125,
+                open_exact: 0.0,
+                open_qtt: 0.0,
+                open_abs_error: 0.0,
+            }],
+        )?;
+        let sample_csv = fs::read_to_string(&samples_path)?;
+        assert!(sample_csv.starts_with(
+            "x_index,y_index,x,y,source_u_periodic,source_v,source_exact,periodic_exact,periodic_qtt,periodic_abs_error,open_exact,open_qtt,open_abs_error\n"
+        ));
+        assert!(sample_csv.contains(",0.5000000000000000,0.2500000000000000,"));
+
+        let bond_dims_path = scratch_csv("affine-bonds");
+        write_bond_dims_csv(&bond_dims_path, &[(1, Some(2), None, Some(4))])?;
+        let bond_csv = fs::read_to_string(&bond_dims_path)?;
+        assert_eq!(
+            bond_csv,
+            "bond_index,input_bond_dim,periodic_transformed_bond_dim,open_transformed_bond_dim\n1,2,,4\n"
+        );
+
+        let operator_dims_path = scratch_csv("affine-operator-bonds");
+        write_operator_bond_dims_csv(&operator_dims_path, &[(1, None, Some(8))])?;
+        let operator_csv = fs::read_to_string(&operator_dims_path)?;
+        assert_eq!(
+            operator_csv,
+            "bond_index,periodic_operator_bond_dim,open_operator_bond_dim\n1,,8\n"
+        );
+
+        Ok(())
+    }
 }
