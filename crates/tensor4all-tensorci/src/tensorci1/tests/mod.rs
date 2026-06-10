@@ -39,6 +39,19 @@ fn test_matrix_ci_rejects_factor_rank_mismatch() {
 }
 
 #[test]
+fn test_matrix_ci_evaluate_rejects_left_right_rank_mismatch() {
+    let left = from_vec2d(vec![vec![1.0_f64, 2.0]]);
+    let right = from_vec2d(vec![vec![3.0_f64, 4.0]]);
+    let ci = matrix_ci::MatrixCI::new(vec![0], vec![0, 1], left, right).unwrap();
+    let err = ci.evaluate(0, 0).unwrap_err();
+
+    assert!(matches!(err, TCIError::DimensionMismatch { .. }));
+    assert!(err
+        .to_string()
+        .contains("requires matching left/right ranks"));
+}
+
+#[test]
 fn test_crossinterpolate1_rank2_function() {
     let f = |idx: &MultiIndex| (idx[0] + idx[1] + 1) as f64;
     let (tci, ranks, errors) = crossinterpolate1::<f64, _>(

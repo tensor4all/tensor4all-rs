@@ -82,6 +82,41 @@ pub enum MatrixTensorConversionError {
     },
 }
 
+/// Error returned when row-shaped input cannot be converted into a [`Matrix`].
+///
+/// Use this when accepting user-provided row data. It reports the first row
+/// whose length differs from the first row, so callers can reject malformed
+/// input before any values are dropped or indexed out of bounds.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{try_from_vec2d, MatrixShapeError};
+///
+/// let err = try_from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0]]).unwrap_err();
+/// assert!(matches!(
+///     err,
+///     MatrixShapeError::RaggedRows {
+///         row: 1,
+///         expected: 2,
+///         actual: 1,
+///     }
+/// ));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum MatrixShapeError {
+    /// A later row had a different length than the first row.
+    #[error("row {row} has length {actual}, expected {expected}")]
+    RaggedRows {
+        /// Zero-based row number with the mismatched length.
+        row: usize,
+        /// Column count established by the first row.
+        expected: usize,
+        /// Actual number of entries in `row`.
+        actual: usize,
+    },
+}
+
 impl<T> Matrix<T> {
     /// Create a matrix from raw column-major data.
     ///
@@ -316,10 +351,64 @@ impl<T> IndexMut<[usize; 2]> for Matrix<T> {
     }
 }
 
-/// Create a matrix from a 2D vector.
+/// Create a matrix from a 2D vector, returning an error for ragged rows.
 ///
 /// Each inner `Vec` is one row. The resulting matrix is stored internally in
 /// column-major order.
+///
+/// # Errors
+///
+/// Returns [`MatrixShapeError::RaggedRows`] when any row has a different length
+/// than the first row.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::try_from_vec2d;
+///
+/// let m = try_from_vec2d(vec![
+///     vec![1.0, 2.0],
+///     vec![3.0, 4.0],
+/// ])?;
+/// assert_eq!(m.nrows(), 2);
+/// assert_eq!(m.ncols(), 2);
+/// assert_eq!(m[[0, 1]], 2.0);
+/// assert_eq!(m[[1, 0]], 3.0);
+/// # Ok::<(), tensor4all_tensorbackend::MatrixShapeError>(())
+/// ```
+pub fn try_from_vec2d<T: Clone + Zero>(
+    data: Vec<Vec<T>>,
+) -> std::result::Result<Matrix<T>, MatrixShapeError> {
+    let nrows = data.len();
+    let ncols = data.first().map_or(0, Vec::len);
+    for (row, values) in data.iter().enumerate() {
+        let actual = values.len();
+        if actual != ncols {
+            return Err(MatrixShapeError::RaggedRows {
+                row,
+                expected: ncols,
+                actual,
+            });
+        }
+    }
+    let mut m = Matrix::zeros(nrows, ncols);
+    for i in 0..nrows {
+        for j in 0..ncols {
+            m[[i, j]] = data[i][j].clone();
+        }
+    }
+    Ok(m)
+}
+
+/// Create a matrix from a rectangular 2D vector.
+///
+/// Each inner `Vec` is one row. The resulting matrix is stored internally in
+/// column-major order.
+///
+/// # Panics
+///
+/// Panics if the row lengths are not all equal. Use [`try_from_vec2d`] when
+/// row-shaped input comes from users, files, or other fallible boundaries.
 ///
 /// # Examples
 ///
@@ -336,15 +425,7 @@ impl<T> IndexMut<[usize; 2]> for Matrix<T> {
 /// assert_eq!(m[[1, 0]], 3.0);
 /// ```
 pub fn from_vec2d<T: Clone + Zero>(data: Vec<Vec<T>>) -> Matrix<T> {
-    let nrows = data.len();
-    let ncols = if nrows > 0 { data[0].len() } else { 0 };
-    let mut m = Matrix::zeros(nrows, ncols);
-    for i in 0..nrows {
-        for j in 0..ncols {
-            m[[i, j]] = data[i][j].clone();
-        }
-    }
-    m
+    try_from_vec2d(data).unwrap_or_else(|err| panic!("{err}"))
 }
 
 /// Get a submatrix by selecting specific rows and columns.

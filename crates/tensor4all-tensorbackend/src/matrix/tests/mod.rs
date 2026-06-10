@@ -78,6 +78,42 @@ fn matrix_from_typed_tensor_rejects_non_matrix_rank() {
 }
 
 #[test]
+fn try_from_vec2d_rejects_longer_rows() {
+    let err = try_from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0, 5.0]]).unwrap_err();
+
+    assert!(matches!(
+        err,
+        MatrixShapeError::RaggedRows {
+            row: 1,
+            expected: 2,
+            actual: 3,
+        }
+    ));
+    assert_eq!(err.to_string(), "row 1 has length 3, expected 2");
+}
+
+#[test]
+fn try_from_vec2d_rejects_shorter_rows() {
+    let err = try_from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0]]).unwrap_err();
+
+    assert!(matches!(
+        err,
+        MatrixShapeError::RaggedRows {
+            row: 1,
+            expected: 2,
+            actual: 1,
+        }
+    ));
+    assert_eq!(err.to_string(), "row 1 has length 1, expected 2");
+}
+
+#[test]
+#[should_panic(expected = "row 1 has length 3, expected 2")]
+fn from_vec2d_panics_with_shape_error_for_ragged_rows() {
+    let _ = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0, 5.0]]);
+}
+
+#[test]
 fn test_matrix_transpose() {
     let m = from_vec2d(vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]]);
     let mt = transpose(&m);
