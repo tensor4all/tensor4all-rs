@@ -37,7 +37,7 @@ where
 
     #[cfg(test)]
     pub(super) fn rank(&self) -> usize {
-        self.row_indices.len().min(self.col_indices.len())
+        self.left.ncols()
     }
 
     #[cfg(test)]
@@ -130,6 +130,7 @@ where
 
     #[cfg(test)]
     fn left_matrix(&self) -> Result<Matrix<T>> {
+        self.ensure_square_rank_for_evaluation()?;
         right_solve(&self.left, &self.pivot_matrix())
     }
 
@@ -141,6 +142,20 @@ where
             value = value + left[[row, k]] * self.right[[k, col]];
         }
         Ok(value)
+    }
+
+    #[cfg(test)]
+    fn ensure_square_rank_for_evaluation(&self) -> Result<()> {
+        if self.left.ncols() != self.right.nrows() {
+            return Err(TCIError::DimensionMismatch {
+                message: format!(
+                    "MatrixCI evaluation requires matching left/right ranks, got {} and {}",
+                    self.left.ncols(),
+                    self.right.nrows()
+                ),
+            });
+        }
+        Ok(())
     }
 }
 
