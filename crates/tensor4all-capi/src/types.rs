@@ -586,12 +586,15 @@ pub enum t4a_boundary_condition {
     Periodic = 0,
     /// Open boundary conditions.
     Open = 1,
+    /// Anti-periodic boundary conditions.
+    AntiPeriodic = 2,
 }
 
 impl From<t4a_boundary_condition> for QuanticsBoundaryCondition {
     fn from(value: t4a_boundary_condition) -> Self {
         match value {
             t4a_boundary_condition::Periodic => Self::Periodic,
+            t4a_boundary_condition::AntiPeriodic => Self::AntiPeriodic,
             t4a_boundary_condition::Open => Self::Open,
         }
     }
@@ -601,6 +604,7 @@ impl From<QuanticsBoundaryCondition> for t4a_boundary_condition {
     fn from(value: QuanticsBoundaryCondition) -> Self {
         match value {
             QuanticsBoundaryCondition::Periodic => Self::Periodic,
+            QuanticsBoundaryCondition::AntiPeriodic => Self::AntiPeriodic,
             QuanticsBoundaryCondition::Open => Self::Open,
         }
     }
