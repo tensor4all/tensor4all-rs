@@ -353,6 +353,37 @@ impl AffineParams {
     }
 }
 
+fn affine_boundary_weight(carry: &[i64], bc: &[BoundaryCondition]) -> f64 {
+    carry
+        .iter()
+        .zip(bc.iter())
+        .map(|(&c, &boundary)| match boundary {
+            BoundaryCondition::Periodic => 1.0,
+            BoundaryCondition::AntiPeriodic => {
+                if c.rem_euclid(2) == 0 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+            BoundaryCondition::Open => {
+                if c == 0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+        })
+        .product()
+}
+
+fn affine_needs_extension(bc: &[BoundaryCondition], b_work: &[i64]) -> bool {
+    b_work.iter().any(|&b| b > 0)
+        && bc
+            .iter()
+            .any(|b| matches!(b, BoundaryCondition::AntiPeriodic | BoundaryCondition::Open))
+}
+
 /// Remap site indices of the affine MPO from internal encoding to the convention
 /// expected by `tensortrain_to_linear_operator_asymmetric`.
 ///
@@ -617,11 +648,6 @@ pub fn affine_transform_matrix(
     let m = params.m;
     let n = params.n;
 
-    let bc_periodic: Vec<bool> = bc
-        .iter()
-        .map(|b| matches!(b, BoundaryCondition::Periodic))
-        .collect();
-
     let input_size = 1usize << (r * n); // 2^(R*N)
     let output_size = 1usize << (r * m); // 2^(R*M)
     let modulus = 1i64 << r; // 2^R
@@ -629,8 +655,6 @@ pub fn affine_transform_matrix(
     let mut rows = Vec::new();
     let mut cols = Vec::new();
     let mut vals = Vec::new();
-
-    let mask = modulus - 1; // 2^R - 1
 
     // Iterate over all (x, y) pairs, matching Julia's approach.
     // For periodic BC with scale > 1, multiple y values can satisfy
@@ -657,24 +681,38 @@ pub fn affine_transform_matrix(
                 .map(|var| ((y_flat >> (var * r)) & ((1 << r) - 1)) as i64)
                 .collect();
 
-            // Compute scale * y
-            let sy: Vec<i64> = y.iter().map(|&yi| scale * yi).collect();
-
-            // Check equiv(v, s*y, R, boundary) per component
-            let equiv = v.iter().zip(sy.iter()).enumerate().all(|(i, (&vi, &syi))| {
-                if bc_periodic[i] {
-                    // Periodic: v ≡ s*y (mod 2^R)
-                    (vi - syi) & mask == 0
-                } else {
-                    // Open: v == s*y (exact)
-                    vi == syi
+            let mut carry = vec![0i64; m];
+            let mut valid = true;
+            for i in 0..m {
+                let diff = v[i] - scale * y[i];
+                match bc[i] {
+                    BoundaryCondition::Periodic | BoundaryCondition::AntiPeriodic => {
+                        if diff.rem_euclid(modulus) == 0 {
+                            carry[i] = diff / modulus;
+                        } else {
+                            valid = false;
+                            break;
+                        }
+                    }
+                    BoundaryCondition::Open => {
+                        if diff == 0 {
+                            carry[i] = 0;
+                        } else {
+                            valid = false;
+                            break;
+                        }
+                    }
                 }
-            });
+            }
 
-            if equiv {
+            if valid {
+                let weight = affine_boundary_weight(&carry, bc);
+                if weight == 0.0 {
+                    continue;
+                }
                 rows.push(y_flat);
                 cols.push(x_flat);
-                vals.push(1.0);
+                vals.push(weight);
             }
         }
     }
@@ -694,14 +732,8 @@ fn affine_transform_mpo(
     let m = params.m;
     let n = params.n;
 
-    // Convert boundary conditions to weights
-    let bc_periodic: Vec<bool> = bc
-        .iter()
-        .map(|b| matches!(b, BoundaryCondition::Periodic))
-        .collect();
-
     // Compute core tensors
-    let tensors = affine_transform_tensors(r, &a_int, &b_int, scale, m, n, &bc_periodic)?;
+    let tensors = affine_transform_tensors(r, &a_int, &b_int, scale, m, n, bc)?;
 
     TensorTrain::new(tensors)
         .map_err(|e| anyhow::anyhow!("Failed to create affine transform MPO: {}", e))
@@ -766,14 +798,8 @@ pub fn affine_transform_tensors_unfused(
     let m = params.m;
     let n = params.n;
 
-    // Convert boundary conditions to weights
-    let bc_periodic: Vec<bool> = bc
-        .iter()
-        .map(|b| matches!(b, BoundaryCondition::Periodic))
-        .collect();
-
     // Compute fused tensors first
-    let fused_tensors = affine_transform_tensors(r, &a_int, &b_int, scale, m, n, &bc_periodic)?;
+    let fused_tensors = affine_transform_tensors(r, &a_int, &b_int, scale, m, n, bc)?;
 
     // Convert fused tensors to unfused format
     // Fused: [left, fused_site, right] where fused_site = 2^(M+N)
@@ -964,7 +990,7 @@ fn affine_transform_tensors(
     scale: i64,
     m: usize,
     n: usize,
-    bc_periodic: &[bool],
+    bc: &[BoundaryCondition],
 ) -> Result<Vec<tensor4all_simplett::Tensor3<Complex64>>> {
     let site_dim = 1 << (m + n); // 2^(M+N) for fused representation
 
@@ -999,9 +1025,7 @@ fn affine_transform_tensors(
     // When abs(b) >= 2^R, high bits of b contribute to carries that affect validity.
     // Extension tensors have site_dim=1 (activebit=false: only x=0, y=0).
     // We fold them into the MSB tensor as a "cap matrix" (Julia approach).
-    let cap_matrix: Option<Vec<f64>> = if !bc_periodic.iter().all(|&p| p)
-        && b_work.iter().any(|&b| b > 0)
-    {
+    let cap_matrix: Option<Vec<f64>> = if affine_needs_extension(bc, &b_work) {
         let mut ext_data_list: Vec<AffineCoreData> = Vec::new();
         while b_work.iter().any(|&b| b > 0) {
             let b_curr: Vec<i64> = b_work
@@ -1027,13 +1051,7 @@ fn affine_transform_tensors(
         // Start with BC weights on the final carries
         let bc_weights: Vec<f64> = carries
             .iter()
-            .map(|c| {
-                if c.iter().all(|&ci| ci == 0) {
-                    1.0
-                } else {
-                    0.0
-                }
-            })
+            .map(|c| affine_boundary_weight(c, bc))
             .collect();
 
         // Contract extension tensors from outermost to innermost
@@ -1064,19 +1082,12 @@ fn affine_transform_tensors(
 
     // Helper: compute BC weight for a carry-out index
     let compute_bc_weight = |cout_idx: usize, core_data: &AffineCoreData| -> Complex64 {
-        if bc_periodic.iter().all(|&p| p) {
-            Complex64::one()
-        } else if let Some(ref cap) = cap_matrix {
+        if let Some(ref cap) = cap_matrix {
             // Extension loop was used: weight comes from cap matrix
             Complex64::new(cap[cout_idx], 0.0)
         } else {
-            // No extension: weight is 1 if carry is zero, 0 otherwise
             let carry = &core_data.carries_out[cout_idx];
-            if carry.iter().all(|&c| c == 0) {
-                Complex64::one()
-            } else {
-                Complex64::new(0.0, 0.0)
-            }
+            Complex64::new(affine_boundary_weight(carry, bc), 0.0)
         }
     };
 

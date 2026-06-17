@@ -176,7 +176,9 @@ Add affine tests for anti-periodic high-bit behavior:
 - `y = x + 2^R` gives `-I`.
 - `y = x - 2^R` gives `-I`.
 - `y = x + 2 * 2^R` gives `+I`.
-- `y = x + 2^R + 1` gives periodic shift by one with an overall `-1`.
+- `y = x + 2^R + 1` gives periodic shift by one with sign determined by the
+  full wrap quotient. Most points get `-1`; the point that lands exactly at
+  `2 * 2^R` gets `+1`.
 
 Add a multivariable affine case matching the future difference-kernel delta:
 

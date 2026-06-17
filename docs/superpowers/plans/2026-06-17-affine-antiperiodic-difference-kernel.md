@@ -55,8 +55,14 @@ fn test_affine_antiperiodic_full_cycle_plus_one_shift() {
 
     for x in 0..n {
         let y_expected = (x + 1) % n;
+        let quotient = (x as i64 + n as i64 + 1).div_euclid(n as i64);
+        let expected_sign = if quotient.rem_euclid(2) == 0 {
+            1.0
+        } else {
+            -1.0
+        };
         for y in 0..n {
-            let expected = if y == y_expected { -1.0 } else { 0.0 };
+            let expected = if y == y_expected { expected_sign } else { 0.0 };
             let actual = *matrix.get(y, x).unwrap_or(&0.0);
             assert!(
                 (actual - expected).abs() < 1e-12,
