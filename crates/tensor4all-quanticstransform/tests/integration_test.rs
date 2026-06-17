@@ -20,9 +20,10 @@ use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops,
 use tensor4all_treetn::{apply_linear_operator, ApplyOptions, LinearOperator, TreeTN};
 
 use tensor4all_quanticstransform::{
-    flip_operator, flip_operator_multivar, phase_rotation_operator_multivar,
-    quantics_fourier_operator, shift_operator, shift_operator_multivar, triangle_operator,
-    BoundaryCondition, FTCore, FourierOptions, TriangleType,
+    difference_kernel_mpo, difference_kernel_operator, flip_operator, flip_operator_multivar,
+    phase_rotation_operator_multivar, quantics_fourier_operator, shift_operator,
+    shift_operator_multivar, triangle_operator, BoundaryCondition, FTCore, FourierOptions,
+    TriangleType,
 };
 
 /// Type alias for the default index type.
@@ -158,6 +159,22 @@ fn create_product_state_mps(x: usize, r: usize) -> TensorTrain<Complex64> {
     TensorTrain::new(tensors).expect("Failed to create product state MPS")
 }
 
+fn create_two_bit_value_qtt(values: [f64; 4]) -> TensorTrain<Complex64> {
+    let mut first = tensor3_zeros(1, 2, 2);
+    first.set3(0, 0, 0, Complex64::one());
+    first.set3(0, 1, 1, Complex64::one());
+
+    let mut second = tensor3_zeros(2, 2, 1);
+    for msb in 0..2 {
+        for lsb in 0..2 {
+            let z = 2 * msb + lsb;
+            second.set3(msb, lsb, 0, Complex64::new(values[z], 0.0));
+        }
+    }
+
+    TensorTrain::new(vec![first, second]).expect("failed to build two-bit value QTT")
+}
+
 /// Contract a TreeTN with site indices to get a flat vector representation.
 ///
 /// Returns a vector of length 2^R representing f[x] for x = 0, 1, ..., 2^R - 1.
@@ -259,6 +276,58 @@ fn apply_operator_to_dense_matrix(
 ) -> Vec<Vec<Complex64>> {
     assert_eq!(n_in, n_out, "n_in and n_out must be equal");
     contract_operator_to_dense_matrix(op, n_in, 2)
+}
+
+fn assert_difference_kernel_dense_matrix(boundary: BoundaryCondition) {
+    let r = 2;
+    let n = 1usize << r;
+    let values = [1.0, 2.0, 3.0, 4.0];
+    let f = create_two_bit_value_qtt(values);
+    let op = difference_kernel_operator(&f, boundary).expect("difference kernel operator");
+    let matrix = apply_operator_to_dense_matrix(&op, r, r);
+
+    for x in 0..n {
+        for xp in 0..n {
+            let z = (x + n - xp) % n;
+            let sign = match boundary {
+                BoundaryCondition::Periodic => 1.0,
+                BoundaryCondition::AntiPeriodic => {
+                    if x >= xp {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                }
+                BoundaryCondition::Open => unreachable!("open is not tested here"),
+            };
+            let expected = Complex64::new(sign * values[z], 0.0);
+            let actual = matrix[x][xp];
+            assert!(
+                (actual - expected).norm() < 1e-10,
+                "boundary={boundary:?}, x={x}, xp={xp}, z={z}, expected={expected:?}, actual={actual:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_difference_kernel_operator_periodic_dense_matrix() {
+    assert_difference_kernel_dense_matrix(BoundaryCondition::Periodic);
+}
+
+#[test]
+fn test_difference_kernel_operator_antiperiodic_dense_matrix() {
+    assert_difference_kernel_dense_matrix(BoundaryCondition::AntiPeriodic);
+}
+
+#[test]
+fn test_difference_kernel_mpo_rejects_open_boundary() {
+    let f = create_two_bit_value_qtt([1.0, 2.0, 3.0, 4.0]);
+    let err = difference_kernel_mpo(&f, BoundaryCondition::Open).unwrap_err();
+    assert!(
+        err.to_string().contains("Open"),
+        "unexpected error for open-boundary difference kernel: {err}"
+    );
 }
 
 /// Contract an operator's MPO directly to a dense matrix (fast path).

@@ -64,6 +64,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?
     .transpose();
 
+    let antiperiodic_operator = affine_operator(
+        config.bits,
+        &affine_params,
+        &[BoundaryCondition::AntiPeriodic, BoundaryCondition::Periodic],
+    )?
+    .transpose();
+
     let open_operator =
         affine_operator(config.bits, &affine_params, &[BoundaryCondition::Open; 2])?.transpose();
 
@@ -87,6 +94,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     // `TensorIndex::external_indices(...)` gives the output site labels for evaluation.
     let periodic_sites = TensorIndex::external_indices(&periodic);
 
+    let mut antiperiodic_aligned = antiperiodic_operator.clone();
+    // The anti-periodic case flips sign only when the transformed u-coordinate wraps.
+    antiperiodic_aligned.align_to_state(&state)?;
+
+    let antiperiodic = apply_linear_operator(&antiperiodic_aligned, &state, ApplyOptions::naive())?;
+    let antiperiodic_sites = TensorIndex::external_indices(&antiperiodic);
+
     let mut open_aligned = open_operator.clone();
     // Align the second boundary-condition variant the same way.
     open_aligned.align_to_state(&state)?;
@@ -100,19 +114,27 @@ fn main() -> Result<(), Box<dyn Error>> {
     let samples = collect_samples(
         &periodic,
         &periodic_sites,
+        &antiperiodic,
+        &antiperiodic_sites,
         &open,
         &open_sites,
         evaluation_grid,
         &config,
     )?;
 
-    let bond_dims = collect_bond_dims(&state.link_dims(), &periodic.link_dims(), &open.link_dims());
+    let bond_dims = collect_bond_dims(
+        &state.link_dims(),
+        &periodic.link_dims(),
+        &antiperiodic.link_dims(),
+        &open.link_dims(),
+    );
     let operator_bond_dims = collect_operator_bond_dims(
         &periodic_operator.mpo().link_dims(),
+        &antiperiodic_operator.mpo().link_dims(),
         &open_operator.mpo().link_dims(),
     );
 
-    print_summary(&source, &periodic, &open, &samples, &config);
+    print_summary(&source, &periodic, &antiperiodic, &open, &samples, &config);
 
     write_samples_csv(&data_dir.join("qtt_affine_samples.csv"), &samples)?;
     write_bond_dims_csv(&data_dir.join("qtt_affine_bond_dims.csv"), &bond_dims)?;

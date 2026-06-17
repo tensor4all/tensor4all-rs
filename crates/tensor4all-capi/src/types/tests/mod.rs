@@ -86,6 +86,7 @@ fn test_svd_truncation_policy_roundtrip() {
 fn test_boundary_condition_roundtrip() {
     for bc in [
         tensor4all_quanticstransform::BoundaryCondition::Periodic,
+        tensor4all_quanticstransform::BoundaryCondition::AntiPeriodic,
         tensor4all_quanticstransform::BoundaryCondition::Open,
     ] {
         let ffi = t4a_boundary_condition::from(bc);

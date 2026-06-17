@@ -3,9 +3,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use tensor4all_simplett::AbstractTensorTrain;
 use tensor4all_tutorial_code::{
-    output_paths, qtt_affine_common, qtt_elementwise_product_utils, qtt_fourier_common,
-    qtt_function_utils, qtt_integral_sweep_utils, qtt_partial_fourier2d_common, qtt_r_sweep_utils,
+    output_paths, qtt_affine_common, qtt_difference_kernel_common, qtt_elementwise_product_utils,
+    qtt_fourier_common, qtt_function_utils, qtt_integral_sweep_utils, qtt_partial_fourier2d_common,
+    qtt_r_sweep_utils,
 };
 
 fn scratch_dir(name: &str) -> PathBuf {
@@ -138,6 +140,9 @@ fn csv_writers_keep_stable_headers() -> Result<(), Box<dyn Error>> {
             periodic_exact: 1.0,
             periodic_qtt: 1.0,
             periodic_abs_error: 0.0,
+            antiperiodic_exact: 1.0,
+            antiperiodic_qtt: 1.0,
+            antiperiodic_abs_error: 0.0,
             open_exact: 1.0,
             open_qtt: 1.0,
             open_abs_error: 0.0,
@@ -145,7 +150,7 @@ fn csv_writers_keep_stable_headers() -> Result<(), Box<dyn Error>> {
     )?;
     assert_header(
         &affine_samples,
-        "x_index,y_index,x,y,source_u_periodic,source_v,source_exact,periodic_exact,periodic_qtt,periodic_abs_error,open_exact,open_qtt,open_abs_error",
+        "x_index,y_index,x,y,source_u_periodic,source_v,source_exact,periodic_exact,periodic_qtt,periodic_abs_error,antiperiodic_exact,antiperiodic_qtt,antiperiodic_abs_error,open_exact,open_qtt,open_abs_error",
     );
 
     let sweep = scratch.join("integral_sweep.csv");
@@ -177,6 +182,76 @@ fn csv_writers_keep_stable_headers() -> Result<(), Box<dyn Error>> {
     assert_header(
         &r_sweep,
         "r,npoints,build_time_sec,mean_abs_error,max_abs_error,rank",
+    );
+
+    Ok(())
+}
+
+#[test]
+fn qtt_difference_kernel_demo_builds_periodic_mpo_and_exports_csv() -> Result<(), Box<dyn Error>> {
+    let config = qtt_difference_kernel_common::DifferenceKernelTutorialConfig {
+        bits: 3,
+        tolerance: 1e-12,
+        maxbonddim: 32,
+        maxiter: 20,
+    };
+
+    let (kernel, ranks, errors) = qtt_difference_kernel_common::build_kernel_qtt(&config)?;
+    let kernel_tt = kernel.tensor_train();
+    let mpo = qtt_difference_kernel_common::build_periodic_difference_kernel_mpo(&kernel_tt)?;
+    let samples = qtt_difference_kernel_common::collect_samples(&kernel, &mpo, &config)?;
+    let bond_dims =
+        qtt_difference_kernel_common::collect_bond_dims(&kernel.link_dims(), &mpo.link_dims());
+
+    assert!(!ranks.is_empty());
+    assert!(!errors.is_empty());
+    assert!(kernel.rank() > 0);
+    assert_eq!(
+        samples.len(),
+        qtt_difference_kernel_common::point_count(config.bits).pow(2)
+    );
+    assert!(!bond_dims.is_empty());
+
+    let max_source_error = samples
+        .iter()
+        .map(|sample| sample.source_abs_error)
+        .fold(0.0_f64, f64::max);
+    let max_mpo_error = samples
+        .iter()
+        .map(|sample| sample.abs_error)
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_source_error < 1e-9,
+        "unexpectedly large kernel QTT error: {max_source_error}"
+    );
+    assert!(
+        max_mpo_error < 1e-9,
+        "unexpectedly large difference-kernel MPO error: {max_mpo_error}"
+    );
+
+    let n = qtt_difference_kernel_common::point_count(config.bits);
+    let wrapped = samples
+        .iter()
+        .find(|sample| sample.x == 0 && sample.xprime == 1)
+        .expect("wrapped sample exists");
+    assert_eq!(wrapped.difference, n - 1);
+    assert!(
+        (wrapped.kernel_exact - qtt_difference_kernel_common::kernel_value(n - 1, n)).abs() < 1e-12
+    );
+
+    let scratch = scratch_dir("qtt-difference-kernel");
+    let samples_path = scratch.join("samples.csv");
+    let bond_dims_path = scratch.join("bond_dims.csv");
+    qtt_difference_kernel_common::write_samples_csv(&samples_path, &samples)?;
+    qtt_difference_kernel_common::write_bond_dims_csv(&bond_dims_path, &bond_dims)?;
+
+    assert_eq!(
+        read_lines(&samples_path).first().map(String::as_str),
+        Some("x_index,xprime_index,x,xprime,difference,source_exact,source_qtt,source_abs_error,kernel_exact,kernel_mpo,abs_error")
+    );
+    assert_eq!(
+        read_lines(&bond_dims_path).first().map(String::as_str),
+        Some("bond_index,kernel_qtt_bond_dim,difference_kernel_mpo_bond_dim")
     );
 
     Ok(())

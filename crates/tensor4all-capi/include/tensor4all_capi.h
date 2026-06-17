@@ -77,6 +77,10 @@ typedef enum t4a_boundary_condition {
    * Open boundary conditions.
    */
   T4A_BOUNDARY_CONDITION_OPEN = 1,
+  /**
+   * Anti-periodic boundary conditions.
+   */
+  T4A_BOUNDARY_CONDITION_ANTI_PERIODIC = 2,
 } t4a_boundary_condition;
 
 /**

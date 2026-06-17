@@ -24,6 +24,7 @@
   - [Computations with QTT]()
     - [Elementwise Product](tutorials/computations-with-qtt/elementwise-product.md)
     - [Affine Transformation](tutorials/computations-with-qtt/affine-transformation.md)
+    - [Difference Kernel MPO](tutorials/computations-with-qtt/difference-kernel.md)
     - [Fourier Transform](tutorials/computations-with-qtt/fourier-transform.md)
     - [2D Partial Fourier Transform](tutorials/computations-with-qtt/partial-fourier2d.md)
 - [Conventions](conventions.md)

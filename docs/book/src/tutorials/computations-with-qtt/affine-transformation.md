@@ -65,13 +65,16 @@ assert!(result.node_count() >= state.node_count());
 # }
 ```
 
-The full tutorial repeats the same workflow for two boundary conditions and
-compares periodic and open results.
+The full tutorial repeats the same workflow for three boundary conditions. The
+anti-periodic case uses `[AntiPeriodic, Periodic]`, so only the wrapped
+`u = x + y` coordinate changes sign.
 
 ## What It Computes
 
-The example builds a two-dimensional QTT, creates an affine operator, applies
-it to the QTT, and compares the transformed values with a direct reference.
+The example builds a two-dimensional QTT, creates affine operators, applies
+them to the QTT, and compares the transformed values with direct references.
+The anti-periodic pullback matches the periodic wrap except that the region
+`x + y >= N` is multiplied by `-1`.
 
 ![Affine transformed values](qtt_affine_values.png)
 

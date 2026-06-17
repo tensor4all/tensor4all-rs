@@ -28,9 +28,12 @@ function load_samples()
         periodic_exact = parse.(Float64, rows[:, 8]),
         periodic_qtt = parse.(Float64, rows[:, 9]),
         periodic_abs_error = parse.(Float64, rows[:, 10]),
-        open_exact = parse.(Float64, rows[:, 11]),
-        open_qtt = parse.(Float64, rows[:, 12]),
-        open_abs_error = parse.(Float64, rows[:, 13]),
+        antiperiodic_exact = parse.(Float64, rows[:, 11]),
+        antiperiodic_qtt = parse.(Float64, rows[:, 12]),
+        antiperiodic_abs_error = parse.(Float64, rows[:, 13]),
+        open_exact = parse.(Float64, rows[:, 14]),
+        open_qtt = parse.(Float64, rows[:, 15]),
+        open_abs_error = parse.(Float64, rows[:, 16]),
     )
 end
 
@@ -41,7 +44,8 @@ function load_bond_dims()
         bond_index = parse.(Int, rows[:, 1]),
         input_bond_dim = parse_optional_int.(rows[:, 2]),
         periodic_transformed_bond_dim = parse_optional_int.(rows[:, 3]),
-        open_transformed_bond_dim = parse_optional_int.(rows[:, 4]),
+        antiperiodic_transformed_bond_dim = parse_optional_int.(rows[:, 4]),
+        open_transformed_bond_dim = parse_optional_int.(rows[:, 5]),
     )
 end
 
@@ -51,7 +55,8 @@ function load_operator_bond_dims()
     return (
         bond_index = parse.(Int, rows[:, 1]),
         periodic_operator_bond_dim = parse_optional_int.(rows[:, 2]),
-        open_operator_bond_dim = parse_optional_int.(rows[:, 3]),
+        antiperiodic_operator_bond_dim = parse_optional_int.(rows[:, 3]),
+        open_operator_bond_dim = parse_optional_int.(rows[:, 4]),
     )
 end
 
@@ -75,13 +80,14 @@ function plot_values(samples)
     ys = sort(unique(samples.y))
     source = to_matrix(samples, samples.source_exact)
     periodic = to_matrix(samples, samples.periodic_qtt)
+    antiperiodic = to_matrix(samples, samples.antiperiodic_qtt)
     open = to_matrix(samples, samples.open_qtt)
-    colorrange = extrema(vcat(vec(source), vec(periodic), vec(open)))
+    colorrange = extrema(vcat(vec(source), vec(periodic), vec(antiperiodic), vec(open)))
 
-    fig = Figure(size = (1800, 600), fontsize = 20)
-    titles = ["source g(x, y)", "periodic pullback", "open pullback"]
-    matrices = [source, periodic, open]
-    for i in 1:3
+    fig = Figure(size = (2200, 600), fontsize = 20)
+    titles = ["source g(x, y)", "periodic pullback", "anti-periodic pullback", "open pullback"]
+    matrices = [source, periodic, antiperiodic, open]
+    for i in 1:4
         ax = Axis(fig[1, 2i-1], xlabel = "x", ylabel = "y", title = titles[i])
         hm = heatmap!(ax, xs, ys, matrices[i]; colorrange, colormap = :lipari)
         Colorbar(fig[1, 2i], hm, vertical = true, ticks = WilkinsonTicks(6))
@@ -94,12 +100,13 @@ function plot_errors(samples)
     xs = sort(unique(samples.x))
     ys = sort(unique(samples.y))
     periodic_error = to_matrix(samples, samples.periodic_abs_error)
+    antiperiodic_error = to_matrix(samples, samples.antiperiodic_abs_error)
     open_error = to_matrix(samples, samples.open_abs_error)
 
-    fig = Figure(size = (1400, 600), fontsize = 20)
-    titles = ["periodic abs error", "open abs error"]
-    matrices = [periodic_error, open_error]
-    for i in 1:2
+    fig = Figure(size = (1900, 600), fontsize = 20)
+    titles = ["periodic abs error", "anti-periodic abs error", "open abs error"]
+    matrices = [periodic_error, antiperiodic_error, open_error]
+    for i in 1:3
         ax = Axis(fig[1, 2i-1], xlabel = "x", ylabel = "y", title = titles[i])
         hm = heatmap!(ax, xs, ys, matrices[i]; colormap = :lipari)
         Colorbar(fig[1, 2i], hm, vertical = true, ticks = WilkinsonTicks(6))
@@ -120,6 +127,7 @@ function plot_bond_dims(bonds)
 
     rows_input = .!ismissing.(bonds.input_bond_dim)
     rows_periodic = .!ismissing.(bonds.periodic_transformed_bond_dim)
+    rows_antiperiodic = .!ismissing.(bonds.antiperiodic_transformed_bond_dim)
     rows_open = .!ismissing.(bonds.open_transformed_bond_dim)
 
 
@@ -130,6 +138,14 @@ function plot_bond_dims(bonds)
         color = :dodgerblue3,
         linewidth = 3,
         label = "periodic",
+    )
+    lines!(
+        ax,
+        bonds.bond_index[rows_antiperiodic],
+        collect(skipmissing(bonds.antiperiodic_transformed_bond_dim)),
+        color = :seagreen4,
+        linewidth = 3,
+        label = "anti-periodic",
     )
     lines!(
         ax,
@@ -172,6 +188,7 @@ function plot_operator_bond_dims(bonds)
     )
 
     rows_periodic = .!ismissing.(bonds.periodic_operator_bond_dim)
+    rows_antiperiodic = .!ismissing.(bonds.antiperiodic_operator_bond_dim)
     rows_open = .!ismissing.(bonds.open_operator_bond_dim)
 
     lines!(
@@ -187,6 +204,21 @@ function plot_operator_bond_dims(bonds)
         bonds.bond_index[rows_periodic],
         collect(skipmissing(bonds.periodic_operator_bond_dim)),
         color = :dodgerblue3,
+        markersize = 10,
+    )
+    lines!(
+        ax,
+        bonds.bond_index[rows_antiperiodic],
+        collect(skipmissing(bonds.antiperiodic_operator_bond_dim)),
+        color = :seagreen4,
+        linewidth = 3,
+        label = "anti-periodic MPO",
+    )
+    scatter!(
+        ax,
+        bonds.bond_index[rows_antiperiodic],
+        collect(skipmissing(bonds.antiperiodic_operator_bond_dim)),
+        color = :seagreen4,
         markersize = 10,
     )
     lines!(

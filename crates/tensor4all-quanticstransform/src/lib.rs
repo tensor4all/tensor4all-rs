@@ -61,6 +61,7 @@
 mod affine;
 mod common;
 mod cumsum;
+mod difference_kernel;
 mod flip;
 mod fourier;
 mod phase_rotation;
@@ -72,6 +73,7 @@ pub use affine::{
 };
 pub use common::{BoundaryCondition, CarryDirection};
 pub use cumsum::{cumsum_operator, triangle_operator, TriangleType};
+pub use difference_kernel::{difference_kernel_mpo, difference_kernel_operator};
 pub use flip::{flip_operator, flip_operator_multivar};
 pub use fourier::{quantics_fourier_operator, FTCore, FourierOptions};
 pub use phase_rotation::{phase_rotation_operator, phase_rotation_operator_multivar};
