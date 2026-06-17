@@ -67,10 +67,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let antiperiodic_operator = affine_operator(
         config.bits,
         &affine_params,
-        &[
-            BoundaryCondition::AntiPeriodic,
-            BoundaryCondition::Periodic,
-        ],
+        &[BoundaryCondition::AntiPeriodic, BoundaryCondition::Periodic],
     )?
     .transpose();
 
@@ -101,8 +98,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // The anti-periodic case flips sign only when the transformed u-coordinate wraps.
     antiperiodic_aligned.align_to_state(&state)?;
 
-    let antiperiodic =
-        apply_linear_operator(&antiperiodic_aligned, &state, ApplyOptions::naive())?;
+    let antiperiodic = apply_linear_operator(&antiperiodic_aligned, &state, ApplyOptions::naive())?;
     let antiperiodic_sites = TensorIndex::external_indices(&antiperiodic);
 
     let mut open_aligned = open_operator.clone();

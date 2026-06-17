@@ -1212,11 +1212,7 @@ fn test_affine_antiperiodic_full_cycle_shifts() {
     let r = 3;
     let n = 1usize << r;
 
-    for (shift, expected_sign) in [
-        (n as i64, -1.0),
-        (-(n as i64), -1.0),
-        (2 * n as i64, 1.0),
-    ] {
+    for (shift, expected_sign) in [(n as i64, -1.0), (-(n as i64), -1.0), (2 * n as i64, 1.0)] {
         let params = AffineParams::from_integers(vec![1], vec![shift], 1, 1).unwrap();
         let matrix =
             affine_transform_matrix(r, &params, &[BoundaryCondition::AntiPeriodic]).unwrap();

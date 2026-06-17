@@ -244,18 +244,18 @@ pub(crate) fn shift_mpo(
 
     // Apply overall boundary condition factor for number of full cycles
     if nbc != 0 {
-            let bc_factor = match bc {
-                BoundaryCondition::Periodic => Complex64::one(),
-                BoundaryCondition::AntiPeriodic => {
-                    if nbc.rem_euclid(2) == 0 {
-                        Complex64::one()
-                    } else {
-                        -Complex64::one()
-                    }
+        let bc_factor = match bc {
+            BoundaryCondition::Periodic => Complex64::one(),
+            BoundaryCondition::AntiPeriodic => {
+                if nbc.rem_euclid(2) == 0 {
+                    Complex64::one()
+                } else {
+                    -Complex64::one()
                 }
-                BoundaryCondition::Open => {
-                    // `nbc` is an Euclidean quotient, so negative offsets in (-n_max, 0)
-                    // still produce `nbc = -1`. Only true full-cycle offsets should zero.
+            }
+            BoundaryCondition::Open => {
+                // `nbc` is an Euclidean quotient, so negative offsets in (-n_max, 0)
+                // still produce `nbc = -1`. Only true full-cycle offsets should zero.
                 if offset >= n_max || offset <= -n_max {
                     Complex64::zero()
                 } else {
