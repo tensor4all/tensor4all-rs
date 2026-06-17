@@ -138,6 +138,9 @@ fn csv_writers_keep_stable_headers() -> Result<(), Box<dyn Error>> {
             periodic_exact: 1.0,
             periodic_qtt: 1.0,
             periodic_abs_error: 0.0,
+            antiperiodic_exact: 1.0,
+            antiperiodic_qtt: 1.0,
+            antiperiodic_abs_error: 0.0,
             open_exact: 1.0,
             open_qtt: 1.0,
             open_abs_error: 0.0,
@@ -145,7 +148,7 @@ fn csv_writers_keep_stable_headers() -> Result<(), Box<dyn Error>> {
     )?;
     assert_header(
         &affine_samples,
-        "x_index,y_index,x,y,source_u_periodic,source_v,source_exact,periodic_exact,periodic_qtt,periodic_abs_error,open_exact,open_qtt,open_abs_error",
+        "x_index,y_index,x,y,source_u_periodic,source_v,source_exact,periodic_exact,periodic_qtt,periodic_abs_error,antiperiodic_exact,antiperiodic_qtt,antiperiodic_abs_error,open_exact,open_qtt,open_abs_error",
     );
 
     let sweep = scratch.join("integral_sweep.csv");

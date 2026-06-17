@@ -132,6 +132,7 @@ The boundary mode is chosen with:
 
 ```rust
 vec![BoundaryCondition::Periodic; 2]
+vec![BoundaryCondition::AntiPeriodic, BoundaryCondition::Periodic]
 vec![BoundaryCondition::Open; 2]
 ```
 
@@ -147,16 +148,18 @@ apply_linear_operator(&aligned_operator, &state, ApplyOptions::naive())?
 
 ## How to read the plots
 
-The value plot compares the original source field, the periodic pullback, and
-the open pullback on one color scale. The periodic result is a sheared and
-wrapped version of the source. The open result has a triangular zero region
-where `x + y >= N`.
+The value plot compares the original source field, the periodic pullback, the
+anti-periodic pullback, and the open pullback on one color scale. The periodic
+result is a sheared and wrapped version of the source. The anti-periodic result
+flips sign in the wrapped region `x + y >= N`. The open result has a triangular
+zero region where `x + y >= N`.
 
 The error plot compares the transformed QTT against the analytic discrete
 reference. The values should be near the QTCI tolerance.
 
 The bond-dimension plots show how much rank growth comes from applying the
-affine pullback, and how large the periodic and open affine MPOs are.
+affine pullback, and how large the periodic, anti-periodic, and open affine
+MPOs are.
 
 ## Running the workflow
 

@@ -45,6 +45,7 @@ pub const DEFAULT_AFFINE_CONFIG: AffineTutorialConfig = AffineTutorialConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AffineBoundaryMode {
     Periodic,
+    AntiPeriodic,
     Open,
 }
 
@@ -61,13 +62,22 @@ pub struct AffineSamplePoint {
     pub periodic_exact: f64,
     pub periodic_qtt: f64,
     pub periodic_abs_error: f64,
+    pub antiperiodic_exact: f64,
+    pub antiperiodic_qtt: f64,
+    pub antiperiodic_abs_error: f64,
     pub open_exact: f64,
     pub open_qtt: f64,
     pub open_abs_error: f64,
 }
 
-pub type AffineBondDimRow = (usize, Option<usize>, Option<usize>, Option<usize>);
-pub type AffineOperatorBondDimRow = (usize, Option<usize>, Option<usize>);
+pub type AffineBondDimRow = (
+    usize,
+    Option<usize>,
+    Option<usize>,
+    Option<usize>,
+    Option<usize>,
+);
+pub type AffineOperatorBondDimRow = (usize, Option<usize>, Option<usize>, Option<usize>);
 
 /// Result of applying the affine operator to a source QTT.
 pub type AffineTransformOutput = (TreeTN<TensorDynLen, usize>, Vec<SiteIndex>);
@@ -94,6 +104,10 @@ pub fn transformed_reference(x: usize, y: usize, bits: usize, mode: AffineBounda
     let n = point_count(bits);
     match mode {
         AffineBoundaryMode::Periodic => source_function((x + y) % n, y, n),
+        AffineBoundaryMode::AntiPeriodic => {
+            let sign = if x + y >= n { -1.0 } else { 1.0 };
+            sign * source_function((x + y) % n, y, n)
+        }
         AffineBoundaryMode::Open => {
             if x + y >= n {
                 0.0
@@ -148,6 +162,9 @@ fn affine_params() -> Result<AffineParams, Box<dyn Error>> {
 fn boundary_conditions(mode: AffineBoundaryMode) -> Vec<BoundaryCondition> {
     match mode {
         AffineBoundaryMode::Periodic => vec![BoundaryCondition::Periodic; 2],
+        AffineBoundaryMode::AntiPeriodic => {
+            vec![BoundaryCondition::AntiPeriodic, BoundaryCondition::Periodic]
+        }
         AffineBoundaryMode::Open => vec![BoundaryCondition::Open; 2],
     }
 }
@@ -192,6 +209,8 @@ pub fn apply_affine_operator(
 pub fn collect_samples(
     periodic: &TreeTN<TensorDynLen, usize>,
     periodic_site_indices: &[SiteIndex],
+    antiperiodic: &TreeTN<TensorDynLen, usize>,
+    antiperiodic_site_indices: &[SiteIndex],
     open: &TreeTN<TensorDynLen, usize>,
     open_site_indices: &[SiteIndex],
     evaluation_grid: &InherentDiscreteGrid,
@@ -208,10 +227,14 @@ pub fn collect_samples(
                 .map(|site| (site - 1) as usize)
                 .collect();
             let periodic_qtt = evaluate_tree_point(periodic, periodic_site_indices, &sites)?.re;
+            let antiperiodic_qtt =
+                evaluate_tree_point(antiperiodic, antiperiodic_site_indices, &sites)?.re;
             let open_qtt = evaluate_tree_point(open, open_site_indices, &sites)?.re;
             let source_exact = source_function(x, y, n);
             let periodic_exact =
                 transformed_reference(x, y, config.bits, AffineBoundaryMode::Periodic);
+            let antiperiodic_exact =
+                transformed_reference(x, y, config.bits, AffineBoundaryMode::AntiPeriodic);
             let open_exact = transformed_reference(x, y, config.bits, AffineBoundaryMode::Open);
 
             samples.push(AffineSamplePoint {
@@ -225,6 +248,9 @@ pub fn collect_samples(
                 periodic_exact,
                 periodic_qtt,
                 periodic_abs_error: (periodic_exact - periodic_qtt).abs(),
+                antiperiodic_exact,
+                antiperiodic_qtt,
+                antiperiodic_abs_error: (antiperiodic_exact - antiperiodic_qtt).abs(),
                 open_exact,
                 open_qtt,
                 open_abs_error: (open_exact - open_qtt).abs(),
@@ -239,15 +265,21 @@ pub fn collect_samples(
 pub fn collect_bond_dims(
     input: &[usize],
     periodic: &[usize],
+    antiperiodic: &[usize],
     open: &[usize],
 ) -> Vec<AffineBondDimRow> {
-    let row_count = input.len().max(periodic.len()).max(open.len());
+    let row_count = input
+        .len()
+        .max(periodic.len())
+        .max(antiperiodic.len())
+        .max(open.len());
     (0..row_count)
         .map(|i| {
             (
                 i + 1,
                 input.get(i).copied(),
                 periodic.get(i).copied(),
+                antiperiodic.get(i).copied(),
                 open.get(i).copied(),
             )
         })
@@ -257,11 +289,19 @@ pub fn collect_bond_dims(
 /// Pair affine operator bond dimensions for the tutorial CSV output.
 pub fn collect_operator_bond_dims(
     periodic: &[usize],
+    antiperiodic: &[usize],
     open: &[usize],
 ) -> Vec<AffineOperatorBondDimRow> {
-    let row_count = periodic.len().max(open.len());
+    let row_count = periodic.len().max(antiperiodic.len()).max(open.len());
     (0..row_count)
-        .map(|i| (i + 1, periodic.get(i).copied(), open.get(i).copied()))
+        .map(|i| {
+            (
+                i + 1,
+                periodic.get(i).copied(),
+                antiperiodic.get(i).copied(),
+                open.get(i).copied(),
+            )
+        })
         .collect()
 }
 
@@ -276,12 +316,12 @@ pub fn write_samples_csv(path: &Path, samples: &[AffineSamplePoint]) -> Result<(
 
     writeln!(
         w,
-        "x_index,y_index,x,y,source_u_periodic,source_v,source_exact,periodic_exact,periodic_qtt,periodic_abs_error,open_exact,open_qtt,open_abs_error"
+        "x_index,y_index,x,y,source_u_periodic,source_v,source_exact,periodic_exact,periodic_qtt,periodic_abs_error,antiperiodic_exact,antiperiodic_qtt,antiperiodic_abs_error,open_exact,open_qtt,open_abs_error"
     )?;
     for sample in samples {
         writeln!(
             w,
-            "{},{},{},{},{},{},{:.16},{:.16},{:.16},{:.16},{:.16},{:.16},{:.16}",
+            "{},{},{},{},{},{},{:.16},{:.16},{:.16},{:.16},{:.16},{:.16},{:.16},{:.16},{:.16},{:.16}",
             sample.x_index,
             sample.y_index,
             sample.x,
@@ -292,6 +332,9 @@ pub fn write_samples_csv(path: &Path, samples: &[AffineSamplePoint]) -> Result<(
             sample.periodic_exact,
             sample.periodic_qtt,
             sample.periodic_abs_error,
+            sample.antiperiodic_exact,
+            sample.antiperiodic_qtt,
+            sample.antiperiodic_abs_error,
             sample.open_exact,
             sample.open_qtt,
             sample.open_abs_error
@@ -308,15 +351,16 @@ pub fn write_bond_dims_csv(path: &Path, rows: &[AffineBondDimRow]) -> Result<(),
 
     writeln!(
         w,
-        "bond_index,input_bond_dim,periodic_transformed_bond_dim,open_transformed_bond_dim"
+        "bond_index,input_bond_dim,periodic_transformed_bond_dim,antiperiodic_transformed_bond_dim,open_transformed_bond_dim"
     )?;
-    for (index, input, periodic, open) in rows {
+    for (index, input, periodic, antiperiodic, open) in rows {
         writeln!(
             w,
-            "{},{},{},{}",
+            "{},{},{},{},{}",
             index,
             write_optional_usize(*input),
             write_optional_usize(*periodic),
+            write_optional_usize(*antiperiodic),
             write_optional_usize(*open)
         )?;
     }
@@ -334,14 +378,15 @@ pub fn write_operator_bond_dims_csv(
 
     writeln!(
         w,
-        "bond_index,periodic_operator_bond_dim,open_operator_bond_dim"
+        "bond_index,periodic_operator_bond_dim,antiperiodic_operator_bond_dim,open_operator_bond_dim"
     )?;
-    for (index, periodic, open) in rows {
+    for (index, periodic, antiperiodic, open) in rows {
         writeln!(
             w,
-            "{},{},{}",
+            "{},{},{},{}",
             index,
             write_optional_usize(*periodic),
+            write_optional_usize(*antiperiodic),
             write_optional_usize(*open)
         )?;
     }
@@ -353,6 +398,7 @@ pub fn write_operator_bond_dims_csv(
 pub fn print_summary(
     source: &QuanticsTensorCI2<f64>,
     periodic: &TreeTN<TensorDynLen, usize>,
+    antiperiodic: &TreeTN<TensorDynLen, usize>,
     open: &TreeTN<TensorDynLen, usize>,
     samples: &[AffineSamplePoint],
     config: &AffineTutorialConfig,
@@ -365,6 +411,10 @@ pub fn print_summary(
         .iter()
         .map(|sample| sample.open_abs_error)
         .fold(0.0_f64, f64::max);
+    let max_antiperiodic_error = samples
+        .iter()
+        .map(|sample| sample.antiperiodic_abs_error)
+        .fold(0.0_f64, f64::max);
 
     println!("Affine transformation tutorial");
     println!("bits = {}", config.bits);
@@ -374,8 +424,16 @@ pub fn print_summary(
         "periodic transformed node count = {}",
         periodic.node_count()
     );
+    println!(
+        "anti-periodic transformed node count = {}",
+        antiperiodic.node_count()
+    );
     println!("open transformed node count = {}", open.node_count());
     println!("max periodic abs error = {:.3e}", max_periodic_error);
+    println!(
+        "max anti-periodic abs error = {:.3e}",
+        max_antiperiodic_error
+    );
     println!("max open abs error = {:.3e}", max_open_error);
 }
 
