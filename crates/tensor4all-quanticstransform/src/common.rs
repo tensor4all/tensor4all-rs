@@ -22,6 +22,8 @@ pub type DynIndex = Index<DynId, TagSet>;
 ///
 /// - **`Periodic`** (default): Results wrap around modulo 2^R.
 ///   Use when functions are periodic or when wraparound is acceptable.
+/// - **`AntiPeriodic`**: Results wrap around modulo 2^R and receive a sign
+///   `(-1)^q`, where `q` is the integer wrap quotient.
 /// - **`Open`**: Out-of-range results produce zeros.
 ///   Use when the function has compact support or when boundary effects matter.
 ///
@@ -35,6 +37,7 @@ pub type DynIndex = Index<DynId, TagSet>;
 /// assert_eq!(bc, BoundaryCondition::Periodic);
 ///
 /// // Periodic: shift(7, 2) in 3-bit (mod 8) wraps to 1
+/// // AntiPeriodic: the same wrap receives a -1 sign
 /// // Open: shift(7, 2) in 3-bit goes to 9 >= 8, produces zero
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -44,6 +47,11 @@ pub enum BoundaryCondition {
     /// Use for periodic functions or when wraparound is desired.
     #[default]
     Periodic,
+    /// Anti-periodic boundary: operations wrap around mod 2^R and receive a
+    /// sign for each wrap.
+    ///
+    /// Use for anti-periodic functions where `f(x + q * 2^R) = (-1)^q f(x)`.
+    AntiPeriodic,
     /// Open boundary: operations beyond `[0, 2^R)` return zero.
     ///
     /// Use when the function has compact support or boundary effects matter.

@@ -163,6 +163,13 @@ pub(crate) fn shift_mpo(
                 let out_bit = sum % 2;
                 let bc_factor = match bc {
                     BoundaryCondition::Periodic => Complex64::one(),
+                    BoundaryCondition::AntiPeriodic => {
+                        if sum >= 2 {
+                            -Complex64::one()
+                        } else {
+                            Complex64::one()
+                        }
+                    }
                     BoundaryCondition::Open => {
                         if sum >= 2 {
                             Complex64::zero()
@@ -180,6 +187,7 @@ pub(crate) fn shift_mpo(
             // Shape (1, 4, 2): left=1 (BC applied), site=4, right=2 (carry_in from site 1)
             let bc_val = match bc {
                 BoundaryCondition::Periodic => Complex64::one(),
+                BoundaryCondition::AntiPeriodic => -Complex64::one(),
                 BoundaryCondition::Open => Complex64::zero(),
             };
 
@@ -236,11 +244,18 @@ pub(crate) fn shift_mpo(
 
     // Apply overall boundary condition factor for number of full cycles
     if nbc != 0 {
-        let bc_factor = match bc {
-            BoundaryCondition::Periodic => Complex64::one(),
-            BoundaryCondition::Open => {
-                // `nbc` is an Euclidean quotient, so negative offsets in (-n_max, 0)
-                // still produce `nbc = -1`. Only true full-cycle offsets should zero.
+            let bc_factor = match bc {
+                BoundaryCondition::Periodic => Complex64::one(),
+                BoundaryCondition::AntiPeriodic => {
+                    if nbc.rem_euclid(2) == 0 {
+                        Complex64::one()
+                    } else {
+                        -Complex64::one()
+                    }
+                }
+                BoundaryCondition::Open => {
+                    // `nbc` is an Euclidean quotient, so negative offsets in (-n_max, 0)
+                    // still produce `nbc = -1`. Only true full-cycle offsets should zero.
                 if offset >= n_max || offset <= -n_max {
                     Complex64::zero()
                 } else {

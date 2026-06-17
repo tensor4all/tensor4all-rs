@@ -1206,3 +1206,74 @@ fn test_affine_extension_loop() {
     assert_affine_mpo_matches_matrix(r, &params, &bc);
     assert_affine_matrix_correctness(r, &params, &bc);
 }
+
+#[test]
+fn test_affine_antiperiodic_full_cycle_shifts() {
+    let r = 3;
+    let n = 1usize << r;
+
+    for (shift, expected_sign) in [
+        (n as i64, -1.0),
+        (-(n as i64), -1.0),
+        (2 * n as i64, 1.0),
+    ] {
+        let params = AffineParams::from_integers(vec![1], vec![shift], 1, 1).unwrap();
+        let matrix =
+            affine_transform_matrix(r, &params, &[BoundaryCondition::AntiPeriodic]).unwrap();
+
+        for x in 0..n {
+            for y in 0..n {
+                let expected = if x == y { expected_sign } else { 0.0 };
+                let actual = *matrix.get(y, x).unwrap_or(&0.0);
+                assert!(
+                    (actual - expected).abs() < 1e-12,
+                    "shift={shift}, x={x}, y={y}, expected={expected}, actual={actual}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_affine_antiperiodic_full_cycle_plus_one_shift() {
+    let r = 3;
+    let n = 1usize << r;
+    let params = AffineParams::from_integers(vec![1], vec![n as i64 + 1], 1, 1).unwrap();
+    let matrix = affine_transform_matrix(r, &params, &[BoundaryCondition::AntiPeriodic]).unwrap();
+
+    for x in 0..n {
+        let y_expected = (x + 1) % n;
+        for y in 0..n {
+            let expected = if y == y_expected { -1.0 } else { 0.0 };
+            let actual = *matrix.get(y, x).unwrap_or(&0.0);
+            assert!(
+                (actual - expected).abs() < 1e-12,
+                "x={x}, y={y}, expected={expected}, actual={actual}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_affine_antiperiodic_difference_delta_signs() {
+    let r = 3;
+    let n = 1usize << r;
+    let params = AffineParams::from_integers(vec![1, -1], vec![0], 1, 2).unwrap();
+    let matrix = affine_transform_matrix(r, &params, &[BoundaryCondition::AntiPeriodic]).unwrap();
+
+    for x in 0..n {
+        for xp in 0..n {
+            let x_flat = x | (xp << r);
+            let z = (x + n - xp) % n;
+            let expected_sign = if x >= xp { 1.0 } else { -1.0 };
+            for y in 0..n {
+                let expected = if y == z { expected_sign } else { 0.0 };
+                let actual = *matrix.get(y, x_flat).unwrap_or(&0.0);
+                assert!(
+                    (actual - expected).abs() < 1e-12,
+                    "x={x}, xp={xp}, z={z}, y={y}, expected={expected}, actual={actual}"
+                );
+            }
+        }
+    }
+}

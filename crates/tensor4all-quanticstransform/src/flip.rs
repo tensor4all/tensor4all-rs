@@ -142,6 +142,7 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
             // For Open BC, we zero out the flip(0) case by setting bc_val = 0.
             let bc_val = match bc {
                 BoundaryCondition::Periodic => Complex64::one(),
+                BoundaryCondition::AntiPeriodic => -Complex64::one(),
                 BoundaryCondition::Open => Complex64::zero(),
             };
 
