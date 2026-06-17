@@ -470,17 +470,17 @@ mod tests {
     #[test]
     fn bond_dim_rows_pad_missing_profiles() {
         assert_eq!(
-            collect_bond_dims(&[2, 3], &[5], &[7, 11, 13]),
+            collect_bond_dims(&[2, 3], &[5], &[6], &[7, 11, 13]),
             vec![
-                (1, Some(2), Some(5), Some(7)),
-                (2, Some(3), None, Some(11)),
-                (3, None, None, Some(13)),
+                (1, Some(2), Some(5), Some(6), Some(7)),
+                (2, Some(3), None, None, Some(11)),
+                (3, None, None, None, Some(13)),
             ]
         );
 
         assert_eq!(
-            collect_operator_bond_dims(&[2], &[3, 5]),
-            vec![(1, Some(2), Some(3)), (2, None, Some(5))]
+            collect_operator_bond_dims(&[2], &[4], &[3, 5]),
+            vec![(1, Some(2), Some(4), Some(3)), (2, None, None, Some(5))]
         );
     }
 
@@ -500,6 +500,9 @@ mod tests {
                 periodic_exact: 0.25,
                 periodic_qtt: 0.125,
                 periodic_abs_error: 0.125,
+                antiperiodic_exact: -0.25,
+                antiperiodic_qtt: -0.125,
+                antiperiodic_abs_error: 0.125,
                 open_exact: 0.0,
                 open_qtt: 0.0,
                 open_abs_error: 0.0,
@@ -507,24 +510,24 @@ mod tests {
         )?;
         let sample_csv = fs::read_to_string(&samples_path)?;
         assert!(sample_csv.starts_with(
-            "x_index,y_index,x,y,source_u_periodic,source_v,source_exact,periodic_exact,periodic_qtt,periodic_abs_error,open_exact,open_qtt,open_abs_error\n"
+            "x_index,y_index,x,y,source_u_periodic,source_v,source_exact,periodic_exact,periodic_qtt,periodic_abs_error,antiperiodic_exact,antiperiodic_qtt,antiperiodic_abs_error,open_exact,open_qtt,open_abs_error\n"
         ));
         assert!(sample_csv.contains(",0.5000000000000000,0.2500000000000000,"));
 
         let bond_dims_path = scratch_csv("affine-bonds");
-        write_bond_dims_csv(&bond_dims_path, &[(1, Some(2), None, Some(4))])?;
+        write_bond_dims_csv(&bond_dims_path, &[(1, Some(2), None, Some(3), Some(4))])?;
         let bond_csv = fs::read_to_string(&bond_dims_path)?;
         assert_eq!(
             bond_csv,
-            "bond_index,input_bond_dim,periodic_transformed_bond_dim,open_transformed_bond_dim\n1,2,,4\n"
+            "bond_index,input_bond_dim,periodic_transformed_bond_dim,antiperiodic_transformed_bond_dim,open_transformed_bond_dim\n1,2,,3,4\n"
         );
 
         let operator_dims_path = scratch_csv("affine-operator-bonds");
-        write_operator_bond_dims_csv(&operator_dims_path, &[(1, None, Some(8))])?;
+        write_operator_bond_dims_csv(&operator_dims_path, &[(1, None, Some(6), Some(8))])?;
         let operator_csv = fs::read_to_string(&operator_dims_path)?;
         assert_eq!(
             operator_csv,
-            "bond_index,periodic_operator_bond_dim,open_operator_bond_dim\n1,,8\n"
+            "bond_index,periodic_operator_bond_dim,antiperiodic_operator_bond_dim,open_operator_bond_dim\n1,,6,8\n"
         );
 
         Ok(())
