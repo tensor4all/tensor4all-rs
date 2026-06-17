@@ -39,7 +39,11 @@ but each one can still be run on its own.
    - Opens `src/bin/qtt_affine.rs`.
    - Applies a 2D affine pullback operator and compares periodic and open boundary behavior.
 
-8. [2D partial Fourier transform](tutorials/qtt_partial_fourier2d_tutorial.md)
+8. [Difference-kernel MPO](tutorials/qtt_difference_kernel_tutorial.md)
+   - Opens `src/bin/qtt_difference_kernel.rs`.
+   - Builds `A[x, x'] = f((x - x') mod N)` as an MPO from a kernel QTT.
+
+9. [2D partial Fourier transform](tutorials/qtt_partial_fourier2d_tutorial.md)
    - Opens `src/bin/qtt_partial_fourier2d.rs`.
    - Applies a Fourier transform to only the `x` coordinate of a 2D QTT.
 

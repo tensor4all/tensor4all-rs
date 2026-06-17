@@ -148,6 +148,15 @@ fn tutorial_binaries_run_current_api_flows() -> Result<(), Box<dyn Error>> {
             ],
         },
         TutorialBinary {
+            name: "qtt_difference_kernel",
+            path: env!("CARGO_BIN_EXE_qtt_difference_kernel"),
+            env: &[],
+            expected_csvs: &[
+                "qtt_difference_kernel_samples.csv",
+                "qtt_difference_kernel_bond_dims.csv",
+            ],
+        },
+        TutorialBinary {
             name: "qtt_fourier",
             path: env!("CARGO_BIN_EXE_qtt_fourier"),
             env: &[],
