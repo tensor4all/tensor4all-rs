@@ -45,8 +45,7 @@ pub fn difference_kernel_mpo(
     let delta = affine_transform_tensors_unfused(f.len(), &params, &[boundary])?;
     let mut tensors = Vec::with_capacity(f.len());
 
-    for site in 0..f.len() {
-        let delta_core = &delta[site];
+    for (site, delta_core) in delta.iter().enumerate() {
         let f_core = f.site_tensor(site);
 
         let delta_left = delta_core.left_dim();

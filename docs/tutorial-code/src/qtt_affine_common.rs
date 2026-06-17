@@ -206,6 +206,7 @@ pub fn apply_affine_operator(
 }
 
 /// Collect dense transformed samples against the analytic reference.
+#[allow(clippy::too_many_arguments)]
 pub fn collect_samples(
     periodic: &TreeTN<TensorDynLen, usize>,
     periodic_site_indices: &[SiteIndex],
