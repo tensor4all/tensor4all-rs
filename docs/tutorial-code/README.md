@@ -21,8 +21,14 @@ The Rust dependencies use local path dependencies to the workspace crates in
 this checkout, so the tutorials are checked against the current
 `tensor4all-rs` source tree.
 
-Set up the Julia plotting environment from `docs/plotting/Project.toml` and
-`docs/plotting/Manifest.toml` with:
+Run the commands in this README from the tutorial-code directory:
+
+```bash
+cd docs/tutorial-code
+```
+
+From that directory, set up the Julia plotting environment from
+`docs/plotting/Project.toml` and `docs/plotting/Manifest.toml` with:
 
 ```bash
 julia --project=docs/plotting -e 'using Pkg; Pkg.instantiate()'
@@ -30,7 +36,7 @@ julia --project=docs/plotting -e 'using Pkg; Pkg.instantiate()'
 
 ## First Run
 
-Run the simplest QTT demo:
+Run the simplest QTT demo from `docs/tutorial-code`:
 
 ```bash
 cargo run --bin qtt_function
@@ -98,7 +104,7 @@ That keeps normal verification from changing the curated tutorial artifacts.
 `docs/data` and `docs/plots` are tracked intentionally. They make the tutorials
 easy to inspect without rerunning every workflow first.
 
-To refresh a tutorial artifact deliberately:
+To refresh a tutorial artifact deliberately from `docs/tutorial-code`:
 
 ```bash
 cargo run --bin qtt_function

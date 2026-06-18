@@ -11,9 +11,10 @@ Simple, efficient Tensor Train (MPS) implementation for numerical computation.
 
 ## Example
 
-```rust,ignore
+```rust
 use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, TensorTrain};
 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
 // Create a constant tensor train (all entries = 1.0) over a 2x3x4 grid
 let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 
@@ -33,6 +34,9 @@ let options = CompressionOptions {
 };
 let compressed = tt.compressed(&options)?;
 assert!(compressed.rank() <= tt.rank());
+
+Ok(())
+}
 ```
 
 ## Documentation
