@@ -12,26 +12,29 @@ Core tensor library: Index system, dynamic-rank Tensor, contraction, SVD/QR/LU f
 
 ## Example
 
-```rust,ignore
-use tensor4all_core::index::{DynId, Index};
-use tensor4all_core::{factorize, FactorizeOptions, TensorDynLen};
-use rand::rng;
+```rust
+use tensor4all_core::{
+    factorize, DynIndex, FactorizeOptions, TensorContractionLike, TensorDynLen,
+};
 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
 // Create indices
-let i = Index::<DynId>::new_dyn_with_tag(3, "i")?;
-let j = Index::<DynId>::new_dyn_with_tag(4, "j")?;
+let i = DynIndex::new_dyn(3);
+let j = DynIndex::new_dyn(4);
 
-// Create a random tensor
-let mut rng = rng();
-let tensor = TensorDynLen::random_f64(&mut rng, vec![i.clone(), j.clone()]);
-assert_eq!(tensor.ndim(), 2);
+// Create a dense tensor
+let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
+let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data)?;
+assert_eq!(tensor.dims(), vec![3, 4]);
 
-// SVD factorization with truncation
-let result = factorize(
-    &tensor,
-    &[i],
-    &FactorizeOptions::svd().with_rtol(1e-10),
-)?;
+// SVD factorization
+let result = factorize(&tensor, &[i], &FactorizeOptions::svd())?;
+let recovered = result.left.contract_pair(&result.right)?;
+assert!(tensor.distance(&recovered)? < 1e-12);
+assert!(result.singular_values.is_some());
+
+Ok(())
+}
 ```
 
 ## Documentation
