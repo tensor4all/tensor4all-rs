@@ -312,6 +312,41 @@ fn direct_product_core_tensors_three_tensors() {
 }
 
 #[test]
+fn lagrange_polynomials_new_handles_general_grid() {
+    let basis = LagrangePolynomials::new(vec![0.0, 0.2, 0.7, 1.0]).unwrap();
+    let x = 0.43_f64;
+
+    assert!(!basis.is_empty());
+    assert!(basis.barycentric_weights().iter().all(|w| w.is_finite()));
+    assert!(basis
+        .barycentric_weights()
+        .iter()
+        .any(|w| w.is_sign_negative()));
+
+    let mut partition_of_unity = 0.0;
+    let mut cubic_interpolant = 0.0;
+    for alpha in 0..basis.len() {
+        let value = basis.evaluate(alpha, x).unwrap();
+        partition_of_unity += value;
+        cubic_interpolant += value * basis.grid()[alpha].powi(3);
+    }
+
+    assert!((partition_of_unity - 1.0).abs() < 1.0e-12);
+    assert!((cubic_interpolant - x.powi(3)).abs() < 1.0e-12);
+}
+
+#[test]
+fn lagrange_polynomials_validation_errors() {
+    assert!(LagrangePolynomials::new(vec![0.0]).is_err());
+    assert!(LagrangePolynomials::new(vec![0.0, f64::NAN]).is_err());
+    assert!(LagrangePolynomials::new(vec![0.0, 0.0]).is_err());
+
+    let basis = LagrangePolynomials::new(vec![0.0, 0.5, 1.0]).unwrap();
+    assert!(basis.evaluate(basis.len(), 0.25).is_err());
+    assert!(basis.evaluate(0, f64::INFINITY).is_err());
+}
+
+#[test]
 fn high_degree_chebyshev_basis_stays_finite() {
     let degree = 600;
     let basis = get_chebyshev_grid(degree).unwrap();
