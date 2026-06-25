@@ -312,6 +312,37 @@ fn direct_product_core_tensors_three_tensors() {
 }
 
 #[test]
+fn high_degree_chebyshev_basis_stays_finite() {
+    let degree = 600;
+    let basis = get_chebyshev_grid(degree).unwrap();
+
+    assert_eq!(basis.len(), degree + 1);
+    assert!(basis.barycentric_weights().iter().all(|w| w.is_finite()));
+    assert!((basis.evaluate(0, basis.grid()[0]).unwrap() - 1.0).abs() < 1.0e-12);
+    assert!(basis.evaluate(1, basis.grid()[0]).unwrap().abs() < 1.0e-12);
+
+    let core = interpolation_tensor(&basis).unwrap();
+    for left in 0..core.left_dim() {
+        for site in 0..core.site_dim() {
+            for right in 0..core.right_dim() {
+                assert!(core.get3(left, site, right).is_finite());
+            }
+        }
+    }
+}
+
+#[test]
+fn high_degree_single_scale_compression_does_not_fail_svd() {
+    let f = |x: f64| (2.0 * std::f64::consts::PI * x).sin();
+    let opts = InterpolativeQttOptions::default();
+
+    let tt = interpolate_single_scale(f, 0.0, 1.0, 3, 600, &opts).unwrap();
+
+    assert_eq!(tt.len(), 3);
+    assert!(tt.link_dims().iter().all(|&dim| dim <= 601));
+}
+
+#[test]
 fn multiscale_interpolation_one_over_x() {
     let r = 12;
     let a = 0.0;
