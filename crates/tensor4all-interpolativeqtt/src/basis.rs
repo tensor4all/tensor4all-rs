@@ -8,9 +8,9 @@ use crate::error::{invalid_argument, Result};
 
 /// Barycentric Lagrange basis on a one-dimensional interpolation grid.
 ///
-/// The basis stores interpolation nodes in `[0, 1]` and precomputed
-/// barycentric weights. It is used by the interpolative QTT constructors to
-/// transfer local polynomial information across binary refinement levels.
+/// The basis stores interpolation nodes in `[0, 1]` and scaled barycentric
+/// weights. It is used by the interpolative QTT constructors to transfer
+/// local polynomial information across binary refinement levels.
 ///
 /// # Related Types
 ///
@@ -64,9 +64,39 @@ impl LagrangePolynomials {
             return Err(invalid_argument("Lagrange grid values must be finite"));
         }
 
-        let mut barycentric_weights = Vec::with_capacity(grid.len());
+        let barycentric_weights = scaled_barycentric_weights(&grid)?;
+
+        Ok(Self {
+            grid,
+            barycentric_weights,
+        })
+    }
+
+    fn from_grid_and_weights(grid: Vec<f64>, barycentric_weights: Vec<f64>) -> Result<Self> {
+        if grid.len() < 2 {
+            return Err(invalid_argument(
+                "Lagrange grid must contain at least two points",
+            ));
+        }
+        if grid.len() != barycentric_weights.len() {
+            return Err(invalid_argument(format!(
+                "Lagrange grid/weight length mismatch: grid has {}, weights have {}",
+                grid.len(),
+                barycentric_weights.len()
+            )));
+        }
+        if grid.iter().any(|x| !x.is_finite()) {
+            return Err(invalid_argument("Lagrange grid values must be finite"));
+        }
+        if barycentric_weights
+            .iter()
+            .any(|weight| !weight.is_finite() || *weight == 0.0)
+        {
+            return Err(invalid_argument(
+                "barycentric weights must be finite and non-zero",
+            ));
+        }
         for j in 0..grid.len() {
-            let mut weight = 1.0;
             for m in 0..grid.len() {
                 if j == m {
                     continue;
@@ -75,9 +105,7 @@ impl LagrangePolynomials {
                 if diff.abs() < 1.0e-15 {
                     return Err(invalid_argument("Lagrange grid values must be distinct"));
                 }
-                weight *= 1.0 / diff;
             }
-            barycentric_weights.push(weight);
         }
 
         Ok(Self {
@@ -138,10 +166,10 @@ impl LagrangePolynomials {
         &self.grid
     }
 
-    /// Borrow the barycentric weights for the interpolation grid.
+    /// Borrow the scaled barycentric weights for the interpolation grid.
     ///
-    /// The weights are primarily useful for diagnostics and for reproducing
-    /// the Julia implementation exactly.
+    /// Only relative weights matter for barycentric interpolation; common
+    /// factors are intentionally omitted to avoid overflow at high degree.
     ///
     /// # Examples
     ///
@@ -193,8 +221,17 @@ impl LagrangePolynomials {
             return Ok(0.0);
         }
 
-        let product = self.grid.iter().fold(1.0, |acc, node| acc * (x - node));
-        Ok(product * self.barycentric_weights[alpha] / (x - self.grid[alpha]))
+        let mut denominator = 0.0;
+        for (node, weight) in self.grid.iter().zip(&self.barycentric_weights) {
+            denominator += weight / (x - node);
+        }
+        if denominator == 0.0 || !denominator.is_finite() {
+            return Err(invalid_argument(
+                "barycentric denominator must be finite and non-zero",
+            ));
+        }
+
+        Ok((self.barycentric_weights[alpha] / (x - self.grid[alpha])) / denominator)
     }
 }
 
@@ -225,7 +262,65 @@ pub fn get_chebyshev_grid(degree: usize) -> Result<LagrangePolynomials> {
     let grid = (0..=degree)
         .map(|j| 0.5 * (1.0 - ((j as f64) * PI / (degree as f64)).cos()))
         .collect();
-    LagrangePolynomials::new(grid)
+    let weights = chebyshev_lobatto_barycentric_weights(degree);
+    LagrangePolynomials::from_grid_and_weights(grid, weights)
+}
+
+fn scaled_barycentric_weights(grid: &[f64]) -> Result<Vec<f64>> {
+    let mut signs = Vec::with_capacity(grid.len());
+    let mut log_abs_weights = Vec::with_capacity(grid.len());
+
+    for j in 0..grid.len() {
+        let mut sign = 1.0;
+        let mut log_abs_weight = 0.0;
+        for m in 0..grid.len() {
+            if j == m {
+                continue;
+            }
+            let diff = grid[j] - grid[m];
+            if diff.abs() < 1.0e-15 {
+                return Err(invalid_argument("Lagrange grid values must be distinct"));
+            }
+            if diff.is_sign_negative() {
+                sign = -sign;
+            }
+            log_abs_weight -= diff.abs().ln();
+        }
+        signs.push(sign);
+        log_abs_weights.push(log_abs_weight);
+    }
+
+    let max_log_abs_weight = log_abs_weights
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    let weights: Vec<_> = signs
+        .into_iter()
+        .zip(log_abs_weights)
+        .map(|(sign, log_abs_weight)| sign * (log_abs_weight - max_log_abs_weight).exp())
+        .collect();
+    if weights
+        .iter()
+        .any(|weight| !weight.is_finite() || *weight == 0.0)
+    {
+        return Err(invalid_argument(
+            "failed to compute finite non-zero barycentric weights",
+        ));
+    }
+    Ok(weights)
+}
+
+fn chebyshev_lobatto_barycentric_weights(degree: usize) -> Vec<f64> {
+    (0..=degree)
+        .map(|j| {
+            let magnitude = if j == 0 || j == degree { 0.5 } else { 1.0 };
+            if j % 2 == 0 {
+                magnitude
+            } else {
+                -magnitude
+            }
+        })
+        .collect()
 }
 
 /// Build the dense local interpolation core for a Lagrange basis.
