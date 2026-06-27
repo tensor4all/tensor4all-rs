@@ -537,7 +537,7 @@ where
         let left_inds: Vec<_> = tensor_a
             .external_indices()
             .iter()
-            .filter(|idx| idx.id() != bond_ab.id())
+            .filter(|idx| *idx != &bond_ab)
             .cloned()
             .collect();
 

@@ -244,6 +244,24 @@ fn test_contract_zipup_topology_mismatch() {
 }
 
 #[test]
+fn zipup_parent_bond_filter_keeps_same_id_primed_nonbond_index() {
+    let site = DynIndex::new_dyn(2);
+    let bond_a = DynIndex::new_dyn(2);
+    let bond_b = DynIndex::new_dyn(2);
+    let bond_a_prime = bond_a.prime();
+    let indices = vec![
+        site.clone(),
+        bond_a.clone(),
+        bond_a_prime.clone(),
+        bond_b.clone(),
+    ];
+
+    let kept = indices_except_exact(&indices, &[bond_a, bond_b]);
+
+    assert_eq!(kept, vec![site, bond_a_prime]);
+}
+
+#[test]
 fn test_contract_naive_requires_dense_reference_limit() {
     let s = DynIndex::new_dyn(3);
     let t_a = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0, 3.0]).unwrap();

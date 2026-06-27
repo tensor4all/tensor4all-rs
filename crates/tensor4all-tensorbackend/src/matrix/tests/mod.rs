@@ -1,5 +1,90 @@
 use super::*;
+use num_complex::Complex64;
 use tenferro::TypedTensor;
+
+fn real_eigen_residual_norm(matrix: &Matrix<f64>, eigenvalue: f64, vector: &[f64]) -> f64 {
+    let mut max_abs = 0.0_f64;
+    for row in 0..matrix.nrows() {
+        let mut av = 0.0;
+        for col in 0..matrix.ncols() {
+            av += matrix[[row, col]] * vector[col];
+        }
+        max_abs = max_abs.max((av - eigenvalue * vector[row]).abs());
+    }
+    max_abs
+}
+
+fn complex_eigen_residual_norm(
+    matrix: &Matrix<Complex64>,
+    eigenvalue: f64,
+    vector: &[Complex64],
+) -> f64 {
+    let mut max_abs = 0.0_f64;
+    for row in 0..matrix.nrows() {
+        let mut av = Complex64::new(0.0, 0.0);
+        for col in 0..matrix.ncols() {
+            av += matrix[[row, col]] * vector[col];
+        }
+        max_abs = max_abs.max((av - vector[row] * eigenvalue).norm());
+    }
+    max_abs
+}
+
+#[test]
+fn projected_hermitian_lowest_eigenpair_works_for_one_by_one() {
+    let matrix = Matrix::from_col_major_vec(1, 1, vec![3.5_f64]);
+
+    let pair = lowest_hermitian_eigenpair(&matrix, 1.0e-12).unwrap();
+
+    assert!((pair.eigenvalue - 3.5).abs() < 1.0e-12);
+    assert_eq!(pair.eigenvector.len(), 1);
+    assert!((pair.eigenvector[0].abs() - 1.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn projected_hermitian_lowest_eigenpair_works_for_real_symmetric_matrix() {
+    let matrix = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 1.0, 1.0, 2.0]);
+
+    let pair = lowest_hermitian_eigenpair(&matrix, 1.0e-12).unwrap();
+
+    assert!((pair.eigenvalue - 1.0).abs() < 1.0e-12);
+    assert!(real_eigen_residual_norm(&matrix, pair.eigenvalue, &pair.eigenvector) < 1.0e-10);
+}
+
+#[test]
+fn projected_hermitian_lowest_eigenpair_works_for_complex_hermitian_matrix() {
+    let i = Complex64::new(0.0, 1.0);
+    let matrix = Matrix::from_col_major_vec(
+        2,
+        2,
+        vec![Complex64::new(0.0, 0.0), i, -i, Complex64::new(0.0, 0.0)],
+    );
+
+    let pair = lowest_hermitian_eigenpair(&matrix, 1.0e-12).unwrap();
+
+    assert!((pair.eigenvalue + 1.0).abs() < 1.0e-12);
+    assert!(complex_eigen_residual_norm(&matrix, pair.eigenvalue, &pair.eigenvector) < 1.0e-10);
+}
+
+#[test]
+fn projected_hermitian_lowest_eigenpair_accepts_degenerate_smallest_eigenvalues() {
+    let matrix = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 0.0, 0.0, 1.0]);
+
+    let pair = lowest_hermitian_eigenpair(&matrix, 1.0e-12).unwrap();
+
+    assert!((pair.eigenvalue - 1.0).abs() < 1.0e-12);
+    assert!(real_eigen_residual_norm(&matrix, pair.eigenvalue, &pair.eigenvector) < 1.0e-10);
+}
+
+#[test]
+fn projected_hermitian_lowest_eigenpair_rejects_non_hermitian_diagonal() {
+    let matrix = Matrix::from_col_major_vec(1, 1, vec![Complex64::new(1.0, 1.0e-3)]);
+
+    let err = lowest_hermitian_eigenpair(&matrix, 1.0e-12).unwrap_err();
+
+    assert!(matches!(err, HermitianEigenError::NonHermitian { .. }));
+    assert!(err.to_string().contains("not Hermitian"));
+}
 
 #[test]
 fn test_matrix_basic() {

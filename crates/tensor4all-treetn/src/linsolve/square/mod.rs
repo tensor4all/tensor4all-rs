@@ -23,7 +23,7 @@
 //!
 //! - Phys. Rev. B 72, 180403 (2005) - Noise term technique (not implemented in initial version)
 
-mod local_linop;
+pub(crate) mod local_linop;
 mod projected_state;
 mod updater;
 

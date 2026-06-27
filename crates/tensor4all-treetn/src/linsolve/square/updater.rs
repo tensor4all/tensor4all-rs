@@ -19,11 +19,9 @@ use tensor4all_core::{FactorizeOptions, IndexLike, TensorLike};
 use super::local_linop::LocalLinOp;
 use super::projected_state::ProjectedState;
 use crate::linsolve::common::{GmresToleranceMode, LinsolveOptions, ProjectedOperator};
+use crate::local_update_support;
 use crate::operator::IndexMapping;
-use crate::{
-    factorize_tensor_to_treetn_with, get_boundary_edges, LocalUpdateStep, LocalUpdater, TreeTN,
-    TreeTopology,
-};
+use crate::{factorize_tensor_to_treetn_with, LocalUpdateStep, LocalUpdater, TreeTN, TreeTopology};
 
 static LOCAL_SOLVE_TRACE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -209,24 +207,14 @@ where
     ///
     /// This is called lazily on the first `before_step` to ensure we have the initial ket_state.
     fn ensure_reference_state_initialized(&mut self, ket_state: &TreeTN<T, V>) -> Result<()> {
-        // Check if reference_state is already initialized (has nodes)
-        if !self.reference_state.node_names().is_empty() {
-            return Ok(());
+        let initialized = self.reference_state.node_names().is_empty();
+        local_update_support::initialize_reference_state_if_empty(
+            &mut self.reference_state,
+            ket_state,
+        )?;
+        if initialized {
+            self.boundary_bond_map.clear();
         }
-
-        // Initialize reference_state by cloning ket_state and relabeling link indices
-        // For boundary bonds, we'll preserve the mapping for later reuse
-        let mut reference_state = ket_state.clone();
-
-        // Get all edges to determine which are boundary bonds
-        // Since we don't have a region yet, we'll relabel all links initially
-        // Boundary bonds will be stabilized in after_step when we know the region
-        reference_state.sim_linkinds_mut()?;
-
-        // Initialize boundary_bond_map as empty (will be populated per-region in after_step)
-        self.boundary_bond_map.clear();
-
-        self.reference_state = reference_state;
         Ok(())
     }
 
@@ -351,27 +339,7 @@ where
 
     /// Contract all tensors in the region into a single local tensor.
     fn contract_region(&self, subtree: &TreeTN<T, V>, region: &[V]) -> Result<T> {
-        if region.is_empty() {
-            return Err(anyhow::anyhow!("Region cannot be empty"));
-        }
-
-        // Collect all tensors in the region
-        let tensors: Vec<T> = region
-            .iter()
-            .map(|node| {
-                let idx = subtree
-                    .node_index(node)
-                    .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in subtree", node))?;
-                let tensor = subtree
-                    .tensor(idx)
-                    .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node))?;
-                Ok(tensor.clone())
-            })
-            .collect::<Result<_>>()?;
-
-        // Use TensorContractionLike::contract for contraction
-        let tensor_refs: Vec<&T> = tensors.iter().collect();
-        T::contract(&tensor_refs)
+        local_update_support::contract_region(subtree, region)
     }
 
     /// Build TreeTopology for the subtree region from the solved tensor.
@@ -383,54 +351,7 @@ where
         region: &[V],
         full_treetn: &TreeTN<T, V>,
     ) -> Result<TreeTopology<V, T::Index>> {
-        use std::collections::HashMap;
-
-        let mut nodes: HashMap<V, Vec<T::Index>> = HashMap::new();
-        let mut edges: Vec<(V, V)> = Vec::new();
-
-        let solved_indices = solved_tensor.external_indices();
-
-        // For each node in the region, find which indices belong to it.
-        for node in region {
-            let mut indices = Vec::new();
-
-            // Get site indices for this node
-            if let Some(site_indices) = full_treetn.site_space(node) {
-                for site_idx in site_indices {
-                    // Verify the index exists in solved_tensor and collect it.
-                    if solved_indices.iter().any(|idx| idx == site_idx) {
-                        indices.push(site_idx.clone());
-                    }
-                }
-            }
-
-            // Get bond indices to neighbors outside the region
-            for neighbor in full_treetn.site_index_network().neighbors(node) {
-                if !region.contains(&neighbor) {
-                    // This is an external neighbor - the bond belongs to this node
-                    if let Some(edge) = full_treetn.edge_between(node, &neighbor) {
-                        if let Some(bond) = full_treetn.bond_index(edge) {
-                            if solved_indices.iter().any(|idx| idx == bond) {
-                                indices.push(bond.clone());
-                            }
-                        }
-                    }
-                }
-            }
-
-            nodes.insert(node.clone(), indices);
-        }
-
-        // Build edges between nodes in the region
-        for (i, node_a) in region.iter().enumerate() {
-            for node_b in region.iter().skip(i + 1) {
-                if full_treetn.edge_between(node_a, node_b).is_some() {
-                    edges.push((node_a.clone(), node_b.clone()));
-                }
-            }
-        }
-
-        Ok(TreeTopology::new(nodes, edges))
+        local_update_support::build_subtree_topology(solved_tensor, region, full_treetn)
     }
 
     /// Copy decomposed tensors back to subtree, preserving original bond IDs.
@@ -441,64 +362,7 @@ where
         region: &[V],
         full_treetn: &TreeTN<T, V>,
     ) -> Result<()> {
-        use std::collections::HashMap;
-
-        // Phase 1: Build a mapping from decomposed bonds to new bond indices
-        // For internal bonds, we create a single new bond index that will be used
-        // for both nodes sharing that edge
-        let mut bond_mapping: HashMap<T::Index, T::Index> = HashMap::new();
-
-        for (i, node_a) in region.iter().enumerate() {
-            for node_b in region.iter().skip(i + 1) {
-                // Check if there's an edge between these nodes
-                if let Some(decomp_edge) = decomposed.edge_between(node_a, node_b) {
-                    if let Some(decomp_bond) = decomposed.bond_index(decomp_edge) {
-                        // Create a new bond index matching decomposed bond dimension.
-                        // Use sim() once for this edge to avoid ID collisions.
-                        if let Some(orig_edge) = subtree.edge_between(node_a, node_b) {
-                            let new_bond = decomp_bond.sim();
-                            bond_mapping.insert(decomp_bond.clone(), new_bond.clone());
-
-                            // Update the edge bond in subtree
-                            subtree.replace_edge_bond(orig_edge, new_bond)?;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Phase 2: For each node in the region, update its tensor using the bond mapping
-        for node in region {
-            let decomp_idx = decomposed
-                .node_index(node)
-                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in decomposed TreeTN", node))?;
-            let mut new_tensor = decomposed
-                .tensor(decomp_idx)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node))?
-                .clone();
-
-            // Replace bond indices using the pre-computed mapping
-            for neighbor in full_treetn.site_index_network().neighbors(node) {
-                if region.contains(&neighbor) {
-                    // Internal bond - use the mapped bond
-                    if let Some(decomp_edge) = decomposed.edge_between(node, &neighbor) {
-                        if let Some(decomp_bond) = decomposed.bond_index(decomp_edge) {
-                            if let Some(new_bond) = bond_mapping.get(decomp_bond) {
-                                new_tensor = new_tensor.replaceind(decomp_bond, new_bond)?;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Update the tensor in subtree
-            let subtree_idx = subtree
-                .node_index(node)
-                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in subtree", node))?;
-            subtree.replace_tensor(subtree_idx, new_tensor)?;
-        }
-
-        Ok(())
+        local_update_support::copy_decomposed_to_subtree(subtree, decomposed, region, full_treetn)
     }
 
     /// Solve the local linear problem using GMRES.
@@ -638,119 +502,12 @@ where
         step: &LocalUpdateStep<V>,
         ket_state: &TreeTN<T, V>,
     ) -> Result<()> {
-        // Extract updated region from ket_state
-        let ket_region = ket_state.extract_subtree(&step.nodes)?;
-
-        // Build mapping from ket bonds to reference bond indices for *all* bonds incident to the region.
-        //
-        // Important: reference_state bonds must remain stable across steps, even when an edge alternates
-        // between being a boundary edge and an internal edge in different steps (as happens in sweeps).
-        // Therefore, we always reuse the current reference_state bond indices, and never create fresh bonds here.
-        let mut ket_to_ref_bond_map: HashMap<T::Index, T::Index> = HashMap::new();
-
-        // Populate mapping for all edges incident to region nodes.
-        // - Boundary edges (region ↔ outside): use reference_state's existing bond IDs for cache stability
-        // - Internal edges (within region): use sim() to create new IDs distinct from ket
-        // This ensures reference_state bond IDs are always different from ket_state bond IDs.
-        let region_nodes: std::collections::HashSet<_> = step.nodes.iter().collect();
-        for node in &step.nodes {
-            for neighbor in ket_state.site_index_network().neighbors(node) {
-                let ket_edge = match ket_state.edge_between(node, &neighbor) {
-                    Some(e) => e,
-                    None => continue,
-                };
-                let ket_bond = match ket_state.bond_index(ket_edge) {
-                    Some(b) => b,
-                    None => continue,
-                };
-
-                let ref_bond = if region_nodes.contains(&neighbor) {
-                    // Internal edge: create new ID using sim()
-                    ket_bond.sim()
-                } else {
-                    // Boundary edge: use reference_state's existing bond ID
-                    let ref_edge = match self.reference_state.edge_between(node, &neighbor) {
-                        Some(e) => e,
-                        None => continue,
-                    };
-                    match self.reference_state.bond_index(ref_edge) {
-                        Some(b) => b.clone(),
-                        None => continue,
-                    }
-                };
-                ket_to_ref_bond_map.insert(ket_bond.clone(), ref_bond);
-            }
-        }
-
-        // Keep a small explicit cache for boundary edges (region ↔ outside) for inspection/debugging.
-        // This is not used to drive the mapping logic.
-        for boundary_edge in get_boundary_edges(ket_state, &step.nodes)? {
-            if let Some(edge) = self.reference_state.edge_between(
-                &boundary_edge.node_in_region,
-                &boundary_edge.neighbor_outside,
-            ) {
-                if let Some(ref_bond) = self.reference_state.bond_index(edge) {
-                    self.boundary_bond_map.insert(
-                        (
-                            boundary_edge.node_in_region.clone(),
-                            boundary_edge.neighbor_outside.clone(),
-                        ),
-                        ref_bond.clone(),
-                    );
-                }
-            }
-        }
-
-        // Create new ref_region by copying ket_region
-        let mut ref_region = ket_region.clone();
-
-        // First, update edge bonds in ref_region to reference-side IDs
-        // This must be done before replacing tensors to ensure consistency
-        let mut edges_to_update: Vec<(V, V, T::Index)> = Vec::new();
-        for node in &step.nodes {
-            let neighbors: Vec<V> = ref_region.site_index_network().neighbors(node).collect();
-            for neighbor in neighbors {
-                if let Some(edge) = ref_region.edge_between(node, &neighbor) {
-                    if let Some(bond) = ref_region.bond_index(edge) {
-                        if let Some(new_bond) = ket_to_ref_bond_map.get(bond) {
-                            edges_to_update.push((node.clone(), neighbor, new_bond.clone()));
-                        }
-                    }
-                }
-            }
-        }
-        // Update edges (ref_region is no longer borrowed)
-        for (node, neighbor, new_bond) in edges_to_update {
-            if let Some(edge) = ref_region.edge_between(&node, &neighbor) {
-                ref_region.replace_edge_bond(edge, new_bond)?;
-            }
-        }
-
-        // Now replace all bond indices (including boundary bonds) in ref_region tensors with reference-side IDs
-        for node in &step.nodes {
-            if let Some(node_idx) = ref_region.node_index(node) {
-                if let Some(tensor) = ref_region.tensor(node_idx) {
-                    let mut new_tensor = tensor.clone();
-                    let tensor_indices = tensor.external_indices();
-
-                    for ket_idx in &tensor_indices {
-                        // Replace if this index is one of the region's bond indices (internal or boundary)
-                        if let Some(ref_bond) = ket_to_ref_bond_map.get(ket_idx) {
-                            new_tensor = new_tensor.replaceind(ket_idx, ref_bond)?;
-                        }
-                        // Site indices are kept as-is.
-                    }
-
-                    ref_region.replace_tensor(node_idx, new_tensor)?;
-                }
-            }
-        }
-
-        // Replace the region back into reference_state
-        self.reference_state
-            .replace_subtree(&step.nodes, &ref_region)?;
-
-        Ok(())
+        local_update_support::sync_reference_state_region(
+            &mut self.reference_state,
+            Some(&mut self.boundary_bond_map),
+            step,
+            ket_state,
+        )
     }
 }
 
