@@ -37,9 +37,11 @@ pub use backend::{
 pub use context::{default_eager_ctx, with_default_backend};
 pub use matrix::{
     batched_mat_mul_same_shape, batched_mat_mul_same_shape_owned, from_vec2d,
-    lowest_hermitian_eigenpair, mat_mul, mat_mul_owned, submatrix, submatrix_argmax, swap_cols,
-    swap_rows, transpose, try_from_vec2d, BlasMul, HermitianEigenError, HermitianEigenScalar,
-    HermitianEigenpair, Matrix, MatrixScalar, MatrixShapeError, MatrixTensorConversionError,
+    hermitian_eigendecomposition, hermitian_exponential_first_column, lowest_hermitian_eigenpair,
+    mat_mul, mat_mul_owned, submatrix, submatrix_argmax, swap_cols, swap_rows, transpose,
+    try_from_vec2d, BlasMul, HermitianEigenError, HermitianEigenScalar,
+    HermitianEigendecomposition, HermitianEigenpair, Matrix, MatrixScalar, MatrixShapeError,
+    MatrixTensorConversionError,
 };
 pub use memory::{release_process_allocator_cached_memory, AllocatorPressureRelief};
 pub use storage::{

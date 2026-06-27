@@ -188,6 +188,25 @@
   dense/full-tensor exports return column-major flat data. Call sites that
   treat these buffers as matrices must use column-major indexing.
 
+## Differentiability And AD Preservation
+
+- Production tensor, tensor-network, linear algebra, and solver paths should
+  preserve automatic differentiation metadata whenever the underlying backend
+  and operation can do so.
+- Do not unnecessarily detach tensors, convert differentiable values through
+  plain Rust scalars, force `.real()`/real-only projections, or round-trip
+  through dense/reference paths in a way that discards AD metadata.
+- When an operation must cross a non-differentiable boundary, such as a scalar
+  control-flow decision, diagnostic conversion, FFI boundary, or unsupported
+  backend routine, keep that boundary explicit in the code and documentation.
+- Prefer backend-provided differentiable primitives for contraction, einsum,
+  SVD, QR, eigensolvers, exponentials, and scalar operations. If a required
+  primitive is missing, add or refine the appropriate backend/core API instead
+  of silently implementing a detached local workaround.
+- Tests that claim AD support must include oracle or finite-difference
+  coverage. Tests for algorithms that are not yet AD-supported should still
+  avoid unnecessary AD metadata loss along intermediate tensor paths.
+
 ## Index Identity Semantics
 
 - Do not use `index.id()` alone to decide whether two indices are the same

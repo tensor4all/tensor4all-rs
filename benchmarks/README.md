@@ -51,6 +51,19 @@ sweeps, without sweep-to-sweep energy early stopping:
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_dmrg --release -- 8 4 3
 ```
 
+Two-site TreeTN TDVP against the same Pauli Heisenberg Hamiltonian on chain and
+star topologies. The benchmark evolves an alternating product state, uses
+`order = 2`, `maxdim = 32`, ITensors-compatible relative discarded squared
+singular-value tail cutoff `1e-12`, and a Hermitian Krylov exponential with
+`krylovdim = 30` and `tol = 1e-12`. Both runners use the numeric cap `100`,
+though Julia's KrylovKit `maxiter` and Rust's `max_time_splits` are different
+control mechanisms. It performs one untimed TDVP warm-up per topology and
+reports runtime plus L2 error against a small dense exact evolution reference:
+
+```bash
+RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_tdvp --release -- 8 4 3 0.02
+```
+
 Non-AD local tensor operations:
 
 ```bash
@@ -181,6 +194,24 @@ contraction sequences. The Julia runner performs one untimed DMRG warm-up per
 topology before recording timings, so reported times exclude Julia compilation
 and ITensorNetworks.jl first-call setup. Both runners use `cutoff = 1e-12` as a
 relative discarded squared singular-value tail cutoff.
+
+ITensorNetworks.jl two-site TDVP parity benchmark on matching chain and star
+Pauli Heisenberg Hamiltonians:
+
+```bash
+export T4A_ITENSORNETWORKS_PATH=/home/shinaoka/tensor4all/ITensor/ITensorNetworks.jl
+export T4A_ITN_BENCH_PROJECT=/tmp/t4a-itensornetworks-bench
+julia --project=$T4A_ITN_BENCH_PROJECT -e 'using Pkg; Pkg.develop(path=ENV["T4A_ITENSORNETWORKS_PATH"]); Pkg.add(["Graphs", "ITensors", "TensorOperations", "KrylovKit"]); Pkg.instantiate()'
+BLAS_NUM_THREADS=1 julia --project=$T4A_ITN_BENCH_PROJECT \
+  benchmarks/julia/benchmark_tdvp_itensornetworks.jl 8 4 3 0.02
+```
+
+The Julia TDVP runner performs one untimed warm-up per topology, so reported
+times exclude Julia compilation, ITensorNetworks.jl first-call setup, and
+KrylovKit initialization. It uses `exponentiate_solver` with `ishermitian =
+true`, `krylovdim = 30`, `tol = 1e-12`, and `maxiter = 100`. The Julia runner
+asserts that the benchmark's selected leaf root matches ITensorNetworks.jl's
+default TDVP sweep root for the chain and star graphs.
 
 Non-AD local tensor operations:
 

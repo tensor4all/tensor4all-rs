@@ -301,6 +301,65 @@ where
         Ok(contracted)
     }
 
+    /// Apply the operator projected to a bond-center tensor.
+    ///
+    /// This is used by one-site TDVP after factoring a site tensor as `Q * R`:
+    /// the left endpoint environment is computed with the temporary `Q` tensor,
+    /// the right endpoint environment is taken from the current state/reference
+    /// environments, and the result is mapped back to the input bond-center
+    /// index space.
+    pub(crate) fn apply_edge_center<NT: NetworkTopology<V>>(
+        &mut self,
+        center: &T,
+        edge: (&V, &V),
+        left_tensors: (&T, &T),
+        bra_to_ket_indices: &[(T::Index, T::Index)],
+        states: (&TreeTN<T, V>, &TreeTN<T, V>),
+        topology: &NT,
+    ) -> Result<T> {
+        let (left, right) = edge;
+        let (left_ket_tensor, left_bra_tensor) = left_tensors;
+        let (ket_state, bra_state) = states;
+        if !self.envs.contains(right, left) {
+            let env = self.compute_environment(right, left, ket_state, bra_state, topology)?;
+            self.envs.insert(right.clone(), left.clone(), env);
+        }
+
+        let left_env = self.compute_environment_from_node_tensors(
+            (left, right),
+            (left_ket_tensor, left_bra_tensor),
+            (ket_state, bra_state),
+            topology,
+        )?;
+        let right_env = self
+            .envs
+            .get(right, left)
+            .ok_or_else(|| anyhow::anyhow!("missing right environment for edge center"))?;
+
+        let mut contracted = T::contract(&[center, &left_env, right_env])?;
+        for (bra_idx, ket_idx) in bra_to_ket_indices {
+            if contracted
+                .external_indices()
+                .iter()
+                .any(|idx| idx == bra_idx)
+            {
+                contracted = contracted.replaceind(bra_idx, ket_idx)?;
+            }
+        }
+
+        let center_inds = center.external_indices();
+        let res_inds = contracted.external_indices();
+        let center_index_keys: std::collections::HashSet<_> =
+            center_inds.iter().map(|i| (i.clone(), i.dim())).collect();
+        let res_index_keys: std::collections::HashSet<_> =
+            res_inds.iter().map(|i| (i.clone(), i.dim())).collect();
+        if center_index_keys == res_index_keys && center_inds.len() == res_inds.len() {
+            contracted = contracted.permuteinds(&center_inds)?;
+        }
+
+        Ok(contracted)
+    }
+
     /// Ensure environments are computed for neighbors of the region.
     fn ensure_environments<NT: NetworkTopology<V>>(
         &mut self,
@@ -337,7 +396,39 @@ where
         bra_state: &TreeTN<T, V>,
         topology: &NT,
     ) -> Result<T> {
-        // First, ensure child environments are computed
+        // Get tensors from bra (V_out), operator, and ket (V_in) at this node
+        let node_idx_bra = bra_state
+            .node_index(from)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in bra_state", from))?;
+        let node_idx_ket = ket_state
+            .node_index(from)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in ket_state", from))?;
+
+        let tensor_bra = bra_state
+            .tensor(node_idx_bra)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found in bra_state"))?;
+        let tensor_ket = ket_state
+            .tensor(node_idx_ket)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found in ket_state"))?;
+
+        self.compute_environment_from_node_tensors(
+            (from, to),
+            (tensor_ket, tensor_bra),
+            (ket_state, bra_state),
+            topology,
+        )
+    }
+
+    fn compute_environment_from_node_tensors<NT: NetworkTopology<V>>(
+        &mut self,
+        edge: (&V, &V),
+        tensors: (&T, &T),
+        states: (&TreeTN<T, V>, &TreeTN<T, V>),
+        topology: &NT,
+    ) -> Result<T> {
+        let (from, to) = edge;
+        let (tensor_ket, tensor_bra) = tensors;
+        let (ket_state, bra_state) = states;
         let child_neighbors: Vec<V> = topology.neighbors(from).filter(|n| n != to).collect();
 
         for child in &child_neighbors {
@@ -348,34 +439,19 @@ where
             }
         }
 
-        // Collect child environments
         let child_envs: Vec<&T> = child_neighbors
             .iter()
             .filter_map(|child| self.envs.get(child, from))
             .collect();
 
-        // Get tensors from bra (V_out), operator, and ket (V_in) at this node
-        let node_idx_bra = bra_state
-            .node_index(from)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in bra_state", from))?;
         let node_idx_op = self
             .operator
             .node_index(from)
             .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in operator", from))?;
-        let node_idx_ket = ket_state
-            .node_index(from)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in ket_state", from))?;
-
-        let tensor_bra = bra_state
-            .tensor(node_idx_bra)
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found in bra_state"))?;
         let tensor_op = self
             .operator
             .tensor(node_idx_op)
             .ok_or_else(|| anyhow::anyhow!("Tensor not found in operator"))?;
-        let tensor_ket = ket_state
-            .tensor(node_idx_ket)
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found in ket_state"))?;
 
         // Environment contraction for 3-chain: <bra| H |ket>
         //

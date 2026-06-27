@@ -52,6 +52,23 @@ fn projected_hermitian_lowest_eigenpair_works_for_real_symmetric_matrix() {
 }
 
 #[test]
+fn hermitian_eigendecomposition_returns_all_real_symmetric_pairs() {
+    let matrix = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 1.0, 1.0, 2.0]);
+
+    let decomp = hermitian_eigendecomposition(&matrix, 1.0e-12).unwrap();
+
+    assert_eq!(decomp.eigenvalues.len(), 2);
+    assert_eq!(decomp.eigenvectors.nrows(), 2);
+    assert_eq!(decomp.eigenvectors.ncols(), 2);
+    assert!((decomp.eigenvalues[0] - 1.0).abs() < 1.0e-12);
+    assert!((decomp.eigenvalues[1] - 3.0).abs() < 1.0e-12);
+    for col in 0..2 {
+        let vector = [decomp.eigenvectors[[0, col]], decomp.eigenvectors[[1, col]]];
+        assert!(real_eigen_residual_norm(&matrix, decomp.eigenvalues[col], &vector) < 1.0e-10);
+    }
+}
+
+#[test]
 fn projected_hermitian_lowest_eigenpair_works_for_complex_hermitian_matrix() {
     let i = Complex64::new(0.0, 1.0);
     let matrix = Matrix::from_col_major_vec(
@@ -64,6 +81,37 @@ fn projected_hermitian_lowest_eigenpair_works_for_complex_hermitian_matrix() {
 
     assert!((pair.eigenvalue + 1.0).abs() < 1.0e-12);
     assert!(complex_eigen_residual_norm(&matrix, pair.eigenvalue, &pair.eigenvector) < 1.0e-10);
+}
+
+#[test]
+fn hermitian_eigendecomposition_returns_all_complex_pairs() {
+    let i = Complex64::new(0.0, 1.0);
+    let matrix = Matrix::from_col_major_vec(
+        2,
+        2,
+        vec![Complex64::new(0.0, 0.0), i, -i, Complex64::new(0.0, 0.0)],
+    );
+
+    let decomp = hermitian_eigendecomposition(&matrix, 1.0e-12).unwrap();
+
+    assert!((decomp.eigenvalues[0] + 1.0).abs() < 1.0e-12);
+    assert!((decomp.eigenvalues[1] - 1.0).abs() < 1.0e-12);
+    for col in 0..2 {
+        let vector = [decomp.eigenvectors[[0, col]], decomp.eigenvectors[[1, col]]];
+        assert!(complex_eigen_residual_norm(&matrix, decomp.eigenvalues[col], &vector) < 1.0e-10);
+    }
+}
+
+#[test]
+fn hermitian_exponential_first_column_matches_diagonal_action() {
+    let matrix = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 0.0, 0.0, 3.0]);
+
+    let coeffs =
+        hermitian_exponential_first_column(&matrix, Complex64::new(0.0, -0.5), 1.0e-12).unwrap();
+
+    assert_eq!(coeffs.len(), 2);
+    assert!((coeffs[0] - Complex64::new(0.5_f64.cos(), -0.5_f64.sin())).norm() < 1.0e-12);
+    assert!(coeffs[1].norm() < 1.0e-12);
 }
 
 #[test]
@@ -84,6 +132,33 @@ fn projected_hermitian_lowest_eigenpair_rejects_non_hermitian_diagonal() {
 
     assert!(matches!(err, HermitianEigenError::NonHermitian { .. }));
     assert!(err.to_string().contains("not Hermitian"));
+}
+
+#[test]
+fn hermitian_eigendecomposition_accepts_relative_roundoff_and_symmetrizes() {
+    let matrix = Matrix::from_col_major_vec(2, 2, vec![1.0e8_f64, 2.0e8, 2.0e8 + 1.0e-5, 3.0e8]);
+
+    let decomp = hermitian_eigendecomposition(&matrix, 1.0e-12).unwrap();
+
+    let symmetrized =
+        Matrix::from_col_major_vec(2, 2, vec![1.0e8, 2.0e8 + 0.5e-5, 2.0e8 + 0.5e-5, 3.0e8]);
+    for col in 0..2 {
+        let vector = [decomp.eigenvectors[[0, col]], decomp.eigenvectors[[1, col]]];
+        let residual = real_eigen_residual_norm(&symmetrized, decomp.eigenvalues[col], &vector);
+        assert!(
+            residual < 1.0e-6,
+            "residual {residual:.3e} exceeds tolerance"
+        );
+    }
+}
+
+#[test]
+fn hermitian_eigendecomposition_rejects_relative_asymmetry_above_tolerance() {
+    let matrix = Matrix::from_col_major_vec(2, 2, vec![1.0e8_f64, 2.0e8, 2.0e8 + 1.0e-2, 3.0e8]);
+
+    let err = hermitian_eigendecomposition(&matrix, 1.0e-12).unwrap_err();
+
+    assert!(matches!(err, HermitianEigenError::NonHermitian { .. }));
 }
 
 #[test]

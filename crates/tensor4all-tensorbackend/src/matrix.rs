@@ -122,8 +122,9 @@ pub enum MatrixShapeError {
 ///
 /// The eigensolver is intended for small Rayleigh-Ritz projected matrices. It
 /// validates shape and Hermitian structure before calling the backend Hermitian
-/// eigendecomposition, so non-Hermitian effective operators are rejected
-/// explicitly instead of silently taking a real part.
+/// eigendecomposition, symmetrizing only roundoff that is within the requested
+/// tolerance. Non-Hermitian effective operators are rejected explicitly instead
+/// of silently taking a real part.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum HermitianEigenError {
     /// The matrix has zero rows and columns, so it has no eigenpair.
@@ -154,7 +155,7 @@ pub enum HermitianEigenError {
         col: usize,
         /// Absolute Hermitian residual for the offending pair.
         difference: f64,
-        /// Tolerance used for validation.
+        /// Effective tolerance used for this entry pair.
         tolerance: f64,
     },
     /// The backend returned an output with an unexpected dtype.
@@ -210,6 +211,31 @@ pub struct HermitianEigenpair<T> {
     pub eigenvector: Vec<T>,
 }
 
+/// Full eigendecomposition of a small Hermitian projected matrix.
+///
+/// `eigenvectors` stores one normalized eigenvector per column in column-major
+/// [`Matrix`] layout. Eigenvalues are returned in the backend's ascending
+/// Hermitian eigensolver order.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{hermitian_eigendecomposition, Matrix};
+///
+/// let matrix = Matrix::from_col_major_vec(2, 2, vec![1.0, 0.0, 0.0, 2.0]);
+/// let decomp = hermitian_eigendecomposition(&matrix, 1.0e-12).unwrap();
+/// assert_eq!(decomp.eigenvalues, vec![1.0, 2.0]);
+/// assert_eq!(decomp.eigenvectors.nrows(), 2);
+/// assert_eq!(decomp.eigenvectors.ncols(), 2);
+/// ```
+#[derive(Debug, Clone)]
+pub struct HermitianEigendecomposition<T> {
+    /// Real eigenvalues of the Hermitian matrix.
+    pub eigenvalues: Vec<f64>,
+    /// Eigenvector matrix with one eigenvector in each column.
+    pub eigenvectors: Matrix<T>,
+}
+
 /// Scalar types supported by [`lowest_hermitian_eigenpair`].
 ///
 /// The current backend path is used for `f64` and `Complex64`, which are the
@@ -219,15 +245,33 @@ pub trait HermitianEigenScalar: TensorScalar + MatrixScalar {
     fn hermitian_difference(a_ij: Self, a_ji: Self) -> f64;
 
     #[doc(hidden)]
+    fn hermitian_scale(a_ij: Self, a_ji: Self) -> f64;
+
+    #[doc(hidden)]
+    fn symmetrized_hermitian_pair(a_ij: Self, a_ji: Self) -> (Self, Self);
+
+    #[doc(hidden)]
     fn eigenvalues_from_tensor(
         tensor: Tensor,
         tolerance: f64,
     ) -> std::result::Result<(Vec<usize>, Vec<f64>), HermitianEigenError>;
+
+    #[doc(hidden)]
+    fn to_complex64(value: Self) -> Complex64;
 }
 
 impl HermitianEigenScalar for f64 {
     fn hermitian_difference(a_ij: Self, a_ji: Self) -> f64 {
         (a_ij - a_ji).abs()
+    }
+
+    fn hermitian_scale(a_ij: Self, a_ji: Self) -> f64 {
+        a_ij.abs().max(a_ji.abs()).max(1.0)
+    }
+
+    fn symmetrized_hermitian_pair(a_ij: Self, a_ji: Self) -> (Self, Self) {
+        let value = 0.5 * (a_ij + a_ji);
+        (value, value)
     }
 
     fn eigenvalues_from_tensor(
@@ -237,11 +281,24 @@ impl HermitianEigenScalar for f64 {
         let values = typed_eigh_output::<f64>("eigenvalues", tensor)?;
         Ok((values.shape().to_vec(), values.as_slice().to_vec()))
     }
+
+    fn to_complex64(value: Self) -> Complex64 {
+        Complex64::new(value, 0.0)
+    }
 }
 
 impl HermitianEigenScalar for Complex64 {
     fn hermitian_difference(a_ij: Self, a_ji: Self) -> f64 {
         (a_ij - a_ji.conj()).norm()
+    }
+
+    fn hermitian_scale(a_ij: Self, a_ji: Self) -> f64 {
+        a_ij.norm().max(a_ji.norm()).max(1.0)
+    }
+
+    fn symmetrized_hermitian_pair(a_ij: Self, a_ji: Self) -> (Self, Self) {
+        let value = 0.5 * (a_ij + a_ji.conj());
+        (value, value.conj())
     }
 
     fn eigenvalues_from_tensor(
@@ -252,16 +309,21 @@ impl HermitianEigenScalar for Complex64 {
         let mut real_values = Vec::with_capacity(values.as_slice().len());
         for (index, value) in values.as_slice().iter().copied().enumerate() {
             let imaginary = value.im.abs();
-            if imaginary > tolerance {
+            let allowed = tolerance * value.norm().max(1.0);
+            if imaginary > allowed {
                 return Err(HermitianEigenError::NonRealEigenvalue {
                     index,
                     imaginary,
-                    tolerance,
+                    tolerance: allowed,
                 });
             }
             real_values.push(value.re);
         }
         Ok((values.shape().to_vec(), real_values))
+    }
+
+    fn to_complex64(value: Self) -> Complex64 {
+        value
     }
 }
 
@@ -443,14 +505,16 @@ impl<T> Matrix<T> {
 /// Compute the smallest eigenpair of a small Hermitian projected matrix.
 ///
 /// This function validates that `matrix` is square, non-empty, and Hermitian
-/// within `hermitian_tol`, then calls tenferro's Hermitian eigendecomposition.
-/// It is intended for Rayleigh-Ritz projected Krylov matrices, whose dimension
-/// is bounded by the Krylov subspace size. It must not be used to materialize a
-/// full tensor-network effective Hamiltonian.
+/// within `hermitian_tol`, symmetrizes accepted roundoff as `(A + A†) / 2`,
+/// then calls tenferro's Hermitian eigendecomposition. It is intended for
+/// Rayleigh-Ritz projected Krylov matrices, whose dimension is bounded by the
+/// Krylov subspace size. It must not be used to materialize a full
+/// tensor-network effective Hamiltonian.
 ///
 /// # Arguments
 /// * `matrix` - Small dense Hermitian matrix in column-major [`Matrix`] layout.
-/// * `hermitian_tol` - Absolute tolerance for `A[i, j] = conj(A[j, i])`.
+/// * `hermitian_tol` - Relative tolerance for `A[i, j] = conj(A[j, i])`,
+///   applied as `hermitian_tol * max(1, |A[i,j]|, |A[j,i]|)`.
 ///   Typical values are `1e-12` for `f64`/`Complex64` projected matrices.
 ///
 /// # Returns
@@ -480,7 +544,66 @@ pub fn lowest_hermitian_eigenpair<T>(
 where
     T: HermitianEigenScalar,
 {
-    validate_hermitian_matrix(matrix, hermitian_tol)?;
+    let decomp = hermitian_eigendecomposition(matrix, hermitian_tol)?;
+
+    let (min_col, eigenvalue) = decomp
+        .eigenvalues
+        .iter()
+        .copied()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))
+        .ok_or(HermitianEigenError::Empty)?;
+
+    let n = decomp.eigenvalues.len();
+    let vector_data = decomp.eigenvectors.as_col_major_slice();
+    let start = n * min_col;
+    let eigenvector = vector_data[start..start + n].to_vec();
+
+    Ok(HermitianEigenpair {
+        eigenvalue,
+        eigenvector,
+    })
+}
+
+/// Compute all eigenpairs of a small Hermitian projected matrix.
+///
+/// This validates Hermitian structure and symmetrizes accepted roundoff before
+/// calling the backend. It is meant for bounded Krylov/Rayleigh-Ritz matrices,
+/// not full tensor-network materialization.
+///
+/// # Arguments
+///
+/// * `matrix` - Square Hermitian matrix in column-major [`Matrix`] layout.
+/// * `hermitian_tol` - Relative tolerance for checking `A = A†`, applied per
+///   entry pair with scale `max(1, |A[i,j]|, |A[j,i]|)`.
+///
+/// # Returns
+///
+/// All real eigenvalues and all eigenvectors of `matrix`.
+///
+/// # Errors
+///
+/// Returns [`HermitianEigenError`] if `matrix` is not square, is not Hermitian
+/// within `hermitian_tol`, or the backend eigensolver fails.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{hermitian_eigendecomposition, Matrix};
+///
+/// let matrix = Matrix::from_col_major_vec(2, 2, vec![3.0, 0.0, 0.0, 5.0]);
+/// let decomp = hermitian_eigendecomposition(&matrix, 1.0e-12).unwrap();
+/// assert_eq!(decomp.eigenvalues, vec![3.0, 5.0]);
+/// assert_eq!(decomp.eigenvectors.as_col_major_slice().len(), 4);
+/// ```
+pub fn hermitian_eigendecomposition<T>(
+    matrix: &Matrix<T>,
+    hermitian_tol: f64,
+) -> std::result::Result<HermitianEigendecomposition<T>, HermitianEigenError>
+where
+    T: HermitianEigenScalar,
+{
+    let matrix = validate_and_symmetrize_hermitian_matrix(matrix, hermitian_tol)?;
 
     let n = matrix.nrows();
     let input_tensor = T::into_tensor(vec![n, n], matrix.as_col_major_slice().to_vec());
@@ -491,32 +614,85 @@ where
         }
     })?;
 
-    let (values_shape, values) = T::eigenvalues_from_tensor(values.data().clone(), hermitian_tol)?;
+    let (values_shape, eigenvalues) =
+        T::eigenvalues_from_tensor(values.data().clone(), hermitian_tol)?;
     ensure_eigh_shape("eigenvalues", &values_shape, &[n])?;
     let vectors = typed_eigh_output::<T>("eigenvectors", vectors.data().clone())?;
     ensure_eigh_shape("eigenvectors", vectors.shape(), &[n, n])?;
 
-    let (min_col, eigenvalue) = values
-        .iter()
-        .copied()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| a.total_cmp(b))
-        .ok_or(HermitianEigenError::Empty)?;
-
-    let vector_data = vectors.as_slice();
-    let start = n * min_col;
-    let eigenvector = vector_data[start..start + n].to_vec();
-
-    Ok(HermitianEigenpair {
-        eigenvalue,
-        eigenvector,
+    Ok(HermitianEigendecomposition {
+        eigenvalues,
+        eigenvectors: Matrix::from_col_major_vec(n, n, vectors.as_slice().to_vec()),
     })
 }
 
-fn validate_hermitian_matrix<T>(
+/// Compute the first column of `exp(exponent * A)` for a small Hermitian matrix.
+///
+/// Krylov exponential routines use this for the projected matrix action on the
+/// first basis vector. The returned coefficients are complex even when `A` is
+/// real because real-time evolution has complex phases.
+///
+/// # Arguments
+///
+/// * `matrix` - Square Hermitian matrix in column-major [`Matrix`] layout.
+/// * `exponent` - Scalar multiplier in `exp(exponent * A)`.
+/// * `hermitian_tol` - Relative tolerance for checking `A = A†`; accepted
+///   roundoff is symmetrized before eigensolving.
+///
+/// # Returns
+///
+/// The first column of the matrix exponential.
+///
+/// # Errors
+///
+/// Returns [`HermitianEigenError`] if Hermitian validation or eigensolving
+/// fails.
+///
+/// # Examples
+///
+/// ```
+/// use num_complex::Complex64;
+/// use tensor4all_tensorbackend::{hermitian_exponential_first_column, Matrix};
+///
+/// let matrix = Matrix::from_col_major_vec(2, 2, vec![1.0, 0.0, 0.0, 2.0]);
+/// let column = hermitian_exponential_first_column(
+///     &matrix,
+///     Complex64::new(0.0, -0.5),
+///     1.0e-12,
+/// ).unwrap();
+/// let expected = Complex64::new(0.5_f64.cos(), -0.5_f64.sin());
+/// assert!((column[0] - expected).norm() < 1.0e-12);
+/// assert!(column[1].norm() < 1.0e-12);
+/// ```
+pub fn hermitian_exponential_first_column<T>(
+    matrix: &Matrix<T>,
+    exponent: Complex64,
+    hermitian_tol: f64,
+) -> std::result::Result<Vec<Complex64>, HermitianEigenError>
+where
+    T: HermitianEigenScalar,
+{
+    let decomp = hermitian_eigendecomposition(matrix, hermitian_tol)?;
+    let n = decomp.eigenvalues.len();
+    let vectors = decomp.eigenvectors.as_col_major_slice();
+    let mut result = vec![Complex64::new(0.0, 0.0); n];
+
+    for col in 0..n {
+        let lambda = decomp.eigenvalues[col];
+        let phase = (exponent * lambda).exp();
+        let first_component = T::to_complex64(vectors[col * n]).conj();
+        for row in 0..n {
+            result[row] += T::to_complex64(vectors[row + col * n]) * phase * first_component;
+        }
+    }
+
+    Ok(result)
+}
+
+fn validate_and_symmetrize_hermitian_matrix<T>(
     matrix: &Matrix<T>,
     hermitian_tol: f64,
-) -> std::result::Result<(), HermitianEigenError>
+) -> std::result::Result<Matrix<T>, HermitianEigenError>
 where
     T: HermitianEigenScalar,
 {
@@ -535,20 +711,28 @@ where
         return Err(HermitianEigenError::Empty);
     }
 
+    let n = matrix.nrows();
+    let mut data = matrix.as_col_major_slice().to_vec();
     for col in 0..matrix.ncols() {
         for row in 0..=col {
-            let difference = T::hermitian_difference(matrix[[row, col]], matrix[[col, row]]);
-            if difference > hermitian_tol {
+            let row_col = matrix[[row, col]];
+            let col_row = matrix[[col, row]];
+            let difference = T::hermitian_difference(row_col, col_row);
+            let tolerance = hermitian_tol * T::hermitian_scale(row_col, col_row);
+            if difference > tolerance {
                 return Err(HermitianEigenError::NonHermitian {
                     row,
                     col,
                     difference,
-                    tolerance: hermitian_tol,
+                    tolerance,
                 });
             }
+            let (row_col, col_row) = T::symmetrized_hermitian_pair(row_col, col_row);
+            data[row + n * col] = row_col;
+            data[col + n * row] = col_row;
         }
     }
-    Ok(())
+    Ok(Matrix::from_col_major_vec(n, n, data))
 }
 
 fn typed_eigh_output<T>(
