@@ -228,6 +228,151 @@ fn hermitian_lanczos_lowest_eigenpair_rejects_non_hermitian_projection() {
 }
 
 #[test]
+fn hermitian_krylov_expm_multiply_diagonal_real_time_matches_exact() {
+    let idx = DynIndex::new_dyn(2);
+    let initial = make_vector_c64(
+        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+        &idx,
+    );
+
+    let result = hermitian_krylov_expm_multiply(
+        |x: &TensorDynLen| scale_vector_c64(x, &[1.0, 3.0]),
+        Complex64::new(0.0, -0.25),
+        &initial,
+        &HermitianKrylovExpmOptions {
+            max_iter: 8,
+            tol: 1.0e-12,
+            ..HermitianKrylovExpmOptions::default()
+        },
+    )
+    .unwrap();
+
+    assert!(result.converged, "error={:.3e}", result.error_estimate);
+    let actual = result.output.to_vec::<Complex64>().unwrap();
+    let expected0 = Complex64::new(0.25_f64.cos(), -0.25_f64.sin());
+    let expected1 = Complex64::new(2.0 * 0.75_f64.cos(), -2.0 * 0.75_f64.sin());
+    assert!((actual[0] - expected0).norm() < 1.0e-10);
+    assert!((actual[1] - expected1).norm() < 1.0e-10);
+}
+
+#[test]
+fn hermitian_krylov_expm_multiply_first_step_breakdown_reports_finite_error() {
+    let idx = DynIndex::new_dyn(2);
+    let initial = make_vector_c64(
+        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+        &idx,
+    );
+
+    let result = hermitian_krylov_expm_multiply(
+        |x: &TensorDynLen| scale_vector_c64(x, &[2.0, 2.0]),
+        Complex64::new(0.0, -0.25),
+        &initial,
+        &HermitianKrylovExpmOptions::default(),
+    )
+    .unwrap();
+
+    assert!(result.converged);
+    assert_eq!(result.iterations, 1);
+    assert!(result.error_estimate.is_finite());
+    assert!(result.error_estimate <= 1.0e-15);
+    let actual = result.output.to_vec::<Complex64>().unwrap();
+    let phase = Complex64::new(0.5_f64.cos(), -0.5_f64.sin());
+    assert!((actual[0] - phase).norm() < 1.0e-10);
+    assert!((actual[1] - Complex64::new(2.0, 0.0) * phase).norm() < 1.0e-10);
+}
+
+#[test]
+fn hermitian_krylov_expm_multiply_zero_exponent_returns_input() {
+    let idx = DynIndex::new_dyn(2);
+    let initial = make_vector_c64(
+        vec![Complex64::new(2.0, 1.0), Complex64::new(-3.0, 0.5)],
+        &idx,
+    );
+
+    let result = hermitian_krylov_expm_multiply(
+        |_x: &TensorDynLen| panic!("zero exponent must not request a matvec"),
+        Complex64::new(0.0, 0.0),
+        &initial,
+        &HermitianKrylovExpmOptions::default(),
+    )
+    .unwrap();
+
+    assert!(result.converged);
+    assert_eq!(result.matvecs, 0);
+    assert_eq!(
+        result.output.to_vec::<Complex64>().unwrap(),
+        initial.to_vec::<Complex64>().unwrap()
+    );
+}
+
+#[test]
+fn hermitian_krylov_expm_multiply_zero_initial_returns_zero_without_matvecs() {
+    let idx = DynIndex::new_dyn(2);
+    let initial = make_vector_c64(vec![Complex64::new(0.0, 0.0); 2], &idx);
+
+    let result = hermitian_krylov_expm_multiply(
+        |_x: &TensorDynLen| panic!("zero input must not request a matvec"),
+        Complex64::new(0.0, -0.25),
+        &initial,
+        &HermitianKrylovExpmOptions::default(),
+    )
+    .unwrap();
+
+    assert!(result.converged);
+    assert_eq!(result.matvecs, 0);
+    assert_eq!(
+        result.output.to_vec::<Complex64>().unwrap(),
+        initial.to_vec::<Complex64>().unwrap()
+    );
+}
+
+#[test]
+fn hermitian_krylov_expm_multiply_real_tensor_promotes_complex_evolution() {
+    let idx = DynIndex::new_dyn(2);
+    let initial = make_vector_with_index(vec![1.0, 0.0], &idx);
+
+    let result = hermitian_krylov_expm_multiply(
+        |x: &TensorDynLen| apply_matrix2_f64(x, &[0.0, 1.0, 1.0, 0.0]),
+        Complex64::new(0.0, -0.5),
+        &initial,
+        &HermitianKrylovExpmOptions::default(),
+    )
+    .unwrap();
+
+    let actual = result.output.to_vec::<Complex64>().unwrap();
+    assert!((actual[0] - Complex64::new(0.5_f64.cos(), 0.0)).norm() < 1.0e-10);
+    assert!((actual[1] - Complex64::new(0.0, -0.5_f64.sin())).norm() < 1.0e-10);
+}
+
+#[test]
+fn hermitian_krylov_expm_multiply_errors_when_unconverged() {
+    let idx = DynIndex::new_dyn(3);
+    let initial = make_vector_c64(
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ],
+        &idx,
+    );
+
+    let err = hermitian_krylov_expm_multiply(
+        |x: &TensorDynLen| scale_vector_c64(x, &[1.0, 2.0, 3.0]),
+        Complex64::new(0.0, -1.0),
+        &initial,
+        &HermitianKrylovExpmOptions {
+            max_iter: 1,
+            max_time_splits: 1,
+            tol: 1.0e-14,
+            ..HermitianKrylovExpmOptions::default()
+        },
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("did not converge"));
+}
+
+#[test]
 fn gmres_accepts_vector_space_without_tensorlike() {
     let b = PlainVector {
         data: vec![1.0, -2.0],
@@ -669,6 +814,16 @@ fn make_vector_with_index(data: Vec<f64>, idx: &DynIndex) -> TensorDynLen {
 fn scale_vector_f64(x: &TensorDynLen, diag: &[f64]) -> Result<TensorDynLen> {
     let x_data = x.to_vec::<f64>()?;
     let result_data: Vec<f64> = x_data
+        .iter()
+        .zip(diag.iter())
+        .map(|(&xi, &di)| xi * di)
+        .collect();
+    Ok(TensorDynLen::from_dense(x.indices.clone(), result_data).unwrap())
+}
+
+fn scale_vector_c64(x: &TensorDynLen, diag: &[f64]) -> Result<TensorDynLen> {
+    let x_data = x.to_vec::<Complex64>()?;
+    let result_data: Vec<_> = x_data
         .iter()
         .zip(diag.iter())
         .map(|(&xi, &di)| xi * di)

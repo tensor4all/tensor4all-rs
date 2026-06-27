@@ -41,7 +41,9 @@ use anyhow::Result;
 use num_complex::Complex64;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use tensor4all_tensorbackend::{lowest_hermitian_eigenpair, Matrix};
+use tensor4all_tensorbackend::{
+    hermitian_exponential_first_column, lowest_hermitian_eigenpair, Matrix,
+};
 
 static GMRES_OP_PROFILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -347,6 +349,91 @@ pub struct HermitianLanczosResult<T> {
     pub converged: bool,
 }
 
+/// Options for [`hermitian_krylov_expm_multiply`].
+///
+/// The routine builds a Hermitian Lanczos basis for a matrix-free operator,
+/// exponentiates the small projected Hermitian matrix, and combines the basis
+/// vectors without materializing the full operator. Scalar convergence checks
+/// and projected eigendecompositions are explicit non-differentiable
+/// boundaries; vector-space tensor operations preserve backend metadata when
+/// the underlying tensor implementation supports it.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::krylov::HermitianKrylovExpmOptions;
+///
+/// let options = HermitianKrylovExpmOptions {
+///     max_iter: 32,
+///     tol: 1.0e-10,
+///     ..HermitianKrylovExpmOptions::default()
+/// };
+/// assert_eq!(options.max_iter, 32);
+/// assert_eq!(options.tol, 1.0e-10);
+/// ```
+#[derive(Debug, Clone)]
+pub struct HermitianKrylovExpmOptions {
+    /// Maximum Krylov subspace dimension for one exponential application.
+    pub max_iter: usize,
+    /// Maximum number of equal time splits attempted after non-convergence.
+    pub max_time_splits: usize,
+    /// Relative convergence tolerance for successive Krylov approximants.
+    pub tol: f64,
+    /// Breakdown threshold for zero vectors and invariant Krylov subspaces.
+    pub breakdown_tol: f64,
+    /// Hermitian validation tolerance for projected matrices.
+    pub hermitian_tol: f64,
+    /// Whether to print per-attempt diagnostics.
+    pub verbose: bool,
+}
+
+impl Default for HermitianKrylovExpmOptions {
+    fn default() -> Self {
+        Self {
+            max_iter: 30,
+            max_time_splits: 100,
+            tol: 1.0e-12,
+            breakdown_tol: 1.0e-14,
+            hermitian_tol: 1.0e-10,
+            verbose: false,
+        }
+    }
+}
+
+/// Result of [`hermitian_krylov_expm_multiply`].
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::krylov::HermitianKrylovExpmResult;
+///
+/// let result = HermitianKrylovExpmResult {
+///     output: vec![1.0_f64, 0.0],
+///     iterations: 1,
+///     matvecs: 1,
+///     error_estimate: 0.0,
+///     converged: true,
+///     time_splits: 1,
+/// };
+/// assert!(result.converged);
+/// assert_eq!(result.output[0], 1.0);
+/// ```
+#[derive(Debug, Clone)]
+pub struct HermitianKrylovExpmResult<T> {
+    /// Approximation to `exp(exponent * A) * initial`.
+    pub output: T,
+    /// Total Krylov iterations over all accepted substeps.
+    pub iterations: usize,
+    /// Total matrix-vector products over all accepted substeps.
+    pub matvecs: usize,
+    /// Maximum successive-approximation error estimate.
+    pub error_estimate: f64,
+    /// Whether the requested tolerance was met.
+    pub converged: bool,
+    /// Number of equal time splits used.
+    pub time_splits: usize,
+}
+
 #[derive(Debug, Clone)]
 struct HermitianRitzState {
     eigenvalue: f64,
@@ -489,6 +576,261 @@ where
         &ritz_state,
         options,
     )
+}
+
+/// Apply `exp(exponent * A)` to a vector using a matrix-free Hermitian Krylov method.
+///
+/// This routine only materializes small projected Krylov matrices. It never
+/// forms the full matrix for `A`, so it can be used by tensor-network local
+/// solvers whose operator application is available as a closure.
+///
+/// # Arguments
+/// * `apply_a` - Matrix-free Hermitian operator application.
+/// * `exponent` - Scalar exponent, for example `-im * dt` for real-time TDVP.
+/// * `initial` - Initial vector.
+/// * `options` - Krylov dimension, tolerance, and Hermitian validation options.
+///
+/// # Returns
+/// A [`HermitianKrylovExpmResult`] containing the evolved vector and diagnostics.
+///
+/// # Errors
+/// Returns an error if an option is invalid, a vector-space operation fails,
+/// the projected matrix is not Hermitian, or the requested tolerance is not met
+/// after the configured time splits.
+///
+/// # Examples
+///
+/// ```
+/// use num_complex::Complex64;
+/// use tensor4all_core::krylov::{
+///     hermitian_krylov_expm_multiply, HermitianKrylovExpmOptions,
+/// };
+/// use tensor4all_core::{DynIndex, TensorDynLen};
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let index = DynIndex::new_dyn(2);
+/// let initial = TensorDynLen::from_dense(
+///     vec![index.clone()],
+///     vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+/// )?;
+/// let options = HermitianKrylovExpmOptions {
+///     max_iter: 4,
+///     tol: 1.0e-12,
+///     ..Default::default()
+/// };
+/// let result = hermitian_krylov_expm_multiply(
+///     |x: &TensorDynLen| {
+///         let data = x.to_vec::<Complex64>()?;
+///         TensorDynLen::from_dense(
+///             vec![index.clone()],
+///             vec![data[0], Complex64::new(2.0, 0.0) * data[1]],
+///         )
+///     },
+///     Complex64::new(0.0, -0.25),
+///     &initial,
+///     &options,
+/// )?;
+/// let evolved = result.output.to_vec::<Complex64>()?;
+/// let expected = Complex64::new(0.25_f64.cos(), -0.25_f64.sin());
+/// assert!((evolved[0] - expected).norm() < 1.0e-10);
+/// assert!(evolved[1].norm() < 1.0e-12);
+/// # Ok(())
+/// # }
+/// ```
+pub fn hermitian_krylov_expm_multiply<T, F>(
+    apply_a: F,
+    exponent: Complex64,
+    initial: &T,
+    options: &HermitianKrylovExpmOptions,
+) -> Result<HermitianKrylovExpmResult<T>>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+{
+    validate_hermitian_krylov_expm_options(options)?;
+    initial.validate()?;
+
+    if exponent == Complex64::new(0.0, 0.0) {
+        return Ok(HermitianKrylovExpmResult {
+            output: initial.clone(),
+            iterations: 0,
+            matvecs: 0,
+            error_estimate: 0.0,
+            converged: true,
+            time_splits: 1,
+        });
+    }
+    if initial.norm() <= options.breakdown_tol {
+        return Ok(HermitianKrylovExpmResult {
+            output: initial.clone(),
+            iterations: 0,
+            matvecs: 0,
+            error_estimate: 0.0,
+            converged: true,
+            time_splits: 1,
+        });
+    }
+
+    let mut splits = 1usize;
+    loop {
+        let step_exponent = exponent / splits as f64;
+        let mut output = initial.clone();
+        let mut iterations = 0usize;
+        let mut matvecs = 0usize;
+        let mut max_error = 0.0_f64;
+        let mut converged = true;
+
+        for _ in 0..splits {
+            let result =
+                hermitian_krylov_expm_multiply_once(&apply_a, step_exponent, &output, options)?;
+            iterations += result.iterations;
+            matvecs += result.matvecs;
+            max_error = max_error.max(result.error_estimate);
+            output = result.output;
+            if !result.converged {
+                converged = false;
+                break;
+            }
+        }
+
+        if converged {
+            return Ok(HermitianKrylovExpmResult {
+                output,
+                iterations,
+                matvecs,
+                error_estimate: max_error,
+                converged: true,
+                time_splits: splits,
+            });
+        }
+
+        if options.verbose {
+            eprintln!(
+                "Hermitian Krylov expm did not converge with {splits} time split(s); retrying"
+            );
+        }
+        if splits >= options.max_time_splits {
+            return Err(anyhow::anyhow!(
+                "hermitian_krylov_expm_multiply did not converge within max_time_splits={} and max_iter={}",
+                options.max_time_splits,
+                options.max_iter
+            ));
+        }
+        splits = splits.saturating_mul(2).min(options.max_time_splits);
+    }
+}
+
+fn hermitian_krylov_expm_multiply_once<T, F>(
+    apply_a: &F,
+    exponent: Complex64,
+    initial: &T,
+    options: &HermitianKrylovExpmOptions,
+) -> Result<HermitianKrylovExpmResult<T>>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+{
+    let initial_norm = initial.norm();
+    if initial_norm <= options.breakdown_tol {
+        return Ok(HermitianKrylovExpmResult {
+            output: initial.clone(),
+            iterations: 0,
+            matvecs: 0,
+            error_estimate: 0.0,
+            converged: true,
+            time_splits: 1,
+        });
+    }
+
+    let mut basis = Vec::with_capacity(options.max_iter + 1);
+    basis.push(initial.scale(AnyScalar::new_real(1.0 / initial_norm))?);
+    let mut h_cols: Vec<Vec<Complex64>> = Vec::with_capacity(options.max_iter);
+    let mut previous: Option<T> = None;
+    let mut last: Option<HermitianKrylovExpmResult<T>> = None;
+    let threshold = options.tol * initial_norm.max(1.0);
+
+    for j in 0..options.max_iter {
+        let w = apply_a(&basis[j])?;
+        if j == 0 {
+            w.validate()?;
+        }
+        let mut w_orth = w;
+        let mut h_col = Vec::with_capacity(j + 2);
+
+        for v_i in basis.iter().take(j + 1) {
+            let h_ij = v_i.inner_product(&w_orth)?;
+            h_col.push(any_scalar_to_complex(&h_ij));
+            let neg_h_ij = AnyScalar::new_real(0.0) - h_ij;
+            w_orth = w_orth.axpby(AnyScalar::new_real(1.0), v_i, neg_h_ij)?;
+        }
+
+        for (i, v_i) in basis.iter().take(j + 1).enumerate() {
+            let correction = v_i.inner_product(&w_orth)?;
+            h_col[i] += any_scalar_to_complex(&correction);
+            let neg_correction = AnyScalar::new_real(0.0) - correction;
+            w_orth = w_orth.axpby(AnyScalar::new_real(1.0), v_i, neg_correction)?;
+        }
+
+        let beta_next = w_orth.norm();
+        h_col.push(Complex64::new(beta_next, 0.0));
+        h_cols.push(h_col);
+
+        let subspace_dim = j + 1;
+        let projected = projected_matrix_from_columns(&h_cols, subspace_dim);
+        let coefficients =
+            hermitian_exponential_first_column(&projected, exponent, options.hermitian_tol)
+                .map_err(|err| anyhow::anyhow!("projected operator is not Hermitian: {err}"))?;
+        let unit_output = combine_basis_with_complex_coefficients(
+            &basis[..subspace_dim],
+            &coefficients,
+            options.hermitian_tol,
+            "hermitian_krylov_expm_multiply",
+        )?;
+        let output = unit_output.scale(AnyScalar::new_real(initial_norm))?;
+        let mut error_estimate = match &previous {
+            Some(previous) => output
+                .axpby(
+                    AnyScalar::new_real(1.0),
+                    previous,
+                    AnyScalar::new_real(-1.0),
+                )?
+                .norm(),
+            None => f64::INFINITY,
+        };
+        let converged = beta_next <= options.breakdown_tol || error_estimate <= threshold;
+        if converged && beta_next <= options.breakdown_tol && previous.is_none() {
+            error_estimate = 0.0;
+        }
+
+        if options.verbose {
+            eprintln!(
+                "Hermitian Krylov expm iter {}: error_estimate={:.6e} threshold={:.6e}",
+                subspace_dim, error_estimate, threshold
+            );
+        }
+
+        let result = HermitianKrylovExpmResult {
+            output: output.clone(),
+            iterations: subspace_dim,
+            matvecs: subspace_dim,
+            error_estimate,
+            converged,
+            time_splits: 1,
+        };
+        if converged {
+            return Ok(result);
+        }
+        if beta_next <= options.breakdown_tol {
+            return Ok(result);
+        }
+        previous = Some(output);
+        last = Some(result);
+        basis.push(w_orth.scale(AnyScalar::new_real(1.0 / beta_next))?);
+    }
+
+    last.ok_or_else(|| {
+        anyhow::anyhow!("hermitian_krylov_expm_multiply: max_iter must be greater than zero")
+    })
 }
 
 /// Solve `A x = b` using GMRES (Generalized Minimal Residual Method).
@@ -2024,6 +2366,30 @@ fn validate_hermitian_lanczos_options(options: &HermitianLanczosOptions) -> Resu
     Ok(())
 }
 
+fn validate_hermitian_krylov_expm_options(options: &HermitianKrylovExpmOptions) -> Result<()> {
+    anyhow::ensure!(
+        options.max_iter > 0,
+        "hermitian_krylov_expm_multiply: max_iter must be greater than zero"
+    );
+    anyhow::ensure!(
+        options.max_time_splits > 0,
+        "hermitian_krylov_expm_multiply: max_time_splits must be greater than zero"
+    );
+    anyhow::ensure!(
+        options.tol.is_finite() && options.tol >= 0.0,
+        "hermitian_krylov_expm_multiply: tol must be finite and non-negative"
+    );
+    anyhow::ensure!(
+        options.breakdown_tol.is_finite() && options.breakdown_tol >= 0.0,
+        "hermitian_krylov_expm_multiply: breakdown_tol must be finite and non-negative"
+    );
+    anyhow::ensure!(
+        options.hermitian_tol.is_finite() && options.hermitian_tol >= 0.0,
+        "hermitian_krylov_expm_multiply: hermitian_tol must be finite and non-negative"
+    );
+    Ok(())
+}
+
 fn projected_matrix_from_columns(h_cols: &[Vec<Complex64>], dim: usize) -> Matrix<Complex64> {
     let mut data = vec![Complex64::new(0.0, 0.0); dim * dim];
     for col in 0..dim {
@@ -2128,6 +2494,34 @@ where
             AnyScalar::new_real(1.0),
             basis_vector,
             any_scalar_from_complex(*coefficient, options.hermitian_tol)?,
+        )?;
+    }
+    Ok(result)
+}
+
+fn combine_basis_with_complex_coefficients<T>(
+    basis: &[T],
+    coefficients: &[Complex64],
+    hermitian_tol: f64,
+    context: &'static str,
+) -> Result<T>
+where
+    T: TensorVectorSpace,
+{
+    anyhow::ensure!(!basis.is_empty(), "{context}: empty Krylov basis");
+    anyhow::ensure!(
+        basis.len() == coefficients.len(),
+        "{context}: coefficient length {} does not match basis length {}",
+        coefficients.len(),
+        basis.len()
+    );
+
+    let mut result = basis[0].scale(any_scalar_from_complex(coefficients[0], hermitian_tol)?)?;
+    for (basis_vector, coefficient) in basis.iter().zip(coefficients.iter()).skip(1) {
+        result = result.axpby(
+            AnyScalar::new_real(1.0),
+            basis_vector,
+            any_scalar_from_complex(*coefficient, hermitian_tol)?,
         )?;
     }
     Ok(result)

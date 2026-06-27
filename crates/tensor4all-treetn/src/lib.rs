@@ -34,6 +34,7 @@ pub mod options;
 pub mod random;
 mod simplett_bridge;
 pub mod site_index_network;
+pub mod tdvp;
 pub mod treetn;
 
 pub use algorithm::{CanonicalForm, CompressionAlgorithm, ContractionAlgorithm};
@@ -63,6 +64,7 @@ pub use simplett_bridge::{
     weighted_remove_site_from_treetn_chain,
 };
 pub use site_index_network::SiteIndexNetwork;
+pub use tdvp::{tdvp, tdvp_with_treetn_operator, TdvpError, TdvpOptions, TdvpResult};
 pub use treetn::{
     // Local update
     apply_local_update_sweep,

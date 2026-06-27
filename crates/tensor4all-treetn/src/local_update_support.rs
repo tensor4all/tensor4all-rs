@@ -11,8 +11,131 @@ use std::hash::Hash;
 
 use anyhow::Result;
 use tensor4all_core::{IndexLike, TensorLike};
+use thiserror::Error;
 
+use crate::operator::{IndexMapping, LinearOperator};
 use crate::treetn::{get_boundary_edges, LocalUpdateStep, TreeTN, TreeTopology};
+
+pub(crate) type SiteMappings<V, I> = (HashMap<V, IndexMapping<I>>, HashMap<V, IndexMapping<I>>);
+
+#[derive(Debug, Error)]
+pub(crate) enum SquareSiteMappingError {
+    #[error(
+        "square local update requires exactly one state site index at node {node}, found {count}"
+    )]
+    UnsupportedStateSiteCount { node: String, count: usize },
+    #[error(
+        "square local update requires exactly one {role} mapping at node {node}, found {count}"
+    )]
+    UnsupportedMultipleSiteMappings {
+        node: String,
+        role: &'static str,
+        count: usize,
+    },
+    #[error("square local update missing {role} mapping at node {node}")]
+    MissingMapping { node: String, role: &'static str },
+    #[error("invalid square local update mapping at node {node}: {reason}")]
+    InvalidMapping { node: String, reason: String },
+}
+
+pub(crate) fn single_site_square_mappings<T, V>(
+    operator: &LinearOperator<T, V>,
+    state: &TreeTN<T, V>,
+) -> Result<SiteMappings<V, T::Index>, SquareSiteMappingError>
+where
+    T: TensorLike,
+    T::Index: IndexLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let mut input = HashMap::new();
+    let mut output = HashMap::new();
+
+    for node in state.node_names() {
+        let node_name = format!("{node:?}");
+        let state_sites = state.site_space(&node).ok_or_else(|| {
+            SquareSiteMappingError::UnsupportedStateSiteCount {
+                node: node_name.clone(),
+                count: 0,
+            }
+        })?;
+        if state_sites.len() != 1 {
+            return Err(SquareSiteMappingError::UnsupportedStateSiteCount {
+                node: node_name,
+                count: state_sites.len(),
+            });
+        }
+        let state_site = state_sites.iter().next().ok_or_else(|| {
+            SquareSiteMappingError::UnsupportedStateSiteCount {
+                node: node_name.clone(),
+                count: 0,
+            }
+        })?;
+
+        let in_mapping = single_mapping(
+            operator.input_mappings().get(&node).map(Vec::as_slice),
+            &node,
+            "input",
+        )?;
+        let out_mapping = single_mapping(
+            operator.output_mappings().get(&node).map(Vec::as_slice),
+            &node,
+            "output",
+        )?;
+
+        if &in_mapping.true_index != state_site {
+            return Err(SquareSiteMappingError::InvalidMapping {
+                node: format!("{node:?}"),
+                reason: "input true index does not match the state site index".to_string(),
+            });
+        }
+        if &out_mapping.true_index != state_site {
+            return Err(SquareSiteMappingError::InvalidMapping {
+                node: format!("{node:?}"),
+                reason:
+                    "output true index must equal the state site index for square local updates"
+                        .to_string(),
+            });
+        }
+        if in_mapping.internal_index.dim() != state_site.dim()
+            || out_mapping.internal_index.dim() != state_site.dim()
+        {
+            return Err(SquareSiteMappingError::InvalidMapping {
+                node: format!("{node:?}"),
+                reason: "operator internal mapping dimensions must match the state site dimension"
+                    .to_string(),
+            });
+        }
+
+        input.insert(node.clone(), in_mapping.clone());
+        output.insert(node, out_mapping.clone());
+    }
+
+    Ok((input, output))
+}
+
+fn single_mapping<'a, I, V>(
+    mappings: Option<&'a [IndexMapping<I>]>,
+    node: &V,
+    role: &'static str,
+) -> Result<&'a IndexMapping<I>, SquareSiteMappingError>
+where
+    I: IndexLike,
+    V: std::fmt::Debug,
+{
+    let mappings = mappings.ok_or_else(|| SquareSiteMappingError::MissingMapping {
+        node: format!("{node:?}"),
+        role,
+    })?;
+    if mappings.len() != 1 {
+        return Err(SquareSiteMappingError::UnsupportedMultipleSiteMappings {
+            node: format!("{node:?}"),
+            role,
+            count: mappings.len(),
+        });
+    }
+    Ok(&mappings[0])
+}
 
 /// Initialize a reference state by cloning the ket state and relabeling links.
 pub(crate) fn initialize_reference_state_if_empty<T, V>(

@@ -17,15 +17,14 @@ use crate::linsolve::common::ProjectedOperator;
 use crate::linsolve::square::local_linop::LocalLinOp;
 use crate::local_update_support::{
     build_subtree_topology, contract_region, copy_decomposed_to_subtree,
-    initialize_reference_state_if_empty, sync_reference_state_region,
+    initialize_reference_state_if_empty, single_site_square_mappings, sync_reference_state_region,
+    SquareSiteMappingError,
 };
 use crate::operator::{IndexMapping, LinearOperator};
 use crate::{
     apply_local_update_sweep, factorize_tensor_to_treetn_with, CanonicalizationOptions,
     LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, TreeTN,
 };
-
-type SiteMappings<V, I> = (HashMap<V, IndexMapping<I>>, HashMap<V, IndexMapping<I>>);
 
 /// Errors reported by TreeTN DMRG.
 ///
@@ -130,6 +129,25 @@ pub enum DmrgError {
         #[source]
         source: anyhow::Error,
     },
+}
+
+impl From<SquareSiteMappingError> for DmrgError {
+    fn from(error: SquareSiteMappingError) -> Self {
+        match error {
+            SquareSiteMappingError::UnsupportedStateSiteCount { node, count } => {
+                Self::UnsupportedStateSiteCount { node, count }
+            }
+            SquareSiteMappingError::UnsupportedMultipleSiteMappings { node, role, count } => {
+                Self::UnsupportedMultipleSiteMappings { node, role, count }
+            }
+            SquareSiteMappingError::MissingMapping { node, role } => {
+                Self::MissingMapping { node, role }
+            }
+            SquareSiteMappingError::InvalidMapping { node, reason } => {
+                Self::InvalidMapping { node, reason }
+            }
+        }
+    }
 }
 
 /// Options for two-site TreeTN DMRG.
@@ -626,7 +644,8 @@ where
         return Err(DmrgError::TopologyMismatch);
     }
 
-    let (input_mapping, output_mapping) = single_site_mappings(operator, &init)?;
+    let (input_mapping, output_mapping) =
+        single_site_square_mappings(operator, &init).map_err(DmrgError::from)?;
     let mut state = init
         .canonicalize([center.clone()], CanonicalizationOptions::default())
         .map_err(|source| DmrgError::Algorithm {
@@ -803,107 +822,6 @@ fn checked_real_scalar(
         });
     }
     Ok(value.real())
-}
-
-fn single_site_mappings<T, V>(
-    operator: &LinearOperator<T, V>,
-    state: &TreeTN<T, V>,
-) -> Result<SiteMappings<V, T::Index>, DmrgError>
-where
-    T: TensorLike,
-    T::Index: IndexLike,
-    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
-    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
-{
-    let mut input = HashMap::new();
-    let mut output = HashMap::new();
-
-    for node in state.node_names() {
-        let node_name = format!("{node:?}");
-        let state_sites =
-            state
-                .site_space(&node)
-                .ok_or_else(|| DmrgError::UnsupportedStateSiteCount {
-                    node: node_name.clone(),
-                    count: 0,
-                })?;
-        if state_sites.len() != 1 {
-            return Err(DmrgError::UnsupportedStateSiteCount {
-                node: node_name,
-                count: state_sites.len(),
-            });
-        }
-        let state_site =
-            state_sites
-                .iter()
-                .next()
-                .ok_or_else(|| DmrgError::UnsupportedStateSiteCount {
-                    node: node_name.clone(),
-                    count: 0,
-                })?;
-
-        let in_mapping = single_mapping(
-            operator.input_mappings().get(&node).map(Vec::as_slice),
-            &node,
-            "input",
-        )?;
-        let out_mapping = single_mapping(
-            operator.output_mappings().get(&node).map(Vec::as_slice),
-            &node,
-            "output",
-        )?;
-
-        if &in_mapping.true_index != state_site {
-            return Err(DmrgError::InvalidMapping {
-                node: format!("{node:?}"),
-                reason: "input true index does not match the state site index".to_string(),
-            });
-        }
-        if &out_mapping.true_index != state_site {
-            return Err(DmrgError::InvalidMapping {
-                node: format!("{node:?}"),
-                reason: "output true index must equal the state site index for square DMRG"
-                    .to_string(),
-            });
-        }
-        if in_mapping.internal_index.dim() != state_site.dim()
-            || out_mapping.internal_index.dim() != state_site.dim()
-        {
-            return Err(DmrgError::InvalidMapping {
-                node: format!("{node:?}"),
-                reason: "operator internal mapping dimensions must match the state site dimension"
-                    .to_string(),
-            });
-        }
-
-        input.insert(node.clone(), in_mapping.clone());
-        output.insert(node, out_mapping.clone());
-    }
-
-    Ok((input, output))
-}
-
-fn single_mapping<'a, I, V>(
-    mappings: Option<&'a [IndexMapping<I>]>,
-    node: &V,
-    role: &'static str,
-) -> Result<&'a IndexMapping<I>, DmrgError>
-where
-    I: IndexLike,
-    V: std::fmt::Debug,
-{
-    let mappings = mappings.ok_or_else(|| DmrgError::MissingMapping {
-        node: format!("{node:?}"),
-        role,
-    })?;
-    if mappings.len() != 1 {
-        return Err(DmrgError::UnsupportedMultipleSiteMappings {
-            node: format!("{node:?}"),
-            role,
-            count: mappings.len(),
-        });
-    }
-    Ok(&mappings[0])
 }
 
 fn rayleigh_region<T, V>(state: &TreeTN<T, V>, center: &V) -> Result<Vec<V>, DmrgError>
