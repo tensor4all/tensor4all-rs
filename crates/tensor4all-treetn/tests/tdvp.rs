@@ -1,14 +1,15 @@
 use std::collections::HashMap;
 
 use num_complex::Complex64;
+use tensor4all_core::krylov::HermitianKrylovExpmOptions;
 use tensor4all_core::{
     DynIndex, FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorContractionLike,
     TensorDynLen, TensorIndex,
 };
 use tensor4all_tensorbackend::{hermitian_eigendecomposition, Matrix};
 use tensor4all_treetn::{
-    factorize_tensor_to_treetn_with, tdvp, IndexMapping, LinearOperator, TdvpError, TdvpOptions,
-    TreeTN, TreeTopology,
+    factorize_tensor_to_treetn_with, tdvp, tdvp_with_treetn_operator, IndexMapping, LinearOperator,
+    TdvpError, TdvpOptions, TreeTN, TreeTopology,
 };
 
 fn chain_state() -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 2]) {
@@ -739,4 +740,198 @@ fn one_site_tdvp_rejects_svd_truncation_policy() {
             ..
         }
     ));
+}
+
+#[test]
+fn tdvp_options_set_sweeps_and_krylov_options() {
+    let krylov = HermitianKrylovExpmOptions {
+        max_iter: 7,
+        tol: 1.0e-11,
+        ..Default::default()
+    };
+    let options = TdvpOptions::default()
+        .with_nsweeps(2)
+        .with_krylov_options(krylov);
+
+    assert_eq!(options.nsweeps, 2);
+    assert_eq!(options.krylov.max_iter, 7);
+    assert_eq!(options.krylov.tol, 1.0e-11);
+}
+
+#[test]
+fn tdvp_rejects_invalid_public_options() {
+    let (state, sites) = chain_state();
+    let operator = identity_operator(&sites, &["site0", "site1"], &[("site0", "site1")]);
+
+    let err = tdvp(
+        &operator,
+        state.clone(),
+        &"site0",
+        TdvpOptions::default().with_nsite(3),
+    )
+    .unwrap_err();
+    assert!(matches!(err, TdvpError::UnsupportedNsite { requested: 3 }));
+
+    let err = tdvp(
+        &operator,
+        state.clone(),
+        &"site0",
+        TdvpOptions::default().with_nsweeps(0),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        TdvpError::InvalidOption {
+            option: "nsweeps",
+            ..
+        }
+    ));
+
+    let err = tdvp(
+        &operator,
+        state.clone(),
+        &"site0",
+        TdvpOptions::default().with_order(3),
+    )
+    .unwrap_err();
+    assert!(matches!(err, TdvpError::UnsupportedOrder { requested: 3 }));
+
+    let err = tdvp(
+        &operator,
+        state.clone(),
+        &"site0",
+        TdvpOptions::default().with_exponent_step(Complex64::new(f64::NAN, 0.0)),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        TdvpError::InvalidOption {
+            option: "exponent_step",
+            ..
+        }
+    ));
+
+    let err = tdvp(
+        &operator,
+        state,
+        &"site0",
+        TdvpOptions::default().with_max_bond_dim(0),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        TdvpError::InvalidOption {
+            option: "max_bond_dim",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn tdvp_rejects_missing_center_and_topology_mismatch() {
+    let (chain, chain_sites) = chain_state();
+    let chain_operator =
+        identity_operator(&chain_sites, &["site0", "site1"], &[("site0", "site1")]);
+    let err = tdvp(
+        &chain_operator,
+        chain.clone(),
+        &"missing",
+        TdvpOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, TdvpError::MissingCenter { .. }));
+
+    let (star, star_sites) = star_state();
+    let star_operator = identity_operator(
+        &star_sites,
+        &["site0", "site1", "site2"],
+        &[("site0", "site1"), ("site0", "site2")],
+    );
+    let err = tdvp(&star_operator, chain, &"site0", TdvpOptions::default()).unwrap_err();
+    assert!(matches!(err, TdvpError::TopologyMismatch));
+
+    let result = tdvp(&star_operator, star, &"site0", TdvpOptions::default());
+    assert!(result.is_ok());
+}
+
+#[test]
+fn two_site_tdvp_rejects_single_node_empty_sweep() {
+    let site = DynIndex::new_dyn(2);
+    let state_tensor = TensorDynLen::from_dense(
+        vec![site.clone()],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+    )
+    .unwrap();
+    let state =
+        TreeTN::<TensorDynLen, &'static str>::from_tensors(vec![state_tensor], vec!["site0"])
+            .unwrap();
+    let operator = identity_operator(&[site], &["site0"], &[]);
+
+    let err = tdvp(
+        &operator,
+        state,
+        &"site0",
+        TdvpOptions::default().with_nsite(2),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, TdvpError::EmptyTwoSiteSweep));
+}
+
+#[test]
+fn two_site_tdvp_accepts_truncation_options() {
+    let (state, sites) = chain_state();
+    let operator = identity_operator(&sites, &["site0", "site1"], &[("site0", "site1")]);
+    let result = tdvp(
+        &operator,
+        state,
+        &"site0",
+        TdvpOptions::default()
+            .with_nsite(2)
+            .with_max_bond_dim(1)
+            .with_svd_policy(SvdTruncationPolicy::new(1.0e-12)),
+    )
+    .unwrap();
+
+    assert_eq!(result.sweeps_completed, 1);
+    assert_eq!(result.local_updates, 2);
+}
+
+#[test]
+fn tdvp_with_treetn_operator_single_node_identity_runs() {
+    let site = DynIndex::new_dyn(2);
+    let state_tensor = TensorDynLen::from_dense(
+        vec![site.clone()],
+        vec![Complex64::new(0.6, 0.0), Complex64::new(-0.8, 0.0)],
+    )
+    .unwrap();
+    let state =
+        TreeTN::<TensorDynLen, &'static str>::from_tensors(vec![state_tensor], vec!["site0"])
+            .unwrap();
+
+    let input = DynIndex::new_dyn(2);
+    let output = DynIndex::new_dyn(2);
+    let op_tensor = TensorDynLen::from_dense(
+        vec![output, input],
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let operator =
+        TreeTN::<TensorDynLen, &'static str>::from_tensors(vec![op_tensor], vec!["site0"]).unwrap();
+
+    let result = tdvp_with_treetn_operator(
+        &operator,
+        state,
+        &"site0",
+        TdvpOptions::default().with_nsite(1),
+    )
+    .unwrap();
+
+    assert_eq!(result.sweeps_completed, 1);
+    assert_eq!(result.local_updates, 2);
 }
