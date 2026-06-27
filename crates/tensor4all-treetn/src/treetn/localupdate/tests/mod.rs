@@ -60,6 +60,71 @@ fn create_y_shape_treetn() -> (
 }
 
 #[test]
+fn truncate_updater_keeps_same_id_primed_nonbond_index() {
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(1);
+    let bond_prime = bond.prime();
+
+    let tensor_0 = TensorDynLen::from_dense(
+        vec![s0.clone(), bond.clone(), bond_prime.clone()],
+        vec![1.0, 0.0],
+    )
+    .unwrap();
+    let tensor_1 =
+        TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], vec![1.0, 0.0]).unwrap();
+
+    let tn =
+        TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor_0, tensor_1], vec![0usize, 1usize])
+            .unwrap();
+
+    let step = LocalUpdateStep {
+        nodes: vec![0usize, 1usize],
+        new_center: 1usize,
+    };
+    let mut updater = TruncateUpdater::new(Some(4), None);
+    let updated = updater.update(tn.clone(), &step, &tn).unwrap();
+
+    let node_0 = updated.node_index(&0usize).unwrap();
+    let tensor_0_indices = updated.tensor(node_0).unwrap().external_indices();
+    assert!(tensor_0_indices.iter().any(|idx| idx == &bond_prime));
+    assert!(!tensor_0_indices.iter().any(|idx| idx == &bond));
+}
+
+#[test]
+fn canonicalize_keeps_same_id_primed_nonbond_index_on_source() {
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(2);
+    let bond_prime = bond.prime();
+
+    let tensor_0 = TensorDynLen::from_dense(
+        vec![s0.clone(), bond.clone(), bond_prime.clone()],
+        vec![1.0, 0.0, 0.0, 1.0, 0.5, 0.0, 0.0, 0.25],
+    )
+    .unwrap();
+    let tensor_1 =
+        TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+
+    let mut tn =
+        TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor_0, tensor_1], vec![0usize, 1usize])
+            .unwrap();
+
+    tn.canonicalize_mut([1usize], Default::default()).unwrap();
+
+    let node_0 = tn.node_index(&0usize).unwrap();
+    let tensor_0_indices = tn.tensor(node_0).unwrap().external_indices();
+    assert!(
+        tensor_0_indices.iter().any(|idx| idx == &bond_prime),
+        "source tensor lost same-ID primed non-bond index: {tensor_0_indices:?}"
+    );
+    assert!(
+        !tensor_0_indices.iter().any(|idx| idx == &bond),
+        "source tensor should no longer carry the old edge bond: {tensor_0_indices:?}"
+    );
+}
+
+#[test]
 fn test_extract_subtree_single_node() {
     let (tn, _site_a, _, _, _) = create_y_shape_treetn();
 

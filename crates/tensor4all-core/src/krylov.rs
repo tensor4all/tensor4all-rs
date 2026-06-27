@@ -6,6 +6,7 @@
 //! # Solvers
 //!
 //! - [`gmres`]: Generalized Minimal Residual Method (GMRES) for non-symmetric systems
+//! - [`hermitian_lanczos_lowest_eigenpair`]: Matrix-free lowest eigenpair solver for Hermitian operators
 //!
 //! # Future Extensions
 //!
@@ -37,8 +38,10 @@
 use crate::any_scalar::AnyScalar;
 use crate::TensorVectorSpace;
 use anyhow::Result;
+use num_complex::Complex64;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use tensor4all_tensorbackend::{lowest_hermitian_eigenpair, Matrix};
 
 static GMRES_OP_PROFILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -234,6 +237,258 @@ pub struct GmresResult<T> {
 
     /// Whether the solver converged.
     pub converged: bool,
+}
+
+/// Options for [`hermitian_lanczos_lowest_eigenpair`].
+///
+/// These options control the maximum Krylov subspace dimension, convergence
+/// tolerance, and validation tolerance for the small projected Hermitian matrix.
+/// When in doubt, use [`Default::default`].
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::krylov::HermitianLanczosOptions;
+///
+/// let opts = HermitianLanczosOptions {
+///     max_iter: 32,
+///     rtol: 1.0e-9,
+///     ..HermitianLanczosOptions::default()
+/// };
+/// assert_eq!(opts.max_iter, 32);
+/// assert_eq!(opts.rtol, 1.0e-9);
+/// ```
+#[derive(Debug, Clone)]
+pub struct HermitianLanczosOptions {
+    /// Maximum Krylov subspace dimension.
+    ///
+    /// Larger values usually improve convergence but increase memory and the
+    /// cost of the small Rayleigh-Ritz eigensolve. Default: `64`.
+    pub max_iter: usize,
+
+    /// Relative residual tolerance.
+    ///
+    /// Convergence requires `||A v - lambda v|| <= max(atol, rtol *
+    /// max(1, |lambda|))`. Default: `1e-10`.
+    pub rtol: f64,
+
+    /// Absolute residual tolerance.
+    ///
+    /// This is useful when targeting eigenvalues near zero. Default: `0.0`.
+    pub atol: f64,
+
+    /// Breakdown threshold for the next Krylov vector norm.
+    ///
+    /// If the orthogonalized vector norm is at or below this value, the current
+    /// Krylov subspace is treated as invariant and iteration stops. Default:
+    /// `1e-14`.
+    pub breakdown_tol: f64,
+
+    /// Hermitian validation tolerance for the projected Rayleigh-Ritz matrix.
+    ///
+    /// The projected operator is rejected when `V^dagger A V` is not Hermitian
+    /// within this absolute tolerance. Default: `1e-10`.
+    pub hermitian_tol: f64,
+
+    /// Whether to print per-iteration residual information.
+    ///
+    /// Default: `false`.
+    pub verbose: bool,
+}
+
+impl Default for HermitianLanczosOptions {
+    fn default() -> Self {
+        Self {
+            max_iter: 64,
+            rtol: 1.0e-10,
+            atol: 0.0,
+            breakdown_tol: 1.0e-14,
+            hermitian_tol: 1.0e-10,
+            verbose: false,
+        }
+    }
+}
+
+/// Result of [`hermitian_lanczos_lowest_eigenpair`].
+///
+/// Contains the lowest Ritz eigenpair, the final true residual norm, iteration
+/// count, and convergence status.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::krylov::HermitianLanczosResult;
+///
+/// let result = HermitianLanczosResult {
+///     eigenvalue: 1.0,
+///     eigenvector: vec![1.0_f64],
+///     iterations: 1,
+///     residual_norm: 0.0,
+///     converged: true,
+/// };
+/// assert!(result.converged);
+/// assert_eq!(result.eigenvalue, 1.0);
+/// ```
+#[derive(Debug, Clone)]
+pub struct HermitianLanczosResult<T> {
+    /// Lowest Ritz eigenvalue.
+    pub eigenvalue: f64,
+
+    /// Corresponding Ritz eigenvector in the original vector space.
+    pub eigenvector: T,
+
+    /// Number of Krylov operator applications used to build the final subspace.
+    pub iterations: usize,
+
+    /// True residual norm `||A v - lambda v||`.
+    pub residual_norm: f64,
+
+    /// Whether the true residual satisfied the requested tolerance.
+    pub converged: bool,
+}
+
+#[derive(Debug, Clone)]
+struct HermitianRitzState {
+    eigenvalue: f64,
+    coefficients: Vec<Complex64>,
+    iterations: usize,
+    residual_estimate: f64,
+}
+
+/// Compute the lowest eigenpair of a Hermitian matrix-free operator.
+///
+/// The operator is supplied as `apply_a`, which maps a vector to `A * vector`.
+/// The algorithm builds an orthonormal Krylov basis using modified
+/// Gram-Schmidt with a second reorthogonalization pass, forms the small
+/// projected matrix `V^dagger A V`, and solves that small Hermitian problem via
+/// tensorbackend. The full operator matrix is never materialized.
+///
+/// # Arguments
+/// * `apply_a` - Matrix-free Hermitian operator application.
+/// * `initial` - Nonzero initial vector that defines the starting Krylov vector.
+/// * `options` - Krylov dimension, convergence tolerances, and Hermitian
+///   validation settings.
+///
+/// # Returns
+/// The lowest Ritz eigenpair and the true residual norm.
+///
+/// # Errors
+/// Returns an error if the initial vector is zero, a vector-space operation
+/// fails, `apply_a` fails, the projected operator is not Hermitian, or the small
+/// projected eigensolver fails.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorVectorSpace};
+/// use tensor4all_core::krylov::{hermitian_lanczos_lowest_eigenpair, HermitianLanczosOptions};
+///
+/// let i = DynIndex::new_dyn(2);
+/// let initial = TensorDynLen::from_dense(vec![i.clone()], vec![1.0_f64, 1.0]).unwrap();
+/// let result = hermitian_lanczos_lowest_eigenpair(
+///     |x: &TensorDynLen| Ok(x.clone()),
+///     &initial,
+///     &HermitianLanczosOptions::default(),
+/// ).unwrap();
+///
+/// assert!(result.converged);
+/// assert!((result.eigenvalue - 1.0).abs() < 1.0e-12);
+/// ```
+pub fn hermitian_lanczos_lowest_eigenpair<T, F>(
+    apply_a: F,
+    initial: &T,
+    options: &HermitianLanczosOptions,
+) -> Result<HermitianLanczosResult<T>>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+{
+    validate_hermitian_lanczos_options(options)?;
+    initial.validate()?;
+
+    let initial_norm = initial.norm();
+    anyhow::ensure!(
+        initial_norm > options.breakdown_tol,
+        "hermitian_lanczos_lowest_eigenpair: zero initial vector"
+    );
+
+    let mut basis = Vec::with_capacity(options.max_iter + 1);
+    basis.push(initial.scale(AnyScalar::new_real(1.0 / initial_norm))?);
+    let mut h_cols: Vec<Vec<Complex64>> = Vec::with_capacity(options.max_iter);
+    let mut last_ritz: Option<HermitianRitzState> = None;
+
+    for j in 0..options.max_iter {
+        let w = apply_a(&basis[j])?;
+        if j == 0 {
+            w.validate()?;
+        }
+
+        let mut h_col = Vec::with_capacity(j + 2);
+        let mut w_orth = w;
+
+        for v_i in basis.iter().take(j + 1) {
+            let h_ij = v_i.inner_product(&w_orth)?;
+            h_col.push(any_scalar_to_complex(&h_ij));
+            let neg_h_ij = AnyScalar::new_real(0.0) - h_ij;
+            w_orth = w_orth.axpby(AnyScalar::new_real(1.0), v_i, neg_h_ij)?;
+        }
+
+        for (i, v_i) in basis.iter().take(j + 1).enumerate() {
+            let correction = v_i.inner_product(&w_orth)?;
+            h_col[i] += any_scalar_to_complex(&correction);
+            let neg_correction = AnyScalar::new_real(0.0) - correction;
+            w_orth = w_orth.axpby(AnyScalar::new_real(1.0), v_i, neg_correction)?;
+        }
+
+        let beta = w_orth.norm();
+        h_col.push(Complex64::new(beta, 0.0));
+        h_cols.push(h_col);
+
+        let subspace_dim = j + 1;
+        let projected = projected_matrix_from_columns(&h_cols, subspace_dim);
+        let ritz = lowest_hermitian_eigenpair(&projected, options.hermitian_tol)
+            .map_err(|err| anyhow::anyhow!("projected operator is not Hermitian: {err}"))?;
+        let residual_estimate = beta * ritz.eigenvector[subspace_dim - 1].norm();
+        let threshold = hermitian_lanczos_threshold(ritz.eigenvalue, options);
+        let estimate_converged = residual_estimate <= threshold;
+
+        if options.verbose {
+            eprintln!(
+                "Hermitian Lanczos iter {}: eigenvalue={:.16e} residual_estimate={:.6e} threshold={:.6e}",
+                subspace_dim, ritz.eigenvalue, residual_estimate, threshold
+            );
+        }
+
+        let ritz_state = HermitianRitzState {
+            eigenvalue: ritz.eigenvalue,
+            iterations: subspace_dim,
+            residual_estimate,
+            coefficients: ritz.eigenvector,
+        };
+        if estimate_converged || beta <= options.breakdown_tol {
+            let result = finalize_hermitian_lanczos_result(
+                &apply_a,
+                &basis[..subspace_dim],
+                &ritz_state,
+                options,
+            )?;
+            if result.converged || beta <= options.breakdown_tol {
+                return Ok(result);
+            }
+        }
+        last_ritz = Some(ritz_state);
+        basis.push(w_orth.scale(AnyScalar::new_real(1.0 / beta))?);
+    }
+
+    let ritz_state = last_ritz.ok_or_else(|| {
+        anyhow::anyhow!("hermitian_lanczos_lowest_eigenpair: max_iter must be greater than zero")
+    })?;
+    finalize_hermitian_lanczos_result(
+        &apply_a,
+        &basis[..ritz_state.iterations],
+        &ritz_state,
+        options,
+    )
 }
 
 /// Solve `A x = b` using GMRES (Generalized Minimal Residual Method).
@@ -1743,6 +1998,139 @@ where
         residual_norm: final_rel_res,
         converged: false,
     })
+}
+
+fn validate_hermitian_lanczos_options(options: &HermitianLanczosOptions) -> Result<()> {
+    anyhow::ensure!(
+        options.max_iter > 0,
+        "hermitian_lanczos_lowest_eigenpair: max_iter must be greater than zero"
+    );
+    anyhow::ensure!(
+        options.rtol.is_finite() && options.rtol >= 0.0,
+        "hermitian_lanczos_lowest_eigenpair: rtol must be finite and non-negative"
+    );
+    anyhow::ensure!(
+        options.atol.is_finite() && options.atol >= 0.0,
+        "hermitian_lanczos_lowest_eigenpair: atol must be finite and non-negative"
+    );
+    anyhow::ensure!(
+        options.breakdown_tol.is_finite() && options.breakdown_tol >= 0.0,
+        "hermitian_lanczos_lowest_eigenpair: breakdown_tol must be finite and non-negative"
+    );
+    anyhow::ensure!(
+        options.hermitian_tol.is_finite() && options.hermitian_tol >= 0.0,
+        "hermitian_lanczos_lowest_eigenpair: hermitian_tol must be finite and non-negative"
+    );
+    Ok(())
+}
+
+fn projected_matrix_from_columns(h_cols: &[Vec<Complex64>], dim: usize) -> Matrix<Complex64> {
+    let mut data = vec![Complex64::new(0.0, 0.0); dim * dim];
+    for col in 0..dim {
+        for row in 0..dim {
+            if let Some(value) = h_cols.get(col).and_then(|h_col| h_col.get(row)) {
+                data[row + dim * col] = *value;
+            }
+        }
+    }
+    Matrix::from_col_major_vec(dim, dim, data)
+}
+
+fn any_scalar_to_complex(value: &AnyScalar) -> Complex64 {
+    value
+        .as_c64()
+        .unwrap_or_else(|| Complex64::new(value.real(), 0.0))
+}
+
+fn any_scalar_from_complex(value: Complex64, tolerance: f64) -> Result<AnyScalar> {
+    if value.im.abs() <= tolerance {
+        Ok(AnyScalar::new_real(value.re))
+    } else {
+        Ok(AnyScalar::new_complex(value.re, value.im))
+    }
+}
+
+fn hermitian_lanczos_threshold(eigenvalue: f64, options: &HermitianLanczosOptions) -> f64 {
+    options.atol.max(options.rtol * eigenvalue.abs().max(1.0))
+}
+
+fn hermitian_true_residual_norm<T, F>(apply_a: &F, eigenvector: &T, eigenvalue: f64) -> Result<f64>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+{
+    let av = apply_a(eigenvector)?;
+    let lambda_v = eigenvector.scale(AnyScalar::new_real(eigenvalue))?;
+    let residual = av.axpby(
+        AnyScalar::new_real(1.0),
+        &lambda_v,
+        AnyScalar::new_real(-1.0),
+    )?;
+    Ok(residual.norm())
+}
+
+fn finalize_hermitian_lanczos_result<T, F>(
+    apply_a: &F,
+    basis: &[T],
+    ritz: &HermitianRitzState,
+    options: &HermitianLanczosOptions,
+) -> Result<HermitianLanczosResult<T>>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+{
+    let eigenvector = combine_basis_with_coefficients(basis, &ritz.coefficients, options)?;
+    let residual_norm = hermitian_true_residual_norm(apply_a, &eigenvector, ritz.eigenvalue)?;
+    let threshold = hermitian_lanczos_threshold(ritz.eigenvalue, options);
+    let converged = residual_norm <= threshold;
+
+    if options.verbose {
+        eprintln!(
+            "Hermitian Lanczos final check iter {}: residual_estimate={:.6e} true_residual={:.6e} threshold={:.6e}",
+            ritz.iterations, ritz.residual_estimate, residual_norm, threshold
+        );
+    }
+
+    Ok(HermitianLanczosResult {
+        eigenvalue: ritz.eigenvalue,
+        eigenvector,
+        iterations: ritz.iterations,
+        residual_norm,
+        converged,
+    })
+}
+
+fn combine_basis_with_coefficients<T>(
+    basis: &[T],
+    coefficients: &[Complex64],
+    options: &HermitianLanczosOptions,
+) -> Result<T>
+where
+    T: TensorVectorSpace,
+{
+    anyhow::ensure!(
+        !basis.is_empty(),
+        "hermitian_lanczos_lowest_eigenpair: empty Krylov basis"
+    );
+    anyhow::ensure!(
+        basis.len() == coefficients.len(),
+        "hermitian_lanczos_lowest_eigenpair: coefficient length {} does not match basis length {}",
+        coefficients.len(),
+        basis.len()
+    );
+
+    let mut result = basis[0].scale(any_scalar_from_complex(
+        coefficients[0],
+        options.hermitian_tol,
+    )?)?;
+    for (basis_vector, coefficient) in basis.iter().zip(coefficients.iter()).skip(1) {
+        result = result.axpby(
+            AnyScalar::new_real(1.0),
+            basis_vector,
+            any_scalar_from_complex(*coefficient, options.hermitian_tol)?,
+        )?;
+    }
+    Ok(result)
 }
 
 /// Compute Givens rotation coefficients to eliminate b in (a, b).

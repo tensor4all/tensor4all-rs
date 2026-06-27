@@ -675,7 +675,7 @@ where
         let left_inds: Vec<T::Index> = tensor_src
             .external_indices()
             .iter()
-            .filter(|idx| idx.id() != bond_on_src.id())
+            .filter(|idx| *idx != &bond_on_src)
             .cloned()
             .collect();
 

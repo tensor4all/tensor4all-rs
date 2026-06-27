@@ -24,6 +24,7 @@ use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 use std::ops::{Index, IndexMut};
 use tenferro::{Tensor, TensorScalar, TypedTensor};
+use tenferro_ad::EagerTensor;
 use tenferro_tensor::BackendSessionHost;
 
 /// A dense 2D matrix in column-major layout.
@@ -115,6 +116,153 @@ pub enum MatrixShapeError {
         /// Actual number of entries in `row`.
         actual: usize,
     },
+}
+
+/// Error returned by [`lowest_hermitian_eigenpair`].
+///
+/// The eigensolver is intended for small Rayleigh-Ritz projected matrices. It
+/// validates shape and Hermitian structure before calling the backend Hermitian
+/// eigendecomposition, so non-Hermitian effective operators are rejected
+/// explicitly instead of silently taking a real part.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum HermitianEigenError {
+    /// The matrix has zero rows and columns, so it has no eigenpair.
+    #[error("Hermitian eigenpair requires a non-empty matrix")]
+    Empty,
+    /// The input is not square.
+    #[error("Hermitian eigenpair requires a square matrix, got {nrows}x{ncols}")]
+    NonSquare {
+        /// Number of matrix rows.
+        nrows: usize,
+        /// Number of matrix columns.
+        ncols: usize,
+    },
+    /// The Hermitian validation tolerance was negative or not finite.
+    #[error("Hermitian tolerance must be finite and non-negative, got {tolerance}")]
+    InvalidTolerance {
+        /// Rejected tolerance value.
+        tolerance: f64,
+    },
+    /// A matrix entry violates `A[i, j] = conj(A[j, i])` within tolerance.
+    #[error(
+        "matrix is not Hermitian at ({row}, {col}): difference {difference} exceeds tolerance {tolerance}"
+    )]
+    NonHermitian {
+        /// Row of the first offending entry.
+        row: usize,
+        /// Column of the first offending entry.
+        col: usize,
+        /// Absolute Hermitian residual for the offending pair.
+        difference: f64,
+        /// Tolerance used for validation.
+        tolerance: f64,
+    },
+    /// The backend returned an output with an unexpected dtype.
+    #[error("{output} output dtype mismatch: expected {expected}, got {actual}")]
+    DType {
+        /// Output tensor name.
+        output: &'static str,
+        /// Expected dtype string.
+        expected: String,
+        /// Actual dtype string.
+        actual: String,
+    },
+    /// The backend returned an output with an unexpected shape.
+    #[error("{output} output shape mismatch: expected {expected:?}, got {actual:?}")]
+    Shape {
+        /// Output tensor name.
+        output: &'static str,
+        /// Expected shape.
+        expected: Vec<usize>,
+        /// Actual shape.
+        actual: Vec<usize>,
+    },
+    /// A Hermitian backend eigenvalue had a non-negligible imaginary part.
+    #[error(
+        "Hermitian eigenvalue {index} has imaginary part {imaginary}, exceeding tolerance {tolerance}"
+    )]
+    NonRealEigenvalue {
+        /// Eigenvalue position in the backend output.
+        index: usize,
+        /// Absolute imaginary part.
+        imaginary: f64,
+        /// Tolerance used for validation.
+        tolerance: f64,
+    },
+    /// The tenferro backend rejected or failed the eigendecomposition.
+    #[error("Hermitian eigendecomposition failed: {message}")]
+    Backend {
+        /// Backend error message.
+        message: String,
+    },
+}
+
+/// Small Hermitian eigenpair returned by [`lowest_hermitian_eigenpair`].
+///
+/// `eigenvector` stores the Ritz vector coefficients in ordinary vector order.
+/// It has length equal to the input matrix dimension and is normalized according
+/// to the backend eigendecomposition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HermitianEigenpair<T> {
+    /// Smallest eigenvalue of the Hermitian matrix.
+    pub eigenvalue: f64,
+    /// Corresponding eigenvector coefficients.
+    pub eigenvector: Vec<T>,
+}
+
+/// Scalar types supported by [`lowest_hermitian_eigenpair`].
+///
+/// The current backend path is used for `f64` and `Complex64`, which are the
+/// scalar types needed by tensor4all's Hermitian Krylov and DMRG algorithms.
+pub trait HermitianEigenScalar: TensorScalar + MatrixScalar {
+    #[doc(hidden)]
+    fn hermitian_difference(a_ij: Self, a_ji: Self) -> f64;
+
+    #[doc(hidden)]
+    fn eigenvalues_from_tensor(
+        tensor: Tensor,
+        tolerance: f64,
+    ) -> std::result::Result<(Vec<usize>, Vec<f64>), HermitianEigenError>;
+}
+
+impl HermitianEigenScalar for f64 {
+    fn hermitian_difference(a_ij: Self, a_ji: Self) -> f64 {
+        (a_ij - a_ji).abs()
+    }
+
+    fn eigenvalues_from_tensor(
+        tensor: Tensor,
+        _tolerance: f64,
+    ) -> std::result::Result<(Vec<usize>, Vec<f64>), HermitianEigenError> {
+        let values = typed_eigh_output::<f64>("eigenvalues", tensor)?;
+        Ok((values.shape().to_vec(), values.as_slice().to_vec()))
+    }
+}
+
+impl HermitianEigenScalar for Complex64 {
+    fn hermitian_difference(a_ij: Self, a_ji: Self) -> f64 {
+        (a_ij - a_ji.conj()).norm()
+    }
+
+    fn eigenvalues_from_tensor(
+        tensor: Tensor,
+        tolerance: f64,
+    ) -> std::result::Result<(Vec<usize>, Vec<f64>), HermitianEigenError> {
+        let values = typed_eigh_output::<Complex64>("eigenvalues", tensor)?;
+        let mut real_values = Vec::with_capacity(values.as_slice().len());
+        for (index, value) in values.as_slice().iter().copied().enumerate() {
+            let imaginary = value.im.abs();
+            if imaginary > tolerance {
+                return Err(HermitianEigenError::NonRealEigenvalue {
+                    index,
+                    imaginary,
+                    tolerance,
+                });
+            }
+            real_values.push(value.re);
+        }
+        Ok((values.shape().to_vec(), real_values))
+    }
 }
 
 impl<T> Matrix<T> {
@@ -290,6 +438,147 @@ impl<T> Matrix<T> {
     pub fn ncols(&self) -> usize {
         self.ncols
     }
+}
+
+/// Compute the smallest eigenpair of a small Hermitian projected matrix.
+///
+/// This function validates that `matrix` is square, non-empty, and Hermitian
+/// within `hermitian_tol`, then calls tenferro's Hermitian eigendecomposition.
+/// It is intended for Rayleigh-Ritz projected Krylov matrices, whose dimension
+/// is bounded by the Krylov subspace size. It must not be used to materialize a
+/// full tensor-network effective Hamiltonian.
+///
+/// # Arguments
+/// * `matrix` - Small dense Hermitian matrix in column-major [`Matrix`] layout.
+/// * `hermitian_tol` - Absolute tolerance for `A[i, j] = conj(A[j, i])`.
+///   Typical values are `1e-12` for `f64`/`Complex64` projected matrices.
+///
+/// # Returns
+/// The smallest real eigenvalue and the corresponding normalized eigenvector
+/// coefficients.
+///
+/// # Errors
+/// Returns [`HermitianEigenError`] if the matrix is empty, non-square,
+/// non-Hermitian within `hermitian_tol`, or if the backend eigendecomposition
+/// fails or returns an unexpected dtype/shape.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{lowest_hermitian_eigenpair, Matrix};
+///
+/// let matrix = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 1.0, 1.0, 2.0]);
+/// let pair = lowest_hermitian_eigenpair(&matrix, 1.0e-12).unwrap();
+///
+/// assert!((pair.eigenvalue - 1.0).abs() < 1.0e-12);
+/// assert_eq!(pair.eigenvector.len(), 2);
+/// ```
+pub fn lowest_hermitian_eigenpair<T>(
+    matrix: &Matrix<T>,
+    hermitian_tol: f64,
+) -> std::result::Result<HermitianEigenpair<T>, HermitianEigenError>
+where
+    T: HermitianEigenScalar,
+{
+    validate_hermitian_matrix(matrix, hermitian_tol)?;
+
+    let n = matrix.nrows();
+    let input_tensor = T::into_tensor(vec![n, n], matrix.as_col_major_slice().to_vec());
+    let input = EagerTensor::from_tensor_in(input_tensor, crate::default_eager_ctx());
+    let (values, vectors) = tenferro_linalg::eager_tensor::eigh(&input).map_err(|source| {
+        HermitianEigenError::Backend {
+            message: source.to_string(),
+        }
+    })?;
+
+    let (values_shape, values) = T::eigenvalues_from_tensor(values.data().clone(), hermitian_tol)?;
+    ensure_eigh_shape("eigenvalues", &values_shape, &[n])?;
+    let vectors = typed_eigh_output::<T>("eigenvectors", vectors.data().clone())?;
+    ensure_eigh_shape("eigenvectors", vectors.shape(), &[n, n])?;
+
+    let (min_col, eigenvalue) = values
+        .iter()
+        .copied()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))
+        .ok_or(HermitianEigenError::Empty)?;
+
+    let vector_data = vectors.as_slice();
+    let start = n * min_col;
+    let eigenvector = vector_data[start..start + n].to_vec();
+
+    Ok(HermitianEigenpair {
+        eigenvalue,
+        eigenvector,
+    })
+}
+
+fn validate_hermitian_matrix<T>(
+    matrix: &Matrix<T>,
+    hermitian_tol: f64,
+) -> std::result::Result<(), HermitianEigenError>
+where
+    T: HermitianEigenScalar,
+{
+    if !hermitian_tol.is_finite() || hermitian_tol < 0.0 {
+        return Err(HermitianEigenError::InvalidTolerance {
+            tolerance: hermitian_tol,
+        });
+    }
+    if matrix.nrows() != matrix.ncols() {
+        return Err(HermitianEigenError::NonSquare {
+            nrows: matrix.nrows(),
+            ncols: matrix.ncols(),
+        });
+    }
+    if matrix.nrows() == 0 {
+        return Err(HermitianEigenError::Empty);
+    }
+
+    for col in 0..matrix.ncols() {
+        for row in 0..=col {
+            let difference = T::hermitian_difference(matrix[[row, col]], matrix[[col, row]]);
+            if difference > hermitian_tol {
+                return Err(HermitianEigenError::NonHermitian {
+                    row,
+                    col,
+                    difference,
+                    tolerance: hermitian_tol,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn typed_eigh_output<T>(
+    output: &'static str,
+    tensor: Tensor,
+) -> std::result::Result<TypedTensor<T>, HermitianEigenError>
+where
+    T: TensorScalar,
+{
+    let actual = tensor.dtype();
+    T::try_into_typed(tensor).ok_or_else(|| HermitianEigenError::DType {
+        output,
+        expected: format!("{:?}", T::dtype()),
+        actual: format!("{actual:?}"),
+    })
+}
+
+fn ensure_eigh_shape(
+    output: &'static str,
+    actual: &[usize],
+    expected: &[usize],
+) -> std::result::Result<(), HermitianEigenError> {
+    if actual != expected {
+        return Err(HermitianEigenError::Shape {
+            output,
+            expected: expected.to_vec(),
+            actual: actual.to_vec(),
+        });
+    }
+    Ok(())
 }
 
 impl<T: Clone> Matrix<T> {

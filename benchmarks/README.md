@@ -37,6 +37,20 @@ Prepared local linsolve:
 RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_local_linsolve --release -- 38 32 32 1 10 30 0
 ```
 
+Two-site TreeTN DMRG against a Pauli Heisenberg Hamiltonian
+`sum_(i,j in E) X_i X_j + Y_i Y_j + Z_i Z_j` on chain and star topologies.
+The benchmark compresses the summed MPO before timing, uses the repository
+ITensors-compatible relative discarded squared singular-value tail cutoff
+`1e-12`, and performs one untimed DMRG warm-up per topology. It reports runtime
+and accuracy against a small dense exact reference. The star case uses a leaf
+DMRG root in both Rust and Julia because ITensorNetworks.jl requires a leaf root
+when converting an `OpSum` to a TTN. The Rust benchmark runs all requested
+sweeps, without sweep-to-sweep energy early stopping:
+
+```bash
+RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_dmrg --release -- 8 4 3
+```
+
 Non-AD local tensor operations:
 
 ```bash
@@ -149,6 +163,24 @@ Prepared local linsolve:
 ```bash
 BLAS_NUM_THREADS=1 julia --project=benchmarks/julia benchmarks/julia/benchmark_local_linsolve.jl 38 32 32 1 1 10
 ```
+
+ITensorNetworks.jl two-site DMRG parity benchmark on matching chain and star
+Pauli Heisenberg Hamiltonians:
+
+```bash
+export T4A_ITENSORNETWORKS_PATH=/home/shinaoka/tensor4all/ITensor/ITensorNetworks.jl
+export T4A_ITN_BENCH_PROJECT=/tmp/t4a-itensornetworks-bench
+julia --project=$T4A_ITN_BENCH_PROJECT -e 'using Pkg; Pkg.develop(path=ENV["T4A_ITENSORNETWORKS_PATH"]); Pkg.add(["Graphs", "ITensors", "TensorOperations"]); Pkg.instantiate()'
+BLAS_NUM_THREADS=1 julia --project=$T4A_ITN_BENCH_PROJECT \
+  benchmarks/julia/benchmark_dmrg_itensornetworks.jl 8 4 3
+```
+
+The temporary project keeps the local ITensorNetworks.jl checkout clean while
+loading `TensorOperations.jl` so ITensorNetworks.jl can choose optimized
+contraction sequences. The Julia runner performs one untimed DMRG warm-up per
+topology before recording timings, so reported times exclude Julia compilation
+and ITensorNetworks.jl first-call setup. Both runners use `cutoff = 1e-12` as a
+relative discarded squared singular-value tail cutoff.
 
 Non-AD local tensor operations:
 

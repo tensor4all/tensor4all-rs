@@ -27,6 +27,10 @@ enum ZipupTopologyMode {
     PreserveInputTopology,
 }
 
+fn indices_except_exact<I: IndexLike>(indices: &[I], excluded: &[I]) -> Vec<I> {
+    tensor4all_core::index_ops::unique_inds(indices, excluded)
+}
+
 impl<T, V> TreeTN<T, V>
 where
     T: TensorLike,
@@ -496,13 +500,9 @@ where
                 .context("Failed to get bond index to destination in tn_b")?;
 
             // left_inds = all indices except the two parent bonds (keep site + child bonds)
-            let left_inds: Vec<_> = c_temp
-                .external_indices()
-                .into_iter()
-                .filter(|idx| {
-                    *idx.id() != *bond_to_dest_a.id() && *idx.id() != *bond_to_dest_b.id()
-                })
-                .collect();
+            let c_temp_indices = c_temp.external_indices();
+            let excluded_parent_bonds = [bond_to_dest_a, bond_to_dest_b];
+            let left_inds = indices_except_exact(&c_temp_indices, &excluded_parent_bonds);
 
             if left_inds.is_empty() {
                 match topology_mode {

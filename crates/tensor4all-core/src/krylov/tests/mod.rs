@@ -4,6 +4,7 @@ use crate::defaults::DynIndex;
 use crate::tensor_index::TensorIndex;
 use crate::TensorVectorSpace;
 use num_complex::Complex64;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 static GMRES_PROFILE_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -108,6 +109,122 @@ impl TensorVectorSpace for PlainVector {
     fn maxabs(&self) -> f64 {
         self.data.iter().map(|x| x.abs()).fold(0.0, f64::max)
     }
+}
+
+#[test]
+fn hermitian_lanczos_lowest_eigenpair_diagonal_plain_vector() {
+    let apply = |x: &PlainVector| -> Result<PlainVector> {
+        Ok(PlainVector {
+            data: vec![2.0 * x.data[0], -x.data[1], 4.0 * x.data[2]],
+        })
+    };
+    let initial = PlainVector {
+        data: vec![1.0, 1.0, 1.0],
+    };
+
+    let result =
+        hermitian_lanczos_lowest_eigenpair(apply, &initial, &HermitianLanczosOptions::default())
+            .unwrap();
+
+    assert!(result.converged, "residual={}", result.residual_norm);
+    assert!((result.eigenvalue + 1.0).abs() < 1.0e-10);
+    assert!(result.residual_norm < 1.0e-8);
+    assert!((result.eigenvector.data[1].abs() - 1.0).abs() < 1.0e-8);
+}
+
+#[test]
+fn hermitian_lanczos_avoids_true_residual_matvec_on_every_iteration() {
+    let apply_calls = AtomicUsize::new(0);
+    let apply = |x: &PlainVector| -> Result<PlainVector> {
+        apply_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(PlainVector {
+            data: vec![2.0 * x.data[0], -x.data[1], 4.0 * x.data[2]],
+        })
+    };
+    let initial = PlainVector {
+        data: vec![1.0, 1.0, 1.0],
+    };
+
+    let result = hermitian_lanczos_lowest_eigenpair(
+        apply,
+        &initial,
+        &HermitianLanczosOptions {
+            max_iter: 3,
+            rtol: 1.0e-12,
+            ..HermitianLanczosOptions::default()
+        },
+    )
+    .unwrap();
+
+    assert!(result.converged, "residual={}", result.residual_norm);
+    assert_eq!(result.iterations, 3);
+    assert_eq!(apply_calls.load(Ordering::Relaxed), result.iterations + 1);
+}
+
+#[test]
+fn hermitian_lanczos_lowest_eigenpair_rejects_zero_initial_vector() {
+    let apply = |x: &PlainVector| -> Result<PlainVector> { Ok(x.clone()) };
+    let initial = PlainVector {
+        data: vec![0.0, 0.0],
+    };
+
+    let err =
+        hermitian_lanczos_lowest_eigenpair(apply, &initial, &HermitianLanczosOptions::default())
+            .unwrap_err();
+
+    assert!(err.to_string().contains("zero initial vector"));
+}
+
+#[test]
+fn hermitian_lanczos_lowest_eigenpair_complex_pauli_y() {
+    let idx = DynIndex::new_dyn(2);
+    let initial = make_vector_c64(
+        vec![Complex64::new(1.0, 0.0), Complex64::new(0.25, 0.5)],
+        &idx,
+    );
+    let minus_i = Complex64::new(0.0, -1.0);
+    let plus_i = Complex64::new(0.0, 1.0);
+    let pauli_y = [
+        Complex64::new(0.0, 0.0),
+        minus_i,
+        plus_i,
+        Complex64::new(0.0, 0.0),
+    ];
+
+    let result = hermitian_lanczos_lowest_eigenpair(
+        |x: &TensorDynLen| apply_matrix2_c64(x, &pauli_y),
+        &initial,
+        &HermitianLanczosOptions {
+            max_iter: 4,
+            rtol: 1.0e-12,
+            ..HermitianLanczosOptions::default()
+        },
+    )
+    .unwrap();
+
+    assert!(result.converged, "residual={}", result.residual_norm);
+    assert!((result.eigenvalue + 1.0).abs() < 1.0e-10);
+    assert!(result.residual_norm < 1.0e-8);
+}
+
+#[test]
+fn hermitian_lanczos_lowest_eigenpair_rejects_non_hermitian_projection() {
+    let idx = DynIndex::new_dyn(2);
+    let initial = make_vector_with_index(vec![1.0, 1.0], &idx);
+    let non_hermitian = [0.0, 1.0, 0.0, 0.0];
+
+    let err = hermitian_lanczos_lowest_eigenpair(
+        |x: &TensorDynLen| apply_matrix2_f64(x, &non_hermitian),
+        &initial,
+        &HermitianLanczosOptions {
+            max_iter: 2,
+            rtol: 0.0,
+            ..HermitianLanczosOptions::default()
+        },
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("not Hermitian"));
 }
 
 #[test]

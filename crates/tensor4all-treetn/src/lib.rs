@@ -22,9 +22,11 @@
 pub mod algorithm;
 // dyn_treetn.rs has been removed.
 // TreeTN uses the `T: TensorLike` pattern, making a separate dyn wrapper unnecessary.
+pub mod dmrg;
 pub mod error;
 pub mod link_index_network;
 pub mod linsolve;
+mod local_update_support;
 pub mod named_graph;
 pub mod node_name_network;
 pub mod operator;
@@ -35,6 +37,7 @@ pub mod site_index_network;
 pub mod treetn;
 
 pub use algorithm::{CanonicalForm, CompressionAlgorithm, ContractionAlgorithm};
+pub use dmrg::{dmrg, dmrg_with_treetn_operator, DmrgError, DmrgOptions, DmrgResult};
 pub use error::{
     LinearOperatorIndexApplyError, LinearOperatorIndexBindingError, LinearOperatorTaggedApplyError,
     NumberedTagSelectionError, SelectedIndexContractionError,
