@@ -7,20 +7,24 @@
 
 mod plan;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
 use num_complex::Complex64;
-use tensor4all_core::krylov::{hermitian_krylov_expm_multiply, HermitianKrylovExpmOptions};
 use tensor4all_core::{
-    Canonical, FactorizeAlg, FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorLike,
+    krylov::{hermitian_krylov_expm_multiply, HermitianKrylovExpmOptions},
+    print_and_reset_contract_profile, print_and_reset_pairwise_contract_profile,
+    reset_contract_profile, reset_pairwise_contract_profile, Canonical, FactorizeAlg,
+    FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorLike,
 };
 use thiserror::Error;
 
 use self::plan::{TdvpRegionKind, TdvpRegionPlan, TdvpRegionStep};
-use crate::linsolve::common::ProjectedOperator;
+use crate::linsolve::common::{CachedTopology, NetworkTopology, ProjectedOperator};
 use crate::linsolve::square::local_linop::LocalLinOp;
 use crate::local_update_support::{
     build_subtree_topology, contract_region, copy_decomposed_to_subtree,
@@ -140,6 +144,108 @@ impl From<SquareSiteMappingError> for TdvpError {
             }
         }
     }
+}
+
+#[derive(Debug, Default, Clone)]
+struct TdvpProfile {
+    total: Duration,
+    initial_mapping: Duration,
+    initial_canonicalize: Duration,
+    plan: Duration,
+    move_center: Duration,
+    reference_init: Duration,
+    reference_move: Duration,
+    two_site_total: Duration,
+    one_site_total: Duration,
+    extract_region: Duration,
+    contract_region: Duration,
+    evolve_local: Duration,
+    projected_apply: Duration,
+    build_topology: Duration,
+    factorize: Duration,
+    copy_decomposed: Duration,
+    subtree_center: Duration,
+    subtree_ortho: Duration,
+    replace_subtree: Duration,
+    state_center: Duration,
+    sync_reference: Duration,
+    invalidate: Duration,
+    steps: usize,
+    two_site_steps: usize,
+    one_site_steps: usize,
+    projected_apply_calls: usize,
+}
+
+thread_local! {
+    static TDVP_PROFILE: RefCell<Option<TdvpProfile>> = const { RefCell::new(None) };
+}
+
+fn tdvp_profile_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("T4A_PROFILE_TDVP").is_some())
+}
+
+fn tdvp_profile_reset() {
+    if tdvp_profile_enabled() {
+        TDVP_PROFILE.with(|profile| *profile.borrow_mut() = Some(TdvpProfile::default()));
+    }
+}
+
+fn with_tdvp_profile(f: impl FnOnce(&mut TdvpProfile)) {
+    if tdvp_profile_enabled() {
+        TDVP_PROFILE.with(|profile| {
+            if let Some(profile) = profile.borrow_mut().as_mut() {
+                f(profile);
+            }
+        });
+    }
+}
+
+fn take_tdvp_profile() -> Option<TdvpProfile> {
+    if !tdvp_profile_enabled() {
+        return None;
+    }
+    TDVP_PROFILE.with(|profile| profile.borrow_mut().take())
+}
+
+fn record_tdvp_profile(elapsed: Option<Instant>, f: impl FnOnce(&mut TdvpProfile, Duration)) {
+    if let Some(started) = elapsed {
+        let elapsed = started.elapsed();
+        with_tdvp_profile(|profile| f(profile, elapsed));
+    }
+}
+
+fn print_tdvp_profile(profile: &TdvpProfile) {
+    eprintln!("=== TreeTN TDVP profile ===");
+    eprintln!("total:              {:?}", profile.total);
+    eprintln!(
+        "steps:              {} two_site={} one_site/site_correction={} projected_apply_calls={}",
+        profile.steps,
+        profile.two_site_steps,
+        profile.one_site_steps,
+        profile.projected_apply_calls
+    );
+    eprintln!("initial mapping:    {:?}", profile.initial_mapping);
+    eprintln!("initial canon:      {:?}", profile.initial_canonicalize);
+    eprintln!("plan:               {:?}", profile.plan);
+    eprintln!("move center:        {:?}", profile.move_center);
+    eprintln!("reference init:     {:?}", profile.reference_init);
+    eprintln!("reference move:     {:?}", profile.reference_move);
+    eprintln!("two-site total:     {:?}", profile.two_site_total);
+    eprintln!("one-site total:     {:?}", profile.one_site_total);
+    eprintln!("extract region:     {:?}", profile.extract_region);
+    eprintln!("contract region:    {:?}", profile.contract_region);
+    eprintln!("evolve local:       {:?}", profile.evolve_local);
+    eprintln!("projected apply:    {:?}", profile.projected_apply);
+    eprintln!("build topology:     {:?}", profile.build_topology);
+    eprintln!("factorize:          {:?}", profile.factorize);
+    eprintln!("copy decomposed:    {:?}", profile.copy_decomposed);
+    eprintln!("subtree center:     {:?}", profile.subtree_center);
+    eprintln!("subtree ortho:      {:?}", profile.subtree_ortho);
+    eprintln!("replace subtree:    {:?}", profile.replace_subtree);
+    eprintln!("state center:       {:?}", profile.state_center);
+    eprintln!("sync reference:     {:?}", profile.sync_reference);
+    eprintln!("invalidate:         {:?}", profile.invalidate);
 }
 
 /// Options for TreeTN TDVP.
@@ -336,7 +442,7 @@ where
     pub sweeps_completed: usize,
     /// Number of projected local exponential updates performed.
     pub local_updates: usize,
-    /// Largest Krylov error estimate reported by local updates.
+    /// Largest Krylov residual estimate reported by local updates.
     pub max_error_estimate: f64,
     /// Largest number of Krylov iterations used by a local update.
     pub max_krylov_iterations: usize,
@@ -348,6 +454,7 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     projected_operator: Arc<RwLock<ProjectedOperator<T, V>>>,
+    topology: CachedTopology<V>,
     options: TdvpOptions,
     reference_state: TreeTN<T, V>,
     local_updates: usize,
@@ -366,6 +473,7 @@ where
         operator: TreeTN<T, V>,
         input_mapping: HashMap<V, IndexMapping<T::Index>>,
         output_mapping: HashMap<V, IndexMapping<T::Index>>,
+        topology: CachedTopology<V>,
         options: TdvpOptions,
     ) -> Self {
         Self {
@@ -374,6 +482,7 @@ where
                 input_mapping,
                 output_mapping,
             ))),
+            topology,
             options,
             reference_state: TreeTN::new(),
             local_updates: 0,
@@ -390,20 +499,41 @@ where
         exponent_step: Complex64,
         context: &'static str,
     ) -> Result<T, TdvpError> {
-        let linop = LocalLinOp::new(
+        let linop = LocalLinOp::with_expected_input_indices(
             Arc::clone(&self.projected_operator),
             region.to_vec(),
             state,
             &self.reference_state,
+            init.external_indices(),
         );
 
+        let mut projected_operator =
+            self.projected_operator
+                .write()
+                .map_err(|err| TdvpError::Algorithm {
+                    context: "TDVP failed to lock projected operator",
+                    source: anyhow::anyhow!("{err}"),
+                })?;
+        let evolve_started = tdvp_profile_enabled().then(Instant::now);
         let result = hermitian_krylov_expm_multiply(
-            |x: &T| linop.apply_projected(x),
+            |x: &T| {
+                let apply_started = tdvp_profile_enabled().then(Instant::now);
+                let result =
+                    linop.apply_projected_with_operator(x, &mut projected_operator, &self.topology);
+                record_tdvp_profile(apply_started, |profile, elapsed| {
+                    profile.projected_apply += elapsed;
+                    profile.projected_apply_calls += 1;
+                });
+                result
+            },
             exponent_step,
             init,
             &self.options.krylov,
         )
         .map_err(|source| TdvpError::Algorithm { context, source })?;
+        record_tdvp_profile(evolve_started, |profile, elapsed| {
+            profile.evolve_local += elapsed;
+        });
 
         self.max_error_estimate = self.max_error_estimate.max(result.error_estimate);
         self.max_krylov_iterations = self.max_krylov_iterations.max(result.iterations);
@@ -417,19 +547,37 @@ where
         step: &TdvpRegionStep<V>,
         next_step: Option<&TdvpRegionStep<V>>,
     ) -> Result<(), TdvpError> {
+        with_tdvp_profile(|profile| {
+            profile.steps += 1;
+            match step.kind {
+                TdvpRegionKind::TwoSite => profile.two_site_steps += 1,
+                TdvpRegionKind::OneSite | TdvpRegionKind::SiteCorrection => {
+                    profile.one_site_steps += 1;
+                }
+            }
+        });
+        let reference_init_started = tdvp_profile_enabled().then(Instant::now);
         initialize_reference_state_if_empty(&mut self.reference_state, state).map_err(
             |source| TdvpError::Algorithm {
                 context: "TDVP failed to initialize reference state",
                 source,
             },
         )?;
+        record_tdvp_profile(reference_init_started, |profile, elapsed| {
+            profile.reference_init += elapsed;
+        });
+        let reference_move_started = tdvp_profile_enabled().then(Instant::now);
         move_center_to_region_full_rank(&mut self.reference_state, &step.nodes).map_err(
             |source| TdvpError::Algorithm {
                 context: "TDVP failed to move reference center to local region",
                 source,
             },
         )?;
+        record_tdvp_profile(reference_move_started, |profile, elapsed| {
+            profile.reference_move += elapsed;
+        });
 
+        let update_started = tdvp_profile_enabled().then(Instant::now);
         match step.kind {
             TdvpRegionKind::TwoSite => self.update_two_site(state, step),
             TdvpRegionKind::SiteCorrection => self.update_one_site_tensor(
@@ -445,7 +593,14 @@ where
                 "TDVP one-site Krylov exponential failed",
             ),
         }?;
+        record_tdvp_profile(update_started, |profile, elapsed| match step.kind {
+            TdvpRegionKind::TwoSite => profile.two_site_total += elapsed,
+            TdvpRegionKind::OneSite | TdvpRegionKind::SiteCorrection => {
+                profile.one_site_total += elapsed;
+            }
+        });
 
+        let sync_started = tdvp_profile_enabled().then(Instant::now);
         sync_reference_state_region(
             &mut self.reference_state,
             None,
@@ -459,8 +614,11 @@ where
             context: "TDVP failed to sync reference state",
             source,
         })?;
+        record_tdvp_profile(sync_started, |profile, elapsed| {
+            profile.sync_reference += elapsed;
+        });
 
-        let topology = state.site_index_network();
+        let invalidate_started = tdvp_profile_enabled().then(Instant::now);
         let mut projected_operator =
             self.projected_operator
                 .write()
@@ -468,7 +626,10 @@ where
                     context: "TDVP projected operator lock poisoned",
                     source: anyhow::anyhow!("{err}"),
                 })?;
-        projected_operator.invalidate(&step.nodes, topology);
+        projected_operator.invalidate(&step.nodes, &self.topology);
+        record_tdvp_profile(invalidate_started, |profile, elapsed| {
+            profile.invalidate += elapsed;
+        });
         Ok(())
     }
 
@@ -479,6 +640,7 @@ where
         next_step: Option<&TdvpRegionStep<V>>,
         context: &'static str,
     ) -> Result<(), TdvpError> {
+        let extract_started = tdvp_profile_enabled().then(Instant::now);
         let subtree =
             state
                 .extract_subtree(&step.nodes)
@@ -486,11 +648,18 @@ where
                     context: "TDVP failed to extract one-site region",
                     source,
                 })?;
+        record_tdvp_profile(extract_started, |profile, elapsed| {
+            profile.extract_region += elapsed;
+        });
+        let contract_started = tdvp_profile_enabled().then(Instant::now);
         let init_local =
             contract_region(&subtree, &step.nodes).map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to contract one-site region",
                 source,
             })?;
+        record_tdvp_profile(contract_started, |profile, elapsed| {
+            profile.contract_region += elapsed;
+        });
         let evolved =
             self.evolve_local(&step.nodes, &init_local, state, step.exponent_step, context)?;
         let evolved = if step.kind == TdvpRegionKind::OneSite {
@@ -504,18 +673,26 @@ where
                 .ok_or_else(|| TdvpError::MissingCenter {
                     center: format!("{:?}", step.nodes[0]),
                 })?;
+        let replace_started = tdvp_profile_enabled().then(Instant::now);
         state
             .replace_tensor(node_idx, evolved)
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to replace one-site tensor",
                 source,
             })?;
+        record_tdvp_profile(replace_started, |profile, elapsed| {
+            profile.replace_subtree += elapsed;
+        });
+        let center_started = tdvp_profile_enabled().then(Instant::now);
         state
             .set_canonical_region([step.new_center.clone()])
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to set one-site canonical center",
                 source,
             })?;
+        record_tdvp_profile(center_started, |profile, elapsed| {
+            profile.state_center += elapsed;
+        });
         Ok(())
     }
 
@@ -592,7 +769,7 @@ where
                 source,
             })?;
 
-        for neighbor in state.site_index_network().neighbors(current) {
+        for neighbor in self.topology.neighbors(current) {
             let Some(ket_edge) = state.edge_between(current, &neighbor) else {
                 continue;
             };
@@ -691,19 +868,30 @@ where
         init: &T,
         exponent_step: Complex64,
     ) -> Result<T, TdvpError> {
+        let mut proj_op = self
+            .projected_operator
+            .write()
+            .map_err(|err| TdvpError::Algorithm {
+                context: "TDVP failed to lock projected operator",
+                source: anyhow::anyhow!("{err}"),
+            })?;
+        let evolve_started = tdvp_profile_enabled().then(Instant::now);
         let result = hermitian_krylov_expm_multiply(
             |x: &T| {
-                let mut proj_op = self.projected_operator.write().map_err(|err| {
-                    anyhow::anyhow!("TDVP projected operator lock poisoned: {err}")
-                })?;
-                proj_op.apply_edge_center(
+                let apply_started = tdvp_profile_enabled().then(Instant::now);
+                let result = proj_op.apply_edge_center(
                     x,
                     (left, right),
                     (left_ket_tensor, left_bra_tensor),
                     bra_to_ket_indices,
                     (state, &self.reference_state),
-                    state.site_index_network(),
-                )
+                    &self.topology,
+                );
+                record_tdvp_profile(apply_started, |profile, elapsed| {
+                    profile.projected_apply += elapsed;
+                    profile.projected_apply_calls += 1;
+                });
+                result
             },
             exponent_step,
             init,
@@ -713,6 +901,9 @@ where
             context: "TDVP one-site bond-center Krylov exponential failed",
             source,
         })?;
+        record_tdvp_profile(evolve_started, |profile, elapsed| {
+            profile.evolve_local += elapsed;
+        });
         self.max_error_estimate = self.max_error_estimate.max(result.error_estimate);
         self.max_krylov_iterations = self.max_krylov_iterations.max(result.iterations);
         self.local_updates += 1;
@@ -729,6 +920,7 @@ where
                 requested: step.nodes.len(),
             });
         }
+        let extract_started = tdvp_profile_enabled().then(Instant::now);
         let mut subtree =
             state
                 .extract_subtree(&step.nodes)
@@ -736,11 +928,18 @@ where
                     context: "TDVP failed to extract two-site region",
                     source,
                 })?;
+        record_tdvp_profile(extract_started, |profile, elapsed| {
+            profile.extract_region += elapsed;
+        });
+        let contract_started = tdvp_profile_enabled().then(Instant::now);
         let init_local =
             contract_region(&subtree, &step.nodes).map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to contract two-site region",
                 source,
             })?;
+        record_tdvp_profile(contract_started, |profile, elapsed| {
+            profile.contract_region += elapsed;
+        });
         let evolved = self.evolve_local(
             &step.nodes,
             &init_local,
@@ -749,12 +948,16 @@ where
             "TDVP two-site Krylov exponential failed",
         )?;
 
+        let topology_started = tdvp_profile_enabled().then(Instant::now);
         let topology = build_subtree_topology(&evolved, &step.nodes, state).map_err(|source| {
             TdvpError::Algorithm {
                 context: "TDVP failed to build two-site subtree topology",
                 source,
             }
         })?;
+        record_tdvp_profile(topology_started, |profile, elapsed| {
+            profile.build_topology += elapsed;
+        });
         let mut factorize_options = FactorizeOptions::svd();
         if let Some(max_rank) = self.options.max_bond_dim {
             factorize_options = factorize_options.with_max_rank(max_rank);
@@ -762,6 +965,7 @@ where
         if let Some(policy) = self.options.svd_policy {
             factorize_options = factorize_options.with_svd_policy(policy);
         }
+        let factorize_started = tdvp_profile_enabled().then(Instant::now);
         let decomposed = factorize_tensor_to_treetn_with(
             &evolved,
             &topology,
@@ -772,18 +976,30 @@ where
             context: "TDVP failed to split evolved two-site tensor",
             source,
         })?;
+        record_tdvp_profile(factorize_started, |profile, elapsed| {
+            profile.factorize += elapsed;
+        });
+        let copy_started = tdvp_profile_enabled().then(Instant::now);
         copy_decomposed_to_subtree(&mut subtree, &decomposed, &step.nodes, state).map_err(
             |source| TdvpError::Algorithm {
                 context: "TDVP failed to copy split two-site tensors",
                 source,
             },
         )?;
+        record_tdvp_profile(copy_started, |profile, elapsed| {
+            profile.copy_decomposed += elapsed;
+        });
+        let subtree_center_started = tdvp_profile_enabled().then(Instant::now);
         subtree
             .set_canonical_region([step.new_center.clone()])
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to set two-site subtree center",
                 source,
             })?;
+        record_tdvp_profile(subtree_center_started, |profile, elapsed| {
+            profile.subtree_center += elapsed;
+        });
+        let subtree_ortho_started = tdvp_profile_enabled().then(Instant::now);
         if let Some(edges) = subtree.edges_to_canonicalize_by_names(&step.new_center) {
             for (from, to) in edges {
                 if let Some(edge) = subtree.edge_between(&from, &to) {
@@ -796,18 +1012,29 @@ where
                 }
             }
         }
+        record_tdvp_profile(subtree_ortho_started, |profile, elapsed| {
+            profile.subtree_ortho += elapsed;
+        });
+        let replace_started = tdvp_profile_enabled().then(Instant::now);
         state
             .replace_subtree(&step.nodes, &subtree)
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to replace two-site subtree",
                 source,
             })?;
+        record_tdvp_profile(replace_started, |profile, elapsed| {
+            profile.replace_subtree += elapsed;
+        });
+        let state_center_started = tdvp_profile_enabled().then(Instant::now);
         state
             .set_canonical_region([step.new_center.clone()])
             .map_err(|source| TdvpError::Algorithm {
                 context: "TDVP failed to set two-site canonical center",
                 source,
             })?;
+        record_tdvp_profile(state_center_started, |profile, elapsed| {
+            profile.state_center += elapsed;
+        });
         Ok(())
     }
 }
@@ -883,6 +1110,13 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
 {
+    let profile_enabled = tdvp_profile_enabled();
+    if profile_enabled {
+        tdvp_profile_reset();
+        reset_contract_profile();
+        reset_pairwise_contract_profile();
+    }
+    let total_started = profile_enabled.then(Instant::now);
     validate_options(&options)?;
     if init.node_index(center).is_none() {
         return Err(TdvpError::MissingCenter {
@@ -893,14 +1127,23 @@ where
         return Err(TdvpError::TopologyMismatch);
     }
 
+    let mapping_started = profile_enabled.then(Instant::now);
     let (input_mapping, output_mapping) =
         single_site_square_mappings(operator, &init).map_err(TdvpError::from)?;
+    record_tdvp_profile(mapping_started, |profile, elapsed| {
+        profile.initial_mapping += elapsed;
+    });
+    let canonicalize_started = profile_enabled.then(Instant::now);
     let mut state = init
         .canonicalize([center.clone()], CanonicalizationOptions::default())
         .map_err(|source| TdvpError::Algorithm {
             context: "TDVP failed to canonicalize initial state",
             source,
         })?;
+    record_tdvp_profile(canonicalize_started, |profile, elapsed| {
+        profile.initial_canonicalize += elapsed;
+    });
+    let plan_started = profile_enabled.then(Instant::now);
     let plan = TdvpRegionPlan::new(
         state.site_index_network().topology(),
         center,
@@ -911,25 +1154,34 @@ where
     .ok_or_else(|| TdvpError::MissingCenter {
         center: format!("{center:?}"),
     })?;
+    record_tdvp_profile(plan_started, |profile, elapsed| {
+        profile.plan += elapsed;
+    });
     if options.nsite == 2 && plan.steps.is_empty() {
         return Err(TdvpError::EmptyTwoSiteSweep);
     }
 
+    let topology = CachedTopology::from_site_index_network(state.site_index_network());
     let mut updater = TdvpUpdater::new(
         operator.mpo().clone(),
         input_mapping,
         output_mapping,
+        topology,
         options.clone(),
     );
     let mut sweeps_completed = 0usize;
     for sweep in 0..options.nsweeps {
         for (step_index, step) in plan.steps.iter().enumerate() {
+            let move_started = profile_enabled.then(Instant::now);
             move_center_to_region_full_rank(&mut state, &step.nodes).map_err(|source| {
                 TdvpError::Algorithm {
                     context: "TDVP failed to move canonical center to local region",
                     source,
                 }
             })?;
+            record_tdvp_profile(move_started, |profile, elapsed| {
+                profile.move_center += elapsed;
+            });
             updater.update_step(&mut state, step, plan.steps.get(step_index + 1))?;
         }
         sweeps_completed = sweep + 1;
@@ -941,6 +1193,14 @@ where
         }
     }
 
+    record_tdvp_profile(total_started, |profile, elapsed| {
+        profile.total += elapsed;
+    });
+    if let Some(profile) = take_tdvp_profile() {
+        print_tdvp_profile(&profile);
+        print_and_reset_contract_profile();
+        print_and_reset_pairwise_contract_profile();
+    }
     Ok(TdvpResult {
         state,
         sweeps_completed,
@@ -1144,4 +1404,53 @@ where
         .ok_or_else(|| anyhow::anyhow!("path neighbor {:?} has no node name", next_idx))?
         .clone();
     Ok(Some(next))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn square_site_mapping_errors_convert_to_tdvp_errors() {
+        let err = TdvpError::from(SquareSiteMappingError::UnsupportedStateSiteCount {
+            node: "site0".to_string(),
+            count: 2,
+        });
+        assert!(matches!(
+            err,
+            TdvpError::UnsupportedStateSiteCount { node, count }
+                if node == "site0" && count == 2
+        ));
+
+        let err = TdvpError::from(SquareSiteMappingError::UnsupportedMultipleSiteMappings {
+            node: "site1".to_string(),
+            role: "input",
+            count: 3,
+        });
+        assert!(matches!(
+            err,
+            TdvpError::UnsupportedMultipleSiteMappings { node, role, count }
+                if node == "site1" && role == "input" && count == 3
+        ));
+
+        let err = TdvpError::from(SquareSiteMappingError::MissingMapping {
+            node: "site2".to_string(),
+            role: "output",
+        });
+        assert!(matches!(
+            err,
+            TdvpError::MissingMapping { node, role }
+                if node == "site2" && role == "output"
+        ));
+
+        let err = TdvpError::from(SquareSiteMappingError::InvalidMapping {
+            node: "site3".to_string(),
+            reason: "dimension mismatch".to_string(),
+        });
+        assert!(matches!(
+            err,
+            TdvpError::InvalidMapping { node, reason }
+                if node == "site3" && reason == "dimension mismatch"
+        ));
+    }
 }

@@ -377,7 +377,7 @@ pub struct HermitianKrylovExpmOptions {
     pub max_iter: usize,
     /// Maximum number of equal time splits attempted after non-convergence.
     pub max_time_splits: usize,
-    /// Relative convergence tolerance for successive Krylov approximants.
+    /// Relative convergence tolerance for the Krylov residual estimate.
     pub tol: f64,
     /// Breakdown threshold for zero vectors and invariant Krylov subspaces.
     pub breakdown_tol: f64,
@@ -426,7 +426,7 @@ pub struct HermitianKrylovExpmResult<T> {
     pub iterations: usize,
     /// Total matrix-vector products over all accepted substeps.
     pub matvecs: usize,
-    /// Maximum successive-approximation error estimate.
+    /// Maximum Krylov residual estimate over accepted substeps.
     pub error_estimate: f64,
     /// Whether the requested tolerance was met.
     pub converged: bool,
@@ -638,14 +638,14 @@ where
 /// # }
 /// ```
 pub fn hermitian_krylov_expm_multiply<T, F>(
-    apply_a: F,
+    mut apply_a: F,
     exponent: Complex64,
     initial: &T,
     options: &HermitianKrylovExpmOptions,
 ) -> Result<HermitianKrylovExpmResult<T>>
 where
     T: TensorVectorSpace,
-    F: Fn(&T) -> Result<T>,
+    F: FnMut(&T) -> Result<T>,
 {
     validate_hermitian_krylov_expm_options(options)?;
     initial.validate()?;
@@ -682,7 +682,7 @@ where
 
         for _ in 0..splits {
             let result =
-                hermitian_krylov_expm_multiply_once(&apply_a, step_exponent, &output, options)?;
+                hermitian_krylov_expm_multiply_once(&mut apply_a, step_exponent, &output, options)?;
             iterations += result.iterations;
             matvecs += result.matvecs;
             max_error = max_error.max(result.error_estimate);
@@ -721,14 +721,14 @@ where
 }
 
 fn hermitian_krylov_expm_multiply_once<T, F>(
-    apply_a: &F,
+    apply_a: &mut F,
     exponent: Complex64,
     initial: &T,
     options: &HermitianKrylovExpmOptions,
 ) -> Result<HermitianKrylovExpmResult<T>>
 where
     T: TensorVectorSpace,
-    F: Fn(&T) -> Result<T>,
+    F: FnMut(&T) -> Result<T>,
 {
     let initial_norm = initial.norm();
     if initial_norm <= options.breakdown_tol {
@@ -745,8 +745,9 @@ where
     let mut basis = Vec::with_capacity(options.max_iter + 1);
     basis.push(initial.scale(AnyScalar::new_real(1.0 / initial_norm))?);
     let mut h_cols: Vec<Vec<Complex64>> = Vec::with_capacity(options.max_iter);
-    let mut previous: Option<T> = None;
-    let mut last: Option<HermitianKrylovExpmResult<T>> = None;
+    let mut last_coefficients: Option<Vec<Complex64>> = None;
+    let mut last_error_estimate = f64::INFINITY;
+    let mut last_subspace_dim = 0usize;
     let threshold = options.tol * initial_norm.max(1.0);
 
     for j in 0..options.max_iter {
@@ -780,57 +781,77 @@ where
         let coefficients =
             hermitian_exponential_first_column(&projected, exponent, options.hermitian_tol)
                 .map_err(|err| anyhow::anyhow!("projected operator is not Hermitian: {err}"))?;
-        let unit_output = combine_basis_with_complex_coefficients(
-            &basis[..subspace_dim],
-            &coefficients,
-            options.hermitian_tol,
-            "hermitian_krylov_expm_multiply",
-        )?;
-        let output = unit_output.scale(AnyScalar::new_real(initial_norm))?;
-        let mut error_estimate = match &previous {
-            Some(previous) => output
-                .axpby(
-                    AnyScalar::new_real(1.0),
-                    previous,
-                    AnyScalar::new_real(-1.0),
-                )?
-                .norm(),
-            None => f64::INFINITY,
+        let error_estimate = if beta_next <= options.breakdown_tol {
+            0.0
+        } else {
+            initial_norm * beta_next * coefficients[subspace_dim - 1].norm()
         };
         let converged = beta_next <= options.breakdown_tol || error_estimate <= threshold;
-        if converged && beta_next <= options.breakdown_tol && previous.is_none() {
-            error_estimate = 0.0;
-        }
 
         if options.verbose {
             eprintln!(
-                "Hermitian Krylov expm iter {}: error_estimate={:.6e} threshold={:.6e}",
+                "Hermitian Krylov expm iter {}: residual_estimate={:.6e} threshold={:.6e}",
                 subspace_dim, error_estimate, threshold
             );
         }
 
-        let result = HermitianKrylovExpmResult {
-            output: output.clone(),
-            iterations: subspace_dim,
-            matvecs: subspace_dim,
-            error_estimate,
-            converged,
-            time_splits: 1,
-        };
         if converged {
-            return Ok(result);
+            let output = finalize_hermitian_krylov_expm_output(
+                &basis[..subspace_dim],
+                &coefficients,
+                initial_norm,
+                options.hermitian_tol,
+            )?;
+            return Ok(HermitianKrylovExpmResult {
+                output,
+                iterations: subspace_dim,
+                matvecs: subspace_dim,
+                error_estimate,
+                converged: true,
+                time_splits: 1,
+            });
         }
-        if beta_next <= options.breakdown_tol {
-            return Ok(result);
-        }
-        previous = Some(output);
-        last = Some(result);
+        last_coefficients = Some(coefficients);
+        last_error_estimate = error_estimate;
+        last_subspace_dim = subspace_dim;
         basis.push(w_orth.scale(AnyScalar::new_real(1.0 / beta_next))?);
     }
 
-    last.ok_or_else(|| {
+    let coefficients = last_coefficients.ok_or_else(|| {
         anyhow::anyhow!("hermitian_krylov_expm_multiply: max_iter must be greater than zero")
+    })?;
+    let output = finalize_hermitian_krylov_expm_output(
+        &basis[..last_subspace_dim],
+        &coefficients,
+        initial_norm,
+        options.hermitian_tol,
+    )?;
+    Ok(HermitianKrylovExpmResult {
+        output,
+        iterations: last_subspace_dim,
+        matvecs: last_subspace_dim,
+        error_estimate: last_error_estimate,
+        converged: false,
+        time_splits: 1,
     })
+}
+
+fn finalize_hermitian_krylov_expm_output<T>(
+    basis: &[T],
+    coefficients: &[Complex64],
+    initial_norm: f64,
+    hermitian_tol: f64,
+) -> Result<T>
+where
+    T: TensorVectorSpace,
+{
+    let unit_output = combine_basis_with_complex_coefficients(
+        basis,
+        coefficients,
+        hermitian_tol,
+        "hermitian_krylov_expm_multiply",
+    )?;
+    unit_output.scale(AnyScalar::new_real(initial_norm))
 }
 
 /// Solve `A x = b` using GMRES (Generalized Minimal Residual Method).

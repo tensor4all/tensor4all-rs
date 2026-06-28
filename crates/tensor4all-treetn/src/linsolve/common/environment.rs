@@ -24,6 +24,56 @@ pub trait NetworkTopology<V> {
     fn neighbors(&self, node: &V) -> Self::Neighbors<'_>;
 }
 
+/// Cached neighbor lists for algorithms whose topology is fixed during a sweep.
+#[derive(Debug, Clone)]
+pub(crate) struct CachedTopology<V>
+where
+    V: Clone + Hash + Eq,
+{
+    neighbors: HashMap<V, Vec<V>>,
+    empty: Vec<V>,
+}
+
+impl<V> CachedTopology<V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    pub(crate) fn from_site_index_network<I>(network: &SiteIndexNetwork<V, I>) -> Self
+    where
+        I: IndexLike,
+    {
+        let neighbors = network
+            .topology()
+            .node_names()
+            .into_iter()
+            .map(|node| (node.clone(), network.neighbors(node).collect::<Vec<_>>()))
+            .collect();
+        Self {
+            neighbors,
+            empty: Vec::new(),
+        }
+    }
+}
+
+impl<V> NetworkTopology<V> for CachedTopology<V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    type Neighbors<'a>
+        = std::iter::Cloned<std::slice::Iter<'a, V>>
+    where
+        Self: 'a,
+        V: 'a;
+
+    fn neighbors(&self, node: &V) -> Self::Neighbors<'_> {
+        self.neighbors
+            .get(node)
+            .unwrap_or(&self.empty)
+            .iter()
+            .cloned()
+    }
+}
+
 /// Simple environment cache for tensor network computations.
 ///
 /// This struct handles:
@@ -37,8 +87,8 @@ where
     T: TensorLike,
     V: Clone + Hash + Eq,
 {
-    /// Cached environment tensors: (from, to) -> tensor
-    envs: HashMap<(V, V), T>,
+    /// Cached environment tensors: from -> to -> tensor.
+    envs: HashMap<V, HashMap<V, T>>,
 }
 
 impl<T, V> EnvironmentCache<T, V>
@@ -55,22 +105,22 @@ where
 
     /// Get a cached environment tensor if it exists.
     pub fn get(&self, from: &V, to: &V) -> Option<&T> {
-        self.envs.get(&(from.clone(), to.clone()))
+        self.envs.get(from).and_then(|from_envs| from_envs.get(to))
     }
 
     /// Insert an environment tensor.
     pub fn insert(&mut self, from: V, to: V, env: T) {
-        self.envs.insert((from, to), env);
+        self.envs.entry(from).or_default().insert(to, env);
     }
 
     /// Check if environment exists for edge (from, to).
     pub fn contains(&self, from: &V, to: &V) -> bool {
-        self.envs.contains_key(&(from.clone(), to.clone()))
+        self.get(from, to).is_some()
     }
 
     /// Get the number of cached environments.
     pub fn len(&self) -> usize {
-        self.envs.len()
+        self.envs.values().map(HashMap::len).sum()
     }
 
     /// Check if the cache is empty.
@@ -109,7 +159,15 @@ where
     /// Recursively invalidate caches starting from env[(from, to)] towards leaves.
     fn invalidate_recursive<NT: NetworkTopology<V>>(&mut self, from: &V, to: &V, topology: &NT) {
         // Remove env[(from, to)] if it exists
-        if self.envs.remove(&(from.clone(), to.clone())).is_some() {
+        let removed = if let Some(from_envs) = self.envs.get_mut(from) {
+            from_envs.remove(to).is_some()
+        } else {
+            false
+        };
+        if self.envs.get(from).is_some_and(HashMap::is_empty) {
+            self.envs.remove(from);
+        }
+        if removed {
             // Propagate to next generation: env[(to, x)] for all neighbors x of to, x ≠ from
             let neighbors: Vec<V> = topology.neighbors(to).filter(|n| n != from).collect();
 

@@ -236,7 +236,7 @@ where
                 anyhow::anyhow!("Failed to acquire read lock on projected_operator: {}", e)
             })
             .context("verify: lock poisoned")?;
-        let operator = &proj_op.operator;
+        let operator = proj_op.operator();
         let rhs = &self.projected_state.rhs;
 
         // Check node consistency
@@ -425,11 +425,12 @@ where
 
         // Create local linear operator with separate reference_state
         // This prevents unintended bra↔ket link contractions in environment computation
-        let linop = LocalLinOp::new(
+        let linop = LocalLinOp::with_expected_input_indices(
             Arc::clone(&self.projected_operator),
             region.to_vec(),
             state,
             &self.reference_state,
+            init_indices,
         );
 
         // KrylovKit builds Arnoldi from the unshifted local operator H.
@@ -764,10 +765,10 @@ where
             let proj_op = self.projected_operator.read().map_err(|e| {
                 anyhow::anyhow!("validate_mpo_external_indices: lock poisoned: {e}")
             })?;
-            let Some(input) = proj_op.input_mapping.as_ref() else {
+            let Some(input) = proj_op.input_mapping() else {
                 return Ok(());
             };
-            let Some(output) = proj_op.output_mapping.as_ref() else {
+            let Some(output) = proj_op.output_mapping() else {
                 return Ok(());
             };
             (input.clone(), output.clone())

@@ -46,16 +46,23 @@ where
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// The operator H
-    pub operator: TreeTN<T, V>,
+    operator: TreeTN<T, V>,
     /// Environment cache
-    pub envs: EnvironmentCache<T, V>,
+    envs: EnvironmentCache<T, V>,
     /// Input index mapping (true site index -> MPO's internal input index)
     /// Used when MPO has internal indices different from state's site indices.
-    pub input_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
+    input_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
     /// Output index mapping (true site index -> MPO's internal output index)
-    pub output_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
+    output_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
+    /// Stable temporary local mappings used to avoid regenerating temp indices
+    /// on every projected operator application.
+    temp_mapping: Option<HashMap<V, LocalIndexMapping<T::Index>>>,
+    /// Operator tensors with internal site indices already replaced by stable
+    /// temporary input/output indices.
+    temp_operator_tensors: HashMap<V, T>,
 }
 
+#[derive(Clone)]
 struct LocalIndexMapping<I> {
     true_in: I,
     internal_in: I,
@@ -63,6 +70,33 @@ struct LocalIndexMapping<I> {
     true_out: I,
     internal_out: I,
     temp_out: I,
+}
+
+fn build_temp_mappings<V, I>(
+    input_mapping: &HashMap<V, IndexMapping<I>>,
+    output_mapping: &HashMap<V, IndexMapping<I>>,
+) -> HashMap<V, LocalIndexMapping<I>>
+where
+    V: Clone + Hash + Eq,
+    I: IndexLike,
+{
+    let mut mappings = HashMap::with_capacity(input_mapping.len().min(output_mapping.len()));
+    for (node, input) in input_mapping {
+        if let Some(output) = output_mapping.get(node) {
+            mappings.insert(
+                node.clone(),
+                LocalIndexMapping {
+                    true_in: input.true_index.clone(),
+                    internal_in: input.internal_index.clone(),
+                    temp_in: input.internal_index.sim(),
+                    true_out: output.true_index.clone(),
+                    internal_out: output.internal_index.clone(),
+                    temp_out: output.internal_index.sim(),
+                },
+            );
+        }
+    }
+    mappings
 }
 
 enum ContractOperand<'a, T> {
@@ -79,6 +113,15 @@ impl<'a, T> ContractOperand<'a, T> {
     }
 }
 
+fn same_index_set<I: IndexLike>(left: &[I], right: &[I]) -> bool {
+    left.len() == right.len()
+        && left.iter().all(|left_idx| {
+            right
+                .iter()
+                .any(|right_idx| left_idx == right_idx && left_idx.dim() == right_idx.dim())
+        })
+}
+
 impl<T, V> ProjectedOperator<T, V>
 where
     T: TensorLike,
@@ -93,6 +136,8 @@ where
             envs: EnvironmentCache::new(),
             input_mapping: None,
             output_mapping: None,
+            temp_mapping: None,
+            temp_operator_tensors: HashMap::new(),
         }
     }
 
@@ -106,12 +151,53 @@ where
         input_mapping: HashMap<V, IndexMapping<T::Index>>,
         output_mapping: HashMap<V, IndexMapping<T::Index>>,
     ) -> Self {
+        let temp_mapping = build_temp_mappings(&input_mapping, &output_mapping);
         Self {
             operator,
             envs: EnvironmentCache::new(),
             input_mapping: Some(input_mapping),
             output_mapping: Some(output_mapping),
+            temp_mapping: Some(temp_mapping),
+            temp_operator_tensors: HashMap::new(),
         }
+    }
+
+    fn ensure_temp_operator_tensor(&mut self, node: &V) -> Result<()> {
+        if self.temp_operator_tensors.contains_key(node) {
+            return Ok(());
+        }
+        let Some(mapping) = self
+            .temp_mapping
+            .as_ref()
+            .and_then(|mappings| mappings.get(node))
+        else {
+            return Ok(());
+        };
+        let node_idx = self
+            .operator
+            .node_index(node)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in operator", node))?;
+        let tensor = self
+            .operator
+            .tensor(node_idx)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found in operator"))?;
+        let tensor = tensor
+            .replaceind(&mapping.internal_in, &mapping.temp_in)?
+            .replaceind(&mapping.internal_out, &mapping.temp_out)?;
+        self.temp_operator_tensors.insert(node.clone(), tensor);
+        Ok(())
+    }
+
+    pub(crate) fn operator(&self) -> &TreeTN<T, V> {
+        &self.operator
+    }
+
+    pub(crate) fn input_mapping(&self) -> Option<&HashMap<V, IndexMapping<T::Index>>> {
+        self.input_mapping.as_ref()
+    }
+
+    pub(crate) fn output_mapping(&self) -> Option<&HashMap<V, IndexMapping<T::Index>>> {
+        self.output_mapping.as_ref()
     }
 
     /// Apply the operator to a local tensor: compute `H|v⟩` at the current position.
@@ -142,11 +228,10 @@ where
         bra_state: &TreeTN<T, V>,
         topology: &NT,
     ) -> Result<T> {
-        // Ensure environments are computed
         self.ensure_environments(region, ket_state, bra_state, topology)?;
 
-        let mut all_tensors = Vec::new();
-        let mut temp_out_to_true: Vec<(T::Index, T::Index)> = Vec::new();
+        let mut all_tensors = Vec::with_capacity(1 + region.len() + region.len().saturating_mul(2));
+        let mut temp_out_to_true: Vec<(T::Index, T::Index)> = Vec::with_capacity(region.len());
 
         if let (Some(ref input_mapping), Some(ref output_mapping)) =
             (&self.input_mapping, &self.output_mapping)
@@ -154,20 +239,23 @@ where
             // MPO-with-mappings path: use unique temp indices to avoid duplicate IDs.
             // Replace true_index -> temp_in on v (never use internal_index on v).
             // Use same temp_in/temp_out on op tensors so they contract with v.
-            let mut per_node: Vec<Option<LocalIndexMapping<T::Index>>> = Vec::new();
+            let mut per_node: Vec<Option<LocalIndexMapping<T::Index>>> =
+                Vec::with_capacity(region.len());
             for node in region {
                 match (input_mapping.get(node), output_mapping.get(node)) {
-                    (Some(im), Some(om)) => {
-                        let temp_in = im.internal_index.sim();
-                        let temp_out = om.internal_index.sim();
-                        per_node.push(Some(LocalIndexMapping {
-                            true_in: im.true_index.clone(),
-                            internal_in: im.internal_index.clone(),
-                            temp_in,
-                            true_out: om.true_index.clone(),
-                            internal_out: om.internal_index.clone(),
-                            temp_out,
-                        }));
+                    (Some(_), Some(_)) => {
+                        let mapping = self
+                            .temp_mapping
+                            .as_ref()
+                            .and_then(|mappings| mappings.get(node))
+                            .cloned()
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "Missing temporary index mapping for operator node {:?}",
+                                    node
+                                )
+                            })?;
+                        per_node.push(Some(mapping));
                     }
                     (None, None) => {
                         if self
@@ -194,6 +282,12 @@ where
                 }
             }
 
+            for (node, mapping) in region.iter().zip(per_node.iter()) {
+                if mapping.is_some() {
+                    self.ensure_temp_operator_tensor(node)?;
+                }
+            }
+
             if per_node.iter().any(Option::is_some) {
                 let mut transformed_v = v.clone();
                 for mapping in per_node.iter().flatten() {
@@ -205,21 +299,22 @@ where
             }
 
             for (node, mapping) in region.iter().zip(per_node.iter()) {
-                let node_idx = self
-                    .operator
-                    .node_index(node)
-                    .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in operator", node))?;
-                let tensor = self
-                    .operator
-                    .tensor(node_idx)
-                    .ok_or_else(|| anyhow::anyhow!("Tensor not found in operator"))?;
                 if let Some(mapping) = mapping {
-                    let mut t = tensor.clone();
-                    t = t.replaceind(&mapping.internal_in, &mapping.temp_in)?;
-                    t = t.replaceind(&mapping.internal_out, &mapping.temp_out)?;
+                    let t = self
+                        .temp_operator_tensors
+                        .get(node)
+                        .ok_or_else(|| anyhow::anyhow!("missing cached operator tensor"))?;
                     temp_out_to_true.push((mapping.temp_out.clone(), mapping.true_out.clone()));
-                    all_tensors.push(ContractOperand::Owned(t));
+                    all_tensors.push(ContractOperand::Borrowed(t));
                 } else {
+                    let node_idx = self
+                        .operator
+                        .node_index(node)
+                        .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in operator", node))?;
+                    let tensor = self
+                        .operator
+                        .tensor(node_idx)
+                        .ok_or_else(|| anyhow::anyhow!("Tensor not found in operator"))?;
                     all_tensors.push(ContractOperand::Borrowed(tensor));
                 }
             }
@@ -290,11 +385,7 @@ where
         // Align result to v's index order
         let v_inds = v.external_indices();
         let res_inds = contracted.external_indices();
-        let v_index_keys: std::collections::HashSet<_> =
-            v_inds.iter().map(|i| (i.clone(), i.dim())).collect();
-        let res_index_keys: std::collections::HashSet<_> =
-            res_inds.iter().map(|i| (i.clone(), i.dim())).collect();
-        if v_index_keys == res_index_keys && v_inds.len() == res_inds.len() {
+        if same_index_set(&v_inds, &res_inds) {
             contracted = contracted.permuteinds(&v_inds)?;
         }
 
@@ -349,11 +440,7 @@ where
 
         let center_inds = center.external_indices();
         let res_inds = contracted.external_indices();
-        let center_index_keys: std::collections::HashSet<_> =
-            center_inds.iter().map(|i| (i.clone(), i.dim())).collect();
-        let res_index_keys: std::collections::HashSet<_> =
-            res_inds.iter().map(|i| (i.clone(), i.dim())).collect();
-        if center_index_keys == res_index_keys && center_inds.len() == res_inds.len() {
+        if same_index_set(&center_inds, &res_inds) {
             contracted = contracted.permuteinds(&center_inds)?;
         }
 
