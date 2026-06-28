@@ -398,11 +398,12 @@ where
         init: &T,
         state: &TreeTN<T, V>,
     ) -> Result<T, DmrgError> {
-        let linop = LocalLinOp::new(
+        let linop = LocalLinOp::with_expected_input_indices(
             Arc::clone(&self.projected_operator),
             region.to_vec(),
             state,
             &self.reference_state,
+            init.external_indices(),
         );
 
         let result = hermitian_lanczos_lowest_eigenpair(
@@ -431,11 +432,12 @@ where
             context: "DMRG failed to contract final Rayleigh region",
             source,
         })?;
-        let linop = LocalLinOp::new(
+        let linop = LocalLinOp::with_expected_input_indices(
             Arc::clone(&self.projected_operator),
             region.to_vec(),
             state,
             &self.reference_state,
+            local.external_indices(),
         );
         let h_local = linop
             .apply_projected(&local)

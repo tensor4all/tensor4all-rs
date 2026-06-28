@@ -9,7 +9,7 @@ use std::sync::{Arc, RwLock};
 use anyhow::{Context, Result};
 use tensor4all_core::{IndexLike, TensorLike};
 
-use crate::linsolve::common::ProjectedOperator;
+use crate::linsolve::common::{NetworkTopology, ProjectedOperator};
 use crate::treetn::TreeTN;
 
 /// LocalLinOp: Wraps the projected operator for local GMRES solving.
@@ -36,6 +36,8 @@ where
     /// Reference state for bra in environment computation
     /// Uses separate bond indices to prevent unintended contractions
     pub reference_state: &'a TreeTN<T, V>,
+    /// Expected local vector-space indices for inputs to this projected operator.
+    expected_input_indices: Vec<T::Index>,
 }
 
 impl<'a, T, V> LocalLinOp<'a, T, V>
@@ -50,99 +52,49 @@ where
     ///
     /// The reference_state should have separate bond indices from state
     /// to prevent unintended bra↔ket contractions in environment computation.
-    pub fn new(
+    pub(crate) fn with_expected_input_indices(
         projected_operator: Arc<RwLock<ProjectedOperator<T, V>>>,
         region: Vec<V>,
         state: &'a TreeTN<T, V>,
         reference_state: &'a TreeTN<T, V>,
+        expected_input_indices: Vec<T::Index>,
     ) -> Self {
         Self {
             projected_operator,
             region,
             state,
             reference_state,
+            expected_input_indices,
         }
-    }
-
-    fn local_input_indices(&self) -> Result<Vec<T::Index>> {
-        let Some((first_node, rest_nodes)) = self.region.split_first() else {
-            return Err(anyhow::anyhow!(
-                "LocalLinOp::apply_projected: region must not be empty"
-            ));
-        };
-        let first_idx = self.state.node_index(first_node).ok_or_else(|| {
-            anyhow::anyhow!(
-                "LocalLinOp::apply_projected: node {:?} not found in state",
-                first_node
-            )
-        })?;
-        let mut local = self
-            .state
-            .tensor(first_idx)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "LocalLinOp::apply_projected: tensor for node {:?} not found in state",
-                    first_node
-                )
-            })?
-            .clone();
-
-        for node in rest_nodes {
-            let node_idx = self.state.node_index(node).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "LocalLinOp::apply_projected: node {:?} not found in state",
-                    node
-                )
-            })?;
-            let tensor = self.state.tensor(node_idx).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "LocalLinOp::apply_projected: tensor for node {:?} not found in state",
-                    node
-                )
-            })?;
-            local = local.contract_pair(tensor)?;
-        }
-
-        Ok(local.external_indices())
     }
 
     fn same_index_set(left: &[T::Index], right: &[T::Index]) -> bool {
-        let left_keys: std::collections::HashSet<_> =
-            left.iter().map(|idx| (idx.clone(), idx.dim())).collect();
-        let right_keys: std::collections::HashSet<_> =
-            right.iter().map(|idx| (idx.clone(), idx.dim())).collect();
-        left.len() == right.len() && left_keys == right_keys
+        left.len() == right.len()
+            && left.iter().all(|left_idx| {
+                right
+                    .iter()
+                    .any(|right_idx| left_idx == right_idx && left_idx.dim() == right_idx.dim())
+            })
     }
 
-    /// Apply the projected local operator: `y = H * x`.
-    pub fn apply_projected(&self, x: &T) -> Result<T> {
+    pub(crate) fn apply_projected_with_operator<NT: NetworkTopology<V>>(
+        &self,
+        x: &T,
+        proj_op: &mut ProjectedOperator<T, V>,
+        topology: &NT,
+    ) -> Result<T> {
         let x_indices = x.external_indices();
-        let expected_input_indices = self.local_input_indices()?;
-        if !Self::same_index_set(&x_indices, &expected_input_indices) {
+        if !Self::same_index_set(&x_indices, &self.expected_input_indices) {
             return Err(anyhow::anyhow!(
                 "LocalLinOp::apply_projected: index structure mismatch between input (x) and the local state vector space:\n  x has {} indices: {:?}\n  expected {} indices: {:?}",
                 x_indices.len(),
                 x_indices.iter().map(|i| format!("{:?}:{}", i.id(), i.dim())).collect::<Vec<_>>(),
-                expected_input_indices.len(),
-                expected_input_indices.iter().map(|i| format!("{:?}:{}", i.id(), i.dim())).collect::<Vec<_>>(),
+                self.expected_input_indices.len(),
+                self.expected_input_indices.iter().map(|i| format!("{:?}:{}", i.id(), i.dim())).collect::<Vec<_>>(),
             ));
         }
 
-        let mut proj_op = self
-            .projected_operator
-            .write()
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to acquire write lock on projected_operator: {}", e)
-            })
-            .context("LocalLinOp::apply: lock poisoned")?;
-
-        let hx = proj_op.apply(
-            x,
-            &self.region,
-            self.state,
-            self.reference_state,
-            self.state.site_index_network(),
-        )?;
+        let hx = proj_op.apply(x, &self.region, self.state, self.reference_state, topology)?;
 
         let hx_indices = hx.external_indices();
         let indices_match = x_indices.len() == hx_indices.len()
@@ -161,6 +113,19 @@ where
         }
 
         Ok(hx)
+    }
+
+    /// Apply the projected local operator: `y = H * x`.
+    pub fn apply_projected(&self, x: &T) -> Result<T> {
+        let mut proj_op = self
+            .projected_operator
+            .write()
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to acquire write lock on projected_operator: {}", e)
+            })
+            .context("LocalLinOp::apply: lock poisoned")?;
+
+        self.apply_projected_with_operator(x, &mut proj_op, self.state.site_index_network())
     }
 }
 

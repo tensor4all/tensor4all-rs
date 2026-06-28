@@ -64,6 +64,9 @@ reports runtime plus L2 error against a small dense exact evolution reference:
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_tdvp --release -- 8 4 3 0.02
 ```
 
+Append `all`, `chain`, or `star` to the Rust command to run both topologies or
+only one topology in a fresh process.
+
 Non-AD local tensor operations:
 
 ```bash

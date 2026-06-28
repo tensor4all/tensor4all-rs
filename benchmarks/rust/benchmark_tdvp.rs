@@ -4,7 +4,7 @@
 //   RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_tdvp --release
 //
 // Optional args:
-//   cargo run -p tensor4all-treetn --example benchmark_tdvp --release -- <n_sites> <time_steps> <repeats> <dt>
+//   cargo run -p tensor4all-treetn --example benchmark_tdvp --release -- <n_sites> <time_steps> <repeats> <dt> [all|chain|star]
 
 use std::collections::HashMap;
 use std::hint::black_box;
@@ -44,6 +44,21 @@ impl Topology {
             Self::Chain => "chain",
             Self::Star => "star",
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TopologySelection {
+    All,
+    One(Topology),
+}
+
+fn parse_topology_selection(value: Option<&str>) -> anyhow::Result<TopologySelection> {
+    match value.unwrap_or("all") {
+        "all" => Ok(TopologySelection::All),
+        "chain" => Ok(TopologySelection::One(Topology::Chain)),
+        "star" => Ok(TopologySelection::One(Topology::Star)),
+        other => anyhow::bail!("unknown topology selection {other:?}; use all, chain, or star"),
     }
 }
 
@@ -458,13 +473,21 @@ fn main() -> anyhow::Result<()> {
     let time_steps = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(4);
     let repeats = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(3);
     let dt: f64 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(0.02);
+    let topology_selection = parse_topology_selection(args.get(5).map(String::as_str))?;
     anyhow::ensure!(n_sites >= 2, "n_sites must be at least 2");
     anyhow::ensure!(time_steps >= 1, "time_steps must be at least 1");
     anyhow::ensure!(repeats >= 1, "repeats must be at least 1");
     anyhow::ensure!(dt.is_finite() && dt > 0.0, "dt must be finite and positive");
 
-    run_case(Topology::Chain, n_sites, time_steps, repeats, dt)?;
-    run_case(Topology::Star, n_sites, time_steps, repeats, dt)?;
+    match topology_selection {
+        TopologySelection::All => {
+            run_case(Topology::Chain, n_sites, time_steps, repeats, dt)?;
+            run_case(Topology::Star, n_sites, time_steps, repeats, dt)?;
+        }
+        TopologySelection::One(topology) => {
+            run_case(topology, n_sites, time_steps, repeats, dt)?;
+        }
+    }
     Ok(())
 }
 
@@ -486,6 +509,23 @@ mod tests {
     fn star_benchmark_uses_itensornetworks_leaf_root() {
         assert_eq!(tdvp_root_name(Topology::Chain), node_name(0));
         assert_eq!(tdvp_root_name(Topology::Star), node_name(1));
+    }
+
+    #[test]
+    fn topology_selection_parses_all_chain_and_star() {
+        assert!(matches!(
+            parse_topology_selection(None).unwrap(),
+            TopologySelection::All
+        ));
+        assert!(matches!(
+            parse_topology_selection(Some("chain")).unwrap(),
+            TopologySelection::One(Topology::Chain)
+        ));
+        assert!(matches!(
+            parse_topology_selection(Some("star")).unwrap(),
+            TopologySelection::One(Topology::Star)
+        ));
+        assert!(parse_topology_selection(Some("line")).is_err());
     }
 
     #[test]

@@ -238,8 +238,7 @@ fn test_projected_operator_creation() {
     let (mps, _, _) = create_simple_mps_chain();
     let projected_op = ProjectedOperator::new(mps);
 
-    // Verify initial state
-    assert!(projected_op.envs.is_empty());
+    assert_eq!(projected_op.local_dimension(&["site0"]), 2);
 }
 
 #[test]
@@ -261,6 +260,76 @@ fn test_projected_operator_local_dimension() {
     let dim = projected_op.local_dimension(&["site0", "site1"]);
     // 2 * 2 = 4
     assert_eq!(dim, 4);
+}
+
+#[test]
+fn test_projected_operator_apply_distinguishes_same_id_prime_level() {
+    struct SingleNode;
+    impl NetworkTopology<&'static str> for SingleNode {
+        type Neighbors<'a>
+            = std::vec::IntoIter<&'static str>
+        where
+            Self: 'a;
+
+        fn neighbors(&self, _node: &&'static str) -> Self::Neighbors<'_> {
+            Vec::new().into_iter()
+        }
+    }
+
+    let site = DynIndex::new_dyn(2);
+    let site_prime = site.prime();
+    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+    state
+        .add_tensor(
+            "site0",
+            TensorDynLen::from_dense(vec![site.clone()], vec![1.0, 0.0]).unwrap(),
+        )
+        .unwrap();
+
+    let op_in = DynIndex::new_dyn(2);
+    let op_out = DynIndex::new_dyn(2);
+    let mut operator = TreeTN::<TensorDynLen, &'static str>::new();
+    operator
+        .add_tensor(
+            "site0",
+            TensorDynLen::from_dense(
+                vec![op_out.clone(), op_in.clone()],
+                vec![1.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    let mut projected_op = ProjectedOperator::with_index_mappings(
+        operator,
+        HashMap::from([(
+            "site0",
+            IndexMapping {
+                true_index: site.clone(),
+                internal_index: op_in,
+            },
+        )]),
+        HashMap::from([(
+            "site0",
+            IndexMapping {
+                true_index: site.clone(),
+                internal_index: op_out,
+            },
+        )]),
+    );
+
+    for data in [vec![1.0, 2.0, 3.0, 4.0], vec![4.0, 3.0, 2.0, 1.0]] {
+        let input = TensorDynLen::from_dense(vec![site.clone(), site_prime.clone()], data).unwrap();
+        let output = projected_op
+            .apply(&input, &["site0"], &state, &state, &SingleNode)
+            .unwrap();
+
+        assert_eq!(
+            output.external_indices(),
+            vec![site.clone(), site_prime.clone()]
+        );
+        assert!(output.sub(&input).unwrap().maxabs() < 1e-12);
+    }
 }
 
 // ============================================================================

@@ -17,6 +17,13 @@ fn unique_dyn_index(used: &mut HashSet<DynId>, dim: usize) -> DynIndex {
     }
 }
 
+fn tensor_indices(state: &TreeTN<TensorDynLen, String>, node: &str) -> Vec<DynIndex> {
+    state
+        .tensor(state.node_index(&node.to_string()).unwrap())
+        .unwrap()
+        .external_indices()
+}
+
 #[test]
 fn test_local_linop_new() {
     use crate::linsolve::common::ProjectedOperator;
@@ -29,11 +36,13 @@ fn test_local_linop_new() {
     let reference_state = state.clone();
     let projected_op = Arc::new(RwLock::new(ProjectedOperator::new(state.clone())));
 
-    let linop = LocalLinOp::new(
+    let expected = tensor_indices(&state, "site0");
+    let linop = LocalLinOp::with_expected_input_indices(
         projected_op,
         vec!["site0".to_string()],
         &state,
         &reference_state,
+        expected,
     );
 
     assert_eq!(linop.region.len(), 1);
@@ -52,11 +61,13 @@ fn test_local_linop_apply_projected_rejects_mismatch() {
     let reference_state = state.clone();
     let projected_op = Arc::new(RwLock::new(ProjectedOperator::new(state.clone())));
 
-    let linop = LocalLinOp::new(
+    let expected = tensor_indices(&state, "site0");
+    let linop = LocalLinOp::with_expected_input_indices(
         projected_op,
         vec!["site0".to_string()],
         &state,
         &reference_state,
+        expected,
     );
 
     let site0 = "site0".to_string();
@@ -81,11 +92,13 @@ fn test_local_linop_apply_index_mismatch() {
     let reference_state = state.clone();
     let projected_op = Arc::new(RwLock::new(ProjectedOperator::new(state.clone())));
 
-    let linop = LocalLinOp::new(
+    let expected = tensor_indices(&state, "site0");
+    let linop = LocalLinOp::with_expected_input_indices(
         projected_op,
         vec!["site0".to_string()],
         &state,
         &reference_state,
+        expected,
     );
 
     let other = DynIndex::new_dyn(2);
@@ -143,11 +156,13 @@ fn test_local_linop_apply_success_mappings() {
     )));
     let reference_state = state.clone();
 
-    let linop = LocalLinOp::new(
+    let expected = tensor_indices(&state, "site0");
+    let linop = LocalLinOp::with_expected_input_indices(
         projected_op,
         vec!["site0".to_string()],
         &state,
         &reference_state,
+        expected,
     );
 
     let site0 = "site0".to_string();
