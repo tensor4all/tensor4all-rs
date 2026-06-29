@@ -6,24 +6,21 @@
 //! states with exactly one state site index per node and mapped TreeTN
 //! operators with one input and one output index per node.
 //!
-//! The v1 path performs local host-side linear algebra on primal dense values
-//! extracted from each local tensor. It does not preserve autodiff tracking.
-//! During expansion, old bonds are reconstructed from full-rank local SVDs; this
+//! During expansion, old bonds are reconstructed from full-rank local SVDs. This
 //! preserves the represented state, but can remove exactly redundant bond
-//! directions while adding missing reference directions.
+//! directions while adding missing reference directions. Local projected-density
+//! contractions and basis reconstruction stay in `TensorDynLen` form; only the
+//! eigenvalue cutoff itself reads detached primal eigenvalues for rank
+//! selection.
 
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::ops::{Add, AddAssign, Div, Mul, Sub};
 
 use anyhow::Result;
-use num_complex::Complex64;
 use tensor4all_core::{
-    AnyScalar, Canonical, DynIndex, FactorizeAlg, IndexLike, SvdTruncationPolicy,
-    TensorContractionLike, TensorDynLen, TensorFactorizationLike, TensorIndex,
-};
-use tensor4all_tensorbackend::{
-    hermitian_eigendecomposition, HermitianEigenScalar, Matrix, TensorElement,
+    contract_pair_with_operand_options, AnyScalar, Canonical, DynIndex, FactorizeAlg, IndexLike,
+    LinearizationOrder, PairwiseContractionOptions, SvdTruncationPolicy, TensorContractionLike,
+    TensorDynLen, TensorFactorizationLike, TensorIndex,
 };
 use thiserror::Error;
 
@@ -276,61 +273,6 @@ impl From<SquareSiteMappingError> for GseError {
     }
 }
 
-trait GseScalar:
-    TensorElement
-    + HermitianEigenScalar
-    + Copy
-    + Default
-    + Add<Output = Self>
-    + AddAssign
-    + Sub<Output = Self>
-    + Mul<Output = Self>
-    + Div<f64, Output = Self>
-    + Debug
-    + 'static
-{
-    fn zero() -> Self;
-    fn one() -> Self;
-    fn conj(self) -> Self;
-    fn real(self) -> f64;
-}
-
-impl GseScalar for f64 {
-    fn zero() -> Self {
-        0.0
-    }
-
-    fn one() -> Self {
-        1.0
-    }
-
-    fn conj(self) -> Self {
-        self
-    }
-
-    fn real(self) -> f64 {
-        self
-    }
-}
-
-impl GseScalar for Complex64 {
-    fn zero() -> Self {
-        Complex64::new(0.0, 0.0)
-    }
-
-    fn one() -> Self {
-        Complex64::new(1.0, 0.0)
-    }
-
-    fn conj(self) -> Self {
-        Complex64::new(self.re, -self.im)
-    }
-
-    fn real(self) -> f64 {
-        self.re
-    }
-}
-
 #[derive(Debug, Clone)]
 struct EdgeExpansionStats {
     edges_processed: usize,
@@ -441,15 +383,8 @@ where
             bonds_expanded: 0,
             max_added_basis: 0,
         }
-    } else if target_scalar == ScalarKind::Complex {
-        expand_edges_with_scalar::<Complex64, V>(
-            &mut state,
-            &mut reference_buffers,
-            center,
-            &options,
-        )?
     } else {
-        expand_edges_with_scalar::<f64, V>(&mut state, &mut reference_buffers, center, &options)?
+        expand_edges(&mut state, &mut reference_buffers, center, &options)?
     };
 
     Ok(GseResult {
@@ -688,14 +623,13 @@ where
     })
 }
 
-fn expand_edges_with_scalar<S, V>(
+fn expand_edges<V>(
     state: &mut TreeTN<TensorDynLen, V>,
     references: &mut [TreeTN<TensorDynLen, V>],
     center: &V,
     options: &GseOptions,
 ) -> Result<EdgeExpansionStats, GseError>
 where
-    S: GseScalar,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
 {
     let edge_order = state
@@ -726,7 +660,7 @@ where
                 },
             )?;
         }
-        let added = expand_one_edge::<S, V>(state, references, &parent, &child, options)?;
+        let added = expand_one_edge(state, references, &parent, &child, options)?;
         stats.edges_processed += 1;
         if added > 0 {
             stats.bonds_expanded += 1;
@@ -742,7 +676,7 @@ where
     Ok(stats)
 }
 
-fn expand_one_edge<S, V>(
+fn expand_one_edge<V>(
     state: &mut TreeTN<TensorDynLen, V>,
     references: &mut [TreeTN<TensorDynLen, V>],
     parent: &V,
@@ -750,7 +684,6 @@ fn expand_one_edge<S, V>(
     options: &GseOptions,
 ) -> Result<usize, GseError>
 where
-    S: GseScalar,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
 {
     let edge = state
@@ -796,7 +729,6 @@ where
         .filter(|idx| idx != &old_bond)
         .collect::<Vec<_>>();
     let q_dim = product_dim(&q_indices);
-    let old_dim = old_bond.dim();
 
     let factorized = child_tensor
         .factorize_full_rank(
@@ -810,118 +742,96 @@ where
         })?;
     let basis_bond = factorized.bond_index;
     let basis_rank = basis_bond.dim();
-    let basis_data = tensor_matrix::<S>(&factorized.right, &basis_bond, &q_indices)?;
-    let target_matrix = tensor_matrix::<S>(&child_tensor, &old_bond, &q_indices)?;
-
-    let mut density = vec![<S as GseScalar>::zero(); q_dim * q_dim];
-    for reference in references.iter() {
-        let ref_edge =
-            reference
-                .edge_between(parent, child)
-                .ok_or_else(|| GseError::Algorithm {
-                    context: "GSE reference edge is missing",
-                    source: anyhow::anyhow!(
-                        "missing reference edge between {:?} and {:?}",
-                        parent,
-                        child
-                    ),
-                })?;
-        let ref_bond =
-            reference
-                .bond_index(ref_edge)
-                .cloned()
-                .ok_or_else(|| GseError::Algorithm {
-                    context: "GSE reference edge has no bond index",
-                    source: anyhow::anyhow!(
-                        "missing reference bond between {:?} and {:?}",
-                        parent,
-                        child
-                    ),
-                })?;
-        let ref_child_idx = reference
-            .node_index(child)
-            .ok_or_else(|| GseError::MissingCenter {
-                center: format!("{child:?}"),
-            })?;
-        let ref_child_tensor =
-            reference
-                .tensor(ref_child_idx)
-                .ok_or_else(|| GseError::Algorithm {
-                    context: "GSE reference child tensor is missing",
-                    source: anyhow::anyhow!("missing reference tensor at {:?}", child),
-                })?;
-        let ref_q_indices = map_q_indices(state, reference, child, parent, &q_indices)?;
-        let ref_matrix = tensor_matrix::<S>(ref_child_tensor, &ref_bond, &ref_q_indices)?;
-        accumulate_density::<S>(&mut density, &ref_matrix, ref_bond.dim(), q_dim);
-    }
-
-    let trace = density_trace::<S>(&density, q_dim);
-    let mut added = 0usize;
-    let mut expanded_basis = basis_data.clone();
-    if trace > 0.0 {
-        for value in &mut density {
-            *value = *value / trace;
-        }
-        let mut missing = projected_missing_density::<S>(&density, &basis_data, basis_rank, q_dim);
-        hermitianize_square::<S>(&mut missing, q_dim);
-        let decomp = hermitian_eigendecomposition(
-            &Matrix::from_col_major_vec(q_dim, q_dim, missing),
-            options.hermitian_tol,
-        )
+    let basis_order = std::iter::once(basis_bond.clone())
+        .chain(q_indices.iter().cloned())
+        .collect::<Vec<_>>();
+    let basis_tensor = factorized
+        .right
+        .permuteinds(&basis_order)
         .map_err(|source| GseError::Algorithm {
-            context: "GSE failed to diagonalize projected reference density",
-            source: source.into(),
+            context: "GSE failed to align old target row basis",
+            source,
         })?;
-        let kept = decomp
-            .eigenvalues
-            .iter()
-            .enumerate()
-            .filter_map(|(col, &lambda)| (lambda > options.density_weight_cutoff).then_some(col))
-            .collect::<Vec<_>>();
-        if !kept.is_empty() {
-            let new_rank = basis_rank + kept.len();
-            let mut data = vec![<S as GseScalar>::zero(); new_rank * q_dim];
-            for q in 0..q_dim {
-                for row in 0..basis_rank {
-                    data[row + new_rank * q] = basis_data[row + basis_rank * q];
-                }
+
+    let q_left = fresh_indices_like(&q_indices);
+    let q_right = fresh_indices_like(&q_indices);
+    let density = build_reference_density(
+        state, references, parent, child, &q_indices, &q_left, &q_right,
+    )?;
+    let trace_identity = identity_on_index_pairs(&q_left, &q_right)?;
+    let trace_tensor = TensorDynLen::contract(&[&density, &trace_identity]).map_err(|source| {
+        GseError::Algorithm {
+            context: "GSE failed to compute local reference-density trace",
+            source,
+        }
+    })?;
+    let trace = trace_tensor.sum().map_err(|source| GseError::Algorithm {
+        context: "GSE failed to read local reference-density trace",
+        source,
+    })?;
+
+    let mut basis_rows = old_basis_rows(&basis_tensor, &basis_bond, basis_rank)?;
+    if trace.real() > 0.0 {
+        let normalized_density =
+            density
+                .scale(AnyScalar::new_real(1.0) / trace)
+                .map_err(|source| GseError::Algorithm {
+                    context: "GSE failed to normalize local reference density",
+                    source,
+                })?;
+        let missing = projected_missing_density_tensor(
+            &normalized_density,
+            &basis_tensor,
+            &basis_bond,
+            &q_indices,
+            &q_left,
+            &q_right,
+        )?;
+        let missing = hermitianize_by_index_groups(&missing, &q_left, &q_right)?;
+        let flat_left = DynIndex::new_dyn(q_dim);
+        let flat_right = DynIndex::new_dyn(q_dim);
+        let missing_matrix = missing
+            .fuse_indices(&q_left, flat_left.clone(), LinearizationOrder::ColumnMajor)
+            .and_then(|tensor| {
+                tensor.fuse_indices(
+                    &q_right,
+                    flat_right.clone(),
+                    LinearizationOrder::ColumnMajor,
+                )
+            })
+            .and_then(|tensor| tensor.permuteinds(&[flat_left.clone(), flat_right]))
+            .map_err(|source| GseError::Algorithm {
+                context: "GSE failed to reshape projected reference density for eigensolve",
+                source,
+            })?;
+        let decomp = missing_matrix
+            .hermitian_eigendecomposition(options.hermitian_tol)
+            .map_err(|source| GseError::Algorithm {
+                context: "GSE failed to diagonalize projected reference density",
+                source,
+            })?;
+        for (col, &lambda) in decomp.eigenvalues.iter().enumerate() {
+            if lambda > options.density_weight_cutoff {
+                basis_rows.push(eigenvector_basis_row(
+                    &decomp.eigenvectors,
+                    &flat_left,
+                    &decomp.eigenvector_index,
+                    col,
+                    &q_left,
+                    &q_indices,
+                )?);
             }
-            let vectors = decomp.eigenvectors.as_col_major_slice();
-            for (offset, &col) in kept.iter().enumerate() {
-                let row = basis_rank + offset;
-                for q in 0..q_dim {
-                    data[row + new_rank * q] = vectors[q + q_dim * col].conj();
-                }
-            }
-            expanded_basis = data;
-            added = kept.len();
         }
     }
 
-    let new_dim = basis_rank + added;
+    let added = basis_rows.len() - basis_rank;
+    let new_dim = basis_rows.len();
     let new_bond = DynIndex::new_bond(new_dim).map_err(|source| GseError::Algorithm {
         context: "GSE failed to create expanded target bond index",
         source: anyhow::anyhow!("{source:?}"),
     })?;
-    let target_child = TensorDynLen::from_dense(
-        std::iter::once(new_bond.clone())
-            .chain(q_indices.iter().cloned())
-            .collect(),
-        expanded_basis.clone(),
-    )
-    .map_err(|source| GseError::Algorithm {
-        context: "GSE failed to build expanded target child tensor",
-        source,
-    })?;
-    let target_coeff =
-        coefficient_matrix::<S>(&target_matrix, old_dim, q_dim, &expanded_basis, new_dim);
-    let coeff_tensor =
-        TensorDynLen::from_dense(vec![old_bond.clone(), new_bond.clone()], target_coeff).map_err(
-            |source| GseError::Algorithm {
-                context: "GSE failed to build target coefficient tensor",
-                source,
-            },
-        )?;
+    let target_child = stack_basis_rows(&basis_rows, new_bond.clone())?;
+    let coeff_tensor = coefficient_tensor(&child_tensor, &target_child)?;
     let target_parent =
         TensorDynLen::contract(&[&parent_tensor, &coeff_tensor]).map_err(|source| {
             GseError::Algorithm {
@@ -937,7 +847,7 @@ where
             source,
         })?;
     state
-        .replace_tensor(child_idx, target_child)
+        .replace_tensor(child_idx, target_child.clone())
         .map_err(|source| GseError::Algorithm {
             context: "GSE failed to replace target child tensor",
             source,
@@ -962,14 +872,14 @@ where
         })?;
 
     for reference in references.iter_mut() {
-        update_reference_edge::<S, V>(
+        update_reference_edge(
             reference,
             state,
             parent,
             child,
             &q_indices,
-            &expanded_basis,
-            new_dim,
+            &target_child,
+            &new_bond,
         )?;
     }
 
@@ -977,17 +887,16 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn update_reference_edge<S, V>(
+fn update_reference_edge<V>(
     reference: &mut TreeTN<TensorDynLen, V>,
     target: &TreeTN<TensorDynLen, V>,
     parent: &V,
     child: &V,
     target_q_indices: &[DynIndex],
-    expanded_basis: &[S],
-    new_dim: usize,
+    expanded_basis: &TensorDynLen,
+    target_new_bond: &DynIndex,
 ) -> Result<(), GseError>
 where
-    S: GseScalar,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     let edge = reference
@@ -1000,7 +909,7 @@ where
                 child
             ),
         })?;
-    let old_bond = reference
+    let _old_bond = reference
         .bond_index(edge)
         .cloned()
         .ok_or_else(|| GseError::Algorithm {
@@ -1037,28 +946,25 @@ where
                 source: anyhow::anyhow!("missing reference tensor at {:?}", parent),
             })?;
     let ref_q_indices = map_q_indices(target, reference, child, parent, target_q_indices)?;
-    let q_dim = product_dim(&ref_q_indices);
-    let ref_matrix = tensor_matrix::<S>(&child_tensor, &old_bond, &ref_q_indices)?;
-    let coeff =
-        coefficient_matrix::<S>(&ref_matrix, old_bond.dim(), q_dim, expanded_basis, new_dim);
-    let new_bond = DynIndex::new_bond(new_dim).map_err(|source| GseError::Algorithm {
-        context: "GSE failed to create expanded reference bond index",
-        source: anyhow::anyhow!("{source:?}"),
-    })?;
-    let child_replacement = TensorDynLen::from_dense(
-        std::iter::once(new_bond.clone())
-            .chain(ref_q_indices.iter().cloned())
-            .collect(),
-        expanded_basis.to_vec(),
-    )
-    .map_err(|source| GseError::Algorithm {
-        context: "GSE failed to build expanded reference child tensor",
-        source,
-    })?;
-    let coeff_tensor = TensorDynLen::from_dense(vec![old_bond.clone(), new_bond.clone()], coeff)
+    let new_bond =
+        DynIndex::new_bond(target_new_bond.dim()).map_err(|source| GseError::Algorithm {
+            context: "GSE failed to create expanded reference bond index",
+            source: anyhow::anyhow!("{source:?}"),
+        })?;
+    let child_replacement = expanded_basis
+        .replaceind(target_new_bond, &new_bond)
+        .and_then(|tensor| tensor.replaceinds(target_q_indices, &ref_q_indices))
         .map_err(|source| GseError::Algorithm {
-            context: "GSE failed to build reference coefficient tensor",
+            context: "GSE failed to relabel expanded basis for reference child",
             source,
+        })?;
+    let coeff_tensor =
+        coefficient_tensor(&child_tensor, &child_replacement).map_err(|error| match error {
+            GseError::Algorithm { source, .. } => GseError::Algorithm {
+                context: "GSE failed to build reference coefficient tensor",
+                source,
+            },
+            other => other,
         })?;
     let parent_replacement =
         TensorDynLen::contract(&[&parent_tensor, &coeff_tensor]).map_err(|source| {
@@ -1101,134 +1007,324 @@ where
     Ok(())
 }
 
-fn tensor_matrix<S>(
-    tensor: &TensorDynLen,
-    row_index: &DynIndex,
-    column_indices: &[DynIndex],
-) -> Result<Vec<S>, GseError>
+fn build_reference_density<V>(
+    target: &TreeTN<TensorDynLen, V>,
+    references: &[TreeTN<TensorDynLen, V>],
+    parent: &V,
+    child: &V,
+    target_q_indices: &[DynIndex],
+    q_left: &[DynIndex],
+    q_right: &[DynIndex],
+) -> Result<TensorDynLen, GseError>
 where
-    S: GseScalar,
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    let ordered = std::iter::once(row_index.clone())
-        .chain(column_indices.iter().cloned())
-        .collect::<Vec<_>>();
-    let permuted = tensor
-        .permuteinds(&ordered)
+    let mut density: Option<TensorDynLen> = None;
+    for reference in references {
+        let ref_edge =
+            reference
+                .edge_between(parent, child)
+                .ok_or_else(|| GseError::Algorithm {
+                    context: "GSE reference edge is missing",
+                    source: anyhow::anyhow!(
+                        "missing reference edge between {:?} and {:?}",
+                        parent,
+                        child
+                    ),
+                })?;
+        let ref_bond =
+            reference
+                .bond_index(ref_edge)
+                .cloned()
+                .ok_or_else(|| GseError::Algorithm {
+                    context: "GSE reference edge has no bond index",
+                    source: anyhow::anyhow!(
+                        "missing reference bond between {:?} and {:?}",
+                        parent,
+                        child
+                    ),
+                })?;
+        let ref_child_idx = reference
+            .node_index(child)
+            .ok_or_else(|| GseError::MissingCenter {
+                center: format!("{child:?}"),
+            })?;
+        let ref_child_tensor =
+            reference
+                .tensor(ref_child_idx)
+                .ok_or_else(|| GseError::Algorithm {
+                    context: "GSE reference child tensor is missing",
+                    source: anyhow::anyhow!("missing reference tensor at {:?}", child),
+                })?;
+        let ref_q_indices = map_q_indices(target, reference, child, parent, target_q_indices)?;
+        let bra = ref_child_tensor
+            .replaceinds(&ref_q_indices, q_left)
+            .map_err(|source| GseError::Algorithm {
+                context: "GSE failed to relabel reference density bra indices",
+                source,
+            })?;
+        let ket = ref_child_tensor
+            .replaceinds(&ref_q_indices, q_right)
+            .map_err(|source| GseError::Algorithm {
+                context: "GSE failed to relabel reference density ket indices",
+                source,
+            })?;
+        let contribution = contract_pair_with_operand_options(
+            &bra,
+            &ket,
+            PairwiseContractionOptions::new().with_lhs_conj(true),
+        )
         .map_err(|source| GseError::Algorithm {
-            context: "GSE failed to align local tensor matrix indices",
+            context: "GSE failed to contract reference density contribution",
             source,
         })?;
-    permuted
-        .to_vec::<S>()
+        debug_assert!(!contribution.external_indices().contains(&ref_bond));
+        density = Some(match density {
+            Some(accumulated) => {
+                accumulated
+                    .add(&contribution)
+                    .map_err(|source| GseError::Algorithm {
+                        context: "GSE failed to accumulate reference density",
+                        source,
+                    })?
+            }
+            None => contribution,
+        });
+    }
+    density.ok_or_else(|| GseError::Algorithm {
+        context: "GSE failed to build reference density",
+        source: anyhow::anyhow!("no references were supplied"),
+    })
+}
+
+fn old_basis_rows(
+    basis: &TensorDynLen,
+    basis_bond: &DynIndex,
+    basis_rank: usize,
+) -> Result<Vec<TensorDynLen>, GseError> {
+    (0..basis_rank)
+        .map(|row| {
+            basis
+                .select_indices(std::slice::from_ref(basis_bond), &[row])
+                .map_err(|source| GseError::Algorithm {
+                    context: "GSE failed to slice old target basis row",
+                    source,
+                })
+        })
+        .collect()
+}
+
+fn eigenvector_basis_row(
+    eigenvectors: &TensorDynLen,
+    flat_left: &DynIndex,
+    eigenvector_index: &DynIndex,
+    col: usize,
+    q_left: &[DynIndex],
+    q_indices: &[DynIndex],
+) -> Result<TensorDynLen, GseError> {
+    let vector = eigenvectors
+        .select_indices(std::slice::from_ref(eigenvector_index), &[col])
         .map_err(|source| GseError::Algorithm {
-            context: "GSE failed to read local tensor matrix values",
+            context: "GSE failed to select projected-density eigenvector",
+            source,
+        })?;
+    let row = vector
+        .unfuse_index(flat_left, q_left, LinearizationOrder::ColumnMajor)
+        .and_then(|tensor| tensor.conj().replaceinds(q_left, q_indices))
+        .map_err(|source| GseError::Algorithm {
+            context: "GSE failed to reshape projected-density eigenvector into a basis row",
+            source,
+        })?;
+    Ok(row)
+}
+
+fn stack_basis_rows(rows: &[TensorDynLen], new_bond: DynIndex) -> Result<TensorDynLen, GseError> {
+    let refs = rows.iter().collect::<Vec<_>>();
+    TensorDynLen::stack_along_new_index(&refs, new_bond, 0).map_err(|source| GseError::Algorithm {
+        context: "GSE failed to stack expanded basis rows",
+        source,
+    })
+}
+
+fn coefficient_tensor(
+    child_tensor: &TensorDynLen,
+    expanded_basis: &TensorDynLen,
+) -> Result<TensorDynLen, GseError> {
+    contract_pair_with_operand_options(
+        child_tensor,
+        expanded_basis,
+        PairwiseContractionOptions::new().with_rhs_conj(true),
+    )
+    .map_err(|source| GseError::Algorithm {
+        context: "GSE failed to build expansion coefficient tensor",
+        source,
+    })
+}
+
+fn projected_missing_density_tensor(
+    density: &TensorDynLen,
+    basis: &TensorDynLen,
+    basis_bond: &DynIndex,
+    q_indices: &[DynIndex],
+    q_left: &[DynIndex],
+    q_right: &[DynIndex],
+) -> Result<TensorDynLen, GseError> {
+    let identity = identity_on_index_pairs(q_left, q_right)?;
+    let basis_left =
+        basis
+            .replaceinds(q_indices, q_left)
+            .map_err(|source| GseError::Algorithm {
+                context: "GSE failed to relabel represented-basis bra indices",
+                source,
+            })?;
+    let basis_right =
+        basis
+            .replaceinds(q_indices, q_right)
+            .map_err(|source| GseError::Algorithm {
+                context: "GSE failed to relabel represented-basis ket indices",
+                source,
+            })?;
+    let represented = contract_pair_with_operand_options(
+        &basis_left,
+        &basis_right,
+        PairwiseContractionOptions::new().with_lhs_conj(true),
+    )
+    .map_err(|source| GseError::Algorithm {
+        context: "GSE failed to contract represented basis projector",
+        source,
+    })?;
+    debug_assert!(!represented.external_indices().contains(basis_bond));
+    let projector = identity
+        .axpby(
+            AnyScalar::new_real(1.0),
+            &represented,
+            AnyScalar::new_real(-1.0),
+        )
+        .map_err(|source| GseError::Algorithm {
+            context: "GSE failed to subtract represented basis projector",
+            source,
+        })?;
+
+    let q_mid_left = fresh_indices_like(q_left);
+    let q_mid_right = fresh_indices_like(q_right);
+    let p_left_mid = projector
+        .replaceinds(q_right, &q_mid_left)
+        .map_err(|source| GseError::Algorithm {
+            context: "GSE failed to relabel left projected-density projector",
+            source,
+        })?;
+    let density_mid = density
+        .replaceinds(q_left, &q_mid_left)
+        .and_then(|tensor| tensor.replaceinds(q_right, &q_mid_right))
+        .map_err(|source| GseError::Algorithm {
+            context: "GSE failed to relabel middle projected-density tensor",
+            source,
+        })?;
+    let p_mid_right = projector
+        .replaceinds(q_left, &q_mid_right)
+        .map_err(|source| GseError::Algorithm {
+            context: "GSE failed to relabel right projected-density projector",
+            source,
+        })?;
+    TensorDynLen::contract(&[&p_left_mid, &density_mid, &p_mid_right]).map_err(|source| {
+        GseError::Algorithm {
+            context: "GSE failed to contract projected missing reference density",
+            source,
+        }
+    })
+}
+
+fn identity_on_index_pairs(
+    left: &[DynIndex],
+    right: &[DynIndex],
+) -> Result<TensorDynLen, GseError> {
+    if left.len() != right.len() {
+        return Err(GseError::Algorithm {
+            context: "GSE failed to build identity on q-space",
+            source: anyhow::anyhow!(
+                "left/right q-index count mismatch: {} vs {}",
+                left.len(),
+                right.len()
+            ),
+        });
+    }
+    let mut identity: Option<TensorDynLen> = None;
+    for (left_index, right_index) in left.iter().zip(right.iter()) {
+        let pair = TensorDynLen::copy_tensor(
+            vec![left_index.clone(), right_index.clone()],
+            AnyScalar::new_real(1.0),
+        )
+        .map_err(|source| GseError::Algorithm {
+            context: "GSE failed to build one-index-pair identity",
+            source,
+        })?;
+        identity = Some(match identity {
+            Some(accumulated) => {
+                accumulated
+                    .outer_product(&pair)
+                    .map_err(|source| GseError::Algorithm {
+                        context: "GSE failed to combine q-space identity factors",
+                        source,
+                    })?
+            }
+            None => pair,
+        });
+    }
+    match identity {
+        Some(tensor) => Ok(tensor),
+        None => TensorDynLen::scalar(1.0_f64).map_err(|source| GseError::Algorithm {
+            context: "GSE failed to build scalar q-space identity",
+            source,
+        }),
+    }
+}
+
+fn hermitianize_by_index_groups(
+    tensor: &TensorDynLen,
+    left: &[DynIndex],
+    right: &[DynIndex],
+) -> Result<TensorDynLen, GseError> {
+    let adjoint = adjoint_by_index_groups(tensor, left, right)?;
+    tensor
+        .axpby(AnyScalar::new_real(0.5), &adjoint, AnyScalar::new_real(0.5))
+        .map_err(|source| GseError::Algorithm {
+            context: "GSE failed to Hermitianize projected reference density",
             source,
         })
 }
 
-fn accumulate_density<S>(density: &mut [S], matrix: &[S], row_dim: usize, q_dim: usize)
-where
-    S: GseScalar,
-{
-    for x in 0..q_dim {
-        for y in 0..q_dim {
-            let mut sum = <S as GseScalar>::zero();
-            for row in 0..row_dim {
-                sum += matrix[row + row_dim * x].conj() * matrix[row + row_dim * y];
-            }
-            density[x + q_dim * y] += sum;
-        }
+fn adjoint_by_index_groups(
+    tensor: &TensorDynLen,
+    left: &[DynIndex],
+    right: &[DynIndex],
+) -> Result<TensorDynLen, GseError> {
+    if left.len() != right.len() {
+        return Err(GseError::Algorithm {
+            context: "GSE failed to adjoint grouped tensor",
+            source: anyhow::anyhow!(
+                "left/right q-index count mismatch: {} vs {}",
+                left.len(),
+                right.len()
+            ),
+        });
     }
+    let temporary = fresh_indices_like(left);
+    tensor
+        .conj()
+        .replaceinds(left, &temporary)
+        .and_then(|tensor| tensor.replaceinds(right, left))
+        .and_then(|tensor| tensor.replaceinds(&temporary, right))
+        .map_err(|source| GseError::Algorithm {
+            context: "GSE failed to swap grouped tensor indices for adjoint",
+            source,
+        })
 }
 
-fn density_trace<S>(density: &[S], q_dim: usize) -> f64
-where
-    S: GseScalar,
-{
-    (0..q_dim)
-        .map(|i| density[i + q_dim * i].real())
-        .sum::<f64>()
-}
-
-fn projected_missing_density<S>(density: &[S], basis: &[S], rank: usize, q_dim: usize) -> Vec<S>
-where
-    S: GseScalar,
-{
-    let mut projector = vec![<S as GseScalar>::zero(); q_dim * q_dim];
-    for x in 0..q_dim {
-        for y in 0..q_dim {
-            let mut represented = <S as GseScalar>::zero();
-            for row in 0..rank {
-                represented += basis[row + rank * x].conj() * basis[row + rank * y];
-            }
-            projector[x + q_dim * y] = if x == y {
-                <S as GseScalar>::one() - represented
-            } else {
-                <S as GseScalar>::zero() - represented
-            };
-        }
-    }
-    let tmp = matmul_square::<S>(&projector, density, q_dim);
-    matmul_square::<S>(&tmp, &projector, q_dim)
-}
-
-fn matmul_square<S>(lhs: &[S], rhs: &[S], n: usize) -> Vec<S>
-where
-    S: GseScalar,
-{
-    let mut out = vec![<S as GseScalar>::zero(); n * n];
-    for col in 0..n {
-        for row in 0..n {
-            let mut sum = <S as GseScalar>::zero();
-            for k in 0..n {
-                sum += lhs[row + n * k] * rhs[k + n * col];
-            }
-            out[row + n * col] = sum;
-        }
-    }
-    out
-}
-
-fn hermitianize_square<S>(matrix: &mut [S], n: usize)
-where
-    S: GseScalar,
-{
-    for col in 0..n {
-        for row in 0..=col {
-            let ij = row + n * col;
-            let ji = col + n * row;
-            if row == col {
-                matrix[ij] = (matrix[ij] + matrix[ij].conj()) / 2.0;
-            } else {
-                let avg = (matrix[ij] + matrix[ji].conj()) / 2.0;
-                matrix[ij] = avg;
-                matrix[ji] = avg.conj();
-            }
-        }
-    }
-}
-
-fn coefficient_matrix<S>(
-    matrix: &[S],
-    row_dim: usize,
-    q_dim: usize,
-    basis: &[S],
-    basis_dim: usize,
-) -> Vec<S>
-where
-    S: GseScalar,
-{
-    let mut coeff = vec![<S as GseScalar>::zero(); row_dim * basis_dim];
-    for ell in 0..basis_dim {
-        for row in 0..row_dim {
-            let mut sum = <S as GseScalar>::zero();
-            for q in 0..q_dim {
-                sum += matrix[row + row_dim * q] * basis[ell + basis_dim * q].conj();
-            }
-            coeff[row + row_dim * ell] = sum;
-        }
-    }
-    coeff
+fn fresh_indices_like(indices: &[DynIndex]) -> Vec<DynIndex> {
+    indices
+        .iter()
+        .map(|index| DynIndex::new_dyn(index.dim()))
+        .collect()
 }
 
 fn map_q_indices<V>(

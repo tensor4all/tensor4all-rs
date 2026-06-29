@@ -296,6 +296,17 @@ fn edge_dim(state: &TreeTN<TensorDynLen, &'static str>, a: &str, b: &str) -> usi
     state.bond_index(edge).unwrap().dim()
 }
 
+fn enable_grad_all(
+    mut state: TreeTN<TensorDynLen, &'static str>,
+) -> TreeTN<TensorDynLen, &'static str> {
+    let nodes = state.node_indices().to_vec();
+    for node in nodes {
+        let tensor = state.tensor(node).unwrap().clone().enable_grad().unwrap();
+        state.replace_tensor(node, tensor).unwrap();
+    }
+    state
+}
+
 fn local_basis_matrix(
     state: &TreeTN<TensorDynLen, &'static str>,
     parent: &str,
@@ -566,6 +577,37 @@ fn global_subspace_expand_preserves_complex_phase_state() {
     assert_eq!(edge_dim(&result.state, "site0", "site1"), 2);
     assert!(dense_distance(&result.state, &state) < 1.0e-10);
     assert!(result.state.canonical_region().contains(&"site1"));
+}
+
+#[test]
+fn global_subspace_expand_preserves_ad_tracking_through_local_density_path() {
+    let zero = Complex64::new(0.0, 0.0);
+    let one = Complex64::new(1.0, 0.0);
+    let (state, _) = product_chain_state([[one, zero], [one, zero]]);
+    let (reference, _) = product_chain_state([[one, zero], [zero, one]]);
+
+    let result = global_subspace_expand_with_references(
+        enable_grad_all(state),
+        vec![enable_grad_all(reference)],
+        &"site0",
+        GseOptions::default().with_density_weight_cutoff(1.0e-14),
+    )
+    .unwrap();
+
+    assert!(result.state.node_indices().iter().all(|&node| result
+        .state
+        .tensor(node)
+        .unwrap()
+        .tracks_grad()));
+
+    let loss = result.state.contract_to_tensor().unwrap().sum().unwrap();
+    loss.backward().unwrap();
+    for node in result.state.node_indices() {
+        assert!(
+            result.state.tensor(node).unwrap().grad().unwrap().is_some(),
+            "expanded node {node:?} lost gradient tracking"
+        );
+    }
 }
 
 #[test]

@@ -41,6 +41,43 @@ struct PairwiseContractProfileEntry {
     total_bytes: usize,
 }
 
+/// Hermitian eigendecomposition of a rank-2 [`TensorDynLen`].
+///
+/// Eigenvectors are returned as a rank-2 tensor whose first index is the input
+/// matrix row index and whose second index labels eigenvector columns. The
+/// eigenvalues are detached primal values intended for nonsmooth selection
+/// logic such as truncation cutoffs.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, TensorDynLen};
+///
+/// let row = DynIndex::new_dyn(2);
+/// let col = DynIndex::new_dyn(2);
+/// let matrix = TensorDynLen::from_dense(
+///     vec![row.clone(), col],
+///     vec![1.0_f64, 0.0, 0.0, 2.0],
+/// ).unwrap();
+///
+/// let decomp = matrix.hermitian_eigendecomposition(1.0e-12).unwrap();
+///
+/// assert_eq!(decomp.eigenvalues, vec![1.0, 2.0]);
+/// assert_eq!(
+///     decomp.eigenvectors.indices(),
+///     &[row, decomp.eigenvector_index.clone()]
+/// );
+/// ```
+#[derive(Debug, Clone)]
+pub struct TensorHermitianEigendecomposition {
+    /// Real eigenvalues in backend Hermitian eigensolver order.
+    pub eigenvalues: Vec<f64>,
+    /// Eigenvector matrix with one eigenvector in each column.
+    pub eigenvectors: TensorDynLen,
+    /// Index labeling the eigenvector columns.
+    pub eigenvector_index: DynIndex,
+}
+
 thread_local! {
     static PAIRWISE_CONTRACT_PROFILE_STATE: RefCell<HashMap<&'static str, PairwiseContractProfileEntry>> =
         RefCell::new(HashMap::new());
@@ -1812,6 +1849,116 @@ impl TensorDynLen {
     pub(crate) fn from_inner(indices: Vec<DynIndex>, inner: EagerTensor) -> Result<Self> {
         let axis_classes = Self::dense_axis_classes(indices.len());
         Self::from_inner_with_axis_classes(indices, inner, axis_classes)
+    }
+
+    /// Compute the Hermitian eigendecomposition of a rank-2 tensor.
+    ///
+    /// The tensor must have two square matrix axes. The returned eigenvectors
+    /// stay in [`TensorDynLen`] form so downstream tensor algebra can preserve
+    /// AD metadata where the backend supports it. Eigenvalues are returned as
+    /// detached real primal values because truncation and rank selection are
+    /// nonsmooth control-flow decisions.
+    ///
+    /// `hermitian_tol` controls the allowed imaginary part of complex
+    /// eigenvalues after the backend solve; use a small non-negative value such
+    /// as `1e-12` for numerically Hermitian inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tensor is not a non-empty square matrix, if the
+    /// backend eigensolver fails, or if complex eigenvalues have imaginary
+    /// parts larger than `hermitian_tol * max(|lambda|, 1)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{AnyScalar, DynIndex, TensorContractionLike, TensorDynLen};
+    ///
+    /// let row = DynIndex::new_dyn(2);
+    /// let col = DynIndex::new_dyn(2);
+    /// let matrix = TensorDynLen::from_dense(
+    ///     vec![row.clone(), col.clone()],
+    ///     vec![3.0_f64, 0.0, 0.0, 5.0],
+    /// ).unwrap();
+    ///
+    /// let decomp = matrix.hermitian_eigendecomposition(1.0e-12).unwrap();
+    /// let eigenvector = decomp
+    ///     .eigenvectors
+    ///     .select_indices(&[decomp.eigenvector_index.clone()], &[0])
+    ///     .unwrap();
+    /// let eigenvector_as_col = eigenvector.replaceind(&row, &col).unwrap();
+    /// let applied = TensorDynLen::contract(&[&matrix, &eigenvector_as_col]).unwrap();
+    /// let expected = eigenvector.scale(AnyScalar::new_real(decomp.eigenvalues[0])).unwrap();
+    ///
+    /// assert!(applied.isapprox(&expected, 1.0e-12, 0.0));
+    /// ```
+    pub fn hermitian_eigendecomposition(
+        &self,
+        hermitian_tol: f64,
+    ) -> Result<TensorHermitianEigendecomposition> {
+        anyhow::ensure!(
+            self.indices.len() == 2,
+            "TensorDynLen::hermitian_eigendecomposition requires a rank-2 tensor, got rank {}",
+            self.indices.len()
+        );
+        let dims = self.dims();
+        anyhow::ensure!(
+            dims[0] == dims[1],
+            "TensorDynLen::hermitian_eigendecomposition requires a square matrix, got {}x{}",
+            dims[0],
+            dims[1]
+        );
+        anyhow::ensure!(
+            dims[0] > 0,
+            "TensorDynLen::hermitian_eigendecomposition requires a non-empty matrix"
+        );
+        anyhow::ensure!(
+            hermitian_tol.is_finite() && hermitian_tol >= 0.0,
+            "TensorDynLen::hermitian_eigendecomposition requires a finite non-negative tolerance"
+        );
+
+        let input = self.try_materialized_inner()?;
+        let (values, vectors) = tenferro_linalg::eager_tensor::eigh(input)
+            .map_err(|source| anyhow::anyhow!("Hermitian eigendecomposition failed: {source}"))?;
+
+        let eigenvalue_index = DynIndex::new_dyn(dims[0]);
+        let eigenvector_index = DynIndex::new_dyn(dims[0]);
+        let eigenvalue_tensor = Self::from_inner(vec![eigenvalue_index], values)?;
+        let eigenvalues = Self::read_real_eigenvalues(&eigenvalue_tensor, hermitian_tol)
+            .with_context(|| {
+                "TensorDynLen::hermitian_eigendecomposition failed to read eigenvalues"
+            })?;
+        let eigenvectors = Self::from_inner(
+            vec![self.indices[0].clone(), eigenvector_index.clone()],
+            vectors,
+        )?;
+
+        Ok(TensorHermitianEigendecomposition {
+            eigenvalues,
+            eigenvectors,
+            eigenvector_index,
+        })
+    }
+
+    fn read_real_eigenvalues(values: &Self, hermitian_tol: f64) -> Result<Vec<f64>> {
+        if values.is_complex() {
+            values
+                .to_vec::<Complex64>()?
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    let imaginary = value.im.abs();
+                    let allowed = hermitian_tol * value.norm().max(1.0);
+                    anyhow::ensure!(
+                        imaginary <= allowed,
+                        "Hermitian eigenvalue {index} has imaginary part {imaginary}, exceeding tolerance {allowed}"
+                    );
+                    Ok(value.re)
+                })
+                .collect()
+        } else {
+            values.to_vec::<f64>()
+        }
     }
 
     pub(crate) fn from_diag_inner(
@@ -3958,27 +4105,23 @@ impl TensorDynLen {
             }
         }
 
-        let old_data = self.to_vec_any()?;
-        let mut new_data = vec![AnyScalar::new_real(0.0); old_data.len()];
-        for (old_linear, value) in old_data.into_iter().enumerate() {
-            let old_multi = decode_col_major_linear(old_linear, &old_dims)?;
-            let fused_multi: Vec<usize> = old_axes.iter().map(|&axis| old_multi[axis]).collect();
-            let fused_linear = encode_linear_with_order(&fused_multi, &fused_dims, order)?;
+        self.ensure_shape_packing_preserves_ad("fuse_indices")?;
 
-            let mut new_multi = Vec::with_capacity(new_dims.len());
-            for (axis, old_coord) in old_multi.iter().copied().enumerate() {
-                if axis == insertion_axis {
-                    new_multi.push(fused_linear);
-                }
-                if !old_axis_set.contains(&axis) {
-                    new_multi.push(old_coord);
-                }
-            }
-            let new_linear = encode_col_major_linear(&new_multi, &new_dims)?;
-            new_data[new_linear] = value;
+        let mut grouped_axes = old_axes.clone();
+        if matches!(order, LinearizationOrder::RowMajor) {
+            grouped_axes.reverse();
         }
+        let mut perm = Vec::with_capacity(self.indices.len());
+        perm.extend((0..insertion_axis).filter(|axis| !old_axis_set.contains(axis)));
+        perm.extend(grouped_axes);
+        perm.extend(
+            ((insertion_axis + 1)..self.indices.len()).filter(|axis| !old_axis_set.contains(axis)),
+        );
+        debug_assert_eq!(perm.len(), self.indices.len());
 
-        Self::from_dense_any(result_indices, new_data)
+        let packed = self.permute(&perm)?;
+        let reshaped = packed.try_materialized_inner()?.reshape(&new_dims)?;
+        Self::from_inner(result_indices, reshaped)
     }
 
     /// Replace one fused index with multiple indices using an exact reshape.
@@ -4039,20 +4182,32 @@ impl TensorDynLen {
         new_dims.extend_from_slice(&replacement_dims);
         new_dims.extend_from_slice(&old_dims[axis + 1..]);
 
-        let old_data = self.to_vec_any()?;
-        let mut new_data = vec![AnyScalar::new_real(0.0); old_data.len()];
-        for (old_linear, value) in old_data.into_iter().enumerate() {
-            let old_multi = decode_col_major_linear(old_linear, &old_dims)?;
-            let split_multi = decode_linear_with_order(old_multi[axis], &replacement_dims, order)?;
-            let mut new_multi = Vec::with_capacity(new_dims.len());
-            new_multi.extend_from_slice(&old_multi[..axis]);
-            new_multi.extend_from_slice(&split_multi);
-            new_multi.extend_from_slice(&old_multi[axis + 1..]);
-            let new_linear = encode_col_major_linear(&new_multi, &new_dims)?;
-            new_data[new_linear] = value;
-        }
+        self.ensure_shape_packing_preserves_ad("unfuse_index")?;
 
-        Self::from_dense_any(result_indices, new_data)
+        let mut grouped_indices = new_indices.to_vec();
+        let mut grouped_dims = replacement_dims.clone();
+        if matches!(order, LinearizationOrder::RowMajor) {
+            grouped_indices.reverse();
+            grouped_dims.reverse();
+        }
+        let mut packed_indices =
+            Vec::with_capacity(self.indices.len() - 1usize + grouped_indices.len());
+        packed_indices.extend_from_slice(&self.indices[..axis]);
+        packed_indices.extend(grouped_indices);
+        packed_indices.extend_from_slice(&self.indices[axis + 1..]);
+
+        let mut packed_dims = Vec::with_capacity(old_dims.len() - 1usize + grouped_dims.len());
+        packed_dims.extend_from_slice(&old_dims[..axis]);
+        packed_dims.extend_from_slice(&grouped_dims);
+        packed_dims.extend_from_slice(&old_dims[axis + 1..]);
+
+        let reshaped = self.try_materialized_inner()?.reshape(&packed_dims)?;
+        let packed = Self::from_inner(packed_indices, reshaped)?;
+        if matches!(order, LinearizationOrder::ColumnMajor) {
+            Ok(packed)
+        } else {
+            packed.permute_indices(&result_indices)
+        }
     }
 
     /// Create a scalar (0-dimensional) tensor from a supported element value.
@@ -4160,19 +4315,6 @@ impl TensorDynLen {
         );
         let data = self.to_vec::<T>()?;
         Ok((self.indices, data))
-    }
-
-    fn to_vec_any(&self) -> Result<Vec<AnyScalar>> {
-        if self.is_complex() {
-            self.to_vec::<Complex64>().map(|data| {
-                data.into_iter()
-                    .map(|value| AnyScalar::new_complex(value.re, value.im))
-                    .collect()
-            })
-        } else {
-            self.to_vec::<f64>()
-                .map(|data| data.into_iter().map(AnyScalar::new_real).collect())
-        }
     }
 
     /// Extract tensor data as a column-major `Vec<f64>`.
@@ -4306,69 +4448,4 @@ fn encode_col_major_linear(indices: &[usize], dims: &[usize]) -> Result<usize> {
             .ok_or_else(|| anyhow::anyhow!("stride overflow"))?;
     }
     Ok(linear)
-}
-
-fn decode_linear_with_order(
-    linear: usize,
-    dims: &[usize],
-    order: LinearizationOrder,
-) -> Result<Vec<usize>> {
-    let total = checked_product(dims)?;
-    anyhow::ensure!(
-        linear < total,
-        "linear offset {} out of bounds for dims {:?}",
-        linear,
-        dims
-    );
-
-    let mut remaining = linear;
-    let mut out = vec![0usize; dims.len()];
-    match order {
-        LinearizationOrder::ColumnMajor => {
-            for (slot, &dim) in out.iter_mut().zip(dims.iter()) {
-                *slot = remaining % dim;
-                remaining /= dim;
-            }
-        }
-        LinearizationOrder::RowMajor => {
-            for (slot, &dim) in out.iter_mut().rev().zip(dims.iter().rev()) {
-                *slot = remaining % dim;
-                remaining /= dim;
-            }
-        }
-    }
-    Ok(out)
-}
-
-fn encode_linear_with_order(
-    indices: &[usize],
-    dims: &[usize],
-    order: LinearizationOrder,
-) -> Result<usize> {
-    match order {
-        LinearizationOrder::ColumnMajor => encode_col_major_linear(indices, dims),
-        LinearizationOrder::RowMajor => {
-            anyhow::ensure!(
-                indices.len() == dims.len(),
-                "index rank {} does not match dims {:?}",
-                indices.len(),
-                dims
-            );
-            let mut linear = 0usize;
-            let mut stride = 1usize;
-            for (&index, &dim) in indices.iter().rev().zip(dims.iter().rev()) {
-                anyhow::ensure!(
-                    index < dim,
-                    "index {} out of bounds for dimension {}",
-                    index,
-                    dim
-                );
-                linear += index * stride;
-                stride = stride
-                    .checked_mul(dim)
-                    .ok_or_else(|| anyhow::anyhow!("stride overflow"))?;
-            }
-            Ok(linear)
-        }
-    }
 }
