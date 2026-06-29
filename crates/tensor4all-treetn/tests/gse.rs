@@ -158,6 +158,42 @@ fn product_internal_branch_state(
     (state, [s0, s1, s2, s3])
 }
 
+fn entangled_chain3_state(
+    leaf_matrix: [[Complex64; 2]; 2],
+) -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 3]) {
+    let zero = Complex64::new(0.0, 0.0);
+    let one = Complex64::new(1.0, 0.0);
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let s2 = DynIndex::new_dyn(2);
+    let b01 = DynIndex::new_dyn(1);
+    let b12 = DynIndex::new_dyn(2);
+
+    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![one, zero]).unwrap();
+
+    let mut t1_data = vec![zero; 4];
+    for b in 0..2 {
+        t1_data[b + 2 * b] = one;
+    }
+    let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], t1_data).unwrap();
+
+    let mut t2_data = vec![zero; 4];
+    for b in 0..2 {
+        for s in 0..2 {
+            t2_data[b + 2 * s] = leaf_matrix[b][s];
+        }
+    }
+    let t2 = TensorDynLen::from_dense(vec![b12.clone(), s2.clone()], t2_data).unwrap();
+
+    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+    let n0 = state.add_tensor("site0", t0).unwrap();
+    let n1 = state.add_tensor("site1", t1).unwrap();
+    let n2 = state.add_tensor("site2", t2).unwrap();
+    state.connect(n0, &b01, n1, &b01).unwrap();
+    state.connect(n1, &b12, n2, &b12).unwrap();
+    (state, [s0, s1, s2])
+}
+
 fn identity_or_x_operator(
     state_sites: &[DynIndex],
     node_names: &[&'static str],
@@ -260,6 +296,56 @@ fn edge_dim(state: &TreeTN<TensorDynLen, &'static str>, a: &str, b: &str) -> usi
     state.bond_index(edge).unwrap().dim()
 }
 
+fn local_basis_matrix(
+    state: &TreeTN<TensorDynLen, &'static str>,
+    parent: &str,
+    child: &str,
+    q_indices: &[DynIndex],
+) -> (usize, usize, Vec<Complex64>) {
+    let edge = state.edge_between(&parent, &child).unwrap();
+    let bond = state.bond_index(edge).unwrap().clone();
+    let child_tensor = state.tensor(state.node_index(&child).unwrap()).unwrap();
+    let ordered = std::iter::once(bond.clone())
+        .chain(q_indices.iter().cloned())
+        .collect::<Vec<_>>();
+    let data = child_tensor
+        .permuteinds(&ordered)
+        .unwrap()
+        .to_vec::<Complex64>()
+        .unwrap();
+    let q_dim = q_indices.iter().map(DynIndex::dim).product();
+    (bond.dim(), q_dim, data)
+}
+
+fn assert_rows_are_isometric(row_dim: usize, q_dim: usize, data: &[Complex64]) {
+    for lhs in 0..row_dim {
+        for rhs in 0..row_dim {
+            let mut overlap = Complex64::new(0.0, 0.0);
+            for q in 0..q_dim {
+                overlap += data[lhs + row_dim * q] * data[rhs + row_dim * q].conj();
+            }
+            let expected = if lhs == rhs { 1.0 } else { 0.0 };
+            assert!(
+                (overlap - Complex64::new(expected, 0.0)).norm() < 1.0e-10,
+                "basis rows {lhs},{rhs} overlap {overlap:?}, expected {expected}"
+            );
+        }
+    }
+}
+
+fn projected_weight(row_dim: usize, q_dim: usize, data: &[Complex64], vector: &[Complex64]) -> f64 {
+    let norm: f64 = vector.iter().map(Complex64::norm_sqr).sum();
+    let mut projected = 0.0;
+    for row in 0..row_dim {
+        let mut coeff = Complex64::new(0.0, 0.0);
+        for q in 0..q_dim {
+            coeff += data[row + row_dim * q].conj() * vector[q];
+        }
+        projected += coeff.norm_sqr();
+    }
+    projected / norm
+}
+
 #[test]
 fn global_subspace_expand_preserves_state_and_grows_chain_bond() {
     let zero = Complex64::new(0.0, 0.0);
@@ -339,6 +425,42 @@ fn global_subspace_expand_maps_processed_child_bond_in_chain_q_space() {
     assert!(result.state.same_topology(&state));
     assert!(dense_distance(&result.state, &state) < 1.0e-10);
     assert!(result.state.canonical_region().contains(&"site0"));
+}
+
+#[test]
+fn global_subspace_expand_handles_nonproduct_processed_child_bond_basis() {
+    let zero = Complex64::new(0.0, 0.0);
+    let one = Complex64::new(1.0, 0.0);
+    let half = Complex64::new(0.5, 0.0);
+    let (state, sites) = entangled_chain3_state([[one, zero], [zero, half]]);
+    let (reference, _) = entangled_chain3_state([[zero, one], [half, zero]]);
+
+    let result = global_subspace_expand_with_references(
+        state.clone(),
+        vec![reference],
+        &"site0",
+        GseOptions::default().with_density_weight_cutoff(1.0e-14),
+    )
+    .unwrap();
+
+    assert_eq!(result.edges_processed, 2);
+    assert!(result.bonds_expanded >= 1);
+    assert_eq!(edge_dim(&result.state, "site1", "site2"), 2);
+    assert!(edge_dim(&result.state, "site0", "site1") >= 2);
+    assert!(dense_distance(&result.state, &state) < 1.0e-10);
+
+    let child_edge = result.state.edge_between(&"site1", &"site2").unwrap();
+    let processed_child_bond = result.state.bond_index(child_edge).unwrap().clone();
+    let (row_dim, q_dim, basis) = local_basis_matrix(
+        &result.state,
+        "site0",
+        "site1",
+        &[sites[1].clone(), processed_child_bond],
+    );
+    assert_rows_are_isometric(row_dim, q_dim, &basis);
+
+    let reference_q_direction = vec![zero, half, one, zero];
+    assert!(projected_weight(row_dim, q_dim, &basis, &reference_q_direction) > 1.0 - 1.0e-10);
 }
 
 #[test]
@@ -467,6 +589,28 @@ fn global_subspace_expand_respects_density_weight_cutoff_without_dropping_target
 }
 
 #[test]
+fn global_subspace_expand_with_empty_references_is_noop() {
+    let zero = Complex64::new(0.0, 0.0);
+    let one = Complex64::new(1.0, 0.0);
+    let (state, _) = product_chain3_state([[one, zero], [one, zero], [one, zero]]);
+
+    let result = global_subspace_expand_with_references(
+        state.clone(),
+        Vec::new(),
+        &"site0",
+        GseOptions::default(),
+    )
+    .unwrap();
+
+    assert_eq!(result.references_built, 0);
+    assert_eq!(result.edges_processed, 0);
+    assert_eq!(result.bonds_expanded, 0);
+    assert_eq!(result.max_added_basis, 0);
+    assert!(dense_distance(&result.state, &state) < 1.0e-10);
+    assert!(result.state.canonical_region().contains(&"site0"));
+}
+
+#[test]
 fn global_subspace_expand_builds_multiple_krylov_references() {
     let zero = Complex64::new(0.0, 0.0);
     let one = Complex64::new(1.0, 0.0);
@@ -528,6 +672,109 @@ fn gse_tdvp_runs_existing_tdvp_after_expansion() {
 }
 
 #[test]
+fn gse_tdvp_can_skip_first_expansion_and_expand_later_sweeps() {
+    let zero = Complex64::new(0.0, 0.0);
+    let one = Complex64::new(1.0, 0.0);
+    let (state, sites) = product_chain_state([[one, zero], [one, zero]]);
+    let operator = identity_or_x_operator(
+        &sites,
+        &["site0", "site1"],
+        &[("site0", "site1")],
+        &["site1"],
+    );
+
+    let result = gse_tdvp(
+        &operator,
+        state,
+        &"site0",
+        GseTdvpOptions {
+            gse: GseOptions::default()
+                .with_krylov_dim(1)
+                .with_density_weight_cutoff(1.0e-14)
+                .with_expand_before_first_sweep(false),
+            tdvp: TdvpOptions::default()
+                .with_nsite(1)
+                .with_nsweeps(2)
+                .with_exponent_step(Complex64::new(0.0, -0.01)),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.gse_expansions, 1);
+    assert_eq!(result.sweeps_completed, 2);
+    assert!(result.local_updates > 0);
+    assert_eq!(edge_dim(&result.state, "site0", "site1"), 2);
+}
+
+#[test]
+fn gse_rejects_invalid_options_and_missing_center() {
+    let zero = Complex64::new(0.0, 0.0);
+    let one = Complex64::new(1.0, 0.0);
+    let (state, _) = product_chain_state([[one, zero], [one, zero]]);
+
+    let density_err = global_subspace_expand_with_references(
+        state.clone(),
+        Vec::new(),
+        &"site0",
+        GseOptions::default().with_density_weight_cutoff(-1.0),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        density_err,
+        GseError::InvalidOption {
+            option: "density_weight_cutoff",
+            ..
+        }
+    ));
+
+    let hermitian_err = global_subspace_expand_with_references(
+        state.clone(),
+        Vec::new(),
+        &"site0",
+        GseOptions::default().with_hermitian_tol(-1.0),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        hermitian_err,
+        GseError::InvalidOption {
+            option: "hermitian_tol",
+            ..
+        }
+    ));
+
+    let invalid_rank_options = GseOptions {
+        reference_max_rank: Some(0),
+        ..Default::default()
+    };
+    let rank_err = global_subspace_expand_with_references(
+        state.clone(),
+        Vec::new(),
+        &"site0",
+        invalid_rank_options,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        rank_err,
+        GseError::InvalidOption {
+            option: "reference_max_rank",
+            ..
+        }
+    ));
+
+    let missing_err = global_subspace_expand_with_references(
+        state,
+        Vec::new(),
+        &"missing",
+        GseOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        missing_err,
+        GseError::MissingCenter { center } if center == "\"missing\""
+    ));
+}
+
+#[test]
 fn gse_rejects_multiple_state_sites_per_node() {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
@@ -585,5 +832,32 @@ fn gse_rejects_scalar_storage_mismatch() {
             target: "f64",
             reference: "Complex64"
         }
+    ));
+}
+
+#[test]
+fn gse_rejects_mixed_scalar_storage_inside_target_tree() {
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(1);
+    let t0 = TensorDynLen::from_dense(vec![s0, bond.clone()], vec![1.0_f64, 0.0]).unwrap();
+    let t1 = TensorDynLen::from_dense(
+        vec![bond.clone(), s1],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+    )
+    .unwrap();
+    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+    let n0 = state.add_tensor("site0", t0).unwrap();
+    let n1 = state.add_tensor("site1", t1).unwrap();
+    state.connect(n0, &bond, n1, &bond).unwrap();
+
+    let err =
+        global_subspace_expand_with_references(state, Vec::new(), &"site0", GseOptions::default())
+            .unwrap_err();
+
+    assert!(matches!(
+        err,
+        GseError::UnsupportedScalarStorage { reason, .. }
+            if reason.contains("mixed scalar storage")
     ));
 }
