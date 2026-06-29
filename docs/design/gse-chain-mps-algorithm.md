@@ -64,23 +64,44 @@ site `N`, then sweeps from `j = N` down to `j = 2`. At the step for site `j`,
 the bond between sites `j-1` and `j` is enlarged. Equivalently, the basis for
 the right block `j..N` seen across that cut is enlarged.
 
-Let
+Write the site tensor as $A^{[j]}_{\alpha s \beta}$, with shape
+$(\chi_L, d_j, \chi_R)$. At the $j$ step, combine the physical index $s$ and
+the right-block bond $\beta$ into a single column index
 
-`A[j]` have shape `(chi_left, d_j, chi_right)`.
+$$
+x = (s, \beta),
+\qquad
+M_j[\alpha, x] = A^{[j]}_{\alpha s \beta}.
+$$
 
-At the `j` step the tensor is reshaped to a matrix
+Thus $M_j$ is a matrix in
 
-```text
-M_j[alpha, (s_j, beta)] = A[j][alpha, s_j, beta]
+$$
+M_j \in \mathbb{C}^{\chi_L \times (d_j \chi_R)}.
+$$
 
-rows:    alpha in the left bond space of site j
-columns: local basis for site j times the already processed right block
-```
+The rows are labelled by the bond to the unprocessed left block. The columns
+are labelled by a local basis for site $j$ together with the already processed
+right block $j+1,\ldots,N$.
 
-The SVD of `M_j` gives the current row basis for the right block. In the
-RydbergToolkit helper, `truncated_svd` returns `Vt`, so the current basis is a
-matrix `B_j` whose rows are orthonormal basis vectors in the column space
-`C^(d_j * chi_right)`.
+The SVD of $M_j$ gives the current basis for that column space:
+
+$$
+M_j = U_j S_j B_j.
+$$
+
+RydbergToolkit's `truncated_svd` helper returns the $V^\dagger$ factor directly,
+so this note calls that row-basis matrix $B_j$. Its rows are orthonormal
+vectors in $\mathbb{C}^{d_j\chi_R}$:
+
+$$
+B_j B_j^\dagger = I,
+\qquad
+\Pi_j^{\mathrm{old}} = B_j^\dagger B_j.
+$$
+
+Here $\Pi_j^{\mathrm{old}}$ is the orthogonal projector onto the right-block
+subspace already represented by the current MPS across the cut $(j-1,j)$.
 
 ![Reshape A[j] and extract the current row basis](assets/gse-reshape-svd.svg)
 
@@ -105,61 +126,215 @@ important part of this particular implementation: the references are not meant
 to be unrestricted high-rank Krylov vectors. They are low-rank probes carrying
 directions just outside the current MPS manifold.
 
+For a Rust translation that aims to match the original Julia strategy, this
+should be treated as the default reference-generation policy:
+
+$$
+\chi_{\mathrm{ref,max}}
+= \max_j \chi_j(\psi) + 1,
+\qquad
+\epsilon_{\mathrm{ref}} = 10^{-13}.
+$$
+
+After each application,
+
+$$
+|\widetilde{\Phi}_{m+1}\rangle = H|\Phi_m\rangle,
+$$
+
+the temporary state is compressed as
+
+$$
+|\Phi_{m+1}\rangle
+=
+\operatorname{compress}
+\left(
+|\widetilde{\Phi}_{m+1}\rangle;
+\chi_{\mathrm{max}} = \chi_{\mathrm{ref,max}},
+\epsilon = \epsilon_{\mathrm{ref}}
+\right),
+$$
+
+then normalized. This means the reference states are approximate Krylov vectors,
+not exact $H^m|\psi\rangle$ vectors and not high-rank MPO-application results.
+
+This point is separate from the later bond expansion. The original algorithm
+does not say "add exactly one basis vector per bond." It says "build each
+reference with at most one more bond dimension than the current target's maximum
+link dimension," then let the projected reference density decide how many
+missing local directions pass the eigenvalue tolerance.
+
+Consequently, a compatible Rust API may expose extra safety knobs, but the
+compatibility defaults should be:
+
+| Knob | Original-compatible default | Meaning |
+|---|---|---|
+| `reference_maxdim` | `maxlinkdim(psi) + 1` | Cap used while building each $H^m\psi$ reference. |
+| `reference_atol` | `1e-13` | SVD/compression tolerance for reference generation. |
+| `expand_atol` | `1e-13` | SVD rank and missing-density eigenvalue tolerance in `expand!`. |
+| `max_added_per_bond` | none | No explicit cap in `expand.jl`; retained directions are selected by `expand_atol`. |
+
+If tensor4all-rs adds `max_added_per_bond = 1`, that is an extra policy, not the
+literal RydbergToolkit default. It may be useful for experiments, but it should
+not be the default when checking against the original Julia behavior.
+
 ## Per-Bond Expansion Step
 
 For a fixed site `j`, RydbergToolkit performs the following operations.
 
 ### 1. Extract the Current Basis
 
-Reshape the target tensor:
+Before processing site $j$, the target and all reference MPSs have their
+orthogonality center at site $j$. Therefore:
 
-`M_j = reshape(A[j], chi_left, d_j * chi_right)`.
+- each state's left block $1,\ldots,j-1$ gives an orthonormal basis for that
+  state, but the basis may differ between `psi` and the references;
+- the already processed right block $j+1,\ldots,N$ is represented in a common
+  orthonormal basis for `psi` and all references.
+
+The second point is a sweep invariant. At $j=N$, the right-block basis is the
+trivial boundary space, so it is automatically common. After processing site
+$j$, the algorithm writes the same expanded right tensor into `psi` and every
+reference work buffer, so the block $j,\ldots,N$ becomes the common right-block
+basis for the next step $j-1$.
+
+With that invariant, the target state near the cut can be written as
+
+$$
+|\psi\rangle
+= \sum_{\alpha,x}
+M_j[\alpha,x]\,
+|L^\psi_\alpha\rangle |x\rangle,
+\qquad
+x=(s_j,\beta).
+$$
+
+Here $|L^\psi_\alpha\rangle$ is an orthonormal left-block basis for the target
+state, and $|x\rangle$ is the common basis for "site $j$ plus the processed
+right block." Reshaping $A^{[j]}$ into $M_j$ is exactly the extraction of these
+coefficients.
 
 Compute a truncated SVD:
 
-`M_j = U S B_j`.
+$$
+M_j = U_j S_j B_j.
+$$
 
-Here `B_j` is the returned `Vt` block. Its rows form the current right-block
-basis for the bond `(j-1, j)`. With nonzero `atol`, numerically small old
-directions may be dropped before new directions are added.
+The rows of $B_j$ form the current right-block basis for the bond $(j-1,j)$.
+With nonzero `atol`, numerically small old directions may be dropped before new
+directions are added. To match the Julia implementation, this `atol` should be
+the same `expand_atol` used for the missing-density eigenvalue test below,
+defaulting to $10^{-13}$. This is close to machine precision for double
+precision, but it is still an explicit algorithmic tolerance rather than an
+implicit backend epsilon.
 
 ### 2. Build a Reference Density Matrix
 
-For each reference MPS `Phi_r`, reshape its current tensor at site `j` in the
+For each reference MPS $\Phi_r$, reshape its current tensor at site $j$ in the
 same way:
 
-`R_r = reshape(Phi_r[j], left_ref, d_j * chi_right)`.
+$$
+R_r[\gamma,x]
+= \Phi_r^{[j]}[\gamma,s_j,\beta],
+\qquad
+x=(s_j,\beta).
+$$
 
-Then accumulate
+The reference state has the cut expansion
 
-`rho_j = sum_r R_r^* R_r`.
+$$
+|\Phi_r\rangle
+=
+\sum_{\gamma,x}
+R_r[\gamma,x]\,
+|L^r_\gamma\rangle |x\rangle.
+$$
 
-This traces out the left/environment side of each reference and leaves a
-density matrix on the same local right-block space where `B_j` lives:
+The left basis $|L^r_\gamma\rangle$ can be different for every reference. It
+only needs to be orthonormal for that reference. The right basis $|x\rangle$ is
+the same one used for $B_j$, because the sweep has already put the processed
+right block into a common basis.
 
-```text
-left side traced out
-        |
-        v
-R_r^* R_r  acts on  (site j) x (right block basis)
-```
+Now trace out the left side of the reference state:
 
-RydbergToolkit normalizes `rho_j` by its trace before projection. That makes the
-absolute tolerance less sensitive to the norm and number of reference states.
+$$
+\rho_j^{(r)}
+=
+\operatorname{Tr}_{L_r}
+|\Phi_r\rangle\langle\Phi_r|.
+$$
+
+Using $\langle L^r_\delta | L^r_\gamma\rangle=\delta_{\delta\gamma}$, its
+matrix elements on the common right-block space are
+
+$$
+\rho_j^{(r)}[x,y]
+=
+\sum_\gamma
+\overline{R_r[\gamma,x]}\,R_r[\gamma,y].
+$$
+
+Equivalently,
+
+$$
+\rho_j^{(r)} = R_r^\dagger R_r.
+$$
+
+This is the reduced density matrix of the reference state on the local
+right-block space. It measures which directions in the $x=(s_j,\beta)$ space
+are important for that reference after ignoring the reference's left
+environment.
+
+For multiple references, RydbergToolkit accumulates
+
+$$
+\rho_j^{\mathrm{ref}}
+=
+\sum_r \rho_j^{(r)}
+=
+\sum_r R_r^\dagger R_r.
+$$
+
+RydbergToolkit then normalizes by the trace, when the trace is nonzero:
+
+$$
+\rho_j
+=
+\frac{\rho_j^{\mathrm{ref}}}
+{\operatorname{Tr}\rho_j^{\mathrm{ref}}}.
+$$
+
+That makes the absolute tolerance less sensitive to the norm and number of
+reference states.
 
 ### 3. Remove the Already Represented Directions
 
-The intended projector is the projector onto the complement of the row span of
-`B_j`:
+The density matrix $\rho_j$ includes both directions already represented by the
+current target MPS and directions missing from it. The represented subspace is
+the row span of $B_j$. With row-basis convention, its projector is
 
-`P_j = I - projector(rowspan(B_j))`.
+$$
+\Pi_j^{\mathrm{old}} = B_j^\dagger B_j.
+$$
+
+The intended complement projector is
+
+$$
+P_j = I - \Pi_j^{\mathrm{old}}.
+$$
 
 The projected density matrix is
 
-`rho_missing = P_j rho_j P_j`.
+$$
+\rho_j^{\mathrm{missing}}
+=
+P_j \rho_j P_j.
+$$
 
 This matrix contains only the reference-state weight that cannot already be
-represented by the current bond basis.
+represented by the current target bond basis. Since $\rho_j$ is positive
+semidefinite and $P_j$ is an orthogonal projector, $\rho_j^{\mathrm{missing}}$
+is also positive semidefinite up to numerical roundoff.
 
 Implementation detail: the Julia code stores basis vectors as rows from `Vt`
 and forms the projector with `transpose(B_j) * conj(B_j)`. Several nearby
@@ -171,32 +346,64 @@ copying the expression without checking the bra/ket orientation.
 
 ### 4. Diagonalize the Missing Density
 
-If `norm(rho_missing) > atol`, RydbergToolkit diagonalizes the Hermitian matrix
-`rho_missing` and keeps eigenvectors whose eigenvalues exceed `atol`:
+If $\|\rho_j^{\mathrm{missing}}\| > \mathrm{atol}$, RydbergToolkit diagonalizes
+the Hermitian matrix $\rho_j^{\mathrm{missing}}$:
 
-`C_j = significant eigenvectors of rho_missing`.
+$$
+\rho_j^{\mathrm{missing}} c_\ell = \lambda_\ell c_\ell.
+$$
 
-Since Julia's `eigen` returns eigenvectors as columns, the code transposes them
-before appending them to the row-basis matrix:
+It keeps eigenvectors whose eigenvalues exceed `atol`:
 
-`E_j = stack_rows(B_j, C_j)`.
+$$
+\lambda_\ell > \mathrm{atol}.
+$$
 
-If `rho_missing` is negligible, no new directions are added and `E_j = B_j`.
+These eigenvectors are directions in the same $x=(s_j,\beta)$ space. In the
+row-basis convention, collect the retained directions into a matrix $C_j$ whose
+rows are the retained missing basis vectors. Then append them to the old basis:
+
+$$
+E_j =
+\begin{bmatrix}
+B_j \\
+C_j
+\end{bmatrix}.
+$$
+
+Since Julia's `eigen` returns eigenvectors as columns, the RydbergToolkit code
+transposes them before appending them to the row-basis matrix. In a complex Rust
+translation, this is another place where the chosen row-vector convention and
+conjugation convention should be made explicit and tested.
+
+If $\rho_j^{\mathrm{missing}}$ is negligible, no new directions are added and
+$E_j = B_j$.
 
 The new bond dimension after this step is
 
-`rank(B_j) + number_of_kept_missing_directions`.
+$$
+\operatorname{rank}(B_j)
++
+\#\{\ell : \lambda_\ell > \mathrm{atol}\}.
+$$
 
 There is no explicit maximum expansion dimension in `expand.jl`; the only
 filter is the eigenvalue tolerance.
+
+Thus the "plus one" in the original implementation belongs to Krylov reference
+generation, not to this formula. A single bond often grows only slightly because
+the references themselves are low-rank, but if several independent missing
+density eigenvectors exceed `atol`, the expansion step can append several rows.
 
 ![Project the reference density into the complement basis](assets/gse-projection-density.svg)
 
 ### 5. Replace the Right Tensor and Absorb Coefficients Left
 
-Reshape the expanded basis matrix:
+Reshape the expanded basis matrix $E_j$:
 
-`E_j -> E_tensor[j]` with shape `(new_chi_left, d_j, chi_right)`.
+```text
+E_j -> E_tensor[j] with shape (new_chi_left, d_j, chi_right)
+```
 
 Then replace the two tensors around the cut by
 
@@ -227,21 +434,44 @@ The target state is not intentionally changed by GSE. Only its allowed bond
 space is enlarged.
 
 Before expansion, the right tensor `A[j]` lies completely in the row span of
-`B_j`:
+$B_j$. Equivalently, there is a coefficient matrix $F_j$ such that
 
-`A[j] = coefficients * B_j`.
+$$
+M_j = F_j B_j.
+$$
 
-After expansion, `E_j` contains all rows of `B_j` plus extra rows from the
-projected reference density. Therefore the old tensor can be represented in the
-larger basis exactly, up to SVD/eigensolver tolerance:
+After expansion, $E_j$ contains all rows of $B_j$ plus extra rows from the
+projected reference density:
 
-```text
-old right basis:       B_j
-expanded right basis:  [ B_j ]
-                       [ C_j ]
+$$
+E_j =
+\begin{bmatrix}
+B_j \\
+C_j
+\end{bmatrix}.
+$$
 
-old state coefficients in C_j directions: zero
-```
+Therefore the old tensor can be represented in the larger basis exactly, up to
+SVD/eigensolver tolerance. If $E_j$ is orthonormal by rows, the expanded
+coefficient matrix is
+
+$$
+F'_j = M_j E_j^\dagger.
+$$
+
+Reconstruction gives
+
+$$
+F'_j E_j
+=
+M_j E_j^\dagger E_j
+=
+M_j,
+$$
+
+because every row of $M_j$ already lies in the row span of $B_j$, and that span
+is a subspace of the row span of $E_j$. The new $C_j$ directions have zero
+target-state coefficient immediately after expansion.
 
 The left tensor `A_new[j-1]` receives those coefficients. The added basis
 vectors therefore create empty variational directions for `psi`; they do not
@@ -255,12 +485,22 @@ increases and the final orthogonality center is site `1`.
 ## What Happens to Reference States During the Sweep
 
 The reference states are mutable work buffers. At each cut, each reference is
-projected into the same expanded basis `E_j` so that the next cut to the left
+projected into the same expanded basis $E_j$ so that the next cut to the left
 can build a density matrix in a compatible gauge.
 
 For the next iteration, the important tensor is the updated
 `reference.data[j - 1]`: it contains the reference coefficients in the expanded
-right-block basis. The code also writes a tail tensor at `reference.data[j]`,
+right-block basis. In formulas, each reference is rewritten from
+
+$$
+|\Phi_r\rangle
+=
+\sum_{\gamma,x}
+R_r[\gamma,x]\,|L^r_\gamma\rangle |x\rangle
+$$
+
+to an equivalent representation using the common expanded basis labelled by the
+rows of $E_j$. The code also writes a tail tensor at `reference.data[j]`,
 but that line is marked with an index-order FIXME. Since the sweep never needs
 that already processed tensor again for density construction, a translation
 should treat the references as internal moving-center work buffers. If a Rust
@@ -326,16 +566,115 @@ parent side  ==  child tensor plus child-side subtrees
              expanded bond
 ```
 
-The child tensor should be reshaped as
+Let $a$ be the bond index from the child to the parent. Combine the physical
+indices at the child and all child-side outgoing bond indices into a single
+column multi-index $q$. The child tensor should be reshaped as
 
 ```text
-rows:    bond index toward the parent
-columns: physical indices at child plus all child-side bond indices
+rows:    a = bond index toward the parent
+columns: q = physical indices at child plus all child-side bond indices
 ```
 
-assuming the child-side subtrees have already been orthogonalized into
-isometric bases. Then the same density-projection-eigenvector logic can enlarge
-the parent-child bond.
+In formulas, the chain reshape
+
+$$
+M_j[\alpha,(s_j,\beta)]
+=
+A^{[j]}_{\alpha s_j \beta}
+$$
+
+becomes the directed-edge reshape
+
+$$
+M_e[a,q]
+=
+T^{[\mathrm{child}]}_{a,q}.
+$$
+
+The same reference-state expansion works if the sweep invariant is generalized:
+before processing edge $e=(\mathrm{parent},\mathrm{child})$, every already
+processed child-side subtree is in a common orthonormal basis for the target
+and all references. Then each reference has a cut expansion
+
+$$
+|\Phi_r\rangle
+=
+\sum_{\gamma,q}
+R_{r,e}[\gamma,q]\,
+|L^r_\gamma(e)\rangle |q;e\rangle,
+$$
+
+and the edge density matrix is
+
+$$
+\rho_e^{\mathrm{ref}}
+=
+\sum_r R_{r,e}^\dagger R_{r,e}.
+$$
+
+The old edge basis comes from the row-space SVD of $M_e$; projecting
+$\rho_e^{\mathrm{ref}}$ into the complement of that old row span and retaining
+dominant eigenvectors enlarges the parent-child bond exactly as in the chain.
+
+### AD Preservation
+
+TreeTN GSE should preserve AD metadata by default. The local matrices above are
+"small" relative to the full tensor network, but converting an AD-tracked tensor
+to host values is still a detach. A production implementation should not build
+$M_e$, $\rho_e^{\mathrm{ref}}$, or $E_e$ through value-extraction APIs such as
+`to_vec`, `into_dense_col_major_parts`, `native_tensor_primal_to_dense_*`, or a
+host `Matrix<T>` round trip when the input tensors track gradients.
+
+The preferred shape is:
+
+1. form local reshapes, contractions, projectors, and basis updates as
+   `TensorDynLen`/tenferro eager operations so the payload stays in the shared
+   AD context;
+2. use tenferro-backed `eigh` on the AD-carrying local density tensor, or add a
+   tensorbackend wrapper that returns tensor payloads rather than host
+   eigenvector buffers;
+3. make any intentionally non-differentiable boundary explicit.
+
+This argues for a small, clean `TensorDynLen` linear-algebra wrapper layer before
+implementing TreeTN GSE. The GSE implementation should not contain ad hoc
+matrix conversions for SVD, QR, or eigendecomposition. Instead, tensor4all-rs
+should provide AD-preserving tensor wrappers for the local dense linear algebra
+operations it needs:
+
+- SVD on a `TensorDynLen` unfolded by a chosen set of row indices, returning
+  `TensorDynLen` factors with the same index semantics as the existing
+  factorization path;
+- QR on the same tensor-unfolding convention, again returning tensor payloads
+  rather than host buffers;
+- Hermitian eigendecomposition on a rank-2 `TensorDynLen` density matrix,
+  returning eigenvalues and eigenvectors as tensor payloads.
+
+Those wrappers should call tenferro linalg operations on the underlying eager
+payload and should preserve tracked AD state whenever tenferro supports the
+corresponding AD rule. If a linalg operation or scalar type is not
+AD-supported, the wrapper should return an explicit error or document an
+explicit detach mode; it should not silently round-trip through primal host
+values.
+
+The last point matters because eigenvalue thresholding and rank selection are
+piecewise-discrete operations:
+
+$$
+C_e = \{c_\ell : \lambda_\ell > \mathrm{atol}\}.
+$$
+
+If the first implementation chooses to detach the selected expansion basis,
+that boundary should be named and documented, for example as "the expansion
+basis is selected from primal values." It should still keep the target and
+reference tensor contractions after basis selection AD-carrying. Tests should
+check that tracked target tensors still report gradient tracking after expansion
+unless the API explicitly requested a detached/reference path.
+
+The discrete selection itself is not part of the differentiable map. In other
+words, gradients should not be defined through the predicate
+$\lambda_\ell > \mathrm{atol}$, the number of retained eigenvectors, or bond
+dimension changes. The continuous tensor operations before and after that
+selection should still preserve AD metadata.
 
 The nontrivial parts are:
 
@@ -357,5 +696,7 @@ KrylovKit". It is an edge-oriented TreeTN basis-expansion primitive that:
 3. computes projected reference density matrices on local child-side spaces;
 4. expands shared bond indices while preserving the target state;
 5. updates reference work buffers consistently enough for the next edge; and
-6. hands the expanded state to the existing TreeTN TDVP with invalidated
+6. preserves AD metadata except at explicitly named nondifferentiable selection
+   boundaries; and
+7. hands the expanded state to the existing TreeTN TDVP with invalidated
    environments.
