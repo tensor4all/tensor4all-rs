@@ -126,6 +126,18 @@ important part of this particular implementation: the references are not meant
 to be unrestricted high-rank Krylov vectors. They are low-rank probes carrying
 directions just outside the current MPS manifold.
 
+Here `maxlinkdim(psi)` is a scalar maximum over the whole MPS, not a vector of
+bond-local dimensions. In the Julia source,
+
+$$
+\operatorname{maxlinkdim}(\psi)
+=
+\max_i \max(\dim \chi_{i-1}, \dim \chi_i),
+$$
+
+and the same scalar `maxdim` is passed to all SVD/eigen truncations inside
+`apply!(FullCompress(), ...)`.
+
 For a Rust translation that aims to match the original Julia strategy, this
 should be treated as the default reference-generation policy:
 
@@ -169,14 +181,75 @@ compatibility defaults should be:
 
 | Knob | Original-compatible default | Meaning |
 |---|---|---|
-| `reference_maxdim` | `maxlinkdim(psi) + 1` | Cap used while building each $H^m\psi$ reference. |
-| `reference_atol` | `1e-13` | SVD/compression tolerance for reference generation. |
-| `expand_atol` | `1e-13` | SVD rank and missing-density eigenvalue tolerance in `expand!`. |
+| `reference_maxdim` | `maxlinkdim(psi) + 1` | Global scalar cap used while building each $H^m\psi$ reference. |
+| `reference_atol` | `1e-13` | Absolute SVD/eigenvalue threshold used during reference generation. |
+| `expand_atol` | `sqrt(eps(real(T)))`, unless TDVP passes another `atol` | Absolute SVD rank and missing-density eigenvalue threshold in `expand!`. |
 | `max_added_per_bond` | none | No explicit cap in `expand.jl`; retained directions are selected by `expand_atol`. |
 
 If tensor4all-rs adds `max_added_per_bond = 1`, that is an extra policy, not the
 literal RydbergToolkit default. It may be useful for experiments, but it should
 not be the default when checking against the original Julia behavior.
+
+### Tolerance Semantics
+
+The Julia implementation uses the name `atol` literally. The helper
+`truncated_svd(M, atol, maxdim)` keeps singular values satisfying
+
+$$
+\sigma_i > \mathrm{atol},
+$$
+
+and `truncated_eigen(M, atol, maxdim)` keeps eigenvalues satisfying
+
+$$
+\lambda_i > \mathrm{atol}.
+$$
+
+There is no relative scaling by $\sigma_{\max}$, by matrix dimension, or by
+discarded weight in those helper functions. This is the behavior to reproduce
+in a strict compatibility mode.
+
+However, this does not mean the clean tensor4all-rs API should expose one
+absolute `atol` knob. TreeTN already routes SVD truncation through
+`SvdTruncationPolicy`, whose default is
+`SvdTruncationPolicy::new(1e-12)`: relative threshold, singular-value measure,
+and per-value truncation. In formulas, the default SVD rank rule is
+
+$$
+\frac{\sigma_i}{\sigma_{\max}} > 10^{-12}.
+$$
+
+That is the right default style for GSE SVDs as well. It is close to a numerical
+rank cutoff, matches the rest of TreeTN better than an absolute `atol`, and can
+be exposed in user-facing options as `singular_value_cutoff` or directly as an
+`SvdTruncationPolicy`.
+
+The preferred Rust design should therefore separate these roles:
+
+| Role | Julia-compatible behavior | TreeTN-aligned default |
+|---|---|---|
+| Reference compression after $H|\Phi_m\rangle$ | Absolute `reference_atol = 1e-13`, global `reference_maxdim = maxlinkdim(psi) + 1`. | Same global `reference_maxdim`, but use the TreeTN SVD policy default: relative per-value singular-value cutoff `1e-12`. |
+| Current-basis rank extraction from $M_j$ | Absolute `expand_atol`, defaulting to `sqrt(eps(real(T)))` in `expand!`. | Use a numerical-rank SVD policy, by default the same relative per-value singular-value cutoff `1e-12`. This step should only remove numerical zeros from the existing target basis. |
+| Missing-density eigenvector selection | Absolute $\lambda_i > \mathrm{expand\_atol}$ after trace-normalizing $\rho_j$. | Use a separate `density_weight_cutoff`, defaulting to the same numerical scale such as `1e-12`, because $\operatorname{Tr}\rho_j=1$. |
+
+The last row is not an SVD truncation policy. After trace normalization,
+
+$$
+\sum_i \lambda_i = 1,
+$$
+
+so the threshold on $\lambda_i$ is already relative to the total reference
+weight. It should be named as a density weight cutoff rather than folded into an
+SVD `singular_value_cutoff`.
+
+Therefore the recommended implementation shape is:
+
+1. provide a `JuliaCompat` tolerance mode that reproduces the absolute thresholds
+   above for regression tests against RydbergToolkit;
+2. make the default Rust-facing SVD knobs reuse the existing TreeTN
+   `SvdTruncationPolicy` default, exposed as `singular_value_cutoff = 1e-12`
+   when a simpler API is desired;
+3. keep the missing-density threshold separate as `density_weight_cutoff`.
 
 ## Per-Bond Expansion Step
 
@@ -224,9 +297,20 @@ The rows of $B_j$ form the current right-block basis for the bond $(j-1,j)$.
 With nonzero `atol`, numerically small old directions may be dropped before new
 directions are added. To match the Julia implementation, this `atol` should be
 the same `expand_atol` used for the missing-density eigenvalue test below,
-defaulting to $10^{-13}$. This is close to machine precision for double
-precision, but it is still an explicit algorithmic tolerance rather than an
-implicit backend epsilon.
+defaulting to $\sqrt{\epsilon_{\mathrm{mach}}}$ for the real scalar type in
+`expand!` and `tdvp`. This is not machine precision itself; it is a user-facing
+accuracy/adaptivity tolerance reused for several GSE decisions.
+
+For the TreeTN implementation, prefer the existing SVD policy instead:
+
+$$
+\frac{\sigma_i}{\sigma_{\max}} > \tau_{\mathrm{sv}},
+\qquad
+\tau_{\mathrm{sv}} = 10^{-12}
+$$
+
+by default. This is a numerical-rank decision for the current target basis, not
+the missing-density selection rule.
 
 ### 2. Build a Reference Density Matrix
 
@@ -660,8 +744,12 @@ The last point matters because eigenvalue thresholding and rank selection are
 piecewise-discrete operations:
 
 $$
-C_e = \{c_\ell : \lambda_\ell > \mathrm{atol}\}.
+C_e = \{c_\ell : \lambda_\ell > \tau_{\mathrm{density}}\}.
 $$
+
+In a Julia-compatible mode, $\tau_{\mathrm{density}}$ is the same `atol` passed
+to `expand!`. In the preferred Rust-facing API, it should be named as a density
+weight cutoff because the density matrix has already been trace-normalized.
 
 If the first implementation chooses to detach the selected expansion basis,
 that boundary should be named and documented, for example as "the expansion
@@ -672,9 +760,9 @@ unless the API explicitly requested a detached/reference path.
 
 The discrete selection itself is not part of the differentiable map. In other
 words, gradients should not be defined through the predicate
-$\lambda_\ell > \mathrm{atol}$, the number of retained eigenvectors, or bond
-dimension changes. The continuous tensor operations before and after that
-selection should still preserve AD metadata.
+$\lambda_\ell > \tau_{\mathrm{density}}$, the number of retained eigenvectors,
+or bond dimension changes. The continuous tensor operations before and after
+that selection should still preserve AD metadata.
 
 The nontrivial parts are:
 
