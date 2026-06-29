@@ -82,6 +82,8 @@ RydbergToolkit helper, `truncated_svd` returns `Vt`, so the current basis is a
 matrix `B_j` whose rows are orthonormal basis vectors in the column space
 `C^(d_j * chi_right)`.
 
+![Reshape A[j] and extract the current row basis](assets/gse-reshape-svd.svg)
+
 ## Reference State Generation
 
 `global_krylov_subspace(psi, H; krylovdim)` builds reference states by repeated
@@ -188,6 +190,8 @@ The new bond dimension after this step is
 There is no explicit maximum expansion dimension in `expand.jl`; the only
 filter is the eigenvalue tolerance.
 
+![Project the reference density into the complement basis](assets/gse-projection-density.svg)
+
 ### 5. Replace the Right Tensor and Absorb Coefficients Left
 
 Reshape the expanded basis matrix:
@@ -214,6 +218,8 @@ A_new[j]             = E_j
 ```
 
 After this, the orthogonality center has moved from `j` to `j-1`.
+
+![Absorb the old two-site block into the expanded basis](assets/gse-bond-update.svg)
 
 ## Why the Target State Is Preserved
 

@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="430" viewBox="0 0 1180 430" role="img" aria-labelledby="title desc">
+  <title id="title">Reshape an MPS site tensor and extract the current right-block basis</title>
+  <desc id="desc">Diagram showing A[j] with left, physical, and right indices reshaped into a matrix M_j whose columns are the fused physical and right-block space, followed by an SVD that returns B_j as row basis vectors.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#344054"/>
+    </marker>
+    <style>
+      .label { font: 15px sans-serif; fill: #1f2937; }
+      .small { font: 12px sans-serif; fill: #475467; }
+      .math { font: 14px monospace; fill: #111827; }
+      .title { font: 18px sans-serif; font-weight: 700; fill: #111827; }
+      .box { fill: #ffffff; stroke: #667085; stroke-width: 1.5; rx: 8; }
+      .tensor { fill: #dbeafe; stroke: #2563eb; stroke-width: 2; rx: 8; }
+      .matrix { fill: #fef3c7; stroke: #d97706; stroke-width: 2; rx: 6; }
+      .basis { fill: #dcfce7; stroke: #16a34a; stroke-width: 2; rx: 6; }
+      .bond { stroke: #344054; stroke-width: 2.5; fill: none; }
+      .arrow { stroke: #344054; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .dim { stroke: #7c3aed; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1180" height="430" fill="#ffffff"/>
+  <text x="30" y="36" class="title">Step 1: reshape A[j] and take SVD</text>
+
+  <g transform="translate(40,78)">
+    <text x="0" y="0" class="label">Chain cut at bond (j-1, j)</text>
+    <line x1="22" y1="48" x2="116" y2="48" class="bond"/>
+    <rect x="116" y="24" width="76" height="48" class="box"/>
+    <text x="135" y="54" class="math">A[j-1]</text>
+    <line x1="192" y1="48" x2="260" y2="48" class="bond"/>
+    <text x="205" y="35" class="small">chi_left</text>
+    <rect x="260" y="18" width="68" height="60" class="tensor"/>
+    <text x="279" y="53" class="math">A[j]</text>
+    <line x1="328" y1="48" x2="430" y2="48" class="bond"/>
+    <text x="350" y="35" class="small">chi_right</text>
+    <text x="170" y="122" class="small">current center tensor</text>
+  </g>
+
+  <g transform="translate(70,215)">
+    <path d="M 30 20 L 135 20 L 165 52 L 60 52 Z" class="tensor"/>
+    <path d="M 135 20 L 165 52 L 165 132 L 135 100 Z" fill="#bfdbfe" stroke="#2563eb" stroke-width="2"/>
+    <path d="M 30 20 L 60 52 L 60 132 L 30 100 Z" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+    <path d="M 60 52 L 165 52 L 165 132 L 60 132 Z" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+    <text x="80" y="83" class="math">A[j]</text>
+    <text x="-10" y="80" class="small">alpha</text>
+    <line x1="23" y1="73" x2="55" y2="73" class="dim"/>
+    <text x="72" y="154" class="small">s_j</text>
+    <line x1="86" y1="140" x2="86" y2="115" class="dim"/>
+    <text x="176" y="93" class="small">beta</text>
+    <line x1="174" y1="88" x2="148" y2="88" class="dim"/>
+    <text x="0" y="-8" class="label">rank-3 MPS tensor</text>
+  </g>
+
+  <path d="M 275 275 C 330 275, 340 275, 392 275" class="arrow"/>
+  <text x="302" y="258" class="small">reshape</text>
+
+  <g transform="translate(405,185)">
+    <rect x="0" y="0" width="170" height="170" class="matrix"/>
+    <line x1="45" y1="0" x2="45" y2="170" stroke="#d97706" stroke-width="1.2"/>
+    <line x1="90" y1="0" x2="90" y2="170" stroke="#d97706" stroke-width="1.2"/>
+    <line x1="135" y1="0" x2="135" y2="170" stroke="#d97706" stroke-width="1.2"/>
+    <line x1="0" y1="43" x2="170" y2="43" stroke="#d97706" stroke-width="1.2"/>
+    <line x1="0" y1="86" x2="170" y2="86" stroke="#d97706" stroke-width="1.2"/>
+    <line x1="0" y1="129" x2="170" y2="129" stroke="#d97706" stroke-width="1.2"/>
+    <text x="62" y="91" class="math">M_j</text>
+    <text x="24" y="-14" class="label">matrix view</text>
+    <text x="38" y="194" class="small">columns: (s_j, beta)</text>
+    <text x="-55" y="92" class="small" transform="rotate(-90 -55 92)">rows: alpha</text>
+  </g>
+
+  <path d="M 590 270 C 640 270, 650 270, 698 270" class="arrow"/>
+  <text x="615" y="252" class="math">M_j = U S B_j</text>
+
+  <g transform="translate(715,176)">
+    <rect x="0" y="0" width="92" height="188" class="box"/>
+    <text x="34" y="98" class="math">U</text>
+    <text x="25" y="211" class="small">coeffs</text>
+    <rect x="112" y="42" width="58" height="104" class="matrix"/>
+    <text x="136" y="99" class="math">S</text>
+    <rect x="190" y="20" width="196" height="148" class="basis"/>
+    <line x1="190" y1="57" x2="386" y2="57" stroke="#16a34a" stroke-width="1.4"/>
+    <line x1="190" y1="94" x2="386" y2="94" stroke="#16a34a" stroke-width="1.4"/>
+    <line x1="190" y1="131" x2="386" y2="131" stroke="#16a34a" stroke-width="1.4"/>
+    <text x="268" y="98" class="math">B_j</text>
+    <text x="206" y="192" class="small">row basis in (s_j, beta) space</text>
+  </g>
+</svg>
