@@ -24,6 +24,7 @@ pub mod algorithm;
 // TreeTN uses the `T: TensorLike` pattern, making a separate dyn wrapper unnecessary.
 pub mod dmrg;
 pub mod error;
+pub mod gse;
 pub mod link_index_network;
 pub mod linsolve;
 mod local_update_support;
@@ -42,6 +43,10 @@ pub use dmrg::{dmrg, dmrg_with_treetn_operator, DmrgError, DmrgOptions, DmrgResu
 pub use error::{
     LinearOperatorIndexApplyError, LinearOperatorIndexBindingError, LinearOperatorTaggedApplyError,
     NumberedTagSelectionError, SelectedIndexContractionError,
+};
+pub use gse::{
+    global_subspace_expand, global_subspace_expand_with_references, gse_tdvp, GseError, GseOptions,
+    GseResult, GseTdvpOptions, GseTdvpResult,
 };
 pub use treetn::contraction;
 

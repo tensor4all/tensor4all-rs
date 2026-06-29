@@ -21,6 +21,7 @@ tenferro-provider-inject = [
 [dependencies]
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
+tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 petgraph.workspace = true
 anyhow.workspace = true
 num-complex.workspace = true
