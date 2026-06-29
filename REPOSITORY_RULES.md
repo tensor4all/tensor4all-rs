@@ -10,6 +10,28 @@
 - Keep documentation slightly behind reality if validation is incomplete; do
   not advertise partially landed surfaces as stable or fully supported.
 
+## Public Surface Discipline
+
+- Keep the public API intentionally small. Prefer `pub(crate)` for types,
+  functions, traits, modules, fields, and helper constructors unless downstream
+  users are expected to call them directly.
+- Public APIs are user-facing contracts. Before adding or keeping a `pub` item,
+  ask whether tensor4all-rs is prepared to support that semantic contract across
+  Rust users, C API users, and language bindings.
+- Public types should implement `Debug` when doing so is cheap and useful. Use a
+  hand-written summary for graph, tensor-network, cache, backend, or FFI wrapper
+  types when derived output would expose unstable internals, dump large payloads,
+  or make future representation changes harder.
+- Do not make implementation details public only for tests, examples,
+  benchmarks, sibling-crate convenience, generated API dumps, or downstream
+  reach-through. Move the code to the owning crate/module or expose a narrower
+  high-level API instead.
+- `#[doc(hidden)] pub` is not a privacy boundary. Use hidden public items only
+  for explicitly supported macro output, required trait contracts, or documented
+  extension contracts; otherwise make the item private or `pub(crate)`.
+- Existing public APIs that violate these rules are migration targets, not
+  patterns to copy.
+
 ## Source Of Truth
 
 - Source code and rustdoc are authoritative for library APIs.
@@ -37,6 +59,37 @@
 - When converting a public API from `anyhow::Result` to a typed error, add or
   update the crate-local error type, document the `# Errors` behavior, and keep
   error messages useful enough for C API and binding layers to preserve context.
+
+## Public Boundary Safety Audits
+
+- User-reachable Rust, tensor-network, C API, and language-binding-facing paths
+  must validate input-derived shape, rank, axis, index, dtype/scalar kind,
+  topology, truncation, and layout configuration before no-op shortcuts,
+  allocation, backend calls, pointer use, or FFI calls.
+- Shape products, dense element counts, byte lengths, strides, offsets, bond
+  products, launch sizes, and FFI dimensions must use checked arithmetic before
+  conversion to `usize`, `i32`, `u32`, pointer offsets, or allocation sizes.
+- Publicly reachable library paths must not turn invalid user input into
+  `panic`, `unwrap`, `expect`, unchecked indexing, poisoned-lock unwraps, or
+  debug-only assertions. Return a crate-local typed error or a C API status with
+  preserved diagnostic context instead.
+- Validate fast paths and zero-size returns with the same scrutiny as the main
+  path. A shortcut must not skip rank, index identity, scalar kind, topology, or
+  layout checks that would reject invalid input on the full path.
+- Repeated validation shared by Rust, C API, Julia/Python bindings, dense,
+  tensor-network, or scalar-specific wrappers should live in shared helpers or
+  prepared metadata types. Do not duplicate hand-written checks when a helper
+  can enforce the contract before unsafe or performance-sensitive code.
+- Validation helpers should return typed prepared metadata when downstream code
+  would otherwise repeat rank-minus-one, axis ordering, shape-product, site role,
+  edge role, or index mapping calculations.
+- Parallel operation surfaces must keep validation and scalar-promotion
+  semantics in parity. A bug in one of Rust/C API, f64/Complex64, dense/TN, or
+  MPS/MPO-like wrappers should trigger a nearby audit of the corresponding
+  surfaces.
+- When a bug exposes a public API design mismatch, fix the canonical contract
+  at its owner. API compatibility is not a goal in this early-development
+  repository unless the task explicitly requires a compatibility window.
 
 ## Base Branch Synchronization
 
@@ -115,6 +168,46 @@
 - When using norm-based approximate equality, report the residual explicitly,
   for example `diff.norm() / reference.norm()`, so failures are diagnosable.
 
+## Performance And Complexity Discipline
+
+- Potentially dangerous operations kept for performance, such as unchecked
+  indexing after validation, raw scratch-buffer access, pointer arithmetic, or
+  backend-native view construction, must carry a nearby one-line comment
+  explaining the invariant that makes the operation valid.
+- Do not introduce accidental `O(n^2)` or worse behavior in graph/topology
+  construction, index mapping, contraction planning, metadata propagation,
+  caching, or tensor-network sweeps. If a superlinear algorithm is intentional,
+  document why the input size is bounded or why the tradeoff is acceptable.
+- Avoid repeatedly cloning, hashing, formatting, scanning, or re-contracting
+  whole tensor networks, topology maps, index sets, graph histories, or cache
+  keys inside per-node, per-edge, per-sample, per-pivot, or per-site loops.
+  Prefer stable IDs, prepared metadata, cached fingerprints with exact equality
+  checks, or reusable work buffers.
+- Do not allocate dense buffers when a structured tensor, strided view,
+  tensor-network contraction, backend-native buffer, or metadata-only layout
+  change can express the same operation.
+- Do not zero-initialize buffers that will be fully overwritten. Expose separate
+  initialized/zeroed acquisition paths when read-before-write callers exist.
+- Avoid heap allocation inside hot loops. Pre-allocate and reuse scratch buffers
+  for sweeps, factorizations, contraction plans, local solves, and interpolation
+  kernels.
+- Performance claims require release-mode measurements. Benchmarks should use
+  value-dependent inputs and outputs, keep setup cost separate when possible,
+  and report thread/backend configuration.
+
+## Cache Ownership
+
+- Long-lived caches must be owned by an explicit runtime, context, solver,
+  interpolator, or tensor-network object. Do not hide unbounded caches in
+  thread-local/global state or backend internals.
+- Every cache must have a bounded default or a documented reason why it is
+  naturally bounded by the owning object.
+- User-reachable caches should provide clear/reset controls and useful stats
+  such as retained entry count and logical retained bytes when that information
+  is practical to compute.
+- Do not add a cache without documenting its owner, lifetime, capacity policy,
+  memory accounting expectations, and invalidation behavior.
+
 ## Documentation Examples
 
 - Rustdoc examples and mdBook Rust snippets must run.
@@ -134,8 +227,34 @@
 - Any change to tutorial APIs, tutorial code, generated tutorial artifacts, or
   public APIs used by tutorials must check and update the corresponding live
   mdBook page before the branch is complete.
+- Non-trivial guide snippets should have an executable source of truth, such as
+  a checked example, tutorial binary, doctest, or test. If Markdown must copy a
+  snippet by hand, add or update a sync/extraction check when practical.
+- Diagrams in `README.md`, mdBook, and `docs/design/` are part of the documented
+  surface. Crate names, layer assignments, dependency direction, and public
+  entry points shown in diagrams must match the current implementation.
 - Legacy markdown under `docs/tutorial-code/docs/tutorials/` must not be treated
   as the online source of truth.
+
+## Work Logs And Design Records
+
+- Nontrivial refactors, cleanup streams, AI-assisted implementation batches, and
+  changes that make explicit design tradeoffs should leave a curated work log
+  under `docs/worklogs/`.
+- A work log should record the session summary, code and documents read,
+  reference implementations considered, decisions made, alternatives rejected or
+  deferred, verification performed, and remaining risks.
+- Work logs are reviewer-facing decision records, not raw transcripts and not
+  implementation plans. Keep them concise enough to review but specific enough
+  that later work can understand the selected abstraction, split, public API, or
+  deferral.
+- When a PR establishes or changes durable design intent, update the appropriate
+  document under `docs/design/` in the same PR. Use work logs for session-level
+  rationale and design docs for decisions future implementation should follow.
+- When an audit finding is a false positive because of an intentional invariant,
+  record the evidence in the issue, PR body, work log, nearby source comment, or
+  source-contract test. Do not simply skip it and leave future reviewers to
+  rediscover the same non-bug.
 
 ## API Design
 
@@ -193,12 +312,18 @@
 - Production tensor, tensor-network, linear algebra, and solver paths should
   preserve automatic differentiation metadata whenever the underlying backend
   and operation can do so.
+- Unless there is a documented reason not to, dense tensor operations should go
+  through `tensor4all-tensorbackend` or existing tensor4all abstractions that
+  preserve tenferro AD metadata. Avoid bypassing the backend with local dense
+  loops, native-tensor extraction, host scalar conversion, or detached
+  reference implementations.
 - Do not unnecessarily detach tensors, convert differentiable values through
   plain Rust scalars, force `.real()`/real-only projections, or round-trip
   through dense/reference paths in a way that discards AD metadata.
 - When an operation must cross a non-differentiable boundary, such as a scalar
-  control-flow decision, diagnostic conversion, FFI boundary, or unsupported
-  backend routine, keep that boundary explicit in the code and documentation.
+  control-flow decision, diagnostic conversion, FFI boundary, unsupported
+  backend routine, or intentionally native/reference implementation, keep that
+  boundary explicit in the code and documentation.
 - Prefer backend-provided differentiable primitives for contraction, einsum,
   SVD, QR, eigensolvers, exponentials, and scalar operations. If a required
   primitive is missing, add or refine the appropriate backend/core API instead
@@ -243,6 +368,33 @@
 - If a needed behavior does not fit the current abstraction cleanly, add or
   refine the appropriate abstraction instead of patching around it locally.
 
+## Unsafe Code Boundary
+
+- `unsafe` belongs in FFI, backend, storage, or other leaf modules that own the
+  low-level invariant. Do not introduce `unsafe` in high-level tensor-network,
+  interpolation, graph/topology, transform, or AD-preserving algorithm code
+  when the correct fix is a lower-level helper.
+- Count and review `unsafe` by location and purpose, not by raw text search.
+  Generated code, comments, tests, and existing backend/FFI seams should be
+  separated from production algorithmic code when auditing risk.
+- Each new `unsafe` block must have a nearby `// SAFETY:` comment explaining the
+  validation or ownership invariant that makes it sound.
+- Boundary-condition tests or source-contract tests should cover new unsafe
+  indexing, raw pointer, FFI, or backend-native view construction paths.
+
+## File Organization
+
+- Keep source files focused, but do not split files solely to reduce line count.
+  Treat roughly 1000 lines as a soft review trigger, not a mechanical limit.
+- Split only along clear behavior, abstraction, feature, ownership, or
+  public/private API boundaries such as validation, planning, execution,
+  topology, contraction, solver, C API bridge, backend glue, or cache ownership.
+- Avoid arbitrary `part1`/`part2` splits and tiny files that force readers to
+  chase one concept across many modules.
+- Use line count to decide where to inspect first. Use responsibility, change
+  frequency, public/private API boundaries, and human navigation to decide
+  whether and how to split.
+
 ## Testing And Coverage
 
 - Use release-mode tests for normal verification.
@@ -252,6 +404,20 @@
   approval.
 - When removing code, check whether removed tests were the sole exerciser of
   any shared helper; add replacement coverage if so.
+
+## Unit Test Organization
+
+- Tests follow implementation ownership. Private implementation details should
+  be tested in the crate that owns them, not through a higher-level facade or
+  binding layer.
+- Keep production source files focused on production code. Prefer module-local
+  test files or small inline `#[cfg(test)]` modules only when the tests are
+  tightly scoped and easy to read.
+- Reserve crate-root `tests/` directories for integration tests and
+  user-visible behavior.
+- When extracting large test suites, split by behavior or operation family
+  rather than keeping one monolithic test module.
+- Do not use `include!` to inject test files into modules.
 
 ## C API And Language-Binding ABI
 
