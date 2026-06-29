@@ -8,6 +8,12 @@
 | [torch_backend.md](./torch_backend.md) | PyTorch backend design exploration |
 | [tenferro_ad_scalar_operator_extension_note.md](./tenferro_ad_scalar_operator_extension_note.md) | Tenferro AD scalar operator extension notes |
 
+## Tensor Networks
+
+| Document | Description |
+|----------|-------------|
+| [gse-chain-mps-algorithm.md](./gse-chain-mps-algorithm.md) | Chain MPS global subspace expansion analysis for TreeTN GSE-TDVP planning |
+
 ## Automatic Differentiation
 
 | Document | Description |

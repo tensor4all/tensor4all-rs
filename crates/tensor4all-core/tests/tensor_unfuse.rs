@@ -84,6 +84,43 @@ fn fuse_indices_column_major_roundtrips_unfuse_index() {
 }
 
 #[test]
+fn fuse_indices_backward_preserves_source_gradient() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let k = DynIndex::new_dyn(2);
+    let fused = DynIndex::new_link(6).unwrap();
+    let tensor = TensorDynLen::from_dense(
+        vec![i.clone(), j.clone(), k.clone()],
+        (0..12).map(|x| x as f64).collect(),
+    )
+    .unwrap()
+    .enable_grad()
+    .unwrap();
+
+    let fused_tensor = tensor
+        .fuse_indices(
+            &[i.clone(), j.clone()],
+            fused.clone(),
+            LinearizationOrder::ColumnMajor,
+        )
+        .unwrap();
+    assert!(fused_tensor.tracks_grad());
+
+    let weights = TensorDynLen::from_dense(
+        vec![fused.clone(), k.clone()],
+        (1..=12).map(|x| x as f64).collect(),
+    )
+    .unwrap();
+    let loss = fused_tensor.inner_product(&weights).unwrap();
+    loss.backward().unwrap();
+
+    let grad = tensor.grad().unwrap().unwrap();
+    let expected =
+        TensorDynLen::from_dense(vec![i, j, k], (1..=12).map(|x| x as f64).collect()).unwrap();
+    assert!(grad.isapprox(&expected, 1e-12, 0.0));
+}
+
+#[test]
 fn fuse_indices_trait_dispatch_on_tensordynlen_uses_old_index_order() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(3);
@@ -109,6 +146,41 @@ fn fuse_indices_trait_dispatch_on_tensordynlen_uses_old_index_order() {
         .permuteinds(tensor.indices())
         .unwrap();
     assert!(roundtrip.isapprox(&tensor, 1e-12, 0.0));
+}
+
+#[test]
+fn unfuse_index_backward_preserves_source_gradient() {
+    let fused = DynIndex::new_link(6).unwrap();
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let k = DynIndex::new_dyn(2);
+    let tensor = TensorDynLen::from_dense(
+        vec![fused.clone(), k.clone()],
+        (0..12).map(|x| x as f64).collect(),
+    )
+    .unwrap()
+    .enable_grad()
+    .unwrap();
+
+    let unfused = tensor
+        .unfuse_index(
+            &fused,
+            &[i.clone(), j.clone()],
+            LinearizationOrder::ColumnMajor,
+        )
+        .unwrap();
+    assert!(unfused.tracks_grad());
+
+    let weights =
+        TensorDynLen::from_dense(vec![i, j, k.clone()], (1..=12).map(|x| x as f64).collect())
+            .unwrap();
+    let loss = unfused.inner_product(&weights).unwrap();
+    loss.backward().unwrap();
+
+    let grad = tensor.grad().unwrap().unwrap();
+    let expected =
+        TensorDynLen::from_dense(vec![fused, k], (1..=12).map(|x| x as f64).collect()).unwrap();
+    assert!(grad.isapprox(&expected, 1e-12, 0.0));
 }
 
 #[test]

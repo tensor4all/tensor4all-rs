@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="430" viewBox="0 0 1060 430" role="img" aria-labelledby="title desc">
+  <title id="title">Project reference density into the complement of the current basis</title>
+  <desc id="desc">Diagram showing reference tensors forming rho_ref, projection by P onto the complement of the current basis B_j, and eigendecomposition to obtain missing basis vectors C_j.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#344054"/>
+    </marker>
+    <style>
+      .title { font: 18px sans-serif; font-weight: 700; fill: #111827; }
+      .label { font: 15px sans-serif; fill: #1f2937; }
+      .small { font: 12px sans-serif; fill: #475467; }
+      .math { font: 14px monospace; fill: #111827; }
+      .box { fill: #ffffff; stroke: #667085; stroke-width: 1.5; rx: 8; }
+      .ref { fill: #e0f2fe; stroke: #0284c7; stroke-width: 2; rx: 6; }
+      .rho { fill: #fef3c7; stroke: #d97706; stroke-width: 2; rx: 6; }
+      .basis { fill: #dcfce7; stroke: #16a34a; stroke-width: 2; rx: 6; }
+      .missing { fill: #fde2e2; stroke: #dc2626; stroke-width: 2; rx: 6; }
+      .arrow { stroke: #344054; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #667085; stroke-width: 1.6; stroke-dasharray: 6 5; fill: none; }
+    </style>
+  </defs>
+
+  <rect width="1060" height="430" fill="#ffffff"/>
+  <text x="30" y="36" class="title">Steps 2-4: reference density, complement projection, eigenvectors</text>
+
+  <g transform="translate(40,86)">
+    <text x="0" y="0" class="label">Reference MPS tensors at site j</text>
+    <rect x="10" y="30" width="150" height="78" class="ref"/>
+    <text x="54" y="73" class="math">R_1</text>
+    <rect x="28" y="122" width="150" height="78" class="ref"/>
+    <text x="72" y="165" class="math">R_2</text>
+    <rect x="46" y="214" width="150" height="78" class="ref"/>
+    <text x="86" y="257" class="math">R_k</text>
+    <text x="4" y="322" class="small">rows: reference left bond</text>
+    <text x="4" y="340" class="small">columns: (s_j, beta)</text>
+  </g>
+
+  <path d="M 245 235 C 305 235, 315 235, 365 235" class="arrow"/>
+  <text x="270" y="215" class="math">sum R_r^* R_r</text>
+
+  <g transform="translate(380,120)">
+    <rect x="0" y="0" width="190" height="190" class="rho"/>
+    <line x1="47" y1="0" x2="47" y2="190" stroke="#d97706" stroke-width="1.2"/>
+    <line x1="94" y1="0" x2="94" y2="190" stroke="#d97706" stroke-width="1.2"/>
+    <line x1="141" y1="0" x2="141" y2="190" stroke="#d97706" stroke-width="1.2"/>
+    <line x1="0" y1="47" x2="190" y2="47" stroke="#d97706" stroke-width="1.2"/>
+    <line x1="0" y1="94" x2="190" y2="94" stroke="#d97706" stroke-width="1.2"/>
+    <line x1="0" y1="141" x2="190" y2="141" stroke="#d97706" stroke-width="1.2"/>
+    <text x="58" y="99" class="math">rho_j</text>
+    <text x="18" y="-16" class="label">reference density</text>
+    <text x="35" y="220" class="small">acts on (s_j, beta)</text>
+  </g>
+
+  <g transform="translate(398,138)">
+    <path d="M 18 18 L 150 18 L 150 64 L 18 64 Z" class="basis"/>
+    <text x="42" y="47" class="math">span(B_j)</text>
+    <path d="M 18 88 L 150 88 L 150 152 L 18 152 Z" class="missing"/>
+    <text x="38" y="124" class="math">missing</text>
+  </g>
+
+  <path d="M 590 235 C 640 235, 650 235, 700 235" class="arrow"/>
+  <text x="608" y="207" class="math">P = I - B^dag B</text>
+  <text x="628" y="226" class="math">P rho_j P</text>
+
+  <g transform="translate(715,120)">
+    <rect x="0" y="0" width="190" height="190" class="missing"/>
+    <path d="M 22 22 L 168 22 L 168 70 L 22 70 Z" fill="#ffffff" stroke="#dc2626" stroke-width="1.4"/>
+    <text x="42" y="53" class="math">projected out</text>
+    <path d="M 22 102 L 168 102 L 168 168 L 22 168 Z" fill="#fecaca" stroke="#dc2626" stroke-width="1.4"/>
+    <text x="50" y="140" class="math">rho_missing</text>
+    <text x="16" y="-16" class="label">complement block</text>
+  </g>
+
+  <path d="M 810 326 C 810 360, 740 360, 700 360" class="arrow"/>
+  <text x="730" y="383" class="math">eig(rho_missing)</text>
+
+  <g transform="translate(500,330)">
+    <rect x="0" y="0" width="150" height="58" class="basis"/>
+    <line x1="0" y1="28" x2="150" y2="28" stroke="#16a34a" stroke-width="1.4"/>
+    <text x="54" y="36" class="math">C_j</text>
+    <text x="8" y="82" class="small">new basis rows to append</text>
+  </g>
+
+  <path d="M 464 88 C 455 66, 455 62, 466 46" class="dash"/>
+  <text x="380" y="62" class="small">normalize by trace before projection</text>
+</svg>
