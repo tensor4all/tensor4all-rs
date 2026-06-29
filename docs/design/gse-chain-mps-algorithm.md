@@ -642,17 +642,21 @@ local tangent/variational space available on later updates.
 The chain algorithm has a single natural "right block" at each cut. A TreeTN
 translation must replace that with a directed-edge view.
 
-For an oriented edge `(parent, child)` in a rooted tree, the chain analogue is:
+Use a rooted tree with root `r`. For an edge `(p, c)`, let `p` be the endpoint
+closer to `r` and `c` the endpoint farther from `r`. The chain analogue is:
 
 ```text
-parent side  ==  child tensor plus child-side subtrees
-             ^
-             expanded bond
+root side / unprocessed complement -- bond a=(p,c) -- c-side subtree
 ```
 
-Let $a$ be the bond index from the child to the parent. Combine the physical
-indices at the child and all child-side outgoing bond indices into a single
-column multi-index $q$. The child tensor should be reshaped as
+This orientation matches the chain if the final root is the left end. The GSE
+sweep processes edges in postorder, from leaves toward `r`. At the moment edge
+`(p,c)` is processed, the whole `c`-side subtree has already been converted into
+a common basis for the target state and all reference work buffers.
+
+Let $a$ be the bond index on edge `(p,c)`. Combine the physical index at `c` and
+all already processed child-side bond indices incident to `c` into a column
+multi-index $q$:
 
 ```text
 rows:    a = bond index toward the parent
@@ -672,13 +676,14 @@ becomes the directed-edge reshape
 $$
 M_e[a,q]
 =
-T^{[\mathrm{child}]}_{a,q}.
+T^{[c]}_{a,q}.
 $$
 
 The same reference-state expansion works if the sweep invariant is generalized:
-before processing edge $e=(\mathrm{parent},\mathrm{child})$, every already
-processed child-side subtree is in a common orthonormal basis for the target
-and all references. Then each reference has a cut expansion
+before processing edge $e=(p,c)$, the target and every reference work buffer have
+their orthogonality center at `c`, and every already processed descendant
+subtree of `c` is represented in a common orthonormal basis. Then each reference
+has a cut expansion
 
 $$
 |\Phi_r\rangle
@@ -699,6 +704,220 @@ $$
 The old edge basis comes from the row-space SVD of $M_e$; projecting
 $\rho_e^{\mathrm{ref}}$ into the complement of that old row span and retaining
 dominant eigenvectors enlarges the parent-child bond exactly as in the chain.
+
+### TreeTN Sweep Invariant
+
+The hard part is not the local formula. The hard part is maintaining the common
+subtree basis while walking a branching topology.
+
+For a rooted postorder traversal, the invariant before processing edge `(p,c)`
+should be:
+
+1. every edge strictly below `c` has already been expanded;
+2. the target and all references use compatible bases for those processed
+   descendant bonds;
+3. the orthogonality center of each work buffer is at `c`;
+4. the bond `a=(p,c)` is the only open connection from the processed `c`-side
+   subtree to the unprocessed complement;
+5. the complement-side basis indexed by `a` is orthonormal for each work buffer,
+   so tracing the row index in $R_{r,e}^\dagger R_{r,e}$ is valid.
+
+For chains, this invariant is maintained automatically by the right-to-left
+sweep. For a branching TreeTN, a scheduler must move the center between sibling
+subtrees without changing already expanded descendant bases. The implementation
+should therefore not be a naive loop over unordered edges. It should build an
+explicit rooted postorder edge plan, and before each edge, move the target and
+all reference work buffers to the required child center `c`.
+
+This suggests an initial TreeTN GSE implementation should share the TDVP root
+planning convention but use a different update path:
+
+```text
+root r
+edge order: postorder directed edges (p, c), c far from r
+
+for (p, c) in edge_order:
+    move target and references to center c
+    expand bond (p, c) using the c-side density matrix
+    write the common expanded c-side basis into each work buffer
+    absorb each work buffer's coefficients into p
+    mark edge (p, c) orthogonal toward p
+```
+
+The final center after the full postorder expansion is the root `r`, matching
+the chain behavior where the original right-end-centered MPS finishes with
+orthocenter `1`.
+
+Be careful with tuple order. The existing TDVP planner stores postorder edges as
+`(child, parent)` because that is convenient for local TDVP updates. This note
+uses `(p, c)` for formulas, with `p` closer to the root. A TreeTN GSE
+implementation can reuse the same traversal, but it should explicitly rename
+planner tuples before applying the formulas.
+
+### Endpoint Update Formula
+
+After the projected-density step, let
+
+$$
+E_e[\ell,q]
+=
+\begin{bmatrix}
+B_e \\
+C_e
+\end{bmatrix}_{\ell,q}
+$$
+
+be the expanded row basis for the processed `c`-side space. If
+$M_e[a,q] = T^{[c]}_{a,q}$, compute the coefficient tensor
+
+$$
+G_e[a,\ell]
+=
+\sum_q M_e[a,q]\overline{E_e[\ell,q]}.
+$$
+
+Then update the two endpoint tensors by
+
+$$
+T'^{[c]}_{\ell,q} = E_e[\ell,q],
+$$
+
+and
+
+$$
+T'^{[p]}_{\ldots,\ell,\ldots}
+=
+\sum_a
+T^{[p]}_{\ldots,a,\ldots}\,
+G_e[a,\ell],
+$$
+
+where the slot `a` is the old bond index on edge `(p,c)`. The new shared bond
+index has dimension `dim(ell)`.
+
+Target preservation requires the old target row span to be retained. The SVD
+that extracts $B_e$ may discard numerical zeros, but it must not apply a
+reference-compression `maxdim`, a density cutoff, or any policy that truncates
+nonzero old target directions in the default state-preserving mode. Such a
+lossy mode would be a separate, explicitly named compression step.
+
+The reference work buffers use the same child-side basis but their own
+coefficients. For reference $r$, write its local matrix as $R_{r,e}[\gamma,q]$
+using the same logical $q$ ordering as above, then compute
+
+$$
+G^r_e[\gamma,\ell]
+=
+\sum_q R_{r,e}[\gamma,q]\overline{E_e[\ell,q]}.
+$$
+
+The reference child endpoint is replaced by the same numerical basis $E_e$
+renamed onto the reference-local site and child-side bond indices, while the
+reference parent endpoint absorbs $G^r_e$. This makes the processed `c`-side
+subtree a common basis for the next edge. The target state is preserved because
+its old row span is contained in $E_e$; references are only mutable work buffers
+and may be projected according to the chosen density cutoff.
+
+In tensor4all-rs this update must go through the TreeTN structural APIs:
+
+1. create a fresh bond index with the expanded dimension;
+2. call `TreeTN::replace_edge_bond(edge, new_bond)` before replacing endpoint
+   tensors, so `link_index_network`, `site_index_network`, and `ortho_towards`
+   stay consistent;
+3. replace the endpoint tensors with tensors carrying the new bond index;
+4. set `ortho_towards` on `(p,c)` to `p`, because the center has moved from `c`
+   toward the root side.
+
+Repeat the same structural update for every reference work buffer, but allocate
+buffer-local bond indices rather than reusing the target's `Index` object. The
+implementation should keep a logical mapping from target edge `(p,c)` to each
+work buffer's corresponding edge index.
+
+This mirrors the existing canonicalization implementation, which updates the
+edge bond before replacing tensors during a sweep edge.
+
+### Reference Work Buffers and Index Policy
+
+The references should be treated as internal work buffers, not as user-visible
+outputs of the expansion routine. The implementation needs an explicit index
+policy:
+
+- The target and reference work buffers should have the same tree topology.
+- Site index dimensions must match the target. For the first implementation,
+  keep the same v1 TDVP restriction: exactly one state site index per node.
+- Reference link IDs should not be assumed to be identical to target link IDs.
+  Existing TDVP support deliberately uses `sim_linkinds_mut()` for reference
+  states to avoid accidental bra/ket contractions.
+- For the local $q$ multi-index, the code should build an explicit
+  reference-to-target map covering both the state site index at `c` and every
+  processed child-side bond. Current TDVP reference initialization clones the
+  target state and then changes link indices, so site indices may be shared by
+  construction while link indices differ. The GSE code should still model this
+  as a logical-position-and-dimension map, not as raw index-ID equality.
+- When forming $R_{r,e}^\dagger R_{r,e}$, use temporary bra/ket copies of the
+  local row and column indices so the contraction traces only the row index and
+  leaves a density matrix on the target-compatible $q$ space.
+
+This is the same reason `ProjectedOperator` uses stable temporary mappings for
+local apply: relying on raw index equality across ket, bra, and operator tensors
+is too fragile once multiple TreeTNs participate in one contraction.
+
+### Reference Generation and Topology Compatibility
+
+The reference states $H\psi, H^2\psi,\ldots$ must be generated without hidden
+full materialization. They also need to be brought back to the target topology
+before GSE. Otherwise there is no well-defined edge `(p,c)` or local $q$ space
+shared by the target and the references.
+
+For an initial implementation, require:
+
+1. `apply_linear_operator` or a topology-preserving contraction path produces a
+   reference on the same node set and edge set as the target;
+2. each reference is compressed with the chosen reference SVD policy and maximum
+   bond dimension;
+3. each reference is reindexed/restructured to match the target's site-space
+   layout, while keeping link IDs collision-safe;
+4. after every operator application, explicitly verify site-space compatibility
+   with the target, including site index dimensions on each logical node;
+5. do not rely on shallow topology helpers that only clone or assume an
+   operator preserves site structure without checking the actual output;
+6. if topology preservation fails, return an explicit error rather than falling
+   back to full dense application.
+
+This keeps the implementation aligned with the repository rule that production
+paths must not silently materialize full dense tensors.
+
+### Initial Scope and Validation
+
+The first TreeTN GSE-TDVP implementation should be deliberately narrow:
+
+| Decision | Initial scope |
+|---|---|
+| State topology | Tree only, same topology for target, references, and operator support. |
+| Site space | One state site index per node, matching current TDVP v1. |
+| Sweep | Rooted postorder edge expansion ending at the requested TDVP root. |
+| Reference generation | Topology-preserving `H` application plus compression; no dense fallback. |
+| AD | Preserve tensor payloads where supported; any primal-only basis selection must be explicit. |
+| Cache | Fully clear/rebuild TDVP `ProjectedOperator` environments after GSE, or invalidate every node incident to a changed bond. Do not rely on invalidating only the final root. |
+
+Validation should include:
+
+1. chain TreeTN results matching the documented MPS algorithm on small complex
+   examples;
+2. branching trees where two sibling leaves and at least one high-degree
+   internal node are expanded before their parent edge, checking the
+   common-basis invariant;
+3. overlap/state-distance preservation for the target before and after
+   expansion, including a case where the reference cutoff is aggressive enough
+   to truncate reference directions but must not truncate the old target basis;
+4. link dimension growth only on selected edges, with `link_index_network`,
+   `site_index_network`, and `ortho_towards` consistency checks;
+5. cache behavior: a TDVP step after GSE must rebuild or invalidate projected
+   environments rather than using stale tensors, including reverse-direction
+   environment entries;
+6. explicit errors for a non-topology-preserving operator application;
+7. complex and, if relevant, non-Hermitian reference-generation cases that
+   exercise the conjugation convention in $G_e$ and $G^r_e$.
 
 ### AD Preservation
 
@@ -785,6 +1004,6 @@ KrylovKit". It is an edge-oriented TreeTN basis-expansion primitive that:
 4. expands shared bond indices while preserving the target state;
 5. updates reference work buffers consistently enough for the next edge; and
 6. preserves AD metadata except at explicitly named nondifferentiable selection
-   boundaries; and
+   boundaries;
 7. hands the expanded state to the existing TreeTN TDVP with invalidated
    environments.
