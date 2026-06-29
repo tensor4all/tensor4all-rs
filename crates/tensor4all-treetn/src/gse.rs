@@ -218,24 +218,6 @@ pub enum GseError {
         /// Why the mapping is invalid.
         reason: String,
     },
-    /// The v1 implementation supports uniform f64 or Complex64 storage.
-    #[error("GSE v1 unsupported scalar storage at node {node}: {reason}")]
-    UnsupportedScalarStorage {
-        /// Debug representation of the node.
-        node: String,
-        /// Why scalar storage is unsupported.
-        reason: String,
-    },
-    /// Target and reference states must use the same scalar storage.
-    #[error(
-        "GSE v1 requires target and reference tensors to have the same scalar storage; target is {target}, reference is {reference}"
-    )]
-    ScalarStorageMismatch {
-        /// Target scalar storage label.
-        target: &'static str,
-        /// Reference scalar storage label.
-        reference: &'static str,
-    },
     /// Existing TDVP failed after GSE.
     #[error("GSE-TDVP TDVP step failed: {source}")]
     Tdvp {
@@ -278,21 +260,6 @@ struct EdgeExpansionStats {
     edges_processed: usize,
     bonds_expanded: usize,
     max_added_basis: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScalarKind {
-    Real,
-    Complex,
-}
-
-impl ScalarKind {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Real => "f64",
-            Self::Complex => "Complex64",
-        }
-    }
 }
 
 /// Build Krylov references from `operator`, expand the TreeTN state, and return
@@ -342,7 +309,6 @@ where
         });
     }
     validate_single_site_state(&init)?;
-    let target_scalar = tree_scalar_kind(&init)?;
 
     let references_built = references.len();
     let mut state = init
@@ -355,13 +321,6 @@ where
     let mut reference_buffers = Vec::with_capacity(references.len());
     for reference in references {
         validate_reference(&state, &reference)?;
-        let reference_scalar = tree_scalar_kind(&reference)?;
-        if reference_scalar != target_scalar {
-            return Err(GseError::ScalarStorageMismatch {
-                target: target_scalar.label(),
-                reference: reference_scalar.label(),
-            });
-        }
         let mut reference = reference
             .canonicalize([center.clone()], CanonicalizationOptions::forced())
             .map_err(|source| GseError::Algorithm {
@@ -568,59 +527,7 @@ where
             });
         }
     }
-    let target_scalar = tree_scalar_kind(target)?;
-    let reference_scalar = tree_scalar_kind(reference)?;
-    if target_scalar != reference_scalar {
-        return Err(GseError::ScalarStorageMismatch {
-            target: target_scalar.label(),
-            reference: reference_scalar.label(),
-        });
-    }
     Ok(())
-}
-
-fn tree_scalar_kind<V>(state: &TreeTN<TensorDynLen, V>) -> Result<ScalarKind, GseError>
-where
-    V: Clone + Hash + Eq + Send + Sync + Debug,
-{
-    let mut kind: Option<ScalarKind> = None;
-    for node in state.node_names() {
-        let tensor = state
-            .node_index(&node)
-            .and_then(|idx| state.tensor(idx))
-            .ok_or_else(|| GseError::UnsupportedScalarStorage {
-                node: format!("{node:?}"),
-                reason: "missing tensor".to_string(),
-            })?;
-        let node_kind = if tensor.is_f64() {
-            ScalarKind::Real
-        } else if tensor.is_complex() {
-            ScalarKind::Complex
-        } else {
-            return Err(GseError::UnsupportedScalarStorage {
-                node: format!("{node:?}"),
-                reason: "expected f64 or Complex64 tensor storage".to_string(),
-            });
-        };
-        if let Some(previous) = kind {
-            if previous != node_kind {
-                return Err(GseError::UnsupportedScalarStorage {
-                    node: format!("{node:?}"),
-                    reason: format!(
-                        "mixed scalar storage in one TreeTN: expected {}, found {}",
-                        previous.label(),
-                        node_kind.label()
-                    ),
-                });
-            }
-        } else {
-            kind = Some(node_kind);
-        }
-    }
-    kind.ok_or_else(|| GseError::UnsupportedScalarStorage {
-        node: "<empty>".to_string(),
-        reason: "empty TreeTN has no scalar storage".to_string(),
-    })
 }
 
 fn expand_edges<V>(

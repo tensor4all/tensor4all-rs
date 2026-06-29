@@ -53,6 +53,24 @@ fn product_chain_state_f64(
     (state, [s0, s1])
 }
 
+fn product_chain_state_from_vectors(
+    left_amplitudes: &[Complex64],
+    right_amplitudes: &[Complex64],
+) -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 2]) {
+    let s0 = DynIndex::new_dyn(left_amplitudes.len());
+    let s1 = DynIndex::new_dyn(right_amplitudes.len());
+    let bond = DynIndex::new_dyn(1);
+    let t0 =
+        TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], left_amplitudes.to_vec()).unwrap();
+    let t1 = TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], right_amplitudes.to_vec())
+        .unwrap();
+    let mut state = TreeTN::<TensorDynLen, &'static str>::new();
+    let n0 = state.add_tensor("site0", t0).unwrap();
+    let n1 = state.add_tensor("site1", t1).unwrap();
+    state.connect(n0, &bond, n1, &bond).unwrap();
+    (state, [s0, s1])
+}
+
 fn product_chain3_state(
     amplitudes: [[Complex64; 2]; 3],
 ) -> (TreeTN<TensorDynLen, &'static str>, [DynIndex; 3]) {
@@ -580,6 +598,44 @@ fn global_subspace_expand_preserves_complex_phase_state() {
 }
 
 #[test]
+fn global_subspace_expand_preserves_complex_reference_direction_in_larger_q_space() {
+    let zero = Complex64::new(0.0, 0.0);
+    let one = Complex64::new(1.0, 0.0);
+    let inv_sqrt2 = 0.5_f64.sqrt();
+    let target_left = vec![one, zero, zero, zero];
+    let reference_left = vec![
+        zero,
+        Complex64::new(inv_sqrt2, 0.0),
+        Complex64::new(0.0, inv_sqrt2),
+        zero,
+    ];
+    let right = vec![one, zero];
+    let (state, sites) = product_chain_state_from_vectors(&target_left, &right);
+    let (reference, _) = product_chain_state_from_vectors(&reference_left, &right);
+
+    let result = global_subspace_expand_with_references(
+        state.clone(),
+        vec![reference],
+        &"site1",
+        GseOptions::default().with_density_weight_cutoff(1.0e-14),
+    )
+    .unwrap();
+
+    assert_eq!(edge_dim(&result.state, "site0", "site1"), 2);
+    assert!(dense_distance(&result.state, &state) < 1.0e-10);
+
+    let (row_dim, q_dim, basis) =
+        local_basis_matrix(&result.state, "site1", "site0", &[sites[0].clone()]);
+    assert_eq!(row_dim, 2);
+    assert_eq!(q_dim, 4);
+    assert_rows_are_isometric(row_dim, q_dim, &basis);
+    assert!(
+        projected_weight(row_dim, q_dim, &basis, &reference_left) > 1.0 - 1.0e-10,
+        "expanded basis failed to preserve the complex reference direction"
+    );
+}
+
+#[test]
 fn global_subspace_expand_preserves_ad_tracking_through_local_density_path() {
     let zero = Complex64::new(0.0, 0.0);
     let one = Complex64::new(1.0, 0.0);
@@ -854,37 +910,32 @@ fn gse_rejects_reference_topology_mismatch() {
 }
 
 #[test]
-fn gse_rejects_scalar_storage_mismatch() {
+fn global_subspace_expand_accepts_complex_reference_for_real_target() {
     let (state, _) = product_chain_state_f64([[1.0, 0.0], [1.0, 0.0]]);
     let zero = Complex64::new(0.0, 0.0);
     let one = Complex64::new(1.0, 0.0);
     let (reference, _) = product_chain_state([[one, zero], [zero, one]]);
 
-    let err = global_subspace_expand_with_references(
-        state,
+    let result = global_subspace_expand_with_references(
+        state.clone(),
         vec![reference],
         &"site0",
-        GseOptions::default(),
+        GseOptions::default().with_density_weight_cutoff(1.0e-14),
     )
-    .unwrap_err();
+    .unwrap();
 
-    assert!(matches!(
-        err,
-        GseError::ScalarStorageMismatch {
-            target: "f64",
-            reference: "Complex64"
-        }
-    ));
+    assert_eq!(edge_dim(&result.state, "site0", "site1"), 2);
+    assert!(dense_distance(&result.state, &state) < 1.0e-10);
 }
 
 #[test]
-fn gse_rejects_mixed_scalar_storage_inside_target_tree() {
+fn global_subspace_expand_accepts_mixed_scalar_storage_inside_target_tree() {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
     let bond = DynIndex::new_dyn(1);
-    let t0 = TensorDynLen::from_dense(vec![s0, bond.clone()], vec![1.0_f64, 0.0]).unwrap();
+    let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0_f64, 0.0]).unwrap();
     let t1 = TensorDynLen::from_dense(
-        vec![bond.clone(), s1],
+        vec![bond.clone(), s1.clone()],
         vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
     )
     .unwrap();
@@ -892,14 +943,18 @@ fn gse_rejects_mixed_scalar_storage_inside_target_tree() {
     let n0 = state.add_tensor("site0", t0).unwrap();
     let n1 = state.add_tensor("site1", t1).unwrap();
     state.connect(n0, &bond, n1, &bond).unwrap();
+    let zero = Complex64::new(0.0, 0.0);
+    let one = Complex64::new(1.0, 0.0);
+    let (reference, _) = product_chain_state([[one, zero], [zero, one]]);
 
-    let err =
-        global_subspace_expand_with_references(state, Vec::new(), &"site0", GseOptions::default())
-            .unwrap_err();
+    let result = global_subspace_expand_with_references(
+        state.clone(),
+        vec![reference],
+        &"site0",
+        GseOptions::default().with_density_weight_cutoff(1.0e-14),
+    )
+    .unwrap();
 
-    assert!(matches!(
-        err,
-        GseError::UnsupportedScalarStorage { reason, .. }
-            if reason.contains("mixed scalar storage")
-    ));
+    assert_eq!(edge_dim(&result.state, "site0", "site1"), 2);
+    assert!(dense_distance(&result.state, &state) < 1.0e-10);
 }
