@@ -419,8 +419,8 @@ where
 ///     &[(op_input, state_index.clone())],
 ///     &[(op_output, state_index.clone())],
 /// ).unwrap();
-/// assert!(rebound.get_input_mapping(&0).unwrap().true_index.same_id(&state_index));
-/// assert!(rebound.get_output_mapping(&0).unwrap().true_index.same_id(&state_index));
+/// assert_eq!(rebound.get_input_mapping(&0).unwrap().true_index, state_index);
+/// assert_eq!(rebound.get_output_mapping(&0).unwrap().true_index, state_index);
 /// ```
 pub fn bind_linear_operator_indices<T, V>(
     operator: &LinearOperator<T, V>,

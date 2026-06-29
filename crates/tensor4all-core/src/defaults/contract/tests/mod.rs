@@ -1,5 +1,5 @@
 use super::*;
-use crate::defaults::Index;
+use crate::defaults::{Index, TagSet};
 use num_complex::Complex64;
 use std::ffi::OsString;
 use std::time::Duration;
@@ -101,6 +101,19 @@ fn test_contract_default_entry_rejects_disconnected_inputs() {
 
     let a = TensorDynLen::from_dense(vec![i], vec![1.0_f64, 2.0]).unwrap();
     let b = TensorDynLen::from_dense(vec![j], vec![3.0_f64, 4.0, 5.0]).unwrap();
+
+    let err = contract(&[&a, &b]).unwrap_err();
+    assert!(err.to_string().contains("Disconnected"));
+}
+
+#[test]
+fn test_contract_same_id_different_tags_is_disconnected() {
+    let id = DynId(90);
+    let site = Index::new_with_tags(id, 2, TagSet::from_str("site").unwrap());
+    let link = Index::new_with_tags(id, 2, TagSet::from_str("link").unwrap());
+
+    let a = TensorDynLen::from_dense(vec![site], vec![1.0_f64, 2.0]).unwrap();
+    let b = TensorDynLen::from_dense(vec![link], vec![3.0_f64, 4.0]).unwrap();
 
     let err = contract(&[&a, &b]).unwrap_err();
     assert!(err.to_string().contains("Disconnected"));
