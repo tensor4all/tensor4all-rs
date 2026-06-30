@@ -276,24 +276,18 @@ where
             if let Some(state_idx) = state.node_index(node) {
                 if let Some(state_tensor) = state.tensor(state_idx) {
                     let state_indices_vec = state_tensor.external_indices();
-                    let state_indices: Vec<_> = state_indices_vec
-                        .iter()
-                        .map(|idx| (idx.id().clone(), idx.dim()))
-                        .collect();
 
                     // Get operator tensor indices
                     if let Some(op_idx) = operator.node_index(node) {
                         if let Some(op_tensor) = operator.tensor(op_idx) {
                             let op_indices_vec = op_tensor.external_indices();
-                            let op_indices: Vec<_> = op_indices_vec
-                                .iter()
-                                .map(|idx| (idx.id().clone(), idx.dim()))
-                                .collect();
 
-                            // Check for common indices (should have at least bond indices)
-                            let common_count = state_indices
+                            // Check for common full indices (should have at least bond indices)
+                            let common_count = state_indices_vec
                                 .iter()
-                                .filter(|(id, _)| op_indices.iter().any(|(oid, _)| oid == id))
+                                .filter(|state_idx| {
+                                    op_indices_vec.iter().any(|op_idx| op_idx == *state_idx)
+                                })
                                 .count();
 
                             report.node_details.push(NodeVerifyDetail {
@@ -304,13 +298,13 @@ where
                                 op_site_indices: op_site
                                     .map(|s| s.iter().map(|i| format!("{:?}", i.id())).collect())
                                     .unwrap_or_default(),
-                                state_tensor_indices: state_indices
+                                state_tensor_indices: state_indices_vec
                                     .iter()
-                                    .map(|(id, dim)| format!("{:?}(dim={})", id, dim))
+                                    .map(|idx| format!("{:?}(dim={})", idx, idx.dim()))
                                     .collect(),
-                                op_tensor_indices: op_indices
+                                op_tensor_indices: op_indices_vec
                                     .iter()
-                                    .map(|(id, dim)| format!("{:?}(dim={})", id, dim))
+                                    .map(|idx| format!("{:?}(dim={})", idx, idx.dim()))
                                     .collect(),
                                 common_index_count: common_count,
                             });
@@ -320,10 +314,10 @@ where
                             // that match state's site indices
                             if common_count == 0 {
                                 report.warnings.push(format!(
-                                    "Node {:?}: No common indices between state and operator tensors. \
+                                        "Node {:?}: No common indices between state and operator tensors. \
                                      State has {:?}, operator has {:?}",
-                                    node, state_indices, op_indices
-                                ));
+                                        node, state_indices_vec, op_indices_vec
+                                    ));
                             }
                         }
                     }
@@ -804,12 +798,12 @@ where
 
             let x_external: Vec<_> = x_sites
                 .iter()
-                .filter(|idx| !idx.same_id(&x_contracted))
+                .filter(|idx| *idx != &x_contracted)
                 .cloned()
                 .collect();
             let b_external: Vec<_> = b_sites
                 .iter()
-                .filter(|idx| !idx.same_id(&b_contracted))
+                .filter(|idx| *idx != &b_contracted)
                 .cloned()
                 .collect();
 
@@ -826,13 +820,13 @@ where
 
             let x_ext = &x_external[0];
             let b_ext = &b_external[0];
-            if !x_ext.same_id(b_ext) || x_ext.dim() != b_ext.dim() {
+            if x_ext != b_ext {
                 return Err(anyhow::anyhow!(
                     "MPO validation: external index mismatch at node {:?}: x has {:?}:{}, b has {:?}:{}",
                     node,
-                    x_ext.id(),
+                    x_ext,
                     x_ext.dim(),
-                    b_ext.id(),
+                    b_ext,
                     b_ext.dim(),
                 ));
             }
@@ -861,9 +855,15 @@ fn local_gmres_options(options: &LinsolveOptions) -> Result<GmresOptions> {
 
 #[cfg(test)]
 mod tests {
-    use tensor4all_core::{DynIndex, TensorDynLen};
+    use tensor4all_core::{DynId, DynIndex, TagSet, TensorDynLen};
 
     use super::*;
+
+    fn one_node_state(node: usize, indices: Vec<DynIndex>) -> TreeTN<TensorDynLen, usize> {
+        let len = indices.iter().map(|idx| idx.dim()).product();
+        let tensor = TensorDynLen::from_dense(indices, vec![1.0_f64; len]).unwrap();
+        TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![node]).unwrap()
+    }
 
     #[test]
     fn index_sets_match_distinguishes_same_id_prime_pair() {
@@ -877,6 +877,65 @@ mod tests {
 
         assert!(updater.index_sets_match(std::slice::from_ref(&i), std::slice::from_ref(&i)));
         assert!(!updater.index_sets_match(&[i], &[i_prime]));
+    }
+
+    #[test]
+    fn verify_counts_only_full_index_overlap() {
+        let id = DynId(700);
+        let state_site = DynIndex::new_with_tags(id, 2, TagSet::from_str("state").unwrap());
+        let op_site = DynIndex::new_with_tags(id, 2, TagSet::from_str("operator").unwrap());
+        let state = one_node_state(0, vec![state_site.clone()]);
+        let rhs = one_node_state(0, vec![state_site]);
+        let operator = one_node_state(0, vec![op_site]);
+
+        let updater = SquareLinsolveUpdater::<TensorDynLen, usize>::new(
+            operator,
+            rhs,
+            LinsolveOptions::default(),
+        );
+        let report = updater.verify(&state).unwrap();
+
+        assert_eq!(report.node_details[0].common_index_count, 0);
+        assert_eq!(report.warnings.len(), 1);
+    }
+
+    #[test]
+    fn validate_mpo_external_indices_keeps_same_id_primed_external_leg() {
+        let contracted = DynIndex::new_dyn(2);
+        let external = contracted.prime();
+        let state = one_node_state(0, vec![external.clone(), contracted.clone()]);
+        let rhs = one_node_state(0, vec![external.clone(), contracted.clone()]);
+
+        let op_in = DynIndex::new_dyn(2);
+        let op_out = DynIndex::new_dyn(2);
+        let operator = one_node_state(0, vec![op_out.clone(), op_in.clone()]);
+
+        let mut input_mapping = HashMap::new();
+        input_mapping.insert(
+            0,
+            IndexMapping {
+                true_index: contracted.clone(),
+                internal_index: op_in,
+            },
+        );
+        let mut output_mapping = HashMap::new();
+        output_mapping.insert(
+            0,
+            IndexMapping {
+                true_index: contracted,
+                internal_index: op_out,
+            },
+        );
+
+        let mut updater = SquareLinsolveUpdater::<TensorDynLen, usize>::with_index_mappings(
+            operator,
+            input_mapping,
+            output_mapping,
+            rhs,
+            LinsolveOptions::default(),
+        );
+
+        updater.validate_mpo_external_indices(&state).unwrap();
     }
 
     #[test]

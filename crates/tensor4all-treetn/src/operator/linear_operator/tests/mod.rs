@@ -1,8 +1,6 @@
 use super::*;
 use std::collections::{HashMap, HashSet};
-use tensor4all_core::{
-    DynIndex, IndexLike, LinearizationOrder, TensorConstructionLike, TensorDynLen,
-};
+use tensor4all_core::{DynIndex, LinearizationOrder, TensorConstructionLike, TensorDynLen};
 
 use crate::operator::index_mapping::IndexMapping;
 use crate::operator::Operator;
@@ -233,11 +231,11 @@ fn test_linear_operator_input_output_site_indices() {
 
     let input_indices = op.input_site_indices();
     assert_eq!(input_indices.len(), 1);
-    assert!(input_indices.iter().any(|i| i.id() == s.id()));
+    assert!(input_indices.contains(&s));
 
     let output_indices = op.output_site_indices();
     assert_eq!(output_indices.len(), 1);
-    assert!(output_indices.iter().any(|i| i.id() == s.id()));
+    assert!(output_indices.contains(&s));
 }
 
 #[test]
@@ -540,7 +538,7 @@ fn test_align_to_state_single_node() {
 
     // Create a new state with a *different* site index (same dimension)
     let new_s = DynIndex::new_dyn(2);
-    assert_ne!(original_s.id(), new_s.id());
+    assert_ne!(original_s, new_s);
 
     let state_tensor = TensorDynLen::from_dense(vec![new_s.clone()], vec![0.5, 0.5]).unwrap();
     let state =
@@ -552,10 +550,10 @@ fn test_align_to_state_single_node() {
 
     // Verify: true indices should now match the state's site index
     let input_mapping = op.get_input_mapping(&"A".to_string()).unwrap();
-    assert_eq!(input_mapping.true_index.id(), new_s.id());
+    assert_eq!(input_mapping.true_index, new_s);
 
     let output_mapping = op.get_output_mapping(&"A".to_string()).unwrap();
-    assert_eq!(output_mapping.true_index.id(), new_s.id());
+    assert_eq!(output_mapping.true_index, new_s);
 
     // Verify: operator should still work correctly after alignment
     let local_tensor = TensorDynLen::from_dense(vec![new_s.clone()], vec![1.0, 0.0]).unwrap();
@@ -575,8 +573,8 @@ fn test_align_to_state_two_nodes() {
     let new_s0 = DynIndex::new_dyn(2);
     let new_s1 = DynIndex::new_dyn(2);
     let bond = DynIndex::new_dyn(1);
-    assert_ne!(original_s0.id(), new_s0.id());
-    assert_ne!(original_s1.id(), new_s1.id());
+    assert_ne!(original_s0, new_s0);
+    assert_ne!(original_s1, new_s1);
 
     let t_a = TensorDynLen::from_dense(vec![new_s0.clone(), bond.clone()], vec![1.0; 2]).unwrap();
     let t_b = TensorDynLen::from_dense(vec![bond.clone(), new_s1.clone()], vec![1.0; 2]).unwrap();
@@ -592,16 +590,16 @@ fn test_align_to_state_two_nodes() {
 
     // Verify: true indices should match the state's site indices
     let input_a = op.get_input_mapping(&"A".to_string()).unwrap();
-    assert_eq!(input_a.true_index.id(), new_s0.id());
+    assert_eq!(input_a.true_index, new_s0);
 
     let input_b = op.get_input_mapping(&"B".to_string()).unwrap();
-    assert_eq!(input_b.true_index.id(), new_s1.id());
+    assert_eq!(input_b.true_index, new_s1);
 
     let output_a = op.get_output_mapping(&"A".to_string()).unwrap();
-    assert_eq!(output_a.true_index.id(), new_s0.id());
+    assert_eq!(output_a.true_index, new_s0);
 
     let output_b = op.get_output_mapping(&"B".to_string()).unwrap();
-    assert_eq!(output_b.true_index.id(), new_s1.id());
+    assert_eq!(output_b.true_index, new_s1);
 
     // Verify: operator still works after alignment
     let local_tensor = TensorDynLen::from_dense(
@@ -676,10 +674,10 @@ fn test_linear_operator_transpose_swaps_mappings() {
         .get("A")
         .and_then(|mappings| mappings.first())
         .unwrap();
-    assert!(tin.true_index.same_id(&expected_in.true_index));
-    assert!(tin.internal_index.same_id(&expected_in.internal_index));
-    assert!(tout.true_index.same_id(&expected_out.true_index));
-    assert!(tout.internal_index.same_id(&expected_out.internal_index));
+    assert_eq!(tin.true_index, expected_in.true_index);
+    assert_eq!(tin.internal_index, expected_in.internal_index);
+    assert_eq!(tout.true_index, expected_out.true_index);
+    assert_eq!(tout.internal_index, expected_out.internal_index);
 }
 
 #[test]
@@ -704,10 +702,10 @@ fn test_linear_operator_transpose_is_involutive() {
         .get("A")
         .and_then(|mappings| mappings.first())
         .unwrap();
-    assert!(rin.true_index.same_id(&ein.true_index));
-    assert!(rin.internal_index.same_id(&ein.internal_index));
-    assert!(rout.true_index.same_id(&eout.true_index));
-    assert!(rout.internal_index.same_id(&eout.internal_index));
+    assert_eq!(rin.true_index, ein.true_index);
+    assert_eq!(rin.internal_index, ein.internal_index);
+    assert_eq!(rout.true_index, eout.true_index);
+    assert_eq!(rout.internal_index, eout.internal_index);
 }
 
 #[test]
@@ -745,13 +743,13 @@ fn test_unfuse_input_and_output_indices_splits_internal_mpo_axes() {
 
     let input_mappings = op.get_input_mappings(&"A".to_string()).unwrap();
     assert_eq!(input_mappings.len(), 2);
-    assert!(input_mappings[0].true_index.same_id(&input0));
-    assert!(input_mappings[1].true_index.same_id(&input1));
+    assert_eq!(input_mappings[0].true_index, input0);
+    assert_eq!(input_mappings[1].true_index, input1);
 
     let output_mappings = op.get_output_mappings(&"A".to_string()).unwrap();
     assert_eq!(output_mappings.len(), 2);
-    assert!(output_mappings[0].true_index.same_id(&output0));
-    assert!(output_mappings[1].true_index.same_id(&output1));
+    assert_eq!(output_mappings[0].true_index, output0);
+    assert_eq!(output_mappings[1].true_index, output1);
 
     let output_internal = output_mappings
         .iter()
@@ -812,14 +810,18 @@ fn test_linear_operator_restructure_to_moves_mapping_nodes() {
     let actual = moved.mpo().contract_to_tensor().unwrap();
 
     assert!(actual.distance(&expected).unwrap() < 1.0e-12);
-    assert!(moved
-        .get_input_mapping(&"left".to_string())
-        .unwrap()
-        .true_index
-        .same_id(&s1));
-    assert!(moved
-        .get_input_mapping(&"right".to_string())
-        .unwrap()
-        .true_index
-        .same_id(&s0));
+    assert_eq!(
+        moved
+            .get_input_mapping(&"left".to_string())
+            .unwrap()
+            .true_index,
+        s1
+    );
+    assert_eq!(
+        moved
+            .get_input_mapping(&"right".to_string())
+            .unwrap()
+            .true_index,
+        s0
+    );
 }

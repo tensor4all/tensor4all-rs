@@ -721,8 +721,8 @@ where
     /// let mut op = LinearOperator::new(mpo, input_mapping, output_mapping);
     /// op.align_to_state(&state).unwrap();
     ///
-    /// assert!(op.get_input_mapping(&0).unwrap().true_index.same_id(&state_index));
-    /// assert!(op.get_output_mapping(&0).unwrap().true_index.same_id(&state_index));
+    /// assert_eq!(op.get_input_mapping(&0).unwrap().true_index, state_index);
+    /// assert_eq!(op.get_output_mapping(&0).unwrap().true_index, state_index);
     /// ```
     pub fn align_to_state(&mut self, state: &TreeTN<T, V>) -> Result<()> {
         self.set_input_space_from_state(state)?;
@@ -745,7 +745,7 @@ where
     ///
     /// ```
     /// use std::collections::HashMap;
-    /// use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
     /// use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
     ///
     /// let site_in = DynIndex::new_dyn(2);
@@ -774,8 +774,8 @@ where
     /// let t = op.transpose();
     ///
     /// // Input/output mappings are swapped.
-    /// assert!(t.get_input_mapping(&0).unwrap().true_index.same_id(&site_out));
-    /// assert!(t.get_output_mapping(&0).unwrap().true_index.same_id(&site_in));
+    /// assert_eq!(t.get_input_mapping(&0).unwrap().true_index, site_out);
+    /// assert_eq!(t.get_output_mapping(&0).unwrap().true_index, site_in);
     /// ```
     pub fn transpose(self) -> Self {
         Self {
@@ -960,7 +960,7 @@ where
     /// ```
     /// use std::collections::HashMap;
     ///
-    /// use tensor4all_core::{DynIndex, IndexLike, LinearizationOrder, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen};
     /// use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
     ///
     /// # fn main() -> anyhow::Result<()> {
@@ -988,8 +988,8 @@ where
     ///
     /// let mappings = unfused.get_input_mappings(&0).unwrap();
     /// assert_eq!(mappings.len(), 2);
-    /// assert!(mappings[0].true_index.same_id(&x0));
-    /// assert!(mappings[1].true_index.same_id(&x1));
+    /// assert_eq!(mappings[0].true_index, x0);
+    /// assert_eq!(mappings[1].true_index, x1);
     /// # Ok(())
     /// # }
     /// ```
@@ -1032,7 +1032,7 @@ where
     /// ```
     /// use std::collections::HashMap;
     ///
-    /// use tensor4all_core::{DynIndex, IndexLike, LinearizationOrder, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen};
     /// use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
     ///
     /// # fn main() -> anyhow::Result<()> {
@@ -1060,8 +1060,8 @@ where
     ///
     /// let mappings = unfused.get_output_mappings(&0).unwrap();
     /// assert_eq!(mappings.len(), 2);
-    /// assert!(mappings[0].true_index.same_id(&y0));
-    /// assert!(mappings[1].true_index.same_id(&y1));
+    /// assert_eq!(mappings[0].true_index, y0);
+    /// assert_eq!(mappings[1].true_index, y1);
     /// # Ok(())
     /// # }
     /// ```

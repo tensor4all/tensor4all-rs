@@ -1446,8 +1446,8 @@ fn test_replaceind() {
 
     // The new TT should have the new index
     let ext_inds = tt2.external_indices();
-    assert!(ext_inds.iter().any(|i| i.id() == new_s0.id()));
-    assert!(!ext_inds.iter().any(|i| i.id() == s0.id()));
+    assert!(ext_inds.contains(&new_s0));
+    assert!(!ext_inds.contains(&s0));
 }
 
 #[test]

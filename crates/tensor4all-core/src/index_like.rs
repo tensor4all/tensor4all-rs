@@ -36,7 +36,7 @@ pub enum ConjState {
     /// Directionless index (ITensors.jl-like default).
     ///
     /// Undirected indices can contract with other undirected indices
-    /// if they have the same ID and dimension.
+    /// only when their full index identity matches and their dimensions match.
     Undirected,
     /// Ket (ingoing) index.
     ///
@@ -78,10 +78,10 @@ pub enum ConjState {
 /// - `Bra`: Outgoing index (QSpace: trailing `*` in itag)
 ///
 /// Two indices are contractable if:
-/// - They have the same `id()` and `dim()`
-/// - Their conjugate states are compatible:
-///   - `(Ket, Bra)` or `(Bra, Ket)` → contractable
-///   - `(Undirected, Undirected)` → contractable
+/// - Their dimensions match
+/// - Their full index identity is compatible:
+///   - `(Undirected, Undirected)` → equal indices
+///   - `(Ket, Bra)` or `(Bra, Ket)` → one index is the other's conjugate
 ///   - Mixed `(Undirected, Ket/Bra)` → **not contractable** (mixing forbidden)
 ///
 /// # Example
@@ -102,24 +102,26 @@ pub enum ConjState {
 pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     /// Lightweight identifier type (conjugate-independent).
     ///
-    /// **Rule**: Contractable indices must have the same ID.
+    /// **Rule**: Contractable indices must have compatible full index identity.
     ///
-    /// The ID serves as a "pairing key" to identify which legs are intended to contract.
+    /// The ID serves as a lightweight component of full index identity.
     /// In large tensor networks, IDs enable efficient graph-based lookups (O(1) with HashSet/HashMap)
     /// to find matching legs across many tensors.
     ///
-    /// This is separate from dimension/direction checks:
-    /// - **ID**: "intent to pair" (which specific legs should connect)
-    /// - **dim/ConjState**: "mathematical compatibility" (can they actually contract)
+    /// This is separate from the full `Eq`/`Hash` identity:
+    /// - **ID**: raw logical identifier, useful for serialization and diagnostics
+    /// - **Eq/Hash**: concrete tensor leg identity used by maps, sets, and contraction
+    /// - **dim/ConjState**: mathematical compatibility checks
     type Id: Clone + Eq + Hash + Debug + Send + Sync;
 
     /// Get the identifier of this index.
     ///
-    /// The ID is used as the pairing key during contraction.
-    /// **Contractable indices must have the same ID** — this is enforced by `is_contractable()`.
+    /// The ID is a lightweight raw identifier.
+    /// **Do not use ID-only equality as concrete tensor leg identity**; use full index
+    /// equality, or `is_contractable()` when deciding contraction compatibility.
     ///
-    /// Two indices with the same ID represent the same logical leg (though they may differ
-    /// in conjugate state for directed indices).
+    /// Two indices with the same ID may still be distinct concrete legs, for example when
+    /// they differ by prime level, tags, or direction.
     fn id(&self) -> &Self::Id;
 
     /// Get the total dimension (state-space dimension) of the index.
@@ -149,26 +151,28 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     /// Check if this index can be contracted with another index.
     ///
     /// Two indices are contractable if:
-    /// - They have the same `id()` and `dim()`
-    /// - Their conjugate states are compatible:
-    ///   - `(Ket, Bra)` or `(Bra, Ket)` → contractable
-    ///   - `(Undirected, Undirected)` → contractable
+    /// - They have the same dimension
+    /// - Their full identity is compatible:
+    ///   - `(Undirected, Undirected)` → equal indices
+    ///   - `(Ket, Bra)` or `(Bra, Ket)` → one index is the other's conjugate
     ///   - Mixed `(Undirected, Ket/Bra)` → **not contractable** (mixing forbidden)
     ///
     /// # Default Implementation
     ///
     /// The default implementation checks:
-    /// 1. Same ID: `self.id() == other.id()`
-    /// 2. Same dimension: `self.dim() == other.dim()`
-    /// 3. Same prime level: `self.plev() == other.plev()`
-    /// 4. Compatible conjugate states (see rules above)
+    /// 1. Same dimension: `self.dim() == other.dim()`
+    /// 2. Compatible conjugate states (see rules above)
+    /// 3. Full index equality for undirected indices, or conjugate full equality for
+    ///    directed pairs.
     fn is_contractable(&self, other: &Self) -> bool {
-        if self.id() != other.id() || self.dim() != other.dim() || self.plev() != other.plev() {
+        if self.dim() != other.dim() {
             return false;
         }
         match (self.conj_state(), other.conj_state()) {
-            (ConjState::Ket, ConjState::Bra) | (ConjState::Bra, ConjState::Ket) => true,
-            (ConjState::Undirected, ConjState::Undirected) => true,
+            (ConjState::Ket, ConjState::Bra) | (ConjState::Bra, ConjState::Ket) => {
+                self.conj() == other.clone()
+            }
+            (ConjState::Undirected, ConjState::Undirected) => self == other,
             _ => false, // Mixed directed/undirected is forbidden
         }
     }

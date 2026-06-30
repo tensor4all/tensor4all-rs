@@ -1,9 +1,9 @@
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index_ops::{
-    common_inds, hascommoninds, hasind, hasinds, noncommon_inds, replaceinds, replaceinds_in_place,
-    union_inds, unique_inds, ReplaceIndsError,
+    common_ind_positions, common_inds, hascommoninds, hasind, hasinds, noncommon_inds, replaceinds,
+    replaceinds_in_place, union_inds, unique_inds, ReplaceIndsError,
 };
-use tensor4all_core::IndexLike;
+use tensor4all_core::{DynId, IndexLike, TagSet};
 
 #[test]
 fn test_sim_preserves_symm_and_tags() {
@@ -219,6 +219,18 @@ fn test_index_ops_distinguish_same_id_prime_pair() {
 
     let replaced = replaceinds(indices, &[(i_prime.clone(), replacement.clone())]).unwrap();
     assert_eq!(replaced, vec![i, replacement]);
+}
+
+#[test]
+fn test_common_ind_positions_distinguish_same_id_tag_pair() {
+    let id = DynId(42);
+    let site = Index::new_with_tags(id, 2, TagSet::from_str("site").unwrap());
+    let link = Index::new_with_tags(id, 2, TagSet::from_str("link").unwrap());
+
+    assert!(site.same_id(&link));
+    assert_ne!(site, link);
+    assert!(!site.is_contractable(&link));
+    assert!(common_ind_positions(&[site], &[link]).is_empty());
 }
 
 #[test]
