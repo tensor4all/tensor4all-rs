@@ -1,6 +1,22 @@
 # Agent Guidelines for tensor4all-rs
 
-Read `README.md` and `REPOSITORY_RULES.md` before starting work.
+Before acting, read the latest shared tensor4all agent rules from the
+[`tensor4all-agent-rules`](https://github.com/tensor4all/tensor4all-agent-rules)
+repository. Start from:
+
+- `https://github.com/tensor4all/tensor4all-agent-rules/blob/main/rules/index.md`
+
+If internet access is unavailable or the remote cannot be resolved, use the
+sibling checkout:
+
+- `../tensor4all-agent-rules/rules/index.md`
+
+Load only the common, Rust, performance, numerical, docs, or benchmark rule
+files relevant to the task. If neither online access nor the sibling checkout
+is available, continue from this repository's local rules and state the shared
+rules were unavailable when creating a PR.
+
+Then read `README.md` and `REPOSITORY_RULES.md` before starting work.
 
 ## Development Stage
 
