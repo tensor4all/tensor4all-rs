@@ -450,7 +450,7 @@ fn test_external_indices_deduplication() {
     let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
     let ext = block.external_indices();
     assert_eq!(ext.len(), 1, "Shared index should appear once");
-    assert!(ext[0].same_id(&idx));
+    assert_eq!(ext[0], idx);
 }
 
 #[test]
@@ -544,7 +544,7 @@ fn test_replaceind() {
     // All blocks should now use new_idx
     for blk in replaced.blocks() {
         let ext = blk.external_indices();
-        assert!(ext[0].same_id(&new_idx));
+        assert_eq!(ext[0], new_idx);
     }
     // Data should be preserved
     let data = replaced.get(0, 0).unwrap().to_vec::<f64>().unwrap();

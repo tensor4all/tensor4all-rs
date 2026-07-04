@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use tensor4all_core::{DynIndex, IndexLike};
+use tensor4all_core::DynIndex;
 use tensor4all_treetn::{square_linsolve, IndexMapping, TruncationOptions};
 
 use crate::error::{Result, TensorTrainError};
@@ -146,9 +146,9 @@ type SiteMappings = (
 /// Infer index mappings from the MPO/MPS structure.
 ///
 /// For each site where the operator has exactly 2 site indices and init has 1,
-/// finds the operator index sharing an ID with init's index (input) and the
-/// remaining one (output). Returns `(None, None)` when no mappings are needed
-/// (operator and init share all site indices).
+/// finds the operator index exactly matching init's index (input) and the
+/// remaining full index (output). Returns `(None, None)` when no mappings are
+/// needed (operator and init share all site indices).
 fn infer_index_mappings(operator: &TensorTrain, init: &TensorTrain) -> Result<SiteMappings> {
     let op_treetn = operator.as_treetn();
     let init_treetn = init.as_treetn();
@@ -163,7 +163,7 @@ fn infer_index_mappings(operator: &TensorTrain, init: &TensorTrain) -> Result<Si
 
         if let (Some(op_indices), Some(init_indices)) = (op_site, init_site) {
             if op_indices.len() == 2 && init_indices.len() == 1 {
-                // MPO-like site: check if we need mappings
+                // MPO-like site: exact input match plus one distinct output leg.
                 let init_idx =
                     init_indices
                         .iter()
@@ -171,31 +171,27 @@ fn infer_index_mappings(operator: &TensorTrain, init: &TensorTrain) -> Result<Si
                         .ok_or_else(|| TensorTrainError::OperationError {
                             message: format!("Site {site}: init site space is empty"),
                         })?;
-                let has_shared = op_indices.iter().any(|idx| idx.same_id(init_idx));
-                if has_shared {
-                    // The shared index exists but may differ by plev → need mapping
-                    let input_idx = op_indices.iter().find(|idx| idx.same_id(init_idx));
-                    if let Some(input_idx) = input_idx {
-                        if input_idx != init_idx {
-                            needs_mapping = true;
-                        }
-                    }
-                    // Check if output index differs from init
-                    let output_idx = op_indices.iter().find(|idx| !idx.same_id(init_idx));
-                    if output_idx.is_some() {
-                        needs_mapping = true;
-                    }
-                } else {
-                    return Err(TensorTrainError::OperationError {
+                let op_input = op_indices
+                    .iter()
+                    .find(|idx| *idx == init_idx)
+                    .ok_or_else(|| TensorTrainError::OperationError {
                         message: format!(
-                            "Site {}: operator has 2 site indices but none share an ID with init's \
+                            "Site {}: operator has 2 site indices but none exactly match init's \
                              site index {:?}. Cannot auto-infer index mappings. \
                              Use the treetn-level API with explicit IndexMapping.",
-                            site,
-                            init_idx.id()
+                            site, init_idx
                         ),
-                    });
-                }
+                    })?;
+                op_indices
+                    .iter()
+                    .find(|idx| *idx != op_input)
+                    .ok_or_else(|| TensorTrainError::OperationError {
+                        message: format!(
+                            "Site {site}: operator has no output index distinct from init index {:?}",
+                            init_idx
+                        ),
+                    })?;
+                needs_mapping = true;
             }
         }
     }
@@ -224,20 +220,20 @@ fn infer_index_mappings(operator: &TensorTrain, init: &TensorTrain) -> Result<Si
 
                 let op_input = op_indices
                     .iter()
-                    .find(|idx| idx.same_id(init_idx))
+                    .find(|idx| *idx == init_idx)
                     .ok_or_else(|| TensorTrainError::OperationError {
                         message: format!(
-                            "Site {site}: operator has no input index sharing an ID with init index {:?}",
-                            init_idx.id()
+                            "Site {site}: operator has no input index exactly matching init index {:?}",
+                            init_idx
                         ),
                     })?;
                 let op_output = op_indices
                     .iter()
-                    .find(|idx| !idx.same_id(init_idx))
+                    .find(|idx| *idx != op_input)
                     .ok_or_else(|| TensorTrainError::OperationError {
                         message: format!(
                             "Site {site}: operator has no output index distinct from init index {:?}",
-                            init_idx.id()
+                            init_idx
                         ),
                     })?;
 
@@ -300,5 +296,28 @@ mod tests {
 
         assert!(matches!(err, TensorTrainError::OperationError { .. }));
         assert!(err.to_string().contains("Cannot auto-infer index mappings"));
+    }
+
+    #[test]
+    fn infer_index_mappings_handles_same_id_primed_output() {
+        let init_site = DynIndex::new_dyn(2);
+        let output_site = init_site.prime();
+
+        let operator = TensorTrain::new(vec![make_tensor(
+            vec![output_site.clone(), init_site.clone()],
+            vec![1.0, 0.0, 0.0, 1.0],
+        )])
+        .unwrap();
+        let init =
+            TensorTrain::new(vec![make_tensor(vec![init_site.clone()], vec![1.0, 2.0])]).unwrap();
+
+        let (input_mapping, output_mapping) = infer_index_mappings(&operator, &init).unwrap();
+        let input_mapping = input_mapping.unwrap();
+        let output_mapping = output_mapping.unwrap();
+
+        assert_eq!(input_mapping[&0].true_index, init_site);
+        assert_eq!(input_mapping[&0].internal_index, init_site);
+        assert_eq!(output_mapping[&0].true_index, init_site);
+        assert_eq!(output_mapping[&0].internal_index, output_site);
     }
 }

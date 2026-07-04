@@ -819,9 +819,9 @@ fn test_partial_contract_allows_compatible_topology_mismatch_with_gap_leaf() {
     let result = result.unwrap();
     let external = result.external_indices();
     assert_eq!(external.len(), 3);
-    assert!(external.iter().any(|idx| idx.id() == s_a.id()));
-    assert!(external.iter().any(|idx| idx.id() == s_b.id()));
-    assert!(external.iter().any(|idx| idx.id() == s_b2.id()));
+    assert!(external.contains(&s_a));
+    assert!(external.contains(&s_b));
+    assert!(external.contains(&s_b2));
 }
 
 #[test]
