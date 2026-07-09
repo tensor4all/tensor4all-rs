@@ -79,6 +79,16 @@ TensorTrain-level operations against ITensorMPS:
 RAYON_NUM_THREADS=1 cargo run -p tensor4all-itensorlike --example benchmark_tt_ops --release -- --L 32 --zipup-L 10 --chis 4,8,16,32,64
 ```
 
+PartitionedTT adaptive patching on a deterministic sum of randomly placed
+anisotropic Gaussians. The benchmark compares the static sequential split order
+against the exact child-parameter-gain ordering at the same global `rtol` and
+`max_bond_dim`, and reports patch count, total TT core parameters, max patch
+bond dimension, dense-reference relative error, and best elapsed time:
+
+```bash
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-partitionedtt --example benchmark_patching --release -- --x 24 --y 16 --components 10 --max-bond-dim 3 --rtol 1e-8 --repeats 3
+```
+
 ACI elementwise TT chi scaling:
 
 ```bash
