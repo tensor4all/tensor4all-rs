@@ -41,6 +41,8 @@ pub struct SubDomainTT {
     data: TensorTrain,
     /// The projector defining the subdomain
     projector: Projector,
+    /// Absolute squared truncation budget assigned by adaptive patching.
+    budget_squared: Option<f64>,
 }
 
 impl SubDomainTT {
@@ -54,6 +56,7 @@ impl SubDomainTT {
         Self {
             data,
             projector: trimmed_projector,
+            budget_squared: None,
         }
     }
 
@@ -62,6 +65,7 @@ impl SubDomainTT {
         Self {
             data,
             projector: Projector::new(),
+            budget_squared: None,
         }
     }
 
@@ -88,6 +92,15 @@ impl SubDomainTT {
     /// Get a reference to the projector.
     pub fn projector(&self) -> &Projector {
         &self.projector
+    }
+
+    pub(crate) fn budget_squared(&self) -> Option<f64> {
+        self.budget_squared
+    }
+
+    pub(crate) fn with_budget_squared(mut self, budget_squared: f64) -> Self {
+        self.budget_squared = Some(budget_squared);
+        self
     }
 
     /// Convert to the underlying tensor train, consuming self.
@@ -140,6 +153,7 @@ impl SubDomainTT {
         Some(Self {
             data: projected_data,
             projector: merged_projector,
+            budget_squared: self.budget_squared,
         })
     }
 

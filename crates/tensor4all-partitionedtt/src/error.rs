@@ -39,4 +39,8 @@ pub enum PartitionedTTError {
     /// Incompatible projector structure
     #[error("Incompatible projectors: {0}")]
     IncompatibleProjectors(String),
+
+    /// Invalid options for a partitioned tensor train operation
+    #[error("Invalid options: {0}")]
+    InvalidOptions(String),
 }
