@@ -43,7 +43,7 @@ actual dependencies. Relationship vocabulary:
 | `tensor4all-simplett` | Simple TT/MPS with compression | — | Original |
 | `tensor4all-itensorlike` | TensorTrain API with orthogonality tracking | [ITensors.jl](https://github.com/ITensor/ITensors.jl) / ITensorMPS.jl | Inspired |
 | `tensor4all-treetn` | Tree tensor networks: canonicalization, DMRG, TDVP, linsolve, GSE | [ITensorNetworks.jl](https://github.com/ITensor/ITensorNetworks.jl), [NamedGraphs.jl](https://github.com/mtfishman/NamedGraphs.jl), KrylovKit.jl | Inspired (data structures); Derived (Apache-2.0) for TDVP sweep plans; Compatible (KrylovKit solver conventions) |
-| `tensor4all-tcicore` | rrLU / MatrixLUCI / cross-interpolation infrastructure | TCI algorithm literature ([SciPost Phys. 18, 104 (2025)](https://doi.org/10.21468/SciPostPhys.18.3.104)) | Original implementation of published algorithms |
+| `tensor4all-tcicore` | rrLU / MatrixLUCI / cross-interpolation infrastructure | [TensorCrossInterpolation.jl](https://github.com/tensor4all/TensorCrossInterpolation.jl) | Port |
 | `tensor4all-tensorci` | Tensor cross interpolation (TCI1/TCI2) | [TensorCrossInterpolation.jl](https://github.com/tensor4all/TensorCrossInterpolation.jl) | Compatible (validated for parity) |
 | `tensor4all-treetci` | Tree tensor cross interpolation | [TreeTCI.jl](https://github.com/tensor4all/TreeTCI.jl) by Ryo Watanabe | Port |
 | `tensor4all-quanticstci` | Quantics TCI function interpolation | [QuanticsTCI.jl](https://github.com/tensor4all/QuanticsTCI.jl) | Port |
@@ -69,7 +69,7 @@ list is best-effort; corrections and additions are welcome.
 | Tensor cross interpolation / TT-cross | `tcicore`, `tensorci`, `treetci` | I. Oseledets and E. Tyrtyshnikov, [Linear Algebra Appl. 432, 70 (2010)](https://doi.org/10.1016/j.laa.2009.07.024); Y. Núñez Fernández et al., [Phys. Rev. X 12, 041018 (2022)](https://doi.org/10.1103/PhysRevX.12.041018); [SciPost Phys. 18, 104 (2025)](https://doi.org/10.21468/SciPostPhys.18.3.104) |
 | Quantics representation | `quanticstci`, `quanticstransform` | I. Oseledets, [SIAM J. Matrix Anal. Appl. 31, 2130 (2010)](https://doi.org/10.1137/090757861); B. Khoromskij, [Constr. Approx. 34, 257 (2011)](https://doi.org/10.1007/s00365-011-9131-1) |
 | Affine transformations on quantics TT | `quanticstransform` | S. Rohshap, M. K. Ritter, H. Shinaoka, J. von Delft, M. Wallerberger, A. Kauch, [Phys. Rev. Research 7, 023087 (2025)](https://doi.org/10.1103/PhysRevResearch.7.023087), Appendix B |
-| Quantum Fourier transform as low-rank MPO | `quanticstransform` | J. Chen, E. M. Stoudenmire, S. R. White, [PRX Quantum 4, 040318 (2023)](https://doi.org/10.1103/PRXQuantum.4.040318) |
+| Quantum Fourier transform as low-rank MPO | `quanticstransform` | J. Chen and M. Lindsey, "Direct interpolative construction of the discrete Fourier transform as a matrix product operator", Appl. Comput. Harmon. Anal. (2025), [arXiv:2404.03182](https://arxiv.org/abs/2404.03182) |
 | Interpolative QTT construction | `interpolativeqtt` | M. Lindsey, [arXiv:2311.12554](https://arxiv.org/abs/2311.12554) |
 | Alternating cross interpolation (ACI) | `aci` | M. K. Ritter et al., [arXiv:2604.00037](https://arxiv.org/abs/2604.00037) |
 
