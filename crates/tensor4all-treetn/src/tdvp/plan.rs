@@ -1,3 +1,10 @@
+// Portions of this file are derived from ITensorNetworks.jl
+// (https://github.com/ITensor/ITensorNetworks.jl),
+// Copyright 2021 The Simons Foundation, Inc. - All Rights Reserved.
+// Licensed under the Apache License, Version 2.0 (see LICENSE-APACHE in this
+// crate). Changes: translated from Julia to Rust and adapted to tensor4all-rs
+// tensor and graph types.
+
 use std::fmt::Debug;
 use std::hash::Hash;
 

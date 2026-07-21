@@ -48,3 +48,16 @@ Ok(())
 
 - [User Guide: Tree Tensor Networks](https://tensor4all.org/tensor4all-rs/guides/tree-tn.html)
 - [API Reference](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_treetn/)
+
+## Acknowledgments and License
+
+The data structure design (`TreeTN`, `SiteIndexNetwork`) is inspired by
+[ITensorNetworks.jl](https://github.com/ITensor/ITensorNetworks.jl) and
+[NamedGraphs.jl](https://github.com/mtfishman/NamedGraphs.jl). The TDVP sweep
+plans and integrator conventions follow ITensorNetworks.jl; portions of
+`src/tdvp/plan.rs` are derived from ITensorNetworks.jl (Copyright 2021 The
+Simons Foundation, Inc.), licensed under the Apache License, Version 2.0
+(see [LICENSE-APACHE](LICENSE-APACHE)).
+
+This crate is licensed under MIT, except for the Apache-2.0 derived portions
+noted above (SPDX: `MIT AND Apache-2.0`).
