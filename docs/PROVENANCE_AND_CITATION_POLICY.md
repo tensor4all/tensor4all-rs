@@ -48,13 +48,19 @@ actual dependencies. Relationship vocabulary:
 - **Backend**: delegates execution to the upstream (in this one case the
   upstream is also an actual dependency).
 
+Components with more than one provenance relationship get one row per
+relationship; the role is stated only on the first row.
+
 | Component | Role | Design/code provenance | Relationship |
 | --- | --- | --- | --- |
 | `tensor4all-core` | Index system, dynamic-rank tensors, contraction, factorizations | [ITensors.jl](https://github.com/ITensor/ITensors.jl) | Inspired (Index semantics designed fully compatible with ITensors.jl) |
 | `tensor4all-tensorbackend` | Scalars, storage, dense linear algebra | [tenferro-rs](https://github.com/tensor4all/tenferro-rs) | Backend |
 | `tensor4all-simplett` | Simple TT/MPS with compression | [TensorCrossInterpolation.jl](https://github.com/tensor4all/TensorCrossInterpolation.jl) | Port |
 | `tensor4all-itensorlike` | TensorTrain API with orthogonality tracking | [ITensors.jl](https://github.com/ITensor/ITensors.jl) / ITensorMPS.jl | Inspired |
-| `tensor4all-treetn` | Tree tensor networks: canonicalization, DMRG, TDVP, linsolve, GSE | [ITensorNetworks.jl](https://github.com/ITensor/ITensorNetworks.jl), [NamedGraphs.jl](https://github.com/mtfishman/NamedGraphs.jl), KrylovKit.jl | Inspired (data structures); Derived (Apache-2.0) for TDVP sweep plans; Compatible (KrylovKit solver conventions) |
+| `tensor4all-treetn` | Tree tensor networks: canonicalization, DMRG, TDVP, linsolve, GSE | [ITensorNetworks.jl](https://github.com/ITensor/ITensorNetworks.jl) | Inspired (`TreeTN`, `SiteIndexNetwork` data structures) |
+| `tensor4all-treetn` | | [ITensorNetworks.jl](https://github.com/ITensor/ITensorNetworks.jl) | Derived (Apache-2.0): TDVP sweep plans (`src/tdvp/plan.rs`) |
+| `tensor4all-treetn` | | [NamedGraphs.jl](https://github.com/mtfishman/NamedGraphs.jl) | Inspired (named graph wrapper) |
+| `tensor4all-treetn` | | KrylovKit.jl | Compatible (linear/eigen solver conventions) |
 | `tensor4all-tcicore` | rrLU / MatrixLUCI / cross-interpolation infrastructure | [TensorCrossInterpolation.jl](https://github.com/tensor4all/TensorCrossInterpolation.jl) | Port |
 | `tensor4all-tensorci` | Tensor cross interpolation (TCI1/TCI2) | [TensorCrossInterpolation.jl](https://github.com/tensor4all/TensorCrossInterpolation.jl) | Compatible (validated for parity) |
 | `tensor4all-treetci` | Tree tensor cross interpolation | [TreeTCI.jl](https://github.com/tensor4all/TreeTCI.jl) by Ryo Watanabe | Port |
