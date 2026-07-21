@@ -82,8 +82,7 @@ the algorithm-origin references, is maintained in the
 
 ## How to Cite
 
-tensor4all-rs does not yet have a software paper of its own. If you use it
-in research, please read the
+If you use tensor4all-rs in research, please read the
 [Provenance and Citation Policy](docs/PROVENANCE_AND_CITATION_POLICY.md)
 and cite the original papers of the algorithms your work relies on, together
 with the software papers of the upstream libraries those components build on
@@ -92,7 +91,10 @@ with the software papers of the upstream libraries those components build on
 for the TCI components, and the ITensor paper,
 [SciPost Phys. Codebases 4 (2022)](https://doi.org/10.21468/SciPostPhysCodeb.4),
 for the tree tensor network components). Please also check the citation
-policies of those upstream projects and apply them recursively.
+policies of those upstream projects and apply them recursively. This is the
+permanent citation style for this project: a future tensor4all-rs software
+paper will add to, not replace, these upstream citations. Until then,
+reference tensor4all-rs directly by repository URL and version or commit.
 
 ## License
 

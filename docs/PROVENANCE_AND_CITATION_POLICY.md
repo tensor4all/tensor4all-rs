@@ -11,9 +11,10 @@ here in the same PR.
 
 ## Citation policy
 
-tensor4all-rs does not yet have a software paper of its own. Until one
-exists, we prefer that citations go to the underlying science rather than to
-this repository:
+Citations should reflect the full lineage of the methods you use, not only
+the topmost software layer. This is a permanent style, not a stopgap: when a
+tensor4all-rs software paper appears, it will be added to the list below in
+addition to, not in place of, the upstream citations.
 
 - Cite the original papers of the algorithms your work relies on (see
   "Algorithm origins" below).
@@ -28,8 +29,9 @@ this repository:
   further method papers (for example, ITensor asks DMRG users to also cite
   the original DMRG papers). The component table below tells you which
   upstream policies are relevant to the components you use.
-- If you need to reference tensor4all-rs directly, cite the repository URL
-  and the version or commit you used.
+- tensor4all-rs itself does not yet have a software paper; if you need to
+  reference it directly, cite the repository URL and the version or commit
+  you used.
 
 ## Component provenance
 
