@@ -1,0 +1,65 @@
+cff-version: 1.2.0
+message: >-
+  If you use tensor4all-rs in research, please cite it using the metadata
+  below. Depending on which components your work relies on, please also cite
+  the references listed under "references" (see the "How to Cite" section of
+  the README for guidance). A software paper is planned; this file will be
+  updated with a preferred-citation entry when it is available.
+title: tensor4all-rs
+type: software
+authors:
+  - name: tensor4all collaboration
+repository-code: "https://github.com/tensor4all/tensor4all-rs"
+url: "https://tensor4all.org/tensor4all-rs/"
+license: MIT
+references:
+  - type: article
+    title: "Learning tensor networks with tensor cross interpolation: new algorithms and libraries"
+    authors:
+      - family-names: "Núñez Fernández"
+        given-names: Yuriel
+      - family-names: Ritter
+        given-names: Marc K.
+      - family-names: Jeannin
+        given-names: Matthieu
+      - family-names: Li
+        given-names: Jheng-Wei
+      - family-names: Kloss
+        given-names: Thomas
+      - family-names: Louvet
+        given-names: Thibaud
+      - family-names: Terasaki
+        given-names: Satoshi
+      - family-names: Parcollet
+        given-names: Olivier
+      - family-names: von Delft
+        given-names: Jan
+      - family-names: Shinaoka
+        given-names: Hiroshi
+      - family-names: Waintal
+        given-names: Xavier
+    journal: SciPost Physics
+    volume: 18
+    year: 2025
+    doi: 10.21468/SciPostPhys.18.3.104
+    notes: >-
+      Cite when your work relies on the tensor cross interpolation
+      components (tensor4all-tcicore, tensor4all-tensorci,
+      tensor4all-treetci, tensor4all-quanticstci).
+  - type: article
+    title: "The ITensor Software Library for Tensor Network Calculations"
+    authors:
+      - family-names: Fishman
+        given-names: Matthew
+      - family-names: White
+        given-names: Steven R.
+      - family-names: Stoudenmire
+        given-names: E. Miles
+    journal: SciPost Physics Codebases
+    volume: 4
+    year: 2022
+    doi: 10.21468/SciPostPhysCodeb.4
+    notes: >-
+      Cite when your work relies on the tree tensor network components
+      (tensor4all-treetn, tensor4all-itensorlike), whose designs build on
+      ITensors.jl and ITensorNetworks.jl.

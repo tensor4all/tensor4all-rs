@@ -75,6 +75,25 @@ Inspired by [ITensors.jl](https://github.com/ITensor/ITensors.jl) and
 acknowledge fruitful discussions with M. Fishman and E. M. Stoudenmire at CCQ,
 Flatiron Institute.
 
+## How to Cite
+
+If you use tensor4all-rs in research, please cite this repository using the
+metadata in [CITATION.cff](CITATION.cff) (GitHub's "Cite this repository"
+button). A software paper is planned and will become the preferred citation
+once available.
+
+Depending on which components your work relies on, please also cite:
+
+- **Tensor cross interpolation** (`tensorci`, `treetci`, `quanticstci`,
+  `tcicore`): Y. Núñez Fernández et al., "Learning tensor networks with
+  tensor cross interpolation: new algorithms and libraries",
+  [SciPost Phys. 18, 104 (2025)](https://doi.org/10.21468/SciPostPhys.18.3.104)
+- **Tree tensor networks** (`treetn`, `itensorlike`): M. Fishman,
+  S. R. White, E. M. Stoudenmire, "The ITensor Software Library for Tensor
+  Network Calculations",
+  [SciPost Phys. Codebases 4 (2022)](https://doi.org/10.21468/SciPostPhysCodeb.4),
+  whose ITensors.jl / ITensorNetworks.jl designs these components build on
+
 ## License
 
 MIT License (see [LICENSE-MIT](LICENSE-MIT))
