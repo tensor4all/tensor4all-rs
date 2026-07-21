@@ -62,12 +62,12 @@ relationship; the role is stated only on the first row.
 | `tensor4all-treetn` | | [NamedGraphs.jl](https://github.com/mtfishman/NamedGraphs.jl) | Inspired (named graph wrapper) |
 | `tensor4all-treetn` | | KrylovKit.jl | Compatible (linear/eigen solver conventions) |
 | `tensor4all-tcicore` | rrLU / MatrixLUCI / cross-interpolation infrastructure | [TensorCrossInterpolation.jl](https://github.com/tensor4all/TensorCrossInterpolation.jl) | Port |
-| `tensor4all-tensorci` | Tensor cross interpolation (TCI1/TCI2) | [TensorCrossInterpolation.jl](https://github.com/tensor4all/TensorCrossInterpolation.jl) | Compatible (validated for parity) |
-| `tensor4all-treetci` | Tree tensor cross interpolation | [TreeTCI.jl](https://github.com/tensor4all/TreeTCI.jl) by Ryo Watanabe | Port |
+| `tensor4all-tensorci` | Tensor cross interpolation (TCI1/TCI2) | [TensorCrossInterpolation.jl](https://github.com/tensor4all/TensorCrossInterpolation.jl) | Port |
+| `tensor4all-treetci` | Tree tensor cross interpolation | [TreeTCI.jl](https://github.com/tensor4all/TreeTCI.jl) | Port |
 | `tensor4all-quanticstci` | Quantics TCI function interpolation | [QuanticsTCI.jl](https://github.com/tensor4all/QuanticsTCI.jl) | Port |
 | `tensor4all-interpolativeqtt` | Interpolative QTT construction | [InterpolativeQTT.jl](https://github.com/tensor4all/InterpolativeQTT.jl) | Port |
 | `tensor4all-quanticstransform` | Quantics operators (shift, flip, QFT, affine) | [Quantics.jl](https://github.com/tensor4all/Quantics.jl) | Port (validated against v0.4.7) |
-| `tensor4all-aci` | Alternating cross interpolation elementwise ops | [AlternatingCrossInterpolation.jl](https://github.com/tensor4all/AlternatingCrossInterpolation.jl) by Marc K. Ritter | Port |
+| `tensor4all-aci` | Alternating cross interpolation elementwise ops | [AlternatingCrossInterpolation.jl](https://github.com/tensor4all/AlternatingCrossInterpolation.jl) | Port |
 | `tensor4all-partitionedtt` | Partitioned TT over subdomains | [PartitionedMPSs.jl](https://github.com/tensor4all/PartitionedMPSs.jl) | Port |
 | `tensor4all-hdf5` | HDF5 serialization | [ITensors.jl](https://github.com/ITensor/ITensors.jl) / ITensorMPS.jl file formats | Compatible (round-trip validated) |
 | `tensor4all-capi` | C FFI surface for language bindings | — | Original (consumed by [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl)) |
