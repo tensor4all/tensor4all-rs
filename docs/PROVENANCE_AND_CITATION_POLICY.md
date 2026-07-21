@@ -1,11 +1,25 @@
-# Component Provenance
+# Provenance and Citation Policy
 
-This file records which tensor4all-rs components build on which external
-projects, and the nature of each relationship. We maintain it because modern
+This document records which tensor4all-rs components build on which external
+projects, which implemented algorithms originate in which publications, and
+how we ask research users to cite them. We maintain it because modern
 development, human or AI-assisted, makes it easy to write one codebase while
 referencing another, and the scientific contribution of the referenced
 projects deserves visible credit beyond what licenses require. When a new
-component references external code or designs, add it here in the same PR.
+component references external code, designs, or published algorithms, add it
+here in the same PR.
+
+## Citation policy
+
+- Cite tensor4all-rs itself using [`CITATION.cff`](../CITATION.cff) (GitHub's
+  "Cite this repository" button). A software paper is planned and will become
+  the preferred citation once available.
+- Additionally cite the original papers of the algorithms your work relies on
+  (see "Algorithm origins" below), and the library papers of upstream
+  projects whose designs the components you use are ported from or build on
+  (see the component table below and the README's "How to Cite" section).
+
+## Component provenance
 
 This table records intellectual provenance (designs, algorithms, and code
 lineage), not the Cargo dependency graph; see each crate's `Cargo.toml` for

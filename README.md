@@ -67,6 +67,7 @@ validated in CI. Longer runnable examples live in the
 - **[API Reference (rustdoc)](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_core/)** — generated API documentation
 - **[Julia Bindings](https://github.com/tensor4all/Tensor4all.jl)** — Tensor4all.jl wrapper
 - **[Design Documents](docs/design/index.md)** — architecture and design decisions
+- **[Provenance and Citation Policy](docs/PROVENANCE_AND_CITATION_POLICY.md)** — which components build on which external projects, algorithm origins, and how to cite
 
 ## Acknowledgments
 
@@ -76,7 +77,8 @@ acknowledge fruitful discussions with M. Fishman and E. M. Stoudenmire at CCQ,
 Flatiron Institute.
 
 A per-component table of which external projects each crate builds on, and
-how, is maintained in [docs/PROVENANCE.md](docs/PROVENANCE.md).
+the algorithm-origin references, is maintained in the
+[Provenance and Citation Policy](docs/PROVENANCE_AND_CITATION_POLICY.md).
 
 ## How to Cite
 
@@ -96,6 +98,11 @@ Depending on which components your work relies on, please also cite:
   Network Calculations",
   [SciPost Phys. Codebases 4 (2022)](https://doi.org/10.21468/SciPostPhysCodeb.4),
   whose ITensors.jl / ITensorNetworks.jl designs these components build on
+
+The full policy, including per-component provenance and the original papers
+of the implemented algorithms (DMRG, TDVP, TCI, quantics transforms, and
+others), is in the
+[Provenance and Citation Policy](docs/PROVENANCE_AND_CITATION_POLICY.md).
 
 ## License
 
