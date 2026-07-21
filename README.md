@@ -75,6 +75,9 @@ Inspired by [ITensors.jl](https://github.com/ITensor/ITensors.jl) and
 acknowledge fruitful discussions with M. Fishman and E. M. Stoudenmire at CCQ,
 Flatiron Institute.
 
+A per-component table of which external projects each crate builds on, and
+how, is maintained in [docs/PROVENANCE.md](docs/PROVENANCE.md).
+
 ## How to Cite
 
 If you use tensor4all-rs in research, please cite this repository using the
