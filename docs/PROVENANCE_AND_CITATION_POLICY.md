@@ -11,13 +11,20 @@ here in the same PR.
 
 ## Citation policy
 
-- Cite tensor4all-rs itself using [`CITATION.cff`](../CITATION.cff) (GitHub's
-  "Cite this repository" button). A software paper is planned and will become
-  the preferred citation once available.
-- Additionally cite the original papers of the algorithms your work relies on
-  (see "Algorithm origins" below), and the library papers of upstream
-  projects whose designs the components you use are ported from or build on
-  (see the component table below and the README's "How to Cite" section).
+tensor4all-rs does not yet have a software paper of its own. Until one
+exists, we prefer that citations go to the underlying science rather than to
+this repository:
+
+- Cite the original papers of the algorithms your work relies on (see
+  "Algorithm origins" below).
+- Cite the software papers of the upstream libraries whose designs the
+  components you use are ported from or build on: the TCI paper
+  ([SciPost Phys. 18, 104 (2025)](https://doi.org/10.21468/SciPostPhys.18.3.104))
+  for the TCI components, and the ITensor paper
+  ([SciPost Phys. Codebases 4 (2022)](https://doi.org/10.21468/SciPostPhysCodeb.4))
+  for the tree tensor network components.
+- If you need to reference tensor4all-rs directly, cite the repository URL
+  and the version or commit you used.
 
 ## Component provenance
 
@@ -75,5 +82,3 @@ list is best-effort; corrections and additions are welcome.
 
 License-bearing derivations are declared in the affected crate
 (`tensor4all-treetn`: `LICENSE-APACHE`, SPDX `MIT AND Apache-2.0`).
-Citation guidance for research use is in the README's "How to Cite" section
-and `CITATION.cff`.
