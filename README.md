@@ -70,13 +70,10 @@ validated in CI. Longer runnable examples live in the
 
 ## Acknowledgments
 
-Inspired by [ITensors.jl](https://github.com/ITensor/ITensors.jl). We acknowledge fruitful discussions with M. Fishman and E. M. Stoudenmire at CCQ, Flatiron Institute.
-
-**Citation:** If you use this code in research, please cite:
-
-> We used tensor4all-rs (<https://github.com/tensor4all/tensor4all-rs>), inspired by ITensors.jl.
->
-> M. Fishman, S. R. White, E. M. Stoudenmire, "The ITensor Software Library for Tensor Network Calculations", arXiv:2007.14822 (2020)
+Inspired by [ITensors.jl](https://github.com/ITensor/ITensors.jl) and
+[ITensorNetworks.jl](https://github.com/ITensor/ITensorNetworks.jl). We
+acknowledge fruitful discussions with M. Fishman and E. M. Stoudenmire at CCQ,
+Flatiron Institute.
 
 ## License
 
