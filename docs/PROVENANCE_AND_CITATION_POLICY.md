@@ -23,6 +23,11 @@ this repository:
   for the TCI components, and the ITensor paper
   ([SciPost Phys. Codebases 4 (2022)](https://doi.org/10.21468/SciPostPhysCodeb.4))
   for the tree tensor network components.
+- Check the citation policies of those upstream projects themselves and
+  apply them recursively: an upstream library may in turn ask you to cite
+  further method papers (for example, ITensor asks DMRG users to also cite
+  the original DMRG papers). The component table below tells you which
+  upstream policies are relevant to the components you use.
 - If you need to reference tensor4all-rs directly, cite the repository URL
   and the version or commit you used.
 

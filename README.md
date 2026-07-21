@@ -91,7 +91,8 @@ with the software papers of the upstream libraries those components build on
 [SciPost Phys. 18, 104 (2025)](https://doi.org/10.21468/SciPostPhys.18.3.104),
 for the TCI components, and the ITensor paper,
 [SciPost Phys. Codebases 4 (2022)](https://doi.org/10.21468/SciPostPhysCodeb.4),
-for the tree tensor network components).
+for the tree tensor network components). Please also check the citation
+policies of those upstream projects and apply them recursively.
 
 ## License
 
