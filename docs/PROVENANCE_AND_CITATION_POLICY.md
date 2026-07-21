@@ -52,7 +52,7 @@ actual dependencies. Relationship vocabulary:
 | --- | --- | --- | --- |
 | `tensor4all-core` | Index system, dynamic-rank tensors, contraction, factorizations | [ITensors.jl](https://github.com/ITensor/ITensors.jl) | Inspired (Index semantics designed fully compatible with ITensors.jl) |
 | `tensor4all-tensorbackend` | Scalars, storage, dense linear algebra | [tenferro-rs](https://github.com/tensor4all/tenferro-rs) | Backend |
-| `tensor4all-simplett` | Simple TT/MPS with compression | — | Original |
+| `tensor4all-simplett` | Simple TT/MPS with compression | [TensorCrossInterpolation.jl](https://github.com/tensor4all/TensorCrossInterpolation.jl) | Port |
 | `tensor4all-itensorlike` | TensorTrain API with orthogonality tracking | [ITensors.jl](https://github.com/ITensor/ITensors.jl) / ITensorMPS.jl | Inspired |
 | `tensor4all-treetn` | Tree tensor networks: canonicalization, DMRG, TDVP, linsolve, GSE | [ITensorNetworks.jl](https://github.com/ITensor/ITensorNetworks.jl), [NamedGraphs.jl](https://github.com/mtfishman/NamedGraphs.jl), KrylovKit.jl | Inspired (data structures); Derived (Apache-2.0) for TDVP sweep plans; Compatible (KrylovKit solver conventions) |
 | `tensor4all-tcicore` | rrLU / MatrixLUCI / cross-interpolation infrastructure | [TensorCrossInterpolation.jl](https://github.com/tensor4all/TensorCrossInterpolation.jl) | Port |
