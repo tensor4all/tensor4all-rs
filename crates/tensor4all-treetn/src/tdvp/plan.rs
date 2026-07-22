@@ -110,20 +110,46 @@ where
             )
         }
         2 => {
-            let edges = post_order_dfs_edges_by_name(network, root)?;
+            // Root-edge-first outward walk (pre-order DFS edges). Starting each
+            // half-sweep at the edge containing the sweep root keeps every gauge
+            // move inside already-evolved regions, which is required for the
+            // symmetric projector-splitting integrator; the old post-order
+            // (root-edge-last) ordering transported the gauge across unevolved
+            // edges at the start and turning point of each half-sweep. Matches
+            // ITensorNetworks.jl at NamedGraphs >= 0.11 (see benchmarks/results/
+            // 2026-07-22-treetn-tdvp-itensornetworks-1t.md).
+            let edges = pre_order_dfs_edges_by_name(network, root)?;
             let mut steps = Vec::new();
             let last_edge = edges.len().saturating_sub(1);
-            for (j, (src, dst)) in edges.into_iter().enumerate() {
+            for (j, (parent, child)) in edges.iter().enumerate() {
+                // The center after a two-site step sits on the vertex shared
+                // with the next region so the following site correction acts on
+                // the overlap; the final edge parks the center on its far side.
+                let center = match edges.get(j + 1) {
+                    Some((next_parent, next_child)) => {
+                        if parent == next_parent || parent == next_child {
+                            parent.clone()
+                        } else {
+                            child.clone()
+                        }
+                    }
+                    None => child.clone(),
+                };
+                let other = if center == *parent {
+                    child.clone()
+                } else {
+                    parent.clone()
+                };
                 steps.push(TdvpRegionStep {
-                    nodes: vec![src, dst.clone()],
-                    new_center: dst.clone(),
+                    nodes: vec![other, center.clone()],
+                    new_center: center.clone(),
                     exponent_step,
                     kind: TdvpRegionKind::TwoSite,
                 });
                 if j < last_edge {
                     steps.push(TdvpRegionStep {
-                        nodes: vec![dst.clone()],
-                        new_center: dst,
+                        nodes: vec![center.clone()],
+                        new_center: center,
                         exponent_step: -exponent_step,
                         kind: TdvpRegionKind::SiteCorrection,
                     });
@@ -159,14 +185,17 @@ where
         .collect()
 }
 
-fn post_order_dfs_edges_by_name<V>(network: &NodeNameNetwork<V>, root: &V) -> Option<Vec<(V, V)>>
+/// Tree edges as `(parent, child)` pairs in a parents-before-children order
+/// (reverse post-order), so the edge containing `root` comes first and each
+/// subsequent edge attaches to an already-visited vertex.
+fn pre_order_dfs_edges_by_name<V>(network: &NodeNameNetwork<V>, root: &V) -> Option<Vec<(V, V)>>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     let root_idx = network.node_index(root)?;
     let post_order = network.post_order_dfs_by_index(root_idx);
     let mut edges = Vec::new();
-    for child in post_order {
+    for &child in post_order.iter().rev() {
         if child == root_idx {
             continue;
         }
@@ -174,7 +203,7 @@ where
         let parent = *path.get(1)?;
         let child_name = network.node_name(child)?.clone();
         let parent_name = network.node_name(parent)?.clone();
-        edges.push((child_name, parent_name));
+        edges.push((parent_name, child_name));
     }
     Some(edges)
 }
@@ -217,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn two_site_plan_inserts_negative_single_site_corrections_except_last_edge() {
+    fn two_site_plan_starts_at_root_edge_with_corrections_except_last_edge() {
         let network = chain_abc();
         let exponent = Complex64::new(0.0, -0.2);
         let plan = TdvpRegionPlan::new(&network, &"B", 2, 1, exponent).unwrap();
@@ -227,12 +256,13 @@ mod tests {
             .iter()
             .map(|step| (step.kind, step.nodes.clone(), step.exponent_step))
             .collect();
+        // The first region contains the sweep root B; the walk moves outward.
         assert_eq!(
             regions,
             vec![
-                (TdvpRegionKind::TwoSite, vec!["A", "B"], exponent),
-                (TdvpRegionKind::SiteCorrection, vec!["B"], -exponent),
                 (TdvpRegionKind::TwoSite, vec!["C", "B"], exponent),
+                (TdvpRegionKind::SiteCorrection, vec!["B"], -exponent),
+                (TdvpRegionKind::TwoSite, vec!["B", "A"], exponent),
             ]
         );
     }
@@ -252,14 +282,77 @@ mod tests {
         assert_eq!(
             regions,
             vec![
-                (TdvpRegionKind::TwoSite, vec!["A", "B"], half),
-                (TdvpRegionKind::SiteCorrection, vec!["B"], -half),
                 (TdvpRegionKind::TwoSite, vec!["C", "B"], half),
-                (TdvpRegionKind::TwoSite, vec!["B", "C"], half),
                 (TdvpRegionKind::SiteCorrection, vec!["B"], -half),
                 (TdvpRegionKind::TwoSite, vec!["B", "A"], half),
+                (TdvpRegionKind::TwoSite, vec!["A", "B"], half),
+                (TdvpRegionKind::SiteCorrection, vec!["B"], -half),
+                (TdvpRegionKind::TwoSite, vec!["B", "C"], half),
             ]
         );
+    }
+
+    #[test]
+    fn two_site_star_plan_walks_outward_from_root_leaf() {
+        // Regression test for the root-edge-first ordering (issue #560): on a
+        // branching tree the half-sweep must start at the edge containing the
+        // sweep root and keep every subsequent region attached to an
+        // already-visited vertex, with the site correction on the overlap.
+        let network = star_abcd();
+        let exponent = Complex64::new(0.0, -0.2);
+        let plan = TdvpRegionPlan::new(&network, &"B", 2, 1, exponent).unwrap();
+
+        let regions: Vec<_> = plan
+            .steps
+            .iter()
+            .map(|step| (step.kind, step.nodes.clone(), step.exponent_step))
+            .collect();
+        assert_eq!(
+            regions,
+            vec![
+                (TdvpRegionKind::TwoSite, vec!["B", "A"], exponent),
+                (TdvpRegionKind::SiteCorrection, vec!["A"], -exponent),
+                (TdvpRegionKind::TwoSite, vec!["D", "A"], exponent),
+                (TdvpRegionKind::SiteCorrection, vec!["A"], -exponent),
+                (TdvpRegionKind::TwoSite, vec!["A", "C"], exponent),
+            ]
+        );
+    }
+
+    #[test]
+    fn two_site_plan_keeps_every_region_attached_to_visited_vertices() {
+        // Two branches of depth 2 force a jump between subtrees; even then the
+        // walk must stay contiguous: the first region contains the sweep root
+        // and every later region shares a vertex with the already-visited set.
+        let mut network = NodeNameNetwork::new();
+        for node in ["A", "B", "C", "D", "E"] {
+            network.add_node(node).unwrap();
+        }
+        network.add_edge(&"A", &"B").unwrap();
+        network.add_edge(&"B", &"C").unwrap();
+        network.add_edge(&"A", &"D").unwrap();
+        network.add_edge(&"D", &"E").unwrap();
+
+        let exponent = Complex64::new(0.0, -0.2);
+        let plan = TdvpRegionPlan::new(&network, &"A", 2, 1, exponent).unwrap();
+
+        let two_site_regions: Vec<Vec<&str>> = plan
+            .steps
+            .iter()
+            .filter(|step| step.kind == TdvpRegionKind::TwoSite)
+            .map(|step| step.nodes.clone())
+            .collect();
+        assert_eq!(two_site_regions.len(), 4);
+        assert!(two_site_regions[0].contains(&"A"));
+        let mut visited: std::collections::HashSet<&str> =
+            two_site_regions[0].iter().copied().collect();
+        for region in &two_site_regions[1..] {
+            assert!(
+                region.iter().any(|node| visited.contains(node)),
+                "region {region:?} is detached from visited set {visited:?}"
+            );
+            visited.extend(region.iter().copied());
+        }
     }
 
     #[test]
