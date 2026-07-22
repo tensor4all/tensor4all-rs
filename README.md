@@ -67,6 +67,7 @@ validated in CI. Longer runnable examples live in the
 - **[API Reference (rustdoc)](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_core/)** — generated API documentation
 - **[Julia Bindings](https://github.com/tensor4all/Tensor4all.jl)** — Tensor4all.jl wrapper
 - **[Design Documents](docs/design/index.md)** — architecture and design decisions
+- **[Provenance and Citation Policy](docs/PROVENANCE_AND_CITATION_POLICY.md)** — which components build on which external projects, algorithm origins, and how to cite
 
 ## Acknowledgments
 
@@ -75,24 +76,25 @@ Inspired by [ITensors.jl](https://github.com/ITensor/ITensors.jl) and
 acknowledge fruitful discussions with M. Fishman and E. M. Stoudenmire at CCQ,
 Flatiron Institute.
 
+A per-component table of which external projects each crate builds on, and
+the algorithm-origin references, is maintained in the
+[Provenance and Citation Policy](docs/PROVENANCE_AND_CITATION_POLICY.md).
+
 ## How to Cite
 
-If you use tensor4all-rs in research, please cite this repository using the
-metadata in [CITATION.cff](CITATION.cff) (GitHub's "Cite this repository"
-button). A software paper is planned and will become the preferred citation
-once available.
-
-Depending on which components your work relies on, please also cite:
-
-- **Tensor cross interpolation** (`tensorci`, `treetci`, `quanticstci`,
-  `tcicore`): Y. Núñez Fernández et al., "Learning tensor networks with
-  tensor cross interpolation: new algorithms and libraries",
-  [SciPost Phys. 18, 104 (2025)](https://doi.org/10.21468/SciPostPhys.18.3.104)
-- **Tree tensor networks** (`treetn`, `itensorlike`): M. Fishman,
-  S. R. White, E. M. Stoudenmire, "The ITensor Software Library for Tensor
-  Network Calculations",
-  [SciPost Phys. Codebases 4 (2022)](https://doi.org/10.21468/SciPostPhysCodeb.4),
-  whose ITensors.jl / ITensorNetworks.jl designs these components build on
+If you use tensor4all-rs in research, please read the
+[Provenance and Citation Policy](docs/PROVENANCE_AND_CITATION_POLICY.md)
+and cite the original papers of the algorithms your work relies on, together
+with the software papers of the upstream libraries those components build on
+(for example the TCI paper,
+[SciPost Phys. 18, 104 (2025)](https://doi.org/10.21468/SciPostPhys.18.3.104),
+for the TCI components, and the ITensor paper,
+[SciPost Phys. Codebases 4 (2022)](https://doi.org/10.21468/SciPostPhysCodeb.4),
+for the tree tensor network components). Please also check the citation
+policies of those upstream projects and apply them recursively. This is the
+permanent citation style for this project: a future tensor4all-rs software
+paper will add to, not replace, these upstream citations. Until then,
+reference tensor4all-rs directly by repository URL and version or commit.
 
 ## License
 
