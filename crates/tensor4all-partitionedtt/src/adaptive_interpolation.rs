@@ -6,7 +6,6 @@
 //! (MIT license; Copyright 2023 Ritter.Marc and contributors).
 
 use std::collections::{HashSet, VecDeque};
-use std::sync::Arc;
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -14,8 +13,10 @@ use tensor4all_core::{DynIndex, TensorDynLen, TensorElement};
 use tensor4all_itensorlike::TensorTrain;
 use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TTScalar};
 use tensor4all_tcicore::{MatrixLuciScalar, MultiIndex, Scalar};
-use tensor4all_tensorbackend::{Storage, StorageScalar};
-use tensor4all_tensorci::{crossinterpolate2, TCI2Options, TensorCI2};
+use tensor4all_tensorbackend::StorageScalar;
+use tensor4all_tensorci::{
+    crossinterpolate2, TCI2OptimizationResult, TCI2Options, TCI2Termination, TensorCI2,
+};
 
 use crate::{PartitionedTT, PartitionedTTError, Projector, Result, SubDomainTT};
 
@@ -209,7 +210,7 @@ where
             &patch.recycled_pivots,
             options.n_initial_pivots,
             &mut rng,
-        );
+        )?;
         let candidate_values: Vec<T> = candidate_pivots
             .iter()
             .map(|pivot| {
@@ -254,7 +255,12 @@ where
                 batch(&full_pivots)
             }
         });
-        let (tci, _ranks, errors) = crossinterpolate2(
+        let TCI2OptimizationResult {
+            tci,
+            errors,
+            termination,
+            ..
+        } = crossinterpolate2(
             local_f,
             local_batch,
             local_dims,
@@ -271,7 +277,7 @@ where
             .copied()
             .unwrap_or_else(|| tci.max_bond_error() / normalization);
 
-        if final_error <= options.tci_options.tolerance {
+        if patch_is_accepted(termination, final_error, options.tci_options.tolerance) {
             let simple_tt = tci.to_tensor_train()?;
             let tt = embed_active_tt(
                 simple_tt,
@@ -397,6 +403,10 @@ fn validate_inputs(
     Ok(patch_order)
 }
 
+fn patch_is_accepted(termination: TCI2Termination, final_error: f64, tolerance: f64) -> bool {
+    termination == TCI2Termination::Converged && final_error <= tolerance
+}
+
 fn active_positions(site_indices: &[DynIndex], projector: &Projector) -> Vec<usize> {
     site_indices
         .iter()
@@ -413,7 +423,7 @@ fn patch_candidates(
     recycled_pivots: &[MultiIndex],
     target: usize,
     rng: &mut StdRng,
-) -> Vec<MultiIndex> {
+) -> Result<Vec<MultiIndex>> {
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
     for full_pivot in initial_pivots.iter().chain(recycled_pivots) {
@@ -432,12 +442,22 @@ fn patch_candidates(
         .iter()
         .map(|&position| site_indices[position].dim)
         .collect();
-    let point_count = local_dims
-        .iter()
-        .copied()
-        .fold(1usize, usize::saturating_mul);
+    let point_count = local_dims.iter().try_fold(1usize, |count, &dim| {
+        count.checked_mul(dim).ok_or_else(|| {
+            PartitionedTTError::InvalidAdaptiveInterpolationInput(
+                "active patch point count exceeds usize".to_string(),
+            )
+        })
+    })?;
     let desired = target.max(candidates.len()).min(point_count);
-    let random_attempts = desired.saturating_mul(20).saturating_add(100);
+    let random_attempts = desired
+        .checked_mul(20)
+        .and_then(|attempts| attempts.checked_add(100))
+        .ok_or_else(|| {
+            PartitionedTTError::InvalidAdaptiveInterpolationInput(
+                "initial-pivot search attempt count exceeds usize".to_string(),
+            )
+        })?;
     for _ in 0..random_attempts {
         if candidates.len() >= desired {
             break;
@@ -459,7 +479,7 @@ fn patch_candidates(
             candidates.push(pivot);
         }
     }
-    candidates
+    Ok(candidates)
 }
 
 fn is_compatible_pivot(
@@ -608,31 +628,14 @@ where
     T: Scalar + TensorElement + StorageScalar + Default + Copy,
 {
     match (left, right) {
-        (Some(left), Some(right)) => {
-            if left.dim != right.dim {
-                return Err(PartitionedTTError::TensorTrainError(format!(
-                    "projected site cannot carry unequal bond dimensions {} and {}",
-                    left.dim, right.dim
-                )));
-            }
-            let bond_dim = left.dim;
-            let mut payload = vec![T::zero(); bond_dim * site.dim];
-            for bond in 0..bond_dim {
-                payload[bond + bond_dim * value] = scale;
-            }
-            let storage = Storage::new_structured(
-                payload,
-                vec![bond_dim, site.dim],
-                vec![1, bond_dim as isize],
-                vec![0, 1, 0],
-            )
-            .map_err(|error| PartitionedTTError::TensorTrainError(error.to_string()))?;
-            TensorDynLen::from_structured_storage(
-                vec![left.clone(), site.clone(), right.clone()],
-                Arc::new(storage),
-            )
-            .map_err(|error| PartitionedTTError::TensorTrainError(error.to_string()))
-        }
+        (Some(left), Some(right)) => TensorDynLen::from_copy_selector(
+            left.clone(),
+            site.clone(),
+            right.clone(),
+            value,
+            scale,
+        )
+        .map_err(|error| PartitionedTTError::TensorTrainError(error.to_string())),
         (None, Some(right)) => {
             if right.dim != 1 {
                 return Err(PartitionedTTError::TensorTrainError(format!(

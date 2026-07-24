@@ -22,6 +22,9 @@
 
 ## Chosen design
 
+Durable algorithm and API decisions are recorded in
+[`docs/design/adaptive-tci-interpolation.md`](../design/adaptive-tci-interpolation.md).
+
 - `tensor4all-partitionedtt::adaptiveinterpolate` runs TCI2 on each patch's
   active sites and splits a nonconverged patch in an explicit complete order.
 - Zero- and one-active-site leaves use exact evaluation because TCI2 requires
@@ -35,6 +38,8 @@
   documented as risky for sparse functions without known nonzero pivots.
 - TCI2 convergence now compares its already-normalized error history with the
   configured tolerance rather than a magnitude-rescaled absolute tolerance.
+- TCI2 reports whether it converged, reached the bond cap, or exhausted its
+  iteration budget; adaptive interpolation accepts only full convergence.
 - The TCIAlgorithms.jl MIT notice is retained in the crate and in the
   repository provenance table.
 

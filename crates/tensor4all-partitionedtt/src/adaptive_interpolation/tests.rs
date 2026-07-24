@@ -16,6 +16,30 @@ fn binary_sites(nsites: usize) -> Vec<DynIndex> {
 }
 
 #[test]
+fn accepts_only_full_tci_convergence() {
+    assert!(patch_is_accepted(
+        TCI2Termination::Converged,
+        1.0e-10,
+        1.0e-8
+    ));
+    assert!(!patch_is_accepted(
+        TCI2Termination::MaxIterations,
+        1.0e-10,
+        1.0e-8,
+    ));
+    assert!(!patch_is_accepted(
+        TCI2Termination::MaxBondDimension,
+        1.0e-10,
+        1.0e-8,
+    ));
+    assert!(!patch_is_accepted(
+        TCI2Termination::Converged,
+        1.0e-6,
+        1.0e-8,
+    ));
+}
+
+#[test]
 fn interpolates_low_rank_function_without_splitting() {
     let sites = binary_sites(3);
     let function =
@@ -182,17 +206,18 @@ fn sampled_zero_patch_is_represented_as_zero() {
 #[test]
 fn extracts_full_diagonal_pivots_for_recycling() {
     let function = |index: &MultiIndex| (index[0] + 2 * index[1] + 3 * index[2] + 1) as f64;
-    let (tci, _, _) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
-        function,
-        None,
-        vec![2, 2, 2],
-        vec![vec![0, 0, 0], vec![1, 1, 1]],
-        TCI2Options {
-            seed: Some(3),
-            ..TCI2Options::default()
-        },
-    )
-    .unwrap();
+    let tensor4all_tensorci::TCI2OptimizationResult { tci, .. } =
+        crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+            function,
+            None,
+            vec![2, 2, 2],
+            vec![vec![0, 0, 0], vec![1, 1, 1]],
+            TCI2Options {
+                seed: Some(3),
+                ..TCI2Options::default()
+            },
+        )
+        .unwrap();
     let sites = binary_sites(3);
 
     let pivots = global_diagonal_pivots(&tci, &[0, 1, 2], &Projector::new(), &sites);
@@ -211,7 +236,8 @@ fn incompatible_recycled_pivots_are_replenished_for_nonzero_child() {
     let recycled = vec![vec![0, 0, 0], vec![0, 1, 1]];
     let mut rng = StdRng::seed_from_u64(7);
 
-    let candidates = patch_candidates(&sites, &active, &projector, &[], &recycled, 3, &mut rng);
+    let candidates =
+        patch_candidates(&sites, &active, &projector, &[], &recycled, 3, &mut rng).unwrap();
     let values: Vec<_> = candidates
         .iter()
         .map(|local| {
@@ -245,6 +271,27 @@ fn projected_middle_sites_use_compact_structured_storage() {
     assert_eq!(middle.storage().storage_kind(), StorageKind::Structured);
     assert_eq!(middle.storage().payload_len(), 4);
     assert_eq!(middle.storage().axis_classes(), &[0, 1, 0]);
+
+    let tensors: Vec<_> = (0..tt.len())
+        .map(|position| tt.tensor(position).unwrap())
+        .collect();
+    let dense = contract(&tensors).unwrap().to_vec::<f64>().unwrap();
+    assert_eq!(dense, vec![0.0, 0.0, 23.0, 34.0, 0.0, 0.0, 31.0, 46.0]);
+}
+
+#[test]
+fn patch_candidate_count_overflow_is_rejected() {
+    let sites = vec![DynIndex::new_dyn(usize::MAX), DynIndex::new_dyn(2)];
+    let mut rng = StdRng::seed_from_u64(1);
+
+    let error =
+        patch_candidates(&sites, &[0, 1], &Projector::new(), &[], &[], 1, &mut rng).unwrap_err();
+
+    assert!(matches!(
+        error,
+        PartitionedTTError::InvalidAdaptiveInterpolationInput(message)
+            if message.contains("point count")
+    ));
 }
 
 #[test]
@@ -255,7 +302,7 @@ fn projected_site_tensor_rejects_unequal_carried_bonds() {
 
     let error = projected_site_tensor::<f64>(Some(&left), &site, Some(&right), 0, 1.0).unwrap_err();
 
-    assert!(error.to_string().contains("unequal bond dimensions"));
+    assert!(error.to_string().contains("bond dimensions differ"));
 }
 
 #[test]
