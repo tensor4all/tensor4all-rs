@@ -816,6 +816,17 @@ fn test_convergence_criterion() {
         3
     ));
 
+    // Normalized errors are compared with the configured relative tolerance,
+    // not with an absolute tolerance rescaled by a large function magnitude.
+    assert!(!super::convergence_criterion(
+        &[5, 5, 5],
+        &[1e-6, 1e-6, 1e-6],
+        &[0, 0, 0],
+        1e-8,
+        100,
+        3
+    ));
+
     // Not converged: global pivots still being added
     assert!(!super::convergence_criterion(
         &[5, 5, 5],

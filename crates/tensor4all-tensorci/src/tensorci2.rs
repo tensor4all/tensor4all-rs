@@ -1521,12 +1521,13 @@ where
             );
         }
 
-        // Check convergence
+        // `errors` is already divided by `error_normalization`, so compare it
+        // with the configured relative tolerance rather than `abs_tol`.
         if convergence_criterion(
             &ranks,
             &errors,
             &nglobal_pivots_history,
-            abs_tol,
+            options.tolerance,
             options.max_bond_dim,
             options.ncheck_history,
         ) {
