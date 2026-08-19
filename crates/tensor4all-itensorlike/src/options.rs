@@ -130,6 +130,7 @@ pub struct ContractOptions {
     nhalfsweeps: usize,
     dense_reference_limit: Option<usize>,
     src_options: SrcOptions,
+    fit_initializer: FitInitializer,
 }
 
 impl Default for ContractOptions {
@@ -141,9 +142,77 @@ impl Default for ContractOptions {
             nhalfsweeps: 2,
             dense_reference_limit: None,
             src_options: SrcOptions::default(),
+            fit_initializer: FitInitializer::default(),
         }
     }
 }
+
+/// Initialization strategy for fit (`ContractMethod::Fit`) contraction.
+///
+/// The initializer determines the variational starting state `C₀ ≈ A·B` that
+/// the two-site sweeps refine.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_itensorlike::{ContractOptions, FitInitializer};
+///
+/// // The default is the compatibility one: a fit contraction starts from the
+/// // zip-up contraction, exactly as it did before this option existed.
+/// let opts = ContractOptions::fit();
+/// assert_eq!(opts.initializer(), FitInitializer::ZipUp);
+///
+/// // Opt in to a small-rank start, which never forms the exact product bond.
+/// // With a truncation tolerance and no `max_bond_dim`, the sweeps grow the
+/// // ranks from it adaptively.
+/// let adaptive = ContractOptions::fit()
+///     .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
+///     .with_initializer(FitInitializer::LowRankRandom {
+///         bond_dim: 1,
+///         seed: None,
+///     });
+/// assert!(matches!(
+///     adaptive.initializer(),
+///     FitInitializer::LowRankRandom { bond_dim: 1, seed: None }
+/// ));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FitInitializer {
+    /// Start `C₀` from the SVD-based zip-up contraction of `A·B`, preserving
+    /// the input topology.
+    ///
+    /// Zip-up materializes the full product bond (up to `χ_A·χ_B` per edge)
+    /// when no truncation tolerance is supplied, so it is the compatibility
+    /// choice rather than the memory-scalable one.
+    ZipUp,
+    /// Start `C₀` from a deterministic small-rank random network carrying the
+    /// surviving output site indices.
+    ///
+    /// No term of dimension χ_A·χ_B is ever formed: each output tensor is an
+    /// independent random tensor of bond dimension [`bond_dim`](Self::LowRankRandom::bond_dim).
+    /// With `max_bond_dim = None` and an SVD truncation tolerance, the sweeps
+    /// grow the ranks adaptively as required.
+    LowRankRandom {
+        /// Initial bond dimension of every edge (`1` = start as small as
+        /// possible and let the sweeps grow it).
+        bond_dim: usize,
+        /// RNG seed for reproducibility; `None` uses a fixed deterministic
+        /// default seed.
+        seed: Option<u64>,
+    },
+}
+
+impl Default for FitInitializer {
+    /// The compatibility choice, so this surface adds an option without changing what an existing caller gets:
+    /// a fit contraction with no explicit initializer starts from the zip-up contraction exactly as before.
+    fn default() -> Self {
+        Self::ZipUp
+    }
+}
+
+/// Default seed used when [`FitInitializer::LowRankRandom`] is constructed
+/// without an explicit seed.
+pub const DEFAULT_FIT_INITIALIZER_SEED: u64 = 0x005e_ed5e_edc0_ffee;
 
 impl ContractOptions {
     /// Create options for zipup contraction.
@@ -220,6 +289,39 @@ impl ContractOptions {
         self
     }
 
+    /// Set the fit initializer strategy.
+    ///
+    /// Ignored for `Zipup` and `Naive` methods. The default is
+    /// [`FitInitializer::LowRankRandom`] with `bond_dim = 1` and the
+    /// deterministic default seed: fit contraction therefore starts from a
+    /// small random state and (with a truncation tolerance and no
+    /// `max_bond_dim`) grows ranks adaptively without constructing the exact
+    /// product bond. Pass [`FitInitializer::ZipUp`] to restore the previous
+    /// zip-up-initialized behavior.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_itensorlike::{ContractOptions, FitInitializer};
+    ///
+    /// let opts = ContractOptions::fit()
+    ///     .with_initializer(FitInitializer::LowRankRandom {
+    ///         bond_dim: 4,
+    ///         seed: Some(99),
+    ///     });
+    /// assert_eq!(
+    ///     opts.initializer(),
+    ///     FitInitializer::LowRankRandom {
+    ///         bond_dim: 4,
+    ///         seed: Some(99)
+    ///     }
+    /// );
+    /// ```
+    pub fn with_initializer(mut self, initializer: FitInitializer) -> Self {
+        self.fit_initializer = initializer;
+        self
+    }
+
     /// Set number of half-sweeps for fit contraction.
     pub fn with_nhalfsweeps(mut self, nhalfsweeps: usize) -> Self {
         self.nhalfsweeps = nhalfsweeps;
@@ -293,6 +395,27 @@ impl ContractOptions {
     #[inline]
     pub fn svd_policy(&self) -> Option<SvdTruncationPolicy> {
         self.svd_policy
+    }
+
+    /// Get the fit initializer strategy used for [`ContractMethod::Fit`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_itensorlike::{ContractOptions, FitInitializer};
+    ///
+    /// let opts = ContractOptions::fit();
+    /// assert_eq!(opts.initializer(), FitInitializer::ZipUp);
+    ///
+    /// let adaptive = opts.with_initializer(FitInitializer::LowRankRandom {
+    ///     bond_dim: 1,
+    ///     seed: None,
+    /// });
+    /// assert!(matches!(adaptive.initializer(), FitInitializer::LowRankRandom { .. }));
+    /// ```
+    #[inline]
+    pub fn initializer(&self) -> FitInitializer {
+        self.fit_initializer
     }
 
     /// Get number of half-sweeps.

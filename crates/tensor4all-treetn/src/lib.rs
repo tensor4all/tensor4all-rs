@@ -93,6 +93,8 @@ pub use treetn::diagnostics;
 pub use treetn::{
     // Local update
     apply_local_update_sweep,
+    contract_fit,
+    contract_fit_from_initial,
     contract_fit_in,
     // Decomposition
     factorize_tensor_to_treetn,
@@ -100,6 +102,7 @@ pub use treetn::{
     fit_sum,
     get_boundary_edges,
     hadamard,
+    low_rank_initializer_tree_tn,
     partial_contract,
     partial_contract_to_site_network,
     sum_over_indices,
