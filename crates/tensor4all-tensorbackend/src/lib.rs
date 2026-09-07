@@ -47,8 +47,8 @@ mod tensor_element;
 pub use any_scalar::BackendScalar;
 #[cfg(feature = "global-defaults")]
 pub use backend::{
-    full_piv_lu_backend, full_piv_lu_matrix, qr_backend, solve_backend, solve_matrix,
-    solve_matrix_owned, src_error_estimate, src_error_estimate_general, svd_backend,
+    full_piv_lu_backend, full_piv_lu_matrix, full_piv_lu_matrix_owned, qr_backend, solve_backend,
+    solve_matrix, solve_matrix_owned, src_error_estimate, src_error_estimate_general, svd_backend,
     triangular_solve_backend, triangular_solve_matrix, triangular_solve_matrix_owned,
     BackendLinalgError, BackendLinalgScalar, FullPivLuMatrixResult, FullPivLuResult,
     FullPivLuScalar, MatrixSolveScalar, MatrixTriangularSolveScalar, SrcErrorEstimate, SvdResult,

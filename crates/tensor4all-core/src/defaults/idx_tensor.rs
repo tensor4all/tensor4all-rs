@@ -1266,7 +1266,11 @@ impl IdxTensor {
 
         let mut root_to_class = std::collections::HashMap::new();
         let mut next_class = 0usize;
-        let mut axis_classes = Vec::new();
+        let mut axis_classes = Vec::with_capacity(
+            lhs_axis_classes
+                .len()
+                .saturating_add(rhs_axis_classes.len()),
+        );
 
         for (axis, &class_id) in lhs_axis_classes.iter().enumerate() {
             if !lhs_contracted[axis] {
@@ -8287,6 +8291,14 @@ mod tests {
         assert_eq!(result.storage_kind(), StorageKind::Structured);
         assert!(result.eager_cache.get().is_none());
         assert_eq!(result.storage().unwrap().payload_len(), n * 3);
+    }
+
+    #[test]
+    fn binary_contraction_axis_classes_preserve_uncontracted_order() {
+        let axis_classes =
+            IdxTensor::binary_contraction_axis_classes(&[0, 1, 0], &[1], &[0, 1], &[0]).unwrap();
+
+        assert_eq!(axis_classes, vec![0, 0, 1]);
     }
 
     #[test]

@@ -1301,7 +1301,7 @@ where
 
     let n = matrix.nrows();
     let input_tensor =
-        T::into_tensor(vec![n, n], matrix.as_col_major_slice().to_vec()).map_err(|source| {
+        T::into_tensor(vec![n, n], matrix.into_col_major_vec()).map_err(|source| {
             HermitianEigenError::Backend {
                 source: Box::new(source),
             }
@@ -1622,8 +1622,8 @@ pub fn try_from_vec2d<T: Clone + Zero>(
         }
     }
     let mut m = Matrix::zeros(nrows, ncols);
-    for i in 0..nrows {
-        for j in 0..ncols {
+    for j in 0..ncols {
+        for i in 0..nrows {
             m[[i, j]] = data[i][j].clone();
         }
     }

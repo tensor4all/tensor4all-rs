@@ -787,8 +787,8 @@ where
         }
 
         let mut component_interner = KeyInterner::<Vec<KeyId>>::default();
-        let mut directed_keys: HashMap<(V, V), Vec<KeyId>> =
-            HashMap::with_capacity(tree.edge_count() * 2);
+        let mut directed_keys: HashMap<V, HashMap<V, Vec<KeyId>>> =
+            HashMap::with_capacity(neighbors.len());
 
         for node in order.iter().rev() {
             let Some(parent_node) = parent.get(node).and_then(Clone::clone) else {
@@ -802,7 +802,8 @@ where
                 .filter(|neighbor| *neighbor != &parent_node)
                 .map(|neighbor| {
                     directed_keys
-                        .get(&(neighbor.clone(), node.clone()))
+                        .get(neighbor)
+                        .and_then(|by_target| by_target.get(node))
                         .with_context(|| {
                             format!(
                                 "ComponentCostIndex::new: missing child key {:?}->{:?}",
@@ -820,7 +821,10 @@ where
                 n_points,
                 &mut component_interner,
             );
-            directed_keys.insert((node.clone(), parent_node), keys);
+            directed_keys
+                .entry(node.clone())
+                .or_default()
+                .insert(parent_node, keys);
         }
 
         for node in &order {
@@ -835,7 +839,8 @@ where
                     .filter(|neighbor| *neighbor != child)
                     .map(|neighbor| {
                         directed_keys
-                            .get(&(neighbor.clone(), node.clone()))
+                            .get(neighbor)
+                            .and_then(|by_target| by_target.get(node))
                             .with_context(|| {
                                 format!(
                                     "ComponentCostIndex::new: missing incoming key {:?}->{:?}",
@@ -853,17 +858,20 @@ where
                     n_points,
                     &mut component_interner,
                 );
-                directed_keys.insert((node.clone(), child.clone()), keys);
+                directed_keys
+                    .entry(node.clone())
+                    .or_default()
+                    .insert(child.clone(), keys);
             }
         }
 
-        let directed_counts = directed_keys
-            .into_iter()
-            .map(|(edge, keys)| {
+        let mut directed_counts = HashMap::with_capacity(tree.edge_count() * 2);
+        for (source, targets) in directed_keys {
+            for (target, keys) in targets {
                 let count = keys.into_iter().collect::<HashSet<_>>().len();
-                (edge, count)
-            })
-            .collect();
+                directed_counts.insert((source.clone(), target), count);
+            }
+        }
 
         Ok(Self {
             neighbors,
@@ -4462,7 +4470,7 @@ where
                 .message_caches
                 .entry(directed_edge.clone())
                 .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_max_bytes));
-            cache.get_all_cached(&hit_keys); // counted above; discard positions here
+            cache.record_hits(hit_keys.len());
         }
 
         // A parent cache hit returned above before this point, so descendants
@@ -7316,6 +7324,11 @@ where
         Some(positions)
     }
 
+    /// Records keys already confirmed as cached by a partial lookup.
+    fn record_hits(&mut self, count: usize) {
+        self.hits += count;
+    }
+
     fn contains(&self, key: &K) -> bool {
         self.positions.contains_key(key)
     }
@@ -9193,6 +9206,22 @@ mod tests {
         let positions = cache.get_all_cached(&[1u32]).unwrap();
         assert_eq!(cache.column(positions[0]), &[1.0, 0.0]);
         assert_eq!((cache.hits(), cache.misses()), (1, 1));
+    }
+
+    #[test]
+    fn packed_message_cache_records_confirmed_partial_hits() {
+        let mut cache = PackedMessageCache::<u32, f64>::new(2, usize::MAX);
+        cache
+            .get_or_compute_batch(&[1u32, 2u32], |missing| {
+                Ok::<_, anyhow::Error>(missing.iter().map(|k| vec![*k as f64, 0.0]).collect())
+            })
+            .unwrap();
+
+        let hit_keys = [1u32, 1u32, 2u32];
+        assert!(hit_keys.iter().all(|key| cache.contains(key)));
+        cache.record_hits(hit_keys.len());
+
+        assert_eq!((cache.hits(), cache.misses()), (3, 2));
     }
 
     #[test]
