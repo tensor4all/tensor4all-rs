@@ -132,6 +132,7 @@ struct PackedSiteTensor<T> {
 }
 
 impl<T: Copy> PackedSiteTensor<T> {
+    #[cfg(any(test, not(feature = "backend-tenferro")))]
     fn get(&self, left: usize, physical: usize, right: usize) -> T {
         debug_assert!(left < self.left_dim);
         debug_assert!(physical < self.physical_dim);
@@ -854,13 +855,6 @@ impl TensorTrain {
         Self::new(new_tensors)
     }
 
-    fn normalize_site_tensor_orders(&mut self) -> Result<()> {
-        for site in 0..self.len() {
-            self.normalize_site_tensor_order(site)?;
-        }
-        Ok(())
-    }
-
     fn has_simple_linear_links(&self) -> Result<bool> {
         if self.len() <= 1 {
             return Ok(true);
@@ -874,24 +868,6 @@ impl TensorTrain {
             }
         }
         Ok(true)
-    }
-
-    fn can_normalize_site_tensor_order(&self, site: usize) -> Result<bool> {
-        let left_ok = if site > 0 {
-            let left = self.tensor_checked(site - 1)?;
-            let current = self.tensor_checked(site)?;
-            common_inds(left.indices(), current.indices()).len() <= 1
-        } else {
-            true
-        };
-        let right_ok = if site + 1 < self.len() {
-            let current = self.tensor_checked(site)?;
-            let right = self.tensor_checked(site + 1)?;
-            common_inds(current.indices(), right.indices()).len() <= 1
-        } else {
-            true
-        };
-        Ok(left_ok && right_ok)
     }
 
     fn with_explicit_unit_links(&self) -> Result<Self> {
@@ -967,54 +943,6 @@ impl TensorTrain {
         }
 
         Self::new(tensors)
-    }
-
-    fn normalize_site_tensor_order(&mut self, site: usize) -> Result<()> {
-        if !self.can_normalize_site_tensor_order(site)? {
-            return Ok(());
-        }
-
-        let tensor = self.tensor_checked(site)?.clone();
-        let current = tensor.indices().to_vec();
-        let left = if site > 0 {
-            self.linkind(site - 1)
-        } else {
-            None
-        };
-        let right = if site + 1 < self.len() {
-            self.linkind(site)
-        } else {
-            None
-        };
-
-        let mut desired = Vec::with_capacity(current.len());
-        if let Some(ref left_link) = left {
-            desired.push(left_link.clone());
-        }
-        desired.extend(
-            current
-                .iter()
-                .filter(|idx| Some(*idx) != left.as_ref() && Some(*idx) != right.as_ref())
-                .cloned(),
-        );
-        if let Some(ref right_link) = right {
-            desired.push(right_link.clone());
-        }
-
-        if desired == current {
-            return Ok(());
-        }
-
-        let normalized =
-            tensor
-                .permuteinds(&desired)
-                .map_err(|e| TensorTrainError::InvalidStructure {
-                    message: format!(
-                        "Failed to normalize site tensor index order at site {}: {}",
-                        site, e
-                    ),
-                })?;
-        self.set_tensor_raw(site, normalized)
     }
 
     /// Get the site indices (non-link indices) for all sites.
@@ -1603,14 +1531,11 @@ impl TensorTrain {
             return Ok(None);
         }
 
-        let mut normalized = self.clone();
-        normalized.normalize_site_tensor_orders()?;
-
-        if let Some(sites) = Self::pack_normalized_sites::<f64>(&normalized)? {
-            return Ok(Some(Self::norm_squared_from_packed_sites(&sites)?));
+        if let Some(sites) = Self::pack_normalized_sites::<f64>(self)? {
+            return Ok(Some(Self::norm_squared_from_packed_sites(sites)?));
         }
-        if let Some(sites) = Self::pack_normalized_sites::<Complex64>(&normalized)? {
-            return Ok(Some(Self::norm_squared_from_packed_sites(&sites)?));
+        if let Some(sites) = Self::pack_normalized_sites::<Complex64>(self)? {
+            return Ok(Some(Self::norm_squared_from_packed_sites(sites)?));
         }
 
         Ok(None)
@@ -1665,18 +1590,62 @@ impl TensorTrain {
                 return Ok(None);
             }
 
+            let current = tensor.indices().to_vec();
+            let left = if site > 0 { tt.linkind(site - 1) } else { None };
+            let right = if site + 1 < tt.len() {
+                tt.linkind(site)
+            } else {
+                None
+            };
+
+            let mut desired = Vec::with_capacity(current.len());
+            if let Some(ref left_link) = left {
+                desired.push(left_link.clone());
+            }
+            desired.extend(
+                current
+                    .iter()
+                    .filter(|idx| Some(*idx) != left.as_ref() && Some(*idx) != right.as_ref())
+                    .cloned(),
+            );
+            if let Some(ref right_link) = right {
+                desired.push(right_link.clone());
+            }
+
+            // The fast-path precondition guarantees at most one link per
+            // boundary.  Permute only this site when its stored order is not
+            // already [left, physical..., right], avoiding a whole-train clone.
+            let data = if desired == current {
+                tensor.to_vec::<T>().map_err(TensorTrainError::from)?
+            } else {
+                tensor
+                    .permuteinds(&desired)
+                    .map_err(|e| TensorTrainError::InvalidStructure {
+                        message: format!(
+                            "Failed to normalize site tensor index order at site {}: {}",
+                            site, e
+                        ),
+                    })?
+                    .to_vec::<T>()
+                    .map_err(TensorTrainError::from)?
+            };
+
             sites.push(PackedSiteTensor {
                 left_dim,
                 physical_dim: total_size / boundary_size,
                 right_dim,
-                data: tensor.to_vec::<T>().map_err(TensorTrainError::from)?,
+                data,
             });
         }
 
         Ok(Some(sites))
     }
 
-    fn norm_squared_from_packed_sites<T: NormAccumScalar>(
+    /// Reference implementation for differential tests and builds without a
+    /// process-global tensorbackend. Its nested loops are intentionally kept
+    /// out of the optimized default path.
+    #[cfg(any(test, not(feature = "backend-tenferro")))]
+    fn norm_squared_from_packed_sites_oracle<T: NormAccumScalar>(
         sites: &[PackedSiteTensor<T>],
     ) -> Result<f64> {
         if sites.is_empty() {
@@ -1723,6 +1692,129 @@ impl TensorTrain {
         Ok(current[0].into_nonnegative_real())
     }
 
+    #[cfg(feature = "backend-tenferro")]
+    fn norm_squared_from_packed_sites<T>(sites: Vec<PackedSiteTensor<T>>) -> Result<f64>
+    where
+        T: NormAccumScalar + tensor4all_tensorbackend::TensorElement,
+    {
+        if sites.is_empty() {
+            return Ok(0.0);
+        }
+
+        let mut current = tensor4all_tensorbackend::dense_native_tensor_from_col_major_owned(
+            vec![T::one()],
+            &[1, 1],
+        )
+        .map_err(|error| {
+            TensorTrainError::operation_source("failed to initialize the norm environment", error)
+        })?;
+
+        for site in sites {
+            let expected_shape = [site.left_dim, site.left_dim];
+            if current.shape() != expected_shape {
+                return Err(TensorTrainError::InvalidStructure {
+                    message: format!(
+                        "norm environment shape {:?} does not match site left shape {:?}",
+                        current.shape(),
+                        expected_shape
+                    ),
+                });
+            }
+
+            let site_shape = [site.left_dim, site.physical_dim, site.right_dim];
+            let site_tensor = tensor4all_tensorbackend::dense_native_tensor_from_col_major_owned(
+                site.data,
+                &site_shape,
+            )
+            .map_err(|error| {
+                TensorTrainError::operation_source(
+                    "failed to build a packed norm site tensor",
+                    error,
+                )
+            })?;
+
+            // Real f64 data is already self-conjugate; avoid duplicating it.
+            // Complex64 needs an explicit conjugate because the backend einsum
+            // API does not attach conjugation semantics to an operand label.
+            let conjugated_site = if TypeId::of::<T>() == TypeId::of::<f64>() {
+                None
+            } else {
+                Some(
+                    tensor4all_tensorbackend::conj_native_tensor(&site_tensor).map_err(
+                        |error| {
+                            TensorTrainError::operation_source(
+                                "failed to conjugate a packed norm site tensor",
+                                anyhow::Error::new(error),
+                            )
+                        },
+                    )?,
+                )
+            };
+            let conjugated_site = conjugated_site.as_ref().unwrap_or(&site_tensor);
+
+            // current[a,b] * A[b,p,r] -> mid[a,p,r]
+            let middle = tensor4all_tensorbackend::einsum_native_tensors(
+                &[(&current, &[0, 1]), (&site_tensor, &[1, 2, 3])],
+                &[0, 2, 3],
+            )
+            .map_err(|error| {
+                TensorTrainError::operation_source(
+                    "failed to contract the norm environment with a site",
+                    error,
+                )
+            })?;
+
+            // conj(A[a,p,s]) * mid[a,p,r] -> next[s,r]
+            current = tensor4all_tensorbackend::einsum_native_tensors(
+                &[(conjugated_site, &[0, 1, 2]), (&middle, &[0, 1, 3])],
+                &[2, 3],
+            )
+            .map_err(|error| {
+                TensorTrainError::operation_source(
+                    "failed to close the norm environment at a site",
+                    error,
+                )
+            })?;
+        }
+
+        if current.shape() != [1, 1] {
+            return Err(TensorTrainError::InvalidStructure {
+                message: format!(
+                    "norm contraction did not close to a scalar environment: got shape {:?}",
+                    current.shape()
+                ),
+            });
+        }
+
+        let mut values =
+            tensor4all_tensorbackend::native_tensor_primal_to_dense_col_major::<T>(&current)
+                .map_err(|error| {
+                    TensorTrainError::operation_source(
+                        "failed to read the contracted norm environment",
+                        anyhow::Error::new(error),
+                    )
+                })?;
+        let value = values
+            .pop()
+            .ok_or_else(|| TensorTrainError::InvalidStructure {
+                message: "contracted norm environment has no scalar value".to_string(),
+            })?;
+        if !values.is_empty() {
+            return Err(TensorTrainError::InvalidStructure {
+                message: "contracted norm environment has multiple scalar values".to_string(),
+            });
+        }
+        Ok(value.into_nonnegative_real())
+    }
+
+    #[cfg(not(feature = "backend-tenferro"))]
+    fn norm_squared_from_packed_sites<T: NormAccumScalar>(
+        sites: Vec<PackedSiteTensor<T>>,
+    ) -> Result<f64> {
+        Self::norm_squared_from_packed_sites_oracle(&sites)
+    }
+
+    #[cfg(any(test, not(feature = "backend-tenferro")))]
     fn checked_norm_square(dim: usize) -> Result<usize> {
         if dim == 0 {
             return Err(TensorTrainError::InvalidStructure {

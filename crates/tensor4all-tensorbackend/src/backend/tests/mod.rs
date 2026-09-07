@@ -493,3 +493,37 @@ fn full_piv_lu_matrix_returns_square_factors() {
     assert_eq!(decomp.q.nrows(), 2);
     assert_eq!(decomp.q.ncols(), 2);
 }
+
+#[test]
+fn full_piv_lu_matrix_owned_matches_borrowed_factors() {
+    let input = crate::from_vec2d(vec![vec![0.0_f64, 1.0], vec![2.0, 3.0]]);
+    let borrowed = full_piv_lu_matrix(&input).unwrap();
+    let owned = full_piv_lu_matrix_owned(input).unwrap();
+
+    assert_eq!(
+        owned.p.as_col_major_slice(),
+        borrowed.p.as_col_major_slice()
+    );
+    assert_eq!(
+        owned.l.as_col_major_slice(),
+        borrowed.l.as_col_major_slice()
+    );
+    assert_eq!(
+        owned.u.as_col_major_slice(),
+        borrowed.u.as_col_major_slice()
+    );
+    assert_eq!(
+        owned.q.as_col_major_slice(),
+        borrowed.q.as_col_major_slice()
+    );
+}
+
+#[test]
+fn full_piv_lu_matrix_owned_preserves_shape_error() {
+    let input = crate::Matrix::from_col_major_vec(2, 3, vec![1.0_f64; 6]);
+    let borrowed_error = full_piv_lu_matrix(&input).unwrap_err().to_string();
+    let owned_error = full_piv_lu_matrix_owned(input).unwrap_err().to_string();
+
+    assert_eq!(owned_error, borrowed_error);
+    assert!(owned_error.contains("incompatible shapes"), "{owned_error}");
+}

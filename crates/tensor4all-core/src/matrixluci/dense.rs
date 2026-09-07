@@ -8,7 +8,7 @@ use crate::scalar::Scalar as LegacyScalar;
 use crate::{rrlu, RrLUOptions};
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::TensorScalar;
-use tensor4all_tensorbackend::{full_piv_lu_matrix, Matrix};
+use tensor4all_tensorbackend::{full_piv_lu_matrix_owned, Matrix};
 
 /// Dense full-pivoting LU kernel backed by the configured tensor backend.
 ///
@@ -145,7 +145,7 @@ impl DenseLuKernel {
     ) -> Result<PivotSelectionCore> {
         let matrix = Matrix::from_col_major_vec(n, n, data.to_vec());
         let decomp =
-            full_piv_lu_matrix(&matrix).map_err(|err| MatrixLuciError::InvalidArgument {
+            full_piv_lu_matrix_owned(matrix).map_err(|err| MatrixLuciError::InvalidArgument {
                 message: format!("tenferro full_piv_lu failed: {err}"),
             })?;
 

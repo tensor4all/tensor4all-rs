@@ -47,6 +47,75 @@ fn test_single_site_tt() {
     assert_eq!(tt.bond_dims(), Vec::<usize>::new());
 }
 
+#[test]
+fn norm_squared_single_site_has_expected_value() {
+    let tensor = IdxTensor::from_dense(vec![idx(10, 2)], vec![3.0_f64, 4.0]).unwrap();
+    let tt = TensorTrain::new(vec![tensor]).unwrap();
+
+    assert_eq!(tt.norm_squared().unwrap(), 25.0);
+}
+
+#[cfg(feature = "backend-tenferro")]
+fn make_norm_packed_sites<T>(
+    specs: &[(usize, usize, usize)],
+    mut value: impl FnMut(usize, usize) -> T,
+) -> Vec<PackedSiteTensor<T>> {
+    specs
+        .iter()
+        .enumerate()
+        .map(|(site, &(left_dim, physical_dim, right_dim))| {
+            let size = left_dim * physical_dim * right_dim;
+            let data = (0..size)
+                .map(|offset| value(site, offset))
+                .collect::<Vec<_>>();
+            PackedSiteTensor {
+                left_dim,
+                physical_dim,
+                right_dim,
+                data,
+            }
+        })
+        .collect()
+}
+
+#[cfg(feature = "backend-tenferro")]
+fn assert_packed_norm_matches_oracle<T>(sites: Vec<PackedSiteTensor<T>>, label: &str)
+where
+    T: NormAccumScalar + tensor4all_tensorbackend::TensorElement,
+{
+    let expected = TensorTrain::norm_squared_from_packed_sites_oracle(&sites).unwrap();
+    let actual = TensorTrain::norm_squared_from_packed_sites(sites).unwrap();
+    let tolerance = 1.0e-10 * expected.abs().max(1.0);
+    assert!(
+        (actual - expected).abs() <= tolerance,
+        "{label}: backend={actual:.16e}, oracle={expected:.16e}, tolerance={tolerance:.3e}"
+    );
+}
+
+#[cfg(feature = "backend-tenferro")]
+#[test]
+fn packed_norm_backend_matches_oracle_for_real_and_complex_layouts() {
+    let cases: &[&[(usize, usize, usize)]] = &[
+        &[(1, 2, 1)],
+        &[(1, 2, 2), (2, 3, 1)],
+        &[(1, 2, 3), (3, 2, 2), (2, 3, 1)],
+    ];
+
+    for (case_index, specs) in cases.iter().enumerate() {
+        let real_sites = make_norm_packed_sites(specs, |site, offset| {
+            0.1 + ((site * 19 + offset * 7 + 3) % 31) as f64 / 37.0
+        });
+        assert_packed_norm_matches_oracle(real_sites, &format!("f64 case {case_index}"));
+
+        let complex_sites = make_norm_packed_sites(specs, |site, offset| {
+            let real = 0.1 + ((site * 19 + offset * 7 + 3) % 31) as f64 / 37.0;
+            let imag = -0.2 + ((site * 11 + offset * 5 + 1) % 23) as f64 / 29.0;
+            Complex64::new(real, imag)
+        });
+        assert_packed_norm_matches_oracle(complex_sites, &format!("Complex64 case {case_index}"));
+    }
+}
+
 fn dense_tt_svd_round_trip<T: TensorElement>(data: Vec<T>, tolerance: f64) {
     let sites = [
         DynIndex::new_dyn(2),

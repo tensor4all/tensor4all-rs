@@ -1211,6 +1211,22 @@ where
         .map_err(BackendLinalgError::from)
 }
 
+fn full_piv_lu_tensor<T>(
+    tensor: Tensor,
+) -> std::result::Result<FullPivLuResult<T>, BackendLinalgError>
+where
+    T: BackendLinalgScalar,
+{
+    let (p, l, u, q, _parity) = with_default_session(|session| tensor.full_piv_lu(session))
+        .map_err(|e| anyhow!("complete-pivoting LU failed via tenferro-tensor: {e}"))?;
+    Ok(FullPivLuResult {
+        p: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", p)?)?,
+        l: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", l)?)?,
+        u: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", u)?)?,
+        q: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", q)?)?,
+    })
+}
+
 /// Compute complete-pivoting LU with the configured tenferro backend.
 /// # Errors
 ///
@@ -1230,14 +1246,7 @@ where
             .to_vec(),
     )
     .map_err(|e| anyhow!("LU input tensor construction failed: {e}"))?;
-    let (p, l, u, q, _parity) = with_default_session(|session| tensor.full_piv_lu(session))
-        .map_err(|e| anyhow!("complete-pivoting LU failed via tenferro-tensor: {e}"))?;
-    Ok(FullPivLuResult {
-        p: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", p)?)?,
-        l: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", l)?)?,
-        u: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", u)?)?,
-        q: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", q)?)?,
-    })
+    full_piv_lu_tensor(tensor)
 }
 
 /// Compute complete-pivoting LU for a column-major [`Matrix`].
@@ -1265,6 +1274,73 @@ where
 {
     let tensor = matrix_to_typed_tensor(a);
     let decomp = full_piv_lu_backend(&tensor)?;
+    Ok(FullPivLuMatrixResult {
+        p: typed_tensor_to_matrix("full_piv_lu", decomp.p)?,
+        l: typed_tensor_to_matrix("full_piv_lu", decomp.l)?,
+        u: typed_tensor_to_matrix("full_piv_lu", decomp.u)?,
+        q: typed_tensor_to_matrix("full_piv_lu", decomp.q)?,
+    })
+}
+
+/// Compute complete-pivoting LU for an owned column-major [`Matrix`].
+///
+/// This is the owned-buffer counterpart of [`full_piv_lu_matrix`]. It consumes
+/// the matrix so its column-major buffer can be transferred to tenferro without
+/// cloning the input before factorization.
+/// The returned factors satisfy `P * A * Qᵀ = L * U` when interpreted as
+/// column-major matrices.
+///
+/// # Errors
+///
+/// Returns [`BackendLinalgError`] when the input is not square (tenferro
+/// reports an incompatible shape), the configured backend rejects the scalar
+/// dtype, the complete-pivoting factorization fails, or a factor produced by
+/// the backend cannot be converted back to a matrix.
+///
+/// # Examples
+/// ```
+/// use tensor4all_tensorbackend::{from_vec2d, full_piv_lu_matrix_owned, Matrix};
+///
+/// fn matmul(a: &Matrix<f64>, b: &Matrix<f64>) -> Matrix<f64> {
+///     let mut out = Matrix::zeros(a.nrows(), b.ncols());
+///     for col in 0..b.ncols() {
+///         for k in 0..a.ncols() {
+///             for row in 0..a.nrows() {
+///                 out[[row, col]] += a[[row, k]] * b[[k, col]];
+///             }
+///         }
+///     }
+///     out
+/// }
+///
+/// fn transpose(a: &Matrix<f64>) -> Matrix<f64> {
+///     let mut out = Matrix::zeros(a.ncols(), a.nrows());
+///     for col in 0..a.ncols() {
+///         for row in 0..a.nrows() {
+///             out[[col, row]] = a[[row, col]];
+///         }
+///     }
+///     out
+/// }
+///
+/// let matrix = from_vec2d(vec![vec![2.0_f64, 1.0], vec![1.0, 2.0]]);
+/// let factors = full_piv_lu_matrix_owned(matrix.clone()).unwrap();
+/// let lhs = matmul(&factors.p, &matmul(&matrix, &transpose(&factors.q)));
+/// let rhs = matmul(&factors.l, &factors.u);
+/// for row in 0..2 {
+///     for col in 0..2 {
+///         assert!((lhs[[row, col]] - rhs[[row, col]]).abs() < 1.0e-12);
+///     }
+/// }
+/// ```
+pub fn full_piv_lu_matrix_owned<T>(
+    a: Matrix<T>,
+) -> std::result::Result<FullPivLuMatrixResult<T>, BackendLinalgError>
+where
+    T: BackendLinalgScalar + Copy,
+{
+    let tensor = T::typed_tensor_into_tensor(a.into_typed_tensor());
+    let decomp = full_piv_lu_tensor(tensor)?;
     Ok(FullPivLuMatrixResult {
         p: typed_tensor_to_matrix("full_piv_lu", decomp.p)?,
         l: typed_tensor_to_matrix("full_piv_lu", decomp.l)?,

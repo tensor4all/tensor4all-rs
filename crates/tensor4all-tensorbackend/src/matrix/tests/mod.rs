@@ -422,6 +422,13 @@ fn try_from_vec2d_rejects_shorter_rows() {
 }
 
 #[test]
+fn try_from_vec2d_preserves_column_major_storage() {
+    let matrix = try_from_vec2d(vec![vec![1.0_f64, 2.0, 3.0], vec![4.0, 5.0, 6.0]]).unwrap();
+
+    assert_eq!(matrix.as_col_major_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+}
+
+#[test]
 #[should_panic(expected = "row 1 has length 3, expected 2")]
 fn from_vec2d_panics_with_shape_error_for_ragged_rows() {
     let _ = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0, 5.0]]);
