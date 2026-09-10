@@ -12,6 +12,15 @@ Then read `README.md` and `REPOSITORY_RULES.md`. Read `PERFORMANCE_TIPS.md`
 evaluation, interpolation, caches, contraction hot paths) and when reviewing
 any PR touching those areas; `skills/audit-performance/` launches that audit.
 
+## Session-start artifact report
+
+Once per session, at the start of work, measure and report the total allocated
+Cargo artifact size across registered worktrees and their configured targets.
+Follow [the inventory procedure](docs/design/build-profiles.md#session-start-inventory):
+deduplicate shared paths and report unavailable measurements. Do not scan the
+whole disk or delete artifacts automatically. Re-reading this file does not
+require another measurement.
+
 ## Development Stage
 
 **Early development**: no backward compatibility. Remove deprecated code
@@ -76,11 +85,13 @@ Every public type, trait, and function **must** have doc comments:
 - mdBook guide code blocks follow the same rules, with hidden lines (`# `
   prefix) for `use` statements and `fn main()` wrappers.
 
-### CI Verification
+### Documentation Verification
 
-- `cargo test --doc --release --workspace` must pass.
-- `./scripts/test-mdbook.sh` must pass (raw `mdbook test docs/book` lacks the
-  resolved `--extern` flags the guide snippets need).
+- Locally, run `cargo test --doc -p <crate>` for affected rustdoc examples or
+  APIs they use. Prose-only changes need link and consistency checks, not builds.
+- Run `./scripts/test-mdbook.sh` when guide snippets or their APIs change (raw
+  `mdbook test docs/book` lacks the resolved `--extern` flags they need).
+- Hosted CI retains full workspace doctests and guide tests.
 
 ### Public Surface Drift
 
@@ -126,12 +137,17 @@ rules in `docs/CAPI_DESIGN.md`.
 ## Testing
 
 ```bash
-cargo nextest run --release --workspace          # Full suite
-cargo nextest run --release --test test_name     # Specific test
-cargo nextest run --release -p crate_name        # Single crate
+cargo test -p <crate> <test_filter>              # Focused regression
+cargo nextest run -p <crate>                     # Changed crate (non-HDF5)
+cargo test -p tensor4all-hdf5                    # HDF5 uses cargo test
 ```
 
-**Always use `--release` for tests**; debug builds are too slow.
+Use non-release builds for ordinary local edit-test loops. Use focused release
+checks for performance claims, release-only failures, unsafe or
+optimization-sensitive behavior, or an explicit maintainer request. If a
+numerical regression is impractically slow without optimization, run that test
+in release mode and record why. Do not run both `release` and `ci` by default.
+See the [local validation table](CONTRIBUTING.md#validate-locally).
 
 - Private functions: `#[cfg(test)]` module in the source file. Integration
   tests: `tests/`.
@@ -260,20 +276,18 @@ link the related Julia-side issue.
 - After updating, re-monitor CI; earlier green checks do not cover the
   synchronized branch.
 
-### Pre-PR Checks (matches CI)
+### Pre-PR Checks
 
-Run before pushing.
+Use the change/risk-tiered [local validation table](CONTRIBUTING.md#validate-locally)
+before pushing; do not duplicate the full hosted suite for every change.
+Required hosted CI and repository-rules review remain authoritative and must
+pass. Report exact local checks and any unavailable validation. Numerical,
+FFI, unsafe, release, and human-only publication safety gates still apply.
 
-```bash
-cargo fmt --all                        # Auto-fix formatting
-cargo fmt --all -- --check             # Dry-run (matches CI)
-cargo clippy --workspace --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
-cargo test -p <changed-crate> --release # Quick check first
-cargo nextest run --cargo-profile ci --workspace --exclude tensor4all-hdf5
-cargo test --profile ci -p tensor4all-hdf5
-cargo test --doc --profile ci --workspace -j 8
-cargo doc --workspace --no-deps        # Build rustdoc
-```
+Keep reusable active-worktree artifacts. Clean owned disposable output when
+work ends, and review long-lived targets periodically according to available
+space. Follow [artifact ownership and cleanup](docs/design/build-profiles.md#artifact-cleanup);
+never clean another task's or a shared target without owner approval.
 
 ### Repository Rules Review Bot
 
@@ -327,7 +341,7 @@ an unrouted section is never shown to the reviewer and
 ```bash
 # Minor: branch workflow
 git checkout -b fix-name && git add -A && git commit -m "msg"
-cargo fmt --all && cargo clippy --workspace  # Lint before push
+# Run the applicable CONTRIBUTING.md local validation tier before push
 git push -u origin fix-name
 gh pr create --base main --title "Title" --body "Desc"
 gh pr merge --auto --squash --delete-branch
