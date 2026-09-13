@@ -235,8 +235,15 @@ fn test_op_c64() { test_op_generic::<Complex64>(); }
 
 ## C API & Language Bindings
 
-The C API is the binding boundary; patterns in `docs/CAPI_DESIGN.md`. Bindings:
-[Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl) (separate repo).
+The C API is the binding boundary for C, C++, and Julia; patterns in
+`docs/CAPI_DESIGN.md`. Bindings: [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl)
+(separate repo).
+
+Python uses a direct PyO3 boundary instead: `crates/tensor4all-py` wraps the
+public Rust APIs of `tensor4all-core` and `tensor4all-treetn` and is not part of
+the C API surface. It is a prototype and not a workspace member (it links
+CPython); see `crates/tensor4all-py/README.md`. Features needed by Python still
+land in the Rust crates first.
 
 Truncation tolerance: support both `cutoff` (ITensors) and `rtol`
 (tensor4all-rs); `rtol = √cutoff`.
