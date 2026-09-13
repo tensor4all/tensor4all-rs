@@ -16,7 +16,8 @@ converts the state to TreeTN, aligns site indices, and applies it via
 ```rust
 # fn main() -> anyhow::Result<()> {
 # use tensor4all_quanticstci::{
-#     quanticscrossinterpolate, DiscretizedGrid, QtciOptions, UnfoldingScheme,
+#     pointwise_coordinate_batch,
+#     quanticscrossinterpolate_batch, DiscretizedGrid, QtciOptions, UnfoldingScheme,
 # };
 # use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 # use tensor4all_treetn::{apply_linear_operator, tensor_train_to_treetn, ApplyOptions};
@@ -35,7 +36,7 @@ let options = QtciOptions::default()
     .with_unfoldingscheme(UnfoldingScheme::Interleaved)
     .with_verbosity(0);
 
-let (state, _, _) = quanticscrossinterpolate(&grid, gaussian, None, options)?;
+let (state, _, _) = quanticscrossinterpolate_batch(&grid, pointwise_coordinate_batch(gaussian), None, options)?;
 
 let mut operator = quantics_fourier_operator(bits, FourierOptions::forward())?;
 assert_eq!(operator.mpo().node_count(), bits);

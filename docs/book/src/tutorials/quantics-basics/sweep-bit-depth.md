@@ -14,7 +14,8 @@ zero-based discrete grid index mapped to `x in [0, 1)`.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-# use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
+# use tensor4all_quanticstci::{
+#     pointwise_index_batch,quanticscrossinterpolate_discrete_batch, QtciOptions};
 let mut point_counts = Vec::new();
 
 for bits in [7usize, 8] {
@@ -28,7 +29,7 @@ for bits in [7usize, 8] {
     let options = QtciOptions::default()
         .with_verbosity(0);
     let (qtt, _ranks, _errors) =
-        quanticscrossinterpolate_discrete::<f64, _>(&sizes, f, None, options)?;
+        quanticscrossinterpolate_discrete_batch::<f64, _>(&sizes, pointwise_index_batch(f), None, options)?;
 
     let last_grid_index = size - 1;
     let x_last = last_grid_index as f64 / size as f64;

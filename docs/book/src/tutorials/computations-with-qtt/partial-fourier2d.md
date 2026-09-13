@@ -18,7 +18,8 @@ gaps. The source function is
 ```rust
 # fn main() -> anyhow::Result<()> {
 # use tensor4all_quanticstci::{
-#     quanticscrossinterpolate, DiscretizedGrid, QtciOptions, UnfoldingScheme,
+#     pointwise_coordinate_batch,
+#     quanticscrossinterpolate_batch, DiscretizedGrid, QtciOptions, UnfoldingScheme,
 # };
 # use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 # use tensor4all_simplett::AbstractTensorTrain;
@@ -40,7 +41,7 @@ let options = QtciOptions::default()
     .with_unfoldingscheme(UnfoldingScheme::Interleaved)
     .with_verbosity(0);
 
-let (state, _ranks, _errors) = quanticscrossinterpolate(&grid, f, None, options)?;
+let (state, _ranks, _errors) = quanticscrossinterpolate_batch(&grid, pointwise_coordinate_batch(f), None, options)?;
 
 let operator = quantics_fourier_operator(bits, FourierOptions::forward())?;
 assert_eq!(operator.mpo().node_count(), bits);

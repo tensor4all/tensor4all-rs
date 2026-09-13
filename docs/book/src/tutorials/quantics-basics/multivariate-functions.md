@@ -15,7 +15,8 @@ The target function is `f(x, y) = x * cos(x) * cos(y)`.
 ```rust
 # fn main() -> anyhow::Result<()> {
 # use tensor4all_quanticstci::{
-#     quanticscrossinterpolate, DiscretizedGrid, QtciOptions, UnfoldingScheme,
+#     pointwise_coordinate_batch,
+#     quanticscrossinterpolate_batch, DiscretizedGrid, QtciOptions, UnfoldingScheme,
 # };
 let grid = DiscretizedGrid::builder(&[7, 7])
     .with_variable_names(&["x", "y"])
@@ -32,7 +33,7 @@ let f = |coords: &[f64]| -> f64 {
 let options = QtciOptions::default()
     .with_unfoldingscheme(UnfoldingScheme::Interleaved)
     .with_verbosity(0);
-let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, None, options)?;
+let (qtt, _ranks, _errors) = quanticscrossinterpolate_batch(&grid, pointwise_coordinate_batch(f), None, options)?;
 
 assert!((qtt.evaluate(&[0, 0])? - f(&[-2.0, -2.0])).abs() < 1e-6);
 # Ok(())

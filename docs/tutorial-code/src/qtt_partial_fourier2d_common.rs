@@ -14,7 +14,8 @@ use num_complex::Complex64;
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::IdxTensor;
 use tensor4all_quanticstci::{
-    quanticscrossinterpolate, DiscretizedGrid, QtciOptions, QuanticsTensorCI2, UnfoldingScheme,
+    pointwise_coordinate_batch, quanticscrossinterpolate_batch, DiscretizedGrid, QtciOptions,
+    QuanticsTensorCI2, UnfoldingScheme,
 };
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 use tensor4all_treetn::{
@@ -207,9 +208,9 @@ pub fn build_source_qtt(
 
     let config_copy = *config;
     let f = move |coords: &[f64]| -> f64 { source_function(coords[0], coords[1], &config_copy) };
-    Ok(quanticscrossinterpolate(
+    Ok(quanticscrossinterpolate_batch(
         grid,
-        f,
+        pointwise_coordinate_batch(f),
         Some(initial_pivots),
         options,
     )?)

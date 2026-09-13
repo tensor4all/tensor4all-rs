@@ -9,7 +9,9 @@ use std::error::Error;
 use std::fs;
 use std::path::Path;
 
-use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions, UnfoldingScheme};
+use tensor4all_quanticstci::{
+    pointwise_index_batch, quanticscrossinterpolate_discrete_batch, QtciOptions, UnfoldingScheme,
+};
 use tensor4all_tutorial_code::output_paths;
 use tensor4all_tutorial_code::qtt_function_utils::{
     collect_samples, print_summary, write_bond_dims_csv, write_samples_csv,
@@ -113,9 +115,9 @@ where
 
     let initial_pivots = vec![vec![1], vec![NPOINTS / 2 - 1], vec![NPOINTS - 1]];
 
-    Ok(quanticscrossinterpolate_discrete(
+    Ok(quanticscrossinterpolate_discrete_batch(
         &sizes,
-        f,
+        pointwise_index_batch(f),
         Some(initial_pivots),
         options,
     )?)

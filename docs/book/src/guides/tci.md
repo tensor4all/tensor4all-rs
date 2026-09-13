@@ -110,24 +110,24 @@ The quantics representation encodes each grid index in binary and arranges the b
 
 - Indexing differs between the two APIs:
   - `crossinterpolate2` (low-level): indices and pivots are 0-indexed (`0..local_dim`)
-  - `quanticscrossinterpolate_discrete` (high-level): grid indices are 0-indexed (`0..grid_size`)
-- Equal dimensions: `quanticscrossinterpolate_discrete` requires all dimensions to have the same number of points.
+  - `quanticscrossinterpolate_discrete_batch` (high-level): grid indices are 0-indexed (`0..grid_size`)
+- Equal dimensions: `quanticscrossinterpolate_discrete_batch` requires all dimensions to have the same number of points.
 - Power-of-2 grid sizes: all grid dimensions must be powers of 2 (4, 8, 16, 32, ...).
 
 ### Choosing between discrete and continuous APIs
 
 | Scenario | Function to use |
 |---|---|
-| Function on integer grid (lattice, combinatorial) | `quanticscrossinterpolate_discrete` |
-| Function on continuous interval `[a, b)` | `quanticscrossinterpolate` with `DiscretizedGrid` |
-| Grid points given as explicit coordinate arrays | `quanticscrossinterpolate_from_arrays` |
-| Vector/tensor-valued function | `quanticscrossinterpolate_batched` |
+| Function on integer grid (lattice, combinatorial) | `quanticscrossinterpolate_discrete_batch` |
+| Function on continuous interval `[a, b)` | `quanticscrossinterpolate_batch` with `DiscretizedGrid` |
+| Grid points given as explicit coordinate arrays | `quanticscrossinterpolate_from_arrays_batch` |
+| Vector/tensor-valued function | `quanticscrossinterpolate_multicomponent` |
 
 **Tip on `n_random_init_pivot`**: The `n_random_init_pivot` option (default: 5) controls how many random initial pivot points are used to seed the TCI algorithm. For functions with multiple separated features or high-dimensional problems, increase this to 10--20 to improve robustness.
 
 ### Discrete grid interpolation
 
-Use `quanticscrossinterpolate_discrete` when your function is naturally defined on an integer grid. Indices are passed as `&[usize]` and are 0-indexed.
+Use `quanticscrossinterpolate_discrete_batch` when your function is naturally defined on an integer grid. Indices are passed as `&[usize]` and are 0-indexed.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
@@ -136,12 +136,10 @@ use tensor4all_quanticstci::prelude::*;
 let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
 let sizes = vec![16, 16];
 
-let (qtci, ranks, errors) = quanticscrossinterpolate_discrete::<f64, _>(
-    &sizes,
-    f,
+let (qtci, ranks, errors) = quanticscrossinterpolate_discrete_batch::<f64, _>(
+    &sizes, pointwise_index_batch(f),
     None,
-    QtciOptions::default().with_tolerance(1e-10),
-)?;
+    QtciOptions::default().with_tolerance(1e-10))?;
 
 assert!(*errors.last().unwrap() < 1e-10);
 assert!(!ranks.is_empty());
@@ -173,12 +171,10 @@ let grid = DiscretizedGrid::builder(&[4])
 
 let f = |x: &[f64]| x[0] * x[0];
 
-let (qtci, _ranks, errors) = quanticscrossinterpolate::<f64, _>(
-    &grid,
-    f,
+let (qtci, _ranks, errors) = quanticscrossinterpolate_batch::<f64, _>(
+    &grid, pointwise_coordinate_batch(f),
     None,
-    QtciOptions::default(),
-)?;
+    QtciOptions::default())?;
 
 assert!(*errors.last().unwrap() < 1e-8);
 
@@ -208,8 +204,8 @@ This has O(h) convergence where h is the grid spacing. The result depends on whe
 #     .build()
 #     .unwrap();
 # let f = |x: &[f64]| x[0] * x[0];
-# let (qtci, _, _) = quanticscrossinterpolate::<f64, _>(
-#     &grid, f, None, QtciOptions::default(),
+# let (qtci, _, _) = quanticscrossinterpolate_batch::<f64, _>(
+#     &grid, pointwise_coordinate_batch(f), None, QtciOptions::default(),
 # )?;
 let integral = qtci.integral()?;
 // Left Riemann sum of x^2 over [0, 1) with 16 points
@@ -255,15 +251,13 @@ let f = move |coords: &[f64]| {
 };
 
 let tol = 1e-8;
-let (qtci, _ranks, errors) = quanticscrossinterpolate::<f64, _>(
-    &grid,
-    f,
+let (qtci, _ranks, errors) = quanticscrossinterpolate_batch::<f64, _>(
+    &grid, pointwise_coordinate_batch(f),
     None,
     QtciOptions::default()
         .with_tolerance(tol)
         .with_max_bond_dim(64)
-        .with_nrandominitpivot(8),
-)?;
+        .with_nrandominitpivot(8))?;
 
 assert!(*errors.last().unwrap() < tol);
 
@@ -296,15 +290,13 @@ let f = |idx: &[usize]| {
     (x / 24.0).cos() + (y / 17.0).cos() + 0.1 * ((x + y) / 13.0).sin()
 };
 
-let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete::<f64, _>(
-    &sizes,
-    f,
+let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete_batch::<f64, _>(
+    &sizes, pointwise_index_batch(f),
     None,
     QtciOptions::default()
         .with_tolerance(1e-10)
         .with_max_bond_dim(64)
-        .with_nrandominitpivot(8),
-)?;
+        .with_nrandominitpivot(8))?;
 
 assert!(*errors.last().unwrap() < 1e-8);
 

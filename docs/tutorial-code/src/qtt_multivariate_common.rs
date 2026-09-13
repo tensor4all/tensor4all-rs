@@ -11,7 +11,8 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use tensor4all_quanticstci::{
-    quanticscrossinterpolate, DiscretizedGrid, QtciOptions, QuanticsTensorCI2, UnfoldingScheme,
+    pointwise_coordinate_batch, quanticscrossinterpolate_batch, DiscretizedGrid, QtciOptions,
+    QuanticsTensorCI2, UnfoldingScheme,
 };
 use tensor4all_simplett::{MultiIndex, TTCache};
 
@@ -93,9 +94,9 @@ where
         vec![npoints - 1, npoints - 1],
     ];
 
-    Ok(quanticscrossinterpolate(
+    Ok(quanticscrossinterpolate_batch(
         grid,
-        f,
+        pointwise_coordinate_batch(f),
         Some(initial_pivots),
         options,
     )?)

@@ -10,7 +10,8 @@ use std::io;
 use std::path::Path;
 
 use tensor4all_quanticstci::{
-    quanticscrossinterpolate, DiscretizedGrid, QtciOptions, UnfoldingScheme,
+    pointwise_coordinate_batch, quanticscrossinterpolate_batch, DiscretizedGrid, QtciOptions,
+    UnfoldingScheme,
 };
 use tensor4all_tutorial_code::output_paths;
 use tensor4all_tutorial_code::qtt_multivariate_common::{
@@ -103,15 +104,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     ];
 
     // Build two QTT approximations of the same physical function using different layouts.
-    let (interleaved, interleaved_ranks, interleaved_errors) = quanticscrossinterpolate(
+    let (interleaved, interleaved_ranks, interleaved_errors) = quanticscrossinterpolate_batch(
         &interleaved_grid,
-        target,
+        pointwise_coordinate_batch(target),
         Some(initial_pivots.clone()),
         options.clone(),
     )?;
 
-    let (grouped, grouped_ranks, grouped_errors) =
-        quanticscrossinterpolate(&grouped_grid, target, Some(initial_pivots), options)?;
+    let (grouped, grouped_ranks, grouped_errors) = quanticscrossinterpolate_batch(
+        &grouped_grid,
+        pointwise_coordinate_batch(target),
+        Some(initial_pivots),
+        options,
+    )?;
 
     // Reconstruct both QTTs on the full Cartesian grid for heatmaps and error plots.
     let samples = collect_samples(&interleaved, &grouped, multivariate_target)?;

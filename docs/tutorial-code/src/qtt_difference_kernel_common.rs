@@ -12,7 +12,8 @@ use std::path::Path;
 
 use num_complex::Complex64;
 use tensor4all_quanticstci::{
-    quanticscrossinterpolate_discrete, QtciOptions, QuanticsTensorCI2, UnfoldingScheme,
+    pointwise_index_batch, quanticscrossinterpolate_discrete_batch, QtciOptions, QuanticsTensorCI2,
+    UnfoldingScheme,
 };
 use tensor4all_quanticstransform::{difference_kernel_mpo, BoundaryCondition};
 use tensor4all_simplett::{
@@ -109,9 +110,9 @@ pub fn build_kernel_qtt(
         vec![n - 1],
     ];
 
-    Ok(quanticscrossinterpolate_discrete(
+    Ok(quanticscrossinterpolate_discrete_batch(
         &sizes,
-        callback,
+        pointwise_index_batch(callback),
         Some(initial_pivots),
         options,
     )?)

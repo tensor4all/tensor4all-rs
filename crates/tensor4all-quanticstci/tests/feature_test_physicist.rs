@@ -2,16 +2,17 @@
 //! from the perspective of a computational physicist.
 //!
 //! Entry points tested:
-//!   1. `quanticscrossinterpolate_discrete` -- discrete integer grids
-//!   2. `quanticscrossinterpolate`          -- continuous grids via DiscretizedGrid
-//!   3. `quanticscrossinterpolate_from_arrays` -- continuous grids from explicit arrays
+//!   1. `quanticscrossinterpolate_discrete_batch` -- discrete integer grids
+//!   2. `quanticscrossinterpolate_batch`          -- continuous grids via DiscretizedGrid
+//!   3. `quanticscrossinterpolate_from_arrays_batch` -- continuous grids from explicit arrays
 //!
 //! Test functions include polynomials, exponentials, and products, with analytical
 //! cross-checks for evaluation, summation, and integration.
 
 use tensor4all_quanticstci::{
-    quanticscrossinterpolate, quanticscrossinterpolate_discrete,
-    quanticscrossinterpolate_from_arrays, DiscretizedGrid, QtciOptions, UnfoldingScheme,
+    pointwise_coordinate_batch, pointwise_index_batch, quanticscrossinterpolate_batch,
+    quanticscrossinterpolate_discrete_batch, quanticscrossinterpolate_from_arrays_batch,
+    DiscretizedGrid, QtciOptions, UnfoldingScheme,
 };
 
 // ---------------------------------------------------------------------------
@@ -39,7 +40,8 @@ fn discrete_1d_polynomial() {
         .with_nrandominitpivot(5);
 
     let (qtci, _ranks, errors) =
-        quanticscrossinterpolate_discrete(&sizes, f, None, opts).expect("discrete 1D should work");
+        quanticscrossinterpolate_discrete_batch(&sizes, pointwise_index_batch(f), None, opts)
+            .expect("discrete 1D should work");
 
     // Convergence check
     assert!(
@@ -80,7 +82,8 @@ fn discrete_2d_product() {
         .with_nrandominitpivot(5);
 
     let (qtci, _ranks, errors) =
-        quanticscrossinterpolate_discrete(&sizes, f, None, opts).expect("discrete 2D should work");
+        quanticscrossinterpolate_discrete_batch(&sizes, pointwise_index_batch(f), None, opts)
+            .expect("discrete 2D should work");
 
     assert!(
         *errors.last().unwrap() < 1e-10,
@@ -122,7 +125,8 @@ fn discrete_1d_exponential() {
         .with_nrandominitpivot(10);
 
     let (qtci, _ranks, errors) =
-        quanticscrossinterpolate_discrete(&sizes, f, None, opts).expect("discrete exp should work");
+        quanticscrossinterpolate_discrete_batch(&sizes, pointwise_index_batch(f), None, opts)
+            .expect("discrete exp should work");
 
     assert!(
         *errors.last().unwrap() < 1e-10,
@@ -163,7 +167,8 @@ fn discrete_constant_function() {
         .with_nrandominitpivot(3);
 
     let (qtci, _ranks, _errors) =
-        quanticscrossinterpolate_discrete(&sizes, f, None, opts).expect("constant fn should work");
+        quanticscrossinterpolate_discrete_batch(&sizes, pointwise_index_batch(f), None, opts)
+            .expect("constant fn should work");
 
     // Rank should be 1 for a constant
     assert_eq!(qtci.rank(), 1, "constant function should have rank 1");
@@ -189,8 +194,13 @@ fn discrete_with_explicit_pivots() {
 
     // Provide 0-indexed grid pivots
     let pivots = vec![vec![0, 0], vec![7, 7], vec![15, 15]];
-    let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete(&sizes, f, Some(pivots), opts)
-        .expect("explicit pivots should work");
+    let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete_batch(
+        &sizes,
+        pointwise_index_batch(f),
+        Some(pivots),
+        opts,
+    )
+    .expect("explicit pivots should work");
 
     assert!(
         *errors.last().unwrap() < 1e-10,
@@ -206,7 +216,12 @@ fn discrete_with_explicit_pivots() {
 #[test]
 fn discrete_non_power_of_two_error() {
     let f = |_idx: &[usize]| 0.0_f64;
-    let result = quanticscrossinterpolate_discrete(&[10], f, None, QtciOptions::default());
+    let result = quanticscrossinterpolate_discrete_batch(
+        &[10],
+        pointwise_index_batch(f),
+        None,
+        QtciOptions::default(),
+    );
     assert!(
         result.is_err(),
         "non-power-of-2 grid size should return an error"
@@ -217,7 +232,12 @@ fn discrete_non_power_of_two_error() {
 #[test]
 fn discrete_unequal_sizes_error() {
     let f = |_idx: &[usize]| 0.0_f64;
-    let result = quanticscrossinterpolate_discrete(&[8, 16], f, None, QtciOptions::default());
+    let result = quanticscrossinterpolate_discrete_batch(
+        &[8, 16],
+        pointwise_index_batch(f),
+        None,
+        QtciOptions::default(),
+    );
     assert!(
         result.is_err(),
         "unequal dimension sizes should return an error"
@@ -247,7 +267,8 @@ fn continuous_1d_polynomial() {
         .with_nrandominitpivot(5);
 
     let (qtci, _ranks, errors) =
-        quanticscrossinterpolate(&grid, f, None, opts).expect("continuous 1D should work");
+        quanticscrossinterpolate_batch(&grid, pointwise_coordinate_batch(f), None, opts)
+            .expect("continuous 1D should work");
 
     assert!(
         *errors.last().unwrap() < 1e-10,
@@ -290,7 +311,8 @@ fn continuous_2d_gaussian() {
         .with_nrandominitpivot(10);
 
     let (qtci, _ranks, errors) =
-        quanticscrossinterpolate(&grid, f, None, opts).expect("2D Gaussian should work");
+        quanticscrossinterpolate_batch(&grid, pointwise_coordinate_batch(f), None, opts)
+            .expect("2D Gaussian should work");
 
     assert!(
         *errors.last().unwrap() < 1e-8,
@@ -335,7 +357,8 @@ fn continuous_cachedata_origcoord() {
         .with_nrandominitpivot(5);
 
     let (qtci, _ranks, _errors) =
-        quanticscrossinterpolate(&grid, f, None, opts).expect("sin interpolation should work");
+        quanticscrossinterpolate_batch(&grid, pointwise_coordinate_batch(f), None, opts)
+            .expect("sin interpolation should work");
 
     let cache = qtci.cachedata_origcoord().unwrap();
     assert!(!cache.is_empty(), "cache should not be empty");
@@ -367,7 +390,8 @@ fn continuous_integral_constant() {
         .with_nrandominitpivot(3);
 
     let (qtci, _ranks, _errors) =
-        quanticscrossinterpolate(&grid, f, None, opts).expect("constant should work");
+        quanticscrossinterpolate_batch(&grid, pointwise_coordinate_batch(f), None, opts)
+            .expect("constant should work");
 
     // integral of 1 over [0,1] = 1.0
     let integral = qtci.integral().unwrap();
@@ -395,9 +419,13 @@ fn from_arrays_1d_cubic() {
         .with_tolerance(1e-10)
         .with_nrandominitpivot(5);
 
-    let (qtci, _ranks, errors) =
-        quanticscrossinterpolate_from_arrays(std::slice::from_ref(&xvals), f, None, opts)
-            .expect("from_arrays 1D cubic should work");
+    let (qtci, _ranks, errors) = quanticscrossinterpolate_from_arrays_batch(
+        std::slice::from_ref(&xvals),
+        pointwise_coordinate_batch(f),
+        None,
+        opts,
+    )
+    .expect("from_arrays 1D cubic should work");
 
     assert!(
         *errors.last().unwrap() < 1e-8,
@@ -432,9 +460,9 @@ fn from_arrays_2d_linear() {
     // flaky failure when random pivots all land on (0,0) where f(0,0)=0.
     let initial_pivots = vec![vec![1usize, 1]];
 
-    let (qtci, _ranks, _errors) = quanticscrossinterpolate_from_arrays(
+    let (qtci, _ranks, _errors) = quanticscrossinterpolate_from_arrays_batch(
         &[xvals.clone(), xvals.clone()],
-        f,
+        pointwise_coordinate_batch(f),
         Some(initial_pivots),
         opts,
     )
@@ -472,8 +500,13 @@ fn from_arrays_1d_gaussian_integral() {
         .with_tolerance(1e-12)
         .with_nrandominitpivot(10);
 
-    let (qtci, _ranks, _errors) = quanticscrossinterpolate_from_arrays(&[xvals], f, None, opts)
-        .expect("from_arrays Gaussian should work");
+    let (qtci, _ranks, _errors) = quanticscrossinterpolate_from_arrays_batch(
+        &[xvals],
+        pointwise_coordinate_batch(f),
+        None,
+        opts,
+    )
+    .expect("from_arrays Gaussian should work");
 
     // integral of exp(-x^2) from -3 to 3 ~ sqrt(pi) * erf(3) ~ 1.7724539 * 0.9999779 ~ 1.7724
     let integral = qtci.integral().unwrap();
@@ -490,23 +523,27 @@ fn from_arrays_error_cases() {
     let f = |_coords: &[f64]| 1.0_f64;
 
     // Empty
-    let result =
-        quanticscrossinterpolate_from_arrays::<f64, _>(&[], f, None, QtciOptions::default());
+    let result = quanticscrossinterpolate_from_arrays_batch::<f64, _>(
+        &[],
+        pointwise_coordinate_batch(f),
+        None,
+        QtciOptions::default(),
+    );
     assert!(result.is_err(), "empty xvals should error");
 
     // Non-power-of-2
-    let result = quanticscrossinterpolate_from_arrays::<f64, _>(
+    let result = quanticscrossinterpolate_from_arrays_batch::<f64, _>(
         &[vec![0.0, 1.0, 2.0]],
-        f,
+        pointwise_coordinate_batch(f),
         None,
         QtciOptions::default(),
     );
     assert!(result.is_err(), "3-element array should error");
 
     // Unequal dimensions
-    let result = quanticscrossinterpolate_from_arrays::<f64, _>(
+    let result = quanticscrossinterpolate_from_arrays_batch::<f64, _>(
         &[vec![0.0, 1.0, 2.0, 3.0], vec![0.0, 1.0]],
-        f,
+        pointwise_coordinate_batch(f),
         None,
         QtciOptions::default(),
     );
@@ -555,8 +592,9 @@ fn options_max_bond_dim_limits_rank() {
         .with_max_bond_dim(3) // But cap bond dim at 3
         .with_nrandominitpivot(5);
 
-    let (qtci, _ranks, _errors) = quanticscrossinterpolate_discrete(&sizes, f, None, opts)
-        .expect("max_bond_dim test should work");
+    let (qtci, _ranks, _errors) =
+        quanticscrossinterpolate_discrete_batch(&sizes, pointwise_index_batch(f), None, opts)
+            .expect("max_bond_dim test should work");
 
     // The rank should respect the maximum bond dimension
     assert!(
@@ -583,7 +621,8 @@ fn tensor_train_consistency() {
         .with_nrandominitpivot(5);
 
     let (qtci, _ranks, _errors) =
-        quanticscrossinterpolate_discrete(&sizes, f, None, opts).expect("should work");
+        quanticscrossinterpolate_discrete_batch(&sizes, pointwise_index_batch(f), None, opts)
+            .expect("should work");
 
     let _tt = qtci.tensor_train();
 
@@ -616,7 +655,8 @@ fn tensor_train_accessor() {
         .with_nrandominitpivot(3);
 
     let (qtci, _ranks, _errors) =
-        quanticscrossinterpolate_discrete(&sizes, f, None, opts).expect("should work");
+        quanticscrossinterpolate_discrete_batch(&sizes, pointwise_index_batch(f), None, opts)
+            .expect("should work");
 
     let tt = qtci.tensor_train();
     assert!(tt.rank() > 0);
@@ -641,8 +681,9 @@ fn unfolding_scheme_comparison() {
             .with_nrandominitpivot(5)
             .with_unfoldingscheme(scheme);
 
-        let (qtci, _ranks, _errors) = quanticscrossinterpolate_discrete(&sizes, f, None, opts)
-            .unwrap_or_else(|e| panic!("scheme {scheme:?} failed: {e}"));
+        let (qtci, _ranks, _errors) =
+            quanticscrossinterpolate_discrete_batch(&sizes, pointwise_index_batch(f), None, opts)
+                .unwrap_or_else(|e| panic!("scheme {scheme:?} failed: {e}"));
 
         // Check a few evaluations
         let val = qtci.evaluate(&[2, 4]).unwrap();

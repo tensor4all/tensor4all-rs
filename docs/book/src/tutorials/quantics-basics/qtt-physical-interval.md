@@ -14,7 +14,8 @@ Here the target function is `f(x) = x^2` on `[-1, 2]`.
 ```rust
 # fn main() -> anyhow::Result<()> {
 # use tensor4all_quanticstci::{
-#     quanticscrossinterpolate, DiscretizedGrid, QtciOptions, UnfoldingScheme,
+#     pointwise_coordinate_batch,
+#     quanticscrossinterpolate_batch, DiscretizedGrid, QtciOptions, UnfoldingScheme,
 # };
 let grid = DiscretizedGrid::builder(&[7])
     .with_lower_bound(&[-1.0])
@@ -29,7 +30,7 @@ let f = |coords: &[f64]| -> f64 {
 };
 let options = QtciOptions::default()
     .with_verbosity(0);
-let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, None, options)?;
+let (qtt, _ranks, _errors) = quanticscrossinterpolate_batch(&grid, pointwise_coordinate_batch(f), None, options)?;
 
 assert!((qtt.evaluate(&[127])? - 4.0).abs() < 1e-8);
 # Ok(())

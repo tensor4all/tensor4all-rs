@@ -14,7 +14,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions, UnfoldingScheme};
+use tensor4all_quanticstci::{
+    pointwise_index_batch, quanticscrossinterpolate_discrete_batch, QtciOptions, UnfoldingScheme,
+};
 use tensor4all_tutorial_code::output_paths;
 use tensor4all_tutorial_code::qtt_r_sweep_utils::{
     collect_samples, max_abs_error, mean_abs_error, print_sweep_summary, write_samples_csv,
@@ -129,7 +131,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 /// Build a QTT approximation for a scalar function on the unit interval.
 ///
-/// The library function `quanticscrossinterpolate_discrete(...)` expects a
+/// The library function `quanticscrossinterpolate_discrete_batch(...)` expects a
 /// callback on discrete grid indices, so this helper performs the index-to-x
 /// conversion first.
 fn build_qtt_from_function<F>(npoints: usize, target_fn: F) -> Result<QttDemoOutput, Box<dyn Error>>
@@ -153,9 +155,9 @@ where
 
     let initial_pivots = vec![vec![1], vec![npoints / 2 - 1], vec![npoints - 1]];
 
-    Ok(quanticscrossinterpolate_discrete(
+    Ok(quanticscrossinterpolate_discrete_batch(
         &sizes,
-        callback,
+        pointwise_index_batch(callback),
         Some(initial_pivots),
         options,
     )?)

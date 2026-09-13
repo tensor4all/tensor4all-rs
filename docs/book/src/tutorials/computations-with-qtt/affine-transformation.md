@@ -18,7 +18,8 @@ applied via `tensor_train_to_treetn`, `align_to_state`, and
 # fn main() -> anyhow::Result<()> {
 # use tensor4all_core::TensorIndex;
 # use tensor4all_quanticstci::{
-#     quanticscrossinterpolate_discrete, QtciOptions, UnfoldingScheme,
+#     pointwise_index_batch,
+#     quanticscrossinterpolate_discrete_batch, QtciOptions, UnfoldingScheme,
 # };
 # use tensor4all_quanticstransform::{
 #     affine_operator, AffineParams, BoundaryCondition,
@@ -41,12 +42,10 @@ let source_options = QtciOptions::default()
     .with_unfoldingscheme(UnfoldingScheme::Fused)
     .with_verbosity(0);
 
-let (source, _, _) = quanticscrossinterpolate_discrete::<f64, _>(
-    &source_grid,
-    source_function,
+let (source, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
+    &source_grid, pointwise_index_batch(source_function),
     None,
-    source_options,
-)?;
+    source_options)?;
 
 let params = AffineParams::from_integers(vec![1, 1, 0, 1], vec![0, 0], 2, 2)?;
 let mut operator = affine_operator(bits, &params, &[BoundaryCondition::Periodic; 2])?

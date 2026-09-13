@@ -15,7 +15,8 @@ pointwise product. The two target functions are `f(x) = x^2` and
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-# use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
+# use tensor4all_quanticstci::{
+#     pointwise_index_batch,quanticscrossinterpolate_discrete_batch, QtciOptions};
 # use tensor4all_treetn::{
 #     contraction::ContractionOptions,
 #     partial_contract, tensor_train_to_treetn, PartialContractionSpec,
@@ -33,12 +34,10 @@ let g = move |idx: &[usize]| -> f64 {
 let options = QtciOptions::default()
     .with_verbosity(0);
 
-let (qtt_a, _, _) = quanticscrossinterpolate_discrete::<f64, _>(
-    &sizes, f, None, options.clone(),
-)?;
-let (qtt_b, _, _) = quanticscrossinterpolate_discrete::<f64, _>(
-    &sizes, g, None, options,
-)?;
+let (qtt_a, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
+    &sizes, pointwise_index_batch(f), None, options.clone())?;
+let (qtt_b, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
+    &sizes, pointwise_index_batch(g), None, options)?;
 
 let tt_a = qtt_a.tensor_train();
 let tt_b = qtt_b.tensor_train();

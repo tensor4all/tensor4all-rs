@@ -6,7 +6,9 @@
 use std::f64::consts::PI;
 
 use anyhow::Result;
-use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions, UnfoldingScheme};
+use tensor4all_quanticstci::{
+    pointwise_index_batch, quanticscrossinterpolate_discrete_batch, QtciOptions, UnfoldingScheme,
+};
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 use tensor4all_treetci::materialize::to_treetn;
 use tensor4all_treetn::Operator;
@@ -29,9 +31,9 @@ fn test_2d_qft_x_only_interleaved() -> Result<()> {
     };
 
     let sizes = vec![n, n];
-    let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete::<f64, _>(
+    let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete_batch::<f64, _>(
         &sizes,
-        f,
+        pointwise_index_batch(f),
         None,
         QtciOptions::default()
             .with_tolerance(1e-12)
