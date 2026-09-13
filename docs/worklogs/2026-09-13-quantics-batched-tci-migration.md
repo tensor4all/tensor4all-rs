@@ -77,10 +77,11 @@ and `tensor4all-treeaci` already use column-major batch views
   `cargo test -p tensor4all-quanticstci --doc`: 29 pass.
 - `cargo clippy --manifest-path docs/tutorial-code/Cargo.toml --all-targets --
   -D warnings`: clean.
-- `cargo test --doc -p book-tests`: every quantics snippet compiles; 21 tests
-  fail at link time with an `lld`/LLVM crash that is environmental and
-  pre-existing (the machine is at 100% disk usage; the same failures occur for
-  unrelated snippets such as `tensor_basics` and `compress`).
+- `cargo test --doc -p book-tests`: **47 passed, 0 failed**. An earlier run had
+  21 link-time `lld`/LLVM crashes for unrelated snippets as well
+  (`tensor_basics`, `compress`); those were caused by the machine being at 100%
+  disk usage. After freeing build artifacts the whole book doctest suite passes,
+  including every quantics snippet migrated here.
 - New tests: `site_evaluator` conversion-failure/number-of-values/caching paths,
   and an `#[allow(deprecated)]` equivalence test asserting the deprecated
   point-wise entry point produces the same ranks, errors, and values as the
@@ -94,4 +95,3 @@ and `tensor4all-treeaci` already use column-major batch views
   values per point and ignores extra ones; fewer, or a non-divisible count, is an
   error.
 - `tensor4all-tensorci` still exposes point-wise entry points.
-- The book doctest linker failures were not resolved (environmental).
