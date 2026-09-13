@@ -18,7 +18,7 @@ Small documentation and typo fixes may go directly to a pull request. For nontri
 3. Keep source code and documentation in English.
 4. Add the smallest test that would fail without the change. Numerical tests must check a meaningful value, identity, residual, or reconstruction error rather than only shapes or finiteness.
 5. Update rustdoc, guides, examples, and generated/public API claims affected by the change.
-6. Record nontrivial work in `docs/worklogs/` with the contract read, decisions, and verification evidence.
+6. Follow the shared Work Logs And Design Records policy and the [local format](docs/worklogs/README.md) when a decision record is needed; small fixes and AI assistance alone do not require one.
 
 ### API naming
 
@@ -108,7 +108,7 @@ Do not commit `target/`, coverage output, generated API dumps, or other build ar
 
 - Link the issue with `Closes #…` when the PR fully resolves it.
 - Explain the behavior change and why it belongs in the selected crate/layer.
-- List the exact validation commands and results.
+- Summarize validation conclusions and unverified areas; link supporting evidence or special reproduction conditions when needed, not a command history.
 - Call out public API breaks, numerical tolerance changes, dense materialization, new dependencies, or cross-repository sequencing explicitly.
 - Keep unrelated changes in separate PRs.
 
