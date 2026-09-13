@@ -1,6 +1,6 @@
 """Type stubs for the tensor4all PyO3 extension module."""
 
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import numpy.typing as npt
@@ -69,3 +69,14 @@ class TreeTensorNetwork:
         dense_reference_limit: int = 1 << 20,
     ) -> TreeTensorNetwork: ...
     def __repr__(self) -> str: ...
+
+def crossinterpolate(
+    evaluate: Callable[[np.ndarray[Any, Any]], np.ndarray[Any, Any]],
+    local_dims: Sequence[int],
+    edges: Sequence[tuple[int, int]] | None = None,
+    initial_pivots: Sequence[Sequence[int]] | None = None,
+    tolerance: float = 1e-8,
+    max_iter: int = 20,
+    max_bond_dim: int | None = None,
+    seed: int | None = None,
+) -> tuple[TreeTensorNetwork, list[int], list[float]]: ...

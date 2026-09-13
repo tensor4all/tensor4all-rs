@@ -22,7 +22,7 @@ pub struct PyTreeTensorNetwork {
 }
 
 impl PyTreeTensorNetwork {
-    fn from_inner(inner: DefaultTreeTN<usize>) -> Self {
+    pub(crate) fn from_inner(inner: DefaultTreeTN<usize>) -> Self {
         Self { inner }
     }
 }
