@@ -80,3 +80,40 @@ def crossinterpolate(
     max_bond_dim: int | None = None,
     seed: int | None = None,
 ) -> tuple[TreeTensorNetwork, list[int], list[float]]: ...
+
+class QuanticsTCI:
+    """A quantics tensor train interpolating a function on a grid."""
+
+    @property
+    def rank(self) -> int: ...
+    @property
+    def shape(self) -> list[int]: ...
+    def evaluate(self, indices: Sequence[int]) -> float | complex: ...
+    def sum(self) -> float | complex: ...
+    def integral(self) -> float | complex: ...
+    def to_numpy(self) -> np.ndarray[Any, Any]: ...
+    def __repr__(self) -> str: ...
+
+def quanticscrossinterpolate(
+    evaluate: Callable[[np.ndarray[Any, Any]], np.ndarray[Any, Any]],
+    bits: int | Sequence[int],
+    lower: float | Sequence[float],
+    upper: float | Sequence[float],
+    initial_pivots: Sequence[Sequence[int]] | None = None,
+    tolerance: float = 1e-8,
+    max_iter: int = 200,
+    max_bond_dim: int | None = None,
+    random_init_pivots: int = 0,
+    unfolding: str = "interleaved",
+) -> tuple[QuanticsTCI, list[int], list[float]]: ...
+
+def quanticscrossinterpolate_discrete(
+    evaluate: Callable[[np.ndarray[Any, Any]], np.ndarray[Any, Any]],
+    sizes: int | Sequence[int],
+    initial_pivots: Sequence[Sequence[int]] | None = None,
+    tolerance: float = 1e-8,
+    max_iter: int = 200,
+    max_bond_dim: int | None = None,
+    random_init_pivots: int = 0,
+    unfolding: str = "interleaved",
+) -> tuple[QuanticsTCI, list[int], list[float]]: ...

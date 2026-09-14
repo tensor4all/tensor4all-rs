@@ -4,9 +4,10 @@ PyO3 bindings for the tensor4all-rs core and TreeTN crates. This is the initial
 prototype tracked by
 [issue #744](https://github.com/tensor4all/tensor4all-rs/issues/744).
 
-The Python layer is deliberately thin: `Index`, `Tensor`, and
-`TreeTensorNetwork` forward to the public Rust API of `tensor4all-core` and
-`tensor4all-treetn`. No tensor or network algorithm lives on the Python side.
+The Python layer is deliberately thin: `Index`, `Tensor`, `TreeTensorNetwork`,
+`crossinterpolate`, and the quantics entry points forward to the public Rust API
+of `tensor4all-core`, `tensor4all-treetn`, `tensor4all-treetci`, and
+`tensor4all-quanticstci`. No tensor or network algorithm lives on the Python side.
 `TreeTensorNetwork` is the only network type; chains (MPS/MPO-like networks) are
 path-shaped instances of it.
 
@@ -44,6 +45,9 @@ default (non-`extension-module`) linking.
   the `"naive"` (dense reference) and `"zipup"` methods.
 - `crossinterpolate(evaluate, local_dims, ...)` for discrete tree tensor cross
   interpolation; it returns `(network, ranks, errors)`.
+- `quanticscrossinterpolate(evaluate, bits, lower, upper, ...)` and
+  `quanticscrossinterpolate_discrete(evaluate, sizes, ...)` for quantics
+  interpolation; both return `(QuanticsTCI, ranks, errors)`.
 
 ## Cross interpolation (TreeTCI)
 
@@ -87,6 +91,47 @@ assert np.allclose(network.contract_to_tensor().to_numpy(), reference)
   site leg is the first index of `network.tensor(k)`. The result is an ordinary
   `TreeTensorNetwork`, so `contract_to_tensor()` and `contract()` work on it.
 
+## Quantics TCI (QTT)
+
+`quanticscrossinterpolate` (continuous grid) and
+`quanticscrossinterpolate_discrete` (integer grid) interpolate a batched Python
+function as a quantics tensor train, using the crate's batched Rust entry point:
+
+```python
+import numpy as np
+import tensor4all as t4a
+
+def evaluate(points):            # points: (n_points, n_dims) float64 coordinates
+    return np.sin(np.pi * points[:, 0])
+
+result, ranks, errors = t4a.quanticscrossinterpolate(
+    evaluate, 6, lower=0.0, upper=1.0, initial_pivots=[[1]], tolerance=1e-10
+)
+
+x = np.arange(2**6) / 2**6
+assert np.allclose(result.to_numpy(), np.sin(np.pi * x))
+assert abs(result.integral() - 2 / np.pi) < 1e-2
+assert abs(result.evaluate([3]) - np.sin(np.pi * 3 / 64)) < 1e-8
+```
+
+- **Layout**: continuous callbacks receive a C-contiguous `float64` array of
+  shape `(n_points, n_dims)` holding original coordinates; discrete callbacks
+  receive the same shape with `int64` 0-indexed grid indices. The batch axis is
+  axis 0, and it is present even for a single point, so `evaluate` must return
+  `(n_points,)`.
+- **Contract**: the same as for TreeTCI — pure, batched, dtype (`float64` or
+  `complex128`) fixed by the first call, exceptions propagated unchanged.
+- **Result**: `QuanticsTCI` with `evaluate(indices)`, `sum()`, `integral()`,
+  `to_numpy()`, `rank`, and `shape`. `integral()` multiplies the sum by the grid
+  step on continuous grids and equals `sum()` on discrete grids.
+- **Options**: `tolerance`, `max_iter`, `max_bond_dim`, `random_init_pivots`
+  (default `0` so runs are reproducible, unlike the Rust default of 5), and
+  `unfolding` (`"interleaved"`, `"fused"`, `"grouped"`).
+- Discrete grids require the same power-of-two number of points per dimension,
+  and the default initial pivot (all zeros) must not evaluate to zero.
+- `to_numpy()` materializes every grid point and refuses grids above 2**22
+  elements; use `sum()` or `evaluate()` for large grids.
+
 ## Data contract
 
 - Indices are connected automatically: an index occurring in exactly two node
@@ -105,10 +150,8 @@ assert np.allclose(network.contract_to_tensor().to_numpy(), reference)
 
 ## Not covered yet
 
-- Quantics TCI and quantics transforms. Because the Rust quantics entry points
-  are point-wise (`f(&[f64]) -> V`), extending the batched contract to quantics
-  needs a batched entry point in `tensor4all-quanticstci` rather than an adapter
-  in this crate.
+- Quantics transforms, non-uniform grids (`quanticscrossinterpolate_from_arrays`),
+  and multi-component quantics results.
 - TCI options beyond `tolerance`, `max_iter`, `max_bond_dim`, and `seed` (for
   example `enable_global_pivots`, `nsearch`), plus `center_site` and proposer
   selection.

@@ -22,13 +22,14 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::rc::Rc;
 
 use num_complex::Complex64;
-use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
-use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use tensor4all_treetci::{
     crossinterpolate2, DefaultProposer, GlobalIndexBatch, TreeTciEdge, TreeTciGraph, TreeTciOptions,
 };
 
+use crate::batch::{extract_values, probe_dtype, ValueDtype};
+use crate::batch::{index_batch_to_numpy, panic_error, stash, take_error, unexpected_result};
 use crate::treetn::PyTreeTensorNetwork;
 
 /// Initial evaluator result, which fixes the value type of the whole run.
@@ -42,77 +43,6 @@ enum ProbeValues {
 struct Probe<T> {
     points: Vec<usize>,
     values: Vec<T>,
-}
-
-/// Build the `(n_points, n_sites)` int64 array handed to the Python evaluator.
-fn points_to_numpy<'py>(
-    py: Python<'py>,
-    batch: &GlobalIndexBatch<'_>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let n_sites = batch.n_sites();
-    let n_points = batch.n_points();
-    let flat: Vec<i64> = batch.data().iter().map(|&value| value as i64).collect();
-    let array = PyArray1::<i64>::from_vec(py, flat);
-    // The source is C-contiguous, so this is a view of the same buffer.
-    Ok(array.reshape((n_points, n_sites))?.into_any())
-}
-
-/// Copy one typed evaluator result out of a Python object.
-///
-/// `Ok(None)` means "not a 1-D array of this dtype"; the caller decides how to
-/// report that.
-fn extract_values<T: numpy::Element + Copy>(
-    value: &Bound<'_, PyAny>,
-    n_points: usize,
-) -> PyResult<Option<Vec<T>>> {
-    let Ok(array) = value.extract::<PyReadonlyArray1<'_, T>>() else {
-        return Ok(None);
-    };
-    let values: Vec<T> = array.as_array().iter().copied().collect();
-    if values.len() != n_points {
-        return Err(PyValueError::new_err(format!(
-            "evaluate returned {} values for a batch of {n_points} points",
-            values.len()
-        )));
-    }
-    Ok(Some(values))
-}
-
-fn unexpected_result(value: &Bound<'_, PyAny>, n_points: usize, required: &str) -> PyErr {
-    let describe = |name: &str| {
-        value
-            .getattr(name)
-            .map(|item| item.to_string())
-            .unwrap_or_else(|_| "unknown".to_string())
-    };
-    PyTypeError::new_err(format!(
-        "evaluate must return a numpy array of shape ({n_points},) with dtype {required}; \
-         got shape={} dtype={} (for example np.asarray(values, dtype=np.float64))",
-        describe("shape"),
-        describe("dtype"),
-    ))
-}
-
-/// Keep the original Python exception so it can be re-raised after
-/// `crossinterpolate2` reports an error of its own.
-fn stash(slot: &Rc<RefCell<Option<PyErr>>>, error: PyErr) -> anyhow::Error {
-    *slot.borrow_mut() = Some(error);
-    anyhow::anyhow!("the evaluate callback failed")
-}
-
-fn take_error(slot: &Rc<RefCell<Option<PyErr>>>, error: anyhow::Error) -> PyErr {
-    slot.borrow_mut()
-        .take()
-        .unwrap_or_else(|| PyValueError::new_err(error.to_string()))
-}
-
-fn panic_error(payload: Box<dyn std::any::Any + Send>) -> PyErr {
-    let message = payload
-        .downcast_ref::<&str>()
-        .map(|message| (*message).to_string())
-        .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "unknown payload".to_string());
-    PyRuntimeError::new_err(format!("TreeTCI panicked inside Rust: {message}"))
 }
 
 /// Produce the values for one batch: serve the cached probe batch when it is
@@ -135,7 +65,8 @@ where
             return Ok(probe.values);
         }
     }
-    let points = points_to_numpy(py, batch).map_err(|error| stash(slot, error))?;
+    let points = index_batch_to_numpy(py, batch.data(), batch.n_sites(), batch.n_points())
+        .map_err(|error| stash(slot, error))?;
     let value = evaluate
         .call1((points,))
         .map_err(|error| stash(slot, error))?;
@@ -224,22 +155,16 @@ fn crossinterpolate(
     let probe_points: Vec<usize> = pivots.iter().flatten().copied().collect();
     let probe_batch = GlobalIndexBatch::new(&probe_points, n_sites, pivots.len())
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
-    let probe_array = points_to_numpy(py, &probe_batch)?;
+    let probe_array = index_batch_to_numpy(py, probe_batch.data(), n_sites, pivots.len())?;
     let probe_value = evaluate.call1((probe_array,))?;
-    let probe = match extract_values::<f64>(&probe_value, pivots.len()) {
-        Ok(Some(values)) => ProbeValues::Real(values),
-        Ok(None) => match extract_values::<Complex64>(&probe_value, pivots.len()) {
-            Ok(Some(values)) => ProbeValues::Complex(values),
-            Ok(None) => {
-                return Err(unexpected_result(
-                    &probe_value,
-                    pivots.len(),
-                    "float64 or complex128",
-                ))
-            }
-            Err(error) => return Err(error),
-        },
-        Err(error) => return Err(error),
+    let dtype = probe_dtype(&probe_value, pivots.len())?;
+    let probe = match dtype {
+        ValueDtype::Real => ProbeValues::Real(
+            extract_values::<f64>(&probe_value, pivots.len())?.unwrap_or_default(),
+        ),
+        ValueDtype::Complex => ProbeValues::Complex(
+            extract_values::<Complex64>(&probe_value, pivots.len())?.unwrap_or_default(),
+        ),
     };
 
     let py_error: Rc<RefCell<Option<PyErr>>> = Rc::new(RefCell::new(None));
@@ -309,7 +234,7 @@ fn crossinterpolate(
     let (treetn, ranks, errors) = match run {
         Ok(Ok(result)) => result,
         Ok(Err(error)) => return Err(take_error(&py_error, error.into())),
-        Err(payload) => return Err(panic_error(payload)),
+        Err(payload) => return Err(panic_error("TreeTCI", payload)),
     };
     Ok((PyTreeTensorNetwork::from_inner(treetn), ranks, errors))
 }

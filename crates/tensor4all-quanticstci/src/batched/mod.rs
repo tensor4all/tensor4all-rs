@@ -258,7 +258,7 @@ pub fn quanticscrossinterpolate_multicomponent<V, F>(
     options: QtciOptions,
 ) -> QtciResult<(QuanticsTensorCI2Batched<V>, Vec<usize>, Vec<f64>)>
 where
-    F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>> + 'static,
+    F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
     V: TTScalar
         + Default
         + Clone

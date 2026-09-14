@@ -7,7 +7,9 @@
 
 use pyo3::prelude::*;
 
+mod batch;
 mod index;
+mod quantics;
 mod tensor;
 mod treetci;
 mod treetn;
@@ -18,6 +20,7 @@ fn tensor4all(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<tensor::PyTensor>()?;
     module.add_class::<treetn::PyTreeTensorNetwork>()?;
     treetci::register(module)?;
+    quantics::register(module)?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

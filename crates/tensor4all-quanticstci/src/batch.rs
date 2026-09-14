@@ -112,9 +112,9 @@ fn pointwise_batch<T, V, F, K>(
 ) -> impl Fn(QuanticsBatch<'_, T>) -> anyhow::Result<Vec<V>>
 where
     T: Copy,
-    V: Clone + 'static,
-    F: Fn(&[T]) -> V + 'static,
-    K: Fn(&[T]) -> Vec<u64> + 'static,
+    V: Clone,
+    F: Fn(&[T]) -> V,
+    K: Fn(&[T]) -> Vec<u64>,
 {
     let cache: RefCell<HashMap<Vec<u64>, V>> = RefCell::new(HashMap::new());
     move |batch: QuanticsBatch<'_, T>| {
@@ -169,8 +169,8 @@ pub fn pointwise_coordinate_batch<V, F>(
     evaluate: F,
 ) -> impl Fn(QuanticsBatch<'_, f64>) -> anyhow::Result<Vec<V>>
 where
-    F: Fn(&[f64]) -> V + 'static,
-    V: Clone + 'static,
+    F: Fn(&[f64]) -> V,
+    V: Clone,
 {
     pointwise_batch(evaluate, |point| {
         point.iter().map(|value| value.to_bits()).collect()
@@ -203,8 +203,8 @@ pub fn pointwise_index_batch<V, F>(
     evaluate: F,
 ) -> impl Fn(QuanticsBatch<'_, usize>) -> anyhow::Result<Vec<V>>
 where
-    F: Fn(&[usize]) -> V + 'static,
-    V: Clone + 'static,
+    F: Fn(&[usize]) -> V,
+    V: Clone,
 {
     pointwise_batch(evaluate, |point| {
         point.iter().map(|&value| value as u64).collect()
@@ -248,8 +248,8 @@ pub fn pointwise_components_batch<V, F>(
     evaluate: F,
 ) -> impl Fn(QuanticsBatch<'_, f64>) -> anyhow::Result<Vec<V>>
 where
-    F: Fn(&[f64]) -> Vec<V> + 'static,
-    V: Clone + 'static,
+    F: Fn(&[f64]) -> Vec<V>,
+    V: Clone,
 {
     let cache: RefCell<HashMap<Vec<u64>, Vec<V>>> = RefCell::new(HashMap::new());
     move |batch: QuanticsBatch<'_, f64>| {

@@ -177,7 +177,7 @@ fn index_buffers(indices: &[PyRef<'_, PyIndex>]) -> Vec<DynIndex> {
 }
 
 /// Copy column-major flat data into a freshly allocated Fortran-ordered array.
-fn write_flat<T: numpy::Element + Copy>(
+pub(crate) fn write_flat<T: numpy::Element + Copy>(
     array: &Bound<'_, PyArrayDyn<T>>,
     flat: &[T],
 ) -> PyResult<()> {

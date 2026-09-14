@@ -577,7 +577,7 @@ where
         + tensor4all_core::MatrixLuciScalar
         + FullPivLuScalar
         + tensor4all_treetci::globalpivot::ScalarParts,
-    F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>> + 'static,
+    F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
 {
     let local_dims = grid.local_dimensions();
     let cache: Rc<RefCell<HashMap<Vec<usize>, V>>> = Rc::new(RefCell::new(HashMap::new()));
@@ -708,7 +708,7 @@ where
         + tensor4all_core::MatrixLuciScalar
         + FullPivLuScalar
         + tensor4all_treetci::globalpivot::ScalarParts,
-    F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>> + 'static,
+    F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
 {
     if xvals.is_empty() {
         return Err(QuanticsTCIError::InvalidConfiguration {
@@ -937,7 +937,7 @@ where
         + tensor4all_core::MatrixLuciScalar
         + FullPivLuScalar
         + tensor4all_treetci::globalpivot::ScalarParts,
-    F: Fn(QuanticsBatch<'_, usize>) -> Result<Vec<V>> + 'static,
+    F: Fn(QuanticsBatch<'_, usize>) -> Result<Vec<V>>,
 {
     if size.is_empty() {
         return Err(QuanticsTCIError::InvalidConfiguration {
