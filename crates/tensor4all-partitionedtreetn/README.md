@@ -47,10 +47,11 @@ QTT intervals, independently of the indices' placement on the tree.
 `ReconstructionTarget::from_subset_operator` prepares the images of an existing
 linear operator (for example a quantics Fourier transform built elsewhere) on an
 ordered subset of full site indices. Spectators keep their identity, dimension,
-and node assignment, and the prepared target reuses the pinned preimage norm
-because a unitary preserves orthogonality even though the image supports
-overlap. Two selected indices on one tree node are rejected. The operator's own
-construction error stays separate from the reported reconstruction bound.
+and node assignment. Two selected indices on one tree node are rejected. The
+operator is applied exactly and the prepared target's norm is measured from the
+explicit sum of the overlapping images, so non-unitary operators get their
+correct norm; the operator's own construction error stays separate from the
+reported reconstruction bound.
 
 Run the asserted example with
 `cargo run --release -p tensor4all-partitionedtreetn --example reconstruct`.

@@ -107,21 +107,36 @@ Added `ReconstructionTarget::from_subset_operator`, which applies an existing
 `LinearOperator` to an ordered subset of the preimage's full site indices. The
 Fourier operator stays the caller's: `tensor4all-quanticstransform` is a
 path-only cross-layer dev-dependency, so this crate keeps no simplett-stack
-runtime dependency. The prepared target reuses the pinned preimage norm and
-stores each transformed patch with its spectator-only projector, because a
-unitary preserves orthogonality while the image supports overlap. Two selected
-indices on one node are rejected with repair guidance rather than silently
-mis-bound; spectators may share a node with a selected index. Transform
-construction error stays separate from the reported reconstruction bound.
+runtime dependency. Two selected indices on one node are rejected with repair
+guidance rather than silently mis-bound; spectators may share a node with a
+selected index.
+
+The constructor accepts an arbitrary operator, which need not be unitary and
+need not map the preimage's disjoint patches to orthogonal images. It therefore
+neither inherits the preimage norm nor assembles the global norm from image norm
+squares; it stores each image with a full support description and measures the
+global norm from the explicit network sum. A scaled-identity regression shows
+the difference: `1e-9 * I` on `[3, 4]` yields a reference norm of `5e-9` instead
+of the preimage's `5`, so a reconstruction at `rtol = 1e-6` no longer discards
+the whole nonzero target.
+
+Application uses the local exact naive path and the entry point exposes no
+truncating apply options, so the prepared target carries no application error
+beyond backend roundoff. Exposing approximate application with its own retained
+error allowance, and the QFT merge-refine schedule, remain follow-up work;
+operator construction error stays separate from the reconstruction bound.
 
 An integration test binds a real `quantics_fourier_operator` and checks sign,
 normalization, and the documented no-permutation output placement against a
-dense small-system oracle, plus a noncontiguous selection with spectators, a
-forward-then-inverse round trip (which returns the bit-reversed input), invalid
-selections, and a multi-index node rejection. The dev-dependency is path-only
-and stripped from published manifests, as the shared rules permit for
-cross-layer tests.
+dense small-system oracle, plus a noncontiguous selection with spectators, an
+index-aligned forward-then-inverse round trip, invalid selections, the
+multi-index node rejection, and the non-unitary norm regression. The
+forward-then-inverse round trip restores the original tensor on the original
+full indices: the inverse takes the reversed operator-node-to-site selection to
+undo the forward transform's bit-reversed output placement, and the result is
+compared index-aligned, not against a bit-reversed oracle.
 
-For this revision, the changed-crate debug test suite passed with the five new
-integration tests, `cargo fmt`, and changed-crate Clippy with all targets and
-warnings denied.
+For this revision, the changed-crate test suite passed with the six integration
+tests, the crate doctests, the runnable example, `cargo fmt`, changed-crate
+release Clippy with all targets and warnings denied, and the full mdBook snippet
+suite and HTML build.

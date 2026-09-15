@@ -175,22 +175,29 @@ spreads over the output domain; there is no direct replacement of its fixed
 input bits by fixed output bits. Adaptive schedules may stop on no gain.
 
 The map is `F_selected ⊗ I_spectators`, so exact QFT preserves orthogonality and
-the original global norm even though transformed supports overlap. A QFT-owned
-prepared target must carry that provenance from its validated preimage. It must
-not try to pass overlapping images through `from_partition` or recompute their
-global norm by assuming disjoint image supports. `from_subset_operator`
-therefore keeps the pinned preimage norm and stores each transformed patch with
-its spectator-only projector, dropping the selected constraints.
+the original global norm even though transformed supports overlap. The
+constructor nonetheless accepts an arbitrary operator, which need not be unitary
+and need not map the preimage's disjoint patches to orthogonal images. It
+therefore neither inherits the preimage norm nor assembles the global norm from
+image norm squares. It stores each image with a full support description, drops
+the selected constraints that no longer hold, and measures the global norm from
+the explicit network sum of the images. That is the correct norm for any
+operator, including non-unitary ones, and it does not assume disjoint image
+supports.
 
-Approximation of the QFT MPO and its application is accounted separately from
-reconstruction: `ReconstructionReport::error_bound` only bounds the
-reconstruction of the prepared images. The construction error of the operator,
-for example `FourierOptions::tolerance` and `max_bond_dim`, stays the caller's
-responsibility and is never folded into that bound. Passing exact apply options
-(no SVD or QR truncation) keeps the transform itself exact up to backend
-roundoff. Integration tests bind a real Fourier operator and check the
-documented sign, normalization, output ordering, and subset behaviour against a
-dense small-system oracle and a direct-apply reference.
+The operator is applied with the local exact naive path; this entry point accepts
+no truncating apply options, so the prepared target carries no application error
+beyond backend roundoff. Approximation of the QFT MPO and of its application is
+accounted separately from reconstruction:
+`ReconstructionReport::error_bound` only bounds the reconstruction of the
+prepared images. The construction error of the operator, for example
+`FourierOptions::tolerance` and `max_bond_dim`, stays the caller's
+responsibility and is never folded into that bound. Exposing approximate
+application with its own retained error allowance remains follow-up work.
+Integration tests bind a real Fourier operator and check the documented sign,
+normalization, output ordering, and subset behaviour against a dense
+small-system oracle, an index-aligned round-trip comparison, and a
+non-unitary-norm regression.
 
 QFT also supplies the input-merge/output-refine schedule and its bit geometry.
 The complementary-area invariant of the Fourier algorithm is not a generic

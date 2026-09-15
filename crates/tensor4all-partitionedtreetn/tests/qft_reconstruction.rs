@@ -4,23 +4,18 @@
 //! ordered subset of site indices and check the documented bit-significance and
 //! bit-reversal conventions against a dense oracle.
 
+use std::collections::HashMap;
+
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, IdxTensor, SvdTruncationPolicy};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_partitionedtreetn::{reconstruction::*, PartitionedTreeTN, SubDomainTreeTN, TreeTN};
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
-use tensor4all_treetn::ApplyOptions;
+use tensor4all_treetn::{IndexMapping, LinearOperator};
 
 const TOL: f64 = 1e-8;
 
-/// Exact application: no SVD or QR truncation is permitted.
-fn exact_apply() -> ApplyOptions {
-    ApplyOptions::default()
-        .with_svd_policy(SvdTruncationPolicy::new(0.0))
-        .with_qr_rtol(0.0)
-}
-
-fn reconstruct_exact(target: &ReconstructionTarget) -> PartitionedTreeTN {
-    let output = reconstruct(
+fn reconstruct_exact(target: &ReconstructionTarget) -> ReconstructedTreeTN {
+    reconstruct(
         target,
         &0,
         ReconstructionTolerance {
@@ -33,8 +28,11 @@ fn reconstruct_exact(target: &ReconstructionTarget) -> PartitionedTreeTN {
             ..Default::default()
         },
     )
-    .expect("reconstruction failed");
-    output
+    .expect("reconstruction failed")
+}
+
+fn single_term_partition(target: &ReconstructionTarget) -> PartitionedTreeTN {
+    reconstruct_exact(target)
         .into_partition()
         .expect("single-term regions expected")
 }
@@ -131,7 +129,7 @@ fn dft_oracle(
     };
     // `values` is stored most-significant site first; dense storage is
     // column-major, so dense position `p` is the p-th index and varies fastest.
-    let selected_bit = |x: usize, index: &DynIndex| {
+    let site_bit = |x: usize, index: &DynIndex| {
         let j = site_of(index);
         (x >> (total - 1 - j)) & 1
     };
@@ -140,7 +138,7 @@ fn dft_oracle(
     for (x, value) in values.iter().enumerate() {
         let mut selected_input = 0usize;
         for site in selected {
-            selected_input = (selected_input << 1) | selected_bit(x, site);
+            selected_input = (selected_input << 1) | site_bit(x, site);
         }
         for k in 0..n {
             let angle = -2.0 * std::f64::consts::PI * (k * selected_input) as f64 / n as f64;
@@ -148,7 +146,7 @@ fn dft_oracle(
             for (position, index) in indices.iter().enumerate() {
                 let bit = match selected.iter().position(|site| site == index) {
                     Some(t) => (k >> t) & 1,
-                    None => selected_bit(x, index),
+                    None => site_bit(x, index),
                 };
                 output_storage |= bit << position;
             }
@@ -156,6 +154,62 @@ fn dft_oracle(
         }
     }
     expected
+}
+
+/// Reorder a most-significant-site-first input vector into the dense index order
+/// of `indices`, so the result can be compared index-aligned.
+fn values_in_index_order(
+    indices: &[DynIndex],
+    sites: &[DynIndex],
+    values: &[Complex64],
+) -> Vec<Complex64> {
+    let total = indices.len();
+    let mut out = vec![Complex64::new(0.0, 0.0); 1usize << total];
+    for (storage, value) in out.iter_mut().enumerate() {
+        let mut source = 0usize;
+        for (position, index) in indices.iter().enumerate() {
+            let site = sites
+                .iter()
+                .position(|candidate| candidate == index)
+                .unwrap_or_else(|| panic!("unexpected index {index:?}"));
+            let bit = (storage >> position) & 1;
+            source |= bit << (total - 1 - site);
+        }
+        *value = values[source];
+    }
+    out
+}
+
+/// A one-site `scale * I` operator written as a one-node MPO.
+fn scaled_identity(scale: f64, site: &DynIndex) -> LinearOperator<IdxTensor, usize> {
+    let internal_input = DynIndex::new_dyn(2);
+    let internal_output = DynIndex::new_dyn(2);
+    let mpo = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(
+            vec![internal_input.clone(), internal_output.clone()],
+            vec![scale, 0.0, 0.0, scale],
+        )
+        .expect("mpo tensor")],
+        vec![0usize],
+    )
+    .expect("mpo");
+    let mut input_mapping = HashMap::new();
+    input_mapping.insert(
+        0usize,
+        IndexMapping {
+            true_index: site.clone(),
+            internal_index: internal_input,
+        },
+    );
+    let mut output_mapping = HashMap::new();
+    output_mapping.insert(
+        0usize,
+        IndexMapping {
+            true_index: site.clone(),
+            internal_index: internal_output,
+        },
+    );
+    LinearOperator::new(mpo, input_mapping, output_mapping)
 }
 
 #[test]
@@ -169,16 +223,10 @@ fn qft_subset_matches_dense_dft_convention() {
 
         let operator =
             quantics_fourier_operator(r, FourierOptions::default()).expect("fourier operator");
-        let target = ReconstructionTarget::from_subset_operator(
-            &preimage,
-            &0,
-            &operator,
-            &sites,
-            exact_apply(),
-        )
-        .expect("subset transform");
+        let target = ReconstructionTarget::from_subset_operator(&preimage, &0, &operator, &sites)
+            .expect("subset transform");
 
-        let (indices, dense) = dense_of(&reconstruct_exact(&target));
+        let (indices, dense) = dense_of(&single_term_partition(&target));
         let expected = dft_oracle(&indices, &sites, &sites, &values);
         let error = max_error(&dense, &expected);
         assert!(error < TOL, "r = {r}: max error {error:e}");
@@ -198,16 +246,10 @@ fn qft_subset_supports_noncontiguous_selection_with_spectators() {
     // Transform sites 0 and 2 only; sites 1 and 3 are spectators.
     let operator = quantics_fourier_operator(2, FourierOptions::default()).expect("fourier");
     let selected = [sites[0].clone(), sites[2].clone()];
-    let target = ReconstructionTarget::from_subset_operator(
-        &preimage,
-        &0,
-        &operator,
-        &selected,
-        exact_apply(),
-    )
-    .expect("subset transform");
+    let target = ReconstructionTarget::from_subset_operator(&preimage, &0, &operator, &selected)
+        .expect("subset transform");
 
-    let partition = reconstruct_exact(&target);
+    let partition = single_term_partition(&target);
     let (indices, dense) = dense_of(&partition);
     let expected = dft_oracle(&indices, &sites, &selected, &values);
     let error = max_error(&dense, &expected);
@@ -226,7 +268,7 @@ fn qft_subset_supports_noncontiguous_selection_with_spectators() {
 }
 
 #[test]
-fn qft_forward_then_inverse_restores_the_target_up_to_bit_reversal() {
+fn qft_forward_then_inverse_restores_the_target() {
     let r = 3;
     let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
     let values: Vec<Complex64> = (0..1usize << r)
@@ -237,36 +279,59 @@ fn qft_forward_then_inverse_restores_the_target_up_to_bit_reversal() {
     let forward = quantics_fourier_operator(r, FourierOptions::forward()).expect("forward");
     let inverse = quantics_fourier_operator(r, FourierOptions::inverse()).expect("inverse");
     // A second Fourier operator reads its input most significant bit first, so
-    // it must take the bit-reversed forward output in reversed site order.
+    // the inverse takes the reversed operator-node-to-site selection to undo the
+    // forward transform's bit-reversed output placement.
     let reverse: Vec<DynIndex> = sites.iter().rev().cloned().collect();
-    let transformed =
-        ReconstructionTarget::from_subset_operator(&preimage, &0, &forward, &sites, exact_apply())
-            .expect("forward target");
-    let restored = ReconstructionTarget::from_subset_operator(
-        &transformed,
-        &0,
-        &inverse,
-        &reverse,
-        exact_apply(),
-    )
-    .expect("inverse target");
+    let transformed = ReconstructionTarget::from_subset_operator(&preimage, &0, &forward, &sites)
+        .expect("forward target");
+    let restored = ReconstructionTarget::from_subset_operator(&transformed, &0, &inverse, &reverse)
+        .expect("inverse target");
 
-    let (indices, dense) = dense_of(&reconstruct_exact(&restored));
-    // The documented no-permutation placement stores frequency bit `t` at
-    // selected position `t`, so a forward-then-inverse round trip returns the
-    // input with its bits reversed, not in the original order.
-    let expected: Vec<Complex64> = (0..values.len())
-        .map(|storage| values[bit_reverse(storage, r)])
-        .collect();
-    assert_eq!(indices.len(), r);
+    // The forward-then-inverse round trip restores the original tensor on the
+    // original full indices; it does not return a bit-reversed tensor.
+    let (indices, dense) = dense_of(&single_term_partition(&restored));
+    let expected = values_in_index_order(&indices, &sites, &values);
     let error = max_error(&dense, &expected);
     assert!(error < TOL, "max error {error:e}");
 }
 
-fn bit_reverse(value: usize, bits: usize) -> usize {
-    (0..bits).fold(0usize, |acc, bit| {
-        acc | (((value >> bit) & 1) << (bits - 1 - bit))
-    })
+#[test]
+fn subset_operator_measures_the_transformed_norm() {
+    // A scaled identity is not unitary: inheriting the preimage norm would leave
+    // the target's global allowance at ~5e-6 while its actual norm is ~5e-9, so
+    // reconstruction would discard the whole nonzero target.
+    let site = DynIndex::new_dyn(2);
+    let state = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(vec![site.clone()], vec![3.0, 4.0]).expect("state")],
+        vec![0usize],
+    )
+    .expect("tree");
+    let preimage = target_of(state);
+    let target = ReconstructionTarget::from_subset_operator(
+        &preimage,
+        &0,
+        &scaled_identity(1e-9, &site),
+        &[site],
+    )
+    .expect("subset transform");
+    assert!(
+        (target.reference_norm() / 5e-9 - 1.0).abs() < 1e-12,
+        "reference norm {}",
+        target.reference_norm()
+    );
+
+    let output = reconstruct(
+        &target,
+        &0,
+        ReconstructionTolerance {
+            rtol: 1e-6,
+            atol: 0.0,
+        },
+        &Default::default(),
+    )
+    .expect("reconstruction");
+    assert_eq!(output.report().region_count, 1);
+    assert_eq!(output.report().term_count, 1);
 }
 
 #[test]
@@ -283,7 +348,6 @@ fn qft_subset_rejects_invalid_selections() {
         &0,
         &operator,
         &[sites[0].clone()],
-        exact_apply(),
     )
     .is_err());
 
@@ -293,7 +357,6 @@ fn qft_subset_rejects_invalid_selections() {
         &0,
         &operator,
         &[sites[0].clone(), sites[0].clone()],
-        exact_apply(),
     )
     .is_err());
 
@@ -303,7 +366,6 @@ fn qft_subset_rejects_invalid_selections() {
         &0,
         &operator,
         &[sites[0].clone(), DynIndex::new_dyn(2)],
-        exact_apply(),
     )
     .is_err());
 }
@@ -325,13 +387,7 @@ fn qft_subset_rejects_two_selected_indices_on_one_node() {
     let preimage = target_of(tree);
 
     let operator = quantics_fourier_operator(2, FourierOptions::default()).expect("fourier");
-    let error = ReconstructionTarget::from_subset_operator(
-        &preimage,
-        &0,
-        &operator,
-        &[a, b],
-        exact_apply(),
-    )
-    .expect_err("indices sharing a node are not supported");
+    let error = ReconstructionTarget::from_subset_operator(&preimage, &0, &operator, &[a, b])
+        .expect_err("indices sharing a node are not supported");
     assert!(error.to_string().contains("distinct tree nodes"));
 }

@@ -191,26 +191,27 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     ///
     /// The selection may skip nodes (noncontiguous indices) and each selected
     /// index may share its tree node with spectator site indices, which keep
-    /// their identity, dimension, and node assignment. `preimage` must be an
-    /// orthogonal target; applying a (approximately) unitary operator preserves
-    /// orthogonality, so the prepared target reuses the pinned preimage norm
-    /// instead of re-deriving a global norm from overlapping image supports.
-    /// Each transformed patch keeps only its spectator constraints.
+    /// their identity, dimension, and node assignment. Images of the preimage's
+    /// disjoint patches generally overlap, so the global norm is measured from
+    /// the explicit network sum rather than inherited from the preimage norm or
+    /// assembled from image norm squares. That keeps the pinned global allowance
+    /// correct for any operator, including non-unitary ones.
     ///
-    /// Approval of the transform is separate from reconstruction: this function
-    /// returns the exact images of the operator it is given (up to `apply_options`
-    /// and backend roundoff). The approximation made when *constructing* that
-    /// operator, for example `FourierOptions::tolerance` and `max_bond_dim`, is not
-    /// included in [`ReconstructionReport::error_bound`](super::ReconstructionReport),
-    /// which only bounds the reconstruction of these images. Pass exact apply
-    /// options (no truncation) to avoid adding transform error of your own.
+    /// The operator is applied exactly with the local naive path; this entry
+    /// point accepts no truncating apply options, so the prepared target carries
+    /// no application error beyond backend roundoff. The approximation made when
+    /// *constructing* the operator, for example `FourierOptions::tolerance` and
+    /// `max_bond_dim`, is not included in
+    /// [`ReconstructionReport::error_bound`](super::ReconstructionReport), which
+    /// only bounds the reconstruction of these images; approximate application
+    /// and its separate error accounting are follow-up work.
     ///
     /// # Errors
     /// Returns [`PartitionedTreeTNError::InvalidOptions`] when the selection does
     /// not match the operator's node count, repeats an index, or selects indices
     /// on one tree node (transform those separately), and
     /// [`PartitionedTreeTNError::NonFiniteAdaptiveValue`] or backend errors from
-    /// patch materialization and application.
+    /// patch materialization, application, summation, and norms.
     ///
     /// # Examples
     /// ```
@@ -219,7 +220,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// use tensor4all_partitionedtreetn::{
     ///     reconstruction::ReconstructionTarget, PartitionedTreeTN, SubDomainTreeTN,
     /// };
-    /// use tensor4all_treetn::{ApplyOptions, IndexMapping, LinearOperator, TreeTN};
+    /// use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
     ///
     /// let site = DynIndex::new_dyn(2);
     /// let state = TreeTN::from_tensors(
@@ -252,7 +253,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
     ///
     /// let target = ReconstructionTarget::from_subset_operator(
-    ///     &preimage, &0, &operator, &[site], ApplyOptions::naive())?;
+    ///     &preimage, &0, &operator, &[site])?;
     /// assert!((target.reference_norm() - 5.0).abs() < 1e-12);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -261,7 +262,6 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         center: &V,
         operator: &LinearOperator<IdxTensor, V>,
         selection: &[DynIndex],
-        apply_options: ApplyOptions,
     ) -> Result<Self> {
         if preimage.patches.is_empty() {
             if selection.is_empty() {
@@ -324,7 +324,11 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         }
         let operator = operator.clone().rename_nodes(&rename)?;
 
-        let mut patches = Vec::with_capacity(preimage.patches.len());
+        // INVARIANT: application is exact (no truncation is exposed), so the
+        // prepared target carries only backend roundoff, never silent
+        // application error that the reconstruction report would mis-attribute.
+        let apply_options = ApplyOptions::naive();
+        let mut terms = Vec::with_capacity(preimage.patches.len());
         for term in preimage.materialize_terms(center)? {
             let data = apply_linear_operator_to_indices(
                 &operator,
@@ -336,25 +340,38 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             .map_err(|error| {
                 PartitionedTreeTNError::tree(format!("subset operator apply: {error}"))
             })?;
-            // The selected sites are unconstrained after the transform; only
-            // spectator constraints survive, so the stored metadata stays a
-            // sound (if weaker) support description.
-            let mut projector = term.projector().clone();
-            for index in selection {
-                projector.remove(index);
-            }
-            let transformed = SubDomainTreeTN::new(data, projector)?;
-            patches.push((
-                transformed.projector().clone(),
-                Patch::Stored(Box::new(transformed)),
-            ));
+            // Images of disjoint patches generally overlap and the selected
+            // constraints no longer hold, so drop them instead of claiming a
+            // support the data does not have.
+            terms.push(SubDomainTreeTN::new(data, Projector::new())?);
         }
+
+        // Images may overlap, so the global norm is not the Euclidean norm of
+        // the image norms. Measure the explicit sum instead of inheriting the
+        // preimage norm or assuming orthogonal images.
+        let norm = match terms.split_first() {
+            None => 0.0,
+            Some((first, rest)) => {
+                let mut total = first.clone();
+                for term in rest {
+                    total = total.add(term)?;
+                }
+                finite(total.norm()?)?
+            }
+        };
+        let mut patches: Vec<_> = terms
+            .into_iter()
+            .map(|term| {
+                let projector = term.projector().clone();
+                (projector, Patch::Stored(Box::new(term)))
+            })
+            .collect();
         patches.sort_by(|a, b| a.0.canonical_cmp(&b.0));
 
         Ok(Self {
             patches,
             network: preimage.network.clone(),
-            norm: preimage.norm,
+            norm,
         })
     }
 
