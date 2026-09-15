@@ -3,7 +3,7 @@ use tensor4all_partitionedtreetn::{
     reconstruction::{
         reconstruct, ReconstructionOptions, ReconstructionTarget, ReconstructionTolerance,
     },
-    PartitionedTreeTN, SubDomainTreeTN, TreeTN,
+    PartitionedTreeTN, PatchSplitStrategy, SubDomainTreeTN, TreeTN,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -31,7 +31,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         &ReconstructionOptions {
             target_bond_dim: Some(1),
-            split_indices: vec![x],
+            patch_order: vec![x],
+            split_strategy: PatchSplitStrategy::Sequential,
             ..Default::default()
         },
     )?;

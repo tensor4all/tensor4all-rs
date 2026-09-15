@@ -168,6 +168,11 @@ site indices per node, and does not implement adaptive interpolation.
   separate from `PatchingOptions::cutoff`. The output exposes superpositions
   via `regions()`; `into_partition()` rejects regions with multiple terms.
   The numerical error bound excludes floating-point roundoff.
+  Options reuse `patch_order` and `PatchSplitStrategy`: `Sequential` tries only
+  the next unprojected nontrivial index and stops on no gain or insufficient
+  region capacity; default `ExactParameterGain` searches all permitted indices.
+  For contiguous QTT intervals, use MSB-first order with `Sequential`, independent
+  of TT site placement. No separate `PatchingOrder` enum is needed.
 
 All truncating and contracting operations require an explicit existing node name
 as `center`. Reconstruction remasks compressed candidates to preserve exact

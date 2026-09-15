@@ -8,7 +8,9 @@ use super::{
     ReconstructionTarget, ReconstructionTolerance, Region,
 };
 use crate::projector::canonical_index_cmp;
-use crate::{DynIndex, PartitionedTreeTNError, Projector, Result, SubDomainTreeTN};
+use crate::{
+    DynIndex, PartitionedTreeTNError, PatchSplitStrategy, Projector, Result, SubDomainTreeTN,
+};
 
 struct Reduced<V: Clone + Hash + Eq + Send + Sync + Debug> {
     terms: Vec<SubDomainTreeTN<V>>,
@@ -34,6 +36,10 @@ struct WorkingRegion<V: Clone + Hash + Eq + Send + Sync + Debug> {
 /// operand ranks. Over-goal regions split only if the largest child term rank
 /// improves. Candidate children are formed from original region inputs, not
 /// from a truncated parent. Failed probes never consume error budget.
+/// [`PatchSplitStrategy::Sequential`] considers only the next unprojected
+/// nontrivial index in `patch_order`; a rejected split never skips that index.
+/// [`PatchSplitStrategy::ExactParameterGain`] selects the best permitted split
+/// by logical parameter count, breaking ties in `patch_order` order.
 ///
 /// Every accepted approximation is checked by the norm of its explicit local
 /// difference network. Errors are added within a region and combined by
@@ -106,10 +112,17 @@ where
         let over_goal = options.target_bond_dim.is_some_and(|goal| rank > goal);
         let mut best: Option<(usize, Vec<WorkingRegion<V>>)> = None;
         if over_goal {
-            for index in &indices {
-                if region.projector.is_projected_at(index) || index.dim <= 1 {
-                    continue;
-                }
+            let candidate_limit = match options.split_strategy {
+                PatchSplitStrategy::Sequential => 1,
+                PatchSplitStrategy::ExactParameterGain => usize::MAX,
+            };
+            // Limit before feasibility/gain checks so Sequential never bypasses
+            // an unprofitable or unaffordable prefix bit to try a later bit.
+            for index in indices
+                .iter()
+                .filter(|index| !region.projector.is_projected_at(index) && index.dim > 1)
+                .take(candidate_limit)
+            {
                 let Some(prospective) = live_regions.checked_add(index.dim - 1) else {
                     continue;
                 };
@@ -219,24 +232,24 @@ fn validate<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
     }
     all.sort_by(canonical_index_cmp);
     let mut seen = HashSet::new();
-    for requested in &options.split_indices {
+    for requested in &options.patch_order {
         if !seen.insert(requested) {
             return Err(invalid(
-                "split_indices must not contain duplicate full indices",
+                "patch_order must not contain duplicate full indices",
             ));
         }
         let canonical = all
             .iter()
             .find(|index| *index == requested)
-            .ok_or_else(|| invalid("split_indices must belong to the target site space"))?;
+            .ok_or_else(|| invalid("patch_order must belong to the target site space"))?;
         if canonical.dim != requested.dim {
             return Err(PartitionedTreeTNError::SiteIndexMismatch);
         }
     }
-    Ok(if options.split_indices.is_empty() {
+    Ok(if options.patch_order.is_empty() {
         all
     } else {
-        options.split_indices.clone()
+        options.patch_order.clone()
     })
 }
 

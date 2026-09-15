@@ -38,6 +38,12 @@ regions and their terms; `into_partition()` succeeds only when every region
 has one term, and never silently sums a list. Its report contains an accumulated
 measured-residual error bound; floating-point roundoff is not rigorously bounded.
 
+Reconstruction reuses `patch_order` and `PatchSplitStrategy`: `Sequential`
+tries only the next unprojected nontrivial index and stops on no gain or a
+region-capacity limit; the default `ExactParameterGain` compares all permitted
+candidates. Use an explicit MSB-first order with `Sequential` for contiguous
+QTT intervals, independently of the indices' placement on the tree.
+
 Run the asserted example with
 `cargo run --release -p tensor4all-partitionedtreetn --example reconstruct`.
 The [guide](https://tensor4all.org/tensor4all-rs/guides/partitioned-treetn.html#reconstruction-with-a-fixed-global-l2-tolerance)

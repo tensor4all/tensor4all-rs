@@ -1,8 +1,8 @@
 use num_complex::Complex64;
 use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, TensorElement};
 use tensor4all_partitionedtreetn::{
-    reconstruction::*, PartitionedTreeTN, PartitionedTreeTNError, Projector, SubDomainTreeTN,
-    TreeTN,
+    reconstruction::*, PartitionedTreeTN, PartitionedTreeTNError, PatchSplitStrategy, Projector,
+    SubDomainTreeTN, TreeTN,
 };
 
 fn diagonal<T: TensorElement + From<f64>>(weights: &[T]) -> SubDomainTreeTN {
@@ -124,6 +124,100 @@ fn rank_goal_and_region_limit_never_override_accuracy() {
         assert_eq!(result.report().region_count, 1);
         assert_eq!(result.report().max_bond_dim, 3);
         check_residual(&original, &result, 1e-11);
+    }
+}
+
+#[test]
+fn sequential_patches_msb_at_right_end_of_reversed_bit_layout() {
+    // T(r2, r1) = delta(r2, r1), with the MSB at the right-hand node.
+    // This tests reconstruction geometry, not QFT application.
+    let original = diagonal(&[1.0, 2.0]);
+    let r2 = original
+        .data()
+        .site_space(&0)
+        .unwrap()
+        .iter()
+        .next()
+        .unwrap()
+        .clone();
+    let r1 = original
+        .data()
+        .site_space(&1)
+        .unwrap()
+        .iter()
+        .next()
+        .unwrap()
+        .clone();
+    for patch_order in [vec![r1.clone(), r2.clone()], vec![r2.clone(), r1.clone()]] {
+        let output = reconstruct(
+            &target(&original),
+            &0,
+            Default::default(),
+            &ReconstructionOptions {
+                target_bond_dim: Some(1),
+                patch_order: patch_order.clone(),
+                split_strategy: PatchSplitStrategy::Sequential,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(output.report().split_count, 1);
+        assert_eq!(output.report().region_count, 2);
+        assert_eq!(output.report().max_bond_dim, 1);
+        for (projector, terms) in output.regions() {
+            assert!(projector.is_projected_at(&patch_order[0]));
+            assert!(!projector.is_projected_at(&patch_order[1]));
+            for term in terms {
+                assert_eq!(term.data().site_space(&0), original.data().site_space(&0));
+                assert_eq!(term.data().site_space(&1), original.data().site_space(&1));
+            }
+        }
+        check_residual(&original, &output, 1e-12);
+    }
+}
+
+#[test]
+fn sequential_does_not_skip_first_index_when_region_capacity_is_insufficient() {
+    let first = DynIndex::new_dyn(3);
+    let second = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(2);
+    let tree = TreeTN::from_tensors(
+        vec![
+            IdxTensor::from_dense(
+                vec![first.clone(), bond.clone()],
+                vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            )
+            .unwrap(),
+            IdxTensor::from_dense(vec![bond, second.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap(),
+        ],
+        vec![0usize, 1],
+    )
+    .unwrap();
+    let original = SubDomainTreeTN::from_treetn(tree).unwrap();
+    for split_strategy in [
+        PatchSplitStrategy::Sequential,
+        PatchSplitStrategy::ExactParameterGain,
+    ] {
+        let output = reconstruct(
+            &target(&original),
+            &0,
+            Default::default(),
+            &ReconstructionOptions {
+                target_bond_dim: Some(1),
+                patch_order: vec![first.clone(), second.clone()],
+                split_strategy,
+                max_regions: 2,
+            },
+        )
+        .unwrap();
+        let sequential = split_strategy == PatchSplitStrategy::Sequential;
+        assert_eq!(output.report().split_count, usize::from(!sequential));
+        assert_eq!(output.report().max_bond_dim, if sequential { 2 } else { 1 });
+        for (projector, _) in output.regions() {
+            assert!(!projector.is_projected_at(&first));
+            assert_eq!(projector.is_projected_at(&second), !sequential);
+        }
+        check_residual(&original, &output, 1e-12);
     }
 }
 
@@ -377,7 +471,7 @@ fn validates_options_before_empty_and_zero_shortcuts() {
             ..Default::default()
         },
         ReconstructionOptions {
-            split_indices: vec![DynIndex::new_dyn(2)],
+            patch_order: vec![DynIndex::new_dyn(2)],
             ..Default::default()
         },
     ] {
@@ -411,7 +505,7 @@ fn validates_center_split_identity_and_dimension() {
             &0,
             Default::default(),
             &ReconstructionOptions {
-                split_indices: indices,
+                patch_order: indices,
                 ..Default::default()
             }
         )
@@ -425,7 +519,7 @@ fn validates_center_split_identity_and_dimension() {
             &0,
             Default::default(),
             &ReconstructionOptions {
-                split_indices: vec![alias],
+                patch_order: vec![alias],
                 ..Default::default()
             }
         ),
@@ -501,7 +595,7 @@ fn spectator_split_with_no_rank_gain_stops_and_keeps_full_index_identity() {
         Default::default(),
         &ReconstructionOptions {
             target_bond_dim: Some(1),
-            split_indices: vec![spectator.clone()],
+            patch_order: vec![spectator.clone()],
             ..Default::default()
         },
     )
@@ -515,7 +609,7 @@ fn spectator_split_with_no_rank_gain_stops_and_keeps_full_index_identity() {
         Default::default(),
         &ReconstructionOptions {
             target_bond_dim: Some(1),
-            split_indices: vec![x.clone()],
+            patch_order: vec![x.clone()],
             ..Default::default()
         },
     )
@@ -526,6 +620,34 @@ fn spectator_split_with_no_rank_gain_stops_and_keeps_full_index_identity() {
         assert!(!projector.is_projected_at(&spectator));
     }
     check_residual(&original, &gain, 1e-12);
+
+    // Sequential cannot skip an unprofitable first index even though the
+    // next index would reduce rank. Gain search may select that next index.
+    for split_strategy in [
+        PatchSplitStrategy::Sequential,
+        PatchSplitStrategy::ExactParameterGain,
+    ] {
+        let output = reconstruct(
+            &prepared,
+            &0,
+            Default::default(),
+            &ReconstructionOptions {
+                target_bond_dim: Some(1),
+                patch_order: vec![spectator.clone(), x.clone()],
+                split_strategy,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let sequential = split_strategy == PatchSplitStrategy::Sequential;
+        assert_eq!(output.report().split_count, usize::from(!sequential));
+        assert_eq!(output.report().max_bond_dim, if sequential { 2 } else { 1 });
+        for (projector, _) in output.regions() {
+            assert!(!projector.is_projected_at(&spectator));
+            assert_eq!(projector.is_projected_at(&x), !sequential);
+        }
+        check_residual(&original, &output, 1e-12);
+    }
 }
 
 #[test]
@@ -552,7 +674,7 @@ fn branched_tree_reconstruction_preserves_value_and_topology() {
         Default::default(),
         &ReconstructionOptions {
             target_bond_dim: Some(1),
-            split_indices: vec![sites[1].clone()],
+            patch_order: vec![sites[1].clone()],
             ..Default::default()
         },
     )
@@ -573,7 +695,7 @@ fn nested_splits_rebuild_original_target_and_keep_one_global_budget() {
     let right = diagonal(&[3.0, 4.0]);
     let prepared =
         ReconstructionTarget::from_tensor_products(vec![(left.clone(), right.clone())]).unwrap();
-    let split_indices = vec![
+    let patch_order = vec![
         left.data()
             .site_space(&0)
             .unwrap()
@@ -590,42 +712,53 @@ fn nested_splits_rebuild_original_target_and_keep_one_global_budget() {
             .unwrap()
             .clone(),
     ];
-    let output = reconstruct(
-        &prepared,
-        &0,
-        ReconstructionTolerance {
-            rtol: 1e-8,
-            atol: 0.0,
-        },
-        &ReconstructionOptions {
-            target_bond_dim: Some(1),
-            split_indices,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    assert_eq!(output.report().split_count, 3);
-    assert_eq!(output.report().region_count, 4);
-    assert_eq!(output.report().max_bond_dim, 1);
-    assert_eq!(output.report().reference_norm, prepared.reference_norm());
-    assert!(output.report().error_bound <= 1e-8 * prepared.reference_norm());
-    let a = left.data().clone().to_dense().unwrap();
-    let b = right.data().clone().to_dense().unwrap();
-    let av = a.to_vec::<f64>().unwrap();
-    let bv = b.to_vec::<f64>().unwrap();
-    let expected = IdxTensor::from_dense(
-        a.indices().iter().chain(b.indices()).cloned().collect(),
-        bv.iter()
-            .flat_map(|y| av.iter().map(move |x| x * y))
-            .collect(),
-    )
-    .unwrap();
-    let residual = result_dense(&output, left.data())
-        .sub(&expected)
-        .unwrap()
-        .norm()
+    for split_strategy in [
+        PatchSplitStrategy::Sequential,
+        PatchSplitStrategy::ExactParameterGain,
+    ] {
+        let output = reconstruct(
+            &prepared,
+            &0,
+            ReconstructionTolerance {
+                rtol: 1e-8,
+                atol: 0.0,
+            },
+            &ReconstructionOptions {
+                target_bond_dim: Some(1),
+                patch_order: patch_order.clone(),
+                split_strategy,
+                ..Default::default()
+            },
+        )
         .unwrap();
-    assert!(residual < 1e-11, "nested split residual: {residual}");
+        assert_eq!(output.report().split_count, 3);
+        assert_eq!(output.report().region_count, 4);
+        assert_eq!(output.report().max_bond_dim, 1);
+        assert_eq!(output.report().reference_norm, prepared.reference_norm());
+        assert!(output.report().error_bound <= 1e-8 * prepared.reference_norm());
+        let a = left.data().clone().to_dense().unwrap();
+        let b = right.data().clone().to_dense().unwrap();
+        let av = a.to_vec::<f64>().unwrap();
+        let bv = b.to_vec::<f64>().unwrap();
+        let expected = IdxTensor::from_dense(
+            a.indices().iter().chain(b.indices()).cloned().collect(),
+            bv.iter()
+                .flat_map(|y| av.iter().map(move |x| x * y))
+                .collect(),
+        )
+        .unwrap();
+        let residual = result_dense(&output, left.data())
+            .sub(&expected)
+            .unwrap()
+            .norm()
+            .unwrap();
+        assert!(residual < 1e-11, "nested split residual: {residual}");
+        for (projector, _) in output.regions() {
+            assert!(patch_order
+                .iter()
+                .all(|index| projector.is_projected_at(index)));
+        }
+    }
 }
 
 #[test]

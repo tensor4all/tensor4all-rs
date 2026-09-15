@@ -14,7 +14,8 @@
 use std::{fmt::Debug, hash::Hash};
 
 use crate::{
-    DynIndex, PartitionedTreeTN, PartitionedTreeTNError, Projector, Result, SubDomainTreeTN,
+    DynIndex, PartitionedTreeTN, PartitionedTreeTNError, PatchSplitStrategy, Projector, Result,
+    SubDomainTreeTN,
 };
 
 mod engine;
@@ -60,15 +61,19 @@ impl Default for ReconstructionTolerance {
 /// The rank is a soft goal: an over-goal term is retained when no permitted
 /// split improves its rank. Each split fixes one whole external site index;
 /// this also supports multiple site indices per tree node. QTT dyadic users
-/// should supply the appropriate binary indices in `split_indices`.
+/// should supply binary indices MSB first in `patch_order` and select
+/// [`PatchSplitStrategy::Sequential`] to preserve contiguous dyadic intervals.
+/// Index significance is independent of the indices' placement on the tree.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_partitionedtreetn::reconstruction::ReconstructionOptions;
+/// use tensor4all_partitionedtreetn::{reconstruction::ReconstructionOptions, PatchSplitStrategy};
 /// let options = ReconstructionOptions::default();
 /// assert_eq!(options.target_bond_dim, Some(64));
 /// assert_eq!(options.max_regions, 1024);
+/// assert_eq!(options.split_strategy, PatchSplitStrategy::ExactParameterGain);
+/// assert!(options.patch_order.is_empty());
 /// ```
 #[derive(Debug, Clone)]
 pub struct ReconstructionOptions {
@@ -77,9 +82,17 @@ pub struct ReconstructionOptions {
     pub target_bond_dim: Option<usize>,
     /// Permitted split indices, matched by full identity and dimension.
     /// Empty means all external indices, in deterministic identity order.
-    /// Candidates are ranked by resulting logical parameter count, with input
-    /// order breaking ties. This list is independent of any QFT-selected subset.
-    pub split_indices: Vec<DynIndex>,
+    /// `Sequential` probes only the first unprojected index with dimension > 1;
+    /// no gain or insufficient region capacity stops splitting that region,
+    /// without skipping to later indices. `ExactParameterGain` probes all
+    /// permitted candidates, with this order breaking ties. This list is
+    /// independent of any QFT-selected subset.
+    pub patch_order: Vec<DynIndex>,
+    /// Existing adaptive-patching candidate strategy; default `ExactParameterGain`.
+    /// Both strategies accept a split only when the maximum child term rank
+    /// decreases. Use `Sequential` with explicit MSB-first `patch_order` for
+    /// contiguous QTT intervals; leave the default for unrestricted gain search.
+    pub split_strategy: PatchSplitStrategy,
     /// Maximum live output regions, default 1024; must be positive.
     /// Reaching this search limit retains valid higher-rank terms.
     pub max_regions: usize,
@@ -89,7 +102,8 @@ impl Default for ReconstructionOptions {
     fn default() -> Self {
         Self {
             target_bond_dim: Some(64),
-            split_indices: Vec::new(),
+            patch_order: Vec::new(),
+            split_strategy: PatchSplitStrategy::default(),
             max_regions: 1024,
         }
     }

@@ -33,7 +33,7 @@ roundoff; it is not a user-requested approximation.
 
 - `ReconstructionTarget<V>`: validated immutable source and pinned norm.
 - `ReconstructionTolerance { rtol, atol }`: numerical accuracy only.
-- `ReconstructionOptions { target_bond_dim, split_indices, max_regions }`:
+- `ReconstructionOptions { target_bond_dim, patch_order, split_strategy, max_regions }`:
   representation/search policy only.
 - `reconstruct(&target, &center, tolerance, &options)`: owned result, no mutation.
 - `ReconstructedTreeTN<V>`: immutable region/term lists and a report.
@@ -50,6 +50,29 @@ Consequently their norm squares must not simply be added. `regions()` exposes
 the terms. `into_partition()` performs structural conversion only and rejects
 multi-term regions. It never silently forms a global sum.
 
+Reuse the existing `PatchSplitStrategy` enum and `PatchingOptions::patch_order`
+convention; do not introduce a second `PatchingOrder` enum. The reconstruction
+options have this signature:
+
+```rust
+pub struct ReconstructionOptions {
+    pub target_bond_dim: Option<usize>,
+    pub patch_order: Vec<DynIndex>,
+    pub split_strategy: PatchSplitStrategy,
+    pub max_regions: usize,
+}
+```
+
+An explicit `patch_order` limits the permitted full site indices. An empty list
+uses all external indices in deterministic full-identity order, which need not
+be bit-significance order. `Sequential` tries only the first unprojected index
+with dimension greater than one. If it has no rank gain or its fanout exceeds
+the region limit, the region stops; later indices are not tried.
+`ExactParameterGain` (the default) searches all permitted candidates and uses
+list order to break ties. Both strategies retain the global L2 allowance and
+soft rank goal. Reusing candidate selection does not reuse the older local
+`cutoff` or hard-rank-cap error semantics.
+
 ## Initial reconstruction algorithm
 
 1. Order target terms by descending support depth, then canonical projector
@@ -63,8 +86,9 @@ multi-term regions. It never silently forms a global sum.
    region sources, then repeat reduction on the children. Do not project an
    already truncated parent approximation as the defining source.
 4. Accept only a candidate whose maximum child term rank is strictly smaller
-   than the parent's. Among eligible candidates choose the smallest total
-   logical parameter count; supplied index order breaks ties.
+   than the parent's. `Sequential` probes only the next permitted index;
+   `ExactParameterGain` chooses the smallest total logical parameter count
+   among eligible candidates, with supplied index order breaking ties.
 5. Stop on no gain, no available indices, or the region search limit. Retain
    higher rank or superpositions instead of violating the accuracy condition.
 
@@ -109,14 +133,35 @@ spectators: preserve their identity, dimension, and node assignment. Reject
 duplicates, absent indices, dimension aliases, and nonbinary selected sites.
 An empty selection can be an explicitly documented identity operation.
 
-The QFT selection is independent of reconstruction's permitted split indices.
-Input bits are ordered from most to least significant. Bind the existing QFT
-operator explicitly and document its bit-reversed output mapping; contiguous
-frequency blocks must fix the actual high frequency bits. A full transform is
+The QFT selection is independent of reconstruction's `patch_order`.
+Input bits are ordered from most to least significant. A full transform is
 the same interface with all desired axes selected. Multidimensional axes each
 carry their own ordered subset; normalization is unitary on selected axes.
 Do not silently add padding or change grid length: padding needs an explicit
 domain/embedding contract.
+
+### Bit significance, site placement, and patching order
+
+For a transform from k to r, both k1 and r1 are the most significant bits:
+`k = sum_j 2^(R-j) k_j`, `r = sum_j 2^(R-j) r_j`.
+With no output bit-reversal permutation, the selected TT positions change from
+`[k1, ..., kR]` to `[rR, ..., r1]`. Thus the position previously carrying k_j
+carries r_(R+1-j). For subset transforms this assignment affects only selected
+indices; spectators keep their identity, dimension, and node assignment.
+
+Contiguous dyadic input patches fix k1, k2, ...; contiguous output patches fix
+r1, r2, ... . Set output `patch_order = [r1, ..., rR]` and
+`split_strategy = PatchSplitStrategy::Sequential`, independently of the TT's
+reversed output placement. For three bits, fixing r1 separates [0,4) from
+[4,8), whereas fixing r3 separates even from odd coordinates. Output patching
+therefore proceeds from the right end of the reversed TT layout.
+
+For uniform input depth d, the complementary merge-refine schedule removes
+input constraints in order k_d, ..., k1 and adds output constraints in order
+r1, ..., r_d. At level t, input unions retain the prefix k1, ..., k_(d-t),
+and output regions fix r1, ..., r_t. An input patch's transform generally
+spreads over the output domain; there is no direct replacement of its fixed
+input bits by fixed output bits. Adaptive schedules may stop on no gain.
 
 The map is `F_selected ⊗ I_spectators`, so exact QFT preserves orthogonality and
 the original global norm even though transformed supports overlap. A QFT-owned
