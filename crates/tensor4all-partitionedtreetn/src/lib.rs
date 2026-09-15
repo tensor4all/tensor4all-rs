@@ -17,6 +17,7 @@ mod error;
 mod partitioned_tree_tn;
 mod patching;
 mod projector;
+pub mod reconstruction;
 mod subdomain_tree_tn;
 
 pub use error::{PartitionedTreeTNError, Result};

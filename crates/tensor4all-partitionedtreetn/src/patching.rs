@@ -1092,7 +1092,7 @@ where
     })
 }
 
-fn logical_parameter_count<V>(subdomain: &SubDomainTreeTN<V>) -> Result<usize>
+pub(crate) fn logical_parameter_count<V>(subdomain: &SubDomainTreeTN<V>) -> Result<usize>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {

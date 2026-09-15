@@ -95,6 +95,46 @@ assert!(result.values().all(|patch| patch.max_bond_dim() <= 1));
 then compares checked sums of logical local tensor element counts. Structured
 storage payload length and AD state are not used as the metric.
 
+## Reconstruction with a fixed global L2 tolerance
+
+Use `reconstruction::reconstruct` when approximation must be measured against
+one immutable target, rather than the local discarded-weight `cutoff` used
+above. `ReconstructionTarget::from_partition` validates and snapshots disjoint
+patches and pins their combined L2 norm. `ReconstructionTolerance { rtol, atol }`
+sets the fixed allowance `max(atol, rtol * reference_norm)`.
+
+The rank goal is soft: a split must improve rank, and a pairwise merge must
+reduce the sum of operand ranks. Unprofitable sums remain as superposition
+terms. The output's regions are disjoint, but terms within a region can overlap.
+Use `regions()` to consume them. `into_partition()` rejects a region containing
+multiple terms; it never implicitly sums them.
+
+This example is included directly from the checked executable source:
+
+```rust
+# use tensor4all_core::{DynIndex, IdxTensor};
+# use tensor4all_partitionedtreetn::{reconstruction::*, PartitionedTreeTN, SubDomainTreeTN, TreeTN};
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+{{#include ../../../../crates/tensor4all-partitionedtreetn/examples/reconstruct.rs:reconstruction}}
+# Ok(())
+# }
+```
+
+`ReconstructionTarget::from_tensor_products` accepts pairs of patches on the
+same named topology and independent site spaces. Their output node owns both
+factors' external indices. Each product norm is the product of its factor norms;
+orthogonal product-patch norm squares are then added. Products remain factorized
+until reconstruction begins. This is a tensor product, not an elementwise
+product or an induced operator norm.
+
+Each accepted compression is checked against its uncompressed local input by
+an explicit difference-network norm. Residuals add within a region and combine
+in quadrature across disjoint regions. The report is a numerical a posteriori
+bound; it excludes floating-point roundoff. `rtol = atol = 0` disables
+approximate compression. Reaching `max_regions` retains higher rank without
+relaxing the error allowance. A partial `split_indices` list constrains the
+search independently of any future QFT-selected index subset.
+
 ## Dtype and topology
 
 A partition is homogeneous: all patches must use the same `IdxTensor` scalar
