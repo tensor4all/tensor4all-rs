@@ -124,21 +124,32 @@ actual target residual as well as the reported bound. No assumption that errors
 from repeated compression are orthogonal, and no square-root-of-step-count
 allocation, is used.
 
-## QFT integration contract (follow-up, not implemented here)
+## QFT integration contract
 
-QFT must accept an explicit subset of external full site indices, with ordered
-binary indices for each transformed coordinate. These need not be contiguous
-nodes and may share a node with spectator indices. All remaining indices are
-spectators: preserve their identity, dimension, and node assignment. Reject
-duplicates, absent indices, dimension aliases, and nonbinary selected sites.
-An empty selection can be an explicitly documented identity operation.
+`ReconstructionTarget::from_subset_operator` applies an existing, already-built
+`LinearOperator` to an ordered subset of the preimage's external full site
+indices. The Fourier operator itself is constructed by the caller
+(`tensor4all-quanticstransform`), so this crate keeps no dependency on the
+simplett stack. QFT must accept an explicit subset of external full site
+indices, with ordered binary indices for each transformed coordinate. These
+need not be contiguous nodes and may share a node with spectator indices. All
+remaining indices are spectators: preserve their identity, dimension, and node
+assignment. The call rejects a selection that does not match the operator node
+count, repeats an index, or is absent from the preimage site space.
+
+Selected indices must currently sit on distinct tree nodes. A node owning two
+selected indices would need the operator's MPO nodes merged into one multi-site
+node; that is not implemented, and the call rejects it with repair guidance
+("transform indices that share a node separately") rather than silently
+mis-binding them. Spectator indices on the same node as a selected index are
+supported.
 
 The QFT selection is independent of reconstruction's `patch_order`.
 Input bits are ordered from most to least significant. A full transform is
 the same interface with all desired axes selected. Multidimensional axes each
-carry their own ordered subset; normalization is unitary on selected axes.
-Do not silently add padding or change grid length: padding needs an explicit
-domain/embedding contract.
+carry their own ordered subset and are applied as separate calls; normalization
+is unitary on selected axes. Do not silently add padding or change grid length:
+padding needs an explicit domain/embedding contract.
 
 ### Bit significance, site placement, and patching order
 
@@ -167,9 +178,19 @@ The map is `F_selected ⊗ I_spectators`, so exact QFT preserves orthogonality a
 the original global norm even though transformed supports overlap. A QFT-owned
 prepared target must carry that provenance from its validated preimage. It must
 not try to pass overlapping images through `from_partition` or recompute their
-global norm by assuming disjoint image supports. Approximation of the QFT MPO
-and its application must be accounted separately from reconstruction; approximate
-unitarity cannot silently justify an exact error certificate.
+global norm by assuming disjoint image supports. `from_subset_operator`
+therefore keeps the pinned preimage norm and stores each transformed patch with
+its spectator-only projector, dropping the selected constraints.
+
+Approximation of the QFT MPO and its application is accounted separately from
+reconstruction: `ReconstructionReport::error_bound` only bounds the
+reconstruction of the prepared images. The construction error of the operator,
+for example `FourierOptions::tolerance` and `max_bond_dim`, stays the caller's
+responsibility and is never folded into that bound. Passing exact apply options
+(no SVD or QR truncation) keeps the transform itself exact up to backend
+roundoff. Integration tests bind a real Fourier operator and check the
+documented sign, normalization, output ordering, and subset behaviour against a
+dense small-system oracle and a direct-apply reference.
 
 QFT also supplies the input-merge/output-refine schedule and its bit geometry.
 The complementary-area invariant of the Fourier algorithm is not a generic

@@ -97,6 +97,31 @@ above belongs to the initial snapshot.
 
 The reported error bound uses floating-point norm measurements, not interval
 arithmetic, and excludes backend roundoff. No AD guarantee or GPU execution was
-validated. No runtime speedup is claimed. QFT itself, zero-padding semantics,
-and its complementary merge-refine schedule are not implemented in this
-general-reconstruction change.
+validated. No runtime speedup is claimed. The complementary merge-refine
+schedule, automatic zero-padding, and applying two selected indices that share
+one tree node remain unimplemented.
+
+## Subset QFT integration (2026-09-15)
+
+Added `ReconstructionTarget::from_subset_operator`, which applies an existing
+`LinearOperator` to an ordered subset of the preimage's full site indices. The
+Fourier operator stays the caller's: `tensor4all-quanticstransform` is a
+path-only cross-layer dev-dependency, so this crate keeps no simplett-stack
+runtime dependency. The prepared target reuses the pinned preimage norm and
+stores each transformed patch with its spectator-only projector, because a
+unitary preserves orthogonality while the image supports overlap. Two selected
+indices on one node are rejected with repair guidance rather than silently
+mis-bound; spectators may share a node with a selected index. Transform
+construction error stays separate from the reported reconstruction bound.
+
+An integration test binds a real `quantics_fourier_operator` and checks sign,
+normalization, and the documented no-permutation output placement against a
+dense small-system oracle, plus a noncontiguous selection with spectators, a
+forward-then-inverse round trip (which returns the bit-reversed input), invalid
+selections, and a multi-index node rejection. The dev-dependency is path-only
+and stripped from published manifests, as the shared rules permit for
+cross-layer tests.
+
+For this revision, the changed-crate debug test suite passed with the five new
+integration tests, `cargo fmt`, and changed-crate Clippy with all targets and
+warnings denied.

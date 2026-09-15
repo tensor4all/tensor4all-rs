@@ -44,12 +44,19 @@ region-capacity limit; the default `ExactParameterGain` compares all permitted
 candidates. Use an explicit MSB-first order with `Sequential` for contiguous
 QTT intervals, independently of the indices' placement on the tree.
 
+`ReconstructionTarget::from_subset_operator` prepares the images of an existing
+linear operator (for example a quantics Fourier transform built elsewhere) on an
+ordered subset of full site indices. Spectators keep their identity, dimension,
+and node assignment, and the prepared target reuses the pinned preimage norm
+because a unitary preserves orthogonality even though the image supports
+overlap. Two selected indices on one tree node are rejected. The operator's own
+construction error stays separate from the reported reconstruction bound.
+
 Run the asserted example with
 `cargo run --release -p tensor4all-partitionedtreetn --example reconstruct`.
 The [guide](https://tensor4all.org/tensor4all-rs/guides/partitioned-treetn.html#reconstruction-with-a-fixed-global-l2-tolerance)
-includes the same executable source. QFT transformation and its merge-refine
-schedule are separate follow-up work; no generic operator-application API is
-introduced here.
+includes the same executable source. The QFT merge-refine schedule and automatic
+zero-padding remain separate follow-up work.
 
 ## Quick start
 

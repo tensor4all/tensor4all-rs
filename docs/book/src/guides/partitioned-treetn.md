@@ -144,6 +144,30 @@ count. For contiguous QTT intervals, supply the bits MSB first and select
 order uses all external indices in deterministic identity order, not numeric
 bit significance.
 
+### Applying a QFT to a subset of sites
+
+`ReconstructionTarget::from_subset_operator(&preimage, &center, &operator,
+&selection, apply_options)` prepares the images of an existing linear operator
+acting on an ordered subset of the target's site indices. `selection` holds one
+full site index per operator node, in the operator's own node order; for a
+quantics Fourier transform its node 0 is the most significant input bit. Build
+that operator with `tensor4all_quanticstransform::quantics_fourier_operator` and
+the crate stays free of a simplett-stack runtime dependency.
+
+The selection may skip sites and spectators keep their identity, dimension, and
+node assignment. A spectator may share its node with a selected index, but two
+selected indices on one node are rejected. The prepared target reuses the pinned
+preimage norm because a unitary preserves orthogonality even though the
+transformed supports overlap; each transformed patch keeps only its spectator
+constraints. Transform construction error (for example
+`FourierOptions::tolerance`) is accounted separately from
+the reconstruction bound, so use exact apply options unless you account for it
+yourself.
+
+The transform stores frequency bit `t` at selected position `t` without an
+output bit-reversal permutation. For contiguous output patches, supply
+`patch_order = [r1, ..., rR]` with `PatchSplitStrategy::Sequential`.
+
 ## Dtype and topology
 
 A partition is homogeneous: all patches must use the same `IdxTensor` scalar

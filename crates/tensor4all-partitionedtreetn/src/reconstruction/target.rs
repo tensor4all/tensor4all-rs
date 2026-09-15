@@ -1,8 +1,9 @@
-use std::{fmt::Debug, hash::Hash};
+use std::{collections::HashSet, fmt::Debug, hash::Hash};
 
-use tensor4all_core::{IndexLike, SvdTruncationPolicy};
+use tensor4all_core::{IdxTensor, IndexLike, SvdTruncationPolicy};
 use tensor4all_treetn::{
-    contraction::ContractionOptions, partial_contract, PartialContractionSpec, SiteIndexNetwork,
+    apply_linear_operator_to_indices, contraction::ContractionOptions, partial_contract,
+    ApplyOptions, LinearOperator, PartialContractionSpec, SiteIndexNetwork,
 };
 
 use super::{finite, invalid};
@@ -176,6 +177,184 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             patches,
             network,
             norm,
+        })
+    }
+
+    /// Prepare the images of `preimage` under `operator` acting on an ordered subset.
+    ///
+    /// `selection` lists one full site index per operator node, in the operator's
+    /// own node order. That node order defines the logical bit order: for a
+    /// quantics Fourier transform its node 0 is the most significant input bit
+    /// (`k1`), and the output at node `j` carries the bit-reversed frequency bit
+    /// `r_(R+1-j)`, so no output bit-reversal permutation is applied here.
+    /// Selection order is independent of reconstruction's `patch_order`.
+    ///
+    /// The selection may skip nodes (noncontiguous indices) and each selected
+    /// index may share its tree node with spectator site indices, which keep
+    /// their identity, dimension, and node assignment. `preimage` must be an
+    /// orthogonal target; applying a (approximately) unitary operator preserves
+    /// orthogonality, so the prepared target reuses the pinned preimage norm
+    /// instead of re-deriving a global norm from overlapping image supports.
+    /// Each transformed patch keeps only its spectator constraints.
+    ///
+    /// Approval of the transform is separate from reconstruction: this function
+    /// returns the exact images of the operator it is given (up to `apply_options`
+    /// and backend roundoff). The approximation made when *constructing* that
+    /// operator, for example `FourierOptions::tolerance` and `max_bond_dim`, is not
+    /// included in [`ReconstructionReport::error_bound`](super::ReconstructionReport),
+    /// which only bounds the reconstruction of these images. Pass exact apply
+    /// options (no truncation) to avoid adding transform error of your own.
+    ///
+    /// # Errors
+    /// Returns [`PartitionedTreeTNError::InvalidOptions`] when the selection does
+    /// not match the operator's node count, repeats an index, or selects indices
+    /// on one tree node (transform those separately), and
+    /// [`PartitionedTreeTNError::NonFiniteAdaptiveValue`] or backend errors from
+    /// patch materialization and application.
+    ///
+    /// # Examples
+    /// ```
+    /// use std::collections::HashMap;
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::{
+    ///     reconstruction::ReconstructionTarget, PartitionedTreeTN, SubDomainTreeTN,
+    /// };
+    /// use tensor4all_treetn::{ApplyOptions, IndexMapping, LinearOperator, TreeTN};
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let state = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense(vec![site.clone()], vec![3.0, 4.0])?], vec![0usize])?;
+    /// let preimage = ReconstructionTarget::from_partition(
+    ///     &PartitionedTreeTN::from_subdomain(SubDomainTreeTN::from_treetn(state)?)?)?;
+    ///
+    /// // A 2x2 identity operator written as a one-node MPO.
+    /// let internal_input = DynIndex::new_dyn(2);
+    /// let internal_output = DynIndex::new_dyn(2);
+    /// let mpo = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense(
+    ///         vec![internal_input.clone(), internal_output.clone()],
+    ///         vec![1.0, 0.0, 0.0, 1.0],
+    ///     )?],
+    ///     vec![0usize],
+    /// )?;
+    /// let operator_input = DynIndex::new_dyn(2);
+    /// let operator_output = DynIndex::new_dyn(2);
+    /// let mut input_mapping = HashMap::new();
+    /// input_mapping.insert(
+    ///     0usize,
+    ///     IndexMapping { true_index: operator_input, internal_index: internal_input },
+    /// );
+    /// let mut output_mapping = HashMap::new();
+    /// output_mapping.insert(
+    ///     0usize,
+    ///     IndexMapping { true_index: operator_output, internal_index: internal_output },
+    /// );
+    /// let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+    ///
+    /// let target = ReconstructionTarget::from_subset_operator(
+    ///     &preimage, &0, &operator, &[site], ApplyOptions::naive())?;
+    /// assert!((target.reference_norm() - 5.0).abs() < 1e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn from_subset_operator(
+        preimage: &Self,
+        center: &V,
+        operator: &LinearOperator<IdxTensor, V>,
+        selection: &[DynIndex],
+        apply_options: ApplyOptions,
+    ) -> Result<Self> {
+        if preimage.patches.is_empty() {
+            if selection.is_empty() {
+                return Ok(Self {
+                    patches: Vec::new(),
+                    network: None,
+                    norm: 0.0,
+                });
+            }
+            return Err(invalid(
+                "cannot apply a subset operator to an empty target; build a target with sites first",
+            ));
+        }
+
+        let mut operator_nodes = operator.mpo().node_names();
+        operator_nodes.sort();
+        if operator_nodes.len() != selection.len() {
+            return Err(invalid(
+                "selection must contain exactly one full index per operator node",
+            ));
+        }
+        let mut seen = HashSet::new();
+        for index in selection {
+            if !seen.insert(index) {
+                return Err(invalid("selection must not repeat a full site index"));
+            }
+        }
+
+        let network = preimage
+            .network
+            .as_ref()
+            .ok_or_else(|| invalid("preimage target has no site topology"))?;
+        let mut rename = Vec::with_capacity(selection.len());
+        let mut owners = HashSet::new();
+        let mut input_pairs = Vec::with_capacity(selection.len());
+        let mut output_pairs = Vec::with_capacity(selection.len());
+        for (node, target_index) in operator_nodes.iter().zip(selection) {
+            let owner = network.find_node_by_index(target_index).ok_or_else(|| {
+                invalid("selection index must belong to the preimage target site space")
+            })?;
+            if !owners.insert(owner.clone()) {
+                return Err(invalid(
+                    "selected indices must be on distinct tree nodes; transform indices that share a node separately",
+                ));
+            }
+            let inputs = operator
+                .get_input_mappings(node)
+                .ok_or_else(|| invalid("every operator node needs exactly one input mapping"))?;
+            let outputs = operator
+                .get_output_mappings(node)
+                .ok_or_else(|| invalid("every operator node needs exactly one output mapping"))?;
+            let ([input], [output]) = (inputs, outputs) else {
+                return Err(invalid(
+                    "subset operators must carry one input and one output mapping per node",
+                ));
+            };
+            input_pairs.push((input.true_index.clone(), target_index.clone()));
+            output_pairs.push((output.true_index.clone(), target_index.clone()));
+            rename.push((node.clone(), owner.clone()));
+        }
+        let operator = operator.clone().rename_nodes(&rename)?;
+
+        let mut patches = Vec::with_capacity(preimage.patches.len());
+        for term in preimage.materialize_terms(center)? {
+            let data = apply_linear_operator_to_indices(
+                &operator,
+                term.data(),
+                &input_pairs,
+                &output_pairs,
+                apply_options.clone(),
+            )
+            .map_err(|error| {
+                PartitionedTreeTNError::tree(format!("subset operator apply: {error}"))
+            })?;
+            // The selected sites are unconstrained after the transform; only
+            // spectator constraints survive, so the stored metadata stays a
+            // sound (if weaker) support description.
+            let mut projector = term.projector().clone();
+            for index in selection {
+                projector.remove(index);
+            }
+            let transformed = SubDomainTreeTN::new(data, projector)?;
+            patches.push((
+                transformed.projector().clone(),
+                Patch::Stored(Box::new(transformed)),
+            ));
+        }
+        patches.sort_by(|a, b| a.0.canonical_cmp(&b.0));
+
+        Ok(Self {
+            patches,
+            network: preimage.network.clone(),
+            norm: preimage.norm,
         })
     }
 

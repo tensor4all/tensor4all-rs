@@ -173,6 +173,13 @@ site indices per node, and does not implement adaptive interpolation.
   region capacity; default `ExactParameterGain` searches all permitted indices.
   For contiguous QTT intervals, use MSB-first order with `Sequential`, independent
   of TT site placement. No separate `PatchingOrder` enum is needed.
+- `reconstruction::ReconstructionTarget::from_subset_operator(&preimage, &center,
+  &operator, &selection, apply_options)` — applies an existing `LinearOperator`
+  (for example a Fourier operator built with `tensor4all-quanticstransform`) to an
+  ordered subset of full site indices. Spectators keep identity, dimension, and
+  node assignment; two selected indices on one node are rejected. The prepared
+  target reuses the pinned preimage norm, and the operator's own construction
+  error is accounted separately from the reconstruction bound.
 
 All truncating and contracting operations require an explicit existing node name
 as `center`. Reconstruction remasks compressed candidates to preserve exact
