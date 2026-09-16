@@ -101,7 +101,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// restructure factors explicitly before calling when needed.
     ///
     /// Products remain factorized here. Each patch norm is the product of its
-    /// factor norms; the target norm is their Euclidean norm. During
+    /// factor norms; the reference scale is their Euclidean norm. During
     /// reconstruction, the existing non-dense partial-contraction path forms
     /// local products without a rank cap or approximation threshold.
     /// Validation of arbitrary projector supports uses pairwise overlap checks.
@@ -411,7 +411,11 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         })
     }
 
-    /// Return the original target L2 scale, fixed at construction.
+    /// Return the target's reference scale, fixed at construction.
+    ///
+    /// It is the exact L2 norm for [`Self::from_partition`] and
+    /// [`Self::from_tensor_products`], and a norm-based upper bound for
+    /// [`Self::from_subset_operator`] with a general operator.
     ///
     /// # Examples
     /// ```

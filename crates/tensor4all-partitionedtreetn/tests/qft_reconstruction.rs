@@ -535,8 +535,10 @@ fn subset_operator_scale_is_not_measured_under_destructive_interference() {
         norm_of(&applied)
     );
 
-    // Regression: preparation keeps the two images separate. A global direct sum
-    // would leave a single term.
+    // Separate-term retention: preparation stores the two images independently,
+    // so reconstruction at zero tolerance keeps both. This observes the retained
+    // representation only; it cannot see a temporary network built and discarded
+    // during preparation.
     let output = reconstruct(
         &target,
         &0,

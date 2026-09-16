@@ -186,7 +186,7 @@ Instead it pins a reference scale from the operator itself,
 ```text
 s = 1                 if unitary is specified
 s = ||A||_F           otherwise
-reference_scale = s * ||preimage||
+reference_scale = s * preimage.reference_scale()
 absolute_tolerance = max(atol, rtol * reference_scale)
 ```
 
@@ -202,9 +202,13 @@ For a general operator the reference scale is a norm-based upper bound, so `rtol
 is relative to that scale and not to `||A x||_2`. This is deliberate: a measured
 output norm would require either the forbidden global direct sum or a
 cancellation-prone `O(M^2)` overlap sum. The two scales coincide for a unitary
-acting on an exactly known input scale. The images stay separate with only their
-spectator constraints, and operator-construction error, including approximate-QFT
-error, remains separate from the reconstruction bound.
+acting on an exactly known input scale, and the multiplication composes with an
+already-propagated preimage scale for operator-derived preimages. The images stay
+separate with only their spectator constraints, and operator-construction error,
+including approximate-QFT error, remains separate from the reconstruction bound.
+Because a temporary and discarded global sum leaves no trace in the returned
+target, separate-term retention tests observe the representation only and are not
+offered as detection of that prohibited path.
 
 QFT also supplies the input-merge/output-refine schedule and its bit geometry.
 The complementary-area invariant of the Fourier algorithm is not a generic

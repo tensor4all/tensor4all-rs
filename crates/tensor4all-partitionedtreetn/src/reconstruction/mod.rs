@@ -1,10 +1,15 @@
 //! Repartition orthogonal targets using a fixed global L2 error budget.
 //!
 //! Unlike the local discarded-weight policy in [`crate::PatchingOptions`],
-//! this module pins the target norm before reconstruction and checks actual
-//! network residuals before accepting approximations. L2 means the unweighted
-//! discrete Frobenius (Hilbert--Schmidt for operators) norm. No induced operator
-//! norm is used. Floating-point roundoff is not rigorously bounded.
+//! this module pins a reference scale before reconstruction and checks actual
+//! network residuals before accepting approximations. For
+//! [`ReconstructionTarget::from_partition`] and
+//! [`ReconstructionTarget::from_tensor_products`] that scale is the exact target
+//! L2 norm; [`ReconstructionTarget::from_subset_operator`] instead propagates a
+//! preimage scale times an operator amplification factor, which is an upper
+//! bound for a general operator. L2 means the unweighted discrete Frobenius
+//! (Hilbert--Schmidt for operators) norm. No induced operator norm is used.
+//! Floating-point roundoff is not rigorously bounded.
 //!
 //! The gain-driven merge, split, and superposition choices are independently
 //! implemented from the supplied algorithm note, "Fourier transform of a patched
@@ -41,7 +46,8 @@ pub use target::ReconstructionTarget;
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct ReconstructionTolerance {
-    /// Relative L2 tolerance against the original target. Default: `1e-6`.
+    /// Relative L2 tolerance against the fixed reference scale: the allowance
+    /// is `max(atol, rtol * reference_scale)`. Default: `1e-6`.
     pub rtol: f64,
     /// Absolute L2 tolerance, useful for small targets. Default: zero.
     pub atol: f64,
@@ -116,11 +122,14 @@ impl Default for ReconstructionOptions {
 /// ```text
 /// s = 1          if unitary is specified
 /// s = ||A||_F    otherwise
-/// reference_scale = s * ||preimage||
+/// reference_scale = s * preimage.reference_scale()
 /// absolute_tolerance = max(atol, rtol * reference_scale)
 /// ```
 ///
-/// Here `A` is the operator restricted to the selected sites. Spectator identity
+/// The multiplication composes with the preimage's own scale, which is already a
+/// propagated bound when that preimage is itself operator-derived; no output norm
+/// is measured at any step. Here `A` is the operator restricted to the selected
+/// sites. Spectator identity
 /// factors are neither materialized nor counted, because
 /// `||A ⊗ I||_2 = ||A||_2 <= ||A||_F`. For an `N`-dimensional unitary the
 /// Frobenius norm is `sqrt(N)` while the induced 2-norm is `1`; `unitary = true`
@@ -153,7 +162,7 @@ pub struct SubsetOperatorOptions {
 /// residual norms, combined by the Euclidean norm across disjoint regions.
 /// It is an a posteriori numerical bound, not an interval-arithmetic certificate:
 /// backend floating-point errors in addition, projection, and norms remain.
-/// The original reference norm never changes during reconstruction.
+/// The reference scale never changes during reconstruction.
 ///
 /// # Examples
 ///
@@ -167,7 +176,9 @@ pub struct SubsetOperatorOptions {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ReconstructionReport {
-    /// Original target L2 norm, computed before any reconstruction.
+    /// Pinned reference scale, fixed before any reconstruction. It is the exact
+    /// target L2 norm for partition- and product-derived targets, and a
+    /// norm-based upper bound for subset-operator targets.
     pub reference_scale: f64,
     /// Fixed `max(atol, rtol * reference_scale)` allowance.
     pub absolute_tolerance: f64,
@@ -234,7 +245,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructedTreeTN<V> {
             .map(|region| (&region.projector, region.terms.as_slice()))
     }
 
-    /// Borrow the fixed reference norm, measured error accounting, and final counts.
+    /// Borrow the fixed reference scale, measured error accounting, and final counts.
     ///
     /// # Examples
     /// ```

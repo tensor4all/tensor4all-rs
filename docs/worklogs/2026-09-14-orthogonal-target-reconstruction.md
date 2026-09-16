@@ -141,8 +141,10 @@ dense reference, invalid selections, the multi-index node rejection, and the
 scale contract: the Frobenius factor against the unitary factor of one, a
 non-unitary factor, destructive interference whose true output is zero while the
 scale stays the operator-based bound, propagation through successive
-applications, and a regression that preparation leaves the images as separate
-terms rather than one summed network. The forward-then-inverse round trip
+applications, and separate-term retention after preparation. That last check
+observes only the retained representation; it cannot see a temporary network
+built and discarded inside preparation, so it is not advertised as detecting a
+global direct sum. The forward-then-inverse round trip
 restores the original tensor on the original full indices: the inverse takes the
 reversed operator-node-to-site selection to undo the forward transform's
 bit-reversed output placement, and the result is compared index-aligned, not

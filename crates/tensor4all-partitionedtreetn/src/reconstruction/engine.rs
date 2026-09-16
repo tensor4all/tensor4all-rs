@@ -27,7 +27,7 @@ struct WorkingRegion<V: Clone + Hash + Eq + Send + Sync + Debug> {
 
 /// Reconstruct an orthogonal target with a fixed global L2 error allowance.
 ///
-/// `target` owns the original data and reference norm; `center` is an existing
+/// `target` owns the original data and reference scale; `center` is an existing
 /// node for local compression and residual norms. `tolerance` sets
 /// `delta = max(atol, rtol * target.reference_scale())`. `options` controls only representation
 /// choices. No full dense tensor or initial global direct sum is constructed.
@@ -44,7 +44,7 @@ struct WorkingRegion<V: Clone + Hash + Eq + Send + Sync + Debug> {
 /// Every accepted approximation is checked by the norm of its explicit local
 /// difference network. Errors are added within a region and combined by
 /// `hypot` across disjoint regions. The numerical bound excludes floating-point
-/// roundoff; see [`ReconstructionReport`]. The original target, inputs, and
+/// roundoff; see [`ReconstructionReport`]. The target, inputs, and
 /// caller's options are unchanged. Zero tolerance retains exact terms without
 /// SVD compression. Soft rank/search limits never force extra approximation.
 ///
