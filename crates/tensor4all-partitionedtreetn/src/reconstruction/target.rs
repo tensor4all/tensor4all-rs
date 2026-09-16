@@ -1,9 +1,13 @@
-use std::{collections::HashSet, fmt::Debug, hash::Hash};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    hash::Hash,
+};
 
 use tensor4all_core::{IdxTensor, IndexLike, SvdTruncationPolicy};
 use tensor4all_treetn::{
     apply_linear_operator_to_indices, contraction::ContractionOptions, partial_contract,
-    ApplyOptions, LinearOperator, PartialContractionSpec, SiteIndexNetwork,
+    ApplyOptions, LinearOperator, PartialContractionSpec, RestructureOptions, SiteIndexNetwork,
 };
 
 use super::{finite, invalid, SubsetOperatorOptions};
@@ -18,6 +22,30 @@ use crate::{
 enum Patch<V: Clone + Hash + Eq + Send + Sync + Debug> {
     Stored(Box<SubDomainTreeTN<V>>),
     Product(Box<(SubDomainTreeTN<V>, SubDomainTreeTN<V>)>),
+}
+
+/// One transformed image together with the preimage support it came from.
+#[derive(Debug, Clone)]
+pub(super) struct PreparedImage<V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    /// Preimage patch support, including its selected-index constraints.
+    pub(super) source: Projector,
+    /// Image retaining only the patch's spectator constraints.
+    pub(super) image: SubDomainTreeTN<V>,
+}
+
+/// Images of every preimage patch, with their provenance and the pinned scale.
+#[derive(Debug, Clone)]
+pub(super) struct PreparedImages<V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    /// One entry per preimage patch, in `preimage`'s canonical patch order.
+    pub(super) images: Vec<PreparedImage<V>>,
+    /// `amplification * preimage.reference_scale()`.
+    pub(super) scale: f64,
 }
 
 /// Immutable orthogonal target and its pinned reference scale.
@@ -196,7 +224,13 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     ///
     /// The selection may skip nodes (noncontiguous indices) and each selected
     /// index may share its tree node with spectator site indices, which keep
-    /// their identity, dimension, and node assignment.
+    /// their identity, dimension, and node assignment. Several selected indices
+    /// may also share one tree node: the operator MPO nodes carrying them are
+    /// fused into a single multi-site node, which is exact and adds no
+    /// truncation error, so the operator and the state agree on the node
+    /// grouping. That fusion requires those operator nodes to form one connected
+    /// group inside the operator's own topology; a group separated by another
+    /// owner's node is rejected rather than mis-bound.
     ///
     /// [`SubsetOperatorOptions::unitary`] selects how the reference scale is
     /// derived. `false` (the default) multiplies the preimage's
@@ -229,7 +263,8 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// # Errors
     /// Returns [`PartitionedTreeTNError::InvalidOptions`] when the selection does
     /// not match the operator's node count, repeats an index, or selects indices
-    /// on one tree node (transform those separately), and
+    /// that share one tree node without forming one connected group of operator
+    /// nodes (split the selection or restructure the operator), and
     /// [`PartitionedTreeTNError::NonFiniteAdaptiveValue`] or backend errors from
     /// patch materialization, application, the operator's Frobenius norm, and
     /// scaling.
@@ -307,6 +342,43 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             ));
         }
 
+        let prepared = Self::prepare_subset_images(preimage, center, operator, selection, options)?;
+        let mut patches: Vec<_> = prepared
+            .images
+            .into_iter()
+            .map(|prepared| {
+                let projector = prepared.image.projector().clone();
+                (projector, Patch::Stored(Box::new(prepared.image)))
+            })
+            .collect();
+        patches.sort_by(|a, b| a.0.canonical_cmp(&b.0));
+
+        Ok(Self {
+            patches,
+            network: preimage.network.clone(),
+            scale: prepared.scale,
+        })
+    }
+
+    /// Apply `operator` to `selection` on every patch of `preimage`.
+    ///
+    /// This is the preparation seam shared by [`Self::from_subset_operator`] and
+    /// [`super::schedule_merge_refine`]. Every result keeps the preimage patch
+    /// support it came from, so a caller that schedules the transform over dyadic
+    /// input leaves can recover that leaf geometry instead of inferring it from
+    /// the spectator-only image projector. Application is exact, so an image
+    /// carries only backend roundoff.
+    ///
+    /// # Errors
+    /// Propagates the selection, operator-mapping, node-merging, and application
+    /// errors documented on [`Self::from_subset_operator`].
+    pub(super) fn prepare_subset_images(
+        preimage: &Self,
+        center: &V,
+        operator: &LinearOperator<IdxTensor, V>,
+        selection: &[DynIndex],
+        options: &SubsetOperatorOptions,
+    ) -> Result<PreparedImages<V>> {
         let mut operator_nodes = operator.mpo().node_names();
         operator_nodes.sort();
         if operator_nodes.len() != selection.len() {
@@ -325,19 +397,24 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             .network
             .as_ref()
             .ok_or_else(|| invalid("preimage target has no site topology"))?;
-        let mut rename = Vec::with_capacity(selection.len());
-        let mut owners = HashSet::new();
+        // Several selected indices may share one tree node. The operator MPO
+        // nodes carrying them are then fused into one multi-site node, so the
+        // operator and the state agree on the node grouping. Fusion is exact:
+        // `LinearOperator::restructure_to` contracts the group locally without
+        // truncation and moves every mapping to the node owning its internal
+        // index. Singleton groups make this a pure node rename.
+        let mpo_network = operator.mpo().site_index_network();
+        let mut target = SiteIndexNetwork::<V, DynIndex>::new();
+        let mut owners: HashMap<V, V> = HashMap::with_capacity(operator_nodes.len());
         let mut input_pairs = Vec::with_capacity(selection.len());
         let mut output_pairs = Vec::with_capacity(selection.len());
         for (node, target_index) in operator_nodes.iter().zip(selection) {
-            let owner = network.find_node_by_index(target_index).ok_or_else(|| {
-                invalid("selection index must belong to the preimage target site space")
-            })?;
-            if !owners.insert(owner.clone()) {
-                return Err(invalid(
-                    "selected indices must be on distinct tree nodes; transform indices that share a node separately",
-                ));
-            }
+            let owner = network
+                .find_node_by_index(target_index)
+                .ok_or_else(|| {
+                    invalid("selection index must belong to the preimage target site space")
+                })?
+                .clone();
             let inputs = operator
                 .get_input_mappings(node)
                 .ok_or_else(|| invalid("every operator node needs exactly one input mapping"))?;
@@ -349,11 +426,58 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
                     "subset operators must carry one input and one output mapping per node",
                 ));
             };
+            if !target.has_node(&owner) {
+                target
+                    .add_node(owner.clone(), HashSet::new())
+                    .map_err(merging)?;
+            }
+            for index in [&input.internal_index, &output.internal_index] {
+                target
+                    .add_site_index(&owner, index.clone())
+                    .map_err(merging)?;
+            }
             input_pairs.push((input.true_index.clone(), target_index.clone()));
             output_pairs.push((output.true_index.clone(), target_index.clone()));
-            rename.push((node.clone(), owner.clone()));
+            owners.insert(node.clone(), owner);
         }
-        let operator = operator.clone().rename_nodes(&rename)?;
+        // INVARIANT: a fused node must be reachable inside its own group. A
+        // group threaded through another owner's node cannot be fused without
+        // absorbing sites that belong elsewhere, so reject it with guidance
+        // instead of mis-binding a multi-site operator node.
+        for owner in target.node_names().into_iter().cloned().collect::<Vec<V>>() {
+            let members: HashSet<V> = owners
+                .iter()
+                .filter(|(_, candidate)| **candidate == owner)
+                .map(|(node, _)| node.clone())
+                .collect();
+            if !is_connected_group(mpo_network, &members) {
+                return Err(invalid(
+                    "selected indices that share one tree node need operator MPO nodes forming one connected group; split the selection or restructure the operator",
+                ));
+            }
+        }
+        // The quotient topology: keep one edge per pair of distinct owners.
+        let mut linked = HashSet::new();
+        for (left, right) in mpo_network.edges() {
+            let (Some(owner_left), Some(owner_right)) = (owners.get(&left), owners.get(&right))
+            else {
+                continue;
+            };
+            if owner_left == owner_right {
+                continue;
+            }
+            let pair = if owner_left <= owner_right {
+                (owner_left.clone(), owner_right.clone())
+            } else {
+                (owner_right.clone(), owner_left.clone())
+            };
+            if linked.insert(pair.clone()) {
+                target.add_edge(&pair.0, &pair.1).map_err(merging)?;
+            }
+        }
+        let operator = operator
+            .restructure_to(&target, &RestructureOptions::default())
+            .map_err(merging)?;
 
         // INVARIANT: application is exact (no truncation is exposed), so the
         // prepared target carries only backend roundoff, never silent
@@ -372,12 +496,17 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
                 PartitionedTreeTNError::tree(format!("subset operator apply: {error}"))
             })?;
             // Images of disjoint patches generally overlap and the selected
-            // constraints no longer hold, so keep only the spectator ones.
-            let mut projector = term.projector().clone();
+            // constraints no longer hold, so keep only the spectator ones. The
+            // original support stays as input provenance.
+            let source = term.projector().clone();
+            let mut projector = source.clone();
             for index in selection {
                 projector.remove(index);
             }
-            images.push(SubDomainTreeTN::new(data, projector)?);
+            images.push(PreparedImage {
+                source,
+                image: SubDomainTreeTN::new(data, projector)?,
+            });
         }
 
         // The output norm is deliberately not measured: doing so would need
@@ -395,20 +524,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             finite(operator.mpo().clone().norm()?)?
         };
         let scale = finite(amplification * preimage.scale)?;
-        let mut patches: Vec<_> = images
-            .into_iter()
-            .map(|image| {
-                let projector = image.projector().clone();
-                (projector, Patch::Stored(Box::new(image)))
-            })
-            .collect();
-        patches.sort_by(|a, b| a.0.canonical_cmp(&b.0));
-
-        Ok(Self {
-            patches,
-            network: preimage.network.clone(),
-            scale,
-        })
+        Ok(PreparedImages { images, scale })
     }
 
     /// Return the target's reference scale, fixed at construction.
@@ -426,6 +542,14 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// ```
     pub fn reference_scale(&self) -> f64 {
         self.scale
+    }
+
+    /// Borrow the canonical patch supports, in the order [`Self::materialize_terms`] uses.
+    ///
+    /// Used by callers that must validate patch geometry before paying for
+    /// operator application.
+    pub(super) fn patch_projectors(&self) -> impl Iterator<Item = &Projector> {
+        self.patches.iter().map(|(projector, _)| projector)
     }
 
     pub(super) fn materialize_terms(&self, center: &V) -> Result<Vec<SubDomainTreeTN<V>>> {
@@ -457,4 +581,36 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         }
         Ok(terms)
     }
+}
+
+/// Wrap a node-merging failure with the operation that raised it.
+fn merging(error: tensor4all_treetn::TreeTNOperationError) -> PartitionedTreeTNError {
+    PartitionedTreeTNError::tree(format!("subset operator node merging: {error}"))
+}
+
+/// True when `members` form one connected group using group-internal edges only.
+///
+/// Connectivity inside the group, not merely inside the whole operator, is what
+/// makes local fusion of one owner's operator nodes possible.
+fn is_connected_group<V>(network: &SiteIndexNetwork<V, DynIndex>, members: &HashSet<V>) -> bool
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    if members.len() <= 1 {
+        return true;
+    }
+    let Some(start) = members.iter().next() else {
+        return true;
+    };
+    let mut seen = HashSet::new();
+    let mut stack = vec![start.clone()];
+    seen.insert(start.clone());
+    while let Some(node) = stack.pop() {
+        for neighbor in network.neighbors(&node) {
+            if members.contains(&neighbor) && seen.insert(neighbor.clone()) {
+                stack.push(neighbor);
+            }
+        }
+    }
+    seen.len() == members.len()
 }

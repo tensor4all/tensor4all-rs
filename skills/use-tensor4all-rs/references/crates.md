@@ -177,12 +177,27 @@ site indices per node, and does not implement adaptive interpolation.
   &operator, &selection, &SubsetOperatorOptions)` — applies an existing
   `LinearOperator` (for example a Fourier operator built with
   `tensor4all-quanticstransform`) to an ordered subset of full site indices.
-  Spectators keep identity, dimension, and node assignment; two selected indices
-  on one node are rejected. The output norm is never measured and the images are
-  never summed: `SubsetOperatorOptions::unitary` selects the amplification factor
-  (`false`, the default, uses the selected-space operator's Frobenius norm as an
-  upper bound; `true` is a caller guarantee of factor one), which multiplies the
-  preimage reference scale and propagates across successive applications.
+  Spectators keep identity, dimension, and node assignment; selected indices that
+  share one tree node are fused into one multi-site operator node, which requires
+  those operator MPO nodes to form one connected group. The output norm is never
+  measured and the images are never summed: `SubsetOperatorOptions::unitary`
+  selects the amplification factor (`false`, the default, uses the
+  selected-space operator's Frobenius norm as an upper bound; `true` is a caller
+  guarantee of factor one), which multiplies the preimage reference scale and
+  propagates across successive applications.
+- `reconstruction::schedule_merge_refine(&preimage, &center, &operator, &selection,
+  &SubsetOperatorOptions, tolerance, &MergeRefineOptions)` — level-coupled
+  input-merge/output-refine QFT schedule. The preimage must be the `2^d` dyadic
+  input leaves of the `d` selected binary indices with identical spectator
+  constraints. Level `t` merges the input bit `k_(d-t+1)` and fixes the output
+  bit `r_t`, restricting to the child region before adding, so no sum over the
+  whole output domain is assembled and each object is reused by its descendants.
+  `MergeRefineOptions::output_depth` stops early; `None` refines every selected
+  bit and yields a strict partition. The trajectory is exact (`error_bound` zero,
+  no compression, no silent padding) and `MergeRefineReport` reports
+  `level_count`, `applied_operator_count`, `additions`, `projections`,
+  `work_items_per_level`, `peak_work_items`, region/term counts, bond dimension,
+  stored parameters, the pinned reference scale, and the allowance.
 
 All truncating and contracting operations require an explicit existing node name
 as `center`. Reconstruction remasks compressed candidates to preserve exact

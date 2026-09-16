@@ -47,7 +47,9 @@ QTT intervals, independently of the indices' placement on the tree.
 `ReconstructionTarget::from_subset_operator` prepares the images of an existing
 linear operator (for example a quantics Fourier transform built elsewhere) on an
 ordered subset of full site indices. Spectators keep their identity, dimension,
-and node assignment. Two selected indices on one tree node are rejected. The
+and node assignment. Selected indices that share one tree node are supported by
+fusing the operator MPO nodes that carry them into one multi-site node, which
+requires those operator nodes to form one connected group. The
 transformed output norm is never measured and the images are never summed into
 one network. `SubsetOperatorOptions::unitary` instead pins the amplification
 factor: `false` (default) uses the selected-space operator's Frobenius norm as an
@@ -56,11 +58,22 @@ norm (factor one). The preimage reference scale is multiplied by that factor and
 successive applications propagate it. The operator's own construction error
 stays separate from the reported reconstruction bound.
 
-Run the asserted example with
-`cargo run --release -p tensor4all-partitionedtreetn --example reconstruct`.
+Run the asserted examples with
+`cargo run --release -p tensor4all-partitionedtreetn --example reconstruct` and
+`cargo run --release -p tensor4all-partitionedtreetn --example merge_refine`.
 The [guide](https://tensor4all.org/tensor4all-rs/guides/partitioned-treetn.html#reconstruction-with-a-fixed-global-l2-tolerance)
-includes the same executable source. The QFT merge-refine schedule and automatic
-zero-padding remain separate follow-up work.
+includes the same executable sources.
+
+`reconstruction::schedule_merge_refine` runs the complementary
+input-merge/output-refine QFT trajectory instead of the greedy engine: level `t`
+merges one input bit and fixes one output prefix bit, restricting each
+contribution to its output region before adding it, so no sum over the whole
+output domain is assembled. The preimage must be the `2^d` dyadic input leaves of
+the selected binary indices. `MergeRefineOptions::output_depth` stops early and
+`MergeRefineReport` records the structural counters. This trajectory is exact
+(no compression, `error_bound = 0`). Adaptive refinement with retained error
+accounting, approximate operator application, and automatic zero-padding remain
+separate follow-up work; padding is never applied silently.
 
 ## Quick start
 
