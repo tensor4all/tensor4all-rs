@@ -287,6 +287,94 @@ fn test_batched_tci_caching_reduces_evaluations() {
 }
 
 #[test]
+fn batched_tci_exposes_grid() {
+    let grid = DiscretizedGrid::builder(&[2])
+        .with_lower_bound(&[0.0])
+        .with_upper_bound(&[1.0])
+        .build()
+        .unwrap();
+    let (result, _, _) = quanticscrossinterpolate_multicomponent::<f64, _>(
+        &grid,
+        pointwise_components_batch(|x: &[f64]| vec![x[0] + 1.0]),
+        &[1],
+        None,
+        QtciOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(result.grid().grid_step().len(), 1);
+}
+
+#[test]
+fn batched_tci_rejects_output_dim_product_overflow() {
+    let grid = DiscretizedGrid::builder(&[2])
+        .with_lower_bound(&[0.0])
+        .with_upper_bound(&[1.0])
+        .build()
+        .unwrap();
+    let result = quanticscrossinterpolate_multicomponent::<f64, _>(
+        &grid,
+        pointwise_components_batch(|_: &[f64]| vec![]),
+        &[usize::MAX, 2],
+        None,
+        QtciOptions::default(),
+    );
+    let error = result.err().unwrap();
+    assert!(error.to_string().contains("overflowed"));
+}
+
+#[test]
+#[allow(deprecated)]
+fn deprecated_pointwise_batched_entry_point_still_works() {
+    let grid = DiscretizedGrid::builder(&[2])
+        .with_lower_bound(&[0.0])
+        .with_upper_bound(&[1.0])
+        .build()
+        .unwrap();
+    let (result, _, _) = quanticscrossinterpolate_batched::<f64, _>(
+        &grid,
+        |x: &[f64]| vec![x[0] + 1.0, 2.0 * x[0] + 1.0],
+        &[2],
+        None,
+        QtciOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(result.output_dims(), &[2]);
+    assert_eq!(result.tensor_train().len(), 3); // 2 grid sites + 1 component
+}
+
+#[test]
+fn combine_component_tts_rejects_empty_input() {
+    let error = combine_component_tts::<f64>(&[]).err().unwrap();
+    assert!(error.to_string().contains("no component tensor trains"));
+}
+
+#[test]
+fn combine_component_tts_rejects_zero_site_component() {
+    let empty = SimpleTensorTrain::<f64>::constant(&[], 1.0);
+    assert_eq!(empty.len(), 0);
+    let error = combine_component_tts(&[empty]).err().unwrap();
+    assert!(error.to_string().contains("at least one site"));
+}
+
+#[test]
+fn combine_component_tts_rejects_site_count_mismatch() {
+    let two_sites = SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0);
+    let three_sites = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let error = combine_component_tts(&[two_sites, three_sites])
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("sites, expected"));
+}
+
+#[test]
+fn combine_component_tts_rejects_site_dim_mismatch() {
+    let dim_two = SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0);
+    let dim_three = SimpleTensorTrain::<f64>::constant(&[3, 3], 1.0);
+    let error = combine_component_tts(&[dim_two, dim_three]).err().unwrap();
+    assert!(error.to_string().contains("site_dim"));
+}
+
+#[test]
 fn test_combine_component_tts_basic() {
     // Test the combine function directly with known simple TTs.
     // Create two rank-1 TTs: constant 2.0 and constant 3.0 on a 2-site, dim-2 grid.
