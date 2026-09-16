@@ -289,44 +289,47 @@ target field is exposed.
 ### Error transport
 
 The global allowance `delta = max(atol, rtol * reference_scale)` is pinned before
-scheduling. Level zero applies the complete transform exactly, so the only error
-source the schedule itself introduces is truncation, which each work item carries
-as an explicit measured bound.
+scheduling. Level zero applies the complete transform, so the error sources are the
+measured application error of each input leaf, the measured residual of every
+accepted truncation, and the measured norm of every dropped contribution.
 
-The implemented accounting is:
+Every component is measured where it happens and recorded once, grouped by the level
+and the region that measured it:
 
-- **Restriction is nonexpansive.** `P_B' e` stays a safe bound on the restricted
-  child, so an inherited bound carries over unchanged and is not charged against
-  local budget; it is never divided by `sqrt(fanout)`.
-- **A merge adds** `e_left + e_right + e_local`, where `e_local` is the measured
-  residual of the accepted candidate against the sum of the *actual restricted
-  parent approximations* (`||sum - round(sum)||`). A rejected probe leaves the
-  exact sum in place and costs nothing.
-- **Budget allocation is a conservative l1 split, spent level by level.** A level
-  can merge at most twice its live item count, so its share is
-  `remaining / level_merges`, `remaining` is reduced by every residual accepted and
-  every norm dropped, and the total therefore stays within the allowance without any
-  orthogonality assumption between separate compressions or drops. This
-  also covers nonuniform input trees, whose merge count is not bounded by
-  `2^d * output_depth`.
-- **Region combination.** Terms inside a region may overlap, so their bounds add
-  by the triangle inequality; disjoint output regions combine by the Euclidean
-  norm, exactly like the greedy engine's report.
+- an application error is measured before any split, so it belongs to level zero,
+  which has the single root region;
+- a truncation residual or a dropped norm is measured inside the child region it is
+  accepted in, so it belongs to that level and region.
 
-Consequences that remain binding: a truncation candidate is accepted only when it
-strictly lowers the bond dimension *and* its measured residual fits its share, so a
-soft rank goal never forces an accuracy violation; keeping a less-compressed or
-exact candidate is always available; the reported bound is a measured a posteriori
-numerical bound that excludes backend roundoff; and it bounds neither
-operator-construction error nor the application error of an externally
-approximated operator.
+Two components of one level live in disjoint regions and therefore have disjoint
+supports, so their norms combine by the Euclidean norm. Two components of different
+levels can be nested, so they add by the triangle inequality. The reported bound is
 
-Still to do on this axis, with the plan's constraints: exploiting the fact that an
-exact split into disjoint children preserves the combined L2 norm of the parent
-error, so cached reuse can carry error through a shared ledger instead of an equal
-l1 split; dropping whole items under the global policy, at the cost of their
-measured norm on top of the inherited error; and tighter accounting validated by
-derivation and regression rather than by assumption.
+```text
+error_bound = sum over levels of
+              hypot over the regions of that level of
+              the components measured in that region at that level
+```
+
+Counting the application error once at the root is the point: the same error network
+is restricted into every refined region, and an earlier per-region `hypot` counted it
+once per region, which made the bound grow like `2^(levels/2)` as the number of
+levels increased. Measured on an `r`-bit input with `I^⊗r + 0.1·X^⊗r` truncated to
+bond dimension one, the reported bound exceeded the true L2 deviation by 3.9x, 7.2x
+and 12.8x at two, three and four levels before this change, and by 1.9x, 2.5x and
+3.2x afterwards.
+
+Budget allocation stays conservative: the application error is charged first, and a
+level can merge at most twice its live item count, so its share is
+`remaining / level_merges` and a level spends only what it measures (accepted
+residuals and dropped norms, including those of discarded probes). The sum of all
+measured components cannot exceed the allowance, so `error_bound` never does either. A
+restriction is nonexpansive and consumes no budget, and a rejected probe contributes
+no reported component, so nothing here needs a `sqrt(fanout)` division.
+
+Still open on this axis: attributing residual components to the final regions they
+touch so that residuals of nested levels could combine by the Euclidean norm instead
+of the triangle inequality.
 
 ### Public surface and dependency placement
 

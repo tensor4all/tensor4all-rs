@@ -1498,61 +1498,78 @@ fn schedule_with_application(
     )
 }
 
-/// `I ⊗ I + scale · X ⊗ X` as a two-node MPO of bond dimension two.
+/// `I^⊗r + scale · X^⊗r` as an `r`-node MPO of bond dimension two.
 ///
 /// Its image of a dyadic input leaf is a rank-two superposition
-/// (`|00> + scale · |11>`), so truncating the application to bond dimension one
-/// has a measurable effect whose size the `scale` controls, unlike a Fourier
+/// (`|0...0> + scale · |1...1>`), so truncating the application to bond dimension
+/// one has a measurable effect whose size `scale` controls, unlike a Fourier
 /// operator whose leaf images are already low rank.
-fn identity_plus_scaled_xx(sites: &[DynIndex], scale: f64) -> LinearOperator<IdxTensor, usize> {
-    let (in0, out0) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
-    let (in1, out1) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
-    let bond = DynIndex::new_dyn(2);
-    // Column-major over `[in, out, bond]`: bond 0 is the identity, bond 1 the X.
-    let left = IdxTensor::from_dense(
-        vec![in0.clone(), out0.clone(), bond.clone()],
-        vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
-    )
-    .expect("left tensor");
-    // Column-major over `[bond, in, out]`: bond 0 is the identity, bond 1 the
-    // scaled X.
-    let right = IdxTensor::from_dense(
-        vec![bond, in1.clone(), out1.clone()],
-        vec![1.0, 0.0, 0.0, 1.0, 0.0, scale, scale, 0.0],
-    )
-    .expect("right tensor");
-    let mpo = TreeTN::from_tensors(vec![left, right], vec![0usize, 1]).expect("mpo");
-    let mut input = HashMap::new();
-    input.insert(
-        0usize,
-        IndexMapping {
-            true_index: sites[0].clone(),
-            internal_index: in0,
-        },
-    );
-    input.insert(
-        1usize,
-        IndexMapping {
-            true_index: sites[1].clone(),
-            internal_index: in1,
-        },
-    );
-    let mut output = HashMap::new();
-    output.insert(
-        0usize,
-        IndexMapping {
-            true_index: sites[0].clone(),
-            internal_index: out0,
-        },
-    );
-    output.insert(
-        1usize,
-        IndexMapping {
-            true_index: sites[1].clone(),
-            internal_index: out1,
-        },
-    );
-    LinearOperator::new(mpo, input, output)
+fn identity_plus_scaled_x_tensor(
+    sites: &[DynIndex],
+    scale: f64,
+) -> LinearOperator<IdxTensor, usize> {
+    let r = sites.len();
+    let inputs: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let outputs: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let bonds: Vec<DynIndex> = (1..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let mut tensors = Vec::new();
+    for i in 0..r {
+        let mut indices: Vec<DynIndex> = Vec::new();
+        if i > 0 {
+            indices.push(bonds[i - 1].clone());
+        }
+        indices.push(inputs[i].clone());
+        indices.push(outputs[i].clone());
+        if i + 1 < r {
+            indices.push(bonds[i].clone());
+        }
+        let dims: Vec<usize> = indices.iter().map(|index| index.dim).collect();
+        let size: usize = dims.iter().product();
+        let mut data = vec![Complex64::new(0.0, 0.0); size];
+        for (linear, slot) in data.iter_mut().enumerate() {
+            let mut coordinate = vec![0usize; indices.len()];
+            let mut remainder = linear;
+            for (position, dim) in dims.iter().enumerate() {
+                coordinate[position] = remainder % dim;
+                remainder /= dim;
+            }
+            // The bond selects the identity (block 0) or the scaled X (block 1).
+            let (block, input, output) = if i == 0 {
+                (coordinate[2], coordinate[0], coordinate[1])
+            } else {
+                (coordinate[0], coordinate[1], coordinate[2])
+            };
+            let kept = if block == 0 {
+                input == output
+            } else {
+                input + output == 1
+            };
+            if kept {
+                *slot = Complex64::new(if block == 0 { 1.0 } else { scale }, 0.0);
+            }
+        }
+        tensors.push(IdxTensor::from_dense(indices, data).expect("tensor"));
+    }
+    let mpo = TreeTN::from_tensors(tensors, (0..r).collect()).expect("mpo");
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+    for i in 0..r {
+        input_mapping.insert(
+            i,
+            IndexMapping {
+                true_index: sites[i].clone(),
+                internal_index: inputs[i].clone(),
+            },
+        );
+        output_mapping.insert(
+            i,
+            IndexMapping {
+                true_index: sites[i].clone(),
+                internal_index: outputs[i].clone(),
+            },
+        );
+    }
+    LinearOperator::new(mpo, input_mapping, output_mapping)
 }
 
 #[test]
@@ -1564,7 +1581,7 @@ fn merge_refine_schedule_charges_a_truncating_application_to_the_bound() {
     let tree = mps(&sites, &values);
     let preimage = dyadic_input_leaves(&tree, &sites);
     // A small second term keeps the truncation error affordable at `rtol = 0.5`.
-    let operator = identity_plus_scaled_xx(&sites, 0.1);
+    let operator = identity_plus_scaled_x_tensor(&sites, 0.1);
 
     // Truncating each application to bond dimension one removes a real part of
     // every leaf image, which the schedule must charge before any compression.
@@ -1601,7 +1618,7 @@ fn merge_refine_schedule_rejects_an_unaffordable_application_error() {
         .collect();
     let tree = mps(&sites, &values);
     let preimage = dyadic_input_leaves(&tree, &sites);
-    let operator = identity_plus_scaled_xx(&sites, 0.1);
+    let operator = identity_plus_scaled_x_tensor(&sites, 0.1);
 
     // A bond-dimension-one application cannot fit a near-exact tolerance.
     let error = schedule_with_application(
@@ -1958,4 +1975,55 @@ fn merge_refine_schedule_drops_negligible_contributions_within_the_allowance() {
     let (tight_indices, tight_dense) = dense_of_regions(&tight);
     let reference_dense = reorder(&reference_dense, &reference_indices, &tight_indices);
     assert!(max_error(&tight_dense, &reference_dense) < 1e-10);
+}
+
+#[test]
+fn merge_refine_schedule_bound_does_not_grow_with_the_level_count() {
+    // One measured application error per leaf is confined to the region that
+    // measured it, so the reported bound must not grow like `2^(levels/2)` as the
+    // output is refined: before the component ledger it exceeded the true L2
+    // deviation by 3.9x at two levels and 7.2x at three.
+    for (r, max_ratio) in [(2usize, 3.0f64), (3, 4.0)] {
+        let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+        let values: Vec<Complex64> = (0..1usize << r)
+            .map(|m| Complex64::new(1.0 + (m as f64 * 0.7).sin(), 0.2 * m as f64))
+            .collect();
+        let tree = mps(&sites, &values);
+        let preimage = dyadic_input_leaves(&tree, &sites);
+        let operator = identity_plus_scaled_x_tensor(&sites, 0.1);
+
+        let exact = schedule_exact(&preimage, &operator, &sites, None, 16);
+        let (exact_indices, exact_dense) = dense_of(&exact.into_partition().expect("partition"));
+        let approximate = schedule_with_application(
+            &preimage,
+            &operator,
+            &sites,
+            0.5,
+            ApplyOptions::zipup().with_max_bond_dim(1),
+        )
+        .expect("approximate application");
+        let report = approximate.report().clone();
+        assert_eq!(report.level_count, r);
+        assert!(report.error_bound > 0.0);
+
+        let (indices, dense) = dense_of_regions(&approximate);
+        let reference = reorder(&exact_dense, &exact_indices, &indices);
+        let deviation = dense
+            .iter()
+            .zip(&reference)
+            .map(|(a, b)| (*a - *b).norm_sqr())
+            .sum::<f64>()
+            .sqrt();
+        assert!(
+            deviation <= report.error_bound + 1e-12,
+            "r = {r}: deviation {deviation:e} exceeds the bound {:e}",
+            report.error_bound
+        );
+        let ratio = report.error_bound / deviation;
+        assert!(
+            ratio <= max_ratio,
+            "r = {r}: bound {:.3e} is {ratio:.2}x the deviation {deviation:.3e}",
+            report.error_bound
+        );
+    }
 }

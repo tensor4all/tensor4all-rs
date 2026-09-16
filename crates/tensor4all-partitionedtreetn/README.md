@@ -82,8 +82,10 @@ when that lowers its maximum retained rank, a merged pair is combined only when
 combining pays off, and merged items are truncated only within an equal share of
 the allowance, so the measured bound never exceeds it. A merged or unpaired
 contribution is dropped only when its measured norm fits its share of the allowance,
-with the dropped bound reported (`dropped_terms`, `dropped_error`) and a fully
-dropped region omitted while its bound still counts. Exceeding `max_terms` returns a
+with `dropped_terms` and `dropped_error` reporting it and a fully dropped region
+omitted while its measured norm still counts. Every measured component is recorded
+once, at the level and region where it was measured, so `error_bound` does not grow
+with the number of refined regions. Exceeding `max_terms` returns a
 resource-limit error. `MergeRefineOptions::apply_options` opts into a
 truncating application whose measured deviation from the exact application is
 charged to the same bound, and an application error above the allowance is

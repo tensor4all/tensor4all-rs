@@ -23,7 +23,9 @@
 //! once per input leaf, keeps each region's retained terms as an explicit
 //! superposition, compresses a merged item only against a measured residual that
 //! fits that item's share of the global allowance, and drops a contribution only
-//! when its measured norm also fits that share.
+//! when its measured norm also fits that share. Every component is recorded once, at
+//! the level and region where it was measured, so the reported bound does not grow
+//! with the number of refined regions.
 //!
 //! With [`MergeRefineOptions::target_bond_dim`] unset the trajectory is uniform
 //! and exact: every region is refined down to the requested depth and
@@ -32,8 +34,8 @@
 //! the refinement lowers its maximum retained rank, and a merged pair is combined
 //! only when the combination pays off, so a rank-one object is not forced into a
 //! preset output tiling. A merged or unpaired contribution is dropped only when
-//! its measured norm fits its share of the global allowance, and the dropped bound
-//! is reported with the region it belonged to. Multi-coordinate groups remain
+//! its measured norm fits its share of the global allowance, and that norm stays in
+//! the report. Multi-coordinate groups remain
 //! follow-up work; automatic padding is a separate domain/embedding policy and is
 //! never applied silently.
 
@@ -211,12 +213,14 @@ pub struct MergeRefineReport {
     pub reference_scale: f64,
     /// `max(atol, rtol * reference_scale)`.
     pub absolute_tolerance: f64,
-    /// Measured compression bound: per-item residuals accumulated by the
-    /// triangle inequality within a region and combined by the Euclidean norm
-    /// across the disjoint output regions. It is an a posteriori numerical bound
-    /// and excludes backend roundoff. It is zero while `target_bond_dim` is
-    /// `None`, and it excludes operator-construction error and the application
-    /// error of an externally approximated operator.
+    /// Measured bound assembled from the components this run measured: the
+    /// application errors at level zero, and the truncation residuals and dropped
+    /// norms at the level and region where each was measured. Components of one
+    /// level live in disjoint regions and combine by the Euclidean norm; components
+    /// of different levels can be nested and add by the triangle inequality. Each
+    /// component is therefore counted once, however many regions it later spreads
+    /// into. It is an a posteriori numerical bound that excludes backend roundoff,
+    /// and it excludes construction error in the caller's operator.
     pub error_bound: f64,
     /// Number of executed level transitions.
     pub level_count: usize,
@@ -267,8 +271,6 @@ where
     output: Projector,
     inputs: Vec<Projector>,
     terms: Vec<SubDomainTreeTN<V>>,
-    /// Sum of the terms' deviation bounds by the triangle inequality.
-    bound: f64,
 }
 
 impl<V> MergeRefineRegion<V>
@@ -276,20 +278,18 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     /// Start a region entry with its first retained term and input prefix.
-    fn new(output: Projector, input: Projector, term: Term<V>) -> Self {
+    fn new(output: Projector, input: Projector, value: SubDomainTreeTN<V>) -> Self {
         Self {
             output,
             inputs: vec![input],
-            terms: vec![term.value],
-            bound: term.bound,
+            terms: vec![value],
         }
     }
 
     /// Add another retained term of the same output region.
-    fn push(&mut self, input: Projector, term: Term<V>) {
+    fn push(&mut self, input: Projector, value: SubDomainTreeTN<V>) {
         self.inputs.push(input);
-        self.terms.push(term.value);
-        self.bound += term.bound;
+        self.terms.push(value);
     }
 }
 
@@ -825,17 +825,20 @@ where
 /// output region is refined only when its terms exceed the goal and refining
 /// lowers its maximum retained rank, and a merged pair is combined into one term
 /// only when that strictly lowers the bond dimension, otherwise both operands stay
-/// as separate terms of the region's superposition. Each merged item is truncated
-/// only toward the goal and only when its measured residual fits an equal share of
-/// the allowance, so the reported bound sums measured residuals inside a region,
-/// combines disjoint regions by the Euclidean norm, and never exceeds the
-/// allowance. A rejected probe costs nothing, and a restriction is nonexpansive,
-/// so an inherited bound carries over without consuming budget. A merged or
-/// unpaired contribution is dropped only when its measured norm fits its share of
-/// the allowance: the inherited bound plus that norm stay in the reported bound, and
-/// a region whose terms are all dropped is omitted from the result instead of being
-/// silently presented as nonzero. Reaching [`MergeRefineOptions::max_terms`] returns
-/// a resource-limit error instead of silently relaxing accuracy.
+/// as separate terms of the region's superposition.
+///
+/// Every approximation is measured where it happens and recorded once in the
+/// report: an application error belongs to level zero, and a truncation residual or
+/// dropped norm belongs to the level and region that measured it. Components of one
+/// level live in disjoint regions and combine by the Euclidean norm; components of
+/// different levels can be nested and add by the triangle inequality, so a component
+/// is never counted once per region it later spreads into. The result never exceeds
+/// the allowance: the level shares are allocated from what the application error
+/// leaves, and a level spends only what it measures. A rejected probe contributes no
+/// reported component, and a region whose terms were all dropped is omitted from the
+/// result, because it has nothing to expose, while its measured norm stays in the
+/// report. Reaching [`MergeRefineOptions::max_terms`] returns a resource-limit error
+/// instead of silently relaxing accuracy.
 ///
 /// Output placement follows the subset-operator convention: `r_j` lands on the
 /// selected index that carried `k_(d+1-j)`, so a contiguous output prefix fixes
@@ -1013,7 +1016,7 @@ where
         // Level zero: one complete transform per leaf over the whole output
         // domain, carrying only the measured application error of that leaf.
         application_error = finite(application_error + prepared.error)?;
-        first.insert(leaf, Item::single(prepared.image, prepared.error));
+        first.insert(leaf, Item::single(prepared.image));
     }
     if application_error > allowance {
         return Err(invalid(
@@ -1026,6 +1029,18 @@ where
     // nonexpansive and therefore carries no new cost, and a rejected probe costs
     // nothing.
     let mut remaining = finite(allowance - application_error)?;
+    // Measured components, grouped by the level and the region where they were
+    // measured. A component is confined to the region that measured it, so two
+    // components of one level live in disjoint regions and combine by the Euclidean
+    // norm, while components of different levels can be nested and combine by the
+    // triangle inequality. Level zero has the single root region, which is why the
+    // application error is counted once instead of once per refined region.
+    let mut components: Vec<BTreeMap<usize, f64>> = Vec::with_capacity(output_depth + 1);
+    let mut root_components = BTreeMap::new();
+    if application_error > 0.0 {
+        root_components.insert(0usize, application_error);
+    }
+    components.push(root_components);
 
     let applied_operator_count: usize = first.len();
     let mut counters = MergeCounters {
@@ -1049,7 +1064,8 @@ where
         } else {
             finite(remaining / level_merges as f64)?
         };
-        let spent_before = counters.residual_spent;
+        let mut level_components: BTreeMap<usize, f64> = BTreeMap::new();
+        let mut spent = 0.0_f64;
         let mut next: BTreeMap<usize, BTreeMap<InputKey, Item<V>>> = BTreeMap::new();
         for (region, items) in std::mem::take(&mut level) {
             // Probe both child regions: restrict first, then merge input siblings.
@@ -1057,15 +1073,25 @@ where
             for bit in 0..2usize {
                 let child = (region << 1) | bit;
                 let projector = geometry.output_projector(level_index, child)?;
-                children.push((
-                    child,
-                    restrict_and_merge(&items, &projector, center, options, share, &mut counters)?,
-                ));
+                let mut incurred = 0.0_f64;
+                let child_items = restrict_and_merge(
+                    &items,
+                    &projector,
+                    center,
+                    options,
+                    share,
+                    &mut counters,
+                    &mut incurred,
+                )?;
+                // The probe costs its measured components even when the region
+                // stops, but only a kept child contributes to the reported bound.
+                spent = finite(spent + incurred)?;
+                children.push((child, child_items, incurred));
             }
             let parent_rank = max_rank(&items);
             let child_rank = children
                 .iter()
-                .map(|(_, child_items)| max_rank(child_items))
+                .map(|(_, child_items, _)| max_rank(child_items))
                 .max()
                 .unwrap_or(0);
             // Refinement is worth its regions only when it lowers the retained
@@ -1076,7 +1102,10 @@ where
             };
             if refine {
                 counters.refined_regions = checked_add(counters.refined_regions, 1)?;
-                for (child, child_items) in children {
+                for (child, child_items, incurred) in children {
+                    if incurred > 0.0 {
+                        level_components.insert(child, incurred);
+                    }
                     next.insert(child, child_items);
                 }
             } else {
@@ -1101,8 +1130,11 @@ where
         work_items_per_level.push(live_items);
         level = next;
         check_term_budget(&level, &finalized, options.max_terms)?;
-        let spent = finite(counters.residual_spent - spent_before)?;
-        remaining = finite(remaining - spent)?;
+        components.push(level_components);
+        // The level share bounds this spend by construction, so the difference is
+        // nonnegative and the clamp only absorbs floating-point rounding at the
+        // boundary instead of failing a run for it.
+        remaining = finite((remaining - spent).max(0.0))?;
     }
     // Regions that survived the last level keep the input prefixes they hold at
     // that depth; a stopped region keeps the prefixes it had before its discarded
@@ -1119,46 +1151,34 @@ where
     // overlap, so they stay in one region entry that `regions()` exposes as a
     // superposition and `into_partition()` rejects.
     let mut grouped: BTreeMap<(usize, usize), MergeRefineRegion<V>> = BTreeMap::new();
-    let mut dropped_by_region: BTreeMap<(usize, usize), f64> = BTreeMap::new();
     for (output_level, region, items) in finalized {
         let output = geometry.output_projector(output_level, region)?;
         for ((input_depth, input_prefix), item) in items {
             let input = geometry.input_projector(input_depth, input_prefix)?;
-            if item.dropped > 0.0 {
-                let entry = dropped_by_region
-                    .entry((output_level, region))
-                    .or_insert(0.0);
-                *entry = finite(*entry + item.dropped)?;
-            }
-            for term in item.terms {
-                max_bond_dim = max_bond_dim.max(term.value.max_bond_dim());
+            for value in item.terms {
+                max_bond_dim = max_bond_dim.max(value.max_bond_dim());
                 logical_parameters = logical_parameters
-                    .checked_add(logical_parameter_count(&term.value)?)
+                    .checked_add(logical_parameter_count(&value)?)
                     .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
                 match grouped.entry((output_level, region)) {
                     Entry::Vacant(slot) => {
-                        slot.insert(MergeRefineRegion::new(output.clone(), input.clone(), term));
+                        slot.insert(MergeRefineRegion::new(output.clone(), input.clone(), value));
                     }
-                    Entry::Occupied(mut slot) => slot.get_mut().push(input.clone(), term),
+                    Entry::Occupied(mut slot) => slot.get_mut().push(input.clone(), value),
                 }
             }
         }
     }
-    let mut regions: Vec<MergeRefineRegion<V>> = Vec::with_capacity(grouped.len());
+    let regions: Vec<MergeRefineRegion<V>> = grouped.into_values().collect();
+    // Components of different levels can be nested, so they add by the triangle
+    // inequality, while the components of one level live in disjoint regions and
+    // therefore combine by the Euclidean norm.
     let mut error_bound = 0.0_f64;
-    // Region bounds add by the triangle inequality because terms inside a region
-    // may overlap; disjoint regions combine by the Euclidean norm.
-    for (key, mut region) in grouped {
-        if let Some(dropped) = dropped_by_region.remove(&key) {
-            region.bound = finite(region.bound + dropped)?;
-        }
-        error_bound = finite(error_bound.hypot(region.bound))?;
-        regions.push(region);
-    }
-    // A region whose terms were all dropped keeps its measured bound even though it
-    // has no retained term to expose.
-    for bound in dropped_by_region.into_values() {
-        error_bound = finite(error_bound.hypot(bound))?;
+    for level_components in &components {
+        let level_bound = level_components
+            .values()
+            .try_fold(0.0_f64, |total, bound| finite(total.hypot(*bound)))?;
+        error_bound = finite(error_bound + level_bound)?;
     }
     let term_count = regions.iter().map(|region| region.terms.len()).sum();
     let reference_scale = scale;
@@ -1187,17 +1207,6 @@ where
     Ok(MergeRefineResult { regions, report })
 }
 
-/// One retained term: `P_B F P_A w` up to a measured deviation bound.
-#[derive(Debug, Clone)]
-struct Term<V>
-where
-    V: Clone + Hash + Eq + Send + Sync + Debug,
-{
-    value: SubDomainTreeTN<V>,
-    /// Measured bound on the deviation of `value` from the exact object.
-    bound: f64,
-}
-
 /// A finalized output region: its output level, its output region key, and its
 /// items keyed by their input prefix.
 type FinalRegion<V> = (usize, usize, BTreeMap<InputKey, Item<V>>);
@@ -1211,50 +1220,41 @@ struct Item<V>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
-    terms: Vec<Term<V>>,
-    /// Bound carried by contributions that were dropped as negligible under the
-    /// global allowance. They have no term to attach to, so the region they belong
-    /// to reports them.
-    dropped: f64,
+    /// Retained terms of the superposition. The measured components that bound
+    /// them are recorded once, in the ledger of the region where they were measured.
+    terms: Vec<SubDomainTreeTN<V>>,
 }
 
 impl<V> Item<V>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    fn single(value: SubDomainTreeTN<V>, bound: f64) -> Self {
-        Self {
-            terms: vec![Term { value, bound }],
-            dropped: 0.0,
-        }
+    fn single(value: SubDomainTreeTN<V>) -> Self {
+        Self { terms: vec![value] }
     }
 
     /// Largest retained bond dimension over the item's terms.
     fn max_rank(&self) -> usize {
         self.terms
             .iter()
-            .map(|term| term.value.max_bond_dim())
+            .map(SubDomainTreeTN::max_bond_dim)
             .max()
             .unwrap_or(0)
     }
 
     /// Restrict every term to `projector`, dropping terms that vanish there.
+    ///
+    /// Restriction is nonexpansive and consumes no budget: a measured component is
+    /// recorded once in the ledger of the region where it was measured, not copied
+    /// into the children that restrict it.
     fn restrict(&self, projector: &Projector) -> Result<Self> {
         let mut terms = Vec::with_capacity(self.terms.len());
-        for term in &self.terms {
-            // Restriction is nonexpansive, so an inherited bound carries over
-            // unchanged and consumes no budget.
-            if let Some(value) = term.value.project(projector)? {
-                terms.push(Term {
-                    value,
-                    bound: term.bound,
-                });
+        for value in &self.terms {
+            if let Some(value) = value.project(projector)? {
+                terms.push(value);
             }
         }
-        Ok(Self {
-            terms,
-            dropped: self.dropped,
-        })
+        Ok(Self { terms })
     }
 }
 
@@ -1274,6 +1274,7 @@ fn restrict_and_merge<V>(
     options: &MergeRefineOptions,
     share: f64,
     counters: &mut MergeCounters,
+    incurred: &mut f64,
 ) -> Result<BTreeMap<InputKey, Item<V>>>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
@@ -1297,8 +1298,15 @@ where
             Entry::Occupied(mut slot) => {
                 // Both siblings carry the same spectator constraints, so strict
                 // subdomain addition applies.
-                let combined =
-                    merge_items(slot.get(), &restricted, center, options, share, counters)?;
+                let combined = merge_items(
+                    slot.get(),
+                    &restricted,
+                    center,
+                    options,
+                    share,
+                    counters,
+                    incurred,
+                )?;
                 counters.additions = checked_add(counters.additions, 1)?;
                 slot.insert(combined);
             }
@@ -1325,40 +1333,34 @@ fn merge_items<V>(
     options: &MergeRefineOptions,
     share: f64,
     counters: &mut MergeCounters,
+    incurred: &mut f64,
 ) -> Result<Item<V>>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     let mut terms = Vec::with_capacity(left.terms.len() + right.terms.len());
-    let mut dropped = finite(left.dropped + right.dropped)?;
     for index in 0..left.terms.len().max(right.terms.len()) {
         match (left.terms.get(index), right.terms.get(index)) {
             (Some(left), Some(right)) => {
-                let sum = left.value.add(&right.value)?;
-                let inherited = finite(left.bound + right.bound)?;
+                let sum = left.add(right)?;
                 counters.max_transient_bond_dim =
                     counters.max_transient_bond_dim.max(sum.max_bond_dim());
                 // A contribution whose measured norm fits its share of the
-                // allowance is dropped: its inherited bound plus its measured norm
-                // stay in the region's report.
-                if drop_negligible(&sum, share, inherited, counters, &mut dropped)? {
+                // allowance is dropped, charging that norm to this region.
+                if drop_negligible(&sum, share, counters, incurred)? {
                     continue;
                 }
                 match options.target_bond_dim {
-                    None => terms.push(Term {
-                        value: sum,
-                        bound: inherited,
-                    }),
+                    None => terms.push(sum),
                     Some(goal) => {
                         let (candidate, residual) =
                             compress_item(&sum, center, goal, share, counters)?;
-                        let naive_rank =
-                            checked_add(left.value.max_bond_dim(), right.value.max_bond_dim())?;
+                        let naive_rank = checked_add(left.max_bond_dim(), right.max_bond_dim())?;
                         if candidate.max_bond_dim() < naive_rank {
-                            terms.push(Term {
-                                value: candidate,
-                                bound: finite(inherited + residual)?,
-                            });
+                            if residual > 0.0 {
+                                *incurred = finite(*incurred + residual)?;
+                            }
+                            terms.push(candidate);
                         } else {
                             terms.push(left.clone());
                             terms.push(right.clone());
@@ -1367,7 +1369,7 @@ where
                 }
             }
             (Some(only), None) | (None, Some(only)) => {
-                if drop_negligible(&only.value, share, only.bound, counters, &mut dropped)? {
+                if drop_negligible(only, share, counters, incurred)? {
                     continue;
                 }
                 terms.push(only.clone());
@@ -1375,19 +1377,18 @@ where
             (None, None) => {}
         }
     }
-    Ok(Item { terms, dropped })
+    Ok(Item { terms })
 }
 
 /// Drop a contribution whose measured norm fits its share of the allowance.
 ///
-/// Returns `true` when the contribution was dropped, in which case its inherited
-/// bound and measured norm are charged to the item and to the level spend.
+/// Returns `true` when the contribution was dropped, in which case its measured
+/// norm is charged to the region that measured it.
 fn drop_negligible<V>(
     value: &SubDomainTreeTN<V>,
     share: f64,
-    inherited: f64,
     counters: &mut MergeCounters,
-    dropped: &mut f64,
+    incurred: &mut f64,
 ) -> Result<bool>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
@@ -1396,10 +1397,9 @@ where
     if norm > share {
         return Ok(false);
     }
-    *dropped = finite(*dropped + inherited + norm)?;
+    *incurred = finite(*incurred + norm)?;
     counters.dropped_terms = checked_add(counters.dropped_terms, 1)?;
     counters.dropped_error = finite(counters.dropped_error + norm)?;
-    counters.residual_spent = finite(counters.residual_spent + norm)?;
     Ok(true)
 }
 
@@ -1435,9 +1435,6 @@ where
 #[derive(Debug, Default)]
 struct MergeCounters {
     additions: usize,
-    /// Sum of the truncation residuals accepted so far, charged against the
-    /// remaining global allowance.
-    residual_spent: f64,
     /// Contributions dropped as negligible, and their measured norm.
     dropped_terms: usize,
     dropped_error: f64,
@@ -1474,7 +1471,6 @@ where
     let (candidate, residual) = truncate_toward_allowance(sum, center, share)?;
     if candidate.max_bond_dim() < sum.max_bond_dim() {
         counters.compressions = checked_add(counters.compressions, 1)?;
-        counters.residual_spent = finite(counters.residual_spent + residual)?;
         Ok((candidate, residual))
     } else {
         Ok((sum.clone(), 0.0))

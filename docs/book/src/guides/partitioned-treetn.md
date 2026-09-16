@@ -215,13 +215,17 @@ already above the allowance is rejected. Every other entry point applies exactly
 (`level_count`, `applied_operator_count`, `additions`, `projections`,
 `compression_attempts`, `compressions`, `work_items_per_level`, `peak_work_items`,
 `refined_regions`, `stopped_regions`) next to the pinned reference scale, the
-allowance, and the measured `error_bound`. The bound adds measured truncation residuals by the
-triangle inequality within a region and combines disjoint regions by the Euclidean
-norm, so it never exceeds the allowance; it excludes operator-construction error
-and the application error of an externally approximated operator. Tighter
-error accounting through a shared ledger, nonuniform geometry, and benchmark
-evidence remain follow-up work, and automatic padding is a separate opt-in domain
-policy that is never applied silently.
+allowance, and the measured `error_bound`. Every measured component — an application
+error, a truncation residual, or a dropped norm — is recorded once, at the level and
+region where it was measured: components of one level live in disjoint regions and
+combine by the Euclidean norm, while components of different levels can be nested and
+add by the triangle inequality. The bound therefore never exceeds the allowance and
+does not grow with the number of refined regions. It excludes operator-construction
+error and any error of a caller-approximated operator outside the charged application
+deviation. Multi-coordinate groups with a synchronized multidimensional level,
+per-input-branch refinement depths with lazy reconciliation, and benchmark evidence in
+the intended patched-input regime remain follow-up work, and automatic padding is a
+separate opt-in domain policy that is never applied silently.
 
 ```rust
 # use std::collections::HashMap;
