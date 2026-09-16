@@ -260,11 +260,20 @@ separately, and adaptive stopping changes the counts.
 ### Geometry and provenance validation
 
 Selected indices must be binary and non-empty, and the preimage must already be
-partitioned into exactly the `2^d` dyadic input leaves of those indices, sharing
-identical spectator constraints. A preimage that leaves a selected index free,
-repeats or misses a selected-coordinate assignment, or disagrees on a spectator
-constraint is rejected before any operator is applied; a repair suggestion is
-required rather than an implicit normalization or padding step. Preparation
+partitioned into dyadic input leaves of those indices, sharing identical spectator
+constraints. A preimage that leaves a selected index free, repeats a
+selected-coordinate assignment, or disagrees on a spectator constraint is rejected
+before any operator is applied; a repair suggestion is required rather than an
+implicit normalization or padding step.
+
+Missing leaves are a decision, not an assumption: `MergeRefineOptions::coverage`
+defaults to `CoverageContract::Complete`, which requires every `2^d` coordinate
+assignment, and `CoverageContract::ZeroForMissingLeaves` accepts a sparse preimage
+in which every omitted assignment contributes exactly zero. An entirely empty
+preimage is the zero target under that contract; under the complete contract it is
+rejected. Sparse coverage does not make the input tree nonuniform: every present
+leaf still fixes all selected indices, which is what keeps the merge order
+well defined. Preparation
 keeps the preimage patch support (`PreparedImage::source`) next to the image, so
 input ancestry is never inferred from spectator-only projectors and no private
 target field is exposed.
@@ -364,9 +373,9 @@ arbitrary data, and operator-construction error stays outside every bound.
 
 ### Deferred boundaries
 
-Nonuniform input trees, per-input-branch refinement depths with lazy
-reconciliation, multi-coordinate groups, item dropping under the global policy,
-and benchmarked cost comparisons remain follow-up work.
+Nonuniform input trees with unequal leaf depths, per-input-branch refinement depths
+with lazy reconciliation, multi-coordinate groups with a synchronized multidimensional
+level, and item dropping under the global policy remain follow-up work.
 
 Approximate operator application is available as an opt-in on the schedule:
 `MergeRefineOptions::apply_options` applies the operator with the caller's
