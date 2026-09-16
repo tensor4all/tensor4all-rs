@@ -178,10 +178,10 @@ site indices per node, and does not implement adaptive interpolation.
   (for example a Fourier operator built with `tensor4all-quanticstransform`) to an
   ordered subset of full site indices. Spectators keep identity, dimension, and
   node assignment; two selected indices on one node are rejected. Application is
-  exact and the prepared target's norm is measured from the explicit sum of the
-  overlapping images, so non-unitary operators are handled correctly. The
-  operator's own construction error is accounted separately from the
-  reconstruction bound.
+  exact, the images stay separate, and the prepared target's norm is accumulated
+  from the image norms and their pairwise overlaps, so non-unitary operators are
+  handled correctly without a global direct sum. The operator's own construction
+  error is accounted separately from the reconstruction bound.
 
 All truncating and contracting operations require an explicit existing node name
 as `center`. Reconstruction remasks compressed candidates to preserve exact

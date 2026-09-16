@@ -179,11 +179,15 @@ the original global norm even though transformed supports overlap. The
 constructor nonetheless accepts an arbitrary operator, which need not be unitary
 and need not map the preimage's disjoint patches to orthogonal images. It
 therefore neither inherits the preimage norm nor assembles the global norm from
-image norm squares. It stores each image with a full support description, drops
-the selected constraints that no longer hold, and measures the global norm from
-the explicit network sum of the images. That is the correct norm for any
-operator, including non-unitary ones, and it does not assume disjoint image
-supports.
+image norm squares. It keeps the images separate - dropping only the selected
+constraints that no longer hold - and accumulates
+`||sum_p S_p||^2 = sum_p ||S_p||^2 + 2 Re sum_{p<q} <S_p, S_q>`. That is the
+correct norm for any operator, including non-unitary ones, and it assumes
+neither disjoint supports nor orthogonality. The cross-term loop is `O(M^2)`
+network inner products for `M` images, and its cancellation is bounded at zero
+because the identity is nonnegative. Building the direct sum of all images is
+explicitly rejected: TreeTN addition adds bond dimensions, so it would recreate
+the global-rank bottleneck before adaptive reconstruction starts.
 
 The operator is applied with the local exact naive path; this entry point accepts
 no truncating apply options, so the prepared target carries no application error

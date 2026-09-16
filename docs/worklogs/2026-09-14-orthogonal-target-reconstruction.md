@@ -114,11 +114,15 @@ selected index.
 The constructor accepts an arbitrary operator, which need not be unitary and
 need not map the preimage's disjoint patches to orthogonal images. It therefore
 neither inherits the preimage norm nor assembles the global norm from image norm
-squares; it stores each image with a full support description and measures the
-global norm from the explicit network sum. A scaled-identity regression shows
-the difference: `1e-9 * I` on `[3, 4]` yields a reference norm of `5e-9` instead
-of the preimage's `5`, so a reconstruction at `rtol = 1e-6` no longer discards
-the whole nonzero target.
+squares. The images stay separate, and the global norm is accumulated as
+`sum_p ||S_p||^2 + 2 Re sum_{p<q} <S_p, S_q>` over `O(M^2)` network inner
+products, with a zero cancellation floor. Summing the images into one network is
+explicitly rejected: TreeTN addition adds bond dimensions, so a global direct sum
+would restore the global-rank bottleneck that the patched representation and the
+merge-gain/list policy exist to avoid. A regression asserts that preparation
+leaves two separate terms, and a multi-patch test uses a non-unitary mixing
+operator whose images are measurably non-orthogonal, so the Euclidean norm of
+the image norms is not the global norm.
 
 Application uses the local exact naive path and the entry point exposes no
 truncating apply options, so the prepared target carries no application error
@@ -126,17 +130,13 @@ beyond backend roundoff. Exposing approximate application with its own retained
 error allowance, and the QFT merge-refine schedule, remain follow-up work;
 operator construction error stays separate from the reconstruction bound.
 
-An integration test binds a real `quantics_fourier_operator` and checks sign,
-normalization, and the documented no-permutation output placement against a
-dense small-system oracle, plus a noncontiguous selection with spectators, an
-index-aligned forward-then-inverse round trip, invalid selections, the
-multi-index node rejection, and the non-unitary norm regression. The
+An integration test suite binds a real `quantics_fourier_operator` and checks
+sign, normalization, and the documented no-permutation output placement against
+a dense small-system oracle, plus a noncontiguous selection with spectators, an
+index-aligned forward-then-inverse round trip, a multi-patch transform against a
+dense reference, invalid selections, the multi-index node rejection, a
+non-unitary norm regression, and the separate-images regression. The
 forward-then-inverse round trip restores the original tensor on the original
 full indices: the inverse takes the reversed operator-node-to-site selection to
 undo the forward transform's bit-reversed output placement, and the result is
 compared index-aligned, not against a bit-reversed oracle.
-
-For this revision, the changed-crate test suite passed with the six integration
-tests, the crate doctests, the runnable example, `cargo fmt`, changed-crate
-release Clippy with all targets and warnings denied, and the full mdBook snippet
-suite and HTML build.

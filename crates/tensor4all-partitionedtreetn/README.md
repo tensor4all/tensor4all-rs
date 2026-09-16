@@ -48,10 +48,11 @@ QTT intervals, independently of the indices' placement on the tree.
 linear operator (for example a quantics Fourier transform built elsewhere) on an
 ordered subset of full site indices. Spectators keep their identity, dimension,
 and node assignment. Two selected indices on one tree node are rejected. The
-operator is applied exactly and the prepared target's norm is measured from the
-explicit sum of the overlapping images, so non-unitary operators get their
-correct norm; the operator's own construction error stays separate from the
-reported reconstruction bound.
+operator is applied exactly, the images stay separate, and the prepared target's
+norm is accumulated from the image norms and their pairwise overlaps, so
+non-unitary operators get their correct norm without summing the images into one
+network; the operator's own construction error stays separate from the reported
+reconstruction bound.
 
 Run the asserted example with
 `cargo run --release -p tensor4all-partitionedtreetn --example reconstruct`.

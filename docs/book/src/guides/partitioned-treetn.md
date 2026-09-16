@@ -156,10 +156,12 @@ the crate stays free of a simplett-stack runtime dependency.
 
 The selection may skip sites and spectators keep their identity, dimension, and
 node assignment. A spectator may share its node with a selected index, but two
-selected indices on one node are rejected. The operator is applied exactly and
-the prepared target's global norm is measured from the explicit sum of the
-images, so a non-unitary operator gets its correct norm instead of the preimage
-norm. The operator's construction error (for example
+selected indices on one node are rejected. The operator is applied exactly, and
+the images of the preimage's disjoint patches are kept separate: the global norm
+is accumulated from the per-image norms and their pairwise overlaps instead of
+inheriting the preimage norm or summing the images into one network. A
+non-unitary operator therefore gets its correct norm without rebuilding a global
+rank bottleneck. The operator's construction error (for example
 `FourierOptions::tolerance`) is accounted separately from the reconstruction
 bound; approximate application is not exposed yet.
 

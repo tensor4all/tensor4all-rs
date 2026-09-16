@@ -192,10 +192,13 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// The selection may skip nodes (noncontiguous indices) and each selected
     /// index may share its tree node with spectator site indices, which keep
     /// their identity, dimension, and node assignment. Images of the preimage's
-    /// disjoint patches generally overlap, so the global norm is measured from
-    /// the explicit network sum rather than inherited from the preimage norm or
-    /// assembled from image norm squares. That keeps the pinned global allowance
-    /// correct for any operator, including non-unitary ones.
+    /// disjoint patches generally overlap, so the global norm is accumulated from
+    /// the separate images as `sum_p ||S_p||^2 + 2 Re sum_{p<q} <S_p, S_q>`
+    /// instead of inherited from the preimage norm, assembled from image norm
+    /// squares, or measured from a direct sum of the images. That keeps the
+    /// pinned global allowance correct for any operator, including non-unitary
+    /// ones, without rebuilding the global-rank bottleneck. The pair term costs
+    /// `O(M^2)` network inner products for `M` images.
     ///
     /// The operator is applied exactly with the local naive path; this entry
     /// point accepts no truncating apply options, so the prepared target carries
@@ -328,7 +331,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         // prepared target carries only backend roundoff, never silent
         // application error that the reconstruction report would mis-attribute.
         let apply_options = ApplyOptions::naive();
-        let mut terms = Vec::with_capacity(preimage.patches.len());
+        let mut images = Vec::with_capacity(preimage.patches.len());
         for term in preimage.materialize_terms(center)? {
             let data = apply_linear_operator_to_indices(
                 &operator,
@@ -341,29 +344,51 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
                 PartitionedTreeTNError::tree(format!("subset operator apply: {error}"))
             })?;
             // Images of disjoint patches generally overlap and the selected
-            // constraints no longer hold, so drop them instead of claiming a
-            // support the data does not have.
-            terms.push(SubDomainTreeTN::new(data, Projector::new())?);
+            // constraints no longer hold, so keep only the spectator ones.
+            let mut projector = term.projector().clone();
+            for index in selection {
+                projector.remove(index);
+            }
+            images.push(SubDomainTreeTN::new(data, projector)?);
         }
 
         // Images may overlap, so the global norm is not the Euclidean norm of
-        // the image norms. Measure the explicit sum instead of inheriting the
-        // preimage norm or assuming orthogonal images.
-        let norm = match terms.split_first() {
-            None => 0.0,
-            Some((first, rest)) => {
-                let mut total = first.clone();
-                for term in rest {
-                    total = total.add(term)?;
+        // the image norms. Accumulate the scalar identity
+        //     ||sum_p S_p||^2 = sum_p ||S_p||^2 + 2 Re sum_{p<q} <S_p, S_q>
+        // from the separate images. Do not form the direct sum: TreeTN addition
+        // adds bond dimensions, so M images with bond dimension chi would build
+        // an intermediate of bond dimension up to M * chi before reconstruction
+        // starts, which is the global-rank bottleneck the patched representation
+        // exists to avoid. The pair loop is O(M^2) network inner products, and
+        // the exact identity is nonnegative, so a negative accumulation is only
+        // floating-point cancellation and is clamped to zero.
+        let mut squared = 0.0_f64;
+        for image in &images {
+            squared = finite(squared + finite(image.norm_squared()?)?)?;
+        }
+        let mut cross = 0.0_f64;
+        for p in 0..images.len() {
+            for q in (p + 1)..images.len() {
+                cross += images[p].inner(&images[q])?.real();
+                if !cross.is_finite() {
+                    return Err(PartitionedTreeTNError::NonFiniteAdaptiveValue);
                 }
-                finite(total.norm()?)?
             }
+        }
+        let norm_squared = squared + 2.0 * cross;
+        if !norm_squared.is_finite() {
+            return Err(PartitionedTreeTNError::NonFiniteAdaptiveValue);
+        }
+        let norm = if norm_squared > 0.0 {
+            norm_squared.sqrt()
+        } else {
+            0.0
         };
-        let mut patches: Vec<_> = terms
+        let mut patches: Vec<_> = images
             .into_iter()
-            .map(|term| {
-                let projector = term.projector().clone();
-                (projector, Patch::Stored(Box::new(term)))
+            .map(|image| {
+                let projector = image.projector().clone();
+                (projector, Patch::Stored(Box::new(image)))
             })
             .collect();
         patches.sort_by(|a, b| a.0.canonical_cmp(&b.0));

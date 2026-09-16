@@ -8,9 +8,13 @@ use std::collections::HashMap;
 
 use num_complex::Complex64;
 use tensor4all_core::{DynIndex, IdxTensor};
-use tensor4all_partitionedtreetn::{reconstruction::*, PartitionedTreeTN, SubDomainTreeTN, TreeTN};
+use tensor4all_partitionedtreetn::{
+    reconstruction::*, PartitionedTreeTN, Projector, SubDomainTreeTN, TreeTN,
+};
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
-use tensor4all_treetn::{IndexMapping, LinearOperator};
+use tensor4all_treetn::{
+    apply_linear_operator_to_indices, ApplyOptions, IndexMapping, LinearOperator,
+};
 
 const TOL: f64 = 1e-8;
 
@@ -180,14 +184,15 @@ fn values_in_index_order(
     out
 }
 
-/// A one-site `scale * I` operator written as a one-node MPO.
-fn scaled_identity(scale: f64, site: &DynIndex) -> LinearOperator<IdxTensor, usize> {
+/// A one-site operator `M` written as a one-node MPO. `data` is column-major
+/// over `[input, output]`, matching the crate's payload convention.
+fn one_site_matrix(site: &DynIndex, data: [f64; 4]) -> LinearOperator<IdxTensor, usize> {
     let internal_input = DynIndex::new_dyn(2);
     let internal_output = DynIndex::new_dyn(2);
     let mpo = TreeTN::from_tensors(
         vec![IdxTensor::from_dense(
             vec![internal_input.clone(), internal_output.clone()],
-            vec![scale, 0.0, 0.0, scale],
+            data.to_vec(),
         )
         .expect("mpo tensor")],
         vec![0usize],
@@ -210,6 +215,91 @@ fn scaled_identity(scale: f64, site: &DynIndex) -> LinearOperator<IdxTensor, usi
         },
     );
     LinearOperator::new(mpo, input_mapping, output_mapping)
+}
+
+/// A one-site `scale * I` operator written as a one-node MPO.
+fn scaled_identity(scale: f64, site: &DynIndex) -> LinearOperator<IdxTensor, usize> {
+    one_site_matrix(site, [scale, 0.0, 0.0, scale])
+}
+
+/// Split `tree` into two disjoint patches that fix `site` to 0 and 1.
+fn partitioned_target(tree: &TreeTN<IdxTensor, usize>, site: &DynIndex) -> ReconstructionTarget {
+    let patch = |value| {
+        SubDomainTreeTN::new(
+            tree.clone(),
+            Projector::from_pairs([(site.clone(), value)]).expect("projector"),
+        )
+        .expect("patch")
+    };
+    ReconstructionTarget::from_partition(
+        &PartitionedTreeTN::from_subdomains(vec![patch(0), patch(1)]).expect("partition"),
+    )
+    .expect("target")
+}
+
+/// Apply `operator` to the whole `tree` for an independent dense reference.
+fn applied_dense(
+    operator: &LinearOperator<IdxTensor, usize>,
+    tree: &TreeTN<IdxTensor, usize>,
+    selection: &[DynIndex],
+) -> (Vec<DynIndex>, Vec<Complex64>) {
+    let mut nodes = operator.mpo().node_names();
+    nodes.sort();
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    for (node, index) in nodes.iter().zip(selection) {
+        inputs.push((
+            operator
+                .get_input_mapping(node)
+                .expect("input mapping")
+                .true_index
+                .clone(),
+            index.clone(),
+        ));
+        outputs.push((
+            operator
+                .get_output_mapping(node)
+                .expect("output mapping")
+                .true_index
+                .clone(),
+            index.clone(),
+        ));
+    }
+    let result =
+        apply_linear_operator_to_indices(operator, tree, &inputs, &outputs, ApplyOptions::naive())
+            .expect("reference apply");
+    let dense = result.to_dense().expect("dense");
+    (
+        dense.indices().to_vec(),
+        dense.to_vec::<Complex64>().expect("vector"),
+    )
+}
+
+fn norm_of(values: &[Complex64]) -> f64 {
+    values
+        .iter()
+        .map(|value| value.norm_sqr())
+        .sum::<f64>()
+        .sqrt()
+}
+
+/// Reorder a column-major dense vector from one index order to another.
+fn reorder(values: &[Complex64], from: &[DynIndex], to: &[DynIndex]) -> Vec<Complex64> {
+    let n = to.len();
+    assert_eq!(from.len(), n);
+    let mut out = vec![Complex64::new(0.0, 0.0); 1usize << n];
+    for (storage, slot) in out.iter_mut().enumerate() {
+        let mut source = 0usize;
+        for (position, index) in to.iter().enumerate() {
+            let q = from
+                .iter()
+                .position(|candidate| candidate == index)
+                .unwrap_or_else(|| panic!("index {index:?} absent from reference"));
+            source |= ((storage >> position) & 1) << q;
+        }
+        *slot = values[source];
+    }
+    out
 }
 
 #[test]
@@ -390,4 +480,91 @@ fn qft_subset_rejects_two_selected_indices_on_one_node() {
     let error = ReconstructionTarget::from_subset_operator(&preimage, &0, &operator, &[a, b])
         .expect_err("indices sharing a node are not supported");
     assert!(error.to_string().contains("distinct tree nodes"));
+}
+
+#[test]
+fn subset_operator_norm_handles_overlapping_nonorthogonal_images() {
+    let sites: Vec<DynIndex> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..4)
+        .map(|m| Complex64::new(m as f64 + 1.0, 0.5 * m as f64))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = partitioned_target(&tree, &sites[0]);
+
+    // Non-unitary mixing operator on site 0: M = [[1, 1], [0, 1]].
+    let operator = one_site_matrix(&sites[0], [1.0, 1.0, 0.0, 1.0]);
+    let target =
+        ReconstructionTarget::from_subset_operator(&preimage, &0, &operator, &[sites[0].clone()])
+            .expect("subset transform");
+
+    let (_, expected) = applied_dense(&operator, &tree, &[sites[0].clone()]);
+    let expected_norm = norm_of(&expected);
+    assert!(
+        (target.reference_norm() / expected_norm - 1.0).abs() < 1e-10,
+        "reference norm {} vs dense {}",
+        target.reference_norm(),
+        expected_norm
+    );
+
+    // The two image patches are not orthogonal, so the Euclidean norm of their
+    // norms is materially different from the true global norm.
+    let patch_norms = [0, 1].map(|value| {
+        let patch = SubDomainTreeTN::new(
+            tree.clone(),
+            Projector::from_pairs([(sites[0].clone(), value)]).expect("projector"),
+        )
+        .expect("patch");
+        let (_, image) = applied_dense(&operator, patch.data(), &[sites[0].clone()]);
+        norm_of(&image)
+    });
+    let euclidean = (patch_norms[0] * patch_norms[0] + patch_norms[1] * patch_norms[1]).sqrt();
+    assert!(
+        (euclidean - expected_norm).abs() > 1e-6,
+        "images are orthogonal; the test does not exercise the cross terms"
+    );
+
+    // Regression: preparation keeps the images separate. A global direct sum
+    // would leave a single term here.
+    let output = reconstruct(
+        &target,
+        &0,
+        ReconstructionTolerance {
+            rtol: 0.0,
+            atol: 0.0,
+        },
+        &ReconstructionOptions {
+            target_bond_dim: None,
+            ..Default::default()
+        },
+    )
+    .expect("reconstruction");
+    assert_eq!(output.report().term_count, 2);
+    assert_eq!(output.report().region_count, 1);
+}
+
+#[test]
+fn qft_subset_multi_patch_matches_dense_reference() {
+    let r = 3;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| Complex64::new((m as f64 * 0.3).cos(), (m as f64 * 0.9).sin()))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = partitioned_target(&tree, &sites[0]);
+
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+    let target = ReconstructionTarget::from_subset_operator(&preimage, &0, &operator, &sites)
+        .expect("subset transform");
+    let (reference_indices, reference) = applied_dense(&operator, &tree, &sites);
+    assert!(
+        (target.reference_norm() / norm_of(&reference) - 1.0).abs() < 1e-10,
+        "reference norm {} vs dense {}",
+        target.reference_norm(),
+        norm_of(&reference)
+    );
+
+    let (indices, dense) = dense_of(&single_term_partition(&target));
+    let expected = reorder(&reference, &reference_indices, &indices);
+    let error = max_error(&dense, &expected);
+    assert!(error < TOL, "max error {error:e}");
 }
