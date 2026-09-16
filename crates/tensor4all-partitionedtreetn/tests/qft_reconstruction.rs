@@ -937,9 +937,11 @@ fn merge_refine_schedule_matches_every_intermediate_against_dense_oracles() {
                 let error = max_error(&dense, &expected);
                 assert!(error < TOL, "r = {r}: max error {error:e}");
             } else if depth > 0 {
-                // A partially refined level keeps one term per input region.
+                // A partially refined level keeps one term per input region, so
+                // the regions are a superposition and not a strict partition.
                 assert_eq!(report.term_count, leaves);
                 assert_eq!(report.region_count, 1usize << depth);
+                assert!(result.into_partition().is_err());
             }
         }
     }

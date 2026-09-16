@@ -639,7 +639,7 @@ where
 /// # Errors
 /// Returns [`PartitionedTreeTNError::InvalidOptions`] for a non-binary or empty
 /// selection, an `output_depth` above the selection depth, a `max_work_items`
-/// limit below the input-leaf count or exceeded by a level, a preimage that is
+/// limit below the input-leaf count, a preimage that is
 /// not exactly the dyadic input leaves, non-finite tolerances, and non-finite or
 /// non-positive checked counts; [`PartitionedTreeTNError::ProjectorMismatch`]
 /// when leaves disagree on spectator constraints; and the operator-mapping,
@@ -791,11 +791,8 @@ where
             }
         }
         let live = next.len();
-        if live > options.max_work_items {
-            return Err(invalid(
-                "the merge-refine schedule exceeded max_work_items; raise the limit or reduce the requested depth",
-            ));
-        }
+        // INVARIANT: a level holds at most `2^d` items (`#A * #B = 2^d`), which the
+        // upfront work limit already covers, so no second limit check is needed.
         peak_work_items = peak_work_items.max(live);
         work_items_per_level.push(live);
         level = next;
