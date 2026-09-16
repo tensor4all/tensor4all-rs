@@ -20,6 +20,29 @@ runner body into `benchmarks/rust/` and keep the crate-local entry point thin.
 
 ### Rust
 
+#### Merge-refine schedule (#752)
+
+`benchmark_merge_refine` compares the level-coupled schedule against the greedy
+reconstruction engine on the same subset-operator target, and against applying the
+complete transform to the whole input at once. It records the schedule's structural
+counters (applications, additions, projections, compressions, per-level items,
+refinement stops), the retained and transient ranks, stored parameters, elapsed
+time, the measured bound, and the deviation from the dense exact trajectory. The
+body lives in `rust/benchmark_merge_refine.rs` and is included by
+`crates/tensor4all-partitionedtreetn/examples/benchmark_merge_refine.rs`.
+
+```bash
+T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
+  cargo build --release -p tensor4all-partitionedtreetn --example benchmark_merge_refine
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  taskset -c 2 ./target/release/examples/benchmark_merge_refine
+```
+
+This is a single-revision comparison, not a baseline/candidate regression gate, so
+the paired protocol below does not apply; keep the thread variables and affinity
+pinned anyway so the timings are comparable. Recorded output:
+[`2026-09-16-merge-refine-schedule.md`](results/2026-09-16-merge-refine-schedule.md).
+
 #### TreeACI branch cost attribution (#732)
 
 `benchmark_branch_cost` uses the same hub core coefficients and the same

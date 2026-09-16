@@ -343,6 +343,25 @@ output region so the final region set stays prefix-free:
   retained term count is bounded by `max_terms`, whose exhaustion is an explicit
   resource-limit error rather than a silent accuracy relaxation.
 
+### Evidence and measurements
+
+`benchmarks/rust/benchmark_merge_refine.rs` compares the schedule against the greedy
+engine on the same subset-operator target and against applying the complete
+transform to the whole input at once. It records the structural counters, the
+retained and transient ranks, stored parameters, elapsed time, the measured bound,
+and the deviation from the dense exact trajectory. On the recorded three- and
+four-bit families (2026-09-16) the operation counts match the design exactly
+(`2^d` applications and `2^d * d` additions for the exact trajectory, `2^d`
+additions for an adaptive stop). Runtime is rank-driven rather than
+structure-driven: at three bits the adaptive policy is slower despite three times
+fewer additions, and at four bits it is about five times faster while the exact
+trajectory's retained rank reaches `256` and the adaptive runs stay at the goal.
+Applying the
+complete transform to the whole input is cheaper on those small inputs, which is the
+honest baseline the design must beat only in the patched-input regime that the
+nonuniform geometry would open. No constant-rank or speedup claim is made for
+arbitrary data, and operator-construction error stays outside every bound.
+
 ### Deferred boundaries
 
 Nonuniform input trees, per-input-branch refinement depths with lazy
