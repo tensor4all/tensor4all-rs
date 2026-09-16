@@ -15,12 +15,14 @@
 //! previously carried `k_(d+1-j)`, matching the subset-operator output placement
 //! (no bit-reversal permutation is applied). Spectator indices are unchanged.
 //!
-//! This module is the deterministic, serial reference trajectory: it applies the
-//! complete transform once per input leaf and performs no compression, so the
-//! reported [`MergeRefineReport::error_bound`] is zero and the result is exact
-//! to backend roundoff. Adaptive rank control, inherited-error accounting, and
-//! nonuniform input trees remain follow-up work; automatic padding is a separate
-//! domain/embedding policy and is never applied silently.
+//! This module runs the deterministic, serial reference trajectory: it applies the
+//! complete transform once per input leaf, and it compresses a merged item only
+//! against a measured residual that fits that item's share of the global
+//! allowance. With [`MergeRefineOptions::target_bond_dim`] unset, the trajectory
+//! is exact and [`MergeRefineReport::error_bound`] stays zero. Adaptive rank
+//! control over multiple levels, dropping whole items, and nonuniform input trees
+//! remain follow-up work; automatic padding is a separate domain/embedding policy
+//! and is never applied silently.
 
 use std::{
     collections::{btree_map::Entry, BTreeMap},
@@ -31,19 +33,22 @@ use std::{
 use tensor4all_core::IdxTensor;
 use tensor4all_treetn::LinearOperator;
 
+use super::engine::{checked_add, truncate_toward_allowance};
 use super::{
-    absolute_allowance, invalid, single_term_partition, validate_tolerance, ReconstructionTarget,
-    ReconstructionTolerance, SubsetOperatorOptions,
+    absolute_allowance, finite, invalid, single_term_partition, validate_tolerance,
+    ReconstructionTarget, ReconstructionTolerance, SubsetOperatorOptions,
 };
 use crate::patching::logical_parameter_count;
 use crate::{
     DynIndex, PartitionedTreeTN, PartitionedTreeTNError, Projector, Result, SubDomainTreeTN,
 };
 
-/// Output-refinement depth and resource policy for [`schedule_merge_refine`].
+/// Output-refinement depth, resource policy, and soft rank goal for
+/// [`schedule_merge_refine`].
 ///
-/// The schedule itself is exact, so this type selects no numerical accuracy:
-/// [`ReconstructionTolerance`] carries the global L2 allowance.
+/// This type selects no numerical accuracy of its own: [`ReconstructionTolerance`]
+/// carries the global L2 allowance, and the rank goal is soft, so it never
+/// overrides that allowance.
 ///
 /// # Examples
 ///
@@ -52,6 +57,7 @@ use crate::{
 /// let options = MergeRefineOptions::default();
 /// assert_eq!(options.output_depth, None);
 /// assert_eq!(options.max_work_items, 4096);
+/// assert_eq!(options.target_bond_dim, None);
 /// ```
 #[derive(Debug, Clone)]
 pub struct MergeRefineOptions {
@@ -65,6 +71,13 @@ pub struct MergeRefineOptions {
     /// uniform trajectory holds exactly `2^selected_indices` items, so a limit
     /// below that is rejected before any operator is applied.
     pub max_work_items: usize,
+    /// Desired maximum bond dimension per retained term, default `None`.
+    /// `None` disables truncation and keeps the trajectory exact. `Some(goal)`
+    /// truncates a merged item only toward this soft goal and only when its
+    /// measured residual fits the item's share of the global allowance, so an
+    /// unaffordable candidate is retained exactly instead of violating the
+    /// accuracy contract. `Some(0)` is invalid.
+    pub target_bond_dim: Option<usize>,
 }
 
 impl Default for MergeRefineOptions {
@@ -72,6 +85,7 @@ impl Default for MergeRefineOptions {
         Self {
             output_depth: None,
             max_work_items: 4096,
+            target_bond_dim: None,
         }
     }
 }
@@ -81,9 +95,10 @@ impl Default for MergeRefineOptions {
 /// These are schedule-shape counters, not runtime costs: they let a caller or a
 /// test verify the level count, the pairwise-addition count, and the live-item
 /// trajectory of the uniform reference mode. Bond dimensions, term counts, and
-/// stored parameters describe the returned representation. Numerically, the
-/// schedule is exact, so [`Self::error_bound`] is zero; see the module
-/// documentation.
+/// stored parameters describe the returned representation. Numerically the
+/// trajectory starts from one exact transform per input leaf, so
+/// [`Self::error_bound`] measures only truncation accepted against the global
+/// allowance; see the module documentation.
 ///
 /// # Examples
 ///
@@ -97,11 +112,14 @@ impl Default for MergeRefineOptions {
 ///     applied_operator_count: 2,
 ///     additions: 2,
 ///     projections: 4,
+///     compression_attempts: 0,
+///     compressions: 0,
 ///     work_items_per_level: vec![2, 2],
 ///     peak_work_items: 2,
 ///     region_count: 2,
 ///     term_count: 2,
 ///     max_bond_dim: 1,
+///     max_transient_bond_dim: 1,
 ///     logical_parameters: 4,
 /// };
 /// assert_eq!(report.work_items_per_level.len(), report.level_count + 1);
@@ -113,7 +131,12 @@ pub struct MergeRefineReport {
     pub reference_scale: f64,
     /// `max(atol, rtol * reference_scale)`.
     pub absolute_tolerance: f64,
-    /// Measured compression and drop bound. Zero while the schedule is exact.
+    /// Measured compression bound: per-item residuals accumulated by the
+    /// triangle inequality within a region and combined by the Euclidean norm
+    /// across the disjoint output regions. It is an a posteriori numerical bound
+    /// and excludes backend roundoff. It is zero while `target_bond_dim` is
+    /// `None`, and it excludes operator-construction error and the application
+    /// error of an externally approximated operator.
     pub error_bound: f64,
     /// Number of executed level transitions.
     pub level_count: usize,
@@ -123,6 +146,10 @@ pub struct MergeRefineReport {
     pub additions: usize,
     /// Region restrictions performed by level transitions.
     pub projections: usize,
+    /// Merged items that exceeded the soft rank goal and probed truncation.
+    pub compression_attempts: usize,
+    /// Probes that strictly lowered the bond dimension and fit their share.
+    pub compressions: usize,
     /// Live work items after each level, starting with level zero.
     pub work_items_per_level: Vec<usize>,
     /// Largest number of live work items.
@@ -134,6 +161,8 @@ pub struct MergeRefineReport {
     pub term_count: usize,
     /// Largest retained bond dimension.
     pub max_bond_dim: usize,
+    /// Largest bond dimension of a merged sum before any compression.
+    pub max_transient_bond_dim: usize,
     /// Stored logical parameters of the retained terms.
     pub logical_parameters: usize,
 }
@@ -146,15 +175,27 @@ where
     output: Projector,
     inputs: Vec<Projector>,
     terms: Vec<SubDomainTreeTN<V>>,
+    /// Sum of the terms' deviation bounds by the triangle inequality.
+    bound: f64,
 }
 
 impl<V> MergeRefineRegion<V>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
-    fn push(&mut self, input: Projector, term: SubDomainTreeTN<V>) {
+    fn new(output: Projector, input: Projector, item: WorkItem<V>) -> Self {
+        Self {
+            output,
+            inputs: vec![input],
+            terms: vec![item.value],
+            bound: item.bound,
+        }
+    }
+
+    fn push(&mut self, input: Projector, item: WorkItem<V>) {
         self.inputs.push(input);
-        self.terms.push(term);
+        self.terms.push(item.value);
+        self.bound += item.bound;
     }
 }
 
@@ -629,8 +670,15 @@ where
 /// [`ReconstructionTarget::from_subset_operator`]: `unitary = true` uses the
 /// preimage scale, otherwise it is multiplied by the selected-space operator's
 /// Frobenius norm. `tolerance` supplies `max(atol, rtol * reference_scale)`.
-/// `options` selects the output depth and the work limit; no numerical
-/// approximation is applied, so the reported bound is zero.
+/// `options` selects the output depth, the work limit, and the soft rank goal.
+///
+/// With [`MergeRefineOptions::target_bond_dim`] unset nothing is truncated and
+/// the reported bound is exactly zero. With a goal, each merged item is truncated
+/// only toward that goal and only when its measured residual fits an equal share
+/// of the allowance, so the reported bound sums measured residuals inside a
+/// region, combines disjoint regions by the Euclidean norm, and never exceeds the
+/// allowance. A rejected probe costs nothing, and a restriction is nonexpansive,
+/// so an inherited bound carries over without consuming budget.
 ///
 /// Output placement follows the subset-operator convention: `r_j` lands on the
 /// selected index that carried `k_(d+1-j)`, so a contiguous output prefix fixes
@@ -639,7 +687,7 @@ where
 /// # Errors
 /// Returns [`PartitionedTreeTNError::InvalidOptions`] for a non-binary or empty
 /// selection, an `output_depth` above the selection depth, a `max_work_items`
-/// limit below the input-leaf count, a preimage that is
+/// limit below the input-leaf count, a zero `target_bond_dim`, a preimage that is
 /// not exactly the dyadic input leaves, non-finite tolerances, and non-finite or
 /// non-positive checked counts; [`PartitionedTreeTNError::ProjectorMismatch`]
 /// when leaves disagree on spectator constraints; and the operator-mapping,
@@ -705,6 +753,7 @@ where
 /// assert_eq!(result.report().additions, 2);
 /// assert_eq!(result.report().work_items_per_level, vec![2, 2]);
 /// assert_eq!(result.report().region_count, 2);
+/// assert_eq!(result.report().error_bound, 0.0);
 /// assert!((result.report().reference_scale - 5.0).abs() < 1e-12);
 /// // The fully refined result is the original state, split by output coordinate.
 /// assert!((result.into_partition()?.norm()? - 5.0).abs() < 1e-12);
@@ -749,32 +798,63 @@ where
     let prepared =
         ReconstructionTarget::prepare_subset_images(preimage, center, operator, selection, subset)?;
     let super::target::PreparedImages { images, scale } = prepared;
-    let mut level: BTreeMap<(usize, usize), SubDomainTreeTN<V>> = BTreeMap::new();
+    let allowance = absolute_allowance(tolerance, scale)?;
+    if options.target_bond_dim == Some(0) {
+        return Err(invalid("target_bond_dim must be positive when specified"));
+    }
+    // Conservative l1 allocation: at most `leaves * output_depth` merges can
+    // compress, so each receives an equal share of the global allowance. A
+    // restriction is nonexpansive and therefore carries no new cost, and a
+    // rejected probe costs nothing.
+    let merge_slots = leaves
+        .checked_mul(output_depth)
+        .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
+    let share = if merge_slots == 0 {
+        0.0
+    } else {
+        finite(allowance / merge_slots as f64)?
+    };
+
+    let mut level: BTreeMap<(usize, usize), WorkItem<V>> = BTreeMap::new();
     for prepared in images {
         let leaf = geometry.leaf_index(&prepared.source).ok_or_else(|| {
             invalid("every preimage patch must fix all selected indices to one coordinate")
         })?;
-        // Level zero: one complete transform per leaf, whole output domain.
-        level.insert((leaf, 0), prepared.image);
+        // Level zero: one complete transform per leaf, whole output domain, and
+        // no application error beyond backend roundoff.
+        level.insert(
+            (leaf, 0),
+            WorkItem {
+                value: prepared.image,
+                bound: 0.0,
+            },
+        );
     }
 
     let applied_operator_count = level.len();
-    let mut additions = 0usize;
-    let mut projections = 0usize;
-    let mut peak_work_items = level.len();
+    let mut counters = MergeCounters {
+        peak_work_items: level.len(),
+        ..MergeCounters::default()
+    };
     let mut work_items_per_level = Vec::with_capacity(output_depth + 1);
     work_items_per_level.push(level.len());
     for level_index in 1..=output_depth {
-        let mut next: BTreeMap<(usize, usize), SubDomainTreeTN<V>> = BTreeMap::new();
-        for ((input_region, output_region), value) in std::mem::take(&mut level) {
+        let mut next: BTreeMap<(usize, usize), WorkItem<V>> = BTreeMap::new();
+        for ((input_region, output_region), item) in std::mem::take(&mut level) {
             for bit in 0..2usize {
                 let child_region = (output_region << 1) | bit;
                 // INVARIANT: restrict to the child output region before adding,
                 // so a parent sum is never assembled over the whole output domain.
                 let projector = geometry.output_projector(level_index, child_region)?;
-                projections += 1;
-                let Some(restricted) = value.project(&projector)? else {
+                counters.projections = checked_add(counters.projections, 1)?;
+                let Some(restricted) = item.value.project(&projector)? else {
                     continue;
+                };
+                // Restriction is nonexpansive, so the inherited bound stays a
+                // safe bound for the child without consuming budget.
+                let restricted = WorkItem {
+                    value: restricted,
+                    bound: item.bound,
                 };
                 match next.entry((input_region >> 1, child_region)) {
                     Entry::Vacant(slot) => {
@@ -783,9 +863,23 @@ where
                     Entry::Occupied(mut slot) => {
                         // Both children carry the same prefix and spectator
                         // constraints, so strict subdomain addition applies.
-                        let sum = slot.get().add(&restricted)?;
-                        slot.insert(sum);
-                        additions += 1;
+                        let sum = slot.get().value.add(&restricted.value)?;
+                        let inherited = finite(slot.get().bound + restricted.bound)?;
+                        let transient = sum.max_bond_dim();
+                        counters.max_transient_bond_dim =
+                            counters.max_transient_bond_dim.max(transient);
+                        let (value, residual) = compress_merged(
+                            &sum,
+                            center,
+                            options.target_bond_dim,
+                            share,
+                            &mut counters,
+                        )?;
+                        slot.insert(WorkItem {
+                            value,
+                            bound: finite(inherited + residual)?,
+                        });
+                        counters.additions = checked_add(counters.additions, 1)?;
                     }
                 }
             }
@@ -793,7 +887,7 @@ where
         let live = next.len();
         // INVARIANT: a level holds at most `2^d` items (`#A * #B = 2^d`), which the
         // upfront work limit already covers, so no second limit check is needed.
-        peak_work_items = peak_work_items.max(live);
+        counters.peak_work_items = counters.peak_work_items.max(live);
         work_items_per_level.push(live);
         level = next;
     }
@@ -802,45 +896,104 @@ where
     let mut region_positions: BTreeMap<usize, usize> = BTreeMap::new();
     let mut max_bond_dim = 0usize;
     let mut logical_parameters = 0usize;
-    for ((input_region, output_region), value) in level {
-        max_bond_dim = max_bond_dim.max(value.max_bond_dim());
+    for ((input_region, output_region), item) in level {
+        max_bond_dim = max_bond_dim.max(item.value.max_bond_dim());
         logical_parameters = logical_parameters
-            .checked_add(logical_parameter_count(&value)?)
+            .checked_add(logical_parameter_count(&item.value)?)
             .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
         let input = geometry.input_projector(output_depth, input_region)?;
         match region_positions.get(&output_region) {
-            Some(&position) => regions[position].push(input, value),
+            Some(&position) => regions[position].push(input, item),
             None => {
                 region_positions.insert(output_region, regions.len());
                 // Every term of a region is masked to the same output prefix and
                 // the same spectator constraints, so the region projector is the
                 // shared term projector; `SubDomainTreeTN::add` enforces that
                 // equality for later terms.
-                let output = value.projector().clone();
-                regions.push(MergeRefineRegion {
-                    output,
-                    inputs: vec![input],
-                    terms: vec![value],
-                });
+                let output = item.value.projector().clone();
+                regions.push(MergeRefineRegion::new(output, input, item));
             }
         }
     }
     let term_count = regions.iter().map(|region| region.terms.len()).sum();
+    // Region bounds add by the triangle inequality because terms inside a region
+    // may overlap; disjoint regions combine by the Euclidean norm.
+    let error_bound = regions
+        .iter()
+        .try_fold(0.0_f64, |total, region| finite(total.hypot(region.bound)))?;
     let reference_scale = scale;
     let report = MergeRefineReport {
         reference_scale,
-        absolute_tolerance: absolute_allowance(tolerance, reference_scale)?,
-        error_bound: 0.0,
+        absolute_tolerance: allowance,
+        error_bound,
         level_count: output_depth,
         applied_operator_count,
-        additions,
-        projections,
+        additions: counters.additions,
+        projections: counters.projections,
+        compression_attempts: counters.compression_attempts,
+        compressions: counters.compressions,
         work_items_per_level,
-        peak_work_items,
+        peak_work_items: counters.peak_work_items,
         region_count: regions.len(),
         term_count,
         max_bond_dim,
+        max_transient_bond_dim: counters.max_transient_bond_dim,
         logical_parameters,
     };
     Ok(MergeRefineResult { regions, report })
+}
+
+/// One live work item: `P_B F P_A w` up to a measured deviation bound.
+#[derive(Debug, Clone)]
+struct WorkItem<V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    value: SubDomainTreeTN<V>,
+    /// Measured bound on the deviation of `value` from the exact object.
+    bound: f64,
+}
+
+/// Live schedule counters, so the level loop stays readable.
+#[derive(Debug, Default)]
+struct MergeCounters {
+    additions: usize,
+    projections: usize,
+    compression_attempts: usize,
+    compressions: usize,
+    peak_work_items: usize,
+    max_transient_bond_dim: usize,
+}
+
+/// Compress a merged item toward the soft rank goal within `share`.
+///
+/// Returns the retained value and its measured residual against `sum`. With no
+/// rank goal the exact sum is kept. Otherwise a truncation candidate is accepted
+/// only when it strictly lowers the bond dimension and its measured residual fits
+/// `share`; an unaffordable or gainless candidate is rejected at zero cost, so a
+/// soft rank goal never forces an accuracy violation.
+fn compress_merged<V>(
+    sum: &SubDomainTreeTN<V>,
+    center: &V,
+    target_bond_dim: Option<usize>,
+    share: f64,
+    counters: &mut MergeCounters,
+) -> Result<(SubDomainTreeTN<V>, f64)>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let Some(goal) = target_bond_dim else {
+        return Ok((sum.clone(), 0.0));
+    };
+    if sum.max_bond_dim() <= goal {
+        return Ok((sum.clone(), 0.0));
+    }
+    counters.compression_attempts = checked_add(counters.compression_attempts, 1)?;
+    let (candidate, residual) = truncate_toward_allowance(sum, center, share)?;
+    if residual > 0.0 && candidate.max_bond_dim() < sum.max_bond_dim() {
+        counters.compressions = checked_add(counters.compressions, 1)?;
+        Ok((candidate, residual))
+    } else {
+        Ok((sum.clone(), 0.0))
+    }
 }

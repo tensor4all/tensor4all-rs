@@ -327,14 +327,33 @@ fn compress<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
     if norm <= allowance {
         return Ok((None, norm));
     }
+    let (candidate, residual) = truncate_toward_allowance(source, center, allowance)?;
+    Ok((Some(candidate), residual))
+}
+
+/// Truncate `source` toward the SVD allowance derived from `allowance`.
+///
+/// Shared by the greedy reconstruction engine and the merge-refine schedule, so
+/// both measure a candidate residual the same way. Returns the candidate, which
+/// is `source` itself when truncation is disabled, cannot pay for itself, or
+/// exceeds the allowance, together with the measured residual against
+/// `source`.
+///
+/// # Errors
+/// Propagates canonicalization, SVD, remasking, and norm errors.
+pub(super) fn truncate_toward_allowance<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
+    source: &SubDomainTreeTN<V>,
+    center: &V,
+    allowance: f64,
+) -> Result<(SubDomainTreeTN<V>, f64)> {
     if allowance == 0.0 || source.max_bond_dim() == 1 {
-        return Ok((Some(source.clone()), 0.0));
+        return Ok((source.clone(), 0.0));
     }
     let edges = source.node_count() - 1;
     let local = allowance / (2.0 * edges as f64);
     let cutoff = local * local;
     if !cutoff.is_finite() {
-        return Ok((Some(source.clone()), 0.0));
+        return Ok((source.clone(), 0.0));
     }
     let policy = SvdTruncationPolicy::new(cutoff)
         .with_absolute()
@@ -347,9 +366,9 @@ fn compress<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
     let mut difference = source.data().axpby(1.0, candidate.data(), -1.0)?;
     let residual = finite(difference.norm()?)?;
     if residual <= allowance {
-        Ok((Some(candidate), residual))
+        Ok((candidate, residual))
     } else {
-        Ok((Some(source.clone()), 0.0))
+        Ok((source.clone(), 0.0))
     }
 }
 
@@ -363,7 +382,7 @@ fn max_rank<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
         .unwrap_or(0)
 }
 
-fn checked_add(a: usize, b: usize) -> Result<usize> {
+pub(super) fn checked_add(a: usize, b: usize) -> Result<usize> {
     a.checked_add(b)
         .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)
 }
