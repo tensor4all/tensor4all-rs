@@ -80,8 +80,11 @@ the measured bound. With `target_bond_dim` unset the trajectory is uniform and
 exact (`error_bound` zero). With a goal it is adaptive: a region is refined only
 when that lowers its maximum retained rank, a merged pair is combined only when
 combining pays off, and merged items are truncated only within an equal share of
-the allowance, so the measured bound never exceeds it. Exceeding `max_terms`
-returns a resource-limit error. `MergeRefineOptions::apply_options` opts into a
+the allowance, so the measured bound never exceeds it. A merged or unpaired
+contribution is dropped only when its measured norm fits its share of the allowance,
+with the dropped bound reported (`dropped_terms`, `dropped_error`) and a fully
+dropped region omitted while its bound still counts. Exceeding `max_terms` returns a
+resource-limit error. `MergeRefineOptions::apply_options` opts into a
 truncating application whose measured deviation from the exact application is
 charged to the same bound, and an application error above the allowance is
 rejected. Nonuniform input trees and automatic zero-padding remain separate

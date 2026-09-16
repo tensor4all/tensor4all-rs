@@ -1911,3 +1911,51 @@ fn merge_refine_schedule_enforces_the_work_limit_on_every_level() {
     assert_eq!(result.report().peak_work_items, 8);
     assert_eq!(result.report().work_items_per_level, vec![4, 6, 8, 8]);
 }
+
+#[test]
+fn merge_refine_schedule_drops_negligible_contributions_within_the_allowance() {
+    let r = 3usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    // The lower half of the domain carries a generic function and the upper half
+    // is negligible, so merged contributions covering only the upper half are the
+    // ones the global policy may drop.
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| {
+            if m < 1usize << (r - 1) {
+                Complex64::new(1.0 + (m as f64 * 0.6).sin(), 0.3 * m as f64)
+            } else {
+                Complex64::new(1e-3 * (1.0 + m as f64), 0.0)
+            }
+        })
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+    let reference = schedule_exact(&preimage, &operator, &sites, None, 64);
+    let (reference_indices, reference_dense) =
+        dense_of(&reference.into_partition().expect("partition"));
+
+    // A loose tolerance drops contributions whose measured norm fits their share.
+    let loose = schedule_rank_limited(&preimage, &operator, &sites, 0.5, 2);
+    let report = loose.report().clone();
+    assert!(report.dropped_terms > 0, "{report:?}");
+    assert!(report.dropped_error > 0.0);
+    assert!(report.error_bound <= report.absolute_tolerance);
+    let (indices, dense) = dense_of_regions(&loose);
+    let reference_dense = reorder(&reference_dense, &reference_indices, &indices);
+    let deviation = max_error(&dense, &reference_dense);
+    assert!(
+        deviation <= report.error_bound + 1e-12,
+        "deviation {deviation:e} exceeds the bound {:e}",
+        report.error_bound
+    );
+
+    // A near-exact tolerance cannot afford dropping.
+    let tight = schedule_rank_limited(&preimage, &operator, &sites, 1e-12, 2);
+    let tight_report = tight.report().clone();
+    assert_eq!(tight_report.dropped_terms, 0);
+    assert_eq!(tight_report.dropped_error, 0.0);
+    let (tight_indices, tight_dense) = dense_of_regions(&tight);
+    let reference_dense = reorder(&reference_dense, &reference_indices, &tight_indices);
+    assert!(max_error(&tight_dense, &reference_dense) < 1e-10);
+}
