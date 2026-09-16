@@ -29,7 +29,7 @@ struct WorkingRegion<V: Clone + Hash + Eq + Send + Sync + Debug> {
 ///
 /// `target` owns the original data and reference norm; `center` is an existing
 /// node for local compression and residual norms. `tolerance` sets
-/// `delta = max(atol, rtol * ||target||)`. `options` controls only representation
+/// `delta = max(atol, rtol * target.reference_scale())`. `options` controls only representation
 /// choices. No full dense tensor or initial global direct sum is constructed.
 ///
 /// Pairwise sums are retained only when compression reduces the sum of the
@@ -71,7 +71,7 @@ struct WorkingRegion<V: Clone + Hash + Eq + Send + Sync + Debug> {
 /// let target = ReconstructionTarget::from_partition(&partition)?;
 /// let output = reconstruct(&target, &0, ReconstructionTolerance { rtol: 1e-8, atol: 0.0 },
 ///     &ReconstructionOptions::default())?;
-/// assert!((output.report().reference_norm - 5.0).abs() < 1e-12);
+/// assert!((output.report().reference_scale - 5.0).abs() < 1e-12);
 /// assert!(output.report().error_bound <= output.report().absolute_tolerance);
 /// let dense = output.into_partition()?.to_treetn()?.to_dense()?;
 /// assert_eq!(dense.to_vec::<f64>()?, vec![3.0, 4.0]);
@@ -90,7 +90,7 @@ where
     let allowance = finite(
         tolerance
             .atol
-            .max(finite(tolerance.rtol * target.reference_norm())?),
+            .max(finite(tolerance.rtol * target.reference_scale())?),
     )?;
     let originals = target.materialize_terms(center)?;
     let projector = Projector::new();
@@ -191,7 +191,7 @@ where
         ));
     }
     let report = ReconstructionReport {
-        reference_norm: target.reference_norm(),
+        reference_scale: target.reference_scale(),
         absolute_tolerance: allowance,
         error_bound: error,
         region_count: regions.len(),

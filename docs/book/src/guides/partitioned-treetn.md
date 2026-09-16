@@ -101,7 +101,7 @@ Use `reconstruction::reconstruct` when approximation must be measured against
 one immutable target, rather than the local discarded-weight `cutoff` used
 above. `ReconstructionTarget::from_partition` validates and snapshots disjoint
 patches and pins their combined L2 norm. `ReconstructionTolerance { rtol, atol }`
-sets the fixed allowance `max(atol, rtol * reference_norm)`.
+sets the fixed allowance `max(atol, rtol * reference_scale)`.
 
 The rank goal is soft: a split must improve rank, and a pairwise merge must
 reduce the sum of operand ranks. Unprofitable sums remain as superposition
@@ -147,23 +147,29 @@ bit significance.
 ### Applying a QFT to a subset of sites
 
 `ReconstructionTarget::from_subset_operator(&preimage, &center, &operator,
-&selection)` prepares the images of an existing linear operator
-acting on an ordered subset of the target's site indices. `selection` holds one
-full site index per operator node, in the operator's own node order; for a
-quantics Fourier transform its node 0 is the most significant input bit. Build
-that operator with `tensor4all_quanticstransform::quantics_fourier_operator` and
-the crate stays free of a simplett-stack runtime dependency.
+&selection, &options)` prepares the images of an existing linear operator acting
+on an ordered subset of the target's site indices. `selection` holds one full
+site index per operator node, in the operator's own node order; for a quantics
+Fourier transform its node 0 is the most significant input bit. Build that
+operator with `tensor4all_quanticstransform::quantics_fourier_operator` and the
+crate stays free of a simplett-stack runtime dependency.
 
 The selection may skip sites and spectators keep their identity, dimension, and
 node assignment. A spectator may share its node with a selected index, but two
-selected indices on one node are rejected. The operator is applied exactly, and
-the images of the preimage's disjoint patches are kept separate: the global norm
-is accumulated from the per-image norms and their pairwise overlaps instead of
-inheriting the preimage norm or summing the images into one network. A
-non-unitary operator therefore gets its correct norm without rebuilding a global
-rank bottleneck. The operator's construction error (for example
-`FourierOptions::tolerance`) is accounted separately from the reconstruction
-bound; approximate application is not exposed yet.
+selected indices on one node are rejected.
+
+The transformed output norm is never measured. `SubsetOperatorOptions::unitary`
+selects the amplification factor: `false` (default) uses the selected-space
+operator's Frobenius norm, an upper bound on its induced amplification; `true` is
+a caller guarantee that the operator preserves the L2 norm, giving factor one.
+The preimage's reference scale is multiplied by that factor, so successive
+applications propagate the scale instead of recomputing an output norm. For a
+general operator `rtol` is therefore relative to that scale, not to the actual
+`||A x||_2`; pass `unitary = true` for a Fourier transform, whose construction
+error is accounted separately from the reconstruction bound.
+
+The operator is applied exactly and the images stay separate, so a global direct
+sum is never formed.
 
 The transform stores frequency bit `t` at selected position `t` without an
 output bit-reversal permutation. For contiguous output patches, supply

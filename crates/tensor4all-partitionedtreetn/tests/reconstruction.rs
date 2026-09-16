@@ -91,7 +91,7 @@ fn split_case<T: TensorElement + From<f64>>() {
     assert_eq!(result.report().region_count, 3);
     assert_eq!(result.report().max_bond_dim, 1);
     assert_eq!(result.report().split_count, 1);
-    assert!((prepared.reference_norm() - 14.0_f64.sqrt()).abs() < 1e-12);
+    assert!((prepared.reference_scale() - 14.0_f64.sqrt()).abs() < 1e-12);
     check_residual(&original, &result, 1e-11);
     assert_eq!(result.into_partition().unwrap().len(), 3);
 }
@@ -258,7 +258,7 @@ fn global_reference_is_pinned_when_small_patch_is_dropped() {
     )
     .unwrap();
     assert_eq!(output.report().term_count, 1);
-    assert!((output.report().reference_norm - 1.0_f64.hypot(tiny)).abs() < 1e-14);
+    assert!((output.report().reference_scale - 1.0_f64.hypot(tiny)).abs() < 1e-14);
     assert!((output.report().error_bound - tiny).abs() < 1e-14);
     check_residual(&original, &output, 1e-14);
 }
@@ -343,7 +343,7 @@ fn productive_merges_recover_constant_from_nonuniform_patches() {
     assert_eq!(output.report().split_count, 0);
     assert_eq!(output.report().term_count, 1);
     assert_eq!(output.report().merge_count, 2);
-    assert_eq!(output.report().reference_norm, prepared.reference_norm());
+    assert_eq!(output.report().reference_scale, prepared.reference_scale());
     check_residual(&original, &output, 1e-11);
 }
 
@@ -383,11 +383,11 @@ fn absolute_tolerance_and_zero_targets() {
     )
     .unwrap();
     assert_eq!(output.report().term_count, 0);
-    assert_eq!(output.report().error_bound, output.report().reference_norm);
+    assert_eq!(output.report().error_bound, output.report().reference_scale);
     check_residual(&original, &output, 1e-20);
     let zero = diagonal(&[0.0, 0.0]);
     let output = reconstruct(&target(&zero), &0, Default::default(), &Default::default()).unwrap();
-    assert_eq!(output.report().reference_norm, 0.0);
+    assert_eq!(output.report().reference_scale, 0.0);
     assert_eq!(output.report().term_count, 0);
 }
 
@@ -397,7 +397,7 @@ fn product_target_has_factor_norm_and_correct_outer_product() {
     let right = diagonal(&[Complex64::new(3.0, 0.0), Complex64::new(0.0, 4.0)]);
     let prepared =
         ReconstructionTarget::from_tensor_products(vec![(left.clone(), right.clone())]).unwrap();
-    assert!((prepared.reference_norm() - 150.0_f64.sqrt()).abs() < 1e-12);
+    assert!((prepared.reference_scale() - 150.0_f64.sqrt()).abs() < 1e-12);
     let output = reconstruct(
         &prepared,
         &0,
@@ -422,7 +422,7 @@ fn product_target_has_factor_norm_and_correct_outer_product() {
     let actual = result_dense(&output, left.data());
     let residual = actual.sub(&expected).unwrap().norm().unwrap();
     assert!(residual < 1e-10, "outer product residual: {residual}");
-    assert_eq!(output.report().reference_norm, prepared.reference_norm());
+    assert_eq!(output.report().reference_scale, prepared.reference_scale());
 }
 
 #[test]
@@ -555,7 +555,7 @@ fn long_product_state_stays_in_network_form() {
         &Default::default(),
     )
     .unwrap();
-    assert_eq!(output.report().reference_norm, 1.0);
+    assert_eq!(output.report().reference_scale, 1.0);
     assert_eq!(output.report().term_count, 1);
     assert_eq!(output.report().split_count, 0);
     let tree = output.into_partition().unwrap().to_treetn().unwrap();
@@ -734,8 +734,8 @@ fn nested_splits_rebuild_original_target_and_keep_one_global_budget() {
         assert_eq!(output.report().split_count, 3);
         assert_eq!(output.report().region_count, 4);
         assert_eq!(output.report().max_bond_dim, 1);
-        assert_eq!(output.report().reference_norm, prepared.reference_norm());
-        assert!(output.report().error_bound <= 1e-8 * prepared.reference_norm());
+        assert_eq!(output.report().reference_scale, prepared.reference_scale());
+        assert!(output.report().error_bound <= 1e-8 * prepared.reference_scale());
         let a = left.data().clone().to_dense().unwrap();
         let b = right.data().clone().to_dense().unwrap();
         let av = a.to_vec::<f64>().unwrap();
@@ -784,9 +784,9 @@ fn disjoint_product_patches_use_sum_of_factor_norm_products() {
         })
         .collect();
     let prepared = ReconstructionTarget::from_tensor_products(pairs).unwrap();
-    assert!((prepared.reference_norm() - 125.0_f64.sqrt()).abs() < 1e-12);
+    assert!((prepared.reference_scale() - 125.0_f64.sqrt()).abs() < 1e-12);
     let output = reconstruct(&prepared, &0, Default::default(), &Default::default()).unwrap();
-    assert_eq!(output.report().reference_norm, prepared.reference_norm());
+    assert_eq!(output.report().reference_scale, prepared.reference_scale());
     assert_eq!(output.report().term_count, 2);
 }
 
@@ -836,6 +836,6 @@ fn measured_svd_residual_is_charged_against_original_norm() {
     assert_eq!(output.report().max_bond_dim, 1);
     assert_eq!(output.report().split_count, 0);
     assert!((output.report().error_bound - 5.0_f64.sqrt() * 1e-6).abs() < 1e-12);
-    assert_eq!(output.report().reference_norm, prepared.reference_norm());
+    assert_eq!(output.report().reference_scale, prepared.reference_scale());
     check_residual(&original, &output, 1e-12);
 }

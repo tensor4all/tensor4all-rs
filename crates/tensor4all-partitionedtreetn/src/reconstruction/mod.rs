@@ -26,7 +26,7 @@ pub use target::ReconstructionTarget;
 
 /// Global L2 tolerances, separate from rank and partition selection policy.
 ///
-/// The absolute allowance is `max(atol, rtol * target.reference_norm())`.
+/// The absolute allowance is `max(atol, rtol * target.reference_scale())`.
 /// Unlike [`crate::PatchingOptions::cutoff`], `rtol` is a norm tolerance, not
 /// a local discarded singular-value weight. Both fields must be finite and
 /// nonnegative. Zero in both fields disables approximate compression.
@@ -109,6 +109,44 @@ impl Default for ReconstructionOptions {
     }
 }
 
+/// How [`ReconstructionTarget::from_subset_operator`] derives the reference scale.
+///
+/// The operator's amplification factor multiplies the preimage's reference scale:
+///
+/// ```text
+/// s = 1          if unitary is specified
+/// s = ||A||_F    otherwise
+/// reference_scale = s * ||preimage||
+/// absolute_tolerance = max(atol, rtol * reference_scale)
+/// ```
+///
+/// Here `A` is the operator restricted to the selected sites. Spectator identity
+/// factors are neither materialized nor counted, because
+/// `||A ⊗ I||_2 = ||A||_2 <= ||A||_F`. For an `N`-dimensional unitary the
+/// Frobenius norm is `sqrt(N)` while the induced 2-norm is `1`; `unitary = true`
+/// assumes the latter and does not assert a unit Frobenius norm. Successive
+/// applications multiply these factors instead of recomputing an output norm.
+///
+/// With `unitary = false` the resulting scale is a norm-based upper bound, not
+/// the measured output norm, so `rtol` is relative to that scale rather than to
+/// `||A x||_2`. The two coincide for a unitary acting on an exactly known input
+/// scale.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtreetn::reconstruction::SubsetOperatorOptions;
+/// let options = SubsetOperatorOptions::default();
+/// assert!(!options.unitary);
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SubsetOperatorOptions {
+    /// Caller guarantee that the operator preserves the L2 norm, so the
+    /// amplification factor is exactly `1`. Default: `false`, which scales by
+    /// the operator's Frobenius norm.
+    pub unitary: bool,
+}
+
 /// Numerical error accounting and final storage diagnostics from reconstruction.
 ///
 /// `error_bound` is a triangle-inequality bound assembled from measured local
@@ -123,15 +161,15 @@ impl Default for ReconstructionOptions {
 /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, reconstruction::*};
 /// let target = ReconstructionTarget::from_partition(&PartitionedTreeTN::<usize>::new())?;
 /// let output = reconstruct(&target, &0, ReconstructionTolerance::default(), &Default::default())?;
-/// assert_eq!(output.report().reference_norm, 0.0);
+/// assert_eq!(output.report().reference_scale, 0.0);
 /// assert_eq!(output.report().error_bound, 0.0);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]
 pub struct ReconstructionReport {
     /// Original target L2 norm, computed before any reconstruction.
-    pub reference_norm: f64,
-    /// Fixed `max(atol, rtol * reference_norm)` allowance.
+    pub reference_scale: f64,
+    /// Fixed `max(atol, rtol * reference_scale)` allowance.
     pub absolute_tolerance: f64,
     /// Accumulated measured-residual bound, at most `absolute_tolerance`.
     pub error_bound: f64,

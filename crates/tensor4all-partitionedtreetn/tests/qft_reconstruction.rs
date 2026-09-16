@@ -217,11 +217,6 @@ fn one_site_matrix(site: &DynIndex, data: [f64; 4]) -> LinearOperator<IdxTensor,
     LinearOperator::new(mpo, input_mapping, output_mapping)
 }
 
-/// A one-site `scale * I` operator written as a one-node MPO.
-fn scaled_identity(scale: f64, site: &DynIndex) -> LinearOperator<IdxTensor, usize> {
-    one_site_matrix(site, [scale, 0.0, 0.0, scale])
-}
-
 /// Split `tree` into two disjoint patches that fix `site` to 0 and 1.
 fn partitioned_target(tree: &TreeTN<IdxTensor, usize>, site: &DynIndex) -> ReconstructionTarget {
     let patch = |value| {
@@ -313,8 +308,14 @@ fn qft_subset_matches_dense_dft_convention() {
 
         let operator =
             quantics_fourier_operator(r, FourierOptions::default()).expect("fourier operator");
-        let target = ReconstructionTarget::from_subset_operator(&preimage, &0, &operator, &sites)
-            .expect("subset transform");
+        let target = ReconstructionTarget::from_subset_operator(
+            &preimage,
+            &0,
+            &operator,
+            &sites,
+            &SubsetOperatorOptions { unitary: true },
+        )
+        .expect("subset transform");
 
         let (indices, dense) = dense_of(&single_term_partition(&target));
         let expected = dft_oracle(&indices, &sites, &sites, &values);
@@ -336,8 +337,14 @@ fn qft_subset_supports_noncontiguous_selection_with_spectators() {
     // Transform sites 0 and 2 only; sites 1 and 3 are spectators.
     let operator = quantics_fourier_operator(2, FourierOptions::default()).expect("fourier");
     let selected = [sites[0].clone(), sites[2].clone()];
-    let target = ReconstructionTarget::from_subset_operator(&preimage, &0, &operator, &selected)
-        .expect("subset transform");
+    let target = ReconstructionTarget::from_subset_operator(
+        &preimage,
+        &0,
+        &operator,
+        &selected,
+        &SubsetOperatorOptions { unitary: true },
+    )
+    .expect("subset transform");
 
     let partition = single_term_partition(&target);
     let (indices, dense) = dense_of(&partition);
@@ -372,10 +379,22 @@ fn qft_forward_then_inverse_restores_the_target() {
     // the inverse takes the reversed operator-node-to-site selection to undo the
     // forward transform's bit-reversed output placement.
     let reverse: Vec<DynIndex> = sites.iter().rev().cloned().collect();
-    let transformed = ReconstructionTarget::from_subset_operator(&preimage, &0, &forward, &sites)
-        .expect("forward target");
-    let restored = ReconstructionTarget::from_subset_operator(&transformed, &0, &inverse, &reverse)
-        .expect("inverse target");
+    let transformed = ReconstructionTarget::from_subset_operator(
+        &preimage,
+        &0,
+        &forward,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+    )
+    .expect("forward target");
+    let restored = ReconstructionTarget::from_subset_operator(
+        &transformed,
+        &0,
+        &inverse,
+        &reverse,
+        &SubsetOperatorOptions { unitary: true },
+    )
+    .expect("inverse target");
 
     // The forward-then-inverse round trip restores the original tensor on the
     // original full indices; it does not return a bit-reversed tensor.
@@ -386,10 +405,7 @@ fn qft_forward_then_inverse_restores_the_target() {
 }
 
 #[test]
-fn subset_operator_measures_the_transformed_norm() {
-    // A scaled identity is not unitary: inheriting the preimage norm would leave
-    // the target's global allowance at ~5e-6 while its actual norm is ~5e-9, so
-    // reconstruction would discard the whole nonzero target.
+fn subset_operator_default_scales_by_the_frobenius_norm() {
     let site = DynIndex::new_dyn(2);
     let state = TreeTN::from_tensors(
         vec![IdxTensor::from_dense(vec![site.clone()], vec![3.0, 4.0]).expect("state")],
@@ -397,31 +413,146 @@ fn subset_operator_measures_the_transformed_norm() {
     )
     .expect("tree");
     let preimage = target_of(state);
+    assert!((preimage.reference_scale() - 5.0).abs() < 1e-12);
+
+    // A 2x2 identity has Frobenius norm sqrt(2), not amplification 1.
+    let identity = one_site_matrix(&site, [1.0, 0.0, 0.0, 1.0]);
+    let scaled = ReconstructionTarget::from_subset_operator(
+        &preimage,
+        &0,
+        &identity,
+        std::slice::from_ref(&site),
+        &SubsetOperatorOptions::default(),
+    )
+    .expect("default scale");
+    assert!(
+        (scaled.reference_scale() - 5.0 * 2.0_f64.sqrt()).abs() < 1e-12,
+        "default scale {}",
+        scaled.reference_scale()
+    );
+
+    let unitary = ReconstructionTarget::from_subset_operator(
+        &preimage,
+        &0,
+        &identity,
+        &[site],
+        &SubsetOperatorOptions { unitary: true },
+    )
+    .expect("unitary scale");
+    assert!((unitary.reference_scale() - 5.0).abs() < 1e-12);
+}
+
+#[test]
+fn subset_operator_scale_propagates_through_successive_applications() {
+    let sites: Vec<DynIndex> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(2.0, 0.0),
+        Complex64::new(3.0, 0.0),
+        Complex64::new(4.0, 0.0),
+    ];
+    let preimage = target_of(mps(&sites, &values));
+    let input_scale = preimage.reference_scale();
+    assert!((input_scale - 30.0_f64.sqrt()).abs() < 1e-12);
+
+    let scaling = one_site_matrix(&sites[0], [0.1, 0.0, 0.0, 0.1]);
+    let first = ReconstructionTarget::from_subset_operator(
+        &preimage,
+        &0,
+        &scaling,
+        &[sites[0].clone()],
+        &SubsetOperatorOptions::default(),
+    )
+    .expect("first");
+    let factor = 0.1 * 2.0_f64.sqrt();
+    assert!((first.reference_scale() - factor * input_scale).abs() < 1e-12);
+
+    let second = ReconstructionTarget::from_subset_operator(
+        &first,
+        &0,
+        &scaling,
+        &[sites[0].clone()],
+        &SubsetOperatorOptions::default(),
+    )
+    .expect("second");
+    assert!(
+        (second.reference_scale() - factor * factor * input_scale).abs() < 1e-12,
+        "propagated scale {}",
+        second.reference_scale()
+    );
+
+    // A unitary application contributes exactly a factor of one.
+    let identity = one_site_matrix(&sites[0], [1.0, 0.0, 0.0, 1.0]);
+    let third = ReconstructionTarget::from_subset_operator(
+        &second,
+        &0,
+        &identity,
+        &[sites[0].clone()],
+        &SubsetOperatorOptions { unitary: true },
+    )
+    .expect("unitary");
+    assert!((third.reference_scale() - second.reference_scale()).abs() < 1e-12);
+}
+
+#[test]
+fn subset_operator_scale_is_not_measured_under_destructive_interference() {
+    let sites: Vec<DynIndex> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
+    // The two `s0` branches are exact negatives, so an operator that adds them
+    // produces the zero function even though every image is nonzero.
+    let values: Vec<Complex64> = (0..4)
+        .map(|m| {
+            let sign = if m < 2 { 1.0 } else { -1.0 };
+            Complex64::new(sign * (m % 2 + 1) as f64, 0.0)
+        })
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = partitioned_target(&tree, &sites[0]);
+    let input_scale = preimage.reference_scale();
+    assert!((input_scale - 10.0_f64.sqrt()).abs() < 1e-12);
+
+    // M = [[1, 1], [0, 0]] with Frobenius norm sqrt(2).
+    let operator = one_site_matrix(&sites[0], [1.0, 1.0, 0.0, 0.0]);
     let target = ReconstructionTarget::from_subset_operator(
         &preimage,
         &0,
-        &scaled_identity(1e-9, &site),
-        &[site],
+        &operator,
+        &[sites[0].clone()],
+        &SubsetOperatorOptions::default(),
     )
     .expect("subset transform");
     assert!(
-        (target.reference_norm() / 5e-9 - 1.0).abs() < 1e-12,
-        "reference norm {}",
-        target.reference_norm()
+        (target.reference_scale() - 2.0_f64.sqrt() * input_scale).abs() < 1e-12,
+        "scale {}",
+        target.reference_scale()
     );
 
+    // The true output is the zero function: the scale is the operator-based
+    // upper bound, not a measured output norm.
+    let (_, applied) = applied_dense(&operator, &tree, &[sites[0].clone()]);
+    assert!(
+        norm_of(&applied) < 1e-12,
+        "applied norm {}",
+        norm_of(&applied)
+    );
+
+    // Regression: preparation keeps the two images separate. A global direct sum
+    // would leave a single term.
     let output = reconstruct(
         &target,
         &0,
         ReconstructionTolerance {
-            rtol: 1e-6,
+            rtol: 0.0,
             atol: 0.0,
         },
-        &Default::default(),
+        &ReconstructionOptions {
+            target_bond_dim: None,
+            ..Default::default()
+        },
     )
     .expect("reconstruction");
+    assert_eq!(output.report().term_count, 2);
     assert_eq!(output.report().region_count, 1);
-    assert_eq!(output.report().term_count, 1);
+    assert_eq!(output.report().reference_scale, target.reference_scale());
 }
 
 #[test]
@@ -438,6 +569,7 @@ fn qft_subset_rejects_invalid_selections() {
         &0,
         &operator,
         &[sites[0].clone()],
+        &SubsetOperatorOptions::default(),
     )
     .is_err());
 
@@ -447,6 +579,7 @@ fn qft_subset_rejects_invalid_selections() {
         &0,
         &operator,
         &[sites[0].clone(), sites[0].clone()],
+        &SubsetOperatorOptions::default(),
     )
     .is_err());
 
@@ -456,6 +589,7 @@ fn qft_subset_rejects_invalid_selections() {
         &0,
         &operator,
         &[sites[0].clone(), DynIndex::new_dyn(2)],
+        &SubsetOperatorOptions::default(),
     )
     .is_err());
 }
@@ -477,69 +611,15 @@ fn qft_subset_rejects_two_selected_indices_on_one_node() {
     let preimage = target_of(tree);
 
     let operator = quantics_fourier_operator(2, FourierOptions::default()).expect("fourier");
-    let error = ReconstructionTarget::from_subset_operator(&preimage, &0, &operator, &[a, b])
-        .expect_err("indices sharing a node are not supported");
-    assert!(error.to_string().contains("distinct tree nodes"));
-}
-
-#[test]
-fn subset_operator_norm_handles_overlapping_nonorthogonal_images() {
-    let sites: Vec<DynIndex> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
-    let values: Vec<Complex64> = (0..4)
-        .map(|m| Complex64::new(m as f64 + 1.0, 0.5 * m as f64))
-        .collect();
-    let tree = mps(&sites, &values);
-    let preimage = partitioned_target(&tree, &sites[0]);
-
-    // Non-unitary mixing operator on site 0: M = [[1, 1], [0, 1]].
-    let operator = one_site_matrix(&sites[0], [1.0, 1.0, 0.0, 1.0]);
-    let target =
-        ReconstructionTarget::from_subset_operator(&preimage, &0, &operator, &[sites[0].clone()])
-            .expect("subset transform");
-
-    let (_, expected) = applied_dense(&operator, &tree, &[sites[0].clone()]);
-    let expected_norm = norm_of(&expected);
-    assert!(
-        (target.reference_norm() / expected_norm - 1.0).abs() < 1e-10,
-        "reference norm {} vs dense {}",
-        target.reference_norm(),
-        expected_norm
-    );
-
-    // The two image patches are not orthogonal, so the Euclidean norm of their
-    // norms is materially different from the true global norm.
-    let patch_norms = [0, 1].map(|value| {
-        let patch = SubDomainTreeTN::new(
-            tree.clone(),
-            Projector::from_pairs([(sites[0].clone(), value)]).expect("projector"),
-        )
-        .expect("patch");
-        let (_, image) = applied_dense(&operator, patch.data(), &[sites[0].clone()]);
-        norm_of(&image)
-    });
-    let euclidean = (patch_norms[0] * patch_norms[0] + patch_norms[1] * patch_norms[1]).sqrt();
-    assert!(
-        (euclidean - expected_norm).abs() > 1e-6,
-        "images are orthogonal; the test does not exercise the cross terms"
-    );
-
-    // Regression: preparation keeps the images separate. A global direct sum
-    // would leave a single term here.
-    let output = reconstruct(
-        &target,
+    let error = ReconstructionTarget::from_subset_operator(
+        &preimage,
         &0,
-        ReconstructionTolerance {
-            rtol: 0.0,
-            atol: 0.0,
-        },
-        &ReconstructionOptions {
-            target_bond_dim: None,
-            ..Default::default()
-        },
+        &operator,
+        &[a, b],
+        &SubsetOperatorOptions::default(),
     )
-    .expect("reconstruction");
-    assert_eq!(output.report().term_count, 2);
-    assert_eq!(output.report().region_count, 1);
+    .expect_err("indices sharing a node are not supported");
+    assert!(error.to_string().contains("distinct tree nodes"));
 }
 
 #[test]
@@ -553,13 +633,19 @@ fn qft_subset_multi_patch_matches_dense_reference() {
     let preimage = partitioned_target(&tree, &sites[0]);
 
     let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
-    let target = ReconstructionTarget::from_subset_operator(&preimage, &0, &operator, &sites)
-        .expect("subset transform");
+    let target = ReconstructionTarget::from_subset_operator(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+    )
+    .expect("subset transform");
     let (reference_indices, reference) = applied_dense(&operator, &tree, &sites);
     assert!(
-        (target.reference_norm() / norm_of(&reference) - 1.0).abs() < 1e-10,
+        (target.reference_scale() / norm_of(&reference) - 1.0).abs() < 1e-10,
         "reference norm {} vs dense {}",
-        target.reference_norm(),
+        target.reference_scale(),
         norm_of(&reference)
     );
 

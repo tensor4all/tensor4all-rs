@@ -163,7 +163,7 @@ site indices per node, and does not implement adaptive interpolation.
   accepts independent factor pairs on the same named topology, keeps them
   factorized until reconstruction, and validates disjoint product supports.
 - `reconstruction::reconstruct(&target, &center, tolerance, &options)` — fixed
-  global `max(atol, rtol * reference_norm)` allowance, measured local residuals,
+  global `max(atol, rtol * reference_scale)` allowance, measured local residuals,
   soft `target_bond_dim`, and gain-driven merging/splitting. This `rtol` is
   separate from `PatchingOptions::cutoff`. The output exposes superpositions
   via `regions()`; `into_partition()` rejects regions with multiple terms.
@@ -174,14 +174,15 @@ site indices per node, and does not implement adaptive interpolation.
   For contiguous QTT intervals, use MSB-first order with `Sequential`, independent
   of TT site placement. No separate `PatchingOrder` enum is needed.
 - `reconstruction::ReconstructionTarget::from_subset_operator(&preimage, &center,
-  &operator, &selection)` — applies an existing `LinearOperator`
-  (for example a Fourier operator built with `tensor4all-quanticstransform`) to an
-  ordered subset of full site indices. Spectators keep identity, dimension, and
-  node assignment; two selected indices on one node are rejected. Application is
-  exact, the images stay separate, and the prepared target's norm is accumulated
-  from the image norms and their pairwise overlaps, so non-unitary operators are
-  handled correctly without a global direct sum. The operator's own construction
-  error is accounted separately from the reconstruction bound.
+  &operator, &selection, &SubsetOperatorOptions)` — applies an existing
+  `LinearOperator` (for example a Fourier operator built with
+  `tensor4all-quanticstransform`) to an ordered subset of full site indices.
+  Spectators keep identity, dimension, and node assignment; two selected indices
+  on one node are rejected. The output norm is never measured and the images are
+  never summed: `SubsetOperatorOptions::unitary` selects the amplification factor
+  (`false`, the default, uses the selected-space operator's Frobenius norm as an
+  upper bound; `true` is a caller guarantee of factor one), which multiplies the
+  preimage reference scale and propagates across successive applications.
 
 All truncating and contracting operations require an explicit existing node name
 as `center`. Reconstruction remasks compressed candidates to preserve exact

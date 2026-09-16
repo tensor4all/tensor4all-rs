@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         },
     )?;
-    assert!((output.report().reference_norm - 2.0_f64.sqrt()).abs() < 1e-12);
+    assert!((output.report().reference_scale - 2.0_f64.sqrt()).abs() < 1e-12);
     assert_eq!(output.report().region_count, 2);
     assert_eq!(output.report().max_bond_dim, 1);
     assert!(output.report().error_bound <= output.report().absolute_tolerance);

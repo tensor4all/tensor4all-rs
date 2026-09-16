@@ -112,17 +112,20 @@ guidance rather than silently mis-bound; spectators may share a node with a
 selected index.
 
 The constructor accepts an arbitrary operator, which need not be unitary and
-need not map the preimage's disjoint patches to orthogonal images. It therefore
-neither inherits the preimage norm nor assembles the global norm from image norm
-squares. The images stay separate, and the global norm is accumulated as
-`sum_p ||S_p||^2 + 2 Re sum_{p<q} <S_p, S_q>` over `O(M^2)` network inner
-products, with a zero cancellation floor. Summing the images into one network is
-explicitly rejected: TreeTN addition adds bond dimensions, so a global direct sum
-would restore the global-rank bottleneck that the patched representation and the
-merge-gain/list policy exist to avoid. A regression asserts that preparation
-leaves two separate terms, and a multi-patch test uses a non-unitary mixing
-operator whose images are measurably non-orthogonal, so the Euclidean norm of
-the image norms is not the global norm.
+need not map the preimage's disjoint patches to orthogonal images, so it never
+measures the transformed output norm. It neither sums the images into one network
+(TreeTN addition adds bond dimensions and would restore the global-rank
+bottleneck) nor computes a pairwise-overlap Gram sum (O(M^2) and
+cancellation-prone). Instead `SubsetOperatorOptions::unitary` selects an
+amplification factor: `false` (default) uses the selected-space operator's
+Frobenius norm as an upper bound on its induced amplification, and `true` is a
+caller guarantee of factor one. The preimage's reference scale is multiplied by
+that factor, so successive applications propagate the scale instead of
+recomputing an output norm. For a general operator the resulting scale is an
+upper bound and `rtol` is relative to it, not to `||A x||_2`; the two coincide
+for a unitary acting on an exactly known input scale. The target accessor and the
+report field were renamed from `reference_norm` to `reference_scale` so their
+names do not claim a measured output norm.
 
 Application uses the local exact naive path and the entry point exposes no
 truncating apply options, so the prepared target carries no application error
@@ -134,9 +137,13 @@ An integration test suite binds a real `quantics_fourier_operator` and checks
 sign, normalization, and the documented no-permutation output placement against
 a dense small-system oracle, plus a noncontiguous selection with spectators, an
 index-aligned forward-then-inverse round trip, a multi-patch transform against a
-dense reference, invalid selections, the multi-index node rejection, a
-non-unitary norm regression, and the separate-images regression. The
-forward-then-inverse round trip restores the original tensor on the original
-full indices: the inverse takes the reversed operator-node-to-site selection to
-undo the forward transform's bit-reversed output placement, and the result is
-compared index-aligned, not against a bit-reversed oracle.
+dense reference, invalid selections, the multi-index node rejection, and the
+scale contract: the Frobenius factor against the unitary factor of one, a
+non-unitary factor, destructive interference whose true output is zero while the
+scale stays the operator-based bound, propagation through successive
+applications, and a regression that preparation leaves the images as separate
+terms rather than one summed network. The forward-then-inverse round trip
+restores the original tensor on the original full indices: the inverse takes the
+reversed operator-node-to-site selection to undo the forward transform's
+bit-reversed output placement, and the result is compared index-aligned, not
+against a bit-reversed oracle.

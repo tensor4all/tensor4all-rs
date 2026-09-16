@@ -6,7 +6,7 @@ use tensor4all_treetn::{
     ApplyOptions, LinearOperator, PartialContractionSpec, SiteIndexNetwork,
 };
 
-use super::{finite, invalid};
+use super::{finite, invalid, SubsetOperatorOptions};
 use crate::subdomain_tree_tn::{
     ensure_center, ensure_same_dtype, ensure_same_topology, ensure_same_tree_structure,
 };
@@ -20,7 +20,12 @@ enum Patch<V: Clone + Hash + Eq + Send + Sync + Debug> {
     Product(Box<(SubDomainTreeTN<V>, SubDomainTreeTN<V>)>),
 }
 
-/// Immutable orthogonal target and its pinned global L2 norm.
+/// Immutable orthogonal target and its pinned reference scale.
+///
+/// The scale is the exact L2 norm for [`Self::from_partition`] and
+/// [`Self::from_tensor_products`]. [`Self::from_subset_operator`] instead pins
+/// the preimage scale times an operator amplification factor, which is an upper
+/// bound for a general operator; see its documentation.
 ///
 /// Orthogonality is established through disjoint projector supports, never a
 /// caller-supplied boolean. [`Self::from_partition`] snapshots an existing
@@ -36,7 +41,7 @@ enum Patch<V: Clone + Hash + Eq + Send + Sync + Debug> {
 /// let tensor = IdxTensor::from_dense(vec![DynIndex::new_dyn(2)], vec![3.0, 4.0])?;
 /// let patch = SubDomainTreeTN::from_treetn(TreeTN::from_tensors(vec![tensor], vec![0usize])?)?;
 /// let target = ReconstructionTarget::from_partition(&PartitionedTreeTN::from_subdomain(patch)?)?;
-/// assert!((target.reference_norm() - 5.0).abs() < 1e-12);
+/// assert!((target.reference_scale() - 5.0).abs() < 1e-12);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]
@@ -46,7 +51,7 @@ where
 {
     patches: Vec<(Projector, Patch<V>)>,
     pub(super) network: Option<SiteIndexNetwork<V, DynIndex>>,
-    norm: f64,
+    scale: f64,
 }
 
 impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
@@ -63,7 +68,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// ```
     /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, reconstruction::ReconstructionTarget};
     /// let target = ReconstructionTarget::from_partition(&PartitionedTreeTN::<usize>::new())?;
-    /// assert_eq!(target.reference_norm(), 0.0);
+    /// assert_eq!(target.reference_scale(), 0.0);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn from_partition(partition: &PartitionedTreeTN<V>) -> Result<Self> {
@@ -71,10 +76,10 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         let mut patches: Vec<_> = partition.values().collect();
         patches.sort_by(|a, b| a.projector().canonical_cmp(b.projector()));
         let network = patches.first().map(|p| p.site_index_network().clone());
-        let mut norm = 0.0_f64;
+        let mut scale = 0.0_f64;
         let mut stored = Vec::with_capacity(patches.len());
         for patch in patches {
-            norm = finite(norm.hypot(finite(patch.norm()?)?))?;
+            scale = finite(scale.hypot(finite(patch.norm()?)?))?;
             stored.push((
                 patch.projector().clone(),
                 Patch::Stored(Box::new(patch.clone())),
@@ -83,7 +88,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         Ok(Self {
             patches: stored,
             network,
-            norm,
+            scale,
         })
     }
 
@@ -119,7 +124,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// let target = ReconstructionTarget::from_tensor_products(vec![
     ///     (make(vec![3.0, 4.0])?, make(vec![0.0, 2.0])?),
     /// ])?;
-    /// assert!((target.reference_norm() - 10.0).abs() < 1e-12);
+    /// assert!((target.reference_scale() - 10.0).abs() < 1e-12);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn from_tensor_products(
@@ -165,18 +170,18 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         if !Projector::are_disjoint(&projectors) {
             return Err(PartitionedTreeTNError::OverlappingProjectors);
         }
-        let mut norm = 0.0_f64;
+        let mut scale = 0.0_f64;
         let mut patches = Vec::with_capacity(pairs.len());
         for ((left, right), projector) in pairs.into_iter().zip(projectors) {
             let patch_norm = finite(finite(left.norm()?)? * finite(right.norm()?)?)?;
-            norm = finite(norm.hypot(patch_norm))?;
+            scale = finite(scale.hypot(patch_norm))?;
             patches.push((projector, Patch::Product(Box::new((left, right)))));
         }
         patches.sort_by(|a, b| a.0.canonical_cmp(&b.0));
         Ok(Self {
             patches,
             network,
-            norm,
+            scale,
         })
     }
 
@@ -191,14 +196,26 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     ///
     /// The selection may skip nodes (noncontiguous indices) and each selected
     /// index may share its tree node with spectator site indices, which keep
-    /// their identity, dimension, and node assignment. Images of the preimage's
-    /// disjoint patches generally overlap, so the global norm is accumulated from
-    /// the separate images as `sum_p ||S_p||^2 + 2 Re sum_{p<q} <S_p, S_q>`
-    /// instead of inherited from the preimage norm, assembled from image norm
-    /// squares, or measured from a direct sum of the images. That keeps the
-    /// pinned global allowance correct for any operator, including non-unitary
-    /// ones, without rebuilding the global-rank bottleneck. The pair term costs
-    /// `O(M^2)` network inner products for `M` images.
+    /// their identity, dimension, and node assignment.
+    ///
+    /// [`SubsetOperatorOptions::unitary`] selects how the reference scale is
+    /// derived. `false` (the default) multiplies the preimage's
+    /// [`Self::reference_scale`] by the selected-space operator's Frobenius
+    /// (Hilbert--Schmidt) norm, which upper-bounds its induced amplification.
+    /// `true` is a caller guarantee that the operator preserves the L2 norm, so
+    /// the amplification factor is exactly `1`. For an `N`-dimensional unitary
+    /// the Frobenius norm is `sqrt(N)` while the induced 2-norm is `1`; the
+    /// option assumes the latter and does not assert a unit Frobenius norm.
+    /// Spectator identity factors are neither materialized nor counted, because
+    /// `||A ⊗ I||_2 = ||A||_2 <= ||A||_F`. Successive applications multiply
+    /// these amplification factors instead of recomputing an output norm.
+    ///
+    /// The transformed images are never summed into one network and their
+    /// output norm is never measured. For a general operator the returned scale
+    /// is therefore a norm-based upper bound and `rtol` is relative to that
+    /// scale, not to `||A x||_2`; the two coincide for a unitary acting on an
+    /// exactly known input scale. Each image keeps only its spectator
+    /// constraints.
     ///
     /// The operator is applied exactly with the local naive path; this entry
     /// point accepts no truncating apply options, so the prepared target carries
@@ -214,14 +231,16 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// not match the operator's node count, repeats an index, or selects indices
     /// on one tree node (transform those separately), and
     /// [`PartitionedTreeTNError::NonFiniteAdaptiveValue`] or backend errors from
-    /// patch materialization, application, summation, and norms.
+    /// patch materialization, application, the operator's Frobenius norm, and
+    /// scaling.
     ///
     /// # Examples
     /// ```
     /// use std::collections::HashMap;
     /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_partitionedtreetn::{
-    ///     reconstruction::ReconstructionTarget, PartitionedTreeTN, SubDomainTreeTN,
+    ///     reconstruction::{ReconstructionTarget, SubsetOperatorOptions},
+    ///     PartitionedTreeTN, SubDomainTreeTN,
     /// };
     /// use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
     ///
@@ -255,23 +274,32 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// );
     /// let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
     ///
+    /// // The default scales by the operator's Frobenius norm sqrt(2).
     /// let target = ReconstructionTarget::from_subset_operator(
-    ///     &preimage, &0, &operator, &[site])?;
-    /// assert!((target.reference_norm() - 5.0).abs() < 1e-12);
+    ///     &preimage, &0, &operator, &[site.clone()], &SubsetOperatorOptions::default())?;
+    /// assert!((target.reference_scale() - 5.0 * 2.0_f64.sqrt()).abs() < 1e-12);
+    ///
+    /// // A caller that guarantees unitarity keeps the preimage scale.
+    /// let unitary = ReconstructionTarget::from_subset_operator(
+    ///     &preimage, &0, &operator, &[site], &SubsetOperatorOptions { unitary: true })?;
+    /// assert!((unitary.reference_scale() - 5.0).abs() < 1e-12);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    ///
+    /// [`SubsetOperatorOptions::unitary`]: super::SubsetOperatorOptions::unitary
     pub fn from_subset_operator(
         preimage: &Self,
         center: &V,
         operator: &LinearOperator<IdxTensor, V>,
         selection: &[DynIndex],
+        options: &SubsetOperatorOptions,
     ) -> Result<Self> {
         if preimage.patches.is_empty() {
             if selection.is_empty() {
                 return Ok(Self {
                     patches: Vec::new(),
                     network: None,
-                    norm: 0.0,
+                    scale: 0.0,
                 });
             }
             return Err(invalid(
@@ -352,38 +380,21 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             images.push(SubDomainTreeTN::new(data, projector)?);
         }
 
-        // Images may overlap, so the global norm is not the Euclidean norm of
-        // the image norms. Accumulate the scalar identity
-        //     ||sum_p S_p||^2 = sum_p ||S_p||^2 + 2 Re sum_{p<q} <S_p, S_q>
-        // from the separate images. Do not form the direct sum: TreeTN addition
-        // adds bond dimensions, so M images with bond dimension chi would build
-        // an intermediate of bond dimension up to M * chi before reconstruction
-        // starts, which is the global-rank bottleneck the patched representation
-        // exists to avoid. The pair loop is O(M^2) network inner products, and
-        // the exact identity is nonnegative, so a negative accumulation is only
-        // floating-point cancellation and is clamped to zero.
-        let mut squared = 0.0_f64;
-        for image in &images {
-            squared = finite(squared + finite(image.norm_squared()?)?)?;
-        }
-        let mut cross = 0.0_f64;
-        for p in 0..images.len() {
-            for q in (p + 1)..images.len() {
-                cross += images[p].inner(&images[q])?.real();
-                if !cross.is_finite() {
-                    return Err(PartitionedTreeTNError::NonFiniteAdaptiveValue);
-                }
-            }
-        }
-        let norm_squared = squared + 2.0 * cross;
-        if !norm_squared.is_finite() {
-            return Err(PartitionedTreeTNError::NonFiniteAdaptiveValue);
-        }
-        let norm = if norm_squared > 0.0 {
-            norm_squared.sqrt()
+        // The output norm is deliberately not measured: doing so would need
+        // either a global direct sum of the images (TreeTN addition adds bond
+        // dimensions and restores the global-rank bottleneck) or a
+        // pairwise-overlap Gram sum (O(M^2) and cancellation-prone). Scale the
+        // preimage's reference scale by the operator's amplification factor
+        // instead. `unitary = true` is the caller's guarantee of factor 1;
+        // otherwise the selected-space operator's Frobenius norm is a norm-based
+        // upper bound. Successive applications multiply these factors.
+        let amplification = if options.unitary {
+            1.0
         } else {
-            0.0
+            // `TreeTN::norm` canonicalizes a clone; the MPO is gauge-invariant.
+            finite(operator.mpo().clone().norm()?)?
         };
+        let scale = finite(amplification * preimage.scale)?;
         let mut patches: Vec<_> = images
             .into_iter()
             .map(|image| {
@@ -396,21 +407,21 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         Ok(Self {
             patches,
             network: preimage.network.clone(),
-            norm,
+            scale,
         })
     }
 
-    /// Return the original target L2 norm, fixed at construction.
+    /// Return the original target L2 scale, fixed at construction.
     ///
     /// # Examples
     /// ```
     /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, reconstruction::ReconstructionTarget};
     /// let target = ReconstructionTarget::from_partition(&PartitionedTreeTN::<usize>::new())?;
-    /// assert_eq!(target.reference_norm(), 0.0);
+    /// assert_eq!(target.reference_scale(), 0.0);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn reference_norm(&self) -> f64 {
-        self.norm
+    pub fn reference_scale(&self) -> f64 {
+        self.scale
     }
 
     pub(super) fn materialize_terms(&self, center: &V) -> Result<Vec<SubDomainTreeTN<V>>> {

@@ -16,7 +16,7 @@ An immutable target is supplied as mutually disjoint patches. Thus
 independent external indices, `||T_p|| = ||A_p|| ||B_p||`. Target constructors
 validate supports, topology, full index identities and dimensions, scalar
 homogeneity, and finite norms before reconstruction. The norm is derived from
-the target; no public `reference_norm` override or `orthogonal: true` flag is
+the target; no public `reference_scale` override or `orthogonal: true` flag is
 accepted.
 
 `from_partition` snapshots existing data. `from_tensor_products` retains factor
@@ -40,7 +40,7 @@ roundoff; it is not a user-requested approximation.
 - `ReconstructionReport`: reference norm, allowance, measured error bound,
   region/term/rank counts, accepted splits and final-region merges.
 
-The absolute allowance is `delta = max(atol, rtol * target.reference_norm())`.
+The absolute allowance is `delta = max(atol, rtol * target.reference_scale())`.
 The reference never changes after dropping, splitting, merging, or rounding.
 Zero targets are valid. Empty targets have no topology; nonempty zero targets
 still validate the requested center and site identities.
@@ -178,30 +178,33 @@ The map is `F_selected ⊗ I_spectators`, so exact QFT preserves orthogonality a
 the original global norm even though transformed supports overlap. The
 constructor nonetheless accepts an arbitrary operator, which need not be unitary
 and need not map the preimage's disjoint patches to orthogonal images. It
-therefore neither inherits the preimage norm nor assembles the global norm from
-image norm squares. It keeps the images separate - dropping only the selected
-constraints that no longer hold - and accumulates
-`||sum_p S_p||^2 = sum_p ||S_p||^2 + 2 Re sum_{p<q} <S_p, S_q>`. That is the
-correct norm for any operator, including non-unitary ones, and it assumes
-neither disjoint supports nor orthogonality. The cross-term loop is `O(M^2)`
-network inner products for `M` images, and its cancellation is bounded at zero
-because the identity is nonnegative. Building the direct sum of all images is
-explicitly rejected: TreeTN addition adds bond dimensions, so it would recreate
-the global-rank bottleneck before adaptive reconstruction starts.
+therefore never measures the transformed output norm: neither by summing the
+images into one network, nor by a pairwise-overlap Gram sum.
 
-The operator is applied with the local exact naive path; this entry point accepts
-no truncating apply options, so the prepared target carries no application error
-beyond backend roundoff. Approximation of the QFT MPO and of its application is
-accounted separately from reconstruction:
-`ReconstructionReport::error_bound` only bounds the reconstruction of the
-prepared images. The construction error of the operator, for example
-`FourierOptions::tolerance` and `max_bond_dim`, stays the caller's
-responsibility and is never folded into that bound. Exposing approximate
-application with its own retained error allowance remains follow-up work.
-Integration tests bind a real Fourier operator and check the documented sign,
-normalization, output ordering, and subset behaviour against a dense
-small-system oracle, an index-aligned round-trip comparison, and a
-non-unitary-norm regression.
+Instead it pins a reference scale from the operator itself,
+
+```text
+s = 1                 if unitary is specified
+s = ||A||_F           otherwise
+reference_scale = s * ||preimage||
+absolute_tolerance = max(atol, rtol * reference_scale)
+```
+
+where `A` is the operator restricted to the selected sites. Spectator identity
+factors are neither materialized nor counted, because
+`||A ⊗ I||_2 = ||A||_2 <= ||A||_F`. For an `N`-dimensional unitary the Frobenius
+norm is `sqrt(N)` while the induced 2-norm is `1`; `unitary = true` assumes the
+latter as a caller guarantee and does not assert a unit Frobenius norm.
+Successive applications multiply these factors rather than recomputing an output
+norm. The option is therefore a contract mark, not a checked property.
+
+For a general operator the reference scale is a norm-based upper bound, so `rtol`
+is relative to that scale and not to `||A x||_2`. This is deliberate: a measured
+output norm would require either the forbidden global direct sum or a
+cancellation-prone `O(M^2)` overlap sum. The two scales coincide for a unitary
+acting on an exactly known input scale. The images stay separate with only their
+spectator constraints, and operator-construction error, including approximate-QFT
+error, remains separate from the reconstruction bound.
 
 QFT also supplies the input-merge/output-refine schedule and its bit geometry.
 The complementary-area invariant of the Fourier algorithm is not a generic

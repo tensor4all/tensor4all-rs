@@ -24,7 +24,7 @@ The separate `reconstruction` module accepts an immutable
 `ReconstructionTarget`, a `ReconstructionTolerance { rtol, atol }`, and
 `ReconstructionOptions`. It pins the target's L2 norm and accepts local
 approximations only after checking their difference-network norms against
-the fixed allowance `max(atol, rtol * reference_norm)`.
+the fixed allowance `max(atol, rtol * reference_scale)`.
 
 `ReconstructionTarget::from_partition` snapshots disjoint eager patches.
 `from_tensor_products` retains independent factor pairs on the same named tree
@@ -48,11 +48,13 @@ QTT intervals, independently of the indices' placement on the tree.
 linear operator (for example a quantics Fourier transform built elsewhere) on an
 ordered subset of full site indices. Spectators keep their identity, dimension,
 and node assignment. Two selected indices on one tree node are rejected. The
-operator is applied exactly, the images stay separate, and the prepared target's
-norm is accumulated from the image norms and their pairwise overlaps, so
-non-unitary operators get their correct norm without summing the images into one
-network; the operator's own construction error stays separate from the reported
-reconstruction bound.
+transformed output norm is never measured and the images are never summed into
+one network. `SubsetOperatorOptions::unitary` instead pins the amplification
+factor: `false` (default) uses the selected-space operator's Frobenius norm as an
+upper bound, `true` is a caller guarantee that the operator preserves the L2
+norm (factor one). The preimage reference scale is multiplied by that factor and
+successive applications propagate it. The operator's own construction error
+stays separate from the reported reconstruction bound.
 
 Run the asserted example with
 `cargo run --release -p tensor4all-partitionedtreetn --example reconstruct`.
