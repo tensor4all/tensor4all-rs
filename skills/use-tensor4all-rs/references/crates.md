@@ -204,7 +204,11 @@ site indices per node, and does not implement adaptive interpolation.
   residual fits an equal share of the allowance, so the measured `error_bound`
   never exceeds the allowance. A contribution is dropped only when its measured norm
   fits its share, reported through `dropped_terms`/`dropped_error`, and exceeding
-  `max_terms` returns a resource-limit error. `error_bound` records every measured
+  `max_terms` returns a resource-limit error. `coordinate_groups` supplies several
+  coordinate axes explicitly (each group states its input and output significance
+  order; one level advances every non-exhausted axis by one bit, so two axes combine
+  four input children and produce four output children), and the transform is never
+  padded. `error_bound` records every measured
   component once, at the level and region where it was measured, so it does not grow
   with the number of refined regions. `MergeRefineOptions::apply_options` opts into a truncating operator
   application: the schedule applies both exactly and with those options, measures

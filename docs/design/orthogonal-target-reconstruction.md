@@ -155,8 +155,9 @@ The QFT selection is independent of reconstruction's `patch_order`.
 Input bits are ordered from most to least significant. A full transform is
 the same interface with all desired axes selected. Multidimensional axes each
 carry their own ordered subset and are applied as separate calls; normalization
-is unitary on selected axes. Do not silently add padding or change grid length:
-padding needs an explicit domain/embedding contract.
+is unitary on selected axes. The transform is never silently padded and its length
+is never changed: the operator's input and output are the same selected indices, so a
+caller that needs a different output space owns that embedding outside this API.
 
 ### Bit significance, site placement, and patching order
 
@@ -220,7 +221,7 @@ offered as detection of that prohibited path.
 QFT also supplies the input-merge/output-refine schedule and its bit geometry.
 The complementary-area invariant of the Fourier algorithm is not a generic
 reconstruction invariant. The current greedy reconstruction entry point does
-not claim to implement that schedule, automatic zero-padding, or QFT itself.
+not claim to implement that schedule or QFT itself.
 
 ## Level-coupled merge-refine schedule
 
@@ -393,12 +394,30 @@ arbitrary data, and operator-construction error stays outside every bound.
 
 ### Deferred boundaries
 
-Per-input-branch refinement depths with lazy reconciliation and multi-coordinate
-groups with a synchronized multidimensional level remain follow-up work, because the
-latter needs an explicit axis schedule and a per-axis output placement that the
-current one-axis operator contract does not define. Unequal input leaf depths are
-supported through the dyadic prefix-code contract described above, and item dropping
-under the global policy is implemented as described above.
+Per-input-branch refinement depths with lazy reconciliation remain follow-up work.
+Unequal input leaf depths are supported through the dyadic prefix-code contract
+described above, and item dropping under the global policy is implemented as described
+above.
+
+### Coordinate axes
+
+Several coordinate axes can be transformed in one synchronized level.
+`MergeRefineOptions::coordinate_groups` supplies them explicitly, and each
+`CoordinateGroup` lists its axis' selected indices in input significance order and,
+separately, in output significance order, so the placement is stated by the caller
+rather than inferred. The groups must assign every selected index exactly once, and a
+group's inputs and outputs must be the same indices. `None`, the default, treats
+`selection` as one axis whose output order reverses its input order, which is the
+one-axis subset-operator convention.
+
+One level advances every non-exhausted axis by one bit: it merges that axis' next
+input bit and fixes that axis' next output bit. Two axes therefore combine four input
+children and produce four output children, and the pairwise sums are measured
+individually as for one axis. A two-axis caller composes per-axis one-dimensional
+operators (for example with `compose_exclusive_linear_operators`) and states each
+axis' output order accordingly; the two-axis regression applies such a composed
+operator and compares it against the two one-dimensional transforms applied in
+sequence.
 
 Approximate operator application is available as an opt-in on the schedule:
 `MergeRefineOptions::apply_options` applies the operator with the caller's

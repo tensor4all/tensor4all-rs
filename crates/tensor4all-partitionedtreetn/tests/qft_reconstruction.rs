@@ -14,7 +14,8 @@ use tensor4all_partitionedtreetn::{
 };
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 use tensor4all_treetn::{
-    apply_linear_operator_to_indices, ApplyOptions, IndexMapping, LinearOperator,
+    apply_linear_operator_to_indices, bind_linear_operator_indices,
+    compose_exclusive_linear_operators, ApplyOptions, IndexMapping, LinearOperator,
     RestructureOptions, SiteIndexNetwork,
 };
 
@@ -2026,4 +2027,200 @@ fn merge_refine_schedule_bound_does_not_grow_with_the_level_count() {
             report.error_bound
         );
     }
+}
+
+/// A one-dimensional Fourier transform whose operator nodes are `nodes`, bound to
+/// the corresponding state indices.
+fn axis_fourier_operator(nodes: &[usize], sites: &[DynIndex]) -> LinearOperator<IdxTensor, usize> {
+    let renamed: Vec<(usize, usize)> = (0..nodes.len())
+        .map(|position| (position, nodes[position]))
+        .collect();
+    let operator = quantics_fourier_operator(nodes.len(), FourierOptions::default())
+        .expect("fourier")
+        .rename_nodes(&renamed)
+        .expect("rename");
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    for (node, site) in nodes.iter().zip(sites) {
+        inputs.push((
+            operator
+                .get_input_mapping(node)
+                .expect("input mapping")
+                .true_index
+                .clone(),
+            site.clone(),
+        ));
+        outputs.push((
+            operator
+                .get_output_mapping(node)
+                .expect("output mapping")
+                .true_index
+                .clone(),
+            site.clone(),
+        ));
+    }
+    bind_linear_operator_indices(&operator, &inputs, &outputs).expect("bind")
+}
+
+/// The product of two one-dimensional Fourier transforms, composed into one
+/// operator over a four-node chain: axis `0` on `sites[0..2]`, axis `1` on
+/// `sites[2..4]`.
+fn two_axis_fourier_operator(sites: &[DynIndex]) -> LinearOperator<IdxTensor, usize> {
+    let axis_a = axis_fourier_operator(&[0, 1], &sites[0..2]);
+    let axis_b = axis_fourier_operator(&[2, 3], &sites[2..4]);
+    let mut target: SiteIndexNetwork<usize, DynIndex> = SiteIndexNetwork::new();
+    for (node, operator) in [(0usize, &axis_a), (1, &axis_a), (2, &axis_b), (3, &axis_b)] {
+        if !target.has_node(&node) {
+            target.add_node(node, HashSet::new()).expect("target node");
+        }
+        for mapping in operator.get_input_mappings(&node).expect("input mappings") {
+            target
+                .add_site_index(&node, mapping.internal_index.clone())
+                .expect("site index");
+        }
+        for mapping in operator
+            .get_output_mappings(&node)
+            .expect("output mappings")
+        {
+            target
+                .add_site_index(&node, mapping.internal_index.clone())
+                .expect("site index");
+        }
+    }
+    target.add_edge(&0usize, &1usize).expect("edge");
+    target.add_edge(&1usize, &2usize).expect("edge");
+    target.add_edge(&2usize, &3usize).expect("edge");
+    compose_exclusive_linear_operators(&target, &[&axis_a, &axis_b], &HashMap::new())
+        .expect("composition")
+}
+
+#[test]
+fn merge_refine_schedule_transforms_two_coordinate_axes_in_one_level() {
+    let sites: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..16)
+        .map(|m| Complex64::new(1.0 + (m as f64 * 0.4).sin(), 0.1 * m as f64))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = two_axis_fourier_operator(&sites);
+    let groups = vec![
+        CoordinateGroup::new(sites[0..2].to_vec()),
+        CoordinateGroup::new(sites[2..4].to_vec()),
+    ];
+
+    // Reference: the two one-dimensional transforms applied in sequence.
+    let mut reference = tree.clone();
+    for (nodes, axis_sites) in [([0usize, 1], &sites[0..2]), ([2usize, 3], &sites[2..4])] {
+        let axis = axis_fourier_operator(&nodes, axis_sites);
+        reference =
+            apply_linear_operator_to_indices(&axis, &reference, &[], &[], ApplyOptions::naive())
+                .expect("reference apply");
+    }
+    let reference_dense = reference.to_dense().expect("dense");
+    let reference_indices = reference_dense.indices().to_vec();
+    let reference_values = reference_dense.to_vec::<Complex64>().expect("vector");
+
+    // One level fixes the most significant frequency bit of each axis: with the
+    // documented per-axis reversal those sit on the axes' last input indices, so a
+    // two-axis level produces four output regions.
+    let partial = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance {
+            rtol: 1e-12,
+            atol: 0.0,
+        },
+        &MergeRefineOptions {
+            coordinate_groups: Some(groups.clone()),
+            output_depth: Some(1),
+            max_work_items: 64,
+            ..Default::default()
+        },
+    )
+    .expect("partial schedule");
+    assert_eq!(partial.report().region_count, 4);
+    assert_eq!(partial.report().work_items_per_level, vec![16, 16]);
+    for (projector, _) in partial.regions() {
+        assert!(projector.get(&sites[1]).is_some());
+        assert!(projector.get(&sites[3]).is_some());
+        assert!(projector.get(&sites[0]).is_none());
+        assert!(projector.get(&sites[2]).is_none());
+    }
+
+    // The fully refined run reproduces the product transform as a strict partition.
+    let full = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance {
+            rtol: 1e-12,
+            atol: 0.0,
+        },
+        &MergeRefineOptions {
+            coordinate_groups: Some(groups),
+            max_work_items: 64,
+            ..Default::default()
+        },
+    )
+    .expect("full schedule");
+    assert_eq!(full.report().applied_operator_count, 16);
+    assert_eq!(full.report().region_count, 16);
+    assert_eq!(full.report().error_bound, 0.0);
+    let partition = full.into_partition().expect("partition");
+    let (indices, dense) = dense_of(&partition);
+    let reference_values = reorder(&reference_values, &reference_indices, &indices);
+    let error = max_error(&dense, &reference_values);
+    assert!(error < TOL, "max error {error:e}");
+}
+
+#[test]
+fn merge_refine_schedule_rejects_inconsistent_coordinate_groups() {
+    let sites: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = vec![Complex64::new(1.0, 0.0); 16];
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = two_axis_fourier_operator(&sites);
+    let tolerance = ReconstructionTolerance::default();
+
+    // A group whose outputs are not its inputs is rejected.
+    let error = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        tolerance,
+        &MergeRefineOptions {
+            coordinate_groups: Some(vec![CoordinateGroup::with_outputs(
+                sites[0..2].to_vec(),
+                sites[2..4].to_vec(),
+            )]),
+            ..Default::default()
+        },
+    )
+    .expect_err("inputs and outputs must be the same indices");
+    assert!(error.to_string().contains("same full indices"));
+
+    // Groups that do not assign every selected index once are rejected.
+    let error = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        tolerance,
+        &MergeRefineOptions {
+            coordinate_groups: Some(vec![CoordinateGroup::new(sites[0..2].to_vec())]),
+            ..Default::default()
+        },
+    )
+    .expect_err("every selected index must be assigned exactly once");
+    assert!(error
+        .to_string()
+        .contains("assign every selected index exactly once"));
 }

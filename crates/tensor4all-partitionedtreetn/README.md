@@ -89,8 +89,10 @@ with the number of refined regions. Exceeding `max_terms` returns a
 resource-limit error. `MergeRefineOptions::apply_options` opts into a
 truncating application whose measured deviation from the exact application is
 charged to the same bound, and an application error above the allowance is
-rejected. Nonuniform input trees and automatic zero-padding remain separate
-follow-up work; padding is never applied silently.
+rejected. Several coordinate axes may be transformed in one synchronized level through
+`MergeRefineOptions::coordinate_groups`, each stating its own input and output order;
+the transform is never padded and its length never changes. Per-input-branch refinement
+depths remain follow-up work.
 
 ## Quick start
 

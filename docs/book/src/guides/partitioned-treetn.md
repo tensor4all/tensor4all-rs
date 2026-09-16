@@ -197,7 +197,12 @@ whole output domain is ever assembled and each computed object is reused by its
 descendants.
 
 `MergeRefineOptions::output_depth` stops after that many levels; `None` (the
-default) refines every selected bit. `MergeRefineOptions::target_bond_dim` is a
+default) refines every selected bit. `MergeRefineOptions::coordinate_groups` supplies
+several coordinate axes explicitly: each `CoordinateGroup` gives that axis' selected
+indices in input order and, separately, in output order, one level advances every
+non-exhausted axis by one bit, and a two-axis level therefore combines four input
+children and produces four output children. The default `None` treats `selection` as
+one axis with the documented reversed placement. `MergeRefineOptions::target_bond_dim` is a
 soft rank goal: `None` keeps the trajectory uniform and exact, while `Some(goal)`
 makes it adaptive. An output region is then refined only when its retained terms
 exceed the goal and refining lowers its maximum retained rank, a merged pair is
@@ -222,10 +227,10 @@ combine by the Euclidean norm, while components of different levels can be neste
 add by the triangle inequality. The bound therefore never exceeds the allowance and
 does not grow with the number of refined regions. It excludes operator-construction
 error and any error of a caller-approximated operator outside the charged application
-deviation. Multi-coordinate groups with a synchronized multidimensional level,
-per-input-branch refinement depths with lazy reconciliation, and benchmark evidence in
-the intended patched-input regime remain follow-up work, and automatic padding is a
-separate opt-in domain policy that is never applied silently.
+deviation. Per-input-branch refinement depths with lazy reconciliation and benchmark
+evidence in the intended patched-input regime remain follow-up work. The transform is
+never padded and its length never changes: the operator's input and output are the
+same selected indices.
 
 ```rust
 # use std::collections::HashMap;
