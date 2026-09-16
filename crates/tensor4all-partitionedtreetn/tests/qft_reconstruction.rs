@@ -9,7 +9,8 @@ use std::collections::{HashMap, HashSet};
 use num_complex::Complex64;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_partitionedtreetn::{
-    reconstruction::*, PartitionedTreeTN, Projector, SubDomainTreeTN, TreeTN,
+    reconstruction::*, PartitionedTreeTN, PartitionedTreeTNError, Projector, SubDomainTreeTN,
+    TreeTN,
 };
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 use tensor4all_treetn::{
@@ -878,6 +879,7 @@ fn schedule_exact(
         },
         &MergeRefineOptions {
             target_bond_dim: None,
+            max_terms: 1 << 20,
             output_depth,
             max_work_items,
         },
@@ -1238,9 +1240,42 @@ fn schedule_rank_limited(
             output_depth: None,
             max_work_items: 4 * leaves,
             target_bond_dim: Some(target_bond_dim),
+            ..Default::default()
         },
     )
     .expect("schedule")
+}
+
+/// Dense value of a schedule result with all of its retained terms summed, in one
+/// canonical index order. Adaptive results keep overlapping terms in one region,
+/// so they are not always a strict partition.
+fn dense_of_regions(result: &MergeRefineResult<usize>) -> (Vec<DynIndex>, Vec<Complex64>) {
+    let mut canonical: Option<Vec<DynIndex>> = None;
+    let mut total: Option<Vec<Complex64>> = None;
+    for (_, terms) in result.regions() {
+        for term in terms {
+            let dense = term.data().to_dense().expect("dense");
+            let term_indices = dense.indices().to_vec();
+            let values = dense.to_vec::<Complex64>().expect("vector");
+            match &canonical {
+                None => {
+                    canonical = Some(term_indices);
+                    total = Some(values);
+                }
+                Some(indices) => {
+                    let aligned = reorder(&values, &term_indices, indices);
+                    let accumulator = total.as_mut().expect("accumulator");
+                    for (target, value) in accumulator.iter_mut().zip(aligned) {
+                        *target += value;
+                    }
+                }
+            }
+        }
+    }
+    (
+        canonical.expect("at least one retained term"),
+        total.expect("accumulator"),
+    )
 }
 
 #[test]
@@ -1272,7 +1307,7 @@ fn merge_refine_schedule_truncates_within_the_global_allowance() {
     assert!(report.error_bound <= report.absolute_tolerance);
 
     // The reported bound covers the deviation from the dense normalized DFT.
-    let (indices, dense) = dense_of(&limited.into_partition().expect("partition"));
+    let (indices, dense) = dense_of_regions(&limited);
     let expected = dft_oracle(&indices, &sites, &sites, &values);
     let oracle_error = max_error(&dense, &expected);
     assert!(
@@ -1302,9 +1337,11 @@ fn merge_refine_schedule_zero_tolerance_keeps_the_exact_trajectory() {
     assert_eq!(report.compressions, 0);
     assert_eq!(report.error_bound, 0.0);
     assert_eq!(report.absolute_tolerance, 0.0);
-    assert_eq!(report.max_bond_dim, exact.report().max_bond_dim);
+    // No truncation is affordable, so the merge policy keeps the operands as
+    // separate terms; their ranks are at most the summed ranks of the exact run.
+    assert!(report.max_bond_dim <= exact.report().max_bond_dim);
 
-    let (indices, dense) = dense_of(&limited.into_partition().expect("partition"));
+    let (indices, dense) = dense_of_regions(&limited);
     let (exact_indices, exact_dense) = dense_of(&exact.into_partition().expect("partition"));
     let exact_dense = reorder(&exact_dense, &exact_indices, &indices);
     assert!(max_error(&dense, &exact_dense) < 1e-12);
@@ -1320,9 +1357,89 @@ fn merge_refine_schedule_keeps_exact_cancellation_with_a_rank_goal() {
 
     let result = schedule_rank_limited(&preimage, &operator, &[site], 0.5, 1);
     let report = result.report();
-    // A zero sum is already rank one, so no probe is needed and no error accrues.
-    assert_eq!(report.compression_attempts, 0);
+    // Exact cancellation costs no accuracy budget: the retained superposition is
+    // the zero function even though its individual terms are not zero.
     assert_eq!(report.error_bound, 0.0);
-    let partition = result.into_partition().expect("partition");
-    assert!(partition.norm().expect("norm") < 1e-12);
+    assert!(report.term_count > 0);
+    let (_, dense) = dense_of_regions(&result);
+    assert!(norm_of(&dense) < 1e-12, "residual {}", norm_of(&dense));
+}
+
+#[test]
+fn merge_refine_schedule_stops_refinement_once_the_rank_goal_is_met() {
+    let r = 3usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| {
+            if m == 3 {
+                Complex64::new(1.0, 0.0)
+            } else {
+                Complex64::new(0.0, 0.0)
+            }
+        })
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+
+    let result = schedule_rank_limited(&preimage, &operator, &sites, 1e-3, 1);
+    let report = result.report().clone();
+
+    // The refined plane wave reaches rank one after one level, so the schedule
+    // stops there instead of forcing the preset `2^r` output blocks.
+    assert_eq!(report.refined_regions, 1, "{report:?}");
+    assert!(report.stopped_regions >= 2, "{report:?}");
+    assert_eq!(report.region_count, 2);
+    assert!(report.region_count < 1usize << r);
+    assert_eq!(report.max_bond_dim, 1);
+
+    // The retained superposition is still the exact normalized DFT.
+    let (indices, dense) = dense_of_regions(&result);
+    let expected = dft_oracle(&indices, &sites, &sites, &values);
+    let residual = max_error(&dense, &expected);
+    assert!(
+        residual <= report.error_bound + 1e-12,
+        "residual {residual:e} exceeds the bound {:e}",
+        report.error_bound
+    );
+}
+
+#[test]
+fn merge_refine_schedule_rejects_a_term_budget_it_cannot_keep() {
+    let r = 2usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| Complex64::new(m as f64 + 1.0, 0.0))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+
+    // Four input leaves cannot be represented within a two-term budget.
+    let error = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance {
+            rtol: 1e-3,
+            atol: 0.0,
+        },
+        &MergeRefineOptions {
+            output_depth: None,
+            max_work_items: 16,
+            target_bond_dim: Some(1),
+            max_terms: 2,
+        },
+    )
+    .expect_err("two terms cannot hold four leaves");
+    assert!(matches!(
+        error,
+        PartitionedTreeTNError::ResourceLimit {
+            limit: "max_terms",
+            ..
+        }
+    ));
+    assert!(error.to_string().contains("max_terms"));
 }

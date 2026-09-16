@@ -72,6 +72,19 @@ pub enum PartitionedTreeTNError {
         reason: &'static str,
     },
 
+    /// A scheduling resource limit was reached before a valid result existed.
+    #[error(
+        "{operation} reached its {limit} limit of {value}; raise the limit or reduce the request"
+    )]
+    ResourceLimit {
+        /// Operation whose budget was exhausted.
+        operation: &'static str,
+        /// Name of the exhausted option.
+        limit: &'static str,
+        /// Observed value when the limit was crossed.
+        value: usize,
+    },
+
     /// A checked patch-volume product or sum overflowed `usize`.
     #[error("partition volume overflowed usize; use smaller site dimensions or fewer patches")]
     VolumeOverflow,
@@ -230,6 +243,14 @@ mod tests {
                 reason: "cutoff must be nonnegative",
             },
             "invalid merge options: cutoff must be nonnegative",
+        );
+        assert_display(
+            PartitionedTreeTNError::ResourceLimit {
+                operation: "merge-refine scheduling",
+                limit: "max_terms",
+                value: 2048,
+            },
+            "merge-refine scheduling reached its max_terms limit of 2048; raise the limit or reduce the request",
         );
         assert_display(
             PartitionedTreeTNError::VolumeOverflow,

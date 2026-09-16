@@ -193,22 +193,25 @@ whole output domain is ever assembled and each computed object is reused by its
 descendants.
 
 `MergeRefineOptions::output_depth` stops after that many levels; `None` (the
-default) refines every selected bit and returns a strict partition with one patch
-per output coordinate. `MergeRefineOptions::target_bond_dim` is a soft rank goal:
-`None` keeps the trajectory exact, while `Some(goal)` truncates a merged item only
-toward that goal and only when its measured residual fits the item's share of the
-global allowance, so an unaffordable candidate is retained exactly rather than
-violating the accuracy contract. `MergeRefineReport` records the schedule shape
+default) refines every selected bit. `MergeRefineOptions::target_bond_dim` is a
+soft rank goal: `None` keeps the trajectory uniform and exact, while `Some(goal)`
+makes it adaptive. An output region is then refined only when its retained terms
+exceed the goal and refining lowers its maximum retained rank, a merged pair is
+combined into one term only when combining pays off (otherwise both operands stay
+as separate terms of the region's superposition), and every truncation candidate
+must fit the item's share of the global allowance. An unaffordable or gainless
+candidate is retained exactly rather than violating the accuracy contract, and
+exceeding `MergeRefineOptions::max_terms` returns a resource-limit error. `MergeRefineReport` records the schedule shape
 (`level_count`, `applied_operator_count`, `additions`, `projections`,
-`compression_attempts`, `compressions`, `work_items_per_level`,
-`peak_work_items`) next to the pinned reference scale, the allowance, and the
-measured `error_bound`. The bound adds measured truncation residuals by the
+`compression_attempts`, `compressions`, `work_items_per_level`, `peak_work_items`,
+`refined_regions`, `stopped_regions`) next to the pinned reference scale, the
+allowance, and the measured `error_bound`. The bound adds measured truncation residuals by the
 triangle inequality within a region and combines disjoint regions by the Euclidean
 norm, so it never exceeds the allowance; it excludes operator-construction error
-and the application error of an externally approximated operator. Adaptive
-refinement with a shared error ledger, nonuniform geometry, and benchmark evidence
-remain follow-up work, and automatic padding is a separate opt-in domain policy
-that is never applied silently.
+and the application error of an externally approximated operator. Tighter
+error accounting through a shared ledger, nonuniform geometry, and benchmark
+evidence remain follow-up work, and automatic padding is a separate opt-in domain
+policy that is never applied silently.
 
 ```rust
 # use std::collections::HashMap;

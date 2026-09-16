@@ -193,13 +193,17 @@ site indices per node, and does not implement adaptive interpolation.
   bit `r_t`, restricting to the child region before adding, so no sum over the
   whole output domain is assembled and each object is reused by its descendants.
   `MergeRefineOptions::output_depth` stops early; `None` refines every selected
-  bit and yields a strict partition. `target_bond_dim` is a soft rank goal: `None`
-  keeps the trajectory exact, and `Some(goal)` accepts a truncation only when it
-  strictly lowers the bond dimension and its measured residual fits an equal share
-  of the allowance, so the measured `error_bound` never exceeds the allowance. The
-  `MergeRefineReport` reports `level_count`, `applied_operator_count`, `additions`,
-  `projections`, `compression_attempts`, `compressions`, `work_items_per_level`,
-  `peak_work_items`, region/term counts, `max_bond_dim`,
+  bit. `target_bond_dim` is a soft rank goal: `None` keeps the trajectory uniform
+  and exact, and `Some(goal)` makes it adaptive, refining a region only when that
+  lowers its maximum retained rank and combining a merged pair only when combining
+  pays off (otherwise both operands stay as separate terms). A truncation is
+  accepted only when it strictly lowers the bond dimension and its measured
+  residual fits an equal share of the allowance, so the measured `error_bound`
+  never exceeds the allowance, and exceeding `max_terms` returns a resource-limit
+  error. The `MergeRefineReport` reports `level_count`,
+  `applied_operator_count`, `additions`, `projections`, `compression_attempts`,
+  `compressions`, `work_items_per_level`, `peak_work_items`, `refined_regions`,
+  `stopped_regions`, region/term counts, `max_bond_dim`,
   `max_transient_bond_dim`, stored parameters, the pinned reference scale, the
   allowance, and the measured bound.
 

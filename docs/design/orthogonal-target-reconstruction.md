@@ -314,17 +314,40 @@ derivation and regression rather than by assumption.
 existing `LinearOperator`, ordered coordinate groups, and the explicit dyadic
 geometry. QFT construction stays in `tensor4all-quanticstransform`, which remains
 a path-only cross-layer dev-dependency: this crate keeps no simplett-stack
-runtime dependency. `MergeRefineOptions` selects only the output depth, the work
-limit, and the soft rank goal; `MergeRefineReport` carries the pinned scale, the
-allowance, the measured bound, and the structural counters. Exact scheduling
+runtime dependency. `MergeRefineOptions` selects the output depth, the work
+limit, the soft rank goal, and the retained term budget; `MergeRefineReport`
+carries the pinned scale, the allowance, the measured bound, and the structural
+counters, including the refinement stops. Exact scheduling
 algebra is shared with any operator, while Fourier-specific rank and performance
 expectations are not claimed for arbitrary operators.
 
+### Adaptive refinement
+
+A region's items are a superposition: each retained term is `P_B F P_A w` up to a
+measured bound, and a region's items carry the input prefixes they came from, so
+input ancestry is never inferred from spectator-only projectors and no private
+target field is exposed downstream.
+
+With a rank goal the trajectory becomes adaptive, and the decision is made per
+output region so the final region set stays prefix-free:
+
+- An output region is refined only when its retained terms exceed the goal *and*
+  refining strictly lowers its maximum retained rank. Without that gain the region
+  stops with the input prefixes it already holds, so a rank-one object is not
+  forced into a preset output tiling. A stopped region keeps the input prefixes it
+  had before the discarded probe, whose measured residuals are never charged.
+- Merging a pair combines the two operands into one term only when that strictly
+  lowers the bond dimension against the naive sum; otherwise both stay as separate
+  terms, which keeps the retained ranks small at the cost of a longer term list.
+- Refinement stops are reported (`refined_regions`, `stopped_regions`), and the
+  retained term count is bounded by `max_terms`, whose exhaustion is an explicit
+  resource-limit error rather than a silent accuracy relaxation.
+
 ### Deferred boundaries
 
-Nonuniform input trees, lazy adaptive refinement with superposition lists,
-unequal output depths per branch, multi-coordinate groups, item dropping, and
-benchmarked cost comparisons remain follow-up work. Approximate operator
+Nonuniform input trees, per-input-branch refinement depths with lazy
+reconciliation, multi-coordinate groups, item dropping under the global policy,
+and benchmarked cost comparisons remain follow-up work. Approximate operator
 application with a retained error allowance is separate, and the entry point
 applies exactly and exposes no truncating apply options. Automatic padding stays
 out of the schedule: a later opt-in padding API must define the embedding, the
