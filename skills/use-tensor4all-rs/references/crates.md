@@ -189,9 +189,10 @@ site indices per node, and does not implement adaptive interpolation.
   &SubsetOperatorOptions, tolerance, &MergeRefineOptions)` — level-coupled
   input-merge/output-refine QFT schedule. The preimage must be the `2^d` dyadic
   input leaves of the `d` selected binary indices with identical spectator
-  constraints: all `2^d` by default, or a sparse subset under
-  `CoverageContract::ZeroForMissingLeaves`, where an omitted assignment is an exact
-  zero. Level `t` merges the input bit `k_(d-t+1)` and fixes the output
+  constraints. Each leaf fixes a contiguous prefix, so depths may differ as long as
+  the leaves form a prefix code; all `2^d` assignments by default, or a sparse subset
+  under `CoverageContract::ZeroForMissingLeaves`, where an omitted assignment is an
+  exact zero. Level `t` merges the input bit `k_(d-t+1)` and fixes the output
   bit `r_t`, restricting to the child region before adding, so no sum over the
   whole output domain is assembled and each object is reused by its descendants.
   `MergeRefineOptions::output_depth` stops early; `None` refines every selected

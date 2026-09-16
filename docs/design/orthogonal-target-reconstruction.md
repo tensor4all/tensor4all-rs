@@ -266,14 +266,22 @@ selected-coordinate assignment, or disagrees on a spectator constraint is reject
 before any operator is applied; a repair suggestion is required rather than an
 implicit normalization or padding step.
 
+Each leaf fixes a *contiguous prefix* of the selected indices, so the input tree may
+be nonuniform: leaf depths can differ as long as the leaves form a dyadic prefix
+code, where no leaf fixes a prefix of another leaf's indices. The contract is
+checked as a Kraft sum in integer units of `2^-depth`, so an overlapping pair and a
+missing assignment are distinguished exactly. Every item then ascends one selected
+bit per level: a genuine sibling pair is summed, and a leaf whose sibling is absent
+keeps its own region, which is already the union of its subtree, so ascending is
+exact and free. Because each refined region keeps its own copy of the still
+unmerged prefixes, the live item count can grow with the number of regions, so the
+work limit is enforced on every level rather than only before the first one.
+
 Missing leaves are a decision, not an assumption: `MergeRefineOptions::coverage`
-defaults to `CoverageContract::Complete`, which requires every `2^d` coordinate
-assignment, and `CoverageContract::ZeroForMissingLeaves` accepts a sparse preimage
-in which every omitted assignment contributes exactly zero. An entirely empty
-preimage is the zero target under that contract; under the complete contract it is
-rejected. Sparse coverage does not make the input tree nonuniform: every present
-leaf still fixes all selected indices, which is what keeps the merge order
-well defined. Preparation
+defaults to `CoverageContract::Complete`, which requires the Kraft sum to be exactly
+one, and `CoverageContract::ZeroForMissingLeaves` accepts a sparse preimage in which
+every omitted assignment contributes exactly zero. An entirely empty preimage is the
+zero target under that contract; under the complete contract it is rejected. Preparation
 keeps the preimage patch support (`PreparedImage::source`) next to the image, so
 input ancestry is never inferred from spectator-only projectors and no private
 target field is exposed.
@@ -294,10 +302,13 @@ The implemented accounting is:
   residual of the accepted candidate against the sum of the *actual restricted
   parent approximations* (`||sum - round(sum)||`). A rejected probe leaves the
   exact sum in place and costs nothing.
-- **Budget allocation is a conservative l1 split.** At most `2^d * output_depth`
-  merges can truncate, so each receives `delta / (2^d * output_depth)`; the sum of
-  all measured residuals therefore stays within the allowance without any
-  orthogonality assumption between separate compressions.
+- **Budget allocation is a conservative l1 split, spent level by level.** A level
+  can merge at most twice its live item count, so its share is
+  `remaining / level_merges`, `remaining` is reduced by the residuals actually
+  accepted, and the sum of all measured residuals therefore stays within the
+  allowance without any orthogonality assumption between separate compressions. This
+  also covers nonuniform input trees, whose merge count is not bounded by
+  `2^d * output_depth`.
 - **Region combination.** Terms inside a region may overlap, so their bounds add
   by the triangle inequality; disjoint output regions combine by the Euclidean
   norm, exactly like the greedy engine's report.
@@ -373,9 +384,10 @@ arbitrary data, and operator-construction error stays outside every bound.
 
 ### Deferred boundaries
 
-Nonuniform input trees with unequal leaf depths, per-input-branch refinement depths
-with lazy reconciliation, multi-coordinate groups with a synchronized multidimensional
-level, and item dropping under the global policy remain follow-up work.
+Per-input-branch refinement depths with lazy reconciliation, multi-coordinate groups
+with a synchronized multidimensional level, and item dropping under the global policy
+remain follow-up work. Unequal input leaf depths are supported through the dyadic
+prefix-code contract described above.
 
 Approximate operator application is available as an opt-in on the schedule:
 `MergeRefineOptions::apply_options` applies the operator with the caller's

@@ -185,9 +185,11 @@ output bit-reversal permutation. For contiguous output patches, supply
 &subset, tolerance, &MergeRefineOptions)` instead runs the complementary
 input-merge/output-refine trajectory of the patched Fourier algorithm. The
 preimage must already be the dyadic input leaves of the `d` selected binary
-indices, sharing identical spectator constraints: all `2^d` of them by default, or a
-sparse subset with `CoverageContract::ZeroForMissingLeaves`, where every omitted
-coordinate assignment contributes exactly zero. Level zero applies the
+indices, sharing identical spectator constraints. Each leaf fixes a contiguous
+prefix of those indices, so leaf depths may differ as long as the leaves form a
+prefix code; all `2^d` coordinate assignments must be covered by default, or a sparse
+subset with `CoverageContract::ZeroForMissingLeaves`, where every omitted assignment
+contributes exactly zero. Level zero applies the
 complete transform once per leaf. Level `t` merges the input siblings by removing
 the constraint on `k_(d-t+1)` and refines the output by fixing `r_t`, restricting
 every contribution to its output region *before* adding it, so no sum over the

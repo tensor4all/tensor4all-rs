@@ -69,7 +69,9 @@ input-merge/output-refine QFT trajectory instead of the greedy engine: level `t`
 merges one input bit and fixes one output prefix bit, restricting each
 contribution to its output region before adding it, so no sum over the whole
 output domain is assembled. The preimage must be the dyadic input leaves of
-the selected binary indices: by default all `2^d` of them, or a sparse subset under
+the selected binary indices. Each leaf fixes a contiguous prefix, so leaf depths may
+differ as long as the leaves form a prefix code; by default they must also cover all
+`2^d` coordinate assignments, or a sparse subset under
 `CoverageContract::ZeroForMissingLeaves`, where an omitted leaf contributes exactly
 zero. `MergeRefineOptions` selects the output depth, the
 work limit, an optional soft rank goal, and the retained term budget;

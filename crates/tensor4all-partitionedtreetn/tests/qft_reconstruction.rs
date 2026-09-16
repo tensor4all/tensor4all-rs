@@ -1091,13 +1091,44 @@ fn merge_refine_schedule_rejects_invalid_geometry() {
         .to_string()
         .contains("cover every selected-coordinate"));
 
-    // A patch that leaves a selected index free is not an input leaf.
+    // A patch that leaves *all* selected indices free is the whole input domain:
+    // a valid one-leaf dyadic tree, so the schedule returns the complete transform
+    // as a single item.
     let unrestricted = ReconstructionTarget::from_partition(
-        &PartitionedTreeTN::from_subdomains(vec![full]).expect("partition"),
+        &PartitionedTreeTN::from_subdomains(vec![full.clone()]).expect("partition"),
+    )
+    .expect("target");
+    let result = schedule_merge_refine(
+        &unrestricted,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance {
+            rtol: 1e-12,
+            atol: 0.0,
+        },
+        &MergeRefineOptions::default(),
+    )
+    .expect("the whole domain is one leaf");
+    assert_eq!(result.report().applied_operator_count, 1);
+    assert_eq!(result.report().additions, 0);
+    let (indices, dense) = dense_of_regions(&result);
+    let expected = dft_oracle(&indices, &sites, &sites, &values);
+    assert!(max_error(&dense, &expected) < TOL);
+
+    // A prefix that skips a significant selected index is not a dyadic leaf.
+    let skipped = SubDomainTreeTN::new(
+        tree.clone(),
+        Projector::from_pairs([(sites[1].clone(), 1)]).expect("projector"),
+    )
+    .expect("patch");
+    let skipped = ReconstructionTarget::from_partition(
+        &PartitionedTreeTN::from_subdomains(vec![skipped]).expect("partition"),
     )
     .expect("target");
     let error = schedule_merge_refine(
-        &unrestricted,
+        &skipped,
         &0,
         &operator,
         &sites,
@@ -1105,10 +1136,8 @@ fn merge_refine_schedule_rejects_invalid_geometry() {
         ReconstructionTolerance::default(),
         &MergeRefineOptions::default(),
     )
-    .expect_err("unconstrained patch");
-    assert!(error
-        .to_string()
-        .contains("must fix all selected indices to one coordinate"));
+    .expect_err("a non-contiguous prefix is not a dyadic leaf");
+    assert!(error.to_string().contains("contiguous prefix"));
 }
 
 #[test]
@@ -1702,4 +1731,183 @@ fn merge_refine_schedule_accepts_an_empty_preimage_under_the_zero_contract() {
     assert_eq!(report.error_bound, 0.0);
     assert_eq!(report.reference_scale, 0.0);
     assert!(result.into_partition().expect("partition").is_empty());
+}
+
+/// The projector fixing the first `depth` of `sites` to `prefix`.
+fn prefix_projector(sites: &[DynIndex], depth: usize, prefix: usize) -> Projector {
+    let pairs = sites
+        .iter()
+        .take(depth)
+        .enumerate()
+        .map(|(position, site)| (site.clone(), (prefix >> (depth - 1 - position)) & 1));
+    Projector::from_pairs(pairs).expect("projector")
+}
+
+/// A target built from explicit prefix projectors on `sites`.
+fn leaf_target(
+    tree: &TreeTN<IdxTensor, usize>,
+    projectors: Vec<Projector>,
+) -> ReconstructionTarget {
+    let full = SubDomainTreeTN::from_treetn(tree.clone()).expect("subdomain");
+    let leaves = projectors
+        .into_iter()
+        .map(|projector| {
+            full.project(&projector)
+                .expect("project")
+                .expect("nonzero leaf")
+        })
+        .collect::<Vec<_>>();
+    ReconstructionTarget::from_partition(
+        &PartitionedTreeTN::from_subdomains(leaves).expect("partition"),
+    )
+    .expect("target")
+}
+
+/// The asymmetric three-bit tree `{0, 10, 110, 111}`, whose leaves have unequal
+/// depths and together cover the whole input domain.
+fn asymmetric_leaves(tree: &TreeTN<IdxTensor, usize>, sites: &[DynIndex]) -> ReconstructionTarget {
+    leaf_target(
+        tree,
+        vec![
+            prefix_projector(sites, 1, 0),
+            prefix_projector(sites, 2, 2),
+            prefix_projector(sites, 3, 6),
+            prefix_projector(sites, 3, 7),
+        ],
+    )
+}
+
+#[test]
+fn merge_refine_schedule_merges_an_asymmetric_dyadic_input_tree() {
+    let r = 3usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| Complex64::new(1.0 + (m as f64 * 0.7).sin(), (m as f64 * 0.3).cos()))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = asymmetric_leaves(&tree, &sites);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+
+    // Four leaves and one depth per level. Each refined region keeps its own copy
+    // of the unmerged prefixes, so the additions repeat per region (2 + 4 + 8) and
+    // the live item count grows instead of staying at the leaf count.
+    let result = schedule_exact(&preimage, &operator, &sites, None, 32);
+    let report = result.report().clone();
+    assert_eq!(report.applied_operator_count, 4);
+    assert_eq!(report.additions, 14);
+    assert_eq!(report.work_items_per_level, vec![4, 6, 8, 8]);
+    assert_eq!(report.peak_work_items, 8);
+    assert_eq!(report.error_bound, 0.0);
+
+    // The leaves partition the domain, so the merged result is the whole DFT.
+    let (indices, dense) = dense_of_regions(&result);
+    let expected = dft_oracle(&indices, &sites, &sites, &values);
+    let residual = max_error(&dense, &expected);
+    assert!(residual < TOL, "residual {residual:e}");
+
+    // Fully merged, so every output region holds one term.
+    assert_eq!(report.region_count, 1usize << r);
+    let partition = result.into_partition().expect("partition");
+    let (partition_indices, partition_dense) = dense_of(&partition);
+    let expected = dft_oracle(&partition_indices, &sites, &sites, &values);
+    assert!(max_error(&partition_dense, &expected) < TOL);
+}
+
+#[test]
+fn merge_refine_schedule_handles_a_sparse_prefix_under_the_zero_contract() {
+    let r = 3usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| Complex64::new(1.0 + m as f64, 0.5 * m as f64))
+        .collect();
+    let tree = mps(&sites, &values);
+    // Only the `k1 = 0` half of the input is present.
+    let half = prefix_projector(&sites, 1, 0);
+    let preimage = leaf_target(&tree, vec![half.clone()]);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+    let tolerance = ReconstructionTolerance {
+        rtol: 1e-12,
+        atol: 0.0,
+    };
+
+    let error = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        tolerance,
+        &MergeRefineOptions {
+            coverage: CoverageContract::Complete,
+            ..Default::default()
+        },
+    )
+    .expect_err("half the domain does not cover the whole selection");
+    assert!(error
+        .to_string()
+        .contains("cover every selected-coordinate assignment"));
+
+    let result = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        tolerance,
+        &MergeRefineOptions {
+            coverage: CoverageContract::ZeroForMissingLeaves,
+            ..Default::default()
+        },
+    )
+    .expect("the missing half is an explicit zero");
+    assert_eq!(result.report().applied_operator_count, 1);
+    assert_eq!(result.report().additions, 0);
+
+    // The present half transforms as if the rest of the input were zero.
+    let masked = mask_input_leaves(&values, &sites, &half);
+    let (indices, dense) = dense_of_regions(&result);
+    let expected = dft_oracle(&indices, &sites, &sites, &masked);
+    let residual = max_error(&dense, &expected);
+    assert!(residual < TOL, "residual {residual:e}");
+}
+
+#[test]
+fn merge_refine_schedule_enforces_the_work_limit_on_every_level() {
+    let r = 3usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| Complex64::new(1.0 + m as f64, 0.0))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = asymmetric_leaves(&tree, &sites);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+
+    // The asymmetric tree starts with four leaves but holds six items after the
+    // first level, so a limit of five must be reported, not silently exceeded.
+    let error = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance::default(),
+        &MergeRefineOptions {
+            max_work_items: 5,
+            ..Default::default()
+        },
+    )
+    .expect_err("six live items exceed the limit of five");
+    assert!(matches!(
+        error,
+        PartitionedTreeTNError::ResourceLimit {
+            limit: "max_work_items",
+            value: 6,
+            ..
+        }
+    ));
+
+    // A limit above the level peak accepts the same schedule.
+    let result = schedule_exact(&preimage, &operator, &sites, None, 8);
+    assert_eq!(result.report().peak_work_items, 8);
+    assert_eq!(result.report().work_items_per_level, vec![4, 6, 8, 8]);
 }
