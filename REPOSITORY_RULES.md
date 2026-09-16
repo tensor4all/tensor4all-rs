@@ -137,14 +137,14 @@
 
 ## Work Logs And Design Records
 
-- Nontrivial refactors, cleanup streams, AI-assisted implementation batches,
-  and changes with explicit design tradeoffs should leave a curated work log
-  under `docs/worklogs/`. A work log should record: session summary, code and
-  documents read, reference implementations considered, decisions,
-  alternatives rejected or deferred, verification performed, remaining risks.
-- Work logs are reviewer-facing decision records, not transcripts or
-  implementation plans: concise enough to review, specific enough that later
-  work understands the selected abstraction, split, public API, or deferral.
+- Follow the shared Work Logs And Design Records policy; keep a lightweight
+  record for nontrivial multi-phase changes, non-obvious design choices, or
+  performance experiments under `docs/worklogs/`. Small fixes and AI assistance
+  alone do not require one.
+- Use the [work-log format](docs/worklogs/README.md) to record decisions and
+  reasons, important alternatives, verification conclusions, and remaining
+  constraints, not command histories or lists of files read. Link the record
+  from the PR and update it only when those conclusions change.
 - When a PR establishes or changes durable design intent, update the relevant
   `docs/design/` document in the same PR. Work logs hold session-level
   rationale; design docs hold decisions future implementation should follow.

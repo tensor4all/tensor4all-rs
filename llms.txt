@@ -15,7 +15,7 @@ transforms (`tensor4all-quanticstransform`), and a C FFI layer
 - [Tensor train guide](docs/book/src/guides/tensor-train.md): `SimpleTensorTrain` (simplett) and ITensor-like `TensorTrain` (itensorlike).
 - [Tree tensor network guide](docs/book/src/guides/tree-tn.md): `TreeTN`.
 - [CUDA TreeTN tutorial](docs/book/src/tutorials/gpu/cuda-tree-contraction.md): explicit ordinal-0 upload, dense full contraction, download, constraints, and runnable examples.
-- [Partitioned TreeTN guide](docs/book/src/guides/partitioned-treetn.md): eager subdomain masking, strict partition algebra, and adaptive patching.
+- [Partitioned TreeTN guide](docs/book/src/guides/partitioned-treetn.md): eager subdomain masking, strict partition algebra, adaptive patching, and reconstruction with a fixed global L2 tolerance.
 - [Quantics TCI guide](docs/book/src/guides/quantics.md) and [TCI guide](docs/book/src/guides/tci.md).
 - [Julia bindings](docs/book/src/julia-bindings.md).
 - [C API design](docs/CAPI_DESIGN.md).

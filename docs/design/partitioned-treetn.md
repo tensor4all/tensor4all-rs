@@ -250,6 +250,10 @@ established by closed issue
 
 ## Adaptive interpolation ownership
 
+The separate [orthogonal-target reconstruction design](orthogonal-target-reconstruction.md)
+adds global L2 error accounting and superposition output without changing the
+local `PatchingOptions::cutoff` semantics above.
+
 `adaptiveinterpolate`, `AdaptiveInterpolateOptions`, TreeTCI termination changes,
 pivot recycling, sampled-zero inference, and TreeTCI checked-arithmetic work are
 out of scope. The new crate does not depend on `tensor4all-treetci`.

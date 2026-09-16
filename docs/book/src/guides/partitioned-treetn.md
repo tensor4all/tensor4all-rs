@@ -95,6 +95,86 @@ assert!(result.values().all(|patch| patch.max_bond_dim() <= 1));
 then compares checked sums of logical local tensor element counts. Structured
 storage payload length and AD state are not used as the metric.
 
+## Reconstruction with a fixed global L2 tolerance
+
+Use `reconstruction::reconstruct` when approximation must be measured against
+one immutable target, rather than the local discarded-weight `cutoff` used
+above. `ReconstructionTarget::from_partition` validates and snapshots disjoint
+patches and pins their combined L2 norm. `ReconstructionTolerance { rtol, atol }`
+sets the fixed allowance `max(atol, rtol * reference_scale)`.
+
+The rank goal is soft: a split must improve rank, and a pairwise merge must
+reduce the sum of operand ranks. Unprofitable sums remain as superposition
+terms. The output's regions are disjoint, but terms within a region can overlap.
+Use `regions()` to consume them. `into_partition()` rejects a region containing
+multiple terms; it never implicitly sums them.
+
+This example is included directly from the checked executable source:
+
+```rust
+# use tensor4all_core::{DynIndex, IdxTensor};
+# use tensor4all_partitionedtreetn::{reconstruction::*, PartitionedTreeTN, PatchSplitStrategy, SubDomainTreeTN, TreeTN};
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+{{#include ../../../../crates/tensor4all-partitionedtreetn/examples/reconstruct.rs:reconstruction}}
+# Ok(())
+# }
+```
+
+`ReconstructionTarget::from_tensor_products` accepts pairs of patches on the
+same named topology and independent site spaces. Their output node owns both
+factors' external indices. Each product norm is the product of its factor norms;
+orthogonal product-patch norm squares are then added. Products remain factorized
+until reconstruction begins. This is a tensor product, not an elementwise
+product or an induced operator norm.
+
+Each accepted compression is checked against its uncompressed local input by
+an explicit difference-network norm. Residuals add within a region and combine
+in quadrature across disjoint regions. The report is a numerical a posteriori
+bound; it excludes floating-point roundoff. `rtol = atol = 0` disables
+approximate compression. Reaching `max_regions` retains higher rank without
+relaxing the error allowance. A partial `patch_order` list constrains the
+search independently of any future QFT-selected index subset.
+
+Reconstruction reuses `PatchSplitStrategy`. `Sequential` tries only the first
+unprojected nontrivial index in `patch_order` and stops that region on no gain
+or insufficient region capacity, without trying later indices. The default
+`ExactParameterGain` compares all permitted candidates by logical parameter
+count. For contiguous QTT intervals, supply the bits MSB first and select
+`Sequential`, even when the TT stores those bits in reverse order. An empty
+order uses all external indices in deterministic identity order, not numeric
+bit significance.
+
+### Applying a QFT to a subset of sites
+
+`ReconstructionTarget::from_subset_operator(&preimage, &center, &operator,
+&selection, &options)` prepares the images of an existing linear operator acting
+on an ordered subset of the target's site indices. `selection` holds one full
+site index per operator node, in the operator's own node order; for a quantics
+Fourier transform its node 0 is the most significant input bit. Build that
+operator with `tensor4all_quanticstransform::quantics_fourier_operator` and the
+crate stays free of a simplett-stack runtime dependency.
+
+The selection may skip sites and spectators keep their identity, dimension, and
+node assignment. A spectator may share its node with a selected index, but two
+selected indices on one node are rejected.
+
+The transformed output norm is never measured. `SubsetOperatorOptions::unitary`
+selects the amplification factor: `false` (default) uses the selected-space
+operator's Frobenius norm, an upper bound on its induced amplification; `true` is
+a caller guarantee that the operator preserves the L2 norm, giving factor one.
+The preimage's reference scale is multiplied by that factor, so successive
+applications propagate the scale instead of recomputing an output norm. For a
+general operator `rtol` is therefore relative to that scale, not to the actual
+`||A x||_2`; pass `unitary = true` for a Fourier transform, whose construction
+error is accounted separately from the reconstruction bound.
+
+The operator is applied exactly and the images stay separate, so a global direct
+sum is never formed.
+
+The transform stores frequency bit `t` at selected position `t` without an
+output bit-reversal permutation. For contiguous output patches, supply
+`patch_order = [r1, ..., rR]` with `PatchSplitStrategy::Sequential`.
+
 ## Dtype and topology
 
 A partition is homogeneous: all patches must use the same `IdxTensor` scalar
