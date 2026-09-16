@@ -878,11 +878,9 @@ fn schedule_exact(
             atol: 0.0,
         },
         &MergeRefineOptions {
-            target_bond_dim: None,
-            max_terms: 1 << 20,
-            apply_options: None,
             output_depth,
             max_work_items,
+            ..Default::default()
         },
     )
     .expect("schedule")
@@ -1432,7 +1430,7 @@ fn merge_refine_schedule_rejects_a_term_budget_it_cannot_keep() {
             max_work_items: 16,
             target_bond_dim: Some(1),
             max_terms: 2,
-            apply_options: None,
+            ..Default::default()
         },
     )
     .expect_err("two terms cannot hold four leaves");
@@ -1589,4 +1587,119 @@ fn merge_refine_schedule_rejects_an_unaffordable_application_error() {
         error.to_string().contains("application error"),
         "unexpected error: {error}"
     );
+}
+
+/// The dyadic input leaves of `sites` whose coordinate set is listed in `keep`.
+fn sparse_input_leaves(
+    tree: &TreeTN<IdxTensor, usize>,
+    sites: &[DynIndex],
+    keep: &[usize],
+) -> ReconstructionTarget {
+    let full = SubDomainTreeTN::from_treetn(tree.clone()).expect("subdomain");
+    let leaves = keep
+        .iter()
+        .map(|leaf| {
+            full.project(&input_leaf_projector(sites, *leaf))
+                .expect("project")
+                .expect("nonzero leaf")
+        })
+        .collect::<Vec<_>>();
+    ReconstructionTarget::from_partition(
+        &PartitionedTreeTN::from_subdomains(leaves).expect("partition"),
+    )
+    .expect("target")
+}
+
+#[test]
+fn merge_refine_schedule_accepts_sparse_leaves_only_under_an_explicit_contract() {
+    let r = 2usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    // The leaf at coordinate one is zero in this state, so omitting it must not
+    // change the result under the zero-for-missing contract.
+    let values: Vec<Complex64> = vec![
+        Complex64::new(1.0, 0.5),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(-2.0, 1.0),
+        Complex64::new(0.5, -0.5),
+    ];
+    let tree = mps(&sites, &values);
+    let complete = dyadic_input_leaves(&tree, &sites);
+    let sparse = sparse_input_leaves(&tree, &sites, &[0, 2, 3]);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+    let tolerance = ReconstructionTolerance {
+        rtol: 1e-12,
+        atol: 0.0,
+    };
+
+    // The default contract rejects the sparse preimage.
+    let error = schedule_merge_refine(
+        &sparse,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        tolerance,
+        &MergeRefineOptions {
+            coverage: CoverageContract::Complete,
+            ..Default::default()
+        },
+    )
+    .expect_err("the default contract requires every leaf");
+    assert!(error
+        .to_string()
+        .contains("cover every selected-coordinate assignment"));
+
+    // With the explicit contract the omitted leaf contributes exactly zero, so
+    // the sparse run matches the complete one.
+    let sparse_result = schedule_merge_refine(
+        &sparse,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        tolerance,
+        &MergeRefineOptions {
+            coverage: CoverageContract::ZeroForMissingLeaves,
+            ..Default::default()
+        },
+    )
+    .expect("sparse coverage");
+    let complete_result = schedule_exact(&complete, &operator, &sites, None, 32);
+
+    let (indices, sparse_dense) = dense_of_regions(&sparse_result);
+    let (complete_indices, complete_dense) =
+        dense_of(&complete_result.into_partition().expect("partition"));
+    let complete_dense = reorder(&complete_dense, &complete_indices, &indices);
+    assert!(max_error(&sparse_dense, &complete_dense) < 1e-12);
+    assert_eq!(sparse_result.report().applied_operator_count, 3);
+    assert_eq!(sparse_result.report().error_bound, 0.0);
+}
+
+#[test]
+fn merge_refine_schedule_accepts_an_empty_preimage_under_the_zero_contract() {
+    let r = 2usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let empty = ReconstructionTarget::from_partition(&PartitionedTreeTN::<usize>::new())
+        .expect("empty target");
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+
+    let result = schedule_merge_refine(
+        &empty,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance::default(),
+        &MergeRefineOptions {
+            coverage: CoverageContract::ZeroForMissingLeaves,
+            ..Default::default()
+        },
+    )
+    .expect("an empty preimage is the zero target");
+    let report = result.report();
+    assert_eq!(report.applied_operator_count, 0);
+    assert_eq!(report.region_count, 0);
+    assert_eq!(report.error_bound, 0.0);
+    assert_eq!(report.reference_scale, 0.0);
+    assert!(result.into_partition().expect("partition").is_empty());
 }

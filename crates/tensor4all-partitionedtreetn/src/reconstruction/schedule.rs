@@ -59,12 +59,13 @@ use crate::{
 /// # Examples
 ///
 /// ```
-/// use tensor4all_partitionedtreetn::reconstruction::MergeRefineOptions;
+/// use tensor4all_partitionedtreetn::reconstruction::{CoverageContract, MergeRefineOptions};
 /// let options = MergeRefineOptions::default();
 /// assert_eq!(options.output_depth, None);
 /// assert_eq!(options.max_work_items, 4096);
 /// assert_eq!(options.max_terms, 1 << 20);
 /// assert_eq!(options.target_bond_dim, None);
+/// assert_eq!(options.coverage, CoverageContract::Complete);
 /// assert!(options.apply_options.is_none());
 /// ```
 #[derive(Debug, Clone)]
@@ -94,6 +95,15 @@ pub struct MergeRefineOptions {
     /// bounds that growth and returns a resource-limit error instead of
     /// exceeding the budget.
     pub max_terms: usize,
+    /// Which input leaves the preimage must supply, default
+    /// [`CoverageContract::Complete`].
+    ///
+    /// The contract is explicit because an absent leaf is only a zero when the
+    /// caller says so: under [`CoverageContract::ZeroForMissingLeaves`] a preimage
+    /// that omits dyadic input leaves is accepted and every omitted coordinate
+    /// assignment contributes exactly zero, while [`CoverageContract::Complete`]
+    /// rejects such a preimage with repair guidance.
+    pub coverage: CoverageContract,
     /// Truncating operator-application options, default `None`.
     ///
     /// `None` applies the operator exactly. `Some(options)` applies it with those
@@ -106,6 +116,30 @@ pub struct MergeRefineOptions {
     pub apply_options: Option<ApplyOptions>,
 }
 
+/// How much of the dyadic input tree the preimage must cover.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtreetn::reconstruction::CoverageContract;
+/// assert_eq!(CoverageContract::default(), CoverageContract::Complete);
+/// assert_ne!(
+///     CoverageContract::ZeroForMissingLeaves,
+///     CoverageContract::Complete
+/// );
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CoverageContract {
+    /// Every dyadic input coordinate assignment must be present exactly once.
+    /// A preimage that omits or repeats an assignment is rejected.
+    #[default]
+    Complete,
+    /// Present dyadic input leaves must still fix every selected index exactly
+    /// once, but an omitted coordinate assignment is accepted as an exact zero
+    /// contribution instead of being rejected.
+    ZeroForMissingLeaves,
+}
+
 impl Default for MergeRefineOptions {
     fn default() -> Self {
         Self {
@@ -113,6 +147,7 @@ impl Default for MergeRefineOptions {
             max_work_items: 4096,
             target_bond_dim: None,
             max_terms: 1 << 20,
+            coverage: CoverageContract::default(),
             apply_options: None,
         }
     }
@@ -664,6 +699,7 @@ fn validate_leaf_geometry<V>(
     preimage: &ReconstructionTarget<V>,
     geometry: &ScheduleGeometry,
     leaves: usize,
+    coverage: CoverageContract,
 ) -> Result<()>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
@@ -688,9 +724,9 @@ where
             ));
         }
     }
-    if covered.iter().any(|covered| !covered) {
+    if coverage == CoverageContract::Complete && covered.iter().any(|covered| !covered) {
         return Err(invalid(
-            "input leaves must cover every selected-coordinate assignment of the binary selection",
+            "input leaves must cover every selected-coordinate assignment of the binary selection, or select CoverageContract::ZeroForMissingLeaves",
         ));
     }
     Ok(())
@@ -698,9 +734,12 @@ where
 
 /// Schedule `operator` on `selection` as a level-coupled merge-refine trajectory.
 ///
-/// `preimage` must already be partitioned into the `2^d` dyadic input leaves of
-/// the `d` selected binary indices, sharing identical constraints on every
-/// spectator index. Level zero applies the complete transform once per leaf;
+/// `preimage` must already be partitioned into dyadic input leaves of the `d`
+/// selected binary indices, sharing identical constraints on every spectator
+/// index. By default it must cover all `2^d` coordinate assignments; with
+/// [`MergeRefineOptions::coverage`] set to
+/// [`CoverageContract::ZeroForMissingLeaves`] omitted assignments are accepted and
+/// contribute exactly zero. Level zero applies the complete transform once per leaf;
 /// level `t` merges the input siblings by removing the constraint on
 /// `k_(d-t+1)` and restricts the sum to each child output prefix fixing `r_t`.
 /// Restriction happens before addition, so no sum over the whole output domain
@@ -845,7 +884,36 @@ where
     }
     // Validate the dyadic input geometry before applying any operator, so an
     // unsupported partition costs no transform work.
-    validate_leaf_geometry(preimage, &geometry, leaves)?;
+    validate_leaf_geometry(preimage, &geometry, leaves, options.coverage)?;
+    if preimage.patch_projectors().next().is_none() {
+        // An empty preimage has no site topology to apply the operator to. Under
+        // the zero-for-missing coverage contract every leaf is missing, so the
+        // target is exactly zero and the schedule returns no region.
+        let reference_scale = preimage.reference_scale();
+        return Ok(MergeRefineResult {
+            regions: Vec::new(),
+            report: MergeRefineReport {
+                reference_scale,
+                absolute_tolerance: absolute_allowance(tolerance, reference_scale)?,
+                error_bound: 0.0,
+                level_count: 0,
+                applied_operator_count: 0,
+                additions: 0,
+                projections: 0,
+                compression_attempts: 0,
+                compressions: 0,
+                work_items_per_level: vec![0],
+                peak_work_items: 0,
+                refined_regions: 0,
+                stopped_regions: 0,
+                region_count: 0,
+                term_count: 0,
+                max_bond_dim: 0,
+                max_transient_bond_dim: 0,
+                logical_parameters: 0,
+            },
+        });
+    }
 
     let prepared = ReconstructionTarget::prepare_subset_images(
         preimage,
