@@ -767,3 +767,432 @@ fn qft_subset_multi_patch_matches_dense_reference() {
     let error = max_error(&dense, &expected);
     assert!(error < TOL, "max error {error:e}");
 }
+
+// ---------------------------------------------------------------------------
+// Level-coupled merge-refine schedule
+// ---------------------------------------------------------------------------
+
+/// The projector fixing `sites` to the most-significant-first coordinate `leaf`.
+fn input_leaf_projector(sites: &[DynIndex], leaf: usize) -> Projector {
+    let pairs = sites
+        .iter()
+        .enumerate()
+        .map(|(position, site)| (site.clone(), (leaf >> (sites.len() - 1 - position)) & 1));
+    Projector::from_pairs(pairs).expect("projector")
+}
+
+/// Build the `2^depth` dyadic input leaves of `sites` as an immutable target.
+fn dyadic_input_leaves(
+    tree: &TreeTN<IdxTensor, usize>,
+    sites: &[DynIndex],
+) -> ReconstructionTarget {
+    let full = SubDomainTreeTN::from_treetn(tree.clone()).expect("subdomain");
+    let leaves = (0..1usize << sites.len())
+        .map(|leaf| input_leaf_projector(sites, leaf))
+        .map(|projector| {
+            full.project(&projector)
+                .expect("project")
+                .expect("a dyadic leaf of a generic state is nonzero")
+        })
+        .collect::<Vec<_>>();
+    ReconstructionTarget::from_partition(
+        &PartitionedTreeTN::from_subdomains(leaves).expect("partition"),
+    )
+    .expect("target")
+}
+
+/// Bit `index` of a column-major dense `storage` position.
+fn dense_bit(indices: &[DynIndex], storage: usize, index: &DynIndex) -> usize {
+    let position = indices
+        .iter()
+        .position(|candidate| candidate == index)
+        .unwrap_or_else(|| panic!("index {index:?} absent from the dense result"));
+    (storage >> position) & 1
+}
+
+/// Zero every dense coordinate that `projector` does not select.
+fn mask_by_projector(
+    values: &[Complex64],
+    indices: &[DynIndex],
+    projector: &Projector,
+) -> Vec<Complex64> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(storage, value)| {
+            let selected = projector
+                .iter()
+                .all(|(index, coordinate)| dense_bit(indices, storage, index) == *coordinate);
+            if selected {
+                *value
+            } else {
+                Complex64::new(0.0, 0.0)
+            }
+        })
+        .collect()
+}
+
+/// Zero every most-significant-site-first input coordinate that `projector` does
+/// not select.
+fn mask_input_leaves(
+    values: &[Complex64],
+    sites: &[DynIndex],
+    projector: &Projector,
+) -> Vec<Complex64> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(x, value)| {
+            let selected = projector.iter().all(|(index, coordinate)| {
+                let position = sites
+                    .iter()
+                    .position(|candidate| candidate == index)
+                    .unwrap_or_else(|| panic!("site {index:?} absent from the input"));
+                ((x >> (sites.len() - 1 - position)) & 1) == *coordinate
+            });
+            if selected {
+                *value
+            } else {
+                Complex64::new(0.0, 0.0)
+            }
+        })
+        .collect()
+}
+
+fn schedule_exact(
+    preimage: &ReconstructionTarget,
+    operator: &LinearOperator<IdxTensor, usize>,
+    selection: &[DynIndex],
+    output_depth: Option<usize>,
+    max_work_items: usize,
+) -> MergeRefineResult<usize> {
+    schedule_merge_refine(
+        preimage,
+        &0,
+        operator,
+        selection,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance {
+            rtol: 1e-12,
+            atol: 0.0,
+        },
+        &MergeRefineOptions {
+            output_depth,
+            max_work_items,
+        },
+    )
+    .expect("schedule")
+}
+
+#[test]
+fn merge_refine_schedule_matches_every_intermediate_against_dense_oracles() {
+    for r in [2usize, 3] {
+        let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+        let values: Vec<Complex64> = (0..1usize << r)
+            .map(|m| Complex64::new((m as f64 * 0.8).sin() + 1.0, (m as f64 * 0.5).cos()))
+            .collect();
+        let tree = mps(&sites, &values);
+        let preimage = dyadic_input_leaves(&tree, &sites);
+        let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+        let leaves = 1usize << r;
+
+        for depth in 0..=r {
+            let result = schedule_exact(&preimage, &operator, &sites, Some(depth), 4 * leaves);
+            let report = result.report();
+            assert_eq!(report.level_count, depth);
+            assert_eq!(report.applied_operator_count, leaves);
+            assert_eq!(report.additions, leaves * depth);
+            assert_eq!(report.peak_work_items, leaves);
+            assert_eq!(report.work_items_per_level, vec![leaves; depth + 1]);
+            assert_eq!(report.error_bound, 0.0);
+
+            // Every retained work item is one intermediate `P_B F P_A w`.
+            let mut canonical: Option<Vec<DynIndex>> = None;
+            let mut items = 0usize;
+            for (input, output, term) in result.items() {
+                items += 1;
+                let dense = term.data().to_dense().expect("dense");
+                let term_indices = dense.indices().to_vec();
+                let term_values = dense.to_vec::<Complex64>().expect("vector");
+                let indices = canonical.get_or_insert_with(|| term_indices.clone());
+                let aligned = reorder(&term_values, &term_indices, indices);
+
+                let masked_input = mask_input_leaves(&values, &sites, input);
+                let expected = dft_oracle(indices, &sites, &sites, &masked_input);
+                let expected = mask_by_projector(&expected, indices, output);
+                let error = max_error(&aligned, &expected);
+                assert!(error < TOL, "r = {r} depth = {depth}: max error {error:e}");
+            }
+            // Only the executed final level is retained.
+            assert_eq!(items, leaves);
+
+            if depth == r {
+                // The fully refined trajectory is the strict partition of the
+                // normalized DFT, one region per output coordinate.
+                assert_eq!(report.region_count, leaves);
+                assert_eq!(report.term_count, leaves);
+                let partition = result.into_partition().expect("fully refined partition");
+                let (indices, dense) = dense_of(&partition);
+                let expected = dft_oracle(&indices, &sites, &sites, &values);
+                let error = max_error(&dense, &expected);
+                assert!(error < TOL, "r = {r}: max error {error:e}");
+            } else if depth > 0 {
+                // A partially refined level keeps one term per input region.
+                assert_eq!(report.term_count, leaves);
+                assert_eq!(report.region_count, 1usize << depth);
+            }
+        }
+    }
+}
+
+#[test]
+fn merge_refine_schedule_refines_one_selected_coordinate_of_several() {
+    // Only the first two sites are selected; the third is a spectator.
+    let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..8)
+        .map(|m| Complex64::new(m as f64 - 2.0, 0.5 * m as f64))
+        .collect();
+    let tree = mps(&sites, &values);
+    let selected = [sites[0].clone(), sites[1].clone()];
+    let preimage = dyadic_input_leaves(&tree, &selected);
+    let operator = quantics_fourier_operator(2, FourierOptions::default()).expect("fourier");
+
+    let result = schedule_exact(&preimage, &operator, &selected, None, 32);
+    let report = result.report();
+    assert_eq!(report.applied_operator_count, 4);
+    assert_eq!(report.additions, 8);
+    assert_eq!(report.work_items_per_level, vec![4, 4, 4]);
+    assert_eq!(report.region_count, 4);
+
+    // Every item is `P_B F P_A w` on the selected pair, with the spectator kept.
+    let mut canonical: Option<Vec<DynIndex>> = None;
+    for (input, output, term) in result.items() {
+        let dense = term.data().to_dense().expect("dense");
+        let term_indices = dense.indices().to_vec();
+        let term_values = dense.to_vec::<Complex64>().expect("vector");
+        let indices = canonical.get_or_insert_with(|| term_indices.clone());
+        let aligned = reorder(&term_values, &term_indices, indices);
+
+        let masked_input = mask_input_leaves(&values, &sites, input);
+        let expected = dft_oracle(indices, &sites, &selected, &masked_input);
+        let expected = mask_by_projector(&expected, indices, output);
+        let error = max_error(&aligned, &expected);
+        assert!(error < TOL, "max error {error:e}");
+    }
+
+    // Spectators keep their identity, dimension, and node assignment.
+    let partition = result.into_partition().expect("partition");
+    let transformed = partition.to_treetn().expect("treetn");
+    assert_eq!(transformed.node_count(), 3);
+    for node in tree.node_names() {
+        assert_eq!(transformed.site_space(&node), tree.site_space(&node));
+    }
+}
+
+#[test]
+fn merge_refine_schedule_rejects_invalid_geometry() {
+    let sites: Vec<DynIndex> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..4)
+        .map(|m| Complex64::new(m as f64 + 1.0, 0.0))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = quantics_fourier_operator(2, FourierOptions::default()).expect("fourier");
+
+    // A selected index of dimension three is not dyadic.
+    let ternary = DynIndex::new_dyn(3);
+    let error = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &[ternary],
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance::default(),
+        &MergeRefineOptions::default(),
+    )
+    .expect_err("non-binary selection");
+    assert!(error.to_string().contains("binary selected indices"));
+
+    // The output depth cannot exceed the selection depth.
+    let error = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance::default(),
+        &MergeRefineOptions {
+            output_depth: Some(3),
+            max_work_items: 16,
+        },
+    )
+    .expect_err("output depth beyond the selection");
+    assert!(error.to_string().contains("output_depth"));
+
+    // The work limit must cover the input leaves.
+    let error = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance::default(),
+        &MergeRefineOptions {
+            output_depth: None,
+            max_work_items: 3,
+        },
+    )
+    .expect_err("work limit below the leaf count");
+    assert!(error.to_string().contains("max_work_items"));
+
+    // A preimage that misses one dyadic leaf is not a coverage contract.
+    let full = SubDomainTreeTN::from_treetn(tree.clone()).expect("subdomain");
+    let partial = full
+        .project(&input_leaf_projector(&sites, 0))
+        .expect("project")
+        .expect("nonzero leaf");
+    let incomplete = ReconstructionTarget::from_partition(
+        &PartitionedTreeTN::from_subdomains(vec![partial]).expect("partition"),
+    )
+    .expect("target");
+    let error = schedule_merge_refine(
+        &incomplete,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance::default(),
+        &MergeRefineOptions::default(),
+    )
+    .expect_err("missing input leaf");
+    assert!(error
+        .to_string()
+        .contains("cover every selected-coordinate"));
+
+    // A patch that leaves a selected index free is not an input leaf.
+    let unrestricted = ReconstructionTarget::from_partition(
+        &PartitionedTreeTN::from_subdomains(vec![full]).expect("partition"),
+    )
+    .expect("target");
+    let error = schedule_merge_refine(
+        &unrestricted,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance::default(),
+        &MergeRefineOptions::default(),
+    )
+    .expect_err("unconstrained patch");
+    assert!(error
+        .to_string()
+        .contains("must fix all selected indices to one coordinate"));
+}
+
+#[test]
+fn merge_refine_schedule_rejects_leaf_spectator_mismatch() {
+    let selected = DynIndex::new_dyn(2);
+    let spectator = DynIndex::new_dyn(2);
+    let values: Vec<Complex64> = (0..4)
+        .map(|m| Complex64::new(m as f64 + 1.0, 0.0))
+        .collect();
+    let tree = mps(&[selected.clone(), spectator.clone()], &values);
+    let full = SubDomainTreeTN::from_treetn(tree).expect("subdomain");
+    let leaf = |selected_value: usize, spectator_value: usize| {
+        let projector = Projector::from_pairs([
+            (selected.clone(), selected_value),
+            (spectator.clone(), spectator_value),
+        ])
+        .expect("projector");
+        full.project(&projector)
+            .expect("project")
+            .expect("nonzero leaf")
+    };
+    // The two input leaves disagree on the spectator coordinate.
+    let preimage = ReconstructionTarget::from_partition(
+        &PartitionedTreeTN::from_subdomains(vec![leaf(0, 0), leaf(1, 1)]).expect("partition"),
+    )
+    .expect("target");
+    let operator = one_site_matrix(&selected, [1.0, 0.0, 0.0, 1.0]);
+
+    let error = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &[selected],
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance::default(),
+        &MergeRefineOptions::default(),
+    )
+    .expect_err("spectator constraints must agree across leaves");
+    assert!(matches!(
+        error,
+        tensor4all_partitionedtreetn::PartitionedTreeTNError::ProjectorMismatch
+    ));
+}
+
+#[test]
+fn merge_refine_schedule_keeps_shared_spectator_constraints() {
+    let selected = DynIndex::new_dyn(2);
+    let spectator = DynIndex::new_dyn(2);
+    let values: Vec<Complex64> = (0..4)
+        .map(|m| Complex64::new(1.0 + m as f64, 0.5 * m as f64))
+        .collect();
+    let tree = mps(&[selected.clone(), spectator.clone()], &values);
+    let full = SubDomainTreeTN::from_treetn(tree).expect("subdomain");
+    let leaf = |selected_value: usize| {
+        let projector =
+            Projector::from_pairs([(selected.clone(), selected_value), (spectator.clone(), 1)])
+                .expect("projector");
+        full.project(&projector)
+            .expect("project")
+            .expect("nonzero leaf")
+    };
+    let preimage = ReconstructionTarget::from_partition(
+        &PartitionedTreeTN::from_subdomains(vec![leaf(0), leaf(1)]).expect("partition"),
+    )
+    .expect("target");
+    let operator = one_site_matrix(&selected, [1.0, 0.0, 0.0, 1.0]);
+
+    let result = schedule_exact(&preimage, &operator, &[selected], None, 8);
+    let report = result.report();
+    assert_eq!(report.applied_operator_count, 2);
+    assert_eq!(report.additions, 2);
+    assert_eq!(report.region_count, 2);
+    // Each region keeps the shared spectator constraint.
+    let partition = result.into_partition().expect("partition");
+    for patch in partition.values() {
+        assert_eq!(patch.projector().get(&spectator), Some(1));
+    }
+    // The identity is exact on the retained spectator-constrained leaves:
+    // `values` is most-significant-selected-first, so the spectator bit is the
+    // least significant one and only `values[1]` and `values[3]` survive.
+    let expected: f64 = values
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .map(|value| value.norm_sqr())
+        .sum::<f64>()
+        .sqrt();
+    assert!((partition.norm().expect("norm") - expected).abs() < 1e-12);
+}
+
+#[test]
+fn merge_refine_schedule_handles_exact_cancellation() {
+    // The two input leaves are exact negatives under a rank-deficient operator
+    // that adds them, so every transformed image and every merged sum is zero.
+    let site = DynIndex::new_dyn(2);
+    let values = vec![Complex64::new(1.0, 0.0), Complex64::new(-1.0, 0.0)];
+    let tree = mps(std::slice::from_ref(&site), &values);
+    let preimage = dyadic_input_leaves(&tree, std::slice::from_ref(&site));
+    let operator = one_site_matrix(&site, [1.0, 1.0, 0.0, 0.0]);
+
+    let result = schedule_exact(&preimage, &operator, &[site], None, 8);
+    assert_eq!(result.report().applied_operator_count, 2);
+    assert_eq!(result.report().additions, 2);
+    for (_, _, term) in result.items() {
+        assert!(term.norm().expect("norm") < 1e-12);
+    }
+    let partition = result.into_partition().expect("partition");
+    assert!(partition.norm().expect("norm") < 1e-12);
+}

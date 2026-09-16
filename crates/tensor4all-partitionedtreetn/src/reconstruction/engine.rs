@@ -4,8 +4,9 @@ use tensor4all_core::SvdTruncationPolicy;
 use tensor4all_treetn::TruncationOptions;
 
 use super::{
-    finite, invalid, ReconstructedTreeTN, ReconstructionOptions, ReconstructionReport,
-    ReconstructionTarget, ReconstructionTolerance, Region,
+    absolute_allowance, finite, invalid, validate_tolerance, ReconstructedTreeTN,
+    ReconstructionOptions, ReconstructionReport, ReconstructionTarget, ReconstructionTolerance,
+    Region,
 };
 use crate::projector::canonical_index_cmp;
 use crate::{
@@ -87,11 +88,7 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     let indices = validate(target, center, tolerance, options)?;
-    let allowance = finite(
-        tolerance
-            .atol
-            .max(finite(tolerance.rtol * target.reference_scale())?),
-    )?;
+    let allowance = absolute_allowance(tolerance, target.reference_scale())?;
     let originals = target.materialize_terms(center)?;
     let projector = Projector::new();
     let reduced = reduce(&originals, &projector, center, allowance)?;
@@ -209,16 +206,10 @@ fn validate<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
     tolerance: ReconstructionTolerance,
     options: &ReconstructionOptions,
 ) -> Result<Vec<DynIndex>> {
-    if !tolerance.rtol.is_finite()
-        || tolerance.rtol < 0.0
-        || !tolerance.atol.is_finite()
-        || tolerance.atol < 0.0
-    {
-        return Err(invalid("rtol and atol must be finite and nonnegative"));
-    }
     if options.target_bond_dim == Some(0) || options.max_regions == 0 {
         return Err(invalid("target_bond_dim and max_regions must be positive"));
     }
+    validate_tolerance(tolerance)?;
     let mut all = Vec::new();
     if let Some(network) = &target.network {
         if network.node_index(center).is_none() {

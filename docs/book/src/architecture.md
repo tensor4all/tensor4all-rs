@@ -160,7 +160,7 @@ requirements onto unrelated generic code.
 |-------|-------------|
 | **treetn** | Tree tensor networks with arbitrary graph topology. Supports canonicalization, truncation, contraction, DMRG/TDVP, and hosts the sanctioned `simplett_bridge`. |
 | **itensorlike** | ITensors.jl-inspired `TensorTrain` (tree-based) with orthogonality tracking and multiple canonical forms. |
-| **partitionedtreetn** | TreeTN-native eagerly masked subdomains, strict partition algebra, volume-budgeted adaptive patching, and reconstruction against a fixed global L2 tolerance. |
+| **partitionedtreetn** | TreeTN-native eagerly masked subdomains, strict partition algebra, volume-budgeted adaptive patching, reconstruction against a fixed global L2 tolerance, and level-coupled merge-refine QFT scheduling. |
 | **partitionedtt** | **Deprecated** partitioned tensor trains for subdomain decomposition. Builds on itensorlike and crosses to simplett via `simplett_bridge`; it remains buildable during migration. |
 | **treetci** | Tree TCI: cross interpolation on tree-structured tensor networks. |
 

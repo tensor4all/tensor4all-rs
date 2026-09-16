@@ -24,6 +24,30 @@ enum Patch<V: Clone + Hash + Eq + Send + Sync + Debug> {
     Product(Box<(SubDomainTreeTN<V>, SubDomainTreeTN<V>)>),
 }
 
+/// One transformed image together with the preimage support it came from.
+#[derive(Debug, Clone)]
+pub(super) struct PreparedImage<V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    /// Preimage patch support, including its selected-index constraints.
+    pub(super) source: Projector,
+    /// Image retaining only the patch's spectator constraints.
+    pub(super) image: SubDomainTreeTN<V>,
+}
+
+/// Images of every preimage patch, with their provenance and the pinned scale.
+#[derive(Debug, Clone)]
+pub(super) struct PreparedImages<V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    /// One entry per preimage patch, in `preimage`'s canonical patch order.
+    pub(super) images: Vec<PreparedImage<V>>,
+    /// `amplification * preimage.reference_scale()`.
+    pub(super) scale: f64,
+}
+
 /// Immutable orthogonal target and its pinned reference scale.
 ///
 /// The scale is the exact L2 norm for [`Self::from_partition`] and
@@ -318,6 +342,43 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             ));
         }
 
+        let prepared = Self::prepare_subset_images(preimage, center, operator, selection, options)?;
+        let mut patches: Vec<_> = prepared
+            .images
+            .into_iter()
+            .map(|prepared| {
+                let projector = prepared.image.projector().clone();
+                (projector, Patch::Stored(Box::new(prepared.image)))
+            })
+            .collect();
+        patches.sort_by(|a, b| a.0.canonical_cmp(&b.0));
+
+        Ok(Self {
+            patches,
+            network: preimage.network.clone(),
+            scale: prepared.scale,
+        })
+    }
+
+    /// Apply `operator` to `selection` on every patch of `preimage`.
+    ///
+    /// This is the preparation seam shared by [`Self::from_subset_operator`] and
+    /// [`super::schedule_merge_refine`]. Every result keeps the preimage patch
+    /// support it came from, so a caller that schedules the transform over dyadic
+    /// input leaves can recover that leaf geometry instead of inferring it from
+    /// the spectator-only image projector. Application is exact, so an image
+    /// carries only backend roundoff.
+    ///
+    /// # Errors
+    /// Propagates the selection, operator-mapping, node-merging, and application
+    /// errors documented on [`Self::from_subset_operator`].
+    pub(super) fn prepare_subset_images(
+        preimage: &Self,
+        center: &V,
+        operator: &LinearOperator<IdxTensor, V>,
+        selection: &[DynIndex],
+        options: &SubsetOperatorOptions,
+    ) -> Result<PreparedImages<V>> {
         let mut operator_nodes = operator.mpo().node_names();
         operator_nodes.sort();
         if operator_nodes.len() != selection.len() {
@@ -435,12 +496,17 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
                 PartitionedTreeTNError::tree(format!("subset operator apply: {error}"))
             })?;
             // Images of disjoint patches generally overlap and the selected
-            // constraints no longer hold, so keep only the spectator ones.
-            let mut projector = term.projector().clone();
+            // constraints no longer hold, so keep only the spectator ones. The
+            // original support stays as input provenance.
+            let source = term.projector().clone();
+            let mut projector = source.clone();
             for index in selection {
                 projector.remove(index);
             }
-            images.push(SubDomainTreeTN::new(data, projector)?);
+            images.push(PreparedImage {
+                source,
+                image: SubDomainTreeTN::new(data, projector)?,
+            });
         }
 
         // The output norm is deliberately not measured: doing so would need
@@ -458,20 +524,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             finite(operator.mpo().clone().norm()?)?
         };
         let scale = finite(amplification * preimage.scale)?;
-        let mut patches: Vec<_> = images
-            .into_iter()
-            .map(|image| {
-                let projector = image.projector().clone();
-                (projector, Patch::Stored(Box::new(image)))
-            })
-            .collect();
-        patches.sort_by(|a, b| a.0.canonical_cmp(&b.0));
-
-        Ok(Self {
-            patches,
-            network: preimage.network.clone(),
-            scale,
-        })
+        Ok(PreparedImages { images, scale })
     }
 
     /// Return the target's reference scale, fixed at construction.
@@ -489,6 +542,14 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// ```
     pub fn reference_scale(&self) -> f64 {
         self.scale
+    }
+
+    /// Borrow the canonical patch supports, in the order [`Self::materialize_terms`] uses.
+    ///
+    /// Used by callers that must validate patch geometry before paying for
+    /// operator application.
+    pub(super) fn patch_projectors(&self) -> impl Iterator<Item = &Projector> {
+        self.patches.iter().map(|(projector, _)| projector)
     }
 
     pub(super) fn materialize_terms(&self, center: &V) -> Result<Vec<SubDomainTreeTN<V>>> {

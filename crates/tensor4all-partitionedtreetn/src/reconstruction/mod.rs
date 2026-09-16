@@ -24,9 +24,13 @@ use crate::{
 };
 
 mod engine;
+mod schedule;
 mod target;
 
 pub use engine::reconstruct;
+pub use schedule::{
+    schedule_merge_refine, MergeRefineOptions, MergeRefineReport, MergeRefineResult,
+};
 pub use target::ReconstructionTarget;
 
 /// Global L2 tolerances, separate from rank and partition selection policy.
@@ -275,13 +279,48 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructedTreeTN<V> {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn into_partition(self) -> Result<PartitionedTreeTN<V>> {
-        if self.regions.iter().any(|region| region.terms.len() > 1) {
+        single_term_partition(
+            self.regions
+                .into_iter()
+                .map(|region| (region.projector, region.terms)),
+        )
+    }
+}
+
+/// Validate the global L2 tolerance pair shared by every reconstruction entry point.
+fn validate_tolerance(tolerance: ReconstructionTolerance) -> Result<()> {
+    if !tolerance.rtol.is_finite()
+        || tolerance.rtol < 0.0
+        || !tolerance.atol.is_finite()
+        || tolerance.atol < 0.0
+    {
+        return Err(invalid("rtol and atol must be finite and nonnegative"));
+    }
+    Ok(())
+}
+
+/// The global L2 allowance `max(atol, rtol * scale)`.
+fn absolute_allowance(tolerance: ReconstructionTolerance, scale: f64) -> Result<f64> {
+    finite(tolerance.atol.max(finite(tolerance.rtol * scale)?))
+}
+
+/// Convert regions with at most one term each into a strict partition.
+fn single_term_partition<V>(
+    regions: impl IntoIterator<Item = (Projector, Vec<SubDomainTreeTN<V>>)>,
+) -> Result<PartitionedTreeTN<V>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let mut terms = Vec::new();
+    for (_, region_terms) in regions {
+        if region_terms.len() > 1 {
             return Err(invalid(
                 "a region retains multiple terms; use regions() to access the superposition",
             ));
         }
-        PartitionedTreeTN::from_subdomains(self.regions.into_iter().flat_map(|r| r.terms).collect())
+        terms.extend(region_terms);
     }
+    PartitionedTreeTN::from_subdomains(terms)
 }
 
 fn invalid(reason: &'static str) -> PartitionedTreeTNError {

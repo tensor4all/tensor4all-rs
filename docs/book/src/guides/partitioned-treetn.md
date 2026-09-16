@@ -155,8 +155,12 @@ operator with `tensor4all_quanticstransform::quantics_fourier_operator` and the
 crate stays free of a simplett-stack runtime dependency.
 
 The selection may skip sites and spectators keep their identity, dimension, and
-node assignment. A spectator may share its node with a selected index, but two
-selected indices on one node are rejected.
+node assignment. A spectator may share its node with a selected index. Several
+selected indices may share one node as well: the operator MPO nodes carrying
+them are fused into one multi-site node, which is exact and keeps the preimage
+node name. Only a group whose operator nodes are threaded through another
+owner's node cannot be fused locally, and that selection is rejected with repair
+guidance.
 
 The transformed output norm is never measured. `SubsetOperatorOptions::unitary`
 selects the amplification factor: `false` (default) uses the selected-space
@@ -174,6 +178,40 @@ sum is never formed.
 The transform stores frequency bit `t` at selected position `t` without an
 output bit-reversal permutation. For contiguous output patches, supply
 `patch_order = [r1, ..., rR]` with `PatchSplitStrategy::Sequential`.
+
+### Level-coupled merge-refine scheduling
+
+`reconstruction::schedule_merge_refine(&preimage, &center, &operator, &selection,
+&subset, tolerance, &MergeRefineOptions)` instead runs the complementary
+input-merge/output-refine trajectory of the patched Fourier algorithm. The
+preimage must already be the `2^d` dyadic input leaves of the `d` selected
+binary indices, sharing identical spectator constraints. Level zero applies the
+complete transform once per leaf. Level `t` merges the input siblings by removing
+the constraint on `k_(d-t+1)` and refines the output by fixing `r_t`, restricting
+every contribution to its output region *before* adding it, so no sum over the
+whole output domain is ever assembled and each computed object is reused by its
+descendants.
+
+`MergeRefineOptions::output_depth` stops after that many levels; `None` (the
+default) refines every selected bit and returns a strict partition with one patch
+per output coordinate. `MergeRefineReport` records the schedule shape
+(`level_count`, `applied_operator_count`, `additions`, `projections`,
+`work_items_per_level`, `peak_work_items`) next to the pinned reference scale and
+allowance. This trajectory applies the complete transform exactly and performs no
+compression, so `error_bound` is zero; approximate levels with retained error
+accounting and adaptive stopping remain follow-up work, and automatic padding is a
+separate opt-in domain policy that is never applied silently.
+
+```rust
+# use std::collections::HashMap;
+# use tensor4all_core::{DynIndex, IdxTensor};
+# use tensor4all_partitionedtreetn::{reconstruction::*, PartitionedTreeTN, Projector, SubDomainTreeTN, TreeTN};
+# use tensor4all_treetn::{IndexMapping, LinearOperator};
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+{{#include ../../../../crates/tensor4all-partitionedtreetn/examples/merge_refine.rs:merge_refine}}
+# Ok(())
+# }
+```
 
 ## Dtype and topology
 

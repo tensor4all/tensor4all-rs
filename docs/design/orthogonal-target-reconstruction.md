@@ -221,3 +221,95 @@ QFT also supplies the input-merge/output-refine schedule and its bit geometry.
 The complementary-area invariant of the Fourier algorithm is not a generic
 reconstruction invariant. The current greedy reconstruction entry point does
 not claim to implement that schedule, automatic zero-padding, or QFT itself.
+
+## Level-coupled merge-refine schedule
+
+The schedule is a second, explicitly selected entry point
+([`reconstruction::schedule_merge_refine`]); it does not replace the greedy
+engine and is not implied by reversing `patch_order` or by calling the greedy
+engine once per final block (which would repeat work and can restore an
+`M^2` contribution count).
+
+### Contract and geometry
+
+A work item represents `G(A, B) = P_B F_selected P_A w`, or a retained sum
+approximating it, with an explicit bound. Spectator indices are unchanged, and
+every item is a complete-transform object: no staged application and no mixed
+position/frequency basis.
+
+For a uniform binary input partition of depth `d` (`M = 2^d`):
+
+1. Level 0 applies the complete transform to each input leaf, with `B` the whole
+   output domain.
+2. Level `t` merges input siblings by removing the constraint on `k_(d-t+1)` and
+   refines `B` by fixing `r_t`.
+3. Each child is `round(P_B' G(A0, B) + P_B' G(A1, B))`: restriction to the child
+   region happens before addition.
+4. Consumed parent data is released once all its children exist, so only two
+   levels are live and transformed partial sums are reused by descendants.
+
+Input significance is `[k1, ..., kd]` in operator node order, while output
+significance `r_j` is carried by the selected index that previously carried
+`k_(d+1-j)`; output prefix regions therefore fix `[r1, ..., rR]` independently of
+physical node order, and an inverse transform uses the corresponding reversed
+selection. The uniform baseline holds `#A * #B = M` items per level and `M * d`
+pairwise additions. These are structural counts, not a runtime bound: tensor
+ranks, local contraction costs, and retained list lengths must be measured
+separately, and adaptive stopping changes the counts.
+
+### Geometry and provenance validation
+
+Selected indices must be binary and non-empty, and the preimage must already be
+partitioned into exactly the `2^d` dyadic input leaves of those indices, sharing
+identical spectator constraints. A preimage that leaves a selected index free,
+repeats or misses a selected-coordinate assignment, or disagrees on a spectator
+constraint is rejected before any operator is applied; a repair suggestion is
+required rather than an implicit normalization or padding step. Preparation
+keeps the preimage patch support (`PreparedImage::source`) next to the image, so
+input ancestry is never inferred from spectator-only projectors and no private
+target field is exposed.
+
+### Error transport
+
+The schedule applies the complete transform exactly and performs no compression,
+so its reported bound is zero and its output is exact to backend roundoff. The
+global allowance `delta = max(atol, rtol * reference_scale)` is still pinned and
+reported, because later approximate levels consume it.
+
+When compression is added, the existing "rebuild children from original
+sources" accounting of the greedy engine cannot be copied: restriction is
+nonexpansive, so an inherited bound stays a safe bound on each restricted child
+but is not a new local compression cost and must not be divided by `sqrt(fanout)`
+without proof or measurement. A merge has the safe bound `e_left + e_right +
+e_local`, where `e_local` is measured against the sum of the *actual restricted
+parent approximations*. An exact split into disjoint children preserves the
+combined L2 norm of the parent error, so reuse must exploit that with a shared
+error ledger or a proven equivalent allocation instead of granting the whole
+parent allowance to every child. Rejected gain probes consume no budget;
+discarding a term costs its measured norm on top of the inherited error. A soft
+rank target never forces an accuracy violation, and the reported bound stays a
+measured a posteriori numerical bound that excludes backend roundoff.
+
+### Public surface and dependency placement
+
+`schedule_merge_refine` lives in `tensor4all-partitionedtreetn` and accepts an
+existing `LinearOperator`, ordered coordinate groups, and the explicit dyadic
+geometry. QFT construction stays in `tensor4all-quanticstransform`, which remains
+a path-only cross-layer dev-dependency: this crate keeps no simplett-stack
+runtime dependency. `MergeRefineOptions` selects only the output depth and the
+work limit; `MergeRefineReport` carries the pinned scale, allowance, and the
+structural counters. Exact scheduling algebra is shared with any operator, while
+Fourier-specific rank and performance expectations are not claimed for arbitrary
+operators.
+
+### Deferred boundaries
+
+Nonuniform input trees, lazy adaptive refinement with superposition lists,
+unequal output depths per branch, multi-coordinate groups, and benchmarked
+cost comparisons remain follow-up work. Approximate operator application with a
+retained error allowance is separate, and the entry point applies exactly and
+exposes no truncating apply options. Automatic padding stays out of the schedule:
+a later opt-in padding API must define the embedding, the extra bits per
+transformed coordinate, physical spacing and frequency grid, normalization, and
+output interpretation, and the selected transform length is never changed
+silently.
