@@ -29,8 +29,8 @@ mod target;
 
 pub use engine::reconstruct;
 pub use schedule::{
-    schedule_merge_refine, CoverageContract, MergeRefineOptions, MergeRefineReport,
-    MergeRefineResult,
+    schedule_merge_refine, CoordinateGroup, CoverageContract, MergeRefineOptions,
+    MergeRefineReport, MergeRefineResult,
 };
 pub use target::ReconstructionTarget;
 

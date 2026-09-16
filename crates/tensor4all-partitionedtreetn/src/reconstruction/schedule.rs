@@ -23,7 +23,9 @@
 //! once per input leaf, keeps each region's retained terms as an explicit
 //! superposition, compresses a merged item only against a measured residual that
 //! fits that item's share of the global allowance, and drops a contribution only
-//! when its measured norm also fits that share.
+//! when its measured norm also fits that share. Every component is recorded once, at
+//! the level and region where it was measured, so the reported bound does not grow
+//! with the number of refined regions.
 //!
 //! With [`MergeRefineOptions::target_bond_dim`] unset the trajectory is uniform
 //! and exact: every region is refined down to the requested depth and
@@ -32,10 +34,10 @@
 //! the refinement lowers its maximum retained rank, and a merged pair is combined
 //! only when the combination pays off, so a rank-one object is not forced into a
 //! preset output tiling. A merged or unpaired contribution is dropped only when
-//! its measured norm fits its share of the global allowance, and the dropped bound
-//! is reported with the region it belonged to. Multi-coordinate groups remain
-//! follow-up work; automatic padding is a separate domain/embedding policy and is
-//! never applied silently.
+//! its measured norm fits its share of the global allowance, and that norm stays in
+//! the report. One or more coordinate axes may be transformed in one synchronized
+//! level, and the input and output of a selection are always the same indices: this
+//! module never pads a space or changes a transform length.
 
 use std::{
     collections::{btree_map::Entry, BTreeMap, BTreeSet},
@@ -103,6 +105,15 @@ pub struct MergeRefineOptions {
     /// bounds that growth and returns a resource-limit error instead of
     /// exceeding the budget.
     pub max_terms: usize,
+    /// Explicit coordinate axes, default `None`.
+    ///
+    /// `None` treats `selection` as one axis whose output placement reverses its
+    /// input order, which is the one-axis subset-operator convention. `Some(groups)`
+    /// supplies the axes explicitly: the groups must assign every selected index
+    /// exactly once, each group must list the same indices as its inputs and
+    /// outputs, and a level advances every non-exhausted axis by one bit, so two
+    /// axes combine four input children and produce four output children.
+    pub coordinate_groups: Option<Vec<CoordinateGroup>>,
     /// Which input leaves the preimage must supply, default
     /// [`CoverageContract::Complete`].
     ///
@@ -158,6 +169,7 @@ impl Default for MergeRefineOptions {
         Self {
             output_depth: None,
             max_work_items: 4096,
+            coordinate_groups: None,
             target_bond_dim: None,
             max_terms: 1 << 20,
             coverage: CoverageContract::default(),
@@ -211,12 +223,14 @@ pub struct MergeRefineReport {
     pub reference_scale: f64,
     /// `max(atol, rtol * reference_scale)`.
     pub absolute_tolerance: f64,
-    /// Measured compression bound: per-item residuals accumulated by the
-    /// triangle inequality within a region and combined by the Euclidean norm
-    /// across the disjoint output regions. It is an a posteriori numerical bound
-    /// and excludes backend roundoff. It is zero while `target_bond_dim` is
-    /// `None`, and it excludes operator-construction error and the application
-    /// error of an externally approximated operator.
+    /// Measured bound assembled from the components this run measured: the
+    /// application errors at level zero, and the truncation residuals and dropped
+    /// norms at the level and region where each was measured. Components of one
+    /// level live in disjoint regions and combine by the Euclidean norm; components
+    /// of different levels can be nested and add by the triangle inequality. Each
+    /// component is therefore counted once, however many regions it later spreads
+    /// into. It is an a posteriori numerical bound that excludes backend roundoff,
+    /// and it excludes construction error in the caller's operator.
     pub error_bound: f64,
     /// Number of executed level transitions.
     pub level_count: usize,
@@ -267,8 +281,6 @@ where
     output: Projector,
     inputs: Vec<Projector>,
     terms: Vec<SubDomainTreeTN<V>>,
-    /// Sum of the terms' deviation bounds by the triangle inequality.
-    bound: f64,
 }
 
 impl<V> MergeRefineRegion<V>
@@ -276,20 +288,18 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     /// Start a region entry with its first retained term and input prefix.
-    fn new(output: Projector, input: Projector, term: Term<V>) -> Self {
+    fn new(output: Projector, input: Projector, value: SubDomainTreeTN<V>) -> Self {
         Self {
             output,
             inputs: vec![input],
-            terms: vec![term.value],
-            bound: term.bound,
+            terms: vec![value],
         }
     }
 
     /// Add another retained term of the same output region.
-    fn push(&mut self, input: Projector, term: Term<V>) {
+    fn push(&mut self, input: Projector, value: SubDomainTreeTN<V>) {
         self.inputs.push(input);
-        self.terms.push(term.value);
-        self.bound += term.bound;
+        self.terms.push(value);
     }
 }
 
@@ -642,15 +652,117 @@ where
     }
 }
 
-/// Binary prefix geometry of the uniform merge-refine trajectory.
+/// One coordinate axis of the schedule.
+///
+/// Several axes are transformed in one synchronized level: each non-exhausted axis
+/// merges its next input bit and fixes its next output bit, so two axes combine four
+/// input children and produce four output children. Both orders are supplied by the
+/// caller, because the one-axis placement convention (reversing the whole selected
+/// node order) does not define a multi-axis schedule on its own.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::DynIndex;
+/// use tensor4all_partitionedtreetn::reconstruction::CoordinateGroup;
+///
+/// let bits: Vec<DynIndex> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
+/// let group = CoordinateGroup::new(bits.clone());
+/// assert_eq!(group.inputs, bits);
+/// assert_eq!(group.outputs, bits.iter().rev().cloned().collect::<Vec<_>>());
+/// ```
+#[derive(Debug, Clone)]
+pub struct CoordinateGroup {
+    /// This axis' selected indices in input significance order, most significant
+    /// first.
+    pub inputs: Vec<DynIndex>,
+    /// This axis' selected indices in output significance order: `outputs[0]`
+    /// carries this axis' most significant frequency bit.
+    pub outputs: Vec<DynIndex>,
+}
+
+impl CoordinateGroup {
+    /// One axis whose output placement reverses its input order.
+    ///
+    /// This matches how a one-dimensional subset transform places its frequency
+    /// bits, so a caller composing per-axis transforms can state each axis this way.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::DynIndex;
+    /// use tensor4all_partitionedtreetn::reconstruction::CoordinateGroup;
+    ///
+    /// let bits: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    /// let group = CoordinateGroup::new(bits);
+    /// assert_eq!(group.inputs.len(), group.outputs.len());
+    /// ```
+    pub fn new(inputs: Vec<DynIndex>) -> Self {
+        let outputs = inputs.iter().rev().cloned().collect();
+        Self { inputs, outputs }
+    }
+
+    /// One axis with an explicit output significance order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::DynIndex;
+    /// use tensor4all_partitionedtreetn::reconstruction::CoordinateGroup;
+    ///
+    /// let inputs: Vec<DynIndex> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
+    /// let outputs = inputs.clone();
+    /// let group = CoordinateGroup::with_outputs(inputs, outputs);
+    /// assert_eq!(group.inputs, group.outputs);
+    /// ```
+    pub fn with_outputs(inputs: Vec<DynIndex>, outputs: Vec<DynIndex>) -> Self {
+        Self { inputs, outputs }
+    }
+}
+
+/// An input region: per axis, how many leading input bits it fixes and their value.
+type InputKey = Vec<(usize, usize)>;
+
+/// An output region: per axis, how many leading output bits it fixes and their value.
+type OutputKey = Vec<(usize, usize)>;
+
+/// True when two index lists contain the same full indices with the same counts.
+///
+/// `DynIndex` is hashed by full identity (id, tags, prime level) but is not `Ord`,
+/// so the comparison counts occurrences in a map instead of sorting.
+fn same_index_multiset(left: &[DynIndex], right: &[DynIndex]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut counts: std::collections::HashMap<&DynIndex, isize> = std::collections::HashMap::new();
+    for index in left {
+        *counts.entry(index).or_insert(0) += 1;
+    }
+    for index in right {
+        match counts.get_mut(index) {
+            Some(count) => {
+                *count -= 1;
+                if *count < 0 {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+    counts.values().all(|count| *count == 0)
+}
+
+/// Prefix geometry of the merge-refine trajectory, one entry per coordinate axis.
 struct ScheduleGeometry {
-    /// Selected indices in operator node order. Input significance `k_j` is
-    /// `selected[j]`; frequency significance `r_j` sits on `selected[depth - j]`.
-    selected: Vec<DynIndex>,
+    axes: Vec<CoordinateGroup>,
 }
 
 impl ScheduleGeometry {
-    fn new(selection: &[DynIndex]) -> Result<Self> {
+    /// Build the geometry from the ordered selection and optional explicit axes.
+    ///
+    /// Without `groups` the selection forms one axis whose output placement reverses
+    /// its input order, which is the one-axis subset-operator convention.
+    fn new(selection: &[DynIndex], groups: Option<&[CoordinateGroup]>) -> Result<Self> {
         if selection.is_empty() {
             return Err(invalid(
                 "the merge-refine schedule needs at least one selected index",
@@ -661,100 +773,194 @@ impl ScheduleGeometry {
                 "the merge-refine schedule needs binary selected indices of dimension two",
             ));
         }
-        Ok(Self {
-            selected: selection.to_vec(),
-        })
-    }
-
-    fn depth(&self) -> usize {
-        self.selected.len()
-    }
-
-    /// The input region fixing the first `depth` selected bits to `prefix`.
-    ///
-    /// A prefix length of zero is the whole input domain.
-    fn input_projector(&self, depth: usize, prefix: usize) -> Result<Projector> {
-        let mut projector = Projector::new();
-        for position in 0..depth {
-            let bit = (prefix >> (depth - 1 - position)) & 1;
-            projector.insert(self.selected[position].clone(), bit)?;
+        let axes = match groups {
+            None => vec![CoordinateGroup::new(selection.to_vec())],
+            Some(groups) => groups.to_vec(),
+        };
+        if axes.is_empty() {
+            return Err(invalid(
+                "the merge-refine schedule needs at least one coordinate group",
+            ));
         }
-        Ok(projector)
-    }
-
-    /// The output region fixing `r1..r_level`, mapped onto the selected positions
-    /// that carry them.
-    fn output_projector(&self, level: usize, region: usize) -> Result<Projector> {
-        let mut projector = Projector::new();
-        for significance in 1..=level {
-            let bit = (region >> (level - significance)) & 1;
-            projector.insert(self.selected[self.depth() - significance].clone(), bit)?;
-        }
-        Ok(projector)
-    }
-
-    /// Read the selected-index prefix a patch support fixes.
-    ///
-    /// Returns its length and value, or `None` when the support is not a
-    /// contiguous prefix: a free selected index followed by a fixed one would
-    /// describe a region the level structure cannot merge.
-    fn input_prefix(&self, projector: &Projector) -> Option<(usize, usize)> {
-        let mut depth = 0usize;
-        let mut prefix = 0usize;
-        let mut free_seen = false;
-        for index in &self.selected {
-            match projector.get(index) {
-                Some(bit) => {
-                    if free_seen {
-                        return None;
-                    }
-                    depth += 1;
-                    prefix = (prefix << 1) | bit;
-                }
-                None => free_seen = true,
+        for axis in &axes {
+            if axis.inputs.is_empty() {
+                return Err(invalid(
+                    "every coordinate group needs at least one selected index",
+                ));
+            }
+            if axis.inputs.len() != axis.outputs.len() {
+                return Err(invalid(
+                    "every coordinate group needs one output index per input index",
+                ));
+            }
+            if !same_index_multiset(&axis.inputs, &axis.outputs) {
+                return Err(invalid(
+                    "a coordinate group's inputs and outputs must be the same full indices",
+                ));
             }
         }
-        Some((depth, prefix))
+        let assigned: Vec<DynIndex> = axes
+            .iter()
+            .flat_map(|axis| axis.inputs.iter().cloned())
+            .collect();
+        if !same_index_multiset(&assigned, selection) {
+            return Err(invalid(
+                "coordinate groups must assign every selected index exactly once",
+            ));
+        }
+        Ok(Self { axes })
+    }
+
+    /// Longest axis, which is the number of level transitions available.
+    fn level_count(&self) -> usize {
+        self.axes
+            .iter()
+            .map(|axis| axis.inputs.len())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// The input region fixing the per-axis prefix encoded by `key`.
+    fn input_projector(&self, key: &InputKey) -> Result<Projector> {
+        let mut projector = Projector::new();
+        for (axis, (depth, value)) in self.axes.iter().zip(key) {
+            for position in 0..*depth {
+                let bit = (value >> (depth - 1 - position)) & 1;
+                projector.insert(axis.inputs[position].clone(), bit)?;
+            }
+        }
+        Ok(projector)
+    }
+
+    /// The output region fixing the per-axis frequency prefix encoded by `key`.
+    fn output_projector(&self, key: &OutputKey) -> Result<Projector> {
+        let mut projector = Projector::new();
+        for (axis, (depth, value)) in self.axes.iter().zip(key) {
+            for position in 0..*depth {
+                let bit = (value >> (depth - 1 - position)) & 1;
+                projector.insert(axis.outputs[position].clone(), bit)?;
+            }
+        }
+        Ok(projector)
+    }
+
+    /// Read the per-axis input prefix a patch support fixes.
+    ///
+    /// Returns `None` when any axis is not a contiguous prefix: a free index
+    /// followed by a fixed one on that axis would describe a region the level
+    /// structure cannot merge.
+    fn input_prefix(&self, projector: &Projector) -> Option<InputKey> {
+        let mut key = Vec::with_capacity(self.axes.len());
+        for axis in &self.axes {
+            let mut depth = 0usize;
+            let mut value = 0usize;
+            let mut free_seen = false;
+            for index in &axis.inputs {
+                match projector.get(index) {
+                    Some(bit) => {
+                        if free_seen {
+                            return None;
+                        }
+                        depth += 1;
+                        value = (value << 1) | bit;
+                    }
+                    None => free_seen = true,
+                }
+            }
+            key.push((depth, value));
+        }
+        Some(key)
+    }
+
+    /// The parent input region: one bit less on every axis that still fixes one.
+    ///
+    /// Every axis advances one bit per level, so the `2^axes` grandchildren of one
+    /// region all reach this key and are merged pairwise as they arrive.
+    fn input_parent(&self, key: &InputKey) -> InputKey {
+        key.iter()
+            .map(|(depth, value)| {
+                if *depth == 0 {
+                    (0, 0)
+                } else {
+                    (depth - 1, value >> 1)
+                }
+            })
+            .collect()
+    }
+
+    /// The root output region: no axis fixes an output bit yet.
+    fn root_output(&self) -> OutputKey {
+        vec![(0, 0); self.axes.len()]
+    }
+
+    /// The child output regions of `key` at `level`.
+    ///
+    /// Every axis that has another output bit at this level contributes one, so a
+    /// two-axis level produces four children.
+    fn output_children(&self, key: &OutputKey, level: usize) -> Vec<OutputKey> {
+        let mut children = vec![key.clone()];
+        for (axis_index, axis) in self.axes.iter().enumerate() {
+            if level > axis.outputs.len() || key[axis_index].0 >= level {
+                continue;
+            }
+            let mut next = Vec::with_capacity(children.len() * 2);
+            for child in children {
+                for bit in 0..2usize {
+                    let mut extended = child.clone();
+                    extended[axis_index] = (level, (child[axis_index].1 << 1) | bit);
+                    next.push(extended);
+                }
+            }
+            children = next;
+        }
+        children
+    }
+
+    /// Total number of selected bits across every axis.
+    fn bit_count(&self) -> usize {
+        self.axes.iter().map(|axis| axis.inputs.len()).sum()
     }
 
     /// The spectator-only part of a patch support.
     fn spectator_part(&self, projector: &Projector) -> Projector {
-        let mut spectator = projector.clone();
-        for index in &self.selected {
-            spectator.remove(index);
+        let mut projector = projector.clone();
+        for axis in &self.axes {
+            for index in axis.inputs.iter().chain(axis.outputs.iter()) {
+                projector.remove(index);
+            }
         }
-        spectator
+        projector
     }
 }
 
-/// Validate that `preimage` is exactly the dyadic input leaves of `geometry`.
+/// Validate the input leaves and return their per-axis prefix keys.
 ///
-/// Runs on patch supports only, so an unsupported partition is rejected before
-/// the operator is applied to any patch.
+/// Runs on patch supports only, so an unsupported partition is rejected before the
+/// operator is applied to any patch.
 fn validate_leaf_geometry<V>(
     preimage: &ReconstructionTarget<V>,
     geometry: &ScheduleGeometry,
     coverage: CoverageContract,
-) -> Result<BTreeSet<(usize, usize)>>
+) -> Result<BTreeSet<InputKey>>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    let depth = geometry.depth();
+    let bits = geometry.bit_count();
+    let shift =
+        u32::try_from(bits).map_err(|_| PartitionedTreeTNError::LogicalParameterCountOverflow)?;
     let full = 1usize
-        .checked_shl(
-            u32::try_from(depth)
-                .map_err(|_| PartitionedTreeTNError::LogicalParameterCountOverflow)?,
-        )
+        .checked_shl(shift)
         .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
-    let mut leaves: BTreeSet<(usize, usize)> = BTreeSet::new();
+    let mut leaves: BTreeSet<InputKey> = BTreeSet::new();
     let mut spectators: Option<Projector> = None;
-    // The Kraft sum of the prefix lengths, in units of `2^-depth`: a prefix-free
-    // set has sum at most `full`, and exactly `full` when it covers the domain.
+    // The Kraft sum of the total prefix lengths, in units of `2^-bits`: a
+    // prefix-free set has sum at most `full`, and exactly `full` when it covers the
+    // whole input domain.
     let mut kraft = 0usize;
     for projector in preimage.patch_projectors() {
-        let (prefix_depth, prefix) = geometry.input_prefix(projector).ok_or_else(|| {
+        let key = geometry.input_prefix(projector).ok_or_else(|| {
             invalid(
-                "every preimage patch must fix a contiguous prefix of the selected indices and leave the trailing selected indices free",
+                "every preimage patch must fix a contiguous prefix of each coordinate group and leave the trailing selected indices free",
             )
         })?;
         let patch_spectators = geometry.spectator_part(projector);
@@ -765,26 +971,41 @@ where
             }
             Some(_) => {}
         }
-        if !leaves.insert((prefix_depth, prefix)) {
+        if !leaves.insert(key.clone()) {
             return Err(invalid(
                 "input leaves must not repeat a selected-coordinate assignment",
             ));
         }
+        let depth: usize = key.iter().map(|(depth, _)| *depth).sum();
+        if depth > bits {
+            return Err(invalid(
+                "an input leaf must not fix more selected bits than the schedule has",
+            ));
+        }
         let weight = 1usize
             .checked_shl(
-                u32::try_from(depth - prefix_depth)
+                u32::try_from(bits - depth)
                     .map_err(|_| PartitionedTreeTNError::LogicalParameterCountOverflow)?,
             )
             .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
         kraft = checked_add(kraft, weight)?;
     }
-    // Prefix-free: a leaf that fixes a prefix of another leaf's selected indices
-    // would cover part of the same region, so the two would overlap.
-    for (prefix_depth, prefix) in &leaves {
-        for shorter in 1..*prefix_depth {
-            if leaves.contains(&(shorter, prefix >> (*prefix_depth - shorter))) {
+    // Prefix-free: a leaf whose per-axis prefixes are all prefixes of another
+    // leaf's would cover part of the same region, so the two would overlap.
+    for key in &leaves {
+        for other in &leaves {
+            if key == other {
+                continue;
+            }
+            let is_prefix =
+                key.iter()
+                    .zip(other)
+                    .all(|((depth, value), (other_depth, other_value))| {
+                        depth <= other_depth && *value == other_value >> (other_depth - depth)
+                    });
+            if is_prefix {
                 return Err(invalid(
-                    "input leaves must not overlap: a leaf that fixes a prefix of another leaf's selected indices covers the same coordinates",
+                    "input leaves must not overlap: a leaf whose prefixes are prefixes of another leaf's selected indices covers the same coordinates",
                 ));
             }
         }
@@ -825,17 +1046,20 @@ where
 /// output region is refined only when its terms exceed the goal and refining
 /// lowers its maximum retained rank, and a merged pair is combined into one term
 /// only when that strictly lowers the bond dimension, otherwise both operands stay
-/// as separate terms of the region's superposition. Each merged item is truncated
-/// only toward the goal and only when its measured residual fits an equal share of
-/// the allowance, so the reported bound sums measured residuals inside a region,
-/// combines disjoint regions by the Euclidean norm, and never exceeds the
-/// allowance. A rejected probe costs nothing, and a restriction is nonexpansive,
-/// so an inherited bound carries over without consuming budget. A merged or
-/// unpaired contribution is dropped only when its measured norm fits its share of
-/// the allowance: the inherited bound plus that norm stay in the reported bound, and
-/// a region whose terms are all dropped is omitted from the result instead of being
-/// silently presented as nonzero. Reaching [`MergeRefineOptions::max_terms`] returns
-/// a resource-limit error instead of silently relaxing accuracy.
+/// as separate terms of the region's superposition.
+///
+/// Every approximation is measured where it happens and recorded once in the
+/// report: an application error belongs to level zero, and a truncation residual or
+/// dropped norm belongs to the level and region that measured it. Components of one
+/// level live in disjoint regions and combine by the Euclidean norm; components of
+/// different levels can be nested and add by the triangle inequality, so a component
+/// is never counted once per region it later spreads into. The result never exceeds
+/// the allowance: the level shares are allocated from what the application error
+/// leaves, and a level spends only what it measures. A rejected probe contributes no
+/// reported component, and a region whose terms were all dropped is omitted from the
+/// result, because it has nothing to expose, while its measured norm stays in the
+/// report. Reaching [`MergeRefineOptions::max_terms`] returns a resource-limit error
+/// instead of silently relaxing accuracy.
 ///
 /// Output placement follows the subset-operator convention: `r_j` lands on the
 /// selected index that carried `k_(d+1-j)`, so a contiguous output prefix fixes
@@ -936,12 +1160,12 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     validate_tolerance(tolerance)?;
-    let geometry = ScheduleGeometry::new(selection)?;
-    let depth = geometry.depth();
-    let output_depth = options.output_depth.unwrap_or(depth);
-    if output_depth > depth {
+    let geometry = ScheduleGeometry::new(selection, options.coordinate_groups.as_deref())?;
+    let levels = geometry.level_count();
+    let output_depth = options.output_depth.unwrap_or(levels);
+    if output_depth > levels {
         return Err(invalid(
-            "output_depth must not exceed the number of selected indices",
+            "output_depth must not exceed the longest coordinate group",
         ));
     }
     // Validate the dyadic input geometry before applying any operator, so an
@@ -999,7 +1223,7 @@ where
     }
     // Live output regions, keyed by their prefix value, each holding one item per
     // input prefix that has not been merged away yet.
-    let mut level: BTreeMap<usize, BTreeMap<InputKey, Item<V>>> = BTreeMap::new();
+    let mut level: BTreeMap<OutputKey, BTreeMap<InputKey, Item<V>>> = BTreeMap::new();
     let mut first: BTreeMap<InputKey, Item<V>> = BTreeMap::new();
     let mut application_error = 0.0_f64;
     for prepared in images {
@@ -1013,7 +1237,7 @@ where
         // Level zero: one complete transform per leaf over the whole output
         // domain, carrying only the measured application error of that leaf.
         application_error = finite(application_error + prepared.error)?;
-        first.insert(leaf, Item::single(prepared.image, prepared.error));
+        first.insert(leaf, Item::single(prepared.image));
     }
     if application_error > allowance {
         return Err(invalid(
@@ -1026,6 +1250,18 @@ where
     // nonexpansive and therefore carries no new cost, and a rejected probe costs
     // nothing.
     let mut remaining = finite(allowance - application_error)?;
+    // Measured components, grouped by the level and the region where they were
+    // measured. A component is confined to the region that measured it, so two
+    // components of one level live in disjoint regions and combine by the Euclidean
+    // norm, while components of different levels can be nested and combine by the
+    // triangle inequality. Level zero has the single root region, which is why the
+    // application error is counted once instead of once per refined region.
+    let mut components: Vec<BTreeMap<OutputKey, f64>> = Vec::with_capacity(output_depth + 1);
+    let mut root_components = BTreeMap::new();
+    if application_error > 0.0 {
+        root_components.insert(geometry.root_output(), application_error);
+    }
+    components.push(root_components);
 
     let applied_operator_count: usize = first.len();
     let mut counters = MergeCounters {
@@ -1034,7 +1270,7 @@ where
     };
     let mut work_items_per_level = Vec::with_capacity(output_depth + 1);
     work_items_per_level.push(first.len());
-    level.insert(0, first);
+    level.insert(geometry.root_output(), first);
     check_term_budget(&level, &[], options.max_terms)?;
     // `finalized` keeps the regions that stopped refining, so their terms count
     // against the same budget as the live ones.
@@ -1049,23 +1285,35 @@ where
         } else {
             finite(remaining / level_merges as f64)?
         };
-        let spent_before = counters.residual_spent;
-        let mut next: BTreeMap<usize, BTreeMap<InputKey, Item<V>>> = BTreeMap::new();
+        let mut level_components: BTreeMap<OutputKey, f64> = BTreeMap::new();
+        let mut spent = 0.0_f64;
+        let mut next: BTreeMap<OutputKey, BTreeMap<InputKey, Item<V>>> = BTreeMap::new();
         for (region, items) in std::mem::take(&mut level) {
-            // Probe both child regions: restrict first, then merge input siblings.
-            let mut children = Vec::with_capacity(2);
-            for bit in 0..2usize {
-                let child = (region << 1) | bit;
-                let projector = geometry.output_projector(level_index, child)?;
-                children.push((
-                    child,
-                    restrict_and_merge(&items, &projector, center, options, share, &mut counters)?,
-                ));
+            // Probe every child region: restrict first, then merge input siblings.
+            // One axis contributes two children, so several axes contribute the
+            // product of their choices in one synchronized level.
+            let context = ProbeContext {
+                geometry: &geometry,
+                center,
+                options,
+                share,
+            };
+            let child_keys = geometry.output_children(&region, level_index);
+            let mut children = Vec::with_capacity(child_keys.len());
+            for child in child_keys {
+                let projector = geometry.output_projector(&child)?;
+                let mut incurred = 0.0_f64;
+                let child_items =
+                    restrict_and_merge(&context, &items, &projector, &mut counters, &mut incurred)?;
+                // The probe costs its measured components even when the region
+                // stops, but only a kept child contributes to the reported bound.
+                spent = finite(spent + incurred)?;
+                children.push((child, child_items, incurred));
             }
             let parent_rank = max_rank(&items);
             let child_rank = children
                 .iter()
-                .map(|(_, child_items)| max_rank(child_items))
+                .map(|(_, child_items, _)| max_rank(child_items))
                 .max()
                 .unwrap_or(0);
             // Refinement is worth its regions only when it lowers the retained
@@ -1076,7 +1324,10 @@ where
             };
             if refine {
                 counters.refined_regions = checked_add(counters.refined_regions, 1)?;
-                for (child, child_items) in children {
+                for (child, child_items, incurred) in children {
+                    if incurred > 0.0 {
+                        level_components.insert(child.clone(), incurred);
+                    }
                     next.insert(child, child_items);
                 }
             } else {
@@ -1101,8 +1352,11 @@ where
         work_items_per_level.push(live_items);
         level = next;
         check_term_budget(&level, &finalized, options.max_terms)?;
-        let spent = finite(counters.residual_spent - spent_before)?;
-        remaining = finite(remaining - spent)?;
+        components.push(level_components);
+        // The level share bounds this spend by construction, so the difference is
+        // nonnegative and the clamp only absorbs floating-point rounding at the
+        // boundary instead of failing a run for it.
+        remaining = finite((remaining - spent).max(0.0))?;
     }
     // Regions that survived the last level keep the input prefixes they hold at
     // that depth; a stopped region keeps the prefixes it had before its discarded
@@ -1118,47 +1372,35 @@ where
     // Group retained terms by output region: terms of one output prefix region
     // overlap, so they stay in one region entry that `regions()` exposes as a
     // superposition and `into_partition()` rejects.
-    let mut grouped: BTreeMap<(usize, usize), MergeRefineRegion<V>> = BTreeMap::new();
-    let mut dropped_by_region: BTreeMap<(usize, usize), f64> = BTreeMap::new();
-    for (output_level, region, items) in finalized {
-        let output = geometry.output_projector(output_level, region)?;
-        for ((input_depth, input_prefix), item) in items {
-            let input = geometry.input_projector(input_depth, input_prefix)?;
-            if item.dropped > 0.0 {
-                let entry = dropped_by_region
-                    .entry((output_level, region))
-                    .or_insert(0.0);
-                *entry = finite(*entry + item.dropped)?;
-            }
-            for term in item.terms {
-                max_bond_dim = max_bond_dim.max(term.value.max_bond_dim());
+    let mut grouped: BTreeMap<OutputKey, MergeRefineRegion<V>> = BTreeMap::new();
+    for (_, region, items) in finalized {
+        let output = geometry.output_projector(&region)?;
+        for (input_key, item) in items {
+            let input = geometry.input_projector(&input_key)?;
+            for value in item.terms {
+                max_bond_dim = max_bond_dim.max(value.max_bond_dim());
                 logical_parameters = logical_parameters
-                    .checked_add(logical_parameter_count(&term.value)?)
+                    .checked_add(logical_parameter_count(&value)?)
                     .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
-                match grouped.entry((output_level, region)) {
+                match grouped.entry(region.clone()) {
                     Entry::Vacant(slot) => {
-                        slot.insert(MergeRefineRegion::new(output.clone(), input.clone(), term));
+                        slot.insert(MergeRefineRegion::new(output.clone(), input.clone(), value));
                     }
-                    Entry::Occupied(mut slot) => slot.get_mut().push(input.clone(), term),
+                    Entry::Occupied(mut slot) => slot.get_mut().push(input.clone(), value),
                 }
             }
         }
     }
-    let mut regions: Vec<MergeRefineRegion<V>> = Vec::with_capacity(grouped.len());
+    let regions: Vec<MergeRefineRegion<V>> = grouped.into_values().collect();
+    // Components of different levels can be nested, so they add by the triangle
+    // inequality, while the components of one level live in disjoint regions and
+    // therefore combine by the Euclidean norm.
     let mut error_bound = 0.0_f64;
-    // Region bounds add by the triangle inequality because terms inside a region
-    // may overlap; disjoint regions combine by the Euclidean norm.
-    for (key, mut region) in grouped {
-        if let Some(dropped) = dropped_by_region.remove(&key) {
-            region.bound = finite(region.bound + dropped)?;
-        }
-        error_bound = finite(error_bound.hypot(region.bound))?;
-        regions.push(region);
-    }
-    // A region whose terms were all dropped keeps its measured bound even though it
-    // has no retained term to expose.
-    for bound in dropped_by_region.into_values() {
-        error_bound = finite(error_bound.hypot(bound))?;
+    for level_components in &components {
+        let level_bound = level_components
+            .values()
+            .try_fold(0.0_f64, |total, bound| finite(total.hypot(*bound)))?;
+        error_bound = finite(error_bound + level_bound)?;
     }
     let term_count = regions.iter().map(|region| region.terms.len()).sum();
     let reference_scale = scale;
@@ -1187,23 +1429,21 @@ where
     Ok(MergeRefineResult { regions, report })
 }
 
-/// One retained term: `P_B F P_A w` up to a measured deviation bound.
-#[derive(Debug, Clone)]
-struct Term<V>
+/// Everything one level's region probes share: the geometry, the compression center,
+/// the options, and this level's share of the remaining allowance.
+struct ProbeContext<'a, V>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
-    value: SubDomainTreeTN<V>,
-    /// Measured bound on the deviation of `value` from the exact object.
-    bound: f64,
+    geometry: &'a ScheduleGeometry,
+    center: &'a V,
+    options: &'a MergeRefineOptions,
+    share: f64,
 }
 
 /// A finalized output region: its output level, its output region key, and its
 /// items keyed by their input prefix.
-type FinalRegion<V> = (usize, usize, BTreeMap<InputKey, Item<V>>);
-
-/// An input region: how many leading selected bits it fixes, and their value.
-type InputKey = (usize, usize);
+type FinalRegion<V> = (usize, OutputKey, BTreeMap<InputKey, Item<V>>);
 
 /// One work item: the superposition of its terms for one input prefix region.
 #[derive(Debug, Clone)]
@@ -1211,50 +1451,41 @@ struct Item<V>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
-    terms: Vec<Term<V>>,
-    /// Bound carried by contributions that were dropped as negligible under the
-    /// global allowance. They have no term to attach to, so the region they belong
-    /// to reports them.
-    dropped: f64,
+    /// Retained terms of the superposition. The measured components that bound
+    /// them are recorded once, in the ledger of the region where they were measured.
+    terms: Vec<SubDomainTreeTN<V>>,
 }
 
 impl<V> Item<V>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    fn single(value: SubDomainTreeTN<V>, bound: f64) -> Self {
-        Self {
-            terms: vec![Term { value, bound }],
-            dropped: 0.0,
-        }
+    fn single(value: SubDomainTreeTN<V>) -> Self {
+        Self { terms: vec![value] }
     }
 
     /// Largest retained bond dimension over the item's terms.
     fn max_rank(&self) -> usize {
         self.terms
             .iter()
-            .map(|term| term.value.max_bond_dim())
+            .map(SubDomainTreeTN::max_bond_dim)
             .max()
             .unwrap_or(0)
     }
 
     /// Restrict every term to `projector`, dropping terms that vanish there.
+    ///
+    /// Restriction is nonexpansive and consumes no budget: a measured component is
+    /// recorded once in the ledger of the region where it was measured, not copied
+    /// into the children that restrict it.
     fn restrict(&self, projector: &Projector) -> Result<Self> {
         let mut terms = Vec::with_capacity(self.terms.len());
-        for term in &self.terms {
-            // Restriction is nonexpansive, so an inherited bound carries over
-            // unchanged and consumes no budget.
-            if let Some(value) = term.value.project(projector)? {
-                terms.push(Term {
-                    value,
-                    bound: term.bound,
-                });
+        for value in &self.terms {
+            if let Some(value) = value.project(projector)? {
+                terms.push(value);
             }
         }
-        Ok(Self {
-            terms,
-            dropped: self.dropped,
-        })
+        Ok(Self { terms })
     }
 }
 
@@ -1268,37 +1499,30 @@ where
 
 /// Restrict a region's items to a child region and merge each input sibling pair.
 fn restrict_and_merge<V>(
+    context: &ProbeContext<'_, V>,
     items: &BTreeMap<InputKey, Item<V>>,
     projector: &Projector,
-    center: &V,
-    options: &MergeRefineOptions,
-    share: f64,
     counters: &mut MergeCounters,
+    incurred: &mut f64,
 ) -> Result<BTreeMap<InputKey, Item<V>>>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     let mut children: BTreeMap<InputKey, Item<V>> = BTreeMap::new();
-    for ((input_depth, input_prefix), item) in items {
+    for (input_key, item) in items {
         let restricted = item.restrict(projector)?;
-        // Every item ascends one selected bit per level. A genuine sibling pair is
-        // summed; a leaf whose sibling is absent keeps its own region, which is
-        // already the union of its subtree, so ascending is exact and free.
-        let parent_depth = input_depth.saturating_sub(1);
-        let parent_prefix = if *input_depth == 0 {
-            0
-        } else {
-            input_prefix >> 1
-        };
-        match children.entry((parent_depth, parent_prefix)) {
+        // Every item ascends one selected bit per axis per level. Genuine siblings
+        // are summed pairwise as they arrive; a leaf whose sibling is absent keeps
+        // its own region, which is already the union of its subtree, so ascending
+        // is exact and free.
+        match children.entry(context.geometry.input_parent(input_key)) {
             Entry::Vacant(slot) => {
                 slot.insert(restricted);
             }
             Entry::Occupied(mut slot) => {
                 // Both siblings carry the same spectator constraints, so strict
                 // subdomain addition applies.
-                let combined =
-                    merge_items(slot.get(), &restricted, center, options, share, counters)?;
+                let combined = merge_items(slot.get(), &restricted, context, counters, incurred)?;
                 counters.additions = checked_add(counters.additions, 1)?;
                 slot.insert(combined);
             }
@@ -1321,44 +1545,36 @@ where
 fn merge_items<V>(
     left: &Item<V>,
     right: &Item<V>,
-    center: &V,
-    options: &MergeRefineOptions,
-    share: f64,
+    context: &ProbeContext<'_, V>,
     counters: &mut MergeCounters,
+    incurred: &mut f64,
 ) -> Result<Item<V>>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     let mut terms = Vec::with_capacity(left.terms.len() + right.terms.len());
-    let mut dropped = finite(left.dropped + right.dropped)?;
     for index in 0..left.terms.len().max(right.terms.len()) {
         match (left.terms.get(index), right.terms.get(index)) {
             (Some(left), Some(right)) => {
-                let sum = left.value.add(&right.value)?;
-                let inherited = finite(left.bound + right.bound)?;
+                let sum = left.add(right)?;
                 counters.max_transient_bond_dim =
                     counters.max_transient_bond_dim.max(sum.max_bond_dim());
                 // A contribution whose measured norm fits its share of the
-                // allowance is dropped: its inherited bound plus its measured norm
-                // stay in the region's report.
-                if drop_negligible(&sum, share, inherited, counters, &mut dropped)? {
+                // allowance is dropped, charging that norm to this region.
+                if drop_negligible(&sum, context.share, counters, incurred)? {
                     continue;
                 }
-                match options.target_bond_dim {
-                    None => terms.push(Term {
-                        value: sum,
-                        bound: inherited,
-                    }),
+                match context.options.target_bond_dim {
+                    None => terms.push(sum),
                     Some(goal) => {
                         let (candidate, residual) =
-                            compress_item(&sum, center, goal, share, counters)?;
-                        let naive_rank =
-                            checked_add(left.value.max_bond_dim(), right.value.max_bond_dim())?;
+                            compress_item(&sum, context.center, goal, context.share, counters)?;
+                        let naive_rank = checked_add(left.max_bond_dim(), right.max_bond_dim())?;
                         if candidate.max_bond_dim() < naive_rank {
-                            terms.push(Term {
-                                value: candidate,
-                                bound: finite(inherited + residual)?,
-                            });
+                            if residual > 0.0 {
+                                *incurred = finite(*incurred + residual)?;
+                            }
+                            terms.push(candidate);
                         } else {
                             terms.push(left.clone());
                             terms.push(right.clone());
@@ -1367,7 +1583,7 @@ where
                 }
             }
             (Some(only), None) | (None, Some(only)) => {
-                if drop_negligible(&only.value, share, only.bound, counters, &mut dropped)? {
+                if drop_negligible(only, context.share, counters, incurred)? {
                     continue;
                 }
                 terms.push(only.clone());
@@ -1375,19 +1591,18 @@ where
             (None, None) => {}
         }
     }
-    Ok(Item { terms, dropped })
+    Ok(Item { terms })
 }
 
 /// Drop a contribution whose measured norm fits its share of the allowance.
 ///
-/// Returns `true` when the contribution was dropped, in which case its inherited
-/// bound and measured norm are charged to the item and to the level spend.
+/// Returns `true` when the contribution was dropped, in which case its measured
+/// norm is charged to the region that measured it.
 fn drop_negligible<V>(
     value: &SubDomainTreeTN<V>,
     share: f64,
-    inherited: f64,
     counters: &mut MergeCounters,
-    dropped: &mut f64,
+    incurred: &mut f64,
 ) -> Result<bool>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
@@ -1396,16 +1611,15 @@ where
     if norm > share {
         return Ok(false);
     }
-    *dropped = finite(*dropped + inherited + norm)?;
+    *incurred = finite(*incurred + norm)?;
     counters.dropped_terms = checked_add(counters.dropped_terms, 1)?;
     counters.dropped_error = finite(counters.dropped_error + norm)?;
-    counters.residual_spent = finite(counters.residual_spent + norm)?;
     Ok(true)
 }
 
 /// Fail before the retained term count exceeds the caller's budget.
 fn check_term_budget<V>(
-    live: &BTreeMap<usize, BTreeMap<InputKey, Item<V>>>,
+    live: &BTreeMap<OutputKey, BTreeMap<InputKey, Item<V>>>,
     finalized: &[FinalRegion<V>],
     max_terms: usize,
 ) -> Result<()>
@@ -1435,9 +1649,6 @@ where
 #[derive(Debug, Default)]
 struct MergeCounters {
     additions: usize,
-    /// Sum of the truncation residuals accepted so far, charged against the
-    /// remaining global allowance.
-    residual_spent: f64,
     /// Contributions dropped as negligible, and their measured norm.
     dropped_terms: usize,
     dropped_error: f64,
@@ -1474,7 +1685,6 @@ where
     let (candidate, residual) = truncate_toward_allowance(sum, center, share)?;
     if candidate.max_bond_dim() < sum.max_bond_dim() {
         counters.compressions = checked_add(counters.compressions, 1)?;
-        counters.residual_spent = finite(counters.residual_spent + residual)?;
         Ok((candidate, residual))
     } else {
         Ok((sum.clone(), 0.0))

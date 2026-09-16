@@ -14,7 +14,8 @@ use tensor4all_partitionedtreetn::{
 };
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 use tensor4all_treetn::{
-    apply_linear_operator_to_indices, ApplyOptions, IndexMapping, LinearOperator,
+    apply_linear_operator_to_indices, bind_linear_operator_indices,
+    compose_exclusive_linear_operators, ApplyOptions, IndexMapping, LinearOperator,
     RestructureOptions, SiteIndexNetwork,
 };
 
@@ -1498,61 +1499,78 @@ fn schedule_with_application(
     )
 }
 
-/// `I ⊗ I + scale · X ⊗ X` as a two-node MPO of bond dimension two.
+/// `I^⊗r + scale · X^⊗r` as an `r`-node MPO of bond dimension two.
 ///
 /// Its image of a dyadic input leaf is a rank-two superposition
-/// (`|00> + scale · |11>`), so truncating the application to bond dimension one
-/// has a measurable effect whose size the `scale` controls, unlike a Fourier
+/// (`|0...0> + scale · |1...1>`), so truncating the application to bond dimension
+/// one has a measurable effect whose size `scale` controls, unlike a Fourier
 /// operator whose leaf images are already low rank.
-fn identity_plus_scaled_xx(sites: &[DynIndex], scale: f64) -> LinearOperator<IdxTensor, usize> {
-    let (in0, out0) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
-    let (in1, out1) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
-    let bond = DynIndex::new_dyn(2);
-    // Column-major over `[in, out, bond]`: bond 0 is the identity, bond 1 the X.
-    let left = IdxTensor::from_dense(
-        vec![in0.clone(), out0.clone(), bond.clone()],
-        vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
-    )
-    .expect("left tensor");
-    // Column-major over `[bond, in, out]`: bond 0 is the identity, bond 1 the
-    // scaled X.
-    let right = IdxTensor::from_dense(
-        vec![bond, in1.clone(), out1.clone()],
-        vec![1.0, 0.0, 0.0, 1.0, 0.0, scale, scale, 0.0],
-    )
-    .expect("right tensor");
-    let mpo = TreeTN::from_tensors(vec![left, right], vec![0usize, 1]).expect("mpo");
-    let mut input = HashMap::new();
-    input.insert(
-        0usize,
-        IndexMapping {
-            true_index: sites[0].clone(),
-            internal_index: in0,
-        },
-    );
-    input.insert(
-        1usize,
-        IndexMapping {
-            true_index: sites[1].clone(),
-            internal_index: in1,
-        },
-    );
-    let mut output = HashMap::new();
-    output.insert(
-        0usize,
-        IndexMapping {
-            true_index: sites[0].clone(),
-            internal_index: out0,
-        },
-    );
-    output.insert(
-        1usize,
-        IndexMapping {
-            true_index: sites[1].clone(),
-            internal_index: out1,
-        },
-    );
-    LinearOperator::new(mpo, input, output)
+fn identity_plus_scaled_x_tensor(
+    sites: &[DynIndex],
+    scale: f64,
+) -> LinearOperator<IdxTensor, usize> {
+    let r = sites.len();
+    let inputs: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let outputs: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let bonds: Vec<DynIndex> = (1..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let mut tensors = Vec::new();
+    for i in 0..r {
+        let mut indices: Vec<DynIndex> = Vec::new();
+        if i > 0 {
+            indices.push(bonds[i - 1].clone());
+        }
+        indices.push(inputs[i].clone());
+        indices.push(outputs[i].clone());
+        if i + 1 < r {
+            indices.push(bonds[i].clone());
+        }
+        let dims: Vec<usize> = indices.iter().map(|index| index.dim).collect();
+        let size: usize = dims.iter().product();
+        let mut data = vec![Complex64::new(0.0, 0.0); size];
+        for (linear, slot) in data.iter_mut().enumerate() {
+            let mut coordinate = vec![0usize; indices.len()];
+            let mut remainder = linear;
+            for (position, dim) in dims.iter().enumerate() {
+                coordinate[position] = remainder % dim;
+                remainder /= dim;
+            }
+            // The bond selects the identity (block 0) or the scaled X (block 1).
+            let (block, input, output) = if i == 0 {
+                (coordinate[2], coordinate[0], coordinate[1])
+            } else {
+                (coordinate[0], coordinate[1], coordinate[2])
+            };
+            let kept = if block == 0 {
+                input == output
+            } else {
+                input + output == 1
+            };
+            if kept {
+                *slot = Complex64::new(if block == 0 { 1.0 } else { scale }, 0.0);
+            }
+        }
+        tensors.push(IdxTensor::from_dense(indices, data).expect("tensor"));
+    }
+    let mpo = TreeTN::from_tensors(tensors, (0..r).collect()).expect("mpo");
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+    for i in 0..r {
+        input_mapping.insert(
+            i,
+            IndexMapping {
+                true_index: sites[i].clone(),
+                internal_index: inputs[i].clone(),
+            },
+        );
+        output_mapping.insert(
+            i,
+            IndexMapping {
+                true_index: sites[i].clone(),
+                internal_index: outputs[i].clone(),
+            },
+        );
+    }
+    LinearOperator::new(mpo, input_mapping, output_mapping)
 }
 
 #[test]
@@ -1564,7 +1582,7 @@ fn merge_refine_schedule_charges_a_truncating_application_to_the_bound() {
     let tree = mps(&sites, &values);
     let preimage = dyadic_input_leaves(&tree, &sites);
     // A small second term keeps the truncation error affordable at `rtol = 0.5`.
-    let operator = identity_plus_scaled_xx(&sites, 0.1);
+    let operator = identity_plus_scaled_x_tensor(&sites, 0.1);
 
     // Truncating each application to bond dimension one removes a real part of
     // every leaf image, which the schedule must charge before any compression.
@@ -1601,7 +1619,7 @@ fn merge_refine_schedule_rejects_an_unaffordable_application_error() {
         .collect();
     let tree = mps(&sites, &values);
     let preimage = dyadic_input_leaves(&tree, &sites);
-    let operator = identity_plus_scaled_xx(&sites, 0.1);
+    let operator = identity_plus_scaled_x_tensor(&sites, 0.1);
 
     // A bond-dimension-one application cannot fit a near-exact tolerance.
     let error = schedule_with_application(
@@ -1958,4 +1976,251 @@ fn merge_refine_schedule_drops_negligible_contributions_within_the_allowance() {
     let (tight_indices, tight_dense) = dense_of_regions(&tight);
     let reference_dense = reorder(&reference_dense, &reference_indices, &tight_indices);
     assert!(max_error(&tight_dense, &reference_dense) < 1e-10);
+}
+
+#[test]
+fn merge_refine_schedule_bound_does_not_grow_with_the_level_count() {
+    // One measured application error per leaf is confined to the region that
+    // measured it, so the reported bound must not grow like `2^(levels/2)` as the
+    // output is refined: before the component ledger it exceeded the true L2
+    // deviation by 3.9x at two levels and 7.2x at three.
+    for (r, max_ratio) in [(2usize, 3.0f64), (3, 4.0)] {
+        let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+        let values: Vec<Complex64> = (0..1usize << r)
+            .map(|m| Complex64::new(1.0 + (m as f64 * 0.7).sin(), 0.2 * m as f64))
+            .collect();
+        let tree = mps(&sites, &values);
+        let preimage = dyadic_input_leaves(&tree, &sites);
+        let operator = identity_plus_scaled_x_tensor(&sites, 0.1);
+
+        let exact = schedule_exact(&preimage, &operator, &sites, None, 16);
+        let (exact_indices, exact_dense) = dense_of(&exact.into_partition().expect("partition"));
+        let approximate = schedule_with_application(
+            &preimage,
+            &operator,
+            &sites,
+            0.5,
+            ApplyOptions::zipup().with_max_bond_dim(1),
+        )
+        .expect("approximate application");
+        let report = approximate.report().clone();
+        assert_eq!(report.level_count, r);
+        assert!(report.error_bound > 0.0);
+
+        let (indices, dense) = dense_of_regions(&approximate);
+        let reference = reorder(&exact_dense, &exact_indices, &indices);
+        let deviation = dense
+            .iter()
+            .zip(&reference)
+            .map(|(a, b)| (*a - *b).norm_sqr())
+            .sum::<f64>()
+            .sqrt();
+        assert!(
+            deviation <= report.error_bound + 1e-12,
+            "r = {r}: deviation {deviation:e} exceeds the bound {:e}",
+            report.error_bound
+        );
+        let ratio = report.error_bound / deviation;
+        assert!(
+            ratio <= max_ratio,
+            "r = {r}: bound {:.3e} is {ratio:.2}x the deviation {deviation:.3e}",
+            report.error_bound
+        );
+    }
+}
+
+/// A one-dimensional Fourier transform whose operator nodes are `nodes`, bound to
+/// the corresponding state indices.
+fn axis_fourier_operator(nodes: &[usize], sites: &[DynIndex]) -> LinearOperator<IdxTensor, usize> {
+    let renamed: Vec<(usize, usize)> = (0..nodes.len())
+        .map(|position| (position, nodes[position]))
+        .collect();
+    let operator = quantics_fourier_operator(nodes.len(), FourierOptions::default())
+        .expect("fourier")
+        .rename_nodes(&renamed)
+        .expect("rename");
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    for (node, site) in nodes.iter().zip(sites) {
+        inputs.push((
+            operator
+                .get_input_mapping(node)
+                .expect("input mapping")
+                .true_index
+                .clone(),
+            site.clone(),
+        ));
+        outputs.push((
+            operator
+                .get_output_mapping(node)
+                .expect("output mapping")
+                .true_index
+                .clone(),
+            site.clone(),
+        ));
+    }
+    bind_linear_operator_indices(&operator, &inputs, &outputs).expect("bind")
+}
+
+/// The product of two one-dimensional Fourier transforms, composed into one
+/// operator over a four-node chain: axis `0` on `sites[0..2]`, axis `1` on
+/// `sites[2..4]`.
+fn two_axis_fourier_operator(sites: &[DynIndex]) -> LinearOperator<IdxTensor, usize> {
+    let axis_a = axis_fourier_operator(&[0, 1], &sites[0..2]);
+    let axis_b = axis_fourier_operator(&[2, 3], &sites[2..4]);
+    let mut target: SiteIndexNetwork<usize, DynIndex> = SiteIndexNetwork::new();
+    for (node, operator) in [(0usize, &axis_a), (1, &axis_a), (2, &axis_b), (3, &axis_b)] {
+        if !target.has_node(&node) {
+            target.add_node(node, HashSet::new()).expect("target node");
+        }
+        for mapping in operator.get_input_mappings(&node).expect("input mappings") {
+            target
+                .add_site_index(&node, mapping.internal_index.clone())
+                .expect("site index");
+        }
+        for mapping in operator
+            .get_output_mappings(&node)
+            .expect("output mappings")
+        {
+            target
+                .add_site_index(&node, mapping.internal_index.clone())
+                .expect("site index");
+        }
+    }
+    target.add_edge(&0usize, &1usize).expect("edge");
+    target.add_edge(&1usize, &2usize).expect("edge");
+    target.add_edge(&2usize, &3usize).expect("edge");
+    compose_exclusive_linear_operators(&target, &[&axis_a, &axis_b], &HashMap::new())
+        .expect("composition")
+}
+
+#[test]
+fn merge_refine_schedule_transforms_two_coordinate_axes_in_one_level() {
+    let sites: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..16)
+        .map(|m| Complex64::new(1.0 + (m as f64 * 0.4).sin(), 0.1 * m as f64))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = two_axis_fourier_operator(&sites);
+    let groups = vec![
+        CoordinateGroup::new(sites[0..2].to_vec()),
+        CoordinateGroup::new(sites[2..4].to_vec()),
+    ];
+
+    // Reference: the two one-dimensional transforms applied in sequence.
+    let mut reference = tree.clone();
+    for (nodes, axis_sites) in [([0usize, 1], &sites[0..2]), ([2usize, 3], &sites[2..4])] {
+        let axis = axis_fourier_operator(&nodes, axis_sites);
+        reference =
+            apply_linear_operator_to_indices(&axis, &reference, &[], &[], ApplyOptions::naive())
+                .expect("reference apply");
+    }
+    let reference_dense = reference.to_dense().expect("dense");
+    let reference_indices = reference_dense.indices().to_vec();
+    let reference_values = reference_dense.to_vec::<Complex64>().expect("vector");
+
+    // One level fixes the most significant frequency bit of each axis: with the
+    // documented per-axis reversal those sit on the axes' last input indices, so a
+    // two-axis level produces four output regions.
+    let partial = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance {
+            rtol: 1e-12,
+            atol: 0.0,
+        },
+        &MergeRefineOptions {
+            coordinate_groups: Some(groups.clone()),
+            output_depth: Some(1),
+            max_work_items: 64,
+            ..Default::default()
+        },
+    )
+    .expect("partial schedule");
+    assert_eq!(partial.report().region_count, 4);
+    assert_eq!(partial.report().work_items_per_level, vec![16, 16]);
+    for (projector, _) in partial.regions() {
+        assert!(projector.get(&sites[1]).is_some());
+        assert!(projector.get(&sites[3]).is_some());
+        assert!(projector.get(&sites[0]).is_none());
+        assert!(projector.get(&sites[2]).is_none());
+    }
+
+    // The fully refined run reproduces the product transform as a strict partition.
+    let full = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance {
+            rtol: 1e-12,
+            atol: 0.0,
+        },
+        &MergeRefineOptions {
+            coordinate_groups: Some(groups),
+            max_work_items: 64,
+            ..Default::default()
+        },
+    )
+    .expect("full schedule");
+    assert_eq!(full.report().applied_operator_count, 16);
+    assert_eq!(full.report().region_count, 16);
+    assert_eq!(full.report().error_bound, 0.0);
+    let partition = full.into_partition().expect("partition");
+    let (indices, dense) = dense_of(&partition);
+    let reference_values = reorder(&reference_values, &reference_indices, &indices);
+    let error = max_error(&dense, &reference_values);
+    assert!(error < TOL, "max error {error:e}");
+}
+
+#[test]
+fn merge_refine_schedule_rejects_inconsistent_coordinate_groups() {
+    let sites: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = vec![Complex64::new(1.0, 0.0); 16];
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = two_axis_fourier_operator(&sites);
+    let tolerance = ReconstructionTolerance::default();
+
+    // A group whose outputs are not its inputs is rejected.
+    let error = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        tolerance,
+        &MergeRefineOptions {
+            coordinate_groups: Some(vec![CoordinateGroup::with_outputs(
+                sites[0..2].to_vec(),
+                sites[2..4].to_vec(),
+            )]),
+            ..Default::default()
+        },
+    )
+    .expect_err("inputs and outputs must be the same indices");
+    assert!(error.to_string().contains("same full indices"));
+
+    // Groups that do not assign every selected index once are rejected.
+    let error = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        tolerance,
+        &MergeRefineOptions {
+            coordinate_groups: Some(vec![CoordinateGroup::new(sites[0..2].to_vec())]),
+            ..Default::default()
+        },
+    )
+    .expect_err("every selected index must be assigned exactly once");
+    assert!(error
+        .to_string()
+        .contains("assign every selected index exactly once"));
 }
