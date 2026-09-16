@@ -529,9 +529,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the grid or options are invalid, an initial pivot
-/// conversion fails, `f` returns the wrong number of values, or the
-/// interpolation fails.
+/// Returns [`QuanticsTCIError::InvalidConfiguration`] when the grid or options
+/// are invalid. Returns [`QuanticsTCIError::Operation`] when an initial pivot
+/// conversion fails, `f` returns a value count that does not equal the number
+/// of requested points, or the underlying interpolation fails.
 ///
 /// # Examples
 ///
@@ -663,9 +664,11 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when `xvals` or the options are invalid, an initial pivot
-/// conversion fails, `f` returns the wrong number of values, or the
-/// interpolation fails.
+/// Returns [`QuanticsTCIError::InvalidConfiguration`] when `xvals` is empty,
+/// contains an empty, non-finite, or non-increasing dimension, or when the
+/// options are invalid. Returns [`QuanticsTCIError::Operation`] when an initial
+/// pivot conversion fails, `f` returns a value count that does not equal the
+/// number of requested points, or the underlying interpolation fails.
 ///
 /// # Examples
 ///
@@ -889,9 +892,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the grid size or options are invalid, an initial pivot
-/// conversion fails, `f` returns the wrong number of values, or the
-/// interpolation fails.
+/// Returns [`QuanticsTCIError::InvalidConfiguration`] when the grid size or
+/// options are invalid. Returns [`QuanticsTCIError::Operation`] when an initial
+/// pivot conversion fails, `f` returns a value count that does not equal the
+/// number of requested points, or the underlying interpolation fails.
 ///
 /// # Examples
 ///

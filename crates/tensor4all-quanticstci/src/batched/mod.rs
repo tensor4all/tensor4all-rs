@@ -210,8 +210,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when `output_dims` is empty or has a zero factor, the grid
-/// or options are invalid, `f` returns the wrong number of values, or a
+/// Returns [`QuanticsTCIError::InvalidConfiguration`] when `output_dims` is
+/// empty or has a zero factor, or when the grid or options are invalid.
+/// Returns [`QuanticsTCIError::Operation`] when `f` returns a value count that
+/// does not equal `n_points * product(output_dims)`, or when the underlying
 /// component interpolation fails.
 ///
 /// # Examples

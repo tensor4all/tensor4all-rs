@@ -143,6 +143,12 @@ where
 /// coordinates, so the point-wise function is called at most once per distinct
 /// point.
 ///
+/// # Errors
+///
+/// The returned closure returns an [`anyhow::Error`] when a requested batch
+/// point index is out of bounds; batches produced by this crate always keep
+/// their points in bounds, so it only fails for a hand-built invalid batch.
+///
 /// # Examples
 ///
 /// ```
@@ -183,6 +189,12 @@ where
 /// [`quanticscrossinterpolate_discrete_batch`](crate::quanticscrossinterpolate_discrete_batch)
 /// when only a scalar function is available.
 ///
+/// # Errors
+///
+/// The returned closure returns an [`anyhow::Error`] when a requested batch
+/// point index is out of bounds; batches produced by this crate always keep
+/// their points in bounds, so it only fails for a hand-built invalid batch.
+///
 /// # Examples
 ///
 /// ```
@@ -219,6 +231,12 @@ where
 /// when only a scalar function returning all components is available. Repeated
 /// coordinates are evaluated once and cached. Values are emitted point-major:
 /// the components of each requested point consecutively.
+///
+/// # Errors
+///
+/// The returned closure returns an [`anyhow::Error`] when a requested batch
+/// point index is out of bounds; batches produced by this crate always keep
+/// their points in bounds, so it only fails for a hand-built invalid batch.
 ///
 /// # Examples
 ///
