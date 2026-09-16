@@ -8,8 +8,12 @@
 //! whole output domain is never assembled.
 //!
 //! A work item represents `P_B F_selected P_A w` for one input dyadic region `A`
-//! and one output prefix region `B`. For a uniform binary input partition of
-//! depth `d`, level `t` merges the constraint on `k_(d-t+1)` and fixes `r_t`.
+//! and one output prefix region `B`. The input regions form a dyadic prefix code
+//! over the selected indices, so their depths may differ: every item ascends one
+//! selected bit per level, a genuine sibling pair is summed, and a leaf whose
+//! sibling is absent keeps its own region, which is already the union of its
+//! subtree. For a uniform input partition of depth `d`, level `t` merges the
+//! constraint on `k_(d-t+1)` and fixes `r_t`.
 //! Input significance is `[k1, ..., kd]` in the operator's node order, while
 //! frequency significance `r_j` is carried by the selected position that
 //! previously carried `k_(d+1-j)`, matching the subset-operator output placement
@@ -31,7 +35,7 @@
 //! domain/embedding policy and is never applied silently.
 
 use std::{
-    collections::{btree_map::Entry, BTreeMap},
+    collections::{btree_map::Entry, BTreeMap, BTreeSet},
     fmt::Debug,
     hash::Hash,
 };
@@ -76,9 +80,10 @@ pub struct MergeRefineOptions {
     /// depth stops after that many level transitions and returns disjoint output
     /// prefix regions whose terms overlap inside a region.
     pub output_depth: Option<usize>,
-    /// Maximum live work items per level, default `4096`. Every level of the
-    /// uniform trajectory holds exactly `2^selected_indices` items, so a limit
-    /// below that is rejected before any operator is applied.
+    /// Maximum live work items, default `4096`. A limit below the number of
+    /// present input leaves is rejected before any operator is applied, and every
+    /// level is checked as well, because unequal leaf depths let the live item
+    /// count grow with the number of refined regions.
     pub max_work_items: usize,
     /// Desired maximum bond dimension per retained term, default `None`.
     /// `None` disables truncation and keeps the trajectory uniform and exact.
@@ -97,6 +102,10 @@ pub struct MergeRefineOptions {
     pub max_terms: usize,
     /// Which input leaves the preimage must supply, default
     /// [`CoverageContract::Complete`].
+    ///
+    /// Leaves must form a dyadic prefix code over the selected binary indices:
+    /// their depths may differ, but no leaf may fix a prefix of another leaf's
+    /// indices, because the two would then cover overlapping coordinates.
     ///
     /// The contract is explicit because an absent leaf is only a zero when the
     /// caller says so: under [`CoverageContract::ZeroForMissingLeaves`] a preimage
@@ -130,7 +139,8 @@ pub struct MergeRefineOptions {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CoverageContract {
-    /// Every dyadic input coordinate assignment must be present exactly once.
+    /// The dyadic input leaves must cover the whole input domain: their Kraft sum
+    /// is exactly one, so every coordinate assignment belongs to exactly one leaf.
     /// A preimage that omits or repeats an assignment is rejected.
     #[default]
     Complete,
@@ -648,13 +658,13 @@ impl ScheduleGeometry {
         self.selected.len()
     }
 
-    /// The input region holding every leaf with the given `k1..k_(depth-level)`
-    /// prefix.
-    fn input_projector(&self, level: usize, region: usize) -> Result<Projector> {
-        let fixed = self.depth() - level;
+    /// The input region fixing the first `depth` selected bits to `prefix`.
+    ///
+    /// A prefix length of zero is the whole input domain.
+    fn input_projector(&self, depth: usize, prefix: usize) -> Result<Projector> {
         let mut projector = Projector::new();
-        for position in 0..fixed {
-            let bit = (region >> (fixed - 1 - position)) & 1;
+        for position in 0..depth {
+            let bit = (prefix >> (depth - 1 - position)) & 1;
             projector.insert(self.selected[position].clone(), bit)?;
         }
         Ok(projector)
@@ -671,14 +681,28 @@ impl ScheduleGeometry {
         Ok(projector)
     }
 
-    /// Read the input leaf coordinate from a patch support, or `None` when the
-    /// support leaves a selected index free.
-    fn leaf_index(&self, projector: &Projector) -> Option<usize> {
-        let mut leaf = 0usize;
+    /// Read the selected-index prefix a patch support fixes.
+    ///
+    /// Returns its length and value, or `None` when the support is not a
+    /// contiguous prefix: a free selected index followed by a fixed one would
+    /// describe a region the level structure cannot merge.
+    fn input_prefix(&self, projector: &Projector) -> Option<(usize, usize)> {
+        let mut depth = 0usize;
+        let mut prefix = 0usize;
+        let mut free_seen = false;
         for index in &self.selected {
-            leaf = (leaf << 1) | projector.get(index)?;
+            match projector.get(index) {
+                Some(bit) => {
+                    if free_seen {
+                        return None;
+                    }
+                    depth += 1;
+                    prefix = (prefix << 1) | bit;
+                }
+                None => free_seen = true,
+            }
         }
-        Some(leaf)
+        Some((depth, prefix))
     }
 
     /// The spectator-only part of a patch support.
@@ -698,17 +722,28 @@ impl ScheduleGeometry {
 fn validate_leaf_geometry<V>(
     preimage: &ReconstructionTarget<V>,
     geometry: &ScheduleGeometry,
-    leaves: usize,
     coverage: CoverageContract,
-) -> Result<()>
+) -> Result<BTreeSet<(usize, usize)>>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    let mut covered = vec![false; leaves];
+    let depth = geometry.depth();
+    let full = 1usize
+        .checked_shl(
+            u32::try_from(depth)
+                .map_err(|_| PartitionedTreeTNError::LogicalParameterCountOverflow)?,
+        )
+        .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
+    let mut leaves: BTreeSet<(usize, usize)> = BTreeSet::new();
     let mut spectators: Option<Projector> = None;
+    // The Kraft sum of the prefix lengths, in units of `2^-depth`: a prefix-free
+    // set has sum at most `full`, and exactly `full` when it covers the domain.
+    let mut kraft = 0usize;
     for projector in preimage.patch_projectors() {
-        let leaf = geometry.leaf_index(projector).ok_or_else(|| {
-            invalid("every preimage patch must fix all selected indices to one coordinate")
+        let (prefix_depth, prefix) = geometry.input_prefix(projector).ok_or_else(|| {
+            invalid(
+                "every preimage patch must fix a contiguous prefix of the selected indices and leave the trailing selected indices free",
+            )
         })?;
         let patch_spectators = geometry.spectator_part(projector);
         match &spectators {
@@ -718,26 +753,46 @@ where
             }
             Some(_) => {}
         }
-        if std::mem::replace(&mut covered[leaf], true) {
+        if !leaves.insert((prefix_depth, prefix)) {
             return Err(invalid(
                 "input leaves must not repeat a selected-coordinate assignment",
             ));
         }
+        let weight = 1usize
+            .checked_shl(
+                u32::try_from(depth - prefix_depth)
+                    .map_err(|_| PartitionedTreeTNError::LogicalParameterCountOverflow)?,
+            )
+            .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
+        kraft = checked_add(kraft, weight)?;
     }
-    if coverage == CoverageContract::Complete && covered.iter().any(|covered| !covered) {
+    // Prefix-free: a leaf that fixes a prefix of another leaf's selected indices
+    // would cover part of the same region, so the two would overlap.
+    for (prefix_depth, prefix) in &leaves {
+        for shorter in 1..*prefix_depth {
+            if leaves.contains(&(shorter, prefix >> (*prefix_depth - shorter))) {
+                return Err(invalid(
+                    "input leaves must not overlap: a leaf that fixes a prefix of another leaf's selected indices covers the same coordinates",
+                ));
+            }
+        }
+    }
+    if coverage == CoverageContract::Complete && kraft != full {
         return Err(invalid(
             "input leaves must cover every selected-coordinate assignment of the binary selection, or select CoverageContract::ZeroForMissingLeaves",
         ));
     }
-    Ok(())
+    Ok(leaves)
 }
 
 /// Schedule `operator` on `selection` as a level-coupled merge-refine trajectory.
 ///
 /// `preimage` must already be partitioned into dyadic input leaves of the `d`
 /// selected binary indices, sharing identical constraints on every spectator
-/// index. By default it must cover all `2^d` coordinate assignments; with
-/// [`MergeRefineOptions::coverage`] set to
+/// index. A leaf fixes a contiguous prefix of those indices, so leaf depths may
+/// differ, but the leaves must form a prefix code: no leaf may fix a prefix of
+/// another leaf's indices. By default they must cover all `2^d` coordinate
+/// assignments; with [`MergeRefineOptions::coverage`] set to
 /// [`CoverageContract::ZeroForMissingLeaves`] omitted assignments are accepted and
 /// contribute exactly zero. Level zero applies the complete transform once per leaf;
 /// level `t` merges the input siblings by removing the constraint on
@@ -774,10 +829,12 @@ where
 /// # Errors
 /// Returns [`PartitionedTreeTNError::InvalidOptions`] for a non-binary or empty
 /// selection, an `output_depth` above the selection depth, a `max_work_items`
-/// limit below the input-leaf count, a zero `target_bond_dim`, a preimage that is
-/// not exactly the dyadic input leaves, non-finite tolerances, and non-finite or
-/// non-positive checked counts; [`PartitionedTreeTNError::ResourceLimit`] when the
-/// retained term count exceeds `max_terms`; [`PartitionedTreeTNError::InvalidOptions`]
+/// limit below the present input-leaf count, a zero `target_bond_dim`, a preimage
+/// whose leaves do not form a valid dyadic prefix code or do not cover the
+/// requested contract, non-finite tolerances, and non-finite or non-positive
+/// checked counts; [`PartitionedTreeTNError::ResourceLimit`] when a level holds
+/// more than `max_work_items` items or the retained term count exceeds
+/// `max_terms`; [`PartitionedTreeTNError::InvalidOptions`]
 /// again when the measured application error of
 /// [`MergeRefineOptions::apply_options`] already exceeds the allowance;
 /// [`PartitionedTreeTNError::ProjectorMismatch`]
@@ -866,25 +923,20 @@ where
     validate_tolerance(tolerance)?;
     let geometry = ScheduleGeometry::new(selection)?;
     let depth = geometry.depth();
-    let shift =
-        u32::try_from(depth).map_err(|_| PartitionedTreeTNError::LogicalParameterCountOverflow)?;
-    let leaves = 1usize
-        .checked_shl(shift)
-        .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
     let output_depth = options.output_depth.unwrap_or(depth);
     if output_depth > depth {
         return Err(invalid(
             "output_depth must not exceed the number of selected indices",
         ));
     }
-    if leaves > options.max_work_items {
-        return Err(invalid(
-            "max_work_items must cover every input leaf of the binary selection; raise the limit or reduce the selection",
-        ));
-    }
     // Validate the dyadic input geometry before applying any operator, so an
     // unsupported partition costs no transform work.
-    validate_leaf_geometry(preimage, &geometry, leaves, options.coverage)?;
+    let present = validate_leaf_geometry(preimage, &geometry, options.coverage)?;
+    if present.len() > options.max_work_items {
+        return Err(invalid(
+            "max_work_items must cover every present input leaf; raise the limit or reduce the selection",
+        ));
+    }
     if preimage.patch_projectors().next().is_none() {
         // An empty preimage has no site topology to apply the operator to. Under
         // the zero-for-missing coverage contract every leaf is missing, so the
@@ -930,12 +982,16 @@ where
     }
     // Live output regions, keyed by their prefix value, each holding one item per
     // input prefix that has not been merged away yet.
-    let mut level: BTreeMap<usize, BTreeMap<usize, Item<V>>> = BTreeMap::new();
-    let mut first: BTreeMap<usize, Item<V>> = BTreeMap::new();
+    let mut level: BTreeMap<usize, BTreeMap<InputKey, Item<V>>> = BTreeMap::new();
+    let mut first: BTreeMap<InputKey, Item<V>> = BTreeMap::new();
     let mut application_error = 0.0_f64;
     for prepared in images {
-        let leaf = geometry.leaf_index(&prepared.source).ok_or_else(|| {
-            invalid("every preimage patch must fix all selected indices to one coordinate")
+        // `validate_leaf_geometry` already accepted this support, so its selected
+        // prefix is present and contiguous.
+        let leaf = geometry.input_prefix(&prepared.source).ok_or_else(|| {
+            invalid(
+                "every preimage patch must fix a contiguous prefix of the selected indices and leave the trailing selected indices free",
+            )
         })?;
         // Level zero: one complete transform per leaf over the whole output
         // domain, carrying only the measured application error of that leaf.
@@ -947,19 +1003,12 @@ where
             "the measured application error exceeds the global allowance; relax the tolerance or the truncating apply options",
         ));
     }
-    // Conservative l1 allocation: the measured application error is charged
-    // first, and at most `leaves * output_depth` merges can compress, so each
-    // receives an equal share of what remains. A restriction is nonexpansive and
-    // therefore carries no new cost, and a rejected probe costs nothing.
-    let merge_slots = leaves
-        .checked_mul(output_depth)
-        .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
-    let remaining = finite(allowance - application_error)?;
-    let share = if merge_slots == 0 {
-        0.0
-    } else {
-        finite(remaining / merge_slots as f64)?
-    };
+    // Conservative l1 allocation, spent level by level: the measured application
+    // error is charged first, and one level can merge at most twice its live item
+    // count, so its share is `remaining / level_merges`. A restriction is
+    // nonexpansive and therefore carries no new cost, and a rejected probe costs
+    // nothing.
+    let mut remaining = finite(allowance - application_error)?;
 
     let applied_operator_count: usize = first.len();
     let mut counters = MergeCounters {
@@ -974,7 +1023,17 @@ where
     // against the same budget as the live ones.
     let mut finalized: Vec<FinalRegion<V>> = Vec::new();
     for level_index in 1..=output_depth {
-        let mut next: BTreeMap<usize, BTreeMap<usize, Item<V>>> = BTreeMap::new();
+        let live_before: usize = level.values().map(|items| items.len()).sum();
+        let level_merges = live_before
+            .checked_mul(2)
+            .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
+        let share = if level_merges == 0 {
+            0.0
+        } else {
+            finite(remaining / level_merges as f64)?
+        };
+        let spent_before = counters.residual_spent;
+        let mut next: BTreeMap<usize, BTreeMap<InputKey, Item<V>>> = BTreeMap::new();
         for (region, items) in std::mem::take(&mut level) {
             // Probe both child regions: restrict first, then merge input siblings.
             let mut children = Vec::with_capacity(2);
@@ -1007,16 +1066,26 @@ where
                 counters.stopped_regions = checked_add(counters.stopped_regions, 1)?;
                 // The stopped region keeps the input prefixes it held before the
                 // discarded probe, so its terms stay smaller than the probe sum.
-                finalized.push((level_index - 1, region, level_index - 1, items));
+                finalized.push((level_index - 1, region, items));
             }
         }
         let live_items: usize = next.values().map(|items| items.len()).sum();
-        // INVARIANT: a level holds at most `2^d` items (`#A * #B = 2^d`), which the
-        // upfront work limit already covers, so no second item check is needed.
+        // Nonuniform input leaves can hold more items than the initial leaf count,
+        // because each refined region keeps its own copy of the unmerged prefixes,
+        // so the work limit is enforced on every level.
+        if live_items > options.max_work_items {
+            return Err(PartitionedTreeTNError::ResourceLimit {
+                operation: "merge-refine scheduling",
+                limit: "max_work_items",
+                value: live_items,
+            });
+        }
         counters.peak_work_items = counters.peak_work_items.max(live_items);
         work_items_per_level.push(live_items);
         level = next;
         check_term_budget(&level, &finalized, options.max_terms)?;
+        let spent = finite(counters.residual_spent - spent_before)?;
+        remaining = finite(remaining - spent)?;
     }
     // Regions that survived the last level keep the input prefixes they hold at
     // that depth; a stopped region keeps the prefixes it had before its discarded
@@ -1024,7 +1093,7 @@ where
     finalized.extend(
         level
             .into_iter()
-            .map(|(region, items)| (output_depth, region, output_depth, items)),
+            .map(|(region, items)| (output_depth, region, items)),
     );
 
     let mut max_bond_dim = 0usize;
@@ -1033,10 +1102,10 @@ where
     // overlap, so they stay in one region entry that `regions()` exposes as a
     // superposition and `into_partition()` rejects.
     let mut grouped: BTreeMap<(usize, usize), MergeRefineRegion<V>> = BTreeMap::new();
-    for (output_level, region, input_level, items) in finalized {
+    for (output_level, region, items) in finalized {
         let output = geometry.output_projector(output_level, region)?;
-        for (input_prefix, item) in items {
-            let input = geometry.input_projector(input_level, input_prefix)?;
+        for ((input_depth, input_prefix), item) in items {
+            let input = geometry.input_projector(input_depth, input_prefix)?;
             for term in item.terms {
                 max_bond_dim = max_bond_dim.max(term.value.max_bond_dim());
                 logical_parameters = logical_parameters
@@ -1093,9 +1162,12 @@ where
     bound: f64,
 }
 
-/// A finalized output region: its output level, output region key, the input
-/// level of its items, and the items themselves.
-type FinalRegion<V> = (usize, usize, usize, BTreeMap<usize, Item<V>>);
+/// A finalized output region: its output level, its output region key, and its
+/// items keyed by their input prefix.
+type FinalRegion<V> = (usize, usize, BTreeMap<InputKey, Item<V>>);
+
+/// An input region: how many leading selected bits it fixes, and their value.
+type InputKey = (usize, usize);
 
 /// One work item: the superposition of its terms for one input prefix region.
 #[derive(Debug, Clone)]
@@ -1143,7 +1215,7 @@ where
 }
 
 /// Largest retained rank over a region's items.
-fn max_rank<V>(items: &BTreeMap<usize, Item<V>>) -> usize
+fn max_rank<V>(items: &BTreeMap<InputKey, Item<V>>) -> usize
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
@@ -1152,26 +1224,35 @@ where
 
 /// Restrict a region's items to a child region and merge each input sibling pair.
 fn restrict_and_merge<V>(
-    items: &BTreeMap<usize, Item<V>>,
+    items: &BTreeMap<InputKey, Item<V>>,
     projector: &Projector,
     center: &V,
     options: &MergeRefineOptions,
     share: f64,
     counters: &mut MergeCounters,
-) -> Result<BTreeMap<usize, Item<V>>>
+) -> Result<BTreeMap<InputKey, Item<V>>>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    let mut children: BTreeMap<usize, Item<V>> = BTreeMap::new();
-    for (input_prefix, item) in items {
+    let mut children: BTreeMap<InputKey, Item<V>> = BTreeMap::new();
+    for ((input_depth, input_prefix), item) in items {
         let restricted = item.restrict(projector)?;
-        match children.entry(input_prefix >> 1) {
+        // Every item ascends one selected bit per level. A genuine sibling pair is
+        // summed; a leaf whose sibling is absent keeps its own region, which is
+        // already the union of its subtree, so ascending is exact and free.
+        let parent_depth = input_depth.saturating_sub(1);
+        let parent_prefix = if *input_depth == 0 {
+            0
+        } else {
+            input_prefix >> 1
+        };
+        match children.entry((parent_depth, parent_prefix)) {
             Entry::Vacant(slot) => {
                 slot.insert(restricted);
             }
             Entry::Occupied(mut slot) => {
-                // Both siblings carry the same prefix and spectator constraints,
-                // so strict subdomain addition applies.
+                // Both siblings carry the same spectator constraints, so strict
+                // subdomain addition applies.
                 let combined =
                     merge_items(slot.get(), &restricted, center, options, share, counters)?;
                 counters.additions = checked_add(counters.additions, 1)?;
@@ -1243,7 +1324,7 @@ where
 
 /// Fail before the retained term count exceeds the caller's budget.
 fn check_term_budget<V>(
-    live: &BTreeMap<usize, BTreeMap<usize, Item<V>>>,
+    live: &BTreeMap<usize, BTreeMap<InputKey, Item<V>>>,
     finalized: &[FinalRegion<V>],
     max_terms: usize,
 ) -> Result<()>
@@ -1253,7 +1334,7 @@ where
     let mut retained = 0usize;
     for items in live
         .values()
-        .chain(finalized.iter().map(|(_, _, _, items)| items))
+        .chain(finalized.iter().map(|(_, _, items)| items))
     {
         for item in items.values() {
             retained = checked_add(retained, item.terms.len())?;
@@ -1273,6 +1354,9 @@ where
 #[derive(Debug, Default)]
 struct MergeCounters {
     additions: usize,
+    /// Sum of the truncation residuals accepted so far, charged against the
+    /// remaining global allowance.
+    residual_spent: f64,
     projections: usize,
     compression_attempts: usize,
     compressions: usize,
@@ -1306,6 +1390,7 @@ where
     let (candidate, residual) = truncate_toward_allowance(sum, center, share)?;
     if candidate.max_bond_dim() < sum.max_bond_dim() {
         counters.compressions = checked_add(counters.compressions, 1)?;
+        counters.residual_spent = finite(counters.residual_spent + residual)?;
         Ok((candidate, residual))
     } else {
         Ok((sum.clone(), 0.0))
