@@ -33,6 +33,7 @@ tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 
 [dev-dependencies]
 num-complex.workspace = true
+serde_json.workspace = true
 # Path-only cross-layer dev-dependency (stripped from published manifests) so
 # the QFT integration tests can exercise a real Fourier operator.
 tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-faer"] }
