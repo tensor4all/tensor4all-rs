@@ -37,7 +37,7 @@ use std::{
 };
 
 use tensor4all_core::IdxTensor;
-use tensor4all_treetn::LinearOperator;
+use tensor4all_treetn::{ApplyOptions, LinearOperator};
 
 use super::engine::{checked_add, truncate_toward_allowance};
 use super::{
@@ -65,6 +65,7 @@ use crate::{
 /// assert_eq!(options.max_work_items, 4096);
 /// assert_eq!(options.max_terms, 1 << 20);
 /// assert_eq!(options.target_bond_dim, None);
+/// assert!(options.apply_options.is_none());
 /// ```
 #[derive(Debug, Clone)]
 pub struct MergeRefineOptions {
@@ -93,6 +94,16 @@ pub struct MergeRefineOptions {
     /// bounds that growth and returns a resource-limit error instead of
     /// exceeding the budget.
     pub max_terms: usize,
+    /// Truncating operator-application options, default `None`.
+    ///
+    /// `None` applies the operator exactly. `Some(options)` applies it with those
+    /// options and measures the deviation from the exact application of the same
+    /// patch, so the truncation is charged to that item's error budget instead of
+    /// becoming a silent approximation. The exact application is always performed
+    /// as the reference, so requesting this costs a second application per input
+    /// leaf, and a measured application error above the global allowance is
+    /// rejected.
+    pub apply_options: Option<ApplyOptions>,
 }
 
 impl Default for MergeRefineOptions {
@@ -102,6 +113,7 @@ impl Default for MergeRefineOptions {
             max_work_items: 4096,
             target_bond_dim: None,
             max_terms: 1 << 20,
+            apply_options: None,
         }
     }
 }
@@ -701,8 +713,9 @@ where
 /// Frobenius norm. `tolerance` supplies `max(atol, rtol * reference_scale)`.
 /// `options` selects the output depth, the work limit, and the soft rank goal.
 ///
-/// With [`MergeRefineOptions::target_bond_dim`] unset nothing is truncated and
-/// the reported bound is exactly zero. With a goal the trajectory is adaptive: an
+/// With [`MergeRefineOptions::target_bond_dim`] unset and no
+/// [`MergeRefineOptions::apply_options`], nothing is truncated and the reported
+/// bound is exactly zero. With a goal the trajectory is adaptive: an
 /// output region is refined only when its terms exceed the goal and refining
 /// lowers its maximum retained rank, and a merged pair is combined into one term
 /// only when that strictly lowers the bond dimension, otherwise both operands stay
@@ -725,7 +738,10 @@ where
 /// limit below the input-leaf count, a zero `target_bond_dim`, a preimage that is
 /// not exactly the dyadic input leaves, non-finite tolerances, and non-finite or
 /// non-positive checked counts; [`PartitionedTreeTNError::ResourceLimit`] when the
-/// retained term count exceeds `max_terms`; [`PartitionedTreeTNError::ProjectorMismatch`]
+/// retained term count exceeds `max_terms`; [`PartitionedTreeTNError::InvalidOptions`]
+/// again when the measured application error of
+/// [`MergeRefineOptions::apply_options`] already exceeds the allowance;
+/// [`PartitionedTreeTNError::ProjectorMismatch`]
 /// when leaves disagree on spectator constraints; and the operator-mapping,
 /// node-merging, application, projection, addition, and backend errors reported
 /// by the underlying TreeTN operations.
@@ -831,38 +847,51 @@ where
     // unsupported partition costs no transform work.
     validate_leaf_geometry(preimage, &geometry, leaves)?;
 
-    let prepared =
-        ReconstructionTarget::prepare_subset_images(preimage, center, operator, selection, subset)?;
+    let prepared = ReconstructionTarget::prepare_subset_images(
+        preimage,
+        center,
+        operator,
+        selection,
+        subset,
+        options.apply_options.as_ref(),
+    )?;
     let super::target::PreparedImages { images, scale } = prepared;
     let allowance = absolute_allowance(tolerance, scale)?;
     if options.target_bond_dim == Some(0) {
         return Err(invalid("target_bond_dim must be positive when specified"));
     }
-    // Conservative l1 allocation: at most `leaves * output_depth` merges can
-    // compress, so each receives an equal share of the global allowance. A
-    // restriction is nonexpansive and therefore carries no new cost, and a
-    // rejected probe costs nothing.
-    let merge_slots = leaves
-        .checked_mul(output_depth)
-        .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
-    let share = if merge_slots == 0 {
-        0.0
-    } else {
-        finite(allowance / merge_slots as f64)?
-    };
-
     // Live output regions, keyed by their prefix value, each holding one item per
     // input prefix that has not been merged away yet.
     let mut level: BTreeMap<usize, BTreeMap<usize, Item<V>>> = BTreeMap::new();
     let mut first: BTreeMap<usize, Item<V>> = BTreeMap::new();
+    let mut application_error = 0.0_f64;
     for prepared in images {
         let leaf = geometry.leaf_index(&prepared.source).ok_or_else(|| {
             invalid("every preimage patch must fix all selected indices to one coordinate")
         })?;
-        // Level zero: one complete transform per leaf, whole output domain, and
-        // no application error beyond backend roundoff.
-        first.insert(leaf, Item::single(prepared.image, 0.0));
+        // Level zero: one complete transform per leaf over the whole output
+        // domain, carrying only the measured application error of that leaf.
+        application_error = finite(application_error + prepared.error)?;
+        first.insert(leaf, Item::single(prepared.image, prepared.error));
     }
+    if application_error > allowance {
+        return Err(invalid(
+            "the measured application error exceeds the global allowance; relax the tolerance or the truncating apply options",
+        ));
+    }
+    // Conservative l1 allocation: the measured application error is charged
+    // first, and at most `leaves * output_depth` merges can compress, so each
+    // receives an equal share of what remains. A restriction is nonexpansive and
+    // therefore carries no new cost, and a rejected probe costs nothing.
+    let merge_slots = leaves
+        .checked_mul(output_depth)
+        .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
+    let remaining = finite(allowance - application_error)?;
+    let share = if merge_slots == 0 {
+        0.0
+    } else {
+        finite(remaining / merge_slots as f64)?
+    };
 
     let applied_operator_count: usize = first.len();
     let mut counters = MergeCounters {

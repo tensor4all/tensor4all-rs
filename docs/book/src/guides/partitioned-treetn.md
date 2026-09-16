@@ -201,7 +201,13 @@ combined into one term only when combining pays off (otherwise both operands sta
 as separate terms of the region's superposition), and every truncation candidate
 must fit the item's share of the global allowance. An unaffordable or gainless
 candidate is retained exactly rather than violating the accuracy contract, and
-exceeding `MergeRefineOptions::max_terms` returns a resource-limit error. `MergeRefineReport` records the schedule shape
+exceeding `MergeRefineOptions::max_terms` returns a resource-limit error.
+
+`MergeRefineOptions::apply_options` opts into a truncating operator application.
+The schedule then applies the operator with those options *and* exactly, measures
+each leaf's deviation, and charges that sum before any scheduling compression, so
+an approximate application is never a silent error; a measured application error
+already above the allowance is rejected. Every other entry point applies exactly. `MergeRefineReport` records the schedule shape
 (`level_count`, `applied_operator_count`, `additions`, `projections`,
 `compression_attempts`, `compressions`, `work_items_per_level`, `peak_work_items`,
 `refined_regions`, `stopped_regions`) next to the pinned reference scale, the
