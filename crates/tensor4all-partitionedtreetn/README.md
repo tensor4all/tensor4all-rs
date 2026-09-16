@@ -47,7 +47,9 @@ QTT intervals, independently of the indices' placement on the tree.
 `ReconstructionTarget::from_subset_operator` prepares the images of an existing
 linear operator (for example a quantics Fourier transform built elsewhere) on an
 ordered subset of full site indices. Spectators keep their identity, dimension,
-and node assignment. Two selected indices on one tree node are rejected. The
+and node assignment. Selected indices that share one tree node are supported by
+fusing the operator MPO nodes that carry them into one multi-site node, which
+requires those operator nodes to form one connected group. The
 transformed output norm is never measured and the images are never summed into
 one network. `SubsetOperatorOptions::unitary` instead pins the amplification
 factor: `false` (default) uses the selected-space operator's Frobenius norm as an

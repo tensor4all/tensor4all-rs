@@ -135,14 +135,21 @@ indices, with ordered binary indices for each transformed coordinate. These
 need not be contiguous nodes and may share a node with spectator indices. All
 remaining indices are spectators: preserve their identity, dimension, and node
 assignment. The call rejects a selection that does not match the operator node
-count, repeats an index, or is absent from the preimage site space.
+count, repeats an index, is absent from the preimage site space, or shares a
+node across operator nodes that cannot be fused into one connected group.
 
-Selected indices must currently sit on distinct tree nodes. A node owning two
-selected indices would need the operator's MPO nodes merged into one multi-site
-node; that is not implemented, and the call rejects it with repair guidance
-("transform indices that share a node separately") rather than silently
-mis-binding them. Spectator indices on the same node as a selected index are
-supported.
+Selected indices may share one tree node. The operator MPO nodes carrying the
+selected indices of one node are then fused into a single multi-site node with
+`LinearOperator::restructure_to`, which contracts the group locally with no
+truncation and moves each mapping to the node owning its internal index; a
+singleton group is a pure node rename. Fusion requires those operator nodes to
+form one connected group inside the operator's own topology, because a group
+threaded through another owner's node cannot be fused without absorbing sites
+that belong elsewhere. Such a selection is rejected with repair guidance
+("split the selection or restructure the operator") rather than silently
+mis-binding it. The fused node keeps the preimage node's name, so node
+assignment is preserved. Spectator indices on the same node as a selected index
+are supported.
 
 The QFT selection is independent of reconstruction's `patch_order`.
 Input bits are ordered from most to least significant. A full transform is

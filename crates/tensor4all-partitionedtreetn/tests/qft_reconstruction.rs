@@ -4,7 +4,7 @@
 //! ordered subset of site indices and check the documented bit-significance and
 //! bit-reversal conventions against a dense oracle.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use num_complex::Complex64;
 use tensor4all_core::{DynIndex, IdxTensor};
@@ -14,6 +14,7 @@ use tensor4all_partitionedtreetn::{
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 use tensor4all_treetn::{
     apply_linear_operator_to_indices, ApplyOptions, IndexMapping, LinearOperator,
+    RestructureOptions, SiteIndexNetwork,
 };
 
 const TOL: f64 = 1e-8;
@@ -89,6 +90,29 @@ fn target_of(tree: TreeTN<IdxTensor, usize>) -> ReconstructionTarget {
             .expect("partition"),
     )
     .expect("target")
+}
+
+/// Regroup `tree`'s sites onto the given nodes, chained in the supplied order.
+///
+/// Every site must appear exactly once. Regrouping is exact, so the dense value
+/// of the returned chain equals the dense value of `tree`.
+fn regroup(
+    tree: &TreeTN<IdxTensor, usize>,
+    groups: &[(usize, Vec<DynIndex>)],
+) -> TreeTN<IdxTensor, usize> {
+    let mut target: SiteIndexNetwork<usize, DynIndex> = SiteIndexNetwork::new();
+    for (node, sites) in groups {
+        target
+            .add_node(*node, sites.iter().cloned().collect::<HashSet<_>>())
+            .expect("target node");
+    }
+    for pair in groups.windows(2) {
+        target
+            .add_edge(&pair[0].0, &pair[1].0)
+            .expect("target edge");
+    }
+    tree.restructure_to(&target, &RestructureOptions::default())
+        .expect("regroup")
 }
 
 fn dense_of(partition: &PartitionedTreeTN) -> (Vec<DynIndex>, Vec<Complex64>) {
@@ -597,31 +621,118 @@ fn qft_subset_rejects_invalid_selections() {
 }
 
 #[test]
-fn qft_subset_rejects_two_selected_indices_on_one_node() {
-    // Node 0 owns two site indices; node 1 owns the third.
+fn qft_subset_supports_two_selected_indices_on_one_node() {
     let a = DynIndex::new_dyn(2);
     let b = DynIndex::new_dyn(2);
     let c = DynIndex::new_dyn(2);
-    let bond = DynIndex::new_dyn(2);
-    let left = IdxTensor::from_dense(
-        vec![a.clone(), b.clone(), bond.clone()],
-        vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-    )
-    .expect("tensor");
-    let right = IdxTensor::from_dense(vec![bond, c], vec![1.0, 0.0, 0.0, 1.0]).expect("tensor");
-    let tree = TreeTN::from_tensors(vec![left, right], vec![0usize, 1]).expect("tree");
+    let sites = [a.clone(), b.clone(), c.clone()];
+    let values: Vec<Complex64> = (0..8)
+        .map(|m| Complex64::new((m as f64 * 0.4).sin() + 1.0, 0.3 * m as f64))
+        .collect();
+    // One node owns bits `a` and `b`; the operator's two nodes are fused into it.
+    let tree = regroup(
+        &mps(&sites, &values),
+        &[
+            (0usize, vec![a.clone(), b.clone()]),
+            (1usize, vec![c.clone()]),
+        ],
+    );
     let preimage = target_of(tree);
 
     let operator = quantics_fourier_operator(2, FourierOptions::default()).expect("fourier");
+    let target = ReconstructionTarget::from_subset_operator(
+        &preimage,
+        &0,
+        &operator,
+        &[a.clone(), b.clone()],
+        &SubsetOperatorOptions { unitary: true },
+    )
+    .expect("merged subset transform");
+
+    let (indices, dense) = dense_of(&single_term_partition(&target));
+    let expected = dft_oracle(&indices, &sites, &[a, b], &values);
+    let error = max_error(&dense, &expected);
+    assert!(error < TOL, "max error {error:e}");
+}
+
+#[test]
+fn qft_subset_merges_selected_indices_that_share_a_spectator_node() {
+    let a = DynIndex::new_dyn(2);
+    let b = DynIndex::new_dyn(2);
+    let spectator = DynIndex::new_dyn(2);
+    let c = DynIndex::new_dyn(2);
+    let sites = [a.clone(), b.clone(), spectator.clone(), c.clone()];
+    let values: Vec<Complex64> = (0..16)
+        .map(|m| Complex64::new(m as f64 - 2.0, (m as f64 * 0.7).cos()))
+        .collect();
+    let tree = regroup(
+        &mps(&sites, &values),
+        &[
+            (0usize, vec![a.clone(), b.clone(), spectator.clone()]),
+            (1usize, vec![c.clone()]),
+        ],
+    );
+    let preimage = target_of(tree);
+
+    let operator = quantics_fourier_operator(2, FourierOptions::default()).expect("fourier");
+    let target = ReconstructionTarget::from_subset_operator(
+        &preimage,
+        &0,
+        &operator,
+        &[a.clone(), b.clone()],
+        &SubsetOperatorOptions { unitary: true },
+    )
+    .expect("merged subset transform");
+
+    let partition = single_term_partition(&target);
+    let (indices, dense) = dense_of(&partition);
+    let expected = dft_oracle(&indices, &sites, &[a, b], &values);
+    let error = max_error(&dense, &expected);
+    assert!(error < TOL, "max error {error:e}");
+
+    // The spectator keeps its identity, dimension, and node assignment.
+    let transformed = partition.to_treetn().expect("treetn");
+    assert_eq!(transformed.node_count(), 2);
+    assert!(transformed
+        .site_space(&0)
+        .is_some_and(|space| space.contains(&spectator)));
+    assert!(transformed
+        .site_space(&1)
+        .is_some_and(|space| space.contains(&c)));
+}
+
+#[test]
+fn qft_subset_rejects_selected_indices_on_a_disconnected_operator_group() {
+    // Node 0 owns `a` and `c`, which are the operator's first and third nodes;
+    // the group is threaded through another owner's node, so it cannot be fused.
+    let a = DynIndex::new_dyn(2);
+    let b = DynIndex::new_dyn(2);
+    let c = DynIndex::new_dyn(2);
+    let d = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(2);
+    let left = IdxTensor::from_dense(
+        vec![a.clone(), c.clone(), bond.clone()],
+        vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0],
+    )
+    .expect("tensor");
+    let right =
+        IdxTensor::from_dense(vec![bond, b.clone(), d.clone()], vec![1.0; 8]).expect("tensor");
+    let tree = TreeTN::from_tensors(vec![left, right], vec![0usize, 1]).expect("tree");
+    let preimage = target_of(tree);
+
+    let operator = quantics_fourier_operator(4, FourierOptions::default()).expect("fourier");
     let error = ReconstructionTarget::from_subset_operator(
         &preimage,
         &0,
         &operator,
-        &[a, b],
+        &[a, b, c, d],
         &SubsetOperatorOptions::default(),
     )
-    .expect_err("indices sharing a node are not supported");
-    assert!(error.to_string().contains("distinct tree nodes"));
+    .expect_err("a disconnected operator group cannot be fused");
+    assert!(
+        error.to_string().contains("connected group"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
