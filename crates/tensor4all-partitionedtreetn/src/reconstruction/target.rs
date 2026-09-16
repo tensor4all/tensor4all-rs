@@ -8,6 +8,7 @@ use tensor4all_core::{IdxTensor, IndexLike, SvdTruncationPolicy};
 use tensor4all_treetn::{
     apply_linear_operator_to_indices, contraction::ContractionOptions, partial_contract,
     ApplyOptions, LinearOperator, PartialContractionSpec, RestructureOptions, SiteIndexNetwork,
+    TreeTN,
 };
 
 use super::{finite, invalid, SubsetOperatorOptions};
@@ -34,6 +35,9 @@ where
     pub(super) source: Projector,
     /// Image retaining only the patch's spectator constraints.
     pub(super) image: SubDomainTreeTN<V>,
+    /// Measured deviation of `image` from the exact application, zero when the
+    /// operator was applied exactly.
+    pub(super) error: f64,
 }
 
 /// Images of every preimage patch, with their provenance and the pinned scale.
@@ -251,14 +255,15 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// exactly known input scale. Each image keeps only its spectator
     /// constraints.
     ///
-    /// The operator is applied exactly with the local naive path; this entry
-    /// point accepts no truncating apply options, so the prepared target carries
-    /// no application error beyond backend roundoff. The approximation made when
-    /// *constructing* the operator, for example `FourierOptions::tolerance` and
-    /// `max_bond_dim`, is not included in
+    /// The operator is applied exactly with the local naive path, so the prepared
+    /// target carries no application error beyond backend roundoff. Truncating the
+    /// application with an explicitly measured deviation is available through
+    /// [`super::schedule_merge_refine`], whose item budget charges it, rather than
+    /// here: this immutable target has no place to carry that error. The
+    /// approximation made when *constructing* the operator, for example
+    /// `FourierOptions::tolerance` and `max_bond_dim`, is not included in
     /// [`ReconstructionReport::error_bound`](super::ReconstructionReport), which
-    /// only bounds the reconstruction of these images; approximate application
-    /// and its separate error accounting are follow-up work.
+    /// only bounds the reconstruction of these images.
     ///
     /// # Errors
     /// Returns [`PartitionedTreeTNError::InvalidOptions`] when the selection does
@@ -342,7 +347,8 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             ));
         }
 
-        let prepared = Self::prepare_subset_images(preimage, center, operator, selection, options)?;
+        let prepared =
+            Self::prepare_subset_images(preimage, center, operator, selection, options, None)?;
         let mut patches: Vec<_> = prepared
             .images
             .into_iter()
@@ -378,6 +384,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         operator: &LinearOperator<IdxTensor, V>,
         selection: &[DynIndex],
         options: &SubsetOperatorOptions,
+        apply: Option<&ApplyOptions>,
     ) -> Result<PreparedImages<V>> {
         let mut operator_nodes = operator.mpo().node_names();
         operator_nodes.sort();
@@ -479,22 +486,33 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             .restructure_to(&target, &RestructureOptions::default())
             .map_err(merging)?;
 
-        // INVARIANT: application is exact (no truncation is exposed), so the
-        // prepared target carries only backend roundoff, never silent
-        // application error that the reconstruction report would mis-attribute.
-        let apply_options = ApplyOptions::naive();
+        // INVARIANT: the exact local application is always performed. It is the
+        // prepared image when the caller requests no truncation, and the measured
+        // reference when the caller does, so an approximate application never
+        // becomes a silent error that the report would mis-attribute.
         let mut images = Vec::with_capacity(preimage.patches.len());
         for term in preimage.materialize_terms(center)? {
-            let data = apply_linear_operator_to_indices(
-                &operator,
-                term.data(),
-                &input_pairs,
-                &output_pairs,
-                apply_options.clone(),
-            )
-            .map_err(|error| {
-                PartitionedTreeTNError::tree(format!("subset operator apply: {error}"))
-            })?;
+            let apply_exact = |options: ApplyOptions| -> Result<TreeTN<IdxTensor, V>> {
+                apply_linear_operator_to_indices(
+                    &operator,
+                    term.data(),
+                    &input_pairs,
+                    &output_pairs,
+                    options,
+                )
+                .map_err(|error| {
+                    PartitionedTreeTNError::tree(format!("subset operator apply: {error}"))
+                })
+            };
+            let exact = apply_exact(ApplyOptions::naive())?;
+            let (data, error) = match apply {
+                None => (exact, 0.0),
+                Some(requested) => {
+                    let approximate = apply_exact(requested.clone())?;
+                    let mut difference = exact.axpby(1.0, &approximate, -1.0)?;
+                    (approximate, finite(difference.norm()?)?)
+                }
+            };
             // Images of disjoint patches generally overlap and the selected
             // constraints no longer hold, so keep only the spectator ones. The
             // original support stays as input provenance.
@@ -506,6 +524,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             images.push(PreparedImage {
                 source,
                 image: SubDomainTreeTN::new(data, projector)?,
+                error,
             });
         }
 

@@ -347,9 +347,18 @@ output region so the final region set stays prefix-free:
 
 Nonuniform input trees, per-input-branch refinement depths with lazy
 reconciliation, multi-coordinate groups, item dropping under the global policy,
-and benchmarked cost comparisons remain follow-up work. Approximate operator
-application with a retained error allowance is separate, and the entry point
-applies exactly and exposes no truncating apply options. Automatic padding stays
+and benchmarked cost comparisons remain follow-up work.
+
+Approximate operator application is available as an opt-in on the schedule:
+`MergeRefineOptions::apply_options` applies the operator with the caller's
+truncating options *and* always applies it exactly, measures the per-leaf
+deviation `||exact - approximate||`, and charges that sum to the item bounds before
+any scheduling compression. The exact application is therefore the measured
+reference, the truncation never becomes a silent error that the report would
+mis-attribute, and a measured application error already above the global allowance
+is rejected instead of returning a result that violates the contract. The
+immutable-target entry point keeps applying exactly, because a `ReconstructionTarget`
+has no place to carry such an error. Automatic padding stays
 out of the schedule: a later opt-in padding API must define the embedding, the
 extra bits per transformed coordinate, physical spacing and frequency grid,
 normalization, and output interpretation, and the selected transform length is

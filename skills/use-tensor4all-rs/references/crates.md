@@ -200,7 +200,10 @@ site indices per node, and does not implement adaptive interpolation.
   accepted only when it strictly lowers the bond dimension and its measured
   residual fits an equal share of the allowance, so the measured `error_bound`
   never exceeds the allowance, and exceeding `max_terms` returns a resource-limit
-  error. The `MergeRefineReport` reports `level_count`,
+  error. `MergeRefineOptions::apply_options` opts into a truncating operator
+  application: the schedule applies both exactly and with those options, measures
+  each leaf's deviation, and charges the sum before any compression, rejecting an
+  application error above the allowance. All other entry points apply exactly. The `MergeRefineReport` reports `level_count`,
   `applied_operator_count`, `additions`, `projections`, `compression_attempts`,
   `compressions`, `work_items_per_level`, `peak_work_items`, `refined_regions`,
   `stopped_regions`, region/term counts, `max_bond_dim`,

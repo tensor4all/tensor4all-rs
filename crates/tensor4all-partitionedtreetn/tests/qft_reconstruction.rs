@@ -880,6 +880,7 @@ fn schedule_exact(
         &MergeRefineOptions {
             target_bond_dim: None,
             max_terms: 1 << 20,
+            apply_options: None,
             output_depth,
             max_work_items,
         },
@@ -1431,6 +1432,7 @@ fn merge_refine_schedule_rejects_a_term_budget_it_cannot_keep() {
             max_work_items: 16,
             target_bond_dim: Some(1),
             max_terms: 2,
+            apply_options: None,
         },
     )
     .expect_err("two terms cannot hold four leaves");
@@ -1442,4 +1444,149 @@ fn merge_refine_schedule_rejects_a_term_budget_it_cannot_keep() {
         }
     ));
     assert!(error.to_string().contains("max_terms"));
+}
+
+/// Schedule with truncating application options and a relative tolerance.
+fn schedule_with_application(
+    preimage: &ReconstructionTarget,
+    operator: &LinearOperator<IdxTensor, usize>,
+    selection: &[DynIndex],
+    rtol: f64,
+    apply_options: ApplyOptions,
+) -> Result<MergeRefineResult<usize>, PartitionedTreeTNError> {
+    let leaves = 1usize << selection.len();
+    schedule_merge_refine(
+        preimage,
+        &0,
+        operator,
+        selection,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance { rtol, atol: 0.0 },
+        &MergeRefineOptions {
+            output_depth: None,
+            max_work_items: 4 * leaves,
+            apply_options: Some(apply_options),
+            ..Default::default()
+        },
+    )
+}
+
+/// `I ⊗ I + scale · X ⊗ X` as a two-node MPO of bond dimension two.
+///
+/// Its image of a dyadic input leaf is a rank-two superposition
+/// (`|00> + scale · |11>`), so truncating the application to bond dimension one
+/// has a measurable effect whose size the `scale` controls, unlike a Fourier
+/// operator whose leaf images are already low rank.
+fn identity_plus_scaled_xx(sites: &[DynIndex], scale: f64) -> LinearOperator<IdxTensor, usize> {
+    let (in0, out0) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let (in1, out1) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let bond = DynIndex::new_dyn(2);
+    // Column-major over `[in, out, bond]`: bond 0 is the identity, bond 1 the X.
+    let left = IdxTensor::from_dense(
+        vec![in0.clone(), out0.clone(), bond.clone()],
+        vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
+    )
+    .expect("left tensor");
+    // Column-major over `[bond, in, out]`: bond 0 is the identity, bond 1 the
+    // scaled X.
+    let right = IdxTensor::from_dense(
+        vec![bond, in1.clone(), out1.clone()],
+        vec![1.0, 0.0, 0.0, 1.0, 0.0, scale, scale, 0.0],
+    )
+    .expect("right tensor");
+    let mpo = TreeTN::from_tensors(vec![left, right], vec![0usize, 1]).expect("mpo");
+    let mut input = HashMap::new();
+    input.insert(
+        0usize,
+        IndexMapping {
+            true_index: sites[0].clone(),
+            internal_index: in0,
+        },
+    );
+    input.insert(
+        1usize,
+        IndexMapping {
+            true_index: sites[1].clone(),
+            internal_index: in1,
+        },
+    );
+    let mut output = HashMap::new();
+    output.insert(
+        0usize,
+        IndexMapping {
+            true_index: sites[0].clone(),
+            internal_index: out0,
+        },
+    );
+    output.insert(
+        1usize,
+        IndexMapping {
+            true_index: sites[1].clone(),
+            internal_index: out1,
+        },
+    );
+    LinearOperator::new(mpo, input, output)
+}
+
+#[test]
+fn merge_refine_schedule_charges_a_truncating_application_to_the_bound() {
+    let sites: Vec<DynIndex> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..4)
+        .map(|m| Complex64::new(1.0 + (m as f64).sin(), (m as f64).cos()))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    // A small second term keeps the truncation error affordable at `rtol = 0.5`.
+    let operator = identity_plus_scaled_xx(&sites, 0.1);
+
+    // Truncating each application to bond dimension one removes a real part of
+    // every leaf image, which the schedule must charge before any compression.
+    let result = schedule_with_application(
+        &preimage,
+        &operator,
+        &sites,
+        0.5,
+        ApplyOptions::zipup().with_max_bond_dim(1),
+    )
+    .expect("approximate application");
+    let report = result.report().clone();
+    assert!(report.error_bound > 1e-6, "bound {:e}", report.error_bound);
+    assert!(report.error_bound <= report.absolute_tolerance);
+
+    // The bound covers the deviation from the exact trajectory.
+    let exact = schedule_exact(&preimage, &operator, &sites, None, 16);
+    let (indices, dense) = dense_of_regions(&result);
+    let (exact_indices, exact_dense) = dense_of(&exact.into_partition().expect("partition"));
+    let exact_dense = reorder(&exact_dense, &exact_indices, &indices);
+    let deviation = max_error(&dense, &exact_dense);
+    assert!(
+        deviation <= report.error_bound + 1e-12,
+        "deviation {deviation:e} exceeds the bound {:e}",
+        report.error_bound
+    );
+}
+
+#[test]
+fn merge_refine_schedule_rejects_an_unaffordable_application_error() {
+    let sites: Vec<DynIndex> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..4)
+        .map(|m| Complex64::new(1.0 + m as f64, 0.5 * m as f64))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = identity_plus_scaled_xx(&sites, 0.1);
+
+    // A bond-dimension-one application cannot fit a near-exact tolerance.
+    let error = schedule_with_application(
+        &preimage,
+        &operator,
+        &sites,
+        1e-12,
+        ApplyOptions::zipup().with_max_bond_dim(1),
+    )
+    .expect_err("the application error exceeds the allowance");
+    assert!(
+        error.to_string().contains("application error"),
+        "unexpected error: {error}"
+    );
 }

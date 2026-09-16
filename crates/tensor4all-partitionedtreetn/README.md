@@ -77,9 +77,11 @@ exact (`error_bound` zero). With a goal it is adaptive: a region is refined only
 when that lowers its maximum retained rank, a merged pair is combined only when
 combining pays off, and merged items are truncated only within an equal share of
 the allowance, so the measured bound never exceeds it. Exceeding `max_terms`
-returns a resource-limit error. Nonuniform input trees, approximate operator
-application, and automatic zero-padding remain separate follow-up work; padding is
-never applied silently.
+returns a resource-limit error. `MergeRefineOptions::apply_options` opts into a
+truncating application whose measured deviation from the exact application is
+charged to the same bound, and an application error above the allowance is
+rejected. Nonuniform input trees and automatic zero-padding remain separate
+follow-up work; padding is never applied silently.
 
 ## Quick start
 
