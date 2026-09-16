@@ -194,13 +194,21 @@ descendants.
 
 `MergeRefineOptions::output_depth` stops after that many levels; `None` (the
 default) refines every selected bit and returns a strict partition with one patch
-per output coordinate. `MergeRefineReport` records the schedule shape
+per output coordinate. `MergeRefineOptions::target_bond_dim` is a soft rank goal:
+`None` keeps the trajectory exact, while `Some(goal)` truncates a merged item only
+toward that goal and only when its measured residual fits the item's share of the
+global allowance, so an unaffordable candidate is retained exactly rather than
+violating the accuracy contract. `MergeRefineReport` records the schedule shape
 (`level_count`, `applied_operator_count`, `additions`, `projections`,
-`work_items_per_level`, `peak_work_items`) next to the pinned reference scale and
-allowance. This trajectory applies the complete transform exactly and performs no
-compression, so `error_bound` is zero; approximate levels with retained error
-accounting and adaptive stopping remain follow-up work, and automatic padding is a
-separate opt-in domain policy that is never applied silently.
+`compression_attempts`, `compressions`, `work_items_per_level`,
+`peak_work_items`) next to the pinned reference scale, the allowance, and the
+measured `error_bound`. The bound adds measured truncation residuals by the
+triangle inequality within a region and combines disjoint regions by the Euclidean
+norm, so it never exceeds the allowance; it excludes operator-construction error
+and the application error of an externally approximated operator. Adaptive
+refinement with a shared error ledger, nonuniform geometry, and benchmark evidence
+remain follow-up work, and automatic padding is a separate opt-in domain policy
+that is never applied silently.
 
 ```rust
 # use std::collections::HashMap;

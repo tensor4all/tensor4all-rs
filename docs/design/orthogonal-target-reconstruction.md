@@ -271,24 +271,42 @@ target field is exposed.
 
 ### Error transport
 
-The schedule applies the complete transform exactly and performs no compression,
-so its reported bound is zero and its output is exact to backend roundoff. The
-global allowance `delta = max(atol, rtol * reference_scale)` is still pinned and
-reported, because later approximate levels consume it.
+The global allowance `delta = max(atol, rtol * reference_scale)` is pinned before
+scheduling. Level zero applies the complete transform exactly, so the only error
+source the schedule itself introduces is truncation, which each work item carries
+as an explicit measured bound.
 
-When compression is added, the existing "rebuild children from original
-sources" accounting of the greedy engine cannot be copied: restriction is
-nonexpansive, so an inherited bound stays a safe bound on each restricted child
-but is not a new local compression cost and must not be divided by `sqrt(fanout)`
-without proof or measurement. A merge has the safe bound `e_left + e_right +
-e_local`, where `e_local` is measured against the sum of the *actual restricted
-parent approximations*. An exact split into disjoint children preserves the
-combined L2 norm of the parent error, so reuse must exploit that with a shared
-error ledger or a proven equivalent allocation instead of granting the whole
-parent allowance to every child. Rejected gain probes consume no budget;
-discarding a term costs its measured norm on top of the inherited error. A soft
-rank target never forces an accuracy violation, and the reported bound stays a
-measured a posteriori numerical bound that excludes backend roundoff.
+The implemented accounting is:
+
+- **Restriction is nonexpansive.** `P_B' e` stays a safe bound on the restricted
+  child, so an inherited bound carries over unchanged and is not charged against
+  local budget; it is never divided by `sqrt(fanout)`.
+- **A merge adds** `e_left + e_right + e_local`, where `e_local` is the measured
+  residual of the accepted candidate against the sum of the *actual restricted
+  parent approximations* (`||sum - round(sum)||`). A rejected probe leaves the
+  exact sum in place and costs nothing.
+- **Budget allocation is a conservative l1 split.** At most `2^d * output_depth`
+  merges can truncate, so each receives `delta / (2^d * output_depth)`; the sum of
+  all measured residuals therefore stays within the allowance without any
+  orthogonality assumption between separate compressions.
+- **Region combination.** Terms inside a region may overlap, so their bounds add
+  by the triangle inequality; disjoint output regions combine by the Euclidean
+  norm, exactly like the greedy engine's report.
+
+Consequences that remain binding: a truncation candidate is accepted only when it
+strictly lowers the bond dimension *and* its measured residual fits its share, so a
+soft rank goal never forces an accuracy violation; keeping a less-compressed or
+exact candidate is always available; the reported bound is a measured a posteriori
+numerical bound that excludes backend roundoff; and it bounds neither
+operator-construction error nor the application error of an externally
+approximated operator.
+
+Still to do on this axis, with the plan's constraints: exploiting the fact that an
+exact split into disjoint children preserves the combined L2 norm of the parent
+error, so cached reuse can carry error through a shared ledger instead of an equal
+l1 split; dropping whole items under the global policy, at the cost of their
+measured norm on top of the inherited error; and tighter accounting validated by
+derivation and regression rather than by assumption.
 
 ### Public surface and dependency placement
 
@@ -296,20 +314,20 @@ measured a posteriori numerical bound that excludes backend roundoff.
 existing `LinearOperator`, ordered coordinate groups, and the explicit dyadic
 geometry. QFT construction stays in `tensor4all-quanticstransform`, which remains
 a path-only cross-layer dev-dependency: this crate keeps no simplett-stack
-runtime dependency. `MergeRefineOptions` selects only the output depth and the
-work limit; `MergeRefineReport` carries the pinned scale, allowance, and the
-structural counters. Exact scheduling algebra is shared with any operator, while
-Fourier-specific rank and performance expectations are not claimed for arbitrary
-operators.
+runtime dependency. `MergeRefineOptions` selects only the output depth, the work
+limit, and the soft rank goal; `MergeRefineReport` carries the pinned scale, the
+allowance, the measured bound, and the structural counters. Exact scheduling
+algebra is shared with any operator, while Fourier-specific rank and performance
+expectations are not claimed for arbitrary operators.
 
 ### Deferred boundaries
 
 Nonuniform input trees, lazy adaptive refinement with superposition lists,
-unequal output depths per branch, multi-coordinate groups, and benchmarked
-cost comparisons remain follow-up work. Approximate operator application with a
-retained error allowance is separate, and the entry point applies exactly and
-exposes no truncating apply options. Automatic padding stays out of the schedule:
-a later opt-in padding API must define the embedding, the extra bits per
-transformed coordinate, physical spacing and frequency grid, normalization, and
-output interpretation, and the selected transform length is never changed
-silently.
+unequal output depths per branch, multi-coordinate groups, item dropping, and
+benchmarked cost comparisons remain follow-up work. Approximate operator
+application with a retained error allowance is separate, and the entry point
+applies exactly and exposes no truncating apply options. Automatic padding stays
+out of the schedule: a later opt-in padding API must define the embedding, the
+extra bits per transformed coordinate, physical spacing and frequency grid,
+normalization, and output interpretation, and the selected transform length is
+never changed silently.

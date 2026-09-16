@@ -877,6 +877,7 @@ fn schedule_exact(
             atol: 0.0,
         },
         &MergeRefineOptions {
+            target_bond_dim: None,
             output_depth,
             max_work_items,
         },
@@ -1026,6 +1027,7 @@ fn merge_refine_schedule_rejects_invalid_geometry() {
         &MergeRefineOptions {
             output_depth: Some(3),
             max_work_items: 16,
+            ..Default::default()
         },
     )
     .expect_err("output depth beyond the selection");
@@ -1042,10 +1044,27 @@ fn merge_refine_schedule_rejects_invalid_geometry() {
         &MergeRefineOptions {
             output_depth: None,
             max_work_items: 3,
+            ..Default::default()
         },
     )
     .expect_err("work limit below the leaf count");
     assert!(error.to_string().contains("max_work_items"));
+
+    // A zero soft rank goal is invalid.
+    let error = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance::default(),
+        &MergeRefineOptions {
+            target_bond_dim: Some(0),
+            ..Default::default()
+        },
+    )
+    .expect_err("zero rank goal");
+    assert!(error.to_string().contains("target_bond_dim"));
 
     // A preimage that misses one dyadic leaf is not a coverage contract.
     let full = SubDomainTreeTN::from_treetn(tree.clone()).expect("subdomain");
@@ -1195,6 +1214,115 @@ fn merge_refine_schedule_handles_exact_cancellation() {
     for (_, _, term) in result.items() {
         assert!(term.norm().expect("norm") < 1e-12);
     }
+    let partition = result.into_partition().expect("partition");
+    assert!(partition.norm().expect("norm") < 1e-12);
+}
+
+/// Run the fully refined schedule with a soft rank goal and a relative tolerance.
+fn schedule_rank_limited(
+    preimage: &ReconstructionTarget,
+    operator: &LinearOperator<IdxTensor, usize>,
+    selection: &[DynIndex],
+    rtol: f64,
+    target_bond_dim: usize,
+) -> MergeRefineResult<usize> {
+    let leaves = 1usize << selection.len();
+    schedule_merge_refine(
+        preimage,
+        &0,
+        operator,
+        selection,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance { rtol, atol: 0.0 },
+        &MergeRefineOptions {
+            output_depth: None,
+            max_work_items: 4 * leaves,
+            target_bond_dim: Some(target_bond_dim),
+        },
+    )
+    .expect("schedule")
+}
+
+#[test]
+fn merge_refine_schedule_truncates_within_the_global_allowance() {
+    let r = 4usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| Complex64::new(1.0 + (m as f64).sin(), (m as f64).cos()))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+
+    let limited = schedule_rank_limited(&preimage, &operator, &sites, 0.3, 2);
+    let report = limited.report().clone();
+
+    // Truncation happened, respected the soft goal, and measured a residual that
+    // stayed inside the global allowance.
+    assert!(report.compression_attempts > 0, "{report:?}");
+    assert!(report.compressions > 0, "{report:?}");
+    assert!(report.max_bond_dim <= 2, "{:?}", report.max_bond_dim);
+    assert!(
+        report.max_transient_bond_dim > report.max_bond_dim,
+        "transient {} retained {}",
+        report.max_transient_bond_dim,
+        report.max_bond_dim
+    );
+    assert!(report.error_bound > 0.0);
+    assert!(report.error_bound <= report.absolute_tolerance);
+
+    // The reported bound covers the deviation from the dense normalized DFT.
+    let (indices, dense) = dense_of(&limited.into_partition().expect("partition"));
+    let expected = dft_oracle(&indices, &sites, &sites, &values);
+    let oracle_error = max_error(&dense, &expected);
+    assert!(
+        oracle_error <= report.error_bound + 1e-12,
+        "oracle residual {oracle_error:e} exceeds the bound {:e}",
+        report.error_bound
+    );
+}
+
+#[test]
+fn merge_refine_schedule_zero_tolerance_keeps_the_exact_trajectory() {
+    let r = 3usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| Complex64::new(m as f64 - 2.0, 0.5 * m as f64))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+
+    let exact = schedule_exact(&preimage, &operator, &sites, None, 32);
+    let limited = schedule_rank_limited(&preimage, &operator, &sites, 0.0, 1);
+    let report = limited.report().clone();
+
+    // A zero allowance leaves no budget, so every probe is rejected for free.
+    assert!(report.compression_attempts > 0);
+    assert_eq!(report.compressions, 0);
+    assert_eq!(report.error_bound, 0.0);
+    assert_eq!(report.absolute_tolerance, 0.0);
+    assert_eq!(report.max_bond_dim, exact.report().max_bond_dim);
+
+    let (indices, dense) = dense_of(&limited.into_partition().expect("partition"));
+    let (exact_indices, exact_dense) = dense_of(&exact.into_partition().expect("partition"));
+    let exact_dense = reorder(&exact_dense, &exact_indices, &indices);
+    assert!(max_error(&dense, &exact_dense) < 1e-12);
+}
+
+#[test]
+fn merge_refine_schedule_keeps_exact_cancellation_with_a_rank_goal() {
+    let site = DynIndex::new_dyn(2);
+    let values = vec![Complex64::new(1.0, 0.0), Complex64::new(-1.0, 0.0)];
+    let tree = mps(std::slice::from_ref(&site), &values);
+    let preimage = dyadic_input_leaves(&tree, std::slice::from_ref(&site));
+    let operator = one_site_matrix(&site, [1.0, 1.0, 0.0, 0.0]);
+
+    let result = schedule_rank_limited(&preimage, &operator, &[site], 0.5, 1);
+    let report = result.report();
+    // A zero sum is already rank one, so no probe is needed and no error accrues.
+    assert_eq!(report.compression_attempts, 0);
+    assert_eq!(report.error_bound, 0.0);
     let partition = result.into_partition().expect("partition");
     assert!(partition.norm().expect("norm") < 1e-12);
 }
