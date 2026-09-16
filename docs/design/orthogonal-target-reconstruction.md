@@ -304,9 +304,9 @@ The implemented accounting is:
   exact sum in place and costs nothing.
 - **Budget allocation is a conservative l1 split, spent level by level.** A level
   can merge at most twice its live item count, so its share is
-  `remaining / level_merges`, `remaining` is reduced by the residuals actually
-  accepted, and the sum of all measured residuals therefore stays within the
-  allowance without any orthogonality assumption between separate compressions. This
+  `remaining / level_merges`, `remaining` is reduced by every residual accepted and
+  every norm dropped, and the total therefore stays within the allowance without any
+  orthogonality assumption between separate compressions or drops. This
   also covers nonuniform input trees, whose merge count is not bounded by
   `2^d * output_depth`.
 - **Region combination.** Terms inside a region may overlap, so their bounds add
@@ -362,6 +362,12 @@ output region so the final region set stays prefix-free:
 - Refinement stops are reported (`refined_regions`, `stopped_regions`), and the
   retained term count is bounded by `max_terms`, whose exhaustion is an explicit
   resource-limit error rather than a silent accuracy relaxation.
+- A merged or unpaired contribution is dropped only when its measured norm fits its
+  share of the allowance. Dropping costs that norm plus the inherited bound it
+  already carried, both of which stay in the region's report, and a region whose
+  terms were all dropped is omitted from the result while its bound still counts
+  toward `error_bound`. `dropped_terms` and `dropped_error` report how much was
+  removed and how much of the bound it accounts for.
 
 ### Evidence and measurements
 
@@ -384,10 +390,12 @@ arbitrary data, and operator-construction error stays outside every bound.
 
 ### Deferred boundaries
 
-Per-input-branch refinement depths with lazy reconciliation, multi-coordinate groups
-with a synchronized multidimensional level, and item dropping under the global policy
-remain follow-up work. Unequal input leaf depths are supported through the dyadic
-prefix-code contract described above.
+Per-input-branch refinement depths with lazy reconciliation and multi-coordinate
+groups with a synchronized multidimensional level remain follow-up work, because the
+latter needs an explicit axis schedule and a per-axis output placement that the
+current one-axis operator contract does not define. Unequal input leaf depths are
+supported through the dyadic prefix-code contract described above, and item dropping
+under the global policy is implemented as described above.
 
 Approximate operator application is available as an opt-in on the schedule:
 `MergeRefineOptions::apply_options` applies the operator with the caller's

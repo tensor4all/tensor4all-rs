@@ -21,8 +21,9 @@
 //!
 //! The trajectory is deterministic and serial. It applies the complete transform
 //! once per input leaf, keeps each region's retained terms as an explicit
-//! superposition, and compresses a merged item only against a measured residual
-//! that fits that item's share of the global allowance.
+//! superposition, compresses a merged item only against a measured residual that
+//! fits that item's share of the global allowance, and drops a contribution only
+//! when its measured norm also fits that share.
 //!
 //! With [`MergeRefineOptions::target_bond_dim`] unset the trajectory is uniform
 //! and exact: every region is refined down to the requested depth and
@@ -30,9 +31,11 @@
 //! adaptive: a region is refined only when its retained terms exceed the goal and
 //! the refinement lowers its maximum retained rank, and a merged pair is combined
 //! only when the combination pays off, so a rank-one object is not forced into a
-//! preset output tiling. Dropping whole items, nonuniform input trees, and
-//! multi-coordinate groups remain follow-up work; automatic padding is a separate
-//! domain/embedding policy and is never applied silently.
+//! preset output tiling. A merged or unpaired contribution is dropped only when
+//! its measured norm fits its share of the global allowance, and the dropped bound
+//! is reported with the region it belonged to. Multi-coordinate groups remain
+//! follow-up work; automatic padding is a separate domain/embedding policy and is
+//! never applied silently.
 
 use std::{
     collections::{btree_map::Entry, BTreeMap, BTreeSet},
@@ -185,6 +188,8 @@ impl Default for MergeRefineOptions {
 ///     applied_operator_count: 2,
 ///     additions: 2,
 ///     projections: 4,
+///     dropped_terms: 0,
+///     dropped_error: 0.0,
 ///     compression_attempts: 0,
 ///     compressions: 0,
 ///     work_items_per_level: vec![2, 2],
@@ -221,6 +226,11 @@ pub struct MergeRefineReport {
     pub additions: usize,
     /// Region restrictions performed by level transitions.
     pub projections: usize,
+    /// Contributions dropped as negligible under the global allowance. Their
+    /// measured norm stays inside [`Self::error_bound`].
+    pub dropped_terms: usize,
+    /// Measured norm of the dropped contributions; part of [`Self::error_bound`].
+    pub dropped_error: f64,
     /// Merged items that exceeded the soft rank goal and probed truncation.
     pub compression_attempts: usize,
     /// Probes that strictly lowered the bond dimension and fit their share.
@@ -291,7 +301,9 @@ where
 /// be added. [`Self::items`] exposes each term's input region.
 /// [`Self::into_partition`] succeeds only when every region holds one term: the
 /// uniform exact trajectory at the full output depth always does, while an
-/// adaptive stop or a retained superposition does not.
+/// adaptive stop or a retained superposition does not. A region whose terms were
+/// all dropped as negligible is omitted, because it has nothing to expose, while
+/// its measured bound stays inside [`MergeRefineReport::error_bound`].
 ///
 /// # Examples
 ///
@@ -818,9 +830,12 @@ where
 /// the allowance, so the reported bound sums measured residuals inside a region,
 /// combines disjoint regions by the Euclidean norm, and never exceeds the
 /// allowance. A rejected probe costs nothing, and a restriction is nonexpansive,
-/// so an inherited bound carries over without consuming budget. Reaching
-/// [`MergeRefineOptions::max_terms`] returns a resource-limit error instead of
-/// silently relaxing accuracy.
+/// so an inherited bound carries over without consuming budget. A merged or
+/// unpaired contribution is dropped only when its measured norm fits its share of
+/// the allowance: the inherited bound plus that norm stay in the reported bound, and
+/// a region whose terms are all dropped is omitted from the result instead of being
+/// silently presented as nonzero. Reaching [`MergeRefineOptions::max_terms`] returns
+/// a resource-limit error instead of silently relaxing accuracy.
 ///
 /// Output placement follows the subset-operator convention: `r_j` lands on the
 /// selected index that carried `k_(d+1-j)`, so a contiguous output prefix fixes
@@ -952,6 +967,8 @@ where
                 applied_operator_count: 0,
                 additions: 0,
                 projections: 0,
+                dropped_terms: 0,
+                dropped_error: 0.0,
                 compression_attempts: 0,
                 compressions: 0,
                 work_items_per_level: vec![0],
@@ -1102,10 +1119,17 @@ where
     // overlap, so they stay in one region entry that `regions()` exposes as a
     // superposition and `into_partition()` rejects.
     let mut grouped: BTreeMap<(usize, usize), MergeRefineRegion<V>> = BTreeMap::new();
+    let mut dropped_by_region: BTreeMap<(usize, usize), f64> = BTreeMap::new();
     for (output_level, region, items) in finalized {
         let output = geometry.output_projector(output_level, region)?;
         for ((input_depth, input_prefix), item) in items {
             let input = geometry.input_projector(input_depth, input_prefix)?;
+            if item.dropped > 0.0 {
+                let entry = dropped_by_region
+                    .entry((output_level, region))
+                    .or_insert(0.0);
+                *entry = finite(*entry + item.dropped)?;
+            }
             for term in item.terms {
                 max_bond_dim = max_bond_dim.max(term.value.max_bond_dim());
                 logical_parameters = logical_parameters
@@ -1120,13 +1144,23 @@ where
             }
         }
     }
-    let regions: Vec<MergeRefineRegion<V>> = grouped.into_values().collect();
-    let term_count = regions.iter().map(|region| region.terms.len()).sum();
+    let mut regions: Vec<MergeRefineRegion<V>> = Vec::with_capacity(grouped.len());
+    let mut error_bound = 0.0_f64;
     // Region bounds add by the triangle inequality because terms inside a region
     // may overlap; disjoint regions combine by the Euclidean norm.
-    let error_bound = regions
-        .iter()
-        .try_fold(0.0_f64, |total, region| finite(total.hypot(region.bound)))?;
+    for (key, mut region) in grouped {
+        if let Some(dropped) = dropped_by_region.remove(&key) {
+            region.bound = finite(region.bound + dropped)?;
+        }
+        error_bound = finite(error_bound.hypot(region.bound))?;
+        regions.push(region);
+    }
+    // A region whose terms were all dropped keeps its measured bound even though it
+    // has no retained term to expose.
+    for bound in dropped_by_region.into_values() {
+        error_bound = finite(error_bound.hypot(bound))?;
+    }
+    let term_count = regions.iter().map(|region| region.terms.len()).sum();
     let reference_scale = scale;
     let report = MergeRefineReport {
         reference_scale,
@@ -1136,6 +1170,8 @@ where
         applied_operator_count,
         additions: counters.additions,
         projections: counters.projections,
+        dropped_terms: counters.dropped_terms,
+        dropped_error: counters.dropped_error,
         compression_attempts: counters.compression_attempts,
         compressions: counters.compressions,
         work_items_per_level,
@@ -1176,6 +1212,10 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     terms: Vec<Term<V>>,
+    /// Bound carried by contributions that were dropped as negligible under the
+    /// global allowance. They have no term to attach to, so the region they belong
+    /// to reports them.
+    dropped: f64,
 }
 
 impl<V> Item<V>
@@ -1185,6 +1225,7 @@ where
     fn single(value: SubDomainTreeTN<V>, bound: f64) -> Self {
         Self {
             terms: vec![Term { value, bound }],
+            dropped: 0.0,
         }
     }
 
@@ -1210,7 +1251,10 @@ where
                 });
             }
         }
-        Ok(Self { terms })
+        Ok(Self {
+            terms,
+            dropped: self.dropped,
+        })
     }
 }
 
@@ -1286,6 +1330,7 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     let mut terms = Vec::with_capacity(left.terms.len() + right.terms.len());
+    let mut dropped = finite(left.dropped + right.dropped)?;
     for index in 0..left.terms.len().max(right.terms.len()) {
         match (left.terms.get(index), right.terms.get(index)) {
             (Some(left), Some(right)) => {
@@ -1293,6 +1338,12 @@ where
                 let inherited = finite(left.bound + right.bound)?;
                 counters.max_transient_bond_dim =
                     counters.max_transient_bond_dim.max(sum.max_bond_dim());
+                // A contribution whose measured norm fits its share of the
+                // allowance is dropped: its inherited bound plus its measured norm
+                // stay in the region's report.
+                if drop_negligible(&sum, share, inherited, counters, &mut dropped)? {
+                    continue;
+                }
                 match options.target_bond_dim {
                     None => terms.push(Term {
                         value: sum,
@@ -1315,11 +1366,41 @@ where
                     }
                 }
             }
-            (Some(only), None) | (None, Some(only)) => terms.push(only.clone()),
+            (Some(only), None) | (None, Some(only)) => {
+                if drop_negligible(&only.value, share, only.bound, counters, &mut dropped)? {
+                    continue;
+                }
+                terms.push(only.clone());
+            }
             (None, None) => {}
         }
     }
-    Ok(Item { terms })
+    Ok(Item { terms, dropped })
+}
+
+/// Drop a contribution whose measured norm fits its share of the allowance.
+///
+/// Returns `true` when the contribution was dropped, in which case its inherited
+/// bound and measured norm are charged to the item and to the level spend.
+fn drop_negligible<V>(
+    value: &SubDomainTreeTN<V>,
+    share: f64,
+    inherited: f64,
+    counters: &mut MergeCounters,
+    dropped: &mut f64,
+) -> Result<bool>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let norm = finite(value.norm()?)?;
+    if norm > share {
+        return Ok(false);
+    }
+    *dropped = finite(*dropped + inherited + norm)?;
+    counters.dropped_terms = checked_add(counters.dropped_terms, 1)?;
+    counters.dropped_error = finite(counters.dropped_error + norm)?;
+    counters.residual_spent = finite(counters.residual_spent + norm)?;
+    Ok(true)
 }
 
 /// Fail before the retained term count exceeds the caller's budget.
@@ -1357,6 +1438,9 @@ struct MergeCounters {
     /// Sum of the truncation residuals accepted so far, charged against the
     /// remaining global allowance.
     residual_spent: f64,
+    /// Contributions dropped as negligible, and their measured norm.
+    dropped_terms: usize,
+    dropped_error: f64,
     projections: usize,
     compression_attempts: usize,
     compressions: usize,

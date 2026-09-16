@@ -202,8 +202,9 @@ site indices per node, and does not implement adaptive interpolation.
   pays off (otherwise both operands stay as separate terms). A truncation is
   accepted only when it strictly lowers the bond dimension and its measured
   residual fits an equal share of the allowance, so the measured `error_bound`
-  never exceeds the allowance, and exceeding `max_terms` returns a resource-limit
-  error. `MergeRefineOptions::apply_options` opts into a truncating operator
+  never exceeds the allowance. A contribution is dropped only when its measured norm
+  fits its share, reported through `dropped_terms`/`dropped_error`, and exceeding
+  `max_terms` returns a resource-limit error. `MergeRefineOptions::apply_options` opts into a truncating operator
   application: the schedule applies both exactly and with those options, measures
   each leaf's deviation, and charges the sum before any compression, rejecting an
   application error above the allowance. All other entry points apply exactly. The `MergeRefineReport` reports `level_count`,
