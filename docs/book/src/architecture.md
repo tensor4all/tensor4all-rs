@@ -160,7 +160,7 @@ requirements onto unrelated generic code.
 |-------|-------------|
 | **treetn** | Tree tensor networks with arbitrary graph topology. Supports canonicalization, truncation, contraction, DMRG/TDVP, and hosts the sanctioned `simplett_bridge`. |
 | **itensorlike** | ITensors.jl-inspired `TensorTrain` (tree-based) with orthogonality tracking and multiple canonical forms. |
-| **partitionedtreetn** | TreeTN-native eagerly masked subdomains, strict partition algebra, and volume-budgeted adaptive patching. |
+| **partitionedtreetn** | TreeTN-native eagerly masked subdomains, strict partition algebra, volume-budgeted adaptive patching, and reconstruction against a fixed global L2 tolerance. |
 | **partitionedtt** | **Deprecated** partitioned tensor trains for subdomain decomposition. Builds on itensorlike and crosses to simplett via `simplett_bridge`; it remains buildable during migration. |
 | **treetci** | Tree TCI: cross interpolation on tree-structured tensor networks. |
 
@@ -205,6 +205,7 @@ requirements onto unrelated generic code.
 | Tensor train with ITensors.jl-style interface | `tensor4all-itensorlike` (`TensorTrain`) |
 | Tree tensor networks | `tensor4all-treetn` |
 | Subdomain decomposition on named TreeTNs | `tensor4all-partitionedtreetn` |
+| Reconstruct orthogonal patches or tensor products with a global L2 tolerance | `tensor4all-partitionedtreetn::reconstruction` |
 | Legacy simple TT subdomain decomposition or adaptive TCI | `tensor4all-partitionedtt` (deprecated during migration) |
 | Quantics transform operators | `tensor4all-quanticstransform` |
 | HDF5 I/O compatible with Julia | `tensor4all-hdf5` |

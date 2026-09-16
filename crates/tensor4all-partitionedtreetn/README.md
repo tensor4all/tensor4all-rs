@@ -16,7 +16,51 @@ discarded-weight cutoff following the ITensorMPS convention. One absolute local
 threshold `cutoff * ||F||^2 * volume_p / total_volume` is derived per operation
 and applied whole at every local SVD. It is **best effort** for the final
 whole-network error; `max_bond_dim` is a hard cap and takes precedence. No API
-in this crate claims a global relative-error bound.
+in the existing adaptive-patching API claims a global relative-error bound.
+
+## Reconstruction with a global L2 tolerance
+
+The separate `reconstruction` module accepts an immutable
+`ReconstructionTarget`, a `ReconstructionTolerance { rtol, atol }`, and
+`ReconstructionOptions`. It pins the target's L2 norm and accepts local
+approximations only after checking their difference-network norms against
+the fixed allowance `max(atol, rtol * reference_scale)`.
+
+`ReconstructionTarget::from_partition` snapshots disjoint eager patches.
+`from_tensor_products` retains independent factor pairs on the same named tree
+topology, validates disjoint product supports, and computes each product norm
+by multiplying factor norms before any product is formed.
+
+`target_bond_dim` is a soft goal. Profitable sums are merged; over-goal terms
+split only when rank improves. Otherwise the output keeps high-rank terms or
+superposition lists. `ReconstructedTreeTN::regions()` exposes the disjoint
+regions and their terms; `into_partition()` succeeds only when every region
+has one term, and never silently sums a list. Its report contains an accumulated
+measured-residual error bound; floating-point roundoff is not rigorously bounded.
+
+Reconstruction reuses `patch_order` and `PatchSplitStrategy`: `Sequential`
+tries only the next unprojected nontrivial index and stops on no gain or a
+region-capacity limit; the default `ExactParameterGain` compares all permitted
+candidates. Use an explicit MSB-first order with `Sequential` for contiguous
+QTT intervals, independently of the indices' placement on the tree.
+
+`ReconstructionTarget::from_subset_operator` prepares the images of an existing
+linear operator (for example a quantics Fourier transform built elsewhere) on an
+ordered subset of full site indices. Spectators keep their identity, dimension,
+and node assignment. Two selected indices on one tree node are rejected. The
+transformed output norm is never measured and the images are never summed into
+one network. `SubsetOperatorOptions::unitary` instead pins the amplification
+factor: `false` (default) uses the selected-space operator's Frobenius norm as an
+upper bound, `true` is a caller guarantee that the operator preserves the L2
+norm (factor one). The preimage reference scale is multiplied by that factor and
+successive applications propagate it. The operator's own construction error
+stays separate from the reported reconstruction bound.
+
+Run the asserted example with
+`cargo run --release -p tensor4all-partitionedtreetn --example reconstruct`.
+The [guide](https://tensor4all.org/tensor4all-rs/guides/partitioned-treetn.html#reconstruction-with-a-fixed-global-l2-tolerance)
+includes the same executable source. The QFT merge-refine schedule and automatic
+zero-padding remain separate follow-up work.
 
 ## Quick start
 
