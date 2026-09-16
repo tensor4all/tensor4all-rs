@@ -15,14 +15,20 @@
 //! previously carried `k_(d+1-j)`, matching the subset-operator output placement
 //! (no bit-reversal permutation is applied). Spectator indices are unchanged.
 //!
-//! This module runs the deterministic, serial reference trajectory: it applies the
-//! complete transform once per input leaf, and it compresses a merged item only
-//! against a measured residual that fits that item's share of the global
-//! allowance. With [`MergeRefineOptions::target_bond_dim`] unset, the trajectory
-//! is exact and [`MergeRefineReport::error_bound`] stays zero. Adaptive rank
-//! control over multiple levels, dropping whole items, and nonuniform input trees
-//! remain follow-up work; automatic padding is a separate domain/embedding policy
-//! and is never applied silently.
+//! The trajectory is deterministic and serial. It applies the complete transform
+//! once per input leaf, keeps each region's retained terms as an explicit
+//! superposition, and compresses a merged item only against a measured residual
+//! that fits that item's share of the global allowance.
+//!
+//! With [`MergeRefineOptions::target_bond_dim`] unset the trajectory is uniform
+//! and exact: every region is refined down to the requested depth and
+//! [`MergeRefineReport::error_bound`] stays zero. With a rank goal it becomes
+//! adaptive: a region is refined only when its retained terms exceed the goal and
+//! the refinement lowers its maximum retained rank, and a merged pair is combined
+//! only when the combination pays off, so a rank-one object is not forced into a
+//! preset output tiling. Dropping whole items, nonuniform input trees, and
+//! multi-coordinate groups remain follow-up work; automatic padding is a separate
+//! domain/embedding policy and is never applied silently.
 
 use std::{
     collections::{btree_map::Entry, BTreeMap},
@@ -57,6 +63,7 @@ use crate::{
 /// let options = MergeRefineOptions::default();
 /// assert_eq!(options.output_depth, None);
 /// assert_eq!(options.max_work_items, 4096);
+/// assert_eq!(options.max_terms, 1 << 20);
 /// assert_eq!(options.target_bond_dim, None);
 /// ```
 #[derive(Debug, Clone)]
@@ -72,12 +79,20 @@ pub struct MergeRefineOptions {
     /// below that is rejected before any operator is applied.
     pub max_work_items: usize,
     /// Desired maximum bond dimension per retained term, default `None`.
-    /// `None` disables truncation and keeps the trajectory exact. `Some(goal)`
-    /// truncates a merged item only toward this soft goal and only when its
-    /// measured residual fits the item's share of the global allowance, so an
-    /// unaffordable candidate is retained exactly instead of violating the
-    /// accuracy contract. `Some(0)` is invalid.
+    /// `None` disables truncation and keeps the trajectory uniform and exact.
+    /// `Some(goal)` enables adaptive refinement for every output region whose
+    /// retained terms exceed the goal: a region is refined only when that lowers
+    /// its maximum retained term rank, and a merged pair is combined only when the
+    /// combination pays off, otherwise its operands stay separate terms. A
+    /// truncation candidate must also fit the item's share of the global
+    /// allowance, so a soft rank goal never forces an accuracy violation.
+    /// `Some(0)` is invalid.
     pub target_bond_dim: Option<usize>,
+    /// Maximum retained terms across live and finalized regions, default
+    /// `1 << 20`. The adaptive merge policy can keep operands separate, so this
+    /// bounds that growth and returns a resource-limit error instead of
+    /// exceeding the budget.
+    pub max_terms: usize,
 }
 
 impl Default for MergeRefineOptions {
@@ -86,6 +101,7 @@ impl Default for MergeRefineOptions {
             output_depth: None,
             max_work_items: 4096,
             target_bond_dim: None,
+            max_terms: 1 << 20,
         }
     }
 }
@@ -116,6 +132,8 @@ impl Default for MergeRefineOptions {
 ///     compressions: 0,
 ///     work_items_per_level: vec![2, 2],
 ///     peak_work_items: 2,
+///     refined_regions: 1,
+///     stopped_regions: 0,
 ///     region_count: 2,
 ///     term_count: 2,
 ///     max_bond_dim: 1,
@@ -154,6 +172,13 @@ pub struct MergeRefineReport {
     pub work_items_per_level: Vec<usize>,
     /// Largest number of live work items.
     pub peak_work_items: usize,
+    /// Output regions refined into child prefix regions.
+    pub refined_regions: usize,
+    /// Output regions kept unsplit because refinement would not lower their
+    /// retained rank. These regions report their terms through
+    /// [`MergeRefineResult::regions`], and their terms cover the input prefixes
+    /// that were still separate when they stopped.
+    pub stopped_regions: usize,
     /// Disjoint output regions in the result.
     pub region_count: usize,
     /// Terms across all regions; terms inside one region overlap and must not be
@@ -183,29 +208,33 @@ impl<V> MergeRefineRegion<V>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
-    fn new(output: Projector, input: Projector, item: WorkItem<V>) -> Self {
+    /// Start a region entry with its first retained term and input prefix.
+    fn new(output: Projector, input: Projector, term: Term<V>) -> Self {
         Self {
             output,
             inputs: vec![input],
-            terms: vec![item.value],
-            bound: item.bound,
+            terms: vec![term.value],
+            bound: term.bound,
         }
     }
 
-    fn push(&mut self, input: Projector, item: WorkItem<V>) {
+    /// Add another retained term of the same output region.
+    fn push(&mut self, input: Projector, term: Term<V>) {
         self.inputs.push(input);
-        self.terms.push(item.value);
-        self.bound += item.bound;
+        self.terms.push(term.value);
+        self.bound += term.bound;
     }
 }
 
 /// Disjoint output regions of a merge-refine schedule run, with provenance.
 ///
 /// Terms inside one region overlap: they are the contributions of different
-/// input dyadic regions to the same output prefix region, so their norm squares
-/// must not simply be added. [`Self::items`] exposes each term's input region;
-/// [`Self::into_partition`] succeeds only when every region holds one term,
-/// which the fully refined depth always produces.
+/// input dyadic regions, or the retained operands of a merge that did not pay
+/// off, to the same output prefix region, so their norm squares must not simply
+/// be added. [`Self::items`] exposes each term's input region.
+/// [`Self::into_partition`] succeeds only when every region holds one term: the
+/// uniform exact trajectory at the full output depth always does, while an
+/// adaptive stop or a retained superposition does not.
 ///
 /// # Examples
 ///
@@ -673,12 +702,18 @@ where
 /// `options` selects the output depth, the work limit, and the soft rank goal.
 ///
 /// With [`MergeRefineOptions::target_bond_dim`] unset nothing is truncated and
-/// the reported bound is exactly zero. With a goal, each merged item is truncated
-/// only toward that goal and only when its measured residual fits an equal share
-/// of the allowance, so the reported bound sums measured residuals inside a
-/// region, combines disjoint regions by the Euclidean norm, and never exceeds the
+/// the reported bound is exactly zero. With a goal the trajectory is adaptive: an
+/// output region is refined only when its terms exceed the goal and refining
+/// lowers its maximum retained rank, and a merged pair is combined into one term
+/// only when that strictly lowers the bond dimension, otherwise both operands stay
+/// as separate terms of the region's superposition. Each merged item is truncated
+/// only toward the goal and only when its measured residual fits an equal share of
+/// the allowance, so the reported bound sums measured residuals inside a region,
+/// combines disjoint regions by the Euclidean norm, and never exceeds the
 /// allowance. A rejected probe costs nothing, and a restriction is nonexpansive,
-/// so an inherited bound carries over without consuming budget.
+/// so an inherited bound carries over without consuming budget. Reaching
+/// [`MergeRefineOptions::max_terms`] returns a resource-limit error instead of
+/// silently relaxing accuracy.
 ///
 /// Output placement follows the subset-operator convention: `r_j` lands on the
 /// selected index that carried `k_(d+1-j)`, so a contiguous output prefix fixes
@@ -689,7 +724,8 @@ where
 /// selection, an `output_depth` above the selection depth, a `max_work_items`
 /// limit below the input-leaf count, a zero `target_bond_dim`, a preimage that is
 /// not exactly the dyadic input leaves, non-finite tolerances, and non-finite or
-/// non-positive checked counts; [`PartitionedTreeTNError::ProjectorMismatch`]
+/// non-positive checked counts; [`PartitionedTreeTNError::ResourceLimit`] when the
+/// retained term count exceeds `max_terms`; [`PartitionedTreeTNError::ProjectorMismatch`]
 /// when leaves disagree on spectator constraints; and the operator-mapping,
 /// node-merging, application, projection, addition, and backend errors reported
 /// by the underlying TreeTN operations.
@@ -815,106 +851,110 @@ where
         finite(allowance / merge_slots as f64)?
     };
 
-    let mut level: BTreeMap<(usize, usize), WorkItem<V>> = BTreeMap::new();
+    // Live output regions, keyed by their prefix value, each holding one item per
+    // input prefix that has not been merged away yet.
+    let mut level: BTreeMap<usize, BTreeMap<usize, Item<V>>> = BTreeMap::new();
+    let mut first: BTreeMap<usize, Item<V>> = BTreeMap::new();
     for prepared in images {
         let leaf = geometry.leaf_index(&prepared.source).ok_or_else(|| {
             invalid("every preimage patch must fix all selected indices to one coordinate")
         })?;
         // Level zero: one complete transform per leaf, whole output domain, and
         // no application error beyond backend roundoff.
-        level.insert(
-            (leaf, 0),
-            WorkItem {
-                value: prepared.image,
-                bound: 0.0,
-            },
-        );
+        first.insert(leaf, Item::single(prepared.image, 0.0));
     }
 
-    let applied_operator_count = level.len();
+    let applied_operator_count: usize = first.len();
     let mut counters = MergeCounters {
-        peak_work_items: level.len(),
+        peak_work_items: first.len(),
         ..MergeCounters::default()
     };
     let mut work_items_per_level = Vec::with_capacity(output_depth + 1);
-    work_items_per_level.push(level.len());
+    work_items_per_level.push(first.len());
+    level.insert(0, first);
+    check_term_budget(&level, &[], options.max_terms)?;
+    // `finalized` keeps the regions that stopped refining, so their terms count
+    // against the same budget as the live ones.
+    let mut finalized: Vec<FinalRegion<V>> = Vec::new();
     for level_index in 1..=output_depth {
-        let mut next: BTreeMap<(usize, usize), WorkItem<V>> = BTreeMap::new();
-        for ((input_region, output_region), item) in std::mem::take(&mut level) {
+        let mut next: BTreeMap<usize, BTreeMap<usize, Item<V>>> = BTreeMap::new();
+        for (region, items) in std::mem::take(&mut level) {
+            // Probe both child regions: restrict first, then merge input siblings.
+            let mut children = Vec::with_capacity(2);
             for bit in 0..2usize {
-                let child_region = (output_region << 1) | bit;
-                // INVARIANT: restrict to the child output region before adding,
-                // so a parent sum is never assembled over the whole output domain.
-                let projector = geometry.output_projector(level_index, child_region)?;
-                counters.projections = checked_add(counters.projections, 1)?;
-                let Some(restricted) = item.value.project(&projector)? else {
-                    continue;
-                };
-                // Restriction is nonexpansive, so the inherited bound stays a
-                // safe bound for the child without consuming budget.
-                let restricted = WorkItem {
-                    value: restricted,
-                    bound: item.bound,
-                };
-                match next.entry((input_region >> 1, child_region)) {
+                let child = (region << 1) | bit;
+                let projector = geometry.output_projector(level_index, child)?;
+                children.push((
+                    child,
+                    restrict_and_merge(&items, &projector, center, options, share, &mut counters)?,
+                ));
+            }
+            let parent_rank = max_rank(&items);
+            let child_rank = children
+                .iter()
+                .map(|(_, child_items)| max_rank(child_items))
+                .max()
+                .unwrap_or(0);
+            // Refinement is worth its regions only when it lowers the retained
+            // rank. Without a rank goal the trajectory stays uniform and exact.
+            let refine = match options.target_bond_dim {
+                None => true,
+                Some(goal) => parent_rank > goal && child_rank < parent_rank,
+            };
+            if refine {
+                counters.refined_regions = checked_add(counters.refined_regions, 1)?;
+                for (child, child_items) in children {
+                    next.insert(child, child_items);
+                }
+            } else {
+                counters.stopped_regions = checked_add(counters.stopped_regions, 1)?;
+                // The stopped region keeps the input prefixes it held before the
+                // discarded probe, so its terms stay smaller than the probe sum.
+                finalized.push((level_index - 1, region, level_index - 1, items));
+            }
+        }
+        let live_items: usize = next.values().map(|items| items.len()).sum();
+        // INVARIANT: a level holds at most `2^d` items (`#A * #B = 2^d`), which the
+        // upfront work limit already covers, so no second item check is needed.
+        counters.peak_work_items = counters.peak_work_items.max(live_items);
+        work_items_per_level.push(live_items);
+        level = next;
+        check_term_budget(&level, &finalized, options.max_terms)?;
+    }
+    // Regions that survived the last level keep the input prefixes they hold at
+    // that depth; a stopped region keeps the prefixes it had before its discarded
+    // probe. Either way the caller consumes their terms through `regions()`.
+    finalized.extend(
+        level
+            .into_iter()
+            .map(|(region, items)| (output_depth, region, output_depth, items)),
+    );
+
+    let mut max_bond_dim = 0usize;
+    let mut logical_parameters = 0usize;
+    // Group retained terms by output region: terms of one output prefix region
+    // overlap, so they stay in one region entry that `regions()` exposes as a
+    // superposition and `into_partition()` rejects.
+    let mut grouped: BTreeMap<(usize, usize), MergeRefineRegion<V>> = BTreeMap::new();
+    for (output_level, region, input_level, items) in finalized {
+        let output = geometry.output_projector(output_level, region)?;
+        for (input_prefix, item) in items {
+            let input = geometry.input_projector(input_level, input_prefix)?;
+            for term in item.terms {
+                max_bond_dim = max_bond_dim.max(term.value.max_bond_dim());
+                logical_parameters = logical_parameters
+                    .checked_add(logical_parameter_count(&term.value)?)
+                    .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
+                match grouped.entry((output_level, region)) {
                     Entry::Vacant(slot) => {
-                        slot.insert(restricted);
+                        slot.insert(MergeRefineRegion::new(output.clone(), input.clone(), term));
                     }
-                    Entry::Occupied(mut slot) => {
-                        // Both children carry the same prefix and spectator
-                        // constraints, so strict subdomain addition applies.
-                        let sum = slot.get().value.add(&restricted.value)?;
-                        let inherited = finite(slot.get().bound + restricted.bound)?;
-                        let transient = sum.max_bond_dim();
-                        counters.max_transient_bond_dim =
-                            counters.max_transient_bond_dim.max(transient);
-                        let (value, residual) = compress_merged(
-                            &sum,
-                            center,
-                            options.target_bond_dim,
-                            share,
-                            &mut counters,
-                        )?;
-                        slot.insert(WorkItem {
-                            value,
-                            bound: finite(inherited + residual)?,
-                        });
-                        counters.additions = checked_add(counters.additions, 1)?;
-                    }
+                    Entry::Occupied(mut slot) => slot.get_mut().push(input.clone(), term),
                 }
             }
         }
-        let live = next.len();
-        // INVARIANT: a level holds at most `2^d` items (`#A * #B = 2^d`), which the
-        // upfront work limit already covers, so no second limit check is needed.
-        counters.peak_work_items = counters.peak_work_items.max(live);
-        work_items_per_level.push(live);
-        level = next;
     }
-
-    let mut regions: Vec<MergeRefineRegion<V>> = Vec::new();
-    let mut region_positions: BTreeMap<usize, usize> = BTreeMap::new();
-    let mut max_bond_dim = 0usize;
-    let mut logical_parameters = 0usize;
-    for ((input_region, output_region), item) in level {
-        max_bond_dim = max_bond_dim.max(item.value.max_bond_dim());
-        logical_parameters = logical_parameters
-            .checked_add(logical_parameter_count(&item.value)?)
-            .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
-        let input = geometry.input_projector(output_depth, input_region)?;
-        match region_positions.get(&output_region) {
-            Some(&position) => regions[position].push(input, item),
-            None => {
-                region_positions.insert(output_region, regions.len());
-                // Every term of a region is masked to the same output prefix and
-                // the same spectator constraints, so the region projector is the
-                // shared term projector; `SubDomainTreeTN::add` enforces that
-                // equality for later terms.
-                let output = item.value.projector().clone();
-                regions.push(MergeRefineRegion::new(output, input, item));
-            }
-        }
-    }
+    let regions: Vec<MergeRefineRegion<V>> = grouped.into_values().collect();
     let term_count = regions.iter().map(|region| region.terms.len()).sum();
     // Region bounds add by the triangle inequality because terms inside a region
     // may overlap; disjoint regions combine by the Euclidean norm.
@@ -934,6 +974,8 @@ where
         compressions: counters.compressions,
         work_items_per_level,
         peak_work_items: counters.peak_work_items,
+        refined_regions: counters.refined_regions,
+        stopped_regions: counters.stopped_regions,
         region_count: regions.len(),
         term_count,
         max_bond_dim,
@@ -943,15 +985,191 @@ where
     Ok(MergeRefineResult { regions, report })
 }
 
-/// One live work item: `P_B F P_A w` up to a measured deviation bound.
+/// One retained term: `P_B F P_A w` up to a measured deviation bound.
 #[derive(Debug, Clone)]
-struct WorkItem<V>
+struct Term<V>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     value: SubDomainTreeTN<V>,
     /// Measured bound on the deviation of `value` from the exact object.
     bound: f64,
+}
+
+/// A finalized output region: its output level, output region key, the input
+/// level of its items, and the items themselves.
+type FinalRegion<V> = (usize, usize, usize, BTreeMap<usize, Item<V>>);
+
+/// One work item: the superposition of its terms for one input prefix region.
+#[derive(Debug, Clone)]
+struct Item<V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    terms: Vec<Term<V>>,
+}
+
+impl<V> Item<V>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    fn single(value: SubDomainTreeTN<V>, bound: f64) -> Self {
+        Self {
+            terms: vec![Term { value, bound }],
+        }
+    }
+
+    /// Largest retained bond dimension over the item's terms.
+    fn max_rank(&self) -> usize {
+        self.terms
+            .iter()
+            .map(|term| term.value.max_bond_dim())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Restrict every term to `projector`, dropping terms that vanish there.
+    fn restrict(&self, projector: &Projector) -> Result<Self> {
+        let mut terms = Vec::with_capacity(self.terms.len());
+        for term in &self.terms {
+            // Restriction is nonexpansive, so an inherited bound carries over
+            // unchanged and consumes no budget.
+            if let Some(value) = term.value.project(projector)? {
+                terms.push(Term {
+                    value,
+                    bound: term.bound,
+                });
+            }
+        }
+        Ok(Self { terms })
+    }
+}
+
+/// Largest retained rank over a region's items.
+fn max_rank<V>(items: &BTreeMap<usize, Item<V>>) -> usize
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    items.values().map(Item::max_rank).max().unwrap_or(0)
+}
+
+/// Restrict a region's items to a child region and merge each input sibling pair.
+fn restrict_and_merge<V>(
+    items: &BTreeMap<usize, Item<V>>,
+    projector: &Projector,
+    center: &V,
+    options: &MergeRefineOptions,
+    share: f64,
+    counters: &mut MergeCounters,
+) -> Result<BTreeMap<usize, Item<V>>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let mut children: BTreeMap<usize, Item<V>> = BTreeMap::new();
+    for (input_prefix, item) in items {
+        let restricted = item.restrict(projector)?;
+        match children.entry(input_prefix >> 1) {
+            Entry::Vacant(slot) => {
+                slot.insert(restricted);
+            }
+            Entry::Occupied(mut slot) => {
+                // Both siblings carry the same prefix and spectator constraints,
+                // so strict subdomain addition applies.
+                let combined =
+                    merge_items(slot.get(), &restricted, center, options, share, counters)?;
+                counters.additions = checked_add(counters.additions, 1)?;
+                slot.insert(combined);
+            }
+        }
+    }
+    let projections = items
+        .len()
+        .checked_mul(2)
+        .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
+    counters.projections = checked_add(counters.projections, projections)?;
+    Ok(children)
+}
+
+/// Combine two sibling contributions to one region.
+///
+/// Without a rank goal the exact sum is kept as a single term. With a goal, each
+/// paired sum is compressed toward the goal first; the single combined term is
+/// kept only when it strictly lowers the bond dimension against the naive sum,
+/// otherwise the operands stay separate terms so the retained ranks stay small.
+fn merge_items<V>(
+    left: &Item<V>,
+    right: &Item<V>,
+    center: &V,
+    options: &MergeRefineOptions,
+    share: f64,
+    counters: &mut MergeCounters,
+) -> Result<Item<V>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let mut terms = Vec::with_capacity(left.terms.len() + right.terms.len());
+    for index in 0..left.terms.len().max(right.terms.len()) {
+        match (left.terms.get(index), right.terms.get(index)) {
+            (Some(left), Some(right)) => {
+                let sum = left.value.add(&right.value)?;
+                let inherited = finite(left.bound + right.bound)?;
+                counters.max_transient_bond_dim =
+                    counters.max_transient_bond_dim.max(sum.max_bond_dim());
+                match options.target_bond_dim {
+                    None => terms.push(Term {
+                        value: sum,
+                        bound: inherited,
+                    }),
+                    Some(goal) => {
+                        let (candidate, residual) =
+                            compress_item(&sum, center, goal, share, counters)?;
+                        let naive_rank =
+                            checked_add(left.value.max_bond_dim(), right.value.max_bond_dim())?;
+                        if candidate.max_bond_dim() < naive_rank {
+                            terms.push(Term {
+                                value: candidate,
+                                bound: finite(inherited + residual)?,
+                            });
+                        } else {
+                            terms.push(left.clone());
+                            terms.push(right.clone());
+                        }
+                    }
+                }
+            }
+            (Some(only), None) | (None, Some(only)) => terms.push(only.clone()),
+            (None, None) => {}
+        }
+    }
+    Ok(Item { terms })
+}
+
+/// Fail before the retained term count exceeds the caller's budget.
+fn check_term_budget<V>(
+    live: &BTreeMap<usize, BTreeMap<usize, Item<V>>>,
+    finalized: &[FinalRegion<V>],
+    max_terms: usize,
+) -> Result<()>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    let mut retained = 0usize;
+    for items in live
+        .values()
+        .chain(finalized.iter().map(|(_, _, _, items)| items))
+    {
+        for item in items.values() {
+            retained = checked_add(retained, item.terms.len())?;
+        }
+    }
+    if retained > max_terms {
+        return Err(PartitionedTreeTNError::ResourceLimit {
+            operation: "merge-refine scheduling",
+            limit: "max_terms",
+            value: retained,
+        });
+    }
+    Ok(())
 }
 
 /// Live schedule counters, so the level loop stays readable.
@@ -963,34 +1181,33 @@ struct MergeCounters {
     compressions: usize,
     peak_work_items: usize,
     max_transient_bond_dim: usize,
+    refined_regions: usize,
+    stopped_regions: usize,
 }
 
-/// Compress a merged item toward the soft rank goal within `share`.
+/// Compress a merged sum toward the soft rank goal within `share`.
 ///
-/// Returns the retained value and its measured residual against `sum`. With no
-/// rank goal the exact sum is kept. Otherwise a truncation candidate is accepted
-/// only when it strictly lowers the bond dimension and its measured residual fits
-/// `share`; an unaffordable or gainless candidate is rejected at zero cost, so a
-/// soft rank goal never forces an accuracy violation.
-fn compress_merged<V>(
+/// Returns the retained value and its measured residual against `sum`. A
+/// truncation candidate is accepted only when it strictly lowers the bond
+/// dimension and its measured residual fits `share`; an unaffordable or gainless
+/// candidate is rejected at zero cost, so a soft rank goal never forces an
+/// accuracy violation.
+fn compress_item<V>(
     sum: &SubDomainTreeTN<V>,
     center: &V,
-    target_bond_dim: Option<usize>,
+    goal: usize,
     share: f64,
     counters: &mut MergeCounters,
 ) -> Result<(SubDomainTreeTN<V>, f64)>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    let Some(goal) = target_bond_dim else {
-        return Ok((sum.clone(), 0.0));
-    };
     if sum.max_bond_dim() <= goal {
         return Ok((sum.clone(), 0.0));
     }
     counters.compression_attempts = checked_add(counters.compression_attempts, 1)?;
     let (candidate, residual) = truncate_toward_allowance(sum, center, share)?;
-    if residual > 0.0 && candidate.max_bond_dim() < sum.max_bond_dim() {
+    if candidate.max_bond_dim() < sum.max_bond_dim() {
         counters.compressions = checked_add(counters.compressions, 1)?;
         Ok((candidate, residual))
     } else {

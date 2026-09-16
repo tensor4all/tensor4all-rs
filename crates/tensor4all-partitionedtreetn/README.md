@@ -70,11 +70,14 @@ merges one input bit and fixes one output prefix bit, restricting each
 contribution to its output region before adding it, so no sum over the whole
 output domain is assembled. The preimage must be the `2^d` dyadic input leaves of
 the selected binary indices. `MergeRefineOptions` selects the output depth, the
-work limit, and an optional soft rank goal; `MergeRefineReport` records the
-structural counters plus the pinned allowance and the measured bound. With
-`target_bond_dim` unset the trajectory is exact (`error_bound` zero). With a goal,
-merged items are truncated only within an equal share of the allowance, so the
-measured bound never exceeds it. Adaptive refinement, approximate operator
+work limit, an optional soft rank goal, and the retained term budget;
+`MergeRefineReport` records the structural counters plus the pinned allowance and
+the measured bound. With `target_bond_dim` unset the trajectory is uniform and
+exact (`error_bound` zero). With a goal it is adaptive: a region is refined only
+when that lowers its maximum retained rank, a merged pair is combined only when
+combining pays off, and merged items are truncated only within an equal share of
+the allowance, so the measured bound never exceeds it. Exceeding `max_terms`
+returns a resource-limit error. Nonuniform input trees, approximate operator
 application, and automatic zero-padding remain separate follow-up work; padding is
 never applied silently.
 
