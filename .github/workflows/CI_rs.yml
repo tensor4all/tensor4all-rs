@@ -89,11 +89,39 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # tensor4all-hdf5 is kept out of nextest because its dlopen-based tests
-      # fail under nextest's per-process execution model.
+      # fail under nextest's per-process execution model. It runs in the
+      # parallel `hdf5` job so it starts together with this one instead of
+      # waiting for the full non-HDF5 suite. HDF5 dev headers are still needed
+      # here because book-tests depends on tensor4all-hdf5.
       - name: Run tests (non-HDF5)
         run: cargo nextest run --cargo-profile ci --workspace --exclude tensor4all-hdf5
 
-      - name: Run HDF5 tests
+      - name: Report Cargo artifact size
+        if: always()
+        run: |
+          if [[ -d target ]]; then
+            du -sh target
+          else
+            echo "target directory was not created"
+          fi
+
+  hdf5:
+    name: HDF5 Tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install HDF5
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Runs under `cargo test`, not nextest: its dlopen-based tests fail under
+      # nextest's per-process execution model.
+      - name: Run tests (HDF5)
         run: cargo test --profile ci -p tensor4all-hdf5
 
       - name: Report Cargo artifact size
@@ -196,6 +224,7 @@ jobs:
     needs:
       - lint
       - test
+      - hdf5
       - coverage
       - doctest
       - scripts
