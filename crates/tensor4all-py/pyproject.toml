@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "tensor4all"
+description = "PyO3 bindings for tensor4all-rs (Index, Tensor, TreeTensorNetwork)"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.22"]
+dynamic = ["version"]
+
+[tool.maturin]
+module-name = "tensor4all"
+features = ["extension-module"]
+include = [{ path = "tensor4all.pyi", format = "wheel" }]

@@ -15,7 +15,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use tensor4all_core::SvdTruncationPolicy;
-use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions, UnfoldingScheme};
+use tensor4all_quanticstci::{
+    pointwise_index_batch, quanticscrossinterpolate_discrete_batch, QtciOptions, UnfoldingScheme,
+};
 use tensor4all_treetn::{
     contraction::{ContractionMethod, ContractionOptions},
     partial_contract, tensor_train_to_treetn, PartialContractionSpec, TruncationOptions,
@@ -222,7 +224,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 /// Build a QTT approximation for a scalar function on the unit interval.
 ///
-/// The public library function `quanticscrossinterpolate_discrete(...)`
+/// The public library function `quanticscrossinterpolate_discrete_batch(...)`
 /// expects a callback that receives discrete grid indices, so this helper
 /// converts those indices into `x in [0, 1)` first.
 fn build_qtt_from_function<F>(target_fn: F) -> Result<QttDemoOutput, Box<dyn Error>>
@@ -246,9 +248,9 @@ where
 
     let initial_pivots = vec![vec![1], vec![NPOINTS / 2 - 1], vec![NPOINTS - 1]];
 
-    Ok(quanticscrossinterpolate_discrete(
+    Ok(quanticscrossinterpolate_discrete_batch(
         &sizes,
-        callback,
+        pointwise_index_batch(callback),
         Some(initial_pivots),
         options,
     )?)

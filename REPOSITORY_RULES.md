@@ -231,3 +231,6 @@
   tensor4all-rs first.
 - C API changes should account for downstream Tensor4all.jl compatibility and
   pin updates.
+- Python bindings (`crates/tensor4all-py`) call the public Rust APIs directly
+  through PyO3; they do not go through the C API. PyO3-specific types and
+  conversions live in that crate so the core crates stay Python-independent.

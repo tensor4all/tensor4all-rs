@@ -6,8 +6,12 @@ High-level Quantics Tensor Train interpolation interface. Port of QuanticsTCI.jl
 
 - `QuanticsTensorCI2` — result of a quantics TCI run; supports `evaluate()`, `sum()`, `integral()`
 - `DiscretizedGrid` — maps grid indices to physical coordinates for continuous domains
-- `quanticscrossinterpolate()` — main entry point for continuous-domain interpolation
-- `quanticscrossinterpolate_discrete()` — entry point for integer grids
+- `quanticscrossinterpolate_batch()` — main entry point for continuous-domain interpolation
+- `quanticscrossinterpolate_discrete_batch()` — entry point for integer grids
+
+Every entry point evaluates the target function **in batches** (see
+`QuanticsBatch`); `pointwise_coordinate_batch()` and `pointwise_index_batch()`
+adapt a scalar function if you only have one.
 
 ## Example
 
@@ -18,10 +22,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // Interpolate f(i, j) = i + j on a 16x16 discrete grid (0-indexed)
 let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
 
-let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete(
-    &[16, 16],   // grid sizes (must be equal powers of 2)
-    f,
-    None,        // auto-select initial pivot
+let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete_batch(
+    &[16, 16], // grid sizes (must be equal powers of 2)
+    pointwise_index_batch(f),
+    None, // auto-select initial pivot
     QtciOptions::default().with_tolerance(1e-10),
 )?;
 

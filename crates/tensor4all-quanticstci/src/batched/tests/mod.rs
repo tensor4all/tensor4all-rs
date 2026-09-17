@@ -1,6 +1,8 @@
 use super::*;
+use crate::batch::{pointwise_components_batch, pointwise_coordinate_batch};
 use crate::QtciOptions;
 use quanticsgrids::DiscretizedGrid;
+use std::sync::Arc;
 use tensor4all_simplett::AbstractTensorTrain;
 
 #[test]
@@ -16,14 +18,14 @@ fn test_batched_tci_2component_1d() {
 
     // Use sin(x)+1 and cos(x) so all components are non-zero at x=0
     // (the default initial pivot).
-    let (result, _, _) = quanticscrossinterpolate_batched::<f64, _>(
+    let (result, _, _) = quanticscrossinterpolate_multicomponent::<f64, _>(
         &grid,
-        |x: &[f64]| {
+        pointwise_components_batch(|x: &[f64]| {
             vec![
                 (2.0 * std::f64::consts::PI * x[0]).sin() + 1.0,
                 (2.0 * std::f64::consts::PI * x[0]).cos(),
             ]
-        },
+        }),
         &[2],
         None,
         options,
@@ -82,17 +84,17 @@ fn test_batched_tci_scalar_equivalent() {
 
     let options = QtciOptions::default().with_tolerance(1e-8);
 
-    let (scalar_result, _, _) = crate::quanticscrossinterpolate::<f64, _>(
+    let (scalar_result, _, _) = crate::quanticscrossinterpolate_batch::<f64, _>(
         &grid,
-        |x: &[f64]| x[0] * x[0],
+        pointwise_coordinate_batch(|x: &[f64]| x[0] * x[0]),
         None,
         options.clone(),
     )
     .unwrap();
 
-    let (batched_result, _, _) = quanticscrossinterpolate_batched::<f64, _>(
+    let (batched_result, _, _) = quanticscrossinterpolate_multicomponent::<f64, _>(
         &grid,
-        |x: &[f64]| vec![x[0] * x[0]],
+        pointwise_components_batch(|x: &[f64]| vec![x[0] * x[0]]),
         &[1],
         None,
         options,
@@ -140,9 +142,9 @@ fn test_batched_tci_empty_output_error() {
     let options = QtciOptions::default();
 
     // Empty output_dims should fail
-    let result = quanticscrossinterpolate_batched::<f64, _>(
+    let result = quanticscrossinterpolate_multicomponent::<f64, _>(
         &grid,
-        |_: &[f64]| vec![],
+        pointwise_components_batch(|_: &[f64]| vec![]),
         &[],
         None,
         options.clone(),
@@ -150,8 +152,13 @@ fn test_batched_tci_empty_output_error() {
     assert!(result.is_err());
 
     // Zero in output_dims should fail
-    let result =
-        quanticscrossinterpolate_batched::<f64, _>(&grid, |_: &[f64]| vec![], &[0], None, options);
+    let result = quanticscrossinterpolate_multicomponent::<f64, _>(
+        &grid,
+        pointwise_components_batch(|_: &[f64]| vec![]),
+        &[0],
+        None,
+        options,
+    );
     assert!(result.is_err());
 }
 
@@ -169,12 +176,12 @@ fn test_batched_tci_matrix_valued() {
 
     // f(x) returns a 2x2 matrix flattened as [a00, a01, a10, a11]
     // Use x+1 so f(0) != 0 (default initial pivot is at x=0).
-    let (result, _, _) = quanticscrossinterpolate_batched::<f64, _>(
+    let (result, _, _) = quanticscrossinterpolate_multicomponent::<f64, _>(
         &grid,
-        |x: &[f64]| {
+        pointwise_components_batch(|x: &[f64]| {
             let v = x[0] + 1.0;
             vec![v, 2.0 * v, 3.0 * v, 4.0 * v]
-        },
+        }),
         &[2, 2],
         None,
         options,
@@ -217,9 +224,9 @@ fn batched_tci_rejects_short_callback_results() {
         .with_upper_bound(&[1.0])
         .build()
         .unwrap();
-    let result = quanticscrossinterpolate_batched::<f64, _>(
+    let result = quanticscrossinterpolate_multicomponent::<f64, _>(
         &grid,
-        |_| vec![1.0],
+        pointwise_components_batch(|_| vec![1.0]),
         &[2],
         None,
         QtciOptions::default(),
@@ -249,12 +256,12 @@ fn test_batched_tci_caching_reduces_evaluations() {
         .with_nrandominitpivot(0); // no random pivots for determinism
 
     // Use functions that are non-zero at x=0 (the default initial pivot).
-    let (result, _, _) = quanticscrossinterpolate_batched::<f64, _>(
+    let (result, _, _) = quanticscrossinterpolate_multicomponent::<f64, _>(
         &grid,
-        move |x: &[f64]| {
+        pointwise_components_batch(move |x: &[f64]| {
             call_count_clone.fetch_add(1, Ordering::Relaxed);
             vec![x[0] + 1.0, x[0] * x[0] + 1.0]
-        },
+        }),
         &[2],
         None,
         options,
@@ -277,6 +284,94 @@ fn test_batched_tci_caching_reduces_evaluations() {
         max_grid_points,
         total_calls
     );
+}
+
+#[test]
+fn batched_tci_exposes_grid() {
+    let grid = DiscretizedGrid::builder(&[2])
+        .with_lower_bound(&[0.0])
+        .with_upper_bound(&[1.0])
+        .build()
+        .unwrap();
+    let (result, _, _) = quanticscrossinterpolate_multicomponent::<f64, _>(
+        &grid,
+        pointwise_components_batch(|x: &[f64]| vec![x[0] + 1.0]),
+        &[1],
+        None,
+        QtciOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(result.grid().grid_step().len(), 1);
+}
+
+#[test]
+fn batched_tci_rejects_output_dim_product_overflow() {
+    let grid = DiscretizedGrid::builder(&[2])
+        .with_lower_bound(&[0.0])
+        .with_upper_bound(&[1.0])
+        .build()
+        .unwrap();
+    let result = quanticscrossinterpolate_multicomponent::<f64, _>(
+        &grid,
+        pointwise_components_batch(|_: &[f64]| vec![]),
+        &[usize::MAX, 2],
+        None,
+        QtciOptions::default(),
+    );
+    let error = result.err().unwrap();
+    assert!(error.to_string().contains("overflowed"));
+}
+
+#[test]
+#[allow(deprecated)]
+fn deprecated_pointwise_batched_entry_point_still_works() {
+    let grid = DiscretizedGrid::builder(&[2])
+        .with_lower_bound(&[0.0])
+        .with_upper_bound(&[1.0])
+        .build()
+        .unwrap();
+    let (result, _, _) = quanticscrossinterpolate_batched::<f64, _>(
+        &grid,
+        |x: &[f64]| vec![x[0] + 1.0, 2.0 * x[0] + 1.0],
+        &[2],
+        None,
+        QtciOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(result.output_dims(), &[2]);
+    assert_eq!(result.tensor_train().len(), 3); // 2 grid sites + 1 component
+}
+
+#[test]
+fn combine_component_tts_rejects_empty_input() {
+    let error = combine_component_tts::<f64>(&[]).err().unwrap();
+    assert!(error.to_string().contains("no component tensor trains"));
+}
+
+#[test]
+fn combine_component_tts_rejects_zero_site_component() {
+    let empty = SimpleTensorTrain::<f64>::constant(&[], 1.0);
+    assert_eq!(empty.len(), 0);
+    let error = combine_component_tts(&[empty]).err().unwrap();
+    assert!(error.to_string().contains("at least one site"));
+}
+
+#[test]
+fn combine_component_tts_rejects_site_count_mismatch() {
+    let two_sites = SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0);
+    let three_sites = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let error = combine_component_tts(&[two_sites, three_sites])
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("sites, expected"));
+}
+
+#[test]
+fn combine_component_tts_rejects_site_dim_mismatch() {
+    let dim_two = SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0);
+    let dim_three = SimpleTensorTrain::<f64>::constant(&[3, 3], 1.0);
+    let error = combine_component_tts(&[dim_two, dim_three]).err().unwrap();
+    assert!(error.to_string().contains("site_dim"));
 }
 
 #[test]

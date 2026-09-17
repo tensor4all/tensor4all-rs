@@ -4,8 +4,12 @@
 //! ```rust
 //! use tensor4all_quanticstci::prelude::*;
 //!
-//! let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
-//! let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete(
+//! let f = |batch: QuanticsBatch<'_, usize>| -> anyhow::Result<Vec<f64>> {
+//!     Ok((0..batch.n_points())
+//!         .map(|point| (batch.get(0, point).unwrap() + batch.get(1, point).unwrap()) as f64)
+//!         .collect())
+//! };
+//! let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete_batch(
 //!     &[16, 16],
 //!     f,
 //!     None,
@@ -16,9 +20,15 @@
 //! assert!(errors.last().copied().unwrap() < 1e-10);
 //! ```
 
+// Re-exported while the point-wise entry points remain available: the
+// deprecation is reported at each call site, not at this re-export.
+#[allow(deprecated)]
 pub use crate::{
-    quanticscrossinterpolate, quanticscrossinterpolate_batched, quanticscrossinterpolate_discrete,
-    quanticscrossinterpolate_from_arrays, DefaultProposer, DiscretizedGrid, InherentDiscreteGrid,
-    QtciOptions, QuanticsTensorCI2, QuanticsTensorCI2Batched, SimpleTensorTrain, TreeTciGraph,
-    TreeTciOptions, UnfoldingScheme,
+    pointwise_components_batch, pointwise_coordinate_batch, pointwise_index_batch,
+    quanticscrossinterpolate, quanticscrossinterpolate_batch, quanticscrossinterpolate_batched,
+    quanticscrossinterpolate_discrete, quanticscrossinterpolate_discrete_batch,
+    quanticscrossinterpolate_from_arrays, quanticscrossinterpolate_from_arrays_batch,
+    quanticscrossinterpolate_multicomponent, DefaultProposer, DiscretizedGrid,
+    InherentDiscreteGrid, QtciOptions, QuanticsBatch, QuanticsTensorCI2, QuanticsTensorCI2Batched,
+    SimpleTensorTrain, TreeTciGraph, TreeTciOptions, UnfoldingScheme,
 };

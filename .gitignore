@@ -21,6 +21,7 @@ venv/
 dist/
 build/
 *.egg-info/
+crates/tensor4all-py/target/
 
 # Julia
 Manifest.toml

@@ -1,0 +1,43 @@
+[package]
+name = "tensor4all-py"
+version = "0.2.0"
+edition = "2021"
+authors = ["tensor4all collaboration"]
+license = "MIT"
+repository = "https://github.com/tensor4all/tensor4all-rs"
+description = "PyO3 bindings for tensor4all-rs (Index, Tensor, TreeTensorNetwork)"
+publish = false
+
+[lib]
+name = "tensor4all"
+crate-type = ["cdylib", "rlib"]
+
+# This crate is its own workspace root, so it owns its profile settings. Keep
+# the repository build-profile contract (docs/design/build-profiles.md):
+# ordinary profiles carry no Rust debug information. Without this, the
+# extension module is built with full debuginfo and grows to gigabytes.
+[profile.dev]
+debug = 0
+debug-assertions = true
+
+[profile.test]
+debug = 0
+
+[profile.release]
+debug = 0
+
+[features]
+default = []
+# maturin enables this for wheel builds; plain `cargo test` keeps the default
+# linking so the Rust test binary can resolve CPython symbols.
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+tensor4all-core = { path = "../tensor4all-core", default-features = false, features = ["backend-tenferro", "tenferro-cpu-faer"] }
+tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false, features = ["tenferro-cpu-faer"] }
+tensor4all-treetci = { path = "../tensor4all-treetci", default-features = false, features = ["tenferro-cpu-faer"] }
+tensor4all-quanticstci = { path = "../tensor4all-quanticstci", default-features = false, features = ["tenferro-cpu-faer"] }
+pyo3 = { version = "0.29", default-features = false, features = ["macros"] }
+numpy = "0.29"
+num-complex = "0.4"
+anyhow = "1.0"

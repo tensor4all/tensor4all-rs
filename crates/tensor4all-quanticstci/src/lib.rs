@@ -28,14 +28,20 @@
 //! # Example: Discrete Grid
 //!
 //! ```rust
-//! use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
+//! use tensor4all_quanticstci::{
+//!     quanticscrossinterpolate_discrete_batch, QtciOptions, QuanticsBatch,
+//! };
 //!
-//! // Interpolate f(i, j) = i + j on a 16x16 grid
-//! // Discrete indices are 0-indexed and passed as `&[usize]`.
-//! let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
+//! // Interpolate f(i, j) = i + j on a 16x16 grid.
+//! // Discrete indices are 0-indexed.
+//! let f = |batch: QuanticsBatch<'_, usize>| -> anyhow::Result<Vec<f64>> {
+//!     Ok((0..batch.n_points())
+//!         .map(|point| (batch.get(0, point).unwrap() + batch.get(1, point).unwrap()) as f64)
+//!         .collect())
+//! };
 //! let sizes = vec![16, 16];
 //!
-//! let (qtci, _ranks, _errors) = quanticscrossinterpolate_discrete(
+//! let (qtci, _ranks, _errors) = quanticscrossinterpolate_discrete_batch(
 //!     &sizes,
 //!     f,
 //!     None,
@@ -50,7 +56,7 @@
 //!
 //! ```rust
 //! use tensor4all_quanticstci::{
-//!     quanticscrossinterpolate, DiscretizedGrid, QtciOptions,
+//!     quanticscrossinterpolate_batch, DiscretizedGrid, QtciOptions, QuanticsBatch,
 //! };
 //!
 //! let grid = DiscretizedGrid::builder(&[4])  // 2^4 = 16 points
@@ -59,9 +65,13 @@
 //!     .build()
 //!     .unwrap();
 //!
-//! let f = |x: &[f64]| x[0] * x[0];  // f(x) = x^2
+//! let f = |batch: QuanticsBatch<'_, f64>| -> anyhow::Result<Vec<f64>> {
+//!     Ok((0..batch.n_points())
+//!         .map(|point| batch.get(0, point).unwrap().powi(2))
+//!         .collect())
+//! };
 //!
-//! let (qtci, _ranks, _errors) = quanticscrossinterpolate(
+//! let (qtci, _ranks, _errors) = quanticscrossinterpolate_batch(
 //!     &grid,
 //!     f,
 //!     None,
@@ -77,10 +87,19 @@
 //!
 //! | Scenario | Function to use |
 //! |---|---|
-//! | Function on integer grid (e.g., lattice) | [`quanticscrossinterpolate_discrete`] |
-//! | Function on a continuous interval `[a, b)` | [`quanticscrossinterpolate`] with [`DiscretizedGrid`] |
-//! | Grid points given as explicit arrays | [`quanticscrossinterpolate_from_arrays`] |
-//! | Vector/tensor-valued function | [`quanticscrossinterpolate_batched`] |
+//! | Function on integer grid (e.g., lattice) | [`quanticscrossinterpolate_discrete_batch`] |
+//! | Function on a continuous interval `[a, b)` | [`quanticscrossinterpolate_batch`] with [`DiscretizedGrid`] |
+//! | Grid points given as explicit arrays | [`quanticscrossinterpolate_from_arrays_batch`] |
+//! | Vector/tensor-valued function | [`quanticscrossinterpolate_multicomponent`] |
+//!
+//! Every entry point evaluates the target function **in batches**: it receives a
+//! [`QuanticsBatch`], column-major `(n_dims, n_points)`, and returns one value
+//! per requested point. A scalar function can be adapted with
+//! [`pointwise_coordinate_batch`] or [`pointwise_index_batch`]. The point-wise
+//! entry points (`quanticscrossinterpolate`, `quanticscrossinterpolate_discrete`,
+//! `quanticscrossinterpolate_from_arrays`) are deprecated because they call the
+//! target function once per point, which is the wrong boundary for vectorized
+//! functions and language bindings.
 
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
@@ -88,17 +107,29 @@ pub struct ReadmeDoctests;
 
 pub mod prelude;
 
+pub mod batch;
 mod batched;
 mod error;
 mod options;
 mod quantics_tci;
 
-pub use batched::{quanticscrossinterpolate_batched, QuanticsTensorCI2Batched};
+pub use batch::{
+    pointwise_components_batch, pointwise_coordinate_batch, pointwise_index_batch, QuanticsBatch,
+};
+// The deprecated point-wise entry points stay re-exported so existing callers
+// keep compiling with a warning; the deprecation fires at each call site.
+#[allow(deprecated)]
+pub use batched::{
+    quanticscrossinterpolate_batched, quanticscrossinterpolate_multicomponent,
+    QuanticsTensorCI2Batched,
+};
 pub use error::QuanticsTCIError;
 pub use options::QtciOptions;
+#[allow(deprecated)]
 pub use quantics_tci::{
-    quanticscrossinterpolate, quanticscrossinterpolate_discrete,
-    quanticscrossinterpolate_from_arrays, QuanticsTensorCI2,
+    quanticscrossinterpolate, quanticscrossinterpolate_batch, quanticscrossinterpolate_discrete,
+    quanticscrossinterpolate_discrete_batch, quanticscrossinterpolate_from_arrays,
+    quanticscrossinterpolate_from_arrays_batch, QuanticsTensorCI2,
 };
 
 // Re-export commonly used types from dependencies

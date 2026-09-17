@@ -1,14 +1,14 @@
 //! Batched (vector/tensor-valued) Quantics TCI interpolation.
 //!
-//! This module provides [`quanticscrossinterpolate_batched`], which interpolates
-//! vector- or tensor-valued functions. Each output component is interpolated
-//! independently using scalar TCI, and the results are combined into a single
+//! This module provides [`quanticscrossinterpolate_multicomponent`], which
+//! interpolates vector- or tensor-valued functions by interpolating each output
+//! component independently and combining the results into a single
 //! [`SimpleTensorTrain`] with an additional component site.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::rc::Rc;
 
-use crate::error::{QuanticsTCIError, Result as QtciResult};
 use anyhow::{anyhow, Result};
 use quanticsgrids::DiscretizedGrid;
 use tensor4all_core::TensorElement;
@@ -16,8 +16,10 @@ use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar};
 use tensor4all_simplett::{Tensor3, Tensor3Ops};
 use tensor4all_tensorbackend::FullPivLuScalar;
 
+use crate::batch::QuanticsBatch;
+use crate::error::{QuanticsTCIError, Result as QtciResult};
 use crate::options::QtciOptions;
-use crate::quantics_tci::quanticscrossinterpolate;
+use crate::quantics_tci::quanticscrossinterpolate_batch;
 
 /// Result of batched (vector/tensor-valued) Quantics TCI interpolation.
 ///
@@ -28,7 +30,8 @@ use crate::quantics_tci::quanticscrossinterpolate;
 ///
 /// ```
 /// use tensor4all_quanticstci::{
-///     quanticscrossinterpolate_batched, AbstractTensorTrain, DiscretizedGrid, QtciOptions,
+///     quanticscrossinterpolate_multicomponent, AbstractTensorTrain, DiscretizedGrid,
+///     QtciOptions, QuanticsBatch,
 /// };
 ///
 /// let grid = DiscretizedGrid::builder(&[2])
@@ -37,9 +40,16 @@ use crate::quantics_tci::quanticscrossinterpolate;
 ///     .build()
 ///     .unwrap();
 ///
-/// let (result, _, _) = quanticscrossinterpolate_batched::<f64, _>(
+/// let (result, _, _) = quanticscrossinterpolate_multicomponent::<f64, _>(
 ///     &grid,
-///     |x: &[f64]| vec![x[0] + 1.0, 2.0 * x[0] + 1.0],
+///     |batch: QuanticsBatch<'_, f64>| -> anyhow::Result<Vec<f64>> {
+///         let mut values = Vec::with_capacity(2 * batch.n_points());
+///         for point in 0..batch.n_points() {
+///             let x = batch.get(0, point).unwrap();
+///             values.extend([x + 1.0, 2.0 * x + 1.0]);
+///         }
+///         Ok(values)
+///     },
 ///     &[2],
 ///     None,
 ///     QtciOptions::default(),
@@ -71,7 +81,8 @@ where
     ///
     /// ```
     /// use tensor4all_quanticstci::{
-    ///     quanticscrossinterpolate_batched, AbstractTensorTrain, DiscretizedGrid, QtciOptions,
+    ///     quanticscrossinterpolate_multicomponent, AbstractTensorTrain, DiscretizedGrid,
+    ///     QtciOptions, QuanticsBatch,
     /// };
     ///
     /// let grid = DiscretizedGrid::builder(&[2])
@@ -80,9 +91,16 @@ where
     ///     .build()
     ///     .unwrap();
     ///
-    /// let (result, _, _) = quanticscrossinterpolate_batched::<f64, _>(
+    /// let (result, _, _) = quanticscrossinterpolate_multicomponent::<f64, _>(
     ///     &grid,
-    ///     |x: &[f64]| vec![x[0] + 1.0, x[0] * x[0] + 1.0],
+    ///     |batch: QuanticsBatch<'_, f64>| -> anyhow::Result<Vec<f64>> {
+    ///         let mut values = Vec::with_capacity(2 * batch.n_points());
+    ///         for point in 0..batch.n_points() {
+    ///             let x = batch.get(0, point).unwrap();
+    ///             values.extend([x + 1.0, x * x + 1.0]);
+    ///         }
+    ///         Ok(values)
+    ///     },
     ///     &[2],
     ///     None,
     ///     QtciOptions::default(),
@@ -101,7 +119,7 @@ where
     ///
     /// ```
     /// use tensor4all_quanticstci::{
-    ///     quanticscrossinterpolate_batched, QtciOptions, DiscretizedGrid,
+    ///     quanticscrossinterpolate_multicomponent, QtciOptions, DiscretizedGrid, QuanticsBatch,
     /// };
     ///
     /// let grid = DiscretizedGrid::builder(&[2])
@@ -110,9 +128,16 @@ where
     ///     .build()
     ///     .unwrap();
     ///
-    /// let (result, _, _) = quanticscrossinterpolate_batched::<f64, _>(
+    /// let (result, _, _) = quanticscrossinterpolate_multicomponent::<f64, _>(
     ///     &grid,
-    ///     |x: &[f64]| vec![x[0] + 1.0, x[0] * x[0] + 1.0],
+    ///     |batch: QuanticsBatch<'_, f64>| -> anyhow::Result<Vec<f64>> {
+    ///         let mut values = Vec::with_capacity(2 * batch.n_points());
+    ///         for point in 0..batch.n_points() {
+    ///             let x = batch.get(0, point).unwrap();
+    ///             values.extend([x + 1.0, x * x + 1.0]);
+    ///         }
+    ///         Ok(values)
+    ///     },
     ///     &[2],
     ///     None,
     ///     QtciOptions::default(),
@@ -130,7 +155,7 @@ where
     ///
     /// ```
     /// use tensor4all_quanticstci::{
-    ///     quanticscrossinterpolate_batched, QtciOptions, DiscretizedGrid,
+    ///     quanticscrossinterpolate_multicomponent, QtciOptions, DiscretizedGrid, QuanticsBatch,
     /// };
     ///
     /// let grid = DiscretizedGrid::builder(&[2])
@@ -139,9 +164,13 @@ where
     ///     .build()
     ///     .unwrap();
     ///
-    /// let (result, _, _) = quanticscrossinterpolate_batched::<f64, _>(
+    /// let (result, _, _) = quanticscrossinterpolate_multicomponent::<f64, _>(
     ///     &grid,
-    ///     |x: &[f64]| vec![x[0] + 1.0],
+    ///     |batch: QuanticsBatch<'_, f64>| -> anyhow::Result<Vec<f64>> {
+    ///         Ok((0..batch.n_points())
+    ///             .map(|point| batch.get(0, point).unwrap() + 1.0)
+    ///             .collect())
+    ///     },
     ///     &[1],
     ///     None,
     ///     QtciOptions::default(),
@@ -154,18 +183,21 @@ where
     }
 }
 
-/// Interpolate a vector/tensor-valued function using batched Quantics TCI.
+/// Interpolate a vector/tensor-valued function, evaluating `f` in batches.
 ///
-/// Each output component is interpolated independently using scalar TCI via
-/// [`quanticscrossinterpolate`]. Function evaluations are cached so each grid
-/// point is evaluated at most once across all components. The per-component
-/// tensor trains are then combined into a single [`SimpleTensorTrain`] with an
-/// additional component site at the end.
+/// Each output component is interpolated independently with
+/// [`quanticscrossinterpolate_batch`], and the per-component tensor trains are
+/// combined into a single [`SimpleTensorTrain`] with an additional component
+/// site at the end. A shared cache means each grid point is evaluated at most
+/// once across all components.
 ///
 /// # Arguments
 ///
 /// * `grid` - Discretized grid describing the function domain
-/// * `f` - Function to interpolate, returns a `Vec<V>` of length `product(output_dims)`
+/// * `f` - Batched function to interpolate. It receives original coordinates as
+///   a [`QuanticsBatch`] and must return `n_points * n_components` values, where
+///   `n_components = product(output_dims)`: the components of each requested
+///   point consecutively, in point order.
 /// * `output_dims` - Shape of the function output (e.g., `&[3]` for 3-vector,
 ///
 ///   `&[2, 2]` for 2x2 matrix)
@@ -178,16 +210,18 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the grid, output dimensions, or options are invalid (a
-/// [`QuanticsTCIError::InvalidConfiguration`]), an initial pivot conversion
-/// fails, or the underlying TCI construction fails (a
-/// [`QuanticsTCIError::Operation`]).
+/// Returns [`QuanticsTCIError::InvalidConfiguration`] when `output_dims` is
+/// empty or has a zero factor, or when the grid or options are invalid.
+/// Returns [`QuanticsTCIError::Operation`] when `f` returns a value count that
+/// does not equal `n_points * product(output_dims)`, or when the underlying
+/// component interpolation fails.
 ///
 /// # Examples
 ///
 /// ```
 /// use tensor4all_quanticstci::{
-///     quanticscrossinterpolate_batched, AbstractTensorTrain, DiscretizedGrid, QtciOptions,
+///     quanticscrossinterpolate_multicomponent, AbstractTensorTrain, DiscretizedGrid, QtciOptions,
+///     QuanticsBatch,
 /// };
 ///
 /// let grid = DiscretizedGrid::builder(&[2])
@@ -196,12 +230,18 @@ where
 ///     .build()
 ///     .unwrap();
 ///
-/// let (result, ranks, errors) = quanticscrossinterpolate_batched::<f64, _>(
+/// let f = |batch: QuanticsBatch<'_, f64>| -> anyhow::Result<Vec<f64>> {
+///     let mut values = Vec::with_capacity(2 * batch.n_points());
+///     for point in 0..batch.n_points() {
+///         let x = batch.get(0, point).unwrap();
+///         values.extend([x + 1.0, 2.0 * x + 1.0]);
+///     }
+///     Ok(values)
+/// };
+///
+/// let (result, ranks, errors) = quanticscrossinterpolate_multicomponent::<f64, _>(
 ///     &grid,
-///     |x: &[f64]| vec![
-///         x[0] + 1.0,
-///         2.0 * x[0] + 1.0,
-///     ],
+///     f,
 ///     &[2],
 ///     None,
 ///     QtciOptions::default().with_tolerance(1e-8),
@@ -212,7 +252,7 @@ where
 /// assert!(!ranks.is_empty());
 /// assert!(!errors.is_empty());
 /// ```
-pub fn quanticscrossinterpolate_batched<V, F>(
+pub fn quanticscrossinterpolate_multicomponent<V, F>(
     grid: &DiscretizedGrid,
     f: F,
     output_dims: &[usize],
@@ -220,7 +260,7 @@ pub fn quanticscrossinterpolate_batched<V, F>(
     options: QtciOptions,
 ) -> QtciResult<(QuanticsTensorCI2Batched<V>, Vec<usize>, Vec<f64>)>
 where
-    F: Fn(&[f64]) -> Vec<V> + 'static,
+    F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
     V: TTScalar
         + Default
         + Clone
@@ -248,81 +288,75 @@ where
         });
     }
 
-    // Shared cache: maps coordinate bits to function output vector.
-    // We use f64::to_bits() for exact hashing of floating-point coordinates.
-    let cache: Arc<Mutex<HashMap<Vec<u64>, Vec<V>>>> = Arc::new(Mutex::new(HashMap::new()));
-    let callback_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    // Shared across components: coordinate bits -> all component values.
+    let cache: Rc<RefCell<HashMap<Vec<u64>, Vec<V>>>> = Rc::new(RefCell::new(HashMap::new()));
+    let f = Rc::new(f);
 
-    // Wrap f in Arc so it can be shared across component closures.
-    type BatchFn<V> = dyn Fn(&[f64]) -> Vec<V>;
-    let f_arc: Arc<BatchFn<V>> = Arc::from(f);
-
-    // Run scalar TCI for each component independently.
     let mut component_tts: Vec<SimpleTensorTrain<V>> = Vec::with_capacity(n_components);
     let mut all_ranks: Vec<Vec<usize>> = Vec::with_capacity(n_components);
     let mut all_errors: Vec<Vec<f64>> = Vec::with_capacity(n_components);
 
-    for comp in 0..n_components {
-        let cache_clone = cache.clone();
-        let callback_error_clone = callback_error.clone();
-        let f_clone = f_arc.clone();
-
-        // Create a scalar wrapper for this component.
-        let scalar_f = move |coords: &[f64]| -> V {
-            let key: Vec<u64> = coords.iter().map(|c| c.to_bits()).collect();
-
-            // Check cache first.
-            {
-                let guard = cache_clone.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(values) = guard.get(&key) {
-                    if let Some(&value) = values.get(comp) {
-                        return value;
+    for component in 0..n_components {
+        let cache = Rc::clone(&cache);
+        let f = Rc::clone(&f);
+        let adapter = move |batch: QuanticsBatch<'_, f64>| -> Result<Vec<V>> {
+            let n_points = batch.n_points();
+            let n_dims = batch.n_dims();
+            let mut values: Vec<Option<V>> = vec![None; n_points];
+            let mut missing: Vec<usize> = Vec::new();
+            for (point, value) in values.iter_mut().enumerate() {
+                let key = coordinate_key(&batch, point)?;
+                match cache.borrow().get(&key) {
+                    Some(components) => {
+                        *value = Some(components.get(component).cloned().ok_or_else(|| {
+                            anyhow!("cached point is missing component {component}")
+                        })?);
                     }
-                    let mut error = callback_error_clone
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    *error = Some(format!(
-                        "callback returned {} components, expected at least {}",
-                        values.len(),
-                        comp + 1
-                    ));
-                    return V::default();
+                    None => missing.push(point),
                 }
             }
 
-            // Evaluate and cache.
-            let values = f_clone(coords);
-            let result = match values.get(comp).copied() {
-                Some(value) => value,
-                None => {
-                    let mut error = callback_error_clone
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    *error = Some(format!(
-                        "callback returned {} components, expected at least {}",
-                        values.len(),
-                        comp + 1
-                    ));
-                    V::default()
+            if !missing.is_empty() {
+                let mut coordinates = Vec::with_capacity(n_dims * missing.len());
+                for &point in &missing {
+                    let point_values = batch
+                        .point(point)
+                        .ok_or_else(|| anyhow!("invalid batch point index {point}"))?;
+                    coordinates.extend_from_slice(point_values);
                 }
-            };
-            {
-                let mut guard = cache_clone.lock().unwrap_or_else(|e| e.into_inner());
-                guard.insert(key, values);
+                let returned = f(QuanticsBatch::new(&coordinates, n_dims, missing.len())?)?;
+                if returned.len() % missing.len() != 0
+                    || returned.len() / missing.len() < n_components
+                {
+                    return Err(anyhow!(
+                        "callback returned {} values for {} points, expected at least {} components per point",
+                        returned.len(),
+                        missing.len(),
+                        n_components
+                    ));
+                }
+                for (offset, &point) in missing.iter().enumerate() {
+                    let components = returned[offset * n_components..][..n_components].to_vec();
+                    values[point] = Some(
+                        components
+                            .get(component)
+                            .cloned()
+                            .ok_or_else(|| anyhow!("missing component {component}"))?,
+                    );
+                    cache
+                        .borrow_mut()
+                        .insert(coordinate_key(&batch, point)?, components);
+                }
             }
-            result
+
+            values
+                .into_iter()
+                .map(|value| value.ok_or_else(|| anyhow!("missing component value")))
+                .collect()
         };
 
-        let interpolation =
-            quanticscrossinterpolate(grid, scalar_f, initial_pivots.clone(), options.clone());
-        if let Some(message) = callback_error
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take()
-        {
-            return Err(QuanticsTCIError::InvalidConfiguration { message });
-        }
-        let (qtci, ranks, errors) = interpolation?;
+        let (qtci, ranks, errors) =
+            quanticscrossinterpolate_batch(grid, adapter, initial_pivots.clone(), options.clone())?;
 
         component_tts.push(qtci.tensor_train());
         all_ranks.push(ranks);
@@ -356,6 +390,54 @@ where
     };
 
     Ok((result, max_bond_dims, max_errors))
+}
+
+/// Interpolate a vector/tensor-valued function, one point at a time.
+///
+/// Deprecated: `f` is called once per grid point. Use
+/// [`quanticscrossinterpolate_multicomponent`] instead, optionally with
+/// [`pointwise_components_batch`](crate::pointwise_components_batch) to keep a
+/// point-wise closure.
+///
+/// # Errors
+///
+/// Returns the same errors as [`quanticscrossinterpolate_multicomponent`].
+#[deprecated(
+    note = "calls `f` once per point; use `quanticscrossinterpolate_multicomponent` (optionally with `pointwise_components_batch`) instead"
+)]
+pub fn quanticscrossinterpolate_batched<V, F>(
+    grid: &DiscretizedGrid,
+    f: F,
+    output_dims: &[usize],
+    initial_pivots: Option<Vec<Vec<usize>>>,
+    options: QtciOptions,
+) -> QtciResult<(QuanticsTensorCI2Batched<V>, Vec<usize>, Vec<f64>)>
+where
+    F: Fn(&[f64]) -> Vec<V> + 'static,
+    V: TTScalar
+        + Default
+        + Clone
+        + 'static
+        + TensorElement
+        + tensor4all_core::MatrixLuciScalar
+        + FullPivLuScalar
+        + tensor4all_treetci::globalpivot::ScalarParts,
+{
+    quanticscrossinterpolate_multicomponent(
+        grid,
+        crate::batch::pointwise_components_batch(f),
+        output_dims,
+        initial_pivots,
+        options,
+    )
+}
+
+/// Key for the multi-component evaluation cache.
+fn coordinate_key(batch: &QuanticsBatch<'_, f64>, point: usize) -> Result<Vec<u64>> {
+    let values = batch
+        .point(point)
+        .ok_or_else(|| anyhow!("invalid batch point index {point}"))?;
+    Ok(values.iter().map(|value| value.to_bits()).collect())
 }
 
 /// Combine per-component tensor trains into a single TT with a component

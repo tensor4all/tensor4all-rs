@@ -5,7 +5,9 @@ use std::fs;
 use std::path::Path;
 
 use tensor4all_core::TensorIndex;
-use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions, UnfoldingScheme};
+use tensor4all_quanticstci::{
+    pointwise_index_batch, quanticscrossinterpolate_discrete_batch, QtciOptions, UnfoldingScheme,
+};
 use tensor4all_quanticstransform::{affine_operator, AffineParams, BoundaryCondition};
 use tensor4all_treetn::{apply_linear_operator, tensor_train_to_treetn, ApplyOptions};
 
@@ -35,14 +37,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         .with_unfoldingscheme(UnfoldingScheme::Fused)
         .with_verbosity(0);
 
-    // `quanticscrossinterpolate_discrete(...)` builds the fused quantics source QTT.
+    // `quanticscrossinterpolate_discrete_batch(...)` builds the fused quantics source QTT.
     let source_callback =
         move |grid_idx: &[usize]| -> f64 { source_function(grid_idx[0], grid_idx[1], n) };
     // Grid indices are 0-based.
     let initial_pivots = vec![vec![0, 0], vec![n / 2 - 1, n / 2 - 1], vec![n - 1, n - 1]];
-    let (source, _ranks, _errors) = quanticscrossinterpolate_discrete(
+    let (source, _ranks, _errors) = quanticscrossinterpolate_discrete_batch(
         &source_grid,
-        source_callback,
+        pointwise_index_batch(source_callback),
         Some(initial_pivots),
         source_options,
     )?;

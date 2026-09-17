@@ -152,7 +152,8 @@ The same approach works for applying the Fourier transform to the y-variable
 ```rust
 use std::f64::consts::PI;
 use tensor4all_quanticstci::{
-    quanticscrossinterpolate_discrete, QtciOptions, UnfoldingScheme,
+    pointwise_index_batch,
+    quanticscrossinterpolate_discrete_batch, QtciOptions, UnfoldingScheme,
 };
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 use tensor4all_treetci::materialize::to_treetn;
@@ -170,12 +171,11 @@ let f = move |idx: &[usize]| -> f64 {
 
 // Build QTT with interleaved encoding
 let sizes = vec![n, n];
-let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete::<f64, _>(
-    &sizes, f, None,
+let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete_batch::<f64, _>(
+    &sizes, pointwise_index_batch(f), None,
     QtciOptions::default()
         .with_tolerance(1e-12)
-        .with_unfoldingscheme(UnfoldingScheme::Interleaved),
-).unwrap();
+        .with_unfoldingscheme(UnfoldingScheme::Interleaved)).unwrap();
 assert!(*errors.last().unwrap() < 1e-10);
 
 // Convert to TreeTN (6 sites: 0,1,2,3,4,5)

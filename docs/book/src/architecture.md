@@ -192,7 +192,8 @@ requirements onto unrelated generic code.
 | Crate | Description |
 |-------|-------------|
 | **hdf5** | HDF5 serialization compatible with ITensors.jl/ITensorMPS.jl file formats. |
-| **capi** | C FFI for language bindings (Julia, Python, etc.). Out of scope for this guide; see [Julia Bindings](julia-bindings.md). |
+| **capi** | C FFI for language bindings (Julia, C, C++). Out of scope for this guide; see [Julia Bindings](julia-bindings.md). |
+| **tensor4all-py** | PyO3 bindings for Python (prototype). Not a workspace member; see its `README.md`. |
 
 ## Which crate should I use?
 

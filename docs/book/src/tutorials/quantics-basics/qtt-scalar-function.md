@@ -9,13 +9,14 @@ Runnable source: [`docs/tutorial-code/src/bin/qtt_function.rs`](../../../../tuto
 
 ## Key API Pieces
 
-Use `quanticscrossinterpolate_discrete` when the function is most naturally
+Use `quanticscrossinterpolate_discrete_batch` when the function is most naturally
 written in terms of grid indices.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
 # use tensor4all_quanticstci::{
-#     quanticscrossinterpolate_discrete, QtciOptions, UnfoldingScheme,
+#     pointwise_index_batch,
+#     quanticscrossinterpolate_discrete_batch, QtciOptions, UnfoldingScheme,
 # };
 let npoints = 128usize;
 let sizes = [npoints];
@@ -28,7 +29,7 @@ let options = QtciOptions::default()
     .with_verbosity(0);
 
 let (qtt, ranks, _errors) =
-    quanticscrossinterpolate_discrete::<f64, _>(&sizes, f, None, options)?;
+    quanticscrossinterpolate_discrete_batch::<f64, _>(&sizes, pointwise_index_batch(f), None, options)?;
 
 let x = 0.5_f64;
 assert!((qtt.evaluate(&[64])? - x.cosh()).abs() < 1e-8);

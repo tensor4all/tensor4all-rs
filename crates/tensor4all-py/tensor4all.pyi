@@ -1,0 +1,119 @@
+"""Type stubs for the tensor4all PyO3 extension module."""
+
+from typing import Any, Callable, Sequence
+
+import numpy as np
+import numpy.typing as npt
+
+__version__: str
+
+class Index:
+    """A tensor index with an identity, dimension, prime level, and tags."""
+
+    def __init__(
+        self,
+        dim: int,
+        tags: Sequence[str] | None = None,
+        plev: int = 0,
+    ) -> None: ...
+    @property
+    def dim(self) -> int: ...
+    @property
+    def plev(self) -> int: ...
+    @property
+    def tags(self) -> list[str]: ...
+    def prime(self) -> Index: ...
+    def noprime(self) -> Index: ...
+    def same_id(self, other: Index) -> bool: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __ne__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+    def __repr__(self) -> str: ...
+
+class Tensor:
+    """A dense tensor with labelled indices."""
+
+    def __init__(
+        self,
+        indices: Sequence[Index],
+        data: npt.ArrayLike,
+    ) -> None: ...
+    @property
+    def indices(self) -> list[Index]: ...
+    @property
+    def dims(self) -> list[int]: ...
+    def to_numpy(self) -> np.ndarray[Any, Any]: ...
+    def contract(self, other: Tensor) -> Tensor: ...
+    def __repr__(self) -> str: ...
+
+class TreeTensorNetwork:
+    """A tree tensor network; chains are path-shaped instances of this type."""
+
+    def __init__(
+        self,
+        tensors: Sequence[Tensor],
+        names: Sequence[int] | None = None,
+    ) -> None: ...
+    @property
+    def num_vertices(self) -> int: ...
+    @property
+    def num_edges(self) -> int: ...
+    def node_names(self) -> list[int]: ...
+    def tensor(self, name: int) -> Tensor: ...
+    def contract_to_tensor(self) -> Tensor: ...
+    def contract(
+        self,
+        other: TreeTensorNetwork,
+        method: str = "naive",
+        maxdim: int | None = None,
+        dense_reference_limit: int = 1 << 20,
+    ) -> TreeTensorNetwork: ...
+    def __repr__(self) -> str: ...
+
+def crossinterpolate(
+    evaluate: Callable[[np.ndarray[Any, Any]], np.ndarray[Any, Any]],
+    local_dims: Sequence[int],
+    edges: Sequence[tuple[int, int]] | None = None,
+    initial_pivots: Sequence[Sequence[int]] | None = None,
+    tolerance: float = 1e-8,
+    max_iter: int = 20,
+    max_bond_dim: int | None = None,
+    seed: int | None = None,
+) -> tuple[TreeTensorNetwork, list[int], list[float]]: ...
+
+class QuanticsTCI:
+    """A quantics tensor train interpolating a function on a grid."""
+
+    @property
+    def rank(self) -> int: ...
+    @property
+    def shape(self) -> list[int]: ...
+    def evaluate(self, indices: Sequence[int]) -> float | complex: ...
+    def sum(self) -> float | complex: ...
+    def integral(self) -> float | complex: ...
+    def to_numpy(self) -> np.ndarray[Any, Any]: ...
+    def __repr__(self) -> str: ...
+
+def quanticscrossinterpolate(
+    evaluate: Callable[[np.ndarray[Any, Any]], np.ndarray[Any, Any]],
+    bits: int | Sequence[int],
+    lower: float | Sequence[float],
+    upper: float | Sequence[float],
+    initial_pivots: Sequence[Sequence[int]] | None = None,
+    tolerance: float = 1e-8,
+    max_iter: int = 200,
+    max_bond_dim: int | None = None,
+    random_init_pivots: int = 0,
+    unfolding: str = "interleaved",
+) -> tuple[QuanticsTCI, list[int], list[float]]: ...
+
+def quanticscrossinterpolate_discrete(
+    evaluate: Callable[[np.ndarray[Any, Any]], np.ndarray[Any, Any]],
+    sizes: int | Sequence[int],
+    initial_pivots: Sequence[Sequence[int]] | None = None,
+    tolerance: float = 1e-8,
+    max_iter: int = 200,
+    max_bond_dim: int | None = None,
+    random_init_pivots: int = 0,
+    unfolding: str = "interleaved",
+) -> tuple[QuanticsTCI, list[int], list[float]]: ...

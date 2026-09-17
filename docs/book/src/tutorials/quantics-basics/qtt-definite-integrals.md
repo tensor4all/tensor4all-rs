@@ -15,7 +15,8 @@ This example uses the same target function as the interval tutorial,
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-# use tensor4all_quanticstci::{quanticscrossinterpolate, DiscretizedGrid, QtciOptions};
+# use tensor4all_quanticstci::{
+#     pointwise_coordinate_batch,quanticscrossinterpolate_batch, DiscretizedGrid, QtciOptions};
 let grid = DiscretizedGrid::builder(&[7])
     .with_lower_bound(&[-1.0])
     .with_upper_bound(&[2.0])
@@ -28,7 +29,7 @@ let f = |coords: &[f64]| -> f64 {
 };
 let options = QtciOptions::default()
     .with_verbosity(0);
-let (qtt, _ranks, _errors) = quanticscrossinterpolate(&grid, f, None, options)?;
+let (qtt, _ranks, _errors) = quanticscrossinterpolate_batch(&grid, pointwise_coordinate_batch(f), None, options)?;
 
 let integral = qtt.integral()?;
 let exact = 3.0;

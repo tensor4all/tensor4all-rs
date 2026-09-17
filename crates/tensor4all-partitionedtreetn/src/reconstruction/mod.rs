@@ -324,6 +324,7 @@ where
     PartitionedTreeTN::from_subdomains(terms)
 }
 
+#[inline(never)]
 fn invalid(reason: &'static str) -> PartitionedTreeTNError {
     PartitionedTreeTNError::InvalidOptions {
         operation: "reconstruction",
@@ -331,6 +332,7 @@ fn invalid(reason: &'static str) -> PartitionedTreeTNError {
     }
 }
 
+#[inline(never)]
 fn finite(value: f64) -> Result<f64> {
     if value.is_finite() && value >= 0.0 {
         Ok(value)

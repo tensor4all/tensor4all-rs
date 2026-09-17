@@ -13,7 +13,8 @@ use num_complex::Complex64;
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::IdxTensor;
 use tensor4all_quanticstci::{
-    quanticscrossinterpolate, DiscretizedGrid, QtciOptions, QuanticsTensorCI2, UnfoldingScheme,
+    pointwise_coordinate_batch, quanticscrossinterpolate_batch, DiscretizedGrid, QtciOptions,
+    QuanticsTensorCI2, UnfoldingScheme,
 };
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 use tensor4all_treetn::{
@@ -123,9 +124,9 @@ pub fn build_gaussian_qtt(
     // Grid indices are 0-based.
     let initial_pivots = vec![vec![0], vec![npoints / 2 - 1], vec![npoints - 1]];
 
-    Ok(quanticscrossinterpolate(
+    Ok(quanticscrossinterpolate_batch(
         grid,
-        f,
+        pointwise_coordinate_batch(f),
         Some(initial_pivots),
         options,
     )?)

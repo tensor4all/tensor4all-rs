@@ -2,7 +2,7 @@
 //! data for Julia plotting.
 //!
 //! This tutorial is the first step beyond the simple `[0,1]` example.  It uses
-//! `DiscretizedGrid` and `quanticscrossinterpolate(...)` so the function is
+//! `DiscretizedGrid` and `quanticscrossinterpolate_batch(...)` so the function is
 //! defined on a real interval instead of only on discrete integer indices.
 
 use std::error::Error;
@@ -35,7 +35,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let grid = build_interval_grid(&config)?;
     let demo_label = "QTT interval demo";
 
-    // Library call: `quanticscrossinterpolate(...)`
+    // Library call: `quanticscrossinterpolate_batch(...)`
     // Inputs:
     // - `&grid`: the physical interval and resolution
     // - `target_function`: callback `Fn(f64) -> f64` that maps coordinates to values

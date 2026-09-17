@@ -6,7 +6,8 @@
 use std::error::Error;
 
 use tensor4all_quanticstci::{
-    quanticscrossinterpolate, DiscretizedGrid, QtciOptions, QuanticsTensorCI2, UnfoldingScheme,
+    pointwise_coordinate_batch, quanticscrossinterpolate_batch, DiscretizedGrid, QtciOptions,
+    QuanticsTensorCI2, UnfoldingScheme,
 };
 
 /// Configuration for the fixed interval tutorial family.
@@ -90,9 +91,9 @@ where
     // Grid indices are 0-based.
     let initial_pivots = vec![vec![0], vec![npoints / 2 - 1], vec![npoints - 1]];
 
-    Ok(quanticscrossinterpolate(
+    Ok(quanticscrossinterpolate_batch(
         grid,
-        f,
+        pointwise_coordinate_batch(f),
         Some(initial_pivots),
         options,
     )?)

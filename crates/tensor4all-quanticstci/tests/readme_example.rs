@@ -1,13 +1,15 @@
-use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
+use tensor4all_quanticstci::{
+    pointwise_index_batch, quanticscrossinterpolate_discrete_batch, QtciOptions,
+};
 
 #[test]
 fn readme_example_uses_public_callback_signature() {
     let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
     let sizes = vec![16, 16];
 
-    let (qtci, ranks, errors) = quanticscrossinterpolate_discrete(
+    let (qtci, ranks, errors) = quanticscrossinterpolate_discrete_batch(
         &sizes,
-        f,
+        pointwise_index_batch(f),
         None,
         QtciOptions::default().with_tolerance(1e-10),
     )

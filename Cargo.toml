@@ -1,4 +1,8 @@
 [workspace]
+# `tensor4all-py` (PyO3 bindings) is intentionally not a workspace member: it
+# links libpython, which the Rust-only CI matrix does not provide. Build it from
+# its own directory (see crates/tensor4all-py/README.md).
+exclude = ["crates/tensor4all-py"]
 members = [
     "crates/tensor4all-aci",
     "crates/tensor4all-treeaci",

@@ -13,8 +13,8 @@ use num_complex::Complex64;
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::IdxTensor;
 use tensor4all_quanticstci::{
-    quanticscrossinterpolate_discrete, InherentDiscreteGrid, QtciOptions, QuanticsTensorCI2,
-    UnfoldingScheme,
+    pointwise_index_batch, quanticscrossinterpolate_discrete_batch, InherentDiscreteGrid,
+    QtciOptions, QuanticsTensorCI2, UnfoldingScheme,
 };
 use tensor4all_quanticstransform::{affine_operator, AffineParams, BoundaryCondition};
 use tensor4all_treetn::{
@@ -141,9 +141,9 @@ pub fn build_source_qtt(config: &AffineTutorialConfig) -> Result<AffineQttOutput
     // Grid indices are 0-based.
     let initial_pivots = vec![vec![0, 0], vec![n / 2 - 1, n / 2 - 1], vec![n - 1, n - 1]];
 
-    Ok(quanticscrossinterpolate_discrete(
+    Ok(quanticscrossinterpolate_discrete_batch(
         &sizes,
-        callback,
+        pointwise_index_batch(callback),
         Some(initial_pivots),
         options,
     )?)
