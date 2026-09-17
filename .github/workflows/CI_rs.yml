@@ -166,7 +166,7 @@ jobs:
     name: Coverage
     runs-on: ubuntu-22.04
     env:
-      CARGO_BUILD_JOBS: 2
+      CARGO_BUILD_JOBS: 4
     steps:
       - uses: actions/checkout@v4
 
