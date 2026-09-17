@@ -186,7 +186,7 @@ jobs:
 
       - name: Generate release coverage JSON
         # Release-mode measurement: the repository's normal verification mode.
-        run: cargo llvm-cov --release --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
+        run: cargo llvm-cov --release --no-clean --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
 
       - name: Check per-file thresholds
         run: python3 scripts/check-coverage.py coverage.json
