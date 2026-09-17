@@ -91,9 +91,13 @@ jobs:
       # tensor4all-hdf5 is kept out of nextest because its dlopen-based tests
       # fail under nextest's per-process execution model.
       - name: Run tests (non-HDF5)
+        env:
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
         run: cargo nextest run --cargo-profile ci --workspace --exclude tensor4all-hdf5
 
       - name: Run HDF5 tests
+        env:
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
         run: cargo test --profile ci -p tensor4all-hdf5
 
       - name: Report Cargo artifact size
@@ -186,6 +190,8 @@ jobs:
 
       - name: Generate release coverage JSON
         # Release-mode measurement: the repository's normal verification mode.
+        env:
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
         run: cargo llvm-cov --release --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
 
       - name: Check per-file thresholds
