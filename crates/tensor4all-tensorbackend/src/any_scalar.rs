@@ -172,6 +172,9 @@ fn scalar_value_from_native(native: &NativeTensor) -> Result<ScalarValue> {
             .copied()
             .map(ScalarValue::C64)
             .ok_or_else(|| anyhow!("failed to read c64 scalar tensor value")),
+        DType::External(_) => Err(anyhow!(
+            "externally defined scalar dtypes are not supported by the tensor4all backend"
+        )),
     }
 }
 
@@ -310,6 +313,11 @@ pub(crate) fn promote_scalar_native(native: &NativeTensor, target: DType) -> Res
             BackendScalar::from_value(Complex32::new(value.re as f32, value.im as f32))
         }
         (ScalarValue::C64(value), DType::C64) => BackendScalar::from_value(value),
+        (_, DType::External(_)) => {
+            return Err(anyhow!(
+                "externally defined scalar dtypes are not supported by the tensor4all backend"
+            ));
+        }
     };
     Ok(promoted.native)
 }
