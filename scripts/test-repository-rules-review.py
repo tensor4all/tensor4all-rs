@@ -104,7 +104,7 @@ def test_added_lines_with_text_ignores_deleted_file() -> None:
 
 def test_default_deepseek_model_uses_current_v4_name() -> None:
     mod = load_module()
-    assert mod.DEFAULT_MODEL == "deepseek-v4-pro"
+    assert mod.DEFAULT_MODEL == "deepseek-flash"
     assert mod.DEFAULT_API_URL == "https://api.deepseek.com/chat/completions"
 
 
