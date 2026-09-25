@@ -3,7 +3,9 @@ use std::cell::Cell;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
-use super::{enumerate_candidates, materialize_and_factor_edge, select_pivot_samples};
+use super::{
+    enumerate_candidates, materialize_and_factor_edge, select_pivot_samples, zero_rank_one_skeleton,
+};
 use crate::{
     frames::InputFrameStore, problem::prepare_problem, samples::SampleArena, TreeAciError,
     TreeAciOptions,
@@ -130,6 +132,65 @@ fn luci_factors_reconstruct_rank_one_and_zero_targets() {
                 );
             }
         }
+    }
+}
+
+/// A zero local matrix commits the pivot pair `(0, 0)`, so the factor that
+/// interpolates must carry the identity on that pivot exactly like the
+/// rank-`r` LUCI factors do. An all-zero interpolating factor left a core that
+/// the deferred CI canonicalization could only factor into a zero-dimensional
+/// bond, and the whole run failed.
+#[test]
+fn zero_local_matrix_keeps_the_pivot_identity_in_the_interpolating_factor() {
+    for left_orthogonal in [true, false] {
+        let inputs = vec![two_node_tree(1.0)];
+        let options = TreeAciOptions::default();
+        let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
+        let (arena, active) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
+        let frames = InputFrameStore::from_samples(&inputs, &problem, &arena).unwrap();
+        let mut zero = |_batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]| {
+            output.fill(0.0);
+            Ok(())
+        };
+        let update = materialize_and_factor_edge(
+            &inputs,
+            &problem,
+            &active,
+            &frames,
+            0,
+            &options,
+            left_orthogonal,
+            &mut zero,
+        )
+        .unwrap();
+
+        let (interpolating, values) = if left_orthogonal {
+            (
+                update.left.as_col_major_slice(),
+                update.right.as_col_major_slice(),
+            )
+        } else {
+            (
+                update.right.as_col_major_slice(),
+                update.left.as_col_major_slice(),
+            )
+        };
+        let mut unit = vec![0.0; interpolating.len()];
+        unit[0] = 1.0;
+        assert_eq!(interpolating, unit.as_slice());
+        assert!(values.iter().all(|value| *value == 0.0));
+        assert_eq!(update.row_samples.len(), 1);
+        assert_eq!(update.col_samples.len(), 1);
+    }
+}
+
+#[test]
+fn zero_rank_one_skeleton_rejects_an_empty_local_matrix() {
+    for (rows, cols) in [(0, 3), (3, 0)] {
+        assert!(matches!(
+            zero_rank_one_skeleton::<f64>(rows, cols, true),
+            Err(TreeAciError::InternalInvariant { .. })
+        ));
     }
 }
 

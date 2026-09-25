@@ -339,12 +339,8 @@ where
         stats.luci += luci_started.elapsed();
     });
     let (left, right, row_indices, col_indices) = if factors.rank == 0 {
-        (
-            Matrix::zeros(row_count, 1),
-            Matrix::zeros(1, col_count),
-            vec![0],
-            vec![0],
-        )
+        let (left, right) = zero_rank_one_skeleton(row_count, col_count, left_orthogonal)?;
+        (left, right, vec![0], vec![0])
     } else {
         (
             factors.left,
@@ -413,6 +409,50 @@ pub(crate) fn reserved_working_bytes<T: TreeAciScalar>(
         .ok_or(TreeAciError::SizeOverflow {
             context: "local update working elements",
         })
+}
+
+/// Rank-one factors that approximate a negligible local matrix by zero while
+/// keeping the interpolative form of the nonzero-rank factors.
+///
+/// A LUCI factorization that selects no pivot (every sampled entry is zero, or
+/// below the factorization's pivot floor) still has to commit a rank-one bond
+/// with the pivot pair `(0, 0)`. Rank-`r` LUCI factors are interpolative: with
+/// `left_orthogonal` the left factor is `A[:, J] A[I, J]^-1`, whose pivot rows
+/// form the identity, and otherwise the right factor carries the identity on
+/// the pivot columns. The zero approximation keeps that identity on its single
+/// pivot and puts the zero in the other factor. An all-zero interpolating
+/// factor would instead leave a core that no CI factorization can represent
+/// with a nonzero bond, so the deferred CI canonicalization at the end of the
+/// pass could not accept it.
+///
+/// # Arguments
+///
+/// * `row_count`, `col_count` - local matrix shape; both must be nonzero.
+/// * `left_orthogonal` - which factor carries the pivot identity, as in
+///   [`RrLUOptions::left_orthogonal`].
+///
+/// # Errors
+///
+/// Returns [`TreeAciError::InternalInvariant`] for an empty local matrix,
+/// which has no pivot `(0, 0)` to select.
+fn zero_rank_one_skeleton<T: TreeAciScalar>(
+    row_count: usize,
+    col_count: usize,
+    left_orthogonal: bool,
+) -> Result<(Matrix<T>, Matrix<T>)> {
+    if row_count == 0 || col_count == 0 {
+        return Err(TreeAciError::InternalInvariant {
+            message: "an empty local matrix has no pivot to keep",
+        });
+    }
+    let mut left = Matrix::zeros(row_count, 1);
+    let mut right = Matrix::zeros(1, col_count);
+    if left_orthogonal {
+        left[[0, 0]] = T::one();
+    } else {
+        right[[0, 0]] = T::one();
+    }
+    Ok((left, right))
 }
 
 fn select_pivot_samples(

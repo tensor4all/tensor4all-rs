@@ -248,6 +248,92 @@ fn hadamard_many_handles_one_two_four_and_eight_inputs_in_one_run() {
     }
 }
 
+/// Rank-one tree whose value is the product over nodes of `site[x_node]`.
+fn site_product_tree<T: crate::TreeAciScalar>(
+    edges: &[(usize, usize)],
+    physical: &[DynIndex],
+    site: [f64; 2],
+) -> TreeTN<IdxTensor, usize> {
+    let bonds = edges
+        .iter()
+        .map(|_| DynIndex::new_dyn(1))
+        .collect::<Vec<_>>();
+    let tensors = physical
+        .iter()
+        .enumerate()
+        .map(|(node, index)| {
+            let mut indices = vec![index.clone()];
+            for (edge, &(left, right)) in edges.iter().enumerate() {
+                if left == node || right == node {
+                    indices.push(bonds[edge].clone());
+                }
+            }
+            let values = site
+                .iter()
+                .map(|&value| <T as tensor4all_core::Scalar>::from_f64(value))
+                .collect();
+            IdxTensor::from_dense(indices, values).unwrap()
+        })
+        .collect();
+    TreeTN::from_tensors(tensors, (0..physical.len()).collect()).unwrap()
+}
+
+/// Local matrices built from the bootstrap samples can be negligible: exactly
+/// zero, or with every entry below the LUCI pivot floor. Such an edge commits
+/// a rank-one zero approximation, which must survive the pass-end CI
+/// canonicalization so that the global guard can recover the feature later.
+fn hadamard_many_survives_negligible_local_matrices<T: crate::TreeAciScalar>() {
+    let cases = [
+        ("identically zero", [0.0, 0.0]),
+        ("zero except at the far corner", [0.0, 1.5]),
+        ("below the pivot floor near the corner", [1.0e-10, 1.0]),
+    ];
+    let topologies = [vec![(0, 1), (1, 2), (2, 3)], vec![(0, 1), (0, 2), (0, 3)]];
+    for edges in &topologies {
+        let physical = (0..4).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+        for (label, site) in cases {
+            let input = site_product_tree::<T>(edges, &physical, site);
+            let expected =
+                site_product_tree::<T>(edges, &physical, [site[0] * site[0], site[1] * site[1]])
+                    .to_dense()
+                    .unwrap();
+            let expected_scale = expected.maxabs().unwrap().max(1.0);
+            for scale_tolerance in [false, true] {
+                let options = TreeAciOptions {
+                    scale_tolerance,
+                    ..TreeAciOptions::default()
+                };
+                let result = hadamard_many::<T, _>(&[input.clone(), input.clone()], &options)
+                    .unwrap_or_else(|error| {
+                        panic!("{label} on {edges:?} (scale_tolerance={scale_tolerance}): {error}")
+                    });
+                let error = result
+                    .tree
+                    .to_dense()
+                    .unwrap()
+                    .sub(&expected)
+                    .unwrap()
+                    .maxabs()
+                    .unwrap();
+                assert!(
+                    error <= 1.0e-12 * expected_scale,
+                    "{label} on {edges:?} (scale_tolerance={scale_tolerance}): error {error}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn hadamard_many_survives_negligible_local_matrices_f64() {
+    hadamard_many_survives_negligible_local_matrices::<f64>();
+}
+
+#[test]
+fn hadamard_many_survives_negligible_local_matrices_c64() {
+    hadamard_many_survives_negligible_local_matrices::<Complex64>();
+}
+
 #[test]
 fn diagnostics_report_candidate_set_sizes_for_every_directed_cut() {
     let edges = [(0, 1), (0, 2), (0, 3)];
