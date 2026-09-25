@@ -64,7 +64,11 @@ mod samples;
 mod scalar;
 mod schedule;
 mod single_site;
+#[cfg(test)]
+mod stagnation_diagnostics;
 mod state;
+#[cfg(test)]
+mod test_support;
 mod transaction;
 mod traversal;
 
