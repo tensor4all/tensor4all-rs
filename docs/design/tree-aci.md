@@ -91,7 +91,19 @@ requiring O(edges) storage and work per pass without extra contractions,
 sampling, or per-pass allocation. Returned `max_ranks` remains a summary for
 diagnostics, not the rank-stability decision input.
 
-The local LUCI residual and enabled global-guard conditions still apply.
+The local LUCI residual and enabled global-guard conditions still apply. All three
+decisions share one scale reference per edge: the local matrix is divided by
+its largest sampled `|f|` and truncated with one absolute threshold on that
+normalized matrix, which is exactly the `error / scale` quantity the sweep
+compares with the tolerance. A relative-to-largest-pivot rule would disagree
+with that check whenever Schur-complement growth lifts a pivot above the
+largest entry, and truncating raw values would turn the LUCI kernels' absolute
+`f64::EPSILON` pivot floor into a scale-dependent relative cutoff. The guard
+scales its threshold by the largest `|f|` among its random starts **and** the
+current edge-local matrices. A few random starts alone can underestimate a
+heavy-tailed output by orders of magnitude; the guard then reports residuals
+the next local update discards again, and a run whose output no longer changes
+never converges (#776).
 `Converged` is an algorithmic stopping condition, not a certified bound on the
 full-grid maximum error: the tolerance controls edge-local residuals, and the
 guard performs bounded randomized coordinate searches with its configured

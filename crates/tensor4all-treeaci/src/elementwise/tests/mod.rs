@@ -631,11 +631,52 @@ fn assert_heavy_tailed_hadamard_converges<T: crate::TreeAciScalar>(
 
 /// Heavy-tailed Hadamard products whose local updates stop changing the
 /// output after a few passes. The guard must judge residuals against the
-/// magnitude the local truncation used; otherwise every remaining pass
-/// re-injects pivots that the next update discards.
+/// magnitude the local truncation used, and the local convergence metric
+/// must use the reference the factorization truncated against; otherwise
+/// every remaining pass re-injects pivots that the next update discards, or
+/// waits on a local error the factorization will never reduce.
 #[test]
 fn heavy_tailed_hadamard_converges_without_idle_passes() {
     // Guard scale: five random starts underestimate max |f|.
     assert_heavy_tailed_hadamard_converges::<f64>("chain f64", &chain_edges(12), 1);
     assert_heavy_tailed_hadamard_converges::<f64>("binary f64", &binary_edges(), 2);
+    // Local reference: Schur-complement pivots exceed the largest entry.
+    assert_heavy_tailed_hadamard_converges::<Complex64>("chain c64", &chain_edges(12), 1);
+}
+
+fn assert_truncation_is_scale_invariant<T: crate::TreeAciScalar>(label: &str) {
+    let options = TreeAciOptions {
+        tolerance: 1.0e-12,
+        ..TreeAciOptions::default()
+    };
+    let edges = chain_edges(10);
+    let reference = run_random_hadamard::<T>(&edges, 4, 2, 7, 1.0e-3, 1.0, &options);
+    assert_eq!(
+        reference.termination,
+        TreeAciTermination::Converged,
+        "{label}"
+    );
+    // Output magnitudes near 1e-12 and 1e+8; a Hadamard product is homogeneous,
+    // so ranks and relative accuracy must not depend on the input scale.
+    for input_scale in [1.0e-6, 1.0e4] {
+        let run = run_random_hadamard::<T>(&edges, 4, 2, 7, 1.0e-3, input_scale, &options);
+        assert_eq!(
+            run.termination, reference.termination,
+            "{label} x{input_scale:e}"
+        );
+        assert_eq!(run.ranks, reference.ranks, "{label} x{input_scale:e}");
+        assert!(
+            run.relative_max_error <= options.tolerance * options.global_tolerance_margin,
+            "{label} x{input_scale:e}: relative max error {:.3e}",
+            run.relative_max_error
+        );
+    }
+}
+
+/// The factorization's absolute `f64::EPSILON` pivot floor must not turn a
+/// relative tolerance into a scale-dependent one.
+#[test]
+fn local_truncation_is_invariant_under_homogeneous_rescaling() {
+    assert_truncation_is_scale_invariant::<f64>("f64");
+    assert_truncation_is_scale_invariant::<Complex64>("c64");
 }

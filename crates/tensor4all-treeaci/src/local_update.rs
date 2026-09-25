@@ -311,23 +311,39 @@ where
     });
     #[cfg(test)]
     let retained_local_values = local_values.clone();
-    let matrix = Matrix::from_col_major_vec(row_count, col_count, local_values);
+    // Factor the matrix normalized to unit maximum and truncate it with one
+    // absolute threshold on that normalized matrix. Two scale references used
+    // to disagree: `rel_tol` stops relative to the largest *pivot*, which
+    // Schur-complement growth can push above the largest entry, while the
+    // sweep compares `error / sampled_scale` with the tolerance. A local
+    // error the factorization had accepted could then never pass the sweep's
+    // check. The dense LUCI kernels also stop at an absolute `f64::EPSILON`
+    // pivot; on raw values that floor becomes a scale-dependent relative
+    // cutoff, while after normalization it is a fixed relative round-off
+    // floor, so homogeneously rescaled inputs truncate identically.
+    let normalizer = if sampled_scale > 0.0 {
+        sampled_scale
+    } else {
+        1.0
+    };
+    let normalized_tolerance = if options.scale_tolerance {
+        options.tolerance
+    } else {
+        options.tolerance / normalizer
+    };
+    let divisor = <T as tensor4all_core::Scalar>::from_f64(normalizer);
+    let mut matrix = Matrix::from_col_major_vec(row_count, col_count, local_values);
+    for value in matrix.as_col_major_mut_slice() {
+        *value = *value / divisor;
+    }
     #[cfg(test)]
     let luci_started = std::time::Instant::now();
-    let factors = matrix_luci_factors_from_matrix_owned(
+    let mut factors = matrix_luci_factors_from_matrix_owned(
         matrix,
         Some(RrLUOptions {
             max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
-            rel_tol: if options.scale_tolerance {
-                options.tolerance
-            } else {
-                0.0
-            },
-            abs_tol: if options.scale_tolerance {
-                0.0
-            } else {
-                options.tolerance
-            },
+            rel_tol: 0.0,
+            abs_tol: normalized_tolerance,
             left_orthogonal,
         }),
     )
@@ -338,6 +354,20 @@ where
     crate::state::profile_debug_stats::record(|stats| {
         stats.luci += luci_started.elapsed();
     });
+    // Only the factor holding raw pivot rows/columns carries the magnitude;
+    // the interpolative factor `A[:, J] A[I, J]^-1` (or its transpose) is
+    // invariant under the normalization.
+    let magnitude_factor = if left_orthogonal {
+        &mut factors.right
+    } else {
+        &mut factors.left
+    };
+    for value in magnitude_factor.as_col_major_mut_slice() {
+        *value = *value * divisor;
+    }
+    for error in &mut factors.pivot_errors {
+        *error *= normalizer;
+    }
     let (left, right, row_indices, col_indices) = if factors.rank == 0 {
         let (left, right) = zero_rank_one_skeleton(row_count, col_count, left_orthogonal)?;
         (left, right, vec![0], vec![0])

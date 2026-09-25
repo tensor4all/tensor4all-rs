@@ -50,6 +50,14 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// Relative or absolute local error target. Default: `1e-12`.
     pub tolerance: f64,
     /// Scale `tolerance` by sampled output magnitude. Default: `true`.
+    ///
+    /// When `true`, every local update truncates its matrix relative to the
+    /// largest `|f|` among that matrix's sampled entries, and the global guard
+    /// accepts residuals up to `tolerance * global_tolerance_margin` times the
+    /// largest `|f|` among its random starts and the current local matrices.
+    /// Results are then invariant under a constant rescaling of a homogeneous
+    /// operator such as a Hadamard product. When `false`, `tolerance` is an
+    /// absolute threshold for both.
     pub scale_tolerance: bool,
     /// Optional topology-compatible initial output. Default: `None`.
     pub initial_guess: Option<TreeTN<IdxTensor, V>>,
