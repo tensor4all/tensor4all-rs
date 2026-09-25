@@ -212,6 +212,16 @@ impl LogicalTensor {
                     })?
                     .to_vec(),
             ),
+            DType::External(_) => {
+                return Err(LogicalTensorError::Tensor {
+                    operation: "snapshot",
+                    source: tenferro_tensor::Error::unsupported_dtype(
+                        "snapshot",
+                        tensor.dtype(),
+                        "logical tensors hold tensor4all preset scalar dtypes only",
+                    ),
+                });
+            }
         };
         Self::new(tensor.shape().to_vec(), data)
     }

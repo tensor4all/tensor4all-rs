@@ -172,6 +172,11 @@ cargo test --release -p tensor4all-treetn \
   --features tenferro-cuda --test cuda_tree_contraction -- --nocapture
 ```
 
+The same gate serves a `tenferro` dependency bump. The v0.7.0 bump's paired 1T
+run (quick suite, 20 pairs × 3 reps, plus `benchmark_tt_ops` and
+`benchmark_tensor_ops`) is recorded in
+[`results/2026-09-23-tenferro-v0.7.0-dependency-bump.md`](results/2026-09-23-tenferro-v0.7.0-dependency-bump.md).
+
 Two-site TreeTN DMRG against a Pauli Heisenberg Hamiltonian
 `sum_(i,j in E) X_i X_j + Y_i Y_j + Z_i Z_j` on chain and star topologies.
 The benchmark compresses the summed MPO before timing, uses the repository
