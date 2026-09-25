@@ -80,12 +80,46 @@ regressions use a self-contained splitmix64 generator instead.
   `tolerance` (up to `1.3e-8` at `1e-8`), inside `tolerance *
   global_tolerance_margin`, as before.
 - The diagnostic harness (`stagnation_diagnostics.rs`, ignored test) and its
-  per-pass trace are test-only. Timings seen during tracing are not
-  performance evidence; the only timing comparison made (release
-  `g0_convergence`, single run, 28.0 s fixed vs 29.4 s base) shows no
-  regression and is not an improvement claim. A performance protocol for
-  fixed-iteration per-sweep overhead was not run; the change's runtime effect
-  is fewer passes, not faster passes.
+  per-pass trace are test-only; timings seen during tracing are not
+  performance evidence.
+
+## Performance
+
+Protocol frozen before timing: standalone release binaries without
+`cfg(test)` instrumentation for base (`076a75e0`) and fix, shared dependency
+builds, only the `hadamard_many` call timed, one thread pinned to one core,
+one warmup per process, 7 repetitions with alternating arm order, relmax
+checked on every run. A comparison is invalid if either arm's
+`(max - min) / median > 0.30` or, end to end, relmax exceeds
+`tolerance * global_tolerance_margin`. All comparisons were valid.
+
+| Case | End to end: base → fix (median s) | Fixed 10 passes: base → fix | Fixed 10 passes, guard off |
+|---|---|---|---|
+| `rand_chi64` cap 128, tol `1e-3` | 0.174 MaxSweeps → 0.062 Converged (0.36×) | 0.093 → 0.162 (1.74×) | 1.011× |
+| same, tol `1e-8` | 0.211 → 0.063 (0.30×) | 0.108 → 0.200 (1.85×) | 1.005× |
+| same, tol `1e-14` | 0.322 → 0.078 (0.24×) | 0.165 → 0.236 (1.43×) | 1.009× |
+| gauss cap 12, tol `1e-4` (control) | 0.0362 → 0.0365, both Converged in 3 (1.01×) | 1.07× | – |
+| gauss cap 12, tol `1e-12` | 0.143 → 0.043, Converged 10 → 3 passes (0.30×) | 1.03× | – |
+| gauss cap 12, tol `1e-14` | 0.255 MaxSweeps → 0.006 RankLimited (0.02×) | 0.13× (RankLimited earlier) | – |
+| generated chain, tol `1e-3` | 0.121 MaxSweeps → 0.029 Converged (0.24×) | 1.10× | 1.015× |
+| gauss cap 12, tol `1e-3` (control) | 0.0360 → 0.0359 (1.00×) | 1.10× | 1.018× |
+
+- The end-to-end gain comes from fewer passes (earlier, justified
+  termination), not from faster passes. The gauss `1e-14` rows compare an
+  honest `RankLimited` at cap 12 with a `MaxSweeps` run; the accuracy there
+  also improved (relmax `7.6e-14 → 1.3e-14`).
+- Local updates cost 0.5–1.8% more per pass (normalization and factor
+  rescaling) with identical evaluated points and accuracy.
+- Fixed-iteration passes cost up to 1.85× more, entirely in the guard. With
+  a correct threshold a search that finds nothing walks to its local maximum;
+  on the base the underestimated threshold ended every walk after its first
+  sweep on a false positive. The fix evaluates fewer points in total
+  (`rand_chi64` tol `1e-3`: 39,760 vs 54,512 over 10 passes) but through more
+  small guard batches. This is the ordinary cost of a guard that verifies,
+  already paid on the base whenever the guard legitimately found nothing. It
+  matters only for runs forced past convergence (large `min_sweeps`).
+  Reducing per-search guard cost (#686/#728 area, or searching only when the
+  local criteria would accept, as #608 proposed) is a separate follow-up.
 - The core LUCI kernels keep their absolute floor; other callers passing raw
   small-magnitude matrices (for example tensorci/treetci) are not covered by
   this fix and were not audited here.
