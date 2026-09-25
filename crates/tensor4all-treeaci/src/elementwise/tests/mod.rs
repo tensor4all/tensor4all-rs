@@ -3,7 +3,11 @@ use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
 
 use super::{tree_elementwise, tree_elementwise_batched};
-use crate::{hadamard_many, TreeAciOptions, TreeAciTermination};
+use crate::{
+    hadamard_many,
+    test_support::{random_decaying_tree, SplitMix},
+    TreeAciOptions, TreeAciTermination,
+};
 
 fn product_tree<T: crate::TreeAciScalar>(
     edges: &[(usize, usize)],
@@ -519,4 +523,119 @@ fn global_guard_recovers_a_separated_feature_at_the_default_search_count() {
     );
     assert!(near_error < 1.0e-6, "near peak lost: {near_error}");
     assert!(result.global_pivots_found.iter().any(|&count| count > 0));
+}
+
+struct HadamardRun {
+    termination: TreeAciTermination,
+    passes: usize,
+    ranks: Vec<usize>,
+    /// `max |y - f| / max |f|` over the full grid.
+    relative_max_error: f64,
+}
+
+/// Runs a Hadamard product of `n_inputs` random trees, each scaled by
+/// `input_scale`, and measures the result against the dense product.
+fn run_random_hadamard<T: crate::TreeAciScalar>(
+    edges: &[(usize, usize)],
+    bond: usize,
+    n_inputs: usize,
+    seed: u64,
+    decay: f64,
+    input_scale: f64,
+    options: &TreeAciOptions<usize>,
+) -> HadamardRun {
+    let physical = (0..=edges.len())
+        .map(|_| DynIndex::new_dyn(2))
+        .collect::<Vec<_>>();
+    let mut rng = SplitMix(seed);
+    let inputs = (0..n_inputs)
+        .map(|_| {
+            random_decaying_tree::<T>(edges, &physical, bond, decay, &mut rng)
+                .scale(tensor4all_core::AnyScalar::new_real(input_scale))
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let result = hadamard_many::<T, _>(&inputs, options).unwrap();
+    let dense_inputs = inputs
+        .iter()
+        .map(|input| aligned_values::<T>(input, &physical))
+        .collect::<Vec<_>>();
+    let expected = (0..dense_inputs[0].len())
+        .map(|point| {
+            dense_inputs.iter().fold(
+                <T as tensor4all_core::Scalar>::from_f64(1.0),
+                |product, values| product * values[point],
+            )
+        })
+        .collect::<Vec<_>>();
+    let actual = aligned_values::<T>(&result.tree, &physical);
+    let abs = tensor4all_core::Scalar::abs_val;
+    let target_max = expected.iter().map(|v| abs(*v)).fold(0.0, f64::max);
+    let error = actual
+        .iter()
+        .zip(&expected)
+        .map(|(a, e)| abs(*a - *e))
+        .fold(0.0, f64::max);
+    HadamardRun {
+        termination: result.termination,
+        passes: result.max_ranks.len(),
+        ranks: result.diagnostics.edge_ranks.iter().map(|e| e.2).collect(),
+        relative_max_error: error / target_max,
+    }
+}
+
+fn chain_edges(nodes: usize) -> Vec<(usize, usize)> {
+    (1..nodes).map(|node| (node - 1, node)).collect()
+}
+
+fn binary_edges() -> Vec<(usize, usize)> {
+    vec![
+        (0, 1),
+        (0, 2),
+        (1, 3),
+        (1, 4),
+        (2, 5),
+        (2, 6),
+        (3, 7),
+        (3, 8),
+        (4, 9),
+        (5, 10),
+        (6, 11),
+    ]
+}
+
+fn assert_heavy_tailed_hadamard_converges<T: crate::TreeAciScalar>(
+    label: &str,
+    edges: &[(usize, usize)],
+    seed: u64,
+) {
+    let options = TreeAciOptions {
+        tolerance: 1.0e-3,
+        ..TreeAciOptions::default()
+    };
+    let run = run_random_hadamard::<T>(edges, 4, 3, seed, 1.0, 1.0, &options);
+    assert_eq!(
+        run.termination,
+        TreeAciTermination::Converged,
+        "{label}: passes={} ranks={:?} relative max error={:.3e}",
+        run.passes,
+        run.ranks,
+        run.relative_max_error
+    );
+    assert!(
+        run.relative_max_error <= options.tolerance * options.global_tolerance_margin,
+        "{label}: relative max error {:.3e}",
+        run.relative_max_error
+    );
+}
+
+/// Heavy-tailed Hadamard products whose local updates stop changing the
+/// output after a few passes. The guard must judge residuals against the
+/// magnitude the local truncation used; otherwise every remaining pass
+/// re-injects pivots that the next update discards.
+#[test]
+fn heavy_tailed_hadamard_converges_without_idle_passes() {
+    // Guard scale: five random starts underestimate max |f|.
+    assert_heavy_tailed_hadamard_converges::<f64>("chain f64", &chain_edges(12), 1);
+    assert_heavy_tailed_hadamard_converges::<f64>("binary f64", &binary_edges(), 2);
 }

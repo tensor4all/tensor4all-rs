@@ -94,6 +94,15 @@ where
         .copied()
         .map(tensor4all_core::Scalar::abs_val)
         .fold(0.0, f64::max);
+    // Judge residuals on the magnitude the local truncation used. Every
+    // `edge_scales` entry is the largest |f| among the exact operator values
+    // of that edge's current local matrix, so together with the starts it is
+    // a lower bound of max |f| that is consistent with the local updates.
+    // The starts alone can underestimate a heavy-tailed output by orders of
+    // magnitude; the guard then reports residuals that every following local
+    // update discards again as below its tolerance, and never lets the run
+    // converge although the output no longer changes.
+    let max_output = state.edge_scales.iter().copied().fold(max_output, f64::max);
     let absolute_tolerance = if options.scale_tolerance && max_output > 0.0 {
         options.tolerance * max_output
     } else {
