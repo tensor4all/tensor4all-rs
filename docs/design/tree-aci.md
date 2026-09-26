@@ -91,7 +91,24 @@ requiring O(edges) storage and work per pass without extra contractions,
 sampling, or per-pass allocation. Returned `max_ranks` remains a summary for
 diagnostics, not the rank-stability decision input.
 
-The local LUCI residual and enabled global-guard conditions still apply.
+The local LUCI residual and enabled global-guard conditions still apply. One
+private `TolerancePolicy` keeps their conversions consistent while preserving
+the caller's selected units. With relative tolerance enabled, each local
+matrix is divided by its largest sampled `|f|` and factored with the configured
+tolerance as an absolute threshold on that normalized matrix. The sweep
+compares `error / scale` with that tolerance, so the factorization and sweep
+share a reference. A relative-to-largest-pivot rule would disagree whenever
+Schur-complement growth lifts a pivot above the largest entry. Normalization
+also makes the LUCI kernels' absolute `f64::EPSILON` pivot floor a fixed
+relative round-off floor for this mode. With absolute tolerance selected, the
+local matrix remains in raw output units and the configured threshold is
+absolute in those same units. The global guard follows the same policy: in
+relative mode it scales its threshold by the largest `|f|` among its random
+starts **and** current edge-local matrices; in absolute mode it uses the
+configured absolute threshold. A few random starts alone can underestimate a
+heavy-tailed output by orders of magnitude; the guard then reports residuals
+the next local update discards again, and a run whose output no longer changes
+never converges (#776).
 `Converged` is an algorithmic stopping condition, not a certified bound on the
 full-grid maximum error: the tolerance controls edge-local residuals, and the
 guard performs bounded randomized coordinate searches with its configured

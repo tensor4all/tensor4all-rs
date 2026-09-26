@@ -4,9 +4,8 @@ use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::{CanonicalForm, TreeTN};
 
 use super::{
-    convergence_criterion, current_state_is_rank_limited, edge_error_metric,
-    global_injection_capacities, run_directional_pass, run_local_sweeps, track_rank_stability,
-    PassDirection,
+    convergence_criterion, current_state_is_rank_limited, global_injection_capacities,
+    run_directional_pass, run_local_sweeps, track_rank_stability, PassDirection,
 };
 use crate::global_guard::input_evaluator_debug_stats;
 use crate::transaction::update_edge_transaction;
@@ -230,10 +229,27 @@ fn rank_stability_allows_shrinkage_but_restarts_on_regrowth() {
 }
 
 #[test]
-fn relative_and_absolute_error_metrics_match_train_aci() {
-    assert_eq!(edge_error_metric(2.0, 10.0, true), 0.2);
-    assert_eq!(edge_error_metric(2.0, 10.0, false), 2.0);
-    assert_eq!(edge_error_metric(2.0, 0.0, true), 2.0);
+fn relative_and_absolute_tolerance_policy_uses_consistent_units() {
+    let relative = TreeAciOptions::<usize>::default().tolerance_policy();
+    let absolute = TreeAciOptions::<usize> {
+        scale_tolerance: false,
+        ..TreeAciOptions::default()
+    }
+    .tolerance_policy();
+
+    assert_eq!(relative.local_normalizer(10.0), 10.0);
+    assert_eq!(relative.local_normalizer(0.0), 1.0);
+    assert_eq!(absolute.local_normalizer(10.0), 1.0);
+    assert_eq!(relative.local_threshold(), 1.0e-12);
+    assert_eq!(relative.absolute_threshold(10.0), 1.0e-11);
+    assert_eq!(relative.absolute_threshold(0.0), 1.0e-12);
+    assert_eq!(absolute.absolute_threshold(10.0), 1.0e-12);
+    assert_eq!(relative.error_metric(2.0, 10.0), 0.2);
+    assert_eq!(absolute.error_metric(2.0, 10.0), 2.0);
+    assert_eq!(relative.error_metric(2.0, 0.0), 2.0);
+    assert!(relative.exceeds(2.0e-11, 10.0));
+    assert!(!relative.exceeds(1.0e-11, 10.0));
+    assert!(absolute.exceeds(2.0e-12, 10.0));
 }
 
 #[test]

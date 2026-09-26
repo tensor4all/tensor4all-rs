@@ -32,6 +32,48 @@ pub(crate) struct LocalUpdateResult<T> {
     pub(crate) local_values: Vec<T>,
 }
 
+/// Converts a local matrix between sampled-output units and the units used by
+/// the selected tolerance mode.
+///
+/// Relative truncation factors a unit-scaled matrix, so the RRLU pivot floor is
+/// independent of the operator's overall magnitude. Absolute truncation keeps
+/// the raw matrix so both its configured threshold and pivot floor stay in raw
+/// units. The magnitude-bearing factor and pivot errors are restored after a
+/// relative-mode factorization.
+#[derive(Clone, Copy, Debug)]
+struct LocalMatrixScale {
+    normalizer: f64,
+}
+
+impl LocalMatrixScale {
+    fn new(normalizer: f64) -> Self {
+        Self { normalizer }
+    }
+
+    fn normalize<T: TreeAciScalar>(self, matrix: &mut Matrix<T>) {
+        if self.normalizer == 1.0 {
+            return;
+        }
+        let divisor = <T as tensor4all_core::Scalar>::from_f64(self.normalizer);
+        for value in matrix.as_col_major_mut_slice() {
+            *value = *value / divisor;
+        }
+    }
+
+    fn restore<T: TreeAciScalar>(self, magnitude_factor: &mut Matrix<T>, pivot_errors: &mut [f64]) {
+        if self.normalizer == 1.0 {
+            return;
+        }
+        let multiplier = <T as tensor4all_core::Scalar>::from_f64(self.normalizer);
+        for value in magnitude_factor.as_col_major_mut_slice() {
+            *value = *value * multiplier;
+        }
+        for error in pivot_errors {
+            *error *= self.normalizer;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn materialize_and_factor_edge<T, V, F>(
     inputs: &[TreeTN<IdxTensor, V>],
@@ -311,23 +353,20 @@ where
     });
     #[cfg(test)]
     let retained_local_values = local_values.clone();
-    let matrix = Matrix::from_col_major_vec(row_count, col_count, local_values);
+    // Use the same numeric tolerance in RRLU as the selected matrix units:
+    // relative mode normalizes the matrix, while absolute mode leaves it raw.
+    let tolerance = options.tolerance_policy();
+    let local_scale = LocalMatrixScale::new(tolerance.local_normalizer(sampled_scale));
+    let mut matrix = Matrix::from_col_major_vec(row_count, col_count, local_values);
+    local_scale.normalize(&mut matrix);
     #[cfg(test)]
     let luci_started = std::time::Instant::now();
-    let factors = matrix_luci_factors_from_matrix_owned(
+    let mut factors = matrix_luci_factors_from_matrix_owned(
         matrix,
         Some(RrLUOptions {
             max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
-            rel_tol: if options.scale_tolerance {
-                options.tolerance
-            } else {
-                0.0
-            },
-            abs_tol: if options.scale_tolerance {
-                0.0
-            } else {
-                options.tolerance
-            },
+            rel_tol: 0.0,
+            abs_tol: tolerance.local_threshold(),
             left_orthogonal,
         }),
     )
@@ -338,6 +377,15 @@ where
     crate::state::profile_debug_stats::record(|stats| {
         stats.luci += luci_started.elapsed();
     });
+    // Only the factor holding raw pivot rows/columns carries the magnitude;
+    // the interpolative factor `A[:, J] A[I, J]^-1` (or its transpose) is
+    // invariant under relative-mode normalization.
+    let magnitude_factor = if left_orthogonal {
+        &mut factors.right
+    } else {
+        &mut factors.left
+    };
+    local_scale.restore(magnitude_factor, &mut factors.pivot_errors);
     let (left, right, row_indices, col_indices) = if factors.rank == 0 {
         let (left, right) = zero_rank_one_skeleton(row_count, col_count, left_orthogonal)?;
         (left, right, vec![0], vec![0])

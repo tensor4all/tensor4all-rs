@@ -96,6 +96,64 @@ fn local_entries_equal_direct_values_and_callback_layout_is_column_major() {
 }
 
 #[test]
+fn local_truncation_uses_relative_or_absolute_sampled_scale() {
+    let inputs = vec![two_node_tree(1.0)];
+
+    for (scale_tolerance, expected_rank) in [(false, 2), (true, 1)] {
+        let options = TreeAciOptions {
+            tolerance: 1.0e-12,
+            scale_tolerance,
+            max_bond_dim: Some(2),
+            ..TreeAciOptions::default()
+        };
+        let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
+        let (arena, active) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
+        let frames = InputFrameStore::from_samples(&inputs, &problem, &arena).unwrap();
+        let mut diagonal = |_batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]| {
+            output.copy_from_slice(&[1.0e8, 0.0, 0.0, 1.0e-9]);
+            Ok(())
+        };
+
+        for left_orthogonal in [true, false] {
+            let update = materialize_and_factor_edge(
+                &inputs,
+                &problem,
+                &active,
+                &frames,
+                0,
+                &options,
+                left_orthogonal,
+                &mut diagonal,
+            )
+            .unwrap();
+
+            assert_eq!(
+                update.left.ncols(),
+                expected_rank,
+                "scale_tolerance={scale_tolerance}"
+            );
+            assert_eq!(
+                update.right.nrows(),
+                expected_rank,
+                "scale_tolerance={scale_tolerance}"
+            );
+            let reconstruct = |row, col| {
+                (0..expected_rank)
+                    .map(|rank| update.left[[row, rank]] * update.right[[rank, col]])
+                    .sum::<f64>()
+            };
+            assert!((reconstruct(0, 0) / 1.0e8 - 1.0).abs() < 1.0e-12);
+            let small_component = reconstruct(1, 1);
+            if scale_tolerance {
+                assert!(small_component.abs() < 1.0e-12);
+            } else {
+                assert!((small_component / 1.0e-9 - 1.0).abs() < 1.0e-12);
+            }
+        }
+    }
+}
+
+#[test]
 fn luci_factors_reconstruct_rank_one_and_zero_targets() {
     for zero in [false, true] {
         let inputs = vec![two_node_tree(1.0)];

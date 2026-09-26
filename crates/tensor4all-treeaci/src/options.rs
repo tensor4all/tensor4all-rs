@@ -17,6 +17,55 @@ use crate::{TreeAciNode, TreeAciScalar, TreeAciTraversalStrategy};
 /// `f64` defaults exactly where they were while making them follow the budget.
 const WORKING_BUDGET_OBJECT_SHARE: usize = 4;
 
+/// One source of scale conversions for local factorization and run-wide
+/// convergence checks.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TolerancePolicy {
+    tolerance: f64,
+    relative: bool,
+}
+
+impl TolerancePolicy {
+    /// Scale used to put a local matrix in factorization units.
+    pub(crate) fn local_normalizer(self, sampled_scale: f64) -> f64 {
+        if self.relative && sampled_scale > 0.0 {
+            sampled_scale
+        } else {
+            1.0
+        }
+    }
+
+    /// Absolute pivot threshold in the local matrix's factorization units.
+    /// Relative mode divides the matrix by its sampled scale first, so both
+    /// modes use the configured tolerance unchanged at the RRLU boundary.
+    pub(crate) fn local_threshold(self) -> f64 {
+        self.tolerance
+    }
+
+    /// Absolute residual threshold for a scale measured in output units.
+    pub(crate) fn absolute_threshold(self, scale: f64) -> f64 {
+        if self.relative && scale > 0.0 {
+            self.tolerance * scale
+        } else {
+            self.tolerance
+        }
+    }
+
+    /// Express a residual in units comparable to the configured tolerance.
+    pub(crate) fn error_metric(self, error: f64, scale: f64) -> f64 {
+        if self.relative && scale > 0.0 {
+            error / scale
+        } else {
+            error
+        }
+    }
+
+    /// Whether an error exceeds this policy's configured tolerance.
+    pub(crate) fn exceeds(self, error: f64, scale: f64) -> bool {
+        self.error_metric(error, scale) > self.tolerance
+    }
+}
+
 /// Controls tree ACI sweeps, global validation, and allocation limits.
 ///
 /// The defaults use per-edge rank stability and conservative
@@ -50,6 +99,14 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// Relative or absolute local error target. Default: `1e-12`.
     pub tolerance: f64,
     /// Scale `tolerance` by sampled output magnitude. Default: `true`.
+    ///
+    /// When `true`, every local update truncates its matrix relative to the
+    /// largest `|f|` among that matrix's sampled entries, and the global guard
+    /// accepts residuals up to `tolerance * global_tolerance_margin` times the
+    /// largest `|f|` among its random starts and the current local matrices.
+    /// Results are then invariant under a constant rescaling of a homogeneous
+    /// operator such as a Hadamard product. When `false`, `tolerance` is an
+    /// absolute threshold for both.
     pub scale_tolerance: bool,
     /// Optional topology-compatible initial output. Default: `None`.
     pub initial_guess: Option<TreeTN<IdxTensor, V>>,
@@ -178,6 +235,13 @@ impl<V: TreeAciNode> Default for TreeAciOptions<V> {
 }
 
 impl<V: TreeAciNode> TreeAciOptions<V> {
+    pub(crate) fn tolerance_policy(&self) -> TolerancePolicy {
+        TolerancePolicy {
+            tolerance: self.tolerance,
+            relative: self.scale_tolerance,
+        }
+    }
+
     /// Element ceiling a run with scalar `T` enforces for a local candidate
     /// matrix.
     ///

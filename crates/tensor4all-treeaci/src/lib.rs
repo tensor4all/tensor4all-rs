@@ -65,6 +65,8 @@ mod scalar;
 mod schedule;
 mod single_site;
 mod state;
+#[cfg(test)]
+mod test_support;
 mod transaction;
 mod traversal;
 
