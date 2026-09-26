@@ -271,17 +271,12 @@ where
     finalize_deferred_canonicalization(state)?;
 
     let max_rank = state.edge_ranks.iter().copied().max().unwrap_or(1);
+    let tolerance = options.tolerance_policy();
     let max_error = state
         .edge_errors
         .iter()
         .zip(&state.edge_scales)
-        .map(|(&error, &scale)| {
-            if options.scale_tolerance && scale > 0.0 {
-                error / scale
-            } else {
-                error
-            }
-        })
+        .map(|(&error, &scale)| tolerance.error_metric(error, scale))
         .fold(0.0, f64::max);
     Ok(PassReport {
         direction,
@@ -408,6 +403,7 @@ fn current_state_is_rank_limited<T: TreeAciScalar, V: TreeAciNode>(
     options: &TreeAciOptions<V>,
 ) -> bool {
     let mut has_bad_edge = false;
+    let tolerance = options.tolerance_policy();
     for (((&rank, &algebraic), &error), &scale) in state
         .edge_ranks
         .iter()
@@ -415,8 +411,7 @@ fn current_state_is_rank_limited<T: TreeAciScalar, V: TreeAciNode>(
         .zip(&state.edge_errors)
         .zip(&state.edge_scales)
     {
-        let metric = edge_error_metric(error, scale, options.scale_tolerance);
-        if metric > options.tolerance {
+        if tolerance.exceeds(error, scale) {
             has_bad_edge = true;
             let limit = options.max_bond_dim.unwrap_or(usize::MAX).min(algebraic);
             if rank < limit {
@@ -425,14 +420,6 @@ fn current_state_is_rank_limited<T: TreeAciScalar, V: TreeAciNode>(
         }
     }
     has_bad_edge
-}
-
-fn edge_error_metric(error: f64, scale: f64, relative: bool) -> f64 {
-    if relative && scale > 0.0 {
-        error / scale
-    } else {
-        error
-    }
 }
 
 fn trailing_all_true(values: &[bool], dwell: usize) -> bool {

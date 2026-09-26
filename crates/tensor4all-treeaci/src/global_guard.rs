@@ -103,12 +103,8 @@ where
     // update discards again as below its tolerance, and never lets the run
     // converge although the output no longer changes.
     let max_output = state.edge_scales.iter().copied().fold(max_output, f64::max);
-    let absolute_tolerance = if options.scale_tolerance && max_output > 0.0 {
-        options.tolerance * max_output
-    } else {
-        options.tolerance
-    };
-    let threshold = absolute_tolerance * options.global_tolerance_margin;
+    let threshold =
+        options.tolerance_policy().absolute_threshold(max_output) * options.global_tolerance_margin;
 
     let mut candidates = Vec::new();
     #[cfg(test)]

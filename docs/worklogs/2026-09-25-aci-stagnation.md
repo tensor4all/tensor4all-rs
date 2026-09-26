@@ -15,20 +15,28 @@ Base: `076a75e0` (includes #774), unchanged at execution time.
   was not needed for any conclusion below.
 - Fix every root cause downstream, in TreeACI (maintainer direction). The
   absolute `f64::EPSILON` pivot floor lives in the shared `tensor4all-core`
-  LUCI kernels, but TreeACI owns the matrices it passes them. Normalizing the
-  local matrix to unit maximum makes that floor a fixed relative round-off
-  floor for TreeACI without changing core behavior for other callers.
-- Truncate with one absolute threshold on the normalized matrix (`rel_tol = 0`)
-  instead of `rel_tol = tolerance`. The latter is relative to the largest
-  pivot, while the sweep's convergence check divides by the largest entry.
-  The new rule is never looser than the old one: it only keeps more pivots
-  when Schur-complement growth lifts a pivot above the largest entry.
-- Scale the guard threshold by the largest `|f|` among its starts and the
-  current edge-local matrices. Every value involved is an exact operator value
-  from the current state, so this is a lower bound of `max |f|` without
-  cumulative history. A missed feature larger than anything sampled still
-  produces a residual above threshold; the existing separated-feature rescue
-  tests remain green.
+  LUCI kernels, but TreeACI owns the matrices it passes them. Relative mode
+  normalizes the local matrix to unit maximum, making that floor a fixed
+  relative round-off floor; absolute mode keeps the matrix in raw output units
+  and preserves an absolute threshold. Neither mode changes core behavior for
+  other callers.
+- Use `rel_tol = 0` and one absolute RRLU threshold in the units selected by
+  `scale_tolerance`: normalized matrix units in relative mode, raw output units
+  in absolute mode. This matches the sweep's corresponding normalized or
+  absolute error check. A threshold relative to the largest pivot can disagree
+  with the sweep when Schur-complement growth lifts a pivot above the largest
+  entry. The relative rule only keeps more pivots in that case; the absolute
+  rule retains the caller's raw-unit cutoff.
+- Centralize local normalization, local threshold conversion, sweep error
+  comparison, and the global threshold in a private `TolerancePolicy`, so the
+  three decisions cannot drift into different units again.
+- In relative mode, scale the guard threshold by the largest `|f|` among its
+  starts and the current edge-local matrices. Every value involved is an exact
+  operator value from the current state, so this is a lower bound of `max |f|`
+  without cumulative history. In absolute mode, keep the configured threshold
+  absolute. A missed feature larger than anything sampled still produces a
+  residual above the relative threshold; the existing separated-feature
+  rescue tests remain green.
 - Rejected: replacing `global_pivots_found` with the accepted injection count
   in the convergence rule, relaxing tolerances, disabling the guard, or a new
   stagnation status. The traces showed injected pivots were accepted and then
@@ -123,3 +131,55 @@ checked on every run. A comparison is invalid if either arm's
 - The core LUCI kernels keep their absolute floor; other callers passing raw
   small-magnitude matrices (for example tensorci/treetci) are not covered by
   this fix and were not audited here.
+
+### Centralized scale-policy follow-up
+
+After the stagnation fix, `TolerancePolicy` became the single private source for
+TreeACI's local matrix units, absolute RRLU argument, sweep metric, and guard
+threshold. Relative mode normalizes the local matrix; absolute mode leaves it
+raw. The paired end-to-end check compared base `5218dad0c03dee0a398b33e645bd8cfd14b196b0`
+with the candidate source (binary SHA-256 `2e72e894a39072095d3be14809ae41fc5380f3441404c5192a401a491e254d26`);
+both used release builds of the same benchmark, lockfile SHA-256
+`111c1302d1763d98c5424c1de4963be60b28266ccb3dd0e32628abcff2f7728d`, Rust
+1.98.1, `tenferro-cpu-faer`, tolerance `1e-8`, seed 732, and one thread pinned
+to CPU 2 (`RAYON_NUM_THREADS`, BLAS, OpenMP, and tenferro threads all set to 1).
+The matrix covered f64/c64, chain-like degree 2/profile 1 and branched degree
+4/profile 2, and both absolute and relative tolerance modes (`d=2`). Each case
+used 15 paired process runs with 5 operation repetitions per arm.
+
+The A/A run first used the same release binary on both arms. It had no validity
+failures; the largest relative MAD was 2.22%, and the widest paired-ratio 95%
+CI upper bound was 1.0621, supporting the predeclared 7% regression cap used
+for A/B. Paired ratios are candidate/base; values below 1 are faster.
+
+| A/A case | Paired ratio | 95% CI |
+|---|---:|---:|
+| f64, chain-like, absolute | 1.0143 | [0.9968, 1.0351] |
+| f64, chain-like, relative | 0.9976 | [0.9679, 1.0089] |
+| f64, branched, absolute | 0.9924 | [0.9727, 1.0051] |
+| f64, branched, relative | 0.9968 | [0.9925, 1.0049] |
+| c64, chain-like, absolute | 1.0075 | [1.0024, 1.0621] |
+| c64, chain-like, relative | 1.0012 | [0.9742, 1.0172] |
+| c64, branched, absolute | 0.9981 | [0.9925, 1.0021] |
+| c64, branched, relative | 0.9968 | [0.9850, 1.0182] |
+
+The paired A/B run passed its 7% cap with no validity failures. Every case's
+upper CI bound was at most 1.04. Median operation times and paired-ratio CIs
+were:
+
+| A/B case | Base → candidate (ms) | Paired ratio | 95% CI |
+|---|---:|---:|---:|
+| f64, chain-like, absolute | 0.446 → 0.446 | 0.9860 | [0.9694, 1.0057] |
+| f64, chain-like, relative | 0.442 → 0.437 | 0.9873 | [0.9750, 1.0134] |
+| f64, branched, absolute | 4.001 → 3.918 | 0.9852 | [0.9724, 0.9880] |
+| f64, branched, relative | 4.027 → 3.959 | 0.9850 | [0.9712, 1.0019] |
+| c64, chain-like, absolute | 0.451 → 0.448 | 1.0112 | [0.9744, 1.0195] |
+| c64, chain-like, relative | 0.449 → 0.455 | 1.0108 | [0.9951, 1.0400] |
+| c64, branched, absolute | 4.058 → 4.060 | 1.0053 | [0.9857, 1.0099] |
+| c64, branched, relative | 4.065 → 4.031 | 0.9906 | [0.9771, 1.0054] |
+
+The maximum relative output error over all A/B runs was `3.47e-15`; evaluated
+points were unchanged at 480 for chain-like cases and 1,280 for branched cases.
+The end-to-end change is effectively neutral, with one small f64 branched
+improvement and no regression near the 7% cap. This refactor does not support
+a claim of a general TreeACI speedup.
