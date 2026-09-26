@@ -107,8 +107,6 @@ where
         options.tolerance_policy().absolute_threshold(max_output) * options.global_tolerance_margin;
 
     let mut candidates = Vec::new();
-    #[cfg(test)]
-    let mut traced_walks = Vec::new();
     let start_storage_bytes = point_vector_storage_bytes(nsearch, site_dims.len())?;
     let mut candidate_storage_bytes = 0usize;
     for start in &starts {
@@ -153,8 +151,6 @@ where
                     .collect())
             },
         )?;
-        #[cfg(test)]
-        traced_walks.push((error, pivot.clone()));
         if error > threshold {
             let entry_bytes = size_of::<(f64, Vec<usize>)>()
                 .checked_add(pivot.len().checked_mul(size_of::<usize>()).ok_or(
@@ -196,21 +192,6 @@ where
             }
         }
     }
-    #[cfg(test)]
-    crate::schedule::stagnation_trace::record_search(
-        crate::schedule::stagnation_trace::GuardSearchTrace {
-            max_start_output: max_output,
-            threshold,
-            walks: traced_walks,
-            pivots: pivots.clone(),
-            coordinate_indices: state
-                .problem
-                .physical
-                .iter()
-                .map(|physical| physical.indices.clone())
-                .collect(),
-        },
-    );
     Ok(GlobalSearchReport {
         pivots,
         evaluated_points: u64::try_from(evaluated_points).map_err(|_| {

@@ -26,19 +26,8 @@ impl SplitMix {
     }
 }
 
-/// Random tree with entries uniform in `[-1, 1)` (both parts when complex).
-pub(crate) fn random_tree<T: crate::TreeAciScalar>(
-    edges: &[(usize, usize)],
-    physical: &[DynIndex],
-    bond: usize,
-    rng: &mut SplitMix,
-) -> TreeTN<IdxTensor, usize> {
-    random_decaying_tree::<T>(edges, physical, bond, 1.0, rng)
-}
-
-/// Like [`random_tree`], but bond component `k` of every edge is weighted by
-/// `decay^k` (applied at the edge's second node), so cross-interpolation
-/// pivots decay geometrically instead of ending at an exact rank.
+/// Deterministic tree whose bond component `k` is weighted by `decay^k` at
+/// each edge's second node, so cross-interpolation pivots decay geometrically.
 pub(crate) fn random_decaying_tree<T: crate::TreeAciScalar>(
     edges: &[(usize, usize)],
     physical: &[DynIndex],

@@ -87,9 +87,10 @@ regressions use a self-contained splitmix64 generator instead.
   full-grid bound. Several fixed cases converge with relmax slightly above
   `tolerance` (up to `1.3e-8` at `1e-8`), inside `tolerance *
   global_tolerance_margin`, as before.
-- The diagnostic harness (`stagnation_diagnostics.rs`, ignored test) and its
-  per-pass trace are test-only; timings seen during tracing are not
-  performance evidence.
+- A temporary ignored diagnostic harness and per-pass trace were used to
+  establish the causal chain above. Their test-only source was removed after
+  the investigation; timings collected with tracing are not performance
+  evidence.
 
 ## Performance
 

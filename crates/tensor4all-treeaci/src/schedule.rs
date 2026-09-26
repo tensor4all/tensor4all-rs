@@ -110,24 +110,6 @@ where
         max_ranks.push(report.max_rank);
         max_errors.push(report.max_error);
         rank_limited.push(current_state_is_rank_limited(state, options));
-        #[cfg(test)]
-        if stagnation_trace::is_enabled() {
-            let output: Box<dyn std::any::Any> = Box::new(state.output.clone());
-            stagnation_trace::with_passes(|passes| {
-                passes.push(stagnation_trace::PassTrace {
-                    pass,
-                    edge_ranks: state.edge_ranks.clone(),
-                    edge_errors: state.edge_errors.clone(),
-                    edge_scales: state.edge_scales.clone(),
-                    max_error_metric: report.max_error,
-                    rank_limited: rank_limited[pass],
-                    stable_rank_passes,
-                    output: Some(output),
-                    search: None,
-                    injection: None,
-                })
-            });
-        }
         let found = if options.enable_global_guard
             && options.nsearch_global_pivots > 0
             && options.max_nglobal_pivots > 0
@@ -168,13 +150,7 @@ where
                 let found = search.pivots.len();
                 #[cfg(test)]
                 let injection_started = std::time::Instant::now();
-                let _injected = inject_global_pivots(state, &search.pivots, &injection_capacities)?;
-                #[cfg(test)]
-                stagnation_trace::record_injection(stagnation_trace::InjectionTrace {
-                    found,
-                    injected: _injected,
-                    ranks_after: state.edge_ranks.clone(),
-                });
+                inject_global_pivots(state, &search.pivots, &injection_capacities)?;
                 #[cfg(test)]
                 crate::state::profile_debug_stats::record(|stats| {
                     stats.global_injection += injection_started.elapsed();
@@ -461,7 +437,5 @@ fn directed_edge_for_step<T: TreeAciScalar, V: TreeAciNode>(
     }
 }
 
-#[cfg(test)]
-pub(crate) mod stagnation_trace;
 #[cfg(test)]
 mod tests;
