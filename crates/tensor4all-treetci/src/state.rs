@@ -79,7 +79,7 @@ impl<T> TreeTCI2<T> {
             )
             .into());
         };
-        if let Some((site, _)) = local_dims.iter().enumerate().find(|(_, &dim)| dim == 0) {
+        if let Some((site, _)) = local_dims.iter().enumerate().find(|&(_, &dim)| dim == 0) {
             return Err(anyhow::anyhow!("local dimension at site {site} must be positive").into());
         }
 

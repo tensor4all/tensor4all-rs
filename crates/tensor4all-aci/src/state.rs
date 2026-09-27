@@ -299,13 +299,13 @@ impl<T: AciScalar> ElementwiseProblem<T> {
     }
 
     pub(crate) fn update_left_frames(&mut self, site: usize, row_indices: &[usize]) -> Result<()> {
-        if frame_batching_enabled() {
-            if let Some(frames) = self.batched_left_frame_updates(site, row_indices)? {
-                for (input, frame) in frames.into_iter().enumerate() {
-                    self.left_frames[input][site + 1] = Some(frame);
-                }
-                return Ok(());
+        if frame_batching_enabled()
+            && let Some(frames) = self.batched_left_frame_updates(site, row_indices)?
+        {
+            for (input, frame) in frames.into_iter().enumerate() {
+                self.left_frames[input][site + 1] = Some(frame);
             }
+            return Ok(());
         }
 
         for input in 0..self.n_inputs() {
@@ -315,13 +315,13 @@ impl<T: AciScalar> ElementwiseProblem<T> {
     }
 
     pub(crate) fn update_right_frames(&mut self, site: usize, col_indices: &[usize]) -> Result<()> {
-        if frame_batching_enabled() {
-            if let Some(frames) = self.batched_right_frame_updates(site, col_indices)? {
-                for (input, frame) in frames.into_iter().enumerate() {
-                    self.right_frames[input][site] = Some(frame);
-                }
-                return Ok(());
+        if frame_batching_enabled()
+            && let Some(frames) = self.batched_right_frame_updates(site, col_indices)?
+        {
+            for (input, frame) in frames.into_iter().enumerate() {
+                self.right_frames[input][site] = Some(frame);
             }
+            return Ok(());
         }
 
         for input in 0..self.n_inputs() {

@@ -173,10 +173,10 @@ where
                 point_index += 1;
             }
         }
-        if let Some((error, point)) = start_best {
-            if error > abs_tol * tol_margin {
-                best.push((error, point));
-            }
+        if let Some((error, point)) = start_best
+            && error > abs_tol * tol_margin
+        {
+            best.push((error, point));
         }
     }
 

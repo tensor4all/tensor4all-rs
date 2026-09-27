@@ -200,11 +200,11 @@ where
     // expired, or the rank capped below the sweep's headroom). Run one final
     // forward sweep so the returned tensor train respects the cap; this
     // mirrors the final cleanup sweep Julia performs after `addglobalpivots`.
-    if let Some(cap) = options.max_bond_dim {
-        if problem.solution.rank() > cap {
-            for bond in 0..problem.len() - 1 {
-                problem.local_update(bond, true, options, &mut op)?;
-            }
+    if let Some(cap) = options.max_bond_dim
+        && problem.solution.rank() > cap
+    {
+        for bond in 0..problem.len() - 1 {
+            problem.local_update(bond, true, options, &mut op)?;
         }
     }
 

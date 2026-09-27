@@ -42,7 +42,7 @@ pub fn release_process_allocator_cached_memory() -> AllocatorPressureRelief {
 fn allocator_pressure_relief() -> AllocatorPressureRelief {
     use std::ffi::c_void;
 
-    extern "C" {
+    unsafe extern "C" {
         fn malloc_default_zone() -> *mut c_void;
         fn malloc_zone_pressure_relief(zone: *mut c_void, goal: usize) -> usize;
     }

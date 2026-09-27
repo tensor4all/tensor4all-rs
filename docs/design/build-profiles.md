@@ -4,6 +4,14 @@
 
 Keep ordinary tensor4all-rs development and verification builds small while retaining an explicit full-debug release profile for debugger sessions and detailed Rust diagnostics through Tensor4all.jl or the C API.
 
+## Workspace dependency lock
+
+Commit the root `Cargo.lock` to keep workspace CI and contributor builds on the
+same resolved dependency graph, and pass `--locked` to CI Cargo build and test
+commands. Refresh dependency versions deliberately with `cargo update` in a
+reviewed change. The lockfile governs this workspace; downstream projects that
+depend on an individual tensor4all crate continue to resolve their own graph.
+
 ## Profile contract
 
 Ordinary profiles generate no Rust debug information:

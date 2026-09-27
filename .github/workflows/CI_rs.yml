@@ -26,19 +26,21 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-workspace-crates: true
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Check explicit-context-only build
         run: |
-          cargo check -p tensor4all-tensorbackend --no-default-features --features explicit-context,tenferro-cpu-faer
-          cargo doc -p tensor4all-tensorbackend --no-deps --no-default-features --features explicit-context,tenferro-cpu-faer
+          cargo check --locked -p tensor4all-tensorbackend --no-default-features --features explicit-context,tenferro-cpu-faer
+          cargo doc --locked -p tensor4all-tensorbackend --no-deps --no-default-features --features explicit-context,tenferro-cpu-faer
 
       - name: Run clippy
         # The public-error-doc backlog is burned down; error/panic doc
         # requirements are now repository-wide blocking (issue #566 PR3).
-        run: cargo clippy --workspace --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
 
   doctest:
     name: Doctests
@@ -53,15 +55,29 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install mdBook
-        run: cargo install mdbook --version 0.5.2 --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@0.5.2
+          fallback: none
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-workspace-crates: true
 
       - name: Run rustdoc tests
-        run: cargo test --doc --profile ci --workspace -j 8
+        run: |
+          rustdoc_log="$RUNNER_TEMP/rustdoc.log"
+          if ! cargo test --locked --doc --profile ci --workspace -j 8 -vv > "$rustdoc_log" 2>&1; then
+            tail -n 200 "$rustdoc_log"
+            exit 1
+          fi
+          tail -n 40 "$rustdoc_log"
 
       - name: Run mdBook tests
-        run: TENSOR4ALL_CARGO_PROFILE=ci ./scripts/test-mdbook.sh
+        env:
+          TENSOR4ALL_CARGO_PROFILE: ci
+          TENSOR4ALL_RUSTDOC_LOG: ${{ runner.temp }}/rustdoc.log
+        run: ./scripts/test-mdbook.sh
 
       - name: Report Cargo artifact size
         if: always()
@@ -87,42 +103,11 @@ jobs:
       - uses: taiki-e/install-action@nextest
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-workspace-crates: true
 
-      # tensor4all-hdf5 is kept out of nextest because its dlopen-based tests
-      # fail under nextest's per-process execution model. It runs in the
-      # parallel `hdf5` job so it starts together with this one instead of
-      # waiting for the full non-HDF5 suite. HDF5 dev headers are still needed
-      # here because book-tests depends on tensor4all-hdf5.
-      - name: Run tests (non-HDF5)
-        run: cargo nextest run --cargo-profile ci --workspace --exclude tensor4all-hdf5
-
-      - name: Report Cargo artifact size
-        if: always()
-        run: |
-          if [[ -d target ]]; then
-            du -sh target
-          else
-            echo "target directory was not created"
-          fi
-
-  hdf5:
-    name: HDF5 Tests
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install HDF5
-        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      # Runs under `cargo test`, not nextest: its dlopen-based tests fail under
-      # nextest's per-process execution model.
-      - name: Run tests (HDF5)
-        run: cargo test --profile ci -p tensor4all-hdf5
+      - name: Run workspace tests
+        run: cargo nextest run --locked --cargo-profile ci --workspace
 
       - name: Report Cargo artifact size
         if: always()
@@ -153,12 +138,14 @@ jobs:
         run: cargo install cbindgen --version 0.29.2 --locked
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-workspace-crates: true
 
       - name: Check generated C API header
         run: ./scripts/check-capi-header.sh
 
       - name: Generate and verify public API inventory
-        run: cargo run -p xtask --release -- api-dump
+        run: cargo run --locked -p xtask --release -- api-dump
 
       - name: Test the repository-rules review script
         run: python3 scripts/test-repository-rules-review.py
@@ -211,10 +198,12 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-workspace-crates: true
 
       - name: Generate release coverage JSON
         # Release-mode measurement: the repository's normal verification mode.
-        run: cargo llvm-cov --release --no-clean --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
+        run: cargo llvm-cov --locked --release --no-clean --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
 
       - name: Check per-file thresholds
         run: python3 scripts/check-coverage.py coverage.json
@@ -224,7 +213,6 @@ jobs:
     needs:
       - lint
       - test
-      - hdf5
       - coverage
       - doctest
       - scripts

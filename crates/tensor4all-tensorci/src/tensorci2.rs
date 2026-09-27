@@ -383,7 +383,7 @@ where
                 message: "local_dims should have at least 2 elements".to_string(),
             });
         }
-        if let Some((site, _)) = local_dims.iter().enumerate().find(|(_, &dim)| dim == 0) {
+        if let Some((site, _)) = local_dims.iter().enumerate().find(|&(_, &dim)| dim == 0) {
             return Err(TCIError::InvalidConfiguration {
                 message: format!("local dimension at site {site} must be positive"),
             });
@@ -417,7 +417,7 @@ where
                 message: "local_dims should have at least 2 elements".to_string(),
             });
         }
-        if let Some((site, _)) = local_dims.iter().enumerate().find(|(_, &dim)| dim == 0) {
+        if let Some((site, _)) = local_dims.iter().enumerate().find(|&(_, &dim)| dim == 0) {
             return Err(TCIError::InvalidConfiguration {
                 message: format!("local dimension at site {site} must be positive"),
             });
@@ -1858,7 +1858,7 @@ where
             })?;
         let mut pi = Matrix::zeros(i_combined.len(), j_combined.len());
 
-        if let Some(ref batch_fn) = context.batched_f {
+        if let Some(batch_fn) = context.batched_f {
             let mut all_indices: Vec<MultiIndex> = Vec::with_capacity(matrix_len);
             for i_multi in &i_combined {
                 for j_multi in &j_combined {

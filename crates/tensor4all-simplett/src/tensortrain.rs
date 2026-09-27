@@ -110,12 +110,12 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         }
 
         // Last tensor should have right_dim = 1
-        if let Some(last) = tensors.last() {
-            if last.right_dim() != 1 {
-                return Err(SimpleTensorTrainError::InvalidOperation {
-                    message: "Last tensor must have right dimension 1".to_string(),
-                });
-            }
+        if let Some(last) = tensors.last()
+            && last.right_dim() != 1
+        {
+            return Err(SimpleTensorTrainError::InvalidOperation {
+                message: "Last tensor must have right dimension 1".to_string(),
+            });
         }
 
         Ok(Self { tensors })

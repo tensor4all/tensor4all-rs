@@ -308,47 +308,45 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
             checked_local_mul(n_inputs, n_points, "local matrix input value count")?;
         let mut input_values = vec![T::zero(); input_value_count];
 
-        if local_materialize_batching_enabled() {
-            if let Some(middle_dim) = self.shared_middle_dim() {
-                let left_batch_len = checked_local_mul(
-                    checked_local_mul(n_inputs, self.nrows, "local left batch input count")?,
-                    middle_dim,
-                    "local left batch size",
-                )?;
-                let right_batch_len = checked_local_mul(
-                    checked_local_mul(n_inputs, middle_dim, "local right batch input count")?,
-                    self.ncols,
-                    "local right batch size",
-                )?;
-                let mut left_batch = Vec::with_capacity(left_batch_len);
-                let mut right_batch = Vec::with_capacity(right_batch_len);
-                for factors in &self.input_factors {
-                    left_batch.extend_from_slice(&factors.left_values);
-                    right_batch.extend_from_slice(&factors.right_values);
-                }
-                let values = batched_mat_mul_same_shape_owned(
-                    n_inputs,
-                    self.nrows,
-                    middle_dim,
-                    self.ncols,
-                    left_batch,
-                    right_batch,
-                )
-                .map_err(|err| local_factor_error("batched local input materialization", err))?;
-                for input in 0..n_inputs {
-                    let offset = checked_local_mul(input, n_points, "local batched input offset")?;
-                    for point in 0..n_points {
-                        let input_offset =
-                            checked_local_mul(n_inputs, point, "local input offset")?;
-                        let input_index =
-                            checked_local_add(input, input_offset, "local input offset")?;
-                        let value_index =
-                            checked_local_add(offset, point, "local batched value offset")?;
-                        input_values[input_index] = values[value_index];
-                    }
-                }
-                return Ok(input_values);
+        if local_materialize_batching_enabled()
+            && let Some(middle_dim) = self.shared_middle_dim()
+        {
+            let left_batch_len = checked_local_mul(
+                checked_local_mul(n_inputs, self.nrows, "local left batch input count")?,
+                middle_dim,
+                "local left batch size",
+            )?;
+            let right_batch_len = checked_local_mul(
+                checked_local_mul(n_inputs, middle_dim, "local right batch input count")?,
+                self.ncols,
+                "local right batch size",
+            )?;
+            let mut left_batch = Vec::with_capacity(left_batch_len);
+            let mut right_batch = Vec::with_capacity(right_batch_len);
+            for factors in &self.input_factors {
+                left_batch.extend_from_slice(&factors.left_values);
+                right_batch.extend_from_slice(&factors.right_values);
             }
+            let values = batched_mat_mul_same_shape_owned(
+                n_inputs,
+                self.nrows,
+                middle_dim,
+                self.ncols,
+                left_batch,
+                right_batch,
+            )
+            .map_err(|err| local_factor_error("batched local input materialization", err))?;
+            for input in 0..n_inputs {
+                let offset = checked_local_mul(input, n_points, "local batched input offset")?;
+                for point in 0..n_points {
+                    let input_offset = checked_local_mul(n_inputs, point, "local input offset")?;
+                    let input_index = checked_local_add(input, input_offset, "local input offset")?;
+                    let value_index =
+                        checked_local_add(offset, point, "local batched value offset")?;
+                    input_values[input_index] = values[value_index];
+                }
+            }
+            return Ok(input_values);
         }
 
         for input in 0..n_inputs {
@@ -578,52 +576,50 @@ fn build_left_factors<T: AciScalar>(
     bond: usize,
     dims: &[LocalInputFactorDims],
 ) -> Result<Vec<Vec<T>>> {
-    if local_setup_batching_enabled() {
-        if let Some(shared) = shared_input_factor_dims(dims) {
-            let n_inputs = dims.len();
-            let left_cols =
-                checked_mul(shared.site_dim_left, shared.middle_dim, "ACI left columns")?;
-            let frame_batch_len = checked_mul(
-                checked_mul(n_inputs, shared.left_rows, "ACI left frame batch")?,
-                shared.input_left_dim,
-                "ACI left frame batch",
-            )?;
-            let core_batch_len = checked_mul(
-                checked_mul(n_inputs, shared.input_left_dim, "ACI left core batch")?,
-                left_cols,
-                "ACI left core batch",
-            )?;
-            let mut frame_batch = Vec::with_capacity(frame_batch_len);
-            let mut core_batch = Vec::with_capacity(core_batch_len);
-            for input in 0..n_inputs {
-                frame_batch.extend_from_slice(
-                    local_left_frame(problem, input, bond)?.as_col_major_slice(),
-                );
-                core_batch.extend_from_slice(
-                    problem
-                        .input_core_left_matrix(input, bond)
-                        .as_col_major_slice(),
-                );
-            }
-            let values = batched_mat_mul_same_shape_owned(
-                n_inputs,
-                shared.left_rows,
-                shared.input_left_dim,
-                left_cols,
-                frame_batch,
-                core_batch,
-            )
-            .map_err(|err| local_factor_error("batched left factor matmul", err))?;
-            let item_len = checked_mul(shared.left_rows, left_cols, "ACI left factor item")?;
-            let factors = (0..n_inputs)
-                .map(|input| {
-                    let start = checked_mul(input, item_len, "ACI left factor offset")?;
-                    let end = checked_local_add(start, item_len, "ACI left factor end")?;
-                    Ok(values[start..end].to_vec())
-                })
-                .collect::<Result<Vec<_>>>()?;
-            return Ok(factors);
+    if local_setup_batching_enabled()
+        && let Some(shared) = shared_input_factor_dims(dims)
+    {
+        let n_inputs = dims.len();
+        let left_cols = checked_mul(shared.site_dim_left, shared.middle_dim, "ACI left columns")?;
+        let frame_batch_len = checked_mul(
+            checked_mul(n_inputs, shared.left_rows, "ACI left frame batch")?,
+            shared.input_left_dim,
+            "ACI left frame batch",
+        )?;
+        let core_batch_len = checked_mul(
+            checked_mul(n_inputs, shared.input_left_dim, "ACI left core batch")?,
+            left_cols,
+            "ACI left core batch",
+        )?;
+        let mut frame_batch = Vec::with_capacity(frame_batch_len);
+        let mut core_batch = Vec::with_capacity(core_batch_len);
+        for input in 0..n_inputs {
+            frame_batch
+                .extend_from_slice(local_left_frame(problem, input, bond)?.as_col_major_slice());
+            core_batch.extend_from_slice(
+                problem
+                    .input_core_left_matrix(input, bond)
+                    .as_col_major_slice(),
+            );
         }
+        let values = batched_mat_mul_same_shape_owned(
+            n_inputs,
+            shared.left_rows,
+            shared.input_left_dim,
+            left_cols,
+            frame_batch,
+            core_batch,
+        )
+        .map_err(|err| local_factor_error("batched left factor matmul", err))?;
+        let item_len = checked_mul(shared.left_rows, left_cols, "ACI left factor item")?;
+        let factors = (0..n_inputs)
+            .map(|input| {
+                let start = checked_mul(input, item_len, "ACI left factor offset")?;
+                let end = checked_local_add(start, item_len, "ACI left factor end")?;
+                Ok(values[start..end].to_vec())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(factors);
     }
 
     (0..dims.len())
@@ -636,52 +632,50 @@ fn build_right_factors<T: AciScalar>(
     bond: usize,
     dims: &[LocalInputFactorDims],
 ) -> Result<Vec<Vec<T>>> {
-    if local_setup_batching_enabled() {
-        if let Some(shared) = shared_input_factor_dims(dims) {
-            let n_inputs = dims.len();
-            let right_rows =
-                checked_mul(shared.middle_dim, shared.site_dim_right, "ACI right rows")?;
-            let core_batch_len = checked_mul(
-                checked_mul(n_inputs, right_rows, "ACI right core batch")?,
-                shared.input_right_dim,
-                "ACI right core batch",
-            )?;
-            let frame_batch_len = checked_mul(
-                checked_mul(n_inputs, shared.input_right_dim, "ACI right frame batch")?,
-                shared.right_cols,
-                "ACI right frame batch",
-            )?;
-            let mut core_batch = Vec::with_capacity(core_batch_len);
-            let mut frame_batch = Vec::with_capacity(frame_batch_len);
-            for input in 0..n_inputs {
-                core_batch.extend_from_slice(
-                    problem
-                        .input_core_right_matrix(input, bond + 1)
-                        .as_col_major_slice(),
-                );
-                frame_batch.extend_from_slice(
-                    local_right_frame(problem, input, bond)?.as_col_major_slice(),
-                );
-            }
-            let values = batched_mat_mul_same_shape_owned(
-                n_inputs,
-                right_rows,
-                shared.input_right_dim,
-                shared.right_cols,
-                core_batch,
-                frame_batch,
-            )
-            .map_err(|err| local_factor_error("batched right factor matmul", err))?;
-            let item_len = checked_mul(right_rows, shared.right_cols, "ACI right factor item")?;
-            let factors = (0..n_inputs)
-                .map(|input| {
-                    let start = checked_mul(input, item_len, "ACI right factor offset")?;
-                    let end = checked_local_add(start, item_len, "ACI right factor end")?;
-                    Ok(values[start..end].to_vec())
-                })
-                .collect::<Result<Vec<_>>>()?;
-            return Ok(factors);
+    if local_setup_batching_enabled()
+        && let Some(shared) = shared_input_factor_dims(dims)
+    {
+        let n_inputs = dims.len();
+        let right_rows = checked_mul(shared.middle_dim, shared.site_dim_right, "ACI right rows")?;
+        let core_batch_len = checked_mul(
+            checked_mul(n_inputs, right_rows, "ACI right core batch")?,
+            shared.input_right_dim,
+            "ACI right core batch",
+        )?;
+        let frame_batch_len = checked_mul(
+            checked_mul(n_inputs, shared.input_right_dim, "ACI right frame batch")?,
+            shared.right_cols,
+            "ACI right frame batch",
+        )?;
+        let mut core_batch = Vec::with_capacity(core_batch_len);
+        let mut frame_batch = Vec::with_capacity(frame_batch_len);
+        for input in 0..n_inputs {
+            core_batch.extend_from_slice(
+                problem
+                    .input_core_right_matrix(input, bond + 1)
+                    .as_col_major_slice(),
+            );
+            frame_batch
+                .extend_from_slice(local_right_frame(problem, input, bond)?.as_col_major_slice());
         }
+        let values = batched_mat_mul_same_shape_owned(
+            n_inputs,
+            right_rows,
+            shared.input_right_dim,
+            shared.right_cols,
+            core_batch,
+            frame_batch,
+        )
+        .map_err(|err| local_factor_error("batched right factor matmul", err))?;
+        let item_len = checked_mul(right_rows, shared.right_cols, "ACI right factor item")?;
+        let factors = (0..n_inputs)
+            .map(|input| {
+                let start = checked_mul(input, item_len, "ACI right factor offset")?;
+                let end = checked_local_add(start, item_len, "ACI right factor end")?;
+                Ok(values[start..end].to_vec())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(factors);
     }
 
     (0..dims.len())

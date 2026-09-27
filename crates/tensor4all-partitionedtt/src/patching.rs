@@ -178,12 +178,11 @@ pub fn add_with_patching(
             if options
                 .max_bond_dim
                 .is_some_and(|cap| subdomain.max_bond_dim() > cap)
+                && let Some(children) = split_subdomain_by_patch_order(&subdomain, options)?
             {
-                if let Some(children) = split_subdomain_by_patch_order(&subdomain, options)? {
-                    split_any = true;
-                    next.extend(children);
-                    continue;
-                }
+                split_any = true;
+                next.extend(children);
+                continue;
             }
             next.push(subdomain);
         }

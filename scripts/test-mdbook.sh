@@ -5,27 +5,26 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 cargo_profile="${TENSOR4ALL_CARGO_PROFILE:-release}"
-
-probe_log="$(mktemp)"
+rustdoc_log="${TENSOR4ALL_RUSTDOC_LOG:-}"
 rustdoc_wrapper_dir="$(mktemp -d)"
-trap 'rm -f "$probe_log"; rm -rf "$rustdoc_wrapper_dir"' EXIT
+trap 'rm -rf "$rustdoc_wrapper_dir"' EXIT
 
-# Force a fresh book-tests rustc invocation so cargo prints the exact --extern
-# paths that its doctest harness resolves for the guide snippets.
-probe_metadata="mdbook_probe_$(date +%s%N)"
-cargo rustc -p book-tests --profile "$cargo_profile" --lib -vv -- -Cmetadata="$probe_metadata" >"$probe_log" 2>&1
-
-rustc_line="$(grep -- '--crate-name book_tests' "$probe_log" | tail -n 1 || true)"
-if [[ -z "$rustc_line" ]]; then
-    echo "failed to locate the book-tests rustc command" >&2
-    tail -n 200 "$probe_log" >&2 || true
+if [[ -z "$rustdoc_log" || ! -f "$rustdoc_log" ]]; then
+    echo "set TENSOR4ALL_RUSTDOC_LOG to the verbose Cargo doctest log" >&2
     exit 1
 fi
 
-extern_args="$(printf '%s\n' "$rustc_line" | grep -oE -- '--extern [^ ]+' | sed 's/^--extern //')"
+rustdoc_line="$(grep -- '--crate-name book_tests' "$rustdoc_log" | tail -n 1 || true)"
+if [[ -z "$rustdoc_line" ]]; then
+    echo "failed to locate the book-tests rustdoc command in $rustdoc_log" >&2
+    tail -n 200 "$rustdoc_log" >&2 || true
+    exit 1
+fi
+
+extern_args="$(printf '%s\n' "$rustdoc_line" | grep -oE -- '--extern [^ ]+' | sed 's/^--extern //')"
 if [[ -z "$extern_args" ]]; then
-    echo "failed to extract --extern flags from the book-tests rustc command" >&2
-    tail -n 200 "$probe_log" >&2 || true
+    echo "failed to extract --extern flags from the book-tests rustdoc command" >&2
+    tail -n 200 "$rustdoc_log" >&2 || true
     exit 1
 fi
 
