@@ -26,5 +26,10 @@
 - The [hosted build evidence](../experiments/ci769-build.md) proves heavy
   dependency reuse and identifies unchanged workspace source timestamps as a
   cause of recompilation. No timestamp manipulation is introduced.
-- Hosted acceptance, the book harness edition evaluation, and final runner-cost
-  accounting are in progress; issue completion is not yet established.
+- The [book edition evaluation](../experiments/ci769-book-edition.md) supports
+  Rust 2024 for both book configurations: all 47 Cargo examples and the same
+  mdBook chapters remain exercised. Build preparation and post-build times are
+  reported separately; the standalone timing comparison is a reference sample.
+- Final hosted checks, unchanged coverage thresholds, and aggregate runner-time
+  comparisons are recorded in [PR #785](https://github.com/tensor4all/tensor4all-rs/pull/785),
+  alongside the exact revisions and cache/runner conditions.

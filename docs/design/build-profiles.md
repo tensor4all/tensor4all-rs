@@ -94,6 +94,11 @@ includes execution and reporting, not just tests. See the
 [CI reuse measurements](../experiments/ci769-build.md) for an observed case and
 runner-time accounting conventions.
 
+Both the Cargo book harness and standalone mdBook configuration select Rust
+2024, allowing eligible examples to share compiled doctest executables. Keep
+these two edition settings aligned when changing the book's test strategy;
+changing only a code fence does not migrate the Cargo harness.
+
 CI and Pages verification pass `TENSOR4ALL_RUSTDOC_LOG` from the preceding
 verbose workspace rustdoc run to `scripts/test-mdbook.sh`. This preserves exact
 `--extern` paths without a second preparation build. Standalone calls prepare a
