@@ -195,15 +195,20 @@ jobs:
         with:
           components: llvm-tools-preview
 
-      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,nextest
 
       - uses: Swatinem/rust-cache@v2
         with:
           cache-workspace-crates: true
 
+      - name: Clear stale coverage measurements
+        run: cargo llvm-cov clean --profraw-only
+
       - name: Generate release coverage JSON
         # Release-mode measurement: the repository's normal verification mode.
-        run: cargo llvm-cov --locked --release --no-clean --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
+        run: cargo llvm-cov nextest --locked --release --no-clean --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
 
       - name: Check per-file thresholds
         run: python3 scripts/check-coverage.py coverage.json
