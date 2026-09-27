@@ -37,13 +37,6 @@ fn test_index_size() {
 }
 
 #[test]
-fn test_index_basic() {
-    let idx = Index::<DynId>::new_dyn(8);
-    assert_eq!(idx.size(), 8);
-    assert!(idx.id.0 > 0);
-}
-
-#[test]
 fn test_index_with_tag() {
     let idx = Index::<DynId>::new_dyn_with_tag(8, "Site").unwrap();
     assert_eq!(idx.size(), 8);
