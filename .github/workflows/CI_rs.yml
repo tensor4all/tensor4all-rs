@@ -10,6 +10,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 
+env:
+  CI_BUILD_DIAGNOSTICS: target/ci-build-diagnostics
+
 jobs:
   lint:
     name: Lint
@@ -65,19 +68,24 @@ jobs:
           cache-workspace-crates: true
 
       - name: Run rustdoc tests
-        run: |
-          rustdoc_log="$RUNNER_TEMP/rustdoc.log"
-          if ! cargo test --locked --doc --profile ci --workspace -j 8 -vv > "$rustdoc_log" 2>&1; then
-            tail -n 200 "$rustdoc_log"
-            exit 1
-          fi
-          tail -n 40 "$rustdoc_log"
+        run: python3 scripts/ci-build-diagnostics.py rustdoc -- cargo test --locked --doc --profile ci --workspace -j 8 --timings -vv
 
       - name: Run mdBook tests
         env:
           TENSOR4ALL_CARGO_PROFILE: ci
-          TENSOR4ALL_RUSTDOC_LOG: ${{ runner.temp }}/rustdoc.log
-        run: ./scripts/test-mdbook.sh
+          TENSOR4ALL_RUSTDOC_LOG: target/ci-build-diagnostics/rustdoc.log
+        run: python3 scripts/ci-build-diagnostics.py mdbook -- ./scripts/test-mdbook.sh
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics-${{ github.job }}
+          path: |
+            target/ci-build-diagnostics
+            target/cargo-timings
+            target/llvm-cov-target/cargo-timings
+          retention-days: 7
 
       - name: Report Cargo artifact size
         if: always()
@@ -107,7 +115,18 @@ jobs:
           cache-workspace-crates: true
 
       - name: Run workspace tests
-        run: cargo nextest run --locked --cargo-profile ci --workspace
+        run: python3 scripts/ci-build-diagnostics.py nextest -- cargo nextest run --locked --cargo-profile ci --workspace --timings -v
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics-${{ github.job }}
+          path: |
+            target/ci-build-diagnostics
+            target/cargo-timings
+            target/llvm-cov-target/cargo-timings
+          retention-days: 7
 
       - name: Report Cargo artifact size
         if: always()
@@ -174,6 +193,9 @@ jobs:
       - name: Test coverage threshold checker
         run: python3 scripts/test-check-coverage.py
 
+      - name: Test build diagnostics
+        run: python3 scripts/test-ci-build-diagnostics.py
+
       - name: Test SRC benchmark gate runner
         run: python3 scripts/test-run-src-benchmark-gates.py
 
@@ -211,7 +233,18 @@ jobs:
         # Release-mode measurement: the repository's normal verification mode.
         run: |
           echo "Available CPUs: $(nproc); Cargo build jobs: $CARGO_BUILD_JOBS"
-          cargo llvm-cov nextest --locked --release --no-clean --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
+          python3 scripts/ci-build-diagnostics.py coverage -- cargo llvm-cov nextest --locked --release --no-clean --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json --timings -v
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics-${{ github.job }}
+          path: |
+            target/ci-build-diagnostics
+            target/cargo-timings
+            target/llvm-cov-target/cargo-timings
+          retention-days: 7
 
       - name: Check per-file thresholds
         run: python3 scripts/check-coverage.py coverage.json

@@ -9,8 +9,16 @@ rustdoc_log="${TENSOR4ALL_RUSTDOC_LOG:-}"
 rustdoc_wrapper_dir="$(mktemp -d)"
 trap 'rm -rf "$rustdoc_wrapper_dir"' EXIT
 
-if [[ -z "$rustdoc_log" || ! -f "$rustdoc_log" ]]; then
-    echo "set TENSOR4ALL_RUSTDOC_LOG to the verbose Cargo doctest log" >&2
+preparation_started=$SECONDS
+if [[ -z "$rustdoc_log" ]]; then
+    # Standalone callers have no preceding workspace doctest log.
+    rustdoc_log="$rustdoc_wrapper_dir/rustdoc.log"
+    if ! cargo test --locked --doc --profile "$cargo_profile" -p book-tests -vv > "$rustdoc_log" 2>&1; then
+        tail -n 200 "$rustdoc_log" >&2
+        exit 1
+    fi
+elif [[ ! -f "$rustdoc_log" ]]; then
+    echo "rustdoc log does not exist: $rustdoc_log" >&2
     exit 1
 fi
 
@@ -65,4 +73,6 @@ fi
 } > "$rustdoc_wrapper_dir/rustdoc"
 chmod +x "$rustdoc_wrapper_dir/rustdoc"
 
+echo "mdBook preparation: $((SECONDS - preparation_started)) seconds"
+echo "mdBook chapter tests begin"
 PATH="$rustdoc_wrapper_dir:$PATH" mdbook test docs/book -L "$repo_root/target/$cargo_profile/deps" "$@"

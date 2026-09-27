@@ -29,9 +29,24 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install mdBook
-        run: cargo install mdbook --version 0.5.2 --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@0.5.2
+          fallback: none
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-workspace-crates: true
+
+      - name: Verify rustdoc examples
+        env:
+          CI_BUILD_DIAGNOSTICS: ${{ runner.temp }}/ci-build-diagnostics
+        run: python3 scripts/ci-build-diagnostics.py rustdoc -- cargo test --locked --doc --profile ci --workspace -j 8 --timings -vv
 
       - name: Verify mdBook examples
+        env:
+          TENSOR4ALL_CARGO_PROFILE: ci
+          TENSOR4ALL_RUSTDOC_LOG: ${{ runner.temp }}/ci-build-diagnostics/rustdoc.log
         run: ./scripts/test-mdbook.sh
 
       - name: Build mdBook
