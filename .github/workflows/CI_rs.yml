@@ -203,8 +203,10 @@ jobs:
         with:
           cache-workspace-crates: true
 
-      - name: Clear stale coverage measurements
-        run: cargo llvm-cov clean --profraw-only
+      - name: Clear stale workspace coverage artifacts
+        # Old workspace binaries can contribute obsolete coverage mappings.
+        # Keep dependency artifacts while rebuilding the measured workspace.
+        run: cargo llvm-cov clean --workspace
 
       - name: Generate release coverage JSON
         # Release-mode measurement: the repository's normal verification mode.
@@ -212,6 +214,15 @@ jobs:
 
       - name: Check per-file thresholds
         run: python3 scripts/check-coverage.py coverage.json
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-json
+          path: coverage.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   rollup-rs:
     runs-on: ubuntu-latest
