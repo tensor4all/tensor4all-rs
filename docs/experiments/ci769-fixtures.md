@@ -86,13 +86,20 @@ Raw samples, including discarded warmups, are in
 The 27-test interpolative suite improves by about 49%. The tutorial sweep saves
 about 54 ms in isolation while retaining all 13 tutorial flows. The complete
 tutorial suite distributions overlap; its approximately 0.2% median difference
-is inconclusive and is not a claim of a meaningful suite speedup. The candidate
-also adds a depth-override boundary test: 23 baseline tutorial tests become 24.
-It covers malformed input, both rejected range endpoints, non-UTF-8 input on
-Unix, and the accepted minimum with its four-point CSV. The maximum/default
-range 15 is exercised by each retained baseline integration run against the
-updated executable and its analytic assertion. Interpolative test counts remain
-27 before and after. The coordinated core suite has separate measurements.
+is inconclusive and is not a claim of a meaningful suite speedup. These tutorial
+suite measurements predate the reviewer follow-up test described below. At the
+measurement revision, a depth-override boundary test raised the tutorial count
+from 23 to 24. It covers malformed input, both rejected range endpoints,
+non-UTF-8 input on Unix, and the accepted minimum with its four-point CSV.
+Interpolative test counts remain 27 before and after. The coordinated core suite
+has separate measurements.
+
+The initial candidate measurement only launched `qtt_r_sweep` with the CI depth
+override, so it did not exercise the updated executable's default maximum. A
+follow-up test now removes `QTT_R_SWEEP_MAX_BITS`, launches the executable, and
+asserts the final CSV row is depth 15 with 32,768 grid points. The tutorial
+package therefore has 25 tests at the current revision; the suite timing above
+does not include this additional full-depth launch.
 
 A diagnostic pass through each tutorial process identified the remaining
 execution cost. These are single observations, not controlled speedup estimates:
@@ -126,13 +133,14 @@ than replacing numerical validation with a sparse or CSV-existence check.
 
 ## Validation evidence
 
-All 27 interpolative tests and all 24 final tutorial tests passed in the direct
-release-suite measurements. Nextest passed the original 50 combined tests; a
-focused nextest run passed the subsequently added boundary test (23 unrelated
-tutorial tests filtered out). Clippy with all targets and denied warnings passed
-for core, interpolativeqtt, and tutorial-code together. Formatting and whitespace
-checks passed. The live tutorial edit is prose only; its existing runnable code
-block and linked source path are unchanged.
+The timing revision passed 27 interpolative tests and 24 tutorial tests. After
+the default-depth regression was added, a focused release Nextest run passed all
+106 selected cases: 54 index, 27 interpolative, and 25 tutorial tests. The new
+full-depth launch completed in about one second locally. Clippy with all targets
+and denied warnings passed for core, interpolativeqtt, and tutorial-code
+together. Formatting and whitespace checks passed. The live tutorial edit is
+prose only; its existing runnable code block and linked source path are
+unchanged.
 
 The release build selects both packages, followed by nextest using the same
 feature union:

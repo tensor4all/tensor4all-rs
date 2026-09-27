@@ -20,9 +20,13 @@
 - The [fixture experiment](../experiments/ci769-fixtures.md) preserves numerical
   tolerances and all tutorial flows. Interpolative QTT improves in repeated 1T
   measurements; the tutorial package-wide difference is inconclusive.
-- The final focused local Nextest selection passes 105 tests: 54 index cases,
-  27 interpolative cases, and 24 tutorial cases. Changed-package all-target
+- After the review follow-up, the final focused local Nextest selection passes
+  106 tests: 54 index cases, 27 interpolative cases, and 25 tutorial cases,
+  including the default depth-15 QTT sweep. Changed-package all-target
   Clippy passes with the hosted error/panic documentation warning policy.
+- The follow-up PR head also passes hosted Test and Coverage with 3,476 and
+  3,429 passing tests, respectively; coverage's 253 file thresholds pass.
+  The added depth-15 test is included in both hosted test counts.
 - The [hosted build evidence](../experiments/ci769-build.md) proves heavy
   dependency reuse and identifies unchanged workspace source timestamps as a
   cause of recompilation. No timestamp manipulation is introduced.
