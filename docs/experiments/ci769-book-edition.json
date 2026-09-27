@@ -1,0 +1,641 @@
+{
+  "cargo": {
+    "2021": [
+      {
+        "edition": "2021",
+        "trial": 0,
+        "total_seconds": 591.439282459,
+        "cargo_build_seconds": 545.694035625,
+        "post_build_seconds": 45.745246834
+      },
+      {
+        "edition": "2021",
+        "trial": 1,
+        "total_seconds": 38.17077404199995,
+        "cargo_build_seconds": 0.15731920799998989,
+        "post_build_seconds": 38.01345483399996
+      },
+      {
+        "edition": "2021",
+        "trial": 2,
+        "total_seconds": 36.83516229199995,
+        "cargo_build_seconds": 0.1738591669999323,
+        "post_build_seconds": 36.66130312500002
+      },
+      {
+        "edition": "2021",
+        "trial": 3,
+        "total_seconds": 36.83158779100006,
+        "cargo_build_seconds": 0.14551520800000617,
+        "post_build_seconds": 36.686072583000055
+      }
+    ],
+    "2024": [
+      {
+        "edition": "2024",
+        "trial": 0,
+        "total_seconds": 3.534922791,
+        "cargo_build_seconds": 0.20013,
+        "post_build_seconds": 3.334792791
+      },
+      {
+        "edition": "2024",
+        "trial": 1,
+        "total_seconds": 3.454163083,
+        "cargo_build_seconds": 0.13146987500000007,
+        "post_build_seconds": 3.322693208
+      },
+      {
+        "edition": "2024",
+        "trial": 2,
+        "total_seconds": 3.4296939580000005,
+        "cargo_build_seconds": 0.13062804099999958,
+        "post_build_seconds": 3.299065917000001
+      },
+      {
+        "edition": "2024",
+        "trial": 3,
+        "total_seconds": 3.438361499999999,
+        "cargo_build_seconds": 0.12984766699999994,
+        "post_build_seconds": 3.3085138329999992
+      }
+    ]
+  },
+  "mdbook": {
+    "2021": [
+      {
+        "edition": "2021",
+        "trial": 0,
+        "total_seconds": 70.784349875
+      },
+      {
+        "edition": "2021",
+        "trial": 1,
+        "total_seconds": 59.499606
+      }
+    ],
+    "2024": [
+      {
+        "edition": "2024",
+        "trial": 0,
+        "total_seconds": 35.902202583000005
+      },
+      {
+        "edition": "2024",
+        "trial": 1,
+        "total_seconds": 35.257886750000004
+      }
+    ]
+  },
+  "cargo_canonical_cases": [
+    [
+      "compress",
+      20
+    ],
+    [
+      "compress",
+      70
+    ],
+    [
+      "getting_started",
+      50
+    ],
+    [
+      "hdf5_serialization",
+      42
+    ],
+    [
+      "qft",
+      25
+    ],
+    [
+      "qft",
+      54
+    ],
+    [
+      "qft",
+      152
+    ],
+    [
+      "quantics",
+      58
+    ],
+    [
+      "quantics",
+      93
+    ],
+    [
+      "quantics",
+      151
+    ],
+    [
+      "quantics",
+      251
+    ],
+    [
+      "quantics",
+      272
+    ],
+    [
+      "root_readme",
+      36
+    ],
+    [
+      "tci",
+      16
+    ],
+    [
+      "tci",
+      85
+    ],
+    [
+      "tci",
+      132
+    ],
+    [
+      "tci",
+      161
+    ],
+    [
+      "tci",
+      198
+    ],
+    [
+      "tci",
+      232
+    ],
+    [
+      "tci",
+      281
+    ],
+    [
+      "tci_advanced",
+      9
+    ],
+    [
+      "tci_advanced",
+      56
+    ],
+    [
+      "tci_advanced",
+      87
+    ],
+    [
+      "tci_advanced",
+      102
+    ],
+    [
+      "tci_advanced",
+      156
+    ],
+    [
+      "tensor_basics",
+      27
+    ],
+    [
+      "tensor_basics",
+      64
+    ],
+    [
+      "tensor_basics",
+      90
+    ],
+    [
+      "tensor_basics",
+      114
+    ],
+    [
+      "tensor_basics",
+      136
+    ],
+    [
+      "tensor_basics",
+      174
+    ],
+    [
+      "tensor_basics",
+      204
+    ],
+    [
+      "tensor_basics",
+      236
+    ],
+    [
+      "tensor_train",
+      29
+    ],
+    [
+      "tensor_train",
+      48
+    ],
+    [
+      "tensor_train",
+      68
+    ],
+    [
+      "tensor_train",
+      105
+    ],
+    [
+      "tensor_train",
+      152
+    ],
+    [
+      "tensor_train",
+      195
+    ],
+    [
+      "tensor_train",
+      233
+    ],
+    [
+      "tensor_train",
+      262
+    ],
+    [
+      "tree_tn",
+      18
+    ],
+    [
+      "tree_tn",
+      52
+    ],
+    [
+      "tree_tn",
+      94
+    ],
+    [
+      "tree_tn",
+      131
+    ],
+    [
+      "tree_tn",
+      150
+    ],
+    [
+      "tree_tn",
+      176
+    ]
+  ],
+  "cargo_ignored": 0,
+  "cargo_compile_fail": 0,
+  "mdbook_chapters": [
+    "index.md",
+    "getting-started.md",
+    "concepts.md",
+    "architecture.md",
+    "guides/tensor-basics.md",
+    "guides/tensor-train.md",
+    "guides/dense-tt-svd.md",
+    "guides/tci.md",
+    "guides/tci-advanced.md",
+    "guides/compress.md",
+    "guides/quantics.md",
+    "guides/qft.md",
+    "guides/tree-tn.md",
+    "guides/mpo-mpo-contraction.md",
+    "guides/partitioned-treetn.md",
+    "guides/hdf5-serialization.md",
+    "tutorials/quantics-basics/qtt-scalar-function.md",
+    "tutorials/quantics-basics/qtt-physical-interval.md",
+    "tutorials/quantics-basics/qtt-definite-integrals.md",
+    "tutorials/quantics-basics/sweep-bit-depth.md",
+    "tutorials/quantics-basics/multivariate-functions.md",
+    "tutorials/quantics-basics/interpolative-qtt.md",
+    "tutorials/gpu/cuda-tree-contraction.md",
+    "tutorials/computations-with-qtt/elementwise-product.md",
+    "tutorials/computations-with-qtt/affine-transformation.md",
+    "tutorials/computations-with-qtt/difference-kernel.md",
+    "tutorials/computations-with-qtt/fourier-transform.md",
+    "tutorials/computations-with-qtt/partial-fourier2d.md",
+    "conventions.md",
+    "julia-bindings.md"
+  ],
+  "mdbook_rust_fences": [
+    {
+      "path": "docs/book/src/getting-started.md",
+      "line": 50,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-basics.md",
+      "line": 27,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-basics.md",
+      "line": 64,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-basics.md",
+      "line": 90,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-basics.md",
+      "line": 114,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-basics.md",
+      "line": 136,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-basics.md",
+      "line": 174,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-basics.md",
+      "line": 204,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-basics.md",
+      "line": 236,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-train.md",
+      "line": 29,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-train.md",
+      "line": 48,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-train.md",
+      "line": 68,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-train.md",
+      "line": 105,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-train.md",
+      "line": 152,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-train.md",
+      "line": 195,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-train.md",
+      "line": 233,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tensor-train.md",
+      "line": 262,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/dense-tt-svd.md",
+      "line": 9,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/dense-tt-svd.md",
+      "line": 61,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tci.md",
+      "line": 16,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tci.md",
+      "line": 85,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tci.md",
+      "line": 132,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tci.md",
+      "line": 161,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tci.md",
+      "line": 198,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tci.md",
+      "line": 232,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tci.md",
+      "line": 281,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tci-advanced.md",
+      "line": 9,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tci-advanced.md",
+      "line": 56,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tci-advanced.md",
+      "line": 87,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tci-advanced.md",
+      "line": 102,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tci-advanced.md",
+      "line": 156,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/compress.md",
+      "line": 20,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/compress.md",
+      "line": 70,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/quantics.md",
+      "line": 58,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/quantics.md",
+      "line": 93,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/quantics.md",
+      "line": 151,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/quantics.md",
+      "line": 251,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/quantics.md",
+      "line": 272,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/qft.md",
+      "line": 25,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/qft.md",
+      "line": 54,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/qft.md",
+      "line": 152,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tree-tn.md",
+      "line": 18,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tree-tn.md",
+      "line": 52,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tree-tn.md",
+      "line": 94,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tree-tn.md",
+      "line": 131,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tree-tn.md",
+      "line": 150,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/tree-tn.md",
+      "line": 176,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/partitioned-treetn.md",
+      "line": 16,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/partitioned-treetn.md",
+      "line": 55,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/partitioned-treetn.md",
+      "line": 114,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/partitioned-treetn.md",
+      "line": 235,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/guides/hdf5-serialization.md",
+      "line": 42,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/tutorials/quantics-basics/qtt-scalar-function.md",
+      "line": 15,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/tutorials/quantics-basics/qtt-physical-interval.md",
+      "line": 14,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/tutorials/quantics-basics/qtt-definite-integrals.md",
+      "line": 16,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/tutorials/quantics-basics/sweep-bit-depth.md",
+      "line": 15,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/tutorials/quantics-basics/multivariate-functions.md",
+      "line": 15,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/tutorials/quantics-basics/interpolative-qtt.md",
+      "line": 16,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/tutorials/quantics-basics/interpolative-qtt.md",
+      "line": 42,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/tutorials/quantics-basics/interpolative-qtt.md",
+      "line": 71,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/tutorials/computations-with-qtt/elementwise-product.md",
+      "line": 16,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/tutorials/computations-with-qtt/affine-transformation.md",
+      "line": 17,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/tutorials/computations-with-qtt/difference-kernel.md",
+      "line": 21,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/tutorials/computations-with-qtt/fourier-transform.md",
+      "line": 16,
+      "attributes": "rust"
+    },
+    {
+      "path": "docs/book/src/tutorials/computations-with-qtt/partial-fourier2d.md",
+      "line": 18,
+      "attributes": "rust"
+    }
+  ]
+}
