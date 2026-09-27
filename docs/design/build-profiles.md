@@ -76,6 +76,30 @@ records. Integration tests exercise the ordinary library through its public
 boundary; unit tests also cover private validation and error paths. Hosted
 workspace coverage and the unchanged per-file thresholds remain authoritative.
 
+## CI artifact reuse and guide verification
+
+The workspace lockfile and `--locked` keep dependency resolution stable across
+CI jobs. Rust artifacts are restored with workspace crates included, but a
+cache hit alone does not establish reuse: Cargo still checks profile, features,
+compiler flags, dependency fingerprints, and source timestamps. A fresh checkout
+can make unchanged workspace source newer than restored dep-info and trigger
+recompilation while registry and Git dependencies remain fresh. Do not rewrite
+source timestamps or change cache keys merely to make the hit indicator green.
+
+Test, Doctests, and Coverage retain `build-diagnostics-*` artifacts for seven
+days. Their JSON summaries and timestamped Cargo logs distinguish `Fresh`
+artifacts from compilation and record the build-completion boundary. Cargo
+`--timings` reports complement these logs; command time after that boundary
+includes execution and reporting, not just tests. See the
+[CI reuse measurements](../experiments/ci769-build.md) for an observed case and
+runner-time accounting conventions.
+
+CI and Pages verification pass `TENSOR4ALL_RUSTDOC_LOG` from the preceding
+verbose workspace rustdoc run to `scripts/test-mdbook.sh`. This preserves exact
+`--extern` paths without a second preparation build. Standalone calls prepare a
+`book-tests` doctest log automatically. An explicitly supplied nonexistent log
+is an error. Native HDF5 link paths are forwarded in both modes.
+
 ## Rationale
 
 Ordinary local checks use non-release profiles; comprehensive CI and benchmarks
