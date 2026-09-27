@@ -194,7 +194,9 @@ jobs:
         run: python3 scripts/test-check-coverage.py
 
       - name: Test build diagnostics
-        run: python3 scripts/test-ci-build-diagnostics.py
+        run: |
+          python3 scripts/test-ci-build-diagnostics.py
+          python3 scripts/test-test-mdbook.py
 
       - name: Test SRC benchmark gate runner
         run: python3 scripts/test-run-src-benchmark-gates.py
