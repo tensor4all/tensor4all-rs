@@ -59,11 +59,17 @@ executables run alternately in the same session, with one discarded warmup
 followed by three retained samples. The isolated n3 test and complete affected
 unit/integration/binary suites are measured separately. Tutorial suite samples
 were refreshed after adding the depth-override boundary test; its candidate
-suite includes the new test while the retained baseline executable does not. The tutorial suite includes its library,
-all binary test targets, the 13-binary integration flow, and verification tests;
-it is not a whole-workspace measurement. The old tutorial integration executable
-runs the updated sweep executable with no override, preserving default depth 15
-and also validating the new numerical assertion on the full default range.
+suite includes the new test while the retained baseline executable does not.
+The tutorial suite includes its library, all binary test targets, the
+13-binary integration flow, and verification tests; it is not a whole-workspace
+measurement. In those timing samples, the retained baseline integration
+executable launches its original sweep at default depth 15, while the timed
+candidate integration flow explicitly limits the updated sweep to depth 10.
+Those candidate timings therefore do not test the updated binary's depth-15
+default. The separate `qtt_r_sweep_defaults_to_full_depth` regression test was
+added afterward; it removes the override, launches the updated binary, and
+checks the depth-15, 32,768-point output. This follow-up test is not included in
+the timing samples above.
 
 The two packages are selected together when building. Selecting only
 `tensor4all-interpolativeqtt` exposes a pre-existing missing `global-defaults`
