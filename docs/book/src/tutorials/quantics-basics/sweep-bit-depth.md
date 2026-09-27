@@ -47,7 +47,15 @@ Use sweeps like this when choosing a grid before running a larger computation.
 ## What It Computes
 
 The example repeats the same QTT construction for several bit depths and writes
-the value error, runtime, and sample curves.
+the value error, runtime, and sample curves. The runnable binary sweeps
+`R = 2..15` for `sin(30x)` and checks every sampled value against that function
+with maximum absolute error below `1e-8`. The shorter snippet above uses
+`sin(10x)` to illustrate the API.
+
+For a faster validation run, set `QTT_R_SWEEP_MAX_BITS` to an integer from 2
+through 15. CI uses 10: all depths from 2 through 10 and every grid point at
+those depths are still checked and exported. The default remains 15 so the
+published plots retain their full range.
 
 ![Sample curves from the bit-depth sweep](qtt_r_sweep_samples.png)
 

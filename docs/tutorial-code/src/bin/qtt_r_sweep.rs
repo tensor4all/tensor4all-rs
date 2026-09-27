@@ -11,6 +11,7 @@
 
 use std::error::Error;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -79,11 +80,23 @@ fn main() -> Result<(), Box<dyn Error>> {
     let data_dir = output_paths::data_dir();
     fs::create_dir_all(&data_dir)?;
     let output = OutputSpec::new();
+    let r_max = match std::env::var("QTT_R_SWEEP_MAX_BITS") {
+        Ok(value) => value.parse::<usize>()?,
+        Err(std::env::VarError::NotPresent) => R_MAX,
+        Err(error) => return Err(error.into()),
+    };
+    if !(R_MIN..=R_MAX).contains(&r_max) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("QTT_R_SWEEP_MAX_BITS must be in {R_MIN}..={R_MAX}"),
+        )
+        .into());
+    }
 
     let mut all_samples = Vec::new();
     let mut stats_rows = Vec::new();
 
-    for r in R_MIN..=R_MAX {
+    for r in R_MIN..=r_max {
         let npoints = 1usize << r;
 
         // Time only the QTT construction itself.
@@ -94,6 +107,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         let samples = collect_samples(r, npoints, &qtci, target_function)?;
         let mean_error = mean_abs_error(&samples);
         let max_error = max_abs_error(&samples);
+        // Use the same analytic accuracy check as the live bit-depth tutorial.
+        assert!(
+            max_error < 1e-8,
+            "R={r}: maximum absolute error {max_error}"
+        );
         let rank = qtci.rank();
 
         print_sweep_summary(

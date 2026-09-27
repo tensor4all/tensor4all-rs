@@ -1,0 +1,330 @@
+{
+  "baseline_revision": "2ce532a8336f299897ce5cef44113e768acf9757",
+  "trial_zero": "discarded warmup",
+  "execution_samples": [
+    {
+      "name": "single_scale_interpolation_n3",
+      "label": "baseline",
+      "trial": 0,
+      "seconds": 27.974577
+    },
+    {
+      "name": "interpolative_full_unit_suite",
+      "label": "baseline",
+      "trial": 0,
+      "seconds": 28.801781
+    },
+    {
+      "name": "single_scale_interpolation_n3",
+      "label": "candidate",
+      "trial": 0,
+      "seconds": 14.409039
+    },
+    {
+      "name": "interpolative_full_unit_suite",
+      "label": "candidate",
+      "trial": 0,
+      "seconds": 14.335637
+    },
+    {
+      "name": "single_scale_interpolation_n3",
+      "label": "candidate",
+      "trial": 1,
+      "seconds": 12.95702
+    },
+    {
+      "name": "interpolative_full_unit_suite",
+      "label": "candidate",
+      "trial": 1,
+      "seconds": 14.845848
+    },
+    {
+      "name": "single_scale_interpolation_n3",
+      "label": "baseline",
+      "trial": 1,
+      "seconds": 27.658369
+    },
+    {
+      "name": "interpolative_full_unit_suite",
+      "label": "baseline",
+      "trial": 1,
+      "seconds": 28.976989
+    },
+    {
+      "name": "single_scale_interpolation_n3",
+      "label": "baseline",
+      "trial": 2,
+      "seconds": 27.373245
+    },
+    {
+      "name": "interpolative_full_unit_suite",
+      "label": "baseline",
+      "trial": 2,
+      "seconds": 28.86709
+    },
+    {
+      "name": "single_scale_interpolation_n3",
+      "label": "candidate",
+      "trial": 2,
+      "seconds": 12.816064
+    },
+    {
+      "name": "interpolative_full_unit_suite",
+      "label": "candidate",
+      "trial": 2,
+      "seconds": 15.459763
+    },
+    {
+      "name": "single_scale_interpolation_n3",
+      "label": "candidate",
+      "trial": 3,
+      "seconds": 13.293113
+    },
+    {
+      "name": "interpolative_full_unit_suite",
+      "label": "candidate",
+      "trial": 3,
+      "seconds": 13.905732
+    },
+    {
+      "name": "single_scale_interpolation_n3",
+      "label": "baseline",
+      "trial": 3,
+      "seconds": 27.428019
+    },
+    {
+      "name": "interpolative_full_unit_suite",
+      "label": "baseline",
+      "trial": 3,
+      "seconds": 28.467129
+    },
+    {
+      "name": "tutorial_full_package_suite",
+      "label": "baseline",
+      "trial": 0,
+      "seconds": 13.007356
+    },
+    {
+      "name": "tutorial_full_package_suite",
+      "label": "candidate",
+      "trial": 0,
+      "seconds": 4.803072
+    },
+    {
+      "name": "tutorial_full_package_suite",
+      "label": "candidate",
+      "trial": 1,
+      "seconds": 4.492161
+    },
+    {
+      "name": "tutorial_full_package_suite",
+      "label": "baseline",
+      "trial": 1,
+      "seconds": 4.603289
+    },
+    {
+      "name": "tutorial_full_package_suite",
+      "label": "baseline",
+      "trial": 2,
+      "seconds": 4.501759
+    },
+    {
+      "name": "tutorial_full_package_suite",
+      "label": "candidate",
+      "trial": 2,
+      "seconds": 4.679681
+    },
+    {
+      "name": "tutorial_full_package_suite",
+      "label": "candidate",
+      "trial": 3,
+      "seconds": 4.425332
+    },
+    {
+      "name": "tutorial_full_package_suite",
+      "label": "baseline",
+      "trial": 3,
+      "seconds": 4.480853
+    },
+    {
+      "name": "qtt_r_sweep",
+      "label": "baseline",
+      "trial": 0,
+      "seconds": 0.062344
+    },
+    {
+      "name": "qtt_r_sweep",
+      "label": "candidate",
+      "trial": 0,
+      "seconds": 0.008575
+    },
+    {
+      "name": "qtt_r_sweep",
+      "label": "candidate",
+      "trial": 1,
+      "seconds": 0.008471
+    },
+    {
+      "name": "qtt_r_sweep",
+      "label": "baseline",
+      "trial": 1,
+      "seconds": 0.06253
+    },
+    {
+      "name": "qtt_r_sweep",
+      "label": "baseline",
+      "trial": 2,
+      "seconds": 0.060818
+    },
+    {
+      "name": "qtt_r_sweep",
+      "label": "candidate",
+      "trial": 2,
+      "seconds": 0.008403
+    },
+    {
+      "name": "qtt_r_sweep",
+      "label": "candidate",
+      "trial": 3,
+      "seconds": 0.008046
+    },
+    {
+      "name": "qtt_r_sweep",
+      "label": "baseline",
+      "trial": 3,
+      "seconds": 0.062391
+    }
+  ],
+  "tutorial_process_diagnostic": [
+    {
+      "label": "baseline",
+      "name": "tensor4all_tutorial_code",
+      "seconds": 0.0027299169999999984
+    },
+    {
+      "label": "baseline",
+      "name": "qtt_function",
+      "seconds": 0.003565124999999999
+    },
+    {
+      "label": "baseline",
+      "name": "qtt_interval",
+      "seconds": 0.0037273750000000015
+    },
+    {
+      "label": "baseline",
+      "name": "qtt_integral",
+      "seconds": 0.0033794170000000026
+    },
+    {
+      "label": "baseline",
+      "name": "qtt_integral_sweep",
+      "seconds": 0.007404250000000001
+    },
+    {
+      "label": "baseline",
+      "name": "qtt_r_sweep",
+      "seconds": 0.94066125
+    },
+    {
+      "label": "baseline",
+      "name": "qtt_multivariate",
+      "seconds": 0.007566209000000046
+    },
+    {
+      "label": "baseline",
+      "name": "interpolative_qtt",
+      "seconds": 0.004352124999999929
+    },
+    {
+      "label": "baseline",
+      "name": "qtt_elementwise_product",
+      "seconds": 0.03486045900000001
+    },
+    {
+      "label": "baseline",
+      "name": "qtt_affine",
+      "seconds": 2.277035167
+    },
+    {
+      "label": "baseline",
+      "name": "qtt_difference_kernel",
+      "seconds": 0.014429124999999932
+    },
+    {
+      "label": "baseline",
+      "name": "qtt_fourier",
+      "seconds": 0.39761374999999965
+    },
+    {
+      "label": "baseline",
+      "name": "qtt_partial_fourier2d",
+      "seconds": 1.6150730419999997
+    },
+    {
+      "label": "candidate",
+      "name": "tensor4all_tutorial_code",
+      "seconds": 0.0032177090000002906
+    },
+    {
+      "label": "candidate",
+      "name": "qtt_function",
+      "seconds": 0.0038808749999992287
+    },
+    {
+      "label": "candidate",
+      "name": "qtt_interval",
+      "seconds": 0.003955500000000001
+    },
+    {
+      "label": "candidate",
+      "name": "qtt_integral",
+      "seconds": 0.0034342920000005606
+    },
+    {
+      "label": "candidate",
+      "name": "qtt_integral_sweep",
+      "seconds": 0.007433583000000077
+    },
+    {
+      "label": "candidate",
+      "name": "qtt_r_sweep",
+      "seconds": 0.008252249999999961
+    },
+    {
+      "label": "candidate",
+      "name": "qtt_multivariate",
+      "seconds": 0.007231667000000108
+    },
+    {
+      "label": "candidate",
+      "name": "interpolative_qtt",
+      "seconds": 0.00467691700000028
+    },
+    {
+      "label": "candidate",
+      "name": "qtt_elementwise_product",
+      "seconds": 0.035002666999999654
+    },
+    {
+      "label": "candidate",
+      "name": "qtt_affine",
+      "seconds": 2.3686394580000005
+    },
+    {
+      "label": "candidate",
+      "name": "qtt_difference_kernel",
+      "seconds": 0.014337792000000071
+    },
+    {
+      "label": "candidate",
+      "name": "qtt_fourier",
+      "seconds": 0.399768625000001
+    },
+    {
+      "label": "candidate",
+      "name": "qtt_partial_fourier2d",
+      "seconds": 1.6246980420000003
+    }
+  ]
+}

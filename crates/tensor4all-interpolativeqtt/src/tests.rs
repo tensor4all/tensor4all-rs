@@ -156,7 +156,10 @@ fn single_scale_interpolation_n2() {
 
 #[test]
 fn single_scale_interpolation_n3() {
-    let r = 4;
+    // Three sites retain left, interior, and right cores while keeping the full
+    // three-dimensional grid check to 8^3 points. The n2 fixture above retains
+    // repeated interior cores (four sites).
+    let r = 3;
     let degree = 15;
     let lower = [-1.0, -1.0, 0.0];
     let upper = [2.0, 2.0, 1.0];
