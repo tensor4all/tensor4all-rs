@@ -280,3 +280,32 @@ fn test_index_set_plev_rejects_negative_plev() {
 
     t4a_index_release(index);
 }
+
+#[test]
+fn test_index_constructors_reject_invalid_metadata_without_assigning_output() {
+    let invalid_utf8 = [0xffu8, 0];
+    let mut out = std::ptr::null_mut();
+    assert_eq!(
+        t4a_index_new(2, invalid_utf8.as_ptr().cast(), 0, &mut out),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("utf-8"));
+    assert!(out.is_null());
+    for (dim, plev, message) in [
+        (0, 0, "dim must be greater than zero"),
+        (2, -1, "plev must be greater than or equal to zero"),
+    ] {
+        assert_eq!(
+            t4a_index_new_with_id(dim, 17, std::ptr::null(), plev, &mut out),
+            T4A_INVALID_ARGUMENT
+        );
+        assert_eq!(last_error(), message);
+        assert!(out.is_null());
+    }
+    assert_eq!(
+        t4a_index_new_with_id(2, 17, invalid_utf8.as_ptr().cast(), 0, &mut out),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("utf-8"));
+    assert!(out.is_null());
+}

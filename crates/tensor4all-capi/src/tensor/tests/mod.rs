@@ -1541,3 +1541,58 @@ fn test_tensor_qr_zero_rtol_disables_truncation() {
         t4a_index_release(index);
     }
 }
+
+#[test]
+fn test_dense_copy_errors_preserve_caller_buffers() {
+    type CopyDense =
+        extern "C" fn(*const t4a_tensor, *mut f64, usize, *mut usize) -> crate::t4a_status_code;
+    let index = new_index(2);
+    let real = new_tensor_f64(&[index], &[2.0, -3.0]);
+    let complex = new_tensor_c64(&[index], &[2.0, 1.0, -3.0, 4.0]);
+    let mut data = [97.0; 4];
+    let mut len = 89;
+    for (tensor, copy, message) in [
+        (
+            complex,
+            t4a_tensor_copy_dense_f64 as CopyDense,
+            "requires an f64 tensor",
+        ),
+        (
+            real,
+            t4a_tensor_copy_dense_c64 as CopyDense,
+            "requires a complex tensor",
+        ),
+    ] {
+        assert_eq!(
+            copy(tensor, data.as_mut_ptr(), 2, &mut len),
+            T4A_INVALID_ARGUMENT
+        );
+        assert!(last_error().contains(message));
+        assert_eq!(data, [97.0; 4]);
+        assert_eq!(len, 89);
+    }
+    for (tensor, copy) in [
+        (real, t4a_tensor_copy_dense_f64 as CopyDense),
+        (complex, t4a_tensor_copy_dense_c64 as CopyDense),
+    ] {
+        assert_eq!(
+            copy(std::ptr::null(), data.as_mut_ptr(), 2, &mut len),
+            T4A_NULL_POINTER
+        );
+        assert_eq!(last_error(), "tensor is null");
+        assert_eq!(
+            copy(tensor, data.as_mut_ptr(), 2, std::ptr::null_mut()),
+            T4A_NULL_POINTER
+        );
+        assert_eq!(last_error(), "out_len is null");
+        assert_eq!(
+            copy(tensor, data.as_mut_ptr(), 1, &mut len),
+            T4A_BUFFER_TOO_SMALL
+        );
+        assert_eq!(len, 2);
+        assert_eq!(data, [97.0; 4]);
+    }
+    t4a_tensor_release(real);
+    t4a_tensor_release(complex);
+    t4a_index_release(index);
+}

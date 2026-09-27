@@ -23,13 +23,13 @@ use tensor4all_treetn::{
 };
 
 /// Release a TreeTN handle.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_release(obj: *mut t4a_treetn) {
     release_opaque(obj);
 }
 
 /// Clone a TreeTN handle.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_clone(
     src: *const t4a_treetn,
     out: *mut *mut t4a_treetn,
@@ -38,19 +38,19 @@ pub extern "C" fn t4a_treetn_clone(
 }
 
 /// Check whether a TreeTN handle is assigned.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_is_assigned(obj: *const t4a_treetn) -> i32 {
     is_assigned_opaque(obj)
 }
 
 /// Release a reusable TreeTN evaluator handle.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_evaluator_release(obj: *mut t4a_treetn_evaluator) {
     release_opaque(obj);
 }
 
 /// Clone a reusable TreeTN evaluator handle.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_evaluator_clone(
     src: *const t4a_treetn_evaluator,
     out: *mut *mut t4a_treetn_evaluator,
@@ -59,7 +59,7 @@ pub extern "C" fn t4a_treetn_evaluator_clone(
 }
 
 /// Check whether a reusable TreeTN evaluator handle is assigned.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_evaluator_is_assigned(obj: *const t4a_treetn_evaluator) -> i32 {
     is_assigned_opaque(obj)
 }
@@ -896,7 +896,7 @@ fn build_linsolve_index_mappings(
 }
 
 /// Create a tree tensor network from an array of tensors.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_new(
     tensors: *const *const t4a_tensor,
     n_tensors: libc::size_t,
@@ -934,7 +934,7 @@ pub extern "C" fn t4a_treetn_new(
 }
 
 /// Get the number of vertices in the tree tensor network.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_num_vertices(
     treetn: *const t4a_treetn,
     out_n: *mut libc::size_t,
@@ -950,7 +950,7 @@ pub extern "C" fn t4a_treetn_num_vertices(
 }
 
 /// Get the tensor at a specific vertex.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_tensor(
     treetn: *const t4a_treetn,
     vertex: libc::size_t,
@@ -982,7 +982,7 @@ pub extern "C" fn t4a_treetn_tensor(
 }
 
 /// Replace the tensor at a specific vertex.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_set_tensor(
     treetn: *mut t4a_treetn,
     vertex: libc::size_t,
@@ -1007,7 +1007,7 @@ pub extern "C" fn t4a_treetn_set_tensor(
 }
 
 /// Get the neighbors of a vertex.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_neighbors(
     treetn: *const t4a_treetn,
     vertex: libc::size_t,
@@ -1024,7 +1024,7 @@ pub extern "C" fn t4a_treetn_neighbors(
 }
 
 /// Get the canonical region vertices, sorted ascending.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_canonical_region(
     treetn: *const t4a_treetn,
     buf: *mut libc::size_t,
@@ -1040,7 +1040,7 @@ pub extern "C" fn t4a_treetn_canonical_region(
 }
 
 /// Get the site indices attached to a vertex.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_site_indices(
     treetn: *const t4a_treetn,
     vertex: libc::size_t,
@@ -1103,7 +1103,7 @@ pub extern "C" fn t4a_treetn_site_indices(
 }
 
 /// Get the bond index on the edge between two vertices.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_linkind(
     treetn: *const t4a_treetn,
     v1: libc::size_t,
@@ -1142,7 +1142,7 @@ pub extern "C" fn t4a_treetn_linkind(
 /// - If the network is already canonicalized with a different form, the call returns
 ///
 ///   `T4A_INVALID_ARGUMENT`. Pass a nonzero `force` to re-canonicalize with a different form.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_orthogonalize(
     treetn: *mut t4a_treetn,
     vertex: libc::size_t,
@@ -1171,7 +1171,7 @@ pub extern "C" fn t4a_treetn_orthogonalize(
 }
 
 /// Truncate the tree tensor network bond dimensions using SVD-based truncation.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_truncate(
     treetn: *mut t4a_treetn,
     policy: *const t4a_svd_truncation_policy,
@@ -1200,7 +1200,7 @@ pub extern "C" fn t4a_treetn_truncate(
 }
 
 /// Fuse connected current-node groups into the requested target topology.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_fuse_to(
     treetn: *const t4a_treetn,
     target_vertices: *const libc::size_t,
@@ -1233,7 +1233,7 @@ pub extern "C" fn t4a_treetn_fuse_to(
 }
 
 /// Split current nodes to match the requested target topology.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_split_to(
     treetn: *const t4a_treetn,
     target_vertices: *const libc::size_t,
@@ -1270,7 +1270,7 @@ pub extern "C" fn t4a_treetn_split_to(
 }
 
 /// Reassign site indices to target vertices using scheduled swap transport.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_swap_site_indices(
     treetn: *const t4a_treetn,
     assignment_site_indices: *const *const t4a_index,
@@ -1298,7 +1298,7 @@ pub extern "C" fn t4a_treetn_swap_site_indices(
 }
 
 /// Restructure a TreeTN using split, swap, and optional final truncation phases.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_restructure_to(
     treetn: *const t4a_treetn,
     target_vertices: *const libc::size_t,
@@ -1348,7 +1348,7 @@ pub extern "C" fn t4a_treetn_restructure_to(
 }
 
 /// Create a reusable TreeTN evaluator from explicit index handles.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_evaluator_new(
     treetn: *const t4a_treetn,
     indices: *const *const t4a_index,
@@ -1376,7 +1376,7 @@ pub extern "C" fn t4a_treetn_evaluator_new(
 }
 
 /// Evaluate one or more points using a reusable TreeTN evaluator.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_evaluator_evaluate(
     evaluator: *mut t4a_treetn_evaluator,
     values_col_major: *const libc::size_t,
@@ -1432,7 +1432,7 @@ pub extern "C" fn t4a_treetn_evaluator_evaluate(
 }
 
 /// Evaluate a TreeTN at one or more points using explicit index handles.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_evaluate(
     treetn: *const t4a_treetn,
     indices: *const *const t4a_index,
@@ -1485,7 +1485,7 @@ pub extern "C" fn t4a_treetn_evaluate(
 }
 
 /// Compute the inner product of two tree tensor networks.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_inner(
     a: *const t4a_treetn,
     b: *const t4a_treetn,
@@ -1512,7 +1512,7 @@ pub extern "C" fn t4a_treetn_inner(
 }
 
 /// Compute the norm of the tree tensor network.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_norm(
     treetn: *mut t4a_treetn,
     out_norm: *mut libc::c_double,
@@ -1533,7 +1533,7 @@ pub extern "C" fn t4a_treetn_norm(
 }
 
 /// Scale a tree tensor network by a complex scalar.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_scale(
     treetn: *const t4a_treetn,
     re: libc::c_double,
@@ -1556,7 +1556,7 @@ pub extern "C" fn t4a_treetn_scale(
 }
 
 /// Add two tree tensor networks, optionally truncating the result.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_add(
     a: *const t4a_treetn,
     b: *const t4a_treetn,
@@ -1606,7 +1606,7 @@ pub extern "C" fn t4a_treetn_add(
 /// For `t4a_contract_method::Src`, `maxdim` must be nonzero and selects the
 /// fixed-rank Gaussian-sketch path with default SRC controls. Adaptive SRC
 /// controls are currently available through the Rust API only.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_contract(
     a: *const t4a_treetn,
     b: *const t4a_treetn,
@@ -1717,7 +1717,7 @@ pub extern "C" fn t4a_treetn_contract(
 /// For `t4a_contract_method::Src`, `maxdim` must be nonzero and selects the
 /// fixed-rank Gaussian-sketch path with default SRC controls. Adaptive SRC
 /// controls are currently available through the Rust API only.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn t4a_treetn_partial_contract(
     a: *const t4a_treetn,
@@ -1847,7 +1847,7 @@ pub extern "C" fn t4a_treetn_partial_contract(
 /// not the generic full-dense TreeTN contraction used by `t4a_treetn_contract`.
 /// For `t4a_contract_method::Src`, `maxdim` must be nonzero and selects the
 /// fixed-rank Gaussian-sketch path with default SRC controls.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_apply_operator_chain(
     operator: *const t4a_treetn,
     state: *const t4a_treetn,
@@ -1945,7 +1945,7 @@ pub extern "C" fn t4a_treetn_apply_operator_chain(
 /// `rhs` share the same true site-index set. The mapping arrays bridge the
 /// operator's internal indices to those true indices, but they do not yet
 /// support solving between distinct `init` and `rhs` true index spaces.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_linsolve(
     operator: *const t4a_treetn,
     rhs: *const t4a_treetn,
@@ -2074,7 +2074,7 @@ pub extern "C" fn t4a_treetn_linsolve(
 }
 
 /// Contract all bonds and materialize the TreeTN as a dense tensor.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_to_dense(
     treetn: *const t4a_treetn,
     out: *mut *mut t4a_tensor,

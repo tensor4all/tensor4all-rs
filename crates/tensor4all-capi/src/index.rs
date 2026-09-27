@@ -15,13 +15,13 @@ use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::{IndexLike, TagSetLike};
 
 /// Release an index handle.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_index_release(obj: *mut t4a_index) {
     release_opaque(obj);
 }
 
 /// Clone an index handle.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_index_clone(
     src: *const t4a_index,
     out: *mut *mut t4a_index,
@@ -30,7 +30,7 @@ pub extern "C" fn t4a_index_clone(
 }
 
 /// Check whether an index handle is assigned.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_index_is_assigned(obj: *const t4a_index) -> i32 {
     is_assigned_opaque(obj)
 }
@@ -143,7 +143,7 @@ where
 }
 
 /// Create a new index with explicit tags and prime level.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_index_new(
     dim: usize,
     tags_csv: *const c_char,
@@ -174,7 +174,7 @@ pub extern "C" fn t4a_index_new(
 ///
 /// Returns [`T4A_INVALID_ARGUMENT`] when `dim` is zero, `plev` is negative, or
 /// the tag string is malformed.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_index_new_with_id(
     dim: usize,
     id: u64,
@@ -190,7 +190,7 @@ pub extern "C" fn t4a_index_new_with_id(
 }
 
 /// Get the dimension of an index.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_index_dim(ptr: *const t4a_index, out_dim: *mut usize) -> t4a_status_code {
     if ptr.is_null() {
         return err_null_pointer("index");
@@ -222,7 +222,7 @@ pub extern "C" fn t4a_index_dim(ptr: *const t4a_index, out_dim: *mut usize) -> t
 /// # Errors
 ///
 /// Returns a null-pointer error when `ptr` or `out_id` is null.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_index_id(ptr: *const t4a_index, out_id: *mut u64) -> t4a_status_code {
     run_value(out_id, || {
         let index = require_index(ptr, "index")?;
@@ -231,7 +231,7 @@ pub extern "C" fn t4a_index_id(ptr: *const t4a_index, out_id: *mut u64) -> t4a_s
 }
 
 /// Compare two full index handles for equality.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_index_equal(
     lhs: *const t4a_index,
     rhs: *const t4a_index,
@@ -245,7 +245,7 @@ pub extern "C" fn t4a_index_equal(
 }
 
 /// Hash the full index value for process-local hash tables.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_index_hash(ptr: *const t4a_index, out_hash: *mut u64) -> t4a_status_code {
     run_value(out_hash, || {
         let index = require_index(ptr, "index")?;
@@ -256,7 +256,7 @@ pub extern "C" fn t4a_index_hash(ptr: *const t4a_index, out_hash: *mut u64) -> t
 }
 
 /// Get the prime level of an index.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_index_plev(ptr: *const t4a_index, out_plev: *mut i64) -> t4a_status_code {
     if ptr.is_null() {
         return err_null_pointer("index");
@@ -274,7 +274,7 @@ pub extern "C" fn t4a_index_plev(ptr: *const t4a_index, out_plev: *mut i64) -> t
 }
 
 /// Return a new index handle with prime level incremented by one.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_index_prime(
     ptr: *const t4a_index,
     out: *mut *mut t4a_index,
@@ -286,7 +286,7 @@ pub extern "C" fn t4a_index_prime(
 }
 
 /// Return a new index handle with prime level reset to zero.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_index_noprime(
     ptr: *const t4a_index,
     out: *mut *mut t4a_index,
@@ -298,7 +298,7 @@ pub extern "C" fn t4a_index_noprime(
 }
 
 /// Return a new index handle with an explicit prime level.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_index_set_plev(
     ptr: *const t4a_index,
     plev: i64,
@@ -317,7 +317,7 @@ pub extern "C" fn t4a_index_set_plev(
 }
 
 /// Copy tags as a comma-separated UTF-8 string.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_index_tags(
     ptr: *const t4a_index,
     buf: *mut u8,
@@ -370,7 +370,7 @@ pub extern "C" fn t4a_index_tags(
 }
 
 /// Query whether an index has the provided tag.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_index_has_tag(
     ptr: *const t4a_index,
     tag: *const c_char,

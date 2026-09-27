@@ -203,14 +203,15 @@ jobs:
         with:
           cache-workspace-crates: true
 
-      - name: Clear stale workspace coverage artifacts
-        # Old workspace binaries can contribute obsolete coverage mappings.
-        # Keep dependency artifacts while rebuilding the measured workspace.
-        run: cargo llvm-cov clean --workspace
+      - name: Clear stale coverage measurements
+        # Reuse compiled artifacts, but measure only this test execution.
+        run: cargo llvm-cov clean --profraw-only
 
       - name: Generate release coverage JSON
         # Release-mode measurement: the repository's normal verification mode.
-        run: cargo llvm-cov nextest --locked --release --no-clean --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
+        run: |
+          echo "Available CPUs: $(nproc); Cargo build jobs: $CARGO_BUILD_JOBS"
+          cargo llvm-cov nextest --locked --release --no-clean --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
 
       - name: Check per-file thresholds
         run: python3 scripts/check-coverage.py coverage.json

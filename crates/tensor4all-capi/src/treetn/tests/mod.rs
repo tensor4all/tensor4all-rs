@@ -2242,3 +2242,169 @@ fn test_treetn_linsolve_rejects_mapping_true_output_not_on_rhs() {
     t4a_index_release(true_output);
     t4a_index_release(true_input);
 }
+
+#[test]
+fn test_evaluators_reject_invalid_batches_without_writing_results() {
+    let (tree, tensors, indices) = make_two_site_treetn();
+    let site_indices = [
+        indices[0] as *const t4a_index,
+        indices[3] as *const t4a_index,
+    ];
+    let mut evaluator = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_evaluator_new(tree, site_indices.as_ptr(), 2, &mut evaluator),
+        T4A_SUCCESS
+    );
+    let positions = [0usize, 0];
+    for (values, n_points, status, message) in [
+        (
+            positions.as_ptr(),
+            0,
+            T4A_INVALID_ARGUMENT,
+            "requires n_points > 0",
+        ),
+        (
+            std::ptr::null(),
+            1,
+            T4A_NULL_POINTER,
+            "values_col_major is null",
+        ),
+        (
+            positions.as_ptr(),
+            usize::MAX,
+            T4A_INVALID_ARGUMENT,
+            "size overflowed size_t",
+        ),
+        (
+            positions.as_ptr(),
+            usize::MAX / 2,
+            T4A_INVALID_ARGUMENT,
+            "byte span overflows isize",
+        ),
+    ] {
+        let mut re = [97.0];
+        let mut im = [89.0];
+        assert_eq!(
+            t4a_treetn_evaluate(
+                tree,
+                site_indices.as_ptr(),
+                2,
+                values,
+                n_points,
+                re.as_mut_ptr(),
+                im.as_mut_ptr()
+            ),
+            status
+        );
+        assert!(last_error().contains(message));
+        assert_eq!((re, im), ([97.0], [89.0]));
+        assert_eq!(
+            t4a_treetn_evaluator_evaluate(
+                evaluator,
+                values,
+                n_points,
+                re.as_mut_ptr(),
+                im.as_mut_ptr()
+            ),
+            status
+        );
+        assert!(last_error().contains(message));
+        assert_eq!((re, im), ([97.0], [89.0]));
+    }
+    let mut re = 97.0;
+    assert_eq!(
+        t4a_treetn_evaluator_evaluate(
+            std::ptr::null_mut(),
+            positions.as_ptr(),
+            1,
+            &mut re,
+            std::ptr::null_mut()
+        ),
+        T4A_NULL_POINTER
+    );
+    assert_eq!(last_error(), "treetn evaluator is null");
+    assert_eq!(re, 97.0);
+    assert_eq!(
+        t4a_treetn_evaluate(
+            tree,
+            site_indices.as_ptr(),
+            0,
+            positions.as_ptr(),
+            1,
+            &mut re,
+            std::ptr::null_mut()
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("requires n_indices > 0"));
+    let mut unused = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_evaluator_new(tree, site_indices.as_ptr(), 0, &mut unused),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("requires n_indices > 0"));
+    assert!(unused.is_null());
+    t4a_treetn_evaluator_release(evaluator);
+    cleanup(tree, tensors, indices);
+}
+
+#[test]
+fn test_fuse_rejects_malformed_target_networks_without_mutating_source() {
+    let (tree, tensors, indices) = make_two_site_treetn();
+    let before = read_dense_f64_treetn(tree);
+    let sites = [
+        indices[0] as *const t4a_index,
+        indices[3] as *const t4a_index,
+    ];
+    let vertices = [0, 1];
+    let mut out = std::ptr::null_mut();
+    for (n_vertices, lengths, message) in [
+        (0, [1, 1], "target must contain at least one vertex"),
+        (
+            2,
+            [0, 2],
+            "target vertex 0 must contain at least one site index",
+        ),
+        (
+            2,
+            [usize::MAX, 1],
+            "total site-index count overflows size_t",
+        ),
+    ] {
+        assert_eq!(
+            t4a_treetn_fuse_to(
+                tree,
+                vertices.as_ptr(),
+                n_vertices,
+                sites.as_ptr(),
+                lengths.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                &mut out
+            ),
+            T4A_INVALID_ARGUMENT
+        );
+        assert!(last_error().contains(message), "{}", last_error());
+        assert!(out.is_null());
+    }
+    let null_site = [std::ptr::null()];
+    assert_eq!(
+        t4a_treetn_fuse_to(
+            tree,
+            vertices.as_ptr(),
+            1,
+            null_site.as_ptr(),
+            [1].as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            &mut out
+        ),
+        T4A_NULL_POINTER
+    );
+    assert!(last_error().contains("site_indices[0] is null"));
+    assert!(out.is_null());
+    assert_eq!(read_dense_f64_treetn(tree), before);
+    cleanup(tree, tensors, indices);
+}

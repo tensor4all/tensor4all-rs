@@ -17,13 +17,13 @@ use tensor4all_quanticstransform::{
 };
 
 /// Release a QTT layout handle.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_qtt_layout_release(obj: *mut t4a_qtt_layout) {
     release_opaque(obj);
 }
 
 /// Clone a QTT layout handle.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_qtt_layout_clone(
     src: *const t4a_qtt_layout,
     out: *mut *mut t4a_qtt_layout,
@@ -32,7 +32,7 @@ pub extern "C" fn t4a_qtt_layout_clone(
 }
 
 /// Check whether a QTT layout handle is assigned.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_qtt_layout_is_assigned(obj: *const t4a_qtt_layout) -> i32 {
     is_assigned_opaque(obj)
 }
@@ -659,7 +659,7 @@ fn parse_boundary_conditions(
 }
 
 /// Create an immutable canonical QTT layout descriptor.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_qtt_layout_new(
     kind: t4a_qtt_layout_kind,
     nvariables: usize,
@@ -689,7 +689,7 @@ pub extern "C" fn t4a_qtt_layout_new(
 }
 
 /// Materialize a shift transform directly as a chain-shaped TreeTN.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_qtransform_shift_materialize(
     layout: *const t4a_qtt_layout,
     target_var: usize,
@@ -709,7 +709,7 @@ pub extern "C" fn t4a_qtransform_shift_materialize(
 }
 
 /// Materialize a flip transform directly as a chain-shaped TreeTN.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_qtransform_flip_materialize(
     layout: *const t4a_qtt_layout,
     target_var: usize,
@@ -728,7 +728,7 @@ pub extern "C" fn t4a_qtransform_flip_materialize(
 }
 
 /// Materialize a phase-rotation transform directly as a chain-shaped TreeTN.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_qtransform_phase_rotation_materialize(
     layout: *const t4a_qtt_layout,
     target_var: usize,
@@ -747,7 +747,7 @@ pub extern "C" fn t4a_qtransform_phase_rotation_materialize(
 }
 
 /// Materialize a cumulative-sum transform directly as a chain-shaped TreeTN.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_qtransform_cumsum_materialize(
     layout: *const t4a_qtt_layout,
     target_var: usize,
@@ -764,7 +764,7 @@ pub extern "C" fn t4a_qtransform_cumsum_materialize(
 }
 
 /// Materialize a Fourier transform directly as a chain-shaped TreeTN.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_qtransform_fourier_materialize(
     layout: *const t4a_qtt_layout,
     target_var: usize,
@@ -817,7 +817,7 @@ pub extern "C" fn t4a_qtransform_fourier_materialize(
 /// `a_den[i + k * m] == 0`. Dimension and byte checks run before reading any
 /// coefficient or boundary-condition pointer, so invalid layout dimensions
 /// take precedence over null coefficient and boundary-condition pointers.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_qtransform_affine_materialize(
     layout: *const t4a_qtt_layout,
     a_num: *const i64,

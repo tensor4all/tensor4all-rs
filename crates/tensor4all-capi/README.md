@@ -41,10 +41,7 @@ t4a_index_release(idx);
 ## Regenerating the Header
 
 ```bash
-mkdir -p crates/tensor4all-capi/include
-cbindgen crates/tensor4all-capi \
-  --config crates/tensor4all-capi/cbindgen.toml \
-  --output crates/tensor4all-capi/include/tensor4all_capi.h
+python3 scripts/generate-capi-header.py
 ```
 
 Use `./scripts/check-capi-header.sh` from the repository root to verify the

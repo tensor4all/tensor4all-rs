@@ -13,6 +13,9 @@
 //! Convenience subsystems such as SimpleTT, TreeTCI, QuanticsTCI, quantics grid
 //! objects, and HDF5 are not part of the redesigned C surface.
 
+// Export stable C symbol names in library builds. Unit tests keep Rust names so
+// LLVM coverage can distinguish their cfg(test) bodies from the library bodies.
+
 // C API requires unsafe operations with raw pointers
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
@@ -258,7 +261,7 @@ pub(crate) fn panic_message(info: &(dyn std::any::Any + Send)) -> String {
 ///
 /// An undersized retrieval buffer does not replace the stored diagnostic, so
 /// callers can retry with the reported size and recover the original message.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_last_error_message(
     buf: *mut u8,
     buf_len: libc::size_t,

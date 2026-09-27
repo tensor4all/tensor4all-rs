@@ -201,15 +201,22 @@ at the FFI boundary when the ABI needs concrete layouts.
 The public C header is generated with `cbindgen`:
 
 ```bash
-mkdir -p crates/tensor4all-capi/include
-cbindgen crates/tensor4all-capi \
-  --config crates/tensor4all-capi/cbindgen.toml \
-  --output crates/tensor4all-capi/include/tensor4all_capi.h
+python3 scripts/generate-capi-header.py
 ```
 
 Regenerate the header whenever exported types, enums, constants, or function
 signatures change. Run `./scripts/check-capi-header.sh` to verify the pinned
 cbindgen version, header freshness, and C/C++ compilability.
+
+The generator uses cbindgen 0.29.2 and resolves the C exports' `not(test)`
+condition in a temporary copy of the Rust source. Unit-test executables retain
+mangled Rust names so LLVM coverage can distinguish them from ordinary library
+builds; ordinary libraries still export the documented C names. cbindgen does
+not yet interpret this conditional attribute (upstream
+[issue #183](https://github.com/mozilla/cbindgen/issues/183)). The generator accepts
+only this specific `cfg_attr` form and rejects unknown forms for explicit review.
+Generation and freshness checks share this implementation; the repository source
+is never rewritten during header generation.
 
 ## Module Reference
 

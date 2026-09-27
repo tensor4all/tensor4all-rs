@@ -21,13 +21,13 @@ use crate::{
 };
 
 /// Release a tensor handle.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_release(obj: *mut t4a_tensor) {
     release_opaque(obj);
 }
 
 /// Clone a tensor handle.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_clone(
     src: *const t4a_tensor,
     out: *mut *mut t4a_tensor,
@@ -36,7 +36,7 @@ pub extern "C" fn t4a_tensor_clone(
 }
 
 /// Select fixed coordinates for tensor indices and drop those axes.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_select_indices(
     tensor: *const t4a_tensor,
     n_select: usize,
@@ -67,7 +67,7 @@ pub extern "C" fn t4a_tensor_select_indices(
 }
 
 /// Check whether a tensor handle is assigned.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_is_assigned(obj: *const t4a_tensor) -> i32 {
     is_assigned_opaque(obj)
 }
@@ -338,7 +338,7 @@ fn box_tensor_handle(tensor: InternalTensor) -> *mut t4a_tensor {
 }
 
 /// Get the rank of a tensor.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_rank(ptr: *const t4a_tensor, out_rank: *mut usize) -> t4a_status_code {
     if ptr.is_null() {
         return err_null_pointer("tensor");
@@ -356,7 +356,7 @@ pub extern "C" fn t4a_tensor_rank(ptr: *const t4a_tensor, out_rank: *mut usize) 
 }
 
 /// Copy tensor dimensions in index order.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_dims(
     ptr: *const t4a_tensor,
     buf: *mut usize,
@@ -393,7 +393,7 @@ pub extern "C" fn t4a_tensor_dims(
 }
 
 /// Copy cloned index handles describing the tensor axes.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_indices(
     ptr: *const t4a_tensor,
     buf: *mut *mut t4a_index,
@@ -434,7 +434,7 @@ pub extern "C" fn t4a_tensor_indices(
 }
 
 /// Get the scalar kind of a tensor.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_scalar_kind(
     ptr: *const t4a_tensor,
     out_kind: *mut t4a_scalar_kind,
@@ -460,7 +460,7 @@ pub extern "C" fn t4a_tensor_scalar_kind(
 ///
 /// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
 /// retrieve the diagnostic with `t4a_last_error_message`.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_storage_kind(
     ptr: *const t4a_tensor,
     out_kind: *mut t4a_storage_kind,
@@ -484,7 +484,7 @@ pub extern "C" fn t4a_tensor_storage_kind(
 ///
 /// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
 /// retrieve the diagnostic with `t4a_last_error_message`.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_payload_rank(
     ptr: *const t4a_tensor,
     out_rank: *mut usize,
@@ -508,7 +508,7 @@ pub extern "C" fn t4a_tensor_payload_rank(
 ///
 /// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
 /// retrieve the diagnostic with `t4a_last_error_message`.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_payload_len(
     ptr: *const t4a_tensor,
     out_len: *mut usize,
@@ -532,7 +532,7 @@ pub extern "C" fn t4a_tensor_payload_len(
 ///
 /// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
 /// retrieve the diagnostic with `t4a_last_error_message`.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_payload_dims(
     ptr: *const t4a_tensor,
     buf: *mut usize,
@@ -558,7 +558,7 @@ pub extern "C" fn t4a_tensor_payload_dims(
 ///
 /// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
 /// retrieve the diagnostic with `t4a_last_error_message`.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_payload_strides(
     ptr: *const t4a_tensor,
     buf: *mut isize,
@@ -584,7 +584,7 @@ pub extern "C" fn t4a_tensor_payload_strides(
 ///
 /// Returns `T4A_INTERNAL_ERROR` when backend storage materialization fails;
 /// retrieve the diagnostic with `t4a_last_error_message`.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_axis_classes(
     ptr: *const t4a_tensor,
     buf: *mut usize,
@@ -610,7 +610,7 @@ pub extern "C" fn t4a_tensor_axis_classes(
 ///
 /// Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; retrieve
 /// the diagnostic with `t4a_last_error_message`.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_copy_dense_f64(
     ptr: *const t4a_tensor,
     buf: *mut f64,
@@ -665,7 +665,7 @@ pub extern "C" fn t4a_tensor_copy_dense_f64(
 ///
 /// Returns `T4A_INTERNAL_ERROR` when backend/materialization fails; retrieve
 /// the diagnostic with `t4a_last_error_message`.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_copy_dense_c64(
     ptr: *const t4a_tensor,
     buf_interleaved: *mut f64,
@@ -719,7 +719,7 @@ pub extern "C" fn t4a_tensor_copy_dense_c64(
 ///
 /// Backend/materialization failures return `T4A_INTERNAL_ERROR` with their
 /// diagnostic preserved in `t4a_last_error_message`.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_copy_payload_f64(
     ptr: *const t4a_tensor,
     buf: *mut f64,
@@ -744,7 +744,7 @@ pub extern "C" fn t4a_tensor_copy_payload_f64(
 ///
 /// Backend/materialization failures return `T4A_INTERNAL_ERROR` with their
 /// diagnostic preserved in `t4a_last_error_message`.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_copy_payload_c64(
     ptr: *const t4a_tensor,
     buf_interleaved: *mut f64,
@@ -764,7 +764,7 @@ pub extern "C" fn t4a_tensor_copy_payload_c64(
 }
 
 /// Contract two tensors by matching common indices.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_contract(
     a: *const t4a_tensor,
     b: *const t4a_tensor,
@@ -785,7 +785,7 @@ pub extern "C" fn t4a_tensor_contract(
 }
 
 /// Contract two tensors while retaining selected shared indices as output legs.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_contract_retain(
     a: *const t4a_tensor,
     b: *const t4a_tensor,
@@ -805,7 +805,7 @@ pub extern "C" fn t4a_tensor_contract_retain(
 }
 
 /// Contract multiple tensors while retaining selected shared indices as output legs.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_contract_many_retain(
     tensors: *const *const t4a_tensor,
     n_tensors: usize,
@@ -824,7 +824,7 @@ pub extern "C" fn t4a_tensor_contract_many_retain(
 }
 
 /// Compute the SVD of a tensor split by the requested left indices.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_svd(
     tensor: *const t4a_tensor,
     left_inds: *const *const t4a_index,
@@ -901,7 +901,7 @@ pub extern "C" fn t4a_tensor_svd(
 /// - `T4A_INTERNAL_ERROR` if the Rust implementation panics while processing
 ///
 ///   the request.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_qr(
     tensor: *const t4a_tensor,
     left_inds: *const *const t4a_index,
@@ -933,7 +933,7 @@ pub extern "C" fn t4a_tensor_qr(
 }
 
 /// Create a dense real tensor from column-major data.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_new_dense_f64(
     rank: usize,
     index_ptrs: *const *const t4a_index,
@@ -963,7 +963,7 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
 }
 
 /// Create a dense complex tensor from interleaved column-major data.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_new_dense_c64(
     rank: usize,
     index_ptrs: *const *const t4a_index,
@@ -993,7 +993,7 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
 }
 
 /// Create a real tensor from explicit compact structured storage.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_new_structured_f64(
     rank: usize,
     index_ptrs: *const *const t4a_index,
@@ -1042,7 +1042,7 @@ pub extern "C" fn t4a_tensor_new_structured_f64(
 }
 
 /// Create a complex tensor from explicit compact structured storage.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_new_structured_c64(
     rank: usize,
     index_ptrs: *const *const t4a_index,
@@ -1088,7 +1088,7 @@ pub extern "C" fn t4a_tensor_new_structured_c64(
 }
 
 /// Create a real diagonal tensor from compact diagonal payload data.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_new_diag_f64(
     rank: usize,
     index_ptrs: *const *const t4a_index,
@@ -1118,7 +1118,7 @@ pub extern "C" fn t4a_tensor_new_diag_f64(
 }
 
 /// Create a complex diagonal tensor from compact diagonal payload data.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_tensor_new_diag_c64(
     rank: usize,
     index_ptrs: *const *const t4a_index,
