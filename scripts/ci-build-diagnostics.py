@@ -68,7 +68,7 @@ def main():
     (directory / f"{args.name}.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps({key: value for key, value in summary.items()
                       if key not in ("compiled", "fresh", "fingerprints_first_60")}, indent=2))
-    print(f"Cargo compiled units: {len(compiled)}; fresh units: {len(fresh)}")
+    print(f"Observed Cargo Compiling lines: {len(compiled)}; Fresh lines: {len(fresh)}")
     print("\n".join(fingerprints))
     print("\n".join(list(tail)[-200 if returncode else -30:]))
     return returncode
