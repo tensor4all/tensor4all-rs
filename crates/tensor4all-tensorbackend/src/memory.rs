@@ -68,7 +68,7 @@ fn allocator_pressure_relief() -> AllocatorPressureRelief {
 
 #[cfg(target_os = "linux")]
 fn allocator_pressure_relief() -> AllocatorPressureRelief {
-    extern "C" {
+    unsafe extern "C" {
         fn malloc_trim(pad: usize) -> i32;
     }
 
