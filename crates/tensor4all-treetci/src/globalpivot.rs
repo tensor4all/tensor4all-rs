@@ -4,11 +4,13 @@
 //! (`tensor4all-tensorci`): after each sweep the optimizer materializes the
 //! current tree approximation and searches random starting points with local
 //! coordinate optimization for multi-indices where `|f(idx) - tt(idx)|` is
-//! large. Found pivots are injected via [`TreeTCI2::add_global_pivots`] so the
-//! next sweep samples regions the local pivot updates missed.
+//! large. Found pivots are injected into the pivot sets (like
+//! [`TreeTCI2::add_global_pivots`], bounded per edge by the edge's maximal
+//! achievable rank) so the next sweep samples regions the local pivot updates
+//! missed.
 //!
 //! The search is enabled by default (`TreeTciOptions::enable_global_pivots`)
-//! and runs after every optimization sweep.
+//! and runs after every optimization sweep except the last one of a run.
 
 use crate::error::Result as TreeTciResult;
 use crate::{materialize::to_treetn, GlobalIndexBatch, MultiIndex, TreeTCI2};

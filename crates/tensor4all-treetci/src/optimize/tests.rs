@@ -2,6 +2,7 @@ use super::{optimize_default, TreeTciOptions};
 use crate::test_support::assert_scalar_close;
 use crate::{GlobalIndexBatch, TreeTCI2, TreeTciEdge, TreeTciGraph};
 use anyhow::Result;
+use tensor4all_core::IndexLike;
 
 fn two_site_graph() -> TreeTciGraph {
     TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap()
@@ -219,4 +220,201 @@ fn optimize_default_stops_early_when_bond_dim_saturated() {
     assert!(ranks.len() < 10);
     assert!(ranks.iter().all(|&r| r <= 1));
     assert!(errors.last().copied().unwrap_or(0.0) > 1e-12);
+}
+
+/// Number of distinct multi-indices on the subtree `key`.
+fn subtree_dim_product<T>(state: &TreeTCI2<T>, key: &crate::SubtreeKey) -> usize {
+    key.as_slice()
+        .iter()
+        .map(|&site| state.local_dims[site])
+        .product()
+}
+
+/// Check the invariants every finished optimization must leave behind: on
+/// each edge, both sides hold the same number of pivots, at least one and at
+/// most `min(max_bond_dim, maximal achievable rank of the edge)`.
+fn assert_swept_pivot_sets<T>(state: &TreeTCI2<T>, max_bond_dim: usize) {
+    for edge in state.graph.edges() {
+        let (left_key, right_key) = state.graph.subregion_vertices(edge).unwrap();
+        let left = crate::ncols_2d(&state.ijset[&left_key]).unwrap();
+        let right = crate::ncols_2d(&state.ijset[&right_key]).unwrap();
+        assert_eq!(left, right, "pivot counts differ across edge {edge:?}");
+        let max_rank =
+            subtree_dim_product(state, &left_key).min(subtree_dim_product(state, &right_key));
+        assert!(
+            left >= 1 && left <= max_bond_dim.min(max_rank),
+            "edge {edge:?} holds {left} pivots; cap {max_bond_dim}, maximal rank {max_rank}"
+        );
+    }
+}
+
+/// Seed a state the way `crossinterpolate2` does, run `optimize_default`, and
+/// check that the capped run stopped cleanly through the saturation stop on a
+/// swept, materializable state within the cap.
+fn run_capped_and_check<F>(
+    local_dims: Vec<usize>,
+    graph: TreeTciGraph,
+    initial_pivots: &[Vec<usize>],
+    evaluate: F,
+    options: &TreeTciOptions,
+) where
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<f64>>,
+{
+    let cap = options.max_bond_dim.unwrap();
+    let mut tci = TreeTCI2::<f64>::new(local_dims, graph).unwrap();
+    tci.add_global_pivots(initial_pivots).unwrap();
+    let n_sites = tci.local_dims.len();
+    let flat: Vec<usize> = initial_pivots.iter().flatten().copied().collect();
+    let batch = GlobalIndexBatch::new(&flat, n_sites, initial_pivots.len()).unwrap();
+    tci.max_sample_value = evaluate(batch)
+        .unwrap()
+        .iter()
+        .fold(0.0_f64, |acc, v| acc.max(v.abs()));
+
+    let (ranks, errors) = optimize_default(&mut tci, &evaluate, options).unwrap();
+
+    // The cap is below the function's rank, so the loop must have stopped
+    // through the bond-dimension saturation stop, not through convergence or
+    // `max_iter`.
+    assert_eq!(ranks, vec![cap; 3]);
+    assert_eq!(errors.len(), ranks.len());
+    assert_swept_pivot_sets(&tci, cap);
+
+    let treetn = crate::to_treetn(&tci, &evaluate, None).unwrap();
+    for edge in tci.graph.edges() {
+        let (left_key, _) = tci.graph.subregion_vertices(edge).unwrap();
+        let expected = crate::ncols_2d(&tci.ijset[&left_key]).unwrap();
+        let (u, v) = tci.graph.separate_vertices(edge).unwrap();
+        let bond = treetn
+            .bond_index(treetn.edge_between(&u, &v).unwrap())
+            .unwrap();
+        assert_eq!(bond.dim(), expected, "bond dimension of {edge:?}");
+    }
+}
+
+fn mix64(mut x: u64) -> u64 {
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    x ^ (x >> 33)
+}
+
+/// Pseudo-random values on a ~3% support of a local-dimension-4 index space
+/// (the function from issue #692).
+fn sparse_value(point: &[usize]) -> f64 {
+    let key = point.iter().fold(0u64, |key, &v| key * 4 + v as u64);
+    let h = mix64(key);
+    if h % 32 < 1 {
+        ((h >> 8) as f64 / u64::MAX as f64) - 0.5
+    } else {
+        0.0
+    }
+}
+
+// Regression for #692: on a sparse function the global pivot search keeps
+// finding missed support. Its pivots used to be injected after the sweep that
+// completed the bond-dimension saturation window, after which the loop
+// stopped, so the returned pivot sets were unswept: on edge (0, 1) the site-0
+// side stayed at 4 (deduplicated) while the other side grew past 4, and
+// materialization failed with "bond ranks disagree across edge".
+#[test]
+fn capped_sparse_chain_with_global_pivots_stops_on_swept_state() {
+    const N_SITES: usize = 5;
+    let mut pivots = Vec::new();
+    let mut key = 1u64;
+    while pivots.len() < 16 {
+        key = mix64(key).max(1);
+        let point: Vec<usize> = (0..N_SITES)
+            .map(|site| ((key >> (2 * site)) % 4) as usize)
+            .collect();
+        if sparse_value(&point) != 0.0 {
+            pivots.push(point);
+        }
+    }
+    let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        let mut point = vec![0usize; N_SITES];
+        (0..batch.n_points())
+            .map(|p| {
+                for (site, slot) in point.iter_mut().enumerate() {
+                    *slot = batch.get(site, p).unwrap();
+                }
+                Ok(sparse_value(&point))
+            })
+            .collect()
+    };
+    let options = TreeTciOptions {
+        tolerance: 1e-12,
+        max_iter: 10,
+        max_bond_dim: Some(8),
+        nsearch: 10,
+        max_nglobal_pivot: 10,
+        seed: Some(1),
+        ..Default::default()
+    };
+
+    run_capped_and_check(
+        vec![4; N_SITES],
+        TreeTciGraph::linear_chain(N_SITES).unwrap(),
+        &pivots,
+        evaluate,
+        &options,
+    );
+
+    // The public entry point from the issue report succeeds as well.
+    let (treetn, ranks, _) = crate::crossinterpolate2::<f64, _, _>(
+        evaluate,
+        vec![4; N_SITES],
+        TreeTciGraph::linear_chain(N_SITES).unwrap(),
+        pivots,
+        options,
+        None,
+        &crate::DefaultProposer,
+    )
+    .unwrap();
+    assert!(ranks.iter().all(|&rank| rank <= 8));
+    assert!(treetn.link_dims().iter().all(|&dim| dim <= 8));
+}
+
+// Regression for #692 on a branching tree: vertex 1 has degree 3 and the
+// function has rank 3 across every cut, so `max_bond_dim = 2` saturates. With
+// global pivots enabled, every seed used to stop right after an injection
+// and fail with "bond ranks disagree across edge (0, 1): left 2, right 5".
+#[test]
+fn capped_star_tree_with_global_pivots_stops_on_swept_state() {
+    let graph = TreeTciGraph::new(
+        4,
+        &[
+            TreeTciEdge::new(0, 1),
+            TreeTciEdge::new(1, 2),
+            TreeTciEdge::new(1, 3),
+        ],
+    )
+    .unwrap();
+    let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        (0..batch.n_points())
+            .map(|p| {
+                let mut phase = 0.0;
+                for (site, weight) in [0.3, 0.5, 0.7, 0.9].into_iter().enumerate() {
+                    phase += weight * batch.get(site, p).unwrap() as f64;
+                }
+                Ok(phase.cos() + 0.1)
+            })
+            .collect()
+    };
+    for seed in 0..8 {
+        let options = TreeTciOptions {
+            tolerance: 1e-10,
+            max_bond_dim: Some(2),
+            seed: Some(seed),
+            ..Default::default()
+        };
+        run_capped_and_check(
+            vec![2, 4, 4, 4],
+            graph.clone(),
+            &[vec![0, 0, 0, 0]],
+            evaluate,
+            &options,
+        );
+    }
 }

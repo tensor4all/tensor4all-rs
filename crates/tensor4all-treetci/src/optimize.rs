@@ -78,7 +78,12 @@ pub struct TreeTciOptions {
     /// Maximum bond dimension retained by the tcicore LUCI pivot substrate.
     ///
     /// Caps the number of pivots per edge bipartition. Use this to limit
-    /// memory and computation for large problems. Default: `None` (no cap).
+    /// memory and computation for large problems. Once the maximal bond
+    /// dimension has sat at this cap for three consecutive iterations, the
+    /// loop stops even if `tolerance` has not been reached: every bond
+    /// dimension of the result stays within the cap, but the approximation
+    /// may be inaccurate when the cap is below the function's rank.
+    /// Default: `None` (no cap).
     pub max_bond_dim: Option<usize>,
 
     /// Whether to normalize the bond error by the maximum observed sample magnitude.
@@ -92,10 +97,15 @@ pub struct TreeTciOptions {
     ///
     /// When `true`, the optimizer materializes the current approximation
     /// after each iteration and searches for multi-indices where
-    /// `|f(idx) - tt(idx)|` is large, injecting the best finds via
-    /// [`TreeTCI2::add_global_pivots`](crate::TreeTCI2::add_global_pivots).
+    /// `|f(idx) - tt(idx)|` is large, injecting the best finds like
+    /// [`TreeTCI2::add_global_pivots`](crate::TreeTCI2::add_global_pivots)
+    /// does, except that no side of an edge grows past that edge's maximal
+    /// achievable rank (the smaller of the two subtree dimension products).
     /// This recovers separated features that local pivot updates miss when
-    /// the initial pivots sit in a single basin. Default: `true`.
+    /// the initial pivots sit in a single basin. The search is skipped after
+    /// the last sweep of a run (the `max_iter`-th, or the one after which the
+    /// loop stops because the bond dimension saturated at `max_bond_dim`), so
+    /// every injected pivot is processed by a later sweep. Default: `true`.
     pub enable_global_pivots: bool,
 
     /// Number of random starting points for the global pivot search.
@@ -337,6 +347,30 @@ where
         };
         errors.push(normalized_error);
 
+        // Mirrors `TreeTCI.jl`'s `convergencecriterion` third disjunct
+        // (branch `local-fix-convergence`, commit 06563dd): once the rank has
+        // saturated at `max_bond_dim` for the whole trailing window, further
+        // sweeps cannot reduce the error, so waiting for it to also cross
+        // `tolerance` would just burn the remaining `max_iter` sweeps.
+        //
+        // This stop depends only on ranks already recorded, so it is decided
+        // *before* the global pivot search. Injected pivots are only
+        // consistent once a sweep has processed them: the injection projects
+        // each pivot onto both sides of every edge with per-side
+        // deduplication, so the two sides of an edge can hold different
+        // column counts (and more than `max_bond_dim`) until the next sweep.
+        // Stopping right after an injection would hand that unswept state to
+        // `to_treetn`, which rejects it ("bond ranks disagree", #692).
+        let bond_dim_saturated = ranks.len() >= NCHECK_HISTORY
+            && options.max_bond_dim.is_some_and(|cap| {
+                ranks[ranks.len() - NCHECK_HISTORY..]
+                    .iter()
+                    .all(|&r| r >= cap)
+            });
+        if bond_dim_saturated {
+            break;
+        }
+
         // Global pivot search: after each sweep, materialize the current
         // approximation and inject pivots where |f - tt| is large, so
         // separated features that the local pivot updates miss are sampled
@@ -344,7 +378,8 @@ where
         // `TreeTciOptions::enable_global_pivots`. The search is skipped on
         // the final iteration: a pivot injected after the last sweep would
         // never be processed by a subsequent sweep, so the recorded error
-        // and termination reason would not reflect it.
+        // and termination reason would not reflect it, and the unswept state
+        // would not be materializable (see above).
         if options.enable_global_pivots && _iter + 1 < options.max_iter {
             let error_scale = if options.normalize_error && state.max_sample_value > 0.0 {
                 state.max_sample_value
@@ -365,7 +400,7 @@ where
                 abs_tol,
                 seed,
             )?;
-            state.add_global_pivots(&pivots)?;
+            state.inject_global_pivots(&pivots)?;
             nglobal_pivots_history.push(pivots.len());
         } else {
             nglobal_pivots_history.push(0);
@@ -379,10 +414,10 @@ where
         // Mirrors `TreeTCI.jl`'s `convergencecriterion` (as locally patched
         // for the scale-mismatch bug on branch `local-fix-convergence`,
         // commit 06563dd): error-below-tolerance + rank-stable over the
-        // trailing window, OR the rank has saturated at `max_bond_dim` for
-        // the whole window (further sweeps cannot reduce the error once the
-        // bond dimension is capped, so waiting for it to also cross
-        // `tolerance` would just burn the remaining `max_iter` sweeps).
+        // trailing window, with no global pivots added anywhere in the window
+        // (including this iteration's search, so a stop here never leaves
+        // unswept injected pivots). The bond-dimension saturation disjunct is
+        // checked above, before the search.
         if errors.len() >= NCHECK_HISTORY {
             let n = errors.len();
             let last_errors = &errors[n - NCHECK_HISTORY..];
@@ -392,10 +427,7 @@ where
             let no_global_pivots = last_ngp.iter().all(|&n| n == 0);
             let rank_stable = last_ranks.iter().min().copied().unwrap_or(0)
                 == last_ranks.last().copied().unwrap_or(0);
-            let bond_dim_saturated = options
-                .max_bond_dim
-                .is_some_and(|cap| last_ranks.iter().all(|&r| r >= cap));
-            if (errors_converged && no_global_pivots && rank_stable) || bond_dim_saturated {
+            if errors_converged && no_global_pivots && rank_stable {
                 break;
             }
         }

@@ -108,6 +108,33 @@ impl<T> TreeTCI2<T> {
     /// /// a backend failure).
     ///
     pub fn add_global_pivots(&mut self, pivots: &[MultiIndex]) -> TreeTciResult<()> {
+        self.insert_global_pivots(pivots, false)
+    }
+
+    /// Inject pivots found by the automatic global pivot search between sweeps.
+    ///
+    /// Like [`TreeTCI2::add_global_pivots`], but a projection is only added
+    /// to a side of an edge while that side holds fewer columns than the
+    /// edge's maximal achievable rank (the smaller of the two subtree
+    /// dimension products). The side whose own subtree product attains that
+    /// bound is already limited by deduplication; the bound matters for the
+    /// opposite side, which could otherwise grow far past it (#692). When the
+    /// preceding sweep already filled a side to the bound, its nonsingular
+    /// pivot block spans the edge's unfolding, so the skipped projections add
+    /// no rank the next sweep could use; otherwise new projections are added
+    /// in the given order until the bound is reached. Initial pivots keep
+    /// going through the unbounded [`TreeTCI2::add_global_pivots`], because
+    /// before the first sweep the existing columns are not known to span the
+    /// unfolding.
+    pub(crate) fn inject_global_pivots(&mut self, pivots: &[MultiIndex]) -> TreeTciResult<()> {
+        self.insert_global_pivots(pivots, true)
+    }
+
+    fn insert_global_pivots(
+        &mut self,
+        pivots: &[MultiIndex],
+        bound_by_edge_rank: bool,
+    ) -> TreeTciResult<()> {
         let n_sites = self.local_dims.len();
         if !(pivots.iter().all(|pivot| pivot.len() == n_sites)) {
             return Err(
@@ -129,13 +156,19 @@ impl<T> TreeTCI2<T> {
         for pivot in pivots {
             for edge in self.graph.edges() {
                 let (left_key, right_key) = self.graph.subregion_vertices(edge)?;
+                let max_columns = if bound_by_edge_rank {
+                    self.subtree_dim_product(&left_key)
+                        .min(self.subtree_dim_product(&right_key))
+                } else {
+                    usize::MAX
+                };
                 let left_projection = project_pivot(pivot, &left_key);
                 let right_projection = project_pivot(pivot, &right_key);
                 let n_left = left_key.as_slice().len();
                 let n_right = right_key.as_slice().len();
                 match self.ijset.entry(left_key) {
                     Entry::Occupied(mut entry) => {
-                        push_unique_column(entry.get_mut(), &left_projection)?;
+                        push_unique_column_bounded(entry.get_mut(), &left_projection, max_columns)?;
                     }
                     Entry::Vacant(entry) => {
                         let mut array = empty_2d(n_left)?;
@@ -145,7 +178,11 @@ impl<T> TreeTCI2<T> {
                 }
                 match self.ijset.entry(right_key) {
                     Entry::Occupied(mut entry) => {
-                        push_unique_column(entry.get_mut(), &right_projection)?;
+                        push_unique_column_bounded(
+                            entry.get_mut(),
+                            &right_projection,
+                            max_columns,
+                        )?;
                     }
                     Entry::Vacant(entry) => {
                         let mut array = empty_2d(n_right)?;
@@ -195,6 +232,14 @@ impl<T> TreeTCI2<T> {
             .max()
             .unwrap_or(0)
     }
+
+    /// Number of distinct multi-indices on a subtree, saturating at `usize::MAX`.
+    fn subtree_dim_product(&self, key: &SubtreeKey) -> usize {
+        key.as_slice()
+            .iter()
+            .map(|&site| self.local_dims[site])
+            .fold(1usize, usize::saturating_mul)
+    }
 }
 
 fn project_pivot(pivot: &MultiIndex, key: &SubtreeKey) -> MultiIndex {
@@ -215,6 +260,19 @@ pub(crate) fn push_unique_column(array: &mut ColMajorArray<usize>, column: &[usi
     }
     array.push_column(column)?;
     Ok(())
+}
+
+/// Push a column if it is not already present and the array holds fewer than
+/// `max_columns` columns.
+fn push_unique_column_bounded(
+    array: &mut ColMajorArray<usize>,
+    column: &[usize],
+    max_columns: usize,
+) -> Result<()> {
+    if ncols_2d(array)? >= max_columns {
+        return Ok(());
+    }
+    push_unique_column(array, column)
 }
 
 #[cfg(test)]
