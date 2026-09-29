@@ -97,15 +97,13 @@ pub struct TreeTciOptions {
     ///
     /// When `true`, the optimizer materializes the current approximation
     /// after each iteration and searches for multi-indices where
-    /// `|f(idx) - tt(idx)|` is large, injecting the best finds like
-    /// [`TreeTCI2::add_global_pivots`](crate::TreeTCI2::add_global_pivots)
-    /// does, except that no side of an edge grows past that edge's maximal
-    /// achievable rank (the smaller of the two subtree dimension products).
+    /// `|f(idx) - tt(idx)|` is large, injecting the best finds via
+    /// [`TreeTCI2::add_global_pivots`](crate::TreeTCI2::add_global_pivots).
     /// This recovers separated features that local pivot updates miss when
     /// the initial pivots sit in a single basin. The search is skipped after
-    /// the last sweep of a run (the `max_iter`-th, or the one after which the
-    /// loop stops because the bond dimension saturated at `max_bond_dim`), so
-    /// every injected pivot is processed by a later sweep. Default: `true`.
+    /// the `max_iter`-th sweep and after the sweep at which the loop stops
+    /// because the bond dimension saturated at `max_bond_dim`, so every
+    /// injected pivot is processed by a later sweep. Default: `true`.
     pub enable_global_pivots: bool,
 
     /// Number of random starting points for the global pivot search.
@@ -400,7 +398,7 @@ where
                 abs_tol,
                 seed,
             )?;
-            state.inject_global_pivots(&pivots)?;
+            state.add_global_pivots(&pivots)?;
             nglobal_pivots_history.push(pivots.len());
         } else {
             nglobal_pivots_history.push(0);
