@@ -412,16 +412,38 @@ where
         }
         contributions
     };
-    let mut iter = contributions.iter();
-    let Some(first) = iter.next() else {
+    let Some(first) = contributions.first() else {
         return Ok(Vec::new());
     };
+    // With `Sequential`, the split index depends only on which output indices
+    // are still unprojected, which every contribution of the group shares, and
+    // the children are recomputed from the original pairs. When a single
+    // contribution already reaches the cap the group must split, so the exact
+    // group sum below could not change the result; skip it.
+    if let Some(cap) = patching_options.max_bond_dim {
+        let contribution_saturated = contributions
+            .iter()
+            .any(|contribution| contribution.max_bond_dim() >= cap);
+        if contribution_saturated
+            && patching_options.split_strategy == PatchSplitStrategy::Sequential
+        {
+            if let Some(index) = choose_split_index(first, center, patching_options)? {
+                return split_group_project_first(
+                    &pairs,
+                    &index,
+                    center,
+                    contract_options,
+                    patching_options,
+                );
+            }
+        }
+    }
     // Exact-add the whole group without intermediate truncation (strict TreeTN
     // addition), then truncate the completed group exactly once. Repeated
     // add-and-truncate was hash-order dependent and re-approximated the sum at
     // every contribution; the single post-add truncation caps the group once.
     let mut probe = first.clone();
-    for contribution in iter {
+    for contribution in contributions.iter().skip(1) {
         probe = probe.add(contribution)?;
     }
     let truncation = truncation_options_from_contract(contract_options);
@@ -450,25 +472,48 @@ where
     let Some(index) = choose_split_index(&probe, center, patching_options)? else {
         return Ok(vec![probe]);
     };
+    #[cfg(test)]
+    DISCARDED_GROUP_PROBES.with(|count| count.set(count.get() + 1));
+    split_group_project_first(&pairs, &index, center, contract_options, patching_options)
+}
 
+#[cfg(test)]
+thread_local! {
+    /// Exact group sums built by `contract_group_project_first` and then
+    /// discarded because the group was split.
+    static DISCARDED_GROUP_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Split a saturated contraction group at `index`: project the original
+/// operands of every pair to each coordinate and retry each child group.
+fn split_group_project_first<V>(
+    pairs: &[(SubDomainTreeTN<V>, SubDomainTreeTN<V>)],
+    index: &tensor4all_core::DynIndex,
+    center: &V,
+    contract_options: &ContractionOptions,
+    patching_options: &PatchingOptions,
+) -> Result<Vec<SubDomainTreeTN<V>>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
     let mut children = Vec::with_capacity(index.dim);
     for value in 0..index.dim {
         let mut child_pairs = Vec::with_capacity(pairs.len());
         let mut projected_left = HashMap::new();
         let mut projected_right = HashMap::new();
-        for (left, right) in &pairs {
+        for (left, right) in pairs {
             let left_key = left.projector().clone();
             if !projected_left.contains_key(&left_key) {
                 projected_left.insert(
                     left_key.clone(),
-                    project_if_present(left, &index, value, center)?,
+                    project_if_present(left, index, value, center)?,
                 );
             }
             let right_key = right.projector().clone();
             if !projected_right.contains_key(&right_key) {
                 projected_right.insert(
                     right_key.clone(),
-                    project_if_present(right, &index, value, center)?,
+                    project_if_present(right, index, value, center)?,
                 );
             }
             if let (Some(child_left), Some(child_right)) = (
@@ -1341,5 +1386,290 @@ mod tests {
             choose_split_index(&subdomain, &1, &sequential).unwrap(),
             Some(site0)
         );
+    }
+
+    /// A contraction group of two pairs `(L, R_q)`, `q = 0, 1`, where
+    /// `L = delta(x, c2)` and `R_q` is `delta(c2, y)` restricted to `c1 = q`,
+    /// times unit vectors on the remaining sites. Each contribution is
+    /// `delta(x, y)` (rank two across every edge between `x` and `y`), both
+    /// share the empty output projector, and fixing `x` makes them rank one.
+    struct SaturatedGroup {
+        pairs: Vec<(SubDomainTreeTN, SubDomainTreeTN)>,
+        center: usize,
+        x: DynIndex,
+        c1: DynIndex,
+        /// Dense value of the whole group sum.
+        expected: IdxTensor,
+    }
+
+    fn delta_values(dims: &[usize], equal: (usize, usize)) -> Vec<f64> {
+        // Column-major: the first index varies fastest.
+        let len: usize = dims.iter().product();
+        (0..len)
+            .map(|mut flat| {
+                let mut coords = Vec::with_capacity(dims.len());
+                for &dim in dims {
+                    coords.push(flat % dim);
+                    flat /= dim;
+                }
+                if coords[equal.0] == coords[equal.1] {
+                    1.0
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    }
+
+    fn right_patches(right: &TreeTN<IdxTensor, usize>, c1: &DynIndex) -> Vec<SubDomainTreeTN> {
+        (0..2)
+            .map(|q| {
+                SubDomainTreeTN::new(
+                    right.clone(),
+                    Projector::from_pairs([(c1.clone(), q)]).unwrap(),
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    /// Chain `0 - 1`: `x` at node 0 and `y` at node 1.
+    fn chain_saturated_group() -> SaturatedGroup {
+        let x = DynIndex::new_dyn(2);
+        let e = DynIndex::new_dyn(2);
+        let y = DynIndex::new_dyn(2);
+        let c1 = DynIndex::new_dyn(2);
+        let c2 = DynIndex::new_dyn(2);
+        let left_bond = DynIndex::new_bond(2).unwrap();
+        let right_bond = DynIndex::new_bond(1).unwrap();
+        let left = TreeTN::from_tensors(
+            vec![
+                IdxTensor::from_dense(
+                    vec![x.clone(), left_bond.clone()],
+                    delta_values(&[2, 2], (0, 1)),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(
+                    vec![left_bond, c1.clone(), c2.clone()],
+                    delta_values(&[2, 2, 2], (0, 2)),
+                )
+                .unwrap(),
+            ],
+            vec![0usize, 1],
+        )
+        .unwrap();
+        let right = TreeTN::from_tensors(
+            vec![
+                IdxTensor::from_dense(vec![e.clone(), right_bond.clone()], vec![1.0, 0.0]).unwrap(),
+                IdxTensor::from_dense(
+                    vec![right_bond, c1.clone(), c2, y.clone()],
+                    delta_values(&[1, 2, 2, 2], (2, 3)),
+                )
+                .unwrap(),
+            ],
+            vec![0usize, 1],
+        )
+        .unwrap();
+        let left = SubDomainTreeTN::from_treetn(left).unwrap();
+        let pairs = right_patches(&right, &c1)
+            .into_iter()
+            .map(|right| (left.clone(), right))
+            .collect();
+        // 2 * u(e) * delta(x, y) over [x, e, y] with u = (1, 0).
+        let expected_values = delta_values(&[2, 2, 2], (0, 2))
+            .into_iter()
+            .enumerate()
+            .map(|(flat, value)| {
+                if (flat / 2) % 2 == 0 {
+                    2.0 * value
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        SaturatedGroup {
+            pairs,
+            center: 0,
+            x: x.clone(),
+            c1,
+            expected: IdxTensor::from_dense(vec![x, e, y], expected_values).unwrap(),
+        }
+    }
+
+    /// Star with center 0 and leaves 1 and 2: `x` at leaf 1, `y` at leaf 2,
+    /// so the rank-two correlation passes through the branching center.
+    fn star_saturated_group() -> SaturatedGroup {
+        let x = DynIndex::new_dyn(2);
+        let g = DynIndex::new_dyn(2);
+        let h = DynIndex::new_dyn(2);
+        let e = DynIndex::new_dyn(2);
+        let y = DynIndex::new_dyn(2);
+        let c1 = DynIndex::new_dyn(2);
+        let c2 = DynIndex::new_dyn(2);
+        let a1 = DynIndex::new_bond(2).unwrap();
+        let a2 = DynIndex::new_bond(2).unwrap();
+        let r1 = DynIndex::new_bond(1).unwrap();
+        let r2 = DynIndex::new_bond(1).unwrap();
+        // Left: v(g) * delta(x, c2) with v = (1, 1).
+        let left = TreeTN::from_tensors(
+            vec![
+                IdxTensor::from_dense(
+                    vec![a1.clone(), a2.clone(), g.clone()],
+                    delta_values(&[2, 2, 2], (0, 1)),
+                )
+                .unwrap(),
+                IdxTensor::from_dense(vec![x.clone(), a1], delta_values(&[2, 2], (0, 1))).unwrap(),
+                IdxTensor::from_dense(
+                    vec![a2, c1.clone(), c2.clone()],
+                    delta_values(&[2, 2, 2], (0, 2)),
+                )
+                .unwrap(),
+            ],
+            vec![0usize, 1, 2],
+        )
+        .unwrap();
+        // Right: u(h) * u(e) * delta(c2, y) with u = (1, 0).
+        let right = TreeTN::from_tensors(
+            vec![
+                IdxTensor::from_dense(vec![r1.clone(), r2.clone(), e.clone()], vec![1.0, 0.0])
+                    .unwrap(),
+                IdxTensor::from_dense(vec![h.clone(), r1], vec![1.0, 0.0]).unwrap(),
+                IdxTensor::from_dense(
+                    vec![r2, c1.clone(), c2, y.clone()],
+                    delta_values(&[1, 2, 2, 2], (2, 3)),
+                )
+                .unwrap(),
+            ],
+            vec![0usize, 1, 2],
+        )
+        .unwrap();
+        let left = SubDomainTreeTN::from_treetn(left).unwrap();
+        let pairs = right_patches(&right, &c1)
+            .into_iter()
+            .map(|right| (left.clone(), right))
+            .collect();
+        // 2 * v(g) * u(h) * u(e) * delta(x, y) over [x, g, h, e, y].
+        let expected_values = delta_values(&[2, 2, 2, 2, 2], (0, 4))
+            .into_iter()
+            .enumerate()
+            .map(|(flat, value)| {
+                let h_zero = (flat / 4) % 2 == 0;
+                let e_zero = (flat / 8) % 2 == 0;
+                if h_zero && e_zero {
+                    2.0 * value
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        SaturatedGroup {
+            pairs,
+            center: 0,
+            x: x.clone(),
+            c1,
+            expected: IdxTensor::from_dense(vec![x, g, h, e, y], expected_values).unwrap(),
+        }
+    }
+
+    /// Run one group with cap two and return the patches and the number of
+    /// exact group sums that were built and then discarded by a split.
+    fn run_group(
+        group: &SaturatedGroup,
+        split_strategy: PatchSplitStrategy,
+        patch_order: Vec<DynIndex>,
+    ) -> (Vec<SubDomainTreeTN>, usize) {
+        DISCARDED_GROUP_PROBES.with(|count| count.set(0));
+        let contraction =
+            ContractionOptions::default().with_svd_policy(SvdTruncationPolicy::new(1.0e-12));
+        let patching = PatchingOptions {
+            cutoff: 0.0,
+            max_bond_dim: Some(2),
+            patch_order,
+            split_strategy,
+        };
+        let result = contract_group_project_first(
+            group.pairs.clone(),
+            None,
+            &group.center,
+            &contraction,
+            &patching,
+        )
+        .unwrap();
+        (result, DISCARDED_GROUP_PROBES.with(|count| count.get()))
+    }
+
+    fn dense_error(result: Vec<SubDomainTreeTN>, expected: &IdxTensor) -> f64 {
+        PartitionedTreeTN::from_subdomains(result)
+            .unwrap()
+            .to_treetn()
+            .unwrap()
+            .to_dense()
+            .unwrap()
+            .sub(expected)
+            .unwrap()
+            .maxabs()
+            .unwrap()
+    }
+
+    fn assert_split_on_x(result: &[SubDomainTreeTN], x: &DynIndex) {
+        assert_eq!(result.len(), 2);
+        let mut coordinates: Vec<_> = result
+            .iter()
+            .map(|patch| patch.projector().get(x).unwrap())
+            .collect();
+        coordinates.sort_unstable();
+        assert_eq!(coordinates, vec![0, 1]);
+        assert!(result.iter().all(|patch| patch.max_bond_dim() == 1));
+    }
+
+    #[test]
+    fn sequential_split_skips_group_sum_when_a_contribution_saturates() {
+        for group in [chain_saturated_group(), star_saturated_group()] {
+            let (result, discarded) = run_group(
+                &group,
+                PatchSplitStrategy::Sequential,
+                vec![group.x.clone()],
+            );
+
+            assert_eq!(discarded, 0);
+            assert_split_on_x(&result, &group.x);
+            let error = dense_error(result, &group.expected);
+            assert!(error < 1.0e-12, "max abs error {error}");
+        }
+    }
+
+    #[test]
+    fn exact_parameter_gain_still_builds_the_group_probe() {
+        for group in [chain_saturated_group(), star_saturated_group()] {
+            let (result, discarded) = run_group(
+                &group,
+                PatchSplitStrategy::ExactParameterGain,
+                vec![group.x.clone()],
+            );
+
+            assert_eq!(discarded, 1);
+            assert_split_on_x(&result, &group.x);
+            let error = dense_error(result, &group.expected);
+            assert!(error < 1.0e-12, "max abs error {error}");
+        }
+    }
+
+    #[test]
+    fn sequential_without_split_index_returns_the_group_sum() {
+        // `c1` is contracted away, so no output index is available to split.
+        for group in [chain_saturated_group(), star_saturated_group()] {
+            let (result, discarded) = run_group(
+                &group,
+                PatchSplitStrategy::Sequential,
+                vec![group.c1.clone()],
+            );
+
+            assert_eq!(discarded, 0);
+            assert_eq!(result.len(), 1);
+            assert!(result[0].projector().is_empty());
+            assert_eq!(result[0].max_bond_dim(), 2);
+            let error = dense_error(result, &group.expected);
+            assert!(error < 1.0e-12, "max abs error {error}");
+        }
     }
 }
