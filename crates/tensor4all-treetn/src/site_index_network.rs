@@ -146,6 +146,12 @@ where
     }
 
     /// Get the site space (physical indices) for a node.
+    ///
+    /// The site space is an unordered set used for membership and equality
+    /// checks. Do not derive an output order from iterating it; for a
+    /// [`TreeTN`](crate::TreeTN), use
+    /// [`TreeTN::node_site_indices`](crate::TreeTN::node_site_indices), which
+    /// follows the node tensor's leg order.
     pub fn site_space(&self, node_name: &NodeName) -> Option<&HashSet<I>> {
         self.site_spaces.get(node_name)
     }
@@ -342,7 +348,7 @@ where
         self.topology.node_name(node)
     }
 
-    /// Get all node names.
+    /// Get all node names, in `NodeIndex` (insertion) order.
     pub fn node_names(&self) -> Vec<&NodeName> {
         self.topology.node_names()
     }

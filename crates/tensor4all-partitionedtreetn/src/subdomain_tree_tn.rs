@@ -84,19 +84,15 @@ where
 
     /// Return all full site indices, including every axis on every node.
     ///
-    /// The order is unspecified because TreeTN site spaces are sets. Full
-    /// index equality, rather than ID-only equality, is used by the stored
-    /// network and projector.
+    /// Nodes appear in the stored TreeTN's node order and each node's axes in
+    /// its tensor's leg order ([`TreeTN::node_site_indices`]), the same order
+    /// as the TreeTN's `external_indices()`. Full index equality, rather than
+    /// ID-only equality, is used by the stored network and projector.
     pub fn all_indices(&self) -> Vec<DynIndex> {
         self.data
             .node_names()
             .into_iter()
-            .flat_map(|name| {
-                self.data
-                    .site_space(&name)
-                    .into_iter()
-                    .flat_map(|indices| indices.iter().cloned())
-            })
+            .flat_map(|name| self.data.node_site_indices(&name).unwrap_or_default())
             .collect()
     }
 

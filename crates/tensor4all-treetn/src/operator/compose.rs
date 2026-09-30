@@ -223,7 +223,10 @@ where
 
     // 3. Identify gap nodes
     let all_target_nodes: HashSet<V> = target.node_names().into_iter().cloned().collect();
-    let gaps: Vec<V> = all_target_nodes.difference(&covered).cloned().collect();
+    // Sorted so the composed MPO's node order (and hence its from_tensors edge
+    // order) does not depend on hash-set iteration order.
+    let mut gaps: Vec<V> = all_target_nodes.difference(&covered).cloned().collect();
+    gaps.sort();
     let gap_set: HashSet<V> = gaps.iter().cloned().collect();
 
     // 4. Identify cross-component edges and create dummy link pairs
@@ -260,9 +263,13 @@ where
     let mut combined_input_mapping: HashMap<V, Vec<IndexMapping<T::Index>>> = HashMap::new();
     let mut combined_output_mapping: HashMap<V, Vec<IndexMapping<T::Index>>> = HashMap::new();
 
-    // 5a. Add tensors from operators (with dummy links added via outer product)
+    // 5a. Add tensors from operators (with dummy links added via outer product).
+    // `Operator::node_names` is a HashSet; visit it sorted for a deterministic
+    // node order.
     for op in operators {
-        for name in op.node_names() {
+        let mut op_node_names: Vec<V> = op.node_names().into_iter().collect();
+        op_node_names.sort();
+        for name in op_node_names {
             let node_idx = op
                 .mpo()
                 .node_index(&name)

@@ -296,7 +296,11 @@ where
     /// * `other` - The other TreeTN to add
     ///
     /// # Returns
-    /// A new TreeTN representing the sum.
+    /// A new TreeTN representing the sum. Each result node tensor keeps
+    /// `self`'s site legs in `self`'s leg order, followed by the merged bond
+    /// legs ordered by neighbor name; nodes appear in `self.node_names()` order.
+    /// The layout is therefore a deterministic function of `self`, and repeated
+    /// sums such as `(a + b) + c` keep the same layout.
     ///
     /// # Errors
     ///
@@ -356,11 +360,19 @@ where
                 anyhow::anyhow!("Tensor not found for node {:?} in other", node_name)
             })?;
 
-            // Find bond index pairs for this node and track neighbors
+            // Find bond index pairs for this node and track neighbors.
+            // `direct_sum` lays out the merged bonds in `bond_pairs` order, so
+            // iterate neighbors sorted by name: the bond layout of the result
+            // then depends only on the topology, not on the petgraph edge order
+            // left behind by however `self` was built, and it is the same for
+            // `a + b` and for chained sums such as `(a + b) + c`.
             let mut bond_pairs: Vec<(T::Index, T::Index)> = Vec::new();
             let mut neighbors_for_edges: Vec<V> = Vec::new();
+            let mut sorted_neighbors: Vec<V> =
+                self.site_index_network().neighbors(&node_name).collect();
+            sorted_neighbors.sort();
 
-            for neighbor in self.site_index_network().neighbors(&node_name) {
+            for neighbor in sorted_neighbors {
                 // Get bond index from self
                 let self_edge = self.edge_between(&node_name, &neighbor).ok_or_else(|| {
                     anyhow::anyhow!(

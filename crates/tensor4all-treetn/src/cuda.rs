@@ -363,8 +363,8 @@ where
         let mut expected_node_names = self.node_names();
         expected_node_names.sort();
         for node_name in expected_node_names {
-            if let Some(site_space) = self.site_space(&node_name) {
-                expected_indices.extend(site_space.iter().cloned());
+            if let Some(site_indices) = self.node_site_indices(&node_name) {
+                expected_indices.extend(site_indices);
             }
         }
         let current_indices = result.external_indices();

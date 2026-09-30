@@ -1,5 +1,5 @@
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, IdxTensor, SvdTruncationPolicy};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy};
 use tensor4all_partitionedtreetn::{
     add_with_patching, PartitionedTreeTN, PartitionedTreeTNError, PatchingOptions, Projector,
     SubDomainTreeTN,
@@ -610,4 +610,168 @@ fn empty_and_zero_node_subdomains_have_consistent_semantics() {
         empty.contract(&nonempty, &0, ContractionOptions::default()),
         Err(PartitionedTreeTNError::Empty)
     ));
+}
+
+/// Star-shaped patch data for `to_treetn` layout tests: hub `0` carries the
+/// two projected site indices `hub_sites` (stored as `[bond01, hub_sites[1],
+/// bond02, hub_sites[0], bond03]`), leaves `1, 2, 3` carry `leaf_sites`.
+/// Bonds are fresh for every patch, data is a deterministic function of
+/// `patch`. Tensors are supplied leaves-first so the hub is not the first input.
+fn star_patch_tensors(
+    hub_sites: &[DynIndex; 2],
+    leaf_sites: &[DynIndex; 3],
+    patch: usize,
+) -> (Vec<IdxTensor>, Vec<usize>) {
+    let bonds: Vec<DynIndex> = (0..3).map(|k| DynIndex::new_dyn(2 + k % 2)).collect();
+    let fill = |len: usize, salt: usize| -> Vec<f64> {
+        (0..len)
+            .map(|i| ((i * 7 + salt * 13 + patch * 29) as f64 * 0.377).sin())
+            .collect()
+    };
+    let hub_legs = vec![
+        bonds[0].clone(),
+        hub_sites[1].clone(),
+        bonds[1].clone(),
+        hub_sites[0].clone(),
+        bonds[2].clone(),
+    ];
+    let hub_len = 2 * 2 * 2 * 3 * 2;
+    let mut tensors = Vec::new();
+    let mut names = Vec::new();
+    for (leaf, bond) in [(3usize, 2usize), (1, 0)] {
+        let legs = vec![leaf_sites[leaf - 1].clone(), bonds[bond].clone()];
+        tensors.push(IdxTensor::from_dense(legs, fill(2 * bonds[bond].dim(), leaf)).unwrap());
+        names.push(leaf);
+    }
+    tensors.push(IdxTensor::from_dense(hub_legs, fill(hub_len, 0)).unwrap());
+    names.push(0);
+    let legs = vec![bonds[1].clone(), leaf_sites[1].clone()];
+    tensors.push(IdxTensor::from_dense(legs, fill(2 * bonds[1].dim(), 2)).unwrap());
+    names.push(2);
+    (tensors, names)
+}
+
+/// Positional leg layout of a TreeTN with bond legs identified by neighbor.
+fn positional_layout(tree: &TreeTN<IdxTensor, usize>) -> Vec<(usize, Vec<String>)> {
+    tree.node_names()
+        .into_iter()
+        .map(|node| {
+            let tensor = tree.tensor(tree.node_index(&node).unwrap()).unwrap();
+            let site_space = tree.site_space(&node).unwrap();
+            let legs = tensor
+                .indices()
+                .iter()
+                .map(|index| {
+                    if site_space.contains(index) {
+                        return format!("site:{index:?}");
+                    }
+                    let neighbor = tree
+                        .site_index_network()
+                        .neighbors(&node)
+                        .find(|neighbor| {
+                            let edge = tree.edge_between(&node, neighbor).unwrap();
+                            tree.bond_index(edge).unwrap() == index
+                        })
+                        .unwrap();
+                    format!("bond:{neighbor}:{}", index.dim())
+                })
+                .collect();
+            (node, legs)
+        })
+        .collect()
+}
+
+#[test]
+fn to_treetn_layout_and_values_are_stable_for_branched_multi_patch_sums() {
+    use tensor4all_core::TensorIndex;
+
+    let hub_sites = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+    let leaf_sites = [
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+    ];
+    // Four patches, one per value of the two hub site indices.
+    let patch_inputs: Vec<_> = (0..4)
+        .map(|patch| {
+            let projector = Projector::from_pairs([
+                (hub_sites[0].clone(), patch / 2),
+                (hub_sites[1].clone(), patch % 2),
+            ])
+            .unwrap();
+            (
+                star_patch_tensors(&hub_sites, &leaf_sites, patch),
+                projector,
+            )
+        })
+        .collect();
+    let build = || {
+        let subdomains = patch_inputs
+            .iter()
+            .map(|((tensors, names), projector)| {
+                let tree = TreeTN::from_tensors(tensors.clone(), names.clone()).unwrap();
+                SubDomainTreeTN::new(tree, projector.clone()).unwrap()
+            })
+            .collect();
+        PartitionedTreeTN::from_subdomains(subdomains)
+            .unwrap()
+            .to_treetn()
+            .unwrap()
+    };
+    let bits = |tensor: &IdxTensor| -> Vec<u64> {
+        tensor
+            .to_vec::<f64>()
+            .unwrap()
+            .into_iter()
+            .map(f64::to_bits)
+            .collect()
+    };
+    let fingerprint = |tree: &TreeTN<IdxTensor, usize>| {
+        let dense = tree.to_dense().unwrap();
+        let node_bits: Vec<Vec<u64>> = tree
+            .node_names()
+            .into_iter()
+            .map(|node| bits(tree.tensor(tree.node_index(&node).unwrap()).unwrap()))
+            .collect();
+        (
+            positional_layout(tree),
+            node_bits,
+            tree.external_indices(),
+            dense.indices().to_vec(),
+            bits(&dense),
+        )
+    };
+
+    let reference_tree = build();
+    let reference = fingerprint(&reference_tree);
+    // The hub keeps the patches' site-leg order and lists its merged bonds by
+    // neighbor name; with four patches each bond has dimension 4 * dim.
+    let hub_layout = &reference.0.iter().find(|(node, _)| *node == 0).unwrap().1;
+    assert_eq!(
+        hub_layout,
+        &vec![
+            format!("site:{:?}", hub_sites[1]),
+            format!("site:{:?}", hub_sites[0]),
+            "bond:1:8".to_string(),
+            "bond:2:12".to_string(),
+            "bond:3:8".to_string(),
+        ]
+    );
+    assert_eq!(
+        reference.3,
+        vec![
+            hub_sites[1].clone(),
+            hub_sites[0].clone(),
+            leaf_sites[0].clone(),
+            leaf_sites[1].clone(),
+            leaf_sites[2].clone(),
+        ]
+    );
+    for rebuild in 1..64 {
+        assert_eq!(
+            fingerprint(&build()),
+            reference,
+            "to_treetn rebuild {rebuild} differs from the first build"
+        );
+    }
 }

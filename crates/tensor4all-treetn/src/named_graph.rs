@@ -217,8 +217,15 @@ where
     }
 
     /// Get all node names.
+    ///
+    /// Names are returned in internal `NodeIndex` order (node insertion order
+    /// while no node has been removed), not in hash-map iteration order, so
+    /// callers that build ordered output from this list stay deterministic.
     pub fn node_names(&self) -> Vec<&NodeName> {
-        self.node_name_to_index.keys().collect()
+        self.graph
+            .node_indices()
+            .filter_map(|node| self.index_to_node_name.get(&node))
+            .collect()
     }
 
     /// Get the number of nodes.

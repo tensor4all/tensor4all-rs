@@ -1050,30 +1050,14 @@ pub extern "C" fn t4a_treetn_site_indices(
 ) -> t4a_status_code {
     run_status(|| {
         let tn = require_tree(treetn)?;
-        let node_idx = tn.inner().node_index(&vertex).ok_or_else(|| {
+        // Site legs in the vertex tensor's own leg order (the same order the
+        // Rust `TensorIndex::external_indices` and `to_dense` use).
+        let ordered_indices = tn.inner().node_site_indices(&vertex).ok_or_else(|| {
             capi_error(
                 T4A_INVALID_ARGUMENT,
                 format!("vertex {vertex} does not exist"),
             )
         })?;
-        let tensor = tn.inner().tensor(node_idx).ok_or_else(|| {
-            capi_error(
-                T4A_INVALID_ARGUMENT,
-                format!("vertex {vertex} has no tensor"),
-            )
-        })?;
-        let site_space = tn.inner().site_space(&vertex).ok_or_else(|| {
-            capi_error(
-                T4A_INVALID_ARGUMENT,
-                format!("vertex {vertex} does not exist"),
-            )
-        })?;
-        let ordered_indices: Vec<_> = tensor
-            .indices()
-            .iter()
-            .filter(|index| site_space.contains(*index))
-            .cloned()
-            .collect();
 
         if out_len.is_null() {
             return Err(capi_error(T4A_NULL_POINTER, "out_len is null"));

@@ -23,15 +23,10 @@ fn make_tensor(indices: Vec<DynIndex>) -> IdxTensor {
 }
 
 /// Helper to collect all site (physical) indices from a TreeTN.
-/// This corresponds to `external_indices()` in the original TensorLike trait.
+/// This is `TensorIndex::external_indices()`, which lists nodes in
+/// `node_names()` order and each node's site legs in its tensor's leg order.
 fn collect_site_indices(tn: &TreeTN<IdxTensor, String>) -> Vec<DynIndex> {
-    let mut indices = Vec::new();
-    for node_name in tn.node_names() {
-        if let Some(site_space) = tn.site_space(&node_name) {
-            indices.extend(site_space.iter().cloned());
-        }
-    }
-    indices
+    tn.external_indices()
 }
 
 #[test]
@@ -148,40 +143,45 @@ fn test_treetn_contract_to_tensor() {
 
 #[test]
 fn test_treetn_site_indices_deterministic_ordering() {
-    // Create a TreeTN with multiple connected nodes and verify ordering is deterministic
-    // Structure: C -- A -- B (linear chain)
-    let idx_a = DynIndex::new_dyn(2); // site index for A
+    // Build the same network many times from the same inputs and verify that
+    // every separately built object reports the same, input-derived order.
+    // Structure: C -- A -- B (linear chain), supplied as (C, A, B); A carries
+    // two site indices stored in the order [idx_a2, bond, idx_a1, bond].
+    let idx_a1 = DynIndex::new_dyn(2); // site index for A
+    let idx_a2 = DynIndex::new_dyn(2); // second site index for A
     let idx_b = DynIndex::new_dyn(3); // site index for B
     let idx_c = DynIndex::new_dyn(4); // site index for C
     let bond_ca = DynIndex::new_dyn(2); // bond between C and A
     let bond_ab = DynIndex::new_dyn(2); // bond between A and B
 
-    // Add nodes in non-alphabetical order (C, A, B)
-    // C has site index idx_c and bond to A
-    // A has site index idx_a and bonds to C and B
-    // B has site index idx_b and bond to A
-    let tn = TreeTN::<IdxTensor, String>::from_tensors(
-        vec![
-            make_tensor(vec![idx_c.clone(), bond_ca.clone()]),
-            make_tensor(vec![bond_ca.clone(), idx_a.clone(), bond_ab.clone()]),
-            make_tensor(vec![bond_ab.clone(), idx_b.clone()]),
-        ],
-        vec!["C".to_string(), "A".to_string(), "B".to_string()],
-    )
-    .unwrap();
+    let tensors = vec![
+        make_tensor(vec![idx_c.clone(), bond_ca.clone()]),
+        make_tensor(vec![
+            idx_a2.clone(),
+            bond_ca.clone(),
+            idx_a1.clone(),
+            bond_ab.clone(),
+        ]),
+        make_tensor(vec![bond_ab.clone(), idx_b.clone()]),
+    ];
+    let names = vec!["C".to_string(), "A".to_string(), "B".to_string()];
 
-    // Site indices - node names are deterministic (from the same TreeTN)
-    let site_indices = collect_site_indices(&tn);
-    assert_eq!(site_indices.len(), 3);
+    // Nodes in input order, site legs in each tensor's leg order.
+    let expected = vec![idx_c.clone(), idx_a2.clone(), idx_a1.clone(), idx_b.clone()];
+    // to_dense orders nodes by name: A, B, C.
+    let expected_dense = vec![idx_a2, idx_a1, idx_b, idx_c];
 
-    // First call
-    let ids1: Vec<_> = site_indices.iter().map(|idx| idx.id()).collect();
-
-    // Second call should give same order
-    let site_indices2 = collect_site_indices(&tn);
-    let ids2: Vec<_> = site_indices2.iter().map(|idx| idx.id()).collect();
-
-    assert_eq!(ids1, ids2, "site_indices should be deterministic");
+    for _ in 0..64 {
+        let tn = TreeTN::<IdxTensor, String>::from_tensors(tensors.clone(), names.clone()).unwrap();
+        assert_eq!(
+            collect_site_indices(&tn),
+            expected,
+            "external_indices must be a deterministic function of the input"
+        );
+        assert_eq!(tn.num_external_indices(), expected.len());
+        let dense = tn.to_dense().unwrap();
+        assert_eq!(dense.indices(), expected_dense.as_slice());
+    }
 }
 
 // Note: The following tests from the original file have been removed because

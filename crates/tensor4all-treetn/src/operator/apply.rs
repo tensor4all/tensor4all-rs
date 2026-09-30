@@ -987,7 +987,8 @@ where
         .difference(&op_node_indices)
         .copied()
         .collect();
-    let gap_nodes: Vec<V> = state_nodes.difference(&op_nodes).cloned().collect();
+    let mut gap_nodes: Vec<V> = state_nodes.difference(&op_nodes).cloned().collect();
+    gap_nodes.sort();
 
     // Build gap site indices: for each gap node, create internal indices for the identity tensor.
     // The (input_internal, output_internal) pairs are used to build the delta tensor.
@@ -1001,8 +1002,10 @@ where
     let mut gap_output_mappings: HashMap<V, Vec<IndexMapping<T::Index>>> = HashMap::new();
 
     for gap_name in &gap_nodes {
+        // Site legs in the state tensor's leg order, so the identity tensor's
+        // layout does not depend on hash-set iteration order.
         let site_space = state
-            .site_space(gap_name)
+            .node_site_indices(gap_name)
             .ok_or_else(|| anyhow::anyhow!("Gap node {:?} has no site space", gap_name))?;
 
         // For identity at gap nodes:
@@ -1010,7 +1013,7 @@ where
         // - Internal indices = new simulated indices for the MPO tensor
         let mut pairs: Vec<(T::Index, T::Index)> = Vec::new();
 
-        for true_idx in site_space {
+        for true_idx in &site_space {
             let input_internal = true_idx.sim();
             let output_internal = true_idx.sim();
             pairs.push((input_internal.clone(), output_internal.clone()));

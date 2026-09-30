@@ -270,7 +270,13 @@ where
 
         // Step 2: Build a map from full index metadata to (node_index, index) pairs in O(n) time.
         // Same-id indices that differ by prime level or tags are distinct site legs.
+        // `first_seen` records each index once, in input order (tensor position,
+        // then leg position), so that edges are connected in a deterministic
+        // order below. Iterating `index_map` directly would make the petgraph
+        // edge insertion order, and with it every neighbor-ordered traversal,
+        // depend on the hasher state.
         let mut index_map: HashMap<T::Index, Vec<(NodeIndex, T::Index)>> = HashMap::new();
+        let mut first_seen: Vec<T::Index> = Vec::new();
 
         for node_idx in &node_indices {
             let tensor = treetn
@@ -280,14 +286,18 @@ where
             for index in tensor.external_indices() {
                 index_map
                     .entry(index.clone())
-                    .or_insert_with(Vec::new)
+                    .or_insert_with(|| {
+                        first_seen.push(index.clone());
+                        Vec::new()
+                    })
                     .push((*node_idx, index.clone()));
             }
         }
 
-        // Step 3: Connect nodes that share the same full index.
+        // Step 3: Connect nodes that share the same full index, in first-occurrence order.
         // For TreeTN (tree structure), each bond index should appear in exactly 2 tensors.
-        for (shared_index, nodes_with_index) in index_map {
+        for shared_index in first_seen {
+            let nodes_with_index = index_map.remove(&shared_index).unwrap_or_default();
             match nodes_with_index.len() {
                 0 => continue,
                 1 => {
@@ -432,7 +442,9 @@ where
 
     /// Internal method to add a tensor with a node name.
     pub(crate) fn add_tensor_internal(&mut self, node_name: V, tensor: T) -> Result<NodeIndex> {
-        // Extract physical indices: initially all indices are physical (no connections yet)
+        // Extract physical indices: initially all indices are physical (no connections yet).
+        // The site space only records membership; ordered views of the site legs
+        // (`node_site_indices`) are read from the tensor's own leg order.
         let physical_indices: HashSet<T::Index> = tensor.external_indices().into_iter().collect();
 
         // Add to graph
@@ -1437,6 +1449,10 @@ where
     }
 
     /// Get all node names in the tree tensor network.
+    ///
+    /// Names are returned in internal `NodeIndex` order, which is the order in
+    /// which nodes were added (for [`from_tensors`](Self::from_tensors), the
+    /// input order) as long as no node has been removed.
     pub fn node_names(&self) -> Vec<V> {
         self.graph
             .graph()
@@ -1559,8 +1575,65 @@ where
     }
 
     /// Get a reference to the site space (physical indices) for a node.
+    ///
+    /// The returned set is for membership tests and carries no order. Use
+    /// [`node_site_indices`](Self::node_site_indices) when the order of the
+    /// site legs matters.
     pub fn site_space(&self, node_name: &V) -> Option<&std::collections::HashSet<T::Index>> {
         self.site_index_network.site_space(node_name)
+    }
+
+    /// Return a node's site (physical) indices in the node tensor's leg order.
+    ///
+    /// The result is the node tensor's `external_indices()` with the bond
+    /// legs removed, so it follows the order in which the tensor stores its
+    /// legs (for tensors passed to [`from_tensors`](Self::from_tensors), the
+    /// order they were constructed with). This is the per-node order used by
+    /// [`TensorIndex::external_indices`](tensor4all_core::TensorIndex::external_indices),
+    /// [`all_site_indices`](Self::all_site_indices) and
+    /// [`contract_to_tensor`](Self::contract_to_tensor).
+    ///
+    /// # Arguments
+    /// * `node_name` - The node whose site legs are requested.
+    ///
+    /// # Returns
+    /// `Some(indices)` when the node exists (empty if it has no site legs),
+    /// `None` when the node or its tensor is missing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let s_a = DynIndex::new_dyn(2);
+    /// let s_b = DynIndex::new_dyn(3);
+    /// let bond = DynIndex::new_dyn(2);
+    /// let s_c = DynIndex::new_dyn(2);
+    /// // Node 0 stores its legs as [s_b, bond, s_a].
+    /// let t0 = IdxTensor::from_dense(
+    ///     vec![s_b.clone(), bond.clone(), s_a.clone()],
+    ///     vec![0.0_f64; 12],
+    /// )
+    /// .unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![bond, s_c.clone()], vec![0.0_f64; 4]).unwrap();
+    /// let tn = TreeTN::<_, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
+    ///
+    /// assert_eq!(tn.node_site_indices(&0), Some(vec![s_b, s_a]));
+    /// assert_eq!(tn.node_site_indices(&1), Some(vec![s_c]));
+    /// assert_eq!(tn.node_site_indices(&2), None);
+    /// ```
+    pub fn node_site_indices(&self, node_name: &V) -> Option<Vec<T::Index>> {
+        let site_space = self.site_index_network.site_space(node_name)?;
+        let node = self.graph.node_index(node_name)?;
+        let tensor = self.tensor(node)?;
+        Some(
+            tensor
+                .external_indices()
+                .into_iter()
+                .filter(|index| site_space.contains(index))
+                .collect(),
+        )
     }
 
     /// Validate that this network has a connected, simple linear-chain topology.

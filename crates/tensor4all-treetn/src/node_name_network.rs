@@ -210,7 +210,7 @@ where
         self.graph.rename_node(old_name, new_name)
     }
 
-    /// Get all node names.
+    /// Get all node names, in `NodeIndex` (insertion) order.
     pub fn node_names(&self) -> Vec<&NodeName> {
         self.graph.node_names()
     }
@@ -529,6 +529,7 @@ where
     ///
     /// The edges are ordered so that nodes farther from the target region are processed first
     /// (children before parents), which is the correct order for canonicalization.
+    /// Nodes at equal distance are ordered by `NodeIndex`, so the order is deterministic.
     ///
     /// # Arguments
     /// * `target_region` - Set of NodeIndex that forms the canonical center region
@@ -557,8 +558,11 @@ where
         let mut parent: HashMap<NodeIndex, NodeIndex> = HashMap::new();
         let mut queue = VecDeque::new();
 
-        // Initialize all target region nodes at distance 0
-        for &node in target_region {
+        // Initialize all target region nodes at distance 0, seeded in NodeIndex
+        // order so the traversal does not depend on the hash set's iteration order.
+        let mut seeds: Vec<NodeIndex> = target_region.iter().copied().collect();
+        seeds.sort_unstable();
+        for node in seeds {
             dist.insert(node, 0);
             queue.push_back(node);
         }
@@ -578,15 +582,19 @@ where
             }
         }
 
-        // Collect edges from nodes outside target region towards their parent
-        // Sort by distance (descending) so farther nodes are processed first
+        // Collect edges from nodes outside target region towards their parent.
+        // Sort by distance (descending) so farther nodes are processed first, and
+        // break ties by NodeIndex: `dist` is a HashMap, so without the tie-break
+        // the order of equally distant nodes (e.g. the leaves of a star) would
+        // follow the hasher state, and so would the order in which factors are
+        // absorbed into a shared parent (a floating-point summation order).
         let mut node_dist_pairs: Vec<(NodeIndex, usize)> = dist
             .iter()
             .filter(|(node, _)| !target_region.contains(node))
             .map(|(&node, &d)| (node, d))
             .collect();
 
-        node_dist_pairs.sort_by_key(|pair| std::cmp::Reverse(pair.1)); // Descending by distance
+        node_dist_pairs.sort_unstable_by_key(|&(node, d)| (std::cmp::Reverse(d), node));
 
         let edges: Vec<(NodeIndex, NodeIndex)> = node_dist_pairs
             .iter()

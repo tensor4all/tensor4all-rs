@@ -47,13 +47,16 @@ where
 
     /// Return all external (site/physical) indices from all nodes.
     ///
-    /// This collects all site indices from `site_index_network`.
-    /// Bond indices are NOT included (they are internal to the network).
+    /// Nodes are visited in [`TreeTN::node_names`] order, and each node's site
+    /// legs follow the node tensor's own leg order
+    /// ([`TreeTN::node_site_indices`]), so the result is a deterministic
+    /// function of the network. Bond indices are NOT included (they are
+    /// internal to the network).
     fn external_indices(&self) -> Vec<Self::Index> {
         let mut result = Vec::new();
         for node_name in self.node_names() {
-            if let Some(site_space) = self.site_space(&node_name) {
-                result.extend(site_space.iter().cloned());
+            if let Some(site_indices) = self.node_site_indices(&node_name) {
+                result.extend(site_indices);
             }
         }
         result
