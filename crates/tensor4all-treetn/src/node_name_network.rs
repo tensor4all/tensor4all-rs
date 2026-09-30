@@ -558,10 +558,15 @@ where
         let mut parent: HashMap<NodeIndex, NodeIndex> = HashMap::new();
         let mut queue = VecDeque::new();
 
-        // Initialize all target region nodes at distance 0. The seeding order
-        // does not matter: in a tree, each node outside a connected region has a
-        // unique distance and parent.
-        for &node in target_region {
+        // Initialize all target region nodes at distance 0, seeded in NodeIndex
+        // order. For a connected region in a tree the order does not matter
+        // (each outside node has a unique distance and parent), but this public
+        // method does not check connectivity: for a disconnected region a node
+        // equidistant from two region nodes takes its parent from whichever seed
+        // is dequeued first, which must not follow hash-set iteration order.
+        let mut seeds: Vec<NodeIndex> = target_region.iter().copied().collect();
+        seeds.sort_unstable();
+        for node in seeds {
             dist.insert(node, 0);
             queue.push_back(node);
         }

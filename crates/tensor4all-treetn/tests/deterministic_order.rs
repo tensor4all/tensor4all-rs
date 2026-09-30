@@ -700,3 +700,23 @@ fn decomposition_leg_order_follows_the_tensor_not_the_topology_lists() {
     assert_eq!(site_legs(1), vec![x2.clone(), x1.clone()]);
     assert_eq!(site_legs(2), vec![y.clone()]);
 }
+
+#[test]
+fn region_canonicalization_order_is_deterministic_for_a_disconnected_region() {
+    // The public edge-order helpers do not check connectivity. For the
+    // disconnected region {0, 2} of the chain 0 - 1 - 2, node 1 is equally
+    // far from both region nodes; its parent must not follow hash order.
+    for _ in 0..REBUILDS {
+        let mut network = SiteIndexNetwork::<usize, DynIndex>::new();
+        for node in 0..3 {
+            network.add_node(node, HashSet::new()).unwrap();
+        }
+        network.add_edge(&0, &1).unwrap();
+        network.add_edge(&1, &2).unwrap();
+        let edges = network
+            .edges_to_canonicalize_to_region_by_names(&HashSet::from([0, 2]))
+            .unwrap();
+        // Seeds are visited in NodeIndex order, so node 0 claims node 1 first.
+        assert_eq!(edges, vec![(1, 0)]);
+    }
+}

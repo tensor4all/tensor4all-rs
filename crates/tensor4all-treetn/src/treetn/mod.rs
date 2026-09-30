@@ -70,6 +70,10 @@ pub use partial_contraction::{
 // Re-export swap types
 pub use swap::{ScheduledSwapStep, SwapOptions, SwapSchedule};
 
+/// Legs grouped by full index, in first-occurrence order: each entry is an
+/// index and the `(node, leg)` pairs that carry it (used by `from_tensors`).
+type IndexGroups<I> = Vec<(I, Vec<(NodeIndex, I)>)>;
+
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
 /// Maintains a graph of tensors connected by bonds (edges).
 /// Each node stores a tensor, and edges store `Connection` objects
@@ -275,8 +279,7 @@ where
         // connected in a deterministic order below. Iterating a HashMap instead
         // would make the petgraph edge insertion order, and with it every
         // neighbor-ordered traversal, depend on the hasher state.
-        #[allow(clippy::type_complexity)]
-        let mut groups: Vec<(T::Index, Vec<(NodeIndex, T::Index)>)> = Vec::new();
+        let mut groups: IndexGroups<T::Index> = Vec::new();
         let mut group_of: HashMap<T::Index, usize> = HashMap::new();
 
         for node_idx in &node_indices {
