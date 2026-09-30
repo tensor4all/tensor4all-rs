@@ -57,4 +57,43 @@ to the largest `|tt|`, were:
 Starts whose best error stays below the threshold had near-ties down to 9.4e-16,
 but those starts return no pivot. The pointwise `TreeTN::evaluate` is not
 bit-reproducible across calls on one tree (78 of 200 values differed in a
-check), while the cached readout reproduced its values bit for bit.
+check), while the cached readout reproduced its values bit for bit within one
+process. Reproducibility across threads or processes was not checked here.
+
+## Rerun on the #793 base
+
+After the branch was rebased onto `9ad67f2c` (#793), the comparison was
+repeated with the same protocol. The baseline was `abff46e9`: the benchmark on
+`9ad67f2c`, with the pointwise readout. The candidate was `4f3bf03d`: the
+cached readout. Both use `StdRng`. Each commit was built in its own detached
+worktree with its own target directory. The three binaries of this rerun had
+distinct SHA-256 hashes: baseline `48e93eb2...`, candidate `312a56a3...`,
+`dcc91f58` baseline `6418ca0c...`.
+
+For every case the two builds again print identical evaluation counts, rank
+histories, error bit patterns, pivot fingerprints and sampled-result
+fingerprints. The values are the same as in the tables above, so #793 did not
+change the result of this workload.
+
+| case | baseline run 1 | candidate run 1 | baseline run 2 | candidate run 2 | speed-up |
+|---|---|---|---|---|---|
+| `chain_cos_129` | 17.28 | 0.371 | 17.16 | 0.375 | 46x |
+| `quantics_chain_r20` | 0.420 | 0.0174 | 0.405 | 0.0155 | 24-26x |
+| `tree_3x10_plus_centre` | 0.965 | 0.0322 | 0.949 | 0.0329 | 29-30x |
+
+Times are medians of three repeats, in seconds. `chain_cos_129` was also run
+with the `dcc91f58` baseline (`8868e816`) in the same session: 16.30 s and
+16.66 s, which is not faster than `abff46e9`. So #793 did not change the cost
+of the pointwise readout.
+
+An earlier rerun on this base reported mixed timings with no speed-up. Its
+baseline times (about 0.38 s for `chain_cos_129`) match the cached readout, not
+the pointwise one. That baseline binary most likely contained the cached
+readout, so the rerun is discarded.
+
+The branch also switches the global search from `StdRng` to the named
+`ChaCha8Rng`. That changes the random starting points for a fixed seed, and
+with them the recorded pivots and error histories in the unit tests. The timing
+comparison above predates that switch and was not repeated with `ChaCha8Rng`.
+The readout-rounding margins in the previous section were measured on the
+`dcc91f58`/`StdRng` base and were not re-measured.

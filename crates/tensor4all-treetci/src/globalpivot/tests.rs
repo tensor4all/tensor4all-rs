@@ -1,14 +1,19 @@
-use super::{cached_batched_readout, find_global_pivots, search_with_readout, SearchParams};
+use super::{
+    cached_batched_readout, find_global_pivots, search_with_readout, ScalarParts, SearchParams,
+};
 use crate::{
     materialize::to_treetn, optimize_with_proposer, DefaultProposer, GlobalIndexBatch, TreeTCI2,
     TreeTciEdge, TreeTciGraph, TreeTciOptions,
 };
 use anyhow::Result;
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use std::cell::RefCell;
-use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor};
+use tensor4all_core::{
+    AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor, MatrixLuciScalar as Scalar, TensorElement,
+};
+use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::TreeTN;
 
 /// Batch evaluator for a two-peak function on a 10-site chain.
@@ -414,8 +419,8 @@ fn assert_readout_matches_pointwise(treetn: &TreeTN<IdxTensor, usize>, local_dim
         assert!((value.clone() - single).abs() <= 1e-13 * scale);
     }
 
-    // A fresh evaluator reproduces the values bit for bit, so a fixed-seed
-    // search stays reproducible.
+    // Fresh evaluators on this tree reproduce the same batch values bit for
+    // bit within this process.
     let again = cached_batched_readout(treetn, &indices, points).unwrap();
     for (a, b) in cached.iter().zip(&again) {
         assert_eq!(a.real().to_bits(), b.real().to_bits());
@@ -460,6 +465,78 @@ fn cached_readout_matches_pointwise_evaluate_for_complex_scalars() {
     assert_readout_matches_pointwise(&treetn, &fixture.local_dims);
 }
 
+/// Exercises TreeTCI's materialize-and-search route for the two scalar kinds
+/// that use the cached evaluator's generic contraction path. The raw-message
+/// kernels are intentionally limited to f64/c64, so these trees must take the
+/// `IdxTensor` fallback even though `to_treetn` creates one physical site per
+/// node.
+fn assert_32bit_global_search_uses_generic_readout<T, F>(evaluate: F)
+where
+    T: FullPivLuScalar + Scalar + TensorElement + ScalarParts,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>> + Copy,
+{
+    let fixture = chain_fixture();
+    let n_sites = fixture.local_dims.len();
+    let origin = vec![0usize; n_sites];
+    let mut state = TreeTCI2::<T>::new(fixture.local_dims.clone(), fixture.graph()).unwrap();
+    state
+        .add_global_pivots(std::slice::from_ref(&origin))
+        .unwrap();
+    state.max_sample_value = 1.0;
+
+    let treetn = to_treetn(&state, evaluate, None).unwrap();
+    let indices = site_indices(&treetn);
+    let n_points = 8;
+    let local_dims = &fixture.local_dims;
+    let flat: Vec<usize> = (0..n_points)
+        .flat_map(|point| (0..n_sites).map(move |site| (point * 7 + site * 3) % local_dims[site]))
+        .collect();
+    let shape = [n_sites, n_points];
+    let candidates = ColMajorArrayRef::new(&flat, &shape).unwrap();
+    let cached = cached_batched_readout(&treetn, &indices, candidates).unwrap();
+    let reference = treetn.evaluate(&indices, candidates).unwrap();
+    let scale = reference.iter().map(AnyScalar::abs).fold(0.0f64, f64::max);
+    let max_diff = cached
+        .iter()
+        .zip(&reference)
+        .map(|(cached, pointwise)| (cached.clone() - pointwise.clone()).abs())
+        .fold(0.0f64, f64::max);
+    assert!(
+        max_diff <= 1e-5 * scale.max(1.0),
+        "32-bit cached readout differs from TreeTN::evaluate by {max_diff:e} (scale {scale:e})"
+    );
+
+    // Exercise the supported public search entry point too: it builds the
+    // same cached evaluator internally while comparing target and TT values.
+    let pivots = find_global_pivots(&state, evaluate, 8, 4, 1.0, 1e-6, 792).unwrap();
+    assert!(
+        !pivots.is_empty(),
+        "the generic 32-bit readout found no pivots"
+    );
+}
+
+#[test]
+fn global_search_supports_f32_and_complex32_cached_fallback() {
+    let real_eval = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f32>> {
+        Ok(batch
+            .data()
+            .chunks(batch.n_sites())
+            .map(|point| quantics_chain_target(point) as f32)
+            .collect())
+    };
+    assert_32bit_global_search_uses_generic_readout(real_eval);
+
+    let phase = Complex32::new(1.0, 0.5);
+    let complex_eval = move |batch: GlobalIndexBatch<'_>| -> Result<Vec<Complex32>> {
+        Ok(batch
+            .data()
+            .chunks(batch.n_sites())
+            .map(|point| phase * quantics_chain_target(point) as f32)
+            .collect())
+    };
+    assert_32bit_global_search_uses_generic_readout(complex_eval);
+}
+
 #[test]
 fn cached_readout_rejects_mismatched_indices_and_shapes() {
     let fixture = chain_fixture();
@@ -480,37 +557,37 @@ fn cached_readout_rejects_mismatched_indices_and_shapes() {
     assert!(cached_batched_readout(&treetn, &indices, short).is_err());
 }
 
-/// Pivots `find_global_pivots` returned on `origin/main` (dcc91f58), before
-/// the readout changed, for the one-sweep states of the two fixtures.
+/// Pivots returned on the #793 base with `ChaCha8Rng` and pointwise readout
+/// for the one-sweep states of the two fixtures.
 fn recorded_pivots(fixture: &str, seed: u64) -> Vec<Vec<usize>> {
     match (fixture, seed) {
         ("chain", 3) => vec![
-            vec![0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1],
-            vec![0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1],
-            vec![0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 1, 0, 1],
-            vec![1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1],
-            vec![1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1],
+            vec![0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 0],
+            vec![0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0],
+            vec![1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0],
+            vec![0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1],
+            vec![0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0],
         ],
         ("chain", 11) => vec![
-            vec![0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1],
-            vec![0, 1, 1, 1, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1],
-            vec![0, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1],
-            vec![1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 0],
-            vec![0, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0],
+            vec![0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0],
+            vec![0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0],
+            vec![1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0],
+            vec![0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 1, 1],
+            vec![0, 1, 1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0],
         ],
         ("branched", 3) => vec![
-            vec![0, 0, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1],
-            vec![0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1],
-            vec![0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0],
-            vec![0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1],
-            vec![0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1],
+            vec![0, 0, 0, 1, 1, 0, 1, 0, 1, 0, 0, 1, 1],
+            vec![0, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1],
+            vec![0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 1, 1],
+            vec![0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0],
+            vec![0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0],
         ],
         ("branched", 11) => vec![
-            vec![0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0],
-            vec![0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 1, 0, 0],
-            vec![0, 0, 0, 1, 0, 1, 0, 1, 1, 1, 1, 0, 0],
-            vec![0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1],
-            vec![0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1],
+            vec![0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0],
+            vec![0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 0, 0],
+            vec![0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1],
+            vec![0, 1, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0],
+            vec![1, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 0],
         ],
         _ => unreachable!("no recording for {fixture} seed {seed}"),
     }
@@ -535,7 +612,7 @@ fn global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree() {
             let pointwise =
                 search_with_readout(&state, fixture.evaluate(), params, pointwise_readout).unwrap();
             // Same pivots, in the same order, as the pointwise readout and
-            // as the recording from before the change.
+            // the fixed-seed recording for this base.
             assert_eq!(cached, pointwise, "{name} seed {seed}");
             assert_eq!(cached, recorded_pivots(name, seed), "{name} seed {seed}");
         }
@@ -544,15 +621,15 @@ fn global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree() {
 
 #[test]
 fn full_runs_reproduce_recorded_ranks_and_errors() {
-    // Recorded on `origin/main` (dcc91f58) with the pointwise readout:
-    // default options, seed 1, global search enabled.
+    // Recorded on the #793 base (9ad67f2c) with `ChaCha8Rng` and the
+    // pointwise readout: default options, seed 1, global search enabled.
     let (ranks, errors) = chain_fixture().full_run();
     assert_eq!(ranks, vec![4, 8, 8, 8]);
     let recorded = [
         4.210785455368414e-9,
-        6.040847869596845e-9,
-        6.151750795122185e-9,
-        6.201777168531953e-9,
+        8.68318251630876e-9,
+        5.771110563560244e-9,
+        6.057293820959278e-9,
     ];
     assert_eq!(errors.len(), recorded.len());
     for (error, expected) in errors.iter().zip(recorded) {

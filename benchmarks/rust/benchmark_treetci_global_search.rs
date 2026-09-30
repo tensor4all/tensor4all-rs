@@ -240,7 +240,8 @@ fn main() -> Result<()> {
             let result = run_case(&case, &samples, &exact)?;
             times.push(result.seconds);
             if let Some(reference) = &first {
-                // Repeats of one build must be bit-for-bit reproducible.
+                // Repeats of one build must preserve the pivot fingerprint
+                // and function-evaluation count.
                 if reference.pivot_fingerprint != result.pivot_fingerprint
                     || reference.evaluations != result.evaluations
                 {

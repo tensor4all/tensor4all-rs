@@ -14,8 +14,8 @@
 use crate::error::Result as TreeTciResult;
 use crate::{materialize::to_treetn, GlobalIndexBatch, MultiIndex, TreeTCI2};
 use anyhow::Result;
-use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 use tensor4all_core::MatrixLuciScalar as Scalar;
 use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_tensorbackend::FullPivLuScalar;
@@ -50,7 +50,9 @@ use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
 /// * `max_nglobal_pivot` -- maximum number of pivots returned.
 /// * `tol_margin` -- acceptance margin over `abs_tol`.
 /// * `abs_tol` -- absolute interpolation-error threshold.
-/// * `seed` -- RNG seed; a fixed seed makes the search deterministic.
+/// * `seed` -- Seed passed to `ChaCha8Rng` to generate the random starting
+///   points. Pivot selection also depends on the target values and the
+///   approximation readout, including its floating-point rounding.
 ///
 /// # Returns
 ///
@@ -69,6 +71,25 @@ use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
 /// invalid configuration), when the candidate index array shape is
 /// malformed (a shape mismatch), or when reading the materialized
 /// approximation at the candidates fails (a contraction failure).
+///
+/// # Examples
+///
+/// ```
+/// use anyhow::Result;
+/// use tensor4all_treetci::{
+///     find_global_pivots, GlobalIndexBatch, TreeTCI2, TreeTciEdge, TreeTciGraph,
+/// };
+///
+/// let graph = TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap();
+/// let mut state = TreeTCI2::<f64>::new(vec![2, 2], graph).unwrap();
+/// state.add_global_pivots(&[vec![0, 0]]).unwrap();
+///
+/// let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+///     Ok(vec![1.0; batch.n_points()])
+/// };
+/// let pivots = find_global_pivots(&state, evaluate, 4, 2, 1.0, f64::MAX, 42).unwrap();
+/// assert!(pivots.is_empty());
+/// ```
 pub fn find_global_pivots<T, F>(
     state: &TreeTCI2<T>,
     evaluate: F,
@@ -194,7 +215,7 @@ where
         })
         .and_then(|per_start| per_start.checked_mul(nsearch))
         .ok_or_else(|| anyhow::anyhow!("global-pivot candidate count overflowed usize"))?;
-    let mut rng = StdRng::seed_from_u64(seed);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let mut points: Vec<MultiIndex> = Vec::with_capacity(candidate_count);
     for _ in 0..nsearch {
         let start: MultiIndex = (0..n_sites)
@@ -250,10 +271,10 @@ where
     // the stable sort keeps the earlier start among equal errors and the
     // deduplication keeps the first occurrence. The cached readout contracts
     // in a different order than the pointwise `TreeTN::evaluate` it replaced
-    // (issue #792), so `tt` can differ from it in the last bits. That can only
-    // reorder two distinct candidates whose errors agree to within that
-    // rounding, i.e. candidates that are indistinguishable at working
-    // precision; the rule above is applied unchanged to the computed errors.
+    // (issue #792), so `tt` can differ from it in the last bits. Rounding can
+    // therefore change acceptance for candidates near the error threshold as
+    // well as reorder candidates whose errors are close. The tie-breaking
+    // rule above remains unchanged for the computed errors.
     let mut best: Vec<(f64, MultiIndex)> = Vec::new();
     let mut point_index = 0usize;
     for _ in 0..nsearch {
