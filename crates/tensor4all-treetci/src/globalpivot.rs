@@ -17,8 +17,9 @@ use anyhow::Result;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tensor4all_core::MatrixLuciScalar as Scalar;
-use tensor4all_core::{AnyScalar, ColMajorArrayRef};
+use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_tensorbackend::FullPivLuScalar;
+use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
 
 /// Search for multi-indices where the current approximation error is large.
 ///
@@ -30,6 +31,11 @@ use tensor4all_tensorbackend::FullPivLuScalar;
 ///    point with the largest interpolation error `|f(idx) - tt(idx)|`.
 /// 4. Keep points whose error exceeds `abs_tol * tol_margin`.
 /// 5. Return at most `max_nglobal_pivot` distinct points.
+///
+/// The approximation is read at all `nsearch * sum(local_dims)` candidates
+/// in one batch through a single [`TreeTNCachedEvaluator`], which shares
+/// subtree environments between candidates instead of contracting the whole
+/// network once per point.
 ///
 /// The returned pivots are full-site multi-indices ready for
 /// [`TreeTCI2::add_global_pivots`].
@@ -49,8 +55,10 @@ use tensor4all_tensorbackend::FullPivLuScalar;
 /// # Returns
 ///
 /// Up to `max_nglobal_pivot` distinct full-site multi-indices where the
-/// current approximation is (likely) poor. An empty vector when nothing
-/// exceeds the threshold.
+/// current approximation is (likely) poor, strongest first. An empty vector
+/// when nothing exceeds the threshold. Among candidates with equal errors the
+/// one generated first wins: within a start, the lower site and then the
+/// lower local value; across starts, the earlier start.
 ///
 /// # Errors
 ///
@@ -58,8 +66,9 @@ use tensor4all_tensorbackend::FullPivLuScalar;
 /// `TreeTN` (a rank mismatch or a singular pivot matrix), when the batch
 /// evaluator returns a wrong number of values (a batch length mismatch),
 /// when `abs_tol` or `tol_margin` is not finite and nonnegative (an
-/// invalid configuration), or when the candidate index array shape is
-/// malformed (a shape mismatch).
+/// invalid configuration), when the candidate index array shape is
+/// malformed (a shape mismatch), or when reading the materialized
+/// approximation at the candidates fails (a contraction failure).
 pub fn find_global_pivots<T, F>(
     state: &TreeTCI2<T>,
     evaluate: F,
@@ -73,6 +82,75 @@ where
     T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
+    let params = SearchParams {
+        nsearch,
+        max_nglobal_pivot,
+        tol_margin,
+        abs_tol,
+        seed,
+    };
+    search_with_readout(state, evaluate, params, cached_batched_readout)
+}
+
+/// Scalar parameters of one global pivot search, as passed to
+/// [`find_global_pivots`].
+#[derive(Clone, Copy, Debug)]
+struct SearchParams {
+    nsearch: usize,
+    max_nglobal_pivot: usize,
+    tol_margin: f64,
+    abs_tol: f64,
+    seed: u64,
+}
+
+/// Reads the materialized approximation at every candidate in one batch.
+///
+/// `candidates` has shape `[site_indices.len(), n_points]` in column-major
+/// layout (one candidate per column, rows in `site_indices` order), which is
+/// the layout [`TreeTNCachedEvaluator::evaluate_batched`] expects. The
+/// evaluator is built once per search, so its environment caches are shared
+/// by all candidates of that search. A plain batched call is used on purpose:
+/// splitting the batch per varied site with `evaluate_batched_with_hint`
+/// measured 1.6-1.9x slower on the issue #792 workloads.
+fn cached_batched_readout(
+    treetn: &TreeTN<IdxTensor, usize>,
+    site_indices: &[DynIndex],
+    candidates: ColMajorArrayRef<'_, usize>,
+) -> Result<Vec<AnyScalar>> {
+    let mut evaluator =
+        TreeTNCachedEvaluator::new(treetn, site_indices, CachedEvaluatorOptions::default())
+            .map_err(anyhow::Error::from)?;
+    evaluator
+        .evaluate_batched(candidates)
+        .map_err(anyhow::Error::from)
+}
+
+/// [`find_global_pivots`] with the approximation readout supplied by the
+/// caller. Production passes [`cached_batched_readout`]; tests also pass the
+/// pointwise [`TreeTN::evaluate`] to check that the readout does not change
+/// the selected pivots.
+fn search_with_readout<T, F, R>(
+    state: &TreeTCI2<T>,
+    evaluate: F,
+    params: SearchParams,
+    readout: R,
+) -> TreeTciResult<Vec<MultiIndex>>
+where
+    T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    R: FnOnce(
+        &TreeTN<IdxTensor, usize>,
+        &[DynIndex],
+        ColMajorArrayRef<'_, usize>,
+    ) -> Result<Vec<AnyScalar>>,
+{
+    let SearchParams {
+        nsearch,
+        max_nglobal_pivot,
+        tol_margin,
+        abs_tol,
+        seed,
+    } = params;
     if !abs_tol.is_finite() || abs_tol < 0.0 {
         return Err(
             anyhow::anyhow!("global pivot search abs_tol must be finite and nonnegative").into(),
@@ -149,15 +227,33 @@ where
         .into());
     }
 
-    // Evaluate the current approximation at all candidates in one batch.
+    // Read the current approximation at all candidates in one batch. `flat`
+    // holds one candidate per column of `n_sites` rows (column-major), in the
+    // row order of `site_indices`.
     let shape = [n_sites, points.len()];
     let values_ref = ColMajorArrayRef::new(&flat, &shape)
         .map_err(|error| anyhow::anyhow!("failed to build candidate index array: {error}"))?;
-    let tt_values = treetn
-        .evaluate(&site_indices, values_ref)
-        .map_err(anyhow::Error::from)?;
+    let tt_values = readout(&treetn, &site_indices, values_ref)?;
+    if tt_values.len() != points.len() {
+        return Err(anyhow::anyhow!(
+            "approximation readout returned {} values for {} global-pivot candidates",
+            tt_values.len(),
+            points.len()
+        )
+        .into());
+    }
 
     // Local search per starting point.
+    //
+    // Tie-breaking: the strict `>` keeps the first candidate in generation
+    // order (lower site, then lower local value) among equal errors; below,
+    // the stable sort keeps the earlier start among equal errors and the
+    // deduplication keeps the first occurrence. The cached readout contracts
+    // in a different order than the pointwise `TreeTN::evaluate` it replaced
+    // (issue #792), so `tt` can differ from it in the last bits. That can only
+    // reorder two distinct candidates whose errors agree to within that
+    // rounding, i.e. candidates that are indistinguishable at working
+    // precision; the rule above is applied unchanged to the computed errors.
     let mut best: Vec<(f64, MultiIndex)> = Vec::new();
     let mut point_index = 0usize;
     for _ in 0..nsearch {
