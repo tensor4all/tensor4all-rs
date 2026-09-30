@@ -111,6 +111,30 @@ complete paired case summaries, all fitted coefficients and experiment hashes.
 It localizes a candidate-frame residual without claiming a production speedup
 or resolving the downstream GW workload.
 
+#### TreeTCI global pivot search (#792)
+
+`benchmark_global_search` runs the default TreeTCI loop (`DefaultProposer`,
+global pivot search on, tolerance `1e-8`, seed 1) on a 129-site rank-2 cosine
+chain, an `R = 20` quantics chain and a branched tree (three arms of 10 sites
+around a degree-3 centre). Wall time covers the optimization and the final
+materialization. Besides the minimum and median of three runs, each case prints
+the quantities that must be identical between two builds for the timings to be
+compared at matched accuracy: function evaluations, rank and error histories
+(error bit patterns), a fingerprint of every pivot set of the run, and the
+sampled error of the result on 2000 `ChaCha8Rng` points. The body lives in
+`rust/benchmark_treetci_global_search.rs`, included by the TreeTCI example.
+Build it at the baseline and candidate revisions and keep the binaries apart:
+
+```bash
+T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
+  cargo build --release -p tensor4all-treetci --example benchmark_global_search
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  taskset -c 2 ./target/release/examples/benchmark_global_search [case]
+```
+
+An optional case name (`chain_cos_129`, `quantics_chain_r20`,
+`tree_3x10_plus_centre`) runs one case only.
+
 #### Other Rust benchmarks
 
 ```bash

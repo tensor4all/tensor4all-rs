@@ -38,3 +38,4 @@ tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 [dev-dependencies]
 approx.workspace = true
 quanticsgrids.workspace = true
+rand_chacha.workspace = true

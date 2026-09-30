@@ -3840,6 +3840,7 @@ dependencies = [
  "petgraph 0.7.1",
  "quanticsgrids",
  "rand 0.9.5",
+ "rand_chacha",
  "tenferro-linalg",
  "tenferro-tensor",
  "tensor4all-core",
