@@ -520,6 +520,12 @@ where
     ///
     /// This is an alias for `contract_to_tensor()`.
     ///
+    /// The result's indices are ordered by sorted node name, then by each node
+    /// tensor's own leg order ([`node_site_indices`](Self::node_site_indices)).
+    /// This differs from `external_indices()`, which follows
+    /// [`node_names`](Self::node_names) (insertion) order; see
+    /// [`contract_to_tensor`](Self::contract_to_tensor) for an example.
+    ///
     /// # Warning
     /// This operation can be very expensive for large networks,
     /// as the result size grows exponentially with the number of sites.
@@ -555,8 +561,8 @@ where
     ///
     /// // Contract to a single dense tensor over site indices s0 and s1
     /// let dense = tn.to_dense().unwrap();
-    /// // Result is rank-2 (two site indices s0 and s1)
-    /// assert_eq!(dense.num_external_indices(), 2);
+    /// // Result is rank-2, ordered by node name: s0 (node "A"), then s1 (node "B")
+    /// assert_eq!(dense.external_indices(), vec![s0, s1]);
     /// ```
     pub fn to_dense(&self) -> std::result::Result<T, TreeTNOperationError> {
         self.contract_to_tensor()

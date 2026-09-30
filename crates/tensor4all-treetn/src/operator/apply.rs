@@ -987,8 +987,7 @@ where
         .difference(&op_node_indices)
         .copied()
         .collect();
-    let mut gap_nodes: Vec<V> = state_nodes.difference(&op_nodes).cloned().collect();
-    gap_nodes.sort();
+    let gap_nodes: Vec<V> = state_nodes.difference(&op_nodes).cloned().collect();
 
     // Build gap site indices: for each gap node, create internal indices for the identity tensor.
     // The (input_internal, output_internal) pairs are used to build the delta tensor.

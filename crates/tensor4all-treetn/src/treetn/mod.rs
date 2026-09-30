@@ -268,15 +268,16 @@ where
             node_indices.push(node_idx);
         }
 
-        // Step 2: Build a map from full index metadata to (node_index, index) pairs in O(n) time.
+        // Step 2: Group every leg by its full index metadata in O(n) time.
         // Same-id indices that differ by prime level or tags are distinct site legs.
-        // `first_seen` records each index once, in input order (tensor position,
-        // then leg position), so that edges are connected in a deterministic
-        // order below. Iterating `index_map` directly would make the petgraph
-        // edge insertion order, and with it every neighbor-ordered traversal,
-        // depend on the hasher state.
-        let mut index_map: HashMap<T::Index, Vec<(NodeIndex, T::Index)>> = HashMap::new();
-        let mut first_seen: Vec<T::Index> = Vec::new();
+        // Groups are kept in first-occurrence order (tensor position, then leg
+        // position), and `group_of` only maps an index to its group, so edges are
+        // connected in a deterministic order below. Iterating a HashMap instead
+        // would make the petgraph edge insertion order, and with it every
+        // neighbor-ordered traversal, depend on the hasher state.
+        #[allow(clippy::type_complexity)]
+        let mut groups: Vec<(T::Index, Vec<(NodeIndex, T::Index)>)> = Vec::new();
+        let mut group_of: HashMap<T::Index, usize> = HashMap::new();
 
         for node_idx in &node_indices {
             let tensor = treetn
@@ -284,22 +285,19 @@ where
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_idx))?;
 
             for index in tensor.external_indices() {
-                index_map
-                    .entry(index.clone())
-                    .or_insert_with(|| {
-                        first_seen.push(index.clone());
-                        Vec::new()
-                    })
-                    .push((*node_idx, index.clone()));
+                let group = *group_of.entry(index.clone()).or_insert_with(|| {
+                    groups.push((index.clone(), Vec::new()));
+                    groups.len() - 1
+                });
+                groups[group].1.push((*node_idx, index));
             }
         }
 
         // Step 3: Connect nodes that share the same full index, in first-occurrence order.
         // For TreeTN (tree structure), each bond index should appear in exactly 2 tensors.
-        for shared_index in first_seen {
-            let nodes_with_index = index_map.remove(&shared_index).unwrap_or_default();
+        // Every group holds at least one leg.
+        for (shared_index, nodes_with_index) in groups {
             match nodes_with_index.len() {
-                0 => continue,
                 1 => {
                     // Index appears in only one tensor - this is a physical index, no connection needed
                     continue;

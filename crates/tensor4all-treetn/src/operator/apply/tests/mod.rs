@@ -1704,3 +1704,106 @@ fn test_linear_operator_replace_indices() {
     );
     assert!(result.is_err());
 }
+
+/// Chain `site0 - site1 - site2 - site3` where `site1` stores two site legs as
+/// `[s1b, bond01, s1a, bond12]`. Returns the input tensors (for repeated
+/// `from_tensors` rebuilds), node names, all site indices per node, and the
+/// two-site node's legs in tensor order.
+#[allow(clippy::type_complexity)]
+fn gap_order_chain() -> (
+    Vec<IdxTensor>,
+    Vec<String>,
+    Vec<(String, DynIndex)>,
+    Vec<DynIndex>,
+) {
+    let s0 = make_index(2);
+    let s1a = make_index(2);
+    let s1b = make_index(2);
+    let s2 = make_index(2);
+    let s3 = make_index(2);
+    let b01 = make_index(2);
+    let b12 = make_index(2);
+    let b23 = make_index(2);
+    let fill = |len: usize, salt: usize| -> Vec<f64> {
+        (0..len)
+            .map(|i| ((i * 5 + salt * 11) as f64 * 0.413).sin())
+            .collect()
+    };
+    let tensors = vec![
+        IdxTensor::from_dense(vec![s0.clone(), b01.clone()], fill(4, 0)).unwrap(),
+        IdxTensor::from_dense(
+            vec![s1b.clone(), b01.clone(), s1a.clone(), b12.clone()],
+            fill(16, 1),
+        )
+        .unwrap(),
+        IdxTensor::from_dense(vec![b12.clone(), s2.clone(), b23.clone()], fill(8, 2)).unwrap(),
+        IdxTensor::from_dense(vec![b23.clone(), s3.clone()], fill(4, 3)).unwrap(),
+    ];
+    let names: Vec<String> = (0..4).map(|i| format!("site{i}")).collect();
+    let sites = vec![(names[2].clone(), s2), (names[3].clone(), s3)];
+    (tensors, names, sites, vec![s1b, s1a])
+}
+
+#[test]
+fn compose_with_gaps_uses_a_deterministic_node_order() {
+    let (tensors, names, op_sites, _) = gap_order_chain();
+    for _ in 0..64 {
+        let state =
+            TreeTN::<IdxTensor, String>::from_tensors(tensors.clone(), names.clone()).unwrap();
+        let operator = build_bonded_identity_operator(&op_sites);
+        // Identity gaps at site0 and site1 (site1 carries two site legs).
+        let mut gaps: HashMap<String, Vec<(DynIndex, DynIndex)>> = HashMap::new();
+        for gap in ["site0", "site1"] {
+            let pairs = state
+                .node_site_indices(&gap.to_string())
+                .unwrap()
+                .iter()
+                .map(|index| (index.sim(), index.sim()))
+                .collect();
+            gaps.insert(gap.to_string(), pairs);
+        }
+        let composed =
+            compose_exclusive_linear_operators(state.site_index_network(), &[&operator], &gaps)
+                .unwrap();
+        // Operator nodes sorted by name, then gap nodes sorted by name.
+        assert_eq!(
+            composed.mpo().node_names(),
+            vec!["site2", "site3", "site0", "site1"]
+        );
+    }
+}
+
+#[test]
+fn apply_with_identity_gaps_keeps_the_state_site_leg_order() {
+    use crate::operator::apply_linear_operator;
+    use crate::operator::ApplyOptions;
+
+    let (tensors, names, op_sites, site1_legs) = gap_order_chain();
+    let mut reference: Option<Vec<u64>> = None;
+    for _ in 0..64 {
+        let state =
+            TreeTN::<IdxTensor, String>::from_tensors(tensors.clone(), names.clone()).unwrap();
+        let operator = build_bonded_identity_operator(&op_sites);
+        let result = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+        // The identity gap at site1 keeps the state's own leg order.
+        assert_eq!(
+            result.node_site_indices(&"site1".to_string()).unwrap(),
+            site1_legs
+        );
+        let dense = result.to_dense().unwrap();
+        assert_eq!(
+            dense.external_indices(),
+            state.to_dense().unwrap().external_indices()
+        );
+        let bits: Vec<u64> = dense
+            .to_vec::<f64>()
+            .unwrap()
+            .into_iter()
+            .map(f64::to_bits)
+            .collect();
+        match &reference {
+            None => reference = Some(bits),
+            Some(reference) => assert_eq!(&bits, reference),
+        }
+    }
+}

@@ -809,9 +809,18 @@ where
         }
 
         // Choose root: prefer the fragment with boundary indices (those need
-        // to be on the root so the original bond connects correctly).
+        // to be on the root so the original bond connects correctly). Ties
+        // between fragments with equally many boundary indices go to the
+        // smallest target name; `boundary_indices` is a HashMap, so taking the
+        // last maximum in iteration order would make the root (and with it the
+        // factorization sequence and the result's gauge) depend on the hasher.
         let root = if let Some(bi) = boundary_indices {
-            if let Some((name, _)) = bi.iter().max_by_key(|(_, ids)| ids.len()) {
+            if let Some((name, _)) = bi.iter().max_by(|(name_a, ids_a), (name_b, ids_b)| {
+                ids_a
+                    .len()
+                    .cmp(&ids_b.len())
+                    .then_with(|| name_b.cmp(name_a))
+            }) {
                 if fragment_target.node_names().contains(&name) {
                     name.clone()
                 } else {

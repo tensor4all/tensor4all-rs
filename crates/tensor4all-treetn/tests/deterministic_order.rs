@@ -14,7 +14,8 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorIndex};
 use tensor4all_treetn::{
-    random_treetn, CanonicalizationOptions, LinkSpace, SiteIndexNetwork, TreeTN, TruncationOptions,
+    random_treetn, CanonicalizationOptions, LinkSpace, SiteIndexNetwork, SplitOptions, TreeTN,
+    TruncationOptions,
 };
 
 /// Number of rebuilds per check. Each rebuild draws fresh hasher seeds.
@@ -229,9 +230,14 @@ fn fingerprint(tn: &Tn) -> Fingerprint {
 
 /// Assert that `make` produces the same fingerprint on every rebuild and return it.
 fn assert_reproducible(what: &str, mut make: impl FnMut() -> Tn) -> Fingerprint {
-    let reference = fingerprint(&make());
+    assert_reproducible_with_index(what, |_| make())
+}
+
+/// Like [`assert_reproducible`], passing the rebuild number to `make`.
+fn assert_reproducible_with_index(what: &str, mut make: impl FnMut(usize) -> Tn) -> Fingerprint {
+    let reference = fingerprint(&make(0));
     for rebuild in 1..REBUILDS {
-        let current = fingerprint(&make());
+        let current = fingerprint(&make(rebuild));
         assert_eq!(
             current, reference,
             "{what}: rebuild {rebuild} differs from the first build"
@@ -520,4 +526,177 @@ fn random_treetn_is_reproducible_for_a_fixed_seed() {
             .collect::<Vec<_>>(),
         topology.input_order
     );
+}
+
+#[test]
+fn same_id_prime_and_tag_variants_are_distinct_site_legs() {
+    use tensor4all_core::index::TagSet;
+
+    let mut rng = ChaCha8Rng::seed_from_u64(79105);
+    // Node 0 stores [s', b, s, b']: `s'` is `s` primed, `b` is the bond to
+    // node 1 and `b'` is a site leg with the bond's ID but a different prime
+    // level. Node 1 is a site-free middle node. Node 2 carries `c_tagged`, a
+    // site leg with the ID of the bond `c` but different tags.
+    let s = DynIndex::new_dyn(2);
+    let s_primed = s.prime();
+    let b = DynIndex::new_dyn(2);
+    let b_primed = b.prime();
+    let c = DynIndex::new_dyn(3);
+    let c_tagged = DynIndex::new_with_tags(*c.id(), 3, TagSet::from_str("Site").unwrap());
+    let t = DynIndex::new_dyn(2);
+    assert_eq!(b_primed.id(), b.id());
+    assert_eq!(c_tagged.id(), c.id());
+    assert_ne!(c_tagged, c);
+
+    let node0 = IdxTensor::random::<f64, _>(
+        &mut rng,
+        vec![s_primed.clone(), b.clone(), s.clone(), b_primed.clone()],
+    )
+    .unwrap();
+    let node1 = IdxTensor::random::<f64, _>(&mut rng, vec![b.clone(), c.clone()]).unwrap();
+    let node2 = IdxTensor::random::<f64, _>(&mut rng, vec![c_tagged.clone(), c.clone(), t.clone()])
+        .unwrap();
+    // Supplied as 2, 0, 1 so that `external_indices` (input order) and
+    // `to_dense` (sorted names) differ.
+    let tensors = vec![node2, node0, node1];
+    let names = vec![2usize, 0, 1];
+
+    let mut reference_bits = None;
+    for _ in 0..REBUILDS {
+        let tn = TreeTN::<IdxTensor, usize>::from_tensors(tensors.clone(), names.clone()).unwrap();
+        assert_eq!(tn.edge_count(), 2);
+        assert_eq!(
+            tn.node_site_indices(&0).unwrap(),
+            vec![s_primed.clone(), s.clone(), b_primed.clone()]
+        );
+        assert_eq!(tn.node_site_indices(&1), Some(vec![]));
+        assert_eq!(
+            tn.node_site_indices(&2).unwrap(),
+            vec![c_tagged.clone(), t.clone()]
+        );
+        assert_eq!(
+            tn.external_indices(),
+            vec![
+                c_tagged.clone(),
+                t.clone(),
+                s_primed.clone(),
+                s.clone(),
+                b_primed.clone(),
+            ]
+        );
+        let dense = tn.to_dense().unwrap();
+        assert_eq!(
+            dense.indices(),
+            [
+                s_primed.clone(),
+                s.clone(),
+                b_primed.clone(),
+                c_tagged.clone(),
+                t.clone(),
+            ]
+            .as_slice()
+        );
+        let dense_bits = bits(&dense);
+        match &reference_bits {
+            None => reference_bits = Some(dense_bits),
+            Some(reference) => assert_eq!(&dense_bits, reference),
+        }
+    }
+}
+
+#[test]
+fn split_to_breaks_boundary_ties_deterministically() {
+    // Chain X - Y - Z where Y carries two sites. Splitting Y into target
+    // nodes 1 and 2 gives two fragments with one boundary bond each (the tie
+    // that used to follow HashMap iteration order when choosing the root).
+    let mut rng = ChaCha8Rng::seed_from_u64(79106);
+    let x = DynIndex::new_dyn(2);
+    let a = DynIndex::new_dyn(2);
+    let b = DynIndex::new_dyn(2);
+    let z = DynIndex::new_dyn(2);
+    let bond_xy = DynIndex::new_dyn(2);
+    let bond_yz = DynIndex::new_dyn(3);
+    let tensors = vec![
+        IdxTensor::random::<f64, _>(&mut rng, vec![x.clone(), bond_xy.clone()]).unwrap(),
+        IdxTensor::random::<f64, _>(
+            &mut rng,
+            vec![bond_xy.clone(), b.clone(), a.clone(), bond_yz.clone()],
+        )
+        .unwrap(),
+        IdxTensor::random::<f64, _>(&mut rng, vec![bond_yz.clone(), z.clone()]).unwrap(),
+    ];
+
+    let target = || {
+        let mut target = SiteIndexNetwork::<usize, DynIndex>::new();
+        target.add_node(0, HashSet::from([x.clone()])).unwrap();
+        target.add_node(1, HashSet::from([a.clone()])).unwrap();
+        target.add_node(2, HashSet::from([b.clone()])).unwrap();
+        target.add_node(3, HashSet::from([z.clone()])).unwrap();
+        target.add_edge(&0, &1).unwrap();
+        target.add_edge(&1, &2).unwrap();
+        target.add_edge(&2, &3).unwrap();
+        target
+    };
+
+    let reference = assert_reproducible("split_to", || {
+        TreeTN::<IdxTensor, usize>::from_tensors(tensors.clone(), vec![10, 11, 12])
+            .unwrap()
+            .split_to(&target(), &SplitOptions::default())
+            .unwrap()
+    });
+    assert_eq!(reference.dense_indices, vec![x, a, b, z]);
+}
+
+#[test]
+fn decomposition_leg_order_follows_the_tensor_not_the_topology_lists() {
+    // DMRG, TDVP and linsolve two-site updates hand
+    // `build_subtree_topology`'s per-node index lists to the tree
+    // decomposition. Those lists come from a hash set, so the decomposition
+    // must treat them as sets: every node's legs follow the decomposed
+    // tensor's own leg order, whatever the list order.
+    use std::collections::HashMap;
+    use tensor4all_core::FactorizeOptions;
+    use tensor4all_treetn::{factorize_tensor_to_treetn_with, TreeTopology};
+
+    let mut rng = ChaCha8Rng::seed_from_u64(79107);
+    let a1 = DynIndex::new_dyn(2);
+    let a2 = DynIndex::new_dyn(2);
+    let x1 = DynIndex::new_dyn(2);
+    let x2 = DynIndex::new_dyn(2);
+    let y = DynIndex::new_dyn(2);
+    let dense = IdxTensor::random::<f64, _>(
+        &mut rng,
+        vec![x2.clone(), a2.clone(), y.clone(), a1.clone(), x1.clone()],
+    )
+    .unwrap();
+
+    let reference = assert_reproducible_with_index("decomposition", |rebuild| {
+        let (hub, leaf) = if rebuild % 2 == 0 {
+            (vec![a1.clone(), a2.clone()], vec![x1.clone(), x2.clone()])
+        } else {
+            (vec![a2.clone(), a1.clone()], vec![x2.clone(), x1.clone()])
+        };
+        let topology = TreeTopology::new(
+            HashMap::from([(0usize, hub), (1, leaf), (2, vec![y.clone()])]),
+            vec![(0, 1), (0, 2)],
+        );
+        factorize_tensor_to_treetn_with(&dense, &topology, FactorizeOptions::svd(), &0).unwrap()
+    });
+    let site_legs = |node: usize| -> Vec<DynIndex> {
+        reference
+            .layout
+            .iter()
+            .find(|(name, _)| *name == node)
+            .unwrap()
+            .1
+            .iter()
+            .filter_map(|leg| match leg {
+                Leg::Site(index) => Some(index.clone()),
+                Leg::Bond { .. } => None,
+            })
+            .collect()
+    };
+    assert_eq!(site_legs(0), vec![a2.clone(), a1.clone()]);
+    assert_eq!(site_legs(1), vec![x2.clone(), x1.clone()]);
+    assert_eq!(site_legs(2), vec![y.clone()]);
 }

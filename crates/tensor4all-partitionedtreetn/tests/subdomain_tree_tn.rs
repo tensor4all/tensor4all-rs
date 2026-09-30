@@ -532,3 +532,31 @@ fn long_chain_norm_avoids_full_dense_materialization() {
     let actual = subdomain.norm_squared().unwrap();
     assert!((actual - expected).abs() / expected < 1.0e-12);
 }
+
+#[test]
+fn all_indices_follow_the_treetn_external_index_order() {
+    use tensor4all_core::TensorIndex;
+
+    // Node 0 stores [s2, bond, s1]; node 1 is supplied first.
+    let s1 = DynIndex::new_dyn(2);
+    let s2 = DynIndex::new_dyn(3);
+    let t = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(2);
+    let node0 = IdxTensor::from_dense(
+        vec![s2.clone(), bond.clone(), s1.clone()],
+        (0..12).map(|i| i as f64).collect(),
+    )
+    .unwrap();
+    let node1 = IdxTensor::from_dense(vec![bond, t.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+
+    for _ in 0..64 {
+        let tree =
+            TreeTN::from_tensors(vec![node1.clone(), node0.clone()], vec![1usize, 0]).unwrap();
+        let subdomain = SubDomainTreeTN::from_treetn(tree.clone()).unwrap();
+        assert_eq!(subdomain.all_indices(), tree.external_indices());
+        assert_eq!(
+            subdomain.all_indices(),
+            vec![t.clone(), s2.clone(), s1.clone()]
+        );
+    }
+}

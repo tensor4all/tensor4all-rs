@@ -2408,3 +2408,37 @@ fn test_fuse_rejects_malformed_target_networks_without_mutating_source() {
     assert_eq!(read_dense_f64_treetn(tree), before);
     cleanup(tree, tensors, indices);
 }
+
+#[test]
+fn test_site_indices_follow_the_vertex_tensor_leg_order() {
+    // docs/CAPI_DESIGN.md: `t4a_treetn_site_indices` returns external indices
+    // in the tensor's own external-index order. Vertex 0 stores [s2, bond, s1].
+    let s1 = new_index(2);
+    let s2 = new_index(3);
+    let bond = new_index(2);
+    let t = new_index(2);
+    let data0: Vec<f64> = (0..12).map(|i| i as f64).collect();
+    let tensor0 = new_tensor(&[s2, bond, s1], &data0);
+    let tensor1 = new_tensor(&[bond, t], &[1.0, 2.0, 3.0, 4.0]);
+    let expected = unsafe { vec![(*s2).inner().clone(), (*s1).inner().clone()] };
+
+    for _ in 0..64 {
+        let tt = new_treetn(&[tensor0, tensor1]);
+        let indices = read_site_indices(tt, 0);
+        let actual: Vec<_> = indices
+            .iter()
+            .map(|&index| unsafe { (*index).inner().clone() })
+            .collect();
+        assert_eq!(actual, expected);
+        for index in indices {
+            t4a_index_release(index);
+        }
+        t4a_treetn_release(tt);
+    }
+
+    t4a_tensor_release(tensor0);
+    t4a_tensor_release(tensor1);
+    for index in [s1, s2, bond, t] {
+        t4a_index_release(index);
+    }
+}

@@ -71,8 +71,16 @@ pub type DefaultIndex = Index<DynId, TagSet>;
 /// Nodes are visited in the site network's node order, and each node tensor's
 /// legs are its site indices sorted by
 /// [`sort_indices_deterministic`](tensor4all_core::sort_indices_deterministic)
-/// followed by its link indices in neighbor order. The same `rng` state and the
-/// same `site_network` object therefore produce the same network.
+/// followed by its link indices in neighbor order. The same `rng` state and a
+/// site network built from the same index objects therefore produce the same
+/// network (link indices are fresh on every call, so compare by position).
+///
+/// Caveat: `sort_indices_deterministic` orders by dimension and prime level
+/// first and then by the index ID, which is random for freshly created
+/// indices. Two site legs of one node with equal dimension and prime level can
+/// therefore be ordered differently when the site network is built from newly
+/// created indices (for example in another process), and the same seed then
+/// fills that node's tensor in a different leg order.
 ///
 /// # Type Parameters
 /// * `T` - Scalar type (e.g. `f64` or `Complex64`)

@@ -558,11 +558,10 @@ where
         let mut parent: HashMap<NodeIndex, NodeIndex> = HashMap::new();
         let mut queue = VecDeque::new();
 
-        // Initialize all target region nodes at distance 0, seeded in NodeIndex
-        // order so the traversal does not depend on the hash set's iteration order.
-        let mut seeds: Vec<NodeIndex> = target_region.iter().copied().collect();
-        seeds.sort_unstable();
-        for node in seeds {
+        // Initialize all target region nodes at distance 0. The seeding order
+        // does not matter: in a tree, each node outside a connected region has a
+        // unique distance and parent.
+        for &node in target_region {
             dist.insert(node, 0);
             queue.push_back(node);
         }
