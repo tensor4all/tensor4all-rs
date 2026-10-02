@@ -456,9 +456,66 @@ fn site_free_contraction_pair() -> (Network, Network) {
     (state, operator)
 }
 
-#[test]
-fn contract_fit_with_center_at_site_free_leaf_reports_dense_norm() {
-    let (state, operator) = site_free_contraction_pair();
+/// A Y-shaped state and operator around a degree-three hub `m` with sites,
+/// whose leaves are `a` and `b` (with sites) and the site-free `e`:
+///
+/// ```text
+/// a - m - b
+///     |
+///     e
+/// ```
+///
+/// The tree is not a chain, so the zip-up initializer of `contract_fit`
+/// takes the general tree path, where `e` leaves an empty side.
+fn site_free_y_contraction_pair() -> (Network, Network) {
+    let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    let outputs: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    let build = |with_outputs: bool, seed: f64| {
+        let (am, mb, me) = (
+            DynIndex::new_dyn(2),
+            DynIndex::new_dyn(2),
+            DynIndex::new_dyn(3),
+        );
+        let legs = |site: usize, bonds: &[&DynIndex]| {
+            let mut indices = vec![sites[site].clone()];
+            if with_outputs {
+                indices.push(outputs[site].clone());
+            }
+            indices.extend(bonds.iter().map(|bond| (*bond).clone()));
+            indices
+        };
+        let a = legs(0, &[&am]);
+        let m = legs(1, &[&am, &mb, &me]);
+        let b = legs(2, &[&mb]);
+        let tensors = [a, m, b, vec![me.clone()]]
+            .into_iter()
+            .enumerate()
+            .map(|(k, indices)| {
+                let len = indices.iter().map(|index| index.dim()).product();
+                dense(indices, &sample_values(len, seed + 0.37 * k as f64), None)
+            })
+            .collect();
+        TreeTN::from_tensors(tensors, names(&["a", "m", "b", "e"])).unwrap()
+    };
+    let state = build(false, 0.5);
+    let operator = build(true, 1.1);
+    assert_eq!(state.edge_count(), 3);
+    assert_eq!(
+        state
+            .site_index_network()
+            .neighbors(&"m".to_string())
+            .count(),
+        3
+    );
+    assert!(is_site_free(&state, &"e".to_string()));
+    assert!(is_site_free(&operator, &"e".to_string()));
+    (state, operator)
+}
+
+/// Run `contract_fit` towards every center, as the zip-up initializer alone
+/// (`nfullsweeps = 0`) and with variational sweeps, and compare each result
+/// with the dense contraction.
+fn assert_contract_fit_matches_dense(state: &Network, operator: &Network, label: &str) {
     let expected = state
         .to_dense()
         .unwrap()
@@ -466,18 +523,33 @@ fn contract_fit_with_center_at_site_free_leaf_reports_dense_norm() {
         .unwrap();
     let expected_norm = expected.norm().unwrap();
     for center in state.node_names() {
-        let label = format!("contract_fit to {center}");
-        let result = contract(
-            &state,
-            &operator,
-            &center,
-            ContractionOptions::fit().with_nfullsweeps(2),
-        )
-        .unwrap();
-        result.verify_internal_consistency().unwrap();
-        assert_values(&result, &expected, &label);
-        assert_norms(&result, expected_norm, &label);
+        for nfullsweeps in [0, 2] {
+            let label = format!("{label}: contract_fit ({nfullsweeps} sweeps) to {center}");
+            let result = contract(
+                state,
+                operator,
+                &center,
+                ContractionOptions::fit().with_nfullsweeps(nfullsweeps),
+            )
+            .unwrap();
+            result.verify_internal_consistency().unwrap();
+            assert!(result.same_topology(state), "{label}: topology changed");
+            assert_values(&result, &expected, &label);
+            assert_norms(&result, expected_norm, &label);
+        }
     }
+}
+
+#[test]
+fn contract_fit_with_center_at_site_free_leaf_reports_dense_norm() {
+    let (state, operator) = site_free_contraction_pair();
+    assert_contract_fit_matches_dense(&state, &operator, "chain");
+}
+
+#[test]
+fn contract_fit_on_branched_tree_with_site_free_leaf_matches_dense_reference() {
+    let (state, operator) = site_free_y_contraction_pair();
+    assert_contract_fit_matches_dense(&state, &operator, "Y tree");
 }
 
 // ============================================================================
@@ -519,8 +591,8 @@ fn swapping_site_onto_and_off_site_free_node_keeps_values_and_norm() {
 }
 
 /// A zero site-free leaf goes through the same factorization as any other
-/// node. The unitary form handles it; LU and CI reject zero tensors on every
-/// node (not only site-free ones), so they are not exercised here.
+/// node. The unitary form handles it; LU and CI reject it, as checked by
+/// `lu_and_ci_canonicalization_reports_zero_tensor_cause`.
 #[test]
 fn zero_site_free_leaf_canonicalizes_to_zero_network() {
     let (site_a, bond) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
@@ -540,12 +612,68 @@ fn zero_site_free_leaf_canonicalizes_to_zero_network() {
     assert_eq!(canonical.clone().norm().unwrap(), 0.0);
 }
 
+/// LU and CI canonicalization fails on a zero tensor that has to be factorized,
+/// whether the node is site-free or not, because a rank-zero split has no
+/// valid bond. The error keeps the root cause in its message and leaves the
+/// network unchanged.
+#[test]
+fn lu_and_ci_canonicalization_reports_zero_tensor_cause() {
+    let (site_a, bond) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let site_free_zero: Network = TreeTN::from_tensors(
+        vec![
+            dense(
+                vec![site_a.clone(), bond.clone()],
+                &[1.0, 2.0, 3.0, 4.0],
+                None,
+            ),
+            dense(vec![bond.clone()], &[0.0, 0.0], None),
+        ],
+        names(&["a", "e"]),
+    )
+    .unwrap();
+    let site_zero: Network = TreeTN::from_tensors(
+        vec![
+            dense(vec![site_a, bond.clone()], &[0.0; 4], None),
+            dense(vec![bond], &[0.4, -1.1], None),
+        ],
+        names(&["a", "e"]),
+    )
+    .unwrap();
+
+    for (network, center, zero_node) in [(&site_free_zero, "a", "e"), (&site_zero, "e", "a")] {
+        for form in [CanonicalForm::LU, CanonicalForm::CI] {
+            let label = format!("{form:?} with zero node {zero_node}");
+            let options = CanonicalizationOptions::forced().with_form(form);
+            let message = network
+                .clone()
+                .canonicalize([center.to_string()], options)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                message.contains("canonicalize: factorization failed: invalid dimension 0"),
+                "{label}: {message}"
+            );
+
+            let mut in_place = network.clone();
+            assert!(
+                in_place
+                    .canonicalize_mut([center.to_string()], options)
+                    .is_err(),
+                "{label}"
+            );
+            assert_eq!(in_place.link_dims(), network.link_dims(), "{label}");
+            assert!(!in_place.is_canonicalized(), "{label}");
+            assert_values(&in_place, &network.to_dense().unwrap(), &label);
+        }
+    }
+}
+
 // ============================================================================
-// Known failures with site-free nodes, tracked separately
+// Known failures with site-free nodes, tracked in issue #797
 // ============================================================================
 
 #[test]
-#[ignore = "known bug outside this fix: inner fails with \"Disconnected tensor network\" on site-free nodes"]
+#[ignore = "known bug, tracked in #797: inner fails with \"Disconnected tensor network\" on site-free nodes"]
 fn inner_with_site_free_leaf_matches_dense_reference() {
     let x = direct_sum_network(false);
     let expected = x.to_dense().unwrap().norm().unwrap().powi(2);
@@ -554,7 +682,7 @@ fn inner_with_site_free_leaf_matches_dense_reference() {
 }
 
 #[test]
-#[ignore = "known bug outside this fix: SRC contraction fails on site-free nodes"]
+#[ignore = "known bug, tracked in #797: SRC contraction fails on site-free nodes"]
 fn src_contraction_with_site_free_leaf_matches_dense_reference() {
     let (state, operator) = site_free_contraction_pair();
     let expected = state
@@ -575,7 +703,7 @@ fn src_contraction_with_site_free_leaf_matches_dense_reference() {
 }
 
 #[test]
-#[ignore = "known bug outside this fix: factorize_tensor_to_treetn rejects site-free nodes"]
+#[ignore = "known bug, tracked in #797: factorize_tensor_to_treetn rejects site-free nodes"]
 fn factorize_tensor_to_treetn_with_site_free_leaf_matches_dense_reference() {
     let (site_a, site_b) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
     let expected = dense(

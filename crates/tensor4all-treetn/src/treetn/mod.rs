@@ -98,8 +98,13 @@ type IndexGroups<I> = Vec<(I, Vec<(NodeIndex, I)>)>;
 /// The extra axes are added with `stack_along_new_index` rather than an
 /// outer product with a real unit tensor: the augmented tensor keeps the
 /// input's scalar type and execution context, whereas a mixed real/complex
-/// outer product leaves the context and drops AD tracking. `left_indices`
-/// must be a subset of `tensor`'s indices, compared by full index equality.
+/// outer product leaves the context and drops AD tracking.
+///
+/// # Errors
+///
+/// Returns an error when `left_indices` is not a subset of `tensor`'s
+/// indices (compared by full index equality), when adding or removing the
+/// singleton axes fails, or with the error of `factorize`.
 fn factorize_allowing_empty_side<T, F>(
     tensor: &T,
     left_indices: &[T::Index],
@@ -109,8 +114,16 @@ where
     T: TensorLike,
     F: FnOnce(&T, &[T::Index]) -> Result<tensor4all_core::FactorizeResult<T>>,
 {
-    let right_is_empty = tensor
-        .external_indices()
+    let tensor_indices = tensor.external_indices();
+    if let Some(missing) = left_indices
+        .iter()
+        .find(|index| !tensor_indices.contains(index))
+    {
+        return Err(anyhow::anyhow!(
+            "left index {missing:?} is not an index of the tensor to factorize"
+        ));
+    }
+    let right_is_empty = tensor_indices
         .iter()
         .all(|index| left_indices.contains(index));
     if !left_indices.is_empty() && !right_is_empty {
@@ -799,9 +812,16 @@ where
                     }
                     None => tensor.factorize_full_rank(left, alg, canonical),
                 }
-                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
+                .with_context(|| format!("{alg:?} full-rank factorization failed"))
             })
-            .with_context(|| format!("{}: factorization failed", context_name))?;
+            .map_err(|error| {
+                // Keep the whole chain as the source, and name its root cause
+                // (for example the rank-zero bond of an LU/CI split of a zero
+                // tensor) in the top-level message, which is all that
+                // `TreeTNOperationError`'s `Display` shows.
+                let cause = error.root_cause().to_string();
+                error.context(format!("{context_name}: factorization failed: {cause}"))
+            })?;
 
         let left_tensor = factorize_result.left;
         let right_tensor = factorize_result.right;
@@ -2565,6 +2585,38 @@ mod tests {
         assert_eq!(result.singular_values, Some(vec![2.0, 1.0]));
         let reconstructed = result.left.contract_pair(&result.right).unwrap();
         assert!(reconstructed.sub(&tensor).unwrap().maxabs().unwrap() < 1e-12);
+    }
+
+    /// A left index that the tensor does not carry is rejected before
+    /// `factorize` runs, for both a non-degenerate and an empty right side.
+    /// The primed copy differs from a tensor index only by prime level.
+    #[test]
+    fn split_rejects_left_index_outside_tensor() {
+        let (i, j) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+        let foreign = DynIndex::new_dyn(2);
+        let primed_i = i.prime();
+        let tensor = sample_tensor(
+            vec![i.clone(), j.clone()],
+            &[1.0, 0.0, 0.0, 2.0],
+            None,
+            None,
+        );
+        for left_indices in [
+            vec![foreign.clone()],
+            vec![i.clone(), foreign],
+            vec![i, j, primed_i],
+        ] {
+            let error = factorize_allowing_empty_side(&tensor, &left_indices, |_, _| {
+                panic!("factorize must not run for an invalid left index")
+            })
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("is not an index of the tensor to factorize"),
+                "{error:#}"
+            );
+        }
     }
 
     // ------------------------------------------------------------------------
