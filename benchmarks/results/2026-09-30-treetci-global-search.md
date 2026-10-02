@@ -137,7 +137,21 @@ the same source and lockfile, with only the production dispatch in
 `find_global_pivots` changed to call `TreeTN::evaluate` instead of
 `cached_batched_readout`. Both builds therefore use `ChaCha8Rng`, the same
 benchmark source, options, fixtures, and sampling seed. The pointwise change
-was made in a temporary detached worktree and is not a branch commit.
+was made in a temporary detached worktree and is not a branch commit. To
+rebuild that baseline, change the readout passed by `find_global_pivots` in
+`crates/tensor4all-treetci/src/globalpivot.rs` at `d93b3e5e` to the pointwise
+`TreeTN::evaluate` (the same readout as `pointwise_readout` in the unit
+tests):
+
+```diff
+-    search_with_readout(state, evaluate, params, cached_batched_readout)
++    search_with_readout(state, evaluate, params, |treetn, site_indices, candidates| {
++        Ok(treetn.evaluate(site_indices, candidates)?)
++    })
+```
+
+This reconstruction follows the description above; the exact patch file of
+that run was not kept.
 
 Both used `cargo build --locked --release -p tensor4all-treetci --example
 benchmark_global_search`, separate target directories, and the same release
@@ -281,8 +295,8 @@ Uncertainty notes:
   independent. The subset `s % 4 == 1` (50 runs with disjoint search seeds)
   gives the same picture. Mean evaluation differences there are +116
   (`chain_cos_129`, 95% bootstrap CI [-297, +536]), +60 ([-86, +208]) and +127
-  ([-365, +615]). The only paired test with p < 0.05 is the `chain_cos_129`
-  error sign test, 16 / 34, p = 0.015, which favours `ChaCha8Rng` by 0.08
+  ([-365, +615]). On this subset, the only paired test with p < 0.05 is the
+  `chain_cos_129` error sign test, 16 / 34, p = 0.015, which favours `ChaCha8Rng` by 0.08
   decades.
 - Multiple tests. On all 200 seeds, the `chain_cos_129` evaluation sign test
   gives p = 0.0017 (122 / 77), but the paired sign-flip test of the mean gives
@@ -296,7 +310,9 @@ Uncertainty notes:
 
 Verdict: quality-neutral. The switch to `ChaCha8Rng` stays. It changes
 fixed-seed trajectories, so recorded pivots and error histories change, but it
-was not measured to change accuracy, convergence or cost.
+showed no detectable change in accuracy or convergence, and no change in
+cost beyond a +0.38% evaluation difference on `chain_cos_129` that is not
+significant on the independent-seed subset.
 
 Binary SHA-256: `ChaCha8Rng`
 `c91ffdd398d16b1cca2b5fa12d2c4974ca6fee316555a7dbb6f81ee3e4d0c58c`, `StdRng`

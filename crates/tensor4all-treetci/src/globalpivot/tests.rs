@@ -462,7 +462,8 @@ fn assert_readout_matches_pointwise(
     }
 
     // Fresh evaluators on this tree reproduce the same batch values bit for
-    // bit within this process.
+    // bit on the same thread (the generic path used for f32/Complex32 is not
+    // reproducible across threads, see issue #795).
     let again = cached_batched_readout(treetn, &indices, points).unwrap();
     for (a, b) in cached.iter().zip(&again) {
         assert_eq!(a.real().to_bits(), b.real().to_bits());
