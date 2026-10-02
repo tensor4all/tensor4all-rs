@@ -2,7 +2,10 @@
 
 Date: 2026-09-30. Baseline: `8868e816` (production code of `origin/main`
 `dcc91f58` plus the benchmark). Candidate: `48ab63bc` (one
-`TreeTNCachedEvaluator` and one `evaluate_batched` call per search). Both
+`TreeTNCachedEvaluator` and one `evaluate_batched` call per search). Both are
+pre-rebase commits and are not on the rebased branch; their trees are
+`eae982919639` (`8868e816`) and `e646b0871bc5` (`48ab63bc`). The rebased
+equivalents are `abff46e9` and `4f3bf03d`, measured again below. Both
 binaries were built from the same benchmark source and lockfile with
 `cargo build --release -p tensor4all-treetci --example benchmark_global_search`
 and kept in separate paths. Runs:
@@ -86,18 +89,46 @@ with the `dcc91f58` baseline (`8868e816`) in the same session: 16.30 s and
 16.66 s, which is not faster than `abff46e9`. So #793 did not change the cost
 of the pointwise readout.
 
-An earlier rerun on this base reported mixed timings with no speed-up. Its
-baseline times (about 0.38 s for `chain_cos_129`) match the cached readout, not
-the pointwise one. That baseline binary most likely contained the cached
-readout, so the rerun is discarded.
-
 The branch also switches the global search from `StdRng` to the named
 `ChaCha8Rng`. That changes the random starting points for a fixed seed, and
 with them the recorded pivots and error histories in the unit tests. The timing
 comparison above predates that switch. A paired rerun on the resulting HEAD is
-recorded below. The readout-rounding margins in the previous section were measured on the
-historical `dcc91f58`/`StdRng` base. A separate diagnostic on current HEAD
-follows.
+recorded below. The readout-rounding margins in the previous section were
+measured on the historical `dcc91f58`/`StdRng` base. A separate diagnostic on
+current HEAD follows. Whether the RNG switch changes result quality is tested
+in [the last section](#rng-switch-stdrng-versus-chacha8rng-200-seeds).
+
+### Excluded run: validity failure
+
+An earlier rerun on this base (2026-09-30) is excluded as a validity failure.
+Its baseline was meant to be the pointwise readout: commit `f8a6754c` (tree
+`4810c076`), `9ad67f2c` with the benchmark harness and a `ChaCha8Rng` change.
+Its candidate was commit `9d38f361` (tree `6aabff89`), with the cached readout.
+Both binaries were built one after the other into the same shared
+`CARGO_TARGET_DIR` and copied out. Three pairs ran, baseline first. Median
+seconds:
+
+| case | baseline 1 | candidate 1 | baseline 2 | candidate 2 | baseline 3 | candidate 3 |
+|---|---:|---:|---:|---:|---:|---:|
+| `chain_cos_129` | 0.3804 | 0.3825 | 0.4041 | 0.4293 | 0.4286 | 0.4167 |
+| `quantics_chain_r20` | 0.0190 | 0.0258 | 0.0222 | 0.0246 | 0.0254 | 0.0231 |
+| `tree_3x10_plus_centre` | 0.0442 | 0.0476 | 0.0481 | 0.0497 | 0.0528 | 0.0449 |
+
+Binary SHA-256 for pairs 1 and 2: baseline
+`c0f3e2f2e0603616bbb25bb02a25e25a04f9075df591dd7f77d2ad8e19bcb5af`, candidate
+`53455de1d971cc9412d6527bbb8cf457018d4da4730edfe86fca04285ea0a02e`. Both were
+rebuilt before pair 3, which ran baseline
+`a286282b23e2d45370d763f86aa075cf1ae3735c23bacaf1087656f3216ed255` and candidate
+`ff361802bcee66283605efba89b776cfd8beb579cbbdbbad2b590f895ba3249a`.
+
+Two facts confirm that the baseline binary did not measure the pointwise
+readout. First, its `chain_cos_129` times, 0.38-0.43 s, match the cached readout
+and not the pointwise one. Second, the clean rebuild above gave 16-17 s for the
+pointwise baseline: each commit was built in its own worktree with its own
+target directory, and the binaries had distinct hashes. The pointwise rerun on
+the later `ChaCha8Rng` head, below, also takes 17 s. The mechanism that put the
+wrong code into the excluded baseline was not identified; the shared target
+directory is the methodological fault. None of its numbers are used.
 
 ## Rerun on current HEAD with `ChaCha8Rng`
 
@@ -186,3 +217,89 @@ of the 36 search calls. The closest threshold decision was about `8.46e7` times
 farther from the threshold than the maximum readout difference for that case.
 This supports the recorded workloads; it does not prove decision stability for
 arbitrary inputs deliberately constructed near the acceptance threshold.
+
+## RNG switch: `StdRng` versus `ChaCha8Rng` (200 seeds)
+
+Date: 2026-10-02. Question: does switching the global search seed RNG from
+`StdRng` to `ChaCha8Rng` change result quality? A fixed seed gives different
+starting points under the two RNGs, so fixed-seed trajectories change. In
+`rand` 0.9, which the workspace uses, `StdRng` is ChaCha12, so both are ChaCha
+stream ciphers that differ only in round count.
+
+Setup. Both binaries were built in release mode from `3b109925` with the cached
+readout and a scratch-only harness patch. The patch reads the TreeTCI seed from
+the environment and prints one JSON line per case. The `StdRng` binary also
+replaced `ChaCha8Rng::seed_from_u64` with `rand::rngs::StdRng::seed_from_u64`
+in `find_global_pivots`. Neither patch is committed. Each binary ran the three
+benchmark cases for seeds 1 to 200 (tolerance `1e-8`, `normalize_error`,
+default options otherwise), with the RNG order alternating per seed, pinned to
+CPU 2 with one thread for Rayon and BLAS. That gives 600 paired runs. The host
+was heavily loaded (1-minute load average 23-108), so no timing from this run
+is used. Evaluation counts, ranks and errors are deterministic for a given
+binary and seed and do not depend on load.
+
+Criterion, fixed before the runs. For every case, all four must hold:
+
+1. the `ChaCha8Rng` median sampled relative error lies inside the `StdRng`
+   interquartile range (IQR);
+2. the `ChaCha8Rng` median evaluation count lies inside the `StdRng` IQR;
+3. false-convergence parity: either both RNGs or neither have a run whose
+   sampled relative error exceeds `10 * tol = 1e-7`;
+4. the worst sampled relative errors are of the same order (their `log10`
+   values differ by less than 1).
+
+The verdict is quality-neutral if all four hold in all three cases.
+
+Results. Median [IQR] over 200 seeds. The sampled error is the maximum
+relative error on the benchmark's 2000 fixed sample points. Paired differences
+are `ChaCha8Rng` minus `StdRng` for the same seed.
+
+| case | RNG | evaluations | sampled rel. error | worst error | iterations | final rank |
+|---|---|---|---|---:|---|---|
+| `chain_cos_129` | `StdRng` | 40,928 [40,730, 41,290] | 5.56e-9 [5.56e-9, 1.11e-8] | 1.11e-8 | 4 (all) | 2 (all) |
+| `chain_cos_129` | `ChaCha8Rng` | 41,065 [40,763, 41,532] | 5.56e-9 [5.56e-9, 1.11e-8] | 1.11e-8 | 4 (all) | 2 (all) |
+| `quantics_chain_r20` | `StdRng` | 18,116 [17,862, 18,327] | 1.30e-8 [1.26e-8, 1.57e-8] | 1.89e-8 | 4 (all) | 8 (all) |
+| `quantics_chain_r20` | `ChaCha8Rng` | 18,088 [17,872, 18,330] | 1.31e-8 [1.26e-8, 1.57e-8] | 1.82e-8 | 4 (all) | 8 (all) |
+| `tree_3x10_plus_centre` | `StdRng` | 50,172 [49,373, 50,850] | 7.33e-9 [6.65e-9, 8.21e-9] | 1.03e-8 | 4 (all) | 9 (all) |
+| `tree_3x10_plus_centre` | `ChaCha8Rng` | 50,140 [49,308, 50,979] | 7.40e-9 [7.19e-9, 8.23e-9] | 1.06e-8 | 4 (all) | 9 (all) |
+
+| case | evaluations: mean (median) paired difference | 95% bootstrap CI of the mean | more / fewer evaluations | `log10` error: mean paired difference | higher / lower error |
+|---|---|---|---|---:|---|
+| `chain_cos_129` | +157 (+127), +0.38% | [-10, +327] | 122 / 77 | -0.017 | 91 / 108 |
+| `quantics_chain_r20` | +12 (+27.5), +0.07% | [-55, +80] | 105 / 95 | +0.003 | 103 / 97 |
+| `tree_3x10_plus_centre` | +20 (-56.5), +0.04% | [-211, +249] | 98 / 102 | +0.009 | 113 / 87 |
+
+Criterion check: all four conditions hold in every case. No run of either RNG
+had a sampled error above `1e-7`, and every run stopped after 4 iterations at
+the same final rank. The pivot fingerprint differed between the RNGs for every
+seed, so the comparison is between genuinely different trajectories.
+
+Uncertainty notes:
+
+- Overlapping seeds. A run with seed `s` uses search seeds `s` to `s + 3`, so
+  neighbouring seeds share three of four search seeds and the 200 runs are not
+  independent. The subset `s % 4 == 1` (50 runs with disjoint search seeds)
+  gives the same picture. Mean evaluation differences there are +116
+  (`chain_cos_129`, 95% bootstrap CI [-297, +536]), +60 ([-86, +208]) and +127
+  ([-365, +615]). The only paired test with p < 0.05 is the `chain_cos_129`
+  error sign test, 16 / 34, p = 0.015, which favours `ChaCha8Rng` by 0.08
+  decades.
+- Multiple tests. On all 200 seeds, the `chain_cos_129` evaluation sign test
+  gives p = 0.0017 (122 / 77), but the paired sign-flip test of the mean gives
+  p = 0.066, and the bootstrap interval of the mean includes zero. The effect
+  is +0.38% of the median and not significant on the independent subset
+  (p = 0.89). The other sign tests and sign-flip tests have p > 0.07. The
+  p-values are uncorrected across 3 cases x 2 metrics x 2 subsets.
+- Scope. Three deterministic workloads at one tolerance. The comparison
+  establishes no detectable quality difference on them, not equivalence for
+  every target function.
+
+Verdict: quality-neutral. The switch to `ChaCha8Rng` stays. It changes
+fixed-seed trajectories, so recorded pivots and error histories change, but it
+was not measured to change accuracy, convergence or cost.
+
+Binary SHA-256: `ChaCha8Rng`
+`c91ffdd398d16b1cca2b5fa12d2c4974ca6fee316555a7dbb6f81ee3e4d0c58c`, `StdRng`
+`ef562c6a2d623c623893d71e1747d47eea4e9b7b1c531e3ebd33e209f8bbe3d6`. The raw
+per-run output (1,200 rows) is not committed; the tables above contain every
+quantity the criterion uses.

@@ -135,7 +135,8 @@ RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 An optional case name (`chain_cos_129`, `quantics_chain_r20`,
 `tree_3x10_plus_centre`) runs one case only. The
 [2026-09-30 report](results/2026-09-30-treetci-global-search.md) records the
-paired #792 comparison and the readout rounding margins.
+paired #792 comparison, the readout rounding margins, and a 200-seed
+`StdRng`/`ChaCha8Rng` quality comparison of the global search.
 
 #### Other Rust benchmarks
 
