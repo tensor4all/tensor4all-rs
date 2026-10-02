@@ -7,85 +7,14 @@ use crate::error::TreeTNOperationError;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use petgraph::stable_graph::NodeIndex;
 
-use tensor4all_core::{FactorizeOptions, FactorizeResult, IndexLike, TensorLike};
+use tensor4all_core::TensorLike;
 
 use crate::node_name_network::NodeNameNetwork;
 
 use super::{localupdate::LocalUpdateSweepPlan, TreeTN};
-
-// ============================================================================
-// Factorize with trivial-bond handling
-// ============================================================================
-
-/// Factorize a tensor into left and right parts connected by a bond index.
-///
-/// Extends [`TensorFactorizationLike::factorize`](tensor4all_core::TensorFactorizationLike::factorize)
-/// to handle degenerate cases where all
-/// indices go to one side (empty `left_inds` or `left_inds == all_inds`).
-/// For these cases a dimension-1 trivial bond is created so that
-/// `contract(left, right)` recovers the input tensor exactly.
-///
-/// With `Canonical::Left` (the only mode used by swap):
-/// - **Normal case**: delegates to `TensorFactorizationLike::factorize`.
-/// - **Empty `left_inds`**: `left = [1]` (dim-1 scalar isometry),
-///
-///   `right = tensor ⊗ [1]` (acquires the trivial bond).
-/// - **Full `left_inds`**: `left = (tensor ⊗ [1]) / ‖tensor‖`,
-///
-///   `right = [‖tensor‖]` (norm on the right side, left is isometric).
-pub(crate) fn factorize_or_trivial<T>(
-    tensor: &T,
-    left_inds: &[T::Index],
-    all_inds: &[T::Index],
-    factorize_options: &FactorizeOptions,
-) -> anyhow::Result<FactorizeResult<T>>
-where
-    T: TensorLike,
-    <T::Index as IndexLike>::Id: Clone + Hash + Eq + std::fmt::Debug + Send + Sync,
-{
-    if left_inds.is_empty() {
-        // All indices go to the right side.
-        let bond = <T::Index as IndexLike>::create_dummy_link_pair().0;
-        let left = T::onehot(&[(bond.clone(), 0)])
-            .map_err(|e| anyhow::anyhow!("factorize_or_trivial: left onehot: {}", e))?;
-        let right_bond = T::onehot(&[(bond.clone(), 0)])
-            .map_err(|e| anyhow::anyhow!("factorize_or_trivial: right onehot: {}", e))?;
-        let right = tensor
-            .outer_product(&right_bond)
-            .context("factorize_or_trivial: right outer_product")?;
-        return Ok(FactorizeResult::new(left, right, bond, None, 1));
-    }
-
-    if left_inds.len() == all_inds.len() {
-        // All indices go to the left side.
-        let bond = <T::Index as IndexLike>::create_dummy_link_pair().0;
-        let left_bond = T::onehot(&[(bond.clone(), 0)])
-            .map_err(|e| anyhow::anyhow!("factorize_or_trivial: left onehot: {}", e))?;
-        let mut left = tensor
-            .outer_product(&left_bond)
-            .context("factorize_or_trivial: left outer_product")?;
-        let mut right = T::onehot(&[(bond.clone(), 0)])
-            .map_err(|e| anyhow::anyhow!("factorize_or_trivial: right onehot: {}", e))?;
-        let left_norm = left.norm()?;
-        if left_norm > 0.0 {
-            left = left
-                .scale(tensor4all_core::AnyScalar::new_real(1.0 / left_norm))
-                .context("factorize_or_trivial: normalize left")?;
-            right = right
-                .scale(tensor4all_core::AnyScalar::new_real(left_norm))
-                .context("factorize_or_trivial: scale right")?;
-        }
-        return Ok(FactorizeResult::new(left, right, bond, None, 1));
-    }
-
-    // Normal case: delegate to TensorFactorizationLike::factorize
-    tensor
-        .factorize(left_inds, factorize_options)
-        .map_err(|e| anyhow::anyhow!("factorize_or_trivial: factorize: {}", e))
-}
 
 // ============================================================================
 // SwapOptions

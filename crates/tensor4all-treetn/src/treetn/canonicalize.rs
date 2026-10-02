@@ -34,6 +34,15 @@ where
     ///
     ///   - Always performs full canonicalization
     ///
+    /// # Site-free nodes
+    ///
+    /// A node without site indices that is swept towards the center (for
+    /// example a site-free leaf) is absorbed exactly into its neighbor: it
+    /// keeps a unit-modulus scalar, and the bond to that neighbor is replaced
+    /// by a fresh dimension-one link, whatever its original dimension. The
+    /// represented tensor is unchanged, but the old bond index is gone from
+    /// the network.
+    ///
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, an
@@ -172,8 +181,8 @@ where
 
     /// Context-scoped canonicalization.
     ///
-    /// Only the unitary (QR) form has a scoped path; LU/CI forms and scalar
-    /// edge normalization return typed errors instead of running.
+    /// Only the unitary (QR) form has a scoped path; LU/CI forms return typed
+    /// errors instead of running.
     pub(crate) fn canonicalize_impl_in(
         &mut self,
         canonical_region: impl IntoIterator<Item = V>,

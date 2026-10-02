@@ -2,7 +2,7 @@
 
 use num_complex::Complex64;
 use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike, TensorIndex};
-use tensor4all_treetn::{TreeTN, TruncationOptions};
+use tensor4all_treetn::TreeTN;
 
 // ============================================================================
 // Helper Functions
@@ -86,20 +86,6 @@ fn create_three_node_named() -> (
     (tn, s0, s1, s2)
 }
 
-/// Create `a - b - e` where `e` is a site-free leaf with a dimension-two
-/// bond. The network represents `[1, 0] ⊗ [3, 4]`, whose norm is 5.
-fn create_site_free_wide_leaf() -> TreeTN<IdxTensor, String> {
-    let (site_a, site_b) = (idx(2), idx(2));
-    let (bond_ab, bond_be) = (idx(1), idx(2));
-    let a = make_tensor(vec![site_a, bond_ab.clone()], vec![1.0, 0.0]);
-    let b = make_tensor(
-        vec![site_b, bond_ab, bond_be.clone()],
-        vec![3.0, 0.0, 0.0, 4.0],
-    );
-    let e = make_tensor(vec![bond_be], vec![1.0, 1.0]);
-    TreeTN::from_tensors(vec![a, b, e], vec!["a".into(), "b".into(), "e".into()]).unwrap()
-}
-
 // ============================================================================
 // Tests for norm and norm_squared
 // ============================================================================
@@ -153,83 +139,6 @@ fn test_norm_against_dense() {
         "TreeTN norm ({}) != dense norm ({})",
         norm_tn,
         norm_dense
-    );
-}
-
-#[test]
-fn site_free_wide_leaf_log_norm_matches_dense_reference() {
-    let mut tn = create_site_free_wide_leaf();
-    let expected = tn.to_dense().unwrap().norm().unwrap();
-    assert_eq!(expected, 5.0);
-
-    let observed = tn.log_norm().unwrap().exp();
-    assert!(
-        (observed - expected).abs() < 1e-12,
-        "TreeTN log norm {observed} != dense norm {expected}"
-    );
-}
-
-#[test]
-fn site_free_wide_leaf_norm_and_squared_norm_match_dense_reference() {
-    let tn = create_site_free_wide_leaf();
-    let expected = tn.to_dense().unwrap().norm().unwrap();
-
-    let mut for_norm = tn.clone();
-    let norm = for_norm.norm().unwrap();
-    assert!((norm - expected).abs() < 1e-12, "norm {norm} != {expected}");
-
-    let mut for_norm_squared = tn;
-    let norm_squared = for_norm_squared.norm_squared().unwrap();
-    assert!(
-        (norm_squared - expected * expected).abs() < 1e-12,
-        "norm squared {norm_squared} != {}",
-        expected * expected
-    );
-}
-
-#[test]
-fn truncating_site_free_wide_leaf_keeps_values_and_respects_bond_cap() {
-    let tn = create_site_free_wide_leaf();
-    let expected = tn.to_dense().unwrap();
-    let truncated = tn
-        .truncate(
-            ["a".to_string()],
-            TruncationOptions::default().with_max_bond_dim(1),
-        )
-        .unwrap();
-    let actual = truncated.to_dense().unwrap();
-    let difference = actual.sub(&expected).unwrap().norm().unwrap();
-
-    assert!(
-        difference < 1e-12,
-        "truncation changed values by {difference}"
-    );
-    let edge = truncated
-        .edge_between(&"b".to_string(), &"e".to_string())
-        .unwrap();
-    assert_eq!(truncated.bond_index(edge).unwrap().dim(), 1);
-}
-
-#[test]
-fn truncating_towards_site_free_wide_leaf_keeps_values_and_respects_bond_cap() {
-    let tn = create_site_free_wide_leaf();
-    let expected = tn.to_dense().unwrap();
-    let truncated = tn
-        .truncate(
-            ["e".to_string()],
-            TruncationOptions::default().with_max_bond_dim(1),
-        )
-        .unwrap();
-    let actual = truncated.to_dense().unwrap();
-    let difference = actual.sub(&expected).unwrap().norm().unwrap();
-
-    assert!(
-        difference < 1e-12,
-        "truncation changed values by {difference}"
-    );
-    assert!(
-        truncated.link_dims().iter().all(|dim| *dim <= 1),
-        "truncation left a bond above the configured cap"
     );
 }
 

@@ -36,8 +36,7 @@ use anyhow::{Context, Result};
 use tensor4all_core::{
     print_and_reset_contract_profile, print_and_reset_native_einsum_profile,
     reset_contract_profile, reset_native_einsum_profile, sort_indices_deterministic, AnyScalar,
-    Canonical, FactorizeAlg, FactorizeOptions, FactorizeResult, IndexLike, SvdTruncationPolicy,
-    TensorLike,
+    Canonical, FactorizeAlg, FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorLike,
 };
 
 use super::localupdate::{LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater};
@@ -703,29 +702,15 @@ where
     }
 
     let factorize_started = fit_profile_enabled().then(Instant::now);
-    let factorize_result = if left_inds.is_empty() || left_inds.len() == local_indices.len() {
-        let (dummy_left, dummy_right) = T::Index::create_dummy_link_pair();
-        let dummy_left_tensor = T::ones(std::slice::from_ref(&dummy_left))
-            .map_err(|e| anyhow::anyhow!("failed to create dummy left tensor: {e}"))?;
-        let dummy_right_tensor = T::ones(std::slice::from_ref(&dummy_right))
-            .map_err(|e| anyhow::anyhow!("failed to create dummy right tensor: {e}"))?;
-        let (left, right) = if left_inds.is_empty() {
-            let right = local_optimum
-                .outer_product(&dummy_right_tensor)
-                .map_err(|e| anyhow::anyhow!("failed to attach dummy right bond: {e}"))?;
-            (dummy_left_tensor, right)
-        } else {
-            let left = local_optimum
-                .outer_product(&dummy_left_tensor)
-                .map_err(|e| anyhow::anyhow!("failed to attach dummy left bond: {e}"))?;
-            (left, dummy_right_tensor)
-        };
-        FactorizeResult::new(left, right, dummy_left, None, 1)
-    } else {
-        local_optimum
-            .factorize(&left_inds, &options)
-            .map_err(|e| anyhow::anyhow!("factorization failed: {e}"))?
-    };
+    // A site-free endpoint leaves one side of the split empty; the shared
+    // helper keeps the requested left-canonical form in that case, so the
+    // norm ends up on `node_v` together with the canonical center.
+    let factorize_result =
+        super::factorize_allowing_empty_side(&local_optimum, &left_inds, |tensor, left| {
+            tensor
+                .factorize(left, &options)
+                .map_err(|e| anyhow::anyhow!("factorization failed: {e}"))
+        })?;
     if let Some(factorize_started) = factorize_started {
         with_fit_profile(|profile| {
             profile.factorize_time += factorize_started.elapsed();

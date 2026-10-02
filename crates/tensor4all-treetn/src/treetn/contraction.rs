@@ -661,30 +661,19 @@ where
             let left_inds =
                 indices_except_exact(&contracted.external_indices(), &[right_a, right_b]);
 
-            if left_inds.is_empty() {
-                match topology_mode {
-                    ZipupTopologyMode::PruneScalarSubtrees => {
-                        remainder = Some(contracted);
-                    }
-                    ZipupTopologyMode::PreserveInputTopology => {
-                        let (dummy_left, dummy_right) = T::Index::create_dummy_link_pair();
-                        let left_tensor = T::ones(std::slice::from_ref(&dummy_left))
-                            .context("contract_zipup: dummy left tensor failed")?;
-                        let dummy_right_tensor = T::ones(std::slice::from_ref(&dummy_right))
-                            .context("contract_zipup: dummy right tensor failed")?;
-                        let right_tensor = contracted
-                            .outer_product(&dummy_right_tensor)
-                            .context("contract_zipup: dummy bond failed")?;
-                        result_tensors.insert(node.clone(), left_tensor);
-                        result_bonds[site] = Some(dummy_left);
-                        remainder = Some(right_tensor);
-                    }
-                }
+            if left_inds.is_empty() && topology_mode == ZipupTopologyMode::PruneScalarSubtrees {
+                remainder = Some(contracted);
                 continue;
             }
 
-            let factorized = contracted
-                .factorize_auto(&left_inds, &factorize_left)
+            // Under PreserveInputTopology a site-free node keeps its place on a
+            // dimension-one bond via the shared empty-side factorization.
+            let factorized =
+                super::factorize_allowing_empty_side(&contracted, &left_inds, |tensor, left| {
+                    tensor
+                        .factorize_auto(left, &factorize_left)
+                        .map_err(anyhow::Error::from)
+                })
                 .context("contract_zipup: site factorization failed")?;
             result_bonds[site] = Some(factorized.bond_index.clone());
             result_tensors.insert(node.clone(), factorized.left);
@@ -755,51 +744,24 @@ where
             .collect();
         let right_inds_exist = final_indices.iter().any(|index| last_sites.contains(index));
 
-        if left_inds.is_empty() || !right_inds_exist {
-            match topology_mode {
-                ZipupTopologyMode::PruneScalarSubtrees => {
-                    result_tensors.insert(
-                        if left_inds.is_empty() {
-                            last.clone()
-                        } else {
-                            penultimate.clone()
-                        },
-                        final_block,
-                    );
-                }
-                ZipupTopologyMode::PreserveInputTopology => {
-                    let (dummy_left, dummy_right) = T::Index::create_dummy_link_pair();
-                    let (left_tensor, right_tensor) = if left_inds.is_empty() {
-                        let left = T::ones(std::slice::from_ref(&dummy_left))
-                            .context("contract_zipup: final dummy left failed")?;
-                        let right_dummy = T::ones(std::slice::from_ref(&dummy_right))
-                            .context("contract_zipup: final dummy right failed")?;
-                        (
-                            left,
-                            final_block
-                                .outer_product(&right_dummy)
-                                .context("contract_zipup: final dummy bond failed")?,
-                        )
-                    } else {
-                        let left_dummy = T::ones(std::slice::from_ref(&dummy_left))
-                            .context("contract_zipup: final dummy left failed")?;
-                        let right = T::ones(std::slice::from_ref(&dummy_right))
-                            .context("contract_zipup: final dummy right failed")?;
-                        (
-                            final_block
-                                .outer_product(&left_dummy)
-                                .context("contract_zipup: final dummy bond failed")?,
-                            right,
-                        )
-                    };
-                    result_tensors.insert(penultimate.clone(), left_tensor);
-                    result_tensors.insert(last.clone(), right_tensor);
-                    result_bonds[node_count - 2] = Some(dummy_left);
-                }
-            }
+        if (left_inds.is_empty() || !right_inds_exist)
+            && topology_mode == ZipupTopologyMode::PruneScalarSubtrees
+        {
+            result_tensors.insert(
+                if left_inds.is_empty() {
+                    last.clone()
+                } else {
+                    penultimate.clone()
+                },
+                final_block,
+            );
         } else {
-            let factorized = final_block
-                .factorize_auto(&left_inds, &factorize_right)
+            let factorized =
+                super::factorize_allowing_empty_side(&final_block, &left_inds, |tensor, left| {
+                    tensor
+                        .factorize_auto(left, &factorize_right)
+                        .map_err(anyhow::Error::from)
+                })
                 .context("contract_zipup: final block factorization failed")?;
             result_bonds[node_count - 2] = Some(factorized.bond_index);
             result_tensors.insert(penultimate.clone(), factorized.left);
@@ -1074,40 +1036,25 @@ where
             let excluded_parent_bonds = [bond_to_dest_a, bond_to_dest_b];
             let left_inds = indices_except_exact(&c_temp_indices, &excluded_parent_bonds);
 
-            if left_inds.is_empty() {
-                match topology_mode {
-                    ZipupTopologyMode::PruneScalarSubtrees => {
-                        // If no left indices remain, pass the tensor directly to destination.
-                        intermediate_tensors
-                            .entry(destination_name.clone())
-                            .or_default()
-                            .push(c_temp);
-                    }
-                    ZipupTopologyMode::PreserveInputTopology => {
-                        // Fit sweeps require C to retain A/B's node set. When a
-                        // subtree has no surviving site indices, keep it connected
-                        // by a dimension-1 dummy link instead of pruning the node.
-                        let (dummy_left, dummy_right) = T::Index::create_dummy_link_pair();
-                        let left_tensor = T::ones(std::slice::from_ref(&dummy_left))
-                            .context("Failed to create topology-preserving dummy left tensor")?;
-                        let dummy_right_tensor = T::ones(std::slice::from_ref(&dummy_right))
-                            .context("Failed to create topology-preserving dummy right tensor")?;
-                        let right_tensor = c_temp
-                            .outer_product(&dummy_right_tensor)
-                            .context("Failed to attach topology-preserving dummy bond")?;
-
-                        result_tensors.insert(source_name.clone(), left_tensor);
-                        intermediate_tensors
-                            .entry(destination_name.clone())
-                            .or_default()
-                            .push(right_tensor);
-                    }
-                }
+            if left_inds.is_empty() && topology_mode == ZipupTopologyMode::PruneScalarSubtrees {
+                // If no left indices remain, pass the tensor directly to destination.
+                intermediate_tensors
+                    .entry(destination_name.clone())
+                    .or_default()
+                    .push(c_temp);
                 continue;
             }
 
-            let factorize_result = c_temp
-                .factorize(&left_inds, &factorize_options)
+            // Fit sweeps require C to retain A/B's node set. Under
+            // PreserveInputTopology a subtree without surviving site indices
+            // stays connected by the dimension-one bond of the shared
+            // empty-side factorization instead of being pruned.
+            let factorize_result =
+                super::factorize_allowing_empty_side(&c_temp, &left_inds, |tensor, left| {
+                    tensor
+                        .factorize(left, &factorize_options)
+                        .map_err(anyhow::Error::from)
+                })
                 .context("Failed to factorize")?;
 
             // Store left factor as result tensor for source node
