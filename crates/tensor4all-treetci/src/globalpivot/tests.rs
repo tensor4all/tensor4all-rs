@@ -11,7 +11,8 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use std::cell::RefCell;
 use tensor4all_core::{
-    AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor, MatrixLuciScalar as Scalar, TensorElement,
+    AnyScalar, ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor, MatrixLuciScalar as Scalar,
+    TensorElement,
 };
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::TreeTN;
@@ -258,48 +259,82 @@ impl Fixture {
         TreeTciGraph::new(self.local_dims.len(), &self.edges).unwrap()
     }
 
-    fn evaluate(&self) -> impl Fn(GlobalIndexBatch<'_>) -> Result<Vec<f64>> + '_ {
+    fn evaluate(&self) -> impl Fn(GlobalIndexBatch<'_>) -> Result<Vec<f64>> + Copy + '_ {
+        self.evaluate_as(|value| value)
+    }
+
+    /// Batch evaluator returning `map(target(point))`, e.g. a 32-bit or
+    /// complex version of the target.
+    fn evaluate_as<T, M>(
+        &self,
+        map: M,
+    ) -> impl Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>> + Copy + '_
+    where
+        M: Fn(f64) -> T + Copy + 'static,
+    {
         // Column-major batch: each column of `n_sites` entries is one point.
         move |batch: GlobalIndexBatch<'_>| {
             Ok(batch
                 .data()
                 .chunks(batch.n_sites())
-                .map(self.target)
+                .map(|point| map((self.target)(point)))
                 .collect())
         }
     }
 
-    fn seeded_state(&self) -> TreeTCI2<f64> {
-        let origin = vec![0usize; self.local_dims.len()];
-        let mut tci = TreeTCI2::<f64>::new(self.local_dims.clone(), self.graph()).unwrap();
+    /// State with the single pivot at the all-zero point.
+    fn seeded_state_with<T, F>(&self, evaluate: F) -> TreeTCI2<T>
+    where
+        T: FullPivLuScalar + Scalar + TensorElement + ScalarParts,
+        F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    {
+        let n_sites = self.local_dims.len();
+        let origin = vec![0usize; n_sites];
+        let mut tci = TreeTCI2::<T>::new(self.local_dims.clone(), self.graph()).unwrap();
         tci.add_global_pivots(std::slice::from_ref(&origin))
             .unwrap();
-        tci.max_sample_value = (self.target)(&origin).abs();
+        let value = evaluate(GlobalIndexBatch::new(&origin, n_sites, 1).unwrap()).unwrap()[0];
+        tci.max_sample_value = value.real_part().hypot(value.imag_part());
         tci
+    }
+
+    fn seeded_state(&self) -> TreeTCI2<f64> {
+        self.seeded_state_with(self.evaluate())
     }
 
     /// State seeded at the all-zero point and swept once without a global
     /// search, so the approximation is partially converged (rank > 1 with a
     /// remaining error the search must find).
-    fn one_sweep_state(&self) -> TreeTCI2<f64> {
-        let mut tci = self.seeded_state();
+    fn one_sweep_state_with<T, F>(&self, evaluate: F) -> TreeTCI2<T>
+    where
+        T: FullPivLuScalar + Scalar + CommonScalar + TensorElement + ScalarParts,
+        F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    {
+        let mut tci = self.seeded_state_with(&evaluate);
         let options = TreeTciOptions {
             max_iter: 1,
             enable_global_pivots: false,
             ..TreeTciOptions::default()
         };
-        optimize_with_proposer(&mut tci, self.evaluate(), &options, &DefaultProposer).unwrap();
+        optimize_with_proposer(&mut tci, &evaluate, &options, &DefaultProposer).unwrap();
         tci
     }
 
-    /// Full default optimization (global search on, fixed seed).
-    fn full_run(&self) -> (Vec<usize>, Vec<f64>) {
+    fn one_sweep_state(&self) -> TreeTCI2<f64> {
+        self.one_sweep_state_with(self.evaluate())
+    }
+
+    /// Full default optimization (global search on, fixed seed). Returns the
+    /// rank and error histories and the final state.
+    fn full_run(&self) -> (Vec<usize>, Vec<f64>, TreeTCI2<f64>) {
         let mut tci = self.seeded_state();
         let options = TreeTciOptions {
             seed: Some(1),
             ..TreeTciOptions::default()
         };
-        optimize_with_proposer(&mut tci, self.evaluate(), &options, &DefaultProposer).unwrap()
+        let (ranks, errors) =
+            optimize_with_proposer(&mut tci, self.evaluate(), &options, &DefaultProposer).unwrap();
+        (ranks, errors, tci)
     }
 }
 
@@ -368,9 +403,13 @@ fn pointwise_readout(
     Ok(treetn.evaluate(site_indices, candidates)?)
 }
 
-fn search_params(state: &TreeTCI2<f64>, seed: u64) -> SearchParams {
+/// Parameters of the fixed-seed searches compared with the pointwise
+/// reference. `nsearch` is kept small because the pointwise reference
+/// contracts the whole network once per candidate, which dominates the debug
+/// test time.
+fn search_params<T>(state: &TreeTCI2<T>, seed: u64) -> SearchParams {
     SearchParams {
-        nsearch: 20,
+        nsearch: 4,
         max_nglobal_pivot: 5,
         tol_margin: 1.0,
         abs_tol: 1e-8 * state.max_sample_value,
@@ -378,11 +417,16 @@ fn search_params(state: &TreeTCI2<f64>, seed: u64) -> SearchParams {
     }
 }
 
-/// Compares the cached batched readout with `TreeTN::evaluate` on random
-/// points of one materialized tree.
-fn assert_readout_matches_pointwise(treetn: &TreeTN<IdxTensor, usize>, local_dims: &[usize]) {
+/// Compares the cached batched readout with `TreeTN::evaluate` on
+/// `n_points` random points of one materialized tree. The two readouts must
+/// agree within `rel_tol` times the largest `|tt|` of the batch.
+fn assert_readout_matches_pointwise(
+    treetn: &TreeTN<IdxTensor, usize>,
+    local_dims: &[usize],
+    n_points: usize,
+    rel_tol: f64,
+) {
     let n_sites = local_dims.len();
-    let n_points = 300;
     let mut rng = ChaCha8Rng::seed_from_u64(792);
     // Column-major `[n_sites, n_points]`: one random point per column.
     let flat: Vec<usize> = (0..n_points)
@@ -406,17 +450,15 @@ fn assert_readout_matches_pointwise(treetn: &TreeTN<IdxTensor, usize>, local_dim
         .zip(&reference)
         .map(|(a, b)| (a.clone() - b.clone()).abs())
         .fold(0.0f64, f64::max);
-    // The two readouts contract in different orders; they agree to rounding
-    // (measured below 5e-15 relative on the issue #792 workloads).
     assert!(
-        max_diff <= 1e-13 * scale,
+        max_diff <= rel_tol * scale,
         "cached readout differs from TreeTN::evaluate by {max_diff:e} (scale {scale:e})"
     );
 
     // Layout: column `p` is point `p`, independent of the batched contract.
     for (point, value) in flat.chunks(n_sites).zip(&cached).take(3) {
         let single = treetn.evaluate_point(&indices, point).unwrap();
-        assert!((value.clone() - single).abs() <= 1e-13 * scale);
+        assert!((value.clone() - single).abs() <= rel_tol * scale);
     }
 
     // Fresh evaluators on this tree reproduce the same batch values bit for
@@ -434,107 +476,96 @@ fn cached_readout_matches_pointwise_evaluate_on_chain_and_branched_tree() {
         let state = fixture.one_sweep_state();
         // Materialize once; both readouts evaluate the same tree.
         let treetn = to_treetn(&state, fixture.evaluate(), None).unwrap();
-        assert_readout_matches_pointwise(&treetn, &fixture.local_dims);
+        // The two readouts contract in different orders; they agree to
+        // rounding (measured below 5e-15 relative on the issue #792
+        // workloads).
+        assert_readout_matches_pointwise(&treetn, &fixture.local_dims, 300, 1e-13);
     }
 }
 
 #[test]
 fn cached_readout_matches_pointwise_evaluate_for_complex_scalars() {
     let fixture = branched_fixture();
-    let n_sites = fixture.local_dims.len();
-    let phase = Complex64::new(1.0, 0.5);
-    let complex_eval = |batch: GlobalIndexBatch<'_>| -> Result<Vec<Complex64>> {
-        Ok(batch
-            .data()
-            .chunks(batch.n_sites())
-            .map(|point| phase * branched_target(point))
-            .collect())
-    };
-    let origin = vec![0usize; n_sites];
-    let mut tci = TreeTCI2::<Complex64>::new(fixture.local_dims.clone(), fixture.graph()).unwrap();
-    tci.add_global_pivots(std::slice::from_ref(&origin))
-        .unwrap();
-    tci.max_sample_value = (phase * branched_target(&origin)).norm();
-    let options = TreeTciOptions {
-        max_iter: 1,
-        enable_global_pivots: false,
-        ..TreeTciOptions::default()
-    };
-    optimize_with_proposer(&mut tci, complex_eval, &options, &DefaultProposer).unwrap();
-    let treetn = to_treetn(&tci, complex_eval, None).unwrap();
-    assert_readout_matches_pointwise(&treetn, &fixture.local_dims);
+    let complex_eval = fixture.evaluate_as(|value| Complex64::new(1.0, 0.5) * value);
+    let state = fixture.one_sweep_state_with(complex_eval);
+    let treetn = to_treetn(&state, complex_eval, None).unwrap();
+    assert_readout_matches_pointwise(&treetn, &fixture.local_dims, 300, 1e-13);
 }
 
-/// Exercises TreeTCI's materialize-and-search route for the two scalar kinds
-/// that use the cached evaluator's generic contraction path. The raw-message
-/// kernels are intentionally limited to f64/c64, so these trees must take the
-/// `IdxTensor` fallback even though `to_treetn` creates one physical site per
-/// node.
-fn assert_32bit_global_search_uses_generic_readout<T, F>(evaluate: F)
+/// Readout tolerance for the 32-bit trees, in units of `f32::EPSILON` times
+/// the largest `|tt|` of the batch. A first-order rounding bound for one
+/// readout value is (number of contractions) x (bond dimension) x eps for
+/// sums without cancellation: the branched fixture has 13 nodes and its
+/// one-sweep state has bond dimension at most 4, so about 52 eps. The value
+/// 64 covers that bound with a small margin. Measured on the 32 random points
+/// of the test: 0.57 eps for f32 and 3.1 eps for Complex32.
+const READOUT_TOL_32BIT_EPS: f64 = 64.0;
+
+/// Fixed-seed global search on a swept 32-bit state of the branched
+/// fixture (centre of degree 3). The cached readout must select exactly the
+/// pivots the pointwise `TreeTN::evaluate` reference selects.
+///
+/// f32 and Complex32 trees are expected to take the cached evaluator's
+/// generic `IdxTensor` contraction path, because
+/// `TreeTNCachedEvaluator::can_use_raw_messages`
+/// (`tensor4all-treetn/src/treetn/cached_evaluator.rs`) accepts only the
+/// `F64 | C64` scalar kinds. This test checks results only and cannot observe
+/// which internal path ran.
+fn assert_32bit_search_matches_pointwise_reference<T, F>(evaluate: F)
 where
-    T: FullPivLuScalar + Scalar + TensorElement + ScalarParts,
+    T: FullPivLuScalar + Scalar + CommonScalar + TensorElement + ScalarParts,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>> + Copy,
 {
-    let fixture = chain_fixture();
-    let n_sites = fixture.local_dims.len();
-    let origin = vec![0usize; n_sites];
-    let mut state = TreeTCI2::<T>::new(fixture.local_dims.clone(), fixture.graph()).unwrap();
-    state
-        .add_global_pivots(std::slice::from_ref(&origin))
-        .unwrap();
-    state.max_sample_value = 1.0;
-
+    let fixture = branched_fixture();
+    let state = fixture.one_sweep_state_with(evaluate);
     let treetn = to_treetn(&state, evaluate, None).unwrap();
-    let indices = site_indices(&treetn);
-    let n_points = 8;
-    let local_dims = &fixture.local_dims;
-    let flat: Vec<usize> = (0..n_points)
-        .flat_map(|point| (0..n_sites).map(move |site| (point * 7 + site * 3) % local_dims[site]))
-        .collect();
-    let shape = [n_sites, n_points];
-    let candidates = ColMajorArrayRef::new(&flat, &shape).unwrap();
-    let cached = cached_batched_readout(&treetn, &indices, candidates).unwrap();
-    let reference = treetn.evaluate(&indices, candidates).unwrap();
-    let scale = reference.iter().map(AnyScalar::abs).fold(0.0f64, f64::max);
-    let max_diff = cached
-        .iter()
-        .zip(&reference)
-        .map(|(cached, pointwise)| (cached.clone() - pointwise.clone()).abs())
-        .fold(0.0f64, f64::max);
-    assert!(
-        max_diff <= 1e-5 * scale.max(1.0),
-        "32-bit cached readout differs from TreeTN::evaluate by {max_diff:e} (scale {scale:e})"
+    assert_readout_matches_pointwise(
+        &treetn,
+        &fixture.local_dims,
+        32,
+        READOUT_TOL_32BIT_EPS * f64::from(f32::EPSILON),
     );
 
-    // Exercise the supported public search entry point too: it builds the
-    // same cached evaluator internally while comparing target and TT values.
-    let pivots = find_global_pivots(&state, evaluate, 8, 4, 1.0, 1e-6, 792).unwrap();
+    // Exact equality is asserted rather than a near-tie-tolerant comparison
+    // because no decision of this search is close at f32 precision. A
+    // one-off diagnostic on this fixture and seed (both scalar types)
+    // measured, relative to the largest `|tt|`: readout differences up to
+    // 1.2e-7 between the two readouts, a smallest winner/runner-up gap
+    // within a start of 1.6e-2, a smallest gap between accepted pivots of
+    // 6.7e-3, and a smallest distance of 3.5e-2 between a start's best
+    // error and the threshold (itself 1.1e-3). If a legitimate change brings
+    // a decision within 32-bit rounding, compare instead that every pivot
+    // exceeds `abs_tol`, that the pivots are distinct, and that they match
+    // the reference except for the documented near-tie.
+    let params = SearchParams {
+        abs_tol: 1e-3 * state.max_sample_value,
+        ..search_params(&state, 3)
+    };
+    let cached = find_global_pivots(
+        &state,
+        evaluate,
+        params.nsearch,
+        params.max_nglobal_pivot,
+        params.tol_margin,
+        params.abs_tol,
+        params.seed,
+    )
+    .unwrap();
+    let pointwise = search_with_readout(&state, evaluate, params, pointwise_readout).unwrap();
     assert!(
-        !pivots.is_empty(),
-        "the generic 32-bit readout found no pivots"
+        !cached.is_empty(),
+        "the swept 32-bit state must leave errors above the threshold"
     );
+    assert_eq!(cached, pointwise);
 }
 
 #[test]
-fn global_search_supports_f32_and_complex32_cached_fallback() {
-    let real_eval = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f32>> {
-        Ok(batch
-            .data()
-            .chunks(batch.n_sites())
-            .map(|point| quantics_chain_target(point) as f32)
-            .collect())
-    };
-    assert_32bit_global_search_uses_generic_readout(real_eval);
-
-    let phase = Complex32::new(1.0, 0.5);
-    let complex_eval = move |batch: GlobalIndexBatch<'_>| -> Result<Vec<Complex32>> {
-        Ok(batch
-            .data()
-            .chunks(batch.n_sites())
-            .map(|point| phase * quantics_chain_target(point) as f32)
-            .collect())
-    };
-    assert_32bit_global_search_uses_generic_readout(complex_eval);
+fn global_search_32bit_pivots_match_pointwise_reference_on_branched_tree() {
+    let fixture = branched_fixture();
+    assert_32bit_search_matches_pointwise_reference(fixture.evaluate_as(|value| value as f32));
+    assert_32bit_search_matches_pointwise_reference(
+        fixture.evaluate_as(|value| Complex32::new(1.0, 0.5) * value as f32),
+    );
 }
 
 #[test]
@@ -557,37 +588,36 @@ fn cached_readout_rejects_mismatched_indices_and_shapes() {
     assert!(cached_batched_readout(&treetn, &indices, short).is_err());
 }
 
-/// Pivots returned on the #793 base with `ChaCha8Rng` and pointwise readout
-/// for the one-sweep states of the two fixtures.
+/// Pivots returned by the fixed-seed searches of
+/// `global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree`
+/// on the one-sweep states of the two fixtures. Recorded on 9ad67f2c plus
+/// this branch's `ChaCha8Rng` switch, pointwise readout, `search_params`
+/// (`nsearch = 4`).
+///
+/// These lists lock the search trajectory on purpose: any change to the
+/// starting points, the local search, the tie-breaking or the sweep that
+/// produces the state changes them. Re-record them deliberately, from the
+/// pointwise reference, only when such a change is intended (for example a
+/// new RNG or search rule), and say so in the commit.
 fn recorded_pivots(fixture: &str, seed: u64) -> Vec<Vec<usize>> {
     match (fixture, seed) {
         ("chain", 3) => vec![
-            vec![0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 0],
             vec![0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0],
             vec![1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0],
-            vec![0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1],
-            vec![0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0],
-        ],
-        ("chain", 11) => vec![
-            vec![0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0],
-            vec![0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0],
-            vec![1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0],
-            vec![0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 1, 1],
-            vec![0, 1, 1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0],
+            vec![1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 0, 0, 1, 1],
+            vec![1, 0, 1, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 0, 0],
         ],
         ("branched", 3) => vec![
-            vec![0, 0, 0, 1, 1, 0, 1, 0, 1, 0, 0, 1, 1],
-            vec![0, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1],
-            vec![0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 1, 1],
-            vec![0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0],
-            vec![0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0],
+            vec![0, 0, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 0],
+            vec![0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0],
+            vec![0, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1, 1, 0],
+            vec![1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 0, 1],
         ],
         ("branched", 11) => vec![
-            vec![0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0],
             vec![0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 0, 0],
             vec![0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1],
-            vec![0, 1, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0],
-            vec![1, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 0],
+            vec![1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 1, 0, 0],
+            vec![1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0],
         ],
         _ => unreachable!("no recording for {fixture} seed {seed}"),
     }
@@ -595,9 +625,16 @@ fn recorded_pivots(fixture: &str, seed: u64) -> Vec<Vec<usize>> {
 
 #[test]
 fn global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree() {
-    for (name, fixture) in [("chain", chain_fixture()), ("branched", branched_fixture())] {
+    // The degree-3 branched tree is the main target and gets two seeds; the
+    // chain gets one. The pointwise reference dominates the cost of this
+    // test.
+    let cases = [
+        ("chain", chain_fixture(), &[3u64][..]),
+        ("branched", branched_fixture(), &[3u64, 11][..]),
+    ];
+    for (name, fixture, seeds) in cases {
         let state = fixture.one_sweep_state();
-        for seed in [3u64, 11] {
+        for &seed in seeds {
             let params = search_params(&state, seed);
             let cached = find_global_pivots(
                 &state,
@@ -612,7 +649,7 @@ fn global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree() {
             let pointwise =
                 search_with_readout(&state, fixture.evaluate(), params, pointwise_readout).unwrap();
             // Same pivots, in the same order, as the pointwise readout and
-            // the fixed-seed recording for this base.
+            // the fixed-seed recording.
             assert_eq!(cached, pointwise, "{name} seed {seed}");
             assert_eq!(cached, recorded_pivots(name, seed), "{name} seed {seed}");
         }
@@ -621,9 +658,12 @@ fn global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree() {
 
 #[test]
 fn full_runs_reproduce_recorded_ranks_and_errors() {
-    // Recorded on the #793 base (9ad67f2c) with `ChaCha8Rng` and the
-    // pointwise readout: default options, seed 1, global search enabled.
-    let (ranks, errors) = chain_fixture().full_run();
+    // Recorded on 9ad67f2c plus this branch's `ChaCha8Rng` switch, pointwise
+    // readout: default options, seed 1, global search enabled. Like
+    // `recorded_pivots`, these values lock the whole optimization trajectory
+    // on purpose and must be re-recorded deliberately when the search, the
+    // sweep or the RNG legitimately changes.
+    let (ranks, errors, _) = chain_fixture().full_run();
     assert_eq!(ranks, vec![4, 8, 8, 8]);
     let recorded = [
         4.210785455368414e-9,
@@ -639,57 +679,134 @@ fn full_runs_reproduce_recorded_ranks_and_errors() {
         );
     }
 
-    let (ranks, errors) = branched_fixture().full_run();
+    let fixture = branched_fixture();
+    let (ranks, errors, state) = fixture.full_run();
     assert_eq!(ranks, vec![4, 16, 16, 16]);
-    // The branched fixture is represented exactly at rank 16.
+    // At rank 16 the branched fixture is represented exactly, so the error
+    // estimates are rounding-level and alone say little about the run.
     assert_eq!(errors.len(), 4);
     assert!(errors.iter().all(|&error| error <= 1e-14), "{errors:?}");
+    // The stronger check: materialize the result once over all 2^13 points
+    // and compare it with the dense target.
+    let treetn = to_treetn(&state, fixture.evaluate(), None).unwrap();
+    let dense = treetn.to_dense().unwrap();
+    let indices = site_indices(&treetn);
+    let n_points: usize = fixture.local_dims.iter().product();
+    // Column-major: site 0 varies fastest.
+    let target: Vec<f64> = (0..n_points)
+        .map(|linear| {
+            let mut rest = linear;
+            let point: Vec<usize> = fixture
+                .local_dims
+                .iter()
+                .map(|&dim| {
+                    let value = rest % dim;
+                    rest /= dim;
+                    value
+                })
+                .collect();
+            (fixture.target)(&point)
+        })
+        .collect();
+    let scale = target
+        .iter()
+        .fold(0.0f64, |acc, value| acc.max(value.abs()));
+    let target = IdxTensor::from_dense(indices, target).unwrap();
+    let residual = dense.sub(&target).unwrap().maxabs().unwrap();
+    assert!(
+        residual <= 1e-12 * scale,
+        "branched full run differs from the target by {residual:e} (scale {scale:e})"
+    );
 }
 
 #[test]
-fn exact_error_ties_keep_the_first_generated_candidate() {
-    // f = 2 everywhere and a readout of exactly 1 give every candidate the
-    // same error, 1. The first candidate of each start must win, starts must
-    // stay in generation order, and the budget truncates that order.
-    let fixture = chain_fixture();
-    let n_sites = fixture.local_dims.len();
-    let per_start: usize = fixture.local_dims.iter().sum();
-    let constant =
-        |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![2.0; batch.n_points()]) };
-    let mut state = TreeTCI2::<f64>::new(fixture.local_dims.clone(), fixture.graph()).unwrap();
+fn equal_errors_keep_generation_order_and_duplicates_collapse() {
+    // Four binary sites, f = 2 everywhere, and a readout that gives every
+    // candidate of start `s` the same error `level(s)` in {1, 2, 3}. All
+    // candidates of a start tie, so its first generated candidate (the start
+    // with site 0 set to 0, one of only 8 points) must win. With 48 starts,
+    // each error level is shared by 16 starts and repeated points are
+    // certain, so the cross-start sort must move candidates, keep generation
+    // order among equal errors, and leave duplicates for the deduplication.
+    let local_dims = vec![2usize; 4];
+    let n_sites = local_dims.len();
+    let per_start: usize = local_dims.iter().sum();
+    let edges: Vec<TreeTciEdge> = (0..n_sites - 1)
+        .map(|site| TreeTciEdge::new(site, site + 1))
+        .collect();
+    let graph = TreeTciGraph::new(n_sites, &edges).unwrap();
+    let mut state = TreeTCI2::<f64>::new(local_dims, graph).unwrap();
     state.add_global_pivots(&[vec![0; n_sites]]).unwrap();
     state.max_sample_value = 2.0;
 
+    let nsearch = 48;
+    let level = |start: usize| 1 + (start * 7 + start / 5) % 3;
+    let constant =
+        |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![2.0; batch.n_points()]) };
     let seen = RefCell::new(Vec::new());
-    let tied_readout = |_: &TreeTN<IdxTensor, usize>,
-                        _: &[DynIndex],
-                        candidates: ColMajorArrayRef<'_, usize>|
+    let leveled_readout = |_: &TreeTN<IdxTensor, usize>,
+                           _: &[DynIndex],
+                           candidates: ColMajorArrayRef<'_, usize>|
      -> Result<Vec<AnyScalar>> {
         seen.replace(candidates.data().to_vec());
-        Ok(vec![AnyScalar::new_real(1.0); candidates.shape()[1]])
+        Ok((0..candidates.shape()[1])
+            .map(|column| AnyScalar::new_real(2.0 - level(column / per_start) as f64))
+            .collect())
     };
-    let params = SearchParams {
-        nsearch: 6,
-        max_nglobal_pivot: 3,
-        tol_margin: 1.0,
-        abs_tol: 0.5,
-        seed: 5,
+    let search = |max_nglobal_pivot: usize| {
+        let params = SearchParams {
+            nsearch,
+            max_nglobal_pivot,
+            tol_margin: 1.0,
+            abs_tol: 0.5,
+            seed: 5,
+        };
+        search_with_readout(&state, constant, params, leveled_readout).unwrap()
     };
-    let pivots = search_with_readout(&state, constant, params, tied_readout).unwrap();
+    let pivots = search(nsearch);
 
-    let candidates = seen.into_inner();
-    let mut expected: Vec<Vec<usize>> = Vec::new();
-    for start in 0..params.nsearch {
+    let candidates = seen.borrow().clone();
+    let first_candidate = |start: usize| {
         let first = start * per_start * n_sites;
-        let point = candidates[first..first + n_sites].to_vec();
-        // The first candidate of a start varies site 0 to its first value.
-        assert_eq!(point[0], 0);
-        if !expected.contains(&point) {
-            expected.push(point);
+        candidates[first..first + n_sites].to_vec()
+    };
+    for start in 0..nsearch {
+        assert_eq!(first_candidate(start)[0], 0);
+    }
+    // Reference without sorting: errors from high to low, starts in
+    // generation order within one error, first occurrence of each point.
+    let mut expected: Vec<Vec<usize>> = Vec::new();
+    let mut repeats_within_a_level = 0;
+    for error_level in (1..=3).rev() {
+        let mut level_points: Vec<Vec<usize>> = Vec::new();
+        for start in (0..nsearch).filter(|&start| level(start) == error_level) {
+            let point = first_candidate(start);
+            if level_points.contains(&point) {
+                repeats_within_a_level += 1;
+            } else {
+                level_points.push(point.clone());
+            }
+            if !expected.contains(&point) {
+                expected.push(point);
+            }
         }
     }
-    expected.truncate(params.max_nglobal_pivot);
+    // The fixture really exercises the deduplication of equal errors.
+    assert!(repeats_within_a_level > 0);
+    // Deduplicating in generation order gives a different list, so the
+    // result really depends on the sort.
+    let mut generation_order: Vec<Vec<usize>> = Vec::new();
+    for start in 0..nsearch {
+        let point = first_candidate(start);
+        if !generation_order.contains(&point) {
+            generation_order.push(point);
+        }
+    }
+    assert_ne!(generation_order, expected);
+
     assert_eq!(pivots, expected);
+    // The budget truncates the same order.
+    assert_eq!(search(3), expected[..3].to_vec());
 }
 
 #[test]

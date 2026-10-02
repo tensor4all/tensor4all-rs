@@ -75,20 +75,32 @@ use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
 /// # Examples
 ///
 /// ```
-/// use anyhow::Result;
+/// # fn main() -> anyhow::Result<()> {
 /// use tensor4all_treetci::{
 ///     find_global_pivots, GlobalIndexBatch, TreeTCI2, TreeTciEdge, TreeTciGraph,
 /// };
 ///
-/// let graph = TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap();
-/// let mut state = TreeTCI2::<f64>::new(vec![2, 2], graph).unwrap();
-/// state.add_global_pivots(&[vec![0, 0]]).unwrap();
-///
-/// let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
-///     Ok(vec![1.0; batch.n_points()])
+/// // f = 1 + 10 * delta_{(1, 1)} on two binary sites.
+/// let evaluate = |batch: GlobalIndexBatch<'_>| -> anyhow::Result<Vec<f64>> {
+///     Ok(batch
+///         .data()
+///         .chunks(batch.n_sites())
+///         .map(|point| if point == [1, 1] { 11.0 } else { 1.0 })
+///         .collect())
 /// };
-/// let pivots = find_global_pivots(&state, evaluate, 4, 2, 1.0, f64::MAX, 42).unwrap();
-/// assert!(pivots.is_empty());
+///
+/// // With the single pivot (0, 0) the rank-1 approximation is 1 everywhere,
+/// // so (1, 1), with error 10, is the only point above `abs_tol = 1.0`.
+/// let graph = TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)])?;
+/// let mut state = TreeTCI2::<f64>::new(vec![2, 2], graph)?;
+/// state.add_global_pivots(&[vec![0, 0]])?;
+///
+/// // Every start other than (0, 0) reaches (1, 1) by changing one site, and
+/// // repeated finds are merged into one pivot.
+/// let pivots = find_global_pivots(&state, evaluate, 4, 2, 1.0, 1.0, 42)?;
+/// assert_eq!(pivots, vec![vec![1, 1]]);
+/// # Ok(())
+/// # }
 /// ```
 pub fn find_global_pivots<T, F>(
     state: &TreeTCI2<T>,
