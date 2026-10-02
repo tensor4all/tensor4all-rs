@@ -88,21 +88,33 @@ where
 {
     /// Compute log(||TreeTN||_F), the log of the Frobenius norm.
     ///
-    /// Uses canonicalization to avoid numerical overflow:
-    /// when canonicalized to a single site with Unitary form,
-    /// the Frobenius norm of the whole network equals the norm of the center tensor.
+    /// Canonicalizes the network to a single center with Unitary form, where
+    /// the Frobenius norm of the whole network equals the norm of the center
+    /// tensor, and returns the logarithm of that center norm. Canonicalization
+    /// avoids contracting the full network, but the center norm is computed as
+    /// `center.norm_squared().sqrt()` before taking the logarithm, so this does
+    /// **not** protect against overflow: a center norm above roughly `1e154`
+    /// (where the squared norm exceeds `f64::MAX`) returns `inf`, and a norm
+    /// below roughly `1e-154` loses precision in the squared norm and returns
+    /// `-inf` once that underflows to zero.
+    ///
+    /// Canonicalization absorbs site-free nodes into their neighbors and
+    /// replaces their bonds with fresh dimension-one links (see
+    /// [`Self::canonicalize`]).
     ///
     /// # Note
     /// This method is mutable because it may need to canonicalize the network
-    /// to a single Unitary center. Use `log_norm` (without canonicalization) if you
-    /// already have a properly canonicalized network.
+    /// to a single Unitary center. If the network is already Unitary
+    /// canonicalized to a single center, that center is used without another
+    /// sweep.
     ///
     /// # Returns
     /// The natural logarithm of the Frobenius norm.
     ///
     /// # Errors
-    /// Returns an error when the tensor train contains a non-finite value or its
-    /// scaling is invalid (an invalid-state or dtype mismatch failure).
+    /// Returns an error when the network is empty, when canonicalization fails,
+    /// or when the center norm cannot be evaluated (a non-finite value or a
+    /// backend failure).
     /// # Examples
     ///
     /// ```
@@ -190,7 +202,9 @@ where
 
     /// Compute the Frobenius norm of the TreeTN.
     ///
-    /// Uses `log_norm` internally: `norm = exp(log_norm)`.
+    /// Uses `log_norm` internally: `norm = exp(log_norm)`, with the same
+    /// overflow limit and the same canonicalization side effects (site-free
+    /// nodes get fresh dimension-one bonds).
     ///
     /// # Note
     /// This method is mutable because it may need to canonicalize the network.
