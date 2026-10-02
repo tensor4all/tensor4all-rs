@@ -74,6 +74,97 @@ pub use swap::{ScheduledSwapStep, SwapOptions, SwapSchedule};
 /// index and the `(node, leg)` pairs that carry it (used by `from_tensors`).
 type IndexGroups<I> = Vec<(I, Vec<(NodeIndex, I)>)>;
 
+/// Create a dimension-one link and its unit tensor in the requested context.
+fn singleton_link<T: TensorLike>(
+    context: Option<&tensor4all_tensorbackend::ExecutionContext>,
+) -> Result<(T::Index, T)> {
+    let link = T::Index::new_link(1).context("failed to create singleton link")?;
+    let unit = match context {
+        Some(context) => T::ones_in(context, std::slice::from_ref(&link)),
+        None => T::ones(std::slice::from_ref(&link)),
+    }
+    .context("failed to create singleton-link tensor")?;
+    Ok((link, unit))
+}
+
+/// Contract a rank-one leaf into its neighbor and retain their edge as a
+/// dimension-one link. This is exact even when the original link is wide.
+pub(super) fn absorb_rank_one_leaf<T: TensorLike>(
+    leaf: &T,
+    neighbor: &T,
+    old_link: &T::Index,
+    context: Option<&tensor4all_tensorbackend::ExecutionContext>,
+) -> Result<(T, T, T::Index)> {
+    let leaf_indices = leaf.external_indices();
+    if leaf_indices.len() != 1 || leaf_indices[0] != *old_link {
+        anyhow::bail!(
+            "rank-one leaf must contain only its connecting link; found {:?}",
+            leaf_indices
+        );
+    }
+
+    let absorbed = T::contract(&[leaf, neighbor]).context("failed to absorb rank-one leaf")?;
+    let (new_link, unit) = singleton_link::<T>(context)?;
+    let updated_neighbor = absorbed
+        .outer_product(&unit)
+        .context("failed to restore singleton link on neighbor")?;
+
+    Ok((unit, updated_neighbor, new_link))
+}
+
+/// Factorize a two-site tensor when one side of the split has no external
+/// indices. A temporary dimension-one axis gives the ordinary factorizer a
+/// valid non-empty split; the temporary axis is removed from the result.
+pub(super) fn factorize_with_singleton_boundary<T: TensorLike>(
+    tensor: &T,
+    left_indices: &[T::Index],
+    singleton_is_left: bool,
+    options: &FactorizeOptions,
+    context: Option<&tensor4all_tensorbackend::ExecutionContext>,
+) -> Result<(T, T, T::Index)> {
+    let (boundary_index, boundary_unit) = singleton_link::<T>(context)?;
+
+    if tensor.num_external_indices() == 0 {
+        let right = tensor
+            .outer_product(&boundary_unit)
+            .context("failed to attach singleton boundary to scalar tensor")?;
+        return Ok((boundary_unit, right, boundary_index));
+    }
+
+    let augmented = tensor
+        .outer_product(&boundary_unit)
+        .context("failed to add singleton boundary for factorization")?;
+    let factor_left_indices = if singleton_is_left {
+        vec![boundary_index.clone()]
+    } else {
+        left_indices.to_vec()
+    };
+    let result = match context {
+        Some(context) => augmented.factorize_in(&factor_left_indices, options, context),
+        None => augmented.factorize(&factor_left_indices, options),
+    }
+    .context("failed to factorize singleton-boundary tensor")?;
+
+    let left = if singleton_is_left {
+        result
+            .left
+            .select_indices(std::slice::from_ref(&boundary_index), &[0])
+            .context("failed to remove left singleton boundary")?
+    } else {
+        result.left
+    };
+    let right = if singleton_is_left {
+        result.right
+    } else {
+        result
+            .right
+            .select_indices(std::slice::from_ref(&boundary_index), &[0])
+            .context("failed to remove right singleton boundary")?
+    };
+
+    Ok((left, right, result.bond_index))
+}
+
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
 /// Maintains a graph of tensors connected by bonds (edges).
 /// Each node stores a tensor, and edges store `Connection` objects
@@ -700,32 +791,21 @@ where
 
         let tensor_external_indices = tensor_src.external_indices();
         if left_inds.is_empty() {
-            // Compatibility boundary: no-context and process-global CPU
-            // callers keep the historical scalar-norm transfer. Every other
-            // explicit context uses the scoped norm/scale path.
-            let tensor_src = self
-                .tensor(src)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", src))
-                .with_context(|| format!("{}: tensor not found", context_name))?
-                .clone();
-            match context {
-                None => {
-                    return self.sweep_scalar_edge_legacy(src, dst, edge, tensor_src, context_name);
-                }
-                Some(execution) if execution.is_global_default_cpu() => {
-                    return self.sweep_scalar_edge_legacy(src, dst, edge, tensor_src, context_name);
-                }
-                Some(execution) => {
-                    return self.sweep_scalar_edge_in(
-                        src,
-                        dst,
-                        edge,
-                        tensor_src,
-                        execution,
-                        context_name,
-                    );
-                }
-            }
+            let tensor_dst = self
+                .tensor(dst)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", dst))
+                .with_context(|| format!("{}: dst tensor not found", context_name))?;
+            let (updated_src, updated_dst, new_bond) =
+                absorb_rank_one_leaf(tensor_src, tensor_dst, &bond_on_src, context)
+                    .with_context(|| format!("{}: failed to absorb rank-one leaf", context_name))?;
+            return self.finish_rank_one_leaf_absorption(
+                src,
+                dst,
+                edge,
+                (updated_src, updated_dst),
+                new_bond,
+                context_name,
+            );
         }
 
         if left_inds.len() == tensor_external_indices.len() {
@@ -791,106 +871,19 @@ where
     // Public accessors
     // ------------------------------------------------------------------------
 
-    /// Historical scalar-edge normalization (no-context and global callers).
-    fn sweep_scalar_edge_legacy(
+    /// Store the absorbed leaf as a dimension-one edge and replace its tensors.
+    fn finish_rank_one_leaf_absorption(
         &mut self,
         src: NodeIndex,
         dst: NodeIndex,
         edge: EdgeIndex,
-        tensor_src: T,
+        updated_tensors: (T, T),
+        new_bond: T::Index,
         context_name: &str,
     ) -> Result<()> {
-        let tensor_dst = self
-            .tensor(dst)
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
-            .with_context(|| format!("{}: dst tensor not found", context_name))?;
-
-        let src_norm = tensor_src.norm()?;
-        let updated_src_tensor = if src_norm > 0.0 {
-            tensor_src
-                .scale(tensor4all_core::AnyScalar::new_real(1.0 / src_norm))
-                .with_context(|| format!("{}: failed to normalize src tensor", context_name))?
-        } else {
-            tensor_src.clone()
-        };
-        let updated_dst_tensor = if src_norm > 0.0 {
-            tensor_dst
-                .scale(tensor4all_core::AnyScalar::new_real(src_norm))
-                .with_context(|| format!("{}: failed to scale dst tensor", context_name))?
-        } else {
-            tensor_dst.clone()
-        };
-
-        self.finish_scalar_edge_swap(
-            src,
-            dst,
-            edge,
-            updated_src_tensor,
-            updated_dst_tensor,
-            context_name,
-        )
-    }
-
-    /// Context-scoped scalar-edge normalization for explicit contexts.
-    ///
-    /// Transfers the source norm with `norm_in`/`scale_in`, so every value
-    /// stays in `context` on CPU and CUDA alike.
-    fn sweep_scalar_edge_in(
-        &mut self,
-        src: NodeIndex,
-        dst: NodeIndex,
-        edge: EdgeIndex,
-        tensor_src: T,
-        context: &tensor4all_tensorbackend::ExecutionContext,
-        context_name: &str,
-    ) -> Result<()> {
-        let tensor_dst = self
-            .tensor(dst)
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
-            .with_context(|| format!("{}: dst tensor not found", context_name))?;
-
-        let src_norm = tensor_src.norm_in(context).map_err(|error| {
-            anyhow::Error::new(error).context(format!("{context_name}: scalar norm failed"))
-        })?;
-        let updated_src_tensor = if src_norm > 0.0 {
-            tensor_src
-                .scale_in(1.0 / src_norm, context)
-                .map_err(|error| {
-                    anyhow::Error::new(error)
-                        .context(format!("{context_name}: failed to normalize src tensor"))
-                })?
-        } else {
-            tensor_src.clone()
-        };
-        let updated_dst_tensor = if src_norm > 0.0 {
-            tensor_dst.scale_in(src_norm, context).map_err(|error| {
-                anyhow::Error::new(error)
-                    .context(format!("{context_name}: failed to scale dst tensor"))
-            })?
-        } else {
-            tensor_dst.clone()
-        };
-
-        self.finish_scalar_edge_swap(
-            src,
-            dst,
-            edge,
-            updated_src_tensor,
-            updated_dst_tensor,
-            context_name,
-        )
-    }
-
-    /// Shared tail of both scalar-edge paths: replace tensors and orient.
-    fn finish_scalar_edge_swap(
-        &mut self,
-        src: NodeIndex,
-        dst: NodeIndex,
-        edge: EdgeIndex,
-        updated_src_tensor: T,
-        updated_dst_tensor: T,
-        context_name: &str,
-    ) -> Result<()> {
+        let (updated_src_tensor, updated_dst_tensor) = updated_tensors;
+        self.replace_edge_bond(edge, new_bond)
+            .with_context(|| format!("{}: failed to update singleton edge bond", context_name))?;
         self.replace_tensor(src, updated_src_tensor)
             .with_context(|| format!("{}: failed to replace tensor at src node", context_name))?;
         self.replace_tensor(dst, updated_dst_tensor)
@@ -2361,7 +2354,7 @@ mod tests {
     }
 
     #[test]
-    fn sweep_scalar_edge_in_matches_legacy_on_explicit_cpu() {
+    fn sweep_rank_one_leaf_preserves_values_on_explicit_cpu() {
         use std::sync::Arc;
 
         use tenferro_cpu::CpuBackend;
@@ -2400,27 +2393,18 @@ mod tests {
         )
         .unwrap();
 
-        // Norm transfer: leaf normalized, parent scaled by the leaf norm.
-        let expected_norm = 14.0_f64.sqrt();
+        // The rank-one leaf is contracted into its neighbor and the edge is
+        // reduced exactly to dimension one.
+        let edge = tree.edge_between(&0, &1).unwrap();
+        assert_eq!(tree.bond_index(edge).unwrap().dim(), 1);
         let leaf_back = tree.tensor(src).unwrap();
         leaf_back.validate_context(&context).unwrap();
         let leaf_values = leaf_back.to_vec::<f64>().unwrap();
-        for (got, want) in leaf_values
-            .iter()
-            .zip([1.0, 2.0, 3.0].iter().map(|v| v / expected_norm))
-        {
-            assert!((got - want).abs() < 1e-12, "leaf {leaf_values:?}");
-        }
+        assert_eq!(leaf_values, vec![1.0]);
         let parent_back = tree.tensor(dst).unwrap();
         parent_back.validate_context(&context).unwrap();
-        let parent_values = parent_back.to_vec::<f64>().unwrap();
-        for (got, want) in parent_values.iter().zip(
-            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
-                .iter()
-                .map(|v| v * expected_norm),
-        ) {
-            assert!((got - want).abs() < 1e-12, "parent {parent_values:?}");
-        }
+        let actual = tree.to_dense().unwrap().to_vec::<f64>().unwrap();
+        assert_eq!(actual, vec![14.0, 32.0]);
 
         // Legacy entry agrees exactly on host inputs.
         let host_leaf = IdxTensor::from_dense(vec![bond.clone()], vec![1.0_f64, 2.0, 3.0]).unwrap();
@@ -2443,9 +2427,11 @@ mod tests {
                 "test",
             )
             .unwrap();
+        let legacy_edge = host_tree.edge_between(&0, &1).unwrap();
+        assert_eq!(host_tree.bond_index(legacy_edge).unwrap().dim(), 1);
         let legacy_leaf = host_tree.tensor(host_src).unwrap().to_vec::<f64>().unwrap();
         assert_eq!(legacy_leaf, leaf_values);
-        let legacy_parent = host_tree.tensor(host_dst).unwrap().to_vec::<f64>().unwrap();
-        assert_eq!(legacy_parent, parent_values);
+        let legacy_actual = host_tree.to_dense().unwrap().to_vec::<f64>().unwrap();
+        assert_eq!(legacy_actual, actual);
     }
 }

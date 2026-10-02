@@ -91,6 +91,42 @@ fn truncate_updater_keeps_same_id_primed_nonbond_index() {
 }
 
 #[test]
+fn truncate_updater_preserves_scalar_tree_with_two_site_free_nodes() {
+    let bond = DynIndex::new_dyn(3);
+    let tensor_left = IdxTensor::from_dense(vec![bond.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    let tensor_right = IdxTensor::from_dense(vec![bond.clone()], vec![4.0, 5.0, 6.0]).unwrap();
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![tensor_left, tensor_right],
+        vec!["left".to_string(), "right".to_string()],
+    )
+    .unwrap();
+
+    let expected = tn.to_dense().unwrap();
+    assert!(expected.external_indices().is_empty());
+    assert_eq!(expected.to_vec::<f64>().unwrap(), vec![32.0]);
+
+    let step = LocalUpdateStep {
+        nodes: vec!["left".to_string(), "right".to_string()],
+        new_center: "right".to_string(),
+    };
+    let mut updater = TruncateUpdater::new(Some(1), None);
+    let updated = updater.update(tn.clone(), &step, &tn).unwrap();
+
+    assert_eq!(updated.node_count(), 2);
+    assert_eq!(updated.edge_count(), 1);
+    updated.verify_internal_consistency().unwrap();
+
+    let edge = updated
+        .edge_between(&"left".to_string(), &"right".to_string())
+        .unwrap();
+    assert_eq!(updated.bond_index(edge).unwrap().dim(), 1);
+
+    let actual = updated.to_dense().unwrap();
+    assert!(actual.external_indices().is_empty());
+    assert_eq!(actual.to_vec::<f64>().unwrap(), vec![32.0]);
+}
+
+#[test]
 fn canonicalize_keeps_same_id_primed_nonbond_index_on_source() {
     let s0 = DynIndex::new_dyn(2);
     let s1 = DynIndex::new_dyn(2);
