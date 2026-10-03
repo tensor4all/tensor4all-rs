@@ -2286,26 +2286,53 @@ where
 /// 2. Contracts the tensors along common (site) indices
 /// 3. Decomposes the result back to a TreeTN using the original topology
 ///
+/// The decomposition is an SVD, so `max_bond_dim` and `svd_policy` bound and
+/// truncate the resulting bond dimensions. `qr_rtol` is QR-specific and is
+/// rejected instead of silently ignored; `ContractionMethod::Fit` with
+/// [`FactorizeAlg::QR`](tensor4all_core::FactorizeAlg::QR) is the QR-based
+/// decomposition path.
+///
 /// This is O(exp(n)) in memory and is primarily useful for debugging and testing.
 #[allow(clippy::too_many_arguments)]
 /// # Errors
 ///
-/// Returns an error when the contraction fails (a shape or index mismatch,
-/// or a backend failure).
+/// Returns an error when the contraction fails (a shape or index mismatch, or
+/// a backend failure), when the truncation options are invalid, or when
+/// `qr_rtol` is set.
 ///
 pub fn contract_naive_to_treetn<T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
     center: &V,
-    _max_bond_dim: Option<usize>,
-    _svd_policy: Option<SvdTruncationPolicy>,
-    _qr_rtol: Option<f64>,
+    max_bond_dim: Option<usize>,
+    svd_policy: Option<SvdTruncationPolicy>,
+    qr_rtol: Option<f64>,
 ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
+    // Validate the truncation request before any dense work, so the scalar and
+    // single-node shortcuts below cannot accept invalid options either.
+    if qr_rtol.is_some() {
+        return Err(anyhow::anyhow!(
+            "contract_naive_to_treetn decomposes with SVD and does not accept qr_rtol; \
+             use ContractionMethod::Fit with FactorizeAlg::QR for QR-based truncation"
+        )
+        .into());
+    }
+    let mut factorize_options = FactorizeOptions::svd();
+    if let Some(max_bond_dim) = max_bond_dim {
+        factorize_options = factorize_options.with_max_bond_dim(max_bond_dim);
+    }
+    if let Some(policy) = svd_policy {
+        factorize_options = factorize_options.with_svd_policy(policy);
+    }
+    factorize_options
+        .validate()
+        .context("contract_naive_to_treetn: invalid truncation options")?;
+
     // 1. Contract to full tensor using existing contract_naive
     let contracted_tensor = tn_a.contract_naive(tn_b)?;
 
@@ -2370,13 +2397,9 @@ where
 
     let topology = super::decompose::TreeTopology::new(nodes, edges);
 
-    // 3. Decompose back to TreeTN
-    let result = factorize_tensor_to_treetn_with(
-        &contracted_tensor,
-        &topology,
-        FactorizeOptions::svd(),
-        center,
-    )?;
+    // 3. Decompose back to TreeTN, honoring the caller's truncation options.
+    let result =
+        factorize_tensor_to_treetn_with(&contracted_tensor, &topology, factorize_options, center)?;
 
     Ok(result)
 }
