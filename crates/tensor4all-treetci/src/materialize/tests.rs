@@ -269,10 +269,21 @@ fn fill_tensor_values_rejects_invalid_partitions() {
     assert!(fill(&[left.clone(), right.clone()], &[], &[]).is_ok());
     // Site 0 twice, site 1 never, an out-of-range central site, and a key
     // without pivots.
-    assert!(fill(std::slice::from_ref(&left), &[], &[0])
-        .unwrap_err()
-        .to_string()
-        .contains("assigned more than once"));
+    let typed = |error: anyhow::Error| {
+        matches!(
+            error.downcast_ref::<crate::TreeTciError>(),
+            Some(crate::TreeTciError::IndexOutOfBounds { .. })
+        )
+    };
+    let duplicate = fill(std::slice::from_ref(&left), &[], &[0]).unwrap_err();
+    assert!(duplicate.to_string().contains("assigned more than once"));
+    assert!(typed(duplicate));
+    assert!(typed(
+        fill(std::slice::from_ref(&left), &[], &[]).unwrap_err()
+    ));
+    assert!(typed(
+        fill(std::slice::from_ref(&left), &[], &[9]).unwrap_err()
+    ));
     assert!(fill(std::slice::from_ref(&left), &[], &[])
         .unwrap_err()
         .to_string()

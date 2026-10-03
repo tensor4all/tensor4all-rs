@@ -42,6 +42,12 @@
   partition checks of `fill_tensor_values`, and `OwnedGlobalIndexBatch` keeps
   its doctests (it now has no production user either and was left in place).
   The materialization test oracle assembles its points inline.
+- `fill_tensor_values` keeps `TreeTciError::IndexOutOfBounds` for its site
+  partition failures (out-of-range, duplicate or missing sites), as the
+  per-point assembly did; these arise only from an inconsistent internal
+  state. A wrong value count from the evaluator names the failing call's
+  point range and the total, since one matrix or tensor may now take several
+  calls.
 
 ## Verification conclusions and constraints
 

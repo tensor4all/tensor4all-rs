@@ -241,6 +241,13 @@ fn product_pivot_dims<T>(state: &TreeTCI2<T>, keys: &[SubtreeKey]) -> Result<usi
     Ok(product)
 }
 
+/// A site-partition failure of [`fill_tensor_values`], typed as
+/// [`TreeTciError::IndexOutOfBounds`] like the per-point assembly it replaces.
+/// It only occurs for an inconsistent internal state.
+fn index_error(message: String) -> anyhow::Error {
+    TreeTciError::IndexOutOfBounds { message }.into()
+}
+
 /// One factor of the point product in [`fill_tensor_values`]: a set of
 /// `count` columns over `sites`, stored column-major.
 struct PointFactor<'a> {
@@ -272,10 +279,9 @@ where
     let n_sites = state.local_dims.len();
     let mut factors = Vec::with_capacity(central_sites.len() + in_keys.len() + out_keys.len());
     for site in central_sites.iter().rev() {
-        let dim = *state
-            .local_dims
-            .get(*site)
-            .ok_or_else(|| anyhow::anyhow!("site {site} is out of bounds for {n_sites} sites"))?;
+        let dim = *state.local_dims.get(*site).ok_or_else(|| {
+            index_error(format!("site {site} is out of bounds for {n_sites} sites"))
+        })?;
         factors.push(PointFactor {
             sites: std::slice::from_ref(site),
             columns: Cow::Owned((0..dim).collect()),
@@ -302,17 +308,21 @@ where
 
     let mut assigned = vec![false; n_sites];
     for &site in factors.iter().flat_map(|factor| factor.sites) {
-        ensure!(
-            site < n_sites,
-            "site {site} is out of bounds for {n_sites} sites"
-        );
-        ensure!(!assigned[site], "site {site} was assigned more than once");
-        assigned[site] = true;
+        let slot = assigned.get_mut(site).ok_or_else(|| {
+            index_error(format!("site {site} is out of bounds for {n_sites} sites"))
+        })?;
+        if *slot {
+            return Err(index_error(format!(
+                "site {site} was assigned more than once"
+            )));
+        }
+        *slot = true;
     }
-    ensure!(
-        assigned.iter().all(|&seen| seen),
-        "global point assembly left some sites unassigned"
-    );
+    if !assigned.iter().all(|&seen| seen) {
+        return Err(index_error(
+            "global point assembly left some sites unassigned".to_string(),
+        ));
+    }
 
     let n_points = factors.iter().try_fold(1usize, |count, factor| {
         count

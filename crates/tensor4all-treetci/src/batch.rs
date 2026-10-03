@@ -23,7 +23,8 @@ pub(crate) const EVALUATION_CHUNK_POINTS: usize = 65_536;
 /// `fill_point` is called once per point, in point order, with that point's
 /// `n_sites` slots of the buffer. The slots still hold an earlier point, so
 /// `fill_point` must assign every site. `what` names the points in the error
-/// raised when the evaluator returns the wrong number of values.
+/// raised when the evaluator returns the wrong number of values; that error
+/// gives the failing call's point range and the total point count.
 ///
 /// Returns the values in point order, exactly as one call over all points
 /// would.
@@ -57,9 +58,12 @@ where
         let chunk = evaluate(GlobalIndexBatch::new(data, n_sites, count)?)?;
         anyhow::ensure!(
             chunk.len() == count,
-            "batch evaluator returned {} values for {} {what}",
+            "batch evaluator returned {} values for {} {what} (points {}..{} of {})",
             chunk.len(),
-            count
+            count,
+            done,
+            done + count,
+            n_points
         );
         if count == n_points {
             // Single call: hand over the evaluator's buffer without a copy.
@@ -349,7 +353,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             error.to_string(),
-            "batch evaluator returned 1 values for 2 test points"
+            "batch evaluator returned 1 values for 2 test points (points 3..5 of 5)"
         );
     }
 
