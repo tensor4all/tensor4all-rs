@@ -92,8 +92,9 @@ State after the user's answers of 2026-10-03.
    the bond cap: a `BondCapReached` patch that passes its error check is
    accepted only if its domain is at most a maximum size; a larger capped
    patch is split. A patch that converges below the cap is never split for its
-   size. How the maximum is specified, and the early exit of the engine at
-   the first saturated sweep, are still open.
+   size. The maximum is given as a number of quantics bits: the count of the
+   patch's unfixed (active) bits. The early exit of the engine at the first
+   saturated sweep is still open.
 5. **Corner-localized misses — decided: optional mitigation.** Split rules and
    child candidate sets may take them into account through an opt-in option
    (for example, child start candidates that include the parent's pivots near
