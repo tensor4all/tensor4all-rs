@@ -4,9 +4,9 @@
 
 Design notes for M5 of
 [`tree-adaptive-patching-roadmap.md`](./tree-adaptive-patching-roadmap.md).
-Only open questions 2 and 5 below are decided; the selector, sibling
-merging, and capped outcomes still need the user's decision before any
-implementation. The only M5 data so far is the fixed-depth
+Open questions 2 and 5 below are decided and 4 has a decided direction; the
+selector, sibling merging, and the details of capped outcomes still need the
+user's decision before any implementation. The only M5 data so far is the fixed-depth
 exploration in
 [`2026-10-03-m5-fixed-depth-exploration.md`](../../benchmarks/results/2026-10-03-m5-fixed-depth-exploration.md).
 
@@ -83,11 +83,17 @@ State after the user's answers of 2026-10-03.
    stop with an error.
 3. **Sibling merging — undecided.** Its acceptance rule, its reporting, and
    whether it belongs in the driver or in a post-processing step remain open.
-4. **Capped outcomes and early exit — undecided** (M3 open question 4,
-   deferred to M5). Passing the error check is not sufficient: a capped patch
-   can meet its tolerance without compressing at all, its parameter count
-   reaching or exceeding the patch's dense size. A further bound beside the
-   minimum patch size (the user suggested a maximum) is under consideration.
+4. **Capped outcomes — direction decided; details and early exit open** (M3
+   open question 4, deferred to M5). Passing the error check is not
+   sufficient: a capped patch can meet its tolerance without compressing at
+   all. A global maximum patch size is rejected, because one coarse region can
+   hold both well-compressible and hard parts, and a region that compresses
+   well must not be split further. The bound applies only to patches that hit
+   the bond cap: a `BondCapReached` patch that passes its error check is
+   accepted only if its domain is at most a maximum size; a larger capped
+   patch is split. A patch that converges below the cap is never split for its
+   size. How the maximum is specified, and the early exit of the engine at
+   the first saturated sweep, are still open.
 5. **Corner-localized misses — decided: optional mitigation.** Split rules and
    child candidate sets may take them into account through an opt-in option
    (for example, child start candidates that include the parent's pivots near
