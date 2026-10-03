@@ -68,18 +68,27 @@ pub(crate) fn compute_coeffs<K: CacheKey>(
         });
     }
 
+    // INVARIANT: for an index space with cardinality greater than one, each
+    // coefficient consumed by a valid multi-index is at most `cardinality / 2`
+    // and the trailing coordinates only ever contribute zero; the `bits` guard
+    // above caps the cardinality at `2^K`.
+    let last_bond = local_dims.iter().rposition(|&d| d > 1);
     let mut coeffs = Vec::with_capacity(local_dims.len());
     let mut prod = K::ONE;
-    for &d in local_dims {
+    for (i, &d) in local_dims.iter().enumerate() {
         coeffs.push(prod.clone());
-        let dim = K::from_usize(d);
-        prod = prod
-            .checked_mul(dim)
-            .ok_or_else(|| error::CacheKeyError::Overflow {
-                total_bits: bits,
-                max_bits: K::BITS_COUNT,
-                key_type: std::any::type_name::<K>(),
-            })?;
+        if Some(i) < last_bond {
+            // Detects coefficient overflow if `total_bits` ever stops bounding
+            // the coefficients this loop produces.
+            let dim = K::from_usize(d);
+            prod = prod
+                .checked_mul(dim)
+                .ok_or_else(|| error::CacheKeyError::Overflow {
+                    total_bits: bits,
+                    max_bits: K::BITS_COUNT,
+                    key_type: std::any::type_name::<K>(),
+                })?;
+        }
     }
 
     Ok(coeffs)

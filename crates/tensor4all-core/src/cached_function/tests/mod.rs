@@ -1,6 +1,6 @@
 use super::error::CacheKeyError;
 use super::*;
-use bnum::types::{U2048, U256};
+use bnum::types::{U1024, U2048, U256};
 use std::sync::Arc;
 use std::thread;
 
@@ -132,6 +132,188 @@ fn test_overflow_error() {
     let local_dims = vec![2; 1025];
     let result = CachedFunction::new(|_: &[usize]| 0.0, &local_dims);
     assert!(result.is_err());
+}
+
+#[test]
+fn test_auto_key_selection_at_exact_key_width_boundaries() {
+    // The largest key of an index space is `product(local_dims) - 1`, so a
+    // cardinality of exactly `2^K` still fits K-bit keys (#781).
+    for (sites, expected) in [
+        (vec![2usize; 64], "u64"),
+        (vec![2usize; 128], "u128"),
+        (vec![2usize; 256], "U256"),
+        (vec![2usize; 512], "U512"),
+        (vec![2usize; 1024], "U1024"),
+    ] {
+        let n = sites.len();
+        let cf = CachedFunction::new(|_: &[usize]| 0.0, &sites)
+            .unwrap_or_else(|e| panic!("{n} binary sites must be accepted: {e}"));
+        assert_eq!(cf.key_type(), expected, "{n} binary sites");
+    }
+
+    // Power-of-two dimensions whose exponents still sum to 64 bits.
+    for sites in [vec![4usize; 32], vec![65536usize; 4]] {
+        let cf = CachedFunction::new(|_: &[usize]| 0.0, &sites).unwrap();
+        assert_eq!(cf.key_type(), "u64");
+    }
+}
+
+#[test]
+fn test_exact_boundary_largest_key_round_trips() {
+    let local_dims = vec![2usize; 64];
+    // `f` counts the set coordinates, so the three probes below have pairwise
+    // distinct keys; a key collision would show up as an unexpected cache hit.
+    let cf = CachedFunction::new(
+        |idx: &[usize]| idx.iter().sum::<usize>() as f64,
+        &local_dims,
+    )
+    .unwrap();
+
+    assert_eq!(cf.eval(&vec![0usize; 64]).unwrap(), 0.0);
+    assert_eq!(cf.eval(&vec![1usize; 64]).unwrap(), 64.0);
+    let mut single = vec![0usize; 64];
+    single[63] = 1;
+    assert_eq!(cf.eval(&single).unwrap(), 1.0);
+    assert_eq!(cf.num_evals(), 3);
+    assert_eq!(cf.num_cache_hits(), 0);
+
+    // Re-evaluating the largest-key index must hit its own entry.
+    assert_eq!(cf.eval(&vec![1usize; 64]).unwrap(), 64.0);
+    assert_eq!(cf.num_evals(), 3);
+    assert_eq!(cf.num_cache_hits(), 1);
+}
+
+#[test]
+fn test_dimension_one_sites_do_not_shift_keys() {
+    // A trailing or interior dimension-one site must not shift the
+    // coefficients of the remaining sites (#781).
+    let cf = CachedFunction::new(
+        |idx: &[usize]| (idx[0] + 10 * idx[2]) as f64,
+        &[2usize, 1, 3],
+    )
+    .unwrap();
+    assert_eq!(cf.eval(&[1, 0, 2]).unwrap(), 21.0);
+    assert_eq!(cf.eval(&[0, 0, 1]).unwrap(), 10.0);
+    // These two collide if the dimension-one site shifts the following stride.
+    assert_eq!(cf.eval(&[1, 0, 0]).unwrap(), 1.0);
+    assert_eq!(cf.eval(&[0, 0, 2]).unwrap(), 20.0);
+    assert_eq!(cf.num_evals(), 4);
+    assert_eq!(cf.num_cache_hits(), 0);
+    // Same index again must be a cache hit, so the two keys differ.
+    assert_eq!(cf.eval(&[1, 0, 2]).unwrap(), 21.0);
+    assert_eq!(cf.num_cache_hits(), 1);
+
+    // A trailing dimension-one site leaves the cardinality at exactly 2^64.
+    let mut sites = vec![2usize; 64];
+    sites.push(1);
+    let cf = CachedFunction::new(|_: &[usize]| 0.0, &sites).unwrap();
+    assert_eq!(cf.key_type(), "u64");
+}
+
+#[test]
+fn test_degenerate_index_spaces_are_accepted() {
+    // Empty and all-singleton spaces hold exactly one key.
+    for local_dims in [vec![], vec![1usize], vec![1, 1], vec![2usize]] {
+        let cf = CachedFunction::new(
+            |idx: &[usize]| idx.iter().sum::<usize>() as f64,
+            &local_dims,
+        )
+        .unwrap();
+        let index = vec![0usize; local_dims.len()];
+        assert_eq!(cf.eval(&index).unwrap(), 0.0, "{local_dims:?}");
+        assert_eq!(cf.eval(&index).unwrap(), 0.0, "{local_dims:?}");
+        assert_eq!(cf.num_evals(), 1, "{local_dims:?}");
+        assert_eq!(cf.num_cache_hits(), 1, "{local_dims:?}");
+    }
+
+    // The exact 64-bit boundary also works through the forced key type.
+    let local_dims = vec![2usize; 64];
+    let mut index = vec![1usize; 64];
+    let cf = CachedFunction::with_key_type::<u64>(
+        |idx: &[usize]| idx.iter().sum::<usize>() as f64,
+        &local_dims,
+    )
+    .unwrap();
+    assert_eq!(cf.eval(&index).unwrap(), 64.0);
+    index[0] = 0;
+    assert_eq!(cf.eval(&index).unwrap(), 63.0);
+    assert_eq!(cf.num_evals(), 2);
+    assert_eq!(cf.num_cache_hits(), 0);
+}
+
+#[test]
+fn test_empty_index_space_rejects_evaluation_without_calling_the_oracle() {
+    for local_dims in [vec![0usize, 2], vec![2, 0, 1]] {
+        let cf = CachedFunction::new(
+            |_: &[usize]| -> f64 { panic!("an empty index space has no valid index") },
+            &local_dims,
+        )
+        .unwrap();
+        let index = vec![0usize; local_dims.len()];
+        assert!(
+            matches!(cf.eval(&index), Err(CacheKeyError::IndexOutOfBounds { .. })),
+            "{local_dims:?}"
+        );
+    }
+}
+
+#[test]
+fn test_forced_key_type_overflow_still_rejected() {
+    // 4^33 needs 66 bits, which does not fit the forced u64 key type.
+    let result = CachedFunction::with_key_type::<u64>(|_: &[usize]| 0.0, &[4usize; 33]);
+    assert!(matches!(result, Err(CacheKeyError::Overflow { .. })));
+}
+
+#[test]
+fn test_u1024_boundary_keys_are_exact() {
+    // The widest supported boundary: 1024 binary sites, whose largest key is
+    // `U1024::MAX`. Each probe isolates one coordinate so a wrong stride or a
+    // colliding key shows up as a cache hit or a wrong value.
+    let local_dims = vec![2usize; 1024];
+    let probe = |coordinate: usize| {
+        let mut index = vec![0usize; 1024];
+        index[coordinate] = 1;
+        index
+    };
+    let cf = CachedFunction::new(
+        |idx: &[usize]| {
+            idx.iter()
+                .enumerate()
+                .map(|(site, &value)| (site + 1) * value)
+                .sum::<usize>() as f64
+        },
+        &local_dims,
+    )
+    .unwrap();
+    assert_eq!(cf.key_type(), "U1024");
+
+    assert_eq!(cf.eval(&vec![0usize; 1024]).unwrap(), 0.0);
+    assert_eq!(cf.eval(&probe(0)).unwrap(), 1.0);
+    assert_eq!(cf.eval(&probe(511)).unwrap(), 512.0);
+    assert_eq!(cf.eval(&probe(512)).unwrap(), 513.0);
+    assert_eq!(cf.eval(&probe(1023)).unwrap(), 1024.0);
+    assert_eq!(cf.num_evals(), 5);
+    assert_eq!(cf.num_cache_hits(), 0);
+
+    // The all-ones index is the largest key and must equal `U1024::MAX`.
+    assert_eq!(cf.eval(&vec![1usize; 1024]).unwrap(), 524_800.0);
+    assert_eq!(cf.num_evals(), 6);
+}
+
+#[test]
+fn test_u1024_all_ones_flat_key_is_max() {
+    let local_dims = vec![2usize; 1024];
+    let coeffs = compute_coeffs::<U1024>(&local_dims).unwrap();
+    assert_eq!(coeffs.len(), 1024);
+    assert_eq!(coeffs[1023], U1024::ONE << 1023);
+    assert_eq!(
+        flat_index::<U1024, usize>(&vec![1usize; 1024], &coeffs),
+        U1024::MAX
+    );
+    assert_eq!(
+        flat_index::<U1024, usize>(&vec![0usize; 1024], &coeffs),
+        U1024::ZERO
+    );
 }
 
 impl cache_key::CacheKey for U2048 {
