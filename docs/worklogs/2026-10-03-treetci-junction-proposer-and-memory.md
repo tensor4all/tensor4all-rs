@@ -34,14 +34,16 @@
   Chunking materialization as well (not only flattening it) keeps its buffer
   bounded at junctions, where a root tensor has `r^3` points.
 - `assemble_global_point` and `assemble_points_column_major` lost their last
-  production user with #801 and nothing else in the workspace (including
-  `tensor4all-py` and the C API) calls them, so they were removed with their
-  tests rather than kept as unused public API. Coverage of the removed paths
-  was reviewed: the tests removed with them exercised only those functions;
-  `TreeTciError::IndexOutOfBounds` stays covered through `graph.rs` and the
-  partition checks of `fill_tensor_values`, and `OwnedGlobalIndexBatch` keeps
-  its doctests (it now has no production user either and was left in place).
-  The materialization test oracle assembles its points inline.
+  production user with #801, and `OwnedGlobalIndexBatch` had no producer
+  other than `assemble_points_column_major`. Nothing else in the workspace
+  (including `tensor4all-py` and the C API) uses any of them, so all three
+  were removed with their tests and doctests rather than kept as unused public
+  API. Coverage of the removed paths was reviewed: the removed tests and
+  doctests exercised only the removed items; `TreeTciError::IndexOutOfBounds`
+  stays covered through `graph.rs` and the partition checks of
+  `fill_tensor_values`, and `GlobalIndexBatch` stays covered by the unit and
+  integration tests that build batches. The materialization test oracle
+  assembles its points inline.
 - `fill_tensor_values` keeps `TreeTciError::IndexOutOfBounds` for its site
   partition failures (out-of-range, duplicate or missing sites), as the
   per-point assembly did; these arise only from an inconsistent internal

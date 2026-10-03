@@ -100,7 +100,7 @@ mod test_support;
 
 pub use api::crossinterpolate2;
 pub use assemble::MultiIndex;
-pub use batch::{GlobalIndexBatch, OwnedGlobalIndexBatch};
+pub use batch::GlobalIndexBatch;
 pub use error::{Result as TreeTciResult, TreeTciError};
 pub use globalpivot::find_global_pivots;
 pub use graph::{TreeTciEdge, TreeTciGraph};

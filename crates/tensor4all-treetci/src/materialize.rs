@@ -308,6 +308,8 @@ where
 
     let mut assigned = vec![false; n_sites];
     for &site in factors.iter().flat_map(|factor| factor.sites) {
+        // Defensive: central sites were bounds-checked above and an
+        // out-of-range key has no pivot set, so this cannot fail today.
         let slot = assigned.get_mut(site).ok_or_else(|| {
             index_error(format!("site {site} is out of bounds for {n_sites} sites"))
         })?;

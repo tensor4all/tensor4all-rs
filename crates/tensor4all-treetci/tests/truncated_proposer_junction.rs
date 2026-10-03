@@ -138,6 +138,8 @@ fn assert_truncated_proposer_converges(tree: &JunctionTree) {
         tolerance: TOLERANCE,
         max_iter: MAX_ITER,
         enable_global_pivots: false,
+        // Keeps the run deterministic should global pivots be re-enabled.
+        seed: Some(7),
         ..Default::default()
     };
     let (ranks, errors) = optimize_with_proposer(
