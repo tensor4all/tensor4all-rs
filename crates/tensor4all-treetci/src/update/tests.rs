@@ -1,7 +1,9 @@
 use super::{evaluate_candidate_matrix, update_edge_default};
+use crate::batch::EVALUATION_CHUNK_POINTS;
 use crate::test_support::assert_scalar_close;
 use crate::{GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge, TreeTciGraph};
 use anyhow::Result;
+use std::cell::RefCell;
 use tensor4all_core::ColMajorArray;
 use tensor4all_core::RrLUOptions;
 
@@ -109,7 +111,8 @@ fn evaluate_candidate_matrix_writes_points_in_column_major_order() {
         &right_key,
         &right_candidates,
         &local_dims,
-        evaluate,
+        &evaluate,
+        EVALUATION_CHUNK_POINTS,
     )
     .unwrap();
 
@@ -139,7 +142,8 @@ fn evaluate_candidate_matrix_rejects_malformed_candidate_length() {
         &right_key,
         &right_candidates,
         &local_dims,
-        evaluate,
+        &evaluate,
+        EVALUATION_CHUNK_POINTS,
     );
     assert!(result.is_err());
 
@@ -152,11 +156,12 @@ fn evaluate_candidate_matrix_rejects_malformed_candidate_length() {
         &right_key,
         &right_candidates,
         &local_dims,
-        |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        &|batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
             Ok(vec![
                 (batch.get(0, 0).unwrap() + batch.get(4, 0).unwrap()) as f64,
             ])
         },
+        EVALUATION_CHUNK_POINTS,
     );
     assert_eq!(result.unwrap(), vec![1.0]);
 }
@@ -179,7 +184,78 @@ fn evaluate_candidate_matrix_rejects_out_of_range_coordinates() {
         &right_key,
         &right_candidates,
         &local_dims,
-        evaluate,
+        &evaluate,
+        EVALUATION_CHUNK_POINTS,
     );
     assert!(result.is_err());
+}
+
+#[test]
+fn evaluate_candidate_matrix_is_independent_of_chunk_size() {
+    // 5 sites split 2 | 3, 4 x 6 = 24 candidate points.
+    let n_sites = 5;
+    let local_dims = vec![3; n_sites];
+    let left_key = SubtreeKey::new(vec![1, 3]);
+    let left_candidates = vec![vec![0, 0], vec![2, 1], vec![1, 2], vec![2, 2]];
+    let right_key = SubtreeKey::new(vec![0, 2, 4]);
+    let right_candidates = vec![
+        vec![0, 0, 0],
+        vec![1, 2, 0],
+        vec![2, 1, 1],
+        vec![0, 2, 2],
+        vec![1, 1, 2],
+        vec![2, 0, 1],
+    ];
+    let n_points = left_candidates.len() * right_candidates.len();
+
+    let calls = RefCell::new(Vec::new());
+    // Non-separable values, so any reordering or misassembled point changes
+    // the result.
+    let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        calls.borrow_mut().push(batch.n_points());
+        Ok(batch
+            .data()
+            .chunks(batch.n_sites())
+            .map(|point| {
+                let code = point.iter().fold(0.0, |acc, &v| acc * 3.0 + v as f64);
+                (0.37 * code).sin() / (1.0 + code)
+            })
+            .collect())
+    };
+    let run = |chunk_points: usize| {
+        calls.borrow_mut().clear();
+        let values = evaluate_candidate_matrix(
+            n_sites,
+            &left_key,
+            &left_candidates,
+            &right_key,
+            &right_candidates,
+            &local_dims,
+            &evaluate,
+            chunk_points,
+        )
+        .unwrap();
+        (values, calls.borrow().clone())
+    };
+
+    // Unchunked reference: one call over every point.
+    let (reference, reference_calls) = run(usize::MAX);
+    assert_eq!(reference_calls, vec![n_points]);
+    assert_eq!(reference.len(), n_points);
+
+    for (chunk_points, expected_calls) in [
+        // Does not divide 24: the last chunk is partial.
+        (7, vec![7, 7, 7, 3]),
+        // Divides 24 but is not a multiple of the 4 rows.
+        (6, vec![6, 6, 6, 6]),
+        (1, vec![1; 24]),
+        // Exactly one chunk, and the production chunk size.
+        (24, vec![24]),
+        (EVALUATION_CHUNK_POINTS, vec![24]),
+    ] {
+        let (values, calls) = run(chunk_points);
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&values), bits(&reference), "chunk {chunk_points}");
+        assert_eq!(calls, expected_calls, "chunk {chunk_points}");
+    }
 }
