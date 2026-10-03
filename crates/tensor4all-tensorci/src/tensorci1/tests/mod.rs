@@ -447,3 +447,234 @@ fn test_crossinterpolate1_rejects_invalid_first_pivots() {
         .unwrap_err();
     assert!(matches!(err, TCIError::InvalidPivot { .. }));
 }
+
+/// Uncached reference: rebuilds the normalized tensor train directly from the
+/// state's site tensors, bypassing the evaluation cache.
+fn uncached_tensor_train(tci: &TensorCI1<f64>) -> SimpleTensorTrain<f64> {
+    let tensors = (0..tci.len())
+        .map(|site| tci.normalized_site_tensor(site).unwrap())
+        .collect();
+    SimpleTensorTrain::new(tensors).unwrap()
+}
+
+/// Issue #787: repeated pointwise evaluation must reuse one normalized
+/// tensor train instead of rebuilding it (and its per-site linear solves) per
+/// call.
+#[test]
+fn test_evaluate_reuses_one_normalized_tensor_train() {
+    reset_normalized_tensor_train_builds();
+    let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
+    let (tci, _ranks, _errors) =
+        crossinterpolate1::<f64, _>(f, vec![4, 4], vec![3, 3], TCI1Options::default()).unwrap();
+    assert_eq!(
+        normalized_tensor_train_builds(),
+        0,
+        "interpolation itself must not build the normalized tensor train"
+    );
+
+    let reference = uncached_tensor_train(&tci);
+    for point in [[0, 0], [1, 2], [2, 3], [3, 1], [0, 3]] {
+        let value = tci.evaluate(&point).unwrap();
+        assert!((value - reference.evaluate(&point).unwrap()).abs() < 1e-12);
+    }
+    assert_eq!(
+        normalized_tensor_train_builds(),
+        1,
+        "repeated evaluation must build the normalized tensor train once"
+    );
+
+    // The explicit conversion reuses the same cached train.
+    let converted = tci.to_tensor_train().unwrap();
+    assert_eq!(normalized_tensor_train_builds(), 1);
+    assert!(
+        (converted.evaluate(&[1, 2]).unwrap() - reference.evaluate(&[1, 2]).unwrap()).abs() < 1e-12
+    );
+}
+
+/// Issue #787: an unoptimized state must keep reporting the documented error
+/// instead of failing inside the cache fill.
+#[test]
+fn test_evaluate_on_unavailable_state_reports_invalid_operation() {
+    let tci = TensorCI1::<f64>::new(vec![2, 3]).unwrap();
+    assert!(matches!(
+        tci.evaluate(&[0, 0]).unwrap_err(),
+        TCIError::InvalidOperation { .. }
+    ));
+    assert!(tci.to_tensor_train().is_err());
+}
+
+/// Issue #787: both pivot mutations must invalidate the cached train, so the
+/// next evaluation reflects the updated interpolation.
+#[test]
+fn test_pivot_mutations_invalidate_the_cached_tensor_train() {
+    let f = |idx: &Vec<usize>| {
+        if idx[0] == 2 && idx[1] == 3 {
+            7.0
+        } else {
+            (idx[0] + idx[1] + 1) as f64
+        }
+    };
+
+    // add_global_pivot: the probe point is inaccurate before the insertion.
+    let (mut tci, _ranks, _errors) = crossinterpolate1::<f64, _>(
+        &f,
+        vec![4, 4],
+        vec![0, 0],
+        TCI1Options {
+            max_iter: 1,
+            ..TCI1Options::default()
+        },
+    )
+    .unwrap();
+    reset_normalized_tensor_train_builds();
+    let before = tci.evaluate(&[2, 3]).unwrap();
+    assert!(
+        (before - 7.0).abs() > 1e-6,
+        "probe point must be inaccurate before the pivot is added, got {before}"
+    );
+    assert_eq!(normalized_tensor_train_builds(), 1);
+
+    tci.add_global_pivot(&f, vec![2, 3], 0.0).unwrap();
+    let build_count_after_mutation = normalized_tensor_train_builds();
+    let reference = uncached_tensor_train(&tci);
+    let after = tci.evaluate(&[2, 3]).unwrap();
+    assert!(
+        (after - 7.0).abs() < 1e-10,
+        "evaluation after add_global_pivot used a stale cached train: {after}"
+    );
+    assert!(
+        (after - reference.evaluate(&[2, 3]).unwrap()).abs() < 1e-12,
+        "cached evaluation must agree with an uncached reconstruction"
+    );
+    assert_eq!(
+        normalized_tensor_train_builds(),
+        build_count_after_mutation + 1,
+        "exactly one rebuild is needed after a successful pivot insertion"
+    );
+
+    // add_pivot: a fresh state whose local sweep genuinely inserts a pivot.
+    let g = |idx: &Vec<usize>| (idx[0] * idx[1] + 1) as f64;
+    let (mut tci, _ranks, _errors) = crossinterpolate1::<f64, _>(
+        g,
+        vec![4, 4],
+        vec![0, 0],
+        TCI1Options {
+            max_iter: 1,
+            ..TCI1Options::default()
+        },
+    )
+    .unwrap();
+    reset_normalized_tensor_train_builds();
+    let _ = tci.evaluate(&[3, 3]).unwrap();
+    assert_eq!(normalized_tensor_train_builds(), 1);
+
+    tci.add_pivot(0, &g, 0.0).unwrap();
+    let reference = uncached_tensor_train(&tci);
+    let value = tci.evaluate(&[3, 3]).unwrap();
+    assert!(
+        (value - reference.evaluate(&[3, 3]).unwrap()).abs() < 1e-12,
+        "cached evaluation after add_pivot must agree with an uncached reconstruction"
+    );
+    assert_eq!(
+        normalized_tensor_train_builds(),
+        2,
+        "add_pivot must rebuild exactly once"
+    );
+}
+
+/// Issue #787: pivot requests that change nothing must keep the cached train.
+#[test]
+fn test_noop_pivot_updates_keep_the_cached_tensor_train() {
+    let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
+    let (mut tci, _ranks, _errors) =
+        crossinterpolate1::<f64, _>(&f, vec![4, 4], vec![3, 3], TCI1Options::default()).unwrap();
+    reset_normalized_tensor_train_builds();
+    let _ = tci.evaluate(&[2, 3]).unwrap();
+    assert_eq!(normalized_tensor_train_builds(), 1);
+
+    // The point is already interpolated exactly, so the early return keeps the cache.
+    tci.add_global_pivot(&f, vec![2, 3], 1e9).unwrap();
+    let _ = tci.evaluate(&[2, 3]).unwrap();
+    assert_eq!(
+        normalized_tensor_train_builds(),
+        1,
+        "a rejected pivot must not invalidate the cached train"
+    );
+
+    // A duplicate pivot changes no state, so the cache must stay valid across
+    // the whole request and the following evaluation.
+    let builds_before_duplicate = normalized_tensor_train_builds();
+    tci.add_global_pivot(&f, vec![3, 3], 0.0).unwrap();
+    assert_eq!(
+        normalized_tensor_train_builds(),
+        builds_before_duplicate,
+        "a duplicate pivot must not invalidate the cached train"
+    );
+    let _ = tci.evaluate(&[2, 3]).unwrap();
+    assert_eq!(
+        normalized_tensor_train_builds(),
+        builds_before_duplicate,
+        "evaluation after a duplicate pivot must reuse the cached train"
+    );
+}
+
+/// Issue #787: clones must not share evaluation state.
+#[test]
+fn test_clones_have_independent_evaluation_caches() {
+    // Underfit on purpose: the clone's pivot insertion must change its own
+    // approximation, which a converged state could not show.
+    let f = |idx: &Vec<usize>| (idx[0] * idx[1] + 1) as f64;
+    let (tci, _ranks, _errors) = crossinterpolate1::<f64, _>(
+        &f,
+        vec![4, 4],
+        vec![0, 0],
+        TCI1Options {
+            max_iter: 1,
+            ..TCI1Options::default()
+        },
+    )
+    .unwrap();
+    let probe = vec![3, 3];
+    let original_value = tci.evaluate(&probe).unwrap();
+
+    let mut clone = tci.clone();
+    assert_eq!(clone.evaluate(&probe).unwrap(), original_value);
+    clone.add_pivot(0, &f, 0.0).unwrap();
+    let clone_value = clone.evaluate(&probe).unwrap();
+    assert!(
+        (clone_value - original_value).abs() > 1e-9,
+        "the clone's pivot insertion must change its approximation: {clone_value} vs {original_value}"
+    );
+
+    // The original keeps its own values and its own cache: evaluating it again
+    // needs no rebuild, so the clone's mutation did not invalidate it.
+    reset_normalized_tensor_train_builds();
+    assert_eq!(tci.evaluate(&probe).unwrap(), original_value);
+    assert_eq!(
+        normalized_tensor_train_builds(),
+        0,
+        "the original must keep its own cached train across a clone mutation"
+    );
+    assert_eq!(tci.evaluate(&probe).unwrap(), original_value);
+    assert_eq!(normalized_tensor_train_builds(), 0);
+}
+
+/// Issue #787: index errors are unchanged by the cache, before and after the
+/// first build, and must not disturb the cache.
+#[test]
+fn test_invalid_index_errors_before_and_after_the_cache_is_built() {
+    let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
+    let (tci, _ranks, _errors) =
+        crossinterpolate1::<f64, _>(&f, vec![4, 4], vec![3, 3], TCI1Options::default()).unwrap();
+
+    assert!(matches!(
+        tci.evaluate(&[1]).unwrap_err(),
+        TCIError::SimpleTensorTrain(_)
+    ));
+    assert!((tci.evaluate(&[2, 3]).unwrap() - 6.0).abs() < 1e-10);
+    assert!(matches!(
+        tci.evaluate(&[9, 9]).unwrap_err(),
+        TCIError::SimpleTensorTrain(_)
+    ));
+    assert!((tci.evaluate(&[2, 3]).unwrap() - 6.0).abs() < 1e-10);
+}
