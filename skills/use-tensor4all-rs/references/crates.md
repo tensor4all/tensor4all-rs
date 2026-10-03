@@ -178,7 +178,11 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   GlobalL2Error::{Certified, Audited, AcceptanceOnly}, .. }, .. }`): only
   `Certified` is a bound, and only up to a calibrated (not proven) rounding
   model; a sampled run is an estimate only with the audit on, otherwise
-  acceptance-only (neither a bound nor an estimate). `ErrorNorm::sampled_max()` /
+  acceptance-only (neither a bound nor an estimate). Known limitation:
+  sampled acceptance and the audit can both miss a localized feature that
+  enters a patch only through a corner or an edge, and the audit's standard
+  error does not reveal it, so an `Audited` error can be orders of magnitude
+  too small; only `Certified` (exact or exhaustive) is a guarantee. `ErrorNorm::sampled_max()` /
   `sampled_max_with_reference(max_abs)` keep the M2 engine criterion (no
   verified bound, no L2 claim). `MaxAbs`/`WeightedL2` are placeholders
   (`UnsupportedNorm`). Zero patches are in `report.zero_patches` (absent from

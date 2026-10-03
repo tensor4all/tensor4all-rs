@@ -23,6 +23,14 @@ ignored test with that reason.
 The open questions remain with the user; every proposal was implemented as
 the default, and the evidence that bears on each is recorded below.
 
+A known limitation of the sampled side of the contract was found by an
+independent review after implementation: uniform-sample acceptance and the
+audit can miss a localized feature that enters a patch only through a corner
+or an edge, and the audited estimate can then be orders of magnitude too
+small without any warning from its standard error. Only certified results are
+guarantees. The fix is deferred to a global review after M9; see
+[Known limitation: corner-localized misses](#known-limitation-corner-localized-misses).
+
 ## Goal
 
 Give `patched_interpolate` one accuracy requirement with a measured, reported
@@ -332,6 +340,14 @@ audit estimate of an accepted patch is unbiased and carries the
 proposal draws one by default for every sampled contribution
 ([open question 5](#open-questions-for-the-user)).
 
+The audit removes the selection bias, not the miss: it is a uniform sample
+too, so it misses a residual on a fraction `rho` of the patch with the same
+probability `(1 - rho)^n`, and its standard error, computed from the same
+points, is then small or zero. Unbiasedness is a statement about the average
+over draws; a single audited run can underestimate a concentrated residual by
+orders of magnitude, as measured in
+[Known limitation: corner-localized misses](#known-limitation-corner-localized-misses).
+
 ### Definition
 
 A patch error is **verified** when it has been measured from values of `f` at
@@ -345,8 +361,9 @@ which the report names per patch:
   certificate, unaffected by selection.
 - **Sampled**: the residual was evaluated at `n` fresh uniform points. The
   acceptance measurement is only a decision statistic. With an audit, the
-  audit measurement is an unbiased estimate with a standard error; without
-  one, the report carries no estimate for the patch.
+  audit measurement is an unbiased estimate with a standard error, which can
+  miss a concentrated residual (see above); without one, the report carries
+  no estimate for the patch.
 
 The run's global error is **certified** when every contribution is exact or
 exhaustive. Certification is a statement about the absolute error,
@@ -874,7 +891,9 @@ No field or variant keeps its name with a different meaning.
   `tau`); when `(1 - GLOBAL_ROUNDING_MARGIN) * ||f~|| > E_up`, also
   `E / ||f|| <= relative_error_bound`. An audited run gives an estimate
   of `E` with the reported standard error and a plug-in estimate of the
-  relative bound. An acceptance-only run gives neither; its reported number is
+  relative bound; neither is a guarantee, and both can be far too small when
+  a concentrated residual is missed
+  ([Known limitation](#known-limitation-corner-localized-misses)). An acceptance-only run gives neither; its reported number is
   only the combined acceptance statistic. When the relative denominator is
   not positive (`(1 - GLOBAL_ROUNDING_MARGIN) * ||f~|| <= E_up` if
   certified, `||f~|| <= E` with the estimate if audited), or `||f~||` is not
@@ -1375,7 +1394,14 @@ the audited relative value is a plug-in estimate of the bound, the absolute
 rounding term of a certificate and the `rounding_limited` flag, that
 `approximation_rms` is `None` above a patch norm of about `1.34e154`, which
 report fields the bitwise determinism claim covers, and the units of each
-reference.
+reference. After the corner-miss finding, the module documentation,
+`GlobalL2Error::Audited`, `MeasurementMethod::Sampled`, `L2Measurement`,
+`VerificationOptions`, the crate root and README, the guide, the skill
+reference, and `llms.txt` also state the
+[known limitation](#known-limitation-corner-localized-misses): sampled
+acceptance and the audit can miss localized features that enter a patch
+through a corner or an edge, the audit's standard error does not reveal such
+a miss, and only certified results are guarantees.
 
 ## Measurements needed later
 
@@ -1738,7 +1764,11 @@ record evaluation counts and approximation errors, not elapsed time.
   function and 48 of 5019 (1.0%) on the localized one. The audited
   relative-bound estimates were `2.25e-5` and `3.19e-5` against true
   relative errors of `2.76e-5` and `3.20e-5`; the acceptance-only statistics
-  were `3.2e-5` and `1.5e-6` in RMS units.
+  were `3.2e-5` and `1.5e-6` in RMS units. The agreement holds for these two
+  runs only and does not make the audited estimate reliable in general: on a
+  function whose feature enters some patches only through a corner, the
+  audited estimate was `10^4` to `10^6` times too small
+  ([Known limitation](#known-limitation-corner-localized-misses)).
 - **OQ8 and OQ9 (determinism).** The stage-1 tests, six fresh threads per
   process, three processes: on the raw-kernel tree, all 128 measured values
   were bitwise identical across threads, and every thread of every process
@@ -1758,3 +1788,75 @@ record evaluation counts and approximation errors, not elapsed time.
   decision flipped in this run. A decision can flip only when a measured
   residual lies within the evaluation's rounding (about `eps` times the
   network values) of `tau`.
+
+### Known limitation: corner-localized misses
+
+Found on 2026-10-03 by an independent review of the implemented driver, after
+the evidence above was gathered. It is recorded here, not fixed.
+
+- **Setup.** A three-dimensional Gaussian ridge along the diagonal of the unit
+  cube, `f = exp(-d^2 / (2 w^2))` with `d` the distance from the line
+  `x = y = z` and `w = 0.02`. Each variable has `R = 7` bits (`2^21` points);
+  the three variables lie on the three branches of a site-free root of degree
+  three, one binary site per node. `patch_order` is MSB-first and interleaved
+  (`x0, y0, z0, x1, ...`). TreeTCI, cap 16, `rtol = 1e-4`, `ErrorNorm::L2`
+  with `L2Reference::Given` (the dense norm), default verification
+  (`samples = 64`, `max_exhaustive_points = 1024`, `retries = 1`, audit on),
+  seeds 1 to 12. Every accepted patch was measured by sampling, and every run
+  was reported as `GlobalL2Error::Audited`.
+- **Result.** 8 of 12 seeds (1, 5, 6, 8, 9, 10, 11, 12) missed parts of the
+  feature. Their true `E / ||f||` was `6.3e-2` to `10.8` (635 to `1.1e5`
+  times `delta`), while the audited estimate of `E / ||f||` was `2.6e-6` to
+  `8.3e-6`: an underestimate by `10^4` to `10^6`. The relative standard error
+  of the audited mean square was 0.17 to 0.60, so the report gave no warning.
+  In each of these runs one or two patches carried essentially all of `E^2`.
+  The other four seeds reached `E / ||f||` of `4.9e-6` to `8.7e-6`, within the
+  allowance.
+- **Which patches were missed.** Patches with 2 or 3 fixed sites (a quarter or
+  an eighth of the cube along the first bit levels), which the ridge enters
+  only near a corner or an edge. There were two kinds:
+  - (a) the engine never sampled the feature and converged at rank 1: the
+    largest sampled magnitude was `1e-25` to `1.5e-11` times `tau`, and the
+    true RMS residual about `1.8e3 tau`;
+  - (b) the engine saw the feature (largest sample about `5e4` to `2e5`
+    times `tau`, rank 4 to 7) and its own error estimate was below `tau`
+    (0.4 to 0.9 `tau`), but the true RMS residual was `1.3e3` to `2.2e5`
+    times `tau` (one further patch `3.4e2 tau`).
+
+  In both kinds the acceptance and audit measurements were at most about
+  `0.1 tau` in RMS: the 64 uniform points of each did not hit the small region
+  where the residual sits. This is the concentrated-residual case of
+  [What it does not guarantee after selection](#what-it-does-not-guarantee-after-selection);
+  the audit removes the selection bias but not the miss.
+- **What only partly helps.** `samples = 1024` reduced the misses to 2 of 12
+  seeds (5 and 12, both kind (b), true residual `1.3e3 tau`); in seed 12 the
+  audited estimate rose to `1.4e-3` against a true `6.35e-2`, still 45 times
+  too small. `recycle_pivots = true` did not fix it: 6 of 12 seeds still
+  exceeded `delta` (5 of them by 11 to 267 times), with audited estimates of
+  `3.6e-6` to `4.4e-5`.
+- **What is not affected.** `Certified` results, in which every contribution
+  is exact or exhaustive, are not affected: the limitation concerns only the
+  sampled acceptance and the audit. `SampledMax` makes no L2 claim.
+- **Reproduction.** The ignored test
+  `corner_localized_ridge_is_not_missed_by_sampled_acceptance` in
+  `crates/tensor4all-partitionedtreetn/tests/adaptive_l2_corner_miss.rs`,
+  adapted from the review's scratch source, runs the M3 driver on the same
+  ridge at the smallest size that shows both kinds of miss: `R = 6` (`2^18`
+  points), `w = 0.02`, cap 16, `rtol = 1e-4`, default verification, seeds 2,
+  3, and 4. It materializes the partition once against the dense reference
+  and fails when the true `E` exceeds `10 delta`. Observed: true `E / ||f||`
+  of `6.85e-2`, `8.79e-2`, and `8.80e-2` (680 to 880 times `delta`) against
+  audited estimates of `4.3e-5`, `3.3e-5`, and `4.0e-4`; seeds 3 and 4 each
+  accept a rank-1 patch with 2 fixed sites whose largest sample is at most
+  `1.6e-15 tau` (kind (a)), and seeds 2 and 4 accept patches with 2 or 3 fixed
+  sites that the engine resolved partly (kind (b)). It took 8.5 s in release
+  on one core. At this size the audited relative standard errors were large
+  (0.86 to 1.00); the 7-bit runs above show that a small one is no
+  reassurance either. At `R = 6`, 11 of seeds 1 to 12 exceeded `delta`, 10 of
+  them by more than ten times.
+- **Decision.** The fix is deferred to a global review after M9 (user
+  decision, 2026-10-03). Until then the public documentation states the
+  limitation. The candidate remedies are listed under M9 in
+  [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md);
+  open question 1 (the naming of "verified") stays open and is not decided by
+  this record.

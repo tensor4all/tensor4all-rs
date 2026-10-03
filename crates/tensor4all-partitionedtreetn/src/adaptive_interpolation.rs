@@ -50,8 +50,21 @@
 //! missed. With [`VerificationOptions::audit`], an independent audit sample
 //! drawn after the decision gives an unbiased estimate of the mean square
 //! residual (its square root, the reported RMS, is not unbiased) with a
-//! standard error; it is never a bound. No finite sample bounds the L2 error of a black-box
-//! function.
+//! standard error; it is never a bound. No finite sample bounds the L2 error
+//! of a black-box function.
+//!
+//! **Known limitation: localized features.** The acceptance sample and the
+//! audit are both uniform, so both can miss a localized feature that enters
+//! a patch only through a corner or an edge; the engine may also never
+//! sample it there and converge at a low rank. The audit's standard error is
+//! computed from the same points and says nothing about a residual
+//! concentrated on a small set it did not draw: the audited estimate can then
+//! be orders of magnitude below the true error with a small standard error.
+//! More [`VerificationOptions::samples`] make such a miss less likely but do
+//! not exclude it. Only a `Certified` result (every contribution exact or
+//! exhaustive) is a guarantee. The limitation is recorded, with a
+//! reproduction, under "Known limitation: corner-localized misses" in
+//! `docs/design/tree-patching-error-contract.md`.
 //!
 //! The report's [`GlobalL2Error`] says what the run can claim:
 //!
@@ -65,7 +78,8 @@
 //!   when the denominator is not positive.
 //! - `Audited` when every sampled contribution has an audit: an estimate of
 //!   `E` with its standard error, and a plug-in estimate of the relative
-//!   bound.
+//!   bound. Neither is a guarantee: both can be far too small when a
+//!   localized feature was missed (see above).
 //! - `AcceptanceOnly` otherwise: the combined acceptance statistics, neither a
 //!   bound nor an estimate; no relative statement exists.
 //!

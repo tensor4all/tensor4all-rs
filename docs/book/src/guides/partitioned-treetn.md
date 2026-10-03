@@ -194,8 +194,13 @@ pivots, then splits the patch. What a run can claim is the report's
   `relative_error_bound` bounds `E / ||f||` when `||f~||` exceeds `E`.
 - `Audited`: some contribution was sampled, and every sampled one was
   audited. The audited mean square is an unbiased estimate (its square root
-  is not) with a standard error, never a bound: a residual concentrated on
-  unsampled points is missed.
+  is not) with a standard error, never a bound and not a guarantee: a
+  residual concentrated on unsampled points is missed by the acceptance
+  sample and the audit alike, and the standard error, computed from the same
+  points, does not reveal it. A localized feature that enters a patch only
+  through a corner or an edge is such a case; the audited error can then be
+  orders of magnitude too small. More `samples` make a miss less likely but
+  do not exclude it.
 - `AcceptanceOnly`: audits were disabled. The combined acceptance statistics
   are neither a bound nor an estimate.
 

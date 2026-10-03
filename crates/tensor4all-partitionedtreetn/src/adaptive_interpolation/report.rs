@@ -71,6 +71,11 @@ pub enum MeasurementMethod {
     /// The residual was evaluated at fresh uniform points of the patch. As an
     /// acceptance measurement it is only a decision statistic; as an audit its
     /// mean square is an unbiased estimate (its RMS is not), never a bound.
+    /// Unbiased refers to the average over draws: a residual concentrated on a
+    /// small part of the patch, such as a localized feature that enters it
+    /// only through a corner or an edge, can be missed by most draws, which
+    /// then report a small error, and the standard error, computed from the
+    /// same points, does not reveal the miss.
     Sampled,
 }
 
@@ -127,7 +132,8 @@ pub struct L2Measurement {
     pub rms: f64,
     /// Standard error of the mean square divided by the mean square; `0`
     /// unless `Sampled`, and `0` when the mean square is `0`, which carries
-    /// no information.
+    /// no information. It is computed from the measured points, so it does
+    /// not reveal a residual concentrated on points that were not drawn.
     pub mean_square_rel_std_error: f64,
     /// Largest `|f - f~_P|` over the measured points.
     pub max_residual: f64,
@@ -349,16 +355,24 @@ pub enum GlobalL2Error {
         /// The bound relies on `||f~||` from `TreeTN::log_norm`.
         relative_error_bound: Option<f64>,
     },
-    /// Every `Sampled` contribution has an audit: an estimate, not a bound.
+    /// Every `Sampled` contribution has an audit: an estimate, not a bound,
+    /// and not a guarantee. The audits sample uniformly, like the acceptance,
+    /// so a residual concentrated on a small set (for example a localized
+    /// feature that enters a patch only through a corner or an edge) can be
+    /// missed by both; `rms_error_estimate` and `mean_square_rel_std_error`
+    /// can then both be small while the true `E` is orders of magnitude
+    /// larger. Only [`GlobalL2Error::Certified`] is a guarantee.
     #[non_exhaustive]
     Audited {
         /// Estimated `E / sqrt(|X|)` (exact and exhaustive contributions as
         /// measured, sampled ones from their audits).
         rms_error_estimate: f64,
-        /// Relative standard error of `rms_error_estimate^2`.
+        /// Relative standard error of `rms_error_estimate^2`, from the audit
+        /// samples; it says nothing about a residual the audits did not draw.
         mean_square_rel_std_error: f64,
         /// Plug-in estimate of the bound `E / (||f~|| - E)` with the audited
-        /// estimate of `E` inserted; not an unbiased estimate of `E / ||f||`.
+        /// estimate of `E` inserted; not an unbiased estimate of `E / ||f||`,
+        /// and too small whenever the estimate of `E` is.
         /// `None` when `||f~||` does not exceed the estimated `E` or
         /// `approximation_rms` is `None`. It relies on `||f~||` from
         /// `TreeTN::log_norm`.

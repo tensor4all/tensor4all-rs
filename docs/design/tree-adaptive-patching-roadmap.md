@@ -152,7 +152,10 @@ nodes; the driver is deterministic for fixed seeds.
 Outcome: one accuracy requirement with a reported, measured error for
 interpolation and patched algebra; verified L2 is the default (Decision 3).
 The measured error is a bound where it is exact or exhaustive (and for patched
-algebra) and a statistical estimate where it is sampled.
+algebra) and a statistical estimate where it is sampled. A sampled estimate,
+audited or not, can miss a localized feature that enters a patch only through
+a corner or an edge
+([known limitation](./tree-patching-error-contract.md#known-limitation-corner-localized-misses); fix deferred to M9).
 
 Scope:
 
@@ -228,6 +231,13 @@ Scope:
 - a minimum patch size option and an in-loop merge of sibling patches,
   reusing the reconstruction merge logic.
 
+Note: split-site selection and the candidate rules for child patches must
+take the M3 corner-localized misses into account
+([known limitation](./tree-patching-error-contract.md#known-limitation-corner-localized-misses)): a split that cuts through a feature can leave
+children that the feature enters only through a corner or an edge, which
+uniform sampling and the engine can miss. The fix itself is decided in the
+M9 global review.
+
 Exit: measurements on M2 patches compare the heuristic with `Sequential` and
 `ExactParameterGain`, and overpatching cases do not exceed the unpatched
 parameter count by more than a documented margin.
@@ -291,6 +301,21 @@ Exit: an MPI smoke test and a multi-rank benchmark.
 - Known risk to track: downstream TreeTCI runs on topologies with junction
   nodes have been observed to be much slower than on chains at low
   temperature; this affects tree pQTCI and must be profiled once M2 exists.
+- Corner-localized misses: global review and fix decision. Uniform-sample
+  acceptance and the audit of M3 can miss a localized feature that enters a
+  patch only through a corner or an edge, underestimating the error by orders
+  of magnitude without a warning
+  ([record](./tree-patching-error-contract.md#known-limitation-corner-localized-misses); reproduction: the ignored test
+  `corner_localized_ridge_is_not_missed_by_sampled_acceptance`). The fix was
+  deferred to this review by user decision on 2026-10-03. Candidate remedies:
+  - a reject-only screen on points already in the patch cache: no new
+    evaluations of `f`; it may only reject a patch, never contribute to an
+    estimate;
+  - a larger default `samples`;
+  - boundary-aware or recycled candidates for child patches: the parent's
+    feature points just across the split face;
+  - split-site rules that avoid cutting through a feature at a corner (M5);
+  - stratified or importance verification.
 
 ### M10. Bindings (deferred)
 

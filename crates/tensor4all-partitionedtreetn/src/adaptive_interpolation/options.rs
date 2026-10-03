@@ -277,11 +277,18 @@ impl PatchedInterpolationOptions {
 /// whose mean square is an unbiased estimate (its RMS is not; neither is a
 /// bound).
 ///
+/// Both samples are uniform, so both can miss a localized feature that
+/// enters a patch only through a corner or an edge, and the audit's standard
+/// error does not reveal such a miss. Only exhaustive (or exact) measurement
+/// rules it out; see "Known limitation" in the
+/// [module documentation](super).
+///
 /// The defaults are provisional; their measured cost is a later milestone.
 /// When in doubt keep them: `samples = 64`, `max_exhaustive_points = 1024`,
 /// `retries = 1`, `audit = true`. Raising `samples` lowers the variance of a
-/// sampled measurement at proportional cost; `max_exhaustive_points` bounds
-/// the exhaustive work and cache growth per patch.
+/// sampled measurement and the chance of missing a localized residual, at
+/// proportional cost, but does not exclude a miss; `max_exhaustive_points`
+/// bounds the exhaustive work and cache growth per patch.
 ///
 /// # Examples
 ///
@@ -303,6 +310,8 @@ impl PatchedInterpolationOptions {
 #[non_exhaustive]
 pub struct VerificationOptions {
     /// Fresh uniform points per sampled measurement, at least 2. Default 64.
+    /// More points make a missed localized residual less likely; no finite
+    /// number excludes one.
     pub samples: usize,
     /// A patch with at most `max(max_exhaustive_points, samples)` points is
     /// measured exhaustively. Bounds the exhaustive work and cache growth per
@@ -316,6 +325,9 @@ pub struct VerificationOptions {
     /// its acceptance decision. Default `true`; without it a run with a
     /// sampled contribution is reported as
     /// [`GlobalL2Error::AcceptanceOnly`](super::GlobalL2Error::AcceptanceOnly).
+    /// The audit is uniform like the acceptance sample: it detects a missed
+    /// residual only if it draws points of it, and its standard error does
+    /// not reveal one it did not draw.
     pub audit: bool,
 }
 

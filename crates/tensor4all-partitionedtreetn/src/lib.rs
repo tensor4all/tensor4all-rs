@@ -18,7 +18,9 @@
 //! are exact or measured exhaustively, up to a calibrated, not proven,
 //! rounding model; a statistical estimate where they are sampled, with the
 //! audit on, and otherwise only an acceptance statistic), or the M2 sampled
-//! max-norm criterion of the engine. The crate
+//! max-norm criterion of the engine. Sampled measurements, audits included,
+//! can miss a localized feature that enters a patch only through a corner or
+//! an edge; only a certified result is a guarantee. The crate
 //! depends on the engine trait only, not on an engine crate.
 //!
 //! The representation follows the partitioned tensor-network approach used by

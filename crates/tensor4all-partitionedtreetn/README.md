@@ -46,6 +46,16 @@ standard error, never a bound; `AcceptanceOnly` (audits off) gives neither an
 estimate nor a relative statement. Sampled measurements cannot bound the L2
 error of a black-box function.
 
+Known limitation: the acceptance sample and the audit are both uniform, so
+both can miss a localized feature that enters a patch only through a corner
+or an edge, and the audit's standard error does not reveal such a miss (it is
+computed from the same points). An `Audited` result can then underestimate
+the error by orders of magnitude. Raising `VerificationOptions::samples`
+makes this less likely but does not exclude it; only `Certified` results
+(every contribution exact or exhaustive) are guarantees. See "Known
+limitation: corner-localized misses" in
+[`docs/design/tree-patching-error-contract.md`](../../docs/design/tree-patching-error-contract.md).
+
 - Patches are processed sequentially in FIFO order; each has an evaluation
   cache, so no point is evaluated twice, and measured values reach the
   children of a split. Patches with at most one active site are evaluated
