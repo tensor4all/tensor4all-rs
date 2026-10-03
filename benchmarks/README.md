@@ -160,10 +160,25 @@ Pre-register the workloads, the thresholds, and the decision rule in
 `results/` before collecting timings, run every configuration in at least two
 independent processes, and save the complete stdout as JSONL beside the
 protocol; do not replace an existing result file. No protocol for this
-runner has been committed yet (M4 is deferred; see the roadmap). The earlier
-[`2026-10-02-tree-patch-representation.md`](results/2026-10-02-tree-patch-representation.md)
-run (bond cap 2, every patch of rank one, runner at `a85e4b42`) is a superseded
-smoke test.
+runner has been committed yet (M4 is deferred; see the roadmap).
+
+#### Fixed-depth tree pQTCI partition exploration (M5)
+
+`benchmark_m5_fixed_depth_partition` fixes the first `k` quantics bits in a
+chosen order and runs one uncapped TreeTCI per resulting patch, on chains and
+branched trees. It is an exploratory study, not a run of the adaptive pQTCI
+driver and not a comparison of split selectors. The source lives in
+`rust/benchmark_m5_fixed_depth_partition.rs`, included by the
+PartitionedTreeTN example of the same name.
+
+```bash
+cargo run --release -p tensor4all-partitionedtreetn \
+  --example benchmark_m5_fixed_depth_partition -- \
+  ridge tree 8 0.03 0,1,2,3,4,5,6 msb 16 20
+```
+
+The recorded runs, their matched-accuracy comparison, and their caveats are in
+[`2026-10-03-m5-fixed-depth-exploration.md`](results/2026-10-03-m5-fixed-depth-exploration.md).
 
 #### TreeTCI global pivot search (#792)
 

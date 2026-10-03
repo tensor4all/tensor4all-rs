@@ -105,9 +105,6 @@ compact patches would create site-free nodes, so #797 is an adoption
 precondition.
 
 No representation decision has been made; see the M4 status in the roadmap.
-The first measurement
-([`2026-10-02-tree-patch-representation.md`](../../benchmarks/results/2026-10-02-tree-patch-representation.md))
-used rank-one patches and is superseded.
 
 ## 5. Avoidable overhead in patch algebra
 

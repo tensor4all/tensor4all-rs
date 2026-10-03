@@ -185,13 +185,10 @@ are still with the user.
 
 ### M4. Patch representation decision (M)
 
-Status: **deferred; no decision recorded.** The first measurement
-([`2026-10-02-tree-patch-representation.md`](../../benchmarks/results/2026-10-02-tree-patch-representation.md))
-is superseded: with interpolation cap 2 every accepted patch had rank one, so
-it was a smoke test and could not support a decision. A review re-measurement
-at caps 8-32 on branched trees showed compact payload savings of 18-33% and
-truncation 17-20% faster, but at those bond dimensions timing is dominated by
-per-node overhead, so it is not decision-grade either.
+Status: **deferred; no decision recorded.** Earlier measurements used bond
+caps of 2 to 64 (realized ranks at most 62). At those bond dimensions timing is
+dominated by per-node overhead, so they were smoke tests that cannot support a
+decision; their results were removed from the repository.
 
 Scope (unchanged goal, corrected method):
 
@@ -226,6 +223,15 @@ Exit: a recorded, scoped decision with raw measurements.
 
 Outcome: the patch tree adapts its split sites and does not proliferate
 redundant patches.
+
+Status: **design open; nothing implemented.** The design notes and the open
+questions for the user are in
+[`tree-pqtci-split-selection.md`](./tree-pqtci-split-selection.md). The only
+data so far is an exploratory fixed-depth partition study
+([`2026-10-03-m5-fixed-depth-exploration.md`](../../benchmarks/results/2026-10-03-m5-fixed-depth-exploration.md)):
+at matched accuracy, partitioning a narrow ridge on a branched tree saved
+about 4 times the TCI time, while the chain control and a delocalized
+spectral function only got more expensive.
 
 Scope:
 
