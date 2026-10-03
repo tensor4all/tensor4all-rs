@@ -80,7 +80,8 @@ State after the user's answers of 2026-10-03.
    tolerance and every remaining split would go below the minimum, the patch
    is accepted with its measured error and explicitly reported as not meeting
    the tolerance. Such a patch is never counted as certified. The run does not
-   stop with an error.
+   stop with an error. The minimum is given as a number of active quantics
+   bits, the same unit as the capped-patch maximum in question 4.
 3. **Sibling merging — undecided.** Its acceptance rule, its reporting, and
    whether it belongs in the driver or in a post-processing step remain open.
 4. **Capped outcomes — direction decided; details and early exit open** (M3
