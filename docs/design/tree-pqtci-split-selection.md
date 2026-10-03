@@ -4,8 +4,9 @@
 
 Design notes for M5 of
 [`tree-adaptive-patching-roadmap.md`](./tree-adaptive-patching-roadmap.md).
-Nothing here is approved for implementation: the proposals and open questions
-below need the user's review. The only M5 data so far is the fixed-depth
+Only open questions 2 and 5 below are decided; the selector, sibling
+merging, and capped outcomes still need the user's decision before any
+implementation. The only M5 data so far is the fixed-depth
 exploration in
 [`2026-10-03-m5-fixed-depth-exploration.md`](../../benchmarks/results/2026-10-03-m5-fixed-depth-exploration.md).
 
@@ -67,24 +68,32 @@ What this needs before code is written:
 
 ## Open questions for the user
 
-1. **Selector.** Adopt the tree generalization above as an opt-in pQTCI
-   option, keep `Sequential` as the default until measurements justify a
-   change?
-2. **Minimum patch size.** The roadmap lists a minimum patch size option. What
-   should happen when a patch fails its tolerance and every remaining split
-   would go below the minimum: accept it with its measured error reported,
-   stop the whole run with an error, or something else?
-3. **Sibling merging.** The roadmap lists sibling reconstruction with
-   independent parent-region verification. Its acceptance rule, how it is
-   reported, and whether it belongs in the driver or as a post-processing
-   step are not decided.
-4. **Capped outcomes and early exit** (M3 open question 4, deferred to M5):
-   whether a `BondCapReached` patch may be accepted on its measured error,
-   together with stopping the engine at the first saturated sweep.
-5. **Corner-localized misses.** Split rules and child candidate sets must
-   take them into account
-   ([known limitation](./tree-patching-error-contract.md#known-limitation-corner-localized-misses));
-   the fix itself belongs to the M9 global review.
+State after the user's answers of 2026-10-03.
+
+1. **Selector — undecided.** Whether the edge-based generalization is valid
+   at nodes of degree three or more cannot be settled by assertion: a site at
+   a junction changes several incident edges at once, and a node's tensor
+   size is the product of all its incident ranks, so the largest single edge
+   need not be the bottleneck. The generalization needs its own analysis
+   before a decision.
+2. **Minimum patch size — decided: accept and report.** When a patch fails its
+   tolerance and every remaining split would go below the minimum, the patch
+   is accepted with its measured error and explicitly reported as not meeting
+   the tolerance. Such a patch is never counted as certified. The run does not
+   stop with an error.
+3. **Sibling merging — undecided.** Its acceptance rule, its reporting, and
+   whether it belongs in the driver or in a post-processing step remain open.
+4. **Capped outcomes and early exit — undecided** (M3 open question 4,
+   deferred to M5). Passing the error check is not sufficient: a capped patch
+   can meet its tolerance without compressing at all, its parameter count
+   reaching or exceeding the patch's dense size. A further bound beside the
+   minimum patch size (the user suggested a maximum) is under consideration.
+5. **Corner-localized misses — decided: optional mitigation.** Split rules and
+   child candidate sets may take them into account through an opt-in option
+   (for example, child start candidates that include the parent's pivots near
+   the split boundary); the default is unchanged. The fix itself belongs to
+   the M9 global review
+   ([known limitation](./tree-patching-error-contract.md#known-limitation-corner-localized-misses)).
 
 ## Measurement requirements
 
