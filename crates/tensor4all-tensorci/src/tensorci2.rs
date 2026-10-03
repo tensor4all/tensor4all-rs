@@ -77,6 +77,9 @@ pub struct TCI2Options {
     /// *relative* threshold: the bond error is divided by the maximum
     /// absolute function value seen so far. Typical choices are `1e-8` for
     /// moderate accuracy and `1e-12` for high accuracy.
+    /// With `normalize_error = false`, this is an absolute threshold.
+    /// Each half-sweep fixes its absolute threshold before updating any bond;
+    /// local LU updates retain their separate numerical relative cutoff.
     pub tolerance: f64,
     /// Maximum number of half-sweep iterations (default: `20`).
     ///
@@ -147,6 +150,20 @@ impl TCI2Options {
             validate_positive("max_bond_dim", max_bond_dim)?;
         }
         Ok(())
+    }
+
+    // Both optimizer and public sweep must give LU the same absolute threshold.
+    // This follows TensorCrossInterpolation.jl's optimize!/updatepivots!
+    // separation of the requested tolerance from LU's numerical relative floor.
+    fn sweep_tolerance(&self, max_sample_value: f64) -> Result<(f64, f64)> {
+        let normalization = if self.normalize_error && max_sample_value > 0.0 {
+            max_sample_value
+        } else {
+            1.0
+        };
+        let abs_tol = self.tolerance * normalization;
+        validate_nonnegative_finite("absolute sweep tolerance", abs_tol)?;
+        Ok((normalization, abs_tol))
     }
 }
 
@@ -257,6 +274,7 @@ struct PivotUpdateContext<'a, B> {
     batched_f: &'a Option<B>,
     left_orthogonal: bool,
     options: &'a TCI2Options,
+    abs_tol: f64,
     extra_i_set: &'a [MultiIndex],
     extra_j_set: &'a [MultiIndex],
 }
@@ -760,6 +778,7 @@ where
         B: Fn(&[MultiIndex]) -> Vec<T>,
     {
         options.validate()?;
+        let (_, abs_tol) = options.sweep_tolerance(self.max_sample_value)?;
         let n = self.len();
         self.invalidate_site_tensors();
         self.flush_pivot_errors();
@@ -775,6 +794,7 @@ where
                         batched_f,
                         left_orthogonal: true,
                         options,
+                        abs_tol,
                         extra_i_set: &empty,
                         extra_j_set: &empty,
                     },
@@ -790,6 +810,7 @@ where
                         batched_f,
                         left_orthogonal: false,
                         options,
+                        abs_tol,
                         extra_i_set: &empty,
                         extra_j_set: &empty,
                     },
@@ -1768,12 +1789,7 @@ where
     let mut termination = TCI2Termination::MaxIterations;
 
     for iter in 0..options.max_iter {
-        let error_normalization = if options.normalize_error && tci.max_sample_value > 0.0 {
-            tci.max_sample_value
-        } else {
-            1.0
-        };
-        let abs_tol = options.tolerance * error_normalization;
+        let (error_normalization, abs_tol) = options.sweep_tolerance(tci.max_sample_value)?;
 
         // Determine sweep direction
         let is_forward = match options.sweep_strategy {
@@ -1813,6 +1829,7 @@ where
                         batched_f: &batched_f,
                         left_orthogonal: true,
                         options: &options,
+                        abs_tol,
                         extra_i_set: &extra_i_set[b + 1],
                         extra_j_set: &extra_j_set[b],
                     },
@@ -1828,6 +1845,7 @@ where
                         batched_f: &batched_f,
                         left_orthogonal: false,
                         options: &options,
+                        abs_tol,
                         extra_i_set: &extra_i_set[b + 1],
                         extra_j_set: &extra_j_set[b],
                     },
@@ -1892,12 +1910,7 @@ where
     // Final 1-site sweep to:
     // 1. Remove unnecessary pivots added by global pivots
     // 2. Compute site tensors
-    let error_normalization = if options.normalize_error && tci.max_sample_value > 0.0 {
-        tci.max_sample_value
-    } else {
-        1.0
-    };
-    let abs_tol = options.tolerance * error_normalization;
+    let (_, abs_tol) = options.sweep_tolerance(tci.max_sample_value)?;
     tci.sweep1site(
         &f,
         true,
@@ -2010,9 +2023,9 @@ where
             &pi,
             Some(RrLUOptions {
                 max_bond_dim: context.options.max_bond_dim.unwrap_or(usize::MAX),
-                rel_tol: context.options.tolerance,
-                abs_tol: 0.0,
+                abs_tol: context.abs_tol,
                 left_orthogonal: context.left_orthogonal,
+                ..RrLUOptions::default()
             }),
         )?
     } else {
@@ -2031,9 +2044,9 @@ where
             },
             RrLUOptions {
                 max_bond_dim: context.options.max_bond_dim.unwrap_or(usize::MAX),
-                rel_tol: context.options.tolerance,
-                abs_tol: 0.0,
+                abs_tol: context.abs_tol,
                 left_orthogonal: context.left_orthogonal,
+                ..RrLUOptions::default()
             },
         );
         if let Some(err) = evaluator.take_error() {
