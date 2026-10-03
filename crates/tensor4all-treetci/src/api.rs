@@ -82,7 +82,8 @@ pub type TreeTciRunResult = (
 #[allow(clippy::too_many_arguments)]
 /// # Errors
 ///
-/// Returns [`TreeTciError::InvalidConfiguration`] for invalid options. It
+/// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
+/// for invalid options. It
 /// also returns an error when the operation fails (a shape or index mismatch,
 /// or a backend failure).
 ///
