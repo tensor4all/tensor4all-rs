@@ -81,7 +81,18 @@ where
 /// giving the local index at `site` for `point`.
 ///
 /// This type is the main interface for the batch evaluator closure passed to
-/// [`crossinterpolate2`](crate::crossinterpolate2).
+/// [`crossinterpolate2`](crate::crossinterpolate2),
+/// [`optimize_default`](crate::optimize_default),
+/// [`optimize_with_proposer`](crate::optimize_with_proposer) and
+/// [`to_treetn`](crate::to_treetn).
+///
+/// # Batch sizes
+///
+/// TreeTCI splits the point sets it assembles for edge candidate matrices and
+/// materialized site tensors into batches of at most 65,536 points, so one
+/// matrix or tensor may take several calls. Initial-pivot evaluation and the
+/// global pivot search pass their point sets in a single batch each. An
+/// evaluator must not rely on how points are grouped into calls.
 ///
 /// # Examples
 ///

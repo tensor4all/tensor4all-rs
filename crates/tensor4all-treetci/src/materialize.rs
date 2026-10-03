@@ -16,7 +16,8 @@ use tensor4all_treetn::TreeTN;
 ///
 /// Converts the pivot sets stored in a [`TreeTCI2`] into site tensors
 /// of a [`TreeTN`]. The `evaluate` closure is called to fill tensor
-/// entries at the selected pivot points, in calls of at most 65,536 points.
+/// entries at the selected pivot points, in calls of at most 65,536 points
+/// (see [`GlobalIndexBatch`](crate::GlobalIndexBatch#batch-sizes)).
 ///
 /// `center_site` selects the BFS root for the tree decomposition
 /// (default: site 0).
