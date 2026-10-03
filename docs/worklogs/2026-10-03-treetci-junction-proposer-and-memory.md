@@ -40,8 +40,9 @@
   were removed with their tests and doctests rather than kept as unused public
   API. Coverage of the removed paths was reviewed: the removed tests and
   doctests exercised only the removed items; `TreeTciError::IndexOutOfBounds`
-  stays covered through `graph.rs` and the partition checks of
-  `fill_tensor_values`, and `GlobalIndexBatch` stays covered by the unit and
+  stays covered through the partition checks of `fill_tensor_values`
+  (checked by downcast in the materialize tests), and `GlobalIndexBatch` stays
+  covered by the unit and
   integration tests that build batches. The materialization test oracle
   assembles its points inline.
 - `fill_tensor_values` keeps `TreeTciError::IndexOutOfBounds` for its site
