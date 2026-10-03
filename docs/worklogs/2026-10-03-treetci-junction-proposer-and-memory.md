@@ -18,10 +18,15 @@
   Keeping them alone (old budget) also failed (1.0e-2, 20 iterations). With
   both, it stops after 8 iterations at 3.3e-4, against 2.4e-4 after 5 for
   `DefaultProposer`. The site-carrying junction goes from 9.3e-3 (16
-  iterations) to 4.0e-4 (7). Without history, or when the candidates fit the
-  budget, the output is unchanged, so chains that do not truncate are
-  unaffected; a truncating chain case (eta=1.2) converged in 7 instead of 9
-  iterations at the same error level.
+  iterations) to 4.0e-4 (7). The optimization loop records the pivot sets
+  at the start of every pass and visits each edge once per pass, so the kept
+  set is always the edge's current pivots: every truncating update changes
+  its sample (and RNG use) relative to TreeTCI.jl, on chains and on vertices
+  with sites as well. Only updates whose candidates fit the budget are
+  unchanged. A truncating chain case (eta=1.2) converged in 7 instead of 9
+  iterations at the same error level. The branch for a kept set larger than
+  the budget is unreachable from the built-in loop (budget `>= 2r`, kept set
+  `r`) and only guards hand-edited histories.
 - #800 and #801 share one crate-private helper, `evaluate_points_chunked`,
   which fills and evaluates at most 65,536 points per evaluator call through
   one reused buffer. Materialization walks the pivot product with a
@@ -39,10 +44,15 @@
   16-17 s, candidate assembly 7.5-8.1 s to 1.7-2.0 s, all `to_treetn` calls
   4.7-5.5 s to 0.9 s, peak RSS 1877 MB to 154 MB. Cap 64: 3.3-3.5 s to
   1.8-1.9 s, 277 MB to 52 MB. Chain, cap 128: 1.4-1.5 s to 1.2-1.3 s, 81 MB to 58 MB.
-- The #804 regression test uses a 4-bit-per-axis Lorentzian on a 13-vertex
-  three-arm tree. The old proposer fails it on the site-free junction; the
-  site-carrying junction case passes before and after, so the history
-  retention is pinned by a proposer unit test instead.
+- The #804 regression test uses a 6-bit-per-axis Lorentzian (eta=0.1) on a
+  19-vertex three-arm tree, with global pivots disabled: on a smaller tree
+  the global search alone restores full rank, so the old proposer only missed
+  the iteration limit at an error of about 1e-16. Each half of the fix is
+  needed at this size. With the old budget the site-free junction bonds stay
+  at rank 1. Without keeping the previous pivots both junction variants stop
+  at a relative dense residual of 1.7e-8 (site) and 1.1e-7 (site-free),
+  against the 1e-10 tolerance; the fixed proposer reaches about 1e-14 there,
+  and stayed below 4e-12 over five other proposer seeds.
 - The convergence evidence for the truncated proposer covers one function
   family on three topologies; it is a sampling heuristic and can still miss
   features that `DefaultProposer` would find.

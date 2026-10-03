@@ -2,17 +2,24 @@
 //! (issue #804): the proposer must converge to the tolerance both when the
 //! junction vertex is site-free (local dimension 1) and when it carries a
 //! site, and the result must match a dense reference.
+//!
+//! Global pivots are disabled so the local proposer has to find every pivot
+//! itself: with them, the global search alone restores full rank on a tree
+//! this small. At this size each half of the #804 fix is needed: with the
+//! old `local_dim * rank` budget the site-free junction bonds stay at their
+//! starting rank 1, and without keeping the previous pivots both junction
+//! variants stop at a dense residual of about 1e-8 to 1e-7.
 
 use anyhow::Result;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetci::{
-    crossinterpolate2, GlobalIndexBatch, TreeTciEdge, TreeTciGraph, TreeTciOptions,
-    TruncatedDefaultProposer,
+    optimize_with_proposer, to_treetn, GlobalIndexBatch, TreeTCI2, TreeTciEdge, TreeTciGraph,
+    TreeTciOptions, TruncatedDefaultProposer,
 };
 use tensor4all_treetn::TreeTN;
 
 /// Quantics bits per variable.
-const BITS: usize = 4;
+const BITS: usize = 6;
 const TOLERANCE: f64 = 1e-10;
 const MAX_ITER: usize = 20;
 
@@ -70,7 +77,7 @@ impl JunctionTree {
         }
         let tau = std::f64::consts::TAU;
         let energy: f64 = -2.0 * coords.iter().map(|x| (tau * x).cos()).sum::<f64>();
-        let (mu, eta) = (0.5, 0.5);
+        let (mu, eta) = (0.5, 0.1);
         eta / ((energy - mu).powi(2) + eta * eta)
     }
 
@@ -111,19 +118,32 @@ impl JunctionTree {
 }
 
 fn assert_truncated_proposer_converges(tree: &JunctionTree) {
+    let local_dims = tree.local_dims();
+    let n_sites = local_dims.len();
+    let evaluate = |batch: GlobalIndexBatch<'_>| tree.evaluate(batch);
+    let mut state = TreeTCI2::<f64>::new(local_dims, tree.graph.clone()).unwrap();
+    state.add_global_pivots(&[vec![0; n_sites]]).unwrap();
+    state.max_sample_value = tree.value(&vec![0; n_sites]).abs();
+    let junction_edges = state.graph.adjacent_edges(0, &[]);
+    assert_eq!(junction_edges.len(), 3);
+    let junction_rank = |state: &TreeTCI2<f64>, edge: TreeTciEdge| {
+        let (key, _) = state.graph.subregion_vertices(edge).unwrap();
+        state.ijset[&key].ncols().unwrap()
+    };
+    for &edge in &junction_edges {
+        assert_eq!(junction_rank(&state, edge), 1);
+    }
+
     let options = TreeTciOptions {
         tolerance: TOLERANCE,
         max_iter: MAX_ITER,
-        seed: Some(7),
+        enable_global_pivots: false,
         ..Default::default()
     };
-    let (tn, ranks, errors) = crossinterpolate2::<f64, _, _>(
-        |batch| tree.evaluate(batch),
-        tree.local_dims(),
-        tree.graph.clone(),
-        vec![],
-        options,
-        None,
+    let (ranks, errors) = optimize_with_proposer(
+        &mut state,
+        evaluate,
+        &options,
         &TruncatedDefaultProposer::seeded(3),
     )
     .unwrap();
@@ -137,14 +157,24 @@ fn assert_truncated_proposer_converges(tree: &JunctionTree) {
         last_error < TOLERANCE,
         "normalized bond error {last_error:e} is not below {TOLERANCE:e}"
     );
+    for &edge in &junction_edges {
+        let rank = junction_rank(&state, edge);
+        assert!(rank > 1, "junction bond {edge:?} stayed at rank {rank}");
+    }
 
+    let tn = to_treetn(&state, evaluate, None).unwrap();
     let reference = tree.dense_reference(&tn);
-    let dense = tn.to_dense().unwrap();
-    let residual = dense.sub(&reference).unwrap().maxabs().unwrap();
+    let residual = tn
+        .to_dense()
+        .unwrap()
+        .sub(&reference)
+        .unwrap()
+        .maxabs()
+        .unwrap();
     let scale = reference.maxabs().unwrap();
     assert!(
-        residual <= 1e-8 * scale,
-        "max abs residual {residual:e} exceeds 1e-8 * {scale:e} (ranks {ranks:?})"
+        residual <= TOLERANCE * scale,
+        "max abs residual {residual:e} exceeds {TOLERANCE:e} * {scale:e} (ranks {ranks:?})"
     );
 }
 

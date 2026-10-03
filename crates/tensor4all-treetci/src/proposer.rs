@@ -187,7 +187,11 @@ impl PivotCandidateProposer for SimpleProposer {
 /// default proposer appends to its candidates) are always kept, and only the
 /// remaining budget is sampled. A uniform sample would drop almost all of them
 /// at a branching vertex, so every update would restart from a fresh random
-/// subset and the bond error would not settle.
+/// subset and the bond error would not settle. The optimization loop records
+/// the pivot sets at the start of every pass and visits each edge once per
+/// pass, so the kept set is exactly the edge's current pivots, on every
+/// vertex: chains and vertices with sites sample differently from
+/// `TreeTCI.jl` too whenever they truncate.
 ///
 /// When the default candidates fit into the budget they are returned
 /// unchanged, so the proposer then behaves exactly like [`DefaultProposer`].
@@ -465,8 +469,12 @@ fn history_columns(
 ///
 /// Candidates in `keep` (the previous-pass pivots) are retained first; the
 /// rest of the budget is filled by a uniform random sample of the others.
-/// With an empty `keep` this is a plain ordered uniform sample. If `keep`
-/// alone exceeds the budget, a uniform sample of it is returned.
+/// With an empty `keep` this is a plain ordered uniform sample.
+///
+/// If `keep` alone exceeds the budget, a uniform sample of it is returned.
+/// The built-in optimization loop never reaches that branch: there `keep` is
+/// the edge's current `r` pivots and the budget is at least `2 * r`. It is
+/// defensive code for states whose history was edited by hand.
 fn sample_ordered_candidates(
     candidates: &[MultiIndex],
     keep: &HashSet<MultiIndex>,

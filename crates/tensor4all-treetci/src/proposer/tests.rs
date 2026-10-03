@@ -265,6 +265,9 @@ fn truncated_default_proposer_keeps_previous_pivots_when_truncating() {
 fn sample_ordered_candidates_samples_keep_set_when_it_exceeds_budget() {
     let candidates: Vec<Vec<usize>> = (0..6).map(|value| vec![value]).collect();
     let keep: HashSet<Vec<usize>> = [vec![1], vec![3], vec![4]].into_iter().collect();
+    // `SmallRng` rather than `ChaCha8Rng`: the private sampler takes the
+    // `SmallRng` that the pre-existing `rng_for_edge` produces. The assertions
+    // hold for any stream.
     let mut rng = SmallRng::seed_from_u64(11);
     let sampled = sample_ordered_candidates(&candidates, &keep, 2, &mut rng);
     assert_eq!(sampled.len(), 2);
