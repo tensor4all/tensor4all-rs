@@ -167,12 +167,30 @@ impl PivotCandidateProposer for SimpleProposer {
 }
 
 /// Truncated default proposer that samples an ordered subset from the default
-/// candidate set, mirroring `TreeTCI.jl`'s
+/// candidate set, adapted from `TreeTCI.jl`'s
 /// `TruncatedDefaultPivotCandidateProposer`.
 ///
 /// Starts from the [`DefaultProposer`] candidates but truncates them to a
 /// bounded size using random sampling. Useful for large problems where the
-/// default candidate set would be prohibitively large.
+/// default candidate set would be prohibitively large, typically at
+/// branching vertices, where it is the product of the incoming bond ranks.
+///
+/// Each side of an edge keeps at most `max(d, 2) * r` candidates, where `r`
+/// is the current rank of the edge and `d` is the local dimension of the
+/// side's endpoint vertex. On vertices with sites (`d >= 2`) this is the
+/// `d * r` budget of `TreeTCI.jl`. A site-free vertex (`d = 1`) still offers
+/// new candidates through the product of its incoming pivot sets, so it gets
+/// the growth factor of a binary site instead of `1`, which would pin the
+/// bond at its current rank.
+///
+/// Unlike `TreeTCI.jl`, the previous-pass pivots of the edge (which the
+/// default proposer appends to its candidates) are always kept, and only the
+/// remaining budget is sampled. A uniform sample would drop almost all of them
+/// at a branching vertex, so every update would restart from a fresh random
+/// subset and the bond error would not settle.
+///
+/// When the default candidates fit into the budget they are returned
+/// unchanged, so the proposer then behaves exactly like [`DefaultProposer`].
 ///
 /// # Examples
 ///
@@ -223,22 +241,64 @@ impl PivotCandidateProposer for TruncatedDefaultProposer {
         let (default_i, default_j) = DefaultProposer.candidates(state, edge)?;
         let mut rng = rng_for_edge(state, edge, self.seed, "truncated_default")?;
 
-        let ichi = state.local_dims[vp]
-            .checked_mul(ncols_2d(state.ijset.get(&ikey).ok_or_else(|| {
-                anyhow::anyhow!("missing pivot set for subtree key {:?}", ikey)
-            })?)?)
-            .ok_or_else(|| anyhow::anyhow!("left candidate count overflowed usize"))?;
-        let jchi = state.local_dims[vq]
-            .checked_mul(ncols_2d(state.ijset.get(&jkey).ok_or_else(|| {
-                anyhow::anyhow!("missing pivot set for subtree key {:?}", jkey)
-            })?)?)
-            .ok_or_else(|| anyhow::anyhow!("right candidate count overflowed usize"))?;
+        let ichi = truncated_candidate_budget(state, vp, &ikey)?;
+        let jchi = truncated_candidate_budget(state, vq, &jkey)?;
 
+        let history = state.ijset_history.last();
+        let ikeep = history_columns(history, &ikey)?;
+        let jkeep = history_columns(history, &jkey)?;
         Ok((
-            sample_ordered_candidates(&default_i, ichi, &mut rng),
-            sample_ordered_candidates(&default_j, jchi, &mut rng),
+            sample_ordered_candidates(&default_i, &ikeep, ichi, &mut rng),
+            sample_ordered_candidates(&default_j, &jkeep, jchi, &mut rng),
         ))
     }
+}
+
+/// Smallest per-update growth factor [`TruncatedDefaultProposer`] grants an
+/// edge side.
+///
+/// It equals the local dimension of a binary (quantics) site, so a site-free
+/// vertex can at most double the bond rank per update, as a binary site can.
+const MIN_TRUNCATED_GROWTH_FACTOR: usize = 2;
+
+/// Candidate budget of one edge side for [`TruncatedDefaultProposer`]:
+/// `max(local_dims[vertex], 2) * rank`, with `rank` the number of pivots
+/// currently stored for `key`.
+///
+/// The budget bounds how far the rank of the edge can grow in one update, so
+/// it must exceed the current rank. `TreeTCI.jl` uses `local_dims[vertex] *
+/// rank`, which equals the current rank at a site-free (local dimension 1)
+/// vertex: the bond can then never grow there, and the optimization stalls at
+/// a large error. The candidates of a site-free vertex are the product of its
+/// incoming pivot sets, which can hold up to `rank_1 * rank_2 * ...` entries,
+/// so it still has new directions to offer; it gets the growth factor of a
+/// binary site. Vertices with sites keep the `TreeTCI.jl` budget.
+///
+/// A budget based on the incoming pivot sets alone (e.g. their summed
+/// sizes) is not used: the edge rank can legitimately exceed that sum (it is
+/// bounded by the product), which would pin the bond again. Using the full
+/// Kronecker candidate count would disable the truncation at junctions,
+/// which is where it matters. The sampler never returns more candidates than
+/// the default proposer offers, so the budget is capped automatically.
+fn truncated_candidate_budget<T>(
+    state: &TreeTCI2<T>,
+    vertex: usize,
+    key: &SubtreeKey,
+) -> Result<usize> {
+    let rank = ncols_2d(
+        state
+            .ijset
+            .get(key)
+            .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", key))?,
+    )?;
+    let local_dim = *state
+        .local_dims
+        .get(vertex)
+        .ok_or_else(|| anyhow::anyhow!("vertex {vertex} has no local dimension"))?;
+    local_dim
+        .max(MIN_TRUNCATED_GROWTH_FACTOR)
+        .checked_mul(rank)
+        .ok_or_else(|| anyhow::anyhow!("truncated candidate budget overflowed usize"))
 }
 
 fn subtree_position(key: &SubtreeKey, site: usize) -> Result<usize> {
@@ -386,8 +446,30 @@ fn rng_for_edge<T>(
     Ok(SmallRng::seed_from_u64(hasher.finish()))
 }
 
+/// Collect the previous-pass pivots stored for `key`, which the default
+/// proposer appends to its candidates.
+fn history_columns(
+    history: Option<&HashMap<SubtreeKey, ColMajorArray<usize>>>,
+    key: &SubtreeKey,
+) -> Result<HashSet<MultiIndex>> {
+    let mut columns = HashSet::new();
+    if let Some(arr) = history.and_then(|history| history.get(key)) {
+        for j in 0..ncols_2d(arr)? {
+            columns.insert(column_2d(arr, j)?.to_vec());
+        }
+    }
+    Ok(columns)
+}
+
+/// Sample at most `max_size` of `candidates`, keeping their order.
+///
+/// Candidates in `keep` (the previous-pass pivots) are retained first; the
+/// rest of the budget is filled by a uniform random sample of the others.
+/// With an empty `keep` this is a plain ordered uniform sample. If `keep`
+/// alone exceeds the budget, a uniform sample of it is returned.
 fn sample_ordered_candidates(
     candidates: &[MultiIndex],
+    keep: &HashSet<MultiIndex>,
     max_size: usize,
     rng: &mut SmallRng,
 ) -> Vec<MultiIndex> {
@@ -395,11 +477,18 @@ fn sample_ordered_candidates(
         return candidates.to_vec();
     }
 
-    let mut selected_indices = (0..candidates.len()).collect::<Vec<_>>();
-    selected_indices.shuffle(rng);
-    selected_indices.truncate(max_size);
-    selected_indices.sort_unstable();
-    selected_indices
+    let (mut selected, mut others): (Vec<usize>, Vec<usize>) =
+        (0..candidates.len()).partition(|&index| keep.contains(&candidates[index]));
+    if selected.len() >= max_size {
+        selected.shuffle(rng);
+        selected.truncate(max_size);
+    } else {
+        others.shuffle(rng);
+        others.truncate(max_size - selected.len());
+        selected.extend(others);
+    }
+    selected.sort_unstable();
+    selected
         .into_iter()
         .map(|index| candidates[index].clone())
         .collect()

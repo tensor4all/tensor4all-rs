@@ -1,9 +1,13 @@
 use super::{
-    union_with_history, DefaultProposer, PivotCandidateProposer, SimpleProposer,
-    TruncatedDefaultProposer,
+    sample_ordered_candidates, union_with_history, DefaultProposer, PivotCandidateProposer,
+    SimpleProposer, TruncatedDefaultProposer,
 };
-use crate::{AllEdges, EdgeVisitor, SubtreeKey, TreeTCI2, TreeTciEdge, TreeTciGraph};
-use std::collections::HashMap;
+use crate::{
+    column_2d, ncols_2d, AllEdges, EdgeVisitor, SubtreeKey, TreeTCI2, TreeTciEdge, TreeTciGraph,
+};
+use rand::rngs::SmallRng;
+use rand::SeedableRng;
+use std::collections::{HashMap, HashSet};
 use tensor4all_core::ColMajorArray;
 
 fn sample_graph() -> TreeTciGraph {
@@ -163,4 +167,111 @@ fn truncated_default_proposer_truncates_default_candidates_in_order() {
     assert!(default_positions
         .windows(2)
         .all(|window| window[0] < window[1]));
+}
+
+/// Star with junction 0 and leaves 1, 2, 3 of local dimension 4.
+fn star_graph() -> TreeTciGraph {
+    TreeTciGraph::new(
+        4,
+        &[
+            TreeTciEdge::new(0, 1),
+            TreeTciEdge::new(0, 2),
+            TreeTciEdge::new(0, 3),
+        ],
+    )
+    .unwrap()
+}
+
+fn star_state(junction_dim: usize, pivots: &[Vec<usize>]) -> TreeTCI2<f64> {
+    let mut tci = TreeTCI2::<f64>::new(vec![junction_dim, 4, 4, 4], star_graph()).unwrap();
+    tci.add_global_pivots(pivots).unwrap();
+    tci
+}
+
+#[test]
+fn truncated_default_proposer_lets_site_free_junction_grow() {
+    // Rank 2 on every bond. On edge (0, 1) the junction side offers the
+    // product of the two other bonds' pivots (2 * 2 = 4 candidates); the old
+    // `local_dim * rank = 1 * 2` budget kept the bond at rank 2.
+    let tci = star_state(1, &[vec![0, 0, 0, 0], vec![0, 1, 1, 1]]);
+    let edge = TreeTciEdge::new(0, 1);
+    let (ikey, _) = tci.graph.subregion_vertices(edge).unwrap();
+    assert_eq!(ncols_2d(&tci.ijset[&ikey]).unwrap(), 2);
+
+    let (default_i, _) = DefaultProposer.candidates(&tci, edge).unwrap();
+    assert_eq!(default_i.len(), 4);
+    let (truncated_i, truncated_j) = TruncatedDefaultProposer::seeded(5)
+        .candidates(&tci, edge)
+        .unwrap();
+    assert_eq!(truncated_i, default_i);
+    // The leaf side has a site of dimension 4: budget 4 * 2 = 8 >= its 4
+    // Kronecker candidates, so it is not truncated either.
+    assert_eq!(truncated_j.len(), 4);
+}
+
+#[test]
+fn truncated_default_proposer_keeps_site_vertex_budget() {
+    // A junction carrying a site of dimension 2 keeps the `d * rank` budget.
+    let pivots = [vec![0, 0, 0, 0], vec![1, 1, 1, 1], vec![0, 2, 2, 2]];
+    let tci = star_state(2, &pivots);
+    let edge = TreeTciEdge::new(0, 1);
+    let (default_i, _) = DefaultProposer.candidates(&tci, edge).unwrap();
+    assert_eq!(default_i.len(), 2 * 3 * 3);
+    for seed in 0..8 {
+        let (truncated_i, _) = TruncatedDefaultProposer::seeded(seed)
+            .candidates(&tci, edge)
+            .unwrap();
+        assert_eq!(truncated_i.len(), 2 * 3);
+    }
+}
+
+#[test]
+fn truncated_default_proposer_keeps_previous_pivots_when_truncating() {
+    let pivots = [vec![0, 0, 0, 0], vec![1, 1, 1, 1], vec![0, 2, 2, 2]];
+    let mut tci = star_state(2, &pivots);
+    tci.ijset_history.push(tci.ijset.clone());
+    let edge = TreeTciEdge::new(0, 1);
+    let (ikey, _) = tci.graph.subregion_vertices(edge).unwrap();
+    let previous: Vec<Vec<usize>> = (0..ncols_2d(&tci.ijset[&ikey]).unwrap())
+        .map(|j| column_2d(&tci.ijset[&ikey], j).unwrap().to_vec())
+        .collect();
+    assert_eq!(previous.len(), 3);
+
+    let (default_i, _) = DefaultProposer.candidates(&tci, edge).unwrap();
+    for seed in 0..32 {
+        let (truncated_i, _) = TruncatedDefaultProposer::seeded(seed)
+            .candidates(&tci, edge)
+            .unwrap();
+        // Budget 2 * 3 out of 18 candidates, always including the previous
+        // pivots, in the default order.
+        assert_eq!(truncated_i.len(), 6);
+        for pivot in &previous {
+            assert!(truncated_i.contains(pivot), "seed {seed} dropped {pivot:?}");
+        }
+        let positions: Vec<usize> = truncated_i
+            .iter()
+            .map(|candidate| {
+                default_i
+                    .iter()
+                    .position(|value| value == candidate)
+                    .unwrap()
+            })
+            .collect();
+        assert!(positions.windows(2).all(|window| window[0] < window[1]));
+    }
+}
+
+#[test]
+fn sample_ordered_candidates_samples_keep_set_when_it_exceeds_budget() {
+    let candidates: Vec<Vec<usize>> = (0..6).map(|value| vec![value]).collect();
+    let keep: HashSet<Vec<usize>> = [vec![1], vec![3], vec![4]].into_iter().collect();
+    let mut rng = SmallRng::seed_from_u64(11);
+    let sampled = sample_ordered_candidates(&candidates, &keep, 2, &mut rng);
+    assert_eq!(sampled.len(), 2);
+    assert!(sampled.iter().all(|candidate| keep.contains(candidate)));
+    assert!(sampled.windows(2).all(|window| window[0] < window[1]));
+
+    // Within budget: returned unchanged.
+    let all = sample_ordered_candidates(&candidates, &keep, 6, &mut rng);
+    assert_eq!(all, candidates);
 }
