@@ -69,6 +69,14 @@ requires no recent global pivots and a stable rank history.
 
 ### Convergence diagnostics
 
+Each half-sweep converts `tolerance` to an absolute threshold using the maximum
+sample magnitude known at its start (or uses `tolerance` directly when
+`normalize_error = false`). Full and Rook two-site updates use that fixed
+threshold; the local LU factorization retains its separate numerical relative
+cutoff. Global pivot search uses the same absolute threshold, multiplied by
+`tol_margin_global_search`. These local criteria are not a guaranteed uniform
+error bound over the entire tensor.
+
 The `errors` vector tracks the normalized bond error after each half-sweep. The algorithm converges when:
 
 1. The last `ncheck_history` (default: 3) entries are all below `tolerance`.
