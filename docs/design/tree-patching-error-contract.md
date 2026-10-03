@@ -1436,6 +1436,16 @@ None blocks the M3 implementation; the defaults below are provisional.
    like the evaluator one (question 8). The a-posteriori
    relative bound is available under either. Keep the proposal, switch, or
    offer both?
+
+   **Decided (user, 2026-10-03): offer both, selected by the caller.**
+   Volume-proportional stays the implemented default. Norm-proportional is
+   added as a caller-selectable allocation once its prerequisite, a bitwise
+   reproducible per-patch norm (canonical-order, audited for the same
+   determinism scope as question 9), is in place; that prerequisite is shared
+   with M3b. The M5 static-partition evidence (per-patch max-norm tolerances
+   gave 2–17× larger L2 error than a monolithic run) supports a global L2
+   budget but does not choose between the two allocations; the corner-miss
+   behaviour of each allocation is part of its evaluation.
 3. **Default reference norm.** Proposed now: none (`L2Reference::Required`),
    with the Monte Carlo estimate as an explicit opt-in, because the estimate
    is heavy-tailed for localized functions and can silently loosen `delta`
