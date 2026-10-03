@@ -33,18 +33,19 @@
 //!   any other patch. The engine receives the absolute tolerance `tau`.
 //! - [`ErrorNorm::SampledMax`]: the M2 criterion, the engine's sampled error
 //!   estimate against `max(atol, rtol * max_reference)`, with `max_reference`
-//!   a function value. No measurement runs; it is not a verified bound and
-//!   makes no L2 claim.
+//!   a function value. No measurement runs; it is neither a certified bound
+//!   nor a measured error, and makes no L2 claim.
 //! - [`ErrorNorm::MaxAbs`] and [`ErrorNorm::WeightedL2`] are placeholders that
 //!   fail with [`PatchedInterpolationError::UnsupportedNorm`] before any
 //!   evaluation.
 //!
-//! **What "verified" means.** Under L2 a patch error is verified when it was
-//! measured from values of `f` at points chosen independently of the
-//! approximation, by one of three methods ([`MeasurementMethod`]):
-//! `Exact` (the patch was built from all its values), `Exhaustive` (the
-//! residual was evaluated at every point: exact up to rounding, a
-//! certificate), or `Sampled` (fresh uniform points). A sampled acceptance
+//! **Certified, measured, and estimated errors.** Under L2 the driver
+//! measures every patch error from values of `f` at points chosen
+//! independently of the approximation, by one of three methods
+//! ([`MeasurementMethod`]): `Exact` (the patch was built from all its
+//! values) and `Exhaustive` (the residual was evaluated at every point: exact
+//! up to rounding) are certified; `Sampled` (fresh uniform points) is
+//! measured, not certified, and never a guarantee. A sampled acceptance
 //! measurement is only a decision statistic: it is conditioned on the
 //! acceptance it decided, and a residual concentrated on unsampled points is
 //! missed. With [`VerificationOptions::audit`], an independent audit sample
@@ -140,15 +141,19 @@
 //! are identical across runs on fresh threads within one process, provided
 //! every measured network value is reproducible; this is tested for `f64` on
 //! trees where every node carries exactly one site, where the measurement
-//! takes the cached evaluator's raw kernels. Reproducibility across separate
-//! processes is not established (open question 9 of
-//! `docs/design/tree-patching-error-contract.md`). Each measurement uses a
-//! fresh `TreeTNCachedEvaluator` centered at the smallest node name, the
-//! default hint, and fixed-size chunks. On other trees (a site-free node or a
-//! node with several sites) the evaluator's generic path can differ at
-//! rounding level between threads and processes, so an L2 acceptance near
-//! `tau` may then differ between runs; this is an open evaluator issue (open
-//! question 8). The bitwise claim never
+//! takes the cached evaluator's raw kernels. Each measurement uses a fresh
+//! `TreeTNCachedEvaluator` centered at the smallest node name, the default
+//! hint, and fixed-size chunks. On other trees (a site-free node, a node with
+//! several sites, or `f32`/`c32` data) the evaluator's generic path can
+//! differ at rounding level between threads and processes, so an L2
+//! acceptance near `tau` may then differ between runs; this is an open
+//! evaluator issue
+//! ([issue #795](https://github.com/tensor4all/tensor4all-rs/issues/795)).
+//! The intended scope is bitwise identical results on the same machine and
+//! build across threads, thread counts, and processes, with no cross-machine
+//! promise. It is not reached yet: generic-path trees need that issue fixed,
+//! and reproducibility across processes is not claimed until a two-process
+//! test passes, which does not exist yet. The bitwise claim never
 //! covers `approximation_rms` and the fields derived from it. The stored
 //! patches are `TreeTN`s, so what is derived from them may still differ
 //! across runs, for a single patch as for the whole partition, on any topology
@@ -161,7 +166,7 @@
 //!
 //! Interpolate `f(x) = 1 / (1 + x)` on eight points, `x = b0 + 2 b1 + 4 b2`,
 //! with one binary site per node of a three-node chain, under the default
-//! verified L2 norm with a known reference norm. A bond cap of two only
+//! L2 norm with a known reference norm. A bond cap of two only
 //! accepts rank-one patches, so the domain is split twice; every patch ends
 //! up exact, so the global error is certified.
 //!

@@ -320,9 +320,9 @@ pub enum MaxReferenceSource {
 /// can exceed `tau`, because it is reported as measured.
 ///
 /// Bitwise reproducible for a fixed seed, a deterministic evaluator and
-/// engine, and a reproducible network evaluation (see "Determinism" in the
-/// module documentation), except the fields that depend on
-/// [`L2ErrorReport::approximation_rms`]: `rounding_allowance_rms`,
+/// engine, and a reproducible network evaluation (see "Randomness and
+/// determinism" in the module documentation), except the fields that depend
+/// on [`L2ErrorReport::approximation_rms`]: `rounding_allowance_rms`,
 /// `rounding_limited`, `relative_error_bound`, and
 /// `relative_bound_estimate`.
 ///

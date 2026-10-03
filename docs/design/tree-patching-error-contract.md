@@ -15,13 +15,17 @@ side (M3b) is scoped here and is not implemented
 
 The two prerequisites: the frozen M2 golden outputs were committed before the
 refactor ([Tests](#tests)); the evaluator fix of
-[Determinism](#determinism) is still open (open question 8). The cross-thread
-determinism test ran early: it passes on trees whose nodes carry one site
-each and fails, as predicted, on the generic path, where it is kept as an
-ignored test with that reason.
+[Determinism](#determinism) is still open, with its order decided (open
+question 8, issue [#795](https://github.com/tensor4all/tensor4all-rs/issues/795)).
+The cross-thread determinism test ran early: it passes on trees whose nodes
+carry one site each and fails, as predicted, on the generic path, where it is
+kept as an ignored test with that reason.
 
-The open questions remain with the user; every proposal was implemented as
-the default, and the evidence that bears on each is recorded below.
+Every proposal was implemented as the default, and the evidence that bears on
+each open question is recorded below. Open questions 1, 2, 4, 5, 8, and 9 were
+decided by the user on 2026-10-03; each decision is recorded under its
+question in [Open questions for the user](#open-questions-for-the-user). The
+others remain with the user.
 
 A known limitation of the sampled side of the contract was found by an
 independent review after implementation: uniform-sample acceptance and the
@@ -41,7 +45,8 @@ evaluation.
 
 Concretely:
 
-1. define what "verified L2" can and cannot mean for a black-box function;
+1. define what a measured L2 error can and cannot mean for a black-box
+   function, and when it is certified;
 2. split one global L2 allowance into per-patch allowances that stay valid
    when patches split;
 3. add a user-selectable error norm to the options and report types without
@@ -200,7 +205,7 @@ checked against the `cargo run -p xtask --release -- api-dump` inventory
   allows dense or exhaustive work in production only behind an explicit,
   caller-visible size limit.
 
-## What "verified L2" means
+## What a measured L2 error means
 
 ### The quantity
 
@@ -350,7 +355,7 @@ orders of magnitude, as measured in
 
 ### Definition
 
-A patch error is **verified** when it has been measured from values of `f` at
+A patch error is **measured** when it has been computed from values of `f` at
 points chosen independently of the approximation, by one of three methods,
 which the report names per patch:
 
@@ -379,8 +384,12 @@ of the domain, or, without a complete audit, an **acceptance-only** sum of
 acceptance statistics, which is neither a bound nor an estimate of `E`. The
 report distinguishes the three cases by type.
 
-Whether this definition is what the user means by "verified" is
-[open question 1](#open-questions-for-the-user).
+Exact and exhaustive measurements are **certified**. A sampled measurement
+is measured, not certified: the acceptance measurement is a decision
+statistic and the audit measurement an estimate, and neither is a guarantee
+([Known limitation](#known-limitation-corner-localized-misses)). The word
+"verified" is not used for results
+([open question 1](#open-questions-for-the-user), decided).
 
 ## Budget
 
@@ -567,7 +576,8 @@ pub enum ErrorNorm {
     /// M2 behavior, with no measurement by the driver.
     #[non_exhaustive]
     SampledMax { max_reference: Option<f64> },
-    /// Placeholder: a verified maximum norm over the whole domain.
+    /// Placeholder: the maximum norm over the whole domain; for a black-box
+    /// function it can be certified only exhaustively.
     MaxAbs,
     /// Placeholder: an L2 norm with caller-supplied weights.
     WeightedL2,
@@ -863,7 +873,7 @@ network at a measured point is `Interpolation { source: Engine }`.
 
 Early development allows them; each is deliberate:
 
-1. `PatchedInterpolationOptions::new(cap)` now selects the verified L2 norm
+1. `PatchedInterpolationOptions::new(cap)` now selects the measured L2 norm
    and requires a reference norm unless `rtol = 0` or the root is exact.
    Callers that relied on the M2 criterion pass `ErrorNorm::sampled_max()`
    and get the M2 behavior unchanged (checked against frozen M2 outputs, see
@@ -900,7 +910,8 @@ No field or variant keeps its name with a different meaning.
   computable, no relative statement exists.
 - **SampledMax**: exactly the M2 driver, with the engine tolerance
   `max(atol, rtol * max_reference)`; `atol = 0` reproduces M2. No measurement,
-  and the rustdoc keeps the M2 statement that this is not a verified bound.
+  and the rustdoc keeps the M2 statement that this is not a bound (worded
+  "neither a certified bound nor a measured error" since open question 1).
 - **Placeholders**: `UnsupportedNorm` before any evaluation.
 - **Engines** keep the M1 contract: one absolute tolerance, their native
   criterion, and `error_estimate` in that criterion's units. They never see
@@ -1102,27 +1113,47 @@ Under these controls the separate investigation found the raw-kernel trees
 bitwise reproducible across rebuilds, threads, processes, and thread counts;
 this record did not rerun that check. The evaluator's part
 is not satisfied on generic-path trees. **Prerequisite**: a fix of the
-contraction-path ties, before the M3 implementation starts. Two candidates,
-neither decided ([open question 8](#open-questions-for-the-user)):
+contraction-path ties. It was planned before the M3 implementation, was not
+done then, and is now a prerequisite of M7. The order is decided
+([open question 8](#open-questions-for-the-user); treetn work tracked by
+[#795](https://github.com/tensor4all/tensor4all-rs/issues/795)):
 
-- (a) in `tensor4all-treetn`, fold the N-ary contractions of the generic
+- (c) first: extend the raw kernels of `TreeTNCachedEvaluator` to site-free
+  nodes. Driver patches keep at most one site per node, but the trees in use
+  have site-free nodes (a site-free root, the junction of `quantics_tree`),
+  and `can_use_raw_messages` (`cached_evaluator.rs`, lines 2530-2543) sends
+  any tree with a site-free node to the generic path. (c) covers the
+  driver's trees, is deterministic, and removes the generic-path overhead;
+- (a) next: in `tensor4all-treetn`, fold the N-ary contractions of the generic
   message and center paths pairwise in positional order (children in sorted
-  name order), so no planner runs there;
-- (b) upstream, deterministic tie-breaking in omeco or in the tenferro-einsum
-  planner, which also covers every other N-ary contraction in the workspace.
+  name order), so no planner runs there; this covers trees with a multi-site
+  node and `f32`/`c32` data;
+- (b) long term: upstream, deterministic tie-breaking in omeco or in the
+  tenferro-einsum planner, which also covers every other N-ary contraction in
+  the workspace.
 
-The driver does not work around it. The required scope of reproducibility,
-across processes or within one process (which still includes different
-threads once M7 runs patches in parallel), is
-[open question 9](#open-questions-for-the-user).
+The driver does not work around it.
+
+**Scope (decided, [open question 9](#open-questions-for-the-user)).** The
+target: for a fixed seed, a deterministic evaluator, and a deterministic
+engine, results are bitwise identical on the same machine and build across
+threads and thread counts, and across processes once a two-process CI test
+(the same test binary run twice, comparing digests) passes. There is no
+cross-machine promise; M8 (MPI) states its own contract. The current tested
+state is narrower: fresh threads within one process, on `f64` trees whose
+nodes carry exactly one site each (the raw kernels). Until #795 (c) and (a)
+land, generic-path trees (a site-free node, a multi-site node, or `f32`/`c32`
+data) are not reproducible across threads, and the two-process CI test does
+not exist yet, so no cross-process claim is made.
 
 The test (a unit test of the measurement): build patches on two trees, a
 branched tree with a multi-site node and a site-free junction (generic path)
 and a branched tree with one site per node (raw kernels). Run each
 repetition on a **fresh thread** (so the thread-local plan cache starts
-empty), and, if open question 9 asks for cross-process reproducibility, also
-in separate test processes. In every repetition, rebuild the patch from its
-raw node data with fresh IDs for every bond index and a fresh
+empty), and, for the decided cross-process scope, also in two separate test
+processes (the two-process CI test, not yet added). In every repetition,
+rebuild the patch from its raw node data with fresh IDs for every bond index
+and a fresh
 `TreeTN::from_tensors`, create a fresh evaluator, and measure the same points
 with the same chunking, center, and hint; all repetitions must give bitwise
 identical residuals. "The same patch" is never the same object. Repetitions on
@@ -1206,10 +1237,10 @@ reproduce both. Bitwise equality of floating data is asserted only within one
 test job, between two runs of the refactored code (test 14). Committing raw
 floating data as bitwise constants would silently require cross-process and
 cross-machine bitwise reproducibility, which
-[open question 9](#open-questions-for-the-user) leaves open and which the M2
-evidence (one manual three-process check on one machine) does not establish;
-bitwise golden constants follow only if question 9 chooses that scope and it
-is verified.
+[open question 9](#open-questions-for-the-user) excludes (decided: same
+machine and build only) and which the M2 evidence (one manual three-process
+check on one machine) does not establish; committed bitwise golden constants
+are therefore not planned.
 
 The "exact" discrete outputs still rest on floating-point decisions (LU pivot
 choices, an error estimate against a tolerance, a rank against the cap), so a
@@ -1229,11 +1260,13 @@ each call; the driver is generic over the engine, so this needs no library
 change. Only the final error-to-tolerance ratio of each call is screened.
 TreeTCI's per-sweep error history, its rank-truncation decisions and its LU
 pivot choices cannot be screened this way; a TreeTCI scenario
-whose discrete output differs on another platform is evidence for question 9
-and is not silently re-recorded. This is preferred over running the golden
+whose discrete output differs on another platform is evidence about
+portability and is not silently re-recorded; question 9 (decided) makes no
+cross-machine bitwise promise, but the tolerance-based golden check should
+still hold. This is preferred over running the golden
 check in a single pinned CI environment, because the check should hold
-wherever the tests run, and a pinned environment would hide exactly the
-portability question that question 9 asks.
+wherever the tests run, and a pinned environment would hide exactly that
+portability question.
 
 All tests live in `tensor4all-partitionedtreetn`, with the existing
 driver-local dense test engine and TreeTCI through the path-only
@@ -1347,7 +1380,8 @@ or more, checked in the test.
     the engine tolerance to `atol` when it exceeds `rtol * max_reference`; a
     domain too large for `f64` is accepted under `SampledMax` as in M2.
 14. **Determinism.** Two L2 runs with the same seed, each on a fresh thread
-    (and in separate processes if open question 9 requires it), give bitwise
+    (and, for the decided scope of open question 9, in two separate
+    processes, a CI test not yet added), give bitwise
     identical patches and reports, except the fields exempt from the bitwise
     claim: `approximation_rms`, `rounding_allowance_rms`,
     `relative_error_bound`, and `relative_bound_estimate` agree within
@@ -1386,7 +1420,8 @@ The M3 PR updates the rustdoc of the driver module and every changed type,
 `docs/book/src/guides/partitioned-treetn.md` and
 `docs/book/src/guides/tree-tn.md`, and
 [tree-pqtci-driver.md](./tree-pqtci-driver.md) ("Error criterion"). Rustdoc
-states the definition of verified, that a sampled measurement is an estimate
+states what certified, measured, and estimated mean (open question 1), that a
+sampled measurement is an estimate
 only when audited and never a bound, that a certified error is absolute with
 respect to the allowance used, that no relative statement exists for an
 acceptance-only run or when the relative denominator is not positive, that
@@ -1442,6 +1477,22 @@ None blocks the M3 implementation; the defaults below are provisional.
    `eps * ||f~||`), not proven, so "certified" holds up to that model. Is
    this acceptable, or should the public API avoid the word "verified" for
    sampled measurements (for example "measured")?
+
+   **Decided (user, 2026-10-03): "verified" is not used as an adjective for
+   results or guarantees.** Exact and exhaustive results are "certified", the
+   existing type name (`GlobalL2Error::Certified`), up to the rounding model
+   above. Sampled results are "measured" or "estimated" and are not
+   guarantees; see
+   [Known limitation](#known-limitation-corner-localized-misses). The wording
+   was changed accordingly in the rustdoc, the crate README, the Partitioned
+   TreeTN guide, the skill reference, the roadmap, and this record (`llms.txt`
+   already used "certified" and "estimated"). Process nouns such as
+   "verification" stay, and so does "verified" where it means that someone
+   checked something. The type and API names are unchanged:
+   `GlobalL2Error::{Certified, Audited, AcceptanceOnly}`,
+   `VerificationOptions`, and `PatchedInterpolationError::VerificationFailed`;
+   the user has not approved renames. Renaming `Audited` to `Estimated` and
+   `Verification*` to `Measurement*` is still open.
 2. **Budget allocation.** Proposed: volume-proportional with one pinned
    `tau` (matches the roadmap's pinned reference, reconstruction's allowance,
    the local `cutoff` allocation, and the M1 record). It needs a reference
@@ -1484,6 +1535,22 @@ None blocks the M3 implementation; the defaults below are provisional.
    splits. This changes the M1/M2 rule "only `Converged` is accepted", and
    with a sampled measurement it would widen the selection effects described
    above. Proposed: not in M3.
+
+   **Decided (user, 2026-10-03): deferred to M5.** Capped outcomes are not
+   accepted in M3. Whether to accept a `BondCapReached` patch on its measured
+   error is decided in M5 together with an early exit at the first saturated
+   sweep. Evidence from the review of the open questions (an emulation run
+   for that review, not a committed diagnostic):
+   - accepting capped outcomes that fit saved only 1 to 3 patches and
+     changed the evaluations by −53% to +16%, and most capped outcomes
+     offered for acceptance failed verification;
+   - the saturated sweeps, 29% to 42% of the cost, run before the accept or
+     split decision, so accepting afterwards does not save them; only an
+     early exit at the first saturated sweep does;
+   - the misses of the
+     [known limitation](#known-limitation-corner-localized-misses) were all
+     `Converged` patches, so selection bias is not the reason for the
+     deferral.
 5. **Acceptance statistic and audit.** Proposed: accept on the point estimate
    of the acceptance sample, and draw an independent audit sample for every
    sampled contribution by default (`audit = true`), at the cost of `samples`
@@ -1493,6 +1560,15 @@ None blocks the M3 implementation; the defaults below are provisional.
    `m + z * SE` rejects more borderline patches but does not help against a
    concentrated residual (it is zero in the counterexample). Should the audit
    be on by default, and should a confidence-bound acceptance be offered?
+
+   **Decided (user, 2026-10-03): keep both as implemented.** The audit stays
+   on by default, and no confidence-bound acceptance is offered. This is
+   consistent with the
+   [known limitation](#known-limitation-corner-localized-misses): the audit
+   removes the selection bias of the acceptance measurement but not a miss,
+   so an audited result is an estimate, not a guarantee; an upper confidence
+   bound `m + z * SE` does not help against a missed concentrated residual,
+   whose sampled standard error is small or zero.
 6. **Scope of M3.** Proposed: this record (interpolation) is implemented as
    M3; the patched-algebra global-budget mode gets its own record (M3b),
    designed after M6 so that it can use the contraction outcome API. Or
@@ -1509,12 +1585,45 @@ None blocks the M3 implementation; the defaults below are provisional.
    fixes every N-ary contraction in the workspace, but needs an upstream
    change and a dependency update. Both, (a) first and (b) later, is also
    possible.
+
+   **Decided (user, 2026-10-03): (c), then (a), then (b).** This is
+   `tensor4all-treetn` work, tracked by issue
+   [#795](https://github.com/tensor4all/tensor4all-rs/issues/795), and a
+   prerequisite of M7.
+   - (c), new and first: extend the raw kernels of `TreeTNCachedEvaluator`
+     to site-free nodes. Driver patches keep at most one site per node, but
+     the trees in use have site-free nodes (the site-free root, the junction
+     of `quantics_tree`), and `can_use_raw_messages`
+     (`cached_evaluator.rs`, lines 2530-2543) sends every tree with a
+     site-free node to the generic path. (c) covers the driver's trees, is
+     deterministic, and removes the generic-path overhead.
+   - (a) next: pairwise positional contraction on the generic path, for
+     trees with a multi-site node and for `f32`/`c32` data.
+   - (b) long term: deterministic tie-breaking upstream in omeco or
+     tenferro.
+
+   Correction: the review of the open questions started from the premise
+   that driver patches mostly take the raw kernels. They do only on trees
+   without site-free nodes; the trees in use have such nodes and take the
+   generic path (see the "Measured network" entry under
+   [Algorithm](#algorithm)).
 9. **Scope of the determinism guarantee.** Should identical seeds give
    bitwise identical results across processes (and machines with the same
    build), or only within one process? Within one process still means across
    threads once M7 runs patches in parallel, so the thread-local plan cache
    alone does not suffice for either scope. The choice sets whether the
    determinism tests also run in separate processes.
+
+   **Decided (user, 2026-10-03): same machine and build.** For a fixed seed,
+   a deterministic evaluator, and a deterministic engine, results are to be
+   bitwise identical on the same machine and build across threads and
+   thread counts, and across processes once a two-process CI test passes
+   (the same test binary run twice). There is no cross-machine promise; M8
+   (MPI) must state its own contract. This is the target; the current tested
+   state is recorded in [Determinism](#determinism): fresh threads within one
+   process, on `f64` trees with exactly one site per node. Until #795 (c) and
+   (a) land, generic-path trees are not reproducible across threads, and the
+   two-process CI test does not exist yet.
 
 ## Implementation decisions
 
@@ -1570,7 +1679,9 @@ text left open.
   at full-domain points with every site requested (fixed sites at their
   coordinates). On a tree with one site per node every stored node then keeps
   exactly one site leg, so the cached evaluator's raw kernels apply to stored
-  patches too; this was checked in the determinism test.
+  patches too; this was checked in the determinism test. A tree with a
+  site-free node, such as the site-free root or junction of the trees in use,
+  takes the generic path for every measurement (open question 8).
 - **Zero screen.** The points added to the candidates are the distinct
   measured points with `f != 0`, largest `|f|` first (ties in measurement
   order), at most `max_bond_dim - 1`. They cannot duplicate a candidate,
@@ -1857,6 +1968,7 @@ the evidence above was gathered. It is recorded here, not fixed.
 - **Decision.** The fix is deferred to a global review after M9 (user
   decision, 2026-10-03). Until then the public documentation states the
   limitation. The candidate remedies are listed under M9 in
-  [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md);
-  open question 1 (the naming of "verified") stays open and is not decided by
-  this record.
+  [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md).
+  Open question 1 (the naming of "verified") was not decided by this
+  finding; it was decided afterwards by the user (see
+  [open question 1](#open-questions-for-the-user)).

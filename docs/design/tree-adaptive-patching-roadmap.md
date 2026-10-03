@@ -76,11 +76,15 @@ patching prototype; it is reference material for M2, not a merge candidate.
 2. **Engine scope.** Implement TreeTCI first. Adding TreeACI or RSI later
    means adding an implementation in that engine's crate only, without
    modifying the trait, the driver, or the TreeTCI implementation.
-3. **Error norm.** Verified L2 is the primary guarantee of the public API.
-   Other norms (for example the sampled max-norm used by TCI) are
-   user-selectable. A selectable norm without an implementation is a
-   placeholder returning an explicit typed "not implemented" error; it never
-   falls back silently to another norm.
+3. **Error norm.** The L2 error, measured by the driver, is the primary
+   accuracy criterion of the public API. It is a guarantee only where it is
+   certified (exact or exhaustive); a sampled measurement is an estimate.
+   (Wording amended on 2026-10-03 by open question 1 of the
+   [M3 record](./tree-patching-error-contract.md#open-questions-for-the-user):
+   "verified" is not used for results.) Other norms (for example the
+   sampled max-norm used by TCI) are user-selectable. A selectable norm
+   without an implementation is a placeholder returning an explicit typed
+   "not implemented" error; it never falls back silently to another norm.
 4. **Chain crate retirement.** Out of scope. `tensor4all-partitionedtt` is
    left untouched until a future repository-wide restructuring.
 
@@ -150,9 +154,10 @@ nodes; the driver is deterministic for fixed seeds.
 ### M3. Error contract (M)
 
 Outcome: one accuracy requirement with a reported, measured error for
-interpolation and patched algebra; verified L2 is the default (Decision 3).
-The measured error is a bound where it is exact or exhaustive (and for patched
-algebra) and a statistical estimate where it is sampled. A sampled estimate,
+interpolation and patched algebra; the measured L2 error is the default
+(Decision 3). The measured error is certified (a bound) where it is exact or
+exhaustive (and for patched algebra), and a statistical estimate, not a
+guarantee, where it is sampled. A sampled estimate,
 audited or not, can miss a localized feature that enters a patch only through
 a corner or an edge
 ([known limitation](./tree-patching-error-contract.md#known-limitation-corner-localized-misses); fix deferred to M9).
@@ -164,9 +169,9 @@ Scope:
 - interpolation acceptance in the selected norm, with the reference scale
   pinned once for all patches instead of per-patch maximum samples;
 - an optional global-budget mode for patched contraction and addition,
-  verified with the difference-network norms already used by reconstruction;
-- reports expose measured errors (bounds where exhaustive, estimates where
-  sampled), not only requested tolerances.
+  measured with the difference-network norms already used by reconstruction;
+- reports expose measured errors (certified bounds where exhaustive,
+  estimates where sampled), not only requested tolerances.
 
 Exit: the contract is documented in rustdoc and design records; tests check
 reported errors (bounds and estimates) against dense references on small
@@ -174,8 +179,9 @@ problems.
 
 Design: [tree-patching-error-contract.md](./tree-patching-error-contract.md)
 (the interpolation side implemented; the patched-algebra mode, M3b, scoped for
-a separate record and not implemented; the open questions are still with the
-user).
+a separate record and not implemented). Open questions 1, 2, 4, 5, 8, and 9
+were decided by the user on 2026-10-03 and are recorded there; 3, 6, and 7
+are still with the user.
 
 ### M4. Patch representation decision (M)
 
@@ -229,7 +235,18 @@ Scope:
   (about `L * d` truncations per split decision when `patch_order` is empty)
   motivates a cheaper default for large patch counts;
 - a minimum patch size option and an in-loop merge of sibling patches,
-  reusing the reconstruction merge logic.
+  reusing the reconstruction merge logic;
+- capped outcomes (M3 open question 4, deferred here by user decision on
+  2026-10-03): decide whether a `BondCapReached` patch may be accepted on its
+  measured error, together with an early exit of the engine at the first
+  saturated sweep. In the review of the M3 open questions, an emulation of
+  capped acceptance saved only 1 to 3 patches, changed evaluations by −53% to
+  +16%, and most capped outcomes offered for acceptance failed verification;
+  the saturated sweeps (29% to 42% of the cost) run before the accept-or-split
+  decision, so only an early exit saves them. The corner-localized misses
+  were all `Converged` patches, so selection bias is not the reason for the
+  deferral
+  ([open question 4](./tree-patching-error-contract.md#open-questions-for-the-user)).
 
 Note: split-site selection and the candidate rules for child patches must
 take the M3 corner-localized misses into account
@@ -280,14 +297,27 @@ Scope:
   execution order;
 - a documented outer/inner parallelism policy.
 
+Prerequisite: the evaluator determinism fix of
+[#795](https://github.com/tensor4all/tensor4all-rs/issues/795), in the order
+decided under M3 open question 8: (c) raw kernels of `TreeTNCachedEvaluator`
+for site-free nodes, then (a) pairwise positional contraction on the generic
+path; (b), upstream tie-breaking in omeco or tenferro, is long term. Until
+then, L2 measurements on trees with a site-free or multi-site node, or with
+`f32`/`c32` data, are not reproducible across threads.
+
 Exit: parallel and sequential runs produce identical partitions for fixed
 seeds and deterministic callbacks; scaling is measured on M9 workloads.
+Determinism scope (M3 open question 9): bitwise identical on the same machine
+and build across threads and thread counts, and across processes once a
+two-process CI test passes; no cross-machine promise.
 
 ### M8. Distributed execution (L)
 
 Outcome: opt-in MPI execution for large workloads: a versioned wire format for
 `TreeTN`/`IdxTensor` patches, patch ownership by projector prefix, and
-collective entry points matching the Hataori MPI conventions.
+collective entry points matching the Hataori MPI conventions. The M3
+determinism scope makes no cross-machine promise, so M8 states its own
+determinism contract.
 
 Exit: an MPI smoke test and a multi-rank benchmark.
 

@@ -33,7 +33,7 @@ use tensor4all_treetn::NodeNameNetwork;
 
 /// Accuracy bound of accepted patches against a dense reference, in units of
 /// `rtol * max_reference` (under `ErrorNorm::SampledMax`). The acceptance criterion is the engine's sampled
-/// error estimate, not a verified bound, so the tests allow this margin.
+/// error estimate, not a certified bound, so the tests allow this margin.
 pub(crate) const ACCURACY_FACTOR: f64 = 10.0;
 
 pub(crate) type Name = String;

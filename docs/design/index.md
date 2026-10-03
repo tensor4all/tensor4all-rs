@@ -26,7 +26,7 @@
 | [treetn-contraction-outcome.md](./treetn-contraction-outcome.md) | Proposal: TreeTN contraction outcome report and rank-threshold early abort (tree patching M6) |
 | [tree-interpolation-engine-seam.md](./tree-interpolation-engine-seam.md) | Engine-agnostic tree interpolation contract in treetn and its TreeTCI implementation (tree patching M1, implemented) |
 | [tree-pqtci-driver.md](./tree-pqtci-driver.md) | Sequential adaptive patched interpolation driver in partitionedtreetn (tree patching M2, implemented) |
-| [tree-patching-error-contract.md](./tree-patching-error-contract.md) | Verified L2 error contract, user-selectable error norm, and per-patch budget for tree adaptive patching (tree patching M3; approved for implementation, open questions checked during implementation) |
+| [tree-patching-error-contract.md](./tree-patching-error-contract.md) | Measured L2 error contract (certified where exact or exhaustive, estimated where sampled), user-selectable error norm, and per-patch budget for tree adaptive patching (tree patching M3; interpolation side implemented, open questions 1, 2, 4, 5, 8, and 9 decided) |
 | [tree-patching-findings.md](./tree-patching-findings.md) | Verified facts about current code used by the tree patching milestones: contraction reporting, element-wise product, fixed sites, patch representation, avoidable overhead, sparse storage decision |
 | [orthogonal-target-reconstruction.md](./orthogonal-target-reconstruction.md) | Fixed global L2 target, gain-driven reconstruction, superpositions, subset-QFT integration, and the level-coupled merge-refine schedule |
 | [gse-chain-mps-algorithm.md](./gse-chain-mps-algorithm.md) | Chain MPS global subspace expansion analysis for TreeTN GSE-TDVP planning |

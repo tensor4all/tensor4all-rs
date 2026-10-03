@@ -184,7 +184,7 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   error does not reveal it, so an `Audited` error can be orders of magnitude
   too small; only `Certified` (exact or exhaustive) is a guarantee. `ErrorNorm::sampled_max()` /
   `sampled_max_with_reference(max_abs)` keep the M2 engine criterion (no
-  verified bound, no L2 claim). `MaxAbs`/`WeightedL2` are placeholders
+  certified bound, no measured error, no L2 claim). `MaxAbs`/`WeightedL2` are placeholders
   (`UnsupportedNorm`). Zero patches are in `report.zero_patches` (absent from
   the partition); supply pivots in the support of sparse functions. Patches
   with at most one free site are exact; every point is evaluated at most once.

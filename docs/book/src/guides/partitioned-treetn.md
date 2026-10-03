@@ -215,20 +215,25 @@ zero tolerance the driver may split down to exact patches, so set
 `ErrorNorm::sampled_max()` keeps the M2 criterion: the engine's sampled error
 estimate against `max(atol, rtol * max_reference)`, where `max_reference` is a
 function value (`sampled_max_with_reference(max_abs)`, or the largest root
-sample). It runs no measurement, is not a verified bound, and makes no L2
-claim. Under every norm, a patch whose candidate samples are all exactly zero
-is first screened (and under L2 measured); zero patches are reported in
-`report.zero_patches` and left out of the partition, which treats an absent
-patch as zero.
+sample). It runs no measurement, is neither a certified bound nor a measured
+error, and makes no L2 claim. Under every norm, a patch whose candidate
+samples are all exactly zero is first screened (and under L2 measured); zero
+patches are reported in `report.zero_patches` and left out of the partition,
+which treats an absent patch as zero.
 
 Execution is sequential. For a fixed `seed`, a deterministic evaluator, and a
 deterministic engine, the report and every stored node tensor (values and
 positional axis order) are identical across runs on fresh threads within one
 process as long as the measured network values are reproducible. This is
-tested for `f64` on trees with exactly one site per node; reproducibility
-across separate processes is not established. On trees with a site-free node
-or a node with several sites the cached evaluator can round differently
-between threads and processes, an open issue.
+tested for `f64` on trees with exactly one site per node. On trees with a
+site-free node or a node with several sites, or with `f32`/`c32` data, the
+cached evaluator can round differently between threads and processes, an
+open issue ([#795](https://github.com/tensor4all/tensor4all-rs/issues/795)).
+The intended scope is bitwise identical results on the same machine and
+build across threads, thread counts, and processes, with no cross-machine
+promise. It is not reached yet: those trees need #795 fixed, and
+reproducibility across processes is not claimed until a two-process test
+passes.
 What is derived from the stored `TreeTN`s may still differ across runs, for a
 single patch as for the whole partition, on any topology
 ([issue #791](https://github.com/tensor4all/tensor4all-rs/issues/791)):

@@ -957,7 +957,7 @@ fn a_zero_monte_carlo_reference_needs_an_absolute_floor() {
         "Monte Carlo reference norm is zero",
     );
     assert!(message.contains("tolerance.atol"));
-    // With an absolute floor the root is a verified zero patch.
+    // With an absolute floor the root is accepted as a zero patch.
     let floor = monte_carlo.with_tolerance(ErrorTolerance {
         rtol: 1e-6,
         atol: 1e-9,

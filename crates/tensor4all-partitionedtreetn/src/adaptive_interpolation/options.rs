@@ -13,7 +13,7 @@ use crate::{ErrorNorm, ErrorTolerance};
 /// [`patched_interpolate`](super::patched_interpolate).
 ///
 /// The accuracy requirement is the pair `error_norm` and `tolerance`. The
-/// default norm is the verified L2 norm with
+/// default norm is the L2 norm, measured by the driver, with
 /// [`L2Reference::Required`](crate::L2Reference::Required): unless
 /// `tolerance.rtol = 0` or the root patch has at most one site, choose a
 /// reference norm with [`ErrorNorm::l2`] (a known L2 norm, or the opt-in
@@ -96,7 +96,7 @@ pub struct PatchedInterpolationOptions {
 
 impl PatchedInterpolationOptions {
     /// Create options with the given bond cap and the defaults of every
-    /// other field: the verified L2 norm with a required reference,
+    /// other field: the measured L2 norm with a required reference,
     /// `rtol = 1e-8`, `atol = 0`, default verification, the derived site
     /// order, five initial pivots, no recycling, seed `0`, no patch limit.
     ///

@@ -32,8 +32,8 @@ The accuracy requirement is `PatchedInterpolationOptions::error_norm` with
   samples with an independent audit. A failed measurement reruns the engine
   with the worst points as pivots, then splits.
 - `ErrorNorm::SampledMax` is the M2 criterion: the engine's sampled error
-  estimate against `max(atol, rtol * max_reference)`. It is **not** a
-  verified bound and makes no L2 claim.
+  estimate against `max(atol, rtol * max_reference)`. It is **neither** a
+  certified bound nor a measured error, and makes no L2 claim.
 - `ErrorNorm::MaxAbs` and `ErrorNorm::WeightedL2` are placeholders that fail
   with `UnsupportedNorm` before any evaluation.
 
@@ -69,10 +69,15 @@ limitation: corner-localized misses" in
   evaluator, and a deterministic engine the report and every stored node
   tensor are identical across runs on fresh threads within one process,
   provided the measured network values are reproducible. This is tested for
-  `f64` on trees with exactly one site per node; reproducibility across
-  separate processes is not established. The cached evaluator's generic path
-  (a site-free node or a node with several sites) can differ at rounding
-  level between threads and processes, an open issue. What is derived from the stored `TreeTN`s may still differ across
+  `f64` on trees with exactly one site per node. The cached evaluator's
+  generic path (a site-free node, a node with several sites, or `f32`/`c32`
+  data) can differ at rounding level between threads and processes, an open
+  issue ([#795](https://github.com/tensor4all/tensor4all-rs/issues/795)). The
+  intended scope is bitwise identical results on the same machine and build
+  across threads, thread counts, and processes, with no cross-machine
+  promise; it is not reached yet: generic-path trees need #795 fixed, and
+  reproducibility across processes is not claimed until a two-process test
+  passes. What is derived from the stored `TreeTN`s may still differ across
   runs ([issue #791](https://github.com/tensor4all/tensor4all-rs/issues/791)):
   materializing (`to_dense`, `contract_to_tensor`, `to_treetn`) in axis order
   and at rounding level, and the iteration order of `external_indices`,

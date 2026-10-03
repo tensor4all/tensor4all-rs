@@ -19,7 +19,7 @@
 ///   ([`L2Reference`]).
 /// - [`ErrorNorm::SampledMax`] is the engine's own sampled criterion against a
 ///   max-norm reference, a function value such as `max |f|`. The driver runs
-///   no measurement; this is not a verified bound.
+///   no measurement; this is neither a certified bound nor a measured error.
 /// - [`ErrorNorm::MaxAbs`] and [`ErrorNorm::WeightedL2`] are placeholders
 ///   without an implementation. They fail with
 ///   [`PatchedInterpolationError::UnsupportedNorm`](crate::adaptive_interpolation::PatchedInterpolationError::UnsupportedNorm)
@@ -51,7 +51,8 @@ pub enum ErrorNorm {
         reference: L2Reference,
     },
     /// The engine's own sampled criterion against a max-norm reference: the
-    /// M2 behavior, with no measurement by the driver. Not a verified bound.
+    /// M2 behavior, with no measurement by the driver. Neither a certified
+    /// bound nor a measured error.
     #[non_exhaustive]
     SampledMax {
         /// A known `max |f|`, finite and positive. `None` pins it to the
@@ -60,15 +61,16 @@ pub enum ErrorNorm {
         /// bound on `max |f|`.
         max_reference: Option<f64>,
     },
-    /// Placeholder: a verified maximum norm over the whole domain. Not
-    /// implemented.
+    /// Placeholder: the maximum norm over the whole domain. For a black-box
+    /// function it can be certified only exhaustively, by evaluating every
+    /// point. Not implemented.
     MaxAbs,
     /// Placeholder: an L2 norm with caller-supplied weights. Not implemented.
     WeightedL2,
 }
 
 impl ErrorNorm {
-    /// The verified L2 norm with the given reference.
+    /// The L2 norm, measured by the driver, with the given reference.
     ///
     /// # Examples
     ///

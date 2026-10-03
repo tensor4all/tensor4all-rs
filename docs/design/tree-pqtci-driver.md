@@ -170,9 +170,9 @@ produces more patches.
 ### Error criterion
 
 Acceptance uses the engine's sampled pivot-error criterion against
-`rtol * reference_scale`. It is not a verified bound and makes no L2 claim;
-rustdoc states this. M3 adds a user-selectable error norm with verified L2 as
-the default (Decision 3); the options and report types are
+`rtol * reference_scale`. It is not a certified bound and makes no L2 claim;
+rustdoc states this. M3 adds a user-selectable error norm with the measured
+L2 error as the default (Decision 3); the options and report types are
 `#[non_exhaustive]` so that M3 extends them without silently changing the
 meaning of `rtol` and `reference_scale`.
 
@@ -366,7 +366,7 @@ lineage through `tensor4all-partitionedtt`. The M2 PR:
 
 ## Non-goals
 
-- Parallel execution (M7), error norms and verified bounds (M3), the patch
+- Parallel execution (M7), error norms and certified bounds (M3), the patch
   representation decision (M4), and split strategies other than a fixed order
   (M5).
 - Retiring or changing `tensor4all-partitionedtt`.
