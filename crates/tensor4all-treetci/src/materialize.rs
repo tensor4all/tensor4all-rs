@@ -1,14 +1,14 @@
 use crate::error::{Result as TreeTciResult, TreeTciError};
 use crate::{
-    assemble::{assemble_points_column_major, MultiIndex},
-    assemble_global_point, column_2d, ncols_2d, GlobalIndexBatch, SubtreeKey, TreeTCI2,
-    TreeTciEdge,
+    batch::{evaluate_points_chunked, EVALUATION_CHUNK_POINTS},
+    ncols_2d, GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge,
 };
-use anyhow::Result;
+use anyhow::{ensure, Result};
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use tensor4all_core::MatrixLuciScalar as Scalar;
-use tensor4all_core::{ColMajorArray, DynIndex, IdxTensor, IndexLike};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::TreeTN;
 
@@ -16,7 +16,8 @@ use tensor4all_treetn::TreeTN;
 ///
 /// Converts the pivot sets stored in a [`TreeTCI2`] into site tensors
 /// of a [`TreeTN`]. The `evaluate` closure is called to fill tensor
-/// entries at the selected pivot points.
+/// entries at the selected pivot points, in calls of at most 65,536 points
+/// (see [`GlobalIndexBatch`](crate::GlobalIndexBatch#batch-sizes)).
 ///
 /// `center_site` selects the BFS root for the tree decomposition
 /// (default: site 0).
@@ -36,13 +37,36 @@ where
     T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
+    to_treetn_chunked(state, &evaluate, center_site, EVALUATION_CHUNK_POINTS)
+}
+
+/// [`to_treetn`] with an explicit number of points per evaluator call.
+///
+/// The result does not depend on `chunk_points`; tests use it to check that.
+pub(crate) fn to_treetn_chunked<T, F>(
+    state: &TreeTCI2<T>,
+    evaluate: &F,
+    center_site: Option<usize>,
+    chunk_points: usize,
+) -> TreeTciResult<TreeTN<IdxTensor, usize>>
+where
+    T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+{
     let node_names = (0..state.graph.n_sites()).collect::<Vec<_>>();
     let site_indices = state
         .local_dims
         .iter()
         .map(|&dim| vec![DynIndex::new_dyn(dim)])
         .collect::<Vec<_>>();
-    to_named_treetn(state, evaluate, center_site, &node_names, &site_indices)
+    to_named_treetn_chunked(
+        state,
+        evaluate,
+        center_site,
+        &node_names,
+        &site_indices,
+        chunk_points,
+    )
 }
 
 /// Materialize a swept TreeTCI state with caller-chosen node names and site
@@ -61,6 +85,29 @@ pub(crate) fn to_named_treetn<T, F, V>(
     center_site: Option<usize>,
     node_names: &[V],
     site_indices: &[Vec<DynIndex>],
+) -> TreeTciResult<TreeTN<IdxTensor, V>>
+where
+    T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    V: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+{
+    to_named_treetn_chunked(
+        state,
+        &evaluate,
+        center_site,
+        node_names,
+        site_indices,
+        EVALUATION_CHUNK_POINTS,
+    )
+}
+
+fn to_named_treetn_chunked<T, F, V>(
+    state: &TreeTCI2<T>,
+    evaluate: &F,
+    center_site: Option<usize>,
+    node_names: &[V],
+    site_indices: &[Vec<DynIndex>],
+    chunk_points: usize,
 ) -> TreeTciResult<TreeTN<IdxTensor, V>>
 where
     T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
@@ -142,9 +189,17 @@ where
         let out_keys = state.graph.edge_in_ij_keys(site, &out_edges)?;
 
         let data = if out_edges.is_empty() {
-            fill_tensor_values(state, &in_keys, &out_keys, &[site], &evaluate)?
+            fill_tensor_values(state, &in_keys, &out_keys, &[site], evaluate, chunk_points)?
         } else {
-            site_tensor_with_parent(state, site, out_edges[0], &in_keys, &out_keys, &evaluate)?
+            site_tensor_with_parent(
+                state,
+                site,
+                out_edges[0],
+                &in_keys,
+                &out_keys,
+                evaluate,
+                chunk_points,
+            )?
         };
 
         let index_count = incoming_edges
@@ -185,6 +240,7 @@ fn site_tensor_with_parent<T, F>(
     in_keys: &[SubtreeKey],
     out_keys: &[SubtreeKey],
     evaluate: &F,
+    chunk_points: usize,
 ) -> Result<Vec<T>>
 where
     T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
@@ -196,7 +252,7 @@ where
         ));
     };
 
-    let pi1_values = fill_tensor_values(state, in_keys, out_keys, &[site], evaluate)?;
+    let pi1_values = fill_tensor_values(state, in_keys, out_keys, &[site], evaluate, chunk_points)?;
     let rows = state.local_dims[site]
         .checked_mul(product_pivot_dims(state, in_keys)?)
         .ok_or_else(|| anyhow::anyhow!("materialized site row count overflowed usize"))?;
@@ -209,6 +265,7 @@ where
         out_keys,
         &[],
         evaluate,
+        chunk_points,
     )?;
     let p_rows = state
         .ijset
@@ -272,129 +329,122 @@ fn product_pivot_dims<T>(state: &TreeTCI2<T>, keys: &[SubtreeKey]) -> Result<usi
     Ok(product)
 }
 
+/// A site-partition failure of [`fill_tensor_values`], typed as
+/// [`TreeTciError::IndexOutOfBounds`] like the per-point assembly it replaces.
+/// It only occurs for an inconsistent internal state.
+fn index_error(message: String) -> anyhow::Error {
+    TreeTciError::IndexOutOfBounds { message }.into()
+}
+
+/// One factor of the point product in [`fill_tensor_values`]: a set of
+/// `count` columns over `sites`, stored column-major.
+struct PointFactor<'a> {
+    sites: &'a [usize],
+    columns: Cow<'a, [usize]>,
+    count: usize,
+}
+
+/// Evaluate the function on every point of the product
+/// `out_keys x in_keys x central_sites` and return the values in that
+/// column-major order: central sites vary fastest (the last one first), then
+/// the pivots of `in_keys[0]`, `in_keys[1]`, ..., then those of `out_keys`.
+///
+/// The points are written straight into a reused, chunked batch buffer
+/// instead of one `Vec` per point and per pivot combination. The bipartition
+/// of the sites is checked once up front instead of once per point.
 fn fill_tensor_values<T, F>(
     state: &TreeTCI2<T>,
     in_keys: &[SubtreeKey],
     out_keys: &[SubtreeKey],
     central_sites: &[usize],
     evaluate: &F,
+    chunk_points: usize,
 ) -> Result<Vec<T>>
 where
     T: Scalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
-    let in_combos = cartesian_entries(&state.ijset, in_keys)?;
-    let out_combos = cartesian_entries(&state.ijset, out_keys)?;
-    let central_combos = central_assignments(&state.local_dims, central_sites)?;
-    let point_count = in_combos
-        .len()
-        .checked_mul(out_combos.len())
-        .and_then(|count| count.checked_mul(central_combos.len().max(1)))
-        .ok_or_else(|| anyhow::anyhow!("materialization point count overflowed usize"))?;
-    let mut points = Vec::with_capacity(point_count);
-
-    for out_combo in &out_combos {
-        for in_combo in &in_combos {
-            for central in &central_combos {
-                let mut assignments = Vec::with_capacity(in_keys.len() + out_keys.len());
-                assignments.extend(in_keys.iter().zip(in_combo.iter()));
-                assignments.extend(out_keys.iter().zip(out_combo.iter()));
-                points.push(assemble_global_point(
-                    state.local_dims.len(),
-                    &assignments,
-                    central,
-                )?);
-            }
-        }
+    let n_sites = state.local_dims.len();
+    let mut factors = Vec::with_capacity(central_sites.len() + in_keys.len() + out_keys.len());
+    for site in central_sites.iter().rev() {
+        let dim = *state.local_dims.get(*site).ok_or_else(|| {
+            index_error(format!("site {site} is out of bounds for {n_sites} sites"))
+        })?;
+        factors.push(PointFactor {
+            sites: std::slice::from_ref(site),
+            columns: Cow::Owned((0..dim).collect()),
+            count: dim,
+        });
+    }
+    for key in in_keys.iter().chain(out_keys) {
+        let pivots = state
+            .ijset
+            .get(key)
+            .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", key))?;
+        ensure!(
+            pivots.shape().first().copied() == Some(key.as_slice().len()),
+            "pivot set of shape {:?} does not match subtree key {:?}",
+            pivots.shape(),
+            key
+        );
+        factors.push(PointFactor {
+            sites: key.as_slice(),
+            columns: Cow::Borrowed(pivots.data()),
+            count: ncols_2d(pivots)?,
+        });
     }
 
-    let batch = assemble_points_column_major(&points)?;
-    let values = evaluate(batch.as_view())?;
-    if !(values.len() == points.len()) {
-        return Err(anyhow::anyhow!(
-            "batch evaluator returned {} values for {} fill-tensor points",
-            values.len(),
-            points.len()
+    let mut assigned = vec![false; n_sites];
+    for &site in factors.iter().flat_map(|factor| factor.sites) {
+        // Defensive: central sites were bounds-checked above and an
+        // out-of-range key has no pivot set, so this cannot fail today.
+        let slot = assigned.get_mut(site).ok_or_else(|| {
+            index_error(format!("site {site} is out of bounds for {n_sites} sites"))
+        })?;
+        if *slot {
+            return Err(index_error(format!(
+                "site {site} was assigned more than once"
+            )));
+        }
+        *slot = true;
+    }
+    if !assigned.iter().all(|&seen| seen) {
+        return Err(index_error(
+            "global point assembly left some sites unassigned".to_string(),
         ));
-    };
-    Ok(values)
-}
-
-/// Extract columns from ColMajorArray ijset entries and produce cartesian products.
-///
-/// Returns Vec<Vec<MultiIndex>> where each inner Vec has one MultiIndex per key.
-fn cartesian_entries(
-    ijset: &HashMap<SubtreeKey, ColMajorArray<usize>>,
-    keys: &[SubtreeKey],
-) -> Result<Vec<Vec<MultiIndex>>> {
-    if keys.is_empty() {
-        return Ok(vec![Vec::new()]);
     }
 
-    // Convert each ColMajorArray to Vec<MultiIndex> (columns as Vecs)
-    let entry_sets = keys
-        .iter()
-        .map(|key| {
-            let arr = ijset
-                .get(key)
-                .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", key))?;
-            let columns: Vec<MultiIndex> = (0..ncols_2d(arr)?)
-                .map(|j| column_2d(arr, j).map(|column| column.to_vec()))
-                .collect::<Result<_>>()?;
-            Ok(columns)
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let combo_capacity = entry_sets.iter().try_fold(1usize, |count, entries| {
+    let n_points = factors.iter().try_fold(1usize, |count, factor| {
         count
-            .checked_mul(entries.len())
-            .ok_or_else(|| anyhow::anyhow!("cartesian entry count overflowed usize"))
+            .checked_mul(factor.count)
+            .ok_or_else(|| anyhow::anyhow!("materialization point count overflowed usize"))
     })?;
-    let mut current = vec![Vec::new(); keys.len()];
-    let mut combos = Vec::with_capacity(combo_capacity);
-    cartesian_entries_recursive(&entry_sets, keys.len(), &mut current, &mut combos);
-    Ok(combos)
-}
 
-fn cartesian_entries_recursive(
-    entry_sets: &[Vec<MultiIndex>],
-    remaining: usize,
-    current: &mut [MultiIndex],
-    out: &mut Vec<Vec<MultiIndex>>,
-) {
-    if remaining == 0 {
-        out.push(current.to_vec());
-        return;
-    }
-
-    let level = remaining - 1;
-    for entry in &entry_sets[level] {
-        current[level] = entry.clone();
-        cartesian_entries_recursive(entry_sets, level, current, out);
-    }
-}
-
-fn central_assignments(
-    local_dims: &[usize],
-    central_sites: &[usize],
-) -> Result<Vec<Vec<(usize, usize)>>> {
-    let mut combos = vec![Vec::new()];
-    for &site in central_sites {
-        let count = combos
-            .len()
-            .checked_mul(local_dims[site])
-            .ok_or_else(|| anyhow::anyhow!("central assignment count overflowed usize"))?;
-        let mut next = Vec::with_capacity(count);
-        for combo in &combos {
-            for value in 0..local_dims[site] {
-                let mut extended = combo.clone();
-                extended.push((site, value));
-                next.push(extended);
+    // Mixed-radix counter over the factors, first factor fastest.
+    let mut digits = vec![0usize; factors.len()];
+    evaluate_points_chunked(
+        n_sites,
+        n_points,
+        chunk_points,
+        |point| {
+            for (factor, &digit) in factors.iter().zip(&digits) {
+                let width = factor.sites.len();
+                let column = &factor.columns[digit * width..(digit + 1) * width];
+                for (&site, &value) in factor.sites.iter().zip(column) {
+                    point[site] = value;
+                }
             }
-        }
-        combos = next;
-    }
-    Ok(combos)
+            for (digit, factor) in digits.iter_mut().zip(&factors) {
+                *digit += 1;
+                if *digit < factor.count {
+                    break;
+                }
+                *digit = 0;
+            }
+        },
+        evaluate,
+        "fill-tensor points",
+    )
 }
 
 #[cfg(test)]

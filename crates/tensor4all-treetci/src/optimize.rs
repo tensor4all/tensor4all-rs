@@ -289,9 +289,14 @@ pub struct TreeTciOptimizeReport {
 /// This is a convenience wrapper around [`optimize_with_proposer`] with the
 /// default neighbor-product proposer.
 ///
+/// The evaluator may be called several times per edge update; see
+/// [`GlobalIndexBatch`](crate::GlobalIndexBatch#batch-sizes) for the batch
+/// sizes.
+///
 /// # Errors
 ///
-/// Returns [`TreeTciError::InvalidConfiguration`] for invalid options. It
+/// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
+/// for invalid options. It
 /// also returns an error when the operation fails (a shape or index mismatch,
 /// or a backend failure).
 ///
@@ -365,9 +370,14 @@ where
 /// Use this when you need a custom proposer (e.g., [`SimpleProposer`](crate::SimpleProposer)
 /// or [`TruncatedDefaultProposer`](crate::TruncatedDefaultProposer)).
 ///
+/// The evaluator may be called several times per edge update; see
+/// [`GlobalIndexBatch`](crate::GlobalIndexBatch#batch-sizes) for the batch
+/// sizes.
+///
 /// # Errors
 ///
-/// Returns [`TreeTciError::InvalidConfiguration`] for invalid options. It
+/// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
+/// for invalid options. It
 /// also returns an error when the operation fails (a shape or index mismatch,
 /// or a backend failure).
 ///

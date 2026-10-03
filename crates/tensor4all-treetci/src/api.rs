@@ -25,7 +25,10 @@ pub type TreeTciRunResult = (
 ///
 /// This is the unified entry point for tree tensor cross interpolation.
 /// The `evaluate` closure receives batches of multi-indices and must return
-/// one scalar per point.
+/// one scalar per point. Edge candidate matrices and materialized site
+/// tensors are split into calls of at most 65,536 points, so the closure
+/// must not assume one call per matrix or tensor; see
+/// [`GlobalIndexBatch`](crate::GlobalIndexBatch#batch-sizes).
 ///
 /// The `proposer` controls how pivot candidates are generated.
 ///
@@ -79,7 +82,8 @@ pub type TreeTciRunResult = (
 #[allow(clippy::too_many_arguments)]
 /// # Errors
 ///
-/// Returns [`TreeTciError::InvalidConfiguration`] for invalid options. It
+/// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
+/// for invalid options. It
 /// also returns an error when the operation fails (a shape or index mismatch,
 /// or a backend failure).
 ///

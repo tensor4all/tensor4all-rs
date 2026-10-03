@@ -1,5 +1,7 @@
 use crate::{
-    assemble::MultiIndex, batch::GlobalIndexBatch, PivotCandidateProposer, TreeTCI2, TreeTciEdge,
+    assemble::MultiIndex,
+    batch::{evaluate_points_chunked, GlobalIndexBatch, EVALUATION_CHUNK_POINTS},
+    PivotCandidateProposer, TreeTCI2, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
 use tensor4all_core::{
@@ -45,7 +47,8 @@ where
         &right_key,
         &right_candidates,
         &state.local_dims,
-        evaluate,
+        &evaluate,
+        EVALUATION_CHUNK_POINTS,
     )?;
 
     for value in &values {
@@ -132,13 +135,19 @@ where
 ///
 /// Returns the values in column-major order with `left_candidates.len()` rows.
 ///
-/// The global points are written straight into one contiguous batch buffer.
-/// Assembling them as individual `Vec<usize>` points instead (via
-/// `assemble_global_point` + `assemble_points_column_major`) costs one heap
-/// allocation and one extra full copy per matrix *entry*, and re-validates the
+/// The global points are written straight into a contiguous batch buffer.
+/// Assembling them as individual `Vec<usize>` points instead and packing
+/// those into a batch costs one heap allocation and one extra full copy per
+/// matrix *entry*, and re-validating per point checks the
 /// bipartition `n_left * n_right` times over -- at a branching vertex that is
 /// O(10^7) allocations for a single edge update. The bipartition is a property
 /// of the two subtree keys, so it is checked once up front instead.
+///
+/// The points are evaluated in calls of at most `chunk_points` points through
+/// one reused buffer, so memory stays bounded by `n_sites * chunk_points`
+/// rather than `n_sites * n_left * n_right` (gigabytes at a branching vertex).
+/// The values, and their order, do not depend on `chunk_points`.
+#[allow(clippy::too_many_arguments)]
 fn evaluate_candidate_matrix<T, F>(
     n_sites: usize,
     left_key: &crate::SubtreeKey,
@@ -146,7 +155,8 @@ fn evaluate_candidate_matrix<T, F>(
     right_key: &crate::SubtreeKey,
     right_candidates: &[MultiIndex],
     local_dims: &[usize],
-    evaluate: F,
+    evaluate: &F,
+    chunk_points: usize,
 ) -> Result<Vec<T>>
 where
     T: Scalar + CommonScalar,
@@ -205,38 +215,32 @@ where
     let n_points = n_left.checked_mul(n_right).ok_or_else(|| {
         anyhow::anyhow!("candidate matrix shape {n_left} x {n_right} overflows usize")
     })?;
-    ensure!(
-        n_sites > 0 && n_points > 0,
-        "at least one point with one site is required"
-    );
-    let data_len = n_sites
-        .checked_mul(n_points)
-        .ok_or_else(|| anyhow::anyhow!("batch size {n_sites} x {n_points} overflows usize"))?;
 
-    // Column-major (n_sites, n_points): point p occupies data[p * n_sites ..].
-    let mut data = vec![0usize; data_len];
-    let mut offset = 0;
-    for right in right_candidates {
-        for left in left_candidates {
-            let point = &mut data[offset..offset + n_sites];
+    // Column-major (n_sites, n_points): left candidates vary fastest.
+    let mut left_index = 0;
+    let mut right_index = 0;
+    evaluate_points_chunked(
+        n_sites,
+        n_points,
+        chunk_points,
+        |point| {
+            let left = &left_candidates[left_index];
+            let right = &right_candidates[right_index];
             for (&site, &value) in left_sites.iter().zip(left.iter()) {
                 point[site] = value;
             }
             for (&site, &value) in right_sites.iter().zip(right.iter()) {
                 point[site] = value;
             }
-            offset += n_sites;
-        }
-    }
-
-    let values = evaluate(GlobalIndexBatch::new(&data, n_sites, n_points)?)?;
-    ensure!(
-        values.len() == n_points,
-        "batch evaluator returned {} values for {} candidate-matrix entries",
-        values.len(),
-        n_points
-    );
-    Ok(values)
+            left_index += 1;
+            if left_index == n_left {
+                left_index = 0;
+                right_index += 1;
+            }
+        },
+        evaluate,
+        "candidate-matrix entries",
+    )
 }
 
 #[cfg(test)]
