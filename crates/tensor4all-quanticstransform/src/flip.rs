@@ -166,7 +166,7 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<SimpleTensorTrain<Complex
                             let bc_weight = if cout == 0 { Complex64::one() } else { bc_val };
                             sum += single_tensor[cin][cout][a][b] * bc_weight;
                         }
-                        let s = a * 2 + b;
+                        let s = pack_site_index(a, b);
                         t.set3(0, s, cin, sum);
                     }
                 }
@@ -180,7 +180,7 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<SimpleTensorTrain<Complex
                 for a in 0..2 {
                     for b in 0..2 {
                         let val = single_tensor[1][cout][a][b]; // cin=1 (carry=0) is fixed
-                        let s = a * 2 + b;
+                        let s = pack_site_index(a, b);
                         t.set3(cout, s, 0, val);
                     }
                 }
@@ -195,7 +195,7 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<SimpleTensorTrain<Complex
                     for a in 0..2 {
                         for b in 0..2 {
                             let val = single_tensor[cin][cout][a][b];
-                            let s = a * 2 + b;
+                            let s = pack_site_index(a, b);
                             t.set3(cout, s, cin, val);
                         }
                     }
@@ -226,8 +226,24 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<SimpleTensorTrain<Complex
 /// - The ITensor is created as ITensor(t, (link_l, link_r, s', s))
 /// - This means a -> s' (output index) and b -> s (input index)
 ///
-/// In SimpleTensorTrain MPO format, the combined site index is s = s' * 2 + s
-/// where s' is the output bit and s is the input bit.
+/// In SimpleTensorTrain MPO format, the combined site index is `s = s' * 2 + s`
+/// where `s'` is the output bit and `s` is the input bit, i.e. `s = b * 2 + a`
+/// for the loop variables below. This matches every other MPO builder in this
+/// crate and the reader in
+/// [`tensortrain_to_linear_operator`](crate::tensortrain_to_linear_operator).
+/// Packs an input/output bit pair into the SimpleTensorTrain site index.
+///
+/// The crate-wide MPO convention is output-major: `site = output_bit * 2 +
+/// input_bit`, matching [`tensortrain_to_linear_operator`](crate::tensortrain_to_linear_operator)
+/// and every other MPO builder in this crate. The flip MPO's own site tensors
+/// are invariant under swapping the two bits (the flip permutation is an
+/// involution), so this helper is what keeps the packing from drifting
+/// silently.
+#[inline]
+fn pack_site_index(input_bit: usize, output_bit: usize) -> usize {
+    output_bit * 2 + input_bit
+}
+
 #[allow(clippy::needless_range_loop)]
 fn single_tensor_flip() -> [[[[Complex64; 2]; 2]; 2]; 2] {
     let cval = [-1i32, 0i32];
