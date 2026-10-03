@@ -25,7 +25,9 @@ pub type TreeTciRunResult = (
 ///
 /// This is the unified entry point for tree tensor cross interpolation.
 /// The `evaluate` closure receives batches of multi-indices and must return
-/// one scalar per point.
+/// one scalar per point. Large point sets (edge candidate matrices,
+/// materialized site tensors) are split into calls of at most 65,536 points,
+/// so the closure must not assume one call per matrix or tensor.
 ///
 /// The `proposer` controls how pivot candidates are generated.
 ///
