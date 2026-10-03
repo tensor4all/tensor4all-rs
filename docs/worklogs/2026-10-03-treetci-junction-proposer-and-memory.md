@@ -33,6 +33,15 @@
   mixed-radix counter instead of allocating per point and per combination.
   Chunking materialization as well (not only flattening it) keeps its buffer
   bounded at junctions, where a root tensor has `r^3` points.
+- `assemble_global_point` and `assemble_points_column_major` lost their last
+  production user with #801 and nothing else in the workspace (including
+  `tensor4all-py` and the C API) calls them, so they were removed with their
+  tests rather than kept as unused public API. Coverage of the removed paths
+  was reviewed: the tests removed with them exercised only those functions;
+  `TreeTciError::IndexOutOfBounds` stays covered through `graph.rs` and the
+  partition checks of `fill_tensor_values`, and `OwnedGlobalIndexBatch` keeps
+  its doctests (it now has no production user either and was left in place).
+  The materialization test oracle assembles its points inline.
 
 ## Verification conclusions and constraints
 

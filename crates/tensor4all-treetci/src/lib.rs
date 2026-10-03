@@ -71,7 +71,7 @@ pub(crate) fn column_2d<T>(
 
 /// High-level TreeTCI entry points.
 pub mod api;
-/// Assembly helpers from subtree-local pivots to global site-order indices.
+/// The [`MultiIndex`] type of subtree-local pivots and candidates.
 pub mod assemble;
 /// Batch views for global site-order evaluation.
 pub mod batch;
@@ -99,7 +99,7 @@ pub mod visitor;
 mod test_support;
 
 pub use api::crossinterpolate2;
-pub use assemble::{assemble_global_point, assemble_points_column_major, MultiIndex};
+pub use assemble::MultiIndex;
 pub use batch::{GlobalIndexBatch, OwnedGlobalIndexBatch};
 pub use error::{Result as TreeTciResult, TreeTciError};
 pub use globalpivot::find_global_pivots;

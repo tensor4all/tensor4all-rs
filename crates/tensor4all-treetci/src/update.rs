@@ -136,9 +136,9 @@ where
 /// Returns the values in column-major order with `left_candidates.len()` rows.
 ///
 /// The global points are written straight into a contiguous batch buffer.
-/// Assembling them as individual `Vec<usize>` points instead (via
-/// `assemble_global_point` + `assemble_points_column_major`) costs one heap
-/// allocation and one extra full copy per matrix *entry*, and re-validates the
+/// Assembling them as individual `Vec<usize>` points instead and packing
+/// those into a batch costs one heap allocation and one extra full copy per
+/// matrix *entry*, and re-validating per point checks the
 /// bipartition `n_left * n_right` times over -- at a branching vertex that is
 /// O(10^7) allocations for a single edge update. The bipartition is a property
 /// of the two subtree keys, so it is checked once up front instead.

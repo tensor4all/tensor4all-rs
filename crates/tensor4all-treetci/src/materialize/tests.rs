@@ -2,8 +2,8 @@ use super::{fill_tensor_values, site_side_key, to_treetn, to_treetn_chunked, Ful
 use crate::batch::EVALUATION_CHUNK_POINTS;
 use crate::test_support::{assert_complex_slice_close, assert_scalar_close};
 use crate::{
-    assemble_global_point, column_2d, ncols_2d, optimize_default, GlobalIndexBatch, MultiIndex,
-    SubtreeKey, TreeTCI2, TreeTciEdge, TreeTciGraph, TreeTciOptions,
+    column_2d, ncols_2d, optimize_default, GlobalIndexBatch, MultiIndex, SubtreeKey, TreeTCI2,
+    TreeTciEdge, TreeTciGraph, TreeTciOptions,
 };
 use anyhow::Result;
 use num_complex::Complex64;
@@ -136,7 +136,7 @@ fn converged_state(graph: TreeTciGraph, local_dims: Vec<usize>) -> TreeTCI2<f64>
 }
 
 /// Points of `fill_tensor_values` as the previous implementation enumerated
-/// them: one `assemble_global_point` per point over the cartesian product
+/// them: one separately assembled point per entry of the cartesian product
 /// `out_keys x in_keys x central_sites`, the first key and the last central
 /// site varying fastest.
 fn reference_fill_points(
@@ -178,14 +178,19 @@ fn reference_fill_points(
     for out_combo in combos(state, out_keys) {
         for in_combo in combos(state, in_keys) {
             for central in &central_combos {
-                let assignments: Vec<(&SubtreeKey, &MultiIndex)> = in_keys
+                let mut point = vec![usize::MAX; state.local_dims.len()];
+                let subtree_values = in_keys
                     .iter()
                     .zip(in_combo.iter())
                     .chain(out_keys.iter().zip(out_combo.iter()))
-                    .collect();
-                points.extend(
-                    assemble_global_point(state.local_dims.len(), &assignments, central).unwrap(),
-                );
+                    .flat_map(|(key, values)| key.as_slice().iter().zip(values.iter()));
+                let central_values = central.iter().map(|(site, value)| (site, value));
+                for (&site, &value) in subtree_values.chain(central_values) {
+                    assert_eq!(point[site], usize::MAX, "site {site} assigned twice");
+                    point[site] = value;
+                }
+                assert!(point.iter().all(|&value| value != usize::MAX));
+                points.extend(point);
             }
         }
     }
