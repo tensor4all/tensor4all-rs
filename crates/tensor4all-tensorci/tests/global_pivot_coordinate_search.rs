@@ -1,5 +1,5 @@
 //! Regression for #806, with explicit starts and literal residual maxima.
-use rand::{Rng, RngCore};
+use rand::{Rng as _, RngCore};
 use tensor4all_simplett::SimpleTensorTrain;
 use tensor4all_tensorci::{
     DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput, TCIError,
@@ -178,17 +178,16 @@ fn optimizer_propagates_custom_finder_errors() {
     use tensor4all_tensorci::{optimize_with_finder, TCI2Options, TensorCI2};
     struct FailingFinder;
     impl GlobalPivotFinder for FailingFinder {
-        fn find_global_pivots<T, F, R>(
+        fn find_global_pivots<T, F>(
             &self,
             _: &GlobalPivotSearchInput<T>,
             _: &F,
             _: f64,
-            _: &mut R,
+            _: &mut dyn RngCore,
         ) -> tensor4all_tensorci::Result<Vec<MultiIndex>>
         where
             T: Scalar + TTScalar,
             F: Fn(&MultiIndex) -> T,
-            R: Rng + ?Sized,
         {
             Err(TCIError::InvalidOperation {
                 message: "finder evaluation failed".into(),

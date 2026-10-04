@@ -1848,7 +1848,10 @@ where
             j_set: tci.j_set.clone(),
         };
 
-        let global_pivots = finder.find_global_pivots(&input, &f, abs_tol, rng)?;
+        // Erase the caller's RNG type once, so the generic pipeline below the
+        // public boundary is instantiated a single time.
+        let mut stream: &mut R = &mut *rng;
+        let global_pivots = finder.find_global_pivots(&input, &f, abs_tol, &mut stream)?;
         let n_global = global_pivots.len();
         tci.add_global_pivots(&global_pivots)?;
         nglobal_pivots_history.push(n_global);

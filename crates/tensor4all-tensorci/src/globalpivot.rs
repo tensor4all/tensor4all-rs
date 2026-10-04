@@ -6,7 +6,7 @@
 //! ([`DefaultGlobalPivotFinder`]) uses random starting points with local
 //! optimization.
 
-use rand::Rng;
+use rand::{Rng, RngCore};
 use tensor4all_core::{floating_zone_walk, MultiIndex, Scalar};
 use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTCache, TTScalar, Tensor3Ops};
 
@@ -96,17 +96,16 @@ pub trait GlobalPivotFinder {
     /// [`TCIError::SimpleTensorTrain`] for failed TT evaluation. Configuration
     /// is validated even when search is disabled. Custom finders may return
     /// other [`TCIError`] variants; the optimizer propagates them unchanged.
-    fn find_global_pivots<T, F, R>(
+    fn find_global_pivots<T, F>(
         &self,
         input: &GlobalPivotSearchInput<T>,
         f: &F,
         abs_tol: f64,
-        rng: &mut R,
+        rng: &mut dyn RngCore,
     ) -> Result<Vec<MultiIndex>>
     where
         T: Scalar + TTScalar,
-        F: Fn(&MultiIndex) -> T,
-        R: Rng + ?Sized;
+        F: Fn(&MultiIndex) -> T;
 }
 
 /// Default global pivot finder using random search with local optimization.
@@ -175,17 +174,16 @@ impl DefaultGlobalPivotFinder {
 }
 
 impl GlobalPivotFinder for DefaultGlobalPivotFinder {
-    fn find_global_pivots<T, F, R>(
+    fn find_global_pivots<T, F>(
         &self,
         input: &GlobalPivotSearchInput<T>,
         f: &F,
         abs_tol: f64,
-        rng: &mut R,
+        rng: &mut dyn RngCore,
     ) -> Result<Vec<MultiIndex>>
     where
         T: Scalar + TTScalar,
         F: Fn(&MultiIndex) -> T,
-        R: Rng + ?Sized,
     {
         validate_nonnegative_finite("abs_tol", abs_tol)?;
         validate_nonnegative_finite("tol_margin", self.tol_margin)?;
@@ -316,17 +314,16 @@ mod tests {
         struct FixedPivotFinder;
 
         impl GlobalPivotFinder for FixedPivotFinder {
-            fn find_global_pivots<T, F, R>(
+            fn find_global_pivots<T, F>(
                 &self,
                 _input: &GlobalPivotSearchInput<T>,
                 _f: &F,
                 _abs_tol: f64,
-                _rng: &mut R,
+                _rng: &mut dyn RngCore,
             ) -> Result<Vec<MultiIndex>>
             where
                 T: Scalar + TTScalar,
                 F: Fn(&MultiIndex) -> T,
-                R: Rng + ?Sized,
             {
                 // Always return a fixed pivot
                 Ok(vec![vec![1, 2]])

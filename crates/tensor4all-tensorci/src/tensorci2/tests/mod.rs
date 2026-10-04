@@ -1,5 +1,6 @@
 use super::*;
 use crate::error::TCIError;
+use rand::Rng as _;
 use std::cell::Cell;
 use std::rc::Rc;
 use tensor4all_simplett::AbstractTensorTrain;
@@ -1187,17 +1188,16 @@ fn test_custom_global_pivot_finder() {
     }
 
     impl GlobalPivotFinder for RandomPivotFinder {
-        fn find_global_pivots<T, F, R>(
+        fn find_global_pivots<T, F>(
             &self,
             input: &GlobalPivotSearchInput<T>,
             _f: &F,
             _abs_tol: f64,
-            rng: &mut R,
+            rng: &mut dyn rand::RngCore,
         ) -> Result<Vec<MultiIndex>>
         where
             T: tensor4all_core::Scalar + tensor4all_simplett::TTScalar,
             F: Fn(&MultiIndex) -> T,
-            R: rand::Rng + ?Sized,
         {
             Ok((0..self.npivots)
                 .map(|_| {
@@ -1304,17 +1304,16 @@ fn test_optimize_with_finder_invokes_custom_finder() {
     }
 
     impl GlobalPivotFinder for CountingFinder {
-        fn find_global_pivots<T, F, R>(
+        fn find_global_pivots<T, F>(
             &self,
             input: &GlobalPivotSearchInput<T>,
             _f: &F,
             _abs_tol: f64,
-            _rng: &mut R,
+            _rng: &mut dyn rand::RngCore,
         ) -> Result<Vec<MultiIndex>>
         where
             T: tensor4all_core::Scalar + tensor4all_simplett::TTScalar,
             F: Fn(&MultiIndex) -> T,
-            R: rand::Rng + ?Sized,
         {
             self.calls.set(self.calls.get() + 1);
             Ok(vec![vec![input.local_dims[0] - 1, input.local_dims[1] - 1]])
