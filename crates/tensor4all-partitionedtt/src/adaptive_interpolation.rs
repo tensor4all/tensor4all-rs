@@ -12,7 +12,7 @@ use std::num::NonZeroUsize;
 #[cfg(feature = "adaptive-hataori-mpi")]
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use rand::{Rng, SeedableRng};
+use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{DynIndex, IdxTensor, MatrixLuciScalar, MultiIndex, Scalar, TensorElement};
 use tensor4all_itensorlike::TensorTrain;
@@ -21,7 +21,7 @@ use tensor4all_simplett::Tensor3Ops;
 use tensor4all_simplett::{tensor3_from_data, SimpleTensorTrain, TTScalar};
 use tensor4all_tensorbackend::StorageScalar;
 use tensor4all_tensorci::{
-    crossinterpolate2, TCI2OptimizationResult, TCI2Options, TCI2Termination, TensorCI2,
+    crossinterpolate2_with_rng, TCI2OptimizationResult, TCI2Options, TCI2Termination, TensorCI2,
 };
 use tensor4all_treetn::{tensor_train_to_treetn, TreeTN};
 
@@ -522,6 +522,36 @@ where
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
+    // The seeded high-level path uses an explicitly named RNG and delegates to
+    // the caller-owned-stream entry point.
+    let mut rng = match options.tci_options.seed {
+        Some(seed) => ChaCha8Rng::seed_from_u64(seed),
+        None => ChaCha8Rng::from_os_rng(),
+    };
+    adaptiveinterpolate_with_rng(
+        f,
+        batched_f,
+        site_indices,
+        initial_pivots,
+        options,
+        &mut rng,
+    )
+}
+
+pub fn adaptiveinterpolate_with_rng<T, F, B, R>(
+    f: F,
+    batched_f: Option<B>,
+    site_indices: Vec<DynIndex>,
+    initial_pivots: Vec<MultiIndex>,
+    options: AdaptiveInterpolateOptions,
+    rng: &mut R,
+) -> Result<AdaptiveInterpolationResult<T>>
+where
+    T: Scalar + TTScalar + MatrixLuciScalar + TensorElement + StorageScalar + Default + Copy,
+    F: Fn(&MultiIndex) -> T,
+    B: Fn(&[MultiIndex]) -> Vec<T>,
+    R: rand::Rng + ?Sized,
+{
     let patch_order = validate_inputs(&site_indices, &initial_pivots, &options)?;
     let root_dims = site_indices.iter().map(|index| index.dim).collect();
     let mut wave = vec![PendingPatch {
@@ -542,6 +572,7 @@ where
                 &initial_pivots,
                 &patch_order,
                 &options,
+                rng,
             )? {
                 PatchOutcome::Accepted(patch) => accepted.push(patch),
                 PatchOutcome::Split(children) => next_wave.extend(children),
@@ -609,6 +640,13 @@ where
     while !wave.is_empty() {
         let paths: Vec<_> = wave.iter().map(|patch| patch.path.clone()).collect();
         let outcomes = hataori::map_in(domain, hataori::LocalMode::Outer, wave, |patch| {
+            // Parallel path: one derived stream per patch. Consuming a single
+            // caller-owned stream across patches is not possible here; the
+            // ownership design is tracked in #825.
+            let mut rng = ChaCha8Rng::seed_from_u64(patch_seed(
+                options.tci_options.seed.unwrap_or(0),
+                &patch.path,
+            ));
             process_patch(
                 patch,
                 &f,
@@ -617,6 +655,7 @@ where
                 &initial_pivots,
                 &patch_order,
                 &options,
+                &mut rng,
             )
         })
         .map_err(|source| {
@@ -745,6 +784,10 @@ where
     loop {
         let root_items = (rank == root).then(|| std::mem::take(&mut wave));
         let wire_outcomes = hataori::pmap(world, domain, pmap_options, root_items, |patch| {
+            let mut rng = ChaCha8Rng::seed_from_u64(patch_seed(
+                options.tci_options.seed.unwrap_or(0),
+                &patch.path,
+            ));
             process_patch(
                 patch,
                 &f,
@@ -753,6 +796,7 @@ where
                 &initial_pivots,
                 &patch_order,
                 &options,
+                &mut rng,
             )
             .map(patch_outcome_to_wire)
         })
@@ -847,7 +891,7 @@ where
     })
 }
 
-fn process_patch<T, F, B>(
+fn process_patch<T, F, B, R>(
     patch: PendingPatch<T>,
     f: &F,
     batched_f: Option<&B>,
@@ -855,11 +899,13 @@ fn process_patch<T, F, B>(
     initial_pivots: &[MultiIndex],
     patch_order: &[DynIndex],
     options: &AdaptiveInterpolateOptions,
+    rng: &mut R,
 ) -> Result<PatchOutcome<T>>
 where
     T: Scalar + TTScalar + MatrixLuciScalar + TensorElement + StorageScalar + Default + Copy,
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
+    R: rand::Rng + ?Sized,
 {
     let projector = projector_from_path(patch_order, &patch.path)?;
     let active_positions = active_positions(site_indices, &projector);
@@ -901,8 +947,6 @@ where
         ));
     }
 
-    let seed = patch_seed(options.tci_options.seed.unwrap_or(0), &patch.path);
-    let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let candidate_pivots = patch_candidates(
         site_indices,
         &active_positions,
@@ -910,7 +954,7 @@ where
         initial_pivots,
         &patch.recycled_pivots,
         options.n_initial_pivots,
-        &mut rng,
+        rng,
     )?;
     let candidate_values = evaluator.eval_many(&candidate_pivots);
     if let Some(error) = evaluator.take_error() {
@@ -937,14 +981,14 @@ where
         .collect();
     let local_f = |pivot: &MultiIndex| evaluator.eval(pivot);
     let local_batch = batched_f.map(|_| |pivots: &[MultiIndex]| evaluator.eval_many(pivots));
-    let mut tci_options = options.tci_options.clone();
-    tci_options.seed = Some(splitmix64(seed));
-    let tci_result = crossinterpolate2(
+    let tci_options = options.tci_options.clone();
+    let tci_result = crossinterpolate2_with_rng(
         local_f,
         local_batch,
         local_dims,
         candidate_pivots,
         tci_options,
+        rng,
     );
     if let Some(error) = evaluator.take_error() {
         return Err(error);
@@ -1286,15 +1330,18 @@ fn active_positions(site_indices: &[DynIndex], projector: &Projector) -> Vec<usi
         .collect()
 }
 
-fn patch_candidates(
+fn patch_candidates<R>(
     site_indices: &[DynIndex],
     active_positions: &[usize],
     projector: &Projector,
     initial_pivots: &[MultiIndex],
     recycled_pivots: &[MultiIndex],
     target: usize,
-    rng: &mut ChaCha8Rng,
-) -> Result<Vec<MultiIndex>> {
+    rng: &mut R,
+) -> Result<Vec<MultiIndex>>
+where
+    R: rand::Rng + ?Sized,
+{
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
     for full_pivot in initial_pivots.iter().chain(recycled_pivots) {

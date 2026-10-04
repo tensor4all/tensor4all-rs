@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tensor4all_core::contract;
 use tensor4all_tensorbackend::StorageKind;
+use tensor4all_tensorci::crossinterpolate2;
 
 fn dense_f64(result: &AdaptiveInterpolationResult<f64>) -> Vec<f64> {
     let tt = result.partitioned_tt().to_tensor_train().unwrap();
