@@ -166,10 +166,10 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
     ///
     /// Same as [`Self::initialize`], but consumes `rng` for the random initial
     /// output instead of deriving a stream from `TreeAciOptions::rng_seed`.
-    pub(crate) fn initialize_with_rng<R: rand::Rng + ?Sized>(
+    pub(crate) fn initialize_with_rng(
         inputs: &'a [TreeTN<IdxTensor, V>],
         options: &TreeAciOptions<V>,
-        rng: &mut R,
+        rng: &mut dyn rand::RngCore,
     ) -> Result<Self> {
         #[cfg(test)]
         let stage_started = std::time::Instant::now();
@@ -185,7 +185,7 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
             validate_initial_guess::<T, V>(guess, &inputs[0], &problem)?;
             guess.clone()
         } else {
-            build_random_output::<T, V, R>(&inputs[0], &problem, &initial_edge_ranks, rng)?
+            build_random_output::<T, V>(&inputs[0], &problem, &initial_edge_ranks, rng)?
         };
         // A complete first directional pass replaces every core with CI
         // factors before `finalize_deferred_canonicalization` establishes the

@@ -133,7 +133,7 @@ where
 /// initial guess construction fails, the operator callback fails, or a local
 /// matrix-CI update fails.
 pub fn elementwise_batched_with_rng<T, F, R>(
-    mut op: F,
+    op: F,
     inputs: &[SimpleTensorTrain<T>],
     options: &AciOptions<T>,
     rng: &mut R,
@@ -142,6 +142,22 @@ where
     T: AciScalar + EinsumScalar + PartialEq,
     F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
     R: rand::Rng + ?Sized,
+{
+    // Erase the caller's RNG type once so the run below is instantiated once
+    // per scalar type instead of once per (scalar, RNG) pair.
+    let mut stream: &mut R = rng;
+    elementwise_batched_erased(op, inputs, options, &mut stream)
+}
+
+fn elementwise_batched_erased<T, F>(
+    mut op: F,
+    inputs: &[SimpleTensorTrain<T>],
+    options: &AciOptions<T>,
+    rng: &mut dyn rand::RngCore,
+) -> Result<AciResult<T>>
+where
+    T: AciScalar + EinsumScalar + PartialEq,
+    F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
 {
     validate_options(options)?;
     validate_inputs(inputs)?;

@@ -1,5 +1,6 @@
 //! Global floating-zone validation for locally sampled tree ACI sweeps.
 
+use rand::Rng as _;
 use std::{collections::HashMap, mem::size_of};
 
 use tensor4all_core::floating_zone_walk;
@@ -31,18 +32,17 @@ pub(crate) fn per_evaluator_message_cache_budget(
     Ok(total_budget / evaluator_count)
 }
 
-pub(crate) fn find_global_pivots<'a, T, V, F, R>(
+pub(crate) fn find_global_pivots<'a, T, V, F>(
     state: &TreeAciState<'a, T, V>,
     input_evaluators: &mut InputEvaluators<'a, V>,
     options: &TreeAciOptions<V>,
-    rng: &mut R,
+    rng: &mut dyn rand::RngCore,
     operator: &mut F,
 ) -> Result<GlobalSearchReport>
 where
     T: TreeAciScalar,
     V: TreeAciNode,
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
-    R: rand::Rng + ?Sized,
 {
     let nsearch = options.nsearch_global_pivots;
     let max_pivots = options.max_nglobal_pivots;

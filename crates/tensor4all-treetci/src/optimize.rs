@@ -1,6 +1,6 @@
 use crate::error::Result as TreeTciResult;
 use crate::{
-    globalpivot::{find_global_pivots_with_rng, ScalarParts},
+    globalpivot::{find_global_pivots_erased, ScalarParts},
     update::update_edge,
     AllEdges, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer, TreeTCI2,
 };
@@ -385,6 +385,24 @@ where
     P: PivotCandidateProposer,
     R: rand::Rng + ?Sized,
 {
+    // Erase the caller's RNG type once so the run below is instantiated once
+    // per scalar type instead of once per (scalar, RNG) pair.
+    let mut stream: &mut R = rng;
+    optimize_with_proposer_erased(state, evaluate, options, proposer, &mut stream)
+}
+
+fn optimize_with_proposer_erased<T, F, P>(
+    state: &mut TreeTCI2<T>,
+    evaluate: F,
+    options: &TreeTciOptions,
+    proposer: &P,
+    rng: &mut dyn rand::RngCore,
+) -> TreeTciResult<(Vec<usize>, Vec<f64>)>
+where
+    T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    P: PivotCandidateProposer,
+{
     options.validate()?;
 
     let mut ranks = Vec::new();
@@ -471,7 +489,7 @@ where
                 1.0
             };
             let abs_tol = options.tolerance * error_scale;
-            let pivots = find_global_pivots_with_rng(
+            let pivots = find_global_pivots_erased(
                 state,
                 &evaluate,
                 options.nsearch,

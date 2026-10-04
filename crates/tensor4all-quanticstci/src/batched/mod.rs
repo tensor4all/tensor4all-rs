@@ -400,12 +400,15 @@ where
 
         // One stream serves every component, so the second component continues
         // the caller's sequence instead of restarting it.
+        // Erase the caller's RNG type once so every component instantiates the
+        // batch pipeline a single time.
+        let mut stream: &mut R = rng;
         let (qtci, ranks, errors) = quanticscrossinterpolate_batch_with_rng(
             grid,
             adapter,
             initial_pivots.clone(),
             options.clone(),
-            rng,
+            &mut stream,
         )?;
 
         component_tts.push(qtci.tensor_train());

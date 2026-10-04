@@ -5,6 +5,7 @@
 //! in column-major `(n_dims, n_points)` order. The deprecated point-wise entry
 //! points are thin wrappers over the batched ones.
 
+use rand::Rng as _;
 use rand::SeedableRng;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -52,12 +53,12 @@ pub(crate) fn seeded_quantics_stream(options: &QtciOptions) -> rand_chacha::ChaC
 
 /// Convert the caller's initial pivots to quantics indices and append random
 /// starting pivots.
-fn prepare_pivots<R: rand::Rng + ?Sized>(
+fn prepare_pivots(
     initial_pivots: Option<Vec<Vec<usize>>>,
     local_dims: &[usize],
     convert: impl Fn(&[usize]) -> Result<Vec<usize>>,
     n_random: usize,
-    rng: &mut R,
+    rng: &mut dyn rand::RngCore,
 ) -> Result<Vec<Vec<usize>>> {
     let mut pivots = match initial_pivots {
         Some(pivots) if !pivots.is_empty() => pivots
@@ -606,6 +607,9 @@ where
         f,
         cache.clone(),
     );
+    // Erase the caller's RNG type once so the run below is instantiated once
+    // per scalar type instead of once per (scalar, RNG) pair.
+    let mut stream: &mut R = rng;
     let pivots = prepare_pivots(
         initial_pivots,
         &local_dims,
@@ -614,7 +618,7 @@ where
                 .map_err(|error| anyhow!("initial pivot {pivot:?} conversion failed: {error}"))
         },
         options.n_random_init_pivot,
-        rng,
+        &mut stream,
     )?;
 
     let (tci, tt, ranks, errors, cache) =
@@ -1074,6 +1078,9 @@ where
         f,
         cache.clone(),
     );
+    // Erase the caller's RNG type once so the run below is instantiated once
+    // per scalar type instead of once per (scalar, RNG) pair.
+    let mut stream: &mut R = rng;
     let pivots = prepare_pivots(
         initial_pivots,
         &local_dims,
@@ -1082,7 +1089,7 @@ where
                 .map_err(|error| anyhow!("initial pivot {pivot:?} conversion failed: {error}"))
         },
         options.n_random_init_pivot,
-        rng,
+        &mut stream,
     )?;
 
     let (tci, tt, ranks, errors, cache) =

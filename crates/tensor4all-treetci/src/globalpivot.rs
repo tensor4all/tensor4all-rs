@@ -14,7 +14,7 @@
 use crate::error::Result as TreeTciResult;
 use crate::{materialize::to_treetn, GlobalIndexBatch, MultiIndex, TreeTCI2};
 use anyhow::Result;
-use rand::{Rng, SeedableRng};
+use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::MatrixLuciScalar as Scalar;
 use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor};
@@ -158,6 +158,37 @@ where
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     R: Rng + ?Sized,
 {
+    // Erase the caller's RNG type once, so the search body below is
+    // instantiated once per scalar type instead of once per (scalar, RNG) pair.
+    let mut stream: &mut R = rng;
+    find_global_pivots_erased(
+        state,
+        evaluate,
+        nsearch,
+        max_nglobal_pivot,
+        tol_margin,
+        abs_tol,
+        &mut stream,
+    )
+}
+
+/// The search body on an already erased stream.
+///
+/// Callers inside the crate use this so the search is instantiated once per
+/// scalar type.
+pub(crate) fn find_global_pivots_erased<T, F>(
+    state: &TreeTCI2<T>,
+    evaluate: F,
+    nsearch: usize,
+    max_nglobal_pivot: usize,
+    tol_margin: f64,
+    abs_tol: f64,
+    rng: &mut dyn RngCore,
+) -> TreeTciResult<Vec<MultiIndex>>
+where
+    T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+{
     let params = SearchParams {
         nsearch,
         max_nglobal_pivot,
@@ -203,11 +234,11 @@ fn cached_batched_readout(
 /// caller. Production passes [`cached_batched_readout`]; tests also pass the
 /// pointwise [`TreeTN::evaluate`] to check that the readout does not change
 /// the selected pivots.
-fn search_with_readout<T, F, R, G>(
+fn search_with_readout<T, F, R>(
     state: &TreeTCI2<T>,
     evaluate: F,
     params: SearchParams,
-    rng: &mut G,
+    rng: &mut dyn RngCore,
     readout: R,
 ) -> TreeTciResult<Vec<MultiIndex>>
 where
@@ -218,7 +249,6 @@ where
         &[DynIndex],
         ColMajorArrayRef<'_, usize>,
     ) -> Result<Vec<AnyScalar>>,
-    G: Rng + ?Sized,
 {
     let SearchParams {
         nsearch,

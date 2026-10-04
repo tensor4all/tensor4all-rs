@@ -24,10 +24,10 @@ pub(crate) fn initial_guess<T: AciScalar>(
 ///
 /// Same as [`initial_guess`], but consumes `rng` for the random cores instead
 /// of deriving a stream from `AciOptions::rng_seed`.
-pub(crate) fn initial_guess_with_rng<T: AciScalar, R: rand::Rng + ?Sized>(
+pub(crate) fn initial_guess_with_rng<T: AciScalar>(
     inputs: &[SimpleTensorTrain<T>],
     options: &AciOptions<T>,
-    rng: &mut R,
+    rng: &mut dyn rand::RngCore,
 ) -> Result<SimpleTensorTrain<T>> {
     let site_dims = validate_inputs(inputs)?;
     validate_options(options)?;
@@ -148,11 +148,11 @@ fn default_link_dims<T: AciScalar>(
     Ok(link_dims)
 }
 
-fn random_core<T: AciScalar, R: rand::Rng + ?Sized>(
+fn random_core<T: AciScalar>(
     left_dim: usize,
     site_dim: usize,
     right_dim: usize,
-    rng: &mut R,
+    rng: &mut dyn rand::RngCore,
 ) -> Result<Tensor3<T>> {
     let len = initial_guess_core_entry_count(left_dim, site_dim, right_dim)?;
     let data = (0..len)

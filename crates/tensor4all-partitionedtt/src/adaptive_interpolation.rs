@@ -5,6 +5,7 @@
 //! TCIAlgorithms.jl at commit e501032278c9dd41b46c5851d8238169c8d178c5
 //! (MIT license; Copyright 2023 Ritter.Marc and contributors).
 
+use rand::Rng as _;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "adaptive-hataori-mpi")]
@@ -564,6 +565,9 @@ where
     B: Fn(&[MultiIndex]) -> Vec<T>,
     R: rand::Rng + ?Sized,
 {
+    // Erase the caller's RNG type once so the patch pipeline below is
+    // instantiated once per scalar type instead of once per (scalar, RNG) pair.
+    let mut stream: &mut R = rng;
     let patch_order = validate_inputs(&site_indices, &initial_pivots, &options)?;
     let root_dims = site_indices.iter().map(|index| index.dim).collect();
     let mut wave = vec![PendingPatch {
@@ -584,7 +588,7 @@ where
                 &initial_pivots,
                 &patch_order,
                 &options,
-                rng,
+                &mut stream,
             )? {
                 PatchOutcome::Accepted(patch) => accepted.push(patch),
                 PatchOutcome::Split(children) => next_wave.extend(children),
@@ -904,7 +908,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn process_patch<T, F, B, R>(
+fn process_patch<T, F, B>(
     patch: PendingPatch<T>,
     f: &F,
     batched_f: Option<&B>,
@@ -912,13 +916,12 @@ fn process_patch<T, F, B, R>(
     initial_pivots: &[MultiIndex],
     patch_order: &[DynIndex],
     options: &AdaptiveInterpolateOptions,
-    rng: &mut R,
+    rng: &mut dyn rand::RngCore,
 ) -> Result<PatchOutcome<T>>
 where
     T: Scalar + TTScalar + MatrixLuciScalar + TensorElement + StorageScalar + Default + Copy,
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
-    R: rand::Rng + ?Sized,
 {
     let projector = projector_from_path(patch_order, &patch.path)?;
     let active_positions = active_positions(site_indices, &projector);
@@ -1343,18 +1346,15 @@ fn active_positions(site_indices: &[DynIndex], projector: &Projector) -> Vec<usi
         .collect()
 }
 
-fn patch_candidates<R>(
+fn patch_candidates(
     site_indices: &[DynIndex],
     active_positions: &[usize],
     projector: &Projector,
     initial_pivots: &[MultiIndex],
     recycled_pivots: &[MultiIndex],
     target: usize,
-    rng: &mut R,
-) -> Result<Vec<MultiIndex>>
-where
-    R: rand::Rng + ?Sized,
-{
+    rng: &mut dyn rand::RngCore,
+) -> Result<Vec<MultiIndex>> {
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
     for full_pivot in initial_pivots.iter().chain(recycled_pivots) {

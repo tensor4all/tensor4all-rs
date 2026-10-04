@@ -81,10 +81,10 @@ impl<T: AciScalar> ElementwiseProblem<T> {
     ///
     /// The stream is consumed by the initial guess, so initialization and the
     /// later guard searches share one caller-owned sequence.
-    pub(crate) fn new_with_rng<R: rand::Rng + ?Sized>(
+    pub(crate) fn new_with_rng(
         inputs: Vec<SimpleTensorTrain<T>>,
         options: AciOptions<T>,
-        rng: &mut R,
+        rng: &mut dyn rand::RngCore,
     ) -> Result<Self>
     where
         T: EinsumScalar,

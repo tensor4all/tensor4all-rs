@@ -70,17 +70,16 @@ impl PassReport {
     }
 }
 
-pub(crate) fn run_local_sweeps<'a, T, V, F, R>(
+pub(crate) fn run_local_sweeps<'a, T, V, F>(
     state: &mut TreeAciState<'a, T, V>,
     options: &TreeAciOptions<V>,
     operator: &mut F,
-    rng: &mut R,
+    rng: &mut dyn rand::RngCore,
 ) -> Result<SweepHistory>
 where
     T: TreeAciScalar,
     V: TreeAciNode,
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
-    R: rand::Rng + ?Sized,
 {
     let mut max_ranks = Vec::with_capacity(options.max_sweeps);
     let mut max_errors = Vec::with_capacity(options.max_sweeps);

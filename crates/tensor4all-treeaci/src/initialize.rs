@@ -136,11 +136,11 @@ fn validate_initial_guess_scalar_kind<T: TreeAciScalar>(tensor: &IdxTensor) -> R
         })
 }
 
-pub(crate) fn build_random_output<T: TreeAciScalar, V: TreeAciNode, R: rand::Rng + ?Sized>(
+pub(crate) fn build_random_output<T: TreeAciScalar, V: TreeAciNode>(
     reference: &TreeTN<IdxTensor, V>,
     problem: &PreparedTreeProblem<V>,
     ranks: &[usize],
-    rng: &mut R,
+    rng: &mut dyn rand::RngCore,
 ) -> Result<TreeTN<IdxTensor, V>> {
     let output_bonds = ranks
         .iter()

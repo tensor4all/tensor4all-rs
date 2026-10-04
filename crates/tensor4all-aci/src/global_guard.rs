@@ -20,6 +20,7 @@
 
 use crate::scalar::AciScalar;
 use crate::{AciError, AciOptions, ElementwiseBatch, ElementwiseProblem, Result};
+use rand::Rng as _;
 use tensor4all_core::floating_zone_walk;
 use tensor4all_simplett::{AbstractTensorTrain, EinsumScalar, TTCache};
 
@@ -44,16 +45,15 @@ use tensor4all_simplett::{AbstractTensorTrain, EinsumScalar, TTCache};
 /// the solution cache is created once per invocation (the solution is fixed
 /// for the whole search and only changes when pivots are injected after it
 /// returns). The operator is called in a single [`ElementwiseBatch`] per step.
-pub(crate) fn find_global_pivots<T, F, R>(
+pub(crate) fn find_global_pivots<T, F>(
     problem: &mut ElementwiseProblem<T>,
     op: &mut F,
     options: &AciOptions<T>,
-    rng: &mut R,
+    rng: &mut dyn rand::RngCore,
 ) -> Result<Vec<Vec<usize>>>
 where
     T: AciScalar + EinsumScalar,
     F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
-    R: rand::Rng + ?Sized,
 {
     let n_sites = problem.len();
     let n_inputs = problem.n_inputs();

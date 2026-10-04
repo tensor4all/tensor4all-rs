@@ -89,7 +89,7 @@ where
 /// Returns [`crate::TreeAciError`] for invalid inputs/options, callback failure,
 /// resource exhaustion, scalar mismatch, or a numerical/tree operation error.
 pub fn tree_elementwise_batched_with_rng<T, V, F, R>(
-    mut operator: F,
+    operator: F,
     inputs: &[TreeTN<IdxTensor, V>],
     options: &TreeAciOptions<V>,
     rng: &mut R,
@@ -99,6 +99,23 @@ where
     V: TreeAciNode,
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
     R: rand::Rng + ?Sized,
+{
+    // Erase the caller's RNG type once so the run below is instantiated once
+    // per scalar type instead of once per (scalar, RNG) pair.
+    let mut stream: &mut R = rng;
+    tree_elementwise_batched_erased(operator, inputs, options, &mut stream)
+}
+
+fn tree_elementwise_batched_erased<T, V, F>(
+    mut operator: F,
+    inputs: &[TreeTN<IdxTensor, V>],
+    options: &TreeAciOptions<V>,
+    rng: &mut dyn rand::RngCore,
+) -> Result<TreeAciResult<V>>
+where
+    T: TreeAciScalar,
+    V: TreeAciNode,
+    F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
 {
     // The exact one-node path needs neither bootstrap samples nor frame/state
     // caches. Branch before `TreeAciState::initialize`; `evaluate_single_site`
@@ -256,7 +273,8 @@ where
     F: FnMut(&[T]) -> T,
     R: rand::Rng + ?Sized,
 {
-    tree_elementwise_batched_with_rng(
+    let mut stream: &mut R = rng;
+    tree_elementwise_batched_erased(
         |batch, output| {
             for (value, point_inputs) in output
                 .iter_mut()
@@ -268,7 +286,7 @@ where
         },
         inputs,
         options,
-        rng,
+        &mut stream,
     )
 }
 
