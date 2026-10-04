@@ -35,20 +35,18 @@ records milestone ownership; it does not authorize those deferred tasks.
 
 The original candidate passed the affected-crate suites and doctests (1527
 tests, 18 explicitly ignored), guide examples, formatting, and maintenance
-gates. The quantics caller affected by the M1 optimizer report change also
-passed its crate suite and doctests (98 tests). The boundary reproductions independently confirmed the immediate
+gates. The boundary reproductions independently confirmed the immediate
 TreeTCI capacity panic and the NaN `Converged` result before the corrections.
 Clippy reported only five existing warnings in the fixed-depth benchmark.
 
 The corrected candidate passed the affected two-crate suites and doctests
 (517 tests, 12 explicitly ignored), guide examples, formatting, and maintenance
 gates. The quantics caller affected by the M1 optimizer report change also
-passed its crate suite and doctests (98 tests). The
-independent re-review resolved both major findings and found no new blocker,
+passed its crate suite and doctests (98 tests). The independent re-review resolved both major findings and found no new blocker,
 major, minor, or nit. Removed validation paths were reviewed for coverage
 impact: non-finite checks moved into the shared evaluator wrapper and remain
-covered at initial and later batches. No
-new static performance violation or measured performance claim was established;
+covered at initial and later batches. No new static performance violation or
+measured performance claim was established;
 downstream-scale measurements remain with M4/M9. Existing sampled-estimate and
 calibrated-rounding limitations are unchanged. The branch is nine commits
 behind `origin/main`; synchronizing and revalidating that integrated candidate
