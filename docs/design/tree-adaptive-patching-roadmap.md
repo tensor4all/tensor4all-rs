@@ -268,16 +268,60 @@ children that the feature enters only through a corner or an edge, which
 uniform sampling and the engine can miss. The fix itself is decided in the
 M9 global review.
 
-Exit: overpatching cases do not exceed the unpatched parameter count by more
-than a documented margin, measured on M2 patches. If the optional heuristic
-is implemented, measurements compare it with `Sequential` and
-`ExactParameterGain`.
+Completion (user decision of 2026-10-04): M5 is complete when each of its
+implementation items is either implemented or explicitly deferred with a
+recorded reason: the minimum patch size and the capped-patch bound (done),
+sibling merging (question 3), the engine's early exit at the first saturated
+sweep, and the opt-in corner-miss mitigation (question 5); the selector is
+already deferred as an optional later study. The overpatching measurements
+below do not gate completion: they move after the checkpoint review and are
+tracked under M9, so the review is not blocked on downstream-scale workloads.
+
+Exit measurement (after the checkpoint, tracked under M9): overpatching cases
+do not exceed the unpatched parameter count by more than a documented
+margin, measured on M2 patches. If the optional heuristic is implemented,
+measurements compare it with `Sequential` and `ExactParameterGain`.
+
+### Checkpoint: interpolation line review (after M5)
+
+Outcome: the interpolation line M1–M5 is reviewed as one unit before any
+later milestone starts (user decision of 2026-10-04). It is the major
+milestone of the branch and the gate for proposing it for merge into `main`.
+M4 stays deferred and does not gate the review: its decision needs
+downstream-scale measurements and the M6 consumers. The review covers M1–M3
+and M5, and records M4 as open.
+
+Scope, on the whole branch diff against `origin/main` rather than commit by
+commit:
+
+- consistency of the public API across M1–M5: names, options, error types,
+  report structures, and their rustdoc;
+- agreement of the error contract and its amendments with the
+  implementation;
+- test coverage of every control-flow path, and duplicated or obsolete
+  tests;
+- documentation drift: README, guides, `skills/use-tensor4all-rs/`,
+  `llms.txt`, and design records claim no more than the code provides;
+- a performance audit of the hot paths with `PERFORMANCE_TIPS.md` and
+  `skills/audit-performance/`;
+- one list of the recorded but unresolved issues (for example #795, #791,
+  #797, #670, and the corner-localized misses), each with its owner
+  milestone.
+
+Process: independent review, a fix round if needed, and a re-review; if the
+re-review finds new problems, stop and report instead of starting another
+fix round. Whether the branch is then proposed for merge into `main` is the
+user's decision.
+
+Exit: the review and its fixes are recorded in a work log, and the
+unresolved-issue list is in this roadmap or the findings record.
 
 ### M6. Adaptive patched contraction (L)
 
 Outcome: the contraction side of the method is complete on trees. This line
 works on existing `PartitionedTreeTN` values and does not depend on M1 or M2;
-it is ordered after them to keep the interpolation line first.
+it is ordered after them to keep the interpolation line first, and starts
+after the checkpoint review.
 
 Scope:
 
@@ -342,6 +386,8 @@ Exit: an MPI smoke test and a multi-rank benchmark.
   at matched measured accuracy.
 - Each benchmark starts only after the component producing its inputs exists
   on the branch.
+- The M5 overpatching measurements (moved here from the M5 exit on
+  2026-10-04), after the checkpoint review.
 - Known risk to track: downstream TreeTCI runs on topologies with junction
   nodes have been observed to be much slower than on chains at low
   temperature; this affects tree pQTCI and must be profiled once M2 exists.
@@ -369,10 +415,10 @@ their own issues.
 ## Dependencies
 
 ```text
-M0 ──► M1 ──► M2 ──► M3 ──► M4 ──► M5
-                      │
-                      └──────────► M7 ──► M8
-M6 (independent of M1/M2; scheduled after M2) ──► M7
+M0 ──► M1 ──► M2 ──► M3 ──► M4 ──► M5 ──► Checkpoint review
+                      │                          │
+                      └──────────► M7 ──► M8     ▼
+M6 (independent of M1/M2; starts after the checkpoint) ──► M7
 M9: continuous, each item gated on its producer
 M10: deferred
 ```
