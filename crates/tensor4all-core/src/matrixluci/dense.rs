@@ -38,7 +38,7 @@ impl DenseLuKernel {
         if Self::is_no_truncation(options, full_rank) {
             let mut pivot_errors = Vec::with_capacity(full_rank + 1);
             for &pivot_abs in diag_abs.iter().take(full_rank) {
-                if pivot_abs < f64::EPSILON {
+                if pivot_abs == 0.0 {
                     if pivot_errors.is_empty() {
                         pivot_errors.push(pivot_abs);
                     } else {
@@ -67,7 +67,7 @@ impl DenseLuKernel {
                 break;
             }
 
-            if pivot_abs < f64::EPSILON {
+            if pivot_abs == 0.0 {
                 if rank == 0 {
                     last_error = pivot_abs;
                 }

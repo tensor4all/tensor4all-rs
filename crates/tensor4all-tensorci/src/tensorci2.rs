@@ -559,7 +559,7 @@ where
     {
         validate_explicit_index_sets(&local_dims, &i_set, &j_set)?;
         let max_sample_value = max_sample_over_index_sets(&local_dims, &i_set, &j_set, f);
-        if max_sample_value < 1e-30 {
+        if max_sample_value == 0.0 {
             return Err(TCIError::InvalidPivot {
                 message: "explicit TensorCI2 index sets only sample zero values".to_string(),
             });
@@ -1148,10 +1148,10 @@ where
                 let site_dim = self.local_dims[b];
                 let right_dim = np; // = |I_{b+1}|
 
-                // A numerically zero pivot matrix (the function underflows in
-                // this subdomain) cannot be solved; emit a zero core with the
-                // same bond shape instead of failing the solve.
-                if (0..np).all(|i| (0..nj).all(|j| Scalar::abs_val(p_mat[[i, j]]) < f64::EPSILON)) {
+                // An exactly zero pivot matrix cannot be solved; emit a zero
+                // core with the same bond shape. Small nonzero values must
+                // still be interpolated, regardless of their absolute scale.
+                if (0..np).all(|i| (0..nj).all(|j| p_mat[[i, j]].is_zero())) {
                     self.site_tensors[b] = try_tensor3_zeros(left_dim, site_dim, right_dim)?;
                     continue;
                 }
@@ -1547,7 +1547,7 @@ where
         }
     }
 
-    if tci.max_sample_value < 1e-30 {
+    if tci.max_sample_value == 0.0 {
         return Err(TCIError::InvalidPivot {
             message: "Initial pivots have zero function values".to_string(),
         });

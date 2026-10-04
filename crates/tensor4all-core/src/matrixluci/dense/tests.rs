@@ -6,6 +6,24 @@ use approx::assert_abs_diff_eq;
 use tensor4all_tensorbackend::from_vec2d;
 
 #[test]
+fn dense_kernel_keeps_small_nonzero_pivots() {
+    for scale in [1.0, 1e-20] {
+        let data = [2.0 * scale, 0.0, 0.0, scale];
+        let source = DenseMatrixSource::from_column_major(&data, 2, 2);
+        for options in [
+            PivotKernelOptions::default(),
+            PivotKernelOptions::no_truncation(),
+        ] {
+            let selection = DenseLuKernel.factorize(&source, &options).unwrap();
+            assert_eq!(selection.row_indices, vec![0, 1]);
+            assert_eq!(selection.col_indices, vec![0, 1]);
+            assert_eq!(selection.pivot_errors, vec![2.0 * scale, scale, 0.0]);
+            assert_eq!(selection.rank, 2);
+        }
+    }
+}
+
+#[test]
 fn dense_kernel_recovers_identity_pivots() {
     let src =
         DenseMatrixSource::from_column_major(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], 3, 3);
