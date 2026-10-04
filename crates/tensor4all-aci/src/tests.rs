@@ -2239,6 +2239,33 @@ fn elementwise_with_rng_draws_for_initialization_and_guards() {
         draws.get()
     };
 
+    // The public entry point also accepts an erased stream (`?Sized` bound).
+    {
+        let draws = Rc::new(Cell::new(0));
+        let mut counting = CountingRng {
+            inner: <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(5),
+            draws: Rc::clone(&draws),
+        };
+        let erased: &mut dyn rand::RngCore = &mut counting;
+        let _ = crate::elementwise_batched_with_rng(
+            |batch, output| {
+                for (point, value) in output.iter_mut().enumerate() {
+                    let mut sum = 0.0;
+                    for input in 0..batch.n_inputs() {
+                        sum += batch.get(input, point)?;
+                    }
+                    *value = sum;
+                }
+                Ok(())
+            },
+            &inputs,
+            &with_guard,
+            erased,
+        )
+        .unwrap();
+        assert!(draws.get() > 0);
+    }
+
     let guarded = count(with_guard);
     let unguarded = count(without_guard);
     assert!(

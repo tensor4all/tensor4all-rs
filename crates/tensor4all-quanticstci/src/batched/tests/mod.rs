@@ -479,7 +479,7 @@ fn multicomponent_with_rng_consumes_one_stream_across_components() {
         pointwise_components_batch(|x: &[f64]| vec![1.0 + x[0], 2.0 * x[0] + 1.0]),
         &[2],
         None,
-        options,
+        options.clone(),
         &mut rng,
     )
     .unwrap();
@@ -489,4 +489,20 @@ fn multicomponent_with_rng_consumes_one_stream_across_components() {
         2 * single_draws,
         "two components must continue the same stream ({both_draws} vs {single_draws} for one)"
     );
+
+    // The public entry point also accepts an erased stream (`?Sized` bound).
+    let draws = Rc::new(Cell::new(0));
+    let mut rng = CountingRng {
+        inner: <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0),
+        draws: Rc::clone(&draws),
+    };
+    let _ = quanticscrossinterpolate_batch_with_rng::<f64, _, _>(
+        &grid,
+        pointwise_coordinate_batch(|x: &[f64]| 1.0 + x[0]),
+        None,
+        options.clone(),
+        &mut rng as &mut dyn rand::RngCore,
+    )
+    .unwrap();
+    assert_eq!(draws.get(), single_draws);
 }
