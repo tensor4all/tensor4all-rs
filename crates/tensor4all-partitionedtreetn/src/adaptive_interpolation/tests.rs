@@ -315,8 +315,10 @@ fn largest_cached_points_are_ordered_by_magnitude_then_coordinates() {
     assert!(cache.largest_points(0, magnitude).is_empty());
     // A limit beyond the entry count neither overflows nor over-allocates.
     assert_eq!(cache.largest_points(usize::MAX, magnitude).len(), 5);
-    // Whatever the map order, a tie at the cutoff keeps the smaller
-    // coordinates: of the three entries at 5 only [0, 1] survives next to 7.
+    // A tie at the cutoff keeps the smaller coordinates: of the three entries
+    // at 5 only [0, 1] survives next to 7. The ranking orders ties by
+    // coordinates, so the result does not depend on the map order; this run
+    // exercises the one order of the unseeded hasher.
     let mut tied = PatchCache::new(vec![2, 3]);
     for (point, value) in [
         ([1, 0], 5.0),

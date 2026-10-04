@@ -203,8 +203,8 @@ the report's `GlobalL2Error`:
   do not exclude it. The opt-in `with_cache_candidates(true)` (child
   patches also start from the largest values the parent already evaluated
   in them) can prevent a miss where the parent sampled the feature, but not
-  one where the parent never sampled it or where the acceptance sample
-  misses a feature the engine saw.
+  one where the parent never sampled it or where the engine saw the feature
+  without resolving it and the acceptance sample misses the residual.
 - `AcceptanceOnly`: audits were disabled. The combined acceptance statistics
   are neither a bound nor an estimate.
 - `ToleranceNotMet`: some patch was retained by the minimum patch size

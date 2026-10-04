@@ -2007,8 +2007,9 @@ the evidence above was gathered. It is recorded here, not fixed.
   values of its inherited evaluation cache. On the reproduction below (seeds
   2, 3, 4) the true `E / delta` fell from 680, 880, and 880 to 51, 230, and
   16. No rank-1 patch of kind (a) was accepted any more, and the effect is
-  not limited to kind (a): seed 2, which had none, improved because a kind
-  (b) patch (true RMS `1.4e3 tau`) was no longer accepted. Other kind (b)
+  not limited to kind (a): seed 2, which had none, improved because its
+  kind (b) patches with true RMS `1.4e3 tau` and `2.6e2 tau` were no longer
+  accepted. Other kind (b)
   patches, whose feature the engine saw but did not resolve and whose
   residual the 64-point acceptance sample and the audit missed, remained, so
   every seed still exceeds `10 delta`. These are three seeds of one

@@ -15,7 +15,8 @@ these decisions, is
 [`tree-pqtci-patch-size-bounds.md`](./tree-pqtci-patch-size-bounds.md).
 There, the user decided the report design (a new `ToleranceNotMet` variant)
 and the unit (one generalized bit per active site, with spatial size
-deferred); its other issues are open.
+deferred); its other open issues were implemented as proposed, and open
+issue 1 stays provisional.
 
 ## Current seam
 
