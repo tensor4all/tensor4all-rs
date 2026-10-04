@@ -15,6 +15,8 @@ use tensor4all_tensorbackend::{mat_mul, solve_matrix, Matrix};
 /// Selects pivots by computing residual blocks on demand, avoiding full
 /// matrix materialization. Suitable for large matrices accessed via
 /// [`LazyMatrixSource`](super::LazyMatrixSource).
+/// An exactly zero starting residual column is skipped. Certifying an all-zero
+/// residual may inspect every remaining entry, one column at a time.
 #[derive(Default)]
 pub struct LazyBlockRookKernel;
 
@@ -75,11 +77,18 @@ fn rook_pivot<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     selected_rows: &[usize],
     selected_cols: &[usize],
 ) -> Result<(usize, usize, f64)> {
-    let mut current_col = remaining_cols[0];
-    let mut current_row = remaining_rows[0];
-    let max_steps = remaining_rows.len() + remaining_cols.len() + 1;
-
-    for _ in 0..max_steps {
+    let mut columns = remaining_cols.iter().copied();
+    let mut current_col;
+    let mut current_row;
+    // INVARIANT: a zero fiber does not certify a zero residual. Scan lazily
+    // until a nonzero starting column is found; never materialize the full
+    // remaining matrix. The ordinary nonzero-column path performs no extra
+    // block evaluations.
+    loop {
+        let Some(col) = columns.next() else {
+            return Ok((remaining_rows[0], remaining_cols[0], 0.0));
+        };
+        current_col = col;
         let col_residual = residual_block(
             source,
             remaining_rows,
@@ -87,9 +96,15 @@ fn rook_pivot<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
             selected_rows,
             selected_cols,
         )?;
-        let (best_row_pos, _, _) = argmax_abs(&col_residual);
-        current_row = remaining_rows[best_row_pos];
+        let (best_row_pos, _, best_abs) = argmax_abs(&col_residual);
+        if best_abs > 0.0 {
+            current_row = remaining_rows[best_row_pos];
+            break;
+        }
+    }
 
+    let max_steps = remaining_rows.len() + remaining_cols.len() + 1;
+    for _ in 0..max_steps {
         let row_residual = residual_block(
             source,
             &[current_row],
@@ -104,6 +119,15 @@ fn rook_pivot<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
             return Ok((current_row, current_col, best_abs));
         }
         current_col = next_col;
+        let col_residual = residual_block(
+            source,
+            remaining_rows,
+            &[current_col],
+            selected_rows,
+            selected_cols,
+        )?;
+        let (best_row_pos, _, _) = argmax_abs(&col_residual);
+        current_row = remaining_rows[best_row_pos];
     }
 
     let row_residual = residual_block(
