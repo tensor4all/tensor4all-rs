@@ -38,6 +38,18 @@ fn point_from_batch(batch: GlobalIndexBatch<'_>, point: usize) -> Result<Vec<usi
         .collect()
 }
 
+/// The stream a seeded quantics run uses.
+///
+/// Entropy is drawn only when the run actually samples random initial pivots;
+/// with `n_random_init_pivot == 0` the run is deterministic and a fixed seed
+/// keeps it so without touching the OS.
+pub(crate) fn seeded_quantics_stream(options: &QtciOptions) -> rand_chacha::ChaCha8Rng {
+    match (options.n_random_init_pivot > 0, options.rng_seed) {
+        (true, None) => rand_chacha::ChaCha8Rng::from_os_rng(),
+        (_, seed) => rand_chacha::ChaCha8Rng::seed_from_u64(seed.unwrap_or(0)),
+    }
+}
+
 /// Convert the caller's initial pivots to quantics indices and append random
 /// starting pivots.
 fn prepare_pivots<R: rand::Rng + ?Sized>(
@@ -641,10 +653,7 @@ where
         + tensor4all_treetci::globalpivot::ScalarParts,
     F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
 {
-    let mut rng = match options.rng_seed {
-        Some(seed) => rand_chacha::ChaCha8Rng::seed_from_u64(seed),
-        None => rand_chacha::ChaCha8Rng::from_os_rng(),
-    };
+    let mut rng = seeded_quantics_stream(&options);
     quanticscrossinterpolate_batch_with_rng(grid, f, initial_pivots, options, &mut rng)
 }
 
@@ -894,10 +903,7 @@ where
         + tensor4all_treetci::globalpivot::ScalarParts,
     F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
 {
-    let mut rng = match options.rng_seed {
-        Some(seed) => rand_chacha::ChaCha8Rng::seed_from_u64(seed),
-        None => rand_chacha::ChaCha8Rng::from_os_rng(),
-    };
+    let mut rng = seeded_quantics_stream(&options);
     quanticscrossinterpolate_from_arrays_batch_with_rng(xvals, f, initial_pivots, options, &mut rng)
 }
 
@@ -1110,10 +1116,7 @@ where
         + tensor4all_treetci::globalpivot::ScalarParts,
     F: Fn(QuanticsBatch<'_, usize>) -> Result<Vec<V>>,
 {
-    let mut rng = match options.rng_seed {
-        Some(seed) => rand_chacha::ChaCha8Rng::seed_from_u64(seed),
-        None => rand_chacha::ChaCha8Rng::from_os_rng(),
-    };
+    let mut rng = seeded_quantics_stream(&options);
     quanticscrossinterpolate_discrete_batch_with_rng(size, f, initial_pivots, options, &mut rng)
 }
 

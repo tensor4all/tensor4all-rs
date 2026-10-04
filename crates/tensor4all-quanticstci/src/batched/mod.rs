@@ -5,7 +5,6 @@
 //! component independently and combining the results into a single
 //! [`SimpleTensorTrain`] with an additional component site.
 
-use rand::SeedableRng;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -49,10 +48,7 @@ where
         + FullPivLuScalar
         + tensor4all_treetci::globalpivot::ScalarParts,
 {
-    let mut rng = match options.rng_seed {
-        Some(seed) => rand_chacha::ChaCha8Rng::seed_from_u64(seed),
-        None => rand_chacha::ChaCha8Rng::from_os_rng(),
-    };
+    let mut rng = super::quantics_tci::seeded_quantics_stream(&options);
     quanticscrossinterpolate_multicomponent_with_rng(
         grid,
         f,

@@ -117,7 +117,9 @@ where
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
-    let mut rng = match (options.enable_global_pivots, options.seed) {
+    // Entropy is drawn only when a randomized global search actually runs.
+    let searches_run = options.enable_global_pivots && options.max_iter > 1;
+    let mut rng = match (searches_run, options.seed) {
         (true, None) => rand_chacha::ChaCha8Rng::from_os_rng(),
         (_, seed) => rand_chacha::ChaCha8Rng::seed_from_u64(seed.unwrap_or(0)),
     };

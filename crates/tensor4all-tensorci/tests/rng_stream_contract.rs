@@ -5,7 +5,7 @@
 //! continue it. A finder that derived a seed for a hidden RNG, or that reset
 //! the stream, fails them.
 
-use rand::SeedableRng;
+use rand::{Rng as _, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -121,4 +121,24 @@ fn the_seeded_entry_point_is_the_low_level_entry_point_with_a_derived_stream() {
 
     assert_eq!(seeded.ranks, streamed.ranks);
     assert_eq!(seeded.errors, streamed.errors);
+}
+
+#[test]
+fn the_finder_leaves_the_supplied_stream_at_the_expected_position() {
+    let finder = DefaultGlobalPivotFinder::new(1, 1, 10.0);
+    let mut stream = ChaCha8Rng::seed_from_u64(11);
+    let mut reference = ChaCha8Rng::seed_from_u64(11);
+
+    finder
+        .find_global_pivots(&input(), &f, 0.1, &mut stream)
+        .unwrap();
+    // One search draws exactly the starting point: one coordinate per site.
+    let _ = (reference.random_range(0..4), reference.random_range(0..4));
+
+    assert_eq!(
+        stream.next_u64(),
+        reference.next_u64(),
+        "the finder must consume the supplied stream at the draw position the rule describes \
+         (no extra draws, no hidden generator)"
+    );
 }

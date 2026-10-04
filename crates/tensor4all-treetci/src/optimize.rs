@@ -314,7 +314,11 @@ where
     // Seeded high-level path: an explicitly named RNG is derived from the
     // option. Entropy is only drawn when the run actually performs a randomized
     // global search, so a run with the search disabled never touches OS entropy.
-    let mut rng = match (options.enable_global_pivots, options.seed) {
+    // Entropy is drawn only when a randomized global search actually runs: with
+    // the search disabled, or with a single sweep, the run is deterministic and
+    // a fixed seed keeps it so without touching the OS.
+    let searches_run = options.enable_global_pivots && options.max_iter > 1;
+    let mut rng = match (searches_run, options.seed) {
         (true, None) => ChaCha8Rng::from_os_rng(),
         (_, seed) => ChaCha8Rng::seed_from_u64(seed.unwrap_or(0)),
     };
