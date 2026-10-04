@@ -138,6 +138,43 @@ assert!(tci_cached.rank() >= 1);
 assert!(cf.num_cache_hits() > 0);
 ```
 
+### `MultiIndexCache`: memoization when the target cannot be `CachedFunction`
+
+`CachedFunction` owns its callback, so it requires `Fn(&[I]) -> V + Send + Sync
++ 'static` and cannot return `Result`. When your target is fallible, borrows a
+value that is not `Send` (for example an interpreter handle), or must never have
+a failed evaluation cached, use `MultiIndexCache` instead: it encodes the same
+mixed-radix keys, but the caller looks points up, evaluates the misses, and
+inserts the successful results.
+
+```rust
+use tensor4all_core::MultiIndexCache;
+
+let mut cache: MultiIndexCache<f64> = MultiIndexCache::new(&[2, 2]).unwrap();
+let target = |idx: &[usize]| Ok::<f64, String>((idx[0] * 2 + idx[1]) as f64);
+
+fn evaluate(
+    cache: &mut MultiIndexCache<f64>,
+    target: impl Fn(&[usize]) -> Result<f64, String>,
+    idx: &[usize],
+) -> Result<f64, String> {
+    match cache.get(idx).unwrap() {
+        Some(value) => Ok(value),
+        None => {
+            let value = target(idx)?; // a failure is never cached
+            cache.insert(idx, value).unwrap();
+            Ok(value)
+        }
+    }
+}
+
+assert_eq!(evaluate(&mut cache, target, &[1, 1]).unwrap(), 3.0);
+assert_eq!(evaluate(&mut cache, target, &[1, 1]).unwrap(), 3.0);
+assert_eq!(cache.hits(), 1);
+assert_eq!(cache.misses(), 1);
+assert_eq!(cache.retained_bytes(), 8 + std::mem::size_of::<f64>());
+```
+
 ### Performance guidance
 
 - `CachedFunction` is most useful when the function evaluation is expensive
@@ -146,6 +183,9 @@ assert!(cf.num_cache_hits() > 0);
   may not be worth it.
 - The cache grows with the number of unique indices evaluated. For very
   high-dimensional problems, memory usage may become significant.
+- The quantics TCI entry points now memoize their target this way, which removed
+  the record-only `HashMap<Vec<usize>, V>` that used to sit on that path
+  (issue #747).
 
 ## Manual Integral
 
