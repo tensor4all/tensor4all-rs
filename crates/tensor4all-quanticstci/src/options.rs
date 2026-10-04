@@ -200,6 +200,26 @@ impl QtciOptions {
         self
     }
 
+    /// Set the seed for the random initial pivots.
+    ///
+    /// `Some(seed)` pins them with an explicitly named `ChaCha8Rng`, so two
+    /// runs with the same options and seed draw the same pivots. `None` (the
+    /// default) draws OS entropy once per run. The `*_with_rng` entry points
+    /// ignore this option and consume the caller's stream instead.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstci::QtciOptions;
+    ///
+    /// let opts = QtciOptions::default().with_rng_seed(42);
+    /// assert_eq!(opts.rng_seed, Some(42));
+    /// ```
+    pub fn with_rng_seed(mut self, seed: u64) -> Self {
+        self.rng_seed = Some(seed);
+        self
+    }
+
     /// Set the unfolding scheme.
     ///
     /// # Examples

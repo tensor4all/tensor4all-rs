@@ -14,7 +14,7 @@ fn test_batched_tci_2component_1d() {
         .build()
         .unwrap();
 
-    let options = QtciOptions::default().with_tolerance(1e-8);
+    let options = QtciOptions::default().with_tolerance(1e-8).with_rng_seed(0);
 
     // Use sin(x)+1 and cos(x) so all components are non-zero at x=0
     // (the default initial pivot).

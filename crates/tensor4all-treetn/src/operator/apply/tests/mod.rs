@@ -5,6 +5,7 @@ use crate::{
     LinearOperatorIndexBindingError, LinearOperatorTaggedApplyError, NumberedTagSelectionError,
     SiteIndexNetwork,
 };
+use rand::SeedableRng;
 use std::collections::{HashMap, HashSet};
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::{ColMajorArrayRef, IdxTensor, SvdTruncationPolicy};
@@ -689,7 +690,7 @@ fn test_linear_operator_tensor_index() {
     .unwrap();
 
     let link_space = LinkSpace::uniform(2);
-    let mut rng = rand::rng();
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
     let mpo = random_treetn::<f64, _, _>(&mut rng, &net, link_space).unwrap();
 
     let true_s0 = make_index(2);
@@ -750,7 +751,7 @@ fn test_arc_linear_operator_cow() {
     .unwrap();
 
     let link_space = LinkSpace::uniform(2);
-    let mut rng = rand::rng();
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
     let mpo = random_treetn::<f64, _, _>(&mut rng, &net, link_space).unwrap();
 
     let arc_op = ArcLinearOperator::new(mpo, HashMap::new(), HashMap::new());
@@ -1638,7 +1639,7 @@ fn test_linear_operator_replace_indices() {
     .unwrap();
 
     let link_space = LinkSpace::uniform(2);
-    let mut rng = rand::rng();
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
     let mpo = random_treetn::<f64, _, _>(&mut rng, &net, link_space).unwrap();
 
     let true_s0 = make_index(2);

@@ -223,7 +223,7 @@ where
 /// let f = |idx: &[usize]| idx[0] as f64;
 /// let (qtci, _ranks, _errors) =
 ///     quanticscrossinterpolate_discrete_batch::<f64, _>(
-///         &[8], pointwise_index_batch(f), None, QtciOptions::default(),
+///         &[8], pointwise_index_batch(f), None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
 ///     ).unwrap();
 ///
 /// // Evaluate at grid point 4
@@ -350,7 +350,7 @@ where
     ///
     /// let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
     /// let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
-    ///     &[4, 4], pointwise_index_batch(f), None, QtciOptions::default(),
+    ///     &[4, 4], pointwise_index_batch(f), None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
     /// ).unwrap();
     ///
     /// // Indices are 0-indexed: f(1, 2) = 1 + 2 = 3
@@ -387,7 +387,7 @@ where
     /// // f(i) = 1 on a grid of size 8 => sum = 8
     /// let f = |_idx: &[usize]| 1.0_f64;
     /// let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
-    ///     &[8], pointwise_index_batch(f), None, QtciOptions::default(),
+    ///     &[8], pointwise_index_batch(f), None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
     /// ).unwrap();
     ///
     /// let sum = qtci.sum().unwrap();
@@ -431,7 +431,7 @@ where
     ///     .unwrap();
     /// let f = |_: &[f64]| 1.0_f64;
     /// let (qtci, _, _) = quanticscrossinterpolate_batch::<f64, _>(
-    ///     &grid, pointwise_coordinate_batch(f), None, QtciOptions::default(),
+    ///     &grid, pointwise_coordinate_batch(f), None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
     /// ).unwrap();
     ///
     /// let integral = qtci.integral().unwrap();
@@ -469,7 +469,7 @@ where
     ///
     /// let f = |idx: &[usize]| idx[0] as f64;
     /// let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
-    ///     &[4], pointwise_index_batch(f), None, QtciOptions::default(),
+    ///     &[4], pointwise_index_batch(f), None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
     /// ).unwrap();
     ///
     /// let tt = qtci.tensor_train();
@@ -570,7 +570,7 @@ where
 ///         .collect())
 /// };
 /// let (qtci, _ranks, errors) =
-///     quanticscrossinterpolate_batch::<f64, _>(&grid, f, None, QtciOptions::default()).unwrap();
+///     quanticscrossinterpolate_batch::<f64, _>(&grid, f, None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() }).unwrap();
 ///
 /// assert!(*errors.last().unwrap() < 1e-6);
 /// assert!(qtci.sum().unwrap() > 0.0); // sin(x) > 0 on (0, pi)
@@ -735,7 +735,7 @@ where
 ///         .collect())
 /// };
 /// let (qtci, _, _) =
-///     quanticscrossinterpolate_from_arrays_batch::<f64, _>(&xvals, f, None, QtciOptions::default())
+///     quanticscrossinterpolate_from_arrays_batch::<f64, _>(&xvals, f, None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() })
 ///         .unwrap();
 ///
 /// // Grid index 2 maps to x = 2.0, so f = 4.0
@@ -997,7 +997,7 @@ where
 ///         &[16, 16],
 ///         f,
 ///         None,
-///         QtciOptions::default(),
+///         QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
 ///     )
 ///     .unwrap();
 ///

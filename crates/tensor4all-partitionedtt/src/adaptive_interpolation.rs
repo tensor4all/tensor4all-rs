@@ -523,10 +523,11 @@ where
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
     // The seeded high-level path uses an explicitly named RNG and delegates to
-    // the caller-owned-stream entry point.
-    let mut rng = match options.tci_options.seed {
-        Some(seed) => ChaCha8Rng::seed_from_u64(seed),
-        None => ChaCha8Rng::from_os_rng(),
+    // the caller-owned-stream entry point. A single-site input is evaluated
+    // exactly without drawing anything, so it never needs OS entropy.
+    let mut rng = match (site_indices.len() > 1, options.tci_options.seed) {
+        (true, None) => ChaCha8Rng::from_os_rng(),
+        (_, seed) => ChaCha8Rng::seed_from_u64(seed.unwrap_or(0)),
     };
     adaptiveinterpolate_with_rng(
         f,

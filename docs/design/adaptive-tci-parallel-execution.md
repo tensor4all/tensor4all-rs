@@ -58,8 +58,9 @@ consumer is ready to test it.
 Keep the existing sequential entry-point name for minimal and
 no-default-feature builds, but change its return type to
 `AdaptiveInterpolationResult<T>` so the required caches are returned uniformly.
-It uses the same wave processor and per-path seed derivation as parallel modes,
-with a sequential scheduler. Add feature-gated entry points rather than putting
+It uses the same wave processor as parallel modes. Stream ownership differs:
+the sequential entry point consumes one caller-owned stream per run (see below),
+while the parallel modes derive one stream per patch. Add feature-gated entry points rather than putting
 feature-dependent bounds on the existing function:
 
 ```rust
@@ -149,16 +150,27 @@ always selects the first unprojected index in `patch_order`, the path reconstruc
 the full `Projector` without serializing `DynIndex` or matching indices by ID.
 Full index identity remains local in `site_indices` and `patch_order`.
 
-The path also supplies a schedule-independent RNG seed. All entry points,
-including the no-default-feature sequential entry point, derive each patch seed
-from the configured root seed and all path coordinates with one fixed documented
-integer mixer. The implementation uses SplitMix64: initialize with
+The path also supplies a schedule-independent RNG seed for the **parallel**
+modes (Rayon, MPI), which derive each patch seed from the configured root seed
+and all path coordinates with one fixed documented integer mixer. The implementation uses SplitMix64: initialize with
 `splitmix64(root_seed ^ 0x6a09e667f3bcc909)`, then for every `(depth, value)`
 apply `splitmix64(state ^ rotate_left(depth as u64, 32) ^ value as u64)`. TCI's
 inner seed is one further `splitmix64` application. Do not use `DefaultHasher`,
-whose stability is not a contract. This intentionally replaces the legacy
-single RNG stream so sequential, Rayon, and MPI modes generate identical
-candidates independent of completion order.
+whose stability is not a contract.
+
+**Implementation note (2026-10-03, supersedes the original contract).** The
+serial entry point now consumes a single caller-owned stream for the entire run
+(`adaptiveinterpolate_with_rng`, with `adaptiveinterpolate` deriving one
+`ChaCha8Rng` from the option), so its candidate pivots and its nested TCI run
+draw from one sequence rather than from per-patch derived seeds. That is what
+`REPOSITORY_RULES.md` "Tensor Network Test Comparisons" asks of a randomized
+entry point. The parallel (Rayon) and MPI modes still derive one `ChaCha8Rng`
+per patch with the mixer above, because a single `&mut R` cannot be shared
+across concurrently processed patches; the design for that ownership is tracked
+in tensor4all/tensor4all-rs#825. Consequently the serial and parallel modes do
+**not** generate identical candidates for the same root seed any more — that
+part of the original contract is withdrawn, and the serial/parallel comparison
+test remains a one-site exact fixture that exercises neither sampling stage.
 
 ## Wavefront scheduling
 

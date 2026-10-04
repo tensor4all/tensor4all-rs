@@ -90,7 +90,7 @@ where
 ///     },
 ///     &[2],
 ///     None,
-///     QtciOptions::default(),
+///     QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
 /// ).unwrap();
 ///
 /// assert_eq!(result.output_dims(), &[2]);
@@ -141,7 +141,7 @@ where
     ///     },
     ///     &[2],
     ///     None,
-    ///     QtciOptions::default(),
+    ///     QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
     /// ).unwrap();
     ///
     /// let tt = result.tensor_train();
@@ -178,7 +178,7 @@ where
     ///     },
     ///     &[2],
     ///     None,
-    ///     QtciOptions::default(),
+    ///     QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
     /// ).unwrap();
     ///
     /// assert_eq!(result.output_dims(), &[2]);
@@ -211,7 +211,7 @@ where
     ///     },
     ///     &[1],
     ///     None,
-    ///     QtciOptions::default(),
+    ///     QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
     /// ).unwrap();
     ///
     /// assert!(result.grid().grid_step().len() > 0);
@@ -282,7 +282,7 @@ where
 ///     f,
 ///     &[2],
 ///     None,
-///     QtciOptions::default().with_tolerance(1e-8),
+///     QtciOptions { rng_seed: Some(0), ..QtciOptions::default() }.with_tolerance(1e-8),
 /// ).unwrap();
 ///
 /// assert_eq!(result.tensor_train().len(), 3); // 2 grid sites + 1 component site
