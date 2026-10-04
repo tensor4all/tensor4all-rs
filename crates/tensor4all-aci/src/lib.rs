@@ -46,13 +46,15 @@ mod state;
 pub(crate) mod validation;
 
 pub use batch::ElementwiseBatch;
-pub use elementwise::{elementwise, elementwise_batched};
+pub use elementwise::{
+    elementwise, elementwise_batched, elementwise_batched_with_rng, elementwise_with_rng,
+};
 pub use error::{AciError, Result};
 #[allow(unused_imports)]
 pub(crate) use local::LocalBlockEvaluator;
 pub use options::AciOptions;
 #[allow(unused_imports)]
-pub(crate) use random_tt::initial_guess;
+pub(crate) use random_tt::{initial_guess, initial_guess_with_rng};
 pub use result::{AciResult, AciTermination};
 pub use scalar::AciScalar;
 #[allow(unused_imports)]

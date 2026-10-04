@@ -76,6 +76,7 @@ fn test_discrete_simple_function() {
     let opts = QtciOptions::default()
         .with_tolerance(1e-10)
         .with_nrandominitpivot(3)
+        .with_rng_seed(0)
         .with_unfoldingscheme(UnfoldingScheme::Fused);
 
     let result = quanticscrossinterpolate_discrete_batch(

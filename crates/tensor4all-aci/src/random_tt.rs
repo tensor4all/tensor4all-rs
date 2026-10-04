@@ -16,6 +16,19 @@ pub(crate) fn initial_guess<T: AciScalar>(
     inputs: &[SimpleTensorTrain<T>],
     options: &AciOptions<T>,
 ) -> Result<SimpleTensorTrain<T>> {
+    let mut rng = ChaCha8Rng::seed_from_u64(options.rng_seed);
+    initial_guess_with_rng(inputs, options, &mut rng)
+}
+
+/// Deterministic initial guess on a caller-owned random stream.
+///
+/// Same as [`initial_guess`], but consumes `rng` for the random cores instead
+/// of deriving a stream from `AciOptions::rng_seed`.
+pub(crate) fn initial_guess_with_rng<T: AciScalar>(
+    inputs: &[SimpleTensorTrain<T>],
+    options: &AciOptions<T>,
+    rng: &mut dyn rand::RngCore,
+) -> Result<SimpleTensorTrain<T>> {
     let site_dims = validate_inputs(inputs)?;
     validate_options(options)?;
 
@@ -28,11 +41,10 @@ pub(crate) fn initial_guess<T: AciScalar>(
     let core_dims = initial_guess_core_dims(&site_dims, &link_dims);
     initial_guess_total_entry_count(&core_dims)?;
 
-    let mut rng = ChaCha8Rng::seed_from_u64(options.rng_seed);
     let mut cores = Vec::with_capacity(core_dims.len());
 
     for (left_dim, site_dim, right_dim) in core_dims {
-        cores.push(random_core(left_dim, site_dim, right_dim, &mut rng)?);
+        cores.push(random_core(left_dim, site_dim, right_dim, rng)?);
     }
 
     Ok(SimpleTensorTrain::new(cores)?)
@@ -140,7 +152,7 @@ fn random_core<T: AciScalar>(
     left_dim: usize,
     site_dim: usize,
     right_dim: usize,
-    rng: &mut ChaCha8Rng,
+    rng: &mut dyn rand::RngCore,
 ) -> Result<Tensor3<T>> {
     let len = initial_guess_core_entry_count(left_dim, site_dim, right_dim)?;
     let data = (0..len)

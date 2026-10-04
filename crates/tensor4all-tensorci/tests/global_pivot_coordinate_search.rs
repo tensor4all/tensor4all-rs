@@ -1,5 +1,5 @@
 //! Regression for #806, with explicit starts and literal residual maxima.
-use rand::{Rng, RngCore};
+use rand::{Rng as _, RngCore};
 use tensor4all_simplett::SimpleTensorTrain;
 use tensor4all_tensorci::{
     DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput, TCIError,
@@ -183,7 +183,7 @@ fn optimizer_propagates_custom_finder_errors() {
             _: &GlobalPivotSearchInput<T>,
             _: &F,
             _: f64,
-            _: &mut impl Rng,
+            _: &mut dyn RngCore,
         ) -> tensor4all_tensorci::Result<Vec<MultiIndex>>
         where
             T: Scalar + TTScalar,

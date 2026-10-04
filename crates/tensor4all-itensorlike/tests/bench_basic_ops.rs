@@ -1,13 +1,14 @@
 //! Benchmark for main branch (tenferro backend).
 //! Run: cargo test --release -p tensor4all-itensorlike --test bench_basic_ops -- --nocapture
 
+use rand_chacha::ChaCha8Rng;
 use std::time::Instant;
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorIndex};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
 fn make_random_mps(n_sites: usize, d: usize, bond_dim: usize, seed: u64) -> TensorTrain {
     use rand::{Rng, SeedableRng};
-    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let mut tensors = Vec::with_capacity(n_sites);
     let mut prev_bond: Option<DynIndex> = None;
     for i in 0..n_sites {
@@ -35,42 +36,41 @@ fn make_random_mps(n_sites: usize, d: usize, bond_dim: usize, seed: u64) -> Tens
 
 fn make_random_mpo_pair(n_sites: usize, d: usize, bond_dim: usize) -> (TensorTrain, TensorTrain) {
     use rand::{Rng, SeedableRng};
-    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+    let mut rng = ChaCha8Rng::seed_from_u64(42);
     let shared: Vec<DynIndex> = (0..n_sites)
         .map(|i| DynIndex::new_dyn_with_tag(d, &format!("mid={}", i + 1)).unwrap())
         .collect();
-    let make_mpo =
-        |rng: &mut rand::rngs::StdRng, tag: &str, shared: &[DynIndex], shared_first: bool| {
-            let mut tensors = Vec::with_capacity(n_sites);
-            let mut prev_bond: Option<DynIndex> = None;
-            for (i, shared_idx) in shared.iter().enumerate().take(n_sites) {
-                let phys = DynIndex::new_dyn_with_tag(d, &format!("{}={}", tag, i + 1)).unwrap();
-                let br = if i < n_sites - 1 { bond_dim } else { 1 };
-                let mut indices = Vec::new();
-                if let Some(ref b) = prev_bond {
-                    indices.push(b.clone());
-                }
-                if shared_first {
-                    indices.push(shared_idx.clone());
-                    indices.push(phys);
-                } else {
-                    indices.push(phys);
-                    indices.push(shared_idx.clone());
-                }
-                let next_bond = if i < n_sites - 1 {
-                    let b = DynIndex::new_dyn(br);
-                    indices.push(b.clone());
-                    Some(b)
-                } else {
-                    None
-                };
-                let size: usize = indices.iter().map(|idx| idx.dim()).product();
-                let data: Vec<f64> = (0..size).map(|_| rng.random::<f64>() - 0.5).collect();
-                tensors.push(IdxTensor::from_dense(indices, data).unwrap());
-                prev_bond = next_bond;
+    let make_mpo = |rng: &mut ChaCha8Rng, tag: &str, shared: &[DynIndex], shared_first: bool| {
+        let mut tensors = Vec::with_capacity(n_sites);
+        let mut prev_bond: Option<DynIndex> = None;
+        for (i, shared_idx) in shared.iter().enumerate().take(n_sites) {
+            let phys = DynIndex::new_dyn_with_tag(d, &format!("{}={}", tag, i + 1)).unwrap();
+            let br = if i < n_sites - 1 { bond_dim } else { 1 };
+            let mut indices = Vec::new();
+            if let Some(ref b) = prev_bond {
+                indices.push(b.clone());
             }
-            TensorTrain::new(tensors).unwrap()
-        };
+            if shared_first {
+                indices.push(shared_idx.clone());
+                indices.push(phys);
+            } else {
+                indices.push(phys);
+                indices.push(shared_idx.clone());
+            }
+            let next_bond = if i < n_sites - 1 {
+                let b = DynIndex::new_dyn(br);
+                indices.push(b.clone());
+                Some(b)
+            } else {
+                None
+            };
+            let size: usize = indices.iter().map(|idx| idx.dim()).product();
+            let data: Vec<f64> = (0..size).map(|_| rng.random::<f64>() - 0.5).collect();
+            tensors.push(IdxTensor::from_dense(indices, data).unwrap());
+            prev_bond = next_bond;
+        }
+        TensorTrain::new(tensors).unwrap()
+    };
     let a = make_mpo(&mut rng, "r", &shared, false);
     let b = make_mpo(&mut rng, "c", &shared, true);
     (a, b)

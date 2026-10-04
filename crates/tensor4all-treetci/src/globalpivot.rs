@@ -14,7 +14,7 @@
 use crate::error::Result as TreeTciResult;
 use crate::{materialize::to_treetn, GlobalIndexBatch, MultiIndex, TreeTCI2};
 use anyhow::Result;
-use rand::{Rng, SeedableRng};
+use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::MatrixLuciScalar as Scalar;
 use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor};
@@ -115,14 +115,87 @@ where
     T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
+    // The seeded path uses an explicitly named RNG and delegates to the
+    // caller-owned-stream entry point.
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    find_global_pivots_with_rng(
+        state,
+        evaluate,
+        nsearch,
+        max_nglobal_pivot,
+        tol_margin,
+        abs_tol,
+        &mut rng,
+    )
+}
+
+/// Global pivot search on a caller-owned random stream.
+///
+/// Same as [`find_global_pivots`], but consumes `rng` directly for the random
+/// starting points instead of deriving their stream from a seed, so a caller
+/// can pin, advance, or share one stream across several searches. Pass a
+/// `rand_chacha::ChaCha8Rng` when a deterministic algorithm is required.
+///
+/// # Errors
+/// Returns an error when the current state cannot be materialized as a
+/// `TreeTN` (a rank mismatch or a singular pivot matrix), when the batch
+/// evaluator returns a wrong number of values (a batch length mismatch),
+/// when `abs_tol` or `tol_margin` is not finite and nonnegative (an
+/// invalid configuration), when the candidate index array shape is
+/// malformed (a shape mismatch), or when reading the materialized
+/// approximation at the candidates fails (a contraction failure).
+pub fn find_global_pivots_with_rng<T, F, R>(
+    state: &TreeTCI2<T>,
+    evaluate: F,
+    nsearch: usize,
+    max_nglobal_pivot: usize,
+    tol_margin: f64,
+    abs_tol: f64,
+    rng: &mut R,
+) -> TreeTciResult<Vec<MultiIndex>>
+where
+    T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    R: Rng + ?Sized,
+{
+    // Erase the caller's RNG type once, so the search body below is
+    // instantiated once per scalar type instead of once per (scalar, RNG) pair.
+    let mut stream: &mut R = rng;
+    find_global_pivots_erased(
+        state,
+        evaluate,
+        nsearch,
+        max_nglobal_pivot,
+        tol_margin,
+        abs_tol,
+        &mut stream,
+    )
+}
+
+/// The search body on an already erased stream.
+///
+/// Callers inside the crate use this so the search is instantiated once per
+/// scalar type.
+pub(crate) fn find_global_pivots_erased<T, F>(
+    state: &TreeTCI2<T>,
+    evaluate: F,
+    nsearch: usize,
+    max_nglobal_pivot: usize,
+    tol_margin: f64,
+    abs_tol: f64,
+    rng: &mut dyn RngCore,
+) -> TreeTciResult<Vec<MultiIndex>>
+where
+    T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+{
     let params = SearchParams {
         nsearch,
         max_nglobal_pivot,
         tol_margin,
         abs_tol,
-        seed,
     };
-    search_with_readout(state, evaluate, params, cached_batched_readout)
+    search_with_readout(state, evaluate, params, rng, cached_batched_readout)
 }
 
 /// Scalar parameters of one global pivot search, as passed to
@@ -133,7 +206,6 @@ struct SearchParams {
     max_nglobal_pivot: usize,
     tol_margin: f64,
     abs_tol: f64,
-    seed: u64,
 }
 
 /// Reads the materialized approximation at every candidate in one batch.
@@ -166,6 +238,7 @@ fn search_with_readout<T, F, R>(
     state: &TreeTCI2<T>,
     evaluate: F,
     params: SearchParams,
+    rng: &mut dyn RngCore,
     readout: R,
 ) -> TreeTciResult<Vec<MultiIndex>>
 where
@@ -182,7 +255,6 @@ where
         max_nglobal_pivot,
         tol_margin,
         abs_tol,
-        seed,
     } = params;
     if !abs_tol.is_finite() || abs_tol < 0.0 {
         return Err(
@@ -231,7 +303,6 @@ where
         })
         .and_then(|per_start| per_start.checked_mul(nsearch))
         .ok_or_else(|| anyhow::anyhow!("global-pivot candidate count overflowed usize"))?;
-    let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let mut points: Vec<MultiIndex> = Vec::with_capacity(candidate_count);
     for _ in 0..nsearch {
         let start: MultiIndex = (0..n_sites)

@@ -1,7 +1,10 @@
+use rand::SeedableRng;
 use std::cell::RefCell;
 
 use crate::scalar::AciScalar;
-use crate::{initial_guess, AciError, AciOptions, ElementwiseBatch, LocalBlockEvaluator, Result};
+use crate::{
+    initial_guess_with_rng, AciError, AciOptions, ElementwiseBatch, LocalBlockEvaluator, Result,
+};
 use tensor4all_core::{
     matrix_luci_factors_from_matrix, matrix_luci_factors_from_matrix_owned, RrLUOptions,
 };
@@ -70,7 +73,23 @@ impl<T: AciScalar> ElementwiseProblem<T> {
     where
         T: EinsumScalar,
     {
-        let solution = initial_guess(&inputs, &options)?;
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rng_seed);
+        Self::new_with_rng(inputs, options, &mut rng)
+    }
+
+    /// Builds the problem on a caller-owned random stream.
+    ///
+    /// The stream is consumed by the initial guess, so initialization and the
+    /// later guard searches share one caller-owned sequence.
+    pub(crate) fn new_with_rng(
+        inputs: Vec<SimpleTensorTrain<T>>,
+        options: AciOptions<T>,
+        rng: &mut dyn rand::RngCore,
+    ) -> Result<Self>
+    where
+        T: EinsumScalar,
+    {
+        let solution = initial_guess_with_rng(&inputs, &options, rng)?;
         let n = solution.len();
         let n_inputs = inputs.len();
         let input_caches = inputs.iter().map(TTCache::new).collect();

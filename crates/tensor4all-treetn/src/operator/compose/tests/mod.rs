@@ -1,5 +1,6 @@
 use super::*;
 use crate::random::{random_treetn, LinkSpace};
+use rand::SeedableRng;
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::IdxTensor;
 
@@ -78,7 +79,7 @@ fn test_are_exclusive_disjoint() {
 
     // Create TreeTNs with these networks
     let link_space = LinkSpace::uniform(2);
-    let mut rng = rand::rng();
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
     let op1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone()).unwrap();
     let op2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone()).unwrap();
 
@@ -108,7 +109,7 @@ fn test_are_exclusive_overlapping() {
         .unwrap();
 
     let link_space = LinkSpace::uniform(2);
-    let mut rng = rand::rng();
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
     let op1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone()).unwrap();
     let op2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone()).unwrap();
 
@@ -129,7 +130,7 @@ fn test_are_exclusive_single_node_operators() {
     op2_net.add_node("N2".to_string(), HashSet::new()).unwrap();
 
     let link_space = LinkSpace::uniform(2);
-    let mut rng = rand::rng();
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
     let op1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone()).unwrap();
     let op2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone()).unwrap();
 
@@ -202,7 +203,7 @@ fn test_compose_exclusive_linear_operators_basic() {
 
     // Create TreeTNs for the operators
     let link_space = LinkSpace::uniform(2);
-    let mut rng = rand::rng();
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
     let mpo1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone()).unwrap();
     let mpo2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone()).unwrap();
 
@@ -309,7 +310,7 @@ fn test_compose_exclusive_linear_operators_single_operators() {
 
     // Create TreeTNs
     let link_space = LinkSpace::uniform(2);
-    let mut rng = rand::rng();
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
     let mpo1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone()).unwrap();
     let mpo2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone()).unwrap();
 
@@ -383,7 +384,7 @@ fn test_compose_exclusive_linear_operators_no_gap() {
 
     // Create TreeTNs
     let link_space = LinkSpace::uniform(2);
-    let mut rng = rand::rng();
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
     let mpo1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone()).unwrap();
     let mpo2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone()).unwrap();
 
@@ -465,7 +466,7 @@ fn test_compose_exclusive_linear_operators_overlap_error() {
         .unwrap();
 
     let link_space = LinkSpace::uniform(2);
-    let mut rng = rand::rng();
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
     let mpo1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone()).unwrap();
     let mpo2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone()).unwrap();
 
@@ -517,7 +518,7 @@ fn test_compose_gap_identity_tensor_is_diagonal() {
         .unwrap();
 
     let link_space = LinkSpace::uniform(2);
-    let mut rng = rand::rng();
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
     let mpo1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone()).unwrap();
     let mpo2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone()).unwrap();
 

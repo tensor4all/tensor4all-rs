@@ -16,6 +16,7 @@
 //! ```
 
 pub use crate::{
-    elementwise, elementwise_batched, AciOptions, AciResult, AciScalar, ElementwiseBatch,
+    elementwise, elementwise_batched, elementwise_batched_with_rng, elementwise_with_rng,
+    AciOptions, AciResult, AciScalar, ElementwiseBatch,
 };
 pub use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};

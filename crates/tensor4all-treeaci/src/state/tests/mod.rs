@@ -274,12 +274,18 @@ fn profile_high_rank_chain_phases_and_candidate_cache() {
         let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
         let initialize_elapsed = initialize_started.elapsed();
         let sweep_started = std::time::Instant::now();
-        let history = run_local_sweeps(&mut state, &options, &mut |batch, output| {
-            for (point, value) in output.iter_mut().enumerate() {
-                *value = batch.get(0, point)? * batch.get(1, point)?;
-            }
-            Ok(())
-        })
+        let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0);
+        let history = run_local_sweeps(
+            &mut state,
+            &options,
+            &mut |batch, output| {
+                for (point, value) in output.iter_mut().enumerate() {
+                    *value = batch.get(0, point)? * batch.get(1, point)?;
+                }
+                Ok(())
+            },
+            &mut rng,
+        )
         .unwrap();
         let sweep_elapsed = sweep_started.elapsed();
         let profile = super::profile_debug_stats::snapshot();
@@ -554,12 +560,18 @@ fn profile_unequal_incident_bonds_at_coordination_four() {
         let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
         let initialize_elapsed = initialize_started.elapsed();
         let sweep_started = std::time::Instant::now();
-        let history = run_local_sweeps(&mut state, &options, &mut |batch, output| {
-            for (point, value) in output.iter_mut().enumerate() {
-                *value = batch.get(0, point)? * batch.get(1, point)?;
-            }
-            Ok(())
-        })
+        let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0);
+        let history = run_local_sweeps(
+            &mut state,
+            &options,
+            &mut |batch, output| {
+                for (point, value) in output.iter_mut().enumerate() {
+                    *value = batch.get(0, point)? * batch.get(1, point)?;
+                }
+                Ok(())
+            },
+            &mut rng,
+        )
         .unwrap();
         let sweep_elapsed = sweep_started.elapsed();
         let profile = super::profile_debug_stats::snapshot();
@@ -647,8 +659,10 @@ fn unseeded_initialization_defers_numeric_canonicalization() {
     let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
     let algebraic_bounds = algebraic_edge_bounds(&problem).unwrap();
     let edge_ranks = initial_edge_ranks(&inputs, &problem, &options, &algebraic_bounds).unwrap();
+    // Same stream as `TreeAciState::initialize` derives from the same options.
+    let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(options.rng_seed);
     let raw =
-        build_random_output::<f64, usize>(&inputs[0], &problem, &edge_ranks, &options).unwrap();
+        build_random_output::<f64, usize>(&inputs[0], &problem, &edge_ranks, &mut rng).unwrap();
     let state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
 
     assert_eq!(state.output.canonical_region().len(), 1);

@@ -1522,6 +1522,57 @@ where
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
+    // The seeded high-level path uses an explicitly named RNG and delegates to
+    // the caller-owned-stream entry point.
+    let mut rng = seeded_rng(options.seed);
+    crossinterpolate2_with_rng(f, batched_f, local_dims, initial_pivots, options, &mut rng)
+}
+
+/// Interpolate on a caller-owned random stream.
+///
+/// Same as [`crossinterpolate2`], but consumes `rng` directly for the global
+/// pivot search instead of deriving a seed for a hidden generator. Use this
+/// when the caller needs to control or reproduce the pivot trajectory, for
+/// example by passing a `ChaCha8Rng` with a fixed seed.
+///
+/// # Errors
+/// Returns [`TCIError::InvalidConfiguration`] for invalid algorithm options,
+/// [`TCIError::DimensionMismatch`] if `local_dims` has fewer than 2 elements,
+/// or [`TCIError::InvalidPivot`] if all initial pivots evaluate to zero.
+/// # Examples
+///
+/// ```
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_tensorci::{crossinterpolate2_with_rng, TCI2Options};
+///
+/// let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
+/// let mut rng = ChaCha8Rng::seed_from_u64(42);
+/// let result = crossinterpolate2_with_rng::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>, _>(
+///     f,
+///     None,
+///     vec![4, 4],
+///     vec![vec![0, 0]],
+///     TCI2Options { max_iter: 2, ..TCI2Options::default() },
+///     &mut rng,
+/// )
+/// .unwrap();
+/// assert!(!result.ranks.is_empty());
+/// ```
+pub fn crossinterpolate2_with_rng<T, F, B, R>(
+    f: F,
+    batched_f: Option<B>,
+    local_dims: Vec<usize>,
+    initial_pivots: Vec<MultiIndex>,
+    options: TCI2Options,
+    rng: &mut R,
+) -> Result<TCI2OptimizationResult<T>>
+where
+    T: Scalar + TTScalar + Default + MatrixLuciScalar,
+    F: Fn(&MultiIndex) -> T,
+    B: Fn(&[MultiIndex]) -> Vec<T>,
+    R: rand::Rng + ?Sized,
+{
     options.validate()?;
     if local_dims.len() < 2 {
         return Err(TCIError::DimensionMismatch {
@@ -1559,7 +1610,15 @@ where
         options.tol_margin_global_search,
     );
 
-    optimize_with_finder(tci, f, batched_f, options, finder)
+    optimize_with_finder_with_rng(tci, f, batched_f, options, finder, rng)
+}
+
+/// Builds the explicitly named RNG for the seeded production paths.
+pub(crate) fn seeded_rng(seed: Option<u64>) -> rand_chacha::ChaCha8Rng {
+    match seed {
+        Some(seed) => rand_chacha::ChaCha8Rng::seed_from_u64(seed),
+        None => rand_chacha::ChaCha8Rng::from_os_rng(),
+    }
 }
 
 /// Optimize an existing [`TensorCI2`] state with an injected global pivot finder.
@@ -1624,7 +1683,7 @@ where
 /// assert!((tt.evaluate(&[2, 3]).unwrap() - 6.0).abs() < 1e-10);
 /// ```
 pub fn optimize_with_finder<T, F, B, G>(
-    mut tci: TensorCI2<T>,
+    tci: TensorCI2<T>,
     f: F,
     batched_f: Option<B>,
     options: TCI2Options,
@@ -1635,6 +1694,59 @@ where
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
     G: GlobalPivotFinder,
+{
+    let mut rng = seeded_rng(options.seed);
+    optimize_with_finder_with_rng(tci, f, batched_f, options, finder, &mut rng)
+}
+
+/// Optimize with a caller-owned random stream.
+///
+/// Same as [`optimize_with_finder`], but consumes `rng` directly for the global
+/// pivot search instead of deriving a seed for a hidden generator, so a caller
+/// can pin or advance the stream itself.
+///
+/// # Errors
+/// Returns [`TCIError::InvalidConfiguration`] for invalid algorithm options or
+/// [`TCIError::InvalidPivot`] when the input state has no pivots. It also
+/// forwards errors from two-site sweeps, tensor-train conversion, callback
+/// length validation, global pivot search, and final one-site cleanup.
+/// # Examples
+///
+/// ```
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_tensorci::{
+///     optimize_with_finder_with_rng, DefaultGlobalPivotFinder, TCI2Options, TensorCI2,
+/// };
+///
+/// let mut tci = TensorCI2::<f64>::new(vec![4, 4]).unwrap();
+/// tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+/// let mut rng = ChaCha8Rng::seed_from_u64(7);
+/// let result = optimize_with_finder_with_rng::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>, _, _>(
+///     tci,
+///     |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64,
+///     None,
+///     TCI2Options { max_iter: 1, ..TCI2Options::default() },
+///     DefaultGlobalPivotFinder::default(),
+///     &mut rng,
+/// )
+/// .unwrap();
+/// assert!(result.ranks.last().copied().unwrap() >= 1);
+/// ```
+pub fn optimize_with_finder_with_rng<T, F, B, G, R>(
+    mut tci: TensorCI2<T>,
+    f: F,
+    batched_f: Option<B>,
+    options: TCI2Options,
+    finder: G,
+    rng: &mut R,
+) -> Result<TCI2OptimizationResult<T>>
+where
+    T: Scalar + TTScalar + Default + MatrixLuciScalar,
+    F: Fn(&MultiIndex) -> T,
+    B: Fn(&[MultiIndex]) -> Vec<T>,
+    G: GlobalPivotFinder,
+    R: rand::Rng + ?Sized,
 {
     options.validate()?;
     if tci.rank() == 0 {
@@ -1649,12 +1761,6 @@ where
     let mut ranks = Vec::new();
     let mut nglobal_pivots_history: Vec<usize> = Vec::new();
     let mut termination = TCI2Termination::MaxIterations;
-
-    let mut rng = if let Some(seed) = options.seed {
-        rand::rngs::StdRng::seed_from_u64(seed)
-    } else {
-        rand::rngs::StdRng::from_os_rng()
-    };
 
     for iter in 0..options.max_iter {
         let error_normalization = if options.normalize_error && tci.max_sample_value > 0.0 {
@@ -1742,7 +1848,10 @@ where
             j_set: tci.j_set.clone(),
         };
 
-        let global_pivots = finder.find_global_pivots(&input, &f, abs_tol, &mut rng)?;
+        // Erase the caller's RNG type once, so the generic pipeline below the
+        // public boundary is instantiated a single time.
+        let mut stream: &mut R = &mut *rng;
+        let global_pivots = finder.find_global_pivots(&input, &f, abs_tol, &mut stream)?;
         let n_global = global_pivots.len();
         tci.add_global_pivots(&global_pivots)?;
         nglobal_pivots_history.push(n_global);

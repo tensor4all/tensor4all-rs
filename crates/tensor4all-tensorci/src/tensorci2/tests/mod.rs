@@ -1,5 +1,6 @@
 use super::*;
 use crate::error::TCIError;
+use rand::Rng as _;
 use std::cell::Cell;
 use std::rc::Rc;
 use tensor4all_simplett::AbstractTensorTrain;
@@ -1145,7 +1146,7 @@ fn test_global_search_oscillatory() {
     let tt = tci.to_tensor_train().unwrap();
 
     // Estimate true error
-    let mut rng = rand::rng();
+    let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
     let pivot_errors = estimate_true_error(&tt, &f, 20, None, &mut rng).unwrap();
 
     // Verify errors are sorted in descending order
@@ -1180,7 +1181,6 @@ fn test_global_search_oscillatory() {
 #[test]
 fn test_custom_global_pivot_finder() {
     use crate::globalpivot::{GlobalPivotFinder, GlobalPivotSearchInput};
-    use rand::Rng;
 
     // Custom finder: returns random pivots (same as Julia's CustomGlobalPivotFinder)
     struct RandomPivotFinder {
@@ -1193,7 +1193,7 @@ fn test_custom_global_pivot_finder() {
             input: &GlobalPivotSearchInput<T>,
             _f: &F,
             _abs_tol: f64,
-            rng: &mut impl Rng,
+            rng: &mut dyn rand::RngCore,
         ) -> Result<Vec<MultiIndex>>
         where
             T: tensor4all_core::Scalar + tensor4all_simplett::TTScalar,
@@ -1263,7 +1263,7 @@ fn test_custom_global_pivot_finder() {
         j_set: (0..tci.len()).map(|p| tci.j_set(p).to_vec()).collect(),
     };
 
-    let mut rng = rand::rng();
+    let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
     let pivots = finder
         .find_global_pivots(&input, &f, 1e-4, &mut rng)
         .unwrap();
@@ -1296,7 +1296,6 @@ fn test_custom_global_pivot_finder() {
 #[test]
 fn test_optimize_with_finder_invokes_custom_finder() {
     use crate::globalpivot::{GlobalPivotFinder, GlobalPivotSearchInput};
-    use rand::Rng;
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -1310,7 +1309,7 @@ fn test_optimize_with_finder_invokes_custom_finder() {
             input: &GlobalPivotSearchInput<T>,
             _f: &F,
             _abs_tol: f64,
-            _rng: &mut impl Rng,
+            _rng: &mut dyn rand::RngCore,
         ) -> Result<Vec<MultiIndex>>
         where
             T: tensor4all_core::Scalar + tensor4all_simplett::TTScalar,

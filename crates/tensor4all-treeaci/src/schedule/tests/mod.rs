@@ -11,6 +11,10 @@ use crate::global_guard::input_evaluator_debug_stats;
 use crate::transaction::update_edge_transaction;
 use crate::{state::TreeAciState, TreeAciError, TreeAciOptions, TreeAciTermination};
 
+fn seeded_rng() -> rand_chacha::ChaCha8Rng {
+    <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0)
+}
+
 fn product_tree(edges: &[(usize, usize)], node_count: usize) -> TreeTN<IdxTensor, usize> {
     let physical = (0..node_count)
         .map(|_| DynIndex::new_dyn(2))
@@ -278,8 +282,13 @@ fn local_sweeps_honor_convergence_and_rank_limit_dwell() {
     let mut converged_state =
         TreeAciState::<f64, usize>::initialize(&converged_inputs, &converged_options).unwrap();
     input_evaluator_debug_stats::reset();
-    let converged =
-        run_local_sweeps(&mut converged_state, &converged_options, &mut identity).unwrap();
+    let converged = run_local_sweeps(
+        &mut converged_state,
+        &converged_options,
+        &mut identity,
+        &mut seeded_rng(),
+    )
+    .unwrap();
     assert_eq!(converged.termination, TreeAciTermination::Converged);
     assert_eq!(converged.max_ranks.len(), 2);
     assert_eq!(converged.max_errors.len(), 2);
@@ -295,7 +304,13 @@ fn local_sweeps_honor_convergence_and_rank_limit_dwell() {
     let limited_inputs = vec![rank_two_delta_tree()];
     let mut limited_state =
         TreeAciState::<f64, usize>::initialize(&limited_inputs, &limited_options).unwrap();
-    let limited = run_local_sweeps(&mut limited_state, &limited_options, &mut identity).unwrap();
+    let limited = run_local_sweeps(
+        &mut limited_state,
+        &limited_options,
+        &mut identity,
+        &mut seeded_rng(),
+    )
+    .unwrap();
     assert_eq!(limited.termination, TreeAciTermination::RankLimited);
     assert_eq!(limited.max_ranks, vec![1, 1]);
     assert!(limited.max_errors.iter().all(|error| *error > 1.0e-12));

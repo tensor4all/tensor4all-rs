@@ -9,6 +9,7 @@ use crate::{
     problem::prepare_problem, problem::PreparedTreeProblem, samples::ComponentSample,
     samples::SampleArena, TreeAciOptions, TreeAciScalar,
 };
+use rand_chacha::ChaCha8Rng;
 
 fn two_node_tree<T: TreeAciScalar + From<f64>>() -> TreeTN<IdxTensor, usize> {
     let s0 = DynIndex::new_dyn(2);
@@ -791,8 +792,8 @@ fn batched_single_incoming_contraction_matches_scalar_path() {
 
 #[test]
 fn batched_path_matches_scalar_path_on_random_core() {
-    use rand::{rngs::StdRng, Rng, SeedableRng};
-    let mut rng = StdRng::seed_from_u64(42);
+    use rand::{Rng, SeedableRng};
+    let mut rng = ChaCha8Rng::seed_from_u64(42);
     let outgoing_dim = 5usize;
     let incoming_dim = 7usize;
     let physical_dim = 2usize;

@@ -98,15 +98,17 @@ pub mod visitor;
 #[cfg(test)]
 mod test_support;
 
-pub use api::crossinterpolate2;
+pub use api::{crossinterpolate2, crossinterpolate2_with_rng};
 pub use assemble::MultiIndex;
 pub use batch::GlobalIndexBatch;
 pub use error::{Result as TreeTciResult, TreeTciError};
-pub use globalpivot::find_global_pivots;
+pub use globalpivot::{find_global_pivots, find_global_pivots_with_rng};
 pub use graph::{TreeTciEdge, TreeTciGraph};
 pub use key::SubtreeKey;
 pub use materialize::to_treetn;
-pub use optimize::{optimize_default, optimize_with_proposer, TreeTciOptions};
+pub use optimize::{
+    optimize_default, optimize_with_proposer, optimize_with_proposer_with_rng, TreeTciOptions,
+};
 pub use proposer::{
     DefaultProposer, PivotCandidateProposer, SimpleProposer, TruncatedDefaultProposer,
 };

@@ -92,6 +92,16 @@ pub struct QtciOptions {
     #[doc(alias = "nrandominitpivot")]
     pub n_random_init_pivot: usize,
 
+    /// Seed for the random initial pivots.
+    ///
+    /// `None` (the default) draws OS entropy. `Some(seed)` pins the random
+    /// initial pivots with an explicitly named `ChaCha8Rng`, so two runs with
+    /// the same options and the same seed draw the same pivots.
+    ///
+    /// Ignored by the `*_with_rng` entry points, which consume the caller's
+    /// stream instead.
+    pub rng_seed: Option<u64>,
+
     /// Unfolding scheme for the quantics tensor train.
     ///
     /// `Interleaved` interleaves bits from different dimensions across
@@ -125,6 +135,7 @@ impl Default for QtciOptions {
             max_bond_dim: None,
             max_iter: 200,
             n_random_init_pivot: 5,
+            rng_seed: None,
             unfolding_scheme: UnfoldingScheme::Interleaved,
             normalize_error: true,
             verbosity: 0,
@@ -189,6 +200,26 @@ impl QtciOptions {
         self
     }
 
+    /// Set the seed for the random initial pivots.
+    ///
+    /// `Some(seed)` pins them with an explicitly named `ChaCha8Rng`, so two
+    /// runs with the same options and seed draw the same pivots. `None` (the
+    /// default) draws OS entropy once per run. The `*_with_rng` entry points
+    /// ignore this option and consume the caller's stream instead.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstci::QtciOptions;
+    ///
+    /// let opts = QtciOptions::default().with_rng_seed(42);
+    /// assert_eq!(opts.rng_seed, Some(42));
+    /// ```
+    pub fn with_rng_seed(mut self, seed: u64) -> Self {
+        self.rng_seed = Some(seed);
+        self
+    }
+
     /// Set the unfolding scheme.
     ///
     /// # Examples
@@ -242,7 +273,7 @@ impl QtciOptions {
             nsearch: 0,
             max_nglobal_pivot: 0,
             tol_margin_global_search: 10.0,
-            seed: None,
+            seed: self.rng_seed,
         }
     }
 }

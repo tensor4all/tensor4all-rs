@@ -25,10 +25,12 @@
 #[allow(deprecated)]
 pub use crate::{
     pointwise_components_batch, pointwise_coordinate_batch, pointwise_index_batch,
-    quanticscrossinterpolate, quanticscrossinterpolate_batch, quanticscrossinterpolate_batched,
+    quanticscrossinterpolate, quanticscrossinterpolate_batch,
+    quanticscrossinterpolate_batch_with_rng, quanticscrossinterpolate_batched,
     quanticscrossinterpolate_discrete, quanticscrossinterpolate_discrete_batch,
     quanticscrossinterpolate_from_arrays, quanticscrossinterpolate_from_arrays_batch,
-    quanticscrossinterpolate_multicomponent, DefaultProposer, DiscretizedGrid,
+    quanticscrossinterpolate_from_arrays_batch_with_rng, quanticscrossinterpolate_multicomponent,
+    quanticscrossinterpolate_multicomponent_with_rng, DefaultProposer, DiscretizedGrid,
     InherentDiscreteGrid, QtciOptions, QuanticsBatch, QuanticsTensorCI2, QuanticsTensorCI2Batched,
     SimpleTensorTrain, TreeTciGraph, TreeTciOptions, UnfoldingScheme,
 };

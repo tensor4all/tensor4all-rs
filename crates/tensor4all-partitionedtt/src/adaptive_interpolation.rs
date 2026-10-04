@@ -5,6 +5,7 @@
 //! TCIAlgorithms.jl at commit e501032278c9dd41b46c5851d8238169c8d178c5
 //! (MIT license; Copyright 2023 Ritter.Marc and contributors).
 
+use rand::Rng as _;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "adaptive-hataori-mpi")]
@@ -12,8 +13,8 @@ use std::num::NonZeroUsize;
 #[cfg(feature = "adaptive-hataori-mpi")]
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{DynIndex, IdxTensor, MatrixLuciScalar, MultiIndex, Scalar, TensorElement};
 use tensor4all_itensorlike::TensorTrain;
 #[cfg(feature = "adaptive-hataori-mpi")]
@@ -21,7 +22,7 @@ use tensor4all_simplett::Tensor3Ops;
 use tensor4all_simplett::{tensor3_from_data, SimpleTensorTrain, TTScalar};
 use tensor4all_tensorbackend::StorageScalar;
 use tensor4all_tensorci::{
-    crossinterpolate2, TCI2OptimizationResult, TCI2Options, TCI2Termination, TensorCI2,
+    crossinterpolate2_with_rng, TCI2OptimizationResult, TCI2Options, TCI2Termination, TensorCI2,
 };
 use tensor4all_treetn::{tensor_train_to_treetn, TreeTN};
 
@@ -522,6 +523,81 @@ where
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
+    // The seeded high-level path uses an explicitly named RNG and delegates to
+    // the caller-owned-stream entry point. A single-site input is evaluated
+    // exactly without drawing anything, so it never needs OS entropy.
+    let mut rng = match (site_indices.len() > 1, options.tci_options.seed) {
+        (true, None) => ChaCha8Rng::from_os_rng(),
+        (_, seed) => ChaCha8Rng::seed_from_u64(seed.unwrap_or(0)),
+    };
+    adaptiveinterpolate_with_rng(
+        f,
+        batched_f,
+        site_indices,
+        initial_pivots,
+        options,
+        &mut rng,
+    )
+}
+
+/// Adaptive interpolation on a caller-owned random stream.
+///
+/// Same as [`adaptiveinterpolate`], but consumes `rng` for every patch: the
+/// candidate pivots and the nested TCI run draw from the supplied stream, and
+/// `AdaptiveInterpolateOptions::tci_options::seed` is ignored. Two runs from the
+/// same stream position produce the same result, so a seed is reproducible by
+/// seeding the stream.
+///
+/// # Examples
+///
+/// ```
+/// use rand::SeedableRng as _;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_core::contract;
+/// use tensor4all_partitionedtt::{
+///     adaptiveinterpolate_with_rng, AdaptiveInterpolateOptions, DynIndex, MultiIndex,
+/// };
+///
+/// let sites = vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+/// let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
+/// let mut rng = ChaCha8Rng::seed_from_u64(0);
+/// let result = adaptiveinterpolate_with_rng::<f64, _, fn(&[MultiIndex]) -> Vec<f64>, _>(
+///     f,
+///     None,
+///     sites,
+///     vec![vec![1, 1]],
+///     AdaptiveInterpolateOptions::default(),
+///     &mut rng,
+/// )
+/// .unwrap();
+///
+/// let tt = result.partitioned_tt().to_tensor_train().unwrap();
+/// let dense = contract(&[tt.tensor(0).unwrap(), tt.tensor(1).unwrap()]).unwrap();
+/// assert_eq!(dense.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 2.0, 4.0]);
+/// ```
+///
+/// # Errors
+/// Returns [`PartitionedTTError::InvalidAdaptiveInterpolationInput`] for empty,
+/// duplicate, zero-dimensional, or inconsistently ordered site indices; invalid
+/// pivots; a zero pivot target; or invalid TCI tolerances/rank limits. It also
+/// forwards TCI2 and tensor-train construction failures.
+pub fn adaptiveinterpolate_with_rng<T, F, B, R>(
+    f: F,
+    batched_f: Option<B>,
+    site_indices: Vec<DynIndex>,
+    initial_pivots: Vec<MultiIndex>,
+    options: AdaptiveInterpolateOptions,
+    rng: &mut R,
+) -> Result<AdaptiveInterpolationResult<T>>
+where
+    T: Scalar + TTScalar + MatrixLuciScalar + TensorElement + StorageScalar + Default + Copy,
+    F: Fn(&MultiIndex) -> T,
+    B: Fn(&[MultiIndex]) -> Vec<T>,
+    R: rand::Rng + ?Sized,
+{
+    // Erase the caller's RNG type once so the patch pipeline below is
+    // instantiated once per scalar type instead of once per (scalar, RNG) pair.
+    let mut stream: &mut R = rng;
     let patch_order = validate_inputs(&site_indices, &initial_pivots, &options)?;
     let root_dims = site_indices.iter().map(|index| index.dim).collect();
     let mut wave = vec![PendingPatch {
@@ -542,6 +618,7 @@ where
                 &initial_pivots,
                 &patch_order,
                 &options,
+                &mut stream,
             )? {
                 PatchOutcome::Accepted(patch) => accepted.push(patch),
                 PatchOutcome::Split(children) => next_wave.extend(children),
@@ -609,6 +686,13 @@ where
     while !wave.is_empty() {
         let paths: Vec<_> = wave.iter().map(|patch| patch.path.clone()).collect();
         let outcomes = hataori::map_in(domain, hataori::LocalMode::Outer, wave, |patch| {
+            // Parallel path: one derived stream per patch. Consuming a single
+            // caller-owned stream across patches is not possible here; the
+            // ownership design is tracked in #825.
+            let mut rng = ChaCha8Rng::seed_from_u64(patch_seed(
+                options.tci_options.seed.unwrap_or(0),
+                &patch.path,
+            ));
             process_patch(
                 patch,
                 &f,
@@ -617,6 +701,7 @@ where
                 &initial_pivots,
                 &patch_order,
                 &options,
+                &mut rng,
             )
         })
         .map_err(|source| {
@@ -745,6 +830,10 @@ where
     loop {
         let root_items = (rank == root).then(|| std::mem::take(&mut wave));
         let wire_outcomes = hataori::pmap(world, domain, pmap_options, root_items, |patch| {
+            let mut rng = ChaCha8Rng::seed_from_u64(patch_seed(
+                options.tci_options.seed.unwrap_or(0),
+                &patch.path,
+            ));
             process_patch(
                 patch,
                 &f,
@@ -753,6 +842,7 @@ where
                 &initial_pivots,
                 &patch_order,
                 &options,
+                &mut rng,
             )
             .map(patch_outcome_to_wire)
         })
@@ -847,6 +937,7 @@ where
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_patch<T, F, B>(
     patch: PendingPatch<T>,
     f: &F,
@@ -855,6 +946,7 @@ fn process_patch<T, F, B>(
     initial_pivots: &[MultiIndex],
     patch_order: &[DynIndex],
     options: &AdaptiveInterpolateOptions,
+    rng: &mut dyn rand::RngCore,
 ) -> Result<PatchOutcome<T>>
 where
     T: Scalar + TTScalar + MatrixLuciScalar + TensorElement + StorageScalar + Default + Copy,
@@ -901,8 +993,6 @@ where
         ));
     }
 
-    let seed = patch_seed(options.tci_options.seed.unwrap_or(0), &patch.path);
-    let mut rng = StdRng::seed_from_u64(seed);
     let candidate_pivots = patch_candidates(
         site_indices,
         &active_positions,
@@ -910,7 +1000,7 @@ where
         initial_pivots,
         &patch.recycled_pivots,
         options.n_initial_pivots,
-        &mut rng,
+        rng,
     )?;
     let candidate_values = evaluator.eval_many(&candidate_pivots);
     if let Some(error) = evaluator.take_error() {
@@ -937,14 +1027,14 @@ where
         .collect();
     let local_f = |pivot: &MultiIndex| evaluator.eval(pivot);
     let local_batch = batched_f.map(|_| |pivots: &[MultiIndex]| evaluator.eval_many(pivots));
-    let mut tci_options = options.tci_options.clone();
-    tci_options.seed = Some(splitmix64(seed));
-    let tci_result = crossinterpolate2(
+    let tci_options = options.tci_options.clone();
+    let tci_result = crossinterpolate2_with_rng(
         local_f,
         local_batch,
         local_dims,
         candidate_pivots,
         tci_options,
+        rng,
     );
     if let Some(error) = evaluator.take_error() {
         return Err(error);
@@ -1293,7 +1383,7 @@ fn patch_candidates(
     initial_pivots: &[MultiIndex],
     recycled_pivots: &[MultiIndex],
     target: usize,
-    rng: &mut StdRng,
+    rng: &mut dyn rand::RngCore,
 ) -> Result<Vec<MultiIndex>> {
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();

@@ -5,13 +5,14 @@
 //! in column-major `(n_dims, n_points)` order. The deprecated point-wise entry
 //! points are thin wrappers over the batched ones.
 
+use rand::Rng as _;
+use rand::SeedableRng;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
 use anyhow::{anyhow, Result};
 use quanticsgrids::{DiscretizedGrid, InherentDiscreteGrid};
-use rand::Rng;
 use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetci::materialize::to_treetn;
@@ -38,6 +39,18 @@ fn point_from_batch(batch: GlobalIndexBatch<'_>, point: usize) -> Result<Vec<usi
         .collect()
 }
 
+/// The stream a seeded quantics run uses.
+///
+/// Entropy is drawn only when the run actually samples random initial pivots;
+/// with `n_random_init_pivot == 0` the run is deterministic and a fixed seed
+/// keeps it so without touching the OS.
+pub(crate) fn seeded_quantics_stream(options: &QtciOptions) -> rand_chacha::ChaCha8Rng {
+    match (options.n_random_init_pivot > 0, options.rng_seed) {
+        (true, None) => rand_chacha::ChaCha8Rng::from_os_rng(),
+        (_, seed) => rand_chacha::ChaCha8Rng::seed_from_u64(seed.unwrap_or(0)),
+    }
+}
+
 /// Convert the caller's initial pivots to quantics indices and append random
 /// starting pivots.
 fn prepare_pivots(
@@ -45,6 +58,7 @@ fn prepare_pivots(
     local_dims: &[usize],
     convert: impl Fn(&[usize]) -> Result<Vec<usize>>,
     n_random: usize,
+    rng: &mut dyn rand::RngCore,
 ) -> Result<Vec<Vec<usize>>> {
     let mut pivots = match initial_pivots {
         Some(pivots) if !pivots.is_empty() => pivots
@@ -53,7 +67,6 @@ fn prepare_pivots(
             .collect::<Result<Vec<_>>>()?,
         _ => vec![vec![0; local_dims.len()]],
     };
-    let mut rng = rand::rng();
     for _ in 0..n_random {
         pivots.push(
             local_dims
@@ -211,7 +224,7 @@ where
 /// let f = |idx: &[usize]| idx[0] as f64;
 /// let (qtci, _ranks, _errors) =
 ///     quanticscrossinterpolate_discrete_batch::<f64, _>(
-///         &[8], pointwise_index_batch(f), None, QtciOptions::default(),
+///         &[8], pointwise_index_batch(f), None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
 ///     ).unwrap();
 ///
 /// // Evaluate at grid point 4
@@ -338,7 +351,7 @@ where
     ///
     /// let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
     /// let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
-    ///     &[4, 4], pointwise_index_batch(f), None, QtciOptions::default(),
+    ///     &[4, 4], pointwise_index_batch(f), None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
     /// ).unwrap();
     ///
     /// // Indices are 0-indexed: f(1, 2) = 1 + 2 = 3
@@ -375,7 +388,7 @@ where
     /// // f(i) = 1 on a grid of size 8 => sum = 8
     /// let f = |_idx: &[usize]| 1.0_f64;
     /// let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
-    ///     &[8], pointwise_index_batch(f), None, QtciOptions::default(),
+    ///     &[8], pointwise_index_batch(f), None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
     /// ).unwrap();
     ///
     /// let sum = qtci.sum().unwrap();
@@ -419,7 +432,7 @@ where
     ///     .unwrap();
     /// let f = |_: &[f64]| 1.0_f64;
     /// let (qtci, _, _) = quanticscrossinterpolate_batch::<f64, _>(
-    ///     &grid, pointwise_coordinate_batch(f), None, QtciOptions::default(),
+    ///     &grid, pointwise_coordinate_batch(f), None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
     /// ).unwrap();
     ///
     /// let integral = qtci.integral().unwrap();
@@ -457,7 +470,7 @@ where
     ///
     /// let f = |idx: &[usize]| idx[0] as f64;
     /// let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
-    ///     &[4], pointwise_index_batch(f), None, QtciOptions::default(),
+    ///     &[4], pointwise_index_batch(f), None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
     /// ).unwrap();
     ///
     /// let tt = qtci.tensor_train();
@@ -510,7 +523,8 @@ where
     }
 }
 
-/// Interpolate a function with an explicit Grid, evaluating `f` in batches.
+/// Interpolate a function with an explicit Grid, evaluating `f` in batches, on a
+/// caller-owned random stream.
 ///
 /// `f` receives a [`QuanticsBatch`] of original coordinates and must return one
 /// value per requested point, in the same order. The batch is column-major
@@ -518,11 +532,16 @@ where
 /// point — not the deprecated point-wise [`quanticscrossinterpolate`] — for
 /// vectorized targets and language bindings.
 ///
+/// Every random draw — the random initial pivots and the global searches of the
+/// underlying tree TCI — comes from `rng`, and [`QtciOptions::rng_seed`] is
+/// ignored.
+///
 /// # Arguments
 /// * `grid` - Discretized grid describing the function domain
 /// * `f` - Batched function to interpolate
 /// * `initial_pivots` - Initial pivot grid indices (optional)
-/// * `options` - TCI options
+/// * `options` - TCI options; `rng_seed` is ignored
+/// * `rng` - Caller-owned random stream
 ///
 /// # Returns
 /// Tuple of ([`QuanticsTensorCI2`], ranks per sweep, errors per sweep)
@@ -537,13 +556,15 @@ where
 /// # Examples
 ///
 /// ```
+/// use rand::SeedableRng as _;
+/// use rand_chacha::ChaCha8Rng;
 /// use tensor4all_quanticstci::{
 ///     DiscretizedGrid,
 ///     QtciOptions,
 ///     QuanticsBatch,
 ///     pointwise_coordinate_batch,
 ///     pointwise_index_batch,
-///     quanticscrossinterpolate_batch,
+///     quanticscrossinterpolate_batch_with_rng,
 /// };
 ///
 /// let grid = DiscretizedGrid::builder(&[4])
@@ -557,12 +578,79 @@ where
 ///         .map(|point| batch.get(0, point).unwrap().sin())
 ///         .collect())
 /// };
+/// let mut rng = ChaCha8Rng::seed_from_u64(0);
 /// let (qtci, _ranks, errors) =
-///     quanticscrossinterpolate_batch::<f64, _>(&grid, f, None, QtciOptions::default()).unwrap();
+///     quanticscrossinterpolate_batch_with_rng::<f64, _, _>(&grid, f, None, QtciOptions::default(), &mut rng).unwrap();
 ///
 /// assert!(*errors.last().unwrap() < 1e-6);
 /// assert!(qtci.sum().unwrap() > 0.0); // sin(x) > 0 on (0, pi)
 /// ```
+pub fn quanticscrossinterpolate_batch_with_rng<V, F, R>(
+    grid: &DiscretizedGrid,
+    f: F,
+    initial_pivots: Option<Vec<Vec<usize>>>,
+    options: QtciOptions,
+    rng: &mut R,
+) -> QtciResult<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
+where
+    V: TTScalar
+        + Default
+        + Clone
+        + 'static
+        + tensor4all_core::TensorElement
+        + tensor4all_core::MatrixLuciScalar
+        + FullPivLuScalar
+        + tensor4all_treetci::globalpivot::ScalarParts,
+    F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
+    R: rand::Rng + ?Sized,
+{
+    let local_dims = grid.local_dimensions();
+    let cache: Rc<RefCell<HashMap<Vec<usize>, V>>> = Rc::new(RefCell::new(HashMap::new()));
+    let grid_for_evaluation = grid.clone();
+    let evaluate = site_evaluator(
+        move |quantics: &[usize]| {
+            grid_for_evaluation
+                .quantics_to_origcoord(quantics)
+                .map_err(|error| anyhow!("failed to convert quantics index {quantics:?}: {error}"))
+        },
+        f,
+        cache.clone(),
+    );
+    // Erase the caller's RNG type once so the run below is instantiated once
+    // per scalar type instead of once per (scalar, RNG) pair.
+    let mut stream: &mut R = rng;
+    let pivots = prepare_pivots(
+        initial_pivots,
+        &local_dims,
+        |pivot| {
+            grid.grididx_to_quantics(pivot)
+                .map_err(|error| anyhow!("initial pivot {pivot:?} conversion failed: {error}"))
+        },
+        options.n_random_init_pivot,
+        &mut stream,
+    )?;
+
+    let (tci, tt, ranks, errors, cache) =
+        run_treetci_batch(local_dims, evaluate, cache, pivots, &options)?;
+    Ok((
+        QuanticsTensorCI2::from_discretized(tt, tci, grid.clone(), cache),
+        ranks,
+        errors,
+    ))
+}
+
+/// Interpolate a quantics function with an explicitly named deterministic seed.
+///
+/// Builds a `ChaCha8Rng` from [`QtciOptions::rng_seed`] (OS entropy when unset,
+/// drawn once per run) and delegates to
+/// [`quanticscrossinterpolate_batch_with_rng`], which ignores the option because
+/// it consumes the caller's stream directly.
+///
+/// # Errors
+/// Returns [`QuanticsTCIError::InvalidConfiguration`] when the grid or options
+/// are invalid. Returns [`QuanticsTCIError::Operation`] when an initial pivot
+/// conversion fails, `f` returns a value count that does not equal the number
+/// of requested points, or the underlying interpolation fails.
 pub fn quanticscrossinterpolate_batch<V, F>(
     grid: &DiscretizedGrid,
     f: F,
@@ -580,35 +668,8 @@ where
         + tensor4all_treetci::globalpivot::ScalarParts,
     F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
 {
-    let local_dims = grid.local_dimensions();
-    let cache: Rc<RefCell<HashMap<Vec<usize>, V>>> = Rc::new(RefCell::new(HashMap::new()));
-    let grid_for_evaluation = grid.clone();
-    let evaluate = site_evaluator(
-        move |quantics: &[usize]| {
-            grid_for_evaluation
-                .quantics_to_origcoord(quantics)
-                .map_err(|error| anyhow!("failed to convert quantics index {quantics:?}: {error}"))
-        },
-        f,
-        cache.clone(),
-    );
-    let pivots = prepare_pivots(
-        initial_pivots,
-        &local_dims,
-        |pivot| {
-            grid.grididx_to_quantics(pivot)
-                .map_err(|error| anyhow!("initial pivot {pivot:?} conversion failed: {error}"))
-        },
-        options.n_random_init_pivot,
-    )?;
-
-    let (tci, tt, ranks, errors, cache) =
-        run_treetci_batch(local_dims, evaluate, cache, pivots, &options)?;
-    Ok((
-        QuanticsTensorCI2::from_discretized(tt, tci, grid.clone(), cache),
-        ranks,
-        errors,
-    ))
+    let mut rng = seeded_quantics_stream(&options);
+    quanticscrossinterpolate_batch_with_rng(grid, f, initial_pivots, options, &mut rng)
 }
 
 /// Interpolate a function with an explicit Grid, one point at a time.
@@ -647,10 +708,11 @@ where
 
 /// Interpolate from explicit grid point arrays, evaluating `f` in batches.
 ///
-/// Convenience wrapper around [`quanticscrossinterpolate_batch`] and
-/// [`quanticscrossinterpolate_discrete_batch`] that evaluates `f` at the exact
-/// coordinates supplied in `xvals`; `f` always receives original coordinates,
-/// batched as in [`quanticscrossinterpolate_batch`].
+/// Convenience wrapper around [`quanticscrossinterpolate_batch_with_rng`] and
+/// [`quanticscrossinterpolate_discrete_batch_with_rng`] that evaluates `f` at the
+/// exact coordinates supplied in `xvals`; `f` always receives original
+/// coordinates, batched as in [`quanticscrossinterpolate_batch`]. Every random
+/// draw comes from `rng` and [`QtciOptions::rng_seed`] is ignored.
 ///
 /// # Arguments
 /// * `xvals` - Strictly increasing, finite coordinate arrays. All dimensions must have
@@ -673,12 +735,14 @@ where
 /// # Examples
 ///
 /// ```
+/// use rand::SeedableRng as _;
+/// use rand_chacha::ChaCha8Rng;
 /// use tensor4all_quanticstci::{
 ///     QtciOptions,
 ///     QuanticsBatch,
 ///     pointwise_coordinate_batch,
 ///     pointwise_index_batch,
-///     quanticscrossinterpolate_from_arrays_batch,
+///     quanticscrossinterpolate_from_arrays_batch_with_rng,
 /// };
 ///
 /// // 4 points in [0, 3]
@@ -688,19 +752,21 @@ where
 ///         .map(|point| batch.get(0, point).unwrap().powi(2))
 ///         .collect())
 /// };
+/// let mut rng = ChaCha8Rng::seed_from_u64(0);
 /// let (qtci, _, _) =
-///     quanticscrossinterpolate_from_arrays_batch::<f64, _>(&xvals, f, None, QtciOptions::default())
+///     quanticscrossinterpolate_from_arrays_batch_with_rng::<f64, _, _>(&xvals, f, None, QtciOptions::default(), &mut rng)
 ///         .unwrap();
 ///
 /// // Grid index 2 maps to x = 2.0, so f = 4.0
 /// let val = qtci.evaluate(&[2]).unwrap();
 /// assert!((val - 4.0).abs() < 1e-8);
 /// ```
-pub fn quanticscrossinterpolate_from_arrays_batch<V, F>(
+pub fn quanticscrossinterpolate_from_arrays_batch_with_rng<V, F, R>(
     xvals: &[Vec<f64>],
     f: F,
     initial_pivots: Option<Vec<Vec<usize>>>,
     options: QtciOptions,
+    rng: &mut R,
 ) -> QtciResult<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
     V: TTScalar
@@ -712,6 +778,7 @@ where
         + FullPivLuScalar
         + tensor4all_treetci::globalpivot::ScalarParts,
     F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
+    R: rand::Rng + ?Sized,
 {
     if xvals.is_empty() {
         return Err(QuanticsTCIError::InvalidConfiguration {
@@ -799,7 +866,7 @@ where
             .include_endpoint(true)
             .build()
             .map_err(|error| anyhow!("Failed to build grid: {error}"))?;
-        return quanticscrossinterpolate_batch(&grid, f, initial_pivots, options);
+        return quanticscrossinterpolate_batch_with_rng(&grid, f, initial_pivots, options, rng);
     }
 
     // Non-uniform coordinates: map grid indices to the supplied coordinates.
@@ -825,7 +892,41 @@ where
         f(QuanticsBatch::new(&coords, n_dims, n_points)?)
     };
 
-    quanticscrossinterpolate_discrete_batch(&sizes, mapped, initial_pivots, options)
+    quanticscrossinterpolate_discrete_batch_with_rng(&sizes, mapped, initial_pivots, options, rng)
+}
+
+/// The same entry point with an explicitly named deterministic seed.
+///
+/// Builds a `ChaCha8Rng` from [`QtciOptions::rng_seed`] (OS entropy when unset,
+/// drawn once per run) and delegates to
+/// [`quanticscrossinterpolate_from_arrays_batch_with_rng`], which ignores the option because it consumes the
+/// caller's stream directly.
+///
+/// # Errors
+/// Returns [`QuanticsTCIError::InvalidConfiguration`] when `xvals` is empty,
+/// contains an empty, non-finite, or non-increasing dimension, or when the
+/// options are invalid. Returns [`QuanticsTCIError::Operation`] when an initial
+/// pivot conversion fails, `f` returns a value count that does not equal the
+/// number of requested points, or the underlying interpolation fails.
+pub fn quanticscrossinterpolate_from_arrays_batch<V, F>(
+    xvals: &[Vec<f64>],
+    f: F,
+    initial_pivots: Option<Vec<Vec<usize>>>,
+    options: QtciOptions,
+) -> QtciResult<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
+where
+    V: TTScalar
+        + Default
+        + Clone
+        + 'static
+        + tensor4all_core::TensorElement
+        + tensor4all_core::MatrixLuciScalar
+        + FullPivLuScalar
+        + tensor4all_treetci::globalpivot::ScalarParts,
+    F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
+{
+    let mut rng = seeded_quantics_stream(&options);
+    quanticscrossinterpolate_from_arrays_batch_with_rng(xvals, f, initial_pivots, options, &mut rng)
 }
 
 /// Interpolate from explicit grid point arrays, one point at a time.
@@ -878,7 +979,9 @@ where
 /// `(n_dims, n_points)`, so point `p` occupies `batch.point(p)`.
 ///
 /// For functions on continuous domains, use
-/// [`quanticscrossinterpolate_batch`] with a [`DiscretizedGrid`] instead.
+/// [`quanticscrossinterpolate_batch_with_rng`] with a [`DiscretizedGrid`]
+/// instead. Every random draw comes from `rng` and [`QtciOptions::rng_seed`] is
+/// ignored.
 ///
 /// # Arguments
 /// * `size` - Grid size in each dimension. All dimensions must have the **same**
@@ -900,12 +1003,14 @@ where
 /// # Examples
 ///
 /// ```
+/// use rand::SeedableRng as _;
+/// use rand_chacha::ChaCha8Rng;
 /// use tensor4all_quanticstci::{
 ///     QtciOptions,
 ///     QuanticsBatch,
 ///     pointwise_coordinate_batch,
 ///     pointwise_index_batch,
-///     quanticscrossinterpolate_discrete_batch,
+///     quanticscrossinterpolate_discrete_batch_with_rng,
 /// };
 ///
 /// let f = |batch: QuanticsBatch<'_, usize>| -> anyhow::Result<Vec<f64>> {
@@ -913,12 +1018,14 @@ where
 ///         .map(|point| (batch.get(0, point).unwrap() * 10 + batch.get(1, point).unwrap()) as f64)
 ///         .collect())
 /// };
+/// let mut rng = ChaCha8Rng::seed_from_u64(0);
 /// let (qtci, _ranks, _errors) =
-///     quanticscrossinterpolate_discrete_batch::<f64, _>(
+///     quanticscrossinterpolate_discrete_batch_with_rng::<f64, _, _>(
 ///         &[16, 16],
 ///         f,
 ///         None,
 ///         QtciOptions::default(),
+///         &mut rng,
 ///     )
 ///     .unwrap();
 ///
@@ -926,11 +1033,12 @@ where
 /// let val = qtci.evaluate(&[2, 4]).unwrap();
 /// assert!((val - 24.0).abs() < 1e-8);
 /// ```
-pub fn quanticscrossinterpolate_discrete_batch<V, F>(
+pub fn quanticscrossinterpolate_discrete_batch_with_rng<V, F, R>(
     size: &[usize],
     f: F,
     initial_pivots: Option<Vec<Vec<usize>>>,
     options: QtciOptions,
+    rng: &mut R,
 ) -> QtciResult<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
     V: TTScalar
@@ -942,6 +1050,7 @@ where
         + FullPivLuScalar
         + tensor4all_treetci::globalpivot::ScalarParts,
     F: Fn(QuanticsBatch<'_, usize>) -> Result<Vec<V>>,
+    R: rand::Rng + ?Sized,
 {
     if size.is_empty() {
         return Err(QuanticsTCIError::InvalidConfiguration {
@@ -988,6 +1097,9 @@ where
         f,
         cache.clone(),
     );
+    // Erase the caller's RNG type once so the run below is instantiated once
+    // per scalar type instead of once per (scalar, RNG) pair.
+    let mut stream: &mut R = rng;
     let pivots = prepare_pivots(
         initial_pivots,
         &local_dims,
@@ -996,6 +1108,7 @@ where
                 .map_err(|error| anyhow!("initial pivot {pivot:?} conversion failed: {error}"))
         },
         options.n_random_init_pivot,
+        &mut stream,
     )?;
 
     let (tci, tt, ranks, errors, cache) =
@@ -1005,6 +1118,39 @@ where
         ranks,
         errors,
     ))
+}
+
+/// The same entry point with an explicitly named deterministic seed.
+///
+/// Builds a `ChaCha8Rng` from [`QtciOptions::rng_seed`] (OS entropy when unset,
+/// drawn once per run) and delegates to
+/// [`quanticscrossinterpolate_discrete_batch_with_rng`], which ignores the option because it consumes the
+/// caller's stream directly.
+///
+/// # Errors
+/// Returns [`QuanticsTCIError::InvalidConfiguration`] when the grid size or
+/// options are invalid. Returns [`QuanticsTCIError::Operation`] when an initial
+/// pivot conversion fails, `f` returns a value count that does not equal the
+/// number of requested points, or the underlying interpolation fails.
+pub fn quanticscrossinterpolate_discrete_batch<V, F>(
+    size: &[usize],
+    f: F,
+    initial_pivots: Option<Vec<Vec<usize>>>,
+    options: QtciOptions,
+) -> QtciResult<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
+where
+    V: TTScalar
+        + Default
+        + Clone
+        + 'static
+        + tensor4all_core::TensorElement
+        + tensor4all_core::MatrixLuciScalar
+        + FullPivLuScalar
+        + tensor4all_treetci::globalpivot::ScalarParts,
+    F: Fn(QuanticsBatch<'_, usize>) -> Result<Vec<V>>,
+{
+    let mut rng = seeded_quantics_stream(&options);
+    quanticscrossinterpolate_discrete_batch_with_rng(size, f, initial_pivots, options, &mut rng)
 }
 
 /// Interpolate a function defined on a discrete integer grid, one point at a time.

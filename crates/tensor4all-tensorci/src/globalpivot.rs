@@ -6,7 +6,7 @@
 //! ([`DefaultGlobalPivotFinder`]) uses random starting points with local
 //! optimization.
 
-use rand::Rng;
+use rand::{Rng, RngCore};
 use tensor4all_core::{floating_zone_walk, MultiIndex, Scalar};
 use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTCache, TTScalar, Tensor3Ops};
 
@@ -40,6 +40,7 @@ pub struct GlobalPivotSearchInput<T: Scalar + TTScalar> {
 /// Using the default implementation via [`DefaultGlobalPivotFinder`]:
 ///
 /// ```
+/// use rand::SeedableRng;
 /// use tensor4all_tensorci::{DefaultGlobalPivotFinder, GlobalPivotFinder,
 ///     GlobalPivotSearchInput};
 /// use tensor4all_simplett::SimpleTensorTrain;
@@ -56,7 +57,7 @@ pub struct GlobalPivotSearchInput<T: Scalar + TTScalar> {
 /// };
 ///
 /// let finder = DefaultGlobalPivotFinder::default();
-/// let mut rng = rand::rng();
+/// let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
 ///
 /// // Every coordinate walk on f(i,j) = i+j reaches (3,3).
 /// let pivots = finder.find_global_pivots(
@@ -100,7 +101,7 @@ pub trait GlobalPivotFinder {
         input: &GlobalPivotSearchInput<T>,
         f: &F,
         abs_tol: f64,
-        rng: &mut impl Rng,
+        rng: &mut dyn RngCore,
     ) -> Result<Vec<MultiIndex>>
     where
         T: Scalar + TTScalar,
@@ -178,7 +179,7 @@ impl GlobalPivotFinder for DefaultGlobalPivotFinder {
         input: &GlobalPivotSearchInput<T>,
         f: &F,
         abs_tol: f64,
-        rng: &mut impl Rng,
+        rng: &mut dyn RngCore,
     ) -> Result<Vec<MultiIndex>>
     where
         T: Scalar + TTScalar,
@@ -293,7 +294,7 @@ mod tests {
         };
 
         let finder = DefaultGlobalPivotFinder::new(10, 3, 1.0);
-        let mut rng = rand::rng();
+        let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
 
         let pivots = finder
             .find_global_pivots(&input, &f, 0.1, &mut rng)
@@ -318,7 +319,7 @@ mod tests {
                 _input: &GlobalPivotSearchInput<T>,
                 _f: &F,
                 _abs_tol: f64,
-                _rng: &mut impl Rng,
+                _rng: &mut dyn RngCore,
             ) -> Result<Vec<MultiIndex>>
             where
                 T: Scalar + TTScalar,
@@ -345,7 +346,7 @@ mod tests {
             j_set: vec![],
         };
 
-        let mut rng = rand::rng();
+        let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
         let pivots = finder
             .find_global_pivots(&input, &f, 0.0, &mut rng)
             .unwrap();
