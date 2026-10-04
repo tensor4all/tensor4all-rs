@@ -25,7 +25,10 @@
 | [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md) | Milestone roadmap for adaptive patched interpolation, contraction, and parallel execution on arbitrary trees |
 | [treetn-contraction-outcome.md](./treetn-contraction-outcome.md) | Proposal: TreeTN contraction outcome report and rank-threshold early abort (tree patching M6) |
 | [tree-interpolation-engine-seam.md](./tree-interpolation-engine-seam.md) | Engine-agnostic tree interpolation contract in treetn and its TreeTCI implementation (tree patching M1, implemented) |
+| [tree-interpolation-edge-pivots.md](./tree-interpolation-edge-pivots.md) | Proposal: optional selected edge pivots through the interpolation engine seam for a future recursive split-selection study; not implemented |
 | [tree-pqtci-driver.md](./tree-pqtci-driver.md) | Sequential adaptive patched interpolation driver in partitionedtreetn (tree patching M2, implemented) |
+| [tree-pqtci-split-selection.md](./tree-pqtci-split-selection.md) | M5 literature review and open decisions for split-site selection, patch-size bounds, and sibling merging |
+| [tree-pqtci-patch-size-bounds.md](./tree-pqtci-patch-size-bounds.md) | Implementation plan for the minimum patch size and the capped-patch size bound of tree pQTCI (tree patching M5 open questions 2 and 4; not implemented) |
 | [tree-patching-error-contract.md](./tree-patching-error-contract.md) | Measured L2 error contract (certified where exact or exhaustive, estimated where sampled), user-selectable error norm, and per-patch budget for tree adaptive patching (tree patching M3; interpolation side implemented, open questions 1, 2, 4, 5, 8, and 9 decided) |
 | [tree-patching-findings.md](./tree-patching-findings.md) | Verified facts about current code used by the tree patching milestones: contraction reporting, element-wise product, fixed sites, patch representation, avoidable overhead, sparse storage decision |
 | [orthogonal-target-reconstruction.md](./orthogonal-target-reconstruction.md) | Fixed global L2 target, gain-driven reconstruction, superpositions, subset-QFT integration, and the level-coupled merge-refine schedule |

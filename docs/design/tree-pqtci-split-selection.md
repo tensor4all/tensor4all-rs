@@ -4,11 +4,20 @@
 
 Design notes for M5 of
 [`tree-adaptive-patching-roadmap.md`](./tree-adaptive-patching-roadmap.md).
-Open questions 2 and 5 below are decided and 4 has a decided direction; the
-selector, sibling merging, and the details of capped outcomes still need the
-user's decision before any implementation. The only M5 data so far is the fixed-depth
-exploration in
+Open questions 2 and 5 below are decided and 4 has a decided direction.
+The selector (question 1) is an optional follow-up study: the default
+coarse-to-fine order stays, and M5 implementation starts with questions 2
+and 4. Sibling merging still needs the user's decision before any
+implementation. The remaining capped-outcome details are open issues of the
+implementation plan, which records provisional rules for a later coding
+phase. Fixed-depth exploratory data are recorded in
 [`2026-10-03-m5-fixed-depth-exploration.md`](../../benchmarks/results/2026-10-03-m5-fixed-depth-exploration.md).
+The implementation plan for questions 2 and 4, with the gaps it found in
+these decisions, is
+[`tree-pqtci-patch-size-bounds.md`](./tree-pqtci-patch-size-bounds.md).
+There, the user decided the report design (a new `ToleranceNotMet` variant)
+and the unit (one generalized bit per active site, with spatial size
+deferred); its other issues are open.
 
 ## Current seam
 
@@ -27,6 +36,12 @@ contract if one is added.
 
 The M1 `InterpolationOutcome::pivots` are full points intended to seed later
 engine runs. They contain no edge-local scores or function values.
+Their coordinates cover the engine problem's active sites; the driver adds
+the patch's fixed coordinates when evaluating on the original domain.
+The optional per-edge data needed by a recursive pivot-scoring study is
+specified for review in
+[tree-interpolation-edge-pivots.md](./tree-interpolation-edge-pivots.md).
+That proposal adds no implemented API or approved selector.
 
 ## The paper's heuristic
 
@@ -50,11 +65,18 @@ compatibility first.
 ## Proposed tree generalization (not reviewed)
 
 Use the largest-rank **edge** in place of the largest-rank bond: the edge
-splits the tree into two node sets, the engine's pivots are projected onto
-each side, and the row and column projections are crossed into full points.
+splits the tree into two node sets, and that edge's selected left and right
+pivot sets are crossed into complete active-domain points. Projecting the
+deduplicated union of joined seed points does not recover those selected
+sets; use the proposed edge snapshot through the engine seam instead.
 Overwriting a candidate site changes the row or column coordinate on the side
 that holds it. Ties are broken by canonical edge order, then by the validated
 `split_order`; candidates stay within `patch_order`.
+
+The edge bipartition has two components even at a junction. The chosen
+site-coordinate split gives one child per local coordinate, so a generalized
+bit of dimension `d` creates `d` children and removes one active site. This
+does not split a graph junction into its incident branches.
 
 What this needs before code is written:
 
@@ -70,7 +92,14 @@ What this needs before code is written:
 
 State after the user's answers of 2026-10-03.
 
-1. **Selector — undecided.** Whether the edge-based generalization is valid
+1. **Selector — optional follow-up study (decided 2026-10-04).** The
+   paper's main algorithm splits along `patch_order`, by default the
+   sequential coarse-to-fine order that the driver already implements;
+   Algorithm 1 is an optional heuristic the paper proposes because that
+   order is usually close to, but not always, the best (§3.7, Fig. 8). The
+   default therefore stays, overpatching control (questions 2, 4 and 3)
+   comes first, and a selector is studied later, once the edge-pivot API
+   and suitable workloads exist. Whether the edge-based generalization is valid
    at nodes of degree three or more cannot be settled by assertion: a site at
    a junction changes several incident edges at once, and a node's tensor
    size is the product of all its incident ranks, so the largest single edge
@@ -82,6 +111,8 @@ State after the user's answers of 2026-10-03.
    the tolerance. Such a patch is never counted as certified. The run does not
    stop with an error. The minimum is given as a number of active quantics
    bits, the same unit as the capped-patch maximum in question 4.
+   Implementation plan and open details:
+   [patch-size bounds](./tree-pqtci-patch-size-bounds.md).
 3. **Sibling merging — undecided.** Its acceptance rule, its reporting, and
    whether it belongs in the driver or in a post-processing step remain open.
 4. **Capped outcomes — direction decided; details and early exit open** (M3
@@ -96,6 +127,8 @@ State after the user's answers of 2026-10-03.
    size. The maximum is given as a number of quantics bits: the count of the
    patch's unfixed (active) bits. The early exit of the engine at the first
    saturated sweep is still open.
+   Implementation plan and open details:
+   [patch-size bounds](./tree-pqtci-patch-size-bounds.md).
 5. **Corner-localized misses — decided: optional mitigation.** Split rules and
    child candidate sets may take them into account through an opt-in option
    (for example, child start candidates that include the parent's pivots near

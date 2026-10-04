@@ -235,8 +235,10 @@ spectral function only got more expensive.
 
 Scope:
 
-- a pivot-based split heuristic generalized from the chain algorithm to tree
-  edge bipartitions;
+- optional: a pivot-based split heuristic generalized from the chain
+  algorithm to tree edge bipartitions. The default split order stays the
+  sequential coarse-to-fine `patch_order`, as in the paper's main algorithm;
+  the heuristic is a later study (user decision of 2026-10-04);
 - `ExactParameterGain` remains the algebra-side reference strategy; its cost
   (about `L * d` truncations per split decision when `patch_order` is empty)
   motivates a cheaper default for large patch counts;
@@ -261,9 +263,10 @@ children that the feature enters only through a corner or an edge, which
 uniform sampling and the engine can miss. The fix itself is decided in the
 M9 global review.
 
-Exit: measurements on M2 patches compare the heuristic with `Sequential` and
-`ExactParameterGain`, and overpatching cases do not exceed the unpatched
-parameter count by more than a documented margin.
+Exit: overpatching cases do not exceed the unpatched parameter count by more
+than a documented margin, measured on M2 patches. If the optional heuristic
+is implemented, measurements compare it with `Sequential` and
+`ExactParameterGain`.
 
 ### M6. Adaptive patched contraction (L)
 

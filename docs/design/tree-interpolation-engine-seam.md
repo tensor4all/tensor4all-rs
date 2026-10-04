@@ -18,6 +18,13 @@ implementation consists of:
 The decisions taken during implementation are recorded under
 [Implementation decisions](#implementation-decisions).
 
+A separate proposed amendment,
+[optional edge pivots](./tree-interpolation-edge-pivots.md), describes opt-in
+export of each edge's selected side coordinates for a later recursive
+split-selection study. That amendment is not implemented or approved; the
+M1 seed pivots described below cover the problem's active sites and do not
+preserve per-edge selections.
+
 ## Goal
 
 A patch driver in `tensor4all-partitionedtreetn` (milestone M2) must run a
