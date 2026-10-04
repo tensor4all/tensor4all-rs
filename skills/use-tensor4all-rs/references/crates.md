@@ -179,11 +179,12 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   opt-in estimate. The driver measures every accepted and zero patch
   (exhaustive up to `max_exhaustive_points`, else sampled plus audit) and
   reports `report.norm` (`NormReport::L2 { tau, error: L2ErrorReport { global:
-  GlobalL2Error::{Certified, Audited, AcceptanceOnly, ToleranceNotMet}, .. },
-  .. }`): `Certified` is a bound that every patch met its allowance, only up
-  to a calibrated (not proven) rounding model; `ToleranceNotMet` (a retained
-  patch missed its allowance; check `report.tolerance_met()`) still bounds the
-  error with an `ExactOrExhaustive` basis but is never certified; a sampled run is an estimate only with the audit on, otherwise
+  GlobalL2Error::{Certified, Audited, AcceptanceOnly, ToleranceNotMet}, ..
+  }, .. }`): `Certified` bounds the error and states that every patch met
+  its allowance, only up to a calibrated (not proven) rounding model;
+  `ToleranceNotMet` (a retained patch missed its allowance; check
+  `report.tolerance_met()`) still bounds the error with an
+  `ExactOrExhaustive` basis but is never certified; a sampled run is an estimate only with the audit on, otherwise
   acceptance-only (neither a bound nor an estimate). Known limitation:
   sampled acceptance and the audit can both miss a localized feature that
   enters a patch only through a corner or an edge, and the audit's standard

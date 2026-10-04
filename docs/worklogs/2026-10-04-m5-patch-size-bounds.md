@@ -50,9 +50,24 @@ equals the M3 classification.
   within tolerance and checks the M3 certificate against the dense error.
   The parameters were chosen by trying a small grid and are recorded in the
   test.
+- Open issue 10 proposed a test engine that truncates at the cap. It was
+  not added: the dense test engine's untruncated over-cap network is exactly
+  the engine fault the new engine-error path needs, and every other test
+  splits such a patch without using it. The engine's documentation says so.
 - The `l2_given` and `tau` helpers moved from `tests/adaptive_l2.rs` into
   `tests/adaptive_common`, next to the shared `never` evaluator, so the new
   test file does not duplicate them.
+
+## Review
+
+An independent review found no blocker or major issue. Its minor findings
+were fixed: `classify` returns the M3 RMS value and basis, so no unreachable
+match arm remains; a test covers a capped-eligible run that fails its
+estimate at an exhausted `patch_order` under `SampledMax`
+(`NoSplitIndexLeft`); a passing retained measurement is asserted not to count
+as a verification failure; the test engine documentation and the
+`Certified` rustdoc match the amended contract; several rustdoc wordings
+were corrected.
 
 ## Verification conclusions and constraints
 
@@ -60,7 +75,7 @@ All crate tests pass unchanged with the defaults, including the frozen M2
 golden outputs and every M3 test; the new file has 20 tests whose expected
 values are closed forms (or the independent stream implementation for the
 sampled cases) and were not tuned to the output. Workspace doctests of the
-crate and `./scripts/test-mdbook.sh` pass. Clippy reports nothing new; its six
+crate and `./scripts/test-mdbook.sh` pass. Clippy reports nothing new; its five
 warnings are in the pre-existing M5 fixed-depth benchmark example.
 
 No performance or overpatching measurement was made. The bounds' effect on

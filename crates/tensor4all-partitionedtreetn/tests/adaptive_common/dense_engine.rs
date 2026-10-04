@@ -2,7 +2,10 @@
 //!
 //! It evaluates the whole active domain, factorizes it exactly, and reports
 //! `BondCapReached` when the exact rank reaches the cap, so splitting is
-//! tested independently of any real engine.
+//! tested independently of any real engine. Above the cap its network
+//! exceeds the cap, which violates the M1 contract (an outcome network's
+//! bonds never exceed the cap); the patch-size tests use that on purpose as
+//! an engine fault, and every other test splits such a patch unused.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -35,8 +38,9 @@ pub(crate) enum Fault {
     IterationLimit,
     /// Report `Converged` whatever the rank, even at the cap.
     ConvergedAtCap,
-    /// Sample only the initial pivots and stop at the cap; the (empty)
-    /// network is never used because the driver splits.
+    /// Sample only the initial pivots and stop at the cap with an empty
+    /// network: unused when the driver splits, an engine fault when it
+    /// retains the patch.
     CapAfterPivots,
     /// Send a batch with the wrong number of rows.
     BadBatch,
@@ -56,7 +60,8 @@ pub(crate) struct Seen {
 
 /// Evaluates the whole active domain, factorizes it exactly (SVD with the
 /// default relative threshold), and reports `BondCapReached` when the exact
-/// rank reaches the cap. Nodes without active sites are supported through a
+/// rank reaches the cap; above the cap its network is not truncated (see the
+/// module documentation). Nodes without active sites are supported through a
 /// temporary dimension-one site that is contracted away afterwards.
 pub(crate) struct DenseEngine {
     fault: Fault,

@@ -84,7 +84,8 @@ pub struct PatchedInterpolationOptions {
     pub max_bond_dim: usize,
     /// Sites fixed when a patch splits, in order, by full index identity.
     /// A partial order is allowed: a patch that cannot be accepted after
-    /// every listed site is fixed fails with
+    /// every listed site is fixed fails (the minimum patch size never turns
+    /// this into an acceptance) with
     /// [`PatchedInterpolationError::NoSplitIndexLeft`](super::PatchedInterpolationError::NoSplitIndexLeft)
     /// or
     /// [`PatchedInterpolationError::VerificationFailed`](super::PatchedInterpolationError::VerificationFailed).
@@ -114,8 +115,10 @@ pub struct PatchedInterpolationOptions {
     /// when it meets its allowance (the measured error under L2, the engine
     /// estimate under `SampledMax`) and
     /// [`PatchStatus::ToleranceNotMet`](super::PatchStatus::ToleranceNotMet)
-    /// otherwise; such a patch is never certified. A patch whose last engine
-    /// run did not converge is measured once and judged the same way. With
+    /// otherwise; such a patch is never certified. A last run that was not
+    /// judged yet (it did not converge and was not capped-eligible) is
+    /// judged once: measured under L2, by its estimate under `SampledMax`.
+    /// With
     /// `Some(m)` for `m >= 2`, a failing two-site patch is retained although
     /// splitting it would give exact patches, and `m` at least the number of
     /// sites blocks the root. `None` (the default) and `Some(0)` or

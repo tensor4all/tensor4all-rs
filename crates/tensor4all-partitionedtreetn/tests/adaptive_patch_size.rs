@@ -277,6 +277,8 @@ fn a_blocked_run_that_did_not_converge_is_measured_once() {
         [InterpolationTermination::IterationLimit; 2]
     );
     assert!(result.report.tolerance_met());
+    // A passing retained measurement is not a verification failure.
+    assert_eq!(result.report.verification_failures, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -621,6 +623,18 @@ fn sampled_max_judges_capped_and_blocked_runs_by_the_engine_estimate() {
         let result = run_steps(steps.clone(), &options.with_min_patch_bits(4));
         assert_eq!(statuses(&result.report), [PatchStatus::ToleranceNotMet]);
         assert!(!result.report.tolerance_met());
+    }
+
+    // A capped-eligible run above the tolerance at an exhausted patch_order
+    // was judged but not measured: NoSplitIndexLeft at the first child.
+    let s0 = problem.site("s0", 0);
+    let exhausted = capped.clone().with_patch_order(vec![s0.clone()]);
+    let engine = ScriptedEngine::new(vec![Step::capped().with_error_estimate(2.0)]);
+    match run(&engine, &problem, &binary_ramp, &[], &exhausted) {
+        Err(PatchedInterpolationError::NoSplitIndexLeft { projector }) => {
+            assert_eq!(projector.get(&s0), Some(0));
+        }
+        other => panic!("expected NoSplitIndexLeft, got {other:?}"),
     }
 
     // A blocked IterationLimit run at the tolerance is within it.

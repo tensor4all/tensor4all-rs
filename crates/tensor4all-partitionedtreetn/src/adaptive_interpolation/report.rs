@@ -164,10 +164,33 @@ impl L2Measurement {
 ///
 /// # Examples
 ///
-/// ```
-/// use tensor4all_partitionedtreetn::adaptive_interpolation::PatchStatus;
+/// See [`ToleranceNotMetBasis`] for a retained patch that misses its
+/// allowance.
 ///
-/// assert_ne!(PatchStatus::WithinTolerance, PatchStatus::ToleranceNotMet);
+/// ```
+/// use std::collections::BTreeMap;
+/// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+/// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+///     patched_interpolate, PatchStatus, PatchedInterpolationOptions,
+/// };
+/// use tensor4all_treetci::TreeTciInterpolator;
+/// use tensor4all_treetn::NodeNameNetwork;
+///
+/// // An exactly evaluated root meets its allowance.
+/// let mut topology = NodeNameNetwork::new();
+/// topology.add_node(0usize)?;
+/// let result = patched_interpolate(
+///     &TreeTciInterpolator::default(),
+///     topology,
+///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(3)])]),
+///     ColMajorArray::new(vec![], vec![1, 0])?,
+///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///         Ok(batch.data().iter().map(|&x| 1.0 + x as f64).collect())
+///     },
+///     &PatchedInterpolationOptions::new(2),
+/// )?;
+/// assert_eq!(result.report.accepted[0].status, PatchStatus::WithinTolerance);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -376,7 +399,8 @@ pub enum MaxReferenceSource {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum GlobalL2Error {
-    /// Every contribution is `Exact` or `Exhaustive`. The measured
+    /// Every contribution is `Exact` or `Exhaustive`, and every patch is
+    /// [`PatchStatus::WithinTolerance`]. The measured
     /// `rms_error` is at most `tau * (1 + GLOBAL_ROUNDING_MARGIN)`, and the
     /// true `E / sqrt(|X|)` exceeds it by at most `rounding_allowance_rms`,
     /// up to the rounding model of [`MEASUREMENT_ROUNDING_FACTOR`]. The bound

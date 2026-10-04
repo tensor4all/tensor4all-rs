@@ -226,7 +226,8 @@ of dimension 4 is one bit.
   converges below the cap is never split for its size. The bound must be at
   least the minimum.
 
-Both default to splitting down to exact patches. On binary layouts, a capped
+By default neither applies, and the driver may split down to exact patches
+in the worst case. On binary layouts, a capped
 bound of at most `log2(max(max_exhaustive_points, samples))` bits keeps every
 capped acceptance exhaustively measured.
 

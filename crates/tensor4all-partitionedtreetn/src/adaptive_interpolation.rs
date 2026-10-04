@@ -682,8 +682,9 @@ where
     /// (measured under L2, estimate-checked under `SampledMax`); `None` for
     /// a run that was not judged.
     rejected: Option<SubDomainTreeTN<V>>,
-    /// The last failed L2 measurement of the patch, of this run when
-    /// `rejected` is set, possibly of an earlier run otherwise.
+    /// The last failed L2 measurement of the patch: of this run when
+    /// `rejected` is set under L2, possibly of an earlier run when it is not,
+    /// and `None` under `SampledMax`.
     failure: Option<Failure>,
 }
 
