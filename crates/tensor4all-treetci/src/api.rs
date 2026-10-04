@@ -1,10 +1,12 @@
 use crate::batch::checked_batch_len;
 use crate::error::Result as TreeTciResult;
 use crate::{
-    materialize::to_treetn, optimize_with_proposer, GlobalIndexBatch, MultiIndex,
-    PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciOptions,
+    materialize::to_treetn,
+    optimize::{optimize_with_proposer, optimize_with_proposer_with_rng},
+    GlobalIndexBatch, MultiIndex, PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciOptions,
 };
 use anyhow::Result;
+use rand::SeedableRng;
 use tensor4all_core::CommonScalar;
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::TreeTN;
@@ -87,6 +89,17 @@ pub type TreeTciRunResult = (
 /// also returns an error when the operation fails (a shape or index mismatch,
 /// or a backend failure).
 ///
+/// Interpolate a tree tensor network.
+///
+/// The seeded high-level path uses an explicitly named RNG (drawn from
+/// [`TreeTciOptions::seed`], or OS entropy when unset and the global search is
+/// enabled) and delegates to [`crossinterpolate2_with_rng`].
+///
+/// # Errors
+///
+/// Returns an error for invalid options, mismatched dimensions, pivot sets that
+/// are empty or evaluate to zero, or a backend failure.
+///
 pub fn crossinterpolate2<T, F, P>(
     evaluate: F,
     local_dims: Vec<usize>,
@@ -104,6 +117,54 @@ where
         + crate::globalpivot::ScalarParts,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
+{
+    let mut rng = match (options.enable_global_pivots, options.seed) {
+        (true, None) => rand_chacha::ChaCha8Rng::from_os_rng(),
+        (_, seed) => rand_chacha::ChaCha8Rng::seed_from_u64(seed.unwrap_or(0)),
+    };
+    crossinterpolate2_with_rng(
+        evaluate,
+        local_dims,
+        graph,
+        initial_pivots,
+        options,
+        center_site,
+        proposer,
+        &mut rng,
+    )
+}
+
+/// Interpolate a tree tensor network on a caller-owned random stream.
+///
+/// Same as [`crossinterpolate2`], but consumes `rng` for every global pivot
+/// search of the run instead of deriving a generator from
+/// [`TreeTciOptions::seed`], so the caller can reproduce or advance the run's
+/// randomness and share one stream across runs. Randomized proposers keep their
+/// own generators (see #824); this controls the global searches only.
+///
+/// # Errors
+///
+/// Returns the same errors as [`crossinterpolate2`].
+///
+pub fn crossinterpolate2_with_rng<T, F, P, R>(
+    evaluate: F,
+    local_dims: Vec<usize>,
+    graph: TreeTciGraph,
+    initial_pivots: Vec<MultiIndex>,
+    options: TreeTciOptions,
+    center_site: Option<usize>,
+    proposer: &P,
+    rng: &mut R,
+) -> TreeTciResult<TreeTciRunResult>
+where
+    T: FullPivLuScalar
+        + CommonScalar
+        + tensor4all_core::MatrixLuciScalar
+        + tensor4all_core::TensorElement
+        + crate::globalpivot::ScalarParts,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    P: PivotCandidateProposer,
+    R: rand::Rng + ?Sized,
 {
     options.validate()?;
     if !(local_dims.len() == graph.n_sites()) {
@@ -152,7 +213,8 @@ where
         return Err(anyhow::anyhow!("initial pivots must not all evaluate to zero").into());
     }
 
-    let (ranks, errors) = optimize_with_proposer(&mut tci, &evaluate, &options, proposer)?;
+    let (ranks, errors) =
+        optimize_with_proposer_with_rng(&mut tci, &evaluate, &options, proposer, rng)?;
     let treetn = to_treetn(&tci, &evaluate, center_site)?;
 
     Ok((treetn, ranks, errors))

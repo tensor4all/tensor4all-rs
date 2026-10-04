@@ -311,6 +311,64 @@ where
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
+    // Seeded high-level path: an explicitly named RNG is derived from the
+    // option. Entropy is only drawn when the run actually performs a randomized
+    // global search, so a run with the search disabled never touches OS entropy.
+    let mut rng = match (options.enable_global_pivots, options.seed) {
+        (true, None) => ChaCha8Rng::from_os_rng(),
+        (_, seed) => ChaCha8Rng::seed_from_u64(seed.unwrap_or(0)),
+    };
+    optimize_with_proposer_with_rng(state, evaluate, options, proposer, &mut rng)
+}
+
+/// Optimize with a caller-owned random stream.
+///
+/// Same as [`optimize_with_proposer`], but consumes `rng` for every global
+/// pivot search of the run instead of deriving one generator from
+/// [`TreeTciOptions::seed`], so the caller can reproduce or advance the run's
+/// randomness and share one stream across several runs. Randomized *proposers*
+/// keep their own internal generators; this entry point controls the global
+/// searches only (see #824).
+///
+/// # Errors
+///
+/// Returns the same errors as [`optimize_with_proposer`].
+///
+/// # Examples
+///
+/// ```
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_treetci::{
+///     chain_graph, optimize_with_proposer_with_rng, SimpleProposer, TreeTCI2, TreeTciOptions,
+/// };
+///
+/// let mut tci = TreeTCI2::<f64>::new(vec![2, 2], chain_graph()).unwrap();
+/// tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+/// let mut rng = ChaCha8Rng::seed_from_u64(3);
+/// let (ranks, errors) = optimize_with_proposer_with_rng(
+///     &mut tci,
+///     |batch| Ok(batch.points().map(|p| (p[0] + p[1] + 1) as f64).collect()),
+///     &TreeTciOptions { max_iter: 1, ..TreeTciOptions::default() },
+///     &SimpleProposer::default(),
+///     &mut rng,
+/// )
+/// .unwrap();
+/// assert_eq!(ranks.len(), errors.len());
+/// ```
+pub fn optimize_with_proposer_with_rng<T, F, P, R>(
+    state: &mut TreeTCI2<T>,
+    evaluate: F,
+    options: &TreeTciOptions,
+    proposer: &P,
+    rng: &mut R,
+) -> TreeTciResult<(Vec<usize>, Vec<f64>)>
+where
+    T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    P: PivotCandidateProposer,
+    R: rand::Rng + ?Sized,
+{
     options.validate()?;
 
     let mut ranks = Vec::new();
@@ -326,13 +384,6 @@ where
     // global pivots: an iteration that injected pivots has not yet swept them,
     // so its error estimate is stale with respect to those pivots.
     const NCHECK_HISTORY: usize = 3;
-
-    // One explicitly named stream for the whole run: the seeded path pins it,
-    // and the unseeded path draws OS entropy once instead of per search.
-    let mut rng = match options.seed {
-        Some(seed) => ChaCha8Rng::seed_from_u64(seed),
-        None => ChaCha8Rng::from_os_rng(),
-    };
 
     for _iter in 0..options.max_iter {
         for _pass in 0..INNER_EDGE_PASSES {
@@ -411,7 +462,7 @@ where
                 options.max_nglobal_pivot,
                 options.tol_margin_global_search,
                 abs_tol,
-                &mut rng,
+                rng,
             )?;
             state.add_global_pivots(&pivots)?;
             nglobal_pivots_history.push(pivots.len());

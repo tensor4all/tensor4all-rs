@@ -46,7 +46,9 @@ mod state;
 pub(crate) mod validation;
 
 pub use batch::ElementwiseBatch;
-pub use elementwise::{elementwise, elementwise_batched};
+pub use elementwise::{
+    elementwise, elementwise_batched, elementwise_batched_with_rng, elementwise_with_rng,
+};
 pub use error::{AciError, Result};
 #[allow(unused_imports)]
 pub(crate) use local::LocalBlockEvaluator;
