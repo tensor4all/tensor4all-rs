@@ -178,16 +178,17 @@ fn optimizer_propagates_custom_finder_errors() {
     use tensor4all_tensorci::{optimize_with_finder, TCI2Options, TensorCI2};
     struct FailingFinder;
     impl GlobalPivotFinder for FailingFinder {
-        fn find_global_pivots<T, F>(
+        fn find_global_pivots<T, F, R>(
             &self,
             _: &GlobalPivotSearchInput<T>,
             _: &F,
             _: f64,
-            _: &mut impl Rng,
+            _: &mut R,
         ) -> tensor4all_tensorci::Result<Vec<MultiIndex>>
         where
             T: Scalar + TTScalar,
             F: Fn(&MultiIndex) -> T,
+            R: Rng + ?Sized,
         {
             Err(TCIError::InvalidOperation {
                 message: "finder evaluation failed".into(),

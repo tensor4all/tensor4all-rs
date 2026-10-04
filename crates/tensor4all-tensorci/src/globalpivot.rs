@@ -95,16 +95,17 @@ pub trait GlobalPivotFinder {
     /// [`TCIError::SimpleTensorTrain`] for failed TT evaluation. Configuration
     /// is validated even when search is disabled. Custom finders may return
     /// other [`TCIError`] variants; the optimizer propagates them unchanged.
-    fn find_global_pivots<T, F>(
+    fn find_global_pivots<T, F, R>(
         &self,
         input: &GlobalPivotSearchInput<T>,
         f: &F,
         abs_tol: f64,
-        rng: &mut impl Rng,
+        rng: &mut R,
     ) -> Result<Vec<MultiIndex>>
     where
         T: Scalar + TTScalar,
-        F: Fn(&MultiIndex) -> T;
+        F: Fn(&MultiIndex) -> T,
+        R: Rng + ?Sized;
 }
 
 /// Default global pivot finder using random search with local optimization.
@@ -173,16 +174,17 @@ impl DefaultGlobalPivotFinder {
 }
 
 impl GlobalPivotFinder for DefaultGlobalPivotFinder {
-    fn find_global_pivots<T, F>(
+    fn find_global_pivots<T, F, R>(
         &self,
         input: &GlobalPivotSearchInput<T>,
         f: &F,
         abs_tol: f64,
-        rng: &mut impl Rng,
+        rng: &mut R,
     ) -> Result<Vec<MultiIndex>>
     where
         T: Scalar + TTScalar,
         F: Fn(&MultiIndex) -> T,
+        R: Rng + ?Sized,
     {
         validate_nonnegative_finite("abs_tol", abs_tol)?;
         validate_nonnegative_finite("tol_margin", self.tol_margin)?;
@@ -313,16 +315,17 @@ mod tests {
         struct FixedPivotFinder;
 
         impl GlobalPivotFinder for FixedPivotFinder {
-            fn find_global_pivots<T, F>(
+            fn find_global_pivots<T, F, R>(
                 &self,
                 _input: &GlobalPivotSearchInput<T>,
                 _f: &F,
                 _abs_tol: f64,
-                _rng: &mut impl Rng,
+                _rng: &mut R,
             ) -> Result<Vec<MultiIndex>>
             where
                 T: Scalar + TTScalar,
                 F: Fn(&MultiIndex) -> T,
+                R: Rng + ?Sized,
             {
                 // Always return a fixed pivot
                 Ok(vec![vec![1, 2]])

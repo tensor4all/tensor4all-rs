@@ -407,14 +407,18 @@ fn pointwise_readout(
 /// reference. `nsearch` is kept small because the pointwise reference
 /// contracts the whole network once per candidate, which dominates the debug
 /// test time.
-fn search_params<T>(state: &TreeTCI2<T>, seed: u64) -> SearchParams {
+fn search_params<T>(state: &TreeTCI2<T>) -> SearchParams {
     SearchParams {
         nsearch: 4,
         max_nglobal_pivot: 5,
         tol_margin: 1.0,
         abs_tol: 1e-8 * state.max_sample_value,
-        seed,
     }
+}
+
+/// The named stream a fixed-seed search uses.
+fn seeded_rng(seed: u64) -> ChaCha8Rng {
+    ChaCha8Rng::seed_from_u64(seed)
 }
 
 /// Compares the cached batched readout with `TreeTN::evaluate` on
@@ -540,7 +544,7 @@ where
     // the reference except for the documented near-tie.
     let params = SearchParams {
         abs_tol: 1e-3 * state.max_sample_value,
-        ..search_params(&state, 3)
+        ..search_params(&state)
     };
     let cached = find_global_pivots(
         &state,
@@ -549,10 +553,12 @@ where
         params.max_nglobal_pivot,
         params.tol_margin,
         params.abs_tol,
-        params.seed,
+        3,
     )
     .unwrap();
-    let pointwise = search_with_readout(&state, evaluate, params, pointwise_readout).unwrap();
+    let mut rng = seeded_rng(3);
+    let pointwise =
+        search_with_readout(&state, evaluate, params, &mut rng, pointwise_readout).unwrap();
     assert!(
         !cached.is_empty(),
         "the swept 32-bit state must leave errors above the threshold"
@@ -636,7 +642,7 @@ fn global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree() {
     for (name, fixture, seeds) in cases {
         let state = fixture.one_sweep_state();
         for &seed in seeds {
-            let params = search_params(&state, seed);
+            let params = search_params(&state);
             let cached = find_global_pivots(
                 &state,
                 fixture.evaluate(),
@@ -647,8 +653,15 @@ fn global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree() {
                 seed,
             )
             .unwrap();
-            let pointwise =
-                search_with_readout(&state, fixture.evaluate(), params, pointwise_readout).unwrap();
+            let mut rng = seeded_rng(seed);
+            let pointwise = search_with_readout(
+                &state,
+                fixture.evaluate(),
+                params,
+                &mut rng,
+                pointwise_readout,
+            )
+            .unwrap();
             // Same pivots, in the same order, as the pointwise readout and
             // the fixed-seed recording.
             assert_eq!(cached, pointwise, "{name} seed {seed}");
@@ -760,9 +773,9 @@ fn equal_errors_keep_generation_order_and_duplicates_collapse() {
             max_nglobal_pivot,
             tol_margin: 1.0,
             abs_tol: 0.5,
-            seed: 5,
         };
-        search_with_readout(&state, constant, params, leveled_readout).unwrap()
+        let mut rng = seeded_rng(5);
+        search_with_readout(&state, constant, params, &mut rng, leveled_readout).unwrap()
     };
     let pivots = search(nsearch);
 
@@ -814,20 +827,24 @@ fn equal_errors_keep_generation_order_and_duplicates_collapse() {
 fn search_rejects_failing_or_short_readouts() {
     let fixture = chain_fixture();
     let state = fixture.one_sweep_state();
-    let params = search_params(&state, 3);
+    let params = search_params(&state);
 
     let failing = |_: &TreeTN<IdxTensor, usize>,
                    _: &[DynIndex],
                    _: ColMajorArrayRef<'_, usize>|
      -> Result<Vec<AnyScalar>> { Err(anyhow::anyhow!("readout failed")) };
-    let error = search_with_readout(&state, fixture.evaluate(), params, failing).unwrap_err();
+    let mut rng = seeded_rng(3);
+    let error =
+        search_with_readout(&state, fixture.evaluate(), params, &mut rng, failing).unwrap_err();
     assert!(error.to_string().contains("readout failed"), "{error}");
 
     let short = |_: &TreeTN<IdxTensor, usize>,
                  _: &[DynIndex],
                  _: ColMajorArrayRef<'_, usize>|
      -> Result<Vec<AnyScalar>> { Ok(vec![AnyScalar::new_real(0.0)]) };
-    let error = search_with_readout(&state, fixture.evaluate(), params, short).unwrap_err();
+    let mut rng = seeded_rng(3);
+    let error =
+        search_with_readout(&state, fixture.evaluate(), params, &mut rng, short).unwrap_err();
     assert!(
         error
             .to_string()

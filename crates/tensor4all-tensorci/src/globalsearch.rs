@@ -65,16 +65,17 @@ use crate::error::{Result, TCIError};
 /// Returns [`TCIError::InvalidConfiguration`] for an invalid site dimension,
 /// [`TCIError::InvalidPivot`] for an invalid starting point, or
 /// [`TCIError::SimpleTensorTrain`] when tensor-train evaluation fails.
-pub fn estimate_true_error<T, F>(
+pub fn estimate_true_error<T, F, R>(
     tt: &SimpleTensorTrain<T>,
     f: &F,
     nsearch: usize,
     initial_points: Option<Vec<MultiIndex>>,
-    rng: &mut impl Rng,
+    rng: &mut R,
 ) -> Result<Vec<(MultiIndex, f64)>>
 where
     T: Scalar + TTScalar,
     F: Fn(&MultiIndex) -> T,
+    R: Rng + ?Sized,
 {
     let site_dims: Vec<usize> = (0..tt.len())
         .map(|i| tt.site_tensor(i).site_dim())

@@ -115,14 +115,51 @@ where
     T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
+    // The seeded path uses an explicitly named RNG and delegates to the
+    // caller-owned-stream entry point.
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    find_global_pivots_with_rng(
+        state,
+        evaluate,
+        nsearch,
+        max_nglobal_pivot,
+        tol_margin,
+        abs_tol,
+        &mut rng,
+    )
+}
+
+/// Global pivot search on a caller-owned random stream.
+///
+/// Same as [`find_global_pivots`], but consumes `rng` directly for the random
+/// starting points instead of deriving their stream from a seed, so a caller
+/// can pin, advance, or share one stream across several searches. Pass a
+/// `rand_chacha::ChaCha8Rng` when a deterministic algorithm is required.
+///
+/// # Errors
+///
+/// Returns the same errors as [`find_global_pivots`].
+pub fn find_global_pivots_with_rng<T, F, R>(
+    state: &TreeTCI2<T>,
+    evaluate: F,
+    nsearch: usize,
+    max_nglobal_pivot: usize,
+    tol_margin: f64,
+    abs_tol: f64,
+    rng: &mut R,
+) -> TreeTciResult<Vec<MultiIndex>>
+where
+    T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    R: Rng + ?Sized,
+{
     let params = SearchParams {
         nsearch,
         max_nglobal_pivot,
         tol_margin,
         abs_tol,
-        seed,
     };
-    search_with_readout(state, evaluate, params, cached_batched_readout)
+    search_with_readout(state, evaluate, params, rng, cached_batched_readout)
 }
 
 /// Scalar parameters of one global pivot search, as passed to
@@ -133,7 +170,6 @@ struct SearchParams {
     max_nglobal_pivot: usize,
     tol_margin: f64,
     abs_tol: f64,
-    seed: u64,
 }
 
 /// Reads the materialized approximation at every candidate in one batch.
@@ -162,10 +198,11 @@ fn cached_batched_readout(
 /// caller. Production passes [`cached_batched_readout`]; tests also pass the
 /// pointwise [`TreeTN::evaluate`] to check that the readout does not change
 /// the selected pivots.
-fn search_with_readout<T, F, R>(
+fn search_with_readout<T, F, R, G>(
     state: &TreeTCI2<T>,
     evaluate: F,
     params: SearchParams,
+    rng: &mut G,
     readout: R,
 ) -> TreeTciResult<Vec<MultiIndex>>
 where
@@ -176,13 +213,13 @@ where
         &[DynIndex],
         ColMajorArrayRef<'_, usize>,
     ) -> Result<Vec<AnyScalar>>,
+    G: Rng + ?Sized,
 {
     let SearchParams {
         nsearch,
         max_nglobal_pivot,
         tol_margin,
         abs_tol,
-        seed,
     } = params;
     if !abs_tol.is_finite() || abs_tol < 0.0 {
         return Err(
@@ -231,7 +268,6 @@ where
         })
         .and_then(|per_start| per_start.checked_mul(nsearch))
         .ok_or_else(|| anyhow::anyhow!("global-pivot candidate count overflowed usize"))?;
-    let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let mut points: Vec<MultiIndex> = Vec::with_capacity(candidate_count);
     for _ in 0..nsearch {
         let start: MultiIndex = (0..n_sites)

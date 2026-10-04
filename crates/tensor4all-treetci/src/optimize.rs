@@ -1,10 +1,12 @@
 use crate::error::Result as TreeTciResult;
 use crate::{
-    globalpivot::{find_global_pivots, ScalarParts},
+    globalpivot::{find_global_pivots_with_rng, ScalarParts},
     update::update_edge,
     AllEdges, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer, TreeTCI2,
 };
 use anyhow::Result;
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use tensor4all_core::CommonScalar;
 use tensor4all_core::{MatrixLuciScalar as Scalar, RrLUOptions};
 use tensor4all_tensorbackend::FullPivLuScalar;
@@ -325,6 +327,13 @@ where
     // so its error estimate is stale with respect to those pivots.
     const NCHECK_HISTORY: usize = 3;
 
+    // One explicitly named stream for the whole run: the seeded path pins it,
+    // and the unseeded path draws OS entropy once instead of per search.
+    let mut rng = match options.seed {
+        Some(seed) => ChaCha8Rng::seed_from_u64(seed),
+        None => ChaCha8Rng::from_os_rng(),
+    };
+
     for _iter in 0..options.max_iter {
         for _pass in 0..INNER_EDGE_PASSES {
             let error_scale = if options.normalize_error && state.max_sample_value > 0.0 {
@@ -395,18 +404,14 @@ where
                 1.0
             };
             let abs_tol = options.tolerance * error_scale;
-            let seed = match options.seed {
-                Some(base) => base.wrapping_add(_iter as u64),
-                None => rand::random(),
-            };
-            let pivots = find_global_pivots(
+            let pivots = find_global_pivots_with_rng(
                 state,
                 &evaluate,
                 options.nsearch,
                 options.max_nglobal_pivot,
                 options.tol_margin_global_search,
                 abs_tol,
-                seed,
+                &mut rng,
             )?;
             state.add_global_pivots(&pivots)?;
             nglobal_pivots_history.push(pivots.len());
