@@ -45,13 +45,24 @@ pub trait Tensor4Ops<T: Clone + Default> {
     /// `(left_dim, right_dim)` matrix.
     fn slice_site(&self, s1: usize, s2: usize) -> Vec<T>;
 
-    /// Reshape this tensor to a matrix (left_dim * site_dim_1 * site_dim_2, right_dim)
+    /// Fuse the `(left, site_dim_1, site_dim_2)` axes into a column-major
+    /// `(left_dim * site_dim_1 * site_dim_2, right_dim)` matrix.
+    ///
+    /// The fused row index is minor-axis-major: `row = s2 + site_dim_2 * (s1 +
+    /// site_dim_1 * left)`, which is not the column-major reshape of those
+    /// axes; see [#821](https://github.com/tensor4all/tensor4all-rs/issues/821).
     fn as_left_matrix(&self) -> (Vec<T>, usize, usize);
 
-    /// Reshape this tensor to a matrix (left_dim, site_dim_1 * site_dim_2 * right_dim)
+    /// Fuse the `(site_dim_1, site_dim_2, right)` axes into a column-major
+    /// `(left_dim, site_dim_1 * site_dim_2 * right_dim)` matrix with the
+    /// right-major column index `column = right + right_dim * (s2 + site_dim_2
+    /// * s1)`; see [#821](https://github.com/tensor4all/tensor4all-rs/issues/821).
     fn as_right_matrix(&self) -> (Vec<T>, usize, usize);
 
-    /// Reshape this tensor to a matrix (left_dim * site_dim_1, site_dim_2 * right_dim)
+    /// Fuse the `(left, site_dim_1)` axes into rows and `(site_dim_2, right)`
+    /// into columns of a column-major `(left_dim * site_dim_1, site_dim_2 *
+    /// right_dim)` matrix, with `row = s1 + site_dim_1 * left` and `column =
+    /// right + right_dim * s2`; see [#821](https://github.com/tensor4all/tensor4all-rs/issues/821).
     fn as_center_matrix(&self) -> (Vec<T>, usize, usize);
 }
 
