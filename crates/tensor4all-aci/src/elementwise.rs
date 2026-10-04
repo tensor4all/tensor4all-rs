@@ -127,6 +127,7 @@ where
 /// Same as [`elementwise_batched`], but consumes `rng` for the initial guess and
 /// for every global guard search instead of deriving a seed per search, so the
 /// caller can reproduce or advance the whole run's randomness.
+/// [`AciOptions::rng_seed`] is ignored on this path.
 ///
 /// # Errors
 /// Returns [`AciError`](crate::AciError) when options or inputs are invalid,
@@ -366,7 +367,8 @@ where
 /// Pointwise ACI on a caller-owned random stream.
 ///
 /// Same as [`elementwise`] with the randomness of
-/// [`elementwise_batched_with_rng`].
+/// [`elementwise_batched_with_rng`]: it consumes `rng` and ignores
+/// [`AciOptions::rng_seed`].
 ///
 /// # Errors
 /// Returns [`AciError`](crate::AciError) when options or inputs are invalid,

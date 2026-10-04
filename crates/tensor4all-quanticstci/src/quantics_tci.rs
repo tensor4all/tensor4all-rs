@@ -523,7 +523,8 @@ where
     }
 }
 
-/// Interpolate a function with an explicit Grid, evaluating `f` in batches.
+/// Interpolate a function with an explicit Grid, evaluating `f` in batches, on a
+/// caller-owned random stream.
 ///
 /// `f` receives a [`QuanticsBatch`] of original coordinates and must return one
 /// value per requested point, in the same order. The batch is column-major
@@ -531,11 +532,16 @@ where
 /// point — not the deprecated point-wise [`quanticscrossinterpolate`] — for
 /// vectorized targets and language bindings.
 ///
+/// Every random draw — the random initial pivots and the global searches of the
+/// underlying tree TCI — comes from `rng`, and [`QtciOptions::rng_seed`] is
+/// ignored.
+///
 /// # Arguments
 /// * `grid` - Discretized grid describing the function domain
 /// * `f` - Batched function to interpolate
 /// * `initial_pivots` - Initial pivot grid indices (optional)
-/// * `options` - TCI options
+/// * `options` - TCI options; `rng_seed` is ignored
+/// * `rng` - Caller-owned random stream
 ///
 /// # Returns
 /// Tuple of ([`QuanticsTensorCI2`], ranks per sweep, errors per sweep)
@@ -550,13 +556,15 @@ where
 /// # Examples
 ///
 /// ```
+/// use rand::SeedableRng as _;
+/// use rand_chacha::ChaCha8Rng;
 /// use tensor4all_quanticstci::{
 ///     DiscretizedGrid,
 ///     QtciOptions,
 ///     QuanticsBatch,
 ///     pointwise_coordinate_batch,
 ///     pointwise_index_batch,
-///     quanticscrossinterpolate_batch,
+///     quanticscrossinterpolate_batch_with_rng,
 /// };
 ///
 /// let grid = DiscretizedGrid::builder(&[4])
@@ -570,8 +578,9 @@ where
 ///         .map(|point| batch.get(0, point).unwrap().sin())
 ///         .collect())
 /// };
+/// let mut rng = ChaCha8Rng::seed_from_u64(0);
 /// let (qtci, _ranks, errors) =
-///     quanticscrossinterpolate_batch::<f64, _>(&grid, f, None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() }).unwrap();
+///     quanticscrossinterpolate_batch_with_rng::<f64, _, _>(&grid, f, None, QtciOptions::default(), &mut rng).unwrap();
 ///
 /// assert!(*errors.last().unwrap() < 1e-6);
 /// assert!(qtci.sum().unwrap() > 0.0); // sin(x) > 0 on (0, pi)
@@ -699,10 +708,11 @@ where
 
 /// Interpolate from explicit grid point arrays, evaluating `f` in batches.
 ///
-/// Convenience wrapper around [`quanticscrossinterpolate_batch`] and
-/// [`quanticscrossinterpolate_discrete_batch`] that evaluates `f` at the exact
-/// coordinates supplied in `xvals`; `f` always receives original coordinates,
-/// batched as in [`quanticscrossinterpolate_batch`].
+/// Convenience wrapper around [`quanticscrossinterpolate_batch_with_rng`] and
+/// [`quanticscrossinterpolate_discrete_batch_with_rng`] that evaluates `f` at the
+/// exact coordinates supplied in `xvals`; `f` always receives original
+/// coordinates, batched as in [`quanticscrossinterpolate_batch`]. Every random
+/// draw comes from `rng` and [`QtciOptions::rng_seed`] is ignored.
 ///
 /// # Arguments
 /// * `xvals` - Strictly increasing, finite coordinate arrays. All dimensions must have
@@ -725,12 +735,14 @@ where
 /// # Examples
 ///
 /// ```
+/// use rand::SeedableRng as _;
+/// use rand_chacha::ChaCha8Rng;
 /// use tensor4all_quanticstci::{
 ///     QtciOptions,
 ///     QuanticsBatch,
 ///     pointwise_coordinate_batch,
 ///     pointwise_index_batch,
-///     quanticscrossinterpolate_from_arrays_batch,
+///     quanticscrossinterpolate_from_arrays_batch_with_rng,
 /// };
 ///
 /// // 4 points in [0, 3]
@@ -740,8 +752,9 @@ where
 ///         .map(|point| batch.get(0, point).unwrap().powi(2))
 ///         .collect())
 /// };
+/// let mut rng = ChaCha8Rng::seed_from_u64(0);
 /// let (qtci, _, _) =
-///     quanticscrossinterpolate_from_arrays_batch::<f64, _>(&xvals, f, None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() })
+///     quanticscrossinterpolate_from_arrays_batch_with_rng::<f64, _, _>(&xvals, f, None, QtciOptions::default(), &mut rng)
 ///         .unwrap();
 ///
 /// // Grid index 2 maps to x = 2.0, so f = 4.0
@@ -966,7 +979,9 @@ where
 /// `(n_dims, n_points)`, so point `p` occupies `batch.point(p)`.
 ///
 /// For functions on continuous domains, use
-/// [`quanticscrossinterpolate_batch`] with a [`DiscretizedGrid`] instead.
+/// [`quanticscrossinterpolate_batch_with_rng`] with a [`DiscretizedGrid`]
+/// instead. Every random draw comes from `rng` and [`QtciOptions::rng_seed`] is
+/// ignored.
 ///
 /// # Arguments
 /// * `size` - Grid size in each dimension. All dimensions must have the **same**
@@ -988,12 +1003,14 @@ where
 /// # Examples
 ///
 /// ```
+/// use rand::SeedableRng as _;
+/// use rand_chacha::ChaCha8Rng;
 /// use tensor4all_quanticstci::{
 ///     QtciOptions,
 ///     QuanticsBatch,
 ///     pointwise_coordinate_batch,
 ///     pointwise_index_batch,
-///     quanticscrossinterpolate_discrete_batch,
+///     quanticscrossinterpolate_discrete_batch_with_rng,
 /// };
 ///
 /// let f = |batch: QuanticsBatch<'_, usize>| -> anyhow::Result<Vec<f64>> {
@@ -1001,12 +1018,14 @@ where
 ///         .map(|point| (batch.get(0, point).unwrap() * 10 + batch.get(1, point).unwrap()) as f64)
 ///         .collect())
 /// };
+/// let mut rng = ChaCha8Rng::seed_from_u64(0);
 /// let (qtci, _ranks, _errors) =
-///     quanticscrossinterpolate_discrete_batch::<f64, _>(
+///     quanticscrossinterpolate_discrete_batch_with_rng::<f64, _, _>(
 ///         &[16, 16],
 ///         f,
 ///         None,
-///         QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
+///         QtciOptions::default(),
+///         &mut rng,
 ///     )
 ///     .unwrap();
 ///

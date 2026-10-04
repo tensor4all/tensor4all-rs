@@ -224,10 +224,12 @@ where
     }
 }
 
-/// Interpolate a vector/tensor-valued function, evaluating `f` in batches.
+/// Interpolate a vector/tensor-valued function, evaluating `f` in batches, on a
+/// caller-owned random stream.
 ///
-/// Each output component is interpolated independently with
-/// [`quanticscrossinterpolate_batch`], and the per-component tensor trains are
+/// Each output component is interpolated with
+/// [`quanticscrossinterpolate_batch_with_rng`] on the *same* stream, in
+/// component order, and the per-component tensor trains are
 /// combined into a single [`SimpleTensorTrain`] with an additional component
 /// site at the end. A shared cache means each grid point is evaluated at most
 /// once across all components.
@@ -243,7 +245,9 @@ where
 ///
 ///   `&[2, 2]` for 2x2 matrix)
 /// * `initial_pivots` - Initial pivot grid indices (0-indexed, optional)
-/// * `options` - TCI options
+/// * `options` - TCI options; `rng_seed` is ignored
+/// * `rng` - Caller-owned random stream. One stream drives every component, so
+///   the whole run is reproducible from the stream's position
 ///
 /// # Returns
 ///
@@ -260,9 +264,11 @@ where
 /// # Examples
 ///
 /// ```
+/// use rand::SeedableRng as _;
+/// use rand_chacha::ChaCha8Rng;
 /// use tensor4all_quanticstci::{
-///     quanticscrossinterpolate_multicomponent, AbstractTensorTrain, DiscretizedGrid, QtciOptions,
-///     QuanticsBatch,
+///     quanticscrossinterpolate_multicomponent_with_rng, AbstractTensorTrain, DiscretizedGrid,
+///     QtciOptions, QuanticsBatch,
 /// };
 ///
 /// let grid = DiscretizedGrid::builder(&[2])
@@ -280,12 +286,14 @@ where
 ///     Ok(values)
 /// };
 ///
-/// let (result, ranks, errors) = quanticscrossinterpolate_multicomponent::<f64, _>(
+/// let mut rng = ChaCha8Rng::seed_from_u64(0);
+/// let (result, ranks, errors) = quanticscrossinterpolate_multicomponent_with_rng::<f64, _, _>(
 ///     &grid,
 ///     f,
 ///     &[2],
 ///     None,
-///     QtciOptions { rng_seed: Some(0), ..QtciOptions::default() }.with_tolerance(1e-8),
+///     QtciOptions::default().with_tolerance(1e-8),
+///     &mut rng,
 /// ).unwrap();
 ///
 /// assert_eq!(result.tensor_train().len(), 3); // 2 grid sites + 1 component site

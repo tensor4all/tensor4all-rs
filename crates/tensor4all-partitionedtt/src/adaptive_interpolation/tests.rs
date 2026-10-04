@@ -788,3 +788,135 @@ fn numerically_zero_child_patch_is_accepted_not_crash_issue598() {
         .expect("valid combined tensor train");
     let _ = tt.bond_dims();
 }
+
+/// A structurally exact patch draws nothing, so it must not consume the caller's
+/// stream.
+///
+/// Single-site patches are evaluated point by point: there are no candidate
+/// pivots and no nested TCI. The high-level `adaptiveinterpolate` therefore
+/// never needs OS entropy for them, and the caller-owned entry point must leave
+/// the supplied stream exactly where it was.
+#[test]
+fn a_single_active_site_patch_consumes_no_randomness() {
+    use rand::RngCore as _;
+
+    let function = |index: &MultiIndex| (index[0] + 1) as f64;
+    let mut stream = ChaCha8Rng::seed_from_u64(7);
+    let mut reference = ChaCha8Rng::seed_from_u64(7);
+
+    let result = adaptiveinterpolate_with_rng::<f64, _, fn(&[MultiIndex]) -> Vec<f64>, _>(
+        function,
+        None,
+        vec![DynIndex::new_dyn(4)],
+        vec![vec![0]],
+        AdaptiveInterpolateOptions::default(),
+        &mut stream,
+    )
+    .expect("a single-site patch is exact");
+
+    assert_eq!(dense_f64(&result), vec![1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(
+        stream.next_u64(),
+        reference.next_u64(),
+        "an exact patch must not advance the caller's stream"
+    );
+}
+
+/// The candidate-pivot sampler and the nested TCI draw from the *same*
+/// caller-owned stream, and neither falls back to a hidden generator.
+///
+/// The two stages are reached through options: `n_initial_pivots` larger than
+/// the compatible pivots makes the sampler draw, while `nsearch = 0` leaves the
+/// nested global search inert; `nsearch > 0` makes the nested search draw.
+/// Isolating a stage completely is not observable from the public API, so the
+/// test pins the properties that are: a fixed seed reproduces the run *and* the
+/// stream position it leaves behind (a hidden `from_os_rng()` or per-patch
+/// reseed breaks this), pre-advancing the caller's stream changes what the run
+/// samples, and the run advances the caller's stream at all.
+#[test]
+fn the_patch_stages_draw_from_the_callers_stream_and_never_from_a_hidden_one() {
+    use rand::RngCore as _;
+    use tensor4all_tensorci::TCI2Options;
+
+    // Strictly positive, so no patch is classified as numerically zero.
+    fn function(index: &MultiIndex) -> f64 {
+        ((index[0] * 7 + index[1] * 3 + index[2] * 5) % 11) as f64 + 0.5
+    }
+
+    let run = |n_initial_pivots: usize, nsearch: usize, pre_draws: usize| {
+        let seen = Rc::new(RefCell::new(Vec::<MultiIndex>::new()));
+        let recorder = Rc::clone(&seen);
+        let mut stream = ChaCha8Rng::seed_from_u64(7);
+        for _ in 0..pre_draws {
+            let _: u64 = stream.next_u64();
+        }
+        let options = AdaptiveInterpolateOptions {
+            n_initial_pivots,
+            tci_options: TCI2Options {
+                nsearch,
+                max_nglobal_pivot: nsearch.max(1),
+                ..TCI2Options::default()
+            },
+            ..AdaptiveInterpolateOptions::default()
+        };
+        let result = adaptiveinterpolate_with_rng::<f64, _, fn(&[MultiIndex]) -> Vec<f64>, _>(
+            move |index: &MultiIndex| {
+                recorder.borrow_mut().push(index.clone());
+                function(index)
+            },
+            None,
+            binary_sites(3),
+            vec![vec![0, 0, 0]],
+            options,
+            &mut stream,
+        )
+        .expect("the test function is strictly positive and low-rank enough");
+        // Read the position *after* the run so two runs can be compared.
+        (dense_f64(&result), seen.borrow().clone(), stream.next_u64())
+    };
+
+    let untouched = ChaCha8Rng::seed_from_u64(7).next_u64();
+
+    // (1) A multi-patch run draws from the caller's stream.
+    let (data, seen, after) = run(3, 0, 0);
+    assert!(
+        seen.len() > 1,
+        "the run must sample beyond the single seed pivot, got {seen:?}"
+    );
+    assert_ne!(
+        after, untouched,
+        "the pipeline must consume the caller's stream instead of a hidden one"
+    );
+
+    // (2) A fixed seed reproduces the sampled points and the stream position.
+    let (data_repeat, seen_repeat, after_repeat) = run(3, 0, 0);
+    assert_eq!(data, data_repeat);
+    assert_eq!(seen, seen_repeat);
+    assert_eq!(
+        after, after_repeat,
+        "the same seed must consume the same number of draws"
+    );
+
+    // (3) The caller's position is authoritative: one extra draw before the call
+    // changes the sampled pivots.
+    let (_, seen_predrawn, _) = run(3, 0, 1);
+    assert_ne!(
+        seen_predrawn, seen,
+        "pre-advancing the caller's stream must change the sampled pivots"
+    );
+
+    // (4) The nested global search draws from the same caller-owned stream:
+    // enabling it changes how far the stream advances on an otherwise identical
+    // run. The sampled *pivots* need not move here, because an exactly
+    // convergent patch reaches the same full pivot set either way.
+    let (_, _, after_sampler_only) = run(1, 0, 0);
+    let (_, _, after_search) = run(1, 2, 0);
+    assert_ne!(
+        after_search, untouched,
+        "the nested TCI must consume the caller's stream"
+    );
+    assert_ne!(
+        after_sampler_only, after_search,
+        "enabling the nested global search must add draws on the same stream"
+    );
+}

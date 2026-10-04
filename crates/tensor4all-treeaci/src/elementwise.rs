@@ -81,7 +81,8 @@ where
 
 /// Tree elementwise ACI on a caller-owned random stream.
 ///
-/// Same as [`tree_elementwise_batched`], but consumes `rng` for the random
+/// Same as [`tree_elementwise_batched`], but consumes `rng` and ignores
+/// [`TreeAciOptions::rng_seed`] for the random
 /// initial output and for every global guard search instead of deriving a seed
 /// per pass, so the caller can reproduce or advance the whole run.
 ///

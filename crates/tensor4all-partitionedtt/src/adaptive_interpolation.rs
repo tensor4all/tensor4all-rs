@@ -544,7 +544,37 @@ where
 ///
 /// Same as [`adaptiveinterpolate`], but consumes `rng` for every patch: the
 /// candidate pivots and the nested TCI run draw from the supplied stream, and
-/// `AdaptiveInterpolateOptions::tci_options::seed` is ignored.
+/// `AdaptiveInterpolateOptions::tci_options::seed` is ignored. Two runs from the
+/// same stream position produce the same result, so a seed is reproducible by
+/// seeding the stream.
+///
+/// # Examples
+///
+/// ```
+/// use rand::SeedableRng as _;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_core::contract;
+/// use tensor4all_partitionedtt::{
+///     adaptiveinterpolate_with_rng, AdaptiveInterpolateOptions, DynIndex, MultiIndex,
+/// };
+///
+/// let sites = vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+/// let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
+/// let mut rng = ChaCha8Rng::seed_from_u64(0);
+/// let result = adaptiveinterpolate_with_rng::<f64, _, fn(&[MultiIndex]) -> Vec<f64>, _>(
+///     f,
+///     None,
+///     sites,
+///     vec![vec![1, 1]],
+///     AdaptiveInterpolateOptions::default(),
+///     &mut rng,
+/// )
+/// .unwrap();
+///
+/// let tt = result.partitioned_tt().to_tensor_train().unwrap();
+/// let dense = contract(&[tt.tensor(0).unwrap(), tt.tensor(1).unwrap()]).unwrap();
+/// assert_eq!(dense.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 2.0, 4.0]);
+/// ```
 ///
 /// # Errors
 /// Returns [`PartitionedTTError::InvalidAdaptiveInterpolationInput`] for empty,

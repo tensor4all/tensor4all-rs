@@ -164,7 +164,8 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
 
     /// Initializes the state on a caller-owned random stream.
     ///
-    /// Same as [`Self::initialize`], but consumes `rng` for the random initial
+    /// Same as [`Self::initialize`], but consumes `rng` and ignores
+    /// [`TreeAciOptions::rng_seed`] for the random initial
     /// output instead of deriving a stream from `TreeAciOptions::rng_seed`.
     pub(crate) fn initialize_with_rng(
         inputs: &'a [TreeTN<IdxTensor, V>],
