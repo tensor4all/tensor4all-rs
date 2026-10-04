@@ -662,8 +662,7 @@ fn unseeded_initialization_defers_numeric_canonicalization() {
     // Same stream as `TreeAciState::initialize` derives from the same options.
     let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(options.rng_seed);
     let raw =
-        build_random_output::<f64, usize, _>(&inputs[0], &problem, &edge_ranks, &options, &mut rng)
-            .unwrap();
+        build_random_output::<f64, usize, _>(&inputs[0], &problem, &edge_ranks, &mut rng).unwrap();
     let state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
 
     assert_eq!(state.output.canonical_region().len(), 1);

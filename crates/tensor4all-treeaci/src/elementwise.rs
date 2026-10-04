@@ -119,7 +119,7 @@ where
         } else {
             PassDirection::Reverse
         };
-        let cleanup = run_directional_pass(&mut state, options, direction, &mut operator, rng)?;
+        let cleanup = run_directional_pass(&mut state, options, direction, &mut operator)?;
         evaluated_points = evaluated_points
             .checked_add(cleanup.evaluated_points)
             .ok_or(crate::TreeAciError::SizeOverflow {

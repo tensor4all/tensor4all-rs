@@ -101,7 +101,7 @@ where
         } else {
             PassDirection::Reverse
         };
-        let report = run_directional_pass(state, options, direction, operator, rng)?;
+        let report = run_directional_pass(state, options, direction, operator)?;
         stable_rank_passes =
             track_rank_stability(&mut previous_ranks, &state.edge_ranks, stable_rank_passes);
         evaluated_points = evaluated_points
@@ -206,20 +206,16 @@ fn global_injection_capacities<T: TreeAciScalar, V: TreeAciNode>(
         .collect()
 }
 
-pub(crate) fn run_directional_pass<T, V, F, R>(
+pub(crate) fn run_directional_pass<T, V, F>(
     state: &mut TreeAciState<'_, T, V>,
     options: &TreeAciOptions<V>,
     direction: PassDirection,
     operator: &mut F,
-    // The pass itself draws no randomness; the stream stays in the signature so
-    // the run's single caller-owned stream reaches every pass-level hook.
-    _rng: &mut R,
 ) -> Result<PassReport>
 where
     T: TreeAciScalar,
     V: TreeAciNode,
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
-    R: rand::Rng + ?Sized,
 {
     #[cfg(test)]
     let schedule_clone_started = std::time::Instant::now();

@@ -456,14 +456,7 @@ fn exact_output_has_no_global_pivot_and_injection_updates_every_cut() {
     let inputs = vec![input];
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
     let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
-    run_directional_pass(
-        &mut state,
-        &options,
-        PassDirection::Forward,
-        &mut identity,
-        &mut seeded_rng(),
-    )
-    .unwrap();
+    run_directional_pass(&mut state, &options, PassDirection::Forward, &mut identity).unwrap();
     let exact = find_global_pivots(
         &state,
         &mut input_evaluators,
@@ -640,14 +633,7 @@ fn injection_skips_saturated_cuts_but_retains_recursive_records() {
         "padding another cut must not replace an inactive bond"
     );
     assert!(state.sample_arena.record_count() > records_before);
-    run_directional_pass(
-        &mut state,
-        &options,
-        PassDirection::Forward,
-        &mut identity,
-        &mut seeded_rng(),
-    )
-    .unwrap();
+    run_directional_pass(&mut state, &options, PassDirection::Forward, &mut identity).unwrap();
     let edge_one_pivots_before = state.pivots.per_edge[1].clone();
     update_edge_transaction(&mut state, 0, &options, true, &mut identity).unwrap();
     assert_eq!(state.pivots.per_edge[1], edge_one_pivots_before);

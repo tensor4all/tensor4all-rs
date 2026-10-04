@@ -101,12 +101,8 @@ fn the_seeded_entry_point_is_the_low_level_entry_point_with_a_derived_stream() {
     };
     let batch: Option<fn(&[Vec<usize>]) -> Vec<f64>> = None;
 
-    let seeded = crossinterpolate2::<f64, _, _>(g, batch, vec![4, 4], vec![vec![0, 0]], {
-        let mut options = options();
-        options.seed = Some(7);
-        options
-    })
-    .unwrap();
+    let seeded =
+        crossinterpolate2::<f64, _, _>(g, batch, vec![4, 4], vec![vec![0, 0]], options()).unwrap();
 
     let mut rng = ChaCha8Rng::seed_from_u64(7);
     let streamed = crossinterpolate2_with_rng::<f64, _, _, _>(

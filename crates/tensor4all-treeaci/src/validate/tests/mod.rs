@@ -61,15 +61,7 @@ fn run_one_directional_pass(
     options: &TreeAciOptions<usize>,
 ) -> crate::Result<()> {
     let mut operator = sum_operator;
-    let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0);
-    run_directional_pass(
-        state,
-        options,
-        PassDirection::Forward,
-        &mut operator,
-        &mut rng,
-    )
-    .map(|_| ())
+    run_directional_pass(state, options, PassDirection::Forward, &mut operator).map(|_| ())
 }
 
 #[test]

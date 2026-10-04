@@ -140,7 +140,6 @@ pub(crate) fn build_random_output<T: TreeAciScalar, V: TreeAciNode, R: rand::Rng
     reference: &TreeTN<IdxTensor, V>,
     problem: &PreparedTreeProblem<V>,
     ranks: &[usize],
-    _options: &TreeAciOptions<V>,
     rng: &mut R,
 ) -> Result<TreeTN<IdxTensor, V>> {
     let output_bonds = ranks

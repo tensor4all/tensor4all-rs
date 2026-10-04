@@ -185,7 +185,7 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
             validate_initial_guess::<T, V>(guess, &inputs[0], &problem)?;
             guess.clone()
         } else {
-            build_random_output::<T, V, R>(&inputs[0], &problem, &initial_edge_ranks, options, rng)?
+            build_random_output::<T, V, R>(&inputs[0], &problem, &initial_edge_ranks, rng)?
         };
         // A complete first directional pass replaces every core with CI
         // factors before `finalize_deferred_canonicalization` establishes the
