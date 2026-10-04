@@ -101,6 +101,16 @@ pub struct PatchedInterpolationOptions {
     /// Seed each child with the pivots of the parent's last engine outcome.
     /// Default `false`.
     pub recycle_pivots: bool,
+    /// Also start each patch from the points of its inherited evaluation
+    /// cache with the largest `|f|`: at most `n_initial_pivots` nonzero
+    /// points, after the user, recycled, and worst points and before the
+    /// random fill. The cache holds every value the parent's engine run and
+    /// measurements evaluated inside the patch, so this adds no evaluations.
+    /// An opt-in mitigation of the corner-localized misses (see "Known
+    /// limitation" in the [module documentation](super)): a child then starts
+    /// on a feature the parent sampled near the split face. It cannot help
+    /// with a feature the parent never sampled. Default `false`.
+    pub cache_candidates: bool,
     /// Root seed of every per-patch sub-seed and measurement stream. Default
     /// `0`.
     pub seed: u64,
@@ -173,7 +183,8 @@ impl PatchedInterpolationOptions {
     /// Create options with the given bond cap and the defaults of every
     /// other field: the measured L2 norm with a required reference,
     /// `rtol = 1e-8`, `atol = 0`, default verification, the derived site
-    /// order, five initial pivots, no recycling, seed `0`, no patch limit,
+    /// order, five initial pivots, no recycling, no cache candidates, seed
+    /// `0`, no patch limit,
     /// no minimum patch size, and capped patches split.
     ///
     /// # Arguments
@@ -198,6 +209,7 @@ impl PatchedInterpolationOptions {
     /// assert!(options.patch_order.is_empty());
     /// assert_eq!(options.n_initial_pivots, 5);
     /// assert!(!options.recycle_pivots);
+    /// assert!(!options.cache_candidates);
     /// assert_eq!(options.seed, 0);
     /// assert_eq!(options.max_patches, None);
     /// assert_eq!(options.min_patch_bits, None);
@@ -212,6 +224,7 @@ impl PatchedInterpolationOptions {
             patch_order: Vec::new(),
             n_initial_pivots: 5,
             recycle_pivots: false,
+            cache_candidates: false,
             seed: 0,
             max_patches: None,
             min_patch_bits: None,
@@ -314,6 +327,20 @@ impl PatchedInterpolationOptions {
     /// ```
     pub fn with_recycle_pivots(mut self, recycle_pivots: bool) -> Self {
         self.recycle_pivots = recycle_pivots;
+        self
+    }
+
+    /// Enable or disable the cache candidates of child patches.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::PatchedInterpolationOptions;
+    ///
+    /// assert!(PatchedInterpolationOptions::new(4).with_cache_candidates(true).cache_candidates);
+    /// ```
+    pub fn with_cache_candidates(mut self, cache_candidates: bool) -> Self {
+        self.cache_candidates = cache_candidates;
         self
     }
 

@@ -71,9 +71,9 @@ fn msb_order(problem: &Problem, bits: usize) -> Vec<DynIndex> {
     order
 }
 
-#[test]
-#[ignore = "known limitation: corner-localized features missed by sampled acceptance; fix deferred to post-M9 global review"]
-fn corner_localized_ridge_is_not_missed_by_sampled_acceptance() {
+/// Run the ridge at every seed of [`SEEDS`] and return the seeds whose true
+/// error exceeds ten times the allowance, with what the run reported.
+fn corner_failures(cache_candidates: bool) -> Vec<(u64, f64, String)> {
     let problem = ridge_tree(BITS);
     let positions: Vec<[usize; 3]> = (0..BITS)
         .map(|k| ["x", "y", "z"].map(|v| problem.position(&problem.site(&format!("{v}{k}"), 0))))
@@ -100,6 +100,7 @@ fn corner_localized_ridge_is_not_missed_by_sampled_acceptance() {
             .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
             .with_tolerance(tol(RTOL))
             .with_patch_order(msb_order(&problem, BITS))
+            .with_cache_candidates(cache_candidates)
             .with_seed(seed);
         let start = std::time::Instant::now();
         let result = run(&TreeTciInterpolator::default(), &problem, &f, &[], &options).unwrap();
@@ -187,8 +188,26 @@ fn corner_localized_ridge_is_not_missed_by_sampled_acceptance() {
             failures.push((seed, true_error / norm, reported));
         }
     }
+    failures
+}
+
+#[test]
+#[ignore = "known limitation: corner-localized features missed by sampled acceptance; fix deferred to post-M9 global review"]
+fn corner_localized_ridge_is_not_missed_by_sampled_acceptance() {
+    let failures = corner_failures(false);
     assert!(
         failures.is_empty(),
         "corner-localized misses (seed, true E/||f||, reported): {failures:?}"
+    );
+}
+
+#[test]
+#[ignore = "measurement: cache candidates remove the never-sampled misses but not the sampled-acceptance misses; fails while those exist (release build)"]
+fn cache_candidates_against_corner_localized_misses() {
+    let failures = corner_failures(true);
+    assert!(
+        failures.is_empty(),
+        "corner-localized misses with cache candidates (seed, true E/||f||, reported): \
+         {failures:?}"
     );
 }

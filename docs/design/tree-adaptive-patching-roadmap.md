@@ -228,9 +228,10 @@ redundant patches.
 Status: **minimum patch size and capped-patch bound implemented
 (2026-10-04, questions 2 and 4 without the engine's early exit,
 [`tree-pqtci-patch-size-bounds.md`](./tree-pqtci-patch-size-bounds.md));
-the engine's early exit is closed and sibling merging moved to M6
-(2026-10-04); the opt-in corner-miss mitigation remains; the selector is an
-optional later study, and the overpatching measurements move after the
+the engine's early exit is closed, sibling merging moved to M6, and the
+opt-in corner-miss mitigation (`cache_candidates`) is implemented
+(2026-10-04), which completes M5 by its completion rule below; the selector
+is an optional later study, and the overpatching measurements move after the
 checkpoint.** The design notes and the open
 questions for the user are in
 [`tree-pqtci-split-selection.md`](./tree-pqtci-split-selection.md). The only
@@ -286,8 +287,9 @@ Completion (user decision of 2026-10-04): M5 is complete when each of its
 implementation items is either implemented or explicitly deferred with a
 recorded reason: the minimum patch size and the capped-patch bound (done),
 sibling merging (question 3, moved to M6), the engine's early exit (closed),
-and the opt-in corner-miss mitigation (question 5, to be implemented); the
-selector is already deferred as an optional later study. The overpatching measurements
+and the opt-in corner-miss mitigation (question 5, implemented as
+`cache_candidates`); the selector is already deferred as an optional later
+study. The overpatching measurements
 below do not gate completion: they move after the checkpoint review and are
 tracked under M9, so the review is not blocked on downstream-scale workloads.
 
@@ -424,7 +426,11 @@ Exit: an MPI smoke test and a multi-rank benchmark.
     estimate;
   - a larger default `samples`;
   - boundary-aware or recycled candidates for child patches: the parent's
-    feature points just across the split face;
+    feature points just across the split face. The opt-in
+    `cache_candidates` of M5 (largest values of the inherited cache) removes
+    the misses where the engine never sampled the feature (true `E / delta`
+    680–880 down to 16–230 on the reproduction), not those of the sampled
+    acceptance;
   - split-site rules that avoid cutting through a feature at a corner (M5);
   - stratified or importance verification.
 

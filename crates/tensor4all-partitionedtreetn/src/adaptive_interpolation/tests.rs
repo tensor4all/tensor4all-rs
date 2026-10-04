@@ -286,6 +286,52 @@ fn cache_split_hands_every_entry_to_its_child() {
     }
 }
 
+#[test]
+fn largest_cached_points_are_ordered_by_magnitude_then_coordinates() {
+    // Values by point on a 2 x 3 layout: two ties at magnitude 5, one zero.
+    let mut cache = PatchCache::new(vec![2, 3]);
+    let values = [
+        ([0, 0], 1.0),
+        ([1, 0], -5.0),
+        ([0, 1], 5.0),
+        ([1, 1], 0.0),
+        ([0, 2], -7.0),
+        ([1, 2], 2.0),
+    ];
+    for (point, value) in values {
+        cache.insert(cache.layout().encode(point.into_iter()), value);
+    }
+    let magnitude = |value: f64| value.abs();
+    // The tie at 5 is ordered by coordinates: [0, 1] before [1, 0].
+    assert_eq!(
+        cache.largest_points(3, magnitude),
+        [vec![0, 2], vec![0, 1], vec![1, 0]]
+    );
+    // The zero entry is never returned, even with room left.
+    assert_eq!(
+        cache.largest_points(10, magnitude),
+        [vec![0, 2], vec![0, 1], vec![1, 0], vec![1, 2], vec![0, 0]]
+    );
+    assert!(cache.largest_points(0, magnitude).is_empty());
+
+    // The same answer for every key type.
+    for dims in [vec![1 << 40, 1 << 40], vec![1 << 43; 3]] {
+        let mut cache = PatchCache::new(dims.clone());
+        let far: Vec<usize> = dims.iter().map(|&dim| dim - 1).collect();
+        let origin = vec![0usize; dims.len()];
+        let mut middle = origin.clone();
+        middle[0] = 1;
+        for (point, value) in [(&far, 3.0), (&origin, -3.0), (&middle, 4.0)] {
+            cache.insert(cache.layout().encode(point.iter().copied()), value);
+        }
+        assert_eq!(
+            cache.largest_points(2, magnitude),
+            [middle.clone(), origin.clone()],
+            "{dims:?}"
+        );
+    }
+}
+
 /// The key type a cache uses: 1 (`u64`), 2 (`u128`), or 3 (boxed slice).
 fn key_kind<T: Copy>(cache: &PatchCache<T>) -> usize {
     match cache.entries() {

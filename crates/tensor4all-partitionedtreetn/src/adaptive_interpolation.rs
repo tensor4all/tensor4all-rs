@@ -68,8 +68,12 @@
 //! concentrated on a small set it did not draw: the audited estimate can then
 //! be orders of magnitude below the true error with a small standard error.
 //! More [`VerificationOptions::samples`] make such a miss less likely but do
-//! not exclude it. Only a `Certified` result (every contribution exact or
-//! exhaustive) is a guarantee. The limitation is recorded, with a
+//! not exclude it. The opt-in
+//! [`PatchedInterpolationOptions::cache_candidates`] starts child patches on
+//! features the parent sampled, which removes the misses where the engine
+//! never sampled the feature, but not those where the acceptance sample and
+//! the audit missed a residual the engine saw. Only a `Certified` result
+//! (every contribution exact or exhaustive) is a guarantee. The limitation is recorded, with a
 //! reproduction, under "Known limitation: corner-localized misses" in
 //! `docs/design/tree-patching-error-contract.md`.
 //!
@@ -113,7 +117,10 @@
 //!    so no point is evaluated twice.
 //! 4. A patch with at most one active (unfixed) site is evaluated exactly and
 //!    needs no engine or measurement. Otherwise the candidate pivots of the
-//!    patch are sampled. If every sample is exactly zero, the zero
+//!    patch are sampled: compatible user pivots, recycled pivots, the
+//!    parent's worst points, with
+//!    [`PatchedInterpolationOptions::cache_candidates`] the largest cached
+//!    values of the patch, then random points. If every sample is exactly zero, the zero
 //!    approximation is measured under L2 (and accepted as a zero patch if it
 //!    fits, otherwise its largest measured points join the candidates) or
 //!    accepted directly under `SampledMax`. Zero patches are reported in
@@ -1168,8 +1175,16 @@ where
             .try_fold(1usize, |count, &dim| count.checked_mul(dim))
             .filter(|&count| point_list_capacity(active.len(), count).is_some());
         // User pivots come first inside `patch_candidates`; then the recycled
-        // pivots and the parent's worst points, each kept once.
-        let prior: Vec<Vec<usize>> = recycled.into_iter().chain(worst).collect();
+        // pivots, the parent's worst points, and (opt-in) the largest cached
+        // values of the patch, each kept once.
+        let cached = if self.options.cache_candidates {
+            let points =
+                cache.largest_points(self.options.n_initial_pivots, |value| value.abs_val());
+            complete_points(&points, &fixed)
+        } else {
+            Vec::new()
+        };
+        let prior: Vec<Vec<usize>> = recycled.into_iter().chain(worst).chain(cached).collect();
         let candidates = patch_candidates(
             &domain,
             &self.initial_pivots,

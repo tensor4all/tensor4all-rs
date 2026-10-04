@@ -2002,6 +2002,16 @@ the evidence above was gathered. It is recorded here, not fixed.
   too small. `recycle_pivots = true` did not fix it: 6 of 12 seeds still
   exceeded `delta` (5 of them by 11 to 267 times), with audited estimates of
   `3.6e-6` to `4.4e-5`.
+- **Opt-in cache candidates (M5 question 5, 2026-10-04).** With
+  `cache_candidates = true`, every child patch also starts from the largest
+  values of its inherited evaluation cache. On the reproduction below (seeds
+  2, 3, 4) the true `E / delta` fell from 680, 880, and 880 to 51, 230, and
+  16, and no rank-1 patch of kind (a) was accepted any more; patches of kind
+  (b), whose residual the engine saw but the 64-point acceptance sample and
+  the audit missed, remained, so every seed still exceeds `10 delta`. The
+  option addresses the start of the engine, not the measurement; the
+  measurement-side remedies stay with the M9 review. The ignored test
+  `cache_candidates_against_corner_localized_misses` records this.
 - **What is not affected.** `Certified` results, in which every contribution
   is exact or exhaustive, are not affected: the limitation concerns only the
   sampled acceptance and the audit. `SampledMax` makes no L2 claim.

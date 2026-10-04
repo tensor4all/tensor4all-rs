@@ -81,3 +81,28 @@ warnings are in the pre-existing M5 fixed-depth benchmark example.
 No performance or overpatching measurement was made. The bounds' effect on
 patch counts, evaluations, and stored size at downstream scale is part of
 the remaining M5 measurements, and no default value is proposed.
+
+## Question 5: cache candidates
+
+`PatchedInterpolationOptions::cache_candidates` (default off) adds, for
+every patch, the at most `n_initial_pivots` points of its inherited cache
+with the largest nonzero `|f|` to its start candidates, after the user,
+recycled, and worst points and before the random fill. The cache already
+holds every value the parent evaluated inside the patch, so no evaluation is
+added. `PatchCache::largest_points` orders equal magnitudes by coordinates,
+so the choice does not depend on the hash-map order or the key packing.
+
+The first proposal, changing only the split coordinate of parent points,
+was dropped before implementation: flipping a quantics bit moves a point by
+half the patch rather than across the split face, and a true reflection
+needs the variable structure, which the driver does not know.
+
+On the corner-miss reproduction (release build, seeds 2, 3, 4) the true
+`E / delta` fell from 680, 880, 880 to 51, 230, 16 with the option, and no
+rank-1 never-sampled patch was accepted; misses of the sampled acceptance
+remain, so the option mitigates and does not fix the limitation. Both
+reproductions stay ignored tests that fail while the limitation exists.
+
+With question 5 implemented, question 3 moved to M6, and the early exit
+closed, M5 is complete by its completion rule; the checkpoint review of the
+interpolation line is next.

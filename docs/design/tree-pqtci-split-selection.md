@@ -6,9 +6,8 @@ Design notes for M5 of
 [`tree-adaptive-patching-roadmap.md`](./tree-adaptive-patching-roadmap.md).
 Open questions 2 and 5 below are decided and 4 has a decided direction.
 The selector (question 1) is an optional follow-up study: the default
-coarse-to-fine order stays. Questions 2 and 4 are implemented, the early
-exit is closed, sibling merging (question 3) moved to M6, and question 5 is
-being implemented as an opt-in option. The remaining capped-outcome details are open issues of the
+coarse-to-fine order stays. Questions 2, 4, and 5 are implemented, the
+early exit is closed, and sibling merging (question 3) moved to M6. The remaining capped-outcome details are open issues of the
 implementation plan, which records provisional rules for a later coding
 phase. Fixed-depth exploratory data are recorded in
 [`2026-10-03-m5-fixed-depth-exploration.md`](../../benchmarks/results/2026-10-03-m5-fixed-depth-exploration.md).
@@ -144,6 +143,12 @@ State after the user's answers of 2026-10-03.
    the split boundary); the default is unchanged. The fix itself belongs to
    the M9 global review
    ([known limitation](./tree-patching-error-contract.md#known-limitation-corner-localized-misses)).
+   Implemented on 2026-10-04 as `cache_candidates`: children also start from
+   the largest values of their inherited evaluation cache. Changing only the
+   split coordinate of parent points was rejected because in quantics it
+   moves a point by half the patch, not across the split face, and a true
+   reflection needs variable structure the driver does not have. The
+   measured effect is recorded with the known limitation.
    The early exit of the engine at the first saturated sweep, listed with
    question 4, is closed (2026-10-04): TreeTCI already stops at the cap after
    three consecutive saturated sweeps; see the roadmap's M5 entry.

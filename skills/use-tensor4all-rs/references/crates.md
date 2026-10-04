@@ -169,7 +169,9 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   (`ErrorTolerance { rtol, atol }`, default `1e-8`, `0`), `verification`
   (`VerificationOptions`: `samples` 64, `max_exhaustive_points` 1024,
   `retries` 1, `audit` true), `n_initial_pivots` (5), `recycle_pivots`
-  (false), `seed` (0; per-patch streams, no `&mut R` API), `max_patches`,
+  (false), `cache_candidates` (false; children also start from their
+  largest cached values, a partial corner-miss mitigation), `seed` (0;
+  per-patch streams, no `&mut R` API), `max_patches`,
   `min_patch_bits` (`None`; generalized bits = active sites, any dimension;
   a blocked failing patch is retained as `PatchStatus::ToleranceNotMet`),
   `capped_patches` (`CappedPatches::Split`; `AcceptUpTo { bits }` accepts

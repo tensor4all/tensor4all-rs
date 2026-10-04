@@ -368,6 +368,17 @@ impl<T> Entries<T> {
         })
     }
 
+    /// Call `visit` with the words and value of every entry, in map order.
+    fn for_each_words(&self, mut visit: impl FnMut(&[u64], &T)) {
+        match self {
+            Self::Narrow(map) => map.iter().for_each(|(key, value)| visit(&[*key], value)),
+            Self::Double(map) => map
+                .iter()
+                .for_each(|(key, value)| visit(&[key.word(0), key.word(1)], value)),
+            Self::Wide(map) => map.iter().for_each(|(key, value)| visit(key, value)),
+        }
+    }
+
     /// Call `visit` with the words and value of every entry, consuming them.
     fn drain_words(self, mut visit: impl FnMut(&[u64], T)) {
         match self {
@@ -456,6 +467,40 @@ impl<T: Copy> PatchCache<T> {
     #[cfg(test)]
     pub(super) fn entries(&self) -> &Entries<T> {
         &self.entries
+    }
+
+    /// The active coordinates of the at most `limit` entries with the largest
+    /// positive `magnitude`, largest first. Equal magnitudes are ordered by
+    /// their coordinates, so the result does not depend on the map order or
+    /// the key packing. Entries of magnitude zero are skipped.
+    pub(super) fn largest_points(
+        &self,
+        limit: usize,
+        magnitude: impl Fn(T) -> f64,
+    ) -> Vec<Vec<usize>> {
+        if limit == 0 {
+            return Vec::new();
+        }
+        let mut best: Vec<(f64, Vec<usize>)> = Vec::with_capacity(limit.saturating_add(1));
+        let before = |a: &(f64, Vec<usize>), b: &(f64, Vec<usize>)| {
+            b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)).is_lt()
+        };
+        self.entries.for_each_words(|words, &value| {
+            let size = magnitude(value);
+            if size.is_nan() || size <= 0.0 {
+                return;
+            }
+            if best.len() == limit && best.last().is_some_and(|last| size < last.0) {
+                return;
+            }
+            let entry = (size, self.layout.decode(words));
+            let at = best.partition_point(|kept| before(kept, &entry));
+            if at < limit {
+                best.insert(at, entry);
+                best.truncate(limit);
+            }
+        });
+        best.into_iter().map(|(_, point)| point).collect()
     }
 
     /// Split the cache among the children of a split at active slot `slot`,
