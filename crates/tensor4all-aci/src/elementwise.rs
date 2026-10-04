@@ -129,8 +129,9 @@ where
 /// caller can reproduce or advance the whole run's randomness.
 ///
 /// # Errors
-///
-/// Returns the same errors as [`elementwise_batched`].
+/// Returns [`AciError`](crate::AciError) when options or inputs are invalid,
+/// initial guess construction fails, the operator callback fails, or a local
+/// matrix-CI update fails.
 pub fn elementwise_batched_with_rng<T, F, R>(
     mut op: F,
     inputs: &[SimpleTensorTrain<T>],
@@ -352,8 +353,9 @@ where
 /// [`elementwise_batched_with_rng`].
 ///
 /// # Errors
-///
-/// Returns the same errors as [`elementwise`].
+/// Returns [`AciError`](crate::AciError) when options or inputs are invalid,
+/// batch extraction fails, initial guess construction fails, or a local
+/// matrix-CI update fails.
 pub fn elementwise_with_rng<T, F, R>(
     mut op: F,
     inputs: &[SimpleTensorTrain<T>],

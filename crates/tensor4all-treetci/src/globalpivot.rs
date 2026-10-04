@@ -137,8 +137,13 @@ where
 /// `rand_chacha::ChaCha8Rng` when a deterministic algorithm is required.
 ///
 /// # Errors
-///
-/// Returns the same errors as [`find_global_pivots`].
+/// Returns an error when the current state cannot be materialized as a
+/// `TreeTN` (a rank mismatch or a singular pivot matrix), when the batch
+/// evaluator returns a wrong number of values (a batch length mismatch),
+/// when `abs_tol` or `tol_margin` is not finite and nonnegative (an
+/// invalid configuration), when the candidate index array shape is
+/// malformed (a shape mismatch), or when reading the materialized
+/// approximation at the candidates fails (a contraction failure).
 pub fn find_global_pivots_with_rng<T, F, R>(
     state: &TreeTCI2<T>,
     evaluate: F,

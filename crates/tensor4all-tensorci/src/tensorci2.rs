@@ -1536,9 +1536,9 @@ where
 /// example by passing a `ChaCha8Rng` with a fixed seed.
 ///
 /// # Errors
-///
-/// Returns the same errors as [`crossinterpolate2`].
-///
+/// Returns [`TCIError::InvalidConfiguration`] for invalid algorithm options,
+/// [`TCIError::DimensionMismatch`] if `local_dims` has fewer than 2 elements,
+/// or [`TCIError::InvalidPivot`] if all initial pivots evaluate to zero.
 /// # Examples
 ///
 /// ```
@@ -1706,9 +1706,10 @@ where
 /// can pin or advance the stream itself.
 ///
 /// # Errors
-///
-/// Returns the same errors as [`optimize_with_finder`].
-///
+/// Returns [`TCIError::InvalidConfiguration`] for invalid algorithm options or
+/// [`TCIError::InvalidPivot`] when the input state has no pivots. It also
+/// forwards errors from two-site sweeps, tensor-train conversion, callback
+/// length validation, global pivot search, and final one-site cleanup.
 /// # Examples
 ///
 /// ```

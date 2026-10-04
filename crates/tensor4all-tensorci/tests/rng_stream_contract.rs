@@ -10,6 +10,9 @@ use rand_chacha::ChaCha8Rng;
 use std::cell::Cell;
 use std::rc::Rc;
 use tensor4all_simplett::SimpleTensorTrain;
+/// The batched-callback type the interpolation entry points accept.
+type EmptyBatch = Option<fn(&[Vec<usize>]) -> Vec<f64>>;
+
 use tensor4all_tensorci::{
     crossinterpolate2, crossinterpolate2_with_rng, DefaultGlobalPivotFinder, GlobalPivotFinder,
     GlobalPivotSearchInput, TCI2Options,
@@ -31,11 +34,13 @@ fn input() -> GlobalPivotSearchInput<f64> {
     }
 }
 
+#[allow(clippy::ptr_arg)] // the finder's callback type is `Fn(&MultiIndex) -> T`
 fn f(index: &Vec<usize>) -> f64 {
     index[0] as f64
 }
 
 /// A nonzero-valued target for the interpolation-level comparison.
+#[allow(clippy::ptr_arg)] // the interpolation callback type is `Fn(&MultiIndex) -> T`
 fn g(index: &Vec<usize>) -> f64 {
     (index[0] + index[1] + 1) as f64
 }
@@ -99,7 +104,7 @@ fn the_seeded_entry_point_is_the_low_level_entry_point_with_a_derived_stream() {
         seed: Some(7),
         ..TCI2Options::default()
     };
-    let batch: Option<fn(&[Vec<usize>]) -> Vec<f64>> = None;
+    let batch: EmptyBatch = None;
 
     let seeded =
         crossinterpolate2::<f64, _, _>(g, batch, vec![4, 4], vec![vec![0, 0]], options()).unwrap();
@@ -151,7 +156,7 @@ fn the_low_level_entry_point_accepts_an_erased_stream() {
 
     let mut inner = ChaCha8Rng::seed_from_u64(5);
     let rng: &mut dyn RngCore = &mut inner;
-    let batch: Option<fn(&[Vec<usize>]) -> Vec<f64>> = None;
+    let batch: EmptyBatch = None;
     let result = crossinterpolate2_with_rng::<f64, _, _, _>(
         g,
         batch,

@@ -206,7 +206,7 @@ where
     let mut tt_cache = TTCache::new(tt);
     let (pivot, error) = floating_zone_walk(
         local_dims,
-        &init_p,
+        init_p,
         max_sweeps,
         early_stop_tol,
         |_scan_site: Option<usize>, points: &[MultiIndex]| {

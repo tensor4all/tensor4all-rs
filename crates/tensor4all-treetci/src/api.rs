@@ -144,9 +144,17 @@ where
 /// own generators (see #824); this controls the global searches only.
 ///
 /// # Errors
-///
-/// Returns the same errors as [`crossinterpolate2`].
-///
+/// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
+/// for invalid options. It
+/// also returns an error when the operation fails (a shape or index mismatch,
+/// or a backend failure).
+/// Interpolate a tree tensor network.
+/// The seeded high-level path uses an explicitly named RNG (drawn from
+/// [`TreeTciOptions::seed`], or OS entropy when unset and the global search is
+/// enabled) and delegates to [`crossinterpolate2_with_rng`].
+/// Returns an error for invalid options, mismatched dimensions, pivot sets that
+/// are empty or evaluate to zero, or a backend failure.
+#[allow(clippy::too_many_arguments)]
 pub fn crossinterpolate2_with_rng<T, F, P, R>(
     evaluate: F,
     local_dims: Vec<usize>,

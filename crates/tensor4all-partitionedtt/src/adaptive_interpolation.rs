@@ -546,8 +546,10 @@ where
 /// `AdaptiveInterpolateOptions::tci_options::seed` is ignored.
 ///
 /// # Errors
-///
-/// Returns the same errors as [`adaptiveinterpolate`].
+/// Returns [`PartitionedTTError::InvalidAdaptiveInterpolationInput`] for empty,
+/// duplicate, zero-dimensional, or inconsistently ordered site indices; invalid
+/// pivots; a zero pivot target; or invalid TCI tolerances/rank limits. It also
+/// forwards TCI2 and tensor-train construction failures.
 pub fn adaptiveinterpolate_with_rng<T, F, B, R>(
     f: F,
     batched_f: Option<B>,
@@ -901,6 +903,7 @@ where
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_patch<T, F, B, R>(
     patch: PendingPatch<T>,
     f: &F,

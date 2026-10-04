@@ -86,8 +86,8 @@ where
 /// per pass, so the caller can reproduce or advance the whole run.
 ///
 /// # Errors
-///
-/// Returns the same errors as [`tree_elementwise_batched`].
+/// Returns [`crate::TreeAciError`] for invalid inputs/options, callback failure,
+/// resource exhaustion, scalar mismatch, or a numerical/tree operation error.
 pub fn tree_elementwise_batched_with_rng<T, V, F, R>(
     mut operator: F,
     inputs: &[TreeTN<IdxTensor, V>],
@@ -243,8 +243,7 @@ where
 /// ignored.
 ///
 /// # Errors
-///
-/// Returns the same errors as [`tree_elementwise`].
+/// Returns [`crate::TreeAciError`] under the same conditions as the batched API.
 pub fn tree_elementwise_with_rng<T, V, F, R>(
     mut operator: F,
     inputs: &[TreeTN<IdxTensor, V>],

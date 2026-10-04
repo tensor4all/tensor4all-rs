@@ -28,8 +28,11 @@ use crate::quantics_tci::quanticscrossinterpolate_batch_with_rng;
 /// stream drives every component.
 ///
 /// # Errors
-///
-/// Returns the same errors as [`quanticscrossinterpolate_multicomponent_with_rng`].
+/// Returns [`QuanticsTCIError::InvalidConfiguration`] when `output_dims` is
+/// empty or has a zero factor, or when the grid or options are invalid.
+/// Returns [`QuanticsTCIError::Operation`] when `f` returns a value count that
+/// does not equal `n_points * product(output_dims)`, or when the underlying
+/// component interpolation fails.
 pub fn quanticscrossinterpolate_multicomponent<V, F>(
     grid: &DiscretizedGrid,
     f: F,

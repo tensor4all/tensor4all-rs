@@ -335,9 +335,10 @@ where
 /// searches only (see #824).
 ///
 /// # Errors
-///
-/// Returns the same errors as [`optimize_with_proposer`].
-///
+/// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
+/// for invalid options. It
+/// also returns an error when the operation fails (a shape or index mismatch,
+/// or a backend failure).
 /// # Examples
 ///
 /// ```
