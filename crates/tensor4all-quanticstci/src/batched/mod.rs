@@ -229,8 +229,9 @@ where
 /// [`quanticscrossinterpolate_batch_with_rng`] on the *same* stream, in
 /// component order, and the per-component tensor trains are
 /// combined into a single [`SimpleTensorTrain`] with an additional component
-/// site at the end. A shared cache means each grid point is evaluated at most
-/// once across all components.
+/// site at the end. Every component run memoizes the points it evaluates, so a
+/// point is evaluated once per component; reusing one evaluation across
+/// components needs a caller-owned cache and is tracked on issue #747.
 ///
 /// # Arguments
 ///
@@ -352,13 +353,19 @@ where
         let f = Rc::clone(&f);
         let adapter = move |batch: QuanticsBatch<'_, f64>| -> Result<Vec<V>> {
             let n_points = batch.n_points();
+            if n_points == 0 {
+                return Ok(Vec::new());
+            }
             let returned = f(batch)?;
-            if returned.len() % n_points != 0 || returned.len() / n_points < n_components {
+            let expected = n_points.checked_mul(n_components).ok_or_else(|| {
+                anyhow!(
+                    "expected value count overflows usize: {n_points} points x {n_components} components"
+                )
+            })?;
+            if returned.len() != expected {
                 return Err(anyhow!(
-                    "callback returned {} values for {} points, expected at least {} components per point",
-                    returned.len(),
-                    n_points,
-                    n_components
+                    "callback returned {} values for {n_points} points, expected exactly {n_components} components per point ({expected} values)",
+                    returned.len()
                 ));
             }
             Ok((0..n_points)

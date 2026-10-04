@@ -71,6 +71,157 @@ fn site_evaluator_evaluates_repeated_points_in_one_batch_once() {
 }
 
 #[test]
+fn site_evaluator_serves_mixed_hits_and_misses_in_request_order() {
+    // Two sites with local dimension 4. Point 0 is cached up front; the batch
+    // requests [cached, new, cached, duplicate-of-new, invalid-free mix].
+    let calls = std::cell::Cell::new(0usize);
+    let converted = std::cell::RefCell::new(Vec::<Vec<usize>>::new());
+    let cache: Rc<RefCell<MultiIndexCache<f64>>> =
+        Rc::new(RefCell::new(MultiIndexCache::new(&[4, 4]).unwrap()));
+    cache.borrow_mut().insert(&[0, 0], 100.0).unwrap();
+
+    let evaluate = site_evaluator(
+        |point: &[usize]| {
+            converted.borrow_mut().push(point.to_vec());
+            Ok(point.iter().map(|&v| v as f64).collect::<Vec<f64>>())
+        },
+        |batch: QuanticsBatch<'_, f64>| {
+            calls.set(calls.get() + 1);
+            // Only the three distinct misses are converted and evaluated.
+            assert_eq!(batch.n_points(), 3);
+            Ok((0..3)
+                .map(|p| batch.get(0, p).unwrap() * 10.0 + batch.get(1, p).unwrap())
+                .collect())
+        },
+        Rc::clone(&cache),
+    );
+
+    // Flat column-major batch: two sites, five points.
+    let batch = GlobalIndexBatch::new(&[0, 0, 1, 2, 2, 1, 1, 2, 3, 3], 2, 5).unwrap();
+    let values = evaluate(batch).unwrap();
+    assert_eq!(
+        values,
+        vec![
+            100.0, // [0,0] served from the cache
+            12.0,  // [1,2] evaluated miss
+            21.0,  // [2,1] evaluated miss
+            12.0,  // [1,2] duplicate of that miss
+            33.0,  // [3,3] evaluated miss
+        ],
+        "request order is preserved"
+    );
+    assert_eq!(calls.get(), 1, "one batched call for the misses");
+    assert_eq!(
+        converted.borrow().as_slice(),
+        &[vec![1, 2], vec![2, 1], vec![3, 3]],
+        "only misses are converted, in first-seen order"
+    );
+    assert_eq!(cache.borrow().misses(), 4, "every request is counted once");
+    assert_eq!(cache.borrow().hits(), 1);
+}
+
+#[test]
+fn site_evaluator_does_not_cache_a_failed_target_and_recovers_after_it() {
+    #[derive(Debug)]
+    struct TargetError;
+    impl std::fmt::Display for TargetError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "typed target failure")
+        }
+    }
+    impl std::error::Error for TargetError {}
+
+    let attempts = std::cell::Cell::new(0usize);
+    let cache: Rc<RefCell<MultiIndexCache<f64>>> =
+        Rc::new(RefCell::new(MultiIndexCache::new(&[4]).unwrap()));
+    let evaluate = site_evaluator(
+        |_point: &[usize]| Ok(vec![0.0_f64]),
+        |_batch: QuanticsBatch<'_, f64>| {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() == 1 {
+                Err(anyhow::Error::new(TargetError))
+            } else {
+                Ok(vec![2.5_f64])
+            }
+        },
+        Rc::clone(&cache),
+    );
+
+    let batch = GlobalIndexBatch::new(&[1], 1, 1).unwrap();
+    let error = evaluate(batch).unwrap_err();
+    assert!(
+        error.downcast_ref::<TargetError>().is_some(),
+        "the target error keeps its type: {error}"
+    );
+    assert!(
+        cache.borrow().is_empty(),
+        "a failed evaluation is not cached"
+    );
+    assert_eq!(cache.borrow().misses(), 1);
+
+    // The next request re-evaluates and succeeds, and is then cached.
+    assert_eq!(evaluate(batch).unwrap(), vec![2.5]);
+    assert_eq!(attempts.get(), 2);
+    assert_eq!(evaluate(batch).unwrap(), vec![2.5]);
+    assert_eq!(attempts.get(), 2);
+    assert_eq!(cache.borrow().hits(), 1);
+}
+
+#[test]
+fn site_evaluator_handles_an_empty_batch_and_invalid_indices() {
+    let calls = std::cell::Cell::new(0usize);
+    let cache: Rc<RefCell<MultiIndexCache<f64>>> =
+        Rc::new(RefCell::new(MultiIndexCache::new(&[4]).unwrap()));
+    let evaluate = site_evaluator(
+        |_point: &[usize]| Ok(vec![0.0_f64]),
+        |_batch: QuanticsBatch<'_, f64>| {
+            calls.set(calls.get() + 1);
+            Ok(Vec::new())
+        },
+        Rc::clone(&cache),
+    );
+
+    // An empty batch is a no-op: nothing converts, evaluates or counts.
+    let empty = GlobalIndexBatch::new(&[], 1, 0).unwrap();
+    assert!(evaluate(empty).unwrap().is_empty());
+    assert_eq!(calls.get(), 0);
+    assert_eq!(cache.borrow().hits(), 0);
+    assert_eq!(cache.borrow().misses(), 0);
+
+    // An index that the cache rejects (rank or range) surfaces as an error and
+    // never reaches the target.
+    let out_of_range = GlobalIndexBatch::new(&[4], 1, 1).unwrap();
+    let error = evaluate(out_of_range).unwrap_err().to_string();
+    assert!(error.contains("out of range"), "unexpected error: {error}");
+    assert_eq!(calls.get(), 0);
+}
+
+#[test]
+fn site_evaluator_rejects_inconsistent_converted_dimensions() {
+    let cache: Rc<RefCell<MultiIndexCache<f64>>> =
+        Rc::new(RefCell::new(MultiIndexCache::new(&[4]).unwrap()));
+    let evaluate = site_evaluator(
+        // The first converted point yields one coordinate, the second two.
+        |point: &[usize]| {
+            if point[0] == 0 {
+                Ok(vec![0.0_f64])
+            } else {
+                Ok(vec![0.0_f64, 1.0])
+            }
+        },
+        |_batch: QuanticsBatch<'_, f64>| Ok(vec![1.0_f64, 2.0]),
+        Rc::clone(&cache),
+    );
+    let batch = GlobalIndexBatch::new(&[0, 1], 1, 2).unwrap();
+    let error = evaluate(batch).unwrap_err().to_string();
+    assert!(
+        error.contains("inconsistent point dimension"),
+        "unexpected error: {error}"
+    );
+    assert!(cache.borrow().is_empty());
+}
+
+#[test]
 fn site_evaluator_rejects_a_wrong_number_of_returned_values() {
     let cache: Rc<RefCell<MultiIndexCache<f64>>> =
         Rc::new(RefCell::new(MultiIndexCache::new(&[4]).unwrap()));
@@ -157,7 +308,7 @@ fn test_discrete_tci_structure() {
         assert_relative_eq!(qtci.evaluate(&grid_idx).unwrap(), expected, epsilon = 1e-8);
     }
     assert!(qtci.num_evals() > 0);
-    assert!(qtci.cache_stats().num_evals() > 0);
+    assert!(qtci.cache_stats().num_evals > 0);
     assert!(qtci.cache_hit_ratio() >= 0.0 && qtci.cache_hit_ratio() <= 1.0);
 
     // Verify evaluate() matches f at known-exact points (same block in

@@ -21,10 +21,15 @@ The quantics interpolation entry points now memoize the target function on the
 quantics multi-index with `tensor4all_core::MultiIndexCache` (issue #747):
 
 - **Removed**: `QuanticsTensorCI2::cachedata()` and
-  `QuanticsTensorCI2::cachedata_origcoord()`, and the `cache` parameter of
-  `QuanticsTensorCI2::from_discretized` / `from_inherent`. The record-only
+  `QuanticsTensorCI2::cachedata_origcoord()`. The record-only
   `HashMap<Vec<usize>, V>` they exposed is gone; port scripts that read
   evaluation points by evaluating the returned tensor train instead.
+- **Changed**: `QuanticsTensorCI2::from_discretized` / `from_inherent` take
+  `CacheStats` in place of the cache `HashMap`, and
+  `quanticscrossinterpolate_multicomponent` no longer reuses one grid point's
+  evaluation across output components (each component run memoizes its own
+  points); the callback now receives exactly `n_points * n_components` values,
+  which is validated exactly instead of accepting oversized results.
 - **Added**: `QuanticsTensorCI2::cache_stats()`, `num_evals()`,
   `num_cache_hits()` and `cache_hit_ratio()`, and the public `CacheStats` type.
 - **Behaviour**: the target is called only for points it has not been asked for

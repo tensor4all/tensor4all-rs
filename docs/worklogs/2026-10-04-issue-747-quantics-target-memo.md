@@ -44,11 +44,18 @@
 - CI-flag clippy, `cargo check --locked --workspace --all-targets` and
   `python3 scripts/check-public-error-docs.py` are clean.
 - Measurement: `benchmarks/results/2026-10-04-issue-747-quantics-target-memo.md`.
-  Pinned single thread (verified), release builds, paired repetitions,
-  predeclared correctness gate (identical sample digest, sampling error, bond
-  dimension and sweep count): 74-82% fewer evaluated points and 1.8x-4.1x
-  faster end to end across two grid sizes and a cheap and a compute-heavy
-  target.
+  Release builds, `taskset -c 0`, every thread-pool variable at 1, and the
+  effective thread count read from `/proc/<pid>/status` (maximum 1 in every
+  run); two alternating rounds of one warm-up plus three measured repetitions
+  per side; predeclared correctness gate (identical sample digest, sampling
+  error, bond dimension and sweep count) satisfied in all 24 runs: 74-82% fewer
+  evaluated points and 1.8x-4.3x faster end to end (median) across two grid
+  sizes and a cheap and a compute-heavy target.
+- The memo cache is bounded by `DEFAULT_RETAINED_BYTE_LIMIT` (256 MiB of
+  logical key and value payload) with `with_retained_byte_limit`,
+  `set_retained_byte_limit`, `clear`, `retained_bytes` and `dropped_inserts`;
+  an insertion past the limit is skipped rather than evicting, so a lookup never
+  returns a stale value and the point is simply evaluated again.
 
 ## Deferred (recorded on issue #747)
 

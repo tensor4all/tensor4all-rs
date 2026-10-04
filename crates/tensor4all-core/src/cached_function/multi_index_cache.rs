@@ -15,15 +15,31 @@
 use super::error;
 use super::{CacheBackend, IndexInt};
 
+/// Logical payload bytes a [`MultiIndexCache`] retains by default.
+///
+/// The limit bounds the sum of one key and one value per entry. When a run
+/// needs to keep more distinct points than that, its memoization degrades to
+/// re-evaluation rather than unbounded memory growth.
+pub const DEFAULT_RETAINED_BYTE_LIMIT: usize = 256 * 1024 * 1024;
+
 /// A persistent cache that maps multi-indices to values through mixed-radix
 /// flat-integer keys, without owning an evaluation callback.
 ///
 /// The cache is owned by its caller and lives as long as the caller keeps it.
-/// It is not `Sync`; keep it in the single-threaded driver that owns the
-/// evaluations. Unlike [`CachedFunction`](super::CachedFunction), neither the
-/// value nor the cache requires a `Send + Sync` callback, and only successful
-/// evaluations are stored: an evaluation that fails is never turned into a
-/// cached value.
+/// The value type must be `Send + Sync`, and the backend is lock-protected, but
+/// the cache stores no evaluation callback, so the target itself may be
+/// borrowed, fallible, or thread-affine. Only successful evaluations are
+/// stored: an evaluation that fails is never turned into a cached value.
+///
+/// Retained storage is bounded by
+/// [`DEFAULT_RETAINED_BYTE_LIMIT`] logical payload bytes by default
+/// ([`Self::with_retained_byte_limit`] changes it, [`Self::set_retained_byte_limit`]
+/// at run time, [`Self::clear`] drops every entry). Once the limit is reached,
+/// further insertions are skipped instead of evicting entries: the value is
+/// simply not cached, the caller re-evaluates that point if it asks again, and
+/// [`Self::dropped_inserts`] counts the skipped insertions. The accounting in
+/// [`Self::retained_bytes`] is the cache's own logical payload estimate and
+/// excludes allocator overhead.
 ///
 /// Key width is selected automatically from the index space (up to 1024 bits,
 /// as in [`CachedFunction`](super::CachedFunction)); an index space that needs
@@ -71,6 +87,8 @@ where
     key_bytes: usize,
     hits: usize,
     misses: usize,
+    retained_byte_limit: usize,
+    dropped_inserts: usize,
     _phantom: std::marker::PhantomData<I>,
 }
 
@@ -85,6 +103,8 @@ where
             .field("len", &self.backend.len())
             .field("hits", &self.hits)
             .field("misses", &self.misses)
+            .field("retained_byte_limit", &self.retained_byte_limit)
+            .field("dropped_inserts", &self.dropped_inserts)
             .field("key_type", &self.backend.key_type_name())
             .finish()
     }
@@ -119,6 +139,38 @@ where
     /// assert!(too_wide.is_err());
     /// ```
     pub fn new(local_dims: &[usize]) -> Result<Self, error::CacheKeyError> {
+        Self::with_retained_byte_limit(local_dims, DEFAULT_RETAINED_BYTE_LIMIT)
+    }
+
+    /// Create an empty cache with an explicit logical payload limit.
+    ///
+    /// Use this to cap the retained key and value storage more tightly than
+    /// [`DEFAULT_RETAINED_BYTE_LIMIT`]. Insertions that would exceed the limit
+    /// are skipped and counted by [`Self::dropped_inserts`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`error::CacheKeyError::Overflow`] when the index space needs more
+    /// than 1024 bits, which no built-in key type can represent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::MultiIndexCache;
+    ///
+    /// // Room for exactly one u64 key plus one f64 value.
+    /// let mut cache: MultiIndexCache<f64> = MultiIndexCache::with_retained_byte_limit(&[4], 16).unwrap();
+    /// assert_eq!(cache.retained_byte_limit(), 16);
+    /// cache.insert(&[0], 1.0).unwrap();
+    /// cache.insert(&[1], 2.0).unwrap(); // skipped: the limit is reached
+    /// assert_eq!(cache.dropped_inserts(), 1);
+    /// assert_eq!(cache.get(&[0]).unwrap(), Some(1.0));
+    /// assert_eq!(cache.get(&[1]).unwrap(), None);
+    /// ```
+    pub fn with_retained_byte_limit(
+        local_dims: &[usize],
+        retained_byte_limit: usize,
+    ) -> Result<Self, error::CacheKeyError> {
         let backend = CacheBackend::Auto(super::InnerCache::<V>::new(local_dims)?);
         let key_bytes = backend.key_bytes();
         Ok(Self {
@@ -127,6 +179,8 @@ where
             key_bytes,
             hits: 0,
             misses: 0,
+            retained_byte_limit,
+            dropped_inserts: 0,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -197,6 +251,13 @@ where
     /// ```
     pub fn insert(&mut self, idx: &[I], value: V) -> Result<(), error::CacheKeyError> {
         self.validate(idx)?;
+        if !self.backend.contains(idx) {
+            let entry_bytes = self.key_bytes + std::mem::size_of::<V>();
+            if self.retained_bytes().saturating_add(entry_bytes) > self.retained_byte_limit {
+                self.dropped_inserts += 1;
+                return Ok(());
+            }
+        }
         self.backend.insert(idx, value);
         Ok(())
     }
@@ -379,6 +440,61 @@ where
     /// ```
     pub fn key_type(&self) -> &'static str {
         self.backend.key_type_name()
+    }
+
+    /// Logical payload limit in bytes that this cache enforces.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::MultiIndexCache;
+    ///
+    /// let cache: MultiIndexCache<f64> = MultiIndexCache::new(&[2]).unwrap();
+    /// assert_eq!(cache.retained_byte_limit(), tensor4all_core::DEFAULT_RETAINED_BYTE_LIMIT);
+    /// ```
+    pub fn retained_byte_limit(&self) -> usize {
+        self.retained_byte_limit
+    }
+
+    /// Change the logical payload limit at run time.
+    ///
+    /// Shrinking the limit below [`Self::retained_bytes`] does not evict
+    /// entries; it only prevents further insertions until the cache falls below
+    /// the limit again.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::MultiIndexCache;
+    ///
+    /// let mut cache: MultiIndexCache<f64> = MultiIndexCache::new(&[2]).unwrap();
+    /// cache.insert(&[0], 1.0).unwrap();
+    /// cache.set_retained_byte_limit(0);
+    /// cache.insert(&[1], 2.0).unwrap(); // skipped
+    /// assert_eq!(cache.len(), 1);
+    /// assert_eq!(cache.dropped_inserts(), 1);
+    /// ```
+    pub fn set_retained_byte_limit(&mut self, limit: usize) {
+        self.retained_byte_limit = limit;
+    }
+
+    /// Number of insertions skipped because the cache was at its payload limit.
+    ///
+    /// A skipped insertion only means the point will be evaluated again if it is
+    /// requested later; it never makes a lookup return a wrong value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::MultiIndexCache;
+    ///
+    /// let mut cache: MultiIndexCache<f64> = MultiIndexCache::with_retained_byte_limit(&[2], 0).unwrap();
+    /// cache.insert(&[0], 1.0).unwrap();
+    /// assert_eq!(cache.dropped_inserts(), 1);
+    /// assert_eq!(cache.len(), 0);
+    /// ```
+    pub fn dropped_inserts(&self) -> usize {
+        self.dropped_inserts
     }
 
     fn validate(&self, idx: &[I]) -> Result<(), error::CacheKeyError> {

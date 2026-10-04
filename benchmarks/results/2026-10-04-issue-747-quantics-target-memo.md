@@ -1,70 +1,108 @@
 # Quantics TCI target memoization (issue #747)
 
-Date: 2026-10-04. Baseline: `origin/main` `75455d14` (the pre-change quantics
-path, which records evaluated points in a `HashMap<Vec<usize>, V>` and never
-looks them up). Candidate: branch `fix/issue-747-multi-index-cache`, release
-build of the same lockfile, where the target is memoized by
-`tensor4all_core::MultiIndexCache` on the quantics multi-index and the record
-map and its introspection API are gone.
+Date: 2026-10-04. Baseline: `origin/main` `75455d14` — the pre-change quantics
+path, which records every evaluated point into a `HashMap<Vec<usize>, V>` and
+never looks it up. Candidate: branch `fix/issue-747-multi-index-cache` (commits
+`f7029da7`, `45130ba2` plus the review follow-ups), where the target is memoized
+by `tensor4all_core::MultiIndexCache` on the quantics multi-index and the record
+map and its introspection API are gone. Both binaries are release builds from
+the same lockfile and the same probe source, differing only in the crate under
+test.
+
+## Machine and thread control
+
+- AMD EPYC 7713P 64-Core, `nproc` = 64.
+- Every run: `taskset -c 0` plus `RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1`.
+- Effective thread count read from the running process: a sampler polls
+  `/proc/<pid>/status` every 50 ms and reports the maximum `Threads:` value.
+  Every run reported `max_threads=1`.
+- Cargo: `-j 4`.
 
 ## Protocol
 
-- Pinned single thread: `RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1
-  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 taskset -c 0`.
-  Effective thread count verified: `nproc` under `taskset -c 0` with
-  `RAYON_NUM_THREADS=1` reports `1`.
-- Release builds, same lockfile, same probe source; one warm-up run per
-  configuration, then three measured repetitions. Times below are the
-  measured repetitions (first repetition of a process is discarded as warm-up).
+- One warm-up repetition per process invocation is discarded; the three
+  following repetitions of that invocation are recorded, with `reps=4`.
+- Two rounds per configuration, alternating baseline and candidate
+  (`a`, `b`, `a`, `b`), so drift shows up as a difference between rounds. Six
+  measured values per configuration per side; the table reports all six and
+  their median.
 - Primary metric: end-to-end interpolation time. Secondary metrics: points
-  passed to the target callback and callback invocations (both measured inside
-  the probe, so they are identical in kind for baseline and candidate), plus
-  the candidate's `num_evals` / `cache_hits` / `cache_misses` / `hit_ratio`.
-- Predeclared correctness gate: identical sample digest, identical sampling
-  error, identical `max_bond` and sweep count, and `rep_error <= tolerance`
-  for every run. All four hold in every case below (digests and errors are
-  byte-identical between baseline and candidate).
-- Grids: 2D `2^bits x 2^bits` discretized grid on `[0,1]^2`, `tolerance=1e-10`,
+  passed to the target callback and callback invocations (counted inside the
+  probe on both sides, so they are comparable), plus the candidate's
+  `num_evals` / `cache_hits` / `cache_misses` / `hit_ratio`.
+- Predeclared correctness gate, checked for every run: `rep_error <= tolerance`,
+  and equality of the sample digest (64 points, `f64` bits folded with FNV),
+  the maximum sample error, `max_bond` and the sweep count between baseline and
+  candidate. All six values below were reproduced exactly in all 24 runs.
+- Grid: 2D `2^bits x 2^bits` discretized grid on `[0,1]^2`, `tolerance=1e-10`,
   `nrandominitpivot=5`, `rng_seed=0`.
-- Targets: `cheap = exp(sin(x) * (1 + y))`, a trivially vectorizable target
-  (worst case for memoization overhead); `heavy = sum_{k=1..64}
-  sin(k x) cos(k y) / k`, 64 transcendental terms per point (the case a memoized
-  target exists for).
+- Targets: `cheap = exp(sin(x) * (1 + y))`, trivially vectorizable (worst case
+  for memoization overhead); `heavy = sum_(k=1..64) sin(k x) cos(k y) / k`,
+  64 transcendental terms per point (the case a memoized target exists for).
 
-## Results
+## Results (milliseconds, end-to-end)
 
-| case | baseline (ms) | candidate (ms) | target points | evaluated points (candidate) | hit ratio | speedup |
-|---|---|---|---|---|---|---|
-| cheap, 2^8 x 2^8 | 20.27, 20.40 | 10.72, 10.93 | 69,519 | 13,636 | 0.804 | 1.9x |
-| cheap, 2^10 x 2^10 | 43.43, 46.11 | 23.42, 25.93 | 127,080 | 28,986 | 0.772 | 1.8x |
-| heavy, 2^8 x 2^8 | 319.19, 319.24 | 78.11, 81.44 | 182,044 | 32,162 | 0.823 | 4.1x |
-| heavy, 2^10 x 2^10 | 492.50, 517.21 | 155.32, 162.16 | 264,347 | 69,267 | 0.738 | 3.2x |
+| case | baseline | candidate | speedup (median) |
+|---|---|---|---|
+| cheap, 2^8 x 2^8 | 20.04, 20.28, 21.47, 21.50, 20.76, 24.09 (median 21.0) | 12.34, 12.89, 11.31, 10.99, 11.38, 11.40 (median 11.4) | 1.8x |
+| cheap, 2^10 x 2^10 | 41.19, 43.31, 43.92, 43.07, 43.44, 43.24 (median 43.3) | 23.27, 23.37, 24.54, 23.96, 23.43, 23.36 (median 23.4) | 1.9x |
+| heavy, 2^8 x 2^8 | 328.45, 324.13, 321.35, 319.32, 316.83, 319.21 (median 321.8) | 74.85, 76.17, 77.14, 74.71, 74.71, 75.40 (median 74.8) | 4.3x |
+| heavy, 2^10 x 2^10 | 462.50, 462.98, 463.12, 468.66, 470.42, 476.53 (median 465.6) | 148.95, 149.14, 154.06, 151.41, 149.65, 154.75 (median 151.2) | 3.1x |
 
-The candidate evaluates 74-82% fewer points, and the saving also covers the
-coordinate conversion and batch assembly for every cached hit. The callback
-invocation count drops as well (19 vs 58, 33 vs 92, 39 vs 72, 49 vs 92), so the
-target is called with fewer, larger batches.
+Observed run-to-run spread within a configuration is a few percent for the
+cheap cases (largest 24.09 vs 20.04, a cold first-invocations outlier) and under
+1.5% for the heavy cases.
 
-Retained cache payload after the 2^10 x 2^10 heavy run: 69,267 entries, which
-the candidate reports through `MultiIndexCache::retained_bytes` as
-`entries * (8 + size_of::<f64>()) = 1.1 MB` of key and value storage. The
-baseline recorded `127,080`-point `Vec<usize>` keys instead (2 sites each plus
-`HashMap` overhead) and kept one heap allocation per recorded point.
+### Target work
+
+| case | baseline points | candidate points | reduction | callback calls (baseline / candidate) | hit ratio |
+|---|---|---|---|---|---|
+| cheap, 2^8 | 69,519 | 13,636 | 80.4% | 58 / 19 | 0.804 |
+| cheap, 2^10 | 127,080 | 28,986 | 77.2% | 92 / 33 | 0.772 |
+| heavy, 2^8 | 182,044 | 32,162 | 82.3% | 72 / 39 | 0.823 |
+| heavy, 2^10 | 264,347 | 69,267 | 73.8% | 92 / 49 | 0.738 |
+
+The candidate evaluates 74-82% fewer points and also skips the coordinate
+conversion and batch assembly for cached hits, which is why the end-to-end win
+is larger than the point reduction alone. The candidate's batches are in fact
+smaller on average than the baseline's (e.g. cheap 2^8: 718 vs 1,198 points per
+call); the saving comes from not repeating work, not from larger batches.
+
+### Retained cache payload
+
+For the heavy 2^10 case both sides see 69,267 distinct points (the same set of
+points is evaluated; the candidate just stops repeating them). The baseline
+retains one `Vec<usize>` key plus its `HashMap` entry per distinct point — one
+heap allocation per point; the candidate retains one flat key and one value per
+point, which `MultiIndexCache::retained_bytes` reports as
+`69,267 * (8 + 8) = 1.1 MB` of logical key and value storage. (The baseline's
+recording map overwrites duplicate keys, so its retained count is the distinct
+count, not the 127,080/264,347 request totals above.)
 
 ## Reproduction
 
 The probe is not committed. Place its source at
-`crates/tensor4all-quanticstci/examples/issue747_probe.rs` (content below) in
-both the baseline and candidate worktrees, then:
+`crates/tensor4all-quanticstci/examples/issue747_probe.rs` in both worktrees,
+then:
 
 ```bash
 cargo build -j 4 --locked --release -p tensor4all-quanticstci \
   --features tensor4all-core/backend-tenferro --example issue747_probe
-# baseline binary needs the cache-accounting fields of the print removed,
-# because those accessors do not exist before this change
-env RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-    OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 taskset -c 0 \
-    ./target/release/examples/issue747_probe <bits> <reps> <cheap|heavy>
+```
+
+The baseline probe must drop the two cache-accounting groups from the final
+`println!` (`num_evals`, `cache_hits`, `cache_misses`, `hit_ratio` and their
+arguments), because those accessors do not exist before this change; the
+callback-side counters used for the comparison are identical on both sides.
+
+```bash
+# per run: one warm-up + three measured repetitions, 1 CPU, all pools at 1
+for round in 1 2; do for probe in baseline candidate; do
+  env RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+      OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 taskset -c 0 \
+      ./target/release/examples/issue747_probe <bits> 4 <cheap|heavy>
+done; done
 ```
 
 ```rust
@@ -113,8 +151,7 @@ fn main() {
         .with_upper_bound(&[1.0, 1.0])
         .build()
         .expect("grid");
-    let mode_for_target = mode.clone();
-    let mode_for_target = Rc::new(mode_for_target);
+    let mode_for_target = Rc::new(mode.clone());
 
     for rep in 0..reps {
         let invocations = Rc::new(Cell::new(0usize));
@@ -175,7 +212,7 @@ fn main() {
             points.get(),
             qtci.num_evals(),
             qtci.num_cache_hits(),
-            qtci.cache_stats().num_cache_misses(),
+            qtci.cache_stats().num_cache_misses,
             qtci.cache_hit_ratio(),
             elapsed.as_secs_f64() * 1e3,
         );

@@ -200,3 +200,51 @@ fn mixed_radix_keys_do_not_collide_between_index_shapes() {
     assert_eq!(cache.get(&[1, 1]).unwrap(), Some(11.0));
     assert_eq!(cache.len(), 3);
 }
+
+#[test]
+fn the_payload_limit_skips_insertions_without_evicting_or_corrupting() {
+    // Room for exactly two entries of (u64 key + f64 value).
+    let mut cache: MultiIndexCache<f64> =
+        MultiIndexCache::with_retained_byte_limit(&[4], 32).unwrap();
+    cache.insert(&[0], 0.0).unwrap();
+    cache.insert(&[1], 1.0).unwrap();
+    assert_eq!(cache.retained_bytes(), 32);
+    cache.insert(&[2], 2.0).unwrap();
+    assert_eq!(cache.dropped_inserts(), 1);
+    assert_eq!(cache.len(), 2);
+    assert_eq!(cache.get(&[0]).unwrap(), Some(0.0));
+    assert_eq!(
+        cache.get(&[2]).unwrap(),
+        None,
+        "a skipped insert is not cached"
+    );
+
+    // Overwriting an existing entry is always allowed.
+    cache.insert(&[1], 10.0).unwrap();
+    assert_eq!(cache.get(&[1]).unwrap(), Some(10.0));
+    assert_eq!(cache.dropped_inserts(), 1);
+
+    // Raising the limit lets the next insertion through.
+    cache.set_retained_byte_limit(1024);
+    cache.insert(&[2], 2.0).unwrap();
+    assert_eq!(cache.len(), 3);
+
+    // `clear` frees the budget without resetting the counters.
+    cache.clear();
+    assert_eq!(cache.retained_bytes(), 0);
+    assert_eq!(cache.dropped_inserts(), 1);
+    assert_eq!(cache.hits(), 2);
+}
+
+#[test]
+fn rejected_insertions_leave_existing_entries_unchanged() {
+    let mut cache: MultiIndexCache<f64> = MultiIndexCache::new(&[3]).unwrap();
+    cache.insert(&[1], 7.0).unwrap();
+
+    assert!(cache.insert(&[9], 1.0).is_err());
+    assert!(cache.insert(&[0, 0], 1.0).is_err());
+
+    assert_eq!(cache.len(), 1);
+    assert_eq!(cache.get(&[1]).unwrap(), Some(7.0));
+    assert_eq!(cache.misses(), 0, "the rejected insertions are not lookups");
+}

@@ -49,6 +49,7 @@ where
         num_evals: cache.len(),
         num_cache_hits: cache.hits(),
         num_cache_misses: cache.misses(),
+        dropped_inserts: cache.dropped_inserts(),
     }
 }
 
@@ -325,8 +326,10 @@ pub struct QuanticsTensorCI2<V: TTScalar> {
 ///
 /// The run memoizes target evaluations on the quantics multi-index, so the
 /// target is called only for points it has not seen. The counters separate the
-/// three quantities an optimization needs: how many requests were cached, how
-/// many were not, and how many distinct points the target evaluated.
+/// quantities an optimization needs: how many requests were cached, how many
+/// were not, how many distinct points the target evaluated, and how many
+/// evaluations could not be retained because the memo cache reached its
+/// logical payload limit.
 ///
 /// # Examples
 ///
@@ -337,6 +340,7 @@ pub struct QuanticsTensorCI2<V: TTScalar> {
 ///     num_evals: 3,
 ///     num_cache_hits: 5,
 ///     num_cache_misses: 3,
+///     dropped_inserts: 0,
 /// };
 /// assert!((stats.hit_ratio() - 5.0 / 8.0).abs() < 1e-12);
 /// assert_eq!(CacheStats::default().hit_ratio(), 0.0);
@@ -349,24 +353,13 @@ pub struct CacheStats {
     pub num_cache_hits: usize,
     /// Point requests that were not cached and had to be evaluated.
     pub num_cache_misses: usize,
+    /// Successful evaluations that were not retained because the memo cache was
+    /// at its logical payload limit. Such a point is evaluated again if it is
+    /// requested later; no returned value changes.
+    pub dropped_inserts: usize,
 }
 
 impl CacheStats {
-    /// Number of distinct points the target function evaluated.
-    pub fn num_evals(&self) -> usize {
-        self.num_evals
-    }
-
-    /// Number of point requests served from the cache.
-    pub fn num_cache_hits(&self) -> usize {
-        self.num_cache_hits
-    }
-
-    /// Number of point requests that were not cached.
-    pub fn num_cache_misses(&self) -> usize {
-        self.num_cache_misses
-    }
-
     /// Fraction of point requests served from the cache, or `0.0` when the run
     /// requested no points.
     ///
@@ -375,7 +368,12 @@ impl CacheStats {
     /// ```
     /// use tensor4all_quanticstci::CacheStats;
     ///
-    /// let stats = CacheStats { num_evals: 1, num_cache_hits: 1, num_cache_misses: 1 };
+    /// let stats = CacheStats {
+    ///     num_evals: 1,
+    ///     num_cache_hits: 1,
+    ///     num_cache_misses: 1,
+    ///     dropped_inserts: 0,
+    /// };
     /// assert!((stats.hit_ratio() - 0.5).abs() < 1e-12);
     /// ```
     pub fn hit_ratio(&self) -> f64 {
@@ -632,8 +630,8 @@ where
     /// # let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
     /// #     &[4], f, None, QtciOptions::default()).unwrap();
     /// let stats = qtci.cache_stats();
-    /// assert_eq!(stats.num_evals(), stats.num_evals);
-    /// assert!(stats.num_cache_hits() + stats.num_cache_misses() >= stats.num_evals());
+    /// assert!(stats.num_evals > 0);
+    /// assert!(stats.num_cache_hits + stats.num_cache_misses >= stats.num_evals);
     /// ```
     pub fn cache_stats(&self) -> CacheStats {
         self.cache_stats
@@ -667,7 +665,7 @@ where
     /// # };
     /// # let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
     /// #     &[4], f, None, QtciOptions::default()).unwrap();
-    /// assert_eq!(qtci.num_cache_hits(), qtci.cache_stats().num_cache_hits());
+    /// assert_eq!(qtci.num_cache_hits(), qtci.cache_stats().num_cache_hits);
     /// ```
     pub fn num_cache_hits(&self) -> usize {
         self.cache_stats.num_cache_hits

@@ -140,12 +140,12 @@ assert!(cf.num_cache_hits() > 0);
 
 ### `MultiIndexCache`: memoization when the target cannot be `CachedFunction`
 
-`CachedFunction` owns its callback, so it requires `Fn(&[I]) -> V + Send + Sync
-+ 'static` and cannot return `Result`. When your target is fallible, borrows a
-value that is not `Send` (for example an interpreter handle), or must never have
-a failed evaluation cached, use `MultiIndexCache` instead: it encodes the same
-mixed-radix keys, but the caller looks points up, evaluates the misses, and
-inserts the successful results.
+`CachedFunction` owns its callback, so it requires `Fn(&[I]) -> V + Send +
+Sync + 'static` and cannot return `Result`. Use `MultiIndexCache` instead when
+your target is fallible, borrows a value that is not `Send` (for example an
+interpreter handle), or must never have a failed evaluation cached. It encodes
+the same mixed-radix keys, but the caller looks points up, evaluates the
+misses, and inserts the successful results.
 
 ```rust
 use tensor4all_core::MultiIndexCache;
