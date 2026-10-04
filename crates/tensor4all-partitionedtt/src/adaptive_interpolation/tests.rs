@@ -1,5 +1,6 @@
 use super::*;
 use num_complex::Complex64;
+use rand_chacha::ChaCha8Rng;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 #[cfg(feature = "adaptive-hataori-rayon")]
@@ -261,7 +262,7 @@ fn incompatible_recycled_pivots_are_replenished_for_nonzero_child() {
     let projector = Projector::from_pairs([(sites[0].clone(), 1)]).unwrap();
     let active = active_positions(&sites, &projector);
     let recycled = vec![vec![0, 0, 0], vec![0, 1, 1]];
-    let mut rng = StdRng::seed_from_u64(7);
+    let mut rng = ChaCha8Rng::seed_from_u64(7);
 
     let candidates =
         patch_candidates(&sites, &active, &projector, &[], &recycled, 3, &mut rng).unwrap();
@@ -498,7 +499,7 @@ fn malformed_wire_cores_are_rejected_before_reconstruction() {
 #[test]
 fn patch_candidate_count_overflow_is_rejected() {
     let sites = vec![DynIndex::new_dyn(usize::MAX), DynIndex::new_dyn(2)];
-    let mut rng = StdRng::seed_from_u64(1);
+    let mut rng = ChaCha8Rng::seed_from_u64(1);
 
     let error =
         patch_candidates(&sites, &[0, 1], &Projector::new(), &[], &[], 1, &mut rng).unwrap_err();

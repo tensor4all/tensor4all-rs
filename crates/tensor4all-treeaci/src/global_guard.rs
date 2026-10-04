@@ -2,7 +2,8 @@
 
 use std::{collections::HashMap, mem::size_of};
 
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 use tensor4all_core::floating_zone_walk;
 use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::{
@@ -69,7 +70,7 @@ where
     // point vectors. Previously a caller could set a tiny working limit and
     // still allocate `nsearch * node_count` coordinates first.
     input_evaluators.enforce_guard_batch_budget_with_retained::<T>(nsearch, site_dims_bytes)?;
-    let mut rng = StdRng::seed_from_u64(seed);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let starts = (0..nsearch)
         .map(|_| {
             site_dims

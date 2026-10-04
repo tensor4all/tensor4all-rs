@@ -20,8 +20,8 @@
 
 use crate::scalar::AciScalar;
 use crate::{AciError, AciOptions, ElementwiseBatch, ElementwiseProblem, Result};
-use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 use tensor4all_core::floating_zone_walk;
 use tensor4all_simplett::{AbstractTensorTrain, EinsumScalar, TTCache};
 
@@ -68,7 +68,7 @@ where
         .map(|site| problem.solution.site_dim(site))
         .collect();
 
-    let mut rng = StdRng::seed_from_u64(seed);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let starts: Vec<Vec<usize>> = (0..nsearch)
         .map(|_| site_dims.iter().map(|&d| rng.random_range(0..d)).collect())
         .collect();

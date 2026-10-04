@@ -1651,9 +1651,9 @@ where
     let mut termination = TCI2Termination::MaxIterations;
 
     let mut rng = if let Some(seed) = options.seed {
-        rand::rngs::StdRng::seed_from_u64(seed)
+        rand_chacha::ChaCha8Rng::seed_from_u64(seed)
     } else {
-        rand::rngs::StdRng::from_os_rng()
+        rand_chacha::ChaCha8Rng::from_os_rng()
     };
 
     for iter in 0..options.max_iter {

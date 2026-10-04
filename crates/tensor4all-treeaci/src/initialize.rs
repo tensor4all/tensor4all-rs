@@ -2,7 +2,8 @@
 
 use std::collections::HashMap;
 
-use rand::{rngs::StdRng, SeedableRng};
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, StandardNormal};
 use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
@@ -162,7 +163,7 @@ pub(crate) fn build_random_output<T: TreeAciScalar, V: TreeAciNode>(
             })?;
         replacement_bonds.insert(bond.clone(), replacement.clone());
     }
-    let mut rng = StdRng::seed_from_u64(options.rng_seed);
+    let mut rng = ChaCha8Rng::seed_from_u64(options.rng_seed);
     let mut tensors = Vec::with_capacity(problem.node_order.len());
     for node in &problem.node_order {
         let node_index = reference

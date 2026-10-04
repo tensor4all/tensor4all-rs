@@ -37,6 +37,7 @@ rand.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
+rand_chacha.workspace = true
 approx.workspace = true
 tenferro.workspace = true
 tenferro-ad.workspace = true

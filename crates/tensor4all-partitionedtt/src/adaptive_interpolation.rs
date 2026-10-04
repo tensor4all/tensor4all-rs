@@ -12,8 +12,8 @@ use std::num::NonZeroUsize;
 #[cfg(feature = "adaptive-hataori-mpi")]
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{DynIndex, IdxTensor, MatrixLuciScalar, MultiIndex, Scalar, TensorElement};
 use tensor4all_itensorlike::TensorTrain;
 #[cfg(feature = "adaptive-hataori-mpi")]
@@ -902,7 +902,7 @@ where
     }
 
     let seed = patch_seed(options.tci_options.seed.unwrap_or(0), &patch.path);
-    let mut rng = StdRng::seed_from_u64(seed);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let candidate_pivots = patch_candidates(
         site_indices,
         &active_positions,
@@ -1293,7 +1293,7 @@ fn patch_candidates(
     initial_pivots: &[MultiIndex],
     recycled_pivots: &[MultiIndex],
     target: usize,
-    rng: &mut StdRng,
+    rng: &mut ChaCha8Rng,
 ) -> Result<Vec<MultiIndex>> {
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
