@@ -1,6 +1,5 @@
 //! Owned native state for tree ACI sweeps.
 
-use rand::SeedableRng;
 use tensor4all_core::{IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
 
@@ -151,13 +150,15 @@ pub(crate) struct TreeAciState<'a, T: TreeAciScalar, V: TreeAciNode> {
 }
 
 impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
+    #[cfg(test)]
     pub(crate) fn initialize(
         inputs: &'a [TreeTN<IdxTensor, V>],
         options: &TreeAciOptions<V>,
     ) -> Result<Self> {
         // The seeded entry point builds one explicitly named stream and
         // delegates, so initialization and the guard searches share it.
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rng_seed);
+        let mut rng =
+            <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(options.rng_seed);
         Self::initialize_with_rng(inputs, options, &mut rng)
     }
 

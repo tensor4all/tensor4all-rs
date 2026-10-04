@@ -1180,7 +1180,6 @@ fn test_global_search_oscillatory() {
 #[test]
 fn test_custom_global_pivot_finder() {
     use crate::globalpivot::{GlobalPivotFinder, GlobalPivotSearchInput};
-    use rand::Rng;
 
     // Custom finder: returns random pivots (same as Julia's CustomGlobalPivotFinder)
     struct RandomPivotFinder {
@@ -1297,7 +1296,6 @@ fn test_custom_global_pivot_finder() {
 #[test]
 fn test_optimize_with_finder_invokes_custom_finder() {
     use crate::globalpivot::{GlobalPivotFinder, GlobalPivotSearchInput};
-    use rand::Rng;
     use std::cell::Cell;
     use std::rc::Rc;
 

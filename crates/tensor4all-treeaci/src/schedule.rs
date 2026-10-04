@@ -211,7 +211,9 @@ pub(crate) fn run_directional_pass<T, V, F, R>(
     options: &TreeAciOptions<V>,
     direction: PassDirection,
     operator: &mut F,
-    rng: &mut R,
+    // The pass itself draws no randomness; the stream stays in the signature so
+    // the run's single caller-owned stream reaches every pass-level hook.
+    _rng: &mut R,
 ) -> Result<PassReport>
 where
     T: TreeAciScalar,

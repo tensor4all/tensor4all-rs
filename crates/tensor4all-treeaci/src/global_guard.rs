@@ -2,8 +2,6 @@
 
 use std::{collections::HashMap, mem::size_of};
 
-use rand::{Rng, SeedableRng};
-use rand_chacha::ChaCha8Rng;
 use tensor4all_core::floating_zone_walk;
 use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::{

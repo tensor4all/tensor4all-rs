@@ -154,7 +154,6 @@ where
     let mut ranks = Vec::new();
     let mut errors = Vec::new();
     let mut nglobal_pivots_history = Vec::new();
-    let mut guard_runs = 0usize;
     let mut termination = AciTermination::MaxIterations;
 
     for iteration in 0..options.max_iters {
@@ -196,7 +195,6 @@ where
             && options.max_nglobal_pivot > 0
             && !rank_capped
         {
-            guard_runs += 1;
             let pivots = find_global_pivots(&mut problem, &mut op, options, rng)?;
             let _added = problem.add_global_pivots(&pivots)?;
             nglobal_pivots_history.push(pivots.len());

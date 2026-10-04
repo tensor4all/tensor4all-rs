@@ -2,8 +2,6 @@
 
 use std::collections::HashMap;
 
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, StandardNormal};
 use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
@@ -142,7 +140,7 @@ pub(crate) fn build_random_output<T: TreeAciScalar, V: TreeAciNode, R: rand::Rng
     reference: &TreeTN<IdxTensor, V>,
     problem: &PreparedTreeProblem<V>,
     ranks: &[usize],
-    options: &TreeAciOptions<V>,
+    _options: &TreeAciOptions<V>,
     rng: &mut R,
 ) -> Result<TreeTN<IdxTensor, V>> {
     let output_bonds = ranks
