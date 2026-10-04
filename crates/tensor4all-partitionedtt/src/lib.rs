@@ -32,8 +32,8 @@ pub use adaptive_interpolation::adaptiveinterpolate_in;
 #[cfg(feature = "adaptive-hataori-mpi")]
 pub use adaptive_interpolation::adaptiveinterpolate_mpi;
 pub use adaptive_interpolation::{
-    adaptiveinterpolate, AcceptedPatchCache, AdaptiveInterpolateOptions,
-    AdaptiveInterpolationResult,
+    adaptiveinterpolate, adaptiveinterpolate_with_rng, AcceptedPatchCache,
+    AdaptiveInterpolateOptions, AdaptiveInterpolationResult,
 };
 pub use contract::{contract, proj_contract};
 pub use error::{PartitionedTTError, Result};

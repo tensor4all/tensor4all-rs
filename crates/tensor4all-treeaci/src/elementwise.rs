@@ -220,7 +220,7 @@ where
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn tree_elementwise<T, V, F>(
-    mut operator: F,
+    operator: F,
     inputs: &[TreeTN<IdxTensor, V>],
     options: &TreeAciOptions<V>,
 ) -> Result<TreeAciResult<V>>
@@ -229,7 +229,35 @@ where
     V: TreeAciNode,
     F: FnMut(&[T]) -> T,
 {
-    tree_elementwise_batched(
+    // The seeded high-level path builds one explicitly named stream and
+    // delegates, so initialization and the guards share it.
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rng_seed);
+    tree_elementwise_with_rng(operator, inputs, options, &mut rng)
+}
+
+/// Pointwise tree ACI on a caller-owned random stream.
+///
+/// Same as [`tree_elementwise`] with the randomness of
+/// [`tree_elementwise_batched_with_rng`]: the supplied stream drives the random
+/// initial output and every global guard search, and the `rng_seed` option is
+/// ignored.
+///
+/// # Errors
+///
+/// Returns the same errors as [`tree_elementwise`].
+pub fn tree_elementwise_with_rng<T, V, F, R>(
+    mut operator: F,
+    inputs: &[TreeTN<IdxTensor, V>],
+    options: &TreeAciOptions<V>,
+    rng: &mut R,
+) -> Result<TreeAciResult<V>>
+where
+    T: TreeAciScalar,
+    V: TreeAciNode,
+    F: FnMut(&[T]) -> T,
+    R: rand::Rng + ?Sized,
+{
+    tree_elementwise_batched_with_rng(
         |batch, output| {
             for (value, point_inputs) in output
                 .iter_mut()
@@ -241,6 +269,7 @@ where
         },
         inputs,
         options,
+        rng,
     )
 }
 

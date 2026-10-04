@@ -12,8 +12,9 @@
 //! ```
 
 pub use crate::{
-    crossinterpolate1, crossinterpolate2, estimate_true_error, floating_zone, opt_first_pivot,
-    optimize_with_finder, DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput,
-    PivotSearchStrategy, Sweep2Strategy, TCI1Options, TCI1SweepStrategy, TCI2OptimizationResult,
-    TCI2Options, TCI2Termination, TensorCI1, TensorCI2, TensorCI2FromTensorTrainOptions,
+    crossinterpolate1, crossinterpolate2, crossinterpolate2_with_rng, estimate_true_error,
+    floating_zone, opt_first_pivot, optimize_with_finder, optimize_with_finder_with_rng,
+    DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput, PivotSearchStrategy,
+    Sweep2Strategy, TCI1Options, TCI1SweepStrategy, TCI2OptimizationResult, TCI2Options,
+    TCI2Termination, TensorCI1, TensorCI2, TensorCI2FromTensorTrainOptions,
 };

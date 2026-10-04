@@ -864,7 +864,7 @@ where
         f(QuanticsBatch::new(&coords, n_dims, n_points)?)
     };
 
-    quanticscrossinterpolate_discrete_batch(&sizes, mapped, initial_pivots, options)
+    quanticscrossinterpolate_discrete_batch_with_rng(&sizes, mapped, initial_pivots, options, rng)
 }
 
 /// The same entry point with an explicitly named deterministic seed.

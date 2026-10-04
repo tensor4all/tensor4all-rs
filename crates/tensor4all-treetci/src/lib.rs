@@ -102,7 +102,7 @@ pub use api::{crossinterpolate2, crossinterpolate2_with_rng};
 pub use assemble::MultiIndex;
 pub use batch::GlobalIndexBatch;
 pub use error::{Result as TreeTciResult, TreeTciError};
-pub use globalpivot::find_global_pivots;
+pub use globalpivot::{find_global_pivots, find_global_pivots_with_rng};
 pub use graph::{TreeTciEdge, TreeTciGraph};
 pub use key::SubtreeKey;
 pub use materialize::to_treetn;

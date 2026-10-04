@@ -538,6 +538,15 @@ where
     )
 }
 
+/// Adaptive interpolation on a caller-owned random stream.
+///
+/// Same as [`adaptiveinterpolate`], but consumes `rng` for every patch: the
+/// candidate pivots and the nested TCI run draw from the supplied stream, and
+/// `AdaptiveInterpolateOptions::tci_options::seed` is ignored.
+///
+/// # Errors
+///
+/// Returns the same errors as [`adaptiveinterpolate`].
 pub fn adaptiveinterpolate_with_rng<T, F, B, R>(
     f: F,
     batched_f: Option<B>,
