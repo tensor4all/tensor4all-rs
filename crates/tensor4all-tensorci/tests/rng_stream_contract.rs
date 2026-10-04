@@ -142,3 +142,31 @@ fn the_finder_leaves_the_supplied_stream_at_the_expected_position() {
          (no extra draws, no hidden generator)"
     );
 }
+
+#[test]
+fn the_low_level_entry_point_accepts_an_erased_stream() {
+    // `&mut dyn RngCore` is the erased stream a caller with a boxed RNG holds;
+    // the `?Sized` bound is what makes this compile.
+    let mut inner = ChaCha8Rng::seed_from_u64(5);
+    let rng: &mut dyn RngCore = &mut inner;
+    let finder = DefaultGlobalPivotFinder::new(1, 1, 10.0);
+    let pivots = finder.find_global_pivots(&input(), &f, 0.1, rng).unwrap();
+    assert_eq!(pivots.len(), 1);
+
+    let mut inner = ChaCha8Rng::seed_from_u64(5);
+    let rng: &mut dyn RngCore = &mut inner;
+    let batch: Option<fn(&[Vec<usize>]) -> Vec<f64>> = None;
+    let result = crossinterpolate2_with_rng::<f64, _, _, _>(
+        g,
+        batch,
+        vec![4, 4],
+        vec![vec![0, 0]],
+        TCI2Options {
+            max_iter: 2,
+            ..TCI2Options::default()
+        },
+        rng,
+    )
+    .unwrap();
+    assert!(!result.ranks.is_empty());
+}

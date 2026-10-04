@@ -112,3 +112,27 @@ fn a_run_with_a_global_search_consumes_the_supplied_stream() {
         "an enabled global search must draw its starts from the supplied stream"
     );
 }
+
+#[test]
+fn the_low_level_entry_point_accepts_an_erased_stream() {
+    // `&mut dyn RngCore` exercises the `?Sized` bound of the public entry point.
+    let mut inner = ChaCha8Rng::seed_from_u64(3);
+    let rng: &mut dyn RngCore = &mut inner;
+    let options = TreeTciOptions {
+        tolerance: 1e-10,
+        max_iter: 2,
+        enable_global_pivots: true,
+        nsearch: 1,
+        max_nglobal_pivot: 1,
+        ..TreeTciOptions::default()
+    };
+    let (ranks, errors) = optimize_with_proposer_with_rng(
+        &mut two_site_state(),
+        evaluate,
+        &options,
+        &SimpleProposer::default(),
+        rng,
+    )
+    .unwrap();
+    assert_eq!(ranks.len(), errors.len());
+}

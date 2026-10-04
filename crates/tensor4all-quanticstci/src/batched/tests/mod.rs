@@ -409,3 +409,84 @@ fn test_combine_component_tts_basic() {
         }
     }
 }
+
+/// One stream drives every component: a two-component run consumes the
+/// component draws twice (once per component) from the same sequence.
+#[test]
+fn multicomponent_with_rng_consumes_one_stream_across_components() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct CountingRng {
+        inner: rand_chacha::ChaCha8Rng,
+        draws: Rc<Cell<usize>>,
+    }
+
+    impl rand::RngCore for CountingRng {
+        fn next_u32(&mut self) -> u32 {
+            self.draws.set(self.draws.get() + 1);
+            self.inner.next_u32()
+        }
+        fn next_u64(&mut self) -> u64 {
+            self.draws.set(self.draws.get() + 1);
+            self.inner.next_u64()
+        }
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            self.draws.set(self.draws.get() + 1);
+            self.inner.fill_bytes(dest)
+        }
+    }
+
+    let grid = DiscretizedGrid::builder(&[4])
+        .with_lower_bound(&[0.0])
+        .with_upper_bound(&[1.0])
+        .build()
+        .unwrap();
+    let options = QtciOptions {
+        tolerance: 1e-8,
+        max_bond_dim: Some(4),
+        n_random_init_pivot: 3,
+        rng_seed: Some(0),
+        ..QtciOptions::default()
+    };
+
+    let draws = Rc::new(Cell::new(0));
+    let mut rng = CountingRng {
+        inner: <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0),
+        draws: Rc::clone(&draws),
+    };
+    let (_one_component, _, _) = quanticscrossinterpolate_batch_with_rng::<f64, _, _>(
+        &grid,
+        pointwise_coordinate_batch(|x: &[f64]| 1.0 + x[0]),
+        None,
+        options.clone(),
+        &mut rng,
+    )
+    .unwrap();
+    let single_draws = draws.get();
+    assert!(
+        single_draws > 0,
+        "a randomized run must draw from the stream"
+    );
+
+    let draws = Rc::new(Cell::new(0));
+    let mut rng = CountingRng {
+        inner: <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0),
+        draws: Rc::clone(&draws),
+    };
+    let (_two_component, _, _) = quanticscrossinterpolate_multicomponent_with_rng::<f64, _, _>(
+        &grid,
+        pointwise_components_batch(|x: &[f64]| vec![1.0 + x[0], 2.0 * x[0] + 1.0]),
+        &[2],
+        None,
+        options,
+        &mut rng,
+    )
+    .unwrap();
+    let both_draws = draws.get();
+    assert_eq!(
+        both_draws,
+        2 * single_draws,
+        "two components must continue the same stream ({both_draws} vs {single_draws} for one)"
+    );
+}
