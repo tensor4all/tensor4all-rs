@@ -11,7 +11,8 @@
 //! the unseeded [`WordHasher`] instead of SipHash.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap};
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 
 use tensor4all_core::{ColMajorArrayRef, CommonScalar, TensorElement};
@@ -472,35 +473,51 @@ impl<T: Copy> PatchCache<T> {
     /// The active coordinates of the at most `limit` entries with the largest
     /// positive `magnitude`, largest first. Equal magnitudes are ordered by
     /// their coordinates, so the result does not depend on the map order or
-    /// the key packing. Entries of magnitude zero are skipped.
+    /// the key packing. Entries whose magnitude is zero or NaN are skipped
+    /// (cached values are finite, so NaN only guards a faulty `magnitude`).
+    ///
+    /// The kept entries live in a heap of at most `min(limit, len)` items, so
+    /// any `limit` is safe and the work is `O(len log limit)`; only entries
+    /// that can enter the heap are decoded.
     pub(super) fn largest_points(
         &self,
         limit: usize,
         magnitude: impl Fn(T) -> f64,
     ) -> Vec<Vec<usize>> {
-        if limit == 0 {
+        let capacity = limit.min(self.entries.len());
+        if capacity == 0 {
             return Vec::new();
         }
-        let mut best: Vec<(f64, Vec<usize>)> = Vec::with_capacity(limit.saturating_add(1));
-        let before = |a: &(f64, Vec<usize>), b: &(f64, Vec<usize>)| {
-            b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)).is_lt()
-        };
+        let mut kept: BinaryHeap<Ranked> = BinaryHeap::with_capacity(capacity);
         self.entries.for_each_words(|words, &value| {
             let size = magnitude(value);
             if size.is_nan() || size <= 0.0 {
                 return;
             }
-            if best.len() == limit && best.last().is_some_and(|last| size < last.0) {
-                return;
-            }
-            let entry = (size, self.layout.decode(words));
-            let at = best.partition_point(|kept| before(kept, &entry));
-            if at < limit {
-                best.insert(at, entry);
-                best.truncate(limit);
+            if kept.len() == capacity {
+                // The top of the heap is the worst kept entry.
+                if kept.peek().is_some_and(|worst| size < worst.size) {
+                    return;
+                }
+                let entry = Ranked {
+                    size,
+                    point: self.layout.decode(words),
+                };
+                if kept.peek().is_some_and(|worst| entry < *worst) {
+                    kept.pop();
+                    kept.push(entry);
+                }
+            } else {
+                kept.push(Ranked {
+                    size,
+                    point: self.layout.decode(words),
+                });
             }
         });
-        best.into_iter().map(|(_, point)| point).collect()
+        kept.into_sorted_vec()
+            .into_iter()
+            .map(|entry| entry.point)
+            .collect()
     }
 
     /// Split the cache among the children of a split at active slot `slot`,
@@ -548,6 +565,38 @@ impl<T: Copy> PatchCache<T> {
             .collect()
     }
 }
+
+/// A cached point ranked for [`PatchCache::largest_points`]: an entry is
+/// less (better) when its magnitude is larger, then when its coordinates are
+/// lexicographically smaller, so a max-heap keeps the worst kept entry on top.
+#[derive(Debug)]
+struct Ranked {
+    size: f64,
+    point: Vec<usize>,
+}
+
+impl Ord for Ranked {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .size
+            .total_cmp(&self.size)
+            .then_with(|| self.point.cmp(&other.point))
+    }
+}
+
+impl PartialOrd for Ranked {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Ranked {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for Ranked {}
 
 /// Evaluation counters of a run.
 #[derive(Default)]

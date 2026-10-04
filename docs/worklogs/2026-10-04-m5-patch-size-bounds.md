@@ -106,3 +106,14 @@ reproductions stay ignored tests that fail while the limitation exists.
 With question 5 implemented, question 3 moved to M6, and the early exit
 closed, M5 is complete by its completion rule; the checkpoint review of the
 interpolation line is next.
+
+An independent review of question 5 found no blocker. Its findings were
+fixed: `largest_points` sized its buffer by `n_initial_pivots`, which has no
+upper bound, so `usize::MAX` panicked on a capacity overflow; it now keeps a
+heap of at most `min(limit, entries)` items, decodes only entries that can
+enter it, and is tested with `usize::MAX`. The documentation no longer turns
+the three-seed measurement into a general claim, states that the cache
+points can replace the random fill, and describes kind (b) as a feature the
+engine saw but did not resolve. The tests now pin the key types, a tie at
+the cutoff, the NaN guard, the absence of cache points without the option,
+and the random fill of the zero case.

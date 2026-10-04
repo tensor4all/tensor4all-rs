@@ -45,10 +45,12 @@ a minimum: a failing patch is then retained and reported as
 `capped_patches: CappedPatches::AcceptUpTo { bits }` accepts a patch that
 reaches the bond cap when it has at most `bits` active sites and passes its
 error check; larger capped patches split, and converged patches never split
-for their size. Both default to the M3 behavior. The opt-in
-`cache_candidates` also starts every child from the largest values of its
-inherited evaluation cache (no new evaluations), which mitigates the
-corner-localized misses described below without excluding them.
+for their size. Both default to the M3 behavior.
+
+The opt-in `cache_candidates` starts every child patch from the largest
+values of its inherited evaluation cache as well (no new evaluations). It
+mitigates the corner-localized misses described below without excluding
+them.
 
 The report's `GlobalL2Error` states what an L2 run can claim. `Certified`
 (every contribution exact or exhaustive, every patch within its allowance)

@@ -70,11 +70,14 @@
 //! More [`VerificationOptions::samples`] make such a miss less likely but do
 //! not exclude it. The opt-in
 //! [`PatchedInterpolationOptions::cache_candidates`] starts child patches on
-//! features the parent sampled, which removes the misses where the engine
-//! never sampled the feature, but not those where the acceptance sample and
-//! the audit missed a residual the engine saw. Only a `Certified` result
-//! (every contribution exact or exhaustive) is a guarantee. The limitation is recorded, with a
-//! reproduction, under "Known limitation: corner-localized misses" in
+//! values the parent already evaluated in them, so it can prevent a miss
+//! where the parent sampled the feature but the child's engine would not; it
+//! does not help when the parent never sampled the feature, nor when the
+//! acceptance sample and the audit miss a feature the engine saw but did not
+//! resolve. Only a `Certified` result (every contribution exact or
+//! exhaustive) is a guarantee. The limitation is recorded, with a
+//! reproduction and the measured effect of the option, under "Known
+//! limitation: corner-localized misses" in
 //! `docs/design/tree-patching-error-contract.md`.
 //!
 //! The report's [`GlobalL2Error`] says what the run can claim:
@@ -120,7 +123,8 @@
 //!    patch are sampled: compatible user pivots, recycled pivots, the
 //!    parent's worst points, with
 //!    [`PatchedInterpolationOptions::cache_candidates`] the largest cached
-//!    values of the patch, then random points. If every sample is exactly zero, the zero
+//!    values of the patch, then random points up to `n_initial_pivots`. If
+//!    every sample is exactly zero, the zero
 //!    approximation is measured under L2 (and accepted as a zero patch if it
 //!    fits, otherwise its largest measured points join the candidates) or
 //!    accepted directly under `SampledMax`. Zero patches are reported in

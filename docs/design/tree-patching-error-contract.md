@@ -2006,11 +2006,15 @@ the evidence above was gathered. It is recorded here, not fixed.
   `cache_candidates = true`, every child patch also starts from the largest
   values of its inherited evaluation cache. On the reproduction below (seeds
   2, 3, 4) the true `E / delta` fell from 680, 880, and 880 to 51, 230, and
-  16, and no rank-1 patch of kind (a) was accepted any more; patches of kind
-  (b), whose residual the engine saw but the 64-point acceptance sample and
-  the audit missed, remained, so every seed still exceeds `10 delta`. The
-  option addresses the start of the engine, not the measurement; the
-  measurement-side remedies stay with the M9 review. The ignored test
+  16. No rank-1 patch of kind (a) was accepted any more, and the effect is
+  not limited to kind (a): seed 2, which had none, improved because a kind
+  (b) patch (true RMS `1.4e3 tau`) was no longer accepted. Other kind (b)
+  patches, whose feature the engine saw but did not resolve and whose
+  residual the 64-point acceptance sample and the audit missed, remained, so
+  every seed still exceeds `10 delta`. These are three seeds of one
+  workload, not a general guarantee. The option changes the start of the
+  engine, not the measurement; the measurement-side remedies stay with the
+  M9 review. The ignored test
   `cache_candidates_against_corner_localized_misses` records this.
 - **What is not affected.** `Certified` results, in which every contribution
   is exact or exhaustive, are not affected: the limitation concerns only the

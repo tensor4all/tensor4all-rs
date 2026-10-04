@@ -4,12 +4,11 @@
 
 Design notes for M5 of
 [`tree-adaptive-patching-roadmap.md`](./tree-adaptive-patching-roadmap.md).
-Open questions 2 and 5 below are decided and 4 has a decided direction.
 The selector (question 1) is an optional follow-up study: the default
-coarse-to-fine order stays. Questions 2, 4, and 5 are implemented, the
-early exit is closed, and sibling merging (question 3) moved to M6. The remaining capped-outcome details are open issues of the
-implementation plan, which records provisional rules for a later coding
-phase. Fixed-depth exploratory data are recorded in
+coarse-to-fine order stays. Questions 2, 4, and 5 are decided and
+implemented, the early exit is closed, and sibling merging (question 3) is
+decided as moved to M6, so M5 is complete. Open issue 1 of the patch-size
+plan stays provisional. Fixed-depth exploratory data are recorded in
 [`2026-10-03-m5-fixed-depth-exploration.md`](../../benchmarks/results/2026-10-03-m5-fixed-depth-exploration.md).
 The implementation plan for questions 2 and 4, with the gaps it found in
 these decisions, is

@@ -200,10 +200,11 @@ the report's `GlobalL2Error`:
   points, does not reveal it. A localized feature that enters a patch only
   through a corner or an edge is such a case; the audited error can then be
   orders of magnitude too small. More `samples` make a miss less likely but
-  do not exclude it, and the opt-in `with_cache_candidates(true)` (child
+  do not exclude it. The opt-in `with_cache_candidates(true)` (child
   patches also start from the largest values the parent already evaluated
-  in them) removes only the misses where the engine never sampled the
-  feature.
+  in them) can prevent a miss where the parent sampled the feature, but not
+  one where the parent never sampled it or where the acceptance sample
+  misses a feature the engine saw.
 - `AcceptanceOnly`: audits were disabled. The combined acceptance statistics
   are neither a bound nor an estimate.
 - `ToleranceNotMet`: some patch was retained by the minimum patch size

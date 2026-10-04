@@ -94,22 +94,27 @@ pub struct PatchedInterpolationOptions {
     /// For quantics grids, list the most significant bits first.
     pub patch_order: Vec<DynIndex>,
     /// Target number of distinct initial pivots per patch, at least 1.
-    /// Compatible user pivots, recycled pivots, and the worst points of a
-    /// failed parent measurement come first; random points of the patch fill
-    /// the rest. Default `5`.
+    /// Compatible user pivots, recycled pivots, the worst points of a failed
+    /// parent measurement, and with `cache_candidates` the largest cached
+    /// values come first and are all kept, so they can exceed the target;
+    /// random points of the patch fill the rest up to the target. Default
+    /// `5`.
     pub n_initial_pivots: usize,
     /// Seed each child with the pivots of the parent's last engine outcome.
     /// Default `false`.
     pub recycle_pivots: bool,
     /// Also start each patch from the points of its inherited evaluation
     /// cache with the largest `|f|`: at most `n_initial_pivots` nonzero
-    /// points, after the user, recycled, and worst points and before the
-    /// random fill. The cache holds every value the parent's engine run and
-    /// measurements evaluated inside the patch, so this adds no evaluations.
+    /// points, after the user, recycled, and worst points. The cache holds
+    /// every value the parent's engine run and measurements evaluated inside
+    /// the patch, so this adds no evaluations. A child with at least
+    /// `n_initial_pivots` such points gets no random start points: random
+    /// exploration is traded for points where `|f|` is known to be large.
     /// An opt-in mitigation of the corner-localized misses (see "Known
     /// limitation" in the [module documentation](super)): a child then starts
-    /// on a feature the parent sampled near the split face. It cannot help
-    /// with a feature the parent never sampled. Default `false`.
+    /// on a feature the parent sampled inside it. It cannot help with a
+    /// feature the parent never sampled, nor with a miss of the acceptance
+    /// sample. Default `false`.
     pub cache_candidates: bool,
     /// Root seed of every per-patch sub-seed and measurement stream. Default
     /// `0`.

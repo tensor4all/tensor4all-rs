@@ -427,11 +427,12 @@ Exit: an MPI smoke test and a multi-rank benchmark.
   - a larger default `samples`;
   - boundary-aware or recycled candidates for child patches: the parent's
     feature points just across the split face. The opt-in
-    `cache_candidates` of M5 (largest values of the inherited cache) removes
-    the misses where the engine never sampled the feature (true `E / delta`
-    680–880 down to 16–230 on the reproduction), not those of the sampled
-    acceptance;
-  - split-site rules that avoid cutting through a feature at a corner (M5);
+    `cache_candidates` of M5 (largest values of the inherited cache) lowered
+    the true `E / delta` of the reproduction from 680–880 to 16–230 and
+    removed its rank-1 never-sampled misses, but not the misses of the
+    sampled acceptance;
+  - split-site rules that avoid cutting through a feature at a corner (the
+    optional selector study, deferred from M5);
   - stratified or importance verification.
 
 ### M10. Bindings (deferred)

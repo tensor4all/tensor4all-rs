@@ -63,11 +63,39 @@ fn children_start_from_their_largest_cached_values_after_the_other_sources() {
     // The candidates come from the cache: no evaluation is added.
     assert_eq!(evaluations, 16);
 
-    // Without the option the same sources come first, then the random fill.
+    // Without the option the same sources come first, then the random fill
+    // tops up to n_initial_pivots = 3: no cached point is added.
     let (first, second, evaluations) = child_pivots(&ramp, &user, &base);
     assert_eq!(first[..2], [vec![0, 0, 0], vec![1, 1, 1]]);
+    assert_eq!(first.len(), 3);
     assert_eq!(second[0], vec![1, 1, 1]);
+    assert_eq!(second.len(), 3);
     assert_eq!(evaluations, 16);
+}
+
+#[test]
+fn an_unbounded_candidate_target_takes_every_nonzero_cached_value() {
+    // n_initial_pivots = usize::MAX neither overflows nor over-allocates:
+    // child 0 starts from its worst point and then all eight cached values,
+    // largest first (15, 13, ..., 1), and the patch size ends the list.
+    let problem = chain("s", 4, 2);
+    let options = options(&ramp, &problem)
+        .with_n_initial_pivots(usize::MAX)
+        .with_cache_candidates(true);
+    let (first, _, _) = child_pivots(&ramp, &[], &options);
+    assert_eq!(
+        first,
+        [
+            vec![1, 1, 1],
+            vec![0, 1, 1],
+            vec![1, 0, 1],
+            vec![0, 0, 1],
+            vec![1, 1, 0],
+            vec![0, 1, 0],
+            vec![1, 0, 0],
+            vec![0, 0, 0],
+        ]
+    );
 }
 
 #[test]
@@ -84,5 +112,7 @@ fn zero_cached_values_are_never_candidates() {
         first[..4],
         [vec![1, 1, 1], vec![1, 0, 1], vec![1, 1, 0], vec![1, 0, 0]]
     );
-    assert_eq!(first.len(), 5);
+    // The fifth comes from the random fill of seed 0, not from the zero
+    // cached values (a zero candidate would be (0, 0, 0), the smallest).
+    assert_eq!(first[4], vec![0, 1, 0]);
 }

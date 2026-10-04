@@ -313,10 +313,33 @@ fn largest_cached_points_are_ordered_by_magnitude_then_coordinates() {
         [vec![0, 2], vec![0, 1], vec![1, 0], vec![1, 2], vec![0, 0]]
     );
     assert!(cache.largest_points(0, magnitude).is_empty());
+    // A limit beyond the entry count neither overflows nor over-allocates.
+    assert_eq!(cache.largest_points(usize::MAX, magnitude).len(), 5);
+    // Whatever the map order, a tie at the cutoff keeps the smaller
+    // coordinates: of the three entries at 5 only [0, 1] survives next to 7.
+    let mut tied = PatchCache::new(vec![2, 3]);
+    for (point, value) in [
+        ([1, 0], 5.0),
+        ([0, 1], 5.0),
+        ([1, 1], 5.0),
+        ([0, 2], 7.0),
+        ([0, 0], 1.0),
+    ] {
+        tied.insert(tied.layout().encode(point.into_iter()), value);
+    }
+    assert_eq!(tied.largest_points(2, magnitude), [vec![0, 2], vec![0, 1]]);
+    // A NaN magnitude is skipped like a zero one: of the positive values
+    // 5, 2, 1 remain, the negative ones (-5, -7) map to NaN.
+    let nan_for_negative = |value: f64| if value < 0.0 { f64::NAN } else { value };
+    assert_eq!(
+        cache.largest_points(10, nan_for_negative),
+        [vec![0, 1], vec![1, 2], vec![0, 0]]
+    );
 
     // The same answer for every key type.
-    for dims in [vec![1 << 40, 1 << 40], vec![1 << 43; 3]] {
+    for (dims, kind) in [(vec![1 << 40, 1 << 40], 2), (vec![1 << 43; 3], 3)] {
         let mut cache = PatchCache::new(dims.clone());
+        assert_eq!(key_kind(&cache), kind, "{dims:?}");
         let far: Vec<usize> = dims.iter().map(|&dim| dim - 1).collect();
         let origin = vec![0usize; dims.len()];
         let mut middle = origin.clone();
