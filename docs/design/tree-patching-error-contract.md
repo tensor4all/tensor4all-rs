@@ -16,7 +16,9 @@ side (M3b) is scoped here and is not implemented
 The two prerequisites: the frozen M2 golden outputs were committed before the
 refactor ([Tests](#tests)); the evaluator fix of
 [Determinism](#determinism) is still open, with its order decided (open
-question 8, issue [#795](https://github.com/tensor4all/tensor4all-rs/issues/795)).
+question 8). Issue [#795](https://github.com/tensor4all/tensor4all-rs/issues/795)
+closed the tracking and test gap through PR #816, while the planner fix remains
+open upstream in [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
 The cross-thread determinism test ran early: it passes on trees whose nodes
 carry one site each and fails, as predicted, on the generic path, where it is
 kept as an ignored test with that reason.
@@ -1126,8 +1128,11 @@ this record did not rerun that check. The evaluator's part
 is not satisfied on generic-path trees. **Prerequisite**: a fix of the
 contraction-path ties. It was planned before the M3 implementation, was not
 done then, and is now a prerequisite of M7. The order is decided
-([open question 8](#open-questions-for-the-user); treetn work tracked by
-[#795](https://github.com/tensor4all/tensor4all-rs/issues/795)):
+([open question 8](#open-questions-for-the-user)). Issue
+[#795](https://github.com/tensor4all/tensor4all-rs/issues/795) closed the
+tracking/test gap through #816; the following local prerequisites remain
+unimplemented, and the upstream planner fix is tracked by
+[tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963):
 
 - (c) first: extend the raw kernels of `TreeTNCachedEvaluator` to site-free
   nodes. Driver patches keep at most one site per node, but the trees in use
@@ -1152,7 +1157,7 @@ threads and thread counts, and across processes once a two-process CI test
 (the same test binary run twice, comparing digests) passes. There is no
 cross-machine promise; M8 (MPI) states its own contract. The current tested
 state is narrower: fresh threads within one process, on `f64` trees whose
-nodes carry exactly one site each (the raw kernels). Until #795 (c) and (a)
+nodes carry exactly one site each (the raw kernels). Until the local steps (c) and (a)
 land, generic-path trees (a site-free node, a multi-site node, or `f32`/`c32`
 data) are not reproducible across threads, and the two-process CI test does
 not exist yet, so no cross-process claim is made.
@@ -1643,10 +1648,12 @@ defaults reproduce M3 exactly.
    change and a dependency update. Both, (a) first and (b) later, is also
    possible.
 
-   **Decided (user, 2026-10-03): (c), then (a), then (b).** This is
-   `tensor4all-treetn` work, tracked by issue
-   [#795](https://github.com/tensor4all/tensor4all-rs/issues/795), and a
-   prerequisite of M7.
+   **Decided (user, 2026-10-03): (c), then (a), then (b).** The local steps are
+   `tensor4all-treetn` work and a prerequisite of M7. Issue
+   [#795](https://github.com/tensor4all/tensor4all-rs/issues/795) closed the
+   tracking/test gap through #816; it did not implement these steps. The
+   upstream step is tracked by
+   [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
    - (c), new and first: extend the raw kernels of `TreeTNCachedEvaluator`
      to site-free nodes. Driver patches keep at most one site per node, but
      the trees in use have site-free nodes (the site-free root, the junction
@@ -1678,7 +1685,7 @@ defaults reproduce M3 exactly.
    (the same test binary run twice). There is no cross-machine promise; M8
    (MPI) must state its own contract. This is the target; the current tested
    state is recorded in [Determinism](#determinism): fresh threads within one
-   process, on `f64` trees with exactly one site per node. Until #795 (c) and
+   process, on `f64` trees with exactly one site per node. Until the local steps (c) and
    (a) land, generic-path trees are not reproducible across threads, and the
    two-process CI test does not exist yet.
 

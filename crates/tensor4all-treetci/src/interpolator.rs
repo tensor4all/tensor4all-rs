@@ -195,10 +195,10 @@ where
     ///
     /// - [`InterpolationError::InvalidProblem`] when the product of a node's
     ///   site dimensions (or the full index set of a single-node problem)
-    ///   overflows `usize`.
+    ///   overflows `usize`, or a single-node point list cannot be reserved.
     /// - [`InterpolationError::Evaluator`] when `evaluate` returns an error or
     ///   a number of values other than the number of points, at any stage, or
-    ///   a non-finite value at an initial pivot.
+    ///   a non-finite scalar component or magnitude in any batch.
     /// - [`InterpolationError::AllSamplesZero`] when every initial pivot
     ///   evaluates to exactly zero.
     /// - [`InterpolationError::Engine`] when TreeTCI fails for any other
@@ -338,10 +338,11 @@ struct EvaluatorFailure {
 }
 
 /// Call the caller's evaluator on a column-major `[n_sites, n_points]` batch
-/// and check that it returns one value per point. Both failure kinds are
-/// wrapped in [`EvaluatorFailure`].
+/// and check that it returns one finite value with finite magnitude per
+/// point. Evaluator failures are wrapped in [`EvaluatorFailure`].
 fn call_evaluator<T, F>(evaluate: &F, data: &[usize], n_sites: usize) -> Result<Vec<T>>
 where
+    T: CommonScalar,
     F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
 {
     // INVARIANT: `n_sites >= 1` because `InterpolationProblem::new` requires
@@ -355,6 +356,20 @@ where
             source: anyhow::anyhow!(
                 "evaluator returned {} values for {n_points} points",
                 values.len()
+            ),
+        }
+        .into());
+    }
+    if let Some(point) = values.iter().position(|&value| {
+        // Multiplication by zero detects non-finite components even when a
+        // scalar's magnitude implementation masks a NaN component.
+        (value * T::from_f64(0.0)).abs_val() != 0.0 || !value.abs_val().is_finite()
+    }) {
+        return Err(EvaluatorFailure {
+            source: anyhow::anyhow!(
+                "evaluator returned a non-finite value or magnitude at batch point {point}, \
+                 coordinates {:?}",
+                &data[point * n_sites..(point + 1) * n_sites]
             ),
         }
         .into());
@@ -409,23 +424,13 @@ fn engine(error: TreeTciError) -> InterpolationError {
 }
 
 /// Apply the zero-patch rule to the initial samples and return their largest
-/// magnitude. A non-finite sample is an invalid evaluator value
-/// (`Evaluator`); `AllSamplesZero` requires every sample to be exactly zero.
+/// magnitude. Values have been checked by `call_evaluator`;
+/// `AllSamplesZero` requires every sample to be exactly zero.
 fn initial_sample_scale<T: CommonScalar>(values: &[T]) -> Result<f64, InterpolationError> {
     let magnitudes: Vec<f64> = values
         .iter()
         .map(|value| CommonScalar::abs_val(*value))
         .collect();
-    if let Some(pivot) = magnitudes
-        .iter()
-        .position(|magnitude| !magnitude.is_finite())
-    {
-        return Err(InterpolationError::Evaluator {
-            source: anyhow::anyhow!(
-                "evaluator returned a non-finite value at initial pivot {pivot}"
-            ),
-        });
-    }
     if magnitudes.iter().all(|&magnitude| magnitude == 0.0) {
         return Err(InterpolationError::AllSamplesZero);
     }
@@ -716,11 +721,18 @@ where
                  overflows usize"
             ),
         })?;
-    let mut points = vec![0usize; len];
-    for (point, out) in points.chunks_exact_mut(n_sites).enumerate() {
+    let mut points = Vec::new();
+    points
+        .try_reserve_exact(len)
+        .map_err(|error| InterpolationError::InvalidProblem {
+            message: format!("could not reserve the single-node point list: {error}"),
+        })?;
+    let mut out = vec![0usize; n_sites];
+    for point in 0..n_points {
         layout
-            .split_point(&[point], out)
+            .split_point(&[point], &mut out)
             .map_err(|source| InterpolationError::Engine { source })?;
+        points.extend_from_slice(&out);
     }
     let values = call_evaluator(evaluate, &points, n_sites).map_err(classify_anyhow)?;
     let max_sample_magnitude = max_magnitude(&values);

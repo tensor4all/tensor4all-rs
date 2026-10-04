@@ -134,6 +134,19 @@ fn point_lists_reject_lengths_that_cannot_fit_a_vec_allocation() {
     assert!(uniform_points(&[2], usize::MAX, 7).is_err());
 }
 
+#[test]
+fn child_caches_reject_unrepresentable_dimensions_before_allocating() {
+    // The first case repacks to fewer key words; the second would keep its
+    // key width. Both must fail before attempting dimension-many children.
+    for dims in [vec![usize::MAX, 2], vec![1usize << (usize::BITS - 5), 2]] {
+        let result = PatchCache::<f64>::new(dims).split(0);
+        match result {
+            Err(message) => assert!(message.contains("child caches"), "{message}"),
+            Ok(_) => panic!("expected child-cache capacity error"),
+        }
+    }
+}
+
 fn domain_parts(dims: &[usize], fixed: &[Option<usize>]) -> (Vec<usize>, KeyLayout) {
     let active: Vec<usize> = (0..dims.len()).filter(|&p| fixed[p].is_none()).collect();
     let layout = KeyLayout::new(active.iter().map(|&p| dims[p]).collect());
@@ -159,7 +172,7 @@ fn random_candidates_are_a_fixed_list_for_a_fixed_seed() {
         active: &active,
         layout: &layout,
     };
-    let candidates = patch_candidates(&domain, &no_pivots(3), &[], 4, 42);
+    let candidates = patch_candidates(&domain, &no_pivots(3), &[], 4, 42).unwrap();
     assert_eq!(candidates.count, 4);
     assert_eq!(
         columns(&candidates.points, 3),
@@ -191,7 +204,7 @@ fn candidates_keep_compatible_user_then_recycled_pivots_in_order() {
     .unwrap();
     let recycled = vec![vec![1, 2, 1], vec![0, 2, 0], vec![1, 3, 1]];
     // Target 2 is already met by the user pivots, but recycled pivots are kept.
-    let candidates = patch_candidates(&domain, &user, &recycled, 2, 9);
+    let candidates = patch_candidates(&domain, &user, &recycled, 2, 9).unwrap();
     assert_eq!(
         columns(&candidates.points, 2),
         [vec![2, 1], vec![0, 0], vec![1, 1]]
@@ -211,13 +224,13 @@ fn candidates_fall_back_to_column_major_points_and_stop_at_the_patch_size() {
     };
     let user = ColMajorArray::new(vec![1, 0], vec![2, 1]).unwrap();
     // No random attempts: the first unused points in column-major order.
-    let candidates = build_candidates(&domain, &user, &[], 4, 0, |_| 0);
+    let candidates = build_candidates(&domain, &user, &[], 4, 0, |_| 0).unwrap();
     assert_eq!(
         columns(&candidates.points, 2),
         [vec![1, 0], vec![0, 0], vec![0, 1], vec![1, 1]]
     );
     // A target above the patch size yields every point once.
-    let candidates = patch_candidates(&domain, &user, &[], 100, 3);
+    let candidates = patch_candidates(&domain, &user, &[], 100, 3).unwrap();
     assert_eq!(candidates.count, 6);
     let distinct: HashSet<Vec<usize>> = columns(&candidates.points, 2).into_iter().collect();
     assert_eq!(distinct.len(), 6);
@@ -272,7 +285,7 @@ fn cache_split_hands_every_entry_to_its_child() {
             }
         }
     }
-    let children = cache.split(1);
+    let children = cache.split(1).unwrap();
     assert_eq!(children.len(), 3);
     for (b, child) in children.iter().enumerate() {
         assert_eq!(child.len(), 4);
@@ -446,7 +459,7 @@ fn cache_split_moves_keys_without_re_encoding() {
         cache.insert(cache.layout().encode(point.iter().copied()), value(point));
     }
     let parent_layout = cache.layout().clone();
-    let children = cache.split(0);
+    let children = cache.split(0).unwrap();
     assert_eq!(children.len(), 3);
     for (a, child) in children.iter().enumerate() {
         assert_eq!(child.layout().dims(), [1 << 20, 2]);
@@ -467,7 +480,7 @@ fn cache_split_moves_keys_without_re_encoding() {
     }
 
     // Splitting a moved-key child again keeps its entries reachable.
-    let grandchildren = children.into_iter().nth(2).unwrap().split(1);
+    let grandchildren = children.into_iter().nth(2).unwrap().split(1).unwrap();
     for (c, grandchild) in grandchildren.iter().enumerate() {
         assert_eq!(grandchild.len(), 3);
         for b in [0, (1 << 20) - 1, 12_345] {
@@ -512,7 +525,7 @@ fn check_masked_split(dims: &[usize], choices: &[Vec<usize>], slot: usize, kind:
     assert_eq!(cache.len(), points.len(), "the grid points are distinct");
     assert_eq!(key_kind(&cache), kind);
     let n_words = cache.layout().n_words();
-    let children = cache.split(slot);
+    let children = cache.split(slot).unwrap();
     assert_eq!(children.len(), dims[slot]);
     for (coordinate, child) in children.iter().enumerate() {
         assert_eq!(child.layout().n_words(), n_words, "keys are moved");
@@ -593,7 +606,7 @@ fn cache_split_re_encodes_only_when_a_word_is_freed() {
     }
     assert_eq!(cache.len(), points.len());
     assert_eq!(key_kind(&cache), 3);
-    let children = cache.split(64);
+    let children = cache.split(64).unwrap();
     for (coordinate, child) in children.iter().enumerate() {
         assert_eq!(child.layout().n_words(), 2);
         assert_eq!(key_kind(child), 2);
@@ -612,7 +625,7 @@ fn cache_split_re_encodes_only_when_a_word_is_freed() {
 
     // The grandchildren of the first child (site 64 fixed to 0) split at the
     // first remaining site, moving their two-word keys.
-    let grandchildren = children.into_iter().next().unwrap().split(0);
+    let grandchildren = children.into_iter().next().unwrap().split(0).unwrap();
     for (coordinate, grandchild) in grandchildren.iter().enumerate() {
         assert_eq!(grandchild.layout().n_words(), 2);
         assert_eq!(key_kind(grandchild), 2);
@@ -819,7 +832,7 @@ fn sampler_gives_the_same_values_and_counts_for_every_key_type() {
 
         // After a split at the first active site, the child that contains
         // `p1` serves it from the moved entries: a hit, no evaluation.
-        let children = sampler.cache.into_inner().split(0);
+        let children = sampler.cache.into_inner().split(0).unwrap();
         let child = children.into_iter().nth(p1[0]).unwrap();
         let mut child_fixed = fixed.clone();
         child_fixed[1] = Some(p1[0]);

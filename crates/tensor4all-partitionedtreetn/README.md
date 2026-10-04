@@ -90,16 +90,17 @@ limitation: corner-localized misses" in
   `f64` on trees with exactly one site per node. The cached evaluator's
   generic path (a site-free node, a node with several sites, or `f32`/`c32`
   data) can differ at rounding level between threads and processes, an open
-  issue ([#795](https://github.com/tensor4all/tensor4all-rs/issues/795)). The
-  intended scope is bitwise identical results on the same machine and build
-  across threads, thread counts, and processes, with no cross-machine
-  promise; it is not reached yet: generic-path trees need #795 fixed, and
-  reproducibility across processes is not claimed until a two-process test
-  passes. What is derived from the stored `TreeTN`s may still differ across
-  runs ([issue #791](https://github.com/tensor4all/tensor4all-rs/issues/791)):
-  materializing (`to_dense`, `contract_to_tensor`, `to_treetn`) in axis order
-  and at rounding level, and the iteration order of `external_indices`,
-  `site_space`, and `neighbors`.
+  limitation tracked in
+  [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
+  Issue #795 closed the tracking/test gap through #816, not the planner fix.
+  The intended scope is bitwise identical results on the same machine and
+  build across threads, thread counts, and processes, with no cross-machine
+  promise; generic-path measurements still need deterministic contraction
+  paths, and reproducibility across processes is not claimed until a
+  two-process test passes. Issue #791 was fixed by #793: the old TreeTN
+  site/edge construction and dense-axis order nondeterminism is resolved.
+  `site_space` still has unspecified set iteration order, and cached generic
+  evaluation retains the distinct planner limitation above.
 
 The patch queue and pivot recycling derive from TCIAlgorithms.jl (MIT) through
 the deprecated `tensor4all-partitionedtt`; this crate carries

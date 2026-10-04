@@ -180,20 +180,20 @@
 //! several sites, or `f32`/`c32` data) the evaluator's generic path can
 //! differ at rounding level between threads and processes, so an L2
 //! acceptance near `tau` may then differ between runs; this is an open
-//! evaluator issue
-//! ([issue #795](https://github.com/tensor4all/tensor4all-rs/issues/795)).
+//! evaluator limitation tracked upstream in
+//! [tenferro-rs #1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
+//! [Issue #795](https://github.com/tensor4all/tensor4all-rs/issues/795) closed
+//! the tracking and test gap through PR #816; it did not fix the planner.
 //! The intended scope is bitwise identical results on the same machine and
 //! build across threads, thread counts, and processes, with no cross-machine
-//! promise. It is not reached yet: generic-path trees need that issue fixed,
-//! and reproducibility across processes is not claimed until a two-process
-//! test passes, which does not exist yet. The bitwise claim never
-//! covers `approximation_rms` and the fields derived from it. The stored
-//! patches are `TreeTN`s, so what is derived from them may still differ
-//! across runs, for a single patch as for the whole partition, on any topology
-//! ([issue #791](https://github.com/tensor4all/tensor4all-rs/issues/791)):
-//! materializing (`to_dense`, `contract_to_tensor`,
-//! [`PartitionedTreeTN::to_treetn`]) in axis order and at rounding level, and
-//! the iteration order of `external_indices`, `site_space`, and `neighbors`.
+//! promise. It is not reached yet: generic-path measurements need deterministic
+//! contraction paths, and reproducibility across processes is not claimed
+//! until a two-process test passes, which does not exist yet. The bitwise claim
+//! never covers `approximation_rms` and the fields derived from it. Issue #791
+//! was fixed by PR #793: TreeTN construction, external-site order, and dense
+//! output order no longer inherit the old hash-iteration nondeterminism.
+//! `site_space` remains a set with unspecified iteration order; generic cached
+//! evaluation still has the separate planner limitation above.
 //!
 //! # Examples
 //!
@@ -489,6 +489,9 @@ impl From<PartitionedTreeTNError> for PatchedInterpolationError {
 ///   evaluations: its point list cannot be reserved (the allocator refuses
 ///   `verification.samples` or, for an exhaustive measurement, up to
 ///   `max(verification.max_exhaustive_points, verification.samples)` points).
+///   An exact or candidate point list, or a split child collection, that cannot
+///   be represented or reserved also returns `InvalidInput`; candidate counts
+///   are clamped to the patch domain before their capacity is checked.
 /// - [`PatchedInterpolationError::Interpolation`] when the evaluator fails,
 ///   returns a wrong number of values, or returns a value with a non-finite
 ///   component or with finite components whose magnitude overflows
@@ -1195,7 +1198,8 @@ where
             &prior,
             self.options.n_initial_pivots,
             seeds.candidates,
-        );
+        )
+        .map_err(invalid)?;
         let sampler = self.sampler(&fixed, active.len(), cache);
         let zero_target = MeasureTarget {
             network: None,
@@ -1491,26 +1495,22 @@ where
                 .cloned()
                 .collect()
         };
-        let children = sampler
-            .cache
-            .into_inner()
-            .split(slot)
-            .into_iter()
-            .enumerate()
-            .map(|(value, cache)| {
-                let mut child_path = path.clone();
-                child_path.push((split_position, value));
-                let mut child_fixed = fixed.to_vec();
-                child_fixed[split_position] = Some(value);
-                Patch {
-                    path: child_path,
-                    fixed: child_fixed,
-                    cache,
-                    recycled: inside(&recycled, value),
-                    worst: inside(&worst, value),
-                }
-            })
-            .collect();
+        let mut children = sampling::reserve_vec(layout.dims[split_position], "patch children")
+            .map_err(invalid)?;
+        let caches = sampler.cache.into_inner().split(slot).map_err(invalid)?;
+        for (value, cache) in caches.into_iter().enumerate() {
+            let mut child_path = path.clone();
+            child_path.push((split_position, value));
+            let mut child_fixed = fixed.to_vec();
+            child_fixed[split_position] = Some(value);
+            children.push(Patch {
+                path: child_path,
+                fixed: child_fixed,
+                cache,
+                recycled: inside(&recycled, value),
+                worst: inside(&worst, value),
+            });
+        }
         Ok(Verdict::Split(children))
     }
 
@@ -1526,7 +1526,8 @@ where
         // Every point of the patch: `0..d` for one active site of dimension
         // `d`, or the single empty point when no site is active.
         let n_points: usize = active.iter().map(|&p| self.layout.dims[p]).product();
-        let points: Vec<usize> = active.iter().flat_map(|_| 0..n_points).collect();
+        let active_dims: Vec<usize> = active.iter().map(|&p| self.layout.dims[p]).collect();
+        let points = sampling::all_points(&active_dims, n_points).map_err(invalid)?;
         let shape = [active.len(), n_points];
         let sampler = self.sampler(fixed, active.len(), cache);
         let batch = ColMajorArrayRef::new(&points, &shape).map_err(internal)?;

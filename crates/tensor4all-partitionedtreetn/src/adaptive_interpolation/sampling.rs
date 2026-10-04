@@ -32,11 +32,17 @@ pub(super) fn reserve_point_list(
 ) -> Result<Vec<usize>, String> {
     let capacity = point_list_capacity(n_coords, count)
         .ok_or_else(|| format!("{what} point-list length exceeds Vec capacity"))?;
-    let mut points = Vec::new();
-    points
+    reserve_vec(capacity, &format!("{what} point list"))
+}
+
+/// Reserve a dimension-derived collection without panicking on byte-capacity
+/// overflow or allocation failure. Shared by point lists and patch children.
+pub(super) fn reserve_vec<T>(capacity: usize, what: &str) -> Result<Vec<T>, String> {
+    let mut values = Vec::new();
+    values
         .try_reserve_exact(capacity)
-        .map_err(|error| format!("could not reserve {what} point list: {error}"))?;
-    Ok(points)
+        .map_err(|error| format!("could not reserve {what}: {error}"))?;
+    Ok(values)
 }
 
 /// SplitMix64 increment (the golden-ratio gamma).
@@ -251,7 +257,7 @@ pub(super) fn patch_candidates(
     recycled: &[Vec<usize>],
     target: usize,
     seed: u64,
-) -> Candidates {
+) -> Result<Candidates, String> {
     build_candidates(domain, user_pivots, recycled, target, seed, random_attempts)
 }
 
@@ -271,12 +277,22 @@ pub(super) fn build_candidates(
     target: usize,
     seed: u64,
     attempt_budget: fn(usize) -> usize,
-) -> Candidates {
+) -> Result<Candidates, String> {
+    let desired = target.min(domain.point_count());
+    let n_user = user_pivots.ncols().unwrap_or(0);
+    let prior_count = n_user
+        .checked_add(recycled.len())
+        .ok_or_else(|| "candidate count overflows usize".to_string())?;
+    // Prior sources may exceed the random-fill target. Reserve their upper
+    // bound too, so appending a candidate cannot grow the point list.
+    let capacity = desired.max(prior_count);
     let mut candidates = Candidates {
-        points: Vec::new(),
+        points: reserve_point_list(domain.active.len(), capacity, "candidate")?,
         count: 0,
     };
     let mut seen = HashSet::new();
+    seen.try_reserve(capacity)
+        .map_err(|error| format!("could not reserve candidate keys: {error}"))?;
     let mut local = vec![0usize; domain.active.len()];
     let mut push = |local: &[usize], candidates: &mut Candidates| {
         if seen.insert(domain.layout.encode(local.iter().copied())) {
@@ -285,7 +301,6 @@ pub(super) fn build_candidates(
         }
     };
 
-    let n_user = user_pivots.ncols().unwrap_or(0);
     let user = (0..n_user).filter_map(|column| user_pivots.column(column));
     for point in user.chain(recycled.iter().map(Vec::as_slice)) {
         if domain.is_compatible(point) {
@@ -296,16 +311,15 @@ pub(super) fn build_candidates(
         }
     }
 
-    let desired = target.min(domain.point_count());
     if candidates.count >= desired {
-        return candidates;
+        return Ok(candidates);
     }
 
     let attempts = attempt_budget(desired - candidates.count);
     let mut rng = SplitMix64::new(seed);
     for _ in 0..attempts {
         if candidates.count >= desired {
-            return candidates;
+            return Ok(candidates);
         }
         for (slot, &position) in domain.active.iter().enumerate() {
             local[slot] = rng.below(domain.dims[position] as u64) as usize;
@@ -324,5 +338,5 @@ pub(super) fn build_candidates(
         push(&local, &mut candidates);
         flat += 1;
     }
-    candidates
+    Ok(candidates)
 }

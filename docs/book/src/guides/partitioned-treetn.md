@@ -314,18 +314,17 @@ process as long as the measured network values are reproducible. This is
 tested for `f64` on trees with exactly one site per node. On trees with a
 site-free node or a node with several sites, or with `f32`/`c32` data, the
 cached evaluator can round differently between threads and processes, an
-open issue ([#795](https://github.com/tensor4all/tensor4all-rs/issues/795)).
-The intended scope is bitwise identical results on the same machine and
-build across threads, thread counts, and processes, with no cross-machine
-promise. It is not reached yet: those trees need #795 fixed, and
-reproducibility across processes is not claimed until a two-process test
-passes.
-What is derived from the stored `TreeTN`s may still differ across runs, for a
-single patch as for the whole partition, on any topology
-([issue #791](https://github.com/tensor4all/tensor4all-rs/issues/791)):
-materializing (`to_dense`, `contract_to_tensor`, `to_treetn`) in axis order and
-at rounding level, and the iteration order of `external_indices`, `site_space`,
-and `neighbors`.
+open limitation tracked in
+[tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
+Issue #795 closed the tracking/test gap through #816; it did not fix the
+planner. The intended scope is bitwise identical results on the same machine
+and build across threads, thread counts, and processes, with no cross-machine
+promise. Generic-path measurements still need deterministic contraction paths;
+reproducibility across processes is not claimed until a two-process test passes.
+Issue #791 was fixed by #793: TreeTN site/edge construction and dense-axis order
+no longer inherit that hash-iteration nondeterminism. `site_space` is still a set
+with unspecified iteration order; cached generic evaluation retains the
+separate planner limitation above.
 
 ## Reconstruction with a fixed global L2 tolerance
 

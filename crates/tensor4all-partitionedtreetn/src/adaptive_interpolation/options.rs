@@ -130,7 +130,7 @@ pub struct PatchedInterpolationOptions {
     /// when it meets its allowance (the measured error under L2, the engine
     /// estimate under `SampledMax`) and
     /// [`PatchStatus::ToleranceNotMet`](super::PatchStatus::ToleranceNotMet)
-    /// otherwise; such a patch is never certified. A last run that was not
+    /// otherwise; a `ToleranceNotMet` patch is never certified. A last run that was not
     /// judged yet (it did not converge and was not capped-eligible) is
     /// judged once: measured under L2, by its estimate under `SampledMax`.
     /// With `Some(m)` for `m >= 2`, a failing two-site patch is retained

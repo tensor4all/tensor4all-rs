@@ -24,6 +24,88 @@ use tensor4all_treetn::interpolation::{
 };
 
 #[test]
+fn exact_point_lists_reject_byte_capacity_overflow_before_evaluation() {
+    let dim = (isize::MAX as usize / std::mem::size_of::<usize>()) + 1;
+    let problem = Problem::new(&[("only", &[dim])], &[]);
+    let result = run(
+        &DenseEngine::new(),
+        &problem,
+        &|_| -> f64 { panic!("unexpected evaluation") },
+        &[],
+        &sampled_max(2),
+    );
+    match result {
+        Err(PatchedInterpolationError::InvalidInput { message }) => {
+            assert!(
+                message.contains("point-list length exceeds Vec capacity"),
+                "{message}"
+            );
+        }
+        other => panic!("expected InvalidInput, got {other:?}"),
+    }
+}
+
+#[test]
+fn candidate_targets_are_checked_after_clamping_to_the_patch_domain() {
+    let problem = chain("s", 64, 2);
+    let result = run(
+        &DenseEngine::new(),
+        &problem,
+        &|_| -> f64 { panic!("unexpected evaluation") },
+        &[],
+        &sampled_max(2).with_n_initial_pivots(usize::MAX),
+    );
+    match result {
+        Err(PatchedInterpolationError::InvalidInput { message }) => {
+            assert!(
+                message.contains("candidate point-list length exceeds Vec capacity"),
+                "{message}"
+            );
+        }
+        other => panic!("expected InvalidInput, got {other:?}"),
+    }
+    // The same option is usable when the distinct candidate count is small.
+    let problem = Problem::new(&[("a", &[2]), ("b", &[2])], &[("a", "b")]);
+    let f = |point: &[usize]| {
+        if point.iter().all(|&value| value == 0) {
+            1.0
+        } else {
+            0.0
+        }
+    };
+    let result = run(
+        &DenseEngine::new(),
+        &problem,
+        &f,
+        &[],
+        &sampled_max(2).with_n_initial_pivots(usize::MAX),
+    )
+    .unwrap();
+    assert_eq!(result.report.function_evaluations, 4);
+    assert_eq!(result.report.splits, 0);
+    assert_accurate(&result, &problem, &f, 0.0);
+}
+
+#[test]
+fn split_child_collections_reject_unrepresentable_dimensions() {
+    let problem = Problem::new(&[("a", &[usize::MAX]), ("b", &[2])], &[("a", "b")]);
+    let engine = DenseEngine::with_fault(Fault::CapAfterPivots);
+    let result = run(
+        &engine,
+        &problem,
+        &|_| 1.0,
+        &[],
+        &sampled_max(2).with_n_initial_pivots(1),
+    );
+    match result {
+        Err(PatchedInterpolationError::InvalidInput { message }) => {
+            assert!(message.contains("patch children"), "{message}");
+        }
+        other => panic!("expected InvalidInput, got {other:?}"),
+    }
+}
+
+#[test]
 fn branched_topology_is_a_genuine_tree_with_a_degree_three_node() {
     let problem = branched();
     let degree = |node: &str| {

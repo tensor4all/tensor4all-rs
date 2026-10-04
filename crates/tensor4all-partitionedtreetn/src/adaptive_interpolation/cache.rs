@@ -402,12 +402,16 @@ fn split_masked<K: PackedKey, T>(
     slot: usize,
     keep: &[u64],
     n_children: usize,
-) -> Vec<Entries<T>> {
+) -> Result<Vec<Entries<T>>, String> {
     let (word, _, _) = layout.slots[slot];
     let capacity = map.len() / n_children.max(1);
-    let mut maps: Vec<WordMap<K, T>> = (0..n_children)
-        .map(|_| WordMap::with_capacity_and_hasher(capacity, BuildHasherDefault::default()))
-        .collect();
+    let mut maps = super::sampling::reserve_vec(n_children, "child cache maps")?;
+    for _ in 0..n_children {
+        maps.push(WordMap::<K, T>::with_capacity_and_hasher(
+            capacity,
+            BuildHasherDefault::default(),
+        ));
+    }
     for (key, value) in map {
         let child = layout.coordinate(slot, key.word(word));
         // INVARIANT: every cached coordinate passed `encode_checked`, so
@@ -416,7 +420,9 @@ fn split_masked<K: PackedKey, T>(
             child_map.insert(key.masked(keep), value);
         }
     }
-    maps.into_iter().map(K::wrap).collect()
+    let mut entries = super::sampling::reserve_vec(n_children, "child cache entries")?;
+    entries.extend(maps.into_iter().map(K::wrap));
+    Ok(entries)
 }
 
 /// Evaluation cache of one patch, keyed by its active coordinates.
@@ -529,15 +535,14 @@ impl<T: Copy> PatchCache<T> {
     /// re-encoded. Only when removing the coordinate lets a compact packing
     /// use fewer words are the keys re-encoded into that packing, so a wide
     /// root cache reaches the inline key types after enough splits.
-    pub(super) fn split(self, slot: usize) -> Vec<Self> {
+    pub(super) fn split(self, slot: usize) -> Result<Vec<Self>, String> {
         let mut child_dims = self.layout.dims.clone();
         let n_children = child_dims.remove(slot);
+        let mut children = super::sampling::reserve_vec(n_children, "child caches")?;
         let compact = KeyLayout::new(child_dims);
         if compact.n_words < self.layout.n_words {
             let capacity = self.entries.len() / n_children.max(1);
-            let mut children: Vec<Self> = (0..n_children)
-                .map(|_| Self::with_layout(compact.clone(), capacity))
-                .collect();
+            children.extend((0..n_children).map(|_| Self::with_layout(compact.clone(), capacity)));
             let mut child_key = vec![0u64; compact.n_words];
             let layout = self.layout;
             self.entries.drain_words(|words, value| {
@@ -550,19 +555,17 @@ impl<T: Copy> PatchCache<T> {
                     child.entries.insert_words(&child_key, value);
                 }
             });
-            return children;
+            return Ok(children);
         }
         let (child_layout, keep) = self.layout.without_slot(slot);
         let layout = &self.layout;
         let entries =
-            with_map!(self.entries, map => split_masked(map, layout, slot, &keep, n_children));
-        entries
-            .into_iter()
-            .map(|entries| Self {
-                layout: child_layout.clone(),
-                entries,
-            })
-            .collect()
+            with_map!(self.entries, map => split_masked(map, layout, slot, &keep, n_children))?;
+        children.extend(entries.into_iter().map(|entries| Self {
+            layout: child_layout.clone(),
+            entries,
+        }));
+        Ok(children)
     }
 }
 

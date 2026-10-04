@@ -305,3 +305,24 @@ fn call_evaluator_marks_errors_and_wrong_lengths() {
     };
     assert_eq!(call_evaluator(&echo, &data, 2).unwrap(), vec![1.0, 10.0]);
 }
+
+#[test]
+fn call_evaluator_rejects_non_finite_complex_components_and_magnitudes() {
+    use num_complex::Complex64;
+    for bad in [
+        Complex64::new(f64::NAN, 1.0),
+        Complex64::new(1.0, f64::INFINITY),
+        Complex64::new(f64::MAX, f64::MAX),
+    ] {
+        let evaluate = |_: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<Complex64>> {
+            Ok(vec![Complex64::new(1.0, 0.0), bad])
+        };
+        let error = call_evaluator(&evaluate, &[0, 1], 1).unwrap_err();
+        assert!(has_evaluator_failure(error.as_ref()));
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("batch point 1, coordinates [1]"),
+            "{message}"
+        );
+    }
+}

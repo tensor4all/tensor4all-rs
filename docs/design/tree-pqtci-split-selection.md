@@ -123,7 +123,7 @@ State after the user's answers of 2026-10-03.
    `tensor4all-partitionedtt` do not merge patches either. The merge becomes
    an M6 post-processing function with an added error-budget check; see the
    roadmap.
-4. **Capped outcomes — direction decided; details and early exit open** (M3
+4. **Capped outcomes — implemented; early exit closed** (M3
    open question 4, deferred to M5). Passing the error check is not
    sufficient: a capped patch can meet its tolerance without compressing at
    all. A global maximum patch size is rejected, because one coarse region can

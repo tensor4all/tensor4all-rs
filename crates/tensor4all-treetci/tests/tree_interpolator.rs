@@ -929,7 +929,7 @@ fn non_finite_initial_samples_are_evaluator_errors() {
         let chain = chain_problem(1e-12, None, 0);
         expect_evaluator_error(
             engine.interpolate(&chain, evaluator(&f, site_dims(&chain))),
-            "non-finite value at initial pivot 0",
+            "non-finite value or magnitude at batch point 0",
         );
 
         // A finite nonzero sample beside the non-finite one does not hide it.
@@ -944,13 +944,117 @@ fn non_finite_initial_samples_are_evaluator_errors() {
         .unwrap();
         expect_evaluator_error(
             engine.interpolate(&two_pivots, evaluator(&f, site_dims(&two_pivots))),
-            "non-finite value at initial pivot 1",
+            "non-finite value or magnitude at batch point 1",
         );
 
         let single = single_node_problem(vec![0, 0, 0]);
         expect_evaluator_error(
             engine.interpolate(&single, evaluator(&f, site_dims(&single))),
-            "non-finite value at initial pivot 0",
+            "non-finite value or magnitude at batch point 0",
         );
+    }
+}
+
+#[test]
+fn single_node_point_lists_reject_byte_capacity_overflow() {
+    let dim = (isize::MAX as usize / std::mem::size_of::<usize>()) + 1;
+    let problem = InterpolationProblem::new(
+        topology(&["only"], &[]),
+        BTreeMap::from([(name("only"), vec![DynIndex::new_dyn(dim)])]),
+        pivots_from(&[vec![0]]),
+        1e-12,
+        None,
+        0,
+    )
+    .unwrap();
+    let calls = Cell::new(0);
+    let result = TreeTciInterpolator::default().interpolate(
+        &problem,
+        |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+            calls.set(calls.get() + 1);
+            Ok(vec![1.0; batch.shape()[1]])
+        },
+    );
+    match result {
+        Err(InterpolationError::InvalidProblem { message }) => {
+            assert!(message.contains("point list"), "{message}");
+        }
+        other => panic!("expected InvalidProblem, got {other:?}"),
+    }
+    // Only the one initial pivot may be evaluated; enumeration never runs.
+    assert!(calls.get() <= 1);
+}
+
+#[test]
+fn non_finite_samples_after_initial_pivots_are_evaluator_errors() {
+    let engine = TreeTciInterpolator::default();
+    let problem = InterpolationProblem::new(
+        topology(&["only"], &[]),
+        BTreeMap::from([(name("only"), vec![DynIndex::new_dyn(2)])]),
+        pivots_from(&[vec![0]]),
+        1e-12,
+        None,
+        0,
+    )
+    .unwrap();
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        expect_evaluator_error(
+            engine.interpolate(
+                &problem,
+                evaluator(&|p| if p[0] == 0 { 1.0 } else { bad }, vec![2]),
+            ),
+            "non-finite",
+        );
+    }
+}
+
+#[test]
+fn non_finite_sweep_and_materialization_samples_are_evaluator_errors() {
+    let engine = TreeTciInterpolator::default();
+    let problem = chain_problem(1e-12, None, 0);
+    fn make_evaluator(
+        calls: &Cell<usize>,
+        fail_on: usize,
+        bad: f64,
+        n_sites: usize,
+    ) -> impl Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>> + '_ {
+        move |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+            calls.set(calls.get() + 1);
+            Ok(batch
+                .data()
+                .chunks(n_sites)
+                .map(|point| {
+                    if calls.get() == fail_on {
+                        bad
+                    } else {
+                        1.0 + point.iter().sum::<usize>() as f64
+                    }
+                })
+                .collect())
+        }
+    }
+    let calls = Cell::new(0);
+    engine
+        .interpolate(
+            &problem,
+            make_evaluator(&calls, usize::MAX, f64::NAN, problem.site_order().len()),
+        )
+        .unwrap();
+    let total = calls.get();
+    assert!(total > 2);
+    // Call one samples initial pivots; call two enters the sweep, and the
+    // final call materializes the last node after optimization.
+    for fail_on in [2, total] {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let calls = Cell::new(0);
+            expect_evaluator_error(
+                engine.interpolate(
+                    &problem,
+                    make_evaluator(&calls, fail_on, bad, problem.site_order().len()),
+                ),
+                "non-finite",
+            );
+            assert_eq!(calls.get(), fail_on);
+        }
     }
 }

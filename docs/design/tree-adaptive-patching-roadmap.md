@@ -40,7 +40,7 @@ more; any claim about trees must be checked on such a topology.
 Record any new port, derivation, or algorithm origin in
 `docs/PROVENANCE_AND_CITATION_POLICY.md` in the PR that introduces it.
 
-## Current state on `main`
+## Current state (including the interpolation branch)
 
 | Capability | Chain (`tensor4all-partitionedtt`, deprecated) | Tree (`tensor4all-partitionedtreetn`) |
 |---|---|---|
@@ -51,6 +51,9 @@ Record any new port, derivation, or algorithm origin in
 | Adaptive patched interpolation | yes (`adaptiveinterpolate`) | sequential, generic over the M1 engine trait (`adaptive_interpolation::patched_interpolate`, M2) |
 | Global L2 reconstruction and merge | no | yes ([orthogonal-target-reconstruction.md](./orthogonal-target-reconstruction.md)) |
 | Parallel patch execution | Hataori Rayon/MPI for interpolation ([adaptive-tci-parallel-execution.md](./adaptive-tci-parallel-execution.md)) | none |
+
+The interpolation entry in the table is implemented on this branch, not yet
+merged into `main`.
 
 The deprecated chain crate is design lineage only, not a verification
 baseline. Branch `feat/treetci-adaptive-patching` holds a sequential TreeTCI
@@ -320,14 +323,19 @@ commit:
   `llms.txt`, and design records claim no more than the code provides;
 - a performance audit of the hot paths with `PERFORMANCE_TIPS.md` and
   `skills/audit-performance/`;
-- one list of the recorded but unresolved issues (for example #795, #791,
-  #797, #670, and the corner-localized misses), each with its owner
-  milestone.
+- one list of the recorded but unresolved issues, each with its owner
+  milestone, distinguishing closed tracking history (#795, #791) from
+  remaining work (#797, #670, upstream tenferro-rs#1963, and corner misses).
 
 Process: independent review, a fix round if needed, and a re-review; if the
 re-review finds new problems, stop and report instead of starting another
 fix round. Whether the branch is then proposed for merge into `main` is the
 user's decision.
+
+The [checkpoint record](../worklogs/2026-10-04-interpolation-checkpoint-review.md)
+records the review and corrections. The consolidated
+[unresolved-issue list](./tree-patching-findings.md#7-interpolation-checkpoint-follow-ups)
+records milestone ownership and current issue states.
 
 Exit: the review and its fixes are recorded in a work log, and the
 unresolved-issue list is in this roadmap or the findings record.
@@ -357,7 +365,8 @@ Scope:
   the M3 error contract holds;
 - the contraction-side overhead items listed in the findings (prefix-tree
   projector index, per-operation norm caching); the `Sequential` group-sum
-  shortcut is [#788](https://github.com/tensor4all/tensor4all-rs/issues/788).
+  shortcut was fixed under
+  [#788](https://github.com/tensor4all/tensor4all-rs/issues/788) (closed).
 
 Exit: tests cover the worst, best, and general patch layouts on branched
 trees; a benchmark reproduces their qualitative ordering.
@@ -378,11 +387,12 @@ Scope:
   execution order;
 - a documented outer/inner parallelism policy.
 
-Prerequisite: the evaluator determinism fix of
-[#795](https://github.com/tensor4all/tensor4all-rs/issues/795), in the order
+Prerequisite: deterministic cached-evaluator contraction paths, in the order
 decided under M3 open question 8: (c) raw kernels of `TreeTNCachedEvaluator`
 for site-free nodes, then (a) pairwise positional contraction on the generic
-path; (b), upstream tie-breaking in omeco or tenferro, is long term. Until
+path; (b), upstream tie-breaking in omeco or tenferro, is long term and tracked by
+[tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
+Issue #795 closed the tracking/test gap through #816, not this prerequisite. Until
 then, L2 measurements on trees with a site-free or multi-site node, or with
 `f32`/`c32` data, are not reproducible across threads.
 

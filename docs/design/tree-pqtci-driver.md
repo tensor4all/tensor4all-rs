@@ -482,10 +482,9 @@ The review kept the proposed names: `adaptive_interpolation`,
   A one-off manual check, with no committed test, also found identical
   digests of the same comparison in three separate test processes. The claim
   covers the report and the stored node tensors only. The stored patches are
-  `TreeTN`s built through `TreeTN::from_tensors`, so they inherit
-  [#791](https://github.com/tensor4all/tensor4all-rs/issues/791): what is derived from them may
-  differ across runs, for a single patch as for the partition and on any
-  topology (a node with two or more sites suffices on a chain), namely
-  materializing (`to_dense`, `contract_to_tensor`, `to_treetn`) in axis order
-  and at rounding level, and the iteration order of `external_indices`,
-  `site_space`, and `neighbors`.
+  `TreeTN`s built through `TreeTN::from_tensors`. Issue
+  [#791](https://github.com/tensor4all/tensor4all-rs/issues/791) was subsequently
+  fixed by #793: site/edge construction and dense output axis order are stable.
+  `site_space` remains a set with unspecified iteration order. The M3 extension
+  adds a separate cached-evaluator contraction-path determinism prerequisite;
+  see [the error contract](./tree-patching-error-contract.md#determinism).

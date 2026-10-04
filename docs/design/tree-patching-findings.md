@@ -110,13 +110,13 @@ No representation decision has been made; see the M4 status in the roadmap.
 
 | Overhead | Evidence | Consumer |
 |---|---|---|
-| `contract_group_project_first` builds and truncates the exact group sum before checking whether one contribution already reached the cap | `partitionedtreetn/src/patching.rs` | M6; the `Sequential` case is [#788](https://github.com/tensor4all/tensor4all-rs/issues/788) |
+| `contract_group_project_first` builds and truncates the exact group sum before checking whether one contribution already reached the cap | `partitionedtreetn/src/patching.rs` | M6; the `Sequential` case was fixed under [#788](https://github.com/tensor4all/tensor4all-rs/issues/788) (closed) |
 | Saturated probes are discarded and recomputed at every recursion level, with no early abort | same | M6 (contraction outcome API) |
 | Default `ExactParameterGain` projects and truncates every candidate's children for each split decision, about `L * d` truncations when `patch_order` is empty | `split_child_parameter_count` | M5 |
 | Eager masking makes contraction and factorization iterate over zero coordinates; each projection adds a `64 * eps` compression sweep | `mask_index`, `project_if_present` | M4 |
 | Pairwise disjointness validation on every partition construction and `N_A * N_B` pair enumeration in contraction | `partitioned_tree_tn.rs` pairwise loop | M6, before M7 |
 | `norm` and `norm_squared` clone and canonicalize on every call | `SubDomainTreeTN::norm` | M6 |
-| TreeTCI has no evaluation cache; patches share no samples | no cache in `tensor4all-treetci` | M2 |
+| TreeTCI has no engine-local evaluation cache; the M2 driver now caches fallible batches and transfers parent samples to children once | `adaptive_interpolation/cache.rs` | M2 resolved at the driver boundary |
 
 ## 6. Sparse and block-sparse storage (not adopted)
 
@@ -140,3 +140,28 @@ No representation decision has been made; see the M4 status in the roadmap.
 
 Decision: not adopted for this roadmap. A block-sparse proposal can be made on
 its own merits (for example quantum-number symmetries).
+
+## 7. Interpolation checkpoint follow-ups
+
+Issue states checked on 2026-10-04. These are recorded limitations or deferred
+work, not newly approved implementation tasks. The checkpoint corrections are
+recorded in the [work log](../worklogs/2026-10-04-interpolation-checkpoint-review.md).
+
+| Work | Owner | State and constraint |
+|---|---|---|
+| Patch representation | M4 | Deferred; downstream-scale measurements of real interpolated patches and M6 consumers are required before choosing eager or compact storage. |
+| Site-free-node operations, [#797](https://github.com/tensor4all/tensor4all-rs/issues/797) | M4 adoption / treetn | Open: `inner`, SRC contraction, and `factorize_tensor_to_treetn` fail on site-free nodes; other solver paths remain suspected. This blocks compact adoption, not the interpolation checkpoint. |
+| Generic cached-evaluator determinism | M7 prerequisite / treetn | Local steps (c), raw messages for site-free nodes, then (a), positional generic contractions, remain unimplemented. The fresh-thread generic-path regressions remain ignored with their documented reason. |
+| Planner tie-breaking, [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963) | M7 prerequisite / upstream | Open. [#795](https://github.com/tensor4all/tensor4all-rs/issues/795) is closed through #816 because the tracking/test gap is resolved; that closure does not fix cross-process values. The two-process CI gate is still absent. |
+| Corner-localized misses | M9 global review | Sampled acceptance and audit can miss concentrated residuals. `cache_candidates` mitigated three seeds of one workload but did not fix the error criterion; both failing reproductions remain ignored. Exact/exhaustive results are outside this sampled limitation. |
+| Thread control and scaling, [#670](https://github.com/tensor4all/tensor4all-rs/issues/670) | M9 / TreeTCI | Open; downstream G0 compression lacks stage-local thread control. Measurements remain deferred to the downstream protocol. |
+| Overpatching and optional selector | M9 / study deferred from M5 | Downstream-scale, matched-accuracy measurements remain outstanding; the edge-pivot proposal is unimplemented and not an approved selector. |
+| Blocked, unconverged patch precedence | M5 provisional contract | Patch-size plan open issue 1 remains provisional: the current rule judges a previously unjudged retained run once and reports whether it met its allowance. No final user decision is inferred here. |
+| Reference/default and norm reservations | M3 decisions | Error-contract questions 3, 6, and 7 remain with the user: automatic reference policy, the separate M3b scope, and placeholder norm selection. The implemented defaults remain unchanged. |
+| Contraction outcomes, sibling merging, algebra error accounting | M6 / M3b | Deferred until after this checkpoint; M3b needs its own design after the M6 outcome seam. |
+
+Resolved history: [#791](https://github.com/tensor4all/tensor4all-rs/issues/791)
+was fixed by #793 (stable TreeTN site/edge construction order), and
+[#788](https://github.com/tensor4all/tensor4all-rs/issues/788) closed the
+Sequential group-sum shortcut defect. Their remaining consumers and distinct
+planner work are listed above rather than treating these issues as open.
