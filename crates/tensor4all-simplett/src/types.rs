@@ -68,7 +68,17 @@ pub trait Tensor3Ops<T: Clone + Default> {
     /// product overflows `usize`.
     fn try_slice_site(&self, s: usize) -> Result<Vec<T>>;
 
-    /// Reshape to a `(left_dim * site_dim, right_dim)` matrix.
+    /// Fuse the `(left, site)` axes into a `(left_dim * site_dim, right_dim)`
+    /// column-major matrix.
+    ///
+    /// The matrix itself is column-major, but its fused **row index is
+    /// site-major**: `row = site + site_dim * left`, so the flat position of
+    /// element `(left, site, right)` is `site + site_dim * left +
+    /// left_dim * site_dim * right`. This is **not** the column-major reshape
+    /// of the `(left, site)` axes, which would use `row = left + left_dim *
+    /// site`; it is the convention the TCI1 machinery consumes. Unifying the
+    /// two orders is tracked in
+    /// [#821](https://github.com/tensor4all/tensor4all-rs/issues/821).
     ///
     /// # Panics
     ///
@@ -76,7 +86,9 @@ pub trait Tensor3Ops<T: Clone + Default> {
     /// [`Tensor3Ops::try_as_left_matrix`] for external dimensions.
     fn as_left_matrix(&self) -> (Vec<T>, usize, usize);
 
-    /// Fallibly reshape to a `(left_dim * site_dim, right_dim)` matrix.
+    /// Fallibly fuse the `(left, site)` axes into a `(left_dim * site_dim,
+    /// right_dim)` column-major matrix with the site-major row index
+    /// `row = site + site_dim * left`.
     ///
     /// # Errors
     ///
@@ -84,7 +96,15 @@ pub trait Tensor3Ops<T: Clone + Default> {
     /// `left_dim * site_dim` or the resulting matrix size overflows `usize`.
     fn try_as_left_matrix(&self) -> Result<(Vec<T>, usize, usize)>;
 
-    /// Reshape to a `(left_dim, site_dim * right_dim)` matrix.
+    /// Fuse the `(site, right)` axes into a `(left_dim, site_dim * right_dim)`
+    /// column-major matrix.
+    ///
+    /// The fused **column index is right-major**: `column = right + right_dim *
+    /// site`, so the flat position of element `(left, site, right)` is `left +
+    /// left_dim * (right + right_dim * site)`. This is **not** the column-major
+    /// reshape of the `(site, right)` axes, which would use `column = site +
+    /// site_dim * right`; see
+    /// [#821](https://github.com/tensor4all/tensor4all-rs/issues/821).
     ///
     /// # Panics
     ///
