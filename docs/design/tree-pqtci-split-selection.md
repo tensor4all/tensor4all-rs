@@ -6,9 +6,9 @@ Design notes for M5 of
 [`tree-adaptive-patching-roadmap.md`](./tree-adaptive-patching-roadmap.md).
 Open questions 2 and 5 below are decided and 4 has a decided direction.
 The selector (question 1) is an optional follow-up study: the default
-coarse-to-fine order stays, and M5 implementation starts with questions 2
-and 4. Sibling merging still needs the user's decision before any
-implementation. The remaining capped-outcome details are open issues of the
+coarse-to-fine order stays. Questions 2 and 4 are implemented, the early
+exit is closed, sibling merging (question 3) moved to M6, and question 5 is
+being implemented as an opt-in option. The remaining capped-outcome details are open issues of the
 implementation plan, which records provisional rules for a later coding
 phase. Fixed-depth exploratory data are recorded in
 [`2026-10-03-m5-fixed-depth-exploration.md`](../../benchmarks/results/2026-10-03-m5-fixed-depth-exploration.md).
@@ -113,8 +113,17 @@ State after the user's answers of 2026-10-03.
    bits, the same unit as the capped-patch maximum in question 4.
    Implemented on 2026-10-04 as `min_patch_bits`; plan and open details:
    [patch-size bounds](./tree-pqtci-patch-size-bounds.md).
-3. **Sibling merging — undecided.** Its acceptance rule, its reporting, and
-   whether it belongs in the driver or in a post-processing step remain open.
+3. **Sibling merging — moved to M6 (decided 2026-10-04).** In the reference
+   implementation (`TCIAlgorithms.jl` at `e501032`, which the paper used),
+   merging exists only after patched matrix multiplication:
+   `_mergesmallpatches` in `adaptivematmul.jl` recurses bottom-up over the
+   patch tree, sums a node's children and own patches by direct sum with a
+   truncation to the cap, and keeps the merge when the summed bond stays
+   strictly below the cap (equal to the cap counts as unsafe). Its adaptive
+   interpolation never merges; `PartitionedMPSs.jl` and
+   `tensor4all-partitionedtt` do not merge patches either. The merge becomes
+   an M6 post-processing function with an added error-budget check; see the
+   roadmap.
 4. **Capped outcomes — direction decided; details and early exit open** (M3
    open question 4, deferred to M5). Passing the error check is not
    sufficient: a capped patch can meet its tolerance without compressing at
@@ -125,10 +134,9 @@ State after the user's answers of 2026-10-03.
    accepted only if its domain is at most a maximum size; a larger capped
    patch is split. A patch that converges below the cap is never split for its
    size. The maximum is given as a number of quantics bits: the count of the
-   patch's unfixed (active) bits. The early exit of the engine at the first
-   saturated sweep is still open.
-   Implemented on 2026-10-04 as `CappedPatches::AcceptUpTo`, without the
-   early exit; plan and open details:
+   patch's unfixed (active) bits.
+   Implemented on 2026-10-04 as `CappedPatches::AcceptUpTo`; plan and open
+   details:
    [patch-size bounds](./tree-pqtci-patch-size-bounds.md).
 5. **Corner-localized misses — decided: optional mitigation.** Split rules and
    child candidate sets may take them into account through an opt-in option
@@ -136,6 +144,9 @@ State after the user's answers of 2026-10-03.
    the split boundary); the default is unchanged. The fix itself belongs to
    the M9 global review
    ([known limitation](./tree-patching-error-contract.md#known-limitation-corner-localized-misses)).
+   The early exit of the engine at the first saturated sweep, listed with
+   question 4, is closed (2026-10-04): TreeTCI already stops at the cap after
+   three consecutive saturated sweeps; see the roadmap's M5 entry.
 
 ## Measurement requirements
 

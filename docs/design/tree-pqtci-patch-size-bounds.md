@@ -857,7 +857,9 @@ the implementation follows unless the user changes it.
     benefit from full sweeps. The engine does not know the patch size, so an
     early exit restricted to such patches needs a hint in the M1 problem. An
     early exit also lowers the quality of the capped networks that Q4
-    measures.
+    measures. Closed on 2026-10-04: TreeTCI already stops once the rank has
+    reached the cap in three consecutive sweeps; shortening that window is
+    reconsidered only if downstream-scale measurements show a gain.
 17. **Unbounded overrun and mixed biases.** A run with `ToleranceNotMet`
     patches can exceed `delta` without limit, and unused budget is not
     redistributed. With audits off, `measured_rms` mixes downward-biased

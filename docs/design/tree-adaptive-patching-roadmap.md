@@ -228,8 +228,10 @@ redundant patches.
 Status: **minimum patch size and capped-patch bound implemented
 (2026-10-04, questions 2 and 4 without the engine's early exit,
 [`tree-pqtci-patch-size-bounds.md`](./tree-pqtci-patch-size-bounds.md));
-the selector (an optional later study), sibling merging, and the
-overpatching measurements remain open.** The design notes and the open
+the engine's early exit is closed and sibling merging moved to M6
+(2026-10-04); the opt-in corner-miss mitigation remains; the selector is an
+optional later study, and the overpatching measurements move after the
+checkpoint.** The design notes and the open
 questions for the user are in
 [`tree-pqtci-split-selection.md`](./tree-pqtci-split-selection.md). The only
 data so far is an exploratory fixed-depth partition study
@@ -247,8 +249,12 @@ Scope:
 - `ExactParameterGain` remains the algebra-side reference strategy; its cost
   (about `L * d` truncations per split decision when `patch_order` is empty)
   motivates a cheaper default for large patch counts;
-- a minimum patch size option and an in-loop merge of sibling patches,
-  reusing the reconstruction merge logic;
+- a minimum patch size option (done). Merging sibling patches moved to M6
+  (user decision of 2026-10-04): in the reference implementation
+  (`TCIAlgorithms.jl`, which the paper used) merging exists only after
+  patched matrix multiplication (`_mergesmallpatches`), and its adaptive
+  interpolation never merges; neither `PartitionedMPSs.jl` nor
+  `tensor4all-partitionedtt` merges patches;
 - capped outcomes (M3 open question 4, deferred here by user decision on
   2026-10-03): decide whether a `BondCapReached` patch may be accepted on its
   measured error, together with an early exit of the engine at the first
@@ -260,6 +266,14 @@ Scope:
   were all `Converged` patches, so selection bias is not the reason for the
   deferral
   ([open question 4](./tree-patching-error-contract.md#open-questions-for-the-user)).
+  The early exit is closed (user decision of 2026-10-04): TreeTCI already
+  stops with `MaxBondDimension` once the rank has reached the cap in three
+  consecutive sweeps (the TreeTCI.jl criterion), so the saturated sweeps
+  above are that three-sweep window and its global pivot searches.
+  Shortening the window for patches that will split anyway is an
+  engine-level optimization that also degrades the recycled pivots and the
+  capped networks that capped acceptance measures; it is reconsidered only
+  if downstream-scale measurements show a gain.
 
 Note: split-site selection and the candidate rules for child patches must
 take the M3 corner-localized misses into account
@@ -271,9 +285,9 @@ M9 global review.
 Completion (user decision of 2026-10-04): M5 is complete when each of its
 implementation items is either implemented or explicitly deferred with a
 recorded reason: the minimum patch size and the capped-patch bound (done),
-sibling merging (question 3), the engine's early exit at the first saturated
-sweep, and the opt-in corner-miss mitigation (question 5); the selector is
-already deferred as an optional later study. The overpatching measurements
+sibling merging (question 3, moved to M6), the engine's early exit (closed),
+and the opt-in corner-miss mitigation (question 5, to be implemented); the
+selector is already deferred as an optional later study. The overpatching measurements
 below do not gate completion: they move after the checkpoint review and are
 tracked under M9, so the review is not blocked on downstream-scale workloads.
 
@@ -332,6 +346,13 @@ Scope:
   the projector rule for paired distinct indices;
 - refine only the input patches that contributed to unconverged outputs,
   recompute only those outputs, then merge converged neighbors;
+- sibling merging (moved from M5 question 3 on 2026-10-04) as a
+  post-processing function on a `PartitionedTreeTN`, usable on interpolation
+  and contraction outputs alike: bottom-up over the split tree as in
+  `_mergesmallpatches` of `TCIAlgorithms.jl` (merge when the summed,
+  truncated patch stays strictly below the cap), plus a check that the exact
+  truncation error of a merge stays within the merged region's allowance, so
+  the M3 error contract holds;
 - the contraction-side overhead items listed in the findings (prefix-tree
   projector index, per-operation norm caching); the `Sequential` group-sum
   shortcut is [#788](https://github.com/tensor4all/tensor4all-rs/issues/788).
