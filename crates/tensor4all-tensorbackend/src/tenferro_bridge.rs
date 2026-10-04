@@ -339,6 +339,9 @@ fn dtype_size_bytes(dtype: DType) -> usize {
         DType::I32 => 4,
         DType::I64 => 8,
         DType::Bool => 1,
+        // INVARIANT: only preset scalars reach the bridge; an externally defined
+        // scalar is caller-owned and has no fixed element width here.
+        DType::External(_) => 0,
     }
 }
 
@@ -1163,6 +1166,9 @@ pub fn native_tensor_primal_to_storage(
                 "native tensor snapshot materialization failed: {e}"
             ))
         }),
+        DType::External(_) => Err(BridgeError::from(anyhow!(
+            "externally defined scalar dtypes are not supported by the tensor4all bridge"
+        ))),
     }
 }
 
@@ -1361,6 +1367,10 @@ pub fn scale_native_tensor(
         DType::I32 | DType::I64 | DType::Bool => {
             Err(anyhow!("scale_native_tensor does not support integer/bool tensors").into())
         }
+        DType::External(_) => Err(anyhow!(
+            "externally defined scalar dtypes are not supported by the tensor4all bridge"
+        )
+        .into()),
     }
 }
 
@@ -1469,6 +1479,10 @@ pub fn axpby_native_tensor(
         DType::I32 | DType::I64 | DType::Bool => {
             Err(anyhow!("axpby_native_tensor does not support integer/bool tensors").into())
         }
+        DType::External(_) => Err(anyhow!(
+            "externally defined scalar dtypes are not supported by the tensor4all bridge"
+        )
+        .into()),
     }
 }
 
@@ -1774,6 +1788,10 @@ pub fn conj_native_tensor(tensor: &NativeTensor) -> std::result::Result<NativeTe
                 .map(|&value| value.conj())
                 .collect::<Vec<_>>(),
         ),
+        DType::External(_) => Err(anyhow!(
+            "externally defined scalar dtypes are not supported by the tensor4all bridge"
+        )
+        .into()),
     }
 }
 

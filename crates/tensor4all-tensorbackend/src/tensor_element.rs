@@ -110,6 +110,7 @@ fn tensor_dtype_name(dtype: DType) -> &'static str {
         DType::Bool => "bool",
         DType::C32 => "c32",
         DType::C64 => "c64",
+        DType::External(_) => "external",
     }
 }
 

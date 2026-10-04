@@ -172,6 +172,9 @@ fn tensor_profile_bytes(dtype: DType, shape: &[usize]) -> usize {
         DType::I32 => 4,
         DType::I64 => 8,
         DType::Bool => 1,
+        // INVARIANT: profiling covers preset payloads; an externally defined
+        // scalar is caller-owned and has no fixed element width here.
+        DType::External(_) => 0,
     };
     shape
         .iter()
@@ -1022,6 +1025,7 @@ impl IdxTensor {
             DType::I32 => "i32",
             DType::I64 => "i64",
             DType::Bool => "bool",
+            DType::External(_) => "external",
         }
     }
 
@@ -1845,7 +1849,7 @@ impl IdxTensor {
                     native_tensor_primal_to_diag::<Complex64>(native)?,
                     logical_rank,
                 ),
-                DType::F32 | DType::C32 => Err(anyhow::anyhow!(
+                DType::F32 | DType::C32 | DType::External(_) => Err(anyhow::anyhow!(
                     "compact IdxTensor storage does not support dtype {:?}",
                     native.dtype()
                 )),
@@ -5632,7 +5636,7 @@ pub(crate) fn unfold_split_inner(
     let m = checked_product(&unfolded_dims[..left_len])?;
     let n = checked_product(&unfolded_dims[left_len..])?;
 
-    let matrix_tensor = unfolded.try_materialized_inner()?.reshape(&[m, n])?;
+    let matrix_tensor = unfolded.try_materialized_inner()?.reshape([m, n])?;
 
     Ok((
         matrix_tensor,
@@ -6065,7 +6069,7 @@ impl IdxTensor {
         .map_err(FactorizeError::ComputationError)?;
         let right = Self::from_inner(
             vec![cap.clone(), batch],
-            r_full.reshape(&[rank, total_width]).map_err(|error| {
+            r_full.reshape([rank, total_width]).map_err(|error| {
                 FactorizeError::ComputationError(
                     anyhow::Error::new(error).context("resident probe batch R reshape failed"),
                 )
