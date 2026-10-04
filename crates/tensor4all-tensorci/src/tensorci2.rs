@@ -93,8 +93,9 @@ pub struct TCI2Options {
     /// Pivot search strategy (default: [`PivotSearchStrategy::Full`]).
     ///
     /// `Full` materializes the entire candidate matrix and finds the best
-    /// pivot exactly. `Rook` uses lazy block-rook search and is faster for
-    /// very large local dimensions but may miss some pivots.
+    /// pivot exactly. `Rook` uses lazy block-rook search and can reduce
+    /// evaluations for large local dimensions, but may miss some pivots.
+    /// Certifying an exactly zero residual can require all remaining entries.
     pub pivot_search: PivotSearchStrategy,
     /// Whether to normalize the bond error by the maximum observed sample
     /// value (default: `true`).
@@ -288,10 +289,11 @@ pub enum PivotSearchStrategy {
     Full,
     /// Use lazy block-rook pivoting over partial matrix blocks.
     ///
-    /// Avoids materializing the full candidate matrix, making it faster
-    /// for very large local dimensions. Error normalization uses the
-    /// maximum sample value observed through the lazy requests rather
-    /// than a full-grid scan.
+    /// Avoids materializing the full candidate matrix. Exactly zero starting
+    /// residual columns are skipped; an all-zero residual can require all
+    /// remaining entries to be inspected, one column at a time. Nonzero local
+    /// maxima are still heuristic. Error normalization uses the maximum sample
+    /// value observed through lazy requests rather than a full-grid scan.
     Rook,
 }
 

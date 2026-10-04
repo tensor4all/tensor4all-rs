@@ -91,3 +91,72 @@ fn lazy_block_rook_kernel_avoids_full_matrix_request() {
     assert_eq!(out.rank, 4);
     assert!(max_requested.load(Ordering::SeqCst) < 16);
 }
+
+#[test]
+fn lazy_block_rook_reconstructs_across_zero_fibers() {
+    fn check<T: crate::MatrixLuciScalar>(value: T) {
+        for (nrows, ncols) in [(2, 2), (3, 5), (5, 3), (16, 16)] {
+            for diagonal_gap in [false, true] {
+                for left_orthogonal in [false, true] {
+                    let mut data = vec![T::zero(); nrows * ncols];
+                    data[nrows * ncols - 1] = value;
+                    if diagonal_gap {
+                        data[0] = value;
+                    }
+                    let factors = crate::matrix_luci_factors_from_blocks(
+                        nrows,
+                        ncols,
+                        |rows, cols, out| {
+                            for (j, &col) in cols.iter().enumerate() {
+                                for (i, &row) in rows.iter().enumerate() {
+                                    out[i + rows.len() * j] = data[row + nrows * col];
+                                }
+                            }
+                        },
+                        crate::RrLUOptions {
+                            left_orthogonal,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                    assert_eq!(factors.rank, if diagonal_gap { 2 } else { 1 });
+                    let reconstructed =
+                        tensor4all_tensorbackend::mat_mul(&factors.left, &factors.right).unwrap();
+                    let error = reconstructed
+                        .as_col_major_slice()
+                        .iter()
+                        .zip(&data)
+                        .map(|(&actual, &expected)| (actual - expected).abs_val())
+                        .fold(0.0_f64, f64::max);
+                    assert!(error < 1e-6, "reconstruction error: {error}");
+                }
+            }
+        }
+    }
+    check(2.0_f32);
+    check(2.0_f64);
+    check(num_complex::Complex32::new(2.0, 1.0));
+    check(num_complex::Complex64::new(2.0, 1.0));
+}
+
+#[test]
+fn lazy_block_rook_certifies_zero_without_materializing_matrix() {
+    for (nrows, ncols) in [(1, 1), (1, 8), (8, 1), (8, 16), (32, 64)] {
+        let evaluated = AtomicUsize::new(0);
+        let largest_block = AtomicUsize::new(0);
+        let source = LazyMatrixSource::new(nrows, ncols, |rows, cols, out: &mut [f64]| {
+            evaluated.fetch_add(out.len(), Ordering::Relaxed);
+            largest_block.fetch_max(rows.len() * cols.len(), Ordering::Relaxed);
+            out.fill(0.0);
+        });
+        let selection = LazyBlockRookKernel
+            .factorize(&source, &PivotKernelOptions::no_truncation())
+            .unwrap();
+        assert_eq!(selection.rank, 0);
+        assert_eq!(selection.pivot_errors, vec![0.0]);
+        // Certifying zero requires inspecting all entries, but only a column
+        // is materialized at a time, including rectangular and singleton cases.
+        assert_eq!(evaluated.load(Ordering::Relaxed), nrows * ncols);
+        assert_eq!(largest_block.load(Ordering::Relaxed), nrows);
+    }
+}
