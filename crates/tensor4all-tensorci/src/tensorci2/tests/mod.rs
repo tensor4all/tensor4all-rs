@@ -1145,7 +1145,7 @@ fn test_global_search_oscillatory() {
     let tt = tci.to_tensor_train().unwrap();
 
     // Estimate true error
-    let mut rng = rand::rng();
+    let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
     let pivot_errors = estimate_true_error(&tt, &f, 20, None, &mut rng).unwrap();
 
     // Verify errors are sorted in descending order
@@ -1263,7 +1263,7 @@ fn test_custom_global_pivot_finder() {
         j_set: (0..tci.len()).map(|p| tci.j_set(p).to_vec()).collect(),
     };
 
-    let mut rng = rand::rng();
+    let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
     let pivots = finder
         .find_global_pivots(&input, &f, 1e-4, &mut rng)
         .unwrap();

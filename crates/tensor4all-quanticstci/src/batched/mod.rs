@@ -20,9 +20,7 @@ use tensor4all_tensorbackend::FullPivLuScalar;
 use crate::batch::QuanticsBatch;
 use crate::error::{QuanticsTCIError, Result as QtciResult};
 use crate::options::QtciOptions;
-use crate::quantics_tci::{
-    quanticscrossinterpolate_batch, quanticscrossinterpolate_batch_with_rng,
-};
+use crate::quantics_tci::quanticscrossinterpolate_batch_with_rng;
 
 /// Interpolate a multi-component function with an explicitly named seed.
 ///

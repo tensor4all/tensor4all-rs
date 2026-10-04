@@ -31,7 +31,7 @@ use crate::error::{Result, TCIError};
 ///
 /// // Exact function differs from the constant
 /// let f = |idx: &Vec<usize>| (idx[0] * idx[1]) as f64;
-/// let mut rng = rand::rng();
+/// let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0);
 ///
 /// let errors = estimate_true_error(&tt, &f, 10, None, &mut rng).unwrap();
 ///
@@ -280,7 +280,7 @@ mod tests {
         let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
 
         let f = |idx: &MultiIndex| (idx[0] + idx[1]) as f64;
-        let mut rng = rand::rng();
+        let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
 
         let errors = estimate_true_error(&tt, &f, 10, None, &mut rng).unwrap();
 

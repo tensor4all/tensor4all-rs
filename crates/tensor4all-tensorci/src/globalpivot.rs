@@ -40,6 +40,7 @@ pub struct GlobalPivotSearchInput<T: Scalar + TTScalar> {
 /// Using the default implementation via [`DefaultGlobalPivotFinder`]:
 ///
 /// ```
+/// use rand::SeedableRng;
 /// use tensor4all_tensorci::{DefaultGlobalPivotFinder, GlobalPivotFinder,
 ///     GlobalPivotSearchInput};
 /// use tensor4all_simplett::SimpleTensorTrain;
@@ -56,7 +57,7 @@ pub struct GlobalPivotSearchInput<T: Scalar + TTScalar> {
 /// };
 ///
 /// let finder = DefaultGlobalPivotFinder::default();
-/// let mut rng = rand::rng();
+/// let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
 ///
 /// // Every coordinate walk on f(i,j) = i+j reaches (3,3).
 /// let pivots = finder.find_global_pivots(
@@ -295,7 +296,7 @@ mod tests {
         };
 
         let finder = DefaultGlobalPivotFinder::new(10, 3, 1.0);
-        let mut rng = rand::rng();
+        let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
 
         let pivots = finder
             .find_global_pivots(&input, &f, 0.1, &mut rng)
@@ -348,7 +349,7 @@ mod tests {
             j_set: vec![],
         };
 
-        let mut rng = rand::rng();
+        let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
         let pivots = finder
             .find_global_pivots(&input, &f, 0.0, &mut rng)
             .unwrap();
