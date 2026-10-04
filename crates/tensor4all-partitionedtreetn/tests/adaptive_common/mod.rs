@@ -21,11 +21,11 @@ use tensor4all_core::{
     ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor, IndexLike, TensorElement,
 };
 use tensor4all_partitionedtreetn::adaptive_interpolation::{
-    patched_interpolate, GlobalL2Error, NormReport, PatchedInterpolationError,
+    patched_interpolate, GlobalL2Error, NormReport, PatchStatus, PatchedInterpolationError,
     PatchedInterpolationOptions, PatchedInterpolationReport, PatchedInterpolationResult,
     GLOBAL_ROUNDING_MARGIN,
 };
-use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, Projector};
+use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference, Projector};
 use tensor4all_treetn::interpolation::{
     InterpolationError, InterpolationProblem, TreeInterpolator,
 };
@@ -50,6 +50,21 @@ pub(crate) fn sampled_max(max_bond_dim: usize) -> PatchedInterpolationOptions {
 /// A relative tolerance without an absolute floor.
 pub(crate) fn tol(rtol: f64) -> ErrorTolerance {
     ErrorTolerance { rtol, atol: 0.0 }
+}
+
+/// L2 options with a given reference norm and relative tolerance.
+pub(crate) fn l2_given(cap: usize, norm: f64, rtol: f64) -> PatchedInterpolationOptions {
+    PatchedInterpolationOptions::new(cap)
+        .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
+        .with_tolerance(tol(rtol))
+}
+
+/// The `tau` of an L2 report.
+pub(crate) fn tau(report: &PatchedInterpolationReport) -> f64 {
+    match report.norm {
+        NormReport::L2 { tau, .. } => tau,
+        ref other => panic!("expected an L2 report, got {other:?}"),
+    }
 }
 
 /// The max-norm reference of a `SampledMax` run.
@@ -403,6 +418,11 @@ pub(crate) fn tree_peak(p: &[usize]) -> f64 {
 // Evaluation bookkeeping and the generic run helper
 // ---------------------------------------------------------------------------
 
+/// An evaluator that must never be called.
+pub(crate) fn never(batch: ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>> {
+    panic!("the evaluator was called with shape {:?}", batch.shape())
+}
+
 /// Records every evaluated point and fails on a repeated one.
 #[derive(Default)]
 pub(crate) struct Recorder {
@@ -511,6 +531,28 @@ pub(crate) fn check_invariants(
     for projector in accepted {
         assert!(result.partition.contains(projector));
     }
+    // Under L2 the status agrees with the deciding measurement.
+    if let NormReport::L2 { tau, .. } = report.norm {
+        for record in &report.accepted {
+            let rms = record
+                .acceptance
+                .as_ref()
+                .expect("an L2 record has a measurement")
+                .rms;
+            match record.status {
+                PatchStatus::WithinTolerance => assert!(rms <= tau, "{record:?} exceeds {tau}"),
+                PatchStatus::ToleranceNotMet => assert!(rms > tau, "{record:?} meets {tau}"),
+                status => panic!("unexpected status {status:?}"),
+            }
+        }
+    }
+    assert_eq!(
+        report.tolerance_met(),
+        report
+            .accepted
+            .iter()
+            .all(|record| record.status == PatchStatus::WithinTolerance)
+    );
 }
 
 /// Run the driver with the given batch evaluator and full-domain pivots.
@@ -830,6 +872,7 @@ pub(crate) fn assert_same_run(
         assert_eq!(x.retries_used, y.retries_used);
         assert_eq!(x.acceptance, y.acceptance);
         assert_eq!(x.audit, y.audit);
+        assert_eq!(x.status, y.status);
     }
     assert_eq!(first.partition.len(), second.partition.len());
     assert_eq!(fingerprint(first, problem), fingerprint(second, problem));
@@ -903,6 +946,7 @@ pub(crate) fn assert_same_runs_across_problems(first: &RunDigest, second: &RunDi
         );
         assert_eq!(x.acceptance, y.acceptance);
         assert_eq!(x.audit, y.audit);
+        assert_eq!(x.status, y.status);
     }
     // Accepted projectors by position, and the stored data.
     assert_eq!(first.patches, second.patches);

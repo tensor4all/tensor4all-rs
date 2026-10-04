@@ -24,14 +24,23 @@ use crate::{ErrorNorm, ErrorTolerance};
 /// cap produces more, smaller patches. When in doubt, keep the defaults, give
 /// a known reference norm, and choose the cap from the rank the engine can
 /// afford per patch. With a tiny or zero tolerance, set `max_patches`: the
-/// driver then splits down to exact patches in the worst case.
+/// driver then splits down to exact patches in the worst case, unless
+/// `min_patch_bits` stops the splitting earlier.
+///
+/// `min_patch_bits` and `capped_patches` bound the patch size in generalized
+/// bits: every active (unfixed) site of a patch counts as one bit, whatever
+/// its dimension, so a fused quantics site of dimension 4 or 8 is one bit.
+/// The minimum stops splitting and accepts a failing patch as
+/// [`PatchStatus::ToleranceNotMet`](super::PatchStatus::ToleranceNotMet);
+/// [`CappedPatches::AcceptUpTo`] accepts small patches that reach the bond
+/// cap on their error check. Both default to the M3 behavior.
 ///
 /// # Examples
 ///
 /// ```
 /// use tensor4all_core::DynIndex;
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
-///     PatchedInterpolationOptions, VerificationOptions,
+///     CappedPatches, PatchedInterpolationOptions, VerificationOptions,
 /// };
 /// use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
 ///
@@ -50,6 +59,8 @@ use crate::{ErrorNorm, ErrorTolerance};
 /// assert_eq!(options.n_initial_pivots, 5);
 /// assert!(options.recycle_pivots);
 /// assert_eq!(options.max_patches, None);
+/// assert_eq!(options.min_patch_bits, None);
+/// assert_eq!(options.capped_patches, CappedPatches::Split);
 /// ```
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -64,9 +75,12 @@ pub struct PatchedInterpolationOptions {
     /// How patches are measured under [`ErrorNorm::L2`]; validated under
     /// every norm. Default [`VerificationOptions::new`].
     pub verification: VerificationOptions,
-    /// Bond cap of every patch, at least 2. A patch is accepted only when the
-    /// engine converges with a rank strictly below the cap. Required; a
-    /// smaller cap means more, smaller patches.
+    /// Bond cap of every patch, at least 2. A patch is accepted when the
+    /// engine converges with a rank strictly below the cap and passes its
+    /// error check; with [`CappedPatches::AcceptUpTo`], a small enough patch
+    /// that reaches the cap is accepted on its error check as well, and
+    /// `min_patch_bits` can retain a patch that did not converge. Required;
+    /// a smaller cap means more, smaller patches.
     pub max_bond_dim: usize,
     /// Sites fixed when a patch splits, in order, by full index identity.
     /// A partial order is allowed: a patch that cannot be accepted after
@@ -92,13 +106,73 @@ pub struct PatchedInterpolationOptions {
     /// Limit on processed patches (accepted, zero, and split alike); `None`
     /// (the default) means no limit, `Some(0)` is invalid.
     pub max_patches: Option<usize>,
+    /// Smallest patch the driver may create, in generalized bits (one bit
+    /// per active site, whatever its dimension). A split whose children
+    /// would have fewer bits is not made: a patch whose split is blocked
+    /// this way is retained instead, with
+    /// [`PatchStatus::WithinTolerance`](super::PatchStatus::WithinTolerance)
+    /// when it meets its allowance (the measured error under L2, the engine
+    /// estimate under `SampledMax`) and
+    /// [`PatchStatus::ToleranceNotMet`](super::PatchStatus::ToleranceNotMet)
+    /// otherwise; such a patch is never certified. A patch whose last engine
+    /// run did not converge is measured once and judged the same way. With
+    /// `Some(m)` for `m >= 2`, a failing two-site patch is retained although
+    /// splitting it would give exact patches, and `m` at least the number of
+    /// sites blocks the root. `None` (the default) and `Some(0)` or
+    /// `Some(1)` split down to exact patches.
+    pub min_patch_bits: Option<usize>,
+    /// Whether a patch that reaches the bond cap may be accepted. Default
+    /// [`CappedPatches::Split`], which splits every capped patch. Patches
+    /// that converge below the cap are never split for their size.
+    pub capped_patches: CappedPatches,
+}
+
+/// Acceptance of patches whose engine run reaches the bond cap
+/// ([`InterpolationTermination::BondCapReached`](tensor4all_treetn::interpolation::InterpolationTermination::BondCapReached)).
+///
+/// A capped patch can meet its tolerance without compressing, so passing the
+/// error check alone does not justify accepting a large one. The bound is in
+/// generalized bits, as for
+/// [`PatchedInterpolationOptions::min_patch_bits`]: every active site counts
+/// as one bit, whatever its dimension. On binary layouts, a bound of at most
+/// `log2(max(max_exhaustive_points, samples))` bits (10 with the default
+/// [`VerificationOptions`]) keeps every capped acceptance exhaustively
+/// measured. `IterationLimit` runs are never accepted through this option.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+///     CappedPatches, PatchedInterpolationOptions,
+/// };
+///
+/// let options = PatchedInterpolationOptions::new(8)
+///     .with_capped_patches(CappedPatches::AcceptUpTo { bits: 6 });
+/// assert_eq!(options.capped_patches, CappedPatches::AcceptUpTo { bits: 6 });
+/// assert_eq!(CappedPatches::default(), CappedPatches::Split);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CappedPatches {
+    /// Split every patch that reaches the cap (the M3 behavior). The
+    /// minimum patch size can still retain one whose split is blocked.
+    #[default]
+    Split,
+    /// Accept a capped patch with at most `bits` active sites when it passes
+    /// its error check (the L2 measurement, or the engine estimate under
+    /// `SampledMax`); split larger ones. Must be at least `min_patch_bits`.
+    AcceptUpTo {
+        /// Largest accepted capped patch, in generalized bits.
+        bits: usize,
+    },
 }
 
 impl PatchedInterpolationOptions {
     /// Create options with the given bond cap and the defaults of every
     /// other field: the measured L2 norm with a required reference,
     /// `rtol = 1e-8`, `atol = 0`, default verification, the derived site
-    /// order, five initial pivots, no recycling, seed `0`, no patch limit.
+    /// order, five initial pivots, no recycling, seed `0`, no patch limit,
+    /// no minimum patch size, and capped patches split.
     ///
     /// # Arguments
     ///
@@ -110,7 +184,7 @@ impl PatchedInterpolationOptions {
     ///
     /// ```
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
-    ///     PatchedInterpolationOptions, VerificationOptions,
+    ///     CappedPatches, PatchedInterpolationOptions, VerificationOptions,
     /// };
     /// use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance};
     ///
@@ -124,6 +198,8 @@ impl PatchedInterpolationOptions {
     /// assert!(!options.recycle_pivots);
     /// assert_eq!(options.seed, 0);
     /// assert_eq!(options.max_patches, None);
+    /// assert_eq!(options.min_patch_bits, None);
+    /// assert_eq!(options.capped_patches, CappedPatches::Split);
     /// ```
     pub fn new(max_bond_dim: usize) -> Self {
         Self {
@@ -136,6 +212,8 @@ impl PatchedInterpolationOptions {
             recycle_pivots: false,
             seed: 0,
             max_patches: None,
+            min_patch_bits: None,
+            capped_patches: CappedPatches::Split,
         }
     }
 
@@ -265,13 +343,48 @@ impl PatchedInterpolationOptions {
         self.max_patches = Some(max_patches);
         self
     }
+
+    /// Set the minimum patch size in generalized bits (one bit per active
+    /// site, whatever its dimension).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::PatchedInterpolationOptions;
+    ///
+    /// let options = PatchedInterpolationOptions::new(4).with_min_patch_bits(3);
+    /// assert_eq!(options.min_patch_bits, Some(3));
+    /// ```
+    pub fn with_min_patch_bits(mut self, bits: usize) -> Self {
+        self.min_patch_bits = Some(bits);
+        self
+    }
+
+    /// Set the acceptance of patches that reach the bond cap.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+    ///     CappedPatches, PatchedInterpolationOptions,
+    /// };
+    ///
+    /// let options = PatchedInterpolationOptions::new(4)
+    ///     .with_capped_patches(CappedPatches::AcceptUpTo { bits: 3 });
+    /// assert_eq!(options.capped_patches, CappedPatches::AcceptUpTo { bits: 3 });
+    /// ```
+    pub fn with_capped_patches(mut self, capped_patches: CappedPatches) -> Self {
+        self.capped_patches = capped_patches;
+        self
+    }
 }
 
 /// How [`patched_interpolate`](super::patched_interpolate) measures accepted
 /// and zero patches under [`ErrorNorm::L2`].
 ///
 /// A patch with at most `max(max_exhaustive_points, samples)` points is
-/// measured exhaustively, a certificate up to rounding; a larger one on
+/// measured exhaustively, exact up to rounding (a certificate when the patch
+/// meets its allowance, otherwise a bound on its error); a larger one on
 /// `samples` fresh uniform points, a decision statistic. With `audit`, every
 /// sampled acceptance gets an independent audit sample after the decision,
 /// whose mean square is an unbiased estimate (its RMS is not; neither is a
@@ -318,8 +431,10 @@ pub struct VerificationOptions {
     /// patch. Default 1024; 0 means only patches with at most `samples`
     /// points.
     pub max_exhaustive_points: usize,
-    /// Engine reruns of one patch after a failed verification, before the
-    /// patch splits. Default 1.
+    /// Engine reruns of one patch after a failed verification of a
+    /// converged run, before the patch splits (or, when the minimum patch
+    /// size blocks the split, is retained). A failed capped run is not
+    /// rerun. Default 1.
     pub retries: usize,
     /// Draw an independent audit sample for every sampled contribution after
     /// its acceptance decision. Default `true`; without it a run with a

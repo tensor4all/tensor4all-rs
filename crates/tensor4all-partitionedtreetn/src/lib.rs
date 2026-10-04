@@ -20,8 +20,11 @@
 //! audit on, and otherwise only an acceptance statistic), or the M2 sampled
 //! max-norm criterion of the engine. Sampled measurements, audits included,
 //! can miss a localized feature that enters a patch only through a corner or
-//! an edge; only a certified result is a guarantee. The crate
-//! depends on the engine trait only, not on an engine crate.
+//! an edge; only a certified result is a guarantee. Optional bounds in
+//! generalized bits (one per active site) set a minimum patch size, which
+//! retains a failing patch reported as not meeting its tolerance, and accept
+//! small patches that reach the bond cap. The crate depends on the engine
+//! trait only, not on an engine crate.
 //!
 //! The representation follows the partitioned tensor-network approach used by
 //! [PartitionedMPSs.jl](https://github.com/tensor4all/PartitionedMPSs.jl) and

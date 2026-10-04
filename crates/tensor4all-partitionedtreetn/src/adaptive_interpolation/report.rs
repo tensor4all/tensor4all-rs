@@ -66,7 +66,10 @@ pub enum MeasurementMethod {
     /// error is zero.
     Exact,
     /// The residual was evaluated at every point of the patch: exact up to
-    /// floating-point rounding, a certificate unaffected by selection.
+    /// floating-point rounding and unaffected by selection. It certifies a
+    /// patch that meets its allowance; for a retained
+    /// [`PatchStatus::ToleranceNotMet`] patch it is a bound on the error, not
+    /// a certificate.
     Exhaustive,
     /// The residual was evaluated at fresh uniform points of the patch. As an
     /// acceptance measurement it is only a decision statistic; as an audit its
@@ -151,6 +154,33 @@ impl L2Measurement {
     }
 }
 
+/// Whether an accepted patch meets its allowance.
+///
+/// Every patch is [`PatchStatus::WithinTolerance`] unless
+/// [`PatchedInterpolationOptions::min_patch_bits`](super::PatchedInterpolationOptions::min_patch_bits)
+/// blocked its split and its last engine run missed the allowance. A
+/// `ToleranceNotMet` patch is never certified, even when its error is known
+/// exactly.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtreetn::adaptive_interpolation::PatchStatus;
+///
+/// assert_ne!(PatchStatus::WithinTolerance, PatchStatus::ToleranceNotMet);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PatchStatus {
+    /// The patch meets its allowance: under L2 its acceptance measurement is
+    /// at most `tau`; under `SampledMax` the engine converged or its estimate
+    /// is at most the engine tolerance.
+    WithinTolerance,
+    /// The minimum patch size blocked the split of a patch whose last engine
+    /// run missed its allowance; the patch was retained with that run.
+    ToleranceNotMet,
+}
+
 /// The record of one accepted patch.
 ///
 /// # Examples
@@ -159,7 +189,7 @@ impl L2Measurement {
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
-///     patched_interpolate, PatchedInterpolationOptions,
+///     patched_interpolate, PatchStatus, PatchedInterpolationOptions,
 /// };
 /// use tensor4all_partitionedtreetn::ErrorNorm;
 /// use tensor4all_treetci::TreeTciInterpolator;
@@ -187,6 +217,7 @@ impl L2Measurement {
 /// assert_eq!(record.max_sample_magnitude, 2.0);
 /// assert_eq!(record.max_bond_dim, 1);
 /// assert_eq!(record.retries_used, 0);
+/// assert_eq!(record.status, PatchStatus::WithinTolerance);
 /// // SampledMax runs no measurement.
 /// assert!(record.acceptance.is_none() && record.audit.is_none());
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -196,8 +227,12 @@ impl L2Measurement {
 pub struct PatchRecord {
     /// Projector of the patch (its fixed sites).
     pub projector: Projector,
-    /// The engine's verdict; always
-    /// [`InterpolationTermination::Converged`] for an accepted patch.
+    /// The engine's verdict of the run that was kept:
+    /// [`InterpolationTermination::Converged`], `BondCapReached` for a patch
+    /// accepted through
+    /// [`CappedPatches::AcceptUpTo`](super::CappedPatches::AcceptUpTo) or
+    /// retained by the minimum patch size, or `IterationLimit` for a
+    /// retained patch.
     pub termination: InterpolationTermination,
     /// The engine's raw error estimate in its own criterion's units (not an
     /// L2 error), `0` for an exactly evaluated patch.
@@ -210,11 +245,15 @@ pub struct PatchRecord {
     pub max_bond_dim: usize,
     /// Engine reruns of this patch after failed verifications, `0` if none.
     pub retries_used: usize,
-    /// The measurement that accepted the patch (under L2 only).
+    /// The measurement that decided the patch (under L2 only): the passing
+    /// one, or for a [`PatchStatus::ToleranceNotMet`] patch its last failed
+    /// one.
     pub acceptance: Option<L2Measurement>,
     /// The independent audit of a `Sampled` acceptance (under L2 with
     /// [`VerificationOptions::audit`](super::VerificationOptions::audit)).
     pub audit: Option<L2Measurement>,
+    /// Whether the patch meets its allowance.
+    pub status: PatchStatus,
 }
 
 /// The record of one zero patch: a region approximated by zero and left out
@@ -314,10 +353,15 @@ pub enum MaxReferenceSource {
 
 /// The global L2 error `E = ||f - f~||` of a run, by what it can claim.
 ///
-/// RMS values are `E / sqrt(|X|)`. Every acceptance measurement satisfies
+/// RMS values are `E / sqrt(|X|)`. When every patch meets its allowance
+/// (the first three variants), every acceptance measurement satisfies
 /// `rms <= tau`, so a certified `rms_error` and `acceptance_statistic_rms`
 /// do not exceed `tau` up to [`GLOBAL_ROUNDING_MARGIN`]; an audited estimate
-/// can exceed `tau`, because it is reported as measured.
+/// can exceed `tau`, because it is reported as measured. A run with a
+/// [`PatchStatus::ToleranceNotMet`] patch reports
+/// [`GlobalL2Error::ToleranceNotMet`] instead, whose error can exceed the
+/// allowance `delta` without limit: the budget of accurate patches is not
+/// redistributed.
 ///
 /// Bitwise reproducible for a fixed seed, a deterministic evaluator and
 /// engine, and a reproducible network evaluation (see "Randomness and
@@ -386,11 +430,123 @@ pub enum GlobalL2Error {
         /// Combined acceptance statistics in RMS units.
         acceptance_statistic_rms: f64,
     },
+    /// Some accepted patch is [`PatchStatus::ToleranceNotMet`]: the run did
+    /// not meet its allowance. Takes precedence over the other variants and
+    /// is never certified. `basis` says how `measured_rms` is known; with
+    /// [`ToleranceNotMetBasis::ExactOrExhaustive`] it still bounds the error.
+    /// Without audits, the acceptance statistics it combines mix the
+    /// downward bias of passing samples with the upward bias of failed ones.
+    #[non_exhaustive]
+    ToleranceNotMet {
+        /// `E / sqrt(|X|)` from every contribution's best available
+        /// measurement, classified as described by `basis`.
+        measured_rms: f64,
+        /// Fraction of `|X|` covered by `ToleranceNotMet` patches.
+        unmet_fraction: f64,
+        /// How `measured_rms` is known.
+        basis: ToleranceNotMetBasis,
+    },
+}
+
+/// How the `measured_rms` of [`GlobalL2Error::ToleranceNotMet`] is known,
+/// by the classification of [`GlobalL2Error`] over every contribution.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeMap;
+/// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
+/// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+///     patched_interpolate, GlobalL2Error, PatchStatus, PatchedInterpolationOptions,
+///     ToleranceNotMetBasis,
+/// };
+/// use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
+/// use tensor4all_treetci::TreeTciInterpolator;
+/// use tensor4all_treetn::interpolation::InterpolationTermination;
+/// use tensor4all_treetn::NodeNameNetwork;
+///
+/// // f(x, y) = 1 + [x == y] on two sites of dimension 3 has rank three; a cap
+/// // of two cannot represent it. A minimum of two bits blocks the split of
+/// // the two-bit root, which is retained with its measured error.
+/// let (x, y) = (DynIndex::new_dyn(3), DynIndex::new_dyn(3));
+/// let mut topology = NodeNameNetwork::new();
+/// topology.add_node(0usize)?;
+/// topology.add_node(1usize)?;
+/// topology.add_edge(&0, &1)?;
+/// let node_sites = BTreeMap::from([(0usize, vec![x.clone()]), (1, vec![y.clone()])]);
+/// let f = |p: &[usize]| if p[0] == p[1] { 2.0 } else { 1.0 };
+/// let values: Vec<f64> = (0..9).map(|k| f(&[k % 3, k / 3])).collect();
+/// let norm = values.iter().map(|v| v * v).sum::<f64>().sqrt();
+/// let options = PatchedInterpolationOptions::new(2)
+///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
+///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
+///     .with_min_patch_bits(2);
+/// let result = patched_interpolate(
+///     &TreeTciInterpolator::default(),
+///     topology,
+///     node_sites,
+///     ColMajorArray::new(vec![0, 0], vec![2, 1])?,
+///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///         Ok(batch.data().chunks(2).map(f).collect())
+///     },
+///     &options,
+/// )?;
+/// let record = &result.report.accepted[0];
+/// assert_eq!(record.status, PatchStatus::ToleranceNotMet);
+/// assert_eq!(record.termination, InterpolationTermination::BondCapReached);
+/// assert!(!result.report.tolerance_met());
+/// let error = result.report.norm.l2_error().unwrap();
+/// assert_eq!(error.certified_fraction, 0.0);
+/// let GlobalL2Error::ToleranceNotMet { measured_rms, unmet_fraction, basis, .. } = &error.global
+/// else {
+///     panic!("expected ToleranceNotMet");
+/// };
+/// assert_eq!(*unmet_fraction, 1.0);
+/// assert!(matches!(basis, ToleranceNotMetBasis::ExactOrExhaustive { .. }));
+/// // The nine points were measured exhaustively: the dense residual agrees.
+/// let reference = IdxTensor::from_dense(vec![x, y], values)?;
+/// let dense = result.partition.to_treetn()?.contract_to_tensor()?;
+/// let residual_rms = dense.sub(&reference)?.norm()? / 3.0;
+/// assert!(residual_rms > 0.0);
+/// assert!((measured_rms - residual_rms).abs() <= 1e-12 * norm);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum ToleranceNotMetBasis {
+    /// Every contribution is `Exact` or `Exhaustive`: `measured_rms` is the
+    /// measured `E / sqrt(|X|)`, and `E <= sqrt(|X|) (measured_rms (1 +
+    /// GLOBAL_ROUNDING_MARGIN) + rounding_allowance_rms)` up to the rounding
+    /// model of [`MEASUREMENT_ROUNDING_FACTOR`]. This bounds the error; it
+    /// does not say the tolerance was met.
+    #[non_exhaustive]
+    ExactOrExhaustive {
+        /// As in [`GlobalL2Error::Certified`].
+        rounding_allowance_rms: Option<f64>,
+        /// The rounding allowance reaches `tau`: the run may miss its
+        /// tolerance by rounding alone. As in [`GlobalL2Error::Certified`].
+        rounding_limited: Option<bool>,
+        /// As in [`GlobalL2Error::Certified`]: a conservative bound on
+        /// `E / ||f||` from the measured value, never from `tau`.
+        relative_error_bound: Option<f64>,
+    },
+    /// Every `Sampled` contribution has an audit: `measured_rms` is an
+    /// estimate, as in [`GlobalL2Error::Audited`].
+    #[non_exhaustive]
+    Audited {
+        /// As in [`GlobalL2Error::Audited`].
+        mean_square_rel_std_error: f64,
+        /// As in [`GlobalL2Error::Audited`].
+        relative_bound_estimate: Option<f64>,
+    },
+    /// Some `Sampled` contribution has no audit: `measured_rms` combines
+    /// acceptance statistics, neither a bound nor an estimate.
+    AcceptanceOnly,
 }
 
 impl GlobalL2Error {
-    /// The variant's RMS value: `rms_error`, `rms_error_estimate`, or
-    /// `acceptance_statistic_rms`.
+    /// The variant's RMS value: `rms_error`, `rms_error_estimate`,
+    /// `acceptance_statistic_rms`, or `measured_rms`.
     ///
     /// # Examples
     ///
@@ -404,6 +560,7 @@ impl GlobalL2Error {
             Self::AcceptanceOnly {
                 acceptance_statistic_rms,
             } => *acceptance_statistic_rms,
+            Self::ToleranceNotMet { measured_rms, .. } => *measured_rms,
         }
     }
 }
@@ -455,7 +612,9 @@ pub struct L2ErrorReport {
     pub domain_points: f64,
     /// The global error by what it can claim.
     pub global: GlobalL2Error,
-    /// Fraction of `|X|` whose contribution is `Exact` or `Exhaustive`.
+    /// Fraction of `|X|` whose contribution is `Exact` or `Exhaustive` and
+    /// meets its allowance; [`PatchStatus::ToleranceNotMet`] patches are
+    /// excluded.
     pub certified_fraction: f64,
     /// `||f~|| / sqrt(|X|)` from `TreeTN::log_norm` per accepted patch,
     /// combined in canonical path order; `None` when some patch's
@@ -678,10 +837,53 @@ pub struct PatchedInterpolationReport {
     /// The part of `measurement_evaluations` made by audits.
     pub audit_evaluations: usize,
     /// Number of measurements of engine outcomes that exceeded the
-    /// allowance.
+    /// allowance, including those of retained
+    /// [`PatchStatus::ToleranceNotMet`] patches.
     pub verification_failures: usize,
     /// Number of engine reruns after failed verifications.
     pub engine_retries: usize,
+}
+
+impl PatchedInterpolationReport {
+    /// Whether every accepted patch meets its allowance (no
+    /// [`PatchStatus::ToleranceNotMet`] record). Zero patches always do. It is
+    /// the only global indicator under `SampledMax`, which has no
+    /// [`GlobalL2Error`].
+    ///
+    /// # Examples
+    ///
+    /// See [`ToleranceNotMetBasis`] for a run that misses its tolerance.
+    ///
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+    ///     patched_interpolate, PatchedInterpolationOptions,
+    /// };
+    /// use tensor4all_treetci::TreeTciInterpolator;
+    /// use tensor4all_treetn::NodeNameNetwork;
+    ///
+    /// // An exactly evaluated root meets its allowance.
+    /// let mut topology = NodeNameNetwork::new();
+    /// topology.add_node(0usize)?;
+    /// let result = patched_interpolate(
+    ///     &TreeTciInterpolator::default(),
+    ///     topology,
+    ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
+    ///     ColMajorArray::new(vec![], vec![1, 0])?,
+    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///         Ok(batch.data().iter().map(|&x| 1.0 + x as f64).collect())
+    ///     },
+    ///     &PatchedInterpolationOptions::new(2),
+    /// )?;
+    /// assert!(result.report.tolerance_met());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn tolerance_met(&self) -> bool {
+        self.accepted
+            .iter()
+            .all(|record| record.status == PatchStatus::WithinTolerance)
+    }
 }
 
 /// Result of [`patched_interpolate`](super::patched_interpolate).

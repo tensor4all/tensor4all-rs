@@ -632,7 +632,10 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     /// Network over the active sites with the problem's node names and
-    /// topology. A node without active sites carries no site index.
+    /// topology. A node without active sites carries no site index. Its bond
+    /// dimensions never exceed [`InterpolationProblem::max_bond_dim`], whatever
+    /// the termination: a caller may use the network of a run that did not
+    /// converge, for example a patch driver that accepts small capped patches.
     pub network: TreeTN<IdxTensor, V>,
     /// Why the run stopped.
     pub termination: InterpolationTermination,

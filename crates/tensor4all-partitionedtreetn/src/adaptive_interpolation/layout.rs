@@ -224,6 +224,7 @@ fn validate_options(
     if options.max_patches == Some(0) {
         return Err(invalid("max_patches must be positive when given"));
     }
+    super::acceptance::validate_bounds(options).map_err(invalid)?;
     if options.verification.samples < 2 {
         return Err(invalid(format!(
             "verification.samples must be at least 2, got {}",

@@ -694,11 +694,6 @@ fn malformed_pivots_fail_only_when_recycled() {
     assert!(source.to_string().contains("rows"));
 }
 
-/// An evaluator that must never be called.
-fn never(batch: ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>> {
-    panic!("the evaluator was called with shape {:?}", batch.shape())
-}
-
 #[test]
 fn invalid_layouts_are_rejected_before_any_evaluation() {
     let site = DynIndex::new_dyn(2);

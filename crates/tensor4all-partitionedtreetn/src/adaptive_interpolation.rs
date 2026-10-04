@@ -3,8 +3,9 @@
 //! [`patched_interpolate`] runs a tree interpolation engine (any
 //! [`TreeInterpolator`]) on the whole domain of a function. Wherever a patch
 //! cannot be accepted, it fixes the next site of a given order and retries on
-//! every child region. The result is a [`PartitionedTreeTN`] with disjoint,
-//! eagerly masked patches, together with a [`PatchedInterpolationReport`].
+//! every child region, unless an optional minimum patch size stops the
+//! splitting. The result is a [`PartitionedTreeTN`] with disjoint, eagerly
+//! masked patches, together with a [`PatchedInterpolationReport`].
 //!
 //! # Derivation notice
 //!
@@ -30,7 +31,12 @@
 //!   `tau = delta / sqrt(|X|)` is pinned once and every accepted or zero
 //!   patch `P` must satisfy `rms_P(f - f~_P) <= tau`, which sums to
 //!   `E <= delta` over the disjoint patches. Zero patches are charged like
-//!   any other patch. The engine receives the absolute tolerance `tau`.
+//!   any other patch. The engine receives the absolute tolerance `tau`. The
+//!   only exception is a patch retained by
+//!   [`PatchedInterpolationOptions::min_patch_bits`] with
+//!   [`PatchStatus::ToleranceNotMet`]: the run then reports
+//!   [`GlobalL2Error::ToleranceNotMet`], and `E` can exceed `delta` without
+//!   limit.
 //! - [`ErrorNorm::SampledMax`]: the M2 criterion, the engine's sampled error
 //!   estimate against `max(atol, rtol * max_reference)`, with `max_reference`
 //!   a function value. No measurement runs; it is neither a certified bound
@@ -69,6 +75,10 @@
 //!
 //! The report's [`GlobalL2Error`] says what the run can claim:
 //!
+//! - `ToleranceNotMet` when some patch was retained without meeting its
+//!   allowance; it takes precedence, is never certified, and its `basis`
+//!   classifies the measurements as below (an exact or exhaustive basis
+//!   still bounds `E`, but the tolerance was not met).
 //! - `Certified` when every contribution is exact or exhaustive:
 //!   `E <= delta (1 + GLOBAL_ROUNDING_MARGIN) + MEASUREMENT_ROUNDING_FACTOR *
 //!   eps * ||f~||`, an absolute bound with respect to the allowance used, up
@@ -115,13 +125,25 @@
 //!    and, under L2, measured on the stored network: exhaustively when the
 //!    patch has at most `max(max_exhaustive_points, samples)` points,
 //!    otherwise on `samples` fresh uniform points. It is accepted when
-//!    `rms <= tau`.
-//! 6. A failed verification reruns the engine (up to
+//!    `rms <= tau`. With [`CappedPatches::AcceptUpTo`], a
+//!    [`InterpolationTermination::BondCapReached`] outcome of a patch with at
+//!    most that many active sites (generalized bits) is checked against the
+//!    cap and judged the same way (by the engine estimate under
+//!    `SampledMax`).
+//! 6. A failed verification of a converged run reruns the engine (up to
 //!    [`VerificationOptions::retries`] times) with the worst measured points
-//!    and the outcome's pivots added to the initial pivots; then the patch
-//!    splits at the next unfixed site of
+//!    and the outcome's pivots added to the initial pivots; a failed capped
+//!    run is not rerun. Then the patch splits at the next unfixed site of
 //!    [`PatchedInterpolationOptions::patch_order`], passing the worst points
 //!    to the children. Any other verdict splits the patch directly.
+//! 7. With [`PatchedInterpolationOptions::min_patch_bits`], a split whose
+//!    children would have fewer active sites than the minimum is not made:
+//!    the patch is retained with its last engine run. A run judged already
+//!    keeps its verdict; one that was not (it did not converge and was not
+//!    capped-eligible) is measured once on the stream of its attempt (judged
+//!    by its estimate under `SampledMax`). The record says
+//!    [`PatchStatus::WithinTolerance`] or [`PatchStatus::ToleranceNotMet`].
+//!    An exhausted `patch_order` keeps its errors.
 //!
 //! # Randomness and determinism
 //!
@@ -222,6 +244,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+mod acceptance;
 mod cache;
 mod embed;
 mod layout;
@@ -253,16 +276,17 @@ use self::sampling::point_list_capacity;
 use crate::error::PartitionedTreeTNError;
 use crate::{ErrorNorm, L2Reference, PartitionedTreeTN, Projector, SubDomainTreeTN};
 
+use acceptance::SizePolicy;
 use cache::{Counters, PatchCache, PatchSampler};
 use layout::SiteLayout;
 use sampling::{patch_candidates, patch_seeds, PatchDomain, PatchSeeds};
 use verify::{Contribution, MeasureError, MeasureTarget, Measured, PointPlan};
 
-pub use options::{PatchedInterpolationOptions, VerificationOptions};
+pub use options::{CappedPatches, PatchedInterpolationOptions, VerificationOptions};
 pub use report::{
     GlobalL2Error, L2ErrorReport, L2Measurement, L2ReferenceSource, MaxReferenceSource,
-    MeasurementMethod, NormReport, PatchRecord, PatchedInterpolationReport,
-    PatchedInterpolationResult, ZeroPatchRecord, GLOBAL_ROUNDING_MARGIN,
+    MeasurementMethod, NormReport, PatchRecord, PatchStatus, PatchedInterpolationReport,
+    PatchedInterpolationResult, ToleranceNotMetBasis, ZeroPatchRecord, GLOBAL_ROUNDING_MARGIN,
     MEASUREMENT_ROUNDING_FACTOR,
 };
 
@@ -337,8 +361,9 @@ pub enum PatchedInterpolationError {
     /// failed or returned a wrong number of values, a non-finite value, or a
     /// value whose magnitude overflows ([`InterpolationError::Evaluator`]); or
     /// the engine failed, returned an outcome that does not match the problem,
-    /// reported `Converged` with a rank that reaches the bond cap, or returned
-    /// a network with a non-finite value at a measured point
+    /// reported `Converged` with a rank that reaches the bond cap, returned a
+    /// network above the cap for a capped-eligible or retained run, or
+    /// returned a network with a non-finite value at a measured point
     /// ([`InterpolationError::Engine`]).
     #[error("interpolation of the patch {projector:?} failed: {source}")]
     Interpolation {
@@ -355,8 +380,8 @@ pub enum PatchedInterpolationError {
         #[source]
         source: PartitionedTreeTNError,
     },
-    /// A patch did not converge and every site of `patch_order` is already
-    /// fixed in it.
+    /// A patch did not converge, its last engine run was not measured, and
+    /// every site of `patch_order` is already fixed in it.
     #[error(
         "the patch {projector:?} did not converge and every site of patch_order is fixed; \
          list more sites in patch_order or raise max_bond_dim"
@@ -365,9 +390,11 @@ pub enum PatchedInterpolationError {
         /// Projector of the patch that could not be split.
         projector: Projector,
     },
-    /// A patch converged below the cap, but its measured L2 error still
-    /// exceeded its allowance after the retries, and every site of
-    /// `patch_order` is already fixed in it.
+    /// The last engine run of a patch was measured (it converged below the
+    /// cap, or reached the cap within [`CappedPatches::AcceptUpTo`]), its L2
+    /// error exceeded its allowance after the retries, and every site of
+    /// `patch_order` is already fixed in it. The minimum patch size never
+    /// turns this into an acceptance.
     #[error(
         "the measured L2 error of the patch {projector:?} (rms {}) exceeds its allowance and \
          every site of patch_order is fixed; list more sites in patch_order, raise rtol or atol, \
@@ -436,7 +463,9 @@ impl From<PartitionedTreeTNError> for PatchedInterpolationError {
 ///   repeated; `tolerance.rtol` or `tolerance.atol` is negative or not
 ///   finite; a given reference (`max_reference` or `L2Reference::Given`) is
 ///   not finite and positive; `max_bond_dim < 2`; `n_initial_pivots == 0`;
-///   `max_patches == Some(0)`; `verification.samples < 2`; `initial_pivots`
+///   `max_patches == Some(0)`; `capped_patches` is
+///   [`CappedPatches::AcceptUpTo`] with fewer bits than `min_patch_bits`;
+///   `verification.samples < 2`; `initial_pivots`
 ///   is not a 2D array with one row per site and in-range coordinates;
 ///   `verification.samples` times the number of sites exceeds the capacity
 ///   of a point list (its byte length must fit a `Vec`); under L2, the
@@ -455,13 +484,15 @@ impl From<PartitionedTreeTNError> for PatchedInterpolationError {
 ///   ([`InterpolationError::Evaluator`]); when the engine fails (including
 ///   [`InterpolationError::AllSamplesZero`] after screening); or when an
 ///   engine outcome does not match the problem, reports `Converged` at a
-///   bond dimension not strictly below the cap, or evaluates to a non-finite
-///   value at a measured point ([`InterpolationError::Engine`]).
+///   bond dimension not strictly below the cap, exceeds the cap in a
+///   capped-eligible or retained run, or evaluates to a non-finite value at
+///   a measured point ([`InterpolationError::Engine`]).
 /// - [`PatchedInterpolationError::NoSplitIndexLeft`] when a patch does not
-///   converge and every site of `patch_order` is fixed.
-/// - [`PatchedInterpolationError::VerificationFailed`] when a converged
-///   patch fails its L2 measurement after the retries and every site of
+///   converge, its last run was not measured, and every site of
 ///   `patch_order` is fixed.
+/// - [`PatchedInterpolationError::VerificationFailed`] when the measured last
+///   run of a patch (converged, or capped-eligible) fails its L2 measurement
+///   after the retries and every site of `patch_order` is fixed.
 /// - [`PatchedInterpolationError::ResourceLimit`] when more than
 ///   `max_patches` patches would be processed.
 /// - [`PatchedInterpolationError::Partition`] when building a patch network
@@ -557,6 +588,7 @@ where
         layout,
         initial_pivots,
         options,
+        policy: SizePolicy::new(options),
         max_reference: Cell::new(None),
         l2: Cell::new(None),
         counters: Counters::default(),
@@ -624,15 +656,34 @@ struct Failure {
     worst: Vec<Vec<usize>>,
 }
 
-/// What a split needs from the processing of its patch.
-struct SplitInput<'a, V>
-where
-    V: Clone + Hash + Eq + Send + Sync + Debug,
-{
+/// What resolving an unaccepted patch needs from its processing.
+struct PatchContext<'a> {
     path: Vec<(usize, usize)>,
     fixed: &'a [Option<usize>],
     active: &'a [usize],
-    outcome: &'a InterpolationOutcome<V>,
+    active_dims: &'a [usize],
+    /// `|P|` as `f64`.
+    patch_points: f64,
+    /// `|P|`, or `None` when its exhaustive point list cannot fit in a `Vec`.
+    patch_count: Option<usize>,
+    seeds: &'a PatchSeeds,
+    /// `tau` under L2, the engine tolerance under `SampledMax`.
+    tolerance: f64,
+}
+
+/// The last engine run of a patch that was not accepted.
+struct Unaccepted<V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    outcome: InterpolationOutcome<V>,
+    attempt: usize,
+    /// The checked, re-embedded network of a run that was judged and failed
+    /// (measured under L2, estimate-checked under `SampledMax`); `None` for
+    /// a run that was not judged.
+    rejected: Option<SubDomainTreeTN<V>>,
+    /// The last failed L2 measurement of the patch, of this run when
+    /// `rejected` is set, possibly of an earlier run otherwise.
     failure: Option<Failure>,
 }
 
@@ -764,6 +815,7 @@ where
     layout: SiteLayout<V>,
     initial_pivots: ColMajorArray<usize>,
     options: &'a PatchedInterpolationOptions,
+    policy: SizePolicy,
     /// SampledMax: the given reference, or the one pinned from the root.
     max_reference: Cell<Option<(f64, MaxReferenceSource)>>,
     /// L2: the pinned reference and allowance.
@@ -935,6 +987,7 @@ where
                     patch_points: entry.patch_points,
                     acceptance: entry.record.acceptance.as_ref().ok_or_else(missing)?,
                     audit: entry.record.audit.as_ref(),
+                    within_tolerance: entry.record.status == PatchStatus::WithinTolerance,
                 },
             ));
         }
@@ -945,6 +998,7 @@ where
                     patch_points: *patch_points,
                     acceptance: record.acceptance.as_ref().ok_or_else(missing)?,
                     audit: record.audit.as_ref(),
+                    within_tolerance: true,
                 },
             ));
         }
@@ -1211,7 +1265,7 @@ where
         let mut added: Vec<Vec<usize>> = Vec::new();
         let mut failure: Option<Failure> = None;
         let mut attempt = 0usize;
-        let outcome = loop {
+        let (outcome, rejected) = loop {
             let initial: Vec<usize> = base.iter().chain(&added).flatten().copied().collect();
             let n_initial = base.len() + added.len();
             let problem = InterpolationProblem::new(
@@ -1227,36 +1281,22 @@ where
                 .engine
                 .interpolate(&problem, |batch| sampler.sample(batch))
                 .map_err(interpolation_error)?;
-            if outcome.termination != InterpolationTermination::Converged {
-                break outcome;
+            let converged = outcome.termination == InterpolationTermination::Converged;
+            if !converged
+                && !self
+                    .policy
+                    .capped_eligible(outcome.termination, active.len())
+            {
+                break (outcome, None);
             }
-            embed::check_outcome_layout(&outcome.network, layout, &fixed)
-                .map_err(|message| engine_error(projector, message))?;
-            let subdomain = self.subdomain(&outcome.network, &fixed, projector)?;
-            // The contract defines `Converged` as strictly below the cap.
-            if subdomain.max_bond_dim() >= self.options.max_bond_dim {
-                return Err(engine_error(
-                    projector,
-                    format!(
-                        "the engine reported Converged with bond dimension {}, not strictly below \
-                         the cap {}",
-                        subdomain.max_bond_dim(),
-                        self.options.max_bond_dim
-                    ),
-                ));
-            }
-            let mut record = PatchRecord {
-                projector: projector.clone(),
-                termination: outcome.termination,
-                engine_error_estimate: outcome.error_estimate,
-                max_sample_magnitude: outcome.max_sample_magnitude,
-                max_bond_dim: subdomain.max_bond_dim(),
-                retries_used: attempt,
-                acceptance: None,
-                audit: None,
-            };
+            let subdomain = self.checked_subdomain(&outcome, &fixed, projector)?;
+            let mut record = self.record(projector, &outcome, &subdomain, attempt);
             if !self.is_l2() {
-                return Ok(accepted(record, subdomain, patch_points));
+                // A capped-eligible run is judged by the engine estimate.
+                if converged || outcome.error_estimate <= tolerance {
+                    return Ok(accepted(record, subdomain, patch_points));
+                }
+                break (outcome, Some(subdomain));
             }
 
             // Verify the re-embedded patch that would be stored.
@@ -1281,69 +1321,135 @@ where
             // first `max_bond_dim - 1` of them (step 10).
             let all_worst = measured.worst_points(tolerance, usize::MAX);
             let worst: Vec<Vec<usize>> = all_worst.iter().take(limit).cloned().collect();
-            if attempt < retries {
-                let pivots = active_pivots(outcome.pivots.as_ref(), &active, &layout.dims)
-                    .map_err(|message| engine_error(projector, message))?;
-                added = added_pivots(&base_set, &all_worst, &pivots, limit);
-                failure = Some(Failure {
-                    measurement: measured.measurement,
-                    worst,
-                });
-                Counters::add(&self.engine_retries, 1);
-                attempt += 1;
-                continue;
-            }
             failure = Some(Failure {
                 measurement: measured.measurement,
                 worst,
             });
-            break outcome;
+            // Only a converged run is rerun: a capped run has exhausted its
+            // rank, and more pivots only raise its starting rank.
+            if converged && attempt < retries {
+                let pivots = active_pivots(outcome.pivots.as_ref(), &active, &layout.dims)
+                    .map_err(|message| engine_error(projector, message))?;
+                added = added_pivots(&base_set, &all_worst, &pivots, limit);
+                Counters::add(&self.engine_retries, 1);
+                attempt += 1;
+                continue;
+            }
+            break (outcome, Some(subdomain));
         };
-        self.split(
-            SplitInput {
-                path,
-                fixed: &fixed,
-                active: &active,
-                outcome: &outcome,
-                failure,
-            },
-            sampler,
-            projector,
-        )
+        let context = PatchContext {
+            path,
+            fixed: &fixed,
+            active: &active,
+            active_dims: &active_dims,
+            patch_points,
+            patch_count,
+            seeds: &seeds,
+            tolerance,
+        };
+        let last = Unaccepted {
+            outcome,
+            attempt,
+            rejected,
+            failure,
+        };
+        self.resolve(context, last, sampler, projector)
     }
 
-    /// Split a patch that was not accepted.
-    fn split(
+    /// The layout-checked, re-embedded network of an outcome the driver may
+    /// use. A `Converged` outcome must be strictly below the bond cap (the
+    /// M1 contract); any other outcome must not exceed it.
+    fn checked_subdomain(
         &self,
-        input: SplitInput<'_, V>,
+        outcome: &InterpolationOutcome<V>,
+        fixed: &[Option<usize>],
+        projector: &Projector,
+    ) -> Result<SubDomainTreeTN<V>, PatchedInterpolationError> {
+        embed::check_outcome_layout(&outcome.network, &self.layout, fixed)
+            .map_err(|message| engine_error(projector, message))?;
+        let subdomain = self.subdomain(&outcome.network, fixed, projector)?;
+        let cap = self.options.max_bond_dim;
+        let bond = subdomain.max_bond_dim();
+        if outcome.termination == InterpolationTermination::Converged && bond >= cap {
+            return Err(engine_error(
+                projector,
+                format!(
+                    "the engine reported Converged with bond dimension {bond}, not strictly below \
+                     the cap {cap}"
+                ),
+            ));
+        }
+        if bond > cap {
+            return Err(engine_error(
+                projector,
+                format!(
+                    "the engine reported {:?} with bond dimension {bond}, above the cap {cap}",
+                    outcome.termination
+                ),
+            ));
+        }
+        Ok(subdomain)
+    }
+
+    /// The record of an engine run, within its tolerance until judged
+    /// otherwise, without measurements.
+    fn record(
+        &self,
+        projector: &Projector,
+        outcome: &InterpolationOutcome<V>,
+        subdomain: &SubDomainTreeTN<V>,
+        attempt: usize,
+    ) -> PatchRecord {
+        PatchRecord {
+            projector: projector.clone(),
+            termination: outcome.termination,
+            engine_error_estimate: outcome.error_estimate,
+            max_sample_magnitude: outcome.max_sample_magnitude,
+            max_bond_dim: subdomain.max_bond_dim(),
+            retries_used: attempt,
+            acceptance: None,
+            audit: None,
+            status: PatchStatus::WithinTolerance,
+        }
+    }
+
+    /// Resolve a patch that was not accepted: split it at the next unfixed
+    /// site of the split order, retain it when the minimum blocks that
+    /// split, or fail when no split site is left.
+    fn resolve(
+        &self,
+        context: PatchContext<'_>,
+        last: Unaccepted<V>,
         sampler: PatchSampler<'_, T, F>,
         projector: &Projector,
     ) -> Result<Verdict<T, V>, PatchedInterpolationError> {
-        let SplitInput {
-            path,
-            fixed,
-            active,
-            outcome,
-            failure,
-        } = input;
         let layout = &self.layout;
+        let fixed = context.fixed;
+        let active = context.active;
         let Some(&split_position) = layout
             .split_order
             .iter()
             .find(|&&position| fixed[position].is_none())
         else {
-            return Err(match failure {
-                Some(failure) if outcome.termination == InterpolationTermination::Converged => {
-                    PatchedInterpolationError::VerificationFailed {
-                        projector: projector.clone(),
-                        measurement: failure.measurement,
-                    }
-                }
+            // The minimum never turns an exhausted patch_order into an
+            // acceptance; a measured, failed last run is reported as such.
+            return Err(match (last.rejected, last.failure) {
+                (Some(_), Some(failure)) => PatchedInterpolationError::VerificationFailed {
+                    projector: projector.clone(),
+                    measurement: failure.measurement,
+                },
                 _ => PatchedInterpolationError::NoSplitIndexLeft {
                     projector: projector.clone(),
                 },
             });
         };
+        if self.policy.split_blocked(active.len()) {
+            return self.retain_blocked(&context, last, &sampler, projector);
+        }
+        let Unaccepted {
+            outcome, failure, ..
+        } = last;
+        let path = context.path;
         let recycled = if self.options.recycle_pivots {
             let pivots = active_pivots(outcome.pivots.as_ref(), active, &layout.dims)
                 .map_err(|message| engine_error(projector, message))?;
@@ -1451,6 +1557,7 @@ where
             retries_used: 0,
             acceptance,
             audit: None,
+            status: PatchStatus::WithinTolerance,
         };
         Ok(accepted(record, subdomain, patch_points))
     }

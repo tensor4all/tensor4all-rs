@@ -13,7 +13,7 @@ use super::{
 };
 use crate::adaptive_interpolation::{patched_interpolate, PatchedInterpolationOptions};
 use crate::adaptive_interpolation::{
-    GlobalL2Error, L2Measurement, MeasurementMethod, GLOBAL_ROUNDING_MARGIN,
+    GlobalL2Error, L2Measurement, MeasurementMethod, ToleranceNotMetBasis, GLOBAL_ROUNDING_MARGIN,
     MEASUREMENT_ROUNDING_FACTOR,
 };
 use crate::{ErrorNorm, ErrorTolerance};
@@ -490,11 +490,13 @@ fn global_error_combines_disjoint_patches_by_volume() {
             patch_points: 3.0,
             acceptance: &a,
             audit: None,
+            within_tolerance: true,
         },
         Contribution {
             patch_points: 1.0,
             acceptance: &b,
             audit: None,
+            within_tolerance: true,
         },
     ];
     let (global, certified) = global_error(&contributions, 4.0, 0.2, Some(1.0));
@@ -557,11 +559,13 @@ fn sampled_contributions_are_audited_or_acceptance_only() {
             patch_points: 2.0,
             acceptance: &exact,
             audit: None,
+            within_tolerance: true,
         },
         Contribution {
             patch_points: 2.0,
             acceptance: &sampled,
             audit: Some(&audit),
+            within_tolerance: true,
         },
     ];
     let (global, certified) = global_error(&audited, 4.0, 0.1, Some(1.0));
@@ -597,11 +601,13 @@ fn sampled_contributions_are_audited_or_acceptance_only() {
             patch_points: 2.0,
             acceptance: &exact,
             audit: None,
+            within_tolerance: true,
         },
         Contribution {
             patch_points: 2.0,
             acceptance: &sampled,
             audit: None,
+            within_tolerance: true,
         },
     ];
     let (global, _) = global_error(&unaudited, 4.0, 0.1, Some(1.0));
@@ -615,6 +621,98 @@ fn sampled_contributions_are_audited_or_acceptance_only() {
         acceptance_statistic_rms,
         (0.5_f64 * 0.01 + 0.5 * 0.0025).sqrt()
     ));
+}
+
+#[test]
+fn unmet_contributions_keep_the_m3_classification_as_basis() {
+    // Two halves of a 4-point domain; the second one misses its allowance.
+    let met = measurement(MeasurementMethod::Exhaustive, 2.0, 0.1, 0.0);
+    let unmet = measurement(MeasurementMethod::Exhaustive, 2.0, 0.3, 0.0);
+    let contribution = |acceptance, audit, within_tolerance| Contribution {
+        patch_points: 2.0,
+        acceptance,
+        audit,
+        within_tolerance,
+    };
+    let exhaustive = [
+        contribution(&met, None, true),
+        contribution(&unmet, None, false),
+    ];
+    let (global, certified) = global_error(&exhaustive, 4.0, 0.1, Some(1.0));
+    // The unmet half is not certified although it was measured exhaustively.
+    assert_eq!(certified, 0.5);
+    let GlobalL2Error::ToleranceNotMet {
+        measured_rms,
+        unmet_fraction,
+        basis:
+            ToleranceNotMetBasis::ExactOrExhaustive {
+                rounding_allowance_rms,
+                rounding_limited,
+                relative_error_bound,
+            },
+    } = global
+    else {
+        panic!("expected ToleranceNotMet with an exact basis, got {global:?}");
+    };
+    let rms = (0.5_f64 * 0.01 + 0.5 * 0.09).sqrt();
+    assert!(close(measured_rms, rms));
+    assert_eq!(unmet_fraction, 0.5);
+    let rounding = MEASUREMENT_ROUNDING_FACTOR * f64::EPSILON;
+    assert_eq!(rounding_allowance_rms, Some(rounding));
+    assert_eq!(rounding_limited, Some(false));
+    // The relative bound uses the measured value, never tau.
+    let upper = rms * (1.0 + GLOBAL_ROUNDING_MARGIN) + rounding;
+    let bound = upper / ((1.0 - GLOBAL_ROUNDING_MARGIN) - upper);
+    assert!(close(relative_error_bound.unwrap(), bound));
+
+    let sampled = measurement(MeasurementMethod::Sampled, 2.0, 0.3, 0.2);
+    let audit = measurement(MeasurementMethod::Sampled, 2.0, 0.4, 0.5);
+    let audited = [
+        contribution(&met, None, true),
+        contribution(&sampled, Some(&audit), false),
+    ];
+    let (global, certified) = global_error(&audited, 4.0, 0.1, Some(1.0));
+    assert_eq!(certified, 0.5);
+    let GlobalL2Error::ToleranceNotMet {
+        measured_rms,
+        unmet_fraction,
+        basis:
+            ToleranceNotMetBasis::Audited {
+                mean_square_rel_std_error,
+                relative_bound_estimate,
+            },
+    } = global
+    else {
+        panic!("expected ToleranceNotMet with an audited basis, got {global:?}");
+    };
+    // Mean square 0.5 * 0.01 + 0.5 * 0.16 = 0.085; the audited term 0.08
+    // has standard error 0.04.
+    let estimate = 0.085_f64.sqrt();
+    assert!(close(measured_rms, estimate));
+    assert_eq!(unmet_fraction, 0.5);
+    assert!(close(mean_square_rel_std_error, 0.04 / 0.085));
+    assert!(close(
+        relative_bound_estimate.unwrap(),
+        estimate / (1.0 - estimate)
+    ));
+
+    let unaudited = [
+        contribution(&met, None, true),
+        contribution(&sampled, None, false),
+    ];
+    let (global, certified) = global_error(&unaudited, 4.0, 0.1, Some(1.0));
+    assert_eq!(certified, 0.5);
+    let GlobalL2Error::ToleranceNotMet {
+        measured_rms,
+        unmet_fraction,
+        basis: ToleranceNotMetBasis::AcceptanceOnly,
+    } = global
+    else {
+        panic!("expected ToleranceNotMet with an acceptance-only basis, got {global:?}");
+    };
+    assert!(close(measured_rms, (0.5_f64 * 0.01 + 0.5 * 0.09).sqrt()));
+    assert_eq!(unmet_fraction, 0.5);
+    assert_eq!(global.rms_value(), measured_rms);
 }
 
 #[test]

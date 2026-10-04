@@ -21,21 +21,6 @@ use tensor4all_treetn::interpolation::InterpolationError;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// L2 options with a given reference norm and relative tolerance.
-fn l2_given(cap: usize, norm: f64, rtol: f64) -> PatchedInterpolationOptions {
-    PatchedInterpolationOptions::new(cap)
-        .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
-        .with_tolerance(tol(rtol))
-}
-
-/// The `tau` of an L2 report.
-fn tau(report: &PatchedInterpolationReport) -> f64 {
-    match report.norm {
-        NormReport::L2 { tau, .. } => tau,
-        ref other => panic!("expected an L2 report, got {other:?}"),
-    }
-}
-
 /// Every acceptance measurement of the report, accepted and zero patches.
 fn acceptances(report: &PatchedInterpolationReport) -> Vec<f64> {
     report
@@ -83,11 +68,6 @@ fn local(problem: &Problem, call: &Call, point: &[usize]) -> Vec<usize> {
         .iter()
         .map(|site| point[problem.position(site)])
         .collect()
-}
-
-/// An evaluator that must never be called.
-fn never(batch: ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>> {
-    panic!("the evaluator was called with shape {:?}", batch.shape())
 }
 
 fn no_pivots(problem: &Problem) -> ColMajorArray<usize> {

@@ -21,7 +21,7 @@ use tensor4all_treetn::{
 
 use super::cache::{is_finite, PatchSampler};
 use super::report::{
-    GlobalL2Error, L2Measurement, MeasurementMethod, GLOBAL_ROUNDING_MARGIN,
+    GlobalL2Error, L2Measurement, MeasurementMethod, ToleranceNotMetBasis, GLOBAL_ROUNDING_MARGIN,
     MEASUREMENT_ROUNDING_FACTOR,
 };
 use super::sampling::{all_points, reserve_point_list, uniform_points};
@@ -314,23 +314,92 @@ pub(super) struct Contribution<'a> {
     pub(super) patch_points: f64,
     pub(super) acceptance: &'a L2Measurement,
     pub(super) audit: Option<&'a L2Measurement>,
+    /// `false` for a patch retained as `ToleranceNotMet`.
+    pub(super) within_tolerance: bool,
 }
 
 /// The global error and the certified fraction of the domain, combined in
-/// the given (canonical path) order.
+/// the given (canonical path) order. A `ToleranceNotMet` contribution turns
+/// the M3 classification into [`GlobalL2Error::ToleranceNotMet`] with that
+/// classification as its basis, and is excluded from the certified fraction.
 pub(super) fn global_error(
     contributions: &[Contribution<'_>],
     domain_points: f64,
     tau: f64,
     approximation_rms: Option<f64>,
 ) -> (GlobalL2Error, f64) {
-    let weight = |c: &Contribution<'_>| (c.patch_points / domain_points).sqrt();
     let exact = |m: &L2Measurement| m.method != MeasurementMethod::Sampled;
     let certified_fraction: f64 = contributions
         .iter()
-        .filter(|c| exact(c.acceptance))
+        .filter(|c| c.within_tolerance && exact(c.acceptance))
         .map(|c| c.patch_points / domain_points)
         .sum();
+    let measured = classify(contributions, domain_points, tau, approximation_rms);
+    if contributions.iter().all(|c| c.within_tolerance) {
+        return (measured, certified_fraction);
+    }
+    let unmet_fraction = contributions
+        .iter()
+        .filter(|c| !c.within_tolerance)
+        .map(|c| c.patch_points / domain_points)
+        .sum();
+    let (measured_rms, basis) = match measured {
+        GlobalL2Error::Certified {
+            rms_error,
+            rounding_allowance_rms,
+            rounding_limited,
+            relative_error_bound,
+        } => (
+            rms_error,
+            ToleranceNotMetBasis::ExactOrExhaustive {
+                rounding_allowance_rms,
+                rounding_limited,
+                relative_error_bound,
+            },
+        ),
+        GlobalL2Error::Audited {
+            rms_error_estimate,
+            mean_square_rel_std_error,
+            relative_bound_estimate,
+        } => (
+            rms_error_estimate,
+            ToleranceNotMetBasis::Audited {
+                mean_square_rel_std_error,
+                relative_bound_estimate,
+            },
+        ),
+        GlobalL2Error::AcceptanceOnly {
+            acceptance_statistic_rms,
+        } => (
+            acceptance_statistic_rms,
+            ToleranceNotMetBasis::AcceptanceOnly,
+        ),
+        GlobalL2Error::ToleranceNotMet {
+            measured_rms,
+            basis,
+            ..
+        } => (measured_rms, basis),
+    };
+    let global = GlobalL2Error::ToleranceNotMet {
+        measured_rms,
+        unmet_fraction,
+        basis,
+    };
+    (global, certified_fraction)
+}
+
+/// The M3 classification of the combined measurements: `Certified` when
+/// every contribution is exact or exhaustive, `AcceptanceOnly` when some
+/// sampled one has no audit, `Audited` otherwise. It never returns
+/// `ToleranceNotMet`.
+fn classify(
+    contributions: &[Contribution<'_>],
+    domain_points: f64,
+    tau: f64,
+    approximation_rms: Option<f64>,
+) -> GlobalL2Error {
+    let weight = |c: &Contribution<'_>| (c.patch_points / domain_points).sqrt();
+    let exact = |m: &L2Measurement| m.method != MeasurementMethod::Sampled;
 
     let mut acceptance = ScaledSquares::default();
     for c in contributions {
@@ -345,22 +414,20 @@ pub(super) fn global_error(
             let denominator = (1.0 - GLOBAL_ROUNDING_MARGIN) * rms - upper;
             (denominator > 0.0).then(|| upper / denominator)
         });
-        let global = GlobalL2Error::Certified {
+        return GlobalL2Error::Certified {
             rms_error,
             rounding_allowance_rms: rounding,
             rounding_limited: rounding.map(|rounding| rounding >= tau),
             relative_error_bound,
         };
-        return (global, certified_fraction);
     }
     if contributions
         .iter()
         .any(|c| !exact(c.acceptance) && c.audit.is_none())
     {
-        let global = GlobalL2Error::AcceptanceOnly {
+        return GlobalL2Error::AcceptanceOnly {
             acceptance_statistic_rms: acceptance.norm(),
         };
-        return (global, certified_fraction);
     }
 
     // Audited: exact and exhaustive contributions as measured, sampled ones
@@ -401,12 +468,11 @@ pub(super) fn global_error(
     let relative_bound_estimate = approximation_rms
         .filter(|&rms| rms > rms_error_estimate)
         .map(|rms| rms_error_estimate / (rms - rms_error_estimate));
-    let global = GlobalL2Error::Audited {
+    GlobalL2Error::Audited {
         rms_error_estimate,
         mean_square_rel_std_error,
         relative_bound_estimate,
-    };
-    (global, certified_fraction)
+    }
 }
 
 /// `||f~|| / sqrt(|X|)` from the log-norms of the accepted patches, combined

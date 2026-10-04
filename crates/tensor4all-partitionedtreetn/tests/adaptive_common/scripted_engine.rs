@@ -79,6 +79,8 @@ pub(crate) struct Step {
     pub(crate) termination: InterpolationTermination,
     /// Returned pivots in active coordinates.
     pub(crate) pivots: Vec<Vec<usize>>,
+    /// The returned engine error estimate.
+    pub(crate) error_estimate: f64,
 }
 
 impl Step {
@@ -87,19 +89,38 @@ impl Step {
             network,
             termination: InterpolationTermination::Converged,
             pivots: Vec::new(),
+            error_estimate: 0.0,
         }
     }
 
+    /// A `BondCapReached` step returning the zero function.
     pub(crate) fn capped() -> Self {
+        Self::capped_with(Network::Constant(0.0))
+    }
+
+    /// A `BondCapReached` step returning `network`.
+    pub(crate) fn capped_with(network: Network) -> Self {
         Self {
-            network: Network::Constant(0.0),
+            network,
             termination: InterpolationTermination::BondCapReached,
             pivots: Vec::new(),
+            error_estimate: 0.0,
         }
+    }
+
+    /// The same step with another termination.
+    pub(crate) fn with_termination(mut self, termination: InterpolationTermination) -> Self {
+        self.termination = termination;
+        self
     }
 
     pub(crate) fn with_pivots(mut self, pivots: Vec<Vec<usize>>) -> Self {
         self.pivots = pivots;
+        self
+    }
+
+    pub(crate) fn with_error_estimate(mut self, error_estimate: f64) -> Self {
+        self.error_estimate = error_estimate;
         self
     }
 }
@@ -197,7 +218,7 @@ where
         Ok(InterpolationOutcome {
             network,
             termination: step.termination,
-            error_estimate: 0.0,
+            error_estimate: step.error_estimate,
             max_sample_magnitude: initial.iter().map(|v| v.abs_val()).fold(0.0, f64::max),
             pivots: pivot_array(&step.pivots, n_active),
         })
