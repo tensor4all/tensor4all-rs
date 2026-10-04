@@ -554,3 +554,6 @@ fn test_eval_no_cache_and_stats() {
     assert_eq!(cf.cache_hit_ratio(), 0.5);
     assert!(cf.is_cached(&[1, 2]));
 }
+
+#[cfg(test)]
+mod multi_index_cache;

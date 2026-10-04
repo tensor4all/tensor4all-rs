@@ -131,7 +131,7 @@ pub use quantics_tci::{
     quanticscrossinterpolate_batch_with_rng, quanticscrossinterpolate_discrete,
     quanticscrossinterpolate_discrete_batch, quanticscrossinterpolate_discrete_batch_with_rng,
     quanticscrossinterpolate_from_arrays, quanticscrossinterpolate_from_arrays_batch,
-    quanticscrossinterpolate_from_arrays_batch_with_rng, QuanticsTensorCI2,
+    quanticscrossinterpolate_from_arrays_batch_with_rng, CacheStats, QuanticsTensorCI2,
 };
 
 // Re-export commonly used types from dependencies

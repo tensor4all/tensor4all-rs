@@ -8,11 +8,11 @@
 use rand::Rng as _;
 use rand::SeedableRng;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use anyhow::{anyhow, Result};
 use quanticsgrids::{DiscretizedGrid, InherentDiscreteGrid};
+use tensor4all_core::MultiIndexCache;
 use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetci::materialize::to_treetn;
@@ -25,18 +25,32 @@ use crate::batch::{pointwise_coordinate_batch, pointwise_index_batch, QuanticsBa
 use crate::error::{QuanticsTCIError, Result as QtciResult};
 use crate::options::QtciOptions;
 
-fn point_from_batch(batch: GlobalIndexBatch<'_>, point: usize) -> Result<Vec<usize>> {
-    (0..batch.n_sites())
-        .map(|site| {
-            batch.get(site, point).ok_or_else(|| {
-                anyhow!(
-                    "invalid batch index: site {site}, point {point}, batch shape {}x{}",
-                    batch.n_sites(),
-                    batch.n_points()
-                )
-            })
-        })
-        .collect()
+/// Build the memo cache of one run from the grid's local dimensions.
+///
+/// A quantics index space wider than the widest built-in cache key (1024 bits)
+/// cannot be memoized; such a run is rejected instead of silently losing cache
+/// coverage.
+fn new_memo_cache<V>(local_dims: &[usize]) -> QtciResult<MultiIndexCache<V>>
+where
+    V: Clone + Send + Sync + 'static,
+{
+    MultiIndexCache::new(local_dims).map_err(|error| QuanticsTCIError::InvalidConfiguration {
+        message: format!("quantics index space cannot be memoized: {error}"),
+    })
+}
+
+/// Read the evaluation accounting out of a run's memo cache.
+fn memo_cache_stats<V>(cache: &MemoCache<V>) -> CacheStats
+where
+    V: Clone + Send + Sync + 'static,
+{
+    let cache = cache.borrow();
+    CacheStats {
+        num_evals: cache.len(),
+        num_cache_hits: cache.hits(),
+        num_cache_misses: cache.misses(),
+        dropped_inserts: cache.dropped_inserts(),
+    }
 }
 
 /// The stream a seeded quantics run uses.
@@ -78,55 +92,115 @@ fn prepare_pivots(
     Ok(pivots)
 }
 
+/// The memoization cache a quantics run shares with its target evaluator.
+///
+/// The cache lives for one run and is dropped with it. It encodes quantics
+/// multi-indices as mixed-radix flat integers, so a lookup never hashes an owned
+/// key vector, and it stores no callback: [`site_evaluator`] looks points up,
+/// evaluates only the misses, and inserts the successful results.
+type MemoCache<V> = Rc<RefCell<MultiIndexCache<V>>>;
+
 /// Wrap a per-point conversion and a batched target function into the
 /// quantics-site batched evaluator TreeTCI expects.
 ///
-/// Every evaluated point is recorded in `cache`, which becomes the cache of the
-/// returned [`QuanticsTensorCI2`].
+/// A point already in `cache` is served from the cache without converting it or
+/// calling the target. The remaining points are converted, evaluated in one
+/// batched call, and inserted; a failed evaluation returns before anything is
+/// inserted, so a failure never becomes a cached value. Repeated points inside
+/// one batch are converted and evaluated once.
 fn site_evaluator<T, V, C, F>(
     convert: C,
     evaluate: F,
-    cache: Rc<RefCell<HashMap<Vec<usize>, V>>>,
+    cache: MemoCache<V>,
 ) -> impl Fn(GlobalIndexBatch<'_>) -> Result<Vec<V>>
 where
     T: Copy,
-    V: Clone,
+    V: Clone + Send + Sync + 'static,
     C: Fn(&[usize]) -> Result<Vec<T>>,
     F: Fn(QuanticsBatch<'_, T>) -> Result<Vec<V>>,
 {
     move |batch: GlobalIndexBatch<'_>| {
         let n_points = batch.n_points();
-        let mut flat: Vec<T> = Vec::new();
-        let mut n_dims = 0usize;
-        let mut quantics_points: Vec<Vec<usize>> = Vec::with_capacity(n_points);
+        let n_sites = batch.n_sites();
+        let mut cache = cache.borrow_mut();
+        let mut results: Vec<Option<V>> = Vec::with_capacity(n_points);
+        let mut miss_positions: Vec<usize> = Vec::new();
+        let mut miss_slots: Vec<usize> = Vec::new();
+        let mut miss_points: Vec<&[usize]> = Vec::new();
+        let mut miss_slot_of: std::collections::HashMap<&[usize], usize> =
+            std::collections::HashMap::new();
+
+        // Read the whole batch into one flat buffer first: a per-point vector
+        // would allocate once per requested point, which dominates the lookup
+        // cost for cheap targets.
+        let mut flat_indices: Vec<usize> = Vec::with_capacity(n_points * n_sites);
         for point in 0..n_points {
-            let quantics = point_from_batch(batch, point)?;
-            let values = convert(&quantics)?;
-            if point == 0 {
-                n_dims = values.len();
-            } else if values.len() != n_dims {
+            for site in 0..n_sites {
+                flat_indices.push(batch.get(site, point).ok_or_else(|| {
+                    anyhow!(
+                        "invalid batch index: site {site}, point {point}, batch shape {n_sites}x{n_points}"
+                    )
+                })?);
+            }
+        }
+
+        for point in 0..n_points {
+            let quantics = &flat_indices[point * n_sites..(point + 1) * n_sites];
+            match cache.get(quantics)? {
+                Some(value) => results.push(Some(value)),
+                None => {
+                    results.push(None);
+                    miss_positions.push(point);
+                    let slot = match miss_slot_of.get(quantics) {
+                        Some(&slot) => slot,
+                        None => {
+                            let slot = miss_points.len();
+                            miss_points.push(quantics);
+                            miss_slot_of.insert(quantics, slot);
+                            slot
+                        }
+                    };
+                    miss_slots.push(slot);
+                }
+            }
+        }
+
+        if !miss_points.is_empty() {
+            let mut flat: Vec<T> = Vec::new();
+            let mut n_dims = 0usize;
+            for quantics in &miss_points {
+                let values = convert(quantics)?;
+                if n_dims == 0 {
+                    n_dims = values.len();
+                } else if values.len() != n_dims {
+                    return Err(anyhow!(
+                        "inconsistent point dimension: expected {n_dims}, got {}",
+                        values.len()
+                    ));
+                }
+                flat.extend_from_slice(&values);
+            }
+            let values = evaluate(QuanticsBatch::new(&flat, n_dims, miss_points.len())?)?;
+            if values.len() != miss_points.len() {
                 return Err(anyhow!(
-                    "inconsistent point dimension: expected {n_dims}, got {}",
-                    values.len()
+                    "target function returned {} values for {} evaluated points",
+                    values.len(),
+                    miss_points.len()
                 ));
             }
-            flat.extend_from_slice(&values);
-            quantics_points.push(quantics);
-        }
-        let values = evaluate(QuanticsBatch::new(&flat, n_dims, n_points)?)?;
-        if values.len() != n_points {
-            return Err(anyhow!(
-                "target function returned {} values for {n_points} points",
-                values.len()
-            ));
-        }
-        {
-            let mut cache = cache.borrow_mut();
-            for (quantics, value) in quantics_points.into_iter().zip(values.iter()) {
-                cache.insert(quantics, value.clone());
+            for (quantics, value) in miss_points.iter().zip(values.iter()) {
+                cache.insert(quantics, value.clone())?;
+            }
+            drop(miss_slot_of);
+            for (position, slot) in miss_positions.iter().zip(miss_slots.iter()) {
+                results[*position] = Some(values[*slot].clone());
             }
         }
-        Ok(values)
+
+        results
+            .into_iter()
+            .collect::<Option<Vec<V>>>()
+            .ok_or_else(|| anyhow!("internal error: a requested point has no value"))
     }
 }
 
@@ -135,16 +209,10 @@ where
 fn run_treetci_batch<V, F>(
     local_dims: Vec<usize>,
     evaluate: F,
-    cache: Rc<RefCell<HashMap<Vec<usize>, V>>>,
+    cache: MemoCache<V>,
     pivots: Vec<Vec<usize>>,
     options: &QtciOptions,
-) -> QtciResult<(
-    TreeTCI2<V>,
-    SimpleTensorTrain<V>,
-    Vec<usize>,
-    Vec<f64>,
-    HashMap<Vec<usize>, V>,
-)>
+) -> QtciResult<(TreeTCI2<V>, SimpleTensorTrain<V>, Vec<usize>, Vec<f64>)>
 where
     V: TTScalar
         + Default
@@ -190,13 +258,12 @@ where
                 .context("TreeTN to SimpleTensorTrain conversion failed"),
         })?;
 
-    // Drop the evaluator (and its cache handle) before extracting the cache.
+    // Drop the evaluator so it releases its cache handle; the caller reads the
+    // counters from its own handle.
     drop(evaluate);
-    let final_cache = Rc::try_unwrap(cache)
-        .map_err(|_| anyhow!("Failed to extract cache"))?
-        .into_inner();
+    drop(cache);
 
-    Ok((tci, tt, ranks, errors, final_cache))
+    Ok((tci, tt, ranks, errors))
 }
 
 /// TCI result wrapped with grid information.
@@ -251,8 +318,72 @@ pub struct QuanticsTensorCI2<V: TTScalar> {
     discretized_grid: Option<DiscretizedGrid>,
     /// Grid for coordinate conversion (InherentDiscreteGrid)
     inherent_grid: Option<InherentDiscreteGrid>,
-    /// Cached function values (quantics index -> value)
-    cache: HashMap<Vec<usize>, V>,
+    /// Target-evaluation accounting of the run that produced this result
+    cache_stats: CacheStats,
+}
+
+/// Target-evaluation accounting for one quantics interpolation run.
+///
+/// The run memoizes target evaluations on the quantics multi-index, so the
+/// target is called only for points it has not seen. The counters separate the
+/// quantities an optimization needs: how many requests were cached, how many
+/// were not, how many distinct points the target evaluated, and how many
+/// evaluations could not be retained because the memo cache reached its
+/// logical payload limit.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstci::CacheStats;
+///
+/// let stats = CacheStats {
+///     num_evals: 3,
+///     num_cache_hits: 5,
+///     num_cache_misses: 3,
+///     dropped_inserts: 0,
+/// };
+/// assert!((stats.hit_ratio() - 5.0 / 8.0).abs() < 1e-12);
+/// assert_eq!(CacheStats::default().hit_ratio(), 0.0);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CacheStats {
+    /// Distinct points the target function evaluated.
+    pub num_evals: usize,
+    /// Point requests served from the cache.
+    pub num_cache_hits: usize,
+    /// Point requests that were not cached and had to be evaluated.
+    pub num_cache_misses: usize,
+    /// Successful evaluations that were not retained because the memo cache was
+    /// at its logical payload limit. Such a point is evaluated again if it is
+    /// requested later; no returned value changes.
+    pub dropped_inserts: usize,
+}
+
+impl CacheStats {
+    /// Fraction of point requests served from the cache, or `0.0` when the run
+    /// requested no points.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstci::CacheStats;
+    ///
+    /// let stats = CacheStats {
+    ///     num_evals: 1,
+    ///     num_cache_hits: 1,
+    ///     num_cache_misses: 1,
+    ///     dropped_inserts: 0,
+    /// };
+    /// assert!((stats.hit_ratio() - 0.5).abs() < 1e-12);
+    /// ```
+    pub fn hit_ratio(&self) -> f64 {
+        let requests = self.num_cache_hits + self.num_cache_misses;
+        if requests == 0 {
+            0.0
+        } else {
+            self.num_cache_hits as f64 / requests as f64
+        }
+    }
 }
 
 impl<V> QuanticsTensorCI2<V>
@@ -264,14 +395,14 @@ where
         tt: SimpleTensorTrain<V>,
         tci_state: TreeTCI2<V>,
         grid: DiscretizedGrid,
-        cache: HashMap<Vec<usize>, V>,
+        cache_stats: CacheStats,
     ) -> Self {
         Self {
             tt,
             tci_state,
             discretized_grid: Some(grid),
             inherent_grid: None,
-            cache,
+            cache_stats,
         }
     }
 
@@ -280,14 +411,14 @@ where
         tt: SimpleTensorTrain<V>,
         tci_state: TreeTCI2<V>,
         grid: InherentDiscreteGrid,
-        cache: HashMap<Vec<usize>, V>,
+        cache_stats: CacheStats,
     ) -> Self {
         Self {
             tt,
             tci_state,
             discretized_grid: None,
             inherent_grid: Some(grid),
-            cache,
+            cache_stats,
         }
     }
 
@@ -486,40 +617,75 @@ where
         &self.tci_state
     }
 
-    /// Access cached evaluation points.
+    /// Target-evaluation accounting of the run that produced this result.
     ///
-    /// Returns a map from quantics indices to function values.
-    pub fn cachedata(&self) -> &HashMap<Vec<usize>, V> {
-        &self.cache
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstci::quanticscrossinterpolate_discrete_batch;
+    /// # use tensor4all_quanticstci::{QtciOptions, QuanticsBatch};
+    /// # let f = |batch: QuanticsBatch<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    /// #     Ok((0..batch.n_points()).map(|p| batch.get(0, p).unwrap() as f64).collect())
+    /// # };
+    /// # let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
+    /// #     &[4], f, None, QtciOptions::default()).unwrap();
+    /// let stats = qtci.cache_stats();
+    /// assert!(stats.num_evals > 0);
+    /// assert!(stats.num_cache_hits + stats.num_cache_misses >= stats.num_evals);
+    /// ```
+    pub fn cache_stats(&self) -> CacheStats {
+        self.cache_stats
     }
 
-    /// Access cached evaluation points with original coordinates.
+    /// Distinct points the target function evaluated.
     ///
-    /// Only available for discretized grids.
-    /// Returns a vector of (coordinates, value) pairs since f64 is not hashable.
-    /// # Errors
+    /// # Examples
     ///
-    /// Returns an error when the grid is not discretized (a
-    /// [`QuanticsTCIError::DiscreteGridRequired`]) or the coordinate conversion
-    /// fails (a [`QuanticsTCIError::Operation`]).
+    /// ```
+    /// # use tensor4all_quanticstci::{quanticscrossinterpolate_discrete_batch, QtciOptions, QuanticsBatch};
+    /// # let f = |batch: QuanticsBatch<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    /// #     Ok((0..batch.n_points()).map(|p| batch.get(0, p).unwrap() as f64).collect())
+    /// # };
+    /// # let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
+    /// #     &[4], f, None, QtciOptions::default()).unwrap();
+    /// assert!(qtci.num_evals() > 0);
+    /// ```
+    pub fn num_evals(&self) -> usize {
+        self.cache_stats.num_evals
+    }
+
+    /// Point requests served from the cache.
     ///
-    pub fn cachedata_origcoord(&self) -> std::result::Result<Vec<(Vec<f64>, V)>, QuanticsTCIError>
-    where
-        V: Clone,
-    {
-        if let Some(grid) = &self.discretized_grid {
-            let mut result = Vec::new();
-            for (quantics, value) in &self.cache {
-                let coord = grid
-                    .quantics_to_origcoord(quantics)
-                    .map_err(|e| anyhow!("Coordinate conversion error: {}", e))?;
-                #[allow(clippy::clone_on_copy)]
-                result.push((coord, value.clone()));
-            }
-            Ok(result)
-        } else {
-            Err(QuanticsTCIError::DiscreteGridRequired)
-        }
+    /// # Examples
+    ///
+    /// ```
+    /// # use tensor4all_quanticstci::{quanticscrossinterpolate_discrete_batch, QtciOptions, QuanticsBatch};
+    /// # let f = |batch: QuanticsBatch<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    /// #     Ok((0..batch.n_points()).map(|p| batch.get(0, p).unwrap() as f64).collect())
+    /// # };
+    /// # let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
+    /// #     &[4], f, None, QtciOptions::default()).unwrap();
+    /// assert_eq!(qtci.num_cache_hits(), qtci.cache_stats().num_cache_hits);
+    /// ```
+    pub fn num_cache_hits(&self) -> usize {
+        self.cache_stats.num_cache_hits
+    }
+
+    /// Fraction of point requests served from the cache.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tensor4all_quanticstci::{quanticscrossinterpolate_discrete_batch, QtciOptions, QuanticsBatch};
+    /// # let f = |batch: QuanticsBatch<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    /// #     Ok((0..batch.n_points()).map(|p| batch.get(0, p).unwrap() as f64).collect())
+    /// # };
+    /// # let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
+    /// #     &[4], f, None, QtciOptions::default()).unwrap();
+    /// assert!((0.0..=1.0).contains(&qtci.cache_hit_ratio()));
+    /// ```
+    pub fn cache_hit_ratio(&self) -> f64 {
+        self.cache_stats.hit_ratio()
     }
 }
 
@@ -605,7 +771,7 @@ where
     R: rand::Rng + ?Sized,
 {
     let local_dims = grid.local_dimensions();
-    let cache: Rc<RefCell<HashMap<Vec<usize>, V>>> = Rc::new(RefCell::new(HashMap::new()));
+    let cache: MemoCache<V> = Rc::new(RefCell::new(new_memo_cache(&local_dims)?));
     let grid_for_evaluation = grid.clone();
     let evaluate = site_evaluator(
         move |quantics: &[usize]| {
@@ -630,10 +796,11 @@ where
         &mut stream,
     )?;
 
-    let (tci, tt, ranks, errors, cache) =
-        run_treetci_batch(local_dims, evaluate, cache, pivots, &options)?;
+    let (tci, tt, ranks, errors) =
+        run_treetci_batch(local_dims, evaluate, cache.clone(), pivots, &options)?;
+    let cache_stats = memo_cache_stats(&cache);
     Ok((
-        QuanticsTensorCI2::from_discretized(tt, tci, grid.clone(), cache),
+        QuanticsTensorCI2::from_discretized(tt, tci, grid.clone(), cache_stats),
         ranks,
         errors,
     ))
@@ -1086,7 +1253,7 @@ where
         .map_err(|e| anyhow!("Failed to build grid: {}", e))?;
 
     let local_dims = grid.local_dimensions();
-    let cache: Rc<RefCell<HashMap<Vec<usize>, V>>> = Rc::new(RefCell::new(HashMap::new()));
+    let cache: MemoCache<V> = Rc::new(RefCell::new(new_memo_cache(&local_dims)?));
     let grid_for_evaluation = grid.clone();
     let evaluate = site_evaluator(
         move |quantics: &[usize]| {
@@ -1111,10 +1278,11 @@ where
         &mut stream,
     )?;
 
-    let (tci, tt, ranks, errors, cache) =
-        run_treetci_batch(local_dims, evaluate, cache, pivots, &options)?;
+    let (tci, tt, ranks, errors) =
+        run_treetci_batch(local_dims, evaluate, cache.clone(), pivots, &options)?;
+    let cache_stats = memo_cache_stats(&cache);
     Ok((
-        QuanticsTensorCI2::from_inherent(tt, tci, grid, cache),
+        QuanticsTensorCI2::from_inherent(tt, tci, grid, cache_stats),
         ranks,
         errors,
     ))

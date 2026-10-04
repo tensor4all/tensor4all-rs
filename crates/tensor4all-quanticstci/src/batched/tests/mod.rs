@@ -232,7 +232,37 @@ fn batched_tci_rejects_short_callback_results() {
         QtciOptions::default(),
     );
     let error = result.err().unwrap();
-    assert!(error.to_string().contains("expected at least 2"));
+    assert!(
+        error
+            .to_string()
+            .contains("expected exactly 2 components per point"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn batched_tci_rejects_oversized_callback_results() {
+    // The components of a point are read with a fixed stride, so accepting a
+    // longer result would silently misalign every point after the first.
+    let grid = DiscretizedGrid::builder(&[2])
+        .with_lower_bound(&[0.0])
+        .with_upper_bound(&[1.0])
+        .build()
+        .unwrap();
+    let result = quanticscrossinterpolate_multicomponent::<f64, _>(
+        &grid,
+        pointwise_components_batch(|_| vec![1.0, 2.0, 3.0]),
+        &[2],
+        None,
+        QtciOptions::default(),
+    );
+    let error = result.err().unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("expected exactly 2 components per point"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]

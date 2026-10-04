@@ -111,8 +111,10 @@ Detect: `rg -n 'HashMap<Vec<usize>|HashMap<MultiIndex|BTreeMap<Vec<usize>'
 crates` on long-lived caches.
 
 Fix: `CachedFunction` (`u64`, `u128`, then `U256`/`U512`/`U1024` via the
-`CacheKey` trait, `with_key_type` to force a width) or `TTCache`, which encode
-keys internally. Do not hand-roll a multi-index cache.
+`CacheKey` trait, `with_key_type` to force a width), `MultiIndexCache` (the same
+key encoding for fallible, borrowed, or thread-affine targets, where the caller
+evaluates the misses), or `TTCache`, which encode keys internally. Do not
+hand-roll a multi-index cache.
 
 ## Silent Slow-Path Fallback
 

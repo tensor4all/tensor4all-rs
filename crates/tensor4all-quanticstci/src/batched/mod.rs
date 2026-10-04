@@ -5,8 +5,6 @@
 //! component independently and combining the results into a single
 //! [`SimpleTensorTrain`] with an additional component site.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use anyhow::{anyhow, Result};
@@ -231,8 +229,9 @@ where
 /// [`quanticscrossinterpolate_batch_with_rng`] on the *same* stream, in
 /// component order, and the per-component tensor trains are
 /// combined into a single [`SimpleTensorTrain`] with an additional component
-/// site at the end. A shared cache means each grid point is evaluated at most
-/// once across all components.
+/// site at the end. Every component run memoizes the points it evaluates, so a
+/// point is evaluated once per component; reusing one evaluation across
+/// components needs a caller-owned cache and is tracked on issue #747.
 ///
 /// # Arguments
 ///
@@ -339,8 +338,11 @@ where
         });
     }
 
-    // Shared across components: coordinate bits -> all component values.
-    let cache: Rc<RefCell<HashMap<Vec<u64>, Vec<V>>>> = Rc::new(RefCell::new(HashMap::new()));
+    // Each component run memoizes its own quantics points, so the callback is
+    // called once per (component run, point). A cross-component cache keyed by
+    // original coordinates is deliberately not kept here: float coordinates are
+    // not a mixed-radix index space, and sharing one discrete-keyed cache
+    // across components needs the caller-owned cache seam tracked in #747.
     let f = Rc::new(f);
 
     let mut component_tts: Vec<SimpleTensorTrain<V>> = Vec::with_capacity(n_components);
@@ -348,62 +350,27 @@ where
     let mut all_errors: Vec<Vec<f64>> = Vec::with_capacity(n_components);
 
     for component in 0..n_components {
-        let cache = Rc::clone(&cache);
         let f = Rc::clone(&f);
         let adapter = move |batch: QuanticsBatch<'_, f64>| -> Result<Vec<V>> {
             let n_points = batch.n_points();
-            let n_dims = batch.n_dims();
-            let mut values: Vec<Option<V>> = vec![None; n_points];
-            let mut missing: Vec<usize> = Vec::new();
-            for (point, value) in values.iter_mut().enumerate() {
-                let key = coordinate_key(&batch, point)?;
-                match cache.borrow().get(&key) {
-                    Some(components) => {
-                        *value = Some(components.get(component).cloned().ok_or_else(|| {
-                            anyhow!("cached point is missing component {component}")
-                        })?);
-                    }
-                    None => missing.push(point),
-                }
+            if n_points == 0 {
+                return Ok(Vec::new());
             }
-
-            if !missing.is_empty() {
-                let mut coordinates = Vec::with_capacity(n_dims * missing.len());
-                for &point in &missing {
-                    let point_values = batch
-                        .point(point)
-                        .ok_or_else(|| anyhow!("invalid batch point index {point}"))?;
-                    coordinates.extend_from_slice(point_values);
-                }
-                let returned = f(QuanticsBatch::new(&coordinates, n_dims, missing.len())?)?;
-                if returned.len() % missing.len() != 0
-                    || returned.len() / missing.len() < n_components
-                {
-                    return Err(anyhow!(
-                        "callback returned {} values for {} points, expected at least {} components per point",
-                        returned.len(),
-                        missing.len(),
-                        n_components
-                    ));
-                }
-                for (offset, &point) in missing.iter().enumerate() {
-                    let components = returned[offset * n_components..][..n_components].to_vec();
-                    values[point] = Some(
-                        components
-                            .get(component)
-                            .cloned()
-                            .ok_or_else(|| anyhow!("missing component {component}"))?,
-                    );
-                    cache
-                        .borrow_mut()
-                        .insert(coordinate_key(&batch, point)?, components);
-                }
+            let returned = f(batch)?;
+            let expected = n_points.checked_mul(n_components).ok_or_else(|| {
+                anyhow!(
+                    "expected value count overflows usize: {n_points} points x {n_components} components"
+                )
+            })?;
+            if returned.len() != expected {
+                return Err(anyhow!(
+                    "callback returned {} values for {n_points} points, expected exactly {n_components} components per point ({expected} values)",
+                    returned.len()
+                ));
             }
-
-            values
-                .into_iter()
-                .map(|value| value.ok_or_else(|| anyhow!("missing component value")))
-                .collect()
+            Ok((0..n_points)
+                .map(|point| returned[point * n_components + component])
+                .collect())
         };
 
         // One stream serves every component, so the second component continues
@@ -491,14 +458,6 @@ where
         initial_pivots,
         options,
     )
-}
-
-/// Key for the multi-component evaluation cache.
-fn coordinate_key(batch: &QuanticsBatch<'_, f64>, point: usize) -> Result<Vec<u64>> {
-    let values = batch
-        .point(point)
-        .ok_or_else(|| anyhow!("invalid batch point index {point}"))?;
-    Ok(values.iter().map(|value| value.to_bits()).collect())
 }
 
 /// Combine per-component tensor trains into a single TT with a component
