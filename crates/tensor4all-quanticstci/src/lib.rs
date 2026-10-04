@@ -121,7 +121,7 @@ pub use batch::{
 #[allow(deprecated)]
 pub use batched::{
     quanticscrossinterpolate_batched, quanticscrossinterpolate_multicomponent,
-    QuanticsTensorCI2Batched,
+    quanticscrossinterpolate_multicomponent_with_rng, QuanticsTensorCI2Batched,
 };
 pub use error::QuanticsTCIError;
 pub use options::QtciOptions;

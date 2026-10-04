@@ -5,6 +5,7 @@
 //! component independently and combining the results into a single
 //! [`SimpleTensorTrain`] with an additional component site.
 
+use rand::SeedableRng;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -19,7 +20,50 @@ use tensor4all_tensorbackend::FullPivLuScalar;
 use crate::batch::QuanticsBatch;
 use crate::error::{QuanticsTCIError, Result as QtciResult};
 use crate::options::QtciOptions;
-use crate::quantics_tci::quanticscrossinterpolate_batch;
+use crate::quantics_tci::{
+    quanticscrossinterpolate_batch, quanticscrossinterpolate_batch_with_rng,
+};
+
+/// Interpolate a multi-component function with an explicitly named seed.
+///
+/// Builds a `ChaCha8Rng` from `QtciOptions::rng_seed` (OS entropy when unset)
+/// and delegates to [`quanticscrossinterpolate_multicomponent_with_rng`], so one
+/// stream drives every component.
+///
+/// # Errors
+///
+/// Returns the same errors as [`quanticscrossinterpolate_multicomponent_with_rng`].
+pub fn quanticscrossinterpolate_multicomponent<V, F>(
+    grid: &DiscretizedGrid,
+    f: F,
+    output_dims: &[usize],
+    initial_pivots: Option<Vec<Vec<usize>>>,
+    options: QtciOptions,
+) -> QtciResult<(QuanticsTensorCI2Batched<V>, Vec<usize>, Vec<f64>)>
+where
+    F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
+    V: TTScalar
+        + Default
+        + Clone
+        + 'static
+        + TensorElement
+        + tensor4all_core::MatrixLuciScalar
+        + FullPivLuScalar
+        + tensor4all_treetci::globalpivot::ScalarParts,
+{
+    let mut rng = match options.rng_seed {
+        Some(seed) => rand_chacha::ChaCha8Rng::seed_from_u64(seed),
+        None => rand_chacha::ChaCha8Rng::from_os_rng(),
+    };
+    quanticscrossinterpolate_multicomponent_with_rng(
+        grid,
+        f,
+        output_dims,
+        initial_pivots,
+        options,
+        &mut rng,
+    )
+}
 
 /// Result of batched (vector/tensor-valued) Quantics TCI interpolation.
 ///
@@ -252,12 +296,13 @@ where
 /// assert!(!ranks.is_empty());
 /// assert!(!errors.is_empty());
 /// ```
-pub fn quanticscrossinterpolate_multicomponent<V, F>(
+pub fn quanticscrossinterpolate_multicomponent_with_rng<V, F, R>(
     grid: &DiscretizedGrid,
     f: F,
     output_dims: &[usize],
     initial_pivots: Option<Vec<Vec<usize>>>,
     options: QtciOptions,
+    rng: &mut R,
 ) -> QtciResult<(QuanticsTensorCI2Batched<V>, Vec<usize>, Vec<f64>)>
 where
     F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
@@ -269,6 +314,7 @@ where
         + tensor4all_core::MatrixLuciScalar
         + FullPivLuScalar
         + tensor4all_treetci::globalpivot::ScalarParts,
+    R: rand::Rng + ?Sized,
 {
     // Validate output_dims
     if output_dims.is_empty() {
@@ -355,8 +401,15 @@ where
                 .collect()
         };
 
-        let (qtci, ranks, errors) =
-            quanticscrossinterpolate_batch(grid, adapter, initial_pivots.clone(), options.clone())?;
+        // One stream serves every component, so the second component continues
+        // the caller's sequence instead of restarting it.
+        let (qtci, ranks, errors) = quanticscrossinterpolate_batch_with_rng(
+            grid,
+            adapter,
+            initial_pivots.clone(),
+            options.clone(),
+            rng,
+        )?;
 
         component_tts.push(qtci.tensor_train());
         all_ranks.push(ranks);
