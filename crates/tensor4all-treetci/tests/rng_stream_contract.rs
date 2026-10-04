@@ -5,7 +5,7 @@
 //! checked by replaying the same seed in a reference `ChaCha8Rng`.
 
 use anyhow::Result;
-use rand::{Rng as _, RngCore, SeedableRng};
+use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tensor4all_treetci::{
     optimize_with_proposer_with_rng, GlobalIndexBatch, SimpleProposer, TreeTCI2, TreeTciEdge,

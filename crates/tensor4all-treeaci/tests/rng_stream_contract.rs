@@ -4,9 +4,6 @@
 //! stream: a hidden generator leaves the count at zero, and a run with the
 //! guard disabled must consume strictly less.
 
-use std::cell::Cell;
-use std::rc::Rc;
-
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{DynIndex, IdxTensor};
