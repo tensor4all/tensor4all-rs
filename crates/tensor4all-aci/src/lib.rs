@@ -52,7 +52,7 @@ pub use error::{AciError, Result};
 pub(crate) use local::LocalBlockEvaluator;
 pub use options::AciOptions;
 #[allow(unused_imports)]
-pub(crate) use random_tt::initial_guess;
+pub(crate) use random_tt::{initial_guess, initial_guess_with_rng};
 pub use result::{AciResult, AciTermination};
 pub use scalar::AciScalar;
 #[allow(unused_imports)]

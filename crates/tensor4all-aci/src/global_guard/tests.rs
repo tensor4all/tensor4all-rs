@@ -1,5 +1,6 @@
 use super::find_global_pivots;
 use crate::{elementwise, AciOptions, ElementwiseProblem};
+use rand::SeedableRng;
 use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
 
 const D: usize = 4;
@@ -140,7 +141,8 @@ fn find_global_pivots_noop_without_search_budget() {
         output.fill(0.0);
         Ok(())
     };
-    let pivots = find_global_pivots(&mut problem, &mut op, &options, 0).unwrap();
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
+    let pivots = find_global_pivots(&mut problem, &mut op, &options, &mut rng).unwrap();
     assert!(pivots.is_empty());
 }
 

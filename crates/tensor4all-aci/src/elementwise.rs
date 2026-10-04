@@ -6,6 +6,7 @@ use crate::validation::{validate_inputs, validate_options};
 use crate::{
     AciError, AciOptions, AciResult, AciTermination, ElementwiseBatch, ElementwiseProblem, Result,
 };
+use rand::SeedableRng;
 use tensor4all_simplett::{
     tensor3_from_data, AbstractTensorTrain, EinsumScalar, SimpleTensorTrain,
 };
@@ -106,13 +107,40 @@ use tensor4all_simplett::{
 /// assert_eq!(result.ranks.len(), result.errors.len());
 /// ```
 pub fn elementwise_batched<T, F>(
-    mut op: F,
+    op: F,
     inputs: &[SimpleTensorTrain<T>],
     options: &AciOptions<T>,
 ) -> Result<AciResult<T>>
 where
     T: AciScalar + EinsumScalar + PartialEq,
     F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
+{
+    // The seeded high-level path uses an explicitly named RNG and delegates to
+    // the caller-owned-stream entry point; one stream serves initialization and
+    // every guard search of the run.
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rng_seed);
+    elementwise_batched_with_rng(op, inputs, options, &mut rng)
+}
+
+/// Elementwise ACI on a caller-owned random stream.
+///
+/// Same as [`elementwise_batched`], but consumes `rng` for the initial guess and
+/// for every global guard search instead of deriving a seed per search, so the
+/// caller can reproduce or advance the whole run's randomness.
+///
+/// # Errors
+///
+/// Returns the same errors as [`elementwise_batched`].
+pub fn elementwise_batched_with_rng<T, F, R>(
+    mut op: F,
+    inputs: &[SimpleTensorTrain<T>],
+    options: &AciOptions<T>,
+    rng: &mut R,
+) -> Result<AciResult<T>>
+where
+    T: AciScalar + EinsumScalar + PartialEq,
+    F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
+    R: rand::Rng + ?Sized,
 {
     validate_options(options)?;
     validate_inputs(inputs)?;
@@ -121,7 +149,7 @@ where
         return elementwise_batched_one_site(op, inputs);
     }
 
-    let mut problem = ElementwiseProblem::new(inputs.to_vec(), options.clone())?;
+    let mut problem = ElementwiseProblem::new_with_rng(inputs.to_vec(), options.clone(), rng)?;
 
     let mut ranks = Vec::new();
     let mut errors = Vec::new();
@@ -169,8 +197,7 @@ where
             && !rank_capped
         {
             guard_runs += 1;
-            let seed = options.rng_seed.wrapping_add(guard_runs as u64);
-            let pivots = find_global_pivots(&mut problem, &mut op, options, seed)?;
+            let pivots = find_global_pivots(&mut problem, &mut op, options, rng)?;
             let _added = problem.add_global_pivots(&pivots)?;
             nglobal_pivots_history.push(pivots.len());
         } else {
@@ -309,7 +336,7 @@ where
 /// assert_eq!(result.ranks.len(), result.errors.len());
 /// ```
 pub fn elementwise<T, F>(
-    mut op: F,
+    op: F,
     inputs: &[SimpleTensorTrain<T>],
     options: &AciOptions<T>,
 ) -> Result<AciResult<T>>
@@ -317,8 +344,31 @@ where
     T: AciScalar + EinsumScalar + PartialEq,
     F: FnMut(&[T]) -> T,
 {
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rng_seed);
+    elementwise_with_rng(op, inputs, options, &mut rng)
+}
+
+/// Pointwise ACI on a caller-owned random stream.
+///
+/// Same as [`elementwise`] with the randomness of
+/// [`elementwise_batched_with_rng`].
+///
+/// # Errors
+///
+/// Returns the same errors as [`elementwise`].
+pub fn elementwise_with_rng<T, F, R>(
+    mut op: F,
+    inputs: &[SimpleTensorTrain<T>],
+    options: &AciOptions<T>,
+    rng: &mut R,
+) -> Result<AciResult<T>>
+where
+    T: AciScalar + EinsumScalar + PartialEq,
+    F: FnMut(&[T]) -> T,
+    R: rand::Rng + ?Sized,
+{
     let mut scratch = Vec::new();
-    elementwise_batched(
+    elementwise_batched_with_rng(
         |batch, output| {
             scratch.clear();
             scratch.reserve(batch.n_inputs());
@@ -333,6 +383,7 @@ where
         },
         inputs,
         options,
+        rng,
     )
 }
 
