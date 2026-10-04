@@ -256,7 +256,11 @@ driver-measured L2 norm. The rest of this record describes M2 as built.
    `absolute_tolerance = rtol * reference_scale`, the bond cap, and the engine
    seed of the patch. The problem's evaluator inserts the fixed coordinates and
    goes through the patch cache.
-10. **Accept or split.** `Converged` is accepted. Any other verdict splits the
+10. **Accept or split.** (Superseded in part: M3 added the L2 measurement,
+    and the M5 patch-size bounds of 2026-10-04 accept small capped patches
+    and retain patches at a minimum size; see
+    [tree-pqtci-patch-size-bounds.md](./tree-pqtci-patch-size-bounds.md).)
+    `Converged` is accepted. Any other verdict splits the
     patch at the next site of `patch_order` that is not fixed yet, one child per
     coordinate; if no site of `patch_order` is left, the driver returns
     `NoSplitIndexLeft`. With `recycle_pivots`, the outcome's pivots (active

@@ -29,22 +29,35 @@ The accuracy requirement is `PatchedInterpolationOptions::error_norm` with
   with `tau = delta / sqrt(|X|)`), and the driver measures every accepted and
   zero patch itself: exhaustively up to
   `VerificationOptions::max_exhaustive_points`, otherwise on fresh uniform
-  samples with an independent audit. A failed measurement reruns the engine
-  with the worst points as pivots, then splits.
+  samples with an independent audit. A failed measurement of a converged run
+  reruns the engine with the worst points as pivots, then splits.
 - `ErrorNorm::SampledMax` is the M2 criterion: the engine's sampled error
   estimate against `max(atol, rtol * max_reference)`. It is **neither** a
   certified bound nor a measured error, and makes no L2 claim.
 - `ErrorNorm::MaxAbs` and `ErrorNorm::WeightedL2` are placeholders that fail
   with `UnsupportedNorm` before any evaluation.
 
+Two optional bounds count patch size in generalized bits, one per active
+(unfixed) site whatever its dimension. `min_patch_bits` stops splitting below
+a minimum: a failing patch is then retained and reported as
+`PatchStatus::ToleranceNotMet`, never certified, and the run reports
+`GlobalL2Error::ToleranceNotMet`, whose error can exceed `delta`.
+`capped_patches: CappedPatches::AcceptUpTo { bits }` accepts a patch that
+reaches the bond cap when it has at most `bits` active sites and passes its
+error check; larger capped patches split, and converged patches never split
+for their size. Both default to the M3 behavior.
+
 The report's `GlobalL2Error` states what an L2 run can claim. `Certified`
-(every contribution exact or exhaustive) bounds the absolute error
+(every contribution exact or exhaustive, every patch within its allowance)
+bounds the absolute error
 `E <= delta (1 + GLOBAL_ROUNDING_MARGIN) + MEASUREMENT_ROUNDING_FACTOR * eps *
 ||f~||`, up to a calibrated (not proven) rounding model, and carries a conservative bound
 on `E / ||f||` when `||f~||` exceeds `E`. `Audited` gives an estimate with a
 standard error, never a bound; `AcceptanceOnly` (audits off) gives neither an
-estimate nor a relative statement. Sampled measurements cannot bound the L2
-error of a black-box function.
+estimate nor a relative statement. `ToleranceNotMet` takes precedence when a
+patch was retained without meeting its allowance; its `basis` says which of
+the three applies to its measured value. Sampled measurements cannot bound
+the L2 error of a black-box function.
 
 Known limitation: the acceptance sample and the audit are both uniform, so
 both can miss a localized feature that enters a patch only through a corner

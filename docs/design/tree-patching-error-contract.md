@@ -35,6 +35,12 @@ small without any warning from its standard error. Only certified results are
 guarantees. The fix is deferred to a global review after M9; see
 [Known limitation: corner-localized misses](#known-limitation-corner-localized-misses).
 
+Amended on 2026-10-04 by the M5 patch-size bounds: a minimum patch size can
+retain a patch that misses its allowance, reported as `ToleranceNotMet`, and
+capped patches up to a size bound can be accepted on their measurement. See
+[Amendment: patch-size bounds](#amendment-2026-10-04-patch-size-bounds); the
+sections below describe M3 and are superseded where that amendment says so.
+
 ## Goal
 
 Give `patched_interpolate` one accuracy requirement with a measured, reported
@@ -371,7 +377,8 @@ which the report names per patch:
   no estimate for the patch.
 
 The run's global error is **certified** when every contribution is exact or
-exhaustive. Certification is a statement about the absolute error,
+exhaustive (since the 2026-10-04 amendment, also within its allowance: a
+retained `ToleranceNotMet` patch is never certified). Certification is a statement about the absolute error,
 `E <= delta * (1 + GLOBAL_ROUNDING_MARGIN) + MEASUREMENT_ROUNDING_FACTOR * eps
 * ||f~||` (see [Measurement rounding](#measurement-rounding)), where `delta` is
 the allowance actually used. The report sets the flag `rounding_limited`
@@ -427,7 +434,8 @@ same rule as the volume-proportional local `cutoff` of `PatchingOptions`
 ```
 
 Summing over the disjoint accepted and zero patches, whose volumes add up to
-`|X|`, gives `E <= delta`. The comparison is a root-mean-square test against
+`|X|`, gives `E <= delta`, unless a patch was retained by the minimum patch
+size without meeting its allowance (2026-10-04 amendment). The comparison is a root-mean-square test against
 one constant.
 
 - **Splits.** A patch's allowance depends on its volume only. The children of
@@ -892,7 +900,8 @@ No field or variant keeps its name with a different meaning.
 
 - **L2** (default): acceptance requires the M2 conditions (`Converged`,
   strictly below the cap, layout checks) and an acceptance measurement with
-  `rms <= tau`. Zero patches require the same of the zero approximation. A
+  `rms <= tau`; the 2026-10-04 amendment adds capped acceptance and retained
+  patches. Zero patches require the same of the zero approximation. A
   certified run has
   `E <= delta * (1 + GLOBAL_ROUNDING_MARGIN) + MEASUREMENT_ROUNDING_FACTOR *
   eps * ||f~||`, up to the rounding model of
@@ -946,6 +955,8 @@ Changes to the M2 steps
 6. **Not converged** (`BondCapReached`, `IterationLimit`, or any future
    variant): split as in M2. No measurement runs on a patch that is not
    accepted anyway ([open question 4](#open-questions-for-the-user)).
+   Superseded on 2026-10-04: capped-eligible and retained runs are measured
+   ([amendment](#amendment-2026-10-04-patch-size-bounds)).
 7. **Verify** the `Converged` outcome of run `a` after the M2 layout and cap
    checks, on the re-embedded patch that would be stored, so the measured
    network is the returned one:
@@ -1465,6 +1476,47 @@ None blocks the M3 implementation; the defaults below are provisional.
   for M3b, where the algebra adopts the shared type (the defaults differ:
   `1e-6` there, `1e-8` here).
 
+## Amendment 2026-10-04: patch-size bounds
+
+M5 questions 2 and 4 of
+[tree-pqtci-split-selection.md](./tree-pqtci-split-selection.md) add two
+options, specified and argued in
+[tree-pqtci-patch-size-bounds.md](./tree-pqtci-patch-size-bounds.md). Sizes
+are generalized bits, one per active site, whatever its dimension. Both
+defaults reproduce M3 exactly.
+
+- **Capped acceptance.** With `CappedPatches::AcceptUpTo { bits }`, a
+  `BondCapReached` run of a patch with at most `bits` active sites is checked
+  (layout, re-embedding, bond at most the cap) and measured on the stream of
+  its attempt. It is accepted when `rms <= tau` (the engine estimate under
+  `SampledMax`). A failed capped measurement is not rerun. These acceptances
+  meet their allowance by measurement, so they break no accounting
+  statement; they widen the selection effects of sampled acceptance, and on
+  binary layouts a bound of at most `log2(max(max_exhaustive_points,
+  samples))` keeps them exhaustive.
+- **Minimum patch size.** With `min_patch_bits = Some(m)`, a split whose
+  children would have fewer than `m` bits is not made. The patch is retained
+  with its last engine run: a judged run keeps its verdict without a second
+  measurement; an unjudged one is checked like a capped run and measured once
+  (by its estimate under `SampledMax`). Its record carries
+  `PatchStatus::WithinTolerance` or `PatchStatus::ToleranceNotMet`; a sampled
+  measurement of a retained patch is audited. An exhausted `patch_order`
+  keeps its M3 errors; `VerificationFailed` now means that the last run was
+  measured (converged or capped-eligible) and failed.
+- **Report.** A `ToleranceNotMet` contribution turns the global error into
+  `GlobalL2Error::ToleranceNotMet { measured_rms, unmet_fraction, basis }`,
+  which takes precedence and whose `basis` carries the M3 classification
+  (`ExactOrExhaustive`, `Audited`, `AcceptanceOnly`). `certified_fraction`
+  excludes such patches, and `PatchedInterpolationReport::tolerance_met()`
+  reports whether every patch met its allowance. The three M3 variants keep
+  their promises, because they occur only when every patch did. The error of
+  a run with a `ToleranceNotMet` patch can exceed `delta` without limit; the
+  budget of accurate patches is not redistributed.
+- **Validation and engine errors.** A capped bound below the minimum is
+  rejected as `InvalidInput` before any evaluation. A capped-eligible or
+  retained network above the cap or not matching the layout is an engine
+  error, as is `Converged` at the cap.
+
 ## Open questions for the user
 
 1. **Definition of "verified".** Exact and exhaustive measurements are
@@ -1551,6 +1603,11 @@ None blocks the M3 implementation; the defaults below are provisional.
      [known limitation](#known-limitation-corner-localized-misses) were all
      `Converged` patches, so selection bias is not the reason for the
      deferral.
+
+   **Implemented in M5 (2026-10-04), without the early exit:** capped
+   patches are accepted on their measurement only up to a size bound in
+   generalized bits (`CappedPatches::AcceptUpTo`), off by default; see the
+   [amendment](#amendment-2026-10-04-patch-size-bounds).
 5. **Acceptance statistic and audit.** Proposed: accept on the point estimate
    of the acceptance sample, and draw an independent audit sample for every
    sampled contribution by default (`audit = true`), at the cost of `samples`

@@ -184,9 +184,9 @@ or zero patch must have a root-mean-square residual of at most
 patch with at most `max(max_exhaustive_points, samples)` points (see
 `VerificationOptions`) is measured at every point; a larger patch on fresh
 uniform samples, followed by an independent audit sample. A failed
-measurement reruns the engine with the worst measured points added to its
-pivots, then splits the patch. What a run can claim is the report's
-`GlobalL2Error`:
+measurement of a converged run reruns the engine with the worst measured
+points added to its pivots, then splits the patch. What a run can claim is
+the report's `GlobalL2Error`:
 
 - `Certified`: every contribution is exact or exhaustive, and the absolute
   error is at most `delta` up to a small relative margin and a rounding term
@@ -203,6 +203,87 @@ pivots, then splits the patch. What a run can claim is the report's
   do not exclude it.
 - `AcceptanceOnly`: audits were disabled. The combined acceptance statistics
   are neither a bound nor an estimate.
+- `ToleranceNotMet`: some patch was retained by the minimum patch size
+  without meeting its allowance (below). It takes precedence over the other
+  three, is never certified, and its `basis` says which of them describes its
+  measured value; an exact or exhaustive basis still bounds the error.
+
+### Patch-size bounds
+
+Two options bound the patch size in generalized bits: every unfixed site of
+a patch counts as one bit, whatever its dimension, so a fused quantics site
+of dimension 4 is one bit.
+
+- `with_min_patch_bits(m)` stops splitting where the children would have
+  fewer than `m` bits. Such a patch is retained with its last engine run and
+  recorded as `PatchStatus::WithinTolerance` or
+  `PatchStatus::ToleranceNotMet`; `report.tolerance_met()` says whether every
+  patch met its allowance, and the error of a run with a `ToleranceNotMet`
+  patch can exceed `delta` without limit.
+- `with_capped_patches(CappedPatches::AcceptUpTo { bits })` accepts a patch
+  that reaches the bond cap when it has at most `bits` unfixed sites and
+  passes its error check. Larger capped patches still split, and a patch that
+  converges below the cap is never split for its size. The bound must be at
+  least the minimum.
+
+Both default to splitting down to exact patches. On binary layouts, a capped
+bound of at most `log2(max(max_exhaustive_points, samples))` bits keeps every
+capped acceptance exhaustively measured.
+
+```rust
+# use std::collections::BTreeMap;
+# use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
+# use tensor4all_partitionedtreetn::adaptive_interpolation::{
+#     patched_interpolate, GlobalL2Error, PatchStatus, PatchedInterpolationOptions,
+#     ToleranceNotMetBasis,
+# };
+# use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
+# use tensor4all_treetci::TreeTciInterpolator;
+# use tensor4all_treetn::NodeNameNetwork;
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+// f(x, y) = 1 + [x == y] on two sites of dimension 3 has rank three, which
+// a cap of two cannot represent. A minimum of two bits retains the root.
+let (x, y) = (DynIndex::new_dyn(3), DynIndex::new_dyn(3));
+let mut topology = NodeNameNetwork::new();
+topology.add_node(0usize)?;
+topology.add_node(1usize)?;
+topology.add_edge(&0, &1)?;
+let node_sites = BTreeMap::from([(0usize, vec![x.clone()]), (1, vec![y.clone()])]);
+let f = |p: &[usize]| if p[0] == p[1] { 2.0 } else { 1.0 };
+let values: Vec<f64> = (0..9).map(|k| f(&[k % 3, k / 3])).collect();
+let norm = values.iter().map(|v| v * v).sum::<f64>().sqrt();
+let options = PatchedInterpolationOptions::new(2)
+    .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
+    .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
+    .with_min_patch_bits(2);
+let result = patched_interpolate(
+    &TreeTciInterpolator::default(),
+    topology,
+    node_sites,
+    ColMajorArray::new(vec![0, 0], vec![2, 1])?,
+    |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+        Ok(batch.data().chunks(2).map(f).collect())
+    },
+    &options,
+)?;
+
+assert_eq!(result.report.splits, 0);
+assert_eq!(result.report.accepted[0].status, PatchStatus::ToleranceNotMet);
+assert!(!result.report.tolerance_met());
+let error = result.report.norm.l2_error().unwrap();
+let GlobalL2Error::ToleranceNotMet { measured_rms, basis, .. } = &error.global else {
+    panic!("expected ToleranceNotMet");
+};
+// The nine points were measured exhaustively, so the measured error is the
+// dense one.
+assert!(matches!(basis, ToleranceNotMetBasis::ExactOrExhaustive { .. }));
+let reference = IdxTensor::from_dense(vec![x, y], values)?;
+let dense = result.partition.to_treetn()?.contract_to_tensor()?;
+let residual_rms = dense.sub(&reference)?.norm()? / 3.0;
+assert!((measured_rms - residual_rms).abs() <= 1e-12 * norm);
+# Ok(())
+# }
+```
 
 The reference norm defaults to `L2Reference::Required`, which fails before any
 evaluation unless `rtol = 0` (use `atol` alone) or the root has at most one

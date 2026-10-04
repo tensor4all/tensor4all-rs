@@ -138,7 +138,8 @@ Scope:
 - a driver in `tensor4all-partitionedtreetn`, generic over the M1 trait;
 - FIFO patch queue keyed by `Projector` over full `DynIndex` identities;
 - acceptance only for a converged patch within tolerance and strictly below
-  the bond cap;
+  the bond cap (M5 later added opt-in capped acceptance and a minimum patch
+  size);
 - fixed sites handled as described in the findings (dimension-one engine
   vertices, index mapping back to the caller's identities, fused-coordinate
   mapping for multi-index nodes); nodes are never removed;
@@ -224,7 +225,11 @@ Exit: a recorded, scoped decision with raw measurements.
 Outcome: the patch tree adapts its split sites and does not proliferate
 redundant patches.
 
-Status: **design open; nothing implemented.** The design notes and the open
+Status: **minimum patch size and capped-patch bound implemented
+(2026-10-04, questions 2 and 4 without the engine's early exit,
+[`tree-pqtci-patch-size-bounds.md`](./tree-pqtci-patch-size-bounds.md));
+the selector (an optional later study), sibling merging, and the
+overpatching measurements remain open.** The design notes and the open
 questions for the user are in
 [`tree-pqtci-split-selection.md`](./tree-pqtci-split-selection.md). The only
 data so far is an exploratory fixed-depth partition study

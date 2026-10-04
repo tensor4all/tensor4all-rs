@@ -41,7 +41,12 @@ remaining (active) sites and needs back:
    identities;
 2. a verdict that separates "converged below the bond cap" from "stopped at
    the bond cap" and "stopped at the iteration limit", because only the first
-   is accepted;
+   is accepted by default (since the M5 patch-size bounds of 2026-10-04 the
+   driver can also accept a small capped patch or retain a patch at its
+   minimum size, see
+   [tree-pqtci-patch-size-bounds.md](./tree-pqtci-patch-size-bounds.md); an
+   outcome network's bonds therefore never exceed the cap, whatever the
+   termination);
 3. the error estimate and the maximum sampled magnitude, unnormalized;
 4. optionally, full-domain pivots of the result for seeding children.
 

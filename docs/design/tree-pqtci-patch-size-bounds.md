@@ -6,7 +6,21 @@ Implementation plan for the two decided M5 items of
 [tree-pqtci-split-selection.md](./tree-pqtci-split-selection.md#open-questions-for-the-user):
 open question 2 (minimum patch size) and open question 4 (capped outcomes,
 without the engine's early exit). Written on `feat/tree-adaptive-patching` at
-`a70a127d`. Nothing is implemented.
+`a70a127d`.
+
+**Implemented on 2026-10-04** as planned, following every proposal of the
+open issues: the maximum is option (c) of open issue 14, named
+`PatchedInterpolationOptions::capped_patches: CappedPatches` with the builder
+`with_capped_patches` (the code block under [Public API changes](#public-api-changes)
+shows the earlier option (a)); `max >= min` is validated (open issue 13,
+after `max_patches`, before the verification options); an over-cap or
+malformed network that the driver would use is an engine error, with the M1
+rustdoc amendment (open issue 10). Open issue 1 stays provisional: the code
+follows "minimum wins", and its final rustdoc wording awaits the user. The
+policy lives in `adaptive_interpolation/acceptance.rs`; the tests are
+`tests/adaptive_patch_size.rs` and a unit test of the report basis in
+`verify/tests.rs`. Decisions and deviations are logged in
+[the implementation work log](../worklogs/2026-10-04-m5-patch-size-bounds.md).
 
 Writing the plan uncovered gaps in the recorded decisions. The user has since
 decided two of them, recorded under [Decided](#decided). The others are under

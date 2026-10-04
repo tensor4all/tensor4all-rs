@@ -169,15 +169,21 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   (`ErrorTolerance { rtol, atol }`, default `1e-8`, `0`), `verification`
   (`VerificationOptions`: `samples` 64, `max_exhaustive_points` 1024,
   `retries` 1, `audit` true), `n_initial_pivots` (5), `recycle_pivots`
-  (false), `seed` (0; per-patch streams, no `&mut R` API), `max_patches`.
+  (false), `seed` (0; per-patch streams, no `&mut R` API), `max_patches`,
+  `min_patch_bits` (`None`; generalized bits = active sites, any dimension;
+  a blocked failing patch is retained as `PatchStatus::ToleranceNotMet`),
+  `capped_patches` (`CappedPatches::Split`; `AcceptUpTo { bits }` accepts
+  small `BondCapReached` patches on their error check, `bits >= min`).
   Under L2 pass `ErrorNorm::l2(L2Reference::Given(l2_norm_of_f))` (an L2 norm,
   not `max |f|`), or `rtol = 0` with `atol`; `L2Reference::MonteCarlo` is an
   opt-in estimate. The driver measures every accepted and zero patch
   (exhaustive up to `max_exhaustive_points`, else sampled plus audit) and
   reports `report.norm` (`NormReport::L2 { tau, error: L2ErrorReport { global:
-  GlobalL2Error::{Certified, Audited, AcceptanceOnly}, .. }, .. }`): only
-  `Certified` is a bound, and only up to a calibrated (not proven) rounding
-  model; a sampled run is an estimate only with the audit on, otherwise
+  GlobalL2Error::{Certified, Audited, AcceptanceOnly, ToleranceNotMet}, .. },
+  .. }`): `Certified` is a bound that every patch met its allowance, only up
+  to a calibrated (not proven) rounding model; `ToleranceNotMet` (a retained
+  patch missed its allowance; check `report.tolerance_met()`) still bounds the
+  error with an `ExactOrExhaustive` basis but is never certified; a sampled run is an estimate only with the audit on, otherwise
   acceptance-only (neither a bound nor an estimate). Known limitation:
   sampled acceptance and the audit can both miss a localized feature that
   enters a patch only through a corner or an edge, and the audit's standard

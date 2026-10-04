@@ -111,7 +111,7 @@ State after the user's answers of 2026-10-03.
    the tolerance. Such a patch is never counted as certified. The run does not
    stop with an error. The minimum is given as a number of active quantics
    bits, the same unit as the capped-patch maximum in question 4.
-   Implementation plan and open details:
+   Implemented on 2026-10-04 as `min_patch_bits`; plan and open details:
    [patch-size bounds](./tree-pqtci-patch-size-bounds.md).
 3. **Sibling merging — undecided.** Its acceptance rule, its reporting, and
    whether it belongs in the driver or in a post-processing step remain open.
@@ -127,7 +127,8 @@ State after the user's answers of 2026-10-03.
    size. The maximum is given as a number of quantics bits: the count of the
    patch's unfixed (active) bits. The early exit of the engine at the first
    saturated sweep is still open.
-   Implementation plan and open details:
+   Implemented on 2026-10-04 as `CappedPatches::AcceptUpTo`, without the
+   early exit; plan and open details:
    [patch-size bounds](./tree-pqtci-patch-size-bounds.md).
 5. **Corner-localized misses — decided: optional mitigation.** Split rules and
    child candidate sets may take them into account through an opt-in option
