@@ -128,8 +128,9 @@ pub use options::QtciOptions;
 #[allow(deprecated)]
 pub use quantics_tci::{
     quanticscrossinterpolate, quanticscrossinterpolate_batch, quanticscrossinterpolate_discrete,
-    quanticscrossinterpolate_discrete_batch, quanticscrossinterpolate_from_arrays,
-    quanticscrossinterpolate_from_arrays_batch, QuanticsTensorCI2,
+    quanticscrossinterpolate_discrete_batch, quanticscrossinterpolate_discrete_batch_with_rng,
+    quanticscrossinterpolate_from_arrays, quanticscrossinterpolate_from_arrays_batch,
+    quanticscrossinterpolate_from_arrays_batch_with_rng, QuanticsTensorCI2,
 };
 
 // Re-export commonly used types from dependencies

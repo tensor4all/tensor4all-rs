@@ -1,9 +1,8 @@
 use crate::batch::checked_batch_len;
 use crate::error::Result as TreeTciResult;
 use crate::{
-    materialize::to_treetn,
-    optimize::{optimize_with_proposer, optimize_with_proposer_with_rng},
-    GlobalIndexBatch, MultiIndex, PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciOptions,
+    materialize::to_treetn, optimize::optimize_with_proposer_with_rng, GlobalIndexBatch,
+    MultiIndex, PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciOptions,
 };
 use anyhow::Result;
 use rand::SeedableRng;
