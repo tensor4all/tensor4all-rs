@@ -1,5 +1,6 @@
 //! Owned native state for tree ACI sweeps.
 
+use rand::SeedableRng;
 use tensor4all_core::{IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
 
@@ -154,6 +155,21 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
         inputs: &'a [TreeTN<IdxTensor, V>],
         options: &TreeAciOptions<V>,
     ) -> Result<Self> {
+        // The seeded entry point builds one explicitly named stream and
+        // delegates, so initialization and the guard searches share it.
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rng_seed);
+        Self::initialize_with_rng(inputs, options, &mut rng)
+    }
+
+    /// Initializes the state on a caller-owned random stream.
+    ///
+    /// Same as [`Self::initialize`], but consumes `rng` for the random initial
+    /// output instead of deriving a stream from `TreeAciOptions::rng_seed`.
+    pub(crate) fn initialize_with_rng<R: rand::Rng + ?Sized>(
+        inputs: &'a [TreeTN<IdxTensor, V>],
+        options: &TreeAciOptions<V>,
+        rng: &mut R,
+    ) -> Result<Self> {
         #[cfg(test)]
         let stage_started = std::time::Instant::now();
         let problem = prepare_problem::<T, V>(inputs, options)?;
@@ -168,7 +184,7 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
             validate_initial_guess::<T, V>(guess, &inputs[0], &problem)?;
             guess.clone()
         } else {
-            build_random_output::<T, V>(&inputs[0], &problem, &initial_edge_ranks, options)?
+            build_random_output::<T, V, R>(&inputs[0], &problem, &initial_edge_ranks, options, rng)?
         };
         // A complete first directional pass replaces every core with CI
         // factors before `finalize_deferred_canonicalization` establishes the

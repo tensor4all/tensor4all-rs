@@ -1,4 +1,6 @@
 use num_complex::{Complex32, Complex64};
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
@@ -12,6 +14,10 @@ use crate::{
     transaction::update_edge_transaction,
     TreeAciOptions,
 };
+
+fn seeded_rng() -> ChaCha8Rng {
+    ChaCha8Rng::seed_from_u64(0)
+}
 
 fn delta_tree() -> (TreeTN<IdxTensor, usize>, DynIndex, DynIndex) {
     let left_site = DynIndex::new_dyn(2);
@@ -372,8 +378,14 @@ fn global_search_rejects_the_start_batch_before_calling_the_operator() {
         Ok(())
     };
 
-    let error = find_global_pivots(&state, &mut evaluators, &options, 0, &mut operator)
-        .expect_err("the start vectors must be budgeted before allocation/evaluation");
+    let error = find_global_pivots(
+        &state,
+        &mut evaluators,
+        &options,
+        &mut seeded_rng(),
+        &mut operator,
+    )
+    .expect_err("the start vectors must be budgeted before allocation/evaluation");
 
     assert!(matches!(
         error,
@@ -414,8 +426,14 @@ fn floating_zone_finds_a_feature_missing_from_the_output() {
     )
     .unwrap();
 
-    let report =
-        find_global_pivots(&state, &mut input_evaluators, &options, 9, &mut identity).unwrap();
+    let report = find_global_pivots(
+        &state,
+        &mut input_evaluators,
+        &options,
+        &mut seeded_rng(),
+        &mut identity,
+    )
+    .unwrap();
 
     assert!(!report.pivots.is_empty());
     assert!(report
@@ -438,9 +456,22 @@ fn exact_output_has_no_global_pivot_and_injection_updates_every_cut() {
     let inputs = vec![input];
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
     let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
-    run_directional_pass(&mut state, &options, PassDirection::Forward, &mut identity).unwrap();
-    let exact =
-        find_global_pivots(&state, &mut input_evaluators, &options, 3, &mut identity).unwrap();
+    run_directional_pass(
+        &mut state,
+        &options,
+        PassDirection::Forward,
+        &mut identity,
+        &mut seeded_rng(),
+    )
+    .unwrap();
+    let exact = find_global_pivots(
+        &state,
+        &mut input_evaluators,
+        &options,
+        &mut seeded_rng(),
+        &mut identity,
+    )
+    .unwrap();
     assert!(exact.pivots.is_empty());
 
     let (input, _, _) = delta_tree();
@@ -531,8 +562,14 @@ fn max_nglobal_pivots_caps_what_the_guard_offers() {
     state.output = zero_tree(left_site, right_site);
     let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
 
-    let report =
-        find_global_pivots(&state, &mut input_evaluators, &options, 9, &mut identity).unwrap();
+    let report = find_global_pivots(
+        &state,
+        &mut input_evaluators,
+        &options,
+        &mut seeded_rng(),
+        &mut identity,
+    )
+    .unwrap();
 
     assert_eq!(report.pivots.len(), 1);
 }
@@ -603,7 +640,14 @@ fn injection_skips_saturated_cuts_but_retains_recursive_records() {
         "padding another cut must not replace an inactive bond"
     );
     assert!(state.sample_arena.record_count() > records_before);
-    run_directional_pass(&mut state, &options, PassDirection::Forward, &mut identity).unwrap();
+    run_directional_pass(
+        &mut state,
+        &options,
+        PassDirection::Forward,
+        &mut identity,
+        &mut seeded_rng(),
+    )
+    .unwrap();
     let edge_one_pivots_before = state.pivots.per_edge[1].clone();
     update_edge_transaction(&mut state, 0, &options, true, &mut identity).unwrap();
     assert_eq!(state.pivots.per_edge[1], edge_one_pivots_before);

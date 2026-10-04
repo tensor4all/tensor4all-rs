@@ -33,17 +33,18 @@ pub(crate) fn per_evaluator_message_cache_budget(
     Ok(total_budget / evaluator_count)
 }
 
-pub(crate) fn find_global_pivots<'a, T, V, F>(
+pub(crate) fn find_global_pivots<'a, T, V, F, R>(
     state: &TreeAciState<'a, T, V>,
     input_evaluators: &mut InputEvaluators<'a, V>,
     options: &TreeAciOptions<V>,
-    seed: u64,
+    rng: &mut R,
     operator: &mut F,
 ) -> Result<GlobalSearchReport>
 where
     T: TreeAciScalar,
     V: TreeAciNode,
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
+    R: rand::Rng + ?Sized,
 {
     let nsearch = options.nsearch_global_pivots;
     let max_pivots = options.max_nglobal_pivots;
@@ -70,7 +71,6 @@ where
     // point vectors. Previously a caller could set a tiny working limit and
     // still allocate `nsearch * node_count` coordinates first.
     input_evaluators.enforce_guard_batch_budget_with_retained::<T>(nsearch, site_dims_bytes)?;
-    let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let starts = (0..nsearch)
         .map(|_| {
             site_dims

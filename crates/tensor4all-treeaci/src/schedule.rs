@@ -70,15 +70,17 @@ impl PassReport {
     }
 }
 
-pub(crate) fn run_local_sweeps<'a, T, V, F>(
+pub(crate) fn run_local_sweeps<'a, T, V, F, R>(
     state: &mut TreeAciState<'a, T, V>,
     options: &TreeAciOptions<V>,
     operator: &mut F,
+    rng: &mut R,
 ) -> Result<SweepHistory>
 where
     T: TreeAciScalar,
     V: TreeAciNode,
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
+    R: rand::Rng + ?Sized,
 {
     let mut max_ranks = Vec::with_capacity(options.max_sweeps);
     let mut max_errors = Vec::with_capacity(options.max_sweeps);
@@ -99,7 +101,7 @@ where
         } else {
             PassDirection::Reverse
         };
-        let report = run_directional_pass(state, options, direction, operator)?;
+        let report = run_directional_pass(state, options, direction, operator, rng)?;
         stable_rank_passes =
             track_rank_stability(&mut previous_ranks, &state.edge_ranks, stable_rank_passes);
         evaluated_points = evaluated_points
@@ -134,10 +136,10 @@ where
                         .ok_or(TreeAciError::InternalInvariant {
                             message: "enabled global Guard has no input evaluators",
                         })?;
-                let seed = options.rng_seed.wrapping_add((pass + 1) as u64);
+
                 #[cfg(test)]
                 let guard_started = std::time::Instant::now();
-                let search = find_global_pivots(state, input_evaluators, options, seed, operator)?;
+                let search = find_global_pivots(state, input_evaluators, options, rng, operator)?;
                 #[cfg(test)]
                 crate::state::profile_debug_stats::record(|stats| {
                     stats.global_guard += guard_started.elapsed();
@@ -204,16 +206,18 @@ fn global_injection_capacities<T: TreeAciScalar, V: TreeAciNode>(
         .collect()
 }
 
-pub(crate) fn run_directional_pass<T, V, F>(
+pub(crate) fn run_directional_pass<T, V, F, R>(
     state: &mut TreeAciState<'_, T, V>,
     options: &TreeAciOptions<V>,
     direction: PassDirection,
     operator: &mut F,
+    rng: &mut R,
 ) -> Result<PassReport>
 where
     T: TreeAciScalar,
     V: TreeAciNode,
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
+    R: rand::Rng + ?Sized,
 {
     #[cfg(test)]
     let schedule_clone_started = std::time::Instant::now();

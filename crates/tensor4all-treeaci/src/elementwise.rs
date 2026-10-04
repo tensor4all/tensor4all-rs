@@ -1,5 +1,6 @@
 //! Public native TreeTN elementwise ACI entry points.
 
+use rand::SeedableRng;
 use tensor4all_core::IdxTensor;
 use tensor4all_treetn::TreeTN;
 
@@ -63,7 +64,7 @@ use crate::{
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn tree_elementwise_batched<T, V, F>(
-    mut operator: F,
+    operator: F,
     inputs: &[TreeTN<IdxTensor, V>],
     options: &TreeAciOptions<V>,
 ) -> Result<TreeAciResult<V>>
@@ -72,14 +73,41 @@ where
     V: TreeAciNode,
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
 {
+    // The seeded high-level path uses an explicitly named RNG and delegates;
+    // one stream serves the random initial output and every guard search.
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rng_seed);
+    tree_elementwise_batched_with_rng(operator, inputs, options, &mut rng)
+}
+
+/// Tree elementwise ACI on a caller-owned random stream.
+///
+/// Same as [`tree_elementwise_batched`], but consumes `rng` for the random
+/// initial output and for every global guard search instead of deriving a seed
+/// per pass, so the caller can reproduce or advance the whole run.
+///
+/// # Errors
+///
+/// Returns the same errors as [`tree_elementwise_batched`].
+pub fn tree_elementwise_batched_with_rng<T, V, F, R>(
+    mut operator: F,
+    inputs: &[TreeTN<IdxTensor, V>],
+    options: &TreeAciOptions<V>,
+    rng: &mut R,
+) -> Result<TreeAciResult<V>>
+where
+    T: TreeAciScalar,
+    V: TreeAciNode,
+    F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
+    R: rand::Rng + ?Sized,
+{
     // The exact one-node path needs neither bootstrap samples nor frame/state
     // caches. Branch before `TreeAciState::initialize`; `evaluate_single_site`
     // performs the complete public-input and initial-guess validation itself.
     if inputs.first().is_some_and(|input| input.node_count() == 1) {
         return evaluate_single_site(inputs, options, &mut operator);
     }
-    let mut state = TreeAciState::<T, V>::initialize(inputs, options)?;
-    let history = run_local_sweeps(&mut state, options, &mut operator)?;
+    let mut state = TreeAciState::<T, V>::initialize_with_rng(inputs, options, rng)?;
+    let history = run_local_sweeps(&mut state, options, &mut operator, rng)?;
     let mut evaluated_points = history.evaluated_points;
     if history
         .global_pivots_found
@@ -91,7 +119,7 @@ where
         } else {
             PassDirection::Reverse
         };
-        let cleanup = run_directional_pass(&mut state, options, direction, &mut operator)?;
+        let cleanup = run_directional_pass(&mut state, options, direction, &mut operator, rng)?;
         evaluated_points = evaluated_points
             .checked_add(cleanup.evaluated_points)
             .ok_or(crate::TreeAciError::SizeOverflow {
