@@ -79,6 +79,13 @@ and parameters 0.34 of the unpartitioned run, so that ratio is approximate.
 - The four-peaks workloads reach only ranks 26–30 on the tree, so the
   high-rank localized case is untested.
 - Single runs, one seed, unknown revision.
+- **Thread settings were not recorded.** The related TreeTCI threading
+  symptom is tracked in [issue #670](https://github.com/tensor4all/tensor4all-rs/issues/670).
+  Oversubscription may inflate these absolute timings. Even if the runs used
+  the same thread settings, its effect can differ between the unpartitioned
+  network and smaller patches, so the time ratios also need a rerun with
+  pinned thread counts before they support a performance decision. Parameter
+  and evaluation counts remain descriptive evidence for these recorded runs.
 
 ## Reproduction
 
