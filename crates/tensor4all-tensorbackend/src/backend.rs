@@ -8,7 +8,7 @@ use num_complex::{Complex32, Complex64, ComplexFloat};
 use tenferro::{DType, Tensor, TensorScalar, TensorSessionOpsExt, TypedTensor};
 use tenferro_linalg::TensorLinalgExt;
 
-use crate::context::with_default_session;
+use crate::context::{default_cpu_execution_context, with_default_session, CpuExecutionContext};
 use crate::matrix::Matrix;
 
 /// Result of SVD decomposition `A = U * diag(S) * Vt`.
@@ -336,6 +336,7 @@ pub trait MatrixTriangularSolveScalar: BackendLinalgScalar + crate::matrix::Matr
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
+        context: &CpuExecutionContext,
     ) -> Result<Matrix<Self>>;
 
     #[doc(hidden)]
@@ -346,8 +347,17 @@ pub trait MatrixTriangularSolveScalar: BackendLinalgScalar + crate::matrix::Matr
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
+        context: &CpuExecutionContext,
     ) -> Result<Matrix<Self>> {
-        Self::triangular_solve_matrix_impl(&a, &b, left_side, lower, transpose_a, unit_diagonal)
+        Self::triangular_solve_matrix_impl(
+            &a,
+            &b,
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+            context,
+        )
     }
 }
 
@@ -635,6 +645,7 @@ fn triangular_solve_matrix_direct<T>(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
+    context: &CpuExecutionContext,
 ) -> Result<Matrix<T>>
 where
     T: BackendLinalgScalar + Copy,
@@ -647,6 +658,7 @@ where
         lower,
         transpose_a,
         unit_diagonal,
+        context,
     )
 }
 
@@ -657,6 +669,7 @@ fn triangular_solve_matrix_direct_owned<T>(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
+    context: &CpuExecutionContext,
 ) -> Result<Matrix<T>>
 where
     T: BackendLinalgScalar + Copy,
@@ -664,17 +677,18 @@ where
 {
     let a_tensor: Tensor = a.into_typed_tensor().into();
     let b_tensor: Tensor = b.into_typed_tensor().into();
-    let result = with_default_session(|session| {
-        a_tensor.triangular_solve(
-            &b_tensor,
-            left_side,
-            lower,
-            transpose_a,
-            unit_diagonal,
-            session,
-        )
-    })
-    .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?;
+    let result = context
+        .with_session(|session| {
+            a_tensor.triangular_solve(
+                &b_tensor,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+                session,
+            )
+        })
+        .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?;
     let x = try_into_typed_result::<T>("triangular_solve", result)?;
     typed_tensor_to_matrix("triangular_solve", x)
 }
@@ -697,8 +711,9 @@ impl MatrixTriangularSolveScalar for f64 {
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
+        context: &CpuExecutionContext,
     ) -> Result<Matrix<Self>> {
-        triangular_solve_matrix_direct(a, b, left_side, lower, transpose_a, unit_diagonal)
+        triangular_solve_matrix_direct(a, b, left_side, lower, transpose_a, unit_diagonal, context)
     }
 
     fn triangular_solve_matrix_owned_impl(
@@ -708,8 +723,17 @@ impl MatrixTriangularSolveScalar for f64 {
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
+        context: &CpuExecutionContext,
     ) -> Result<Matrix<Self>> {
-        triangular_solve_matrix_direct_owned(a, b, left_side, lower, transpose_a, unit_diagonal)
+        triangular_solve_matrix_direct_owned(
+            a,
+            b,
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+            context,
+        )
     }
 }
 
@@ -731,8 +755,9 @@ impl MatrixTriangularSolveScalar for Complex64 {
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
+        context: &CpuExecutionContext,
     ) -> Result<Matrix<Self>> {
-        triangular_solve_matrix_direct(a, b, left_side, lower, transpose_a, unit_diagonal)
+        triangular_solve_matrix_direct(a, b, left_side, lower, transpose_a, unit_diagonal, context)
     }
 
     fn triangular_solve_matrix_owned_impl(
@@ -742,8 +767,17 @@ impl MatrixTriangularSolveScalar for Complex64 {
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
+        context: &CpuExecutionContext,
     ) -> Result<Matrix<Self>> {
-        triangular_solve_matrix_direct_owned(a, b, left_side, lower, transpose_a, unit_diagonal)
+        triangular_solve_matrix_direct_owned(
+            a,
+            b,
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+            context,
+        )
     }
 }
 
@@ -785,6 +819,7 @@ impl MatrixTriangularSolveScalar for f32 {
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
+        context: &CpuExecutionContext,
     ) -> Result<Matrix<Self>> {
         let a64 = Matrix::from_col_major_vec(
             a.nrows(),
@@ -809,6 +844,7 @@ impl MatrixTriangularSolveScalar for f32 {
             lower,
             transpose_a,
             unit_diagonal,
+            context,
         )?;
         Ok(Matrix::from_col_major_vec(
             x64.nrows(),
@@ -859,6 +895,7 @@ impl MatrixTriangularSolveScalar for Complex32 {
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
+        context: &CpuExecutionContext,
     ) -> Result<Matrix<Self>> {
         let a64 = Matrix::from_col_major_vec(
             a.nrows(),
@@ -883,6 +920,7 @@ impl MatrixTriangularSolveScalar for Complex32 {
             lower,
             transpose_a,
             unit_diagonal,
+            context,
         )?;
         Ok(Matrix::from_col_major_vec(
             x64.nrows(),
@@ -1172,8 +1210,16 @@ pub fn triangular_solve_matrix<T>(
 where
     T: MatrixTriangularSolveScalar,
 {
-    T::triangular_solve_matrix_impl(a, b, left_side, lower, transpose_a, unit_diagonal)
-        .map_err(BackendLinalgError::from)
+    T::triangular_solve_matrix_impl(
+        a,
+        b,
+        left_side,
+        lower,
+        transpose_a,
+        unit_diagonal,
+        &default_cpu_execution_context(),
+    )
+    .map_err(BackendLinalgError::from)
 }
 
 /// Solve a triangular system while consuming column-major [`Matrix`] values.
@@ -1207,8 +1253,67 @@ pub fn triangular_solve_matrix_owned<T>(
 where
     T: MatrixTriangularSolveScalar,
 {
-    T::triangular_solve_matrix_owned_impl(a, b, left_side, lower, transpose_a, unit_diagonal)
-        .map_err(BackendLinalgError::from)
+    triangular_solve_matrix_owned_in(
+        a,
+        b,
+        left_side,
+        lower,
+        transpose_a,
+        unit_diagonal,
+        &default_cpu_execution_context(),
+    )
+}
+
+/// Solve a triangular system in a caller-owned CPU execution context.
+///
+/// Context-scoped counterpart of [`triangular_solve_matrix_owned`] with the
+/// same flags and column-major [`Matrix`] layout: `left_side` solves
+/// `op(A) X = B` (otherwise `X op(A) = B`), `lower` selects the triangular
+/// half, `transpose_a` applies a transpose to `A`, and `unit_diagonal` treats
+/// the diagonal of `A` as ones. The solve runs on `context`'s configured
+/// backend; no process-global context is consulted.
+///
+/// # Errors
+///
+/// Returns an error when the input shapes or scalar dtype are invalid, the
+/// triangular flags are invalid, or the solve fails in `context`'s backend.
+///
+/// # Examples
+/// ```
+/// use tensor4all_tensorbackend::{
+///     from_vec2d, triangular_solve_matrix_owned_in, CpuExecutionContext,
+/// };
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::new());
+/// let a = from_vec2d(vec![vec![2.0_f64, 0.0], vec![1.0, 3.0]]);
+/// let b = from_vec2d(vec![vec![2.0_f64], vec![7.0]]);
+/// let x = triangular_solve_matrix_owned_in(a, b, true, true, false, false, &context).unwrap();
+/// assert!((x[[0, 0]] - 1.0).abs() < 1.0e-12);
+/// assert!((x[[1, 0]] - 2.0).abs() < 1.0e-12);
+/// ```
+pub fn triangular_solve_matrix_owned_in<T>(
+    a: Matrix<T>,
+    b: Matrix<T>,
+    left_side: bool,
+    lower: bool,
+    transpose_a: bool,
+    unit_diagonal: bool,
+    context: &CpuExecutionContext,
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
+where
+    T: MatrixTriangularSolveScalar,
+{
+    T::triangular_solve_matrix_owned_impl(
+        a,
+        b,
+        left_side,
+        lower,
+        transpose_a,
+        unit_diagonal,
+        context,
+    )
+    .map_err(BackendLinalgError::from)
 }
 
 fn full_piv_lu_tensor<T>(

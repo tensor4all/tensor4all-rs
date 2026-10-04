@@ -611,15 +611,13 @@ fn update_trailing_submatrix<T: Scalar>(data: &mut [T], nrows: usize, ncols: usi
     }
 }
 
-fn extract_lu_from_factorized<T: Scalar>(
+fn extract_l_from_factorized<T: Scalar>(
     data: &[T],
     nrows: usize,
-    ncols: usize,
     rank: usize,
     left_orthogonal: bool,
-) -> Result<(Matrix<T>, Matrix<T>)> {
-    debug_assert!(rank <= nrows.min(ncols));
-    debug_assert_eq!(data.len(), nrows * ncols);
+) -> Result<Matrix<T>> {
+    debug_assert!(rank <= nrows);
 
     let mut l_data = vec![T::zero(); nrows * rank];
     for col in 0..rank {
@@ -628,6 +626,31 @@ fn extract_lu_from_factorized<T: Scalar>(
         let dst_start = col_major_offset(nrows, col, col);
         l_data[dst_start..dst_start + (nrows - col)].copy_from_slice(&data[src_start..src_end]);
     }
+
+    if left_orthogonal {
+        for i in 0..rank {
+            l_data[col_major_offset(nrows, i, i)] = T::one();
+        }
+    }
+
+    if l_data.iter().any(|&value| value.is_nan()) {
+        return Err(MatrixCIError::NaNEncountered {
+            matrix: "L".to_string(),
+        });
+    }
+
+    Ok(Matrix::from_col_major_vec(nrows, rank, l_data))
+}
+
+fn extract_u_from_factorized<T: Scalar>(
+    data: &[T],
+    nrows: usize,
+    ncols: usize,
+    rank: usize,
+    left_orthogonal: bool,
+) -> Result<Matrix<T>> {
+    debug_assert!(rank <= nrows.min(ncols));
+    debug_assert_eq!(data.len(), nrows * ncols);
 
     let mut u_data = vec![T::zero(); rank * ncols];
     for col in 0..ncols {
@@ -640,31 +663,31 @@ fn extract_lu_from_factorized<T: Scalar>(
         }
     }
 
-    if left_orthogonal {
-        for i in 0..rank {
-            l_data[col_major_offset(nrows, i, i)] = T::one();
-        }
-    } else {
+    if !left_orthogonal {
         for i in 0..rank {
             u_data[col_major_offset(rank, i, i)] = T::one();
         }
     }
 
-    if l_data.iter().any(|&value| value.is_nan()) {
-        return Err(MatrixCIError::NaNEncountered {
-            matrix: "L".to_string(),
-        });
-    }
     if u_data.iter().any(|&value| value.is_nan()) {
         return Err(MatrixCIError::NaNEncountered {
             matrix: "U".to_string(),
         });
     }
 
-    Ok((
-        Matrix::from_col_major_vec(nrows, rank, l_data),
-        Matrix::from_col_major_vec(rank, ncols, u_data),
-    ))
+    Ok(Matrix::from_col_major_vec(rank, ncols, u_data))
+}
+
+fn extract_lu_from_factorized<T: Scalar>(
+    data: &[T],
+    nrows: usize,
+    ncols: usize,
+    rank: usize,
+    left_orthogonal: bool,
+) -> Result<(Matrix<T>, Matrix<T>)> {
+    let left = extract_l_from_factorized(data, nrows, rank, left_orthogonal)?;
+    let right = extract_u_from_factorized(data, nrows, ncols, rank, left_orthogonal)?;
+    Ok((left, right))
 }
 
 /// Options for rank-revealing LU decomposition.
@@ -694,6 +717,144 @@ pub struct RrLUOptions {
     pub abs_tol: f64,
     /// Left orthogonal (L has 1s on diagonal) or right orthogonal (U has 1s)
     pub left_orthogonal: bool,
+}
+
+struct RrLUFactorization {
+    row_permutation: Vec<usize>,
+    col_permutation: Vec<usize>,
+    n_pivot: usize,
+    error: f64,
+}
+
+/// Left factor and pivot diagnostics needed by row interpolation.
+///
+/// This avoids materializing the complementary upper factor for RSI's
+/// row-only path while sharing the same pivoting implementation as [`rrlu_mut`].
+pub(crate) struct RrLULeft<T: Scalar> {
+    pub(crate) row_permutation: Vec<usize>,
+    pub(crate) l: Matrix<T>,
+    pub(crate) n_pivot: usize,
+    pub(crate) pivot_magnitudes: Vec<f64>,
+}
+
+fn factorize_mut_in_place<T: Scalar>(
+    a: &mut Matrix<T>,
+    opts: RrLUOptions,
+) -> Result<RrLUFactorization> {
+    let nr = a.nrows();
+    let nc = a.ncols();
+    let data = a.as_col_major_mut_slice();
+    validate_col_major_matrix_len(nr, nc, data.len())?;
+    debug_assert_eq!(data.len(), nr * nc);
+
+    let max_bond_dim = opts.max_bond_dim.min(nr).min(nc);
+    let mut row_permutation = (0..nr).collect::<Vec<_>>();
+    let mut col_permutation = (0..nc).collect::<Vec<_>>();
+    let mut n_pivot = 0;
+    let mut error = f64::NAN;
+    let mut max_error = 0.0f64;
+
+    while n_pivot < max_bond_dim {
+        let k = n_pivot;
+        if k >= nr || k >= nc {
+            break;
+        }
+
+        let (pivot_row, pivot_col, pivot_val) =
+            submatrix_argmax_col_major(data, nr, nc, k, nr, k, nc);
+        let pivot_abs = f64::sqrt(pivot_val.abs_sq());
+        error = pivot_abs;
+
+        // Check stopping criteria (but add at least 1 pivot)
+        if n_pivot > 0 && (pivot_abs < opts.rel_tol * max_error || pivot_abs < opts.abs_tol) {
+            break;
+        }
+
+        // Guard against tiny pivots to prevent NaN from division. A caller that
+        // sets both tolerances to zero is requesting a non-truncating
+        // decomposition, so only an exactly zero pivot stops the factorization.
+        let min_pivot_abs = if opts.rel_tol == 0.0 && opts.abs_tol == 0.0 {
+            0.0
+        } else {
+            f64::EPSILON
+        };
+        if pivot_abs <= min_pivot_abs {
+            break;
+        }
+
+        max_error = max_error.max(pivot_abs);
+
+        // Swap rows and columns
+        if pivot_row != k {
+            swap_rows_col_major(data, nr, nc, k, pivot_row);
+            row_permutation.swap(k, pivot_row);
+        }
+        if pivot_col != k {
+            swap_cols_col_major(data, nr, nc, k, pivot_col);
+            col_permutation.swap(k, pivot_col);
+        }
+
+        let pivot = col_major_get(data, nr, k, k);
+
+        // Eliminate
+        if opts.left_orthogonal {
+            scale_column_tail(data, nr, k, k + 1, pivot);
+        } else {
+            scale_row_tail(data, nr, nc, k, k + 1, pivot);
+        }
+
+        update_trailing_submatrix(data, nr, nc, k);
+        n_pivot += 1;
+    }
+
+    // Preserve the full-factor API's existing diagnostic semantics.
+    if n_pivot >= nr.min(nc) {
+        error = 0.0;
+    }
+
+    Ok(RrLUFactorization {
+        row_permutation,
+        col_permutation,
+        n_pivot,
+        error,
+    })
+}
+
+pub(crate) fn rrlu_left_mut<T: Scalar>(
+    a: &mut Matrix<T>,
+    options: Option<RrLUOptions>,
+) -> Result<RrLULeft<T>> {
+    let mut options = options.unwrap_or_default();
+    options.left_orthogonal = true;
+    let state = factorize_mut_in_place(a, options)?;
+    let nrows = a.nrows();
+    let data = a.as_col_major_slice();
+    let mut pivot_magnitudes = (0..state.n_pivot)
+        .map(|i| f64::sqrt(data[col_major_offset(nrows, i, i)].abs_sq()))
+        .collect::<Vec<_>>();
+    // The row-only API measures the remaining residual even at a rank cap.
+    let residual = if state.n_pivot >= a.nrows().min(a.ncols()) {
+        0.0
+    } else {
+        let (_, _, value) = submatrix_argmax_col_major(
+            data,
+            nrows,
+            a.ncols(),
+            state.n_pivot,
+            nrows,
+            state.n_pivot,
+            a.ncols(),
+        );
+        f64::sqrt(value.abs_sq())
+    };
+    pivot_magnitudes.push(residual);
+    let l = extract_l_from_factorized(data, nrows, state.n_pivot, true)?;
+    Ok(RrLULeft {
+        row_permutation: state.row_permutation,
+        l,
+        n_pivot: state.n_pivot,
+        pivot_magnitudes,
+    })
 }
 
 impl Default for RrLUOptions {
@@ -734,88 +895,27 @@ impl Default for RrLUOptions {
 /// ```
 pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> Result<RrLU<T>> {
     let opts = options.unwrap_or_default();
-    let nr = a.nrows();
-    let nc = a.ncols();
-    let data = a.as_col_major_mut_slice();
-    validate_col_major_matrix_len(nr, nc, data.len())?;
-    debug_assert_eq!(data.len(), nr * nc);
+    let left_orthogonal = opts.left_orthogonal;
+    let state = factorize_mut_in_place(a, opts)?;
+    let nrows = a.nrows();
+    let ncols = a.ncols();
+    let (l, u) = extract_lu_from_factorized(
+        a.as_col_major_slice(),
+        nrows,
+        ncols,
+        state.n_pivot,
+        left_orthogonal,
+    )?;
 
-    let mut lu = RrLU::new(nr, nc, opts.left_orthogonal);
-    let max_bond_dim = opts.max_bond_dim.min(nr).min(nc);
-    let mut max_error = 0.0f64;
-
-    while lu.n_pivot < max_bond_dim {
-        let k = lu.n_pivot;
-
-        if k >= nr || k >= nc {
-            break;
-        }
-
-        let (pivot_row, pivot_col, pivot_val) =
-            submatrix_argmax_col_major(data, nr, nc, k, nr, k, nc);
-
-        let pivot_abs = f64::sqrt(pivot_val.abs_sq());
-        lu.error = pivot_abs;
-
-        // Check stopping criteria (but add at least 1 pivot)
-        if lu.n_pivot > 0 && (pivot_abs < opts.rel_tol * max_error || pivot_abs < opts.abs_tol) {
-            break;
-        }
-
-        // Guard against tiny pivots to prevent NaN from division. A caller that
-        // sets both tolerances to zero is requesting a non-truncating
-        // decomposition, so only an exactly zero pivot stops the factorization.
-        let min_pivot_abs = if opts.rel_tol == 0.0 && opts.abs_tol == 0.0 {
-            0.0
-        } else {
-            f64::EPSILON
-        };
-        if pivot_abs <= min_pivot_abs {
-            if lu.n_pivot == 0 {
-                // First pivot is near-zero: the matrix is effectively zero
-                lu.error = pivot_abs;
-            }
-            break;
-        }
-
-        max_error = max_error.max(pivot_abs);
-
-        // Swap rows and columns
-        if pivot_row != k {
-            swap_rows_col_major(data, nr, nc, k, pivot_row);
-            lu.row_permutation.swap(k, pivot_row);
-        }
-        if pivot_col != k {
-            swap_cols_col_major(data, nr, nc, k, pivot_col);
-            lu.col_permutation.swap(k, pivot_col);
-        }
-
-        let pivot = col_major_get(data, nr, k, k);
-
-        // Eliminate
-        if opts.left_orthogonal {
-            scale_column_tail(data, nr, k, k + 1, pivot);
-        } else {
-            scale_row_tail(data, nr, nc, k, k + 1, pivot);
-        }
-
-        update_trailing_submatrix(data, nr, nc, k);
-
-        lu.n_pivot += 1;
-    }
-
-    let n = lu.n_pivot;
-    let (l, u) = extract_lu_from_factorized(data, nr, nc, n, opts.left_orthogonal)?;
-
-    // Set error to 0 if full rank
-    if n >= nr.min(nc) {
-        lu.error = 0.0;
-    }
-
-    lu.l = l;
-    lu.u = u;
-
-    Ok(lu)
+    Ok(RrLU {
+        row_permutation: state.row_permutation,
+        col_permutation: state.col_permutation,
+        l,
+        u,
+        left_orthogonal,
+        n_pivot: state.n_pivot,
+        error: state.error,
+    })
 }
 
 /// Perform rank-revealing LU decomposition (non-destructive).

@@ -1,0 +1,14 @@
+[package]
+name = "tree-rsi-benchmark"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+rand.workspace = true
+rand_chacha.workspace = true
+serde_json.workspace = true
+tensor4all-core = { path = "../../crates/tensor4all-core" }
+tensor4all-treetn = { path = "../../crates/tensor4all-treetn", default-features = false, features = ["tenferro-cpu-faer"] }
+tensor4all-treersi = { path = "../../crates/tensor4all-treersi" }
+tensor4all-treeaci = { path = "../../crates/tensor4all-treeaci" }

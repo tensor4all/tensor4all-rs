@@ -63,3 +63,8 @@ mod tests {
         );
     }
 }
+
+// The RSI guide includes this exact source via mdBook preprocessing. Embed
+// the source here so workspace doctests exercise it without that preprocessor.
+#[doc = concat!("```rust\n", include_str!("../../../crates/tensor4all-treersi/examples/validated_product.rs"), "\n``` ")]
+mod tree_rsi {}

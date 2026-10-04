@@ -269,3 +269,10 @@ Split a function's domain into non-overlapping projected patches, each its own T
 ## tensor4all-capi — C FFI
 
 Status enum `t4a_status_code` with `T4A_` prefix (`T4A_SUCCESS`, `T4A_NULL_POINTER`, `T4A_INTERNAL_ERROR`). Header `crates/tensor4all-capi/include/tensor4all_capi.h` regenerated with `cbindgen`. See `docs/CAPI_DESIGN.md`. Wrapped by Tensor4all.jl. Not for direct Rust use.
+
+## tensor4all-treersi — experimental tree RSI products
+
+- `hadamard_many_in::<T, V>` computes a simultaneous Hadamard product in the inputs’ CPU execution context. `hadamard_many_with_rng_in` accepts a caller-owned RNG.
+- `TreeRsiOptions` requires a positive `max_bond_dim` or `sketch_dim`. `rel_tol` controls local pivots, not global accuracy.
+- Validate actual products on a small dense oracle or held-out batched points; errors and nonfinite results must fail acceptance. No arbitrary nonlinear or reciprocal API.
+- [Guide](../../../docs/book/src/guides/tree-rsi.md), [runnable example](../../../crates/tensor4all-treersi/examples/validated_product.rs).

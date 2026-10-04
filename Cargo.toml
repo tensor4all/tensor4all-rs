@@ -6,6 +6,7 @@ exclude = ["crates/tensor4all-py"]
 members = [
     "crates/tensor4all-aci",
     "crates/tensor4all-treeaci",
+    "crates/tensor4all-treersi",
     "crates/tensor4all-tensorbackend",
     "crates/tensor4all-core",
     "crates/tensor4all-treetn",
@@ -20,6 +21,7 @@ members = [
     "crates/tensor4all-treetci",
     "crates/tensor4all-capi",
     "crates/tensor4all-hdf5",
+    "benchmarks/tree-rsi",
     "tools/api-dump",
     "tools/library-panic-audit",
     "xtask",

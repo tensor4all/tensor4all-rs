@@ -27,6 +27,8 @@ use tenferro::{DType, Tensor, TensorScalar, TypedTensor};
 use tenferro_ad::EagerTensor;
 use tenferro_linalg::EagerTensorLinalgExt;
 
+use crate::context::{default_cpu_execution_context, CpuExecutionContext};
+
 /// A dense 2D matrix in column-major layout.
 ///
 /// Access elements with `m[[row, col]]` syntax. Data is stored contiguously
@@ -1901,10 +1903,18 @@ pub fn submatrix_argmax<T: MatrixScalar>(
 /// types cannot implement it.
 pub trait BlasMul: Sized {
     #[doc(hidden)]
-    fn blas_mat_mul(a: &Matrix<Self>, b: &Matrix<Self>) -> Result<Matrix<Self>>;
+    fn blas_mat_mul(
+        a: &Matrix<Self>,
+        b: &Matrix<Self>,
+        context: &CpuExecutionContext,
+    ) -> Result<Matrix<Self>>;
 
     #[doc(hidden)]
-    fn blas_mat_mul_owned(a: Matrix<Self>, b: Matrix<Self>) -> Result<Matrix<Self>>;
+    fn blas_mat_mul_owned(
+        a: Matrix<Self>,
+        b: Matrix<Self>,
+        context: &CpuExecutionContext,
+    ) -> Result<Matrix<Self>>;
 }
 
 fn dot_general_matrices<T>(
@@ -1913,14 +1923,15 @@ fn dot_general_matrices<T>(
     m: usize,
     n: usize,
     expected_len: usize,
+    context: &CpuExecutionContext,
 ) -> Result<Matrix<T>>
 where
     T: TensorScalar,
 {
-    use crate::context::with_default_session;
     use tenferro::TensorSessionOpsExt;
 
-    let c = with_default_session(|session| a_tensor.matmul(&b_tensor, session))
+    let c = context
+        .with_session(|session| a_tensor.matmul(&b_tensor, session))
         .context("matrix multiplication failed")?;
     let c = T::into_typed(c)
         .map_err(|error| anyhow::anyhow!("matrix multiplication returned wrong dtype: {error}"))?;
@@ -1947,7 +1958,11 @@ macro_rules! impl_blas_mul {
     ($($t:ty),*) => {
         $(
         impl BlasMul for $t {
-            fn blas_mat_mul(a: &Matrix<Self>, b: &Matrix<Self>) -> Result<Matrix<Self>> {
+            fn blas_mat_mul(
+                a: &Matrix<Self>,
+                b: &Matrix<Self>,
+                context: &CpuExecutionContext,
+            ) -> Result<Matrix<Self>> {
                 let m = a.nrows();
                 let k = a.ncols();
                 let n = b.ncols();
@@ -1969,10 +1984,14 @@ macro_rules! impl_blas_mul {
 
                 let a_tensor: Tensor = a.to_typed_tensor().into();
                 let b_tensor: Tensor = b.to_typed_tensor().into();
-                dot_general_matrices::<$t>(a_tensor, b_tensor, m, n, expected_len)
+                dot_general_matrices::<$t>(a_tensor, b_tensor, m, n, expected_len, context)
             }
 
-            fn blas_mat_mul_owned(a: Matrix<Self>, b: Matrix<Self>) -> Result<Matrix<Self>> {
+            fn blas_mat_mul_owned(
+                a: Matrix<Self>,
+                b: Matrix<Self>,
+                context: &CpuExecutionContext,
+            ) -> Result<Matrix<Self>> {
                 let m = a.nrows();
                 let k = a.ncols();
                 let n = b.ncols();
@@ -1992,7 +2011,7 @@ macro_rules! impl_blas_mul {
 
                 let a_tensor: Tensor = a.into_typed_tensor().into();
                 let b_tensor: Tensor = b.into_typed_tensor().into();
-                dot_general_matrices::<$t>(a_tensor, b_tensor, m, n, expected_len)
+                dot_general_matrices::<$t>(a_tensor, b_tensor, m, n, expected_len, context)
             }
         }
         )*
@@ -2073,7 +2092,7 @@ impl MatrixScalar for Complex32 {
 /// assert!((c[[1, 1]] - 50.0).abs() < 1e-10);
 /// ```
 pub fn mat_mul<T: BlasMul>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>, MatrixMulError> {
-    T::blas_mat_mul(a, b).map_err(MatrixMulError::from)
+    T::blas_mat_mul(a, b, &default_cpu_execution_context()).map_err(MatrixMulError::from)
 }
 
 /// Matrix multiplication: consume `A` and `B`, returning `A * B`.
@@ -2097,7 +2116,38 @@ pub fn mat_mul<T: BlasMul>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>, Ma
 /// assert_eq!(c.as_col_major_slice(), &[19.0, 43.0, 22.0, 50.0]);
 /// ```
 pub fn mat_mul_owned<T: BlasMul>(a: Matrix<T>, b: Matrix<T>) -> Result<Matrix<T>, MatrixMulError> {
-    T::blas_mat_mul_owned(a, b).map_err(MatrixMulError::from)
+    mat_mul_owned_in(a, b, &default_cpu_execution_context())
+}
+
+/// Matrix multiplication in a caller-owned CPU execution context.
+///
+/// Context-scoped counterpart of [`mat_mul_owned`]: consumes `A` and `B` and
+/// returns the column-major product `A * B`, computed on `context`'s
+/// configured backend. No process-global context is consulted.
+///
+/// # Errors
+///
+/// Returns `MatrixMulError` when the inner dimensions disagree,
+/// the output shape overflows `usize`, or `context`'s backend fails.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{from_vec2d, mat_mul_owned_in, CpuExecutionContext};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::new());
+/// let a = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
+/// let b = from_vec2d(vec![vec![5.0, 6.0], vec![7.0, 8.0]]);
+/// let c = mat_mul_owned_in(a, b, &context).unwrap();
+/// assert_eq!(c.as_col_major_slice(), &[19.0, 43.0, 22.0, 50.0]);
+/// ```
+pub fn mat_mul_owned_in<T: BlasMul>(
+    a: Matrix<T>,
+    b: Matrix<T>,
+    context: &CpuExecutionContext,
+) -> Result<Matrix<T>, MatrixMulError> {
+    T::blas_mat_mul_owned(a, b, context).map_err(MatrixMulError::from)
 }
 
 /// Batched matrix multiplication for column-major matrices with one shared shape.
@@ -2157,27 +2207,40 @@ pub fn batched_mat_mul_same_shape_owned<T>(
 where
     T: tenferro::TensorScalar + Copy,
 {
-    validate_batched_mat_mul_inputs(batch, m, k, n, a.len(), b.len())?;
+    batched_mat_mul_same_shape_owned_in(batch, m, k, n, a, b, &default_cpu_execution_context())
+}
 
-    let a_tensor = T::into_tensor(vec![m, k, batch], a)
-        .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
-    let b_tensor = T::into_tensor(vec![k, n, batch], b)
-        .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
-    // TensorSessionOpsExt exposes rank-2 matmul but not arbitrary batched dot.
-    // Keep one backend execution by expressing [m,k,b] × [k,n,b] as einsum.
-    let c = crate::tenferro_bridge::einsum_native_tensors_owned(
-        vec![(a_tensor, vec![0, 1, 2]), (b_tensor, vec![1, 3, 2])],
-        &[0, 3, 2],
-    )
-    .context("batched matrix multiplication failed")?;
-    let c = T::into_typed(c).map_err(|error| {
-        MatrixMulError::from(anyhow::anyhow!(
-            "batched matrix multiplication returned wrong dtype: {error}"
-        ))
-    })?;
-    let (_shape, data) = c
-        .into_vec_col_major()
-        .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
+/// Multiplies a batch of column-major matrices in a caller-owned CPU context.
+///
+/// Each contiguous batch contains `a: m x k` and `b: k x n`; the returned
+/// buffer contains `batch` consecutive `m x n` products. Storage is consumed.
+/// `context` supplies the configured provider and threading policy.
+///
+/// # Errors
+/// Returns `MatrixMulError` for overflowing shapes, incorrect input lengths,
+/// or a backend execution failure.
+///
+/// # Examples
+/// ```
+/// use tensor4all_tensorbackend::{batched_mat_mul_same_shape_owned_in, default_cpu_execution_context};
+/// let out = batched_mat_mul_same_shape_owned_in(2, 2, 1, 1,
+///     vec![1.0_f64, 2.0, 3.0, 4.0], vec![2.0, 3.0], &default_cpu_execution_context())?;
+/// assert_eq!(out, vec![2.0, 4.0, 9.0, 12.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn batched_mat_mul_same_shape_owned_in<T>(
+    batch: usize,
+    m: usize,
+    k: usize,
+    n: usize,
+    a: Vec<T>,
+    b: Vec<T>,
+    context: &CpuExecutionContext,
+) -> Result<Vec<T>, MatrixMulError>
+where
+    T: tenferro::TensorScalar + Copy,
+{
+    validate_batched_mat_mul_inputs(batch, m, k, n, a.len(), b.len())?;
     let expected_len = batch
         .checked_mul(m)
         .and_then(|value| value.checked_mul(n))
@@ -2186,6 +2249,23 @@ where
                 "batched matrix multiplication output shape overflows"
             ))
         })?;
+
+    let a_tensor = T::into_tensor(vec![m, k, batch], a)
+        .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
+    let b_tensor = T::into_tensor(vec![k, n, batch], b)
+        .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
+    use tenferro_einsum::TensorEinsumExt;
+    let c = context
+        .with_session(|session| [&a_tensor, &b_tensor].einsum("ikb,kjb->ijb", session))
+        .context("batched matrix multiplication failed")?;
+    let c = T::into_typed(c).map_err(|error| {
+        MatrixMulError::from(anyhow::anyhow!(
+            "batched matrix multiplication returned wrong dtype: {error}"
+        ))
+    })?;
+    let (_shape, data) = c
+        .into_vec_col_major()
+        .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
     if data.len() != expected_len {
         return Err(MatrixMulError::from(anyhow::anyhow!(
             "batched matrix multiplication returned {} values for expected shape {}x{}x{}",

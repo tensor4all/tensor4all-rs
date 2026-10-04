@@ -50,8 +50,9 @@ pub use backend::{
     full_piv_lu_backend, full_piv_lu_matrix, full_piv_lu_matrix_owned, qr_backend, solve_backend,
     solve_matrix, solve_matrix_owned, src_error_estimate, src_error_estimate_general, svd_backend,
     triangular_solve_backend, triangular_solve_matrix, triangular_solve_matrix_owned,
-    BackendLinalgError, BackendLinalgScalar, FullPivLuMatrixResult, FullPivLuResult,
-    FullPivLuScalar, MatrixSolveScalar, MatrixTriangularSolveScalar, SrcErrorEstimate, SvdResult,
+    triangular_solve_matrix_owned_in, BackendLinalgError, BackendLinalgScalar,
+    FullPivLuMatrixResult, FullPivLuResult, FullPivLuScalar, MatrixSolveScalar,
+    MatrixTriangularSolveScalar, SrcErrorEstimate, SvdResult,
 };
 #[cfg(feature = "global-defaults")]
 pub use context::{
@@ -67,11 +68,12 @@ pub use incremental_qr::{IncrementalQr, IncrementalQrScalar};
 pub use logical_tensor::{LogicalTensor, LogicalTensorData, LogicalTensorError};
 #[cfg(feature = "global-defaults")]
 pub use matrix::{
-    batched_mat_mul_same_shape, batched_mat_mul_same_shape_owned, from_vec2d,
-    grouped_mat_mul_shared, grouped_mat_mul_shared_owned, grouped_mat_mul_shared_with_backend,
+    batched_mat_mul_same_shape, batched_mat_mul_same_shape_owned,
+    batched_mat_mul_same_shape_owned_in, from_vec2d, grouped_mat_mul_shared,
+    grouped_mat_mul_shared_owned, grouped_mat_mul_shared_with_backend,
     hermitian_eigendecomposition, hermitian_exponential_first_column, lowest_hermitian_eigenpair,
-    mat_mul, mat_mul_owned, submatrix, submatrix_argmax, swap_cols, swap_rows, transpose,
-    try_from_vec2d, BlasMul, GroupedGemmError, GroupedGemmJob, GroupedGemmOptions,
+    mat_mul, mat_mul_owned, mat_mul_owned_in, submatrix, submatrix_argmax, swap_cols, swap_rows,
+    transpose, try_from_vec2d, BlasMul, GroupedGemmError, GroupedGemmJob, GroupedGemmOptions,
     HermitianEigenError, HermitianEigenScalar, HermitianEigendecomposition, HermitianEigenpair,
     Matrix, MatrixScalar, MatrixShapeError, MatrixTensorConversionError,
 };

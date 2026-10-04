@@ -568,10 +568,33 @@ mod defaults {
         FORCE_EAGER_CONTEXT_FAILURE.with(|failure| failure.set(previous));
         result
     }
+
+    /// Runs `f` on another thread while this thread holds the process-global
+    /// backend lock, and panics if `f` does not finish within two seconds.
+    ///
+    /// An operation that consulted the global context would block on that
+    /// lock, so completing proves `f` stayed in its explicit context.
+    #[cfg(test)]
+    pub(crate) fn run_while_default_context_is_busy<R: Send + 'static>(
+        f: impl FnOnce() -> R + Send + 'static,
+    ) -> R {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        with_default_backend(|_| {
+            let (tx, rx) = mpsc::channel();
+            let handle = std::thread::spawn(move || {
+                let _ = tx.send(f());
+            });
+            let result = rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("operation blocked on the process-global context");
+            handle.join().expect("worker thread panicked");
+            result
+        })
+    }
 }
 
-#[cfg(all(test, feature = "global-defaults"))]
-pub(crate) use defaults::with_forced_eager_context_failure;
 #[cfg(feature = "global-defaults")]
 pub use defaults::{
     default_cpu_execution_context, default_eager_ctx, with_default_backend, EagerContextError,
@@ -581,6 +604,8 @@ pub(crate) use defaults::{
     default_engine_buffer_pool_stats, reset_default_engine, reset_default_engine_buffer_pool,
     with_default_graph_runtime, with_default_session,
 };
+#[cfg(all(test, feature = "global-defaults"))]
+pub(crate) use defaults::{run_while_default_context_is_busy, with_forced_eager_context_failure};
 
 #[cfg(test)]
 mod tests {

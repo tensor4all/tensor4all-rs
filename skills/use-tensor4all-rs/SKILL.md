@@ -52,6 +52,7 @@ Match the goal to the crate. This is the leading decision — the rest follows.
 |------|-------|
 | TCI on a black-box function, high level | `tensor4all-quanticstci` |
 | TCI with fine-grained, low-level control | `tensor4all-tensorci` |
+| Experimental sketched Hadamard products of existing trees | `tensor4all-treersi`; independently validate actual product error |
 | Tree-structured cross interpolation | `tensor4all-treetci` |
 | Elementwise ops on tensor trains (ACI) | `tensor4all-aci` |
 | Simple TT: create / evaluate / compress | `tensor4all-simplett` |

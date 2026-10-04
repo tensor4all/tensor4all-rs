@@ -59,3 +59,9 @@ experimental/
 
 # Agent session infrastructure (never commit)
 .pi-subagents/
+
+# RSI experiment outputs are disposable artifacts, not source.
+/benchmarks/tree-rsi/results/
+/benchmarks/tree-rsi/scratch/
+# Locally generated benchmark synopsis; raw run data stays under ignored target/.
+/benchmarks/tree-rsi/paper-coverage/results.md

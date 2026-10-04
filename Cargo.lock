@@ -309,6 +309,7 @@ dependencies = [
  "tensor4all-quanticstransform",
  "tensor4all-simplett",
  "tensor4all-tensorci",
+ "tensor4all-treersi",
  "tensor4all-treetci",
  "tensor4all-treetn",
 ]
@@ -3836,6 +3837,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tensor4all-treersi"
+version = "0.2.0"
+dependencies = [
+ "num-complex 0.4.6",
+ "rand 0.9.5",
+ "rand_chacha",
+ "rand_distr",
+ "tenferro-cpu",
+ "tensor4all-core",
+ "tensor4all-tensorbackend",
+ "tensor4all-treetn",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "tensor4all-treetci"
 version = "0.2.0"
 dependencies = [
@@ -4092,6 +4108,19 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "tree-rsi-benchmark"
+version = "0.0.0"
+dependencies = [
+ "rand 0.9.5",
+ "rand_chacha",
+ "serde_json",
+ "tensor4all-core",
+ "tensor4all-treeaci",
+ "tensor4all-treersi",
+ "tensor4all-treetn",
 ]
 
 [[package]]

@@ -950,3 +950,100 @@ fn grouped_gemm_shared_with_backend_uses_configured_thread_context() {
     assert_eq!(output, [12.0]);
     assert_eq!(backend.num_threads(), 1);
 }
+
+fn assert_mat_mul_owned_in_matches_global<T>(a: Matrix<T>, b: Matrix<T>)
+where
+    T: MatrixScalar + std::fmt::Debug,
+{
+    let expected = mat_mul_owned(a.clone(), b.clone()).unwrap();
+    let actual = crate::context::run_while_default_context_is_busy(move || {
+        let context = CpuExecutionContext::from_backend(tenferro_cpu::CpuBackend::new());
+        mat_mul_owned_in(a, b, &context).unwrap()
+    });
+    assert_eq!(actual.nrows(), expected.nrows());
+    assert_eq!(actual.ncols(), expected.ncols());
+    for (x, y) in actual
+        .as_col_major_slice()
+        .iter()
+        .zip(expected.as_col_major_slice())
+    {
+        assert!((*x - *y).matrix_abs_sq() < 1.0e-24, "{x:?} != {y:?}");
+    }
+}
+
+#[test]
+fn mat_mul_owned_in_runs_in_the_caller_context_f64() {
+    assert_mat_mul_owned_in_matches_global(
+        Matrix::from_col_major_vec(2, 3, vec![1.0_f64, -2.0, 0.5, 4.0, 3.0, -1.0]),
+        Matrix::from_col_major_vec(3, 2, vec![2.0, 1.0, -3.0, 0.0, 5.0, 7.0]),
+    );
+}
+
+#[test]
+fn mat_mul_owned_in_runs_in_the_caller_context_c64() {
+    let z = |re: f64, im: f64| Complex64::new(re, im);
+    assert_mat_mul_owned_in_matches_global(
+        Matrix::from_col_major_vec(
+            2,
+            2,
+            vec![z(1.0, 2.0), z(0.0, -1.0), z(3.0, 0.5), z(-2.0, 1.0)],
+        ),
+        Matrix::from_col_major_vec(2, 1, vec![z(0.5, -0.5), z(2.0, 3.0)]),
+    );
+}
+
+#[test]
+fn mat_mul_owned_in_rejects_mismatched_inner_dimensions() {
+    let context = CpuExecutionContext::from_backend(tenferro_cpu::CpuBackend::new());
+    let error = mat_mul_owned_in(
+        Matrix::<f64>::zeros(2, 3),
+        Matrix::<f64>::zeros(2, 2),
+        &context,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("must agree"), "{error}");
+}
+
+#[test]
+#[should_panic(expected = "blocked on the process-global context")]
+fn busy_default_context_harness_detects_global_mat_mul() {
+    crate::context::run_while_default_context_is_busy(|| {
+        mat_mul_owned(Matrix::<f64>::zeros(1, 1), Matrix::<f64>::zeros(1, 1)).unwrap()
+    });
+}
+
+#[test]
+fn batched_owned_in_checks_lengths_and_uses_the_supplied_context() {
+    let context = crate::default_cpu_execution_context();
+    let out = super::batched_mat_mul_same_shape_owned_in(
+        2,
+        2,
+        1,
+        1,
+        vec![1.0_f64, 2.0, 3.0, 4.0],
+        vec![2.0, 3.0],
+        &context,
+    )
+    .unwrap();
+    assert_eq!(out, vec![2.0, 4.0, 9.0, 12.0]);
+    assert!(super::batched_mat_mul_same_shape_owned_in(
+        2,
+        2,
+        1,
+        1,
+        vec![1.0_f64],
+        vec![2.0, 3.0],
+        &context
+    )
+    .is_err());
+    assert!(super::batched_mat_mul_same_shape_owned_in::<f64>(
+        usize::MAX,
+        2,
+        0,
+        2,
+        vec![],
+        vec![],
+        &context
+    )
+    .is_err());
+}

@@ -234,3 +234,9 @@ Concretely:
 
 When interoperating with code that uses `nhalfsweeps`, divide by two before passing the value to
 `tensor4all-treetn` APIs.
+
+## Experimental sketched products
+
+For Hadamard products of existing compatible trees, see the
+[experimental RSI guide](tree-rsi.md). Validate actual output error separately
+from its local interpolation diagnostics.

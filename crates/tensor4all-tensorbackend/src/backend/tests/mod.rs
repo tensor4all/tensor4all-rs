@@ -527,3 +527,36 @@ fn full_piv_lu_matrix_owned_preserves_shape_error() {
     assert_eq!(owned_error, borrowed_error);
     assert!(owned_error.contains("incompatible shapes"), "{owned_error}");
 }
+
+#[test]
+fn triangular_solve_matrix_owned_in_runs_in_the_caller_context() {
+    let x = crate::context::run_while_default_context_is_busy(|| {
+        let context = crate::CpuExecutionContext::from_backend(tenferro_cpu::CpuBackend::new());
+        let a = crate::from_vec2d(vec![vec![2.0_f64, 0.0], vec![1.0, 3.0]]);
+        let b = crate::from_vec2d(vec![vec![2.0_f64], vec![7.0]]);
+        triangular_solve_matrix_owned_in(a, b, true, true, false, false, &context).unwrap()
+    });
+    assert!((x[[0, 0]] - 1.0).abs() < 1.0e-12);
+    assert!((x[[1, 0]] - 2.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn triangular_solve_matrix_owned_in_promotes_f32_in_the_caller_context() {
+    let x = crate::context::run_while_default_context_is_busy(|| {
+        let context = crate::CpuExecutionContext::from_backend(tenferro_cpu::CpuBackend::new());
+        // Right-side upper solve X A = B with A = [2 1; 0 3].
+        let a = crate::from_vec2d(vec![vec![2.0_f32, 1.0], vec![0.0, 3.0]]);
+        let b = crate::from_vec2d(vec![vec![2.0_f32, 7.0]]);
+        triangular_solve_matrix_owned_in(a, b, false, false, false, false, &context).unwrap()
+    });
+    assert!((x[[0, 0]] - 1.0).abs() < 1.0e-6);
+    assert!((x[[0, 1]] - 2.0).abs() < 1.0e-6);
+}
+
+#[test]
+fn triangular_solve_matrix_owned_in_rejects_mismatched_shapes() {
+    let context = crate::CpuExecutionContext::from_backend(tenferro_cpu::CpuBackend::new());
+    let a = crate::from_vec2d(vec![vec![2.0_f64, 0.0], vec![1.0, 3.0]]);
+    let b = Matrix::<f64>::zeros(3, 1);
+    assert!(triangular_solve_matrix_owned_in(a, b, true, true, false, false, &context).is_err());
+}

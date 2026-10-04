@@ -1,0 +1,35 @@
+[package]
+name = "tensor4all-treersi"
+description = "Recursive Sketched Interpolation for Hadamard products on tree tensor networks"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["tenferro-cpu-faer", "global-defaults"]
+global-defaults = ["tensor4all-tensorbackend/global-defaults"]
+tenferro-cpu-faer = [
+    "tensor4all-treetn/tenferro-cpu-faer",
+    "tensor4all-tensorbackend/backend-tenferro",
+    "tensor4all-tensorbackend/tenferro-cpu-faer",
+]
+tenferro-provider-inject = [
+    "tensor4all-treetn/tenferro-provider-inject",
+    "tensor4all-tensorbackend/backend-tenferro",
+    "tensor4all-tensorbackend/tenferro-provider-inject",
+]
+
+[dependencies]
+num-complex.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+rand_distr.workspace = true
+thiserror.workspace = true
+tensor4all-core = { path = "../tensor4all-core", default-features = false }
+tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
+tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
+
+[dev-dependencies]
+tenferro-cpu.workspace = true

@@ -13,6 +13,7 @@ transforms (`tensor4all-quanticstransform`), and a C FFI layer
 - [Architecture & crate guide](docs/book/src/architecture.md): two-stack layout (network stack vs simplett stack), the sanctioned `treetn::simplett_bridge` crossing, and the `TensorTrain` naming resolution.
 - [Getting started](docs/book/src/getting-started.md): first steps.
 - [Tensor train guide](docs/book/src/guides/tensor-train.md): `SimpleTensorTrain` (simplett) and ITensor-like `TensorTrain` (itensorlike).
+- [Experimental RSI product guide](docs/book/src/guides/tree-rsi.md): `tensor4all-treersi` for existing TreeTN Hadamard products; local pivots do not certify output accuracy.
 - [Tree tensor network guide](docs/book/src/guides/tree-tn.md): `TreeTN`.
 - [CUDA TreeTN tutorial](docs/book/src/tutorials/gpu/cuda-tree-contraction.md): explicit ordinal-0 upload, dense full contraction, download, constraints, and runnable examples.
 - [Partitioned TreeTN guide](docs/book/src/guides/partitioned-treetn.md): eager subdomain masking, strict partition algebra, adaptive patching, reconstruction with a fixed global L2 tolerance, and level-coupled merge-refine QFT scheduling.

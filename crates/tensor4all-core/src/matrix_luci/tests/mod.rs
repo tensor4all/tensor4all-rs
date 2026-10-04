@@ -262,17 +262,33 @@ fn timed_hilbert_matrix_luci_once(size: usize, left_orthogonal: bool) -> MatrixL
 
     let start = Instant::now();
     let left = if left_orthogonal {
-        rrlu_cols_times_pivot_solve(&lu).unwrap()
+        rrlu_cols_times_pivot_solve(
+            &lu,
+            &tensor4all_tensorbackend::default_cpu_execution_context(),
+        )
+        .unwrap()
     } else {
-        rrlu_colmatrix(&lu).unwrap()
+        rrlu_colmatrix(
+            &lu,
+            &tensor4all_tensorbackend::default_cpu_execution_context(),
+        )
+        .unwrap()
     };
     timing.left_factor = start.elapsed();
 
     let start = Instant::now();
     let right = if left_orthogonal {
-        rrlu_rowmatrix(&lu).unwrap()
+        rrlu_rowmatrix(
+            &lu,
+            &tensor4all_tensorbackend::default_cpu_execution_context(),
+        )
+        .unwrap()
     } else {
-        rrlu_pivot_solve_times_rows(&lu).unwrap()
+        rrlu_pivot_solve_times_rows(
+            &lu,
+            &tensor4all_tensorbackend::default_cpu_execution_context(),
+        )
+        .unwrap()
     };
     timing.right_factor = start.elapsed();
 
@@ -343,4 +359,201 @@ fn matrix_luci_hilbert_timing() {
             );
         }
     }
+}
+
+/// Runs `f` on another thread while this thread holds the process-global
+/// backend lock; completing within two seconds proves `f` never consulted the
+/// global context.
+fn run_while_default_context_is_busy<R: Send + 'static>(
+    f: impl FnOnce() -> R + Send + 'static,
+) -> R {
+    tensor4all_tensorbackend::with_default_backend(|_| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        let result = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("factorization blocked on the process-global context");
+        handle.join().expect("worker thread panicked");
+        result
+    })
+}
+
+fn assert_owned_in_matches_global_factors<T>(matrix: Matrix<T>, left_orthogonal: bool)
+where
+    T: Scalar + crate::MatrixLuciScalar + std::fmt::Debug,
+{
+    let options = RrLUOptions {
+        left_orthogonal,
+        ..RrLUOptions::default()
+    };
+    let expected =
+        matrix_luci_factors_from_matrix_owned(matrix.clone(), Some(options.clone())).unwrap();
+    let input = matrix.clone();
+    let actual = run_while_default_context_is_busy(move || {
+        let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+            tenferro_cpu::CpuBackend::new(),
+        );
+        matrix_luci_factors_from_matrix_owned_in(input, Some(options), &context).unwrap()
+    });
+    assert_eq!(actual.rank, expected.rank);
+    assert_eq!(actual.row_indices, expected.row_indices);
+    assert_eq!(actual.col_indices, expected.col_indices);
+    for (x, y) in [
+        (&actual.left, &expected.left),
+        (&actual.right, &expected.right),
+    ] {
+        for (a, b) in x.as_col_major_slice().iter().zip(y.as_col_major_slice()) {
+            assert!((*a - *b).abs_sq() < 1.0e-24, "{a:?} != {b:?}");
+        }
+    }
+    let rebuilt = mat_mul(&actual.left, &actual.right).unwrap();
+    for (a, b) in rebuilt
+        .as_col_major_slice()
+        .iter()
+        .zip(matrix.as_col_major_slice())
+    {
+        assert!((*a - *b).abs_sq() < 1.0e-20, "{a:?} != {b:?}");
+    }
+}
+
+#[test]
+fn owned_in_factors_match_global_factors_in_both_gauges_f64() {
+    let matrix = from_vec2d(vec![
+        vec![1.0_f64, 2.0, 3.0],
+        vec![4.0, 5.0, 6.0],
+        vec![7.0, 8.0, 10.0],
+        vec![2.0, 1.0, 0.5],
+    ]);
+    assert_owned_in_matches_global_factors(matrix.clone(), true);
+    assert_owned_in_matches_global_factors(matrix, false);
+}
+
+#[test]
+fn owned_in_factors_match_global_factors_in_both_gauges_c64() {
+    let z = |re: f64, im: f64| Complex64::new(re, im);
+    let matrix = from_vec2d(vec![
+        vec![z(1.0, 1.0), z(0.0, 2.0), z(3.0, -1.0)],
+        vec![z(2.0, 0.0), z(-1.0, 1.0), z(0.5, 0.5)],
+    ]);
+    assert_owned_in_matches_global_factors(matrix.clone(), true);
+    assert_owned_in_matches_global_factors(matrix, false);
+}
+
+#[test]
+fn row_interpolation_context_matches_full_factors_without_right_factor() {
+    let context = tensor4all_tensorbackend::default_cpu_execution_context();
+    let a = tensor4all_tensorbackend::Matrix::from_col_major_vec(
+        3,
+        2,
+        vec![1.0_f64, 2.0, 4.0, 3.0, 6.0, 12.0],
+    );
+    let row = super::matrix_luci_row_interpolation_owned_in(a.clone(), None, &context).unwrap();
+    assert_eq!(row.rows, vec![2]);
+    assert_eq!(row.interpolation.as_col_major_slice(), &[0.25, 0.5, 1.0]);
+    let full = super::matrix_luci_factors_from_matrix_owned_in(
+        a,
+        Some(crate::RrLUOptions {
+            left_orthogonal: true,
+            ..Default::default()
+        }),
+        &context,
+    )
+    .unwrap();
+    assert_eq!(row.rows, full.row_indices);
+    assert_eq!(
+        row.interpolation.as_col_major_slice(),
+        full.left.as_col_major_slice()
+    );
+    let zero = super::matrix_luci_row_interpolation_owned_in(
+        tensor4all_tensorbackend::Matrix::<f64>::zeros(3, 2),
+        None,
+        &context,
+    )
+    .unwrap();
+    assert!(zero.rows.is_empty());
+    assert_eq!(zero.interpolation.ncols(), 0);
+}
+
+#[test]
+fn owned_context_facades_reject_invalid_controls_and_nonfinite_inputs() {
+    fn check<T: Scalar + crate::MatrixLuciScalar>() {
+        let context = tensor4all_tensorbackend::default_cpu_execution_context();
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+            for absolute in [false, true] {
+                let mut options = RrLUOptions::default();
+                if absolute {
+                    options.abs_tol = value;
+                } else {
+                    options.rel_tol = value;
+                }
+                let a = Matrix::<T>::zeros(0, 2);
+                assert!(matches!(
+                    matrix_luci_row_interpolation_owned_in(
+                        a.clone(),
+                        Some(options.clone()),
+                        &context
+                    ),
+                    Err(MatrixCIError::InvalidArgument { .. })
+                ));
+                assert!(matches!(
+                    matrix_luci_factors_from_matrix_owned_in(a, Some(options), &context),
+                    Err(MatrixCIError::InvalidArgument { .. })
+                ));
+            }
+        }
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let a = Matrix::from_col_major_vec(1, 2, vec![T::one(), T::from_f64(value)]);
+            assert!(matrix_luci_row_interpolation_owned_in(a.clone(), None, &context).is_err());
+            assert!(matrix_luci_factors_from_matrix_owned_in(a, None, &context).is_err());
+        }
+        // A rank cap of zero is valid and still reports the uneliminated residual.
+        let a = Matrix::from_col_major_vec(1, 2, vec![T::one(), T::from_f64(2.0)]);
+        let options = RrLUOptions {
+            max_bond_dim: 0,
+            ..Default::default()
+        };
+        let id = matrix_luci_row_interpolation_owned_in(a, Some(options), &context).unwrap();
+        assert!(id.rows.is_empty());
+        assert_eq!(id.pivot_magnitudes, vec![2.0]);
+    }
+    check::<f64>();
+    check::<f32>();
+    check::<num_complex::Complex64>();
+    check::<num_complex::Complex32>();
+}
+
+#[test]
+fn row_only_rank_cap_diagnostic_measures_the_remaining_schur_complement() {
+    fn check<T: Scalar + crate::MatrixLuciScalar>() {
+        let context = tensor4all_tensorbackend::default_cpu_execution_context();
+        for tail in [0.0, 1.0] {
+            for cap in 0..=3 {
+                let a = Matrix::from_col_major_vec(
+                    3,
+                    3,
+                    [4.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, tail]
+                        .map(T::from_f64)
+                        .to_vec(),
+                );
+                let id = matrix_luci_row_interpolation_owned_in(
+                    a,
+                    Some(RrLUOptions {
+                        max_bond_dim: cap,
+                        ..Default::default()
+                    }),
+                    &context,
+                )
+                .unwrap();
+                let rank = cap.min(if tail == 0.0 { 2 } else { 3 });
+                assert_eq!(id.rows.len(), rank);
+                assert_eq!(id.pivot_magnitudes, [4.0, 2.0, tail, 0.0][..=rank]);
+            }
+        }
+    }
+    check::<f64>();
+    check::<f32>();
+    check::<num_complex::Complex64>();
+    check::<num_complex::Complex32>();
 }
