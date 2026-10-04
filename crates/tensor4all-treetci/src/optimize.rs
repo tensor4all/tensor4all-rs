@@ -337,23 +337,34 @@ where
 /// # Examples
 ///
 /// ```
+/// use anyhow::Result;
 /// use rand::SeedableRng;
 /// use rand_chacha::ChaCha8Rng;
 /// use tensor4all_treetci::{
-///     chain_graph, optimize_with_proposer_with_rng, SimpleProposer, TreeTCI2, TreeTciOptions,
+///     optimize_with_proposer_with_rng, GlobalIndexBatch, SimpleProposer, TreeTCI2, TreeTciEdge,
+///     TreeTciGraph, TreeTciOptions,
 /// };
 ///
-/// let mut tci = TreeTCI2::<f64>::new(vec![2, 2], chain_graph()).unwrap();
-/// tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+/// let graph = TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap();
+/// let mut state = TreeTCI2::<f64>::new(vec![2, 2], graph).unwrap();
+/// state.add_global_pivots(&[vec![0, 0]]).unwrap();
+/// state.max_sample_value = 1.0;
+///
+/// let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+///     let mut vals = Vec::with_capacity(batch.n_points());
+///     for p in 0..batch.n_points() {
+///         let i = batch.get(0, p).unwrap();
+///         let j = batch.get(1, p).unwrap();
+///         vals.push(if i == j { 1.0 } else { 0.0 });
+///     }
+///     Ok(vals)
+/// };
+///
 /// let mut rng = ChaCha8Rng::seed_from_u64(3);
+/// let options = TreeTciOptions { tolerance: 1e-10, max_iter: 1, ..Default::default() };
 /// let (ranks, errors) = optimize_with_proposer_with_rng(
-///     &mut tci,
-///     |batch| Ok(batch.points().map(|p| (p[0] + p[1] + 1) as f64).collect()),
-///     &TreeTciOptions { max_iter: 1, ..TreeTciOptions::default() },
-///     &SimpleProposer::default(),
-///     &mut rng,
-/// )
-/// .unwrap();
+///     &mut state, evaluate, &options, &SimpleProposer::default(), &mut rng,
+/// ).unwrap();
 /// assert_eq!(ranks.len(), errors.len());
 /// ```
 pub fn optimize_with_proposer_with_rng<T, F, P, R>(
