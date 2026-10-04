@@ -100,7 +100,7 @@ where
 
     let mut pivot_errors: Vec<(MultiIndex, f64)> = points
         .into_iter()
-        .map(|init_p| floating_zone(tt, f, &site_dims, Some(&init_p), f64::MAX))
+        .map(|init_p| floating_zone(tt, f, &site_dims, &init_p, f64::MAX))
         .collect::<Result<_>>()?;
 
     // Sort by descending error
@@ -133,7 +133,7 @@ where
 /// let local_dims = vec![4, 4];
 ///
 /// // Search from (2, 2) without early stopping
-/// let (pivot, error) = floating_zone(&tt, &f, &local_dims, Some(&vec![2, 2]), f64::MAX).unwrap();
+/// let (pivot, error) = floating_zone(&tt, &f, &local_dims, &vec![2, 2], f64::MAX).unwrap();
 ///
 /// // Should find maximum error at (3, 3): |3*3 - 0| = 9
 /// assert_eq!(pivot, vec![3, 3]);
@@ -145,7 +145,9 @@ where
 /// * `tt` -- the tensor train approximation
 /// * `f` -- the exact function
 /// * `local_dims` -- number of values each index can take
-/// * `init_p` -- starting point (`None` draws a random starting point)
+/// * `init_p` -- starting point; must fit `local_dims`. Randomized starts are
+///   the caller's responsibility (`estimate_true_error` draws them from the
+///   caller-owned RNG it is given)
 /// * `early_stop_tol` -- stop early once the error exceeds this value
 ///
 ///   (use `f64::MAX` to search exhaustively)
@@ -162,7 +164,7 @@ pub fn floating_zone<T, F>(
     tt: &SimpleTensorTrain<T>,
     f: &F,
     local_dims: &[usize],
-    init_p: Option<&MultiIndex>,
+    init_p: &MultiIndex,
     early_stop_tol: f64,
 ) -> Result<(MultiIndex, f64)>
 where
@@ -184,22 +186,14 @@ where
         });
     }
 
-    // Julia's `_floatingzone` draws a random starting point when none is
-    // given; match that instead of fixing the all-zeros index.
-    let init_p = match init_p {
-        Some(p) => {
-            if p.len() != local_dims.len() || p.iter().zip(local_dims).any(|(&i, &d)| i >= d) {
-                return Err(TCIError::InvalidPivot {
-                    message: format!("initial pivot {p:?} does not fit local_dims {local_dims:?}"),
-                });
-            }
-            p.clone()
-        }
-        None => local_dims
-            .iter()
-            .map(|&d| rand::rng().random_range(0..d))
-            .collect(),
-    };
+    // The starting point is required: randomized starts are drawn by the
+    // caller from a caller-owned RNG (`estimate_true_error` does this), so this
+    // helper never consumes implicit entropy.
+    if init_p.len() != local_dims.len() || init_p.iter().zip(local_dims).any(|(&i, &d)| i >= d) {
+        return Err(TCIError::InvalidPivot {
+            message: format!("initial pivot {init_p:?} does not fit local_dims {local_dims:?}"),
+        });
+    }
 
     let max_sweeps =
         local_dims
@@ -264,8 +258,7 @@ mod tests {
 
         // Start from (1, 1) so initial error is not zero: |1*1 - 1| = 0
         // Actually start from (2, 2) so initial error is |4 - 1| = 3
-        let (pivot, error) =
-            floating_zone(&tt, &f, &local_dims, Some(&vec![2, 2]), f64::MAX).unwrap();
+        let (pivot, error) = floating_zone(&tt, &f, &local_dims, &vec![2, 2], f64::MAX).unwrap();
 
         // Error should be > 0 since tt=1 but f(i,j)=i*j varies
         // The maximum error should be at (3,3): |9-1|=8
