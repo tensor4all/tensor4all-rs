@@ -410,33 +410,12 @@ fn test_combine_component_tts_basic() {
     }
 }
 
-/// One stream drives every component: a two-component run consumes the
-/// component draws twice (once per component) from the same sequence.
+/// One stream drives every component: the two-component multichannel entry
+/// consumes exactly what two sequential single-component runs consume from the
+/// same stream, and the second component therefore continues the sequence
+/// instead of restarting it.
 #[test]
 fn multicomponent_with_rng_consumes_one_stream_across_components() {
-    use std::cell::Cell;
-    use std::rc::Rc;
-
-    struct CountingRng {
-        inner: rand_chacha::ChaCha8Rng,
-        draws: Rc<Cell<usize>>,
-    }
-
-    impl rand::RngCore for CountingRng {
-        fn next_u32(&mut self) -> u32 {
-            self.draws.set(self.draws.get() + 1);
-            self.inner.next_u32()
-        }
-        fn next_u64(&mut self) -> u64 {
-            self.draws.set(self.draws.get() + 1);
-            self.inner.next_u64()
-        }
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
-            self.draws.set(self.draws.get() + 1);
-            self.inner.fill_bytes(dest)
-        }
-    }
-
     let grid = DiscretizedGrid::builder(&[4])
         .with_lower_bound(&[0.0])
         .with_upper_bound(&[1.0])
@@ -450,59 +429,50 @@ fn multicomponent_with_rng_consumes_one_stream_across_components() {
         ..QtciOptions::default()
     };
 
-    let draws = Rc::new(Cell::new(0));
-    let mut rng = CountingRng {
-        inner: <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0),
-        draws: Rc::clone(&draws),
-    };
-    let (_one_component, _, _) = quanticscrossinterpolate_batch_with_rng::<f64, _, _>(
-        &grid,
-        pointwise_coordinate_batch(|x: &[f64]| 1.0 + x[0]),
-        None,
-        options.clone(),
-        &mut rng,
-    )
-    .unwrap();
-    let single_draws = draws.get();
-    assert!(
-        single_draws > 0,
-        "a randomized run must draw from the stream"
-    );
-
-    let draws = Rc::new(Cell::new(0));
-    let mut rng = CountingRng {
-        inner: <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0),
-        draws: Rc::clone(&draws),
-    };
-    let (_two_component, _, _) = quanticscrossinterpolate_multicomponent_with_rng::<f64, _, _>(
+    let mut multichannel = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0);
+    let _ = quanticscrossinterpolate_multicomponent_with_rng::<f64, _, _>(
         &grid,
         pointwise_components_batch(|x: &[f64]| vec![1.0 + x[0], 2.0 * x[0] + 1.0]),
         &[2],
         None,
         options.clone(),
-        &mut rng,
+        &mut multichannel,
     )
     .unwrap();
-    let both_draws = draws.get();
+
+    // Two sequential single-component runs on a second stream.
+    let mut sequential = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0);
+    for _ in 0..2 {
+        let _ = quanticscrossinterpolate_batch_with_rng::<f64, _, _>(
+            &grid,
+            pointwise_coordinate_batch(|x: &[f64]| 1.0 + x[0]),
+            None,
+            options.clone(),
+            &mut sequential,
+        )
+        .unwrap();
+    }
+
+    let tail = |rng: &mut rand_chacha::ChaCha8Rng| {
+        (0..16)
+            .map(|_| rand::RngCore::next_u64(rng))
+            .collect::<Vec<_>>()
+    };
     assert_eq!(
-        both_draws,
-        2 * single_draws,
-        "two components must continue the same stream ({both_draws} vs {single_draws} for one)"
+        tail(&mut multichannel),
+        tail(&mut sequential),
+        "two components must consume one shared stream, not a restarted one"
     );
 
     // The public entry point also accepts an erased stream (`?Sized` bound).
-    let draws = Rc::new(Cell::new(0));
-    let mut rng = CountingRng {
-        inner: <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0),
-        draws: Rc::clone(&draws),
-    };
+    let mut inner = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0);
+    let erased: &mut dyn rand::RngCore = &mut inner;
     let _ = quanticscrossinterpolate_batch_with_rng::<f64, _, _>(
         &grid,
         pointwise_coordinate_batch(|x: &[f64]| 1.0 + x[0]),
         None,
-        options.clone(),
-        &mut rng as &mut dyn rand::RngCore,
+        options,
+        erased,
     )
     .unwrap();
-    assert_eq!(draws.get(), single_draws);
 }

@@ -1,41 +1,16 @@
-//! The caller-owned RNG contract of the treetci entry points (issue #796).
+//! The caller-owned RNG contract of the treetci entry point (issue #796).
 //!
-//! A run whose randomized global search is disabled must not touch the supplied
-//! stream at all, and a run that does search must consume it directly.
-
-use std::cell::Cell;
-use std::rc::Rc;
+//! A run whose randomized global search is disabled must leave the supplied
+//! stream exactly where it was; a run that does search must advance it. Both are
+//! checked by replaying the same seed in a reference `ChaCha8Rng`.
 
 use anyhow::Result;
-use rand::{RngCore, SeedableRng};
+use rand::{Rng as _, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tensor4all_treetci::{
     optimize_with_proposer_with_rng, GlobalIndexBatch, SimpleProposer, TreeTCI2, TreeTciEdge,
     TreeTciGraph, TreeTciOptions,
 };
-
-/// Counts how many values the run draws from the supplied stream.
-struct CountingRng {
-    inner: ChaCha8Rng,
-    draws: Rc<Cell<usize>>,
-}
-
-impl RngCore for CountingRng {
-    fn next_u32(&mut self) -> u32 {
-        self.draws.set(self.draws.get() + 1);
-        self.inner.next_u32()
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.draws.set(self.draws.get() + 1);
-        self.inner.next_u64()
-    }
-
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        self.draws.set(self.draws.get() + 1);
-        self.inner.fill_bytes(dest)
-    }
-}
 
 fn two_site_state() -> TreeTCI2<f64> {
     let graph = TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap();
@@ -56,12 +31,9 @@ fn evaluate(batch: GlobalIndexBatch<'_>) -> Result<Vec<f64>> {
 }
 
 #[test]
-fn a_run_without_a_global_search_does_not_touch_the_supplied_stream() {
-    let draws = Rc::new(Cell::new(0));
-    let mut rng = CountingRng {
-        inner: ChaCha8Rng::seed_from_u64(3),
-        draws: Rc::clone(&draws),
-    };
+fn a_run_without_a_global_search_leaves_the_supplied_stream_untouched() {
+    let mut stream = ChaCha8Rng::seed_from_u64(3);
+    let mut reference = ChaCha8Rng::seed_from_u64(3);
     let options = TreeTciOptions {
         tolerance: 1e-10,
         max_iter: 2,
@@ -73,24 +45,21 @@ fn a_run_without_a_global_search_does_not_touch_the_supplied_stream() {
         evaluate,
         &options,
         &SimpleProposer::default(),
-        &mut rng,
+        &mut stream,
     )
     .unwrap();
     assert_eq!(ranks.len(), errors.len());
     assert_eq!(
-        draws.get(),
-        0,
+        stream.next_u64(),
+        reference.next_u64(),
         "a run with the global search disabled must not consume the caller's stream"
     );
 }
 
 #[test]
 fn a_run_with_a_global_search_consumes_the_supplied_stream() {
-    let draws = Rc::new(Cell::new(0));
-    let mut rng = CountingRng {
-        inner: ChaCha8Rng::seed_from_u64(3),
-        draws: Rc::clone(&draws),
-    };
+    let mut stream = ChaCha8Rng::seed_from_u64(3);
+    let mut reference = ChaCha8Rng::seed_from_u64(3);
     let options = TreeTciOptions {
         tolerance: 1e-10,
         max_iter: 3,
@@ -104,20 +73,22 @@ fn a_run_with_a_global_search_consumes_the_supplied_stream() {
         evaluate,
         &options,
         &SimpleProposer::default(),
-        &mut rng,
+        &mut stream,
     )
     .unwrap();
-    assert!(
-        draws.get() > 0,
+    assert_ne!(
+        stream.next_u64(),
+        reference.next_u64(),
         "an enabled global search must draw its starts from the supplied stream"
     );
 }
 
+/// `&mut dyn rand::RngCore` exercises the `?Sized` bound of the public entry
+/// point.
 #[test]
 fn the_low_level_entry_point_accepts_an_erased_stream() {
-    // `&mut dyn RngCore` exercises the `?Sized` bound of the public entry point.
     let mut inner = ChaCha8Rng::seed_from_u64(3);
-    let rng: &mut dyn RngCore = &mut inner;
+    let erased: &mut dyn rand::RngCore = &mut inner;
     let options = TreeTciOptions {
         tolerance: 1e-10,
         max_iter: 2,
@@ -131,7 +102,7 @@ fn the_low_level_entry_point_accepts_an_erased_stream() {
         evaluate,
         &options,
         &SimpleProposer::default(),
-        rng,
+        erased,
     )
     .unwrap();
     assert_eq!(ranks.len(), errors.len());

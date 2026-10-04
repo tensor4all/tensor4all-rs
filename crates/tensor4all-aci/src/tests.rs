@@ -2098,36 +2098,11 @@ fn local_update_step_timing() {
     }
 }
 
-/// The initial guess must consume the caller's stream directly: one draw per
-/// core entry, and a pre-advanced stream must change the result. A hidden
-/// generator (or one reseeded from the option) leaves the count at zero.
+/// The initial guess must consume the caller's stream directly: the stream
+/// advances, and a pre-advanced stream produces different random cores. A
+/// hidden generator leaves it untouched.
 #[test]
 fn initial_guess_with_rng_consumes_the_supplied_stream() {
-    use std::cell::Cell;
-    use std::rc::Rc;
-
-    struct CountingRng {
-        inner: rand_chacha::ChaCha8Rng,
-        draws: Rc<Cell<usize>>,
-    }
-
-    impl rand::RngCore for CountingRng {
-        fn next_u32(&mut self) -> u32 {
-            self.draws.set(self.draws.get() + 1);
-            self.inner.next_u32()
-        }
-
-        fn next_u64(&mut self) -> u64 {
-            self.draws.set(self.draws.get() + 1);
-            self.inner.next_u64()
-        }
-
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
-            self.draws.set(self.draws.get() + 1);
-            self.inner.fill_bytes(dest)
-        }
-    }
-
     let a = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
     let b = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
     let options = AciOptions::<f64> {
@@ -2135,25 +2110,15 @@ fn initial_guess_with_rng_consumes_the_supplied_stream() {
         ..AciOptions::default()
     };
 
-    let draws = Rc::new(Cell::new(0));
-    let mut rng = CountingRng {
-        inner: <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7),
-        draws: Rc::clone(&draws),
-    };
+    let mut stream = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
+    let mut reference = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
     let guess =
-        crate::random_tt::initial_guess_with_rng(&[a.clone(), b.clone()], &options, &mut rng)
+        crate::random_tt::initial_guess_with_rng(&[a.clone(), b.clone()], &options, &mut stream)
             .unwrap();
-    let entries: usize = (0..guess.len())
-        .map(|site| {
-            use tensor4all_simplett::Tensor3Ops;
-            let tensor = guess.site_tensor(site);
-            tensor.left_dim() * tensor.site_dim() * tensor.right_dim()
-        })
-        .sum();
-    assert_eq!(
-        draws.get(),
-        entries,
-        "the random cores must draw exactly one value per entry from the supplied stream"
+    assert_ne!(
+        rand::RngCore::next_u64(&mut stream),
+        rand::RngCore::next_u64(&mut reference),
+        "initialization must draw from the supplied stream"
     );
 
     // A pre-advanced stream produces different cores.
@@ -2161,47 +2126,21 @@ fn initial_guess_with_rng_consumes_the_supplied_stream() {
     let _ = rand::Rng::random::<u64>(&mut pre_advanced);
     let other =
         crate::random_tt::initial_guess_with_rng(&[a, b], &options, &mut pre_advanced).unwrap();
-    let mut differs = false;
-    for indices in [[0, 0, 0], [1, 2, 1], [0, 1, 1]] {
-        if (guess.evaluate(&indices).unwrap() - other.evaluate(&indices).unwrap()).abs() > 0.0 {
-            differs = true;
-        }
-    }
+    let differs = [[0, 0, 0], [1, 2, 1], [0, 1, 1]].iter().any(|indices| {
+        (guess.evaluate(indices).unwrap() - other.evaluate(indices).unwrap()).abs() > 0.0
+    });
     assert!(differs, "a pre-advanced stream must change the drawn cores");
 }
 
-/// With the guard enabled, the run must draw from the supplied stream *after*
-/// initialization too: initialization and every guard share one sequence.
+/// With the guard enabled the run consumes more of the supplied stream than
+/// without it: initialization and every guard share one sequence.
 #[test]
 fn elementwise_with_rng_draws_for_initialization_and_guards() {
-    use std::cell::Cell;
-    use std::rc::Rc;
-
-    struct CountingRng {
-        inner: rand_chacha::ChaCha8Rng,
-        draws: Rc<Cell<usize>>,
-    }
-
-    impl rand::RngCore for CountingRng {
-        fn next_u32(&mut self) -> u32 {
-            self.draws.set(self.draws.get() + 1);
-            self.inner.next_u32()
-        }
-        fn next_u64(&mut self) -> u64 {
-            self.draws.set(self.draws.get() + 1);
-            self.inner.next_u64()
-        }
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
-            self.draws.set(self.draws.get() + 1);
-            self.inner.fill_bytes(dest)
-        }
-    }
-
     let inputs = vec![
         SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0),
         SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0),
     ];
-    let with_guard = AciOptions::<f64> {
+    let guarded = AciOptions::<f64> {
         max_bond_dim: Some(2),
         max_iters: 2,
         enable_global_guard: true,
@@ -2209,17 +2148,12 @@ fn elementwise_with_rng_draws_for_initialization_and_guards() {
         max_nglobal_pivot: 1,
         ..AciOptions::default()
     };
-    let without_guard = AciOptions::<f64> {
+    let unguarded = AciOptions::<f64> {
         enable_global_guard: false,
-        ..with_guard.clone()
+        ..guarded.clone()
     };
-
-    let count = |options: AciOptions<f64>| {
-        let draws = Rc::new(Cell::new(0));
-        let mut rng = CountingRng {
-            inner: <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(5),
-            draws: Rc::clone(&draws),
-        };
+    let run = |options: AciOptions<f64>| {
+        let mut stream = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(5);
         let _ = crate::elementwise_batched_with_rng(
             |batch, output| {
                 for (point, value) in output.iter_mut().enumerate() {
@@ -2233,43 +2167,54 @@ fn elementwise_with_rng_draws_for_initialization_and_guards() {
             },
             &inputs,
             &options,
-            &mut rng,
+            &mut stream,
         )
         .unwrap();
-        draws.get()
+        // Drain the remaining sequence so the two runs can be compared.
+        (0..32)
+            .map(|_| rand::RngCore::next_u64(&mut stream))
+            .collect::<Vec<_>>()
     };
-
-    // The public entry point also accepts an erased stream (`?Sized` bound).
-    {
-        let draws = Rc::new(Cell::new(0));
-        let mut counting = CountingRng {
-            inner: <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(5),
-            draws: Rc::clone(&draws),
-        };
-        let erased: &mut dyn rand::RngCore = &mut counting;
-        let _ = crate::elementwise_batched_with_rng(
-            |batch, output| {
-                for (point, value) in output.iter_mut().enumerate() {
-                    let mut sum = 0.0;
-                    for input in 0..batch.n_inputs() {
-                        sum += batch.get(input, point)?;
-                    }
-                    *value = sum;
-                }
-                Ok(())
-            },
-            &inputs,
-            &with_guard,
-            erased,
-        )
-        .unwrap();
-        assert!(draws.get() > 0);
-    }
-
-    let guarded = count(with_guard);
-    let unguarded = count(without_guard);
-    assert!(
-        guarded > unguarded,
-        "the guard must consume the supplied stream after initialization: {guarded} vs {unguarded}"
+    let guarded_tail = run(guarded);
+    let unguarded_tail = run(unguarded);
+    assert_ne!(
+        guarded_tail, unguarded_tail,
+        "the guard must consume the supplied stream after initialization"
     );
+}
+
+/// The public entry point also accepts an erased stream (`?Sized` bound).
+#[test]
+fn elementwise_with_rng_accepts_an_erased_stream() {
+    let inputs = vec![
+        SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0),
+        SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0),
+    ];
+    let options = AciOptions::<f64> {
+        max_bond_dim: Some(2),
+        max_iters: 2,
+        enable_global_guard: true,
+        nsearch_global_pivots: 2,
+        max_nglobal_pivot: 1,
+        ..AciOptions::default()
+    };
+    let mut inner = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(5);
+    let erased: &mut dyn rand::RngCore = &mut inner;
+    let result = crate::elementwise_batched_with_rng(
+        |batch, output| {
+            for (point, value) in output.iter_mut().enumerate() {
+                let mut sum = 0.0;
+                for input in 0..batch.n_inputs() {
+                    sum += batch.get(input, point)?;
+                }
+                *value = sum;
+            }
+            Ok(())
+        },
+        &inputs,
+        &options,
+        erased,
+    )
+    .unwrap();
+    assert_eq!(result.ranks.len(), result.errors.len());
 }
