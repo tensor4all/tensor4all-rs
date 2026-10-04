@@ -118,10 +118,9 @@ pub struct PatchedInterpolationOptions {
     /// otherwise; such a patch is never certified. A last run that was not
     /// judged yet (it did not converge and was not capped-eligible) is
     /// judged once: measured under L2, by its estimate under `SampledMax`.
-    /// With
-    /// `Some(m)` for `m >= 2`, a failing two-site patch is retained although
-    /// splitting it would give exact patches, and `m` at least the number of
-    /// sites blocks the root. `None` (the default) and `Some(0)` or
+    /// With `Some(m)` for `m >= 2`, a failing two-site patch is retained
+    /// although splitting it would give exact patches, and `m` at least the
+    /// number of sites blocks the root. `None` (the default) and `Some(0)` or
     /// `Some(1)` split down to exact patches.
     pub min_patch_bits: Option<usize>,
     /// Whether a patch that reaches the bond cap may be accepted. Default

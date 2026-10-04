@@ -190,6 +190,7 @@ impl L2Measurement {
 ///     &PatchedInterpolationOptions::new(2),
 /// )?;
 /// assert_eq!(result.report.accepted[0].status, PatchStatus::WithinTolerance);
+/// assert!(result.report.tolerance_met());
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -876,33 +877,8 @@ impl PatchedInterpolationReport {
     ///
     /// # Examples
     ///
-    /// See [`ToleranceNotMetBasis`] for a run that misses its tolerance.
-    ///
-    /// ```
-    /// use std::collections::BTreeMap;
-    /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
-    /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
-    ///     patched_interpolate, PatchedInterpolationOptions,
-    /// };
-    /// use tensor4all_treetci::TreeTciInterpolator;
-    /// use tensor4all_treetn::NodeNameNetwork;
-    ///
-    /// // An exactly evaluated root meets its allowance.
-    /// let mut topology = NodeNameNetwork::new();
-    /// topology.add_node(0usize)?;
-    /// let result = patched_interpolate(
-    ///     &TreeTciInterpolator::default(),
-    ///     topology,
-    ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-    ///     ColMajorArray::new(vec![], vec![1, 0])?,
-    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
-    ///         Ok(batch.data().iter().map(|&x| 1.0 + x as f64).collect())
-    ///     },
-    ///     &PatchedInterpolationOptions::new(2),
-    /// )?;
-    /// assert!(result.report.tolerance_met());
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
+    /// See [`PatchStatus`] for a run that meets its tolerance and
+    /// [`ToleranceNotMetBasis`] for one that does not.
     pub fn tolerance_met(&self) -> bool {
         self.accepted
             .iter()

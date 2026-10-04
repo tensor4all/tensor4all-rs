@@ -741,7 +741,8 @@ the implementation follows unless the user changes it.
        measurement does not show.
 
    Blocking for the final rustdoc; the code can proceed with the provisional
-   rule.
+   rule. Asked again after the implementation (2026-10-04), the user left it
+   undecided; the provisional rule stays implemented and documented.
 2. **Default values.** Neither decision fixes a default. Proposed: `None` for
    both, which is exactly M3 and keeps the golden outputs. Q4's direction
    then applies only when the user opts in. A numeric default (for example
