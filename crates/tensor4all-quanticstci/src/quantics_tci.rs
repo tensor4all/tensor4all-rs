@@ -5,6 +5,7 @@
 //! in column-major `(n_dims, n_points)` order. The deprecated point-wise entry
 //! points are thin wrappers over the batched ones.
 
+use rand::SeedableRng;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -40,11 +41,12 @@ fn point_from_batch(batch: GlobalIndexBatch<'_>, point: usize) -> Result<Vec<usi
 
 /// Convert the caller's initial pivots to quantics indices and append random
 /// starting pivots.
-fn prepare_pivots(
+fn prepare_pivots<R: rand::Rng + ?Sized>(
     initial_pivots: Option<Vec<Vec<usize>>>,
     local_dims: &[usize],
     convert: impl Fn(&[usize]) -> Result<Vec<usize>>,
     n_random: usize,
+    rng: &mut R,
 ) -> Result<Vec<Vec<usize>>> {
     let mut pivots = match initial_pivots {
         Some(pivots) if !pivots.is_empty() => pivots
@@ -53,7 +55,6 @@ fn prepare_pivots(
             .collect::<Result<Vec<_>>>()?,
         _ => vec![vec![0; local_dims.len()]],
     };
-    let mut rng = rand::rng();
     for _ in 0..n_random {
         pivots.push(
             local_dims
@@ -592,6 +593,12 @@ where
         f,
         cache.clone(),
     );
+    // One explicitly named stream per run: the option seeds it, and the
+    // default draws OS entropy once instead of per pivot.
+    let mut rng = match options.rng_seed {
+        Some(seed) => rand_chacha::ChaCha8Rng::seed_from_u64(seed),
+        None => rand_chacha::ChaCha8Rng::from_os_rng(),
+    };
     let pivots = prepare_pivots(
         initial_pivots,
         &local_dims,
@@ -600,6 +607,7 @@ where
                 .map_err(|error| anyhow!("initial pivot {pivot:?} conversion failed: {error}"))
         },
         options.n_random_init_pivot,
+        &mut rng,
     )?;
 
     let (tci, tt, ranks, errors, cache) =
@@ -988,6 +996,12 @@ where
         f,
         cache.clone(),
     );
+    // One explicitly named stream per run: the option seeds it, and the
+    // default draws OS entropy once instead of per pivot.
+    let mut rng = match options.rng_seed {
+        Some(seed) => rand_chacha::ChaCha8Rng::seed_from_u64(seed),
+        None => rand_chacha::ChaCha8Rng::from_os_rng(),
+    };
     let pivots = prepare_pivots(
         initial_pivots,
         &local_dims,
@@ -996,6 +1010,7 @@ where
                 .map_err(|error| anyhow!("initial pivot {pivot:?} conversion failed: {error}"))
         },
         options.n_random_init_pivot,
+        &mut rng,
     )?;
 
     let (tci, tt, ranks, errors, cache) =
