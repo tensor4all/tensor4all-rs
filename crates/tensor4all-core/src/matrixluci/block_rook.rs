@@ -162,7 +162,7 @@ fn factorize_lazy<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
             break;
         }
 
-        if pivot_abs < T::epsilon() {
+        if pivot_abs == 0.0 {
             if selected_rows.is_empty() {
                 last_error = pivot_abs;
             }
