@@ -228,6 +228,13 @@ This is intentional nested parallelism. It avoids oversubscription as long as
 inner work remains on the current Rayon pool. Callbacks that create their own
 thread pools are outside the contract.
 
+A plain canonical Tensor4all CPU session entered from a domain worker runs inline
+and single-threaded on that worker instead of installing the process CPU pool
+inside the domain pool; the domain pool therefore owns parallel patch execution
+while a patch executes its matrix work. Graph and eager execution are not plain
+concrete sessions and keep their own runtime. See
+[tensorbackend session entry](tensorbackend-session-entry.md).
+
 ## Patch-owned sample cache
 
 Add one private cache owned by each pending patch:
