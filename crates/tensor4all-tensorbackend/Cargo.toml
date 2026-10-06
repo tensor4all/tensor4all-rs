@@ -65,6 +65,7 @@ anyhow.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
 omeco.workspace = true
+rayon.workspace = true
 tenferro.workspace = true
 tenferro-ad.workspace = true
 tenferro-cpu.workspace = true

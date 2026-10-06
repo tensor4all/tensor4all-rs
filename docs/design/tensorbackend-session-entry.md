@@ -52,9 +52,10 @@ It is the only tensorbackend-owned entry for plain concrete operations. The
 method:
 
 1. checks the current execution thread for an active canonical session before
-   locking `self.backend`;
-2. locks the context-local backend with the same poisoned-lock recovery as
-   `with_backend`;
+   taking a backend;
+2. selects this entry's backend: a thread outside any Rayon pool locks the
+   context-local backend with the same poisoned-lock recovery as `with_backend`,
+   and a Rayon worker uses the context-local pool-less backend described below;
 3. calls `CpuBackend::with_backend_session` exactly once;
 4. installs an RAII guard inside the actual session closure, which tenferro may
    execute on a worker thread;
@@ -64,7 +65,9 @@ The guard is module-private and active in all build modes. It forbids nested
 canonical sessions on one execution thread. It does not intercept raw
 `with_backend` / `with_default_backend` re-entry from a session closure, or a
 session closure that spawns another thread and synchronously re-enters; both
-patterns remain forbidden because they can wait on a context mutex. The
+patterns remain forbidden because they can wait on a context mutex. An entry from
+a Rayon worker is not such a pattern: it takes the worker-local path described
+below. The
 regression test assumes the workspace's unwind-on-panic profile; a
 `panic=abort` build aborts on this internal programming-contract violation.
 
@@ -72,6 +75,29 @@ The existing public `CpuExecutionContext::with_backend` remains unchanged for
 caller-managed low-level integration. Production tensorbackend concrete
 wrappers use `with_session`; graph/cache management may continue using raw
 backend access because it owns runtime setup rather than a concrete operation.
+
+## Session entry from a Rayon worker
+
+An entry from a Rayon worker runs the session inline and single-threaded on that
+worker, through a context-local pool-less backend (`CpuContext::with_threads(1)`),
+and does not take the context-local backend lock. tenferro otherwise installs the
+session into the context backend's own pool, and a thread running inside another
+pool waits for that install by processing more of the enclosing pool's work. Work
+stolen that way can enter a session itself, on a thread whose tenferro execution
+is already active: tenferro rejects that entry, and before this change the same
+thread deadlocked on the context-local backend mutex (tensor4all-rs#830).
+
+Such an entry therefore uses neither the supplied backend nor its pool and
+placement: the pool-less backend reports one thread, and the enclosing pool owns
+parallelism. Entries from any thread that is not a Rayon worker keep the supplied
+backend, its pool, and its context-local lock. The rule follows the entry thread,
+not a particular pool, so it also covers the backend's own workers.
+
+Because the session runs on the entering thread, the canonical guard is effective
+for it: a nested session on that thread fails with the guard message instead of
+waiting on a mutex. Parallelism comes from the enclosing pool's task scheduling,
+so a session body that itself waits on the enclosing pool remains a contract
+violation.
 
 ## Global-default adapter
 
