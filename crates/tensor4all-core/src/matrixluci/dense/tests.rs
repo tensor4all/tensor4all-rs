@@ -49,11 +49,11 @@ fn dense_kernel_reports_zero_rank_for_zero_matrix() {
 #[test]
 fn pivot_errors_cover_empty_and_zero_pivot_stops() {
     assert_eq!(
-        DenseLuKernel::compute_pivot_errors(&[], 0, 3, &PivotKernelOptions::default()),
+        DenseLuKernel::compute_pivot_errors::<f64>(&[], 0, 3, &PivotKernelOptions::default()),
         vec![0.0]
     );
     assert_eq!(
-        DenseLuKernel::compute_pivot_errors(
+        DenseLuKernel::compute_pivot_errors::<f64>(
             &[2.0, 0.0],
             2,
             2,
@@ -62,7 +62,7 @@ fn pivot_errors_cover_empty_and_zero_pivot_stops() {
         vec![2.0, 0.0]
     );
     assert_eq!(
-        DenseLuKernel::compute_pivot_errors(&[0.0], 1, 1, &PivotKernelOptions::default()),
+        DenseLuKernel::compute_pivot_errors::<f64>(&[0.0], 1, 1, &PivotKernelOptions::default()),
         vec![0.0]
     );
 }
@@ -231,4 +231,50 @@ fn dense_kernel_matches_legacy_pivot_errors_for_right_orthogonal_mode() {
         ..RrLUOptions::default()
     };
     assert_pivot_parity(rows, luci_options, legacy_options);
+}
+
+#[test]
+fn dense_selection_extreme_scales() {
+    use num_complex::Complex64;
+    for phase in [Complex64::new(1.0, 0.0), Complex64::new(1.0, 0.5)] {
+        let base: Vec<_> = [4.0, 1.0, 2.0, 3.0].iter().map(|&v| phase * v).collect();
+        for options in [
+            PivotKernelOptions::default(),
+            PivotKernelOptions::no_truncation(),
+        ] {
+            let reference = DenseLuKernel
+                .factorize(&DenseMatrixSource::from_column_major(&base, 2, 2), &options)
+                .unwrap();
+            for scale in [2f64.powi(-600), 2f64.powi(600)] {
+                let data: Vec<_> = base.iter().map(|&v| v * scale).collect();
+                let out = DenseLuKernel
+                    .factorize(&DenseMatrixSource::from_column_major(&data, 2, 2), &options)
+                    .unwrap();
+                assert_eq!(out.rank, reference.rank);
+                assert_eq!(out.row_indices, reference.row_indices);
+                assert_eq!(out.col_indices, reference.col_indices);
+                for (a, b) in out.pivot_errors.iter().zip(&reference.pivot_errors) {
+                    assert!((a / scale - b).abs() < 1e-12);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn dense_errors_stop_at_undividable_pivots_in_the_component_type() {
+    let tiny = f32::from_bits(1) as f64;
+    for options in [
+        PivotKernelOptions::default(),
+        PivotKernelOptions::no_truncation(),
+    ] {
+        assert_eq!(
+            DenseLuKernel::compute_pivot_errors::<f32>(&[tiny], 1, 1, &options),
+            vec![tiny]
+        );
+        assert_eq!(
+            DenseLuKernel::compute_pivot_errors::<f32>(&[1.0, tiny], 2, 2, &options).len(),
+            2
+        );
+    }
 }

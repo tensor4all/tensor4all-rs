@@ -359,7 +359,7 @@ impl<T: Scalar> RrLU<T> {
     /// }
     /// ```
     pub fn pivot_errors(&self) -> Vec<f64> {
-        let mut errors: Vec<f64> = self.diag().iter().map(|d| f64::sqrt(d.abs_sq())).collect();
+        let mut errors: Vec<f64> = self.diag().iter().map(|d| d.abs_val()).collect();
         errors.push(self.error);
         errors
     }
@@ -511,6 +511,28 @@ fn submatrix_argmax_col_major<T: Scalar>(
         }
     }
 
+    // Preserve the normal-scale squared-magnitude fast path and its tie order.
+    // Outside the component type's normal range, compare robust magnitudes.
+    if !max_val.is_finite() || max_val < T::min_positive() {
+        let mut max_abs = first.abs_val();
+        max_row = row_start;
+        max_col = col_start;
+        for col in col_start..col_end {
+            let start = col_major_offset(nrows, row_start, col);
+            for (&value, row) in data[start..start + row_end - row_start]
+                .iter()
+                .zip(row_start..row_end)
+            {
+                let magnitude = value.abs_val();
+                if magnitude > max_abs {
+                    max_abs = magnitude;
+                    max_row = row;
+                    max_col = col;
+                }
+            }
+        }
+    }
+
     (
         max_row,
         max_col,
@@ -559,6 +581,44 @@ fn swap_cols_col_major<T>(data: &mut [T], nrows: usize, ncols: usize, col_a: usi
     }
 }
 
+/// Select division once per pivot, preserving ordinary-scale arithmetic.
+/// Reciprocal multiplication avoids squaring an extreme complex divisor.
+enum PivotDivisor<T> {
+    Direct(T),
+    Reciprocal(T),
+}
+
+impl<T: Scalar> PivotDivisor<T> {
+    fn new(pivot: T) -> Self {
+        let squared = pivot.abs_sq();
+        if squared >= T::min_positive() && squared.is_finite() {
+            Self::Direct(pivot)
+        } else {
+            let inverse = T::from_f64(1.0 / pivot.abs_val());
+            Self::Reciprocal((pivot * inverse).conj() * inverse)
+        }
+    }
+}
+
+/// Stop only for an exact zero or an unrepresentable reciprocal in T.
+pub(crate) fn pivot_is_undividable<T: Scalar>(magnitude: f64) -> bool {
+    magnitude == 0.0
+        || (magnitude.is_finite() && !T::from_f64(1.0 / magnitude).abs_val().is_finite())
+}
+
+fn scale_column_by<T: Scalar, F: Fn(T) -> T>(
+    data: &mut [T],
+    nrows: usize,
+    col: usize,
+    row_start: usize,
+    divide: F,
+) {
+    let start = col_major_offset(nrows, row_start, col);
+    for value in &mut data[start..nrows * (col + 1)] {
+        *value = divide(*value);
+    }
+}
+
 fn scale_column_tail<T: Scalar>(
     data: &mut [T],
     nrows: usize,
@@ -569,10 +629,23 @@ fn scale_column_tail<T: Scalar>(
     if row_start >= nrows {
         return;
     }
-    let start = col_major_offset(nrows, row_start, col);
-    let end = col_major_offset(nrows, nrows - 1, col) + 1;
-    for value in &mut data[start..end] {
-        *value = *value / pivot;
+    match PivotDivisor::new(pivot) {
+        PivotDivisor::Direct(p) => scale_column_by(data, nrows, col, row_start, |v| v / p),
+        PivotDivisor::Reciprocal(p) => scale_column_by(data, nrows, col, row_start, |v| v * p),
+    }
+}
+
+fn scale_row_by<T: Scalar, F: Fn(T) -> T>(
+    data: &mut [T],
+    nrows: usize,
+    ncols: usize,
+    row: usize,
+    col_start: usize,
+    divide: F,
+) {
+    for col in col_start..ncols {
+        let value = divide(col_major_get(data, nrows, row, col));
+        col_major_set(data, nrows, row, col, value);
     }
 }
 
@@ -584,9 +657,9 @@ fn scale_row_tail<T: Scalar>(
     col_start: usize,
     pivot: T,
 ) {
-    for col in col_start..ncols {
-        let value = col_major_get(data, nrows, row, col) / pivot;
-        col_major_set(data, nrows, row, col, value);
+    match PivotDivisor::new(pivot) {
+        PivotDivisor::Direct(p) => scale_row_by(data, nrows, ncols, row, col_start, |v| v / p),
+        PivotDivisor::Reciprocal(p) => scale_row_by(data, nrows, ncols, row, col_start, |v| v * p),
     }
 }
 
@@ -650,12 +723,12 @@ fn extract_lu_from_factorized<T: Scalar>(
         }
     }
 
-    if l_data.iter().any(|&value| value.is_nan()) {
+    if l_data.iter().any(|&value| !value.abs_val().is_finite()) {
         return Err(MatrixCIError::NaNEncountered {
             matrix: "L".to_string(),
         });
     }
-    if u_data.iter().any(|&value| value.is_nan()) {
+    if u_data.iter().any(|&value| !value.abs_val().is_finite()) {
         return Err(MatrixCIError::NaNEncountered {
             matrix: "U".to_string(),
         });
@@ -716,8 +789,8 @@ impl Default for RrLUOptions {
 ///
 /// Returns [`MatrixCIError::InvalidArgument`] if the matrix shape product
 /// overflows `usize` or its backing storage length does not match the shape.
-/// Returns [`MatrixCIError::NaNEncountered`] if NaN values appear in the L or U
-/// factors.
+/// Returns [`MatrixCIError::NaNEncountered`] if input entries or intermediate
+/// factors have non-finite magnitudes.
 ///
 /// # Examples
 ///
@@ -740,6 +813,13 @@ pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> R
     validate_col_major_matrix_len(nr, nc, data.len())?;
     debug_assert_eq!(data.len(), nr * nc);
 
+    // Validate all entries, including those a pivot scan would otherwise skip.
+    if data.iter().any(|&value| !value.abs_val().is_finite()) {
+        return Err(MatrixCIError::NaNEncountered {
+            matrix: "input".to_string(),
+        });
+    }
+
     let mut lu = RrLU::new(nr, nc, opts.left_orthogonal);
     let max_bond_dim = opts.max_bond_dim.min(nr).min(nc);
     let mut max_error = 0.0f64;
@@ -754,18 +834,22 @@ pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> R
         let (pivot_row, pivot_col, pivot_val) =
             submatrix_argmax_col_major(data, nr, nc, k, nr, k, nc);
 
-        let pivot_abs = f64::sqrt(pivot_val.abs_sq());
+        let pivot_abs = pivot_val.abs_val();
         lu.error = pivot_abs;
+        if !pivot_abs.is_finite() {
+            return Err(MatrixCIError::NaNEncountered {
+                matrix: "residual".to_string(),
+            });
+        }
 
         // Check stopping criteria (but add at least 1 pivot)
         if lu.n_pivot > 0 && (pivot_abs < opts.rel_tol * max_error || pivot_abs < opts.abs_tol) {
             break;
         }
 
-        // Only an exactly zero pivot prevents elimination. Small nonzero
-        // pivots are governed by the caller's relative/absolute tolerances;
-        // machine epsilon is not an absolute threshold on matrix values.
-        if pivot_abs == 0.0 {
+        // Small pivots follow caller truncation; guard only zero or an
+        // unrepresentable reciprocal in the actual component type.
+        if pivot_is_undividable::<T>(pivot_abs) {
             break;
         }
 
@@ -817,8 +901,8 @@ pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> R
 ///
 /// Returns [`MatrixCIError::InvalidArgument`] if the matrix shape product
 /// overflows `usize` or its backing storage length does not match the shape.
-/// Returns [`MatrixCIError::NaNEncountered`] if NaN values appear in the L or U
-/// factors.
+/// Returns [`MatrixCIError::NaNEncountered`] if input entries or intermediate
+/// factors have non-finite magnitudes.
 ///
 /// # Examples
 ///
@@ -849,7 +933,8 @@ pub fn rrlu<T: Scalar>(a: &Matrix<T>, options: Option<RrLUOptions>) -> Result<Rr
 /// # Errors
 /// Returns [`MatrixCIError::InvalidArgument`] when `p` is not square or
 /// `c` has too few columns, and [`MatrixCIError::SingularMatrix`] for a zero
-/// diagonal pivot.
+/// diagonal pivot or one with an unrepresentable reciprocal; non-finite pivots
+/// return [`MatrixCIError::NaNEncountered`].
 ///
 /// # Examples
 ///
@@ -891,18 +976,21 @@ pub fn cols_to_l_matrix<T: Scalar>(
     }
     let n = p.nrows();
     for k in 0..n {
-        if p[[k, k]].abs_val() == 0.0 {
+        let magnitude = p[[k, k]].abs_val();
+        if !magnitude.is_finite() {
+            return Err(MatrixCIError::NaNEncountered {
+                matrix: "pivot".to_string(),
+            });
+        }
+        if pivot_is_undividable::<T>(magnitude) {
             return Err(MatrixCIError::SingularMatrix);
         }
     }
 
     for k in 0..n {
         let pivot = p[[k, k]];
-        // c[:, k] /= pivot
-        for i in 0..c.nrows() {
-            let val = c[[i, k]] / pivot;
-            c[[i, k]] = val;
-        }
+        let nrows = c.nrows();
+        scale_column_tail(c.as_col_major_mut_slice(), nrows, k, 0, pivot);
 
         // c[:, k+1:] -= c[:, k] * p[k, k+1:]
         for j in (k + 1)..c.ncols() {
@@ -926,7 +1014,8 @@ pub fn cols_to_l_matrix<T: Scalar>(
 /// # Errors
 /// Returns [`MatrixCIError::InvalidArgument`] when `p` is not square or
 /// `r` has too few rows, and [`MatrixCIError::SingularMatrix`] for a zero
-/// diagonal pivot.
+/// diagonal pivot or one with an unrepresentable reciprocal; non-finite pivots
+/// return [`MatrixCIError::NaNEncountered`].
 ///
 /// # Examples
 ///
@@ -967,18 +1056,21 @@ pub fn rows_to_u_matrix<T: Scalar>(
     }
     let n = p.nrows();
     for k in 0..n {
-        if p[[k, k]].abs_val() == 0.0 {
+        let magnitude = p[[k, k]].abs_val();
+        if !magnitude.is_finite() {
+            return Err(MatrixCIError::NaNEncountered {
+                matrix: "pivot".to_string(),
+            });
+        }
+        if pivot_is_undividable::<T>(magnitude) {
             return Err(MatrixCIError::SingularMatrix);
         }
     }
 
     for k in 0..n {
         let pivot = p[[k, k]];
-        // r[k, :] /= pivot
-        for j in 0..r.ncols() {
-            let val = r[[k, j]] / pivot;
-            r[[k, j]] = val;
-        }
+        let (nrows, ncols) = (r.nrows(), r.ncols());
+        scale_row_tail(r.as_col_major_mut_slice(), nrows, ncols, k, 0, pivot);
 
         // r[k+1:, :] -= p[k+1:, k] * r[k, :]
         for i in (k + 1)..r.nrows() {

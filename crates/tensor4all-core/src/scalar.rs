@@ -70,6 +70,22 @@ pub trait Scalar:
         self.abs_sq().sqrt()
     }
 
+    /// Smallest positive normal value of the underlying real component type.
+    ///
+    /// This bounds squared-magnitude arithmetic; subnormal values remain valid
+    /// inputs. Returns `f64::MIN_POSITIVE` by default.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::Scalar;
+    /// assert_eq!(f32::min_positive(), f32::MIN_POSITIVE as f64);
+    /// assert_eq!(f64::min_positive(), f64::MIN_POSITIVE);
+    /// ```
+    fn min_positive() -> f64 {
+        f64::MIN_POSITIVE
+    }
+
     /// Create from f64 value.
     fn from_f64(val: f64) -> Self;
 
@@ -139,6 +155,11 @@ impl Scalar for f32 {
     }
 
     #[inline]
+    fn min_positive() -> f64 {
+        f32::MIN_POSITIVE as f64
+    }
+
+    #[inline]
     fn from_f64(val: f64) -> Self {
         val as f32
     }
@@ -200,6 +221,11 @@ impl Scalar for Complex32 {
     #[inline]
     fn abs_val(self) -> f64 {
         self.norm() as f64
+    }
+
+    #[inline]
+    fn min_positive() -> f64 {
+        f32::MIN_POSITIVE as f64
     }
 
     #[inline]

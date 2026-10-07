@@ -1,5 +1,6 @@
 //! Lazy pivot-kernel implementations.
 
+use crate::matrixlu::pivot_is_undividable;
 use crate::matrixluci::error::MatrixLuciError;
 use crate::matrixluci::factors::{load_block, subtract_inplace};
 use crate::matrixluci::kernel::PivotKernel;
@@ -50,6 +51,9 @@ fn argmax_abs<T: MatrixLuciScalar>(matrix: &Matrix<T>) -> (usize, usize, f64) {
     for col in 0..matrix.ncols() {
         for row in 0..matrix.nrows() {
             let value = matrix[[row, col]].abs_val();
+            if !value.is_finite() {
+                return (row, col, value);
+            }
             if value > best_abs {
                 best_row = row;
                 best_col = col;
@@ -162,7 +166,12 @@ fn factorize_lazy<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
             break;
         }
 
-        if pivot_abs == 0.0 {
+        if !pivot_abs.is_finite() {
+            return Err(MatrixLuciError::NaNEncountered {
+                matrix: "rook residual",
+            });
+        }
+        if pivot_is_undividable::<T>(pivot_abs) {
             if selected_rows.is_empty() {
                 last_error = pivot_abs;
             }

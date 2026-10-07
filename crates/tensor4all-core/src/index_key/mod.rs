@@ -1,6 +1,6 @@
 //! Bit-packed integer keys for multi-index maps.
 //!
-//! A [`FlatIndexer`] turns a multi-index over fixed local dimensions into a
+//! A [`FlatIndexer`](crate::index_key::FlatIndexer) turns a multi-index over fixed local dimensions into a
 //! single integer key suitable for hashing. Dimension `i` occupies
 //! `ceil(log2(d_i))` bits at a fixed offset, so encoding is shift-and-OR with
 //! no multiplication, and two multi-indices collide only if they are equal.

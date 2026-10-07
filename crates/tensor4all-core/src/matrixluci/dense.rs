@@ -1,5 +1,6 @@
 //! Dense pivot-kernel implementations.
 
+use crate::matrixlu::pivot_is_undividable;
 use crate::matrixluci::kernel::PivotKernel;
 use crate::matrixluci::scalar::MatrixLuciScalar;
 use crate::matrixluci::source::{materialize_source, CandidateMatrixSource};
@@ -24,7 +25,7 @@ impl DenseLuKernel {
         options.max_bond_dim >= full_rank && options.rel_tol == 0.0 && options.abs_tol == 0.0
     }
 
-    fn compute_pivot_errors(
+    fn compute_pivot_errors<T: LegacyScalar>(
         diag_abs: &[f64],
         nrows: usize,
         ncols: usize,
@@ -38,7 +39,7 @@ impl DenseLuKernel {
         if Self::is_no_truncation(options, full_rank) {
             let mut pivot_errors = Vec::with_capacity(full_rank + 1);
             for &pivot_abs in diag_abs.iter().take(full_rank) {
-                if pivot_abs == 0.0 {
+                if pivot_is_undividable::<T>(pivot_abs) {
                     if pivot_errors.is_empty() {
                         pivot_errors.push(pivot_abs);
                     } else {
@@ -67,7 +68,7 @@ impl DenseLuKernel {
                 break;
             }
 
-            if pivot_abs == 0.0 {
+            if pivot_is_undividable::<T>(pivot_abs) {
                 if rank == 0 {
                     last_error = pivot_abs;
                 }
@@ -143,6 +144,11 @@ impl DenseLuKernel {
         n: usize,
         options: &PivotKernelOptions,
     ) -> Result<PivotSelectionCore> {
+        if data.iter().any(|&value| !value.abs_val().is_finite()) {
+            return Err(MatrixLuciError::NaNEncountered {
+                matrix: "dense input",
+            });
+        }
         let matrix = Matrix::from_col_major_vec(n, n, data.to_vec());
         let decomp =
             full_piv_lu_matrix_owned(matrix).map_err(|err| MatrixLuciError::InvalidArgument {
@@ -153,7 +159,12 @@ impl DenseLuKernel {
         let diag_abs = (0..n)
             .map(|i| u_values[i + n * i].abs_val())
             .collect::<Vec<_>>();
-        let pivot_errors = Self::compute_pivot_errors(&diag_abs, n, n, options);
+        if diag_abs.iter().any(|value| !value.is_finite()) {
+            return Err(MatrixLuciError::NaNEncountered {
+                matrix: "dense diagonal",
+            });
+        }
+        let pivot_errors = Self::compute_pivot_errors::<T>(&diag_abs, n, n, options);
         let rank = pivot_errors.len().saturating_sub(1);
 
         let row_perm =
