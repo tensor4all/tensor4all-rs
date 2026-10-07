@@ -20,6 +20,13 @@
 
 ## Verification and limits
 
+- All 1,151 unit/integration tests and 435 doctests of the four affected
+  crates pass. Strict Clippy, strict rustdoc and deterministic repository rules
+  checks pass. Tree/quantics validation was repeated after main gained #839.
+  The ten public regressions fail on main at `6ddfa204` before the repair.
+  Six pre-existing documentation-link warnings exposed by the strict build
+  were corrected without relaxing a lint or changing executable examples.
+
 - Reconstruction covers rrLU and both public LUCI facades, both orientations,
   square/rectangular shapes, and real/complex single/double precision.
   Exact binary rescaling compares rank, pivot indices and scaled pivot errors.
