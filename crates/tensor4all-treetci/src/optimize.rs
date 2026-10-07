@@ -267,6 +267,13 @@ impl Default for TreeTciOptions {
 /// [`GlobalIndexBatch`](crate::GlobalIndexBatch#batch-sizes) for the batch
 /// sizes.
 ///
+/// Repeated calls on the same function/topology/dimensions support increasing
+/// `max_bond_dim` or removing the cap. Current pivots and sampled normalization
+/// scale carry over; proposers retain the current edge's pivots directly.
+/// This call starts new diagnostics, a new convergence window and its own iteration budget,
+/// including the final-iteration global-search skip. It need not match one
+/// longer run. A failing evaluator can leave a partially updated state.
+///
 /// # Errors
 ///
 /// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
@@ -340,6 +347,13 @@ where
 /// [`optimize_with_proposer_with_rng`] to advance one caller-owned stream
 /// through both operations, including across continued calls.
 ///
+/// Repeated calls on the same function/topology/dimensions support increasing
+/// `max_bond_dim` or removing the cap. Current pivots and sampled normalization
+/// scale carry over; proposers retain the current edge's pivots directly.
+/// This call starts new diagnostics, a new convergence window and its own iteration budget,
+/// including the final-iteration global-search skip. It need not match one
+/// longer run. A failing evaluator can leave a partially updated state.
+///
 /// # Errors
 ///
 /// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
@@ -408,6 +422,13 @@ where
 /// randomness and share one stream across several runs. Candidate generation
 /// and global searches both consume the supplied stream directly. The seed
 /// stored in a proposer and [`TreeTciOptions::seed`] are ignored here.
+///
+/// Repeated calls on the same function/topology/dimensions support increasing
+/// `max_bond_dim` or removing the cap. Current pivots and sampled normalization
+/// scale carry over; proposers retain the current edge's pivots directly.
+/// This call starts new diagnostics, a new convergence window and its own iteration budget,
+/// including the final-iteration global-search skip. It need not match one
+/// longer run. A failing evaluator can leave a partially updated state.
 ///
 /// # Errors
 /// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
@@ -555,7 +576,9 @@ where
                 left_orthogonal: true,
             };
 
-            state.ijset_history.push(state.ijset.clone());
+            // INVARIANT: AllEdges visits each edge once in this pass. Its
+            // two subtree keys are not changed by updates of other edges;
+            // proposers can retain its current pivots without a full snapshot.
             state.flush_pivot_errors();
 
             for edge in visitor.visit_order(state) {

@@ -167,9 +167,8 @@ fn run_case(case: &Case, samples: &[usize], exact: &[f64]) -> Result<RunResult> 
     let seconds = started.elapsed().as_secs_f64();
 
     let mut hasher = DefaultHasher::new();
-    for history in &state.ijset_history {
-        hash_pivot_sets(&mut hasher, history);
-    }
+    // Since #833, only current pivot sets exist. Historical result files
+    // included pass snapshots and their fingerprints are not comparable.
     hash_pivot_sets(&mut hasher, &state.ijset);
     let pivot_fingerprint = hasher.finish();
 

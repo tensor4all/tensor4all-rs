@@ -1,5 +1,5 @@
 use super::{
-    sample_ordered_candidates, union_with_history, DefaultProposer, PivotCandidateProposer,
+    sample_ordered_candidates, union_with_pivots, DefaultProposer, PivotCandidateProposer,
     SimpleProposer, TruncatedDefaultProposer,
 };
 use crate::{
@@ -76,15 +76,15 @@ fn default_proposer_matches_neighbor_product_assembly() {
 }
 
 #[test]
-fn default_proposer_unions_history_candidates() {
+fn default_proposer_retains_current_edge_pivots() {
     let mut tci = TreeTCI2::<f64>::new(vec![2; 7], sample_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0, 0, 0, 0, 0, 0], vec![1, 0, 1, 0, 1, 0, 1]])
         .unwrap();
-    // History entry: ColMajorArray shape [4, 1], single column [1, 1, 1, 1]
-    tci.ijset_history.push(HashMap::from([(
+    // Current edge pivots: ColMajorArray shape [4, 1], single column [1, 1, 1, 1]
+    tci.ijset.insert(
         SubtreeKey::new(vec![0, 1, 2, 3]),
         ColMajorArray::new(vec![1, 1, 1, 1], vec![4, 1]).unwrap(),
-    )]));
+    );
 
     let (iset, _jset) = DefaultProposer
         .candidates(&tci, TreeTciEdge::new(3, 4))
@@ -94,19 +94,19 @@ fn default_proposer_unions_history_candidates() {
 }
 
 #[test]
-fn union_with_history_dedups_in_first_occurrence_order() {
+fn union_with_pivots_dedups_in_first_occurrence_order() {
     let key = SubtreeKey::new(vec![0, 1, 2]);
-    let history = HashMap::from([(
+    let pivots = HashMap::from([(
         key.clone(),
         ColMajorArray::new(vec![1, 1, 1, 0, 1, 2], vec![3, 2]).unwrap(), // [1,1,1], [0,1,2]
     )]);
 
     // `values` contains duplicates (the cartesian pivot expansion can produce
-    // them); history adds two columns, one of which is already present.
+    // them); current pivots add two columns, one of which is already present.
     let values = vec![vec![0, 0, 0], vec![0, 0, 0], vec![1, 1, 1], vec![2, 2, 2]];
-    let out = union_with_history(values, Some(&history), &key).unwrap();
+    let out = union_with_pivots(values, &pivots, &key).unwrap();
 
-    // First occurrence wins, both within `values` and across history: the
+    // First occurrence wins, both within `values` and across current pivots: the
     // already-seen [1,1,1] is not appended again, [0,1,2] is new and appended.
     assert_eq!(
         out,
@@ -228,8 +228,7 @@ fn truncated_default_proposer_keeps_site_vertex_budget() {
 #[test]
 fn truncated_default_proposer_keeps_previous_pivots_when_truncating() {
     let pivots = [vec![0, 0, 0, 0], vec![1, 1, 1, 1], vec![0, 2, 2, 2]];
-    let mut tci = star_state(2, &pivots);
-    tci.ijset_history.push(tci.ijset.clone());
+    let tci = star_state(2, &pivots);
     let edge = TreeTciEdge::new(0, 1);
     let (ikey, _) = tci.graph.subregion_vertices(edge).unwrap();
     let previous: Vec<Vec<usize>> = (0..ncols_2d(&tci.ijset[&ikey]).unwrap())
@@ -300,8 +299,8 @@ fn caller_stream_matches_direct_simple_candidate_draws() {
         assert_eq!(
             actual,
             (
-                union_with_history(expected_left, None, &left).unwrap(),
-                union_with_history(expected_right, None, &right).unwrap()
+                union_with_pivots(expected_left, &state.ijset, &left).unwrap(),
+                union_with_pivots(expected_right, &state.ijset, &right).unwrap()
             )
         );
     }
@@ -315,7 +314,6 @@ fn caller_stream_matches_direct_truncated_sampling() {
     state
         .add_global_pivots(&[vec![0; 7], vec![1, 0, 1, 0, 1, 0, 1]])
         .unwrap();
-    state.ijset_history.push(state.ijset.clone());
     let edge = TreeTciEdge::new(1, 3);
     let (u, v) = state.graph.separate_vertices(edge).unwrap();
     let (left, right) = state.graph.subregion_vertices(edge).unwrap();
@@ -328,13 +326,13 @@ fn caller_stream_matches_direct_truncated_sampling() {
             .unwrap();
         let expected_left = sample_ordered_candidates(
             &default.0,
-            &super::history_columns(state.ijset_history.last(), &left).unwrap(),
+            &super::pivot_columns(&state.ijset, &left).unwrap(),
             super::truncated_candidate_budget(&state, u, &left).unwrap(),
             &mut reference_rng,
         );
         let expected_right = sample_ordered_candidates(
             &default.1,
-            &super::history_columns(state.ijset_history.last(), &right).unwrap(),
+            &super::pivot_columns(&state.ijset, &right).unwrap(),
             super::truncated_candidate_budget(&state, v, &right).unwrap(),
             &mut reference_rng,
         );

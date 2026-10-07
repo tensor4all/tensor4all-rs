@@ -3,7 +3,9 @@
 The built-in random proposers and global finder use explicitly named
 `ChaCha8Rng` streams at seeded entry points. `DefaultProposer` is deterministic
 and consumes no draws. Candidate sampling retains its ordered subset and
-previous-pass pivot retention rules.
+current-edge pivot retention rules. During optimization these are the
+same pivots as at the start of its pass; see the
+[continuation contract](treetci-termination.md#continued-optimization).
 
 | Entry point | Candidate draws | Global search starts |
 | --- | --- | --- |

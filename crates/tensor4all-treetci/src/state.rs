@@ -18,6 +18,14 @@ use tensor4all_core::ColMajorArray;
 /// [`optimize_default`](crate::optimize_default) or
 /// [`crossinterpolate2`](crate::crossinterpolate2).
 ///
+/// Continue optimization on the same function, topology and local dimensions
+/// by calling an `optimize_*` function again with a larger `max_bond_dim` or
+/// `None`. Pivot sets and the maximum sampled magnitude carry over. Pivot
+/// history is not copied: proposers retain the current edge's pivots. Diagnostics,
+/// convergence windows and iteration budgets restart per call; repeated calls
+/// need not match one longer run. Caller-stream APIs continue the supplied RNG,
+/// while seeded high-level calls restart their named generators.
+///
 /// # Examples
 ///
 /// ```
@@ -34,7 +42,26 @@ use tensor4all_core::ColMajorArray;
 ///
 /// // Seed with a global pivot
 /// state.add_global_pivots(&[vec![0, 0, 0]]).unwrap();
-/// assert!(state.max_bond_dim() >= 1);
+/// assert_eq!(state.max_bond_dim(), 1);
+///
+/// let evaluate = |batch: tensor4all_treetci::GlobalIndexBatch<'_>| {
+///     Ok((0..batch.n_points()).map(|p| {
+///         if batch.get(0, p) == batch.get(1, p) { 1.0_f64 } else { 0.0 }
+///     }).collect::<Vec<_>>())
+/// };
+/// // Use a two-site identity so the required rank is known to be two.
+/// let mut state = TreeTCI2::<f64>::new(vec![2, 2], TreeTciGraph::linear_chain(2)?)?;
+/// state.add_global_pivots(&[vec![0, 0]])?;
+/// let capped = tensor4all_treetci::TreeTciOptions {
+///     max_bond_dim: Some(1), max_iter: 3, enable_global_pivots: false,
+///     ..Default::default()
+/// };
+/// tensor4all_treetci::optimize_default(&mut state, evaluate, &capped)?;
+/// assert_eq!(state.max_bond_dim(), 1);
+/// let uncapped = tensor4all_treetci::TreeTciOptions { max_bond_dim: None, ..capped };
+/// tensor4all_treetci::optimize_default(&mut state, evaluate, &uncapped)?;
+/// assert_eq!(state.max_bond_dim(), 2);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Clone, Debug)]
 pub struct TreeTCI2<T> {
@@ -51,8 +78,6 @@ pub struct TreeTCI2<T> {
     pub pivot_errors: Vec<f64>,
     /// Maximum observed sample magnitude for normalization.
     pub max_sample_value: f64,
-    /// Previous pivot sets for candidate-generation history.
-    pub ijset_history: Vec<HashMap<SubtreeKey, ColMajorArray<usize>>>,
     marker: PhantomData<T>,
 }
 
@@ -96,7 +121,6 @@ impl<T> TreeTCI2<T> {
             bond_errors,
             pivot_errors: Vec::new(),
             max_sample_value: 0.0,
-            ijset_history: Vec::new(),
             marker: PhantomData,
         })
     }
