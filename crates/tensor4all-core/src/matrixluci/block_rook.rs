@@ -101,7 +101,9 @@ fn rook_pivot<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
             selected_cols,
         )?;
         let (best_row_pos, _, best_abs) = argmax_abs(&col_residual);
-        if best_abs > 0.0 {
+        // Skip only an exactly zero fiber. Non-finite magnitudes must reach
+        // the kernel's existing numerical-error check, not look like zeros.
+        if best_abs != 0.0 {
             current_row = remaining_rows[best_row_pos];
             break;
         }
