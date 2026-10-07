@@ -31,3 +31,8 @@
 - The seed convention is distinct from continued-state convergence/history
   semantics, handled in #833. High-level calls restart their generators;
   caller-stream calls preserve the sequence if the caller reuses the generator.
+
+- Fresh worktree-owned artifacts pass 167 unit/integration tests and 70
+  doctests across treetci/quanticstci. Strict Clippy, strict documentation,
+  public-error documentation audit and API inventory pass. Numerical
+  tolerances and coverage thresholds are unchanged.
