@@ -29,3 +29,19 @@ stall on flat zero fibers; sampled convergence remains a sampled criterion.
 
 - [User Guide: Tree Tensor Networks](https://tensor4all.org/tensor4all-rs/guides/tree-tn.html)
 - [API Reference](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_treetci/)
+
+## Random streams
+
+`PivotCandidateProposer::candidates_with_rng` and
+`optimize_with_proposer_with_rng` consume caller-owned streams directly.
+The optimizer shares that stream between candidate generation and global
+searches; reuse it across continued calls to preserve the draw sequence.
+`DefaultProposer` consumes no draws.
+
+Seeded proposer calls use `ChaCha8Rng`. The high-level optimizer creates one
+candidate stream from the proposer's seed per call and a separate global-search
+stream from `TreeTciOptions::seed`. No stream is derived by hashing edges,
+ranks or history length. Fixed-seed trajectories intentionally change from the
+former `DefaultHasher`/`SmallRng` implementation. Custom proposers implement
+`candidates_with_rng` and may override `seed` for the high-level entry point.
+See the [stream contract](../../docs/design/treetci-random-streams.md).

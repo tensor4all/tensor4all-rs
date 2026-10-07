@@ -1,11 +1,11 @@
 use crate::batch::checked_batch_len;
 use crate::error::Result as TreeTciResult;
+use crate::optimize::{with_seeded_streams, RandomStreams};
 use crate::{
-    materialize::to_treetn, optimize::optimize_with_proposer_with_rng, GlobalIndexBatch,
-    MultiIndex, PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciOptions, TreeTciTermination,
+    materialize::to_treetn, optimize::optimize_with_streams, GlobalIndexBatch, MultiIndex,
+    PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciOptions, TreeTciTermination,
 };
 use anyhow::Result;
-use rand::SeedableRng;
 use tensor4all_core::CommonScalar;
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::TreeTN;
@@ -135,22 +135,19 @@ where
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
-    // Entropy is drawn only when a randomized global search actually runs.
-    let searches_run = options.enable_global_pivots && options.max_iter > 1;
-    let mut rng = match (searches_run, options.seed) {
-        (true, None) => rand_chacha::ChaCha8Rng::from_os_rng(),
-        (_, seed) => rand_chacha::ChaCha8Rng::seed_from_u64(seed.unwrap_or(0)),
-    };
-    crossinterpolate2_with_rng(
-        evaluate,
-        local_dims,
-        graph,
-        initial_pivots,
-        options,
-        center_site,
-        proposer,
-        &mut rng,
-    )
+    options.validate()?;
+    with_seeded_streams(&options, proposer, |streams| {
+        crossinterpolate2_with_streams(
+            evaluate,
+            local_dims,
+            graph,
+            initial_pivots,
+            &options,
+            center_site,
+            proposer,
+            streams,
+        )
+    })
 }
 
 /// Interpolate a tree tensor network on a caller-owned random stream.
@@ -158,8 +155,9 @@ where
 /// Same as [`crossinterpolate2`], but consumes `rng` for every global pivot
 /// search of the run instead of deriving a generator from
 /// [`TreeTciOptions::seed`], so the caller can reproduce or advance the run's
-/// randomness and share one stream across runs. Randomized proposers keep their
-/// own generators (see #824); this controls the global searches only.
+/// randomness and share one stream across runs. Candidate generation and
+/// global searches both consume the supplied stream directly; proposer seeds
+/// and `options.seed` are ignored.
 /// Returns [`TreeTciRunResult`] with the network and the same stopping
 /// diagnostics as [`crossinterpolate2`].
 ///
@@ -211,6 +209,42 @@ where
     P: PivotCandidateProposer,
     R: rand::Rng + ?Sized,
 {
+    let mut stream: &mut R = rng;
+    let mut streams = RandomStreams::Shared(&mut stream);
+    crossinterpolate2_with_streams(
+        evaluate,
+        local_dims,
+        graph,
+        initial_pivots,
+        &options,
+        center_site,
+        proposer,
+        &mut streams,
+    )
+}
+
+// INVARIANT: This shared run boundary preserves the eight explicit parameters
+// of the public caller-stream entry point without bundling unrelated options.
+#[allow(clippy::too_many_arguments)]
+fn crossinterpolate2_with_streams<T, F, P>(
+    evaluate: F,
+    local_dims: Vec<usize>,
+    graph: TreeTciGraph,
+    initial_pivots: Vec<MultiIndex>,
+    options: &TreeTciOptions,
+    center_site: Option<usize>,
+    proposer: &P,
+    streams: &mut RandomStreams<'_>,
+) -> TreeTciResult<TreeTciRunResult>
+where
+    T: FullPivLuScalar
+        + CommonScalar
+        + tensor4all_core::MatrixLuciScalar
+        + tensor4all_core::TensorElement
+        + crate::globalpivot::ScalarParts,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    P: PivotCandidateProposer,
+{
     options.validate()?;
     if !(local_dims.len() == graph.n_sites()) {
         return Err(anyhow::anyhow!(
@@ -258,7 +292,7 @@ where
         return Err(anyhow::anyhow!("initial pivots must not all evaluate to zero").into());
     }
 
-    let result = optimize_with_proposer_with_rng(&mut tci, &evaluate, &options, proposer, rng)?;
+    let result = optimize_with_streams(&mut tci, &evaluate, options, proposer, streams)?;
     let treetn = to_treetn(&tci, &evaluate, center_site)?;
 
     Ok(TreeTciRunResult {

@@ -1,15 +1,15 @@
 //! The caller-owned RNG contract of the treetci entry point (issue #796).
 //!
-//! A run whose randomized global search is disabled must leave the supplied
-//! stream exactly where it was; a run that does search must advance it. Both are
+//! The deterministic proposer with global search disabled leaves the stream
+//! untouched; randomized candidates or global searches advance it. Both are
 //! checked by replaying the same seed in a reference `ChaCha8Rng`.
 
 use anyhow::Result;
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tensor4all_treetci::{
-    optimize_with_proposer_with_rng, GlobalIndexBatch, SimpleProposer, TreeTCI2, TreeTciEdge,
-    TreeTciGraph, TreeTciOptions,
+    optimize_with_proposer_with_rng, DefaultProposer, GlobalIndexBatch, SimpleProposer, TreeTCI2,
+    TreeTciEdge, TreeTciGraph, TreeTciOptions,
 };
 
 fn two_site_state() -> TreeTCI2<f64> {
@@ -45,7 +45,7 @@ fn a_run_without_a_global_search_leaves_the_supplied_stream_untouched() {
             &mut two_site_state(),
             evaluate,
             &options,
-            &SimpleProposer::default(),
+            &DefaultProposer,
             &mut stream,
         )
         .unwrap();
@@ -108,4 +108,24 @@ fn the_low_level_entry_point_accepts_an_erased_stream() {
         )
         .unwrap();
     assert_eq!(ranks.len(), errors.len());
+}
+
+#[test]
+fn randomized_candidates_consume_the_stream_without_global_search() {
+    let mut stream = ChaCha8Rng::seed_from_u64(3);
+    let mut reference = stream.clone();
+    let options = TreeTciOptions {
+        max_iter: 2,
+        enable_global_pivots: false,
+        ..Default::default()
+    };
+    optimize_with_proposer_with_rng(
+        &mut two_site_state(),
+        evaluate,
+        &options,
+        &SimpleProposer::seeded(999),
+        &mut stream,
+    )
+    .unwrap();
+    assert_ne!(stream.next_u64(), reference.next_u64());
 }

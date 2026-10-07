@@ -12,10 +12,11 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
     struct InitialCrossOnly;
 
     impl crate::PivotCandidateProposer for InitialCrossOnly {
-        fn candidates<T>(
+        fn candidates_with_rng<T, R: rand::Rng + ?Sized>(
             &self,
             _state: &TreeTCI2<T>,
             _edge: TreeTciEdge,
+            _rng: &mut R,
         ) -> crate::TreeTciResult<(Vec<Vec<usize>>, Vec<Vec<usize>>)> {
             Ok((vec![vec![0]], vec![vec![0]]))
         }
@@ -470,4 +471,46 @@ fn capped_star_tree_with_global_pivots_stops_on_swept_state() {
             &options,
         );
     }
+}
+
+#[test]
+fn optimizer_threads_the_caller_stream_through_each_edge_pass() {
+    use crate::{DefaultProposer, PivotCandidateProposer};
+    use rand::{RngCore, SeedableRng};
+    use rand_chacha::ChaCha8Rng;
+    use std::cell::RefCell;
+    struct RecordDraws(RefCell<Vec<u64>>);
+    impl PivotCandidateProposer for RecordDraws {
+        fn seed(&self) -> u64 {
+            panic!("caller-stream path must not read the seed")
+        }
+        fn candidates_with_rng<T, R: rand::Rng + ?Sized>(
+            &self,
+            state: &TreeTCI2<T>,
+            edge: TreeTciEdge,
+            rng: &mut R,
+        ) -> crate::TreeTciResult<(Vec<Vec<usize>>, Vec<Vec<usize>>)> {
+            self.0.borrow_mut().push(rng.next_u64());
+            DefaultProposer.candidates_with_rng(state, edge, rng)
+        }
+    }
+    let proposer = RecordDraws(RefCell::new(Vec::new()));
+    let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+    state.add_global_pivots(&[vec![0, 0]]).unwrap();
+    state.max_sample_value = 1.0;
+    let options = TreeTciOptions {
+        enable_global_pivots: false,
+        max_iter: 2,
+        ..Default::default()
+    };
+    let evaluate = |batch: GlobalIndexBatch<'_>| Ok(vec![1.0; batch.n_points()]);
+    let mut rng = ChaCha8Rng::seed_from_u64(73);
+    let mut reference = rng.clone();
+    super::optimize_with_proposer_with_rng(&mut state, evaluate, &options, &proposer, &mut rng)
+        .unwrap();
+    assert_eq!(
+        *proposer.0.borrow(),
+        (0..4).map(|_| reference.next_u64()).collect::<Vec<_>>()
+    );
+    assert_eq!(rng.next_u64(), reference.next_u64());
 }
