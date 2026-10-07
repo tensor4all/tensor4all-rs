@@ -1,5 +1,5 @@
 use super::{
-    cached_batched_readout, find_global_pivots, search_with_readout, ScalarParts, SearchParams,
+    cached_walk_readout, find_global_pivots, search_with_readout, ScalarParts, SearchParams,
 };
 use crate::{
     materialize::to_treetn, optimize_with_proposer, DefaultProposer, GlobalIndexBatch, TreeTCI2,
@@ -15,7 +15,7 @@ use tensor4all_core::{
     TensorElement,
 };
 use tensor4all_tensorbackend::FullPivLuScalar;
-use tensor4all_treetn::TreeTN;
+use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
 
 /// Batch evaluator for a two-peak function on a 10-site chain.
 ///
@@ -211,6 +211,79 @@ fn find_global_pivots_respects_threshold_and_limit() {
     assert!(few.len() <= 2);
 }
 
+fn assert_coordinate_walk<T>(phase: T)
+where
+    T: FullPivLuScalar + Scalar + TensorElement + ScalarParts,
+{
+    for (dims, edges, a, b) in [
+        (vec![4, 4], vec![TreeTciEdge::new(0, 1)], 0, 1),
+        (
+            vec![1, 4, 4, 2],
+            vec![
+                TreeTciEdge::new(0, 1),
+                TreeTciEdge::new(0, 2),
+                TreeTciEdge::new(0, 3),
+            ],
+            1,
+            2,
+        ),
+    ] {
+        let n_sites = dims.len();
+        let graph = TreeTciGraph::new(n_sites, &edges).unwrap();
+        let mut state = TreeTCI2::<T>::new(dims.clone(), graph).unwrap();
+        state.add_global_pivots(&[vec![0; n_sites]]).unwrap();
+        // Pin a start at (1, 1). Starting at (0, 0) on an i*j residual
+        // gives flat zero fibers, which a greedy walk cannot escape either.
+        let seed = (0..1000)
+            .find(|&seed| {
+                let mut rng = seeded_rng(seed);
+                let start: Vec<usize> = dims.iter().map(|&d| rng.random_range(0..d)).collect();
+                start[a] == 1 && start[b] == 1
+            })
+            .unwrap();
+        for repeat_sweep in [false, true] {
+            // All pivot cross-sections are 1, so the rank-one approximation
+            // is phase everywhere. The residual is the table below or i*j.
+            // The table walk visits (2,1), (2,3), then (3,3) next sweep.
+            let table = [[1.0, 4.0, 2.0], [3.0, 5.0, 6.0], [2.0, 7.0, 9.0]];
+            let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<T>> {
+                Ok(batch
+                    .data()
+                    .chunks(n_sites)
+                    .map(|point| {
+                        let i = point[a];
+                        let j = point[b];
+                        let residual = if i == 0 || j == 0 {
+                            0.0
+                        } else if repeat_sweep {
+                            table[i - 1][j - 1]
+                        } else {
+                            (i * j) as f64
+                        };
+                        phase * T::from_f64(1.0 + residual)
+                    })
+                    .collect())
+            };
+            // Original-start axis scans reach at most 3 (i*j) or 4 (table),
+            // below these thresholds for every scalar variant below.
+            let threshold = if repeat_sweep { 8.0 } else { 4.0 };
+            let pivots = find_global_pivots(&state, evaluate, 1, 1, 1.0, threshold, seed).unwrap();
+            let mut expected = vec![0; n_sites];
+            expected[a] = 3;
+            expected[b] = 3;
+            assert_eq!(pivots, vec![expected], "repeat_sweep={repeat_sweep}");
+        }
+    }
+}
+
+#[test]
+fn global_search_retains_coordinate_moves_and_repeats_sweeps() {
+    assert_coordinate_walk(1.0_f64);
+    assert_coordinate_walk(Complex64::new(1.0, 0.5));
+    assert_coordinate_walk(1.0_f32);
+    assert_coordinate_walk(Complex32::new(1.0, 0.5));
+}
+
 #[test]
 fn find_global_pivots_supports_complex_scalars() {
     let graph = chain_graph();
@@ -393,12 +466,23 @@ fn site_indices(treetn: &TreeTN<IdxTensor, usize>) -> Vec<DynIndex> {
         .collect()
 }
 
+fn cached_batched_readout(
+    treetn: &TreeTN<IdxTensor, usize>,
+    indices: &[DynIndex],
+    candidates: ColMajorArrayRef<'_, usize>,
+) -> Result<Vec<AnyScalar>> {
+    let mut cache = TreeTNCachedEvaluator::new(treetn, indices, CachedEvaluatorOptions::default())?;
+    cached_walk_readout(&mut cache, treetn, indices, candidates, None)
+}
+
 /// The readout the search used before issue #792: `TreeTN::evaluate`, which
 /// contracts the whole network once per candidate. Kept as the reference.
 fn pointwise_readout(
+    _cache: &mut TreeTNCachedEvaluator<'_, usize>,
     treetn: &TreeTN<IdxTensor, usize>,
     site_indices: &[DynIndex],
     candidates: ColMajorArrayRef<'_, usize>,
+    _scan_site: Option<usize>,
 ) -> Result<Vec<AnyScalar>> {
     Ok(treetn.evaluate(site_indices, candidates)?)
 }
@@ -597,9 +681,9 @@ fn cached_readout_rejects_mismatched_indices_and_shapes() {
 
 /// Pivots returned by the fixed-seed searches of
 /// `global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree`
-/// on the one-sweep states of the two fixtures. Recorded on 9ad67f2c plus
-/// this branch's `ChaCha8Rng` switch, pointwise readout, `search_params`
-/// (`nsearch = 4`).
+/// on the one-sweep states of the two fixtures. Re-recorded from the
+/// pointwise readout on the b1bb828d base with #812's retained-coordinate
+/// walk, `ChaCha8Rng`, and `search_params` (`nsearch = 4`).
 ///
 /// These lists lock the search trajectory on purpose: any change to the
 /// starting points, the local search, the tie-breaking or the sweep that
@@ -609,22 +693,20 @@ fn cached_readout_rejects_mismatched_indices_and_shapes() {
 fn recorded_pivots(fixture: &str, seed: u64) -> Vec<Vec<usize>> {
     match (fixture, seed) {
         ("chain", 3) => vec![
-            vec![0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0],
-            vec![1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0],
-            vec![1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 0, 0, 1, 1],
-            vec![1, 0, 1, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 0, 0],
+            vec![0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            vec![1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
         ],
         ("branched", 3) => vec![
-            vec![0, 0, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 0],
-            vec![0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0],
-            vec![0, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1, 1, 0],
-            vec![1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 0, 1],
+            vec![0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            vec![0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0],
+            vec![1, 0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0, 0],
+            vec![1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0],
         ],
         ("branched", 11) => vec![
-            vec![0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 0, 0],
-            vec![0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1],
-            vec![1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 1, 0, 0],
-            vec![1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0],
+            vec![0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0],
+            vec![0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1],
+            vec![1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0],
+            vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
         ],
         _ => unreachable!("no recording for {fixture} seed {seed}"),
     }
@@ -672,8 +754,8 @@ fn global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree() {
 
 #[test]
 fn full_runs_reproduce_recorded_ranks_and_errors() {
-    // Recorded on 9ad67f2c plus this branch's `ChaCha8Rng` switch, pointwise
-    // readout: default options, seed 1, global search enabled. Like
+    // Re-recorded on b1bb828d with #812's retained-coordinate search:
+    // default options, seed 1, global search enabled. No tolerance changed. Like
     // `recorded_pivots`, these values lock the whole optimization trajectory
     // on purpose and must be re-recorded deliberately when the search, the
     // sweep or the RNG legitimately changes.
@@ -681,9 +763,9 @@ fn full_runs_reproduce_recorded_ranks_and_errors() {
     assert_eq!(ranks, vec![4, 8, 8, 8]);
     let recorded = [
         4.210785455368414e-9,
-        8.68318251630876e-9,
-        5.771110563560244e-9,
-        6.057293820959278e-9,
+        7.104994852102056e-9,
+        6.760951106568071e-9,
+        6.850685368779623e-9,
     ];
     assert_eq!(errors.len(), recorded.len());
     for (error, expected) in errors.iter().zip(recorded) {
@@ -735,39 +817,47 @@ fn full_runs_reproduce_recorded_ranks_and_errors() {
 
 #[test]
 fn equal_errors_keep_generation_order_and_duplicates_collapse() {
-    // Four binary sites, f = 2 everywhere, and a readout that gives every
-    // candidate of start `s` the same error `level(s)` in {1, 2, 3}. All
-    // candidates of a start tie, so its first generated candidate (the start
-    // with site 0 set to 0, one of only 8 points) must win. With 48 starts,
-    // each error level is shared by 16 starts and repeated points are
-    // certain, so the cross-start sort must move candidates, keep generation
-    // order among equal errors, and leave duplicates for the deduplication.
-    let local_dims = vec![2usize; 4];
-    let n_sites = local_dims.len();
-    let per_start: usize = local_dims.iter().sum();
-    let edges: Vec<TreeTciEdge> = (0..n_sites - 1)
-        .map(|site| TreeTciEdge::new(site, site + 1))
-        .collect();
-    let graph = TreeTciGraph::new(n_sites, &edges).unwrap();
-    let mut state = TreeTCI2::<f64>::new(local_dims, graph).unwrap();
+    // Each injected start has error level 1, 2 or 3. Site 0 has tied
+    // candidates, so its lowest value wins; all other coordinates have a
+    // strict local maximum at the held value. Distinct starts are retained,
+    // letting us exercise stable sorting and deduplication across starts.
+    let n_sites = 4;
+    let graph = TreeTciGraph::linear_chain(n_sites).unwrap();
+    let mut state = TreeTCI2::<f64>::new(vec![2; n_sites], graph).unwrap();
     state.add_global_pivots(&[vec![0; n_sites]]).unwrap();
     state.max_sample_value = 2.0;
-
     let nsearch = 48;
     let level = |start: usize| 1 + (start * 7 + start / 5) % 3;
     let constant =
         |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![2.0; batch.n_points()]) };
     let seen = RefCell::new(Vec::new());
-    let leveled_readout = |_: &TreeTN<IdxTensor, usize>,
-                           _: &[DynIndex],
-                           candidates: ColMajorArrayRef<'_, usize>|
-     -> Result<Vec<AnyScalar>> {
-        seen.replace(candidates.data().to_vec());
-        Ok((0..candidates.shape()[1])
-            .map(|column| AnyScalar::new_real(2.0 - level(column / per_start) as f64))
-            .collect())
-    };
     let search = |max_nglobal_pivot: usize| {
+        seen.borrow_mut().clear();
+        let mut start = 0;
+        let mut active_level = 0.0;
+        let leveled_readout = |_: &mut TreeTNCachedEvaluator<'_, usize>,
+                               _: &TreeTN<IdxTensor, usize>,
+                               _: &[DynIndex],
+                               candidates: ColMajorArrayRef<'_, usize>,
+                               site: Option<usize>|
+         -> Result<Vec<AnyScalar>> {
+            if site.is_none() {
+                active_level = level(start) as f64;
+                start += 1;
+                let mut point = candidates.data().to_vec();
+                point[0] = 0;
+                seen.borrow_mut().push(point);
+            }
+            let error = if site.is_none() || site == Some(0) {
+                active_level
+            } else {
+                0.0
+            };
+            Ok(vec![
+                AnyScalar::new_real(2.0 - error);
+                candidates.shape()[1]
+            ])
+        };
         let params = SearchParams {
             nsearch,
             max_nglobal_pivot,
@@ -778,25 +868,17 @@ fn equal_errors_keep_generation_order_and_duplicates_collapse() {
         search_with_readout(&state, constant, params, &mut rng, leveled_readout).unwrap()
     };
     let pivots = search(nsearch);
-
     let candidates = seen.borrow().clone();
-    let first_candidate = |start: usize| {
-        let first = start * per_start * n_sites;
-        candidates[first..first + n_sites].to_vec()
-    };
-    for start in 0..nsearch {
-        assert_eq!(first_candidate(start)[0], 0);
-    }
-    // Reference without sorting: errors from high to low, starts in
-    // generation order within one error, first occurrence of each point.
-    let mut expected: Vec<Vec<usize>> = Vec::new();
-    let mut repeats_within_a_level = 0;
+    assert_eq!(candidates.len(), nsearch);
+    assert!(candidates.iter().all(|point| point[0] == 0));
+    let mut expected = Vec::new();
+    let mut repeats = 0;
     for error_level in (1..=3).rev() {
-        let mut level_points: Vec<Vec<usize>> = Vec::new();
+        let mut level_points = Vec::new();
         for start in (0..nsearch).filter(|&start| level(start) == error_level) {
-            let point = first_candidate(start);
+            let point = candidates[start].clone();
             if level_points.contains(&point) {
-                repeats_within_a_level += 1;
+                repeats += 1;
             } else {
                 level_points.push(point.clone());
             }
@@ -805,21 +887,15 @@ fn equal_errors_keep_generation_order_and_duplicates_collapse() {
             }
         }
     }
-    // The fixture really exercises the deduplication of equal errors.
-    assert!(repeats_within_a_level > 0);
-    // Deduplicating in generation order gives a different list, so the
-    // result really depends on the sort.
-    let mut generation_order: Vec<Vec<usize>> = Vec::new();
-    for start in 0..nsearch {
-        let point = first_candidate(start);
+    assert!(repeats > 0);
+    let mut generation_order = Vec::new();
+    for point in candidates {
         if !generation_order.contains(&point) {
             generation_order.push(point);
         }
     }
     assert_ne!(generation_order, expected);
-
     assert_eq!(pivots, expected);
-    // The budget truncates the same order.
     assert_eq!(search(3), expected[..3].to_vec());
 }
 
@@ -829,26 +905,163 @@ fn search_rejects_failing_or_short_readouts() {
     let state = fixture.one_sweep_state();
     let params = search_params(&state);
 
-    let failing = |_: &TreeTN<IdxTensor, usize>,
+    let failing = |_: &mut TreeTNCachedEvaluator<'_, usize>,
+                   _: &TreeTN<IdxTensor, usize>,
                    _: &[DynIndex],
-                   _: ColMajorArrayRef<'_, usize>|
+                   _: ColMajorArrayRef<'_, usize>,
+                   _: Option<usize>|
      -> Result<Vec<AnyScalar>> { Err(anyhow::anyhow!("readout failed")) };
     let mut rng = seeded_rng(3);
     let error =
         search_with_readout(&state, fixture.evaluate(), params, &mut rng, failing).unwrap_err();
     assert!(error.to_string().contains("readout failed"), "{error}");
 
-    let short = |_: &TreeTN<IdxTensor, usize>,
+    let short = |_: &mut TreeTNCachedEvaluator<'_, usize>,
+                 _: &TreeTN<IdxTensor, usize>,
                  _: &[DynIndex],
-                 _: ColMajorArrayRef<'_, usize>|
-     -> Result<Vec<AnyScalar>> { Ok(vec![AnyScalar::new_real(0.0)]) };
+                 _: ColMajorArrayRef<'_, usize>,
+                 _: Option<usize>|
+     -> Result<Vec<AnyScalar>> { Ok(Vec::new()) };
     let mut rng = seeded_rng(3);
     let error =
         search_with_readout(&state, fixture.evaluate(), params, &mut rng, short).unwrap_err();
     assert!(
         error
             .to_string()
-            .contains("approximation readout returned 1 values"),
+            .contains("approximation readout returned 0 values"),
         "{error}"
     );
+}
+
+#[test]
+fn coordinate_scans_propagate_evaluator_and_readout_failures() {
+    use std::cell::Cell;
+    let fixture = Fixture {
+        local_dims: vec![3, 3],
+        edges: vec![TreeTciEdge::new(0, 1)],
+        target: |_| 1.0,
+    };
+    let state = fixture.seeded_state();
+    let params = search_params(&state);
+    // Materialization and the initial-point evaluation succeed; fail the
+    // first coordinate scan to cover errors inside the walk, after setup.
+    for wrong_length in [false, true] {
+        let started = Cell::new(false);
+        let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+            if started.get() {
+                if wrong_length {
+                    return Ok(vec![1.0; batch.n_points() + 1]);
+                }
+                return Err(anyhow::anyhow!("coordinate oracle failed"));
+            }
+            Ok(vec![1.0; batch.n_points()])
+        };
+        let readout = |cache: &mut TreeTNCachedEvaluator<'_, usize>,
+                       tree: &TreeTN<IdxTensor, usize>,
+                       indices: &[DynIndex],
+                       points: ColMajorArrayRef<'_, usize>,
+                       site| {
+            started.set(true);
+            cached_walk_readout(cache, tree, indices, points, site)
+        };
+        let error =
+            search_with_readout(&state, evaluate, params, &mut seeded_rng(1), readout).unwrap_err();
+        let message = if wrong_length {
+            "batch evaluator returned 3 values for 2"
+        } else {
+            "coordinate oracle failed"
+        };
+        assert!(error.to_string().contains(message), "{error}");
+    }
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let readout = |_: &mut TreeTNCachedEvaluator<'_, usize>,
+                       _: &TreeTN<IdxTensor, usize>,
+                       _: &[DynIndex],
+                       points: ColMajorArrayRef<'_, usize>,
+                       site: Option<usize>| {
+            let value = if site.is_some() { value } else { 1.0 };
+            Ok(vec![AnyScalar::new_real(value); points.shape()[1]])
+        };
+        let error = search_with_readout(
+            &state,
+            fixture.evaluate(),
+            params,
+            &mut seeded_rng(1),
+            readout,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("non-finite global pivot residual"),
+            "{error}"
+        );
+    }
+    let short = |_: &mut TreeTNCachedEvaluator<'_, usize>,
+                 _: &TreeTN<IdxTensor, usize>,
+                 _: &[DynIndex],
+                 points: ColMajorArrayRef<'_, usize>,
+                 site: Option<usize>| {
+        Ok(if site.is_some() {
+            Vec::new()
+        } else {
+            vec![AnyScalar::new_real(1.0); points.shape()[1]]
+        })
+    };
+    let error = search_with_readout(
+        &state,
+        fixture.evaluate(),
+        params,
+        &mut seeded_rng(1),
+        short,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("approximation readout returned 0 values for 2"),
+        "{error}"
+    );
+}
+
+#[test]
+fn coordinate_walk_honors_early_stop_and_sweep_bound() {
+    let fixture = Fixture {
+        local_dims: vec![2, 2],
+        edges: vec![TreeTciEdge::new(0, 1)],
+        target: |_| 1.0,
+    };
+    let state = fixture.seeded_state();
+    // A diagnostic readout whose error strictly increases on every call
+    // never hits a local maximum, so only the two safety bounds stop it.
+    for (threshold, expected_calls) in [(2.0, 21), (1e9, 201)] {
+        let mut calls = 0;
+        let readout = |_: &mut TreeTNCachedEvaluator<'_, usize>,
+                       _: &TreeTN<IdxTensor, usize>,
+                       _: &[DynIndex],
+                       points: ColMajorArrayRef<'_, usize>,
+                       _: Option<usize>| {
+            calls += 1;
+            Ok(vec![
+                AnyScalar::new_real(1.0 - calls as f64);
+                points.shape()[1]
+            ])
+        };
+        let params = SearchParams {
+            nsearch: 1,
+            max_nglobal_pivot: 1,
+            tol_margin: 1.0,
+            abs_tol: threshold,
+        };
+        let pivots = search_with_readout(
+            &state,
+            fixture.evaluate(),
+            params,
+            &mut seeded_rng(1),
+            readout,
+        )
+        .unwrap();
+        assert_eq!(calls, expected_calls);
+        assert_eq!(pivots.len(), usize::from(threshold == 2.0));
+    }
 }
