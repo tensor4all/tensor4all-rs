@@ -11,10 +11,10 @@
   "crates/tensor4all-tensorbackend/src/matrix.rs:1665:assert",
   "crates/tensor4all-tensorbackend/src/matrix.rs:1700:assert",
   "crates/tensor4all-tensorbackend/src/matrix.rs:1704:assert",
-  "crates/tensor4all-tensorbackend/src/matrix.rs:1967:assert",
-  "crates/tensor4all-tensorbackend/src/matrix.rs:1968:assert",
-  "crates/tensor4all-tensorbackend/src/matrix.rs:1969:assert",
-  "crates/tensor4all-tensorbackend/src/matrix.rs:1970:assert",
+  "crates/tensor4all-tensorbackend/src/matrix.rs:1988:assert",
+  "crates/tensor4all-tensorbackend/src/matrix.rs:1989:assert",
+  "crates/tensor4all-tensorbackend/src/matrix.rs:1990:assert",
+  "crates/tensor4all-tensorbackend/src/matrix.rs:1991:assert",
   "crates/tensor4all-tensorbackend/src/matrix.rs:964:assert",
   "crates/tensor4all-tensorbackend/src/matrix.rs:969:assert_eq"
 ]

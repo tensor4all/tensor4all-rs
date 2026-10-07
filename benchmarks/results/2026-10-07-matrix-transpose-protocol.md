@@ -54,7 +54,7 @@ records are retained with the final results.
 
 The first confirmation passed primary and validity gates but failed
 non-regression for Complex64 single-row/tall cases and 32x32 complex cases.
-Retain it as `2026-10-07-matrix-transpose-first.json` rather than omit those
+Retain it as the version-1 entry in `2026-10-07-matrix-transpose-rejected.jsonl` rather than omit those
 cases. Correct the dispatch/code organization: clone the flat buffer for
 single-axis inputs (transpose preserves their flat order), inline the small
 wrapper/simple traversal, and keep the blocked kernel out of that hot-path
@@ -65,8 +65,32 @@ case list. Repeat the full nine-pair confirmation after that correction.
 
 The forced-inline correction worsened generated simple-path code and failed
 unchanged 8x8 control validity as well as multiple non-regression cases. Retain
-all results as `2026-10-07-matrix-transpose-second.json`; they are inconclusive.
+all results as the version-2 entry in `2026-10-07-matrix-transpose-rejected.jsonl`; they are inconclusive.
 Remove forced inlining and express the simple traversal with source-column
 iterators, preserving contiguous reads while avoiding repeated source bounds
 checks. Keep the direct single-axis clone and the frozen blocked dispatch.
 Repeat the complete experiment with all original gates and cases.
+
+## Final large-tall policy
+
+Keep all rejected complete-suite records (versions 1 through 8) in the linked
+JSONL file. Version 3 changed the 8x8 traversal itself, invalidating its
+unchanged-control premise; later versions restored the original small loop
+in a separate helper. A contiguous-read, fully-written uninitialized buffer
+removes the Complex64 tall-case regression, but the 4 MiB rrLU factor still
+regresses or shows bimodal timings. Restoring zero filling there also leaves
+that phase unstable. These are rejected results, not accepted speedups.
+
+Refine the large-tall traversal: retain linear contiguous reads at payloads
+up to 2 MiB (largest passing tall microbenchmark payload), and use 16-row by
+4-column tiles above that boundary. Narrower column tiles reduce same-set
+source-column conflicts for the long leading dimensions; this is an
+explanation of the traversal choice, not a measured cache-counter claim.
+Square/wide tiles stay 16x16 and the small fallback stays 4096 elements.
+Separate the simple/large helpers without forced inlining of the public
+wrapper. Freeze this policy before repeating all nine pairs with unchanged
+case lists, validity gates, and numerical/performance thresholds.
+
+Version 9 passes every gate, including the complete public conversions. A
+final formatting/documentation/test-only follow-up will retain that record
+and repeat the complete experiment against the exact committed source.

@@ -1808,8 +1808,10 @@ pub fn swap_cols<T>(m: &mut Matrix<T>, a: usize, b: usize) -> Result<(), MatrixS
 /// Transpose the matrix, preserving its column-major layout.
 ///
 /// Uses 16-by-16 cache tiles for square/wide matrices with more than 4096
-/// elements. Small, tall, and single-row inputs keep the simple traversal;
-/// the thresholds were measured on the recorded transpose size ladder.
+/// elements. Tall inputs use contiguous reads up to 2 MiB of payload, then
+/// 16-by-4 tiles; small inputs keep the simple traversal and single-axis
+/// inputs clone their flat buffer. Thresholds were measured on the recorded
+/// transpose ladder and rrLU orientation conversions.
 ///
 /// # Examples
 ///
@@ -1831,9 +1833,9 @@ pub fn transpose<T: Clone + Zero>(m: &Matrix<T>) -> Matrix<T> {
             ncols: m.nrows,
         };
     }
-    // Small and tall inputs favor the original contiguous-read traversal.
+    // Small inputs favor the original contiguous-read traversal.
     // Threshold and tile selection: benchmarks/results/2026-10-07-matrix-transpose.md.
-    if m.data.len() <= 4096 || m.nrows <= 1 || m.nrows > m.ncols {
+    if m.data.len() <= 4096 {
         return transpose_simple(m);
     }
     if std::mem::needs_drop::<T>() {
@@ -1843,13 +1845,12 @@ pub fn transpose<T: Clone + Zero>(m: &Matrix<T>) -> Matrix<T> {
     }
 }
 
+#[inline(never)]
 fn transpose_simple<T: Clone + Zero>(m: &Matrix<T>) -> Matrix<T> {
     let mut result = Matrix::zeros(m.ncols, m.nrows);
-    // INVARIANT: Matrix construction validates data.len() == rows*cols;
-    // each source column has exactly rows entries, and j is below cols.
-    for (j, column) in m.data.chunks_exact(m.nrows).enumerate() {
-        for (i, value) in column.iter().enumerate() {
-            result.data[j + m.ncols * i] = value.clone();
+    for j in 0..m.ncols {
+        for i in 0..m.nrows {
+            result[[j, i]] = m[[i, j]].clone();
         }
     }
     result
@@ -1906,26 +1907,46 @@ impl<T, const TRACK_DROPS: bool> Drop for TransposeBuffer<T, TRACK_DROPS> {
     }
 }
 
+#[inline(never)]
 fn transpose_blocked<T: Clone, const TRACK_DROPS: bool>(m: &Matrix<T>) -> Matrix<T> {
     const TILE: usize = 16;
+    const TALL_LINEAR_BYTES: usize = 2 * 1024 * 1024;
     let mut output = TransposeBuffer::<T, TRACK_DROPS>::new(m.data.len());
-    for i0 in (0..m.nrows).step_by(TILE) {
-        for j0 in (0..m.ncols).step_by(TILE) {
-            let i_end = i0.saturating_add(TILE).min(m.nrows);
-            let j_end = j0.saturating_add(TILE).min(m.ncols);
-            for i in i0..i_end {
-                let column = &mut output.values[i * m.ncols..(i + 1) * m.ncols];
-                for (j, slot) in column.iter_mut().enumerate().take(j_end).skip(j0) {
-                    slot.write(m.data[j * m.nrows + i].clone());
-                    if TRACK_DROPS {
-                        output.initialized[i * m.ncols + j] = true;
+    if m.nrows > m.ncols
+        && m.data.len().saturating_mul(std::mem::size_of::<T>()) <= TALL_LINEAR_BYTES
+    {
+        // Tall matrices favor contiguous source-column reads. Use the same
+        // fully-written buffer without an otherwise redundant zero fill.
+        for j in 0..m.ncols {
+            for i in 0..m.nrows {
+                let index = j + m.ncols * i;
+                output.values[index].write(m[[i, j]].clone());
+                if TRACK_DROPS {
+                    output.initialized[index] = true;
+                }
+            }
+        }
+    } else {
+        let column_tile = if m.nrows > m.ncols { 4 } else { TILE };
+        for i0 in (0..m.nrows).step_by(TILE) {
+            for j0 in (0..m.ncols).step_by(column_tile) {
+                let i_end = i0.saturating_add(TILE).min(m.nrows);
+                let j_end = j0.saturating_add(column_tile).min(m.ncols);
+                for i in i0..i_end {
+                    let column = &mut output.values[i * m.ncols..(i + 1) * m.ncols];
+                    for (j, slot) in column.iter_mut().enumerate().take(j_end).skip(j0) {
+                        slot.write(m.data[j * m.nrows + i].clone());
+                        if TRACK_DROPS {
+                            output.initialized[i * m.ncols + j] = true;
+                        }
                     }
                 }
             }
         }
     }
     // SAFETY: Matrix construction validates rows*cols == data.len(). The tile
-    // ranges partition all rows and columns; each output slot j + cols*i has
+    // ranges (or source-column traversal) partition all rows and columns;
+    // each output slot j + cols*i has
     // been written exactly once, including partial tiles at both boundaries.
     let data = unsafe { output.into_initialized() };
     Matrix {

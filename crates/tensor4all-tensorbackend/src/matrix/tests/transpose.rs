@@ -68,6 +68,8 @@ fn transpose_preserves_bits_at_dispatch_and_partial_tile_boundaries() {
         (128, 129),
         (129, 128),
         (129, 145),
+        (4096, 32),
+        (4097, 32),
     ] {
         let len = rows * cols;
         check_layout(
@@ -145,40 +147,42 @@ impl Zero for PanicClone {
 
 #[test]
 fn blocked_transpose_drops_only_initialized_clones_on_unwind_and_success() {
-    let len = 128 * 129;
-    for panic_at in [0_usize, 17, 256, len - 1, usize::MAX] {
-        let clones = Arc::new(AtomicUsize::new(0));
-        let input = Matrix::from_col_major_vec(
-            128,
-            129,
-            (0..len)
-                .map(|value| PanicClone {
-                    value,
-                    clones: clones.clone(),
-                    panic_at,
-                })
-                .collect(),
-        );
-        let result = std::panic::catch_unwind(|| transpose(&input));
-        if panic_at == usize::MAX {
-            let output = result.unwrap();
-            assert_eq!(Arc::strong_count(&clones), 2 * len + 1);
-            for i in 0..128 {
-                for j in 0..129 {
-                    assert_eq!(output[[j, i]].value, input[[i, j]].value);
+    for (rows, cols) in [(128, 129), (129, 128), (1, 8193), (513, 257)] {
+        let len = rows * cols;
+        for panic_at in [0_usize, 17, 256, len - 1, usize::MAX] {
+            let clones = Arc::new(AtomicUsize::new(0));
+            let input = Matrix::from_col_major_vec(
+                rows,
+                cols,
+                (0..len)
+                    .map(|value| PanicClone {
+                        value,
+                        clones: clones.clone(),
+                        panic_at,
+                    })
+                    .collect(),
+            );
+            let result = std::panic::catch_unwind(|| transpose(&input));
+            if panic_at == usize::MAX {
+                let output = result.unwrap();
+                assert_eq!(Arc::strong_count(&clones), 2 * len + 1);
+                for i in 0..rows {
+                    for j in 0..cols {
+                        assert_eq!(output[[j, i]].value, input[[i, j]].value);
+                    }
                 }
+                drop(output);
+            } else {
+                assert!(result.is_err());
             }
-            drop(output);
-        } else {
-            assert!(result.is_err());
+            assert_eq!(
+                Arc::strong_count(&clones),
+                len + 1,
+                "no initialized clone may leak or be dropped twice"
+            );
+            drop(input);
+            assert_eq!(Arc::strong_count(&clones), 1);
         }
-        assert_eq!(
-            Arc::strong_count(&clones),
-            len + 1,
-            "no initialized clone may leak or be dropped twice"
-        );
-        drop(input);
-        assert_eq!(Arc::strong_count(&clones), 1);
     }
 }
 
