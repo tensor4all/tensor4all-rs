@@ -5,6 +5,9 @@ use thiserror::Error;
 /// Errors that can occur during matrix LUCI operations.
 #[derive(Debug, Error)]
 pub(crate) enum MatrixLuciError {
+    /// Non-finite matrix input or residual.
+    #[error("Non-finite values in {matrix}")]
+    NaNEncountered { matrix: &'static str },
     /// Invalid argument.
     #[error("Invalid argument: {message}")]
     InvalidArgument {

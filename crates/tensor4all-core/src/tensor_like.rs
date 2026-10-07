@@ -1347,7 +1347,7 @@ pub trait TensorConstructionLike: TensorContractionLike {
     /// Returns `Self::Error` when the input and output index lists differ in
     /// length (a length mismatch) or when a constituent diagonal or outer
     /// product reports a failure; propagates failures from [`Self::diagonal`],
-    /// [`Self::scalar_one`], and [`Self::outer_product`].
+    /// [`Self::scalar_one`], and [`TensorContractionLike::outer_product`].
     fn delta(
         input_indices: &[<Self as TensorIndex>::Index],
         output_indices: &[<Self as TensorIndex>::Index],
@@ -1840,7 +1840,7 @@ pub trait TensorConstructionLike: TensorContractionLike {
     /// (a duplicate-index failure), when a coordinate is out of range (an
     /// out of bounds failure), or when the underlying one-hot construction or
     /// contraction reports a failure; propagates failures from
-    /// [`Self::onehot`] and [`Self::contract`].
+    /// [`Self::onehot`] and [`TensorContractionLike::contract`].
     fn select_indices(
         &self,
         selected_indices: &[<Self as TensorIndex>::Index],
