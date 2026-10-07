@@ -400,3 +400,15 @@ fn test_rrlu_transpose() {
         }
     }
 }
+
+#[test]
+fn factor_extraction_rejects_non_finite_factors() {
+    for left_orthogonal in [false, true] {
+        let error =
+            super::extract_lu_from_factorized(&[f64::NAN], 1, 1, 1, left_orthogonal).unwrap_err();
+        let expected = if left_orthogonal { "U" } else { "L" };
+        assert!(
+            matches!(error, crate::MatrixCIError::NaNEncountered { matrix } if matrix == expected)
+        );
+    }
+}

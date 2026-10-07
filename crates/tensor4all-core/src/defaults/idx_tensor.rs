@@ -971,7 +971,7 @@ pub enum StructuredSelectorError {
 /// | Extract data | [`to_vec`](Self::to_vec), [`into_dense_col_major_parts`](Self::into_dense_col_major_parts), [`sum`](Self::sum), [`only`](Self::only) |
 /// | Contraction | [`contract`](Self::contract) |
 /// | Arithmetic | [`add`](Self::add), [`scale`](Self::scale), [`axpby`](Self::axpby) |
-/// | Factorization | via [`TensorFactorizationLike::factorize`](crate::TensorFactorizationLike::factorize) |
+/// | Factorization | via [`TensorFactorizationLike::factorize`] |
 /// | Norms | [`norm`](Self::norm), [`norm_squared`](Self::norm_squared), [`maxabs`](Self::maxabs) |
 /// | Index ops | [`replaceind`](Self::replaceind), [`permute_indices`](Self::permute_indices) |
 /// # Data Layout
@@ -5039,7 +5039,7 @@ impl IdxTensor {
     /// Element-wise subtraction with index alignment.
     ///
     /// This computes `self - other` using the same vector-space semantics as
-    /// [`TensorVectorSpace`](crate::TensorVectorSpace).
+    /// [`TensorVectorSpace`].
     ///
     /// # Errors
     /// Returns an error when the tensors have different index sets (an index-set
