@@ -183,19 +183,53 @@ fn tensor_profile_bytes(dtype: DType, shape: &[usize]) -> usize {
 /// Trait for scalar types that can generate random values from a standard
 /// normal distribution.
 /// This enables the generic [`IdxTensor::random`] constructor.
+/// Implementations consume the supplied RNG directly, including a
+/// `dyn rand::RngCore`, without creating or reseeding another generator.
+///
+/// # Examples
+/// ```
+/// use rand::{RngCore, SeedableRng};
+/// use rand_chacha::ChaCha8Rng;
+/// use rand_distr::{Distribution, StandardNormal};
+/// use tensor4all_core::tensor::RandomScalar;
+/// let mut rng = ChaCha8Rng::seed_from_u64(42);
+/// let mut reference = rng.clone();
+/// let erased: &mut dyn RngCore = &mut rng;
+/// let expected: f64 = StandardNormal.sample(&mut reference);
+/// assert_eq!(f64::random_value(erased), expected);
+/// ```
 pub trait RandomScalar: TensorElement {
-    /// Generate a random value from the standard normal distribution.
-    fn random_value<R: Rng>(rng: &mut R) -> Self;
+    /// Draw a scalar from the caller's standard normal RNG stream.
+    ///
+    /// `rng` may be a concrete generator or an erased `dyn rand::RngCore`.
+    /// Returns one normal draw for `f64`, or independent real and imaginary
+    /// normal draws for `Complex64`.
+    ///
+    /// # Examples
+    /// ```
+    /// use rand::{RngCore, SeedableRng};
+    /// use rand_chacha::ChaCha8Rng;
+    /// use rand_distr::{Distribution, StandardNormal};
+    /// use num_complex::Complex64;
+    /// use tensor4all_core::tensor::RandomScalar;
+    /// let mut rng = ChaCha8Rng::seed_from_u64(42);
+    /// let mut reference = rng.clone();
+    /// let erased: &mut dyn RngCore = &mut rng;
+    /// let expected = Complex64::new(
+    ///     StandardNormal.sample(&mut reference), StandardNormal.sample(&mut reference));
+    /// assert_eq!(Complex64::random_value(erased), expected);
+    /// ```
+    fn random_value<R: Rng + ?Sized>(rng: &mut R) -> Self;
 }
 
 impl RandomScalar for f64 {
-    fn random_value<R: Rng>(rng: &mut R) -> Self {
+    fn random_value<R: Rng + ?Sized>(rng: &mut R) -> Self {
         StandardNormal.sample(rng)
     }
 }
 
 impl RandomScalar for Complex64 {
-    fn random_value<R: Rng>(rng: &mut R) -> Self {
+    fn random_value<R: Rng + ?Sized>(rng: &mut R) -> Self {
         Complex64::new(StandardNormal.sample(rng), StandardNormal.sample(rng))
     }
 }
@@ -4068,26 +4102,34 @@ impl IdxTensor {
     /// * `R` - The random number generator type
     ///
     /// # Arguments
-    /// * `rng` - Random number generator
+    /// * `rng` - Caller-owned RNG, including `dyn rand::RngCore`; consumed directly
     /// * `indices` - The indices for the tensor
     ///
     /// # Errors
     /// Returns an error when the dimension product overflows (an overflow failure)
     /// or the backend cannot generate the requested scalar type.
+    ///
+    /// # Returns
+    /// A tensor filled from the supplied RNG stream in column-major order.
     /// # Example
     /// ```
     /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use rand::SeedableRng;
+    /// use rand::{RngCore, SeedableRng};
     /// use rand_chacha::ChaCha8Rng;
+    /// use rand_distr::{Distribution, StandardNormal};
     ///
     /// let mut rng = ChaCha8Rng::seed_from_u64(42);
+    /// let mut reference = rng.clone();
+    /// let expected: Vec<f64> = (0..6).map(|_| StandardNormal.sample(&mut reference)).collect();
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
-    /// let tensor: IdxTensor = IdxTensor::random::<f64, _>(&mut rng, vec![i, j]).unwrap();
-    /// assert_eq!(tensor.dims(), vec![2, 3]);
+    /// let erased: &mut dyn RngCore = &mut rng;
+    /// let tensor = IdxTensor::random::<f64, _>(erased, vec![i, j]).unwrap();
+    /// assert_eq!(tensor.to_vec::<f64>().unwrap(), expected);
+    /// assert_eq!(rng.get_word_pos(), reference.get_word_pos());
     /// ```
-    pub fn random<T: RandomScalar, R: Rng>(
+    pub fn random<T: RandomScalar, R: Rng + ?Sized>(
         rng: &mut R,
         indices: Vec<DynIndex>,
     ) -> std::result::Result<Self, IdxTensorError> {
