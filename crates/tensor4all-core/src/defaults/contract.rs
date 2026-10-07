@@ -573,7 +573,7 @@ pub fn contract_owned_with_options(
 ///
 /// This is the concrete `IdxTensor` entry point for binary contraction. It
 /// contracts all common indices and preserves the pairwise structured fast
-/// paths used by [`TensorContractionLike::contract_pair`].
+/// paths used by [`crate::TensorContractionLike::contract_pair`].
 /// # Errors
 ///
 /// Returns an error when the pair is disconnected or has incompatible indices
