@@ -8,7 +8,7 @@
   tracked-leaf boundary. Apply the same seam to adjacent plain payload,
   selection, gradient-readback, and context-scoped wrapping paths.
 - Size automatic batches from the largest local tensor, capped at 256 points.
-  A fixed16 policy slowed an already streaming low-rank path; retain larger
+  A fixed-16 policy slowed an already streaming low-rank path; retain larger
   groups there while reducing them for large native intermediates. Explicit
   point limits remain available. The 32 MiB estimate is not an RSS guarantee.
 - Bound cached evaluation's temporary batches independently of the caller's
@@ -34,7 +34,12 @@
   caches, invalid limits, and errors in a later chunk followed by reuse.
 - The prepared-slice reuse test explicitly selects whole-batch processing
   because its subject is the large-group slice path, independently of defaults.
-- Performance results will follow the [predeclared protocol](../../benchmarks/results/2026-10-07-cached-batch-memory-protocol.md).
-  CUDA wrapping changes share the seam, but device execution is unavailable on
-  this CPU-only host. The separate CUDA transfer module and backend eigensolver
-  also wrap native values; they remain adjacent audit targets.
+- The [final experiment](../../benchmarks/results/2026-10-07-cached-batch-memory.md)
+  passes all predeclared gates across both kernels and every case. The generic
+  rank 33/4096 case drops from about 3 GiB to 56 MiB and takes about one third of
+  the legacy time. The largest streaming-path median slowdown is 5.8%; no
+  general speedup is claimed. Retain the original failed fixture and exploratory
+  data with the final evidence.
+- CUDA context construction shares the untracked seam, but device execution
+  is unavailable on this CPU-only host. The separate CUDA transfer module and
+  backend eigensolver also wrap native values; they remain adjacent audit targets.

@@ -1688,8 +1688,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the indices or configured centers do not match
-    /// the tree, `max_batch_points` is zero, or backend preparation fails.
+    /// Returns a [`TreeTNOperationError`] on an index or topology mismatch,
+    /// when a configured center is not a node, when `max_batch_points` is
+    /// `Some(0)`, or when backend preparation fails.
     ///
     /// # Examples
     ///
@@ -1744,7 +1745,7 @@ where
     /// plan's node set, neighbour structure, or physical index placement, so
     /// that the plan and the tree mismatch, or when `options.center` or any
     /// entry of `options.initial_centers` is not a node of `tree`, or when
-    /// `options.max_batch_points` is zero. Bond
+    /// `options.max_batch_points` is `Some(0)`. Bond
     /// dimensions, tensor values, and dtype are deliberately not checked,
     /// because the plan does not describe them.
     ///
