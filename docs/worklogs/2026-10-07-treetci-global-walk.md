@@ -27,3 +27,9 @@
 - Algorithmic cost is compared in the linked [complete paired experiment](../../benchmarks/results/2026-10-07-treetci-global-walk.md).
   The walks visit different candidates, so timings do not isolate readout
   speed and need not retain identical rank/error histories.
+
+- Full treetci/quanticstci tests and doctests, strict Clippy and rustdoc pass.
+  The pinned one-thread comparison passes its accuracy and diagnostic validity
+  gates but costs 2.01–3.76 times the baseline wall time on the cheap-oracle
+  cases. This is an explicit correctness/performance tradeoff, not a speedup.
+  Higher thread counts and expensive downstream oracles remain unmeasured.

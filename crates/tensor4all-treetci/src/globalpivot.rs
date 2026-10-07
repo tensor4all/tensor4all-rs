@@ -59,9 +59,10 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 ///
 /// Up to `max_nglobal_pivot` distinct full-site multi-indices where the
 /// current approximation is (likely) poor, strongest first. An empty vector
-/// when nothing exceeds the threshold. Among candidates with equal errors the
-/// lower local value wins at each site; across starts, the earlier start
-/// wins. This is a greedy local search and can stall on flat zero fibers.
+/// when nothing exceeds the threshold. Among positive equal errors, the lower
+/// local value wins at each site; an all-zero scan keeps the held coordinate.
+/// Across starts, the earlier start wins. This is a greedy local search and
+/// can stall on flat zero fibers.
 ///
 /// # Errors
 ///
