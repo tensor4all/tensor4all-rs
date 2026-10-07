@@ -1805,7 +1805,11 @@ pub fn swap_cols<T>(m: &mut Matrix<T>, a: usize, b: usize) -> Result<(), MatrixS
     Ok(())
 }
 
-/// Transpose the matrix.
+/// Transpose the matrix, preserving its column-major layout.
+///
+/// Uses 16-by-16 cache tiles for square/wide matrices with more than 4096
+/// elements. Small, tall, and single-row inputs keep the simple traversal;
+/// the thresholds were measured on the recorded transpose size ladder.
 ///
 /// # Examples
 ///
@@ -1820,13 +1824,115 @@ pub fn swap_cols<T>(m: &mut Matrix<T>, a: usize, b: usize) -> Result<(), MatrixS
 /// assert_eq!(mt[[2, 1]], 6.0);
 /// ```
 pub fn transpose<T: Clone + Zero>(m: &Matrix<T>) -> Matrix<T> {
+    if m.nrows <= 1 || m.ncols <= 1 {
+        return Matrix {
+            data: m.data.clone(),
+            nrows: m.ncols,
+            ncols: m.nrows,
+        };
+    }
+    // Small and tall inputs favor the original contiguous-read traversal.
+    // Threshold and tile selection: benchmarks/results/2026-10-07-matrix-transpose.md.
+    if m.data.len() <= 4096 || m.nrows <= 1 || m.nrows > m.ncols {
+        return transpose_simple(m);
+    }
+    if std::mem::needs_drop::<T>() {
+        transpose_blocked::<T, true>(m)
+    } else {
+        transpose_blocked::<T, false>(m)
+    }
+}
+
+fn transpose_simple<T: Clone + Zero>(m: &Matrix<T>) -> Matrix<T> {
     let mut result = Matrix::zeros(m.ncols, m.nrows);
-    for j in 0..m.ncols {
-        for i in 0..m.nrows {
-            result[[j, i]] = m[[i, j]].clone();
+    // INVARIANT: Matrix construction validates data.len() == rows*cols;
+    // each source column has exactly rows entries, and j is below cols.
+    for (j, column) in m.data.chunks_exact(m.nrows).enumerate() {
+        for (i, value) in column.iter().enumerate() {
+            result.data[j + m.ncols * i] = value.clone();
         }
     }
     result
+}
+
+// Initialized slots are tracked only for types with destructors, preserving
+// the public Clone contract if cloning unwinds partway through a tile. Numeric
+// monomorphizations have no bitmap allocation or per-element bookkeeping.
+struct TransposeBuffer<T, const TRACK_DROPS: bool> {
+    values: Vec<std::mem::MaybeUninit<T>>,
+    initialized: Vec<bool>,
+}
+
+impl<T, const TRACK_DROPS: bool> TransposeBuffer<T, TRACK_DROPS> {
+    fn new(len: usize) -> Self {
+        let mut values = Vec::with_capacity(len);
+        values.resize_with(len, std::mem::MaybeUninit::uninit);
+        Self {
+            values,
+            initialized: if TRACK_DROPS {
+                vec![false; len]
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
+    // SAFETY: Every slot must hold one initialized T before calling this.
+    unsafe fn into_initialized(mut self) -> Vec<T> {
+        let mut values = std::mem::ManuallyDrop::new(std::mem::take(&mut self.values));
+        self.initialized.clear();
+        // SAFETY: The caller initialized every slot. MaybeUninit<T> and T have
+        // identical layout; ownership of this exact allocation is transferred
+        // once, with unchanged length/capacity. The guard now owns no values.
+        unsafe {
+            Vec::from_raw_parts(
+                values.as_mut_ptr().cast::<T>(),
+                values.len(),
+                values.capacity(),
+            )
+        }
+    }
+}
+
+impl<T, const TRACK_DROPS: bool> Drop for TransposeBuffer<T, TRACK_DROPS> {
+    fn drop(&mut self) {
+        for (slot, initialized) in self.values.iter_mut().zip(&self.initialized) {
+            if *initialized {
+                // SAFETY: A flag is set only after the matching slot is written.
+                // This guard owns the allocation and drops each live slot once.
+                unsafe { slot.assume_init_drop() };
+            }
+        }
+    }
+}
+
+fn transpose_blocked<T: Clone, const TRACK_DROPS: bool>(m: &Matrix<T>) -> Matrix<T> {
+    const TILE: usize = 16;
+    let mut output = TransposeBuffer::<T, TRACK_DROPS>::new(m.data.len());
+    for i0 in (0..m.nrows).step_by(TILE) {
+        for j0 in (0..m.ncols).step_by(TILE) {
+            let i_end = i0.saturating_add(TILE).min(m.nrows);
+            let j_end = j0.saturating_add(TILE).min(m.ncols);
+            for i in i0..i_end {
+                let column = &mut output.values[i * m.ncols..(i + 1) * m.ncols];
+                for (j, slot) in column.iter_mut().enumerate().take(j_end).skip(j0) {
+                    slot.write(m.data[j * m.nrows + i].clone());
+                    if TRACK_DROPS {
+                        output.initialized[i * m.ncols + j] = true;
+                    }
+                }
+            }
+        }
+    }
+    // SAFETY: Matrix construction validates rows*cols == data.len(). The tile
+    // ranges partition all rows and columns; each output slot j + cols*i has
+    // been written exactly once, including partial tiles at both boundaries.
+    let data = unsafe { output.into_initialized() };
+    Matrix {
+        data,
+        nrows: m.ncols,
+        ncols: m.nrows,
+    }
 }
 
 /// Find the position and value of the maximum absolute value in a submatrix.
