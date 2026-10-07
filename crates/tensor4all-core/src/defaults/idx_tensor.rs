@@ -762,7 +762,7 @@ impl IdxTensorStorage {
                     dense_native_tensor_from_col_major(&values, storage.payload_dims())?
                 };
                 (
-                    EagerTensor::from_tensor_in(native, default_eager_ctx()?)?,
+                    IdxTensor::untracked_inner(native, default_eager_ctx()?)?,
                     storage.payload_dims().to_vec(),
                     storage.axis_classes().to_vec(),
                 )
@@ -1411,6 +1411,16 @@ impl IdxTensor {
         Ok(storage_to_native_tensor(storage, dims)?)
     }
 
+    // Plain native data has no AD graph to preserve. Register a semantic leaf
+    // only when enable_grad explicitly requests one; from_tensor_in registers
+    // dead weak records even when requires_grad is false (issue #780).
+    fn untracked_inner(
+        native: NativeTensor,
+        runtime: Arc<EagerRuntime>,
+    ) -> std::result::Result<EagerTensor, tenferro_ad::Error> {
+        adopt_untracked_eager_value(runtime, TensorValue::from_tensor(native))
+    }
+
     fn empty_eager_cache() -> Arc<OnceLock<Arc<EagerTensor>>> {
         Arc::new(OnceLock::new())
     }
@@ -1426,7 +1436,7 @@ impl IdxTensor {
         if let Some(inner) = self.storage.eager() {
             return Ok(inner.clone());
         }
-        Ok(EagerTensor::from_tensor_in(
+        Ok(IdxTensor::untracked_inner(
             storage_payload_native(self.storage.materialize(self.indices.len())?.as_ref())?,
             default_eager_ctx()?,
         )?)
@@ -1815,8 +1825,8 @@ impl IdxTensor {
             }
         }
         let payload_inner = match (common, mixed) {
-            (Some(runtime), false) => EagerTensor::from_tensor_in(payload, runtime)?,
-            _ => EagerTensor::from_tensor_in(payload, default_eager_ctx()?)?,
+            (Some(runtime), false) => IdxTensor::untracked_inner(payload, runtime)?,
+            _ => IdxTensor::untracked_inner(payload, default_eager_ctx()?)?,
         };
         Self::from_structured_payload_inner(
             result_indices,
@@ -2217,7 +2227,7 @@ impl IdxTensor {
                 (selected_axes, positions),
                 move |payload, dims, _strides, classes| {
                     let native = dense_native_tensor_from_col_major(&payload, &dims)?;
-                    let inner = EagerTensor::from_tensor_in(native, default_eager_ctx()?)?;
+                    let inner = IdxTensor::untracked_inner(native, default_eager_ctx()?)?;
                     Self::from_structured_payload_inner(output_indices, inner, dims, classes)
                 },
             )
@@ -2236,7 +2246,7 @@ impl IdxTensor {
                 (selected_axes, positions),
                 move |payload, dims, _strides, classes| {
                     let native = dense_native_tensor_from_col_major(&payload, &dims)?;
-                    let inner = EagerTensor::from_tensor_in(native, default_eager_ctx()?)?;
+                    let inner = IdxTensor::untracked_inner(native, default_eager_ctx()?)?;
                     Self::from_structured_payload_inner(output_indices, inner, dims, classes)
                 },
             )
@@ -2316,7 +2326,7 @@ impl IdxTensor {
                 "materialize_storage_to_native",
                 tensor_profile_bytes(native.dtype(), native.shape()),
             );
-            let _ = self.eager_cache.set(Arc::new(EagerTensor::from_tensor_in(
+            let _ = self.eager_cache.set(Arc::new(IdxTensor::untracked_inner(
                 native,
                 default_eager_ctx()?,
             )?));
@@ -2873,7 +2883,7 @@ impl IdxTensor {
                 message: error.to_string(),
             })?;
         let payload_dtype = payload_native.dtype();
-        let payload_inner = EagerTensor::from_tensor_in(
+        let payload_inner = IdxTensor::untracked_inner(
             payload_native,
             default_eager_ctx().map_err(|error| StructuredSelectorError::InvalidStorage {
                 message: error.to_string(),
@@ -2911,7 +2921,7 @@ impl IdxTensor {
     ) -> Result<Self> {
         Self::from_inner_with_axis_classes(
             indices,
-            EagerTensor::from_tensor_in(native, default_eager_ctx()?)?,
+            IdxTensor::untracked_inner(native, default_eager_ctx()?)?,
             axis_classes,
         )
     }
@@ -3289,7 +3299,7 @@ impl IdxTensor {
                 )
                 .into());
             }
-            let gradient = EagerTensor::from_tensor_in(gradient_tensor, default_eager_ctx()?)?;
+            let gradient = IdxTensor::untracked_inner(gradient_tensor, default_eager_ctx()?)?;
             return Ok(Some(Self::from_structured_payload_inner(
                 self.indices.clone(),
                 gradient,
@@ -6283,7 +6293,7 @@ impl IdxTensor {
         })?;
         // `validate_context` already pinned the factor to this exact CUDA
         // context, so the uploaded identity lands in the factor's runtime.
-        EagerTensor::from_tensor_in(uploaded, runtime).map_err(|error| {
+        IdxTensor::untracked_inner(uploaded, runtime).map_err(|error| {
             FactorizeError::ComputationError(
                 anyhow::Error::new(error).context("SRC estimator identity wrapping failed"),
             )
@@ -7807,7 +7817,7 @@ impl IdxTensor {
                 let runtime = context.eager_runtime().map_err(|error| {
                     IdxTensorError::operation("CPU context construction", anyhow::Error::new(error))
                 })?;
-                EagerTensor::from_tensor_in(native, runtime).map_err(|error| {
+                IdxTensor::untracked_inner(native, runtime).map_err(|error| {
                     IdxTensorError::operation(
                         "CPU context eager wrapping",
                         anyhow::Error::new(error),
@@ -7822,7 +7832,7 @@ impl IdxTensor {
                         anyhow::Error::new(error),
                     )
                 })?;
-                EagerTensor::from_tensor_in(
+                IdxTensor::untracked_inner(
                     uploaded,
                     context.eager_runtime().map_err(|error| {
                         IdxTensorError::operation(
@@ -8127,7 +8137,7 @@ impl IdxTensor {
                 )
             })?,
         };
-        EagerTensor::from_tensor_in(resident, runtime).map_err(|error| {
+        IdxTensor::untracked_inner(resident, runtime).map_err(|error| {
             IdxTensorError::operation(
                 "context-scoped scaling",
                 anyhow::Error::new(error).context("scalar wrapping failed"),

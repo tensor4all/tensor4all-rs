@@ -123,6 +123,26 @@ contraction cost at the expense of a controlled approximation error.
 
 ## Operations
 
+### Batched Readout
+
+Use `TreeTNCachedEvaluator` when reading many points from an unchanged network.
+Its input is a column-major `[number_of_indices, number_of_points]` array;
+the result follows the input column order, including duplicate points.
+
+`CachedEvaluatorOptions::max_batch_points` limits internal batches to 16 points
+by default. You can submit a larger batch directly: temporary contraction
+buffers are released between internal batches. The input and result vectors
+still grow with the point count, and temporary memory depends on bond ranks.
+An automatic contraction center is chosen using the first internal batch;
+pin `center` when the workload has a known favorable contraction direction.
+
+Persistent message payloads default to 8 MiB per directed edge, and prepared
+branch slices default to 32 MiB per scalar kind. The existing byte-budget
+options can disable retention with `0` or deliberately permit unlimited
+retention with `usize::MAX`. Budgets account for logical payloads, excluding
+map metadata and spare capacity. Start with the defaults; benchmark before
+increasing the batch size or cache budgets for repeated-assignment workloads.
+
 ### Norm Computation
 
 `norm()` returns the Frobenius norm of the tensor represented by the network. It canonicalizes
