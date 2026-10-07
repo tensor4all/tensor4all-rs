@@ -483,7 +483,11 @@ pub struct FactorizeResult<T: TensorIndex> {
     pub bond_index: T::Index,
     /// Singular values (only for SVD).
     pub singular_values: Option<Vec<f64>>,
-    /// Rank of the factorization.
+    /// Retained bond dimension of the factorization.
+    ///
+    /// Tensor LU/CI factorization represents a rank-zero matrix selection
+    /// with a dimension-one bond and an exactly zero product. The selected
+    /// canonical factor keeps its unit diagonal; the other factor is zero.
     pub rank: usize,
     incremental_qr_state: Option<IncrementalQrState>,
 }

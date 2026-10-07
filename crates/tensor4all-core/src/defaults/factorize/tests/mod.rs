@@ -35,6 +35,7 @@ fn matrix_luci_factors_convert_to_indexed_column_major_factors() {
         factors,
         std::slice::from_ref(&left_index),
         std::slice::from_ref(&right_index),
+        Canonical::Left,
     )
     .unwrap();
 

@@ -925,12 +925,16 @@ where
     let lu = rrlu_mut(&mut a_matrix, Some(lu_options))?;
     let rank = lu.npivots();
 
-    // Extract L and U matrices (permuted)
-    let l_matrix = lu.left(true);
-    let u_matrix = lu.right(true);
+    // Tensor factorization keeps a valid rank-one zero representation even
+    // when low-level LU reports a rank-zero selection.
+    let (l_matrix, u_matrix, bond_dim) = if rank == 0 {
+        let (left, right) = rank_one_zero_factors(m, n, canonical);
+        (left, right, 1)
+    } else {
+        (lu.left(true), lu.right(true), rank)
+    };
 
-    // Create bond index
-    let bond_index = DynIndex::new_bond(rank)
+    let bond_index = DynIndex::new_bond(bond_dim)
         .map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))?;
 
     // Convert L matrix back to tensor
@@ -947,7 +951,9 @@ where
     let right = IdxTensor::from_dense(r_indices, u_vec)
         .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
-    Ok(FactorizeResult::new(left, right, bond_index, None, rank))
+    Ok(FactorizeResult::new(
+        left, right, bond_index, None, bond_dim,
+    ))
 }
 
 /// CI (Cross Interpolation) factorization implementation.
@@ -1044,30 +1050,59 @@ where
     let factors = matrix_luci_factors_from_matrix_owned(a_matrix, Some(lu_options))?;
     let rank = factors.rank;
     let (left, right, bond_index) =
-        matrix_luci_factors_to_idx_tensors(factors, &left_indices, &right_indices)?;
+        matrix_luci_factors_to_idx_tensors(factors, &left_indices, &right_indices, canonical)?;
 
-    Ok(FactorizeResult::new(left, right, bond_index, None, rank))
+    Ok(FactorizeResult::new(
+        left,
+        right,
+        bond_index,
+        None,
+        rank.max(1),
+    ))
+}
+
+// The selected side still has unit diagonal; only the opposite side carries
+// the zero value. Both factors keep a valid dimension-one bond.
+fn rank_one_zero_factors<T: MatrixScalar>(
+    m: usize,
+    n: usize,
+    canonical: Canonical,
+) -> (Matrix<T>, Matrix<T>) {
+    let mut left = Matrix::zeros(m, 1);
+    let mut right = Matrix::zeros(1, n);
+    match canonical {
+        Canonical::Left => left[[0, 0]] = T::one(),
+        Canonical::Right => right[[0, 0]] = T::one(),
+    }
+    (left, right)
 }
 
 fn matrix_luci_factors_to_idx_tensors<T>(
     factors: MatrixLuciFactors<T>,
     left_indices: &[DynIndex],
     right_indices: &[DynIndex],
+    canonical: Canonical,
 ) -> Result<(IdxTensor, IdxTensor, DynIndex), FactorizeError>
 where
-    T: TensorElement + Clone,
+    T: TensorElement + MatrixScalar,
 {
-    let bond_index = DynIndex::new_bond(factors.rank)
+    let bond_dim = factors.rank.max(1);
+    let (left_matrix, right_matrix) = if factors.rank == 0 {
+        rank_one_zero_factors(factors.left.nrows(), factors.right.ncols(), canonical)
+    } else {
+        (factors.left, factors.right)
+    };
+    let bond_index = DynIndex::new_bond(bond_dim)
         .map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))?;
 
     let mut l_indices = left_indices.to_vec();
     l_indices.push(bond_index.clone());
-    let left = IdxTensor::from_dense(l_indices, factors.left.into_col_major_vec())
+    let left = IdxTensor::from_dense(l_indices, left_matrix.into_col_major_vec())
         .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(right_indices);
-    let right = IdxTensor::from_dense(r_indices, factors.right.into_col_major_vec())
+    let right = IdxTensor::from_dense(r_indices, right_matrix.into_col_major_vec())
         .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
     Ok((left, right, bond_index))

@@ -405,6 +405,69 @@ fn factorize_auto_respects_cap_zero_and_rank_deficiency() {
 }
 
 #[test]
+fn lu_and_ci_zero_factors_keep_a_valid_rank_one_bond() {
+    let left = DynIndex::new_dyn(2);
+    let right = DynIndex::new_dyn(3);
+    let real = IdxTensor::from_dense(vec![left.clone(), right.clone()], vec![0.0; 6]).unwrap();
+    let complex = IdxTensor::from_dense(
+        vec![left.clone(), right.clone()],
+        vec![Complex64::new(0.0, 0.0); 6],
+    )
+    .unwrap();
+
+    for zero in [real, complex] {
+        for (options, alg) in [
+            (FactorizeOptions::lu(), FactorizeAlg::LU),
+            (FactorizeOptions::ci(), FactorizeAlg::CI),
+        ] {
+            for canonical in [Canonical::Left, Canonical::Right] {
+                for result in [
+                    factorize(
+                        &zero,
+                        std::slice::from_ref(&left),
+                        &options.clone().with_canonical(canonical),
+                    )
+                    .unwrap(),
+                    factorize_full_rank(&zero, std::slice::from_ref(&left), alg, canonical)
+                        .unwrap(),
+                ] {
+                    assert_eq!(result.rank, 1);
+                    assert_eq!(result.left.dims(), vec![2, 1]);
+                    assert_eq!(result.right.dims(), vec![1, 3]);
+                    assert_eq!(result.left.indices()[0], left);
+                    assert_eq!(result.right.indices()[1], right);
+                    assert_eq!(result.left.is_complex(), zero.is_complex());
+                    assert_eq!(result.right.is_complex(), zero.is_complex());
+                    let selected = if canonical == Canonical::Left {
+                        &result.left
+                    } else {
+                        &result.right
+                    };
+                    let values = if zero.is_complex() {
+                        selected.to_vec::<Complex64>().unwrap()
+                    } else {
+                        selected
+                            .to_vec::<f64>()
+                            .unwrap()
+                            .into_iter()
+                            .map(|value| Complex64::new(value, 0.0))
+                            .collect()
+                    };
+                    assert_eq!(values[0], Complex64::new(1.0, 0.0));
+                    assert!(values[1..]
+                        .iter()
+                        .all(|&value| value == Complex64::new(0.0, 0.0)));
+                    let reconstructed = result.left.contract_pair(&result.right).unwrap();
+                    assert_eq!(reconstructed.maxabs().unwrap(), 0.0);
+                    assert!(reconstructed.indices().contains(&left));
+                    assert!(reconstructed.indices().contains(&right));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn factorize_auto_gate_is_strict_and_preserves_tracked_ad() {
     let i = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(2);
