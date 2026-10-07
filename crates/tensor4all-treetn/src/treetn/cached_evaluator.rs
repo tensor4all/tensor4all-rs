@@ -1011,8 +1011,9 @@ where
 /// assert!(options.center.is_none());
 /// assert!(options.initial_centers.is_empty());
 /// assert!(options.max_greedy_steps_per_start.is_none());
-/// assert_eq!(options.message_cache_max_bytes, usize::MAX);
-/// assert_eq!(options.branch_slice_cache_max_bytes, usize::MAX);
+/// assert_eq!(options.max_batch_points, None);
+/// assert_eq!(options.message_cache_max_bytes, 8 * 1024 * 1024);
+/// assert_eq!(options.branch_slice_cache_max_bytes, 32 * 1024 * 1024);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CachedEvaluatorOptions<V> {
@@ -1035,20 +1036,29 @@ pub struct CachedEvaluatorOptions<V> {
     ///
     /// `None` means no explicit step limit; the search stops at a local minimum.
     pub max_greedy_steps_per_start: Option<usize>,
+    /// Explicit maximum points processed together in one internal batch.
+    ///
+    /// `None` (recommended) chooses at most 256 points, reducing the limit
+    /// for large local tensors using a 32 MiB local-buffer estimate. This is
+    /// a sizing heuristic, not a bound on total RSS. `Some(n)` must be positive
+    /// and fixes the limit to `n`; `Some(usize::MAX)` processes the whole input
+    /// together and can require very large buffers. Input and returned scalars
+    /// still occupy O(number of points) memory.
+    pub max_batch_points: Option<usize>,
     /// Maximum logical payload bytes retained by each directed message cache.
     ///
     /// A value of `0` disables retention while preserving the same evaluation
-    /// results. The default is `usize::MAX`, which preserves the historical
-    /// unbounded cache policy; callers that evaluate many changing batches
-    /// should set an explicit finite budget or `0`.
+    /// results. The default is 8 MiB per directed edge. Use `usize::MAX` only
+    /// when unbounded retention is intentional; the budget excludes key/map
+    /// metadata and spare allocation capacity.
     pub message_cache_max_bytes: usize,
     /// Maximum logical payload bytes retained by the evaluator's prepared
     /// branch physical-slice cache.
     ///
     /// A value of `0` disables retention while preserving the same numerical
     /// result: each branch slice is prepared for the current group and then
-    /// released. The default is `usize::MAX`, bounded in practice by the
-    /// physical slices of the branch tensors visited by this evaluator.
+    /// released. The default is 32 MiB per scalar kind. Use `usize::MAX` only
+    /// when retaining every visited physical slice is intentional.
     /// Setting a finite value bounds retained slice payloads across directed
     /// orientations and scalar kinds; cache metadata is not included in this
     /// logical payload budget.
@@ -1063,8 +1073,9 @@ impl<V> Default for CachedEvaluatorOptions<V> {
             center: None,
             initial_centers: Vec::new(),
             max_greedy_steps_per_start: None,
-            message_cache_max_bytes: usize::MAX,
-            branch_slice_cache_max_bytes: usize::MAX,
+            max_batch_points: None,
+            message_cache_max_bytes: 8 * 1024 * 1024,
+            branch_slice_cache_max_bytes: 32 * 1024 * 1024,
         }
     }
 }
@@ -1645,6 +1656,7 @@ where
     plan: CachedEvaluatorPlan<V>,
     options: CachedEvaluatorOptions<V>,
     center: Option<V>,
+    batch_point_limit: usize,
     last_stats: CachedEvaluationStats,
     /// Run-scoped, per-directed-edge persistent message cache. Lives as long
     /// as this evaluator: an input-tree evaluator lives for a whole TreeACI
@@ -1671,13 +1683,14 @@ where
     /// Creates a cached evaluator for `tree` and the requested physical indices.
     ///
     /// If `options.center` is set, that node is used directly. Otherwise, the
-    /// first call to [`Self::evaluate_batched`] chooses a center with greedy search
-    /// using that batch's repeated-subtree structure.
+    /// first internal batch of [`Self::evaluate_batched`] chooses a center
+    /// with greedy search using that batch's repeated-subtree structure.
     ///
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// Returns a [`TreeTNOperationError`] on an index or topology mismatch,
+    /// when a configured center is not a node, when `max_batch_points` is
+    /// `Some(0)`, or when backend preparation fails.
     ///
     /// # Examples
     ///
@@ -1719,8 +1732,8 @@ where
     ///   values, and dtype are free to differ.
     /// * `plan` - The shared plan. It is cloned by `Arc`, so the new evaluator
     ///   keeps it alive and no layout work is repeated.
-    /// * `options` - Same meaning as for [`Self::new`]; the message-cache
-    ///   budget and centre selection are per evaluator, not per plan.
+    /// * `options` - Same meaning as for [`Self::new`]; batch size, cache
+    ///   budgets and centre selection are per evaluator, not per plan.
     ///
     /// # Returns
     ///
@@ -1731,7 +1744,8 @@ where
     /// Returns a [`TreeTNOperationError`] when `tree` does not carry the
     /// plan's node set, neighbour structure, or physical index placement, so
     /// that the plan and the tree mismatch, or when `options.center` or any
-    /// entry of `options.initial_centers` is not a node of `tree`. Bond
+    /// entry of `options.initial_centers` is not a node of `tree`, or when
+    /// `options.max_batch_points` is `Some(0)`. Bond
     /// dimensions, tensor values, and dtype are deliberately not checked,
     /// because the plan does not describe them.
     ///
@@ -1785,6 +1799,11 @@ where
         options: CachedEvaluatorOptions<V>,
     ) -> std::result::Result<Self, TreeTNOperationError> {
         plan.ensure_matches(tree)?;
+        if options.max_batch_points == Some(0) {
+            return Err(TreeTNOperationError::from(anyhow::anyhow!(
+                "TreeTNCachedEvaluator: max_batch_points must be positive"
+            )));
+        }
         if let Some(center) = &options.center {
             ensure_node_exists(tree, center, "TreeTNCachedEvaluator::new: center")?;
         }
@@ -1795,6 +1814,28 @@ where
                 "TreeTNCachedEvaluator::new: initial center",
             )?;
         }
+        let batch_point_limit = match options.max_batch_points {
+            Some(limit) => limit,
+            None => {
+                // Bound the largest local tensor's per-point scalar buffer
+                // estimate; small/raw paths keep larger groups to amortize setup.
+                let largest_local = plan.inner.sorted_node_names.iter().try_fold(
+                    1_usize,
+                    |largest, node| -> Result<usize> {
+                        let tensor = tensor_for_node(tree, node)?;
+                        let elements = tensor
+                            .indices()
+                            .iter()
+                            .fold(1_usize, |n, index| n.saturating_mul(index.dim()));
+                        Ok(largest.max(elements))
+                    },
+                )?;
+                let per_point = largest_local
+                    .saturating_mul(std::mem::size_of::<CachedScalar>())
+                    .max(1);
+                (32 * 1024 * 1024 / per_point).clamp(1, 256)
+            }
+        };
         let center = options.center.clone();
         let branch_slice_cache_max_bytes = options.branch_slice_cache_max_bytes;
         Ok(Self {
@@ -1802,6 +1843,7 @@ where
             plan: plan.clone(),
             options,
             center,
+            batch_point_limit,
             last_stats: CachedEvaluationStats::default(),
             message_caches: HashMap::new(),
             parent_bond_indices: HashMap::new(),
@@ -1880,7 +1922,12 @@ where
     /// Evaluates all batch points using cached subtree environments.
     ///
     /// `values` must have shape `[indices.len(), n_points]` in column-major
-    /// layout. The returned vector contains one scalar per column.
+    /// layout. The returned vector contains one scalar per column. Internal
+    /// batches contain at most [`CachedEvaluatorOptions::max_batch_points`]
+    /// points when set; the default selects up to 256 using local tensor sizes.
+    /// Separate finite cache budgets bound retained
+    /// payloads; input/output storage still scales with the number of points,
+    /// and temporary storage also depends on network ranks.
     ///
     /// # Errors
     ///
@@ -2079,6 +2126,11 @@ where
             self.last_stats = CachedEvaluationStats::default();
             return Ok(Vec::new());
         }
+        let chunk_size = self.batch_point_limit.min(values.shape()[1]);
+        let n_indices = self.layout().n_indices;
+        let first_shape = [n_indices, chunk_size];
+        let first = ColMajorArrayRef::new(&values.data()[..n_indices * chunk_size], &first_shape)
+            .map_err(anyhow::Error::from)?;
         let hinted_center = hint.center.is_some();
         let center = match hint.center {
             Some(node) => {
@@ -2090,30 +2142,30 @@ where
                 }
                 node
             }
-            None => self.ensure_center(values)?.clone(),
+            None => self.ensure_center(first)?.clone(),
         };
-        #[cfg(test)]
-        let environment_started = std::time::Instant::now();
-        let environment_result = self.build_environment_cache(&center, values);
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::BUILD_ENV_NS, environment_started.elapsed());
-        let (component_batches, environment_cache) = environment_result?;
-        #[cfg(test)]
-        let center_started = std::time::Instant::now();
-        let result = if hinted_center {
-            self.contract_edge_cut_or_center(
-                &center,
-                values,
-                &component_batches,
-                &environment_cache,
-            )
-        } else {
-            self.contract_center_for_points(&center, values, &component_batches, &environment_cache)
-        };
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::CENTER_NS, center_started.elapsed());
-        let results = result?;
-        self.last_stats.batched_center_contract_count = 1;
+        let mut results = Vec::with_capacity(values.shape()[1]);
+        let mut stats = CachedEvaluationStats::default();
+        for start in (0..values.shape()[1]).step_by(chunk_size) {
+            let end = start.saturating_add(chunk_size).min(values.shape()[1]);
+            let shape = [n_indices, end - start];
+            let chunk =
+                ColMajorArrayRef::new(&values.data()[n_indices * start..n_indices * end], &shape)
+                    .map_err(anyhow::Error::from)?;
+            results.extend(self.evaluate_chunk(&center, chunk, hinted_center)?);
+            stats.subtree_environment_count += self.last_stats.subtree_environment_count;
+            stats.directed_message_count += self.last_stats.directed_message_count;
+            stats.batched_message_contract_count += self.last_stats.batched_message_contract_count;
+            stats.batched_center_contract_count += self.last_stats.batched_center_contract_count;
+            stats.message_cache_hits += self.last_stats.message_cache_hits;
+            stats.message_cache_misses += self.last_stats.message_cache_misses;
+            stats.warm_edge_cut_assembly_visits += self.last_stats.warm_edge_cut_assembly_visits;
+            stats.message_cache_key_count = self.last_stats.message_cache_key_count;
+            stats.message_cache_logical_bytes = self.last_stats.message_cache_logical_bytes;
+            stats.message_cache_owned_bytes_estimate =
+                self.last_stats.message_cache_owned_bytes_estimate;
+        }
+        self.last_stats = stats;
         #[cfg(feature = "diagnostics")]
         {
             let (node, shape) = self.diagnostic_node(&center)?;
@@ -2125,6 +2177,32 @@ where
                 self.diagnostic_cache(),
             );
         }
+        Ok(results)
+    }
+
+    fn evaluate_chunk(
+        &mut self,
+        center: &V,
+        values: ColMajorArrayRef<'_, usize>,
+        hinted_center: bool,
+    ) -> std::result::Result<Vec<CachedScalar>, TreeTNOperationError> {
+        #[cfg(test)]
+        let environment_started = std::time::Instant::now();
+        let environment_result = self.build_environment_cache(center, values);
+        #[cfg(test)]
+        phase_timing::add(&phase_timing::BUILD_ENV_NS, environment_started.elapsed());
+        let (component_batches, environment_cache) = environment_result?;
+        #[cfg(test)]
+        let center_started = std::time::Instant::now();
+        let result = if hinted_center {
+            self.contract_edge_cut_or_center(center, values, &component_batches, &environment_cache)
+        } else {
+            self.contract_center_for_points(center, values, &component_batches, &environment_cache)
+        };
+        #[cfg(test)]
+        phase_timing::add(&phase_timing::CENTER_NS, center_started.elapsed());
+        let results = result?;
+        self.last_stats.batched_center_contract_count = 1;
         Ok(results)
     }
 
@@ -8058,6 +8136,152 @@ mod tests {
         assert_reordered_duplicate_and_partial_hit::<Complex64>();
     }
 
+    #[test]
+    fn chunk_limit_validation_scalar_batches_and_late_errors() {
+        let tree =
+            TreeTN::from_tensors(vec![IdxTensor::scalar(2.0).unwrap()], vec![0_usize]).unwrap();
+        let plan = CachedEvaluatorPlan::new(&tree, &[]).unwrap();
+        let invalid = CachedEvaluatorOptions {
+            max_batch_points: Some(0),
+            ..Default::default()
+        };
+        assert!(TreeTNCachedEvaluator::new(&tree, &[], invalid.clone()).is_err());
+        assert!(TreeTNCachedEvaluator::with_plan(&tree, &plan, invalid).is_err());
+        let mut evaluator =
+            TreeTNCachedEvaluator::new(&tree, &[], CachedEvaluatorOptions::default()).unwrap();
+        let actual = evaluator
+            .evaluate_batched_typed::<f64>(
+                ColMajorArrayRef::new(&[], &[0, 33]).unwrap(),
+                EvaluationHint::default(),
+            )
+            .unwrap();
+        assert_eq!(actual, vec![2.0; 33]);
+        assert_eq!(evaluator.stats_for_test().batched_center_contract_count, 1);
+        let (tree, indices) = typed_three_node_chain::<f64>();
+        let mut evaluator =
+            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
+        let mut values = vec![0_usize; 3 * 257];
+        values[3 * 256] = indices[0].dim(); // invalid value in the last internal chunk
+        let points = ColMajorArrayRef::new(&values, &[3, 257]).unwrap();
+        assert!(evaluator.evaluate_batched(points).is_err());
+        values[3 * 256] = 1;
+        let points = ColMajorArrayRef::new(&values, &[3, 257]).unwrap();
+        let expected = tree.evaluate(&indices, points).unwrap();
+        let actual = evaluator
+            .evaluate_batched_with_hint(points, EvaluationHint::around(0))
+            .unwrap();
+        assert_typed_results::<f64>(&actual, &expected);
+        assert!(evaluator
+            .evaluate_batched_with_hint(points, EvaluationHint::around(99))
+            .is_err());
+    }
+
+    fn assert_chunked_branch_hints<T: CachedEvaluatorTestScalar>() {
+        let (tree, indices) = typed_unequal_y_tree::<T>();
+        let values = (0..33)
+            .flat_map(|p| [p % 2, (p / 2) % 2, (p / 4) % 2, (p / 8) % 2])
+            .collect::<Vec<_>>();
+        let points = ColMajorArrayRef::new(&values, &[4, 33]).unwrap();
+        let expected = tree.evaluate(&indices, points).unwrap();
+        for limit in [1_usize, 7, 16, usize::MAX] {
+            let mut evaluator = TreeTNCachedEvaluator::new(
+                &tree,
+                &indices,
+                CachedEvaluatorOptions {
+                    max_batch_points: Some(limit),
+                    message_cache_max_bytes: 0,
+                    branch_slice_cache_max_bytes: 0,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            for hint in [
+                EvaluationHint::default(),
+                EvaluationHint::around(0),
+                EvaluationHint::around(1),
+            ] {
+                let actual = evaluator.evaluate_batched(points).unwrap();
+                assert_typed_results::<T>(&actual, &expected);
+                let actual = evaluator.evaluate_batched_typed::<T>(points, hint).unwrap();
+                let actual = actual
+                    .into_iter()
+                    .map(CachedEvaluatorTestScalar::into_any_scalar)
+                    .collect::<Vec<AnyScalar>>();
+                assert_typed_results::<T>(&actual, &expected);
+                assert_eq!(
+                    evaluator.stats_for_test().batched_center_contract_count,
+                    33_usize.div_ceil(limit)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn chunked_branch_hints_and_disabled_caches_preserve_all_scalar_kinds() {
+        assert_chunked_branch_hints::<f32>();
+        assert_chunked_branch_hints::<f64>();
+        assert_chunked_branch_hints::<Complex32>();
+        assert_chunked_branch_hints::<Complex64>();
+    }
+
+    #[test]
+    fn automatic_chunk_limit_shrinks_for_large_local_tensors() {
+        let indices = vec![DynIndex::new_dyn(128), DynIndex::new_dyn(128)];
+        let tensor = IdxTensor::from_dense(indices.clone(), vec![2.0_f64; 128 * 128]).unwrap();
+        let tree = TreeTN::from_tensors(vec![tensor], vec![0_usize]).unwrap();
+        let mut evaluator =
+            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
+        let limit =
+            (32 * 1024 * 1024 / (128 * 128 * std::mem::size_of::<CachedScalar>())).clamp(1, 256);
+        assert_eq!(evaluator.batch_point_limit, limit);
+        assert!(limit < 256);
+        let values = vec![0_usize; 2 * (limit + 1)];
+        let shape = [2, limit + 1];
+        let actual = evaluator
+            .evaluate_batched_typed::<f64>(
+                ColMajorArrayRef::new(&values, &shape).unwrap(),
+                EvaluationHint::default(),
+            )
+            .unwrap();
+        assert_eq!(actual, vec![2.0; limit + 1]);
+        assert_eq!(evaluator.stats_for_test().batched_center_contract_count, 2);
+    }
+
+    fn assert_default_batch_chunking<T: CachedEvaluatorTestScalar>() {
+        let (tree, indices) = typed_three_node_chain::<T>();
+        for n_points in [0_usize, 1, 255, 256, 257, 512, 513] {
+            let values = (0..n_points)
+                .flat_map(|point| [point % 2, (point / 2) % 2, point % 3])
+                .collect::<Vec<_>>();
+            let shape = [3, n_points];
+            let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+            let expected = tree.evaluate(&indices, points).unwrap();
+            let mut evaluator = TreeTNCachedEvaluator::new(
+                &tree,
+                &indices,
+                CachedEvaluatorOptions {
+                    center: Some(1),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let actual = evaluator.evaluate_batched(points).unwrap();
+            assert_typed_results::<T>(&actual, &expected);
+            assert_eq!(
+                evaluator.stats_for_test().batched_center_contract_count,
+                n_points.div_ceil(256)
+            );
+        }
+    }
+
+    #[test]
+    fn default_batch_chunking_bounds_center_work_and_preserves_results() {
+        assert_default_batch_chunking::<f32>();
+        assert_default_batch_chunking::<f64>();
+        assert_default_batch_chunking::<Complex32>();
+        assert_default_batch_chunking::<Complex64>();
+    }
+
     fn assert_cache_capacity_and_clear_reuse<T: CachedEvaluatorTestScalar>() {
         let (tree, indices) = typed_three_node_chain::<T>();
         let values = [0usize, 0, 0, 1, 0, 1, 0, 1, 1, 1, 1, 0];
@@ -10697,6 +10921,7 @@ mod tests {
             &indices,
             CachedEvaluatorOptions {
                 center: Some(1),
+                max_batch_points: Some(usize::MAX),
                 ..Default::default()
             },
         )
@@ -10721,6 +10946,7 @@ mod tests {
             &indices,
             CachedEvaluatorOptions {
                 center: Some(1),
+                max_batch_points: Some(usize::MAX),
                 branch_slice_cache_max_bytes: 0,
                 ..Default::default()
             },
