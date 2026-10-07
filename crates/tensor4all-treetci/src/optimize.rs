@@ -334,6 +334,12 @@ where
 /// [`GlobalIndexBatch`](crate::GlobalIndexBatch#batch-sizes) for the batch
 /// sizes.
 ///
+/// Candidate generation uses one ChaCha8 stream seeded by
+/// [`PivotCandidateProposer::seed`] per optimization call; global searches use
+/// a separate ChaCha8 stream governed by [`TreeTciOptions::seed`]. Use
+/// [`optimize_with_proposer_with_rng`] to advance one caller-owned stream
+/// through both operations, including across continued calls.
+///
 /// # Errors
 ///
 /// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
@@ -387,18 +393,10 @@ where
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
-    // Seeded high-level path: an explicitly named RNG is derived from the
-    // option. Entropy is only drawn when the run actually performs a randomized
-    // global search, so a run with the search disabled never touches OS entropy.
-    // Entropy is drawn only when a randomized global search actually runs: with
-    // the search disabled, or with a single sweep, the run is deterministic and
-    // a fixed seed keeps it so without touching the OS.
-    let searches_run = options.enable_global_pivots && options.max_iter > 1;
-    let mut rng = match (searches_run, options.seed) {
-        (true, None) => ChaCha8Rng::from_os_rng(),
-        (_, seed) => ChaCha8Rng::seed_from_u64(seed.unwrap_or(0)),
-    };
-    optimize_with_proposer_with_rng(state, evaluate, options, proposer, &mut rng)
+    options.validate()?;
+    with_seeded_streams(options, proposer, |streams| {
+        optimize_with_streams(state, evaluate, options, proposer, streams)
+    })
 }
 
 /// Optimize with a caller-owned random stream.
@@ -407,9 +405,9 @@ where
 /// Same as [`optimize_with_proposer`], but consumes `rng` for every global
 /// pivot search of the run instead of deriving one generator from
 /// [`TreeTciOptions::seed`], so the caller can reproduce or advance the run's
-/// randomness and share one stream across several runs. Randomized *proposers*
-/// keep their own internal generators; this entry point controls the global
-/// searches only (see #824).
+/// randomness and share one stream across several runs. Candidate generation
+/// and global searches both consume the supplied stream directly. The seed
+/// stored in a proposer and [`TreeTciOptions::seed`] are ignored here.
 ///
 /// # Errors
 /// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
@@ -465,15 +463,61 @@ where
     // Erase the caller's RNG type once so the run below is instantiated once
     // per scalar type instead of once per (scalar, RNG) pair.
     let mut stream: &mut R = rng;
-    optimize_with_proposer_erased(state, evaluate, options, proposer, &mut stream)
+    let mut streams = RandomStreams::Shared(&mut stream);
+    optimize_with_streams(state, evaluate, options, proposer, &mut streams)
 }
 
-fn optimize_with_proposer_erased<T, F, P>(
+/// Construct named seeded streams once at a high-level run boundary.
+pub(crate) fn with_seeded_streams<P, T>(
+    options: &TreeTciOptions,
+    proposer: &P,
+    run: impl FnOnce(&mut RandomStreams<'_>) -> T,
+) -> T
+where
+    P: PivotCandidateProposer,
+{
+    let searches_run = options.enable_global_pivots && options.max_iter > 1;
+    let mut global = match (searches_run, options.seed) {
+        (true, None) => ChaCha8Rng::from_os_rng(),
+        (_, seed) => ChaCha8Rng::seed_from_u64(seed.unwrap_or(0)),
+    };
+    let mut candidates = ChaCha8Rng::seed_from_u64(proposer.seed());
+    run(&mut RandomStreams::Separate {
+        candidates: &mut candidates,
+        global: &mut global,
+    })
+}
+
+// Dispatch at candidate/search batch boundaries, never per tensor element.
+pub(crate) enum RandomStreams<'a> {
+    Shared(&'a mut dyn rand::RngCore),
+    Separate {
+        candidates: &'a mut dyn rand::RngCore,
+        global: &'a mut dyn rand::RngCore,
+    },
+}
+
+impl RandomStreams<'_> {
+    fn candidates(&mut self) -> &mut dyn rand::RngCore {
+        match self {
+            Self::Shared(rng) => *rng,
+            Self::Separate { candidates, .. } => *candidates,
+        }
+    }
+    fn global(&mut self) -> &mut dyn rand::RngCore {
+        match self {
+            Self::Shared(rng) => *rng,
+            Self::Separate { global, .. } => *global,
+        }
+    }
+}
+
+pub(crate) fn optimize_with_streams<T, F, P>(
     state: &mut TreeTCI2<T>,
     evaluate: F,
     options: &TreeTciOptions,
     proposer: &P,
-    rng: &mut dyn rand::RngCore,
+    streams: &mut RandomStreams<'_>,
 ) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
@@ -515,7 +559,14 @@ where
             state.flush_pivot_errors();
 
             for edge in visitor.visit_order(state) {
-                update_edge(state, edge, &evaluate, &kernel_options, proposer)?;
+                update_edge(
+                    state,
+                    edge,
+                    &evaluate,
+                    &kernel_options,
+                    proposer,
+                    streams.candidates(),
+                )?;
             }
         }
 
@@ -575,7 +626,7 @@ where
                 options.max_nglobal_pivot,
                 options.tol_margin_global_search,
                 abs_tol,
-                rng,
+                streams.global(),
             )?;
             state.add_global_pivots(&pivots)?;
             nglobal_pivots_history.push(pivots.len());

@@ -1,12 +1,10 @@
 use crate::error::Result as TreeTciResult;
 use crate::{assemble::MultiIndex, column_2d, ncols_2d, SubtreeKey, TreeTCI2, TreeTciEdge};
 use anyhow::{ensure, Result};
-use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
-use std::collections::hash_map::DefaultHasher;
+use rand_chacha::ChaCha8Rng;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use tensor4all_core::ColMajorArray;
 
 /// Generates candidate pivot sets for one edge bipartition.
@@ -19,21 +17,91 @@ use tensor4all_core::ColMajorArray;
 /// - [`DefaultProposer`] -- neighbor-product candidates (recommended default)
 /// - [`SimpleProposer`] -- random candidates with deterministic seed
 /// - [`TruncatedDefaultProposer`] -- truncated default candidates with random sampling
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::{PivotCandidateProposer, SimpleProposer};
+/// assert_eq!(SimpleProposer::seeded(42).seed(), 42);
+/// ```
 pub trait PivotCandidateProposer {
-    /// Return `(I_candidates, J_candidates)` for the requested edge.
+    /// Return `(I_candidates, J_candidates)` using a fresh seeded ChaCha8 stream.
     ///
     /// `I_candidates` are multi-indices for the left (u-side) subtree,
     /// `J_candidates` for the right (v-side) subtree.
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// Returns an error for invalid edges, missing or malformed pivot sets,
+    /// or candidate-size overflow.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::{DefaultProposer, PivotCandidateProposer, TreeTCI2, TreeTciEdge, TreeTciGraph};
+    /// let edge = TreeTciEdge::new(0, 1);
+    /// let mut state = TreeTCI2::<f64>::new(vec![2, 2], TreeTciGraph::new(2, &[edge])?)?;
+    /// state.add_global_pivots(&[vec![0, 0]])?;
+    /// let (left, right) = DefaultProposer.candidates(&state, edge)?;
+    /// assert_eq!(left, vec![vec![0], vec![1]]);
+    /// assert_eq!(right, vec![vec![0], vec![1]]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     fn candidates<T>(
         &self,
         state: &TreeTCI2<T>,
         edge: TreeTciEdge,
+    ) -> TreeTciResult<(Vec<MultiIndex>, Vec<MultiIndex>)> {
+        let mut rng = ChaCha8Rng::seed_from_u64(self.seed());
+        self.candidates_with_rng(state, edge, &mut rng)
+    }
+
+    /// Generate candidates using the caller's stream directly.
+    ///
+    /// No seed is derived and no private generator is constructed. Reuse `rng`
+    /// across edges and continued optimizations to advance the same stream.
+    /// The deterministic [`DefaultProposer`] consumes no draws.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid edges, missing or malformed pivot sets,
+    /// or candidate-size overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rand::SeedableRng;
+    /// use rand_chacha::ChaCha8Rng;
+    /// use tensor4all_treetci::{DefaultProposer, PivotCandidateProposer, TreeTCI2, TreeTciEdge, TreeTciGraph};
+    /// let edge = TreeTciEdge::new(0, 1);
+    /// let mut state = TreeTCI2::<f64>::new(vec![2, 2], TreeTciGraph::new(2, &[edge])?)?;
+    /// state.add_global_pivots(&[vec![0, 0]])?;
+    /// let mut rng = ChaCha8Rng::seed_from_u64(7);
+    /// let (left, right) = DefaultProposer.candidates_with_rng(&state, edge, &mut rng)?;
+    /// assert_eq!(left, vec![vec![0], vec![1]]);
+    /// assert_eq!(right, vec![vec![0], vec![1]]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn candidates_with_rng<T, R: Rng + ?Sized>(
+        &self,
+        state: &TreeTCI2<T>,
+        edge: TreeTciEdge,
+        rng: &mut R,
     ) -> TreeTciResult<(Vec<MultiIndex>, Vec<MultiIndex>)>;
+
+    /// Seed for the high-level ChaCha8 candidate stream; defaults to zero.
+    ///
+    /// Caller-owned stream entry points ignore this value. High-level
+    /// optimizations initialize the candidate stream once per call.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::{PivotCandidateProposer, SimpleProposer};
+    /// assert_eq!(SimpleProposer::seeded(42).seed(), 42);
+    /// ```
+    fn seed(&self) -> u64 {
+        0
+    }
 }
 
 /// Default neighbor-product proposer that mirrors `TreeTCI.jl`.
@@ -59,10 +127,11 @@ impl PivotCandidateProposer for DefaultProposer {
     /// Returns an error when the construction or conversion fails (a shape or
     /// /// index mismatch, or a backend failure).
     ///
-    fn candidates<T>(
+    fn candidates_with_rng<T, R: Rng + ?Sized>(
         &self,
         state: &TreeTCI2<T>,
         edge: TreeTciEdge,
+        _rng: &mut R,
     ) -> TreeTciResult<(Vec<MultiIndex>, Vec<MultiIndex>)> {
         let (vp, vq) = state.graph.separate_vertices(edge)?;
         let (ikey, jkey) = state.graph.subregion_vertices(edge)?;
@@ -90,19 +159,22 @@ impl PivotCandidateProposer for DefaultProposer {
 /// `SimplePivotCandidateProposer`.
 ///
 /// Generates random candidate multi-indices using a deterministic seed.
+/// Seeded calls use ChaCha8; caller-stream calls ignore the seed.
 /// Useful for reproducible benchmarking or when the default proposer
 /// produces too many candidates.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_treetci::SimpleProposer;
+/// use tensor4all_treetci::{PivotCandidateProposer, SimpleProposer};
 ///
 /// // Default seed (0)
 /// let p = SimpleProposer::default();
+/// assert_eq!(p.seed(), 0);
 ///
 /// // Deterministic seed for reproducibility
 /// let p = SimpleProposer::seeded(42);
+/// assert_eq!(p.seed(), 42);
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct SimpleProposer {
@@ -115,9 +187,10 @@ impl SimpleProposer {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_treetci::SimpleProposer;
+    /// use tensor4all_treetci::{PivotCandidateProposer, SimpleProposer};
     ///
     /// let proposer = SimpleProposer::seeded(123);
+    /// assert_eq!(proposer.seed(), 123);
     /// ```
     pub const fn seeded(seed: u64) -> Self {
         Self { seed }
@@ -131,19 +204,23 @@ impl Default for SimpleProposer {
 }
 
 impl PivotCandidateProposer for SimpleProposer {
+    fn seed(&self) -> u64 {
+        self.seed
+    }
+
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
     /// /// index mismatch, or a backend failure).
     ///
-    fn candidates<T>(
+    fn candidates_with_rng<T, R: Rng + ?Sized>(
         &self,
         state: &TreeTCI2<T>,
         edge: TreeTciEdge,
+        rng: &mut R,
     ) -> TreeTciResult<(Vec<MultiIndex>, Vec<MultiIndex>)> {
         let (vp, vq) = state.graph.separate_vertices(edge)?;
         let (ikey, jkey) = state.graph.subregion_vertices(edge)?;
-        let mut rng = rng_for_edge(state, edge, self.seed, "simple")?;
 
         let ichi = state.local_dims[vp]
             .checked_mul(ncols_2d(state.ijset.get(&ikey).ok_or_else(|| {
@@ -156,8 +233,8 @@ impl PivotCandidateProposer for SimpleProposer {
             })?)?)
             .ok_or_else(|| anyhow::anyhow!("right candidate count overflowed usize"))?;
 
-        let iset = random_candidates(&mut rng, state.local_dims.as_slice(), &ikey, ichi);
-        let jset = random_candidates(&mut rng, state.local_dims.as_slice(), &jkey, jchi);
+        let iset = random_candidates(rng, state.local_dims.as_slice(), &ikey, ichi);
+        let jset = random_candidates(rng, state.local_dims.as_slice(), &jkey, jchi);
 
         let history = state.ijset_history.last();
         let icombined = union_with_history(iset, history, &ikey)?;
@@ -199,9 +276,10 @@ impl PivotCandidateProposer for SimpleProposer {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_treetci::TruncatedDefaultProposer;
+/// use tensor4all_treetci::{PivotCandidateProposer, TruncatedDefaultProposer};
 ///
 /// let proposer = TruncatedDefaultProposer::seeded(42);
+/// assert_eq!(proposer.seed(), 42);
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct TruncatedDefaultProposer {
@@ -214,9 +292,10 @@ impl TruncatedDefaultProposer {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_treetci::TruncatedDefaultProposer;
+    /// use tensor4all_treetci::{PivotCandidateProposer, TruncatedDefaultProposer};
     ///
     /// let proposer = TruncatedDefaultProposer::seeded(99);
+    /// assert_eq!(proposer.seed(), 99);
     /// ```
     pub const fn seeded(seed: u64) -> Self {
         Self { seed }
@@ -230,20 +309,24 @@ impl Default for TruncatedDefaultProposer {
 }
 
 impl PivotCandidateProposer for TruncatedDefaultProposer {
+    fn seed(&self) -> u64 {
+        self.seed
+    }
+
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
     /// /// index mismatch, or a backend failure).
     ///
-    fn candidates<T>(
+    fn candidates_with_rng<T, R: Rng + ?Sized>(
         &self,
         state: &TreeTCI2<T>,
         edge: TreeTciEdge,
+        rng: &mut R,
     ) -> TreeTciResult<(Vec<MultiIndex>, Vec<MultiIndex>)> {
         let (vp, vq) = state.graph.separate_vertices(edge)?;
         let (ikey, jkey) = state.graph.subregion_vertices(edge)?;
-        let (default_i, default_j) = DefaultProposer.candidates(state, edge)?;
-        let mut rng = rng_for_edge(state, edge, self.seed, "truncated_default")?;
+        let (default_i, default_j) = DefaultProposer.candidates_with_rng(state, edge, rng)?;
 
         let ichi = truncated_candidate_budget(state, vp, &ikey)?;
         let jchi = truncated_candidate_budget(state, vq, &jkey)?;
@@ -252,8 +335,8 @@ impl PivotCandidateProposer for TruncatedDefaultProposer {
         let ikeep = history_columns(history, &ikey)?;
         let jkeep = history_columns(history, &jkey)?;
         Ok((
-            sample_ordered_candidates(&default_i, &ikeep, ichi, &mut rng),
-            sample_ordered_candidates(&default_j, &jkeep, jchi, &mut rng),
+            sample_ordered_candidates(&default_i, &ikeep, ichi, rng),
+            sample_ordered_candidates(&default_j, &jkeep, jchi, rng),
         ))
     }
 }
@@ -405,8 +488,8 @@ fn kronecker(
     Ok(result)
 }
 
-fn random_candidates(
-    rng: &mut SmallRng,
+fn random_candidates<R: Rng + ?Sized>(
+    rng: &mut R,
     local_dims: &[usize],
     key: &SubtreeKey,
     size: usize,
@@ -419,35 +502,6 @@ fn random_candidates(
                 .collect()
         })
         .collect()
-}
-
-fn rng_for_edge<T>(
-    state: &TreeTCI2<T>,
-    edge: TreeTciEdge,
-    seed: u64,
-    tag: &str,
-) -> Result<SmallRng> {
-    let (ikey, jkey) = state.graph.subregion_vertices(edge)?;
-    let mut hasher = DefaultHasher::new();
-    seed.hash(&mut hasher);
-    tag.hash(&mut hasher);
-    edge.hash(&mut hasher);
-    state.ijset_history.len().hash(&mut hasher);
-    state
-        .ijset
-        .get(&ikey)
-        .map(ncols_2d)
-        .transpose()?
-        .unwrap_or(0)
-        .hash(&mut hasher);
-    state
-        .ijset
-        .get(&jkey)
-        .map(ncols_2d)
-        .transpose()?
-        .unwrap_or(0)
-        .hash(&mut hasher);
-    Ok(SmallRng::seed_from_u64(hasher.finish()))
 }
 
 /// Collect the previous-pass pivots stored for `key`, which the default
@@ -475,11 +529,11 @@ fn history_columns(
 /// The built-in optimization loop never reaches that branch: there `keep` is
 /// the edge's current `r` pivots and the budget is at least `2 * r`. It is
 /// defensive code for states whose history was edited by hand.
-fn sample_ordered_candidates(
+fn sample_ordered_candidates<R: Rng + ?Sized>(
     candidates: &[MultiIndex],
     keep: &HashSet<MultiIndex>,
     max_size: usize,
-    rng: &mut SmallRng,
+    rng: &mut R,
 ) -> Vec<MultiIndex> {
     if candidates.len() <= max_size {
         return candidates.to_vec();

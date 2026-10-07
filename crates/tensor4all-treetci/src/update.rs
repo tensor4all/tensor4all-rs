@@ -21,20 +21,22 @@ use crate::DefaultProposer;
 ///
 /// This is a low-level building block; prefer [`optimize_default`](crate::optimize_default)
 /// or [`crossinterpolate2`](crate::crossinterpolate2) for typical usage.
-pub(crate) fn update_edge<T, F, P>(
+pub(crate) fn update_edge<T, F, P, R>(
     state: &mut TreeTCI2<T>,
     edge: TreeTciEdge,
     evaluate: F,
     options: &RrLUOptions,
     proposer: &P,
+    rng: &mut R,
 ) -> Result<MatrixLuciFactors<T>>
 where
     T: Scalar + CommonScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
+    R: rand::Rng + ?Sized,
 {
     let (left_key, right_key) = state.graph.subregion_vertices(edge)?;
-    let (left_candidates, right_candidates) = proposer.candidates(state, edge)?;
+    let (left_candidates, right_candidates) = proposer.candidates_with_rng(state, edge, rng)?;
     if left_candidates.is_empty() || right_candidates.is_empty() {
         return Err(anyhow::anyhow!(
             "proposer returned empty candidate list for edge {edge:?}",
@@ -128,7 +130,9 @@ where
     T: Scalar + CommonScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
-    update_edge(state, edge, evaluate, options, &DefaultProposer)
+    use rand::SeedableRng;
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
+    update_edge(state, edge, evaluate, options, &DefaultProposer, &mut rng)
 }
 
 /// Evaluate the function on the full `I x J` candidate matrix for one edge.
