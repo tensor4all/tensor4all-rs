@@ -19,6 +19,12 @@ the sampled stopping criterion passed; it does not certify the full-network
 error. See the [stopping contract](../../docs/design/treetci-termination.md)
 for the convergence window, global-search behavior, and limit precedence.
 
+Global pivot search uses the same retained-coordinate floating-zone walk as
+chain TCI: at most 100 sweeps per random start, stopping on no improvement or
+an error above ten times the acceptance threshold. One cached tree evaluator
+is shared across starts and coordinate scans. The walk is greedy and may
+stall on flat zero fibers; sampled convergence remains a sampled criterion.
+
 ## Documentation
 
 - [User Guide: Tree Tensor Networks](https://tensor4all.org/tensor4all-rs/guides/tree-tn.html)
