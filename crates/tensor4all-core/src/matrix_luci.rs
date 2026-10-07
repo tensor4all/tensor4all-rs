@@ -402,6 +402,9 @@ where
 /// The caller provides a block-fill closure that receives row and column
 /// index lists and writes the corresponding matrix block in column-major
 /// order.
+/// Exactly zero starting residual columns are skipped. An all-zero residual
+/// can require inspecting all remaining entries, without materializing the
+/// full candidate matrix.
 ///
 /// # Arguments
 ///
