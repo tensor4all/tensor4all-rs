@@ -33,11 +33,35 @@ is zero. If the convergence window is not yet available, the result is
 `MaxIterations`, including a one-iteration call on an exactly representable
 function.
 
-Each optimizer call starts its own diagnostic and convergence window. These
-results do not establish an equivalence between several calls and one longer
-call, nor change the continuation/RNG contracts tracked by
-[#833](https://github.com/tensor4all/tensor4all-rs/issues/833) and
-[#824](https://github.com/tensor4all/tensor4all-rs/issues/824).
+## Continued optimization
+
+A `TreeTCI2` can be optimized repeatedly with a larger `max_bond_dim` or with
+its cap removed, for the same function, topology and local dimensions. Current
+pivot sets and the maximum sampled magnitude carry over; bond errors are
+refreshed during subsequent passes. Each pass visits each edge once; its pivot
+sets remain unchanged until its own update, since other edges use distinct
+canonical subtree keys. Proposers retain those current pivots directly. No
+historical full pivot maps are copied or retained; `ijset_history` is removed.
+
+Each call starts fresh ranks/errors/global-pivot diagnostics, a new convergence
+window and an independent iteration budget. The final-iteration global-search
+skip and stop precedence apply on every call. Several calls need not reproduce
+one longer call, nor a fresh uncapped run's pivot trajectory or ranks at each
+iteration. Increasing a cap permits growth; it does not guarantee convergence
+or certify error over the whole network.
+
+Seeded high-level calls restart their candidate and global RNG streams.
+Caller-stream entry points advance the same generator when the caller reuses
+it, including for random proposers. The [random-stream contract](treetci-random-streams.md)
+defines that distinction. A failed evaluator can leave partial edge updates;
+continuation is not a transactional rollback mechanism.
+
+The #833 regression applies χ=4 then uncapped to real/complex three-arm trees
+with a site-free junction, with global search enabled and disabled. It checks
+all dense entries against the target, checks the capped result is inaccurate,
+and compares the recovered result with a fresh uncapped run after aligning
+physical indices. This fixture establishes recovery in that case, not a
+universal equivalence between optimization schedules.
 
 ## Relationship to TreeTCI.jl
 

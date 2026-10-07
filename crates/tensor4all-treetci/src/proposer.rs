@@ -148,9 +148,9 @@ impl PivotCandidateProposer for DefaultProposer {
         let jsite_index = subtree_position(&jkey, vq)?;
         let jset = kronecker(&jpivots, jsite_index, state.local_dims[vq])?;
 
-        let history = state.ijset_history.last();
-        let icombined = union_with_history(iset, history, &ikey)?;
-        let jcombined = union_with_history(jset, history, &jkey)?;
+        let pivots = &state.ijset;
+        let icombined = union_with_pivots(iset, pivots, &ikey)?;
+        let jcombined = union_with_pivots(jset, pivots, &jkey)?;
         Ok((icombined, jcombined))
     }
 }
@@ -236,9 +236,9 @@ impl PivotCandidateProposer for SimpleProposer {
         let iset = random_candidates(rng, state.local_dims.as_slice(), &ikey, ichi);
         let jset = random_candidates(rng, state.local_dims.as_slice(), &jkey, jchi);
 
-        let history = state.ijset_history.last();
-        let icombined = union_with_history(iset, history, &ikey)?;
-        let jcombined = union_with_history(jset, history, &jkey)?;
+        let pivots = &state.ijset;
+        let icombined = union_with_pivots(iset, pivots, &ikey)?;
+        let jcombined = union_with_pivots(jset, pivots, &jkey)?;
         Ok((icombined, jcombined))
     }
 }
@@ -260,13 +260,13 @@ impl PivotCandidateProposer for SimpleProposer {
 /// the growth factor of a binary site instead of `1`, which would pin the
 /// bond at its current rank.
 ///
-/// Unlike `TreeTCI.jl`, the previous-pass pivots of the edge (which the
+/// Unlike `TreeTCI.jl`, the current pivots of the edge (which the
 /// default proposer appends to its candidates) are always kept, and only the
 /// remaining budget is sampled. A uniform sample would drop almost all of them
 /// at a branching vertex, so every update would restart from a fresh random
-/// subset and the bond error would not settle. The optimization loop records
-/// the pivot sets at the start of every pass and visits each edge once per
-/// pass, so the kept set is exactly the edge's current pivots, on every
+/// subset and the bond error would not settle. Each edge is visited once per
+/// pass and other edge updates leave its pivot sets unchanged. The kept set
+/// is therefore the same as a start-of-pass snapshot of that edge, on every
 /// vertex: chains and vertices with sites sample differently from
 /// `TreeTCI.jl` too whenever they truncate.
 ///
@@ -331,9 +331,9 @@ impl PivotCandidateProposer for TruncatedDefaultProposer {
         let ichi = truncated_candidate_budget(state, vp, &ikey)?;
         let jchi = truncated_candidate_budget(state, vq, &jkey)?;
 
-        let history = state.ijset_history.last();
-        let ikeep = history_columns(history, &ikey)?;
-        let jkeep = history_columns(history, &jkey)?;
+        let pivots = &state.ijset;
+        let ikeep = pivot_columns(pivots, &ikey)?;
+        let jkeep = pivot_columns(pivots, &jkey)?;
         Ok((
             sample_ordered_candidates(&default_i, &ikeep, ichi, rng),
             sample_ordered_candidates(&default_j, &jkeep, jchi, rng),
@@ -395,7 +395,7 @@ fn subtree_position(key: &SubtreeKey, site: usize) -> Result<usize> {
         .ok_or_else(|| anyhow::anyhow!("site {} not found in subtree key {:?}", site, key))
 }
 
-/// Concatenate `values` with the previous iteration's pivots for `key`,
+/// Concatenate `values` with the current edge pivots for `key`,
 /// dropping duplicates and preserving first-occurrence order.
 ///
 /// Membership is tested through a `HashSet`, mirroring `TreeTCI.jl`'s
@@ -404,9 +404,9 @@ fn subtree_position(key: &SubtreeKey, site: usize) -> Result<usize> {
 /// the *product* of the other incident bonds' dimensions (`d * chi_1 * chi_2`)
 /// rather than `d * chi` as on a chain, so n reaches O(10^5) and the
 /// quadratic term dominates the whole optimization.
-fn union_with_history(
+fn union_with_pivots(
     values: Vec<MultiIndex>,
-    history: Option<&HashMap<SubtreeKey, ColMajorArray<usize>>>,
+    pivots: &HashMap<SubtreeKey, ColMajorArray<usize>>,
     key: &SubtreeKey,
 ) -> Result<Vec<MultiIndex>> {
     let mut unique = Vec::with_capacity(values.len());
@@ -416,7 +416,7 @@ fn union_with_history(
             unique.push(candidate);
         }
     }
-    if let Some(arr) = history.and_then(|history| history.get(key)) {
+    if let Some(arr) = pivots.get(key) {
         for j in 0..ncols_2d(arr)? {
             let col = column_2d(arr, j)?.to_vec();
             if seen.insert(col.clone()) {
@@ -504,14 +504,13 @@ fn random_candidates<R: Rng + ?Sized>(
         .collect()
 }
 
-/// Collect the previous-pass pivots stored for `key`, which the default
-/// proposer appends to its candidates.
-fn history_columns(
-    history: Option<&HashMap<SubtreeKey, ColMajorArray<usize>>>,
+/// Collect the current edge pivots, which remain unchanged until its update.
+fn pivot_columns(
+    pivots: &HashMap<SubtreeKey, ColMajorArray<usize>>,
     key: &SubtreeKey,
 ) -> Result<HashSet<MultiIndex>> {
     let mut columns = HashSet::new();
-    if let Some(arr) = history.and_then(|history| history.get(key)) {
+    if let Some(arr) = pivots.get(key) {
         for j in 0..ncols_2d(arr)? {
             columns.insert(column_2d(arr, j)?.to_vec());
         }
@@ -521,14 +520,14 @@ fn history_columns(
 
 /// Sample at most `max_size` of `candidates`, keeping their order.
 ///
-/// Candidates in `keep` (the previous-pass pivots) are retained first; the
+/// Candidates in `keep` (the current edge pivots) are retained first; the
 /// rest of the budget is filled by a uniform random sample of the others.
 /// With an empty `keep` this is a plain ordered uniform sample.
 ///
 /// If `keep` alone exceeds the budget, a uniform sample of it is returned.
 /// The built-in optimization loop never reaches that branch: there `keep` is
 /// the edge's current `r` pivots and the budget is at least `2 * r`. It is
-/// defensive code for states whose history was edited by hand.
+/// defensive code for states whose pivot sets were edited by hand.
 fn sample_ordered_candidates<R: Rng + ?Sized>(
     candidates: &[MultiIndex],
     keep: &HashSet<MultiIndex>,

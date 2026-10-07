@@ -45,3 +45,17 @@ ranks or history length. Fixed-seed trajectories intentionally change from the
 former `DefaultHasher`/`SmallRng` implementation. Custom proposers implement
 `candidates_with_rng` and may override `seed` for the high-level entry point.
 See the [stream contract](../../docs/design/treetci-random-streams.md).
+
+## Continued optimization
+
+Reuse a `TreeTCI2` and call an optimizer again with a larger `max_bond_dim`
+or no cap. Keep the same function, topology and local dimensions. Current
+pivots and sampled normalization scale carry over. Proposers retain the current
+edge's pivots directly from `ijset`; no historical full pivot maps are copied.
+Custom proposers retaining that edge's previous pivots now read `ijset`.
+The former `ijset_history` field is removed.
+
+Each call starts its own diagnostics and convergence window and skips global
+search after its final iteration. Several calls therefore need not match one
+longer run. Seeded calls restart RNGs; reuse a caller-owned RNG to advance its
+sequence across calls. See the [continuation contract](../../docs/design/treetci-termination.md#continued-optimization).
