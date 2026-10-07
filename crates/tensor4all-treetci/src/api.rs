@@ -2,7 +2,7 @@ use crate::batch::checked_batch_len;
 use crate::error::Result as TreeTciResult;
 use crate::{
     materialize::to_treetn, optimize::optimize_with_proposer_with_rng, GlobalIndexBatch,
-    MultiIndex, PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciOptions,
+    MultiIndex, PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciOptions, TreeTciTermination,
 };
 use anyhow::Result;
 use rand::SeedableRng;
@@ -10,17 +10,43 @@ use tensor4all_core::CommonScalar;
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::TreeTN;
 
-/// High-level TreeTCI return type:
-/// `(treetn, ranks_per_iter, normalized_errors_per_iter)`.
+/// A materialized tree tensor network with iteration diagnostics and stopping reason.
 ///
-/// - `treetn`: The materialized tree tensor network.
-/// - `ranks_per_iter`: Maximum bond dimension at each iteration.
-/// - `normalized_errors_per_iter`: Normalized bond error at each iteration.
-pub type TreeTciRunResult = (
-    TreeTN<tensor4all_core::IdxTensor, usize>,
-    Vec<usize>,
-    Vec<f64>,
-);
+/// Returned by [`crossinterpolate2`] and [`crossinterpolate2_with_rng`].
+/// [`crate::TreeTciOptimizationResult`] contains the corresponding diagnostics
+/// when optimizing a caller-owned state without materializing the network.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::{
+///     crossinterpolate2, DefaultProposer, TreeTciGraph, TreeTciOptions, TreeTciTermination,
+/// };
+///
+/// let result = crossinterpolate2::<f64, _, _>(
+///     |batch| Ok(vec![2.0; batch.n_points()]), vec![2, 2],
+///     TreeTciGraph::linear_chain(2)?, vec![vec![0, 0]],
+///     TreeTciOptions { seed: Some(0), ..Default::default() }, None, &DefaultProposer,
+/// )?;
+/// assert_eq!(result.termination, TreeTciTermination::Converged);
+/// let dense = result.treetn.contract_to_tensor()?;
+/// let expected = tensor4all_core::IdxTensor::from_dense(dense.indices().to_vec(), vec![2.0; 4])?;
+/// assert!(dense.sub(&expected)?.maxabs()? < 1e-12);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug)]
+pub struct TreeTciRunResult {
+    /// The materialized approximation; inspect `termination` before accepting it.
+    pub treetn: TreeTN<tensor4all_core::IdxTensor, usize>,
+    /// Maximum bond dimension after each completed iteration.
+    pub ranks: Vec<usize>,
+    /// Maximum sampled bond error per iteration, normalized when requested.
+    ///
+    /// Has the same length as `ranks`; it is not a full-network residual.
+    pub errors: Vec<f64>,
+    /// The stopping condition evaluated by the optimization loop.
+    pub termination: TreeTciTermination,
+}
 
 /// Cross interpolate a function on a tree graph and return a `TreeTN`.
 ///
@@ -31,7 +57,9 @@ pub type TreeTciRunResult = (
 /// must not assume one call per matrix or tensor; see
 /// [`GlobalIndexBatch`](crate::GlobalIndexBatch#batch-sizes).
 ///
-/// The `proposer` controls how pivot candidates are generated.
+/// The `proposer` controls how pivot candidates are generated. Returns
+/// [`TreeTciRunResult`] with the network, iteration histories, and stopping
+/// reason; see [`TreeTciTermination`] for its sampled convergence criterion.
 ///
 /// # Examples
 ///
@@ -65,7 +93,7 @@ pub type TreeTciRunResult = (
 /// };
 ///
 /// let proposer = DefaultProposer;
-/// let (treetn, ranks, errors) = crossinterpolate2::<f64, _, _>(
+/// let result = crossinterpolate2::<f64, _, _>(
 ///     evaluate,
 ///     local_dims,
 ///     graph,
@@ -76,28 +104,18 @@ pub type TreeTciRunResult = (
 /// ).unwrap();
 ///
 /// // The identity on a 2x2 space has rank 2
-/// assert!(ranks.last().copied().unwrap_or(0) <= 2);
+/// assert_eq!(result.ranks.last().copied(), Some(2));
+/// assert_eq!(result.termination, tensor4all_treetci::TreeTciTermination::Converged);
 /// // Error should converge to near zero
-/// assert!(errors.last().copied().unwrap_or(1.0) < 1e-8);
+/// assert!(result.errors.last().copied().unwrap_or(1.0) < 1e-8);
 /// ```
 #[allow(clippy::too_many_arguments)]
 /// # Errors
 ///
-/// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
-/// for invalid options. It
-/// also returns an error when the operation fails (a shape or index mismatch,
-/// or a backend failure).
-///
-/// Interpolate a tree tensor network.
-///
-/// The seeded high-level path uses an explicitly named RNG (drawn from
-/// [`TreeTciOptions::seed`], or OS entropy when unset and the global search is
-/// enabled) and delegates to [`crossinterpolate2_with_rng`].
-///
-/// # Errors
-///
-/// Returns an error for invalid options, mismatched dimensions, pivot sets that
-/// are empty or evaluate to zero, or a backend failure.
+/// Returns [`crate::TreeTciError::InvalidConfiguration`] for invalid options.
+/// Dimension mismatches, invalid initial pivots, an all-zero initial sample,
+/// callback failures, and materialization/backend failures return
+/// [`crate::TreeTciError::Operation`] with the underlying diagnostic.
 ///
 pub fn crossinterpolate2<T, F, P>(
     evaluate: F,
@@ -142,18 +160,36 @@ where
 /// [`TreeTciOptions::seed`], so the caller can reproduce or advance the run's
 /// randomness and share one stream across runs. Randomized proposers keep their
 /// own generators (see #824); this controls the global searches only.
+/// Returns [`TreeTciRunResult`] with the network and the same stopping
+/// diagnostics as [`crossinterpolate2`].
 ///
 /// # Errors
 /// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
 /// for invalid options. It
 /// also returns an error when the operation fails (a shape or index mismatch,
 /// or a backend failure).
-/// Interpolate a tree tensor network.
-/// The seeded high-level path uses an explicitly named RNG (drawn from
-/// [`TreeTciOptions::seed`], or OS entropy when unset and the global search is
-/// enabled) and delegates to [`crossinterpolate2_with_rng`].
-/// Returns an error for invalid options, mismatched dimensions, pivot sets that
-/// are empty or evaluate to zero, or a backend failure.
+///
+/// # Examples
+///
+/// ```
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_treetci::{
+///     crossinterpolate2_with_rng, DefaultProposer, TreeTciGraph,
+///     TreeTciOptions, TreeTciTermination,
+/// };
+///
+/// let mut rng = ChaCha8Rng::seed_from_u64(0);
+/// let result = crossinterpolate2_with_rng::<f64, _, _, _>(
+///     |batch| Ok(vec![2.0; batch.n_points()]), vec![2, 2],
+///     TreeTciGraph::linear_chain(2)?, vec![vec![0, 0]],
+///     TreeTciOptions::default(), None, &DefaultProposer, &mut rng,
+/// )?;
+/// assert_eq!(result.termination, TreeTciTermination::Converged);
+/// assert_eq!(result.ranks, vec![1; 3]);
+/// assert_eq!(result.errors, vec![0.0; 3]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[allow(clippy::too_many_arguments)]
 pub fn crossinterpolate2_with_rng<T, F, P, R>(
     evaluate: F,
@@ -222,9 +258,13 @@ where
         return Err(anyhow::anyhow!("initial pivots must not all evaluate to zero").into());
     }
 
-    let (ranks, errors) =
-        optimize_with_proposer_with_rng(&mut tci, &evaluate, &options, proposer, rng)?;
+    let result = optimize_with_proposer_with_rng(&mut tci, &evaluate, &options, proposer, rng)?;
     let treetn = to_treetn(&tci, &evaluate, center_site)?;
 
-    Ok((treetn, ranks, errors))
+    Ok(TreeTciRunResult {
+        treetn,
+        ranks: result.ranks,
+        errors: result.errors,
+        termination: result.termination,
+    })
 }

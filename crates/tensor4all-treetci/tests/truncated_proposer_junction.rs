@@ -142,13 +142,14 @@ fn assert_truncated_proposer_converges(tree: &JunctionTree) {
         seed: Some(7),
         ..Default::default()
     };
-    let (ranks, errors) = optimize_with_proposer(
-        &mut state,
-        evaluate,
-        &options,
-        &TruncatedDefaultProposer::seeded(3),
-    )
-    .unwrap();
+    let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } =
+        optimize_with_proposer(
+            &mut state,
+            evaluate,
+            &options,
+            &TruncatedDefaultProposer::seeded(3),
+        )
+        .unwrap();
 
     assert!(
         ranks.len() < MAX_ITER,

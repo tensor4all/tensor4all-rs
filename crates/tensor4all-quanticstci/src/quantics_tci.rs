@@ -247,8 +247,7 @@ where
     }
 
     let tree_opts = options.to_treetci_options();
-    let (ranks, errors) =
-        optimize_with_proposer(&mut tci, &evaluate, &tree_opts, &DefaultProposer)?;
+    let result = optimize_with_proposer(&mut tci, &evaluate, &tree_opts, &DefaultProposer)?;
     let treetn = to_treetn(&tci, &evaluate, Some(0))?;
 
     // Convert TreeTN → SimpleTensorTrain<V> via the sanctioned bridge
@@ -263,7 +262,7 @@ where
     drop(evaluate);
     drop(cache);
 
-    Ok((tci, tt, ranks, errors))
+    Ok((tci, tt, result.ranks, result.errors))
 }
 
 /// TCI result wrapped with grid information.

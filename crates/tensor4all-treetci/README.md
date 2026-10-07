@@ -10,6 +10,14 @@ Computes tensor cross interpolation on tree-structured graphs, producing TreeTN 
 - `crossinterpolate2()` — high-level entry point for tree TCI
 - `TreeTCI2` — algorithm state
 - `TreeTciGraph` — graph structure definition
+- `TreeTciRunResult` — `treetn`, per-iteration `ranks` and `errors`, and `termination`
+- `TreeTciOptimizationResult` — diagnostics from optimizing a caller-owned state
+- `TreeTciTermination` — `Converged`, `MaxBondDimension`, or `MaxIterations`
+
+The entry points return named results rather than tuples. `Converged` means
+the sampled stopping criterion passed; it does not certify the full-network
+error. See the [stopping contract](../../docs/design/treetci-termination.md)
+for the convergence window, global-search behavior, and limit precedence.
 
 ## Documentation
 

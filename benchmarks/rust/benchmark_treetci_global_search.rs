@@ -161,7 +161,7 @@ fn run_case(case: &Case, samples: &[usize], exact: &[f64]) -> Result<RunResult> 
     let initial = vec![0usize; n_sites];
     state.add_global_pivots(std::slice::from_ref(&initial))?;
     state.max_sample_value = f(&initial).abs();
-    let (ranks, errors) =
+    let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } =
         optimize_with_proposer(&mut state, evaluate, &options, &DefaultProposer)?;
     let treetn = to_treetn(&state, evaluate, None)?;
     let seconds = started.elapsed().as_secs_f64();

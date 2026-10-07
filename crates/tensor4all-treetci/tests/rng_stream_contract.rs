@@ -40,14 +40,15 @@ fn a_run_without_a_global_search_leaves_the_supplied_stream_untouched() {
         enable_global_pivots: false,
         ..TreeTciOptions::default()
     };
-    let (ranks, errors) = optimize_with_proposer_with_rng(
-        &mut two_site_state(),
-        evaluate,
-        &options,
-        &SimpleProposer::default(),
-        &mut stream,
-    )
-    .unwrap();
+    let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } =
+        optimize_with_proposer_with_rng(
+            &mut two_site_state(),
+            evaluate,
+            &options,
+            &SimpleProposer::default(),
+            &mut stream,
+        )
+        .unwrap();
     assert_eq!(ranks.len(), errors.len());
     assert_eq!(
         stream.next_u64(),
@@ -97,13 +98,14 @@ fn the_low_level_entry_point_accepts_an_erased_stream() {
         max_nglobal_pivot: 1,
         ..TreeTciOptions::default()
     };
-    let (ranks, errors) = optimize_with_proposer_with_rng(
-        &mut two_site_state(),
-        evaluate,
-        &options,
-        &SimpleProposer::default(),
-        erased,
-    )
-    .unwrap();
+    let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } =
+        optimize_with_proposer_with_rng(
+            &mut two_site_state(),
+            evaluate,
+            &options,
+            &SimpleProposer::default(),
+            erased,
+        )
+        .unwrap();
     assert_eq!(ranks.len(), errors.len());
 }
