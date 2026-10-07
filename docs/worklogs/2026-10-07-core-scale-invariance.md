@@ -44,3 +44,11 @@
 - A nearby backend `submatrix_argmax` also compares squared magnitudes. It is
   not used by these rrLU/LUCI paths and remains outside this issue's kernel
   repair; it warrants a separate utility audit.
+
+- Fresh worktree-owned artifacts independently passed all core/tensorci unit
+  and integration tests, the affected matrixlu/scalar doctests, and strict
+  Clippy. Non-finite factor extraction, dense selection and elimination
+  overflow now have direct regression coverage. An undividable dense residual
+  retains its actual nonzero error. Removed a redundant public debug assertion
+  and its obsolete panic baseline entry; the full panic audit reports zero
+  unbaselined findings and zero stale entries.

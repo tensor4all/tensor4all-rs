@@ -40,11 +40,7 @@ impl DenseLuKernel {
             let mut pivot_errors = Vec::with_capacity(full_rank + 1);
             for &pivot_abs in diag_abs.iter().take(full_rank) {
                 if pivot_is_undividable::<T>(pivot_abs) {
-                    if pivot_errors.is_empty() {
-                        pivot_errors.push(pivot_abs);
-                    } else {
-                        pivot_errors.push(0.0);
-                    }
+                    pivot_errors.push(pivot_abs);
                     return pivot_errors;
                 }
                 pivot_errors.push(pivot_abs);

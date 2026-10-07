@@ -811,7 +811,6 @@ pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> R
     let nc = a.ncols();
     let data = a.as_col_major_mut_slice();
     validate_col_major_matrix_len(nr, nc, data.len())?;
-    debug_assert_eq!(data.len(), nr * nc);
 
     // Validate all entries, including those a pivot scan would otherwise skip.
     if data.iter().any(|&value| !value.abs_val().is_finite()) {

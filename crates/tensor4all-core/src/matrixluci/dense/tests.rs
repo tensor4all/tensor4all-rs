@@ -278,3 +278,22 @@ fn dense_errors_stop_at_undividable_pivots_in_the_component_type() {
         );
     }
 }
+
+#[test]
+fn dense_selection_reports_non_finite_input_and_diagonals() {
+    use crate::matrixluci::MatrixLuciError;
+    for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let data = [invalid];
+        let source = DenseMatrixSource::from_column_major(&data, 1, 1);
+        assert!(matches!(
+            DenseLuKernel.factorize(&source, &PivotKernelOptions::default()),
+            Err(MatrixLuciError::NaNEncountered { .. })
+        ));
+    }
+    let values = [f64::MAX, f64::MAX, -f64::MAX, f64::MAX];
+    let source = DenseMatrixSource::from_column_major(&values, 2, 2);
+    assert!(matches!(
+        DenseLuKernel.factorize(&source, &PivotKernelOptions::default()),
+        Err(MatrixLuciError::NaNEncountered { .. })
+    ));
+}

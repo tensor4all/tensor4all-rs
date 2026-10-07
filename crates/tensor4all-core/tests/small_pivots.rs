@@ -352,3 +352,13 @@ fn triangular_conversion_rejects_non_finite_and_undividable_pivots() {
         }
     }
 }
+
+#[test]
+fn elimination_overflow_is_reported_as_a_numerical_error() {
+    use tensor4all_core::MatrixCIError;
+    let matrix = Matrix::from_col_major_vec(2, 2, vec![f64::MAX, f64::MAX, -f64::MAX, f64::MAX]);
+    assert!(matches!(
+        rrlu(&matrix, None),
+        Err(MatrixCIError::NaNEncountered { .. })
+    ));
+}
