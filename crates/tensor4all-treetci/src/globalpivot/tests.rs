@@ -98,7 +98,7 @@ fn tree_value(tree: &TreeTN<IdxTensor, usize>, index: &[usize]) -> f64 {
 fn run(enable_global_pivots: bool) -> (Vec<usize>, Vec<f64>, f64, f64) {
     let mut tci = seeded_state();
     let opts = options(enable_global_pivots);
-    let (ranks, errors) =
+    let crate::TreeTciOptimizationResult { ranks, errors, .. } =
         optimize_with_proposer(&mut tci, evaluate, &opts, &DefaultProposer).unwrap();
     let tree = to_treetn(&tci, evaluate, None).unwrap();
     (
@@ -332,7 +332,7 @@ impl Fixture {
             seed: Some(1),
             ..TreeTciOptions::default()
         };
-        let (ranks, errors) =
+        let crate::TreeTciOptimizationResult { ranks, errors, .. } =
             optimize_with_proposer(&mut tci, self.evaluate(), &options, &DefaultProposer).unwrap();
         (ranks, errors, tci)
     }
