@@ -43,3 +43,8 @@
 - CUDA context construction shares the untracked seam, but device execution
   is unavailable on this CPU-only host. The separate CUDA transfer module and
   backend eigensolver also wrap native values; they remain adjacent audit targets.
+- Final local verification passes 900 core and 849 TreeTN tests, 494 affected
+  doctests, strict all-target Clippy/rustdoc, diagnostics-feature compilation,
+  and compiler-backed default/all-feature workspace panic audits. Existing
+  panic assertions are unchanged, with no added allowance. Hosted coverage
+  and rules review remain authoritative after push.
