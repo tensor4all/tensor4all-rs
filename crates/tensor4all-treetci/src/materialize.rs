@@ -22,6 +22,9 @@ use tensor4all_treetn::TreeTN;
 /// `center_site` selects the BFS root for the tree decomposition
 /// (default: site 0).
 ///
+/// Small nonzero pivot values reach the backend solve without an absolute
+/// zero threshold. Accuracy depends on the state's pivot sets and the solve.
+///
 /// This function is called internally by [`crossinterpolate2`](crate::crossinterpolate2).
 /// # Errors
 ///
@@ -193,14 +196,10 @@ where
         ));
     };
 
-    // A numerically zero pivot matrix (the function underflows in this
-    // subdomain) cannot be solved; emit a zero site tensor of the same shape
-    // instead of failing the solve. Mirrors the guard in
-    // `tensor4all-tensorci`'s `fill_site_tensors`.
-    if p_values
-        .iter()
-        .all(|value| tensor4all_core::Scalar::abs_val(*value) < f64::EPSILON)
-    {
+    // An exactly zero pivot matrix cannot be solved; emit a zero site tensor
+    // of the same shape instead. Nonzero pivots must reach the solve regardless
+    // of their absolute scale (#779).
+    if p_values.iter().all(|value| value.is_zero()) {
         let len = rows
             .checked_mul(cols)
             .ok_or_else(|| anyhow::anyhow!("materialized zero site size overflowed usize"))?;
