@@ -129,8 +129,10 @@ Use `TreeTNCachedEvaluator` when reading many points from an unchanged network.
 Its input is a column-major `[number_of_indices, number_of_points]` array;
 the result follows the input column order, including duplicate points.
 
-`CachedEvaluatorOptions::max_batch_points` limits internal batches to 16 points
-by default. You can submit a larger batch directly: temporary contraction
+`CachedEvaluatorOptions::max_batch_points` defaults to `None`, choosing up to
+256 points and reducing that limit for large local tensors using a 32 MiB
+local-buffer estimate. This estimate is a sizing heuristic, not an RSS limit.
+Set `Some(n)` for a fixed positive point limit. You can submit a larger batch directly: temporary contraction
 buffers are released between internal batches. The input and result vectors
 still grow with the point count, and temporary memory depends on bond ranks.
 An automatic contraction center is chosen using the first internal batch;

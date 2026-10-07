@@ -11,13 +11,15 @@ fn main() -> anyhow::Result<()> {
     let mode = args.first().map(String::as_str).unwrap_or("bounded");
     let rank = args.get(1).map(|s| s.parse()).transpose()?.unwrap_or(17usize);
     let count = args.get(2).map(|s| s.parse()).transpose()?.unwrap_or(1024usize);
+    let generic = args.get(3).is_some_and(|s| s == "generic");
     let physical = (0..4).map(|_| DynIndex::new_dyn(128)).collect::<Vec<_>>();
     let bonds = (0..3).map(|_| DynIndex::new_dyn(rank)).collect::<Vec<_>>();
     // One physical value at the hub is enough; leaves supply changing points.
     let hub_site = DynIndex::new_dyn(2);
-    let mut tensors = vec![IdxTensor::from_dense(
-        vec![hub_site.clone(), bonds[0].clone(), bonds[1].clone(), bonds[2].clone()],
-        vec![1.0_f64; 2 * rank * rank * rank],
+    let mut hub_indices = bonds.clone();
+    if !generic { hub_indices.insert(0, hub_site.clone()); }
+    let mut tensors = vec![IdxTensor::from_dense(hub_indices,
+        vec![1.0_f64; (if generic { 1 } else { 2 }) * rank * rank * rank],
     )?];
     for leaf in 0..3 {
         let data = (0..128).flat_map(|site| {
@@ -25,24 +27,24 @@ fn main() -> anyhow::Result<()> {
         }).collect();
         tensors.push(IdxTensor::from_dense(vec![bonds[leaf].clone(), physical[leaf + 1].clone()], data)?);
     }
-    let indices = vec![hub_site, physical[1].clone(), physical[2].clone(), physical[3].clone()];
+    let mut indices = physical[1..].to_vec();
+    if !generic { indices.insert(0, hub_site); }
     let tree = TreeTN::from_tensors(tensors, vec![0_usize, 1, 2, 3])?;
     let mut rng = ChaCha8Rng::seed_from_u64(123456789);
     let values = (0..count).flat_map(|_| {
-        let mut point = [0_usize; 4];
-        for (axis, value) in point.iter_mut().enumerate() {
-            *value = rng.random_range(0..if axis == 0 { 2 } else { 128 });
-        }
-        point
+        (0..indices.len()).map(|axis| rng.random_range(0..if !generic && axis == 0 { 2 } else { 128 })).collect::<Vec<_>>()
     }).collect::<Vec<_>>();
-    let shape = [4, count];
+    let shape = [indices.len(), count];
     let points = ColMajorArrayRef::new(&values, &shape)?;
-    let mut options = CachedEvaluatorOptions { center: Some(0), ..Default::default() };
+    let mut options = CachedEvaluatorOptions { center: Some(if generic { 1 } else { 0 }), ..Default::default() };
     match mode {
         "bounded" => {},
-        "unchunked" => options.max_batch_points = usize::MAX,
+        "chunk16" => options.max_batch_points = Some(16),
+        "chunk64" => options.max_batch_points = Some(64),
+        "chunk256" => options.max_batch_points = Some(256),
+        "unchunked" => options.max_batch_points = Some(usize::MAX),
         "legacy" => {
-            options.max_batch_points = usize::MAX;
+            options.max_batch_points = Some(usize::MAX);
             options.message_cache_max_bytes = usize::MAX;
             options.branch_slice_cache_max_bytes = usize::MAX;
         },
@@ -53,15 +55,15 @@ fn main() -> anyhow::Result<()> {
     let result = evaluator.evaluate_batched(black_box(points))?;
     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
     let mut max_relative_error = 0.0_f64;
-    for (point, actual) in values.chunks_exact(4).zip(&result) {
+    for (point, actual) in values.chunks_exact(indices.len()).zip(&result) {
         let offset = (rank - 1) as f64 / (2.0 * rank as f64);
-        let expected = point[1..].iter().map(|&site| 1.0 + site as f64 / 128.0 + offset).product::<f64>();
+        let expected = point[if generic { 0 } else { 1 }..].iter().map(|&site| 1.0 + site as f64 / 128.0 + offset).product::<f64>();
         max_relative_error = max_relative_error.max((actual.real() - expected).abs() / expected);
     }
     assert!(max_relative_error < 1.0e-12, "relative error {max_relative_error}");
     let status = std::fs::read_to_string("/proc/self/status")?;
     let rss = status.lines().find(|s| s.starts_with("VmHWM:")).unwrap_or("VmHWM: unavailable");
-    println!("mode={mode},rank={rank},points={count},elapsed_ms={elapsed:.6},max_relative_error={max_relative_error:.3e},{rss}");
+    println!("fixture={},mode={mode},rank={rank},points={count},elapsed_ms={elapsed:.6},max_relative_error={max_relative_error:.3e},{rss}", if generic { "generic" } else { "raw" });
     black_box(result);
     Ok(())
 }

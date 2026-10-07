@@ -7,6 +7,10 @@
   runtime records that survive the tensor. `enable_grad` remains the explicit
   tracked-leaf boundary. Apply the same seam to adjacent plain payload,
   selection, gradient-readback, and context-scoped wrapping paths.
+- Size automatic batches from the largest local tensor, capped at 256 points.
+  A fixed16 policy slowed an already streaming low-rank path; retain larger
+  groups there while reducing them for large native intermediates. Explicit
+  point limits remain available. The 32 MiB estimate is not an RSS guarantee.
 - Bound cached evaluation's temporary batches independently of the caller's
   point count, retaining output order and evaluator reuse. Center selection
   uses the first internal batch so its assignment metadata is bounded too.

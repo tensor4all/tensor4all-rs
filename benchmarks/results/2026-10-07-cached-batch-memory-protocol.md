@@ -30,3 +30,33 @@ any validity gate fails; rerun the full suite under the same protocol.
 
 The largest legacy case fits within this host's 19 GiB RAM. This protocol does
 not repeat the downstream 20k/rank33 stress case that approached that limit.
+
+## Investigation and revised confirmatory experiment
+
+The original raw-center experiment failed the memory primary gate (RSS ratio
+0.999 at rank33/4096) and the small-rank throughput gate. It is retained in
+`2026-10-07-cached-batch-memory-raw-first.json`. That fixture uses a streaming
+raw-center kernel and does not exercise the reported native batched branch
+intermediate. Its taskset-startup affinity probe also made the validity result
+inconclusive; the benchmark itself begins after taskset sets the affinity.
+
+A separate exploratory suite adds a site-free hub centered at a leaf, forcing
+the generic branch contraction while preserving an analytic result. It retains
+the original raw fixture, every size, and fixed limits16/64/256. The sampled
+wrapper-startup affinity check is corrected by setting affinity before exec;
+all final measurements check every observed thread after that boundary.
+Exploratory records are retained, not promoted as confirmatory evidence.
+
+Freeze automatic sizing before fresh confirmation: `None` picks at most 256
+points, further limited by a 32 MiB largest-logical-local-tensor scalar-buffer
+estimate. Explicit `Some(n)` selects the requested positive limit, including
+whole-batch `Some(usize::MAX)`. This avoids fixed16 overhead for small tensors
+while limiting the large intermediates. The estimate is not a total-RSS bound.
+
+Final confirmation runs BOTH fixtures, all nine rank/point cases, legacy and
+automatic bounded mode, seven pairs each with alternating order, in fresh
+processes. Statistic remains median paired ratios, bootstrap95 intervals.
+Primary: generic rank33/4096 RSS ratio <=0.25. Every case's median throughput
+ratio must be <=1.1. Correctness and original validity gates remain in force.
+The fixture correction is explicit; the failed original experiment is not
+rewritten as success. Final binary checksum and code commit are recorded.
