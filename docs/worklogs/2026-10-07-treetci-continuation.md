@@ -23,7 +23,9 @@
   recover rank 8 and match all 512 target entries and each other within
   1e-12 times the target maximum magnitude. Initial pivots provide independent
   arm variations so the local-only configuration can discover junction rank.
-- The treetci/quanticstci unit/integration tests and all affected doctests pass.
+- All 169 treetci/quanticstci unit/integration tests and 70 doctests pass.
+  Strict Clippy, strict documentation, API inventory, public-error documentation
+  and the full library panic audit pass.
   This includes existing branching/truncated-proposer regressions and the
   runnable continued-state example. No tolerance or coverage threshold changes.
 - Continuation is not equivalent to a fresh run or one longer call: sampled
