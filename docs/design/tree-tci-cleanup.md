@@ -36,8 +36,9 @@ canonical side keeps its unit diagonal; its partner carries the zero value.
 The current
 tensor LU/CI options do not expose a user tolerance: do not reinterpret SVD
 options or add a tolerance API to manufacture an all-discarded tensor case.
-Complete discard under an explicit tolerance is verified at existing matrix
-selection entry points.
+This candidate verifies exact-zero tensor conversion, not complete discard
+under an explicit matrix tolerance: existing first-pivot stopping semantics
+remain unchanged, and that numerical acceptance case is still pending.
 
 Lazy Rook distinguishes an unsuccessful trial fiber from a zero remaining
 residual. It searches other residual fibers without full dense matrix

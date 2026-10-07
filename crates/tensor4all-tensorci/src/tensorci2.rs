@@ -294,6 +294,9 @@ pub enum PivotSearchStrategy {
     /// remaining entries to be inspected, one column at a time. Nonzero local
     /// maxima are still heuristic. Error normalization uses the maximum sample
     /// value observed through lazy requests rather than a full-grid scan.
+    /// The per-edge evaluator memoizes sampled entries, so this strategy is
+    /// not a cache-memory cap: exhaustive zero certification can retain the
+    /// complete candidate grid even though requests remain partial batches.
     Rook,
 }
 
