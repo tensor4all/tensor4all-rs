@@ -7,7 +7,7 @@ use crate::error::TreeTNOperationError;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use tensor4all_core::{Canonical, FactorizeOptions, IndexLike, TensorLike};
 
@@ -127,7 +127,10 @@ where
 /// # Arguments
 /// * `tensor` - The dense tensor to decompose
 /// * `topology` - Tree topology specifying nodes, edges, and physical index assignments
-/// * `options` - Factorization options (algorithm, max_bond_dim, rtol, etc.)
+/// * `options` - Factorization options; bond caps must be positive and truncation
+///   policies must be valid for the chosen algorithm. Use `FactorizeOptions::svd()`
+///   for default SVD behavior.
+/// * `root` - Name of the requested canonical center, which must exist in the topology
 ///
 /// # Returns
 /// A TreeTN representing the decomposed tensor.
@@ -136,7 +139,23 @@ where
 /// Returns an error if:
 /// - The topology is invalid
 /// - Physical index positions don't match the tensor
+/// - Factorization options are invalid, even for empty or single-node topologies;
+///   the error retains [`tensor4all_core::FactorizeError::InvalidOptions`]
 /// - Factorization fails
+///
+/// # Examples
+/// ```
+/// use tensor4all_core::{DynIndex, FactorizeOptions, IdxTensor};
+/// use tensor4all_treetn::{factorize_tensor_to_treetn_with, TreeTopology};
+/// let site = DynIndex::new_dyn(2);
+/// let tensor = IdxTensor::from_dense(vec![site.clone()], vec![2.0, 3.0]).unwrap();
+/// let topology = TreeTopology::new([(0, vec![site])].into(), vec![]);
+/// let tree = factorize_tensor_to_treetn_with(
+///     &tensor, &topology, FactorizeOptions::svd(), &0).unwrap();
+/// assert_eq!(tree.contract_to_tensor().unwrap().to_vec::<f64>().unwrap(), vec![2.0, 3.0]);
+/// assert!(factorize_tensor_to_treetn_with(
+///     &tensor, &topology, FactorizeOptions::svd().with_max_bond_dim(0), &0).is_err());
+/// ```
 pub fn factorize_tensor_to_treetn_with<T, V>(
     tensor: &T,
     topology: &TreeTopology<V, T::Index>,
@@ -163,6 +182,9 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
+    options
+        .validate()
+        .context("invalid tree decomposition factorization options")?;
     topology.validate()?;
 
     let tensor_indices = tensor.external_indices();
