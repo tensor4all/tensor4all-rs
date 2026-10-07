@@ -2,6 +2,10 @@
 
 ## Decisions
 
+- The retention regression tags allocations owned by its test thread, including
+  warmup state; unrelated harness cleanup cannot change the measured balance.
+  Trailing allocation tags preserve alignment and ownership through resize and
+  cross-thread deallocation. Cached payload replacement remains balanced.
 - Plain native tensors use the existing untracked eager-value adoption seam.
   Creating a semantic leaf with `requires_grad=false` still registers weak
   runtime records that survive the tensor. `enable_grad` remains the explicit
@@ -48,3 +52,8 @@
   and compiler-backed default/all-feature workspace panic audits. Existing
   panic assertions are unchanged, with no added allowance. Hosted coverage
   and rules review remain authoritative after push.
+- The tagged regression still rejects the original constructor with 69,088
+  retained bytes and passes the fixed constructor in ordinary and optimized
+  builds, including 25 independent uncaptured optimized processes. Allocator
+  checks cover unrelated frees, resize/grow/shrink, alignment, and cross-thread
+  release. The required exact-zero assertion is unchanged.
