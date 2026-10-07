@@ -6,7 +6,7 @@ use crate::{
     TreeTciEdge, TreeTciGraph, TreeTciOptions,
 };
 use anyhow::Result;
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use std::cell::RefCell;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
@@ -439,20 +439,164 @@ fn solve_right_full_piv_lu_recovers_complex_rhs_for_nontrivial_pivot() {
     assert_complex_slice_close(&solved, &target, max_sample, 1e-12);
 }
 
-#[test]
-fn to_treetn_emits_zero_core_for_zero_pivot_matrix() {
+fn zero_pivot_matrix<T>()
+where
+    T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
+{
     // A pivot whose sampled function values are all exactly zero produces a
     // singular pivot matrix in `site_tensor_with_parent`; materialization
     // must emit a zero core instead of failing the solve.
-    let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+    let mut tci = TreeTCI2::<T>::new(vec![2, 2], two_site_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0]]).unwrap();
 
     // Evaluator that is exactly zero at every pivot cross-section.
-    let batch_eval =
-        |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![0.0; batch.n_points()]) };
+    for zero in [T::zero(), T::from_f64(-0.0)] {
+        let batch_eval =
+            |batch: GlobalIndexBatch<'_>| -> Result<Vec<T>> { Ok(vec![zero; batch.n_points()]) };
+        for center in [0, 1] {
+            let tn = to_treetn(&tci, batch_eval, Some(center)).unwrap();
+            assert_eq!(tn.to_dense().unwrap().maxabs().unwrap(), 0.0);
+        }
+    }
+}
 
-    let tn = to_treetn(&tci, batch_eval, Some(0)).unwrap();
-    let dense = tn.to_dense().unwrap();
-    let values = dense.to_vec::<f64>().unwrap();
-    assert_eq!(values, vec![0.0; 4]);
+#[test]
+fn to_treetn_emits_zero_core_for_zero_pivot_matrix() {
+    zero_pivot_matrix::<f64>();
+    zero_pivot_matrix::<Complex64>();
+    zero_pivot_matrix::<f32>();
+    zero_pivot_matrix::<Complex32>();
+}
+
+/// Check a whole dense reconstruction relative to the oracle's scale. An
+/// all-zero materialization must fail even when every value is tiny.
+fn assert_scaled_materialization<T, F>(state: &TreeTCI2<T>, value: F, tolerance: f64)
+where
+    T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
+    F: Fn(&[usize]) -> T,
+{
+    let n_sites = state.local_dims.len();
+    for scale in [1.0, 1e-16, 1e-20, 1e-31] {
+        let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<T>> {
+            Ok(batch
+                .data()
+                .chunks(batch.n_sites())
+                .map(|point| value(point) * T::from_f64(scale))
+                .collect())
+        };
+        // None exercises the default root; explicit roots exercise every
+        // direction of the pivot solve, including site-free junctions.
+        for center in std::iter::once(None).chain((0..n_sites).map(Some)) {
+            let tn = to_treetn(state, evaluate, center).unwrap();
+            let indices: Vec<DynIndex> = (0..n_sites)
+                .map(|site| tn.site_space(&site).unwrap().iter().next().unwrap().clone())
+                .collect();
+            let total: usize = state.local_dims.iter().product();
+            let mut point = vec![0; n_sites];
+            let mut values = Vec::with_capacity(total);
+            for _ in 0..total {
+                values.push(value(&point) * T::from_f64(scale));
+                for (slot, &dim) in point.iter_mut().zip(&state.local_dims) {
+                    *slot += 1;
+                    if *slot < dim {
+                        break;
+                    }
+                    *slot = 0;
+                }
+            }
+            let expected = IdxTensor::from_dense(indices, values).unwrap();
+            let residual = tn
+                .to_dense()
+                .unwrap()
+                .sub(&expected)
+                .unwrap()
+                .maxabs()
+                .unwrap()
+                / scale;
+            assert!(
+                residual < tolerance,
+                "scale {scale:e}, center {center:?}: scaled residual {residual:e}"
+            );
+        }
+    }
+}
+
+fn small_full_rank_pivot<T>(value: impl Fn(&[usize]) -> T, tolerance: f64)
+where
+    T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
+{
+    // Seed both sides completely so the test isolates materialization from
+    // the independent small-pivot floor in the optimizer (#819 / #779).
+    let mut state = TreeTCI2::<T>::new(vec![2, 2], two_site_graph()).unwrap();
+    state.add_global_pivots(&[vec![0, 0], vec![1, 1]]).unwrap();
+    assert_eq!(state.max_bond_dim(), 2);
+    assert_scaled_materialization(&state, &value, tolerance);
+
+    // Rank-one constant oracles exercise a rectangular site block and the
+    // scalar pivot solve, including the 1e-31 initialization reproducer.
+    let mut constant_state = TreeTCI2::<T>::new(vec![3, 2], two_site_graph()).unwrap();
+    constant_state.add_global_pivots(&[vec![0, 0]]).unwrap();
+    let constant = value(&[0, 0]);
+    assert_scaled_materialization(&constant_state, |_| constant, tolerance);
+}
+
+#[test]
+fn to_treetn_preserves_small_nonzero_full_rank_pivots() {
+    let real = |point: &[usize]| 1.0 + point[0] as f64 + 2.0 * point[1] as f64;
+    let imag = |point: &[usize]| 0.25 + 0.5 * point[0] as f64 - 0.75 * point[1] as f64;
+    small_full_rank_pivot(real, 1e-12);
+    small_full_rank_pivot(|point| Complex64::new(real(point), imag(point)), 1e-12);
+    small_full_rank_pivot(|point| real(point) as f32, 2e-6);
+    small_full_rank_pivot(
+        |point| Complex32::new(real(point) as f32, imag(point) as f32),
+        2e-6,
+    );
+}
+
+fn small_tree_pivots<T>(value: impl Fn(&[usize]) -> T)
+where
+    T: FullPivLuScalar
+        + tensor4all_core::MatrixLuciScalar
+        + tensor4all_core::TensorElement
+        + tensor4all_core::CommonScalar
+        + crate::globalpivot::ScalarParts,
+{
+    for (graph, dims) in [
+        (chain_graph(), vec![2; 6]),
+        // Degree-three junctions at sites 1 and 4 have no physical variable.
+        (branched_graph(), vec![2, 1, 2, 2, 1, 2, 2]),
+    ] {
+        let n_sites = dims.len();
+        let mut state = TreeTCI2::<T>::new(dims, graph).unwrap();
+        state.add_global_pivots(&[vec![0; n_sites]]).unwrap();
+        state.max_sample_value = value(&vec![0; n_sites]).abs_val();
+        let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<T>> {
+            Ok(batch.data().chunks(batch.n_sites()).map(&value).collect())
+        };
+        // Obtain well-conditioned pivots at unit scale, then materialize the
+        // same state at each scale, without relying on the core floor fix.
+        optimize_default(
+            &mut state,
+            evaluate,
+            &TreeTciOptions {
+                tolerance: 1e-13,
+                max_iter: 10,
+                seed: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(state.max_bond_dim() >= 2);
+        assert_scaled_materialization(&state, &value, 1e-10);
+    }
+}
+
+#[test]
+fn to_treetn_preserves_small_nonzero_chain_and_branched_tree_values() {
+    small_tree_pivots(smooth_value);
+    small_tree_pivots(|point| {
+        let real = smooth_value(point);
+        let imag = real * (0.5 + point.iter().sum::<usize>() as f64 / 8.0);
+        Complex64::new(real, imag)
+    });
 }
