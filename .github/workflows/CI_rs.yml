@@ -227,9 +227,10 @@ jobs:
         with:
           cache-workspace-crates: true
 
-      - name: Clear stale coverage measurements
-        # Reuse compiled artifacts, but measure only this test execution.
-        run: cargo llvm-cov clean --profraw-only
+      - name: Clear stale workspace coverage artifacts
+        # Prefix cache restores can contain obsolete instrumented workspace
+        # binaries. Remove those and old profiles, but retain dependency builds.
+        run: cargo llvm-cov clean --workspace --locked
 
       - name: Generate release coverage JSON
         # Release-mode measurement: the repository's normal verification mode.
