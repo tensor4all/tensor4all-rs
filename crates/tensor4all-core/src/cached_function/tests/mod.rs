@@ -557,3 +557,5 @@ fn test_eval_no_cache_and_stats() {
 
 #[cfg(test)]
 mod multi_index_cache;
+
+mod cached_batch;

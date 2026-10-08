@@ -144,6 +144,22 @@ An optional case name (`chain_cos_129`, `quantics_chain_r20`,
 paired #792 comparison, the readout rounding margins, and a 200-seed
 `StdRng`/`ChaCha8Rng` quality comparison of the global search.
 
+#### TreeTCI optional target memo (#802)
+
+`benchmark_memo plain` and `benchmark_memo memo` compare a disabled target
+memo with a 256 MiB logical payload budget. The eight cases cover chains and
+site-free-centre trees, two sizes, and cheap versus synthetic expensive
+deterministic targets. Timing includes initialization, optimization, final
+materialization and cache drop. See the
+[paired protocol](2026-10-08-treetci-memo-protocol.md) for the complete cases,
+correctness checks, confidence intervals and acceptance gates.
+
+```bash
+cargo build --release -p tensor4all-treetci --features tensor4all-core/default --example benchmark_memo
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  taskset -c 2 ./target/release/examples/benchmark_memo memo
+```
+
 #### Other Rust benchmarks
 
 ```bash

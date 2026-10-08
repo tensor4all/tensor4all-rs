@@ -274,6 +274,8 @@ impl QtciOptions {
             max_nglobal_pivot: 0,
             tol_margin_global_search: 10.0,
             seed: self.rng_seed,
+            // The quantics evaluator owns its cache; avoid a second memo layer.
+            evaluation_cache_bytes: None,
         }
     }
 }

@@ -46,6 +46,8 @@ pub struct TreeTciRunResult {
     pub errors: Vec<f64>,
     /// The stopping condition evaluated by the optimization loop.
     pub termination: TreeTciTermination,
+    /// Oracle evaluation and optional memo accounting, including final materialization.
+    pub evaluation: crate::TreeTciEvaluationStats,
 }
 
 /// Cross interpolate a function on a tree graph and return a `TreeTN`.
@@ -56,6 +58,9 @@ pub struct TreeTciRunResult {
 /// tensors are split into calls of at most 65,536 points, so the closure
 /// must not assume one call per matrix or tensor; see
 /// [`GlobalIndexBatch`](crate::GlobalIndexBatch#batch-sizes).
+/// The callback may borrow mutable state. With `evaluation_cache_bytes` enabled,
+/// it must return a fixed value for each multi-index throughout the call:
+/// memoization suppresses repeated calls, including during final materialization.
 ///
 /// The `proposer` controls how pivot candidates are generated. Returns
 /// [`TreeTciRunResult`] with the network, iteration histories, and stopping
@@ -132,7 +137,7 @@ where
         + tensor4all_core::MatrixLuciScalar
         + tensor4all_core::TensorElement
         + crate::globalpivot::ScalarParts,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
     options.validate()?;
@@ -205,7 +210,7 @@ where
         + tensor4all_core::MatrixLuciScalar
         + tensor4all_core::TensorElement
         + crate::globalpivot::ScalarParts,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
     R: rand::Rng + ?Sized,
 {
@@ -242,7 +247,7 @@ where
         + tensor4all_core::MatrixLuciScalar
         + tensor4all_core::TensorElement
         + crate::globalpivot::ScalarParts,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
     options.validate()?;
@@ -263,6 +268,13 @@ where
 
     let mut tci = TreeTCI2::<T>::new(local_dims, graph)?;
     tci.add_global_pivots(&pivots)?;
+
+    let evaluator = crate::evaluation::RunEvaluator::new(
+        evaluate,
+        &tci.local_dims,
+        options.evaluation_cache_bytes,
+    )?;
+    let evaluate = |batch: GlobalIndexBatch<'_>| evaluator.call(batch);
 
     // Initialize max_sample_value via batch evaluate
     let n_sites = tci.local_dims.len();
@@ -292,13 +304,14 @@ where
         return Err(anyhow::anyhow!("initial pivots must not all evaluate to zero").into());
     }
 
-    let result = optimize_with_streams(&mut tci, &evaluate, options, proposer, streams)?;
-    let treetn = to_treetn(&tci, &evaluate, center_site)?;
+    let result = optimize_with_streams(&mut tci, evaluate, options, proposer, streams)?;
+    let treetn = to_treetn(&tci, evaluate, center_site)?;
 
     Ok(TreeTciRunResult {
         treetn,
         ranks: result.ranks,
         errors: result.errors,
         termination: result.termination,
+        evaluation: evaluator.stats(),
     })
 }

@@ -109,6 +109,7 @@ where
             }
             .unwrap();
             TreeTciRunResult {
+                evaluation: Default::default(),
                 treetn: to_treetn(&state, evaluate, None).unwrap(),
                 ranks: result.ranks,
                 errors: result.errors,
