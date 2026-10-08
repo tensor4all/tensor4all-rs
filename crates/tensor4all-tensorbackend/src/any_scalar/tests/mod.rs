@@ -1,6 +1,17 @@
 use super::*;
 use tenferro::DType;
 
+#[test]
+fn external_target_dtype_is_rejected_as_unsupported() {
+    let native = NativeTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    let error = promote_scalar_native(&native, DType::External(core::any::TypeId::of::<u8>()))
+        .expect_err("an external target dtype must be rejected");
+    let tenferro = error
+        .downcast_ref::<tenferro_tensor::Error>()
+        .expect("the rejection must preserve the typed tenferro error");
+    assert_eq!(tenferro.kind(), tenferro_tensor::ErrorKind::Unsupported);
+}
+
 fn assert_scalar_close(actual: &BackendScalar, expected: &BackendScalar) {
     match (actual.as_f64(), expected.as_f64()) {
         (Some(a), Some(e)) => assert!((a - e).abs() < 1e-6),

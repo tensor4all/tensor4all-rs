@@ -20,28 +20,28 @@ tenferro-cuda = [
 ]
 tenferro-cpu-faer = [
     "tensor4all-tensorbackend/tenferro-cpu-faer",
-    "tenferro/cpu-faer",
-    "tenferro-ad/cpu-faer",
+    "tenferro/native",
+    "tenferro-ad/native",
     "tenferro-einsum/autodiff",
-    "tenferro-einsum/cpu-faer",
+    "tenferro-einsum/native",
     "tenferro-linalg/autodiff",
-    "tenferro-linalg/cpu-faer",
+    "tenferro-linalg/native",
 ]
 tenferro-system-blas = [
     "tensor4all-tensorbackend/tenferro-system-blas",
-    "tenferro/cpu-blas",
-    "tenferro-ad/cpu-blas",
+    "tenferro/blas",
+    "tenferro-ad/blas",
     "tenferro-einsum/autodiff",
-    "tenferro-einsum/cpu-blas",
+    "tenferro-einsum/blas",
     "tenferro-linalg/autodiff",
-    "tenferro-linalg/cpu-blas",
+    "tenferro-linalg/blas",
 ]
 tenferro-provider-inject = [
     "tensor4all-tensorbackend/tenferro-provider-inject",
-    "tenferro/cpu-blas",
-    "tenferro-ad/cpu-blas",
+    "tenferro/blas",
+    "tenferro-ad/blas",
     "tenferro-einsum/autodiff",
-    "tenferro-einsum/cpu-blas",
+    "tenferro-einsum/blas",
     "tenferro-linalg/autodiff",
     "tenferro-linalg/provider-inject",
 ]

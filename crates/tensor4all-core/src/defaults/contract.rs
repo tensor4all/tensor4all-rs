@@ -29,7 +29,7 @@ use anyhow::Result;
 use petgraph::algo::connected_components;
 use petgraph::prelude::*;
 use tenferro::TensorValue;
-use tenferro_einsum::{EagerEinsumExt, EinsumSubscripts};
+use tenferro_einsum::{EagerSessionEinsumExt, EinsumSubscripts};
 use tensor4all_tensorbackend::{
     einsum_native_tensor_reads, einsum_native_tensors_owned, NativeTensorReadInput,
 };
@@ -1067,7 +1067,12 @@ fn execute_contraction_plan(
             .map(|tensor| tensor.as_inner())
             .collect::<Result<Vec<_>>>()?;
         let subscripts = build_einsum_subscripts_from_usize_ids(&plan.input_ids, &plan.output_ids)?;
-        let result = operands.as_slice().einsum_subscripts(&subscripts)?;
+        let runtime = operands
+            .first()
+            .map(|operand| operand.runtime())
+            .ok_or_else(|| anyhow::anyhow!("No tensors to contract"))?;
+        let result = runtime
+            .with_eager_session(|session| session.einsum_subscripts(&operands, &subscripts))?;
         return IdxTensor::from_inner_with_axis_classes(
             plan.result_indices.clone(),
             result,
@@ -1111,7 +1116,12 @@ fn execute_contraction_plan(
             .map(|tensor| tensor.as_inner())
             .collect::<Result<Vec<_>>>()?;
         let subscripts = build_einsum_subscripts_from_usize_ids(&plan.input_ids, &plan.output_ids)?;
-        let result = operands.as_slice().einsum_subscripts(&subscripts)?;
+        let runtime = operands
+            .first()
+            .map(|operand| operand.runtime())
+            .ok_or_else(|| anyhow::anyhow!("No tensors to contract"))?;
+        let result = runtime
+            .with_eager_session(|session| session.einsum_subscripts(&operands, &subscripts))?;
         return IdxTensor::from_inner_with_axis_classes(
             plan.result_indices.clone(),
             result,

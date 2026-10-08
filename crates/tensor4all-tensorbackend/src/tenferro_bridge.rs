@@ -339,6 +339,10 @@ fn dtype_size_bytes(dtype: DType) -> usize {
         DType::I32 => 4,
         DType::I64 => 8,
         DType::Bool => 1,
+        // External scalar kinds have no element width this crate can know. They
+        // are rejected at every entry point that can materialize storage, so this
+        // accounting arm is unreachable for a tensor that passed those checks.
+        DType::External(_) => 0,
     }
 }
 
@@ -652,7 +656,7 @@ fn convert_tensor(tensor: &NativeTensor, to: DType) -> Result<NativeTensor> {
             .map_err(|e| anyhow!("tensor duplication failed: {e}"));
     }
     with_default_session(|session| tensor.convert(to, session))
-        .map_err(|e| anyhow!("tensor conversion to {to:?} failed: {e}"))
+        .map_err(|e| anyhow::Error::new(e).context(format!("tensor conversion to {to:?} failed")))
 }
 
 fn ids_to_subscript(ids: &[u32]) -> Result<String> {
@@ -852,7 +856,14 @@ fn cached_einsum_native_reads(
             && inputs.iter().all(|input| input.dtype() == first.dtype())
     }) {
         let plan = cached_concrete_einsum_plan(inputs, subscripts, &einsum_subscripts)?;
-        return with_default_session(|session| plan.execute_read(inputs, session))
+        // The plan reports `tenferro_einsum::Error`, so the session-entry
+        // rejection is mapped here rather than through the tenferro-tensor-typed
+        // session helper.
+        return crate::context::default_context()
+            .with_session(|session| plan.execute_read(inputs, session))
+            .map_err(|entry| {
+                anyhow::Error::new(entry).context("native einsum session entry failed")
+            })?
             .map_err(|error| anyhow!("native einsum session execution failed: {error}"));
     }
 
@@ -1163,6 +1174,12 @@ pub fn native_tensor_primal_to_storage(
                 "native tensor snapshot materialization failed: {e}"
             ))
         }),
+        DType::External(_) => Err(BridgeError::from(anyhow::Error::new(
+            tenferro_tensor::Error::unsupported(
+                "dense storage",
+                "external scalar kinds cannot be materialized into dense storage",
+            ),
+        ))),
     }
 }
 
@@ -1287,7 +1304,7 @@ pub fn sum_native_tensor(tensor: &NativeTensor) -> std::result::Result<BackendSc
             .map_err(|e| anyhow!("native scalar duplication failed: {e}"))?
     } else {
         let axes: Vec<usize> = (0..tensor.shape().len()).collect();
-        with_default_session(|session| tensor.reduce_sum(&axes, session))
+        with_default_session(|session| tensor.reduce_sum(Some(&axes), session))
             .map_err(|e| anyhow!("native sum failed: {e}"))?
     };
     Ok(BackendScalar::from_native(reduced)?)
@@ -1361,6 +1378,12 @@ pub fn scale_native_tensor(
         DType::I32 | DType::I64 | DType::Bool => {
             Err(anyhow!("scale_native_tensor does not support integer/bool tensors").into())
         }
+        DType::External(_) => Err(BridgeError::from(anyhow::Error::new(
+            tenferro_tensor::Error::unsupported(
+                "scaling",
+                "external scalar kinds are not scalable dtypes",
+            ),
+        ))),
     }
 }
 
@@ -1469,6 +1492,12 @@ pub fn axpby_native_tensor(
         DType::I32 | DType::I64 | DType::Bool => {
             Err(anyhow!("axpby_native_tensor does not support integer/bool tensors").into())
         }
+        DType::External(_) => Err(BridgeError::from(anyhow::Error::new(
+            tenferro_tensor::Error::unsupported(
+                "axpby",
+                "external scalar kinds are not axpby dtypes",
+            ),
+        ))),
     }
 }
 
@@ -1760,6 +1789,12 @@ pub fn conj_native_tensor(tensor: &NativeTensor) -> std::result::Result<NativeTe
             .duplicate()
             .map_err(|e| anyhow!("native tensor duplication failed: {e}"))
             .map_err(BridgeError::from),
+        DType::External(_) => Err(BridgeError::from(anyhow::Error::new(
+            tenferro_tensor::Error::unsupported(
+                "conjugation",
+                "external scalar kinds have no conjugation",
+            ),
+        ))),
         DType::C32 => native_tensor_from_vec(
             tensor.shape().to_vec(),
             native_slice::<Complex32>(tensor, "failed to read c32 native tensor")?

@@ -250,11 +250,13 @@ fn factorize_gram(
         .take(rank)
         .map(|(_, column)| *column)
         .collect();
-    let basis_inner = decomposition
+    let eigenvectors_inner = decomposition
         .eigenvectors
         .as_inner()
-        .map_err(FactorizeError::ComputationError)?
-        .take_cols(&retained_columns)
+        .map_err(FactorizeError::ComputationError)?;
+    let basis_inner = eigenvectors_inner
+        .runtime()
+        .with_eager_session(|session| session.take_cols(eigenvectors_inner, &retained_columns))
         .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
     let bond_index = DynIndex::new_bond(rank)
         .map_err(|error| FactorizeError::ComputationError(anyhow::anyhow!(error)))?;
@@ -349,8 +351,10 @@ fn reshape_factor(tensor: IdxTensor, indices: Vec<DynIndex>) -> Result<IdxTensor
     let dims: Vec<usize> = indices.iter().map(|index| index.dim).collect();
     let inner = tensor
         .as_inner()
-        .map_err(FactorizeError::ComputationError)?
-        .reshape(&dims)
+        .map_err(FactorizeError::ComputationError)?;
+    let inner = inner
+        .runtime()
+        .with_eager_session(|session| session.reshape(inner, &dims))
         .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
     IdxTensor::from_inner(indices, inner).map_err(FactorizeError::ComputationError)
 }

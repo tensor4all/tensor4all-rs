@@ -77,6 +77,13 @@ pub enum CpuExecutionContextError {
         #[source]
         source: Arc<dyn std::error::Error + Send + Sync + 'static>,
     },
+    /// tenferro rejected entry into the canonical CPU session.
+    #[error("CPU canonical session entry failed: {source}")]
+    SessionEntry {
+        /// Original tenferro diagnostic.
+        #[source]
+        source: Arc<dyn std::error::Error + Send + Sync + 'static>,
+    },
     /// Graph compilation or execution failed.
     #[error("CPU graph {operation} failed: {source}")]
     Graph {
@@ -120,14 +127,23 @@ impl Drop for CanonicalSessionGuard {
 }
 
 /// Run one concrete session on `backend` under the canonical session guard.
+///
+/// # Errors
+///
+/// Returns [`CpuExecutionContextError::SessionEntry`] when tenferro rejects the
+/// entry, for example because an execution is already active on this thread.
 fn run_canonical_session<R: Send>(
     backend: &mut CpuBackend,
     f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-) -> R {
-    backend.with_backend_session(|session| {
-        let _guard = CanonicalSessionGuard::enter();
-        f(session)
-    })
+) -> Result<R, CpuExecutionContextError> {
+    backend
+        .with_backend_session(|session| {
+            let _guard = CanonicalSessionGuard::enter();
+            f(session)
+        })
+        .map_err(|source| CpuExecutionContextError::SessionEntry {
+            source: Arc::new(source),
+        })
 }
 
 impl CpuExecutionContextError {
@@ -224,10 +240,16 @@ impl CpuExecutionContext {
         f(&mut backend)
     }
 
+    /// Run `f` in one canonical session of this context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuExecutionContextError::SessionEntry`] when tenferro rejects
+    /// the session entry.
     pub(crate) fn with_session<R: Send>(
         &self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, CpuExecutionContextError> {
         CanonicalSessionGuard::assert_inactive();
         // A Rayon worker can be handed more of the enclosing pool's work while
         // tenferro installs this session into the context's own pool. That stolen
@@ -475,7 +497,12 @@ mod defaults {
     static DEFAULT_CONTEXT_HITS: std::sync::atomic::AtomicUsize =
         std::sync::atomic::AtomicUsize::new(0);
 
-    fn default_context() -> &'static Arc<CpuExecutionContext> {
+    /// Borrow the process-global CPU execution context.
+    ///
+    /// New code must take a caller-owned context; this accessor exists for the
+    /// process-global convenience path and for callers that map the session-entry
+    /// rejection into their own error type.
+    pub(crate) fn default_context() -> &'static Arc<CpuExecutionContext> {
         DEFAULT_CONTEXT.get_or_init(|| {
             #[cfg(test)]
             DEFAULT_CONTEXT_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -515,10 +542,26 @@ mod defaults {
         default_context().with_backend(f)
     }
 
-    pub(crate) fn with_default_session<R: Send>(
-        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
-        default_context().with_session(f)
+    /// Run `f` in one canonical session of the process-global context.
+    ///
+    /// The entry rejection stays inside tenferro's error type: it is reported as
+    /// a `tenferro_tensor::Error` classified as runtime state, so callers keep
+    /// one error type for session work while the source chain keeps tenferro's
+    /// admission diagnostic.
+    ///
+    /// # Errors
+    ///
+    /// Returns the tenferro diagnostic when the session entry is rejected or
+    /// when `f` fails.
+    pub(crate) fn with_default_session<T: Send>(
+        f: impl FnOnce(&mut dyn BackendSession) -> Result<T, tenferro_tensor::Error> + Send,
+    ) -> Result<T, tenferro_tensor::Error> {
+        default_context()
+            .with_session(f)
+            .map_err(|source| {
+                tenferro_tensor::Error::runtime_state_source("canonical session entry", source)
+            })
+            .and_then(std::convert::identity)
     }
 
     pub(crate) fn with_default_graph_runtime<R>(
@@ -613,6 +656,8 @@ mod defaults {
     }
 }
 
+#[cfg(feature = "global-defaults")]
+pub(crate) use defaults::default_context;
 #[cfg(all(test, feature = "global-defaults"))]
 pub(crate) use defaults::with_forced_eager_context_failure;
 #[cfg(feature = "global-defaults")]
@@ -627,7 +672,6 @@ pub(crate) use defaults::{
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -635,8 +679,6 @@ mod tests {
     use tenferro::program::{CoreSemanticOp, ProgramInputSpec};
     use tenferro::{DType, TensorSessionOpsExt, TraceContext};
     use tenferro_ad::EagerTensor;
-    use tenferro_cpu::{CpuContext, ExternalCpuDomain};
-    use tenferro_tensor::CpuDomainId;
 
     fn context() -> CpuExecutionContext {
         CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap())
@@ -649,6 +691,7 @@ mod tests {
         let rhs = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0]).unwrap();
         let result = context
             .with_session(|session| lhs.matmul(&rhs, session))
+            .unwrap()
             .unwrap();
 
         assert_eq!(result.as_slice::<f64>().unwrap(), &[23.0, 34.0]);
@@ -668,7 +711,7 @@ mod tests {
             .expect("recursive entry panic should contain a string message");
         assert_eq!(message, CANONICAL_SESSION_REENTRY_MESSAGE);
 
-        assert_eq!(context.with_session(|_| 7usize), 7);
+        assert_eq!(context.with_session(|_| 7usize).unwrap(), 7);
     }
 
     #[test]
@@ -707,7 +750,7 @@ mod tests {
         let second = context().eager_runtime().unwrap();
         let a = EagerTensor::from_tensor_in(
             Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
-            first,
+            first.clone(),
         )
         .unwrap();
         let b = EagerTensor::from_tensor_in(
@@ -715,20 +758,17 @@ mod tests {
             second,
         )
         .unwrap();
-        assert!(matches!(
-            a.add(&b),
-            Err(tenferro_ad::Error::ContextMismatch { .. })
-        ));
+        let error = first
+            .with_eager_session(|session| session.add(&a, &b))
+            .expect_err("cross-context addition must be rejected");
+        assert!(matches!(error, tenferro_ad::Error::ContextMismatch { .. }));
     }
 
     #[test]
-    fn caller_managed_backend_remains_caller_owned_after_context_drop() {
+    fn caller_supplied_context_stays_caller_owned_after_context_drop() {
         let executor = Arc::new(CpuContext::with_threads(1).unwrap());
-        let id = CpuDomainId::new(7);
-        let domain =
-            ExternalCpuDomain::new_caller_managed(id, executor.clone(), NonZeroUsize::MIN).unwrap();
-        let backend = CpuBackend::from_external_managed_domains(id, [domain]).unwrap();
-        let context = CpuExecutionContext::from_backend(backend);
+        let context =
+            CpuExecutionContext::from_backend(CpuBackend::from_context(Arc::clone(&executor)));
         assert_eq!(context.with_backend(|backend| backend.num_threads()), 1);
         drop(context);
         assert_eq!(executor.num_threads(), 1);
@@ -793,12 +833,33 @@ mod tests {
                             .unwrap();
                             let rhs =
                                 Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0]).unwrap();
-                            context
-                                .with_session(|session| lhs.matmul(&rhs, session))
-                                .unwrap()
-                                .as_slice::<f64>()
-                                .unwrap()
-                                .to_vec()
+                            // tenferro-rs #2004 rejects a worker entry it cannot
+                            // wait for with a typed `SessionEntry` error instead of
+                            // blocking on the context pool. Either outcome finishes,
+                            // which is what this test observes.
+                            match context.with_session(|session| lhs.matmul(&rhs, session)) {
+                                Ok(Ok(product)) => {
+                                    Some(product.as_slice::<f64>().unwrap().to_vec())
+                                }
+                                Ok(Err(error)) => panic!("session operation failed: {error}"),
+                                Err(error) => {
+                                    let CpuExecutionContextError::SessionEntry { source } = error
+                                    else {
+                                        panic!("worker entry must fail with the typed session error");
+                                    };
+                                    let rejection = source
+                                        .downcast_ref::<tenferro_tensor::SessionEntryError>()
+                                        .expect("the rejection must preserve tenferro's typed cause");
+                                    assert!(
+                                        matches!(
+                                            rejection,
+                                            tenferro_tensor::SessionEntryError::Contended { .. }
+                                        ),
+                                        "a worker cannot wait, so the rejection is contention: {rejection}"
+                                    );
+                                    None
+                                }
+                            }
                         })
                         .collect::<Vec<_>>()
                 });
@@ -809,7 +870,11 @@ mod tests {
                 "a session entered from a Rayon worker must finish instead of waiting on the context pool",
             );
             assert_eq!(results.len(), 2, "enclosing workers = {enclosing_workers}");
-            for values in results {
+            assert!(
+                results.iter().any(Option::is_some),
+                "at least one concurrent worker entry must complete a session, got {results:?}"
+            );
+            for values in results.into_iter().flatten() {
                 assert_eq!(values, vec![23.0, 34.0]);
             }
         }
