@@ -25,7 +25,7 @@ use tensor4all_core::{
     TensorContractionLike, IdxTensor,
 };
 use tensor4all_itensorlike::{CanonicalForm, ContractOptions, TensorTrain};
-use tenferro::{DotGeneralConfig, Tensor, TypedTensor};
+use tenferro::{DotGeneralConfig, Tensor};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 
@@ -164,7 +164,7 @@ fn deterministic_native_tensor(shape: Vec<usize>, seed: usize) -> Result<Tensor>
     let data = (0..len)
         .map(|idx| deterministic_value(idx, seed))
         .collect::<Vec<_>>();
-    Ok(Tensor::C64(TypedTensor::from_vec_col_major(shape, data)?))
+    Tensor::from_vec_col_major(shape, data).map_err(anyhow::Error::from)
 }
 
 fn make_sites(length: usize, phys_dim: usize) -> Vec<DynIndex> {
