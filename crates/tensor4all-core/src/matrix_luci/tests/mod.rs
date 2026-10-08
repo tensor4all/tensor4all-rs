@@ -557,3 +557,72 @@ fn row_only_rank_cap_diagnostic_measures_the_remaining_schur_complement() {
     check::<num_complex::Complex64>();
     check::<num_complex::Complex32>();
 }
+
+fn check_row_only_extreme_pivots<T: crate::MatrixLuciScalar + PartialEq + std::fmt::Debug>(
+    scale: T,
+) {
+    let context = tensor4all_tensorbackend::default_cpu_execution_context();
+    for cap in 0..=2 {
+        let a = Matrix::from_col_major_vec(
+            2,
+            2,
+            vec![scale, T::zero(), T::zero(), scale * T::from_f64(2.0)],
+        );
+        let result = matrix_luci_row_interpolation_owned_in(
+            a,
+            Some(RrLUOptions {
+                max_bond_dim: cap,
+                ..Default::default()
+            }),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(result.rows, [1, 0][..cap]);
+        let expected = [T::zero(), T::one(), T::one(), T::zero()];
+        assert_eq!(
+            result.interpolation.as_col_major_slice(),
+            &expected[..2 * cap]
+        );
+        let expected_pivots = [(scale * T::from_f64(2.0)).abs_val(), scale.abs_val(), 0.0];
+        assert_eq!(result.pivot_magnitudes.len(), cap + 1);
+        for (&actual, &expected) in result.pivot_magnitudes.iter().zip(&expected_pivots[..=cap]) {
+            assert_eq!(actual, expected);
+        }
+    }
+}
+
+#[test]
+fn row_only_interpolation_preserves_extreme_scale_pivots_and_capped_residuals() {
+    for scale in [1e-200_f64, 1e200] {
+        check_row_only_extreme_pivots(scale);
+        check_row_only_extreme_pivots(Complex64::new(scale, scale / 2.0));
+    }
+    for scale in [1e-25_f32, 1e25] {
+        check_row_only_extreme_pivots(scale);
+        check_row_only_extreme_pivots(Complex32::new(scale, scale / 2.0));
+    }
+}
+
+#[test]
+fn row_only_interpolation_rejects_nonfinite_residuals_at_the_rank_cap() {
+    fn check<T: crate::MatrixLuciScalar>(largest: f64) {
+        let context = tensor4all_tensorbackend::default_cpu_execution_context();
+        let value = T::from_f64(largest);
+        for cap in [1, 2] {
+            let a = Matrix::from_col_major_vec(2, 2, vec![value, value, -value, value]);
+            let result = matrix_luci_row_interpolation_owned_in(
+                a,
+                Some(RrLUOptions {
+                    max_bond_dim: cap,
+                    ..Default::default()
+                }),
+                &context,
+            );
+            assert!(matches!(result, Err(MatrixCIError::NaNEncountered { .. })));
+        }
+    }
+    check::<f64>(f64::MAX);
+    check::<f32>(f64::from(f32::MAX));
+    check::<Complex64>(f64::MAX);
+    check::<Complex32>(f64::from(f32::MAX));
+}

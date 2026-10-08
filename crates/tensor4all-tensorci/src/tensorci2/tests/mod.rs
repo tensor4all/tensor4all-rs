@@ -511,48 +511,59 @@ fn test_crossinterpolate2_pivot_errors_match_diagonal_values() {
 
 #[test]
 fn test_crossinterpolate2_rook_search_uses_partial_batch_requests() {
-    let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
-    let max_batch = Rc::new(Cell::new(0usize));
-    let total_requested = Rc::new(Cell::new(0usize));
-    let batched_f = {
-        let max_batch = Rc::clone(&max_batch);
-        let total_requested = Rc::clone(&total_requested);
-        move |indices: &[MultiIndex]| -> Vec<f64> {
-            max_batch.set(max_batch.get().max(indices.len()));
-            total_requested.set(total_requested.get() + indices.len());
-            indices
-                .iter()
-                .map(|idx| ((idx[0] + 1) * (idx[1] + 1)) as f64)
-                .collect()
+    for rank_cap in [1, 2] {
+        let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
+        let max_batch = Rc::new(Cell::new(0usize));
+        let total_requested = Rc::new(Cell::new(0usize));
+        let batched_f = {
+            let max_batch = Rc::clone(&max_batch);
+            let total_requested = Rc::clone(&total_requested);
+            move |indices: &[MultiIndex]| -> Vec<f64> {
+                max_batch.set(max_batch.get().max(indices.len()));
+                total_requested.set(total_requested.get() + indices.len());
+                indices
+                    .iter()
+                    .map(|idx| ((idx[0] + 1) * (idx[1] + 1)) as f64)
+                    .collect()
+            }
+        };
+
+        let local_dims = vec![8, 8];
+        let first_pivot = vec![vec![0, 0]];
+        let options = TCI2Options {
+            max_iter: 1,
+            max_bond_dim: Some(rank_cap),
+            pivot_search: PivotSearchStrategy::Rook,
+            ..Default::default()
+        };
+
+        let crate::TCI2OptimizationResult {
+            tci,
+            ranks: _ranks,
+            errors: _errors,
+            ..
+        } = crossinterpolate2(f, Some(batched_f), local_dims, first_pivot, options).unwrap();
+
+        assert!(
+            max_batch.get() < 64,
+            "rook search should request partial batches, got full batch of {} entries",
+            max_batch.get()
+        );
+        if rank_cap == 1 {
+            // Finding a nonzero pivot still uses only partial samples.
+            assert!(total_requested.get() < 64);
+        } else {
+            // Certifying an exactly zero residual can require all entries.
+            // Roundoff can instead trigger the ordinary tolerance stop.
+            // In either case, entries are requested only in partial batches.
+            assert!(total_requested.get() <= 64);
         }
-    };
-
-    let local_dims = vec![8, 8];
-    let first_pivot = vec![vec![0, 0]];
-    let options = TCI2Options {
-        max_iter: 1,
-        max_bond_dim: Some(2),
-        pivot_search: PivotSearchStrategy::Rook,
-        ..Default::default()
-    };
-
-    let crate::TCI2OptimizationResult {
-        tci: _tci,
-        ranks: _ranks,
-        errors: _errors,
-        ..
-    } = crossinterpolate2(f, Some(batched_f), local_dims, first_pivot, options).unwrap();
-
-    assert!(
-        max_batch.get() < 64,
-        "rook search should request partial batches, got full batch of {} entries",
-        max_batch.get()
-    );
-    assert!(
-        total_requested.get() < 64,
-        "rook search should avoid evaluating the full Pi matrix, requested {} entries",
-        total_requested.get()
-    );
+        let (values, _) = tci.to_tensor_train().unwrap().full_tensor().unwrap();
+        for (offset, value) in values.iter().enumerate() {
+            let expected = ((offset % 8 + 1) * (offset / 8 + 1)) as f64;
+            assert!((value - expected).abs() < 1e-12);
+        }
+    }
 }
 
 #[test]

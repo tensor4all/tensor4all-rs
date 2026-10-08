@@ -183,19 +183,53 @@ fn tensor_profile_bytes(dtype: DType, shape: &[usize]) -> usize {
 /// Trait for scalar types that can generate random values from a standard
 /// normal distribution.
 /// This enables the generic [`IdxTensor::random`] constructor.
+/// Implementations consume the supplied RNG directly, including a
+/// `dyn rand::RngCore`, without creating or reseeding another generator.
+///
+/// # Examples
+/// ```
+/// use rand::{RngCore, SeedableRng};
+/// use rand_chacha::ChaCha8Rng;
+/// use rand_distr::{Distribution, StandardNormal};
+/// use tensor4all_core::tensor::RandomScalar;
+/// let mut rng = ChaCha8Rng::seed_from_u64(42);
+/// let mut reference = rng.clone();
+/// let erased: &mut dyn RngCore = &mut rng;
+/// let expected: f64 = StandardNormal.sample(&mut reference);
+/// assert_eq!(f64::random_value(erased), expected);
+/// ```
 pub trait RandomScalar: TensorElement {
-    /// Generate a random value from the standard normal distribution.
-    fn random_value<R: Rng>(rng: &mut R) -> Self;
+    /// Draw a scalar from the caller's standard normal RNG stream.
+    ///
+    /// `rng` may be a concrete generator or an erased `dyn rand::RngCore`.
+    /// Returns one normal draw for `f64`, or independent real and imaginary
+    /// normal draws for `Complex64`.
+    ///
+    /// # Examples
+    /// ```
+    /// use rand::{RngCore, SeedableRng};
+    /// use rand_chacha::ChaCha8Rng;
+    /// use rand_distr::{Distribution, StandardNormal};
+    /// use num_complex::Complex64;
+    /// use tensor4all_core::tensor::RandomScalar;
+    /// let mut rng = ChaCha8Rng::seed_from_u64(42);
+    /// let mut reference = rng.clone();
+    /// let erased: &mut dyn RngCore = &mut rng;
+    /// let expected = Complex64::new(
+    ///     StandardNormal.sample(&mut reference), StandardNormal.sample(&mut reference));
+    /// assert_eq!(Complex64::random_value(erased), expected);
+    /// ```
+    fn random_value<R: Rng + ?Sized>(rng: &mut R) -> Self;
 }
 
 impl RandomScalar for f64 {
-    fn random_value<R: Rng>(rng: &mut R) -> Self {
+    fn random_value<R: Rng + ?Sized>(rng: &mut R) -> Self {
         StandardNormal.sample(rng)
     }
 }
 
 impl RandomScalar for Complex64 {
-    fn random_value<R: Rng>(rng: &mut R) -> Self {
+    fn random_value<R: Rng + ?Sized>(rng: &mut R) -> Self {
         Complex64::new(StandardNormal.sample(rng), StandardNormal.sample(rng))
     }
 }
@@ -728,7 +762,7 @@ impl IdxTensorStorage {
                     dense_native_tensor_from_col_major(&values, storage.payload_dims())?
                 };
                 (
-                    EagerTensor::from_tensor_in(native, default_eager_ctx()?)?,
+                    IdxTensor::untracked_inner(native, default_eager_ctx()?)?,
                     storage.payload_dims().to_vec(),
                     storage.axis_classes().to_vec(),
                 )
@@ -971,7 +1005,7 @@ pub enum StructuredSelectorError {
 /// | Extract data | [`to_vec`](Self::to_vec), [`into_dense_col_major_parts`](Self::into_dense_col_major_parts), [`sum`](Self::sum), [`only`](Self::only) |
 /// | Contraction | [`contract`](Self::contract) |
 /// | Arithmetic | [`add`](Self::add), [`scale`](Self::scale), [`axpby`](Self::axpby) |
-/// | Factorization | via [`TensorFactorizationLike::factorize`](crate::TensorFactorizationLike::factorize) |
+/// | Factorization | via [`TensorFactorizationLike::factorize`] |
 /// | Norms | [`norm`](Self::norm), [`norm_squared`](Self::norm_squared), [`maxabs`](Self::maxabs) |
 /// | Index ops | [`replaceind`](Self::replaceind), [`permute_indices`](Self::permute_indices) |
 /// # Data Layout
@@ -1377,6 +1411,16 @@ impl IdxTensor {
         Ok(storage_to_native_tensor(storage, dims)?)
     }
 
+    // Plain native data has no AD graph to preserve. Register a semantic leaf
+    // only when enable_grad explicitly requests one; from_tensor_in registers
+    // dead weak records even when requires_grad is false (issue #780).
+    fn untracked_inner(
+        native: NativeTensor,
+        runtime: Arc<EagerRuntime>,
+    ) -> std::result::Result<EagerTensor, tenferro_ad::Error> {
+        adopt_untracked_eager_value(runtime, TensorValue::from_tensor(native))
+    }
+
     fn empty_eager_cache() -> Arc<OnceLock<Arc<EagerTensor>>> {
         Arc::new(OnceLock::new())
     }
@@ -1392,7 +1436,7 @@ impl IdxTensor {
         if let Some(inner) = self.storage.eager() {
             return Ok(inner.clone());
         }
-        Ok(EagerTensor::from_tensor_in(
+        Ok(IdxTensor::untracked_inner(
             storage_payload_native(self.storage.materialize(self.indices.len())?.as_ref())?,
             default_eager_ctx()?,
         )?)
@@ -1781,8 +1825,8 @@ impl IdxTensor {
             }
         }
         let payload_inner = match (common, mixed) {
-            (Some(runtime), false) => EagerTensor::from_tensor_in(payload, runtime)?,
-            _ => EagerTensor::from_tensor_in(payload, default_eager_ctx()?)?,
+            (Some(runtime), false) => IdxTensor::untracked_inner(payload, runtime)?,
+            _ => IdxTensor::untracked_inner(payload, default_eager_ctx()?)?,
         };
         Self::from_structured_payload_inner(
             result_indices,
@@ -2183,7 +2227,7 @@ impl IdxTensor {
                 (selected_axes, positions),
                 move |payload, dims, _strides, classes| {
                     let native = dense_native_tensor_from_col_major(&payload, &dims)?;
-                    let inner = EagerTensor::from_tensor_in(native, default_eager_ctx()?)?;
+                    let inner = IdxTensor::untracked_inner(native, default_eager_ctx()?)?;
                     Self::from_structured_payload_inner(output_indices, inner, dims, classes)
                 },
             )
@@ -2202,7 +2246,7 @@ impl IdxTensor {
                 (selected_axes, positions),
                 move |payload, dims, _strides, classes| {
                     let native = dense_native_tensor_from_col_major(&payload, &dims)?;
-                    let inner = EagerTensor::from_tensor_in(native, default_eager_ctx()?)?;
+                    let inner = IdxTensor::untracked_inner(native, default_eager_ctx()?)?;
                     Self::from_structured_payload_inner(output_indices, inner, dims, classes)
                 },
             )
@@ -2282,7 +2326,7 @@ impl IdxTensor {
                 "materialize_storage_to_native",
                 tensor_profile_bytes(native.dtype(), native.shape()),
             );
-            let _ = self.eager_cache.set(Arc::new(EagerTensor::from_tensor_in(
+            let _ = self.eager_cache.set(Arc::new(IdxTensor::untracked_inner(
                 native,
                 default_eager_ctx()?,
             )?));
@@ -2839,7 +2883,7 @@ impl IdxTensor {
                 message: error.to_string(),
             })?;
         let payload_dtype = payload_native.dtype();
-        let payload_inner = EagerTensor::from_tensor_in(
+        let payload_inner = IdxTensor::untracked_inner(
             payload_native,
             default_eager_ctx().map_err(|error| StructuredSelectorError::InvalidStorage {
                 message: error.to_string(),
@@ -2877,7 +2921,7 @@ impl IdxTensor {
     ) -> Result<Self> {
         Self::from_inner_with_axis_classes(
             indices,
-            EagerTensor::from_tensor_in(native, default_eager_ctx()?)?,
+            IdxTensor::untracked_inner(native, default_eager_ctx()?)?,
             axis_classes,
         )
     }
@@ -3255,7 +3299,7 @@ impl IdxTensor {
                 )
                 .into());
             }
-            let gradient = EagerTensor::from_tensor_in(gradient_tensor, default_eager_ctx()?)?;
+            let gradient = IdxTensor::untracked_inner(gradient_tensor, default_eager_ctx()?)?;
             return Ok(Some(Self::from_structured_payload_inner(
                 self.indices.clone(),
                 gradient,
@@ -4068,26 +4112,34 @@ impl IdxTensor {
     /// * `R` - The random number generator type
     ///
     /// # Arguments
-    /// * `rng` - Random number generator
+    /// * `rng` - Caller-owned RNG, including `dyn rand::RngCore`; consumed directly
     /// * `indices` - The indices for the tensor
     ///
     /// # Errors
     /// Returns an error when the dimension product overflows (an overflow failure)
     /// or the backend cannot generate the requested scalar type.
+    ///
+    /// # Returns
+    /// A tensor filled from the supplied RNG stream in column-major order.
     /// # Example
     /// ```
     /// use tensor4all_core::IdxTensor;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use rand::SeedableRng;
+    /// use rand::{RngCore, SeedableRng};
     /// use rand_chacha::ChaCha8Rng;
+    /// use rand_distr::{Distribution, StandardNormal};
     ///
     /// let mut rng = ChaCha8Rng::seed_from_u64(42);
+    /// let mut reference = rng.clone();
+    /// let expected: Vec<f64> = (0..6).map(|_| StandardNormal.sample(&mut reference)).collect();
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
-    /// let tensor: IdxTensor = IdxTensor::random::<f64, _>(&mut rng, vec![i, j]).unwrap();
-    /// assert_eq!(tensor.dims(), vec![2, 3]);
+    /// let erased: &mut dyn RngCore = &mut rng;
+    /// let tensor = IdxTensor::random::<f64, _>(erased, vec![i, j]).unwrap();
+    /// assert_eq!(tensor.to_vec::<f64>().unwrap(), expected);
+    /// assert_eq!(rng.get_word_pos(), reference.get_word_pos());
     /// ```
-    pub fn random<T: RandomScalar, R: Rng>(
+    pub fn random<T: RandomScalar, R: Rng + ?Sized>(
         rng: &mut R,
         indices: Vec<DynIndex>,
     ) -> std::result::Result<Self, IdxTensorError> {
@@ -5039,7 +5091,7 @@ impl IdxTensor {
     /// Element-wise subtraction with index alignment.
     ///
     /// This computes `self - other` using the same vector-space semantics as
-    /// [`TensorVectorSpace`](crate::TensorVectorSpace).
+    /// [`TensorVectorSpace`].
     ///
     /// # Errors
     /// Returns an error when the tensors have different index sets (an index-set
@@ -6241,7 +6293,7 @@ impl IdxTensor {
         })?;
         // `validate_context` already pinned the factor to this exact CUDA
         // context, so the uploaded identity lands in the factor's runtime.
-        EagerTensor::from_tensor_in(uploaded, runtime).map_err(|error| {
+        IdxTensor::untracked_inner(uploaded, runtime).map_err(|error| {
             FactorizeError::ComputationError(
                 anyhow::Error::new(error).context("SRC estimator identity wrapping failed"),
             )
@@ -7765,7 +7817,7 @@ impl IdxTensor {
                 let runtime = context.eager_runtime().map_err(|error| {
                     IdxTensorError::operation("CPU context construction", anyhow::Error::new(error))
                 })?;
-                EagerTensor::from_tensor_in(native, runtime).map_err(|error| {
+                IdxTensor::untracked_inner(native, runtime).map_err(|error| {
                     IdxTensorError::operation(
                         "CPU context eager wrapping",
                         anyhow::Error::new(error),
@@ -7780,7 +7832,7 @@ impl IdxTensor {
                         anyhow::Error::new(error),
                     )
                 })?;
-                EagerTensor::from_tensor_in(
+                IdxTensor::untracked_inner(
                     uploaded,
                     context.eager_runtime().map_err(|error| {
                         IdxTensorError::operation(
@@ -8085,7 +8137,7 @@ impl IdxTensor {
                 )
             })?,
         };
-        EagerTensor::from_tensor_in(resident, runtime).map_err(|error| {
+        IdxTensor::untracked_inner(resident, runtime).map_err(|error| {
             IdxTensorError::operation(
                 "context-scoped scaling",
                 anyhow::Error::new(error).context("scalar wrapping failed"),

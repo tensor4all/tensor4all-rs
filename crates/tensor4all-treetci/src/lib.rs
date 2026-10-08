@@ -17,7 +17,8 @@
 //! The workflow is:
 //! 1. Define a tree graph via [`TreeTciGraph`] (or use [`TreeTciGraph::linear_chain`]).
 //! 2. Configure options via [`TreeTciOptions`].
-//! 3. Call [`crossinterpolate2`] with a batch evaluator, returning a `TreeTN`.
+//! 3. Call [`crossinterpolate2`] with a batch evaluator, returning [`TreeTciRunResult`].
+//!    Inspect its stopping reason and use its `treetn` approximation.
 //!
 //! # Example
 //!
@@ -41,12 +42,13 @@
 //! };
 //!
 //! let options = TreeTciOptions { tolerance: 1e-10, max_iter: 5, ..Default::default() };
-//! let (treetn, ranks, errors) = crossinterpolate2::<f64, _, _>(
+//! let result = crossinterpolate2::<f64, _, _>(
 //!     evaluate, vec![2, 2], graph, vec![], options, None, &DefaultProposer,
 //! ).unwrap();
 //!
-//! assert!(errors.last().copied().unwrap_or(1.0) < 1e-8);
-//! assert!(ranks.last().copied().unwrap_or(0) <= 2);
+//! assert_eq!(result.termination, tensor4all_treetci::TreeTciTermination::Converged);
+//! assert_eq!(result.ranks.last().copied(), Some(2));
+//! assert!(result.errors.last().copied().unwrap_or(1.0) < 1e-8);
 //! ```
 
 #![warn(missing_docs)]
@@ -76,6 +78,7 @@ pub mod assemble;
 /// Batch views for global site-order evaluation.
 pub mod batch;
 pub mod error;
+mod evaluation;
 /// Automatic global pivot search for the optimization loop.
 pub mod globalpivot;
 /// Tree graph helpers and edge-bipartition utilities for TreeTCI.
@@ -98,16 +101,18 @@ pub mod visitor;
 #[cfg(test)]
 mod test_support;
 
-pub use api::{crossinterpolate2, crossinterpolate2_with_rng};
+pub use api::{crossinterpolate2, crossinterpolate2_with_rng, TreeTciRunResult};
 pub use assemble::MultiIndex;
 pub use batch::GlobalIndexBatch;
 pub use error::{Result as TreeTciResult, TreeTciError};
+pub use evaluation::TreeTciEvaluationStats;
 pub use globalpivot::{find_global_pivots, find_global_pivots_with_rng};
 pub use graph::{TreeTciEdge, TreeTciGraph};
 pub use key::SubtreeKey;
 pub use materialize::to_treetn;
 pub use optimize::{
-    optimize_default, optimize_with_proposer, optimize_with_proposer_with_rng, TreeTciOptions,
+    optimize_default, optimize_with_proposer, optimize_with_proposer_with_rng,
+    TreeTciOptimizationResult, TreeTciOptions, TreeTciTermination,
 };
 pub use proposer::{
     DefaultProposer, PivotCandidateProposer, SimpleProposer, TruncatedDefaultProposer,

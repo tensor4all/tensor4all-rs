@@ -135,7 +135,8 @@ pub struct MatrixLuciRowInterpolation<T> {
 /// # Errors
 /// Returns [`MatrixCIError::InvalidArgument`] for negative or nonfinite
 /// tolerances, infinite input magnitudes, or backend solve failures; returns
-/// [`MatrixCIError::NaNEncountered`] for NaN input or factors.
+/// [`MatrixCIError::NaNEncountered`] for NaN input or nonfinite factors or
+/// residual magnitudes.
 ///
 /// # Examples
 /// ```
@@ -196,6 +197,11 @@ fn validate_owned_luci_input<T: Scalar>(a: &Matrix<T>, options: &RrLUOptions) ->
 
 pub(crate) fn map_backend_error(err: crate::matrixluci::MatrixLuciError) -> MatrixCIError {
     match err {
+        crate::matrixluci::MatrixLuciError::NaNEncountered { matrix } => {
+            MatrixCIError::NaNEncountered {
+                matrix: matrix.to_string(),
+            }
+        }
         crate::matrixluci::MatrixLuciError::InvalidArgument { message } => {
             MatrixCIError::InvalidArgument { message }
         }
@@ -576,6 +582,9 @@ where
 /// The caller provides a block-fill closure that receives row and column
 /// index lists and writes the corresponding matrix block in column-major
 /// order.
+/// Exactly zero starting residual columns are skipped. An all-zero residual
+/// can require inspecting all remaining entries, without materializing the
+/// full candidate matrix.
 ///
 /// # Arguments
 ///

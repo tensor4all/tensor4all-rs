@@ -715,6 +715,111 @@ fn hataori_outer_matches_sequential_and_allows_nested_rayon() {
 
 #[cfg(feature = "adaptive-hataori-rayon")]
 #[test]
+fn hataori_workers_finish_a_split_interpolation_issue830() {
+    use std::collections::HashSet;
+    use std::time::Duration;
+
+    // Three binary axes with a sharp peak. The bond cap forces subdivision, so a
+    // patch runs the matrix LU inside a domain worker. A domain worker that waits
+    // on the process CPU pool there can be handed a second patch, whose own
+    // matrix work re-enters the same pool.
+    let sites: Vec<DynIndex> = (0..6).map(|_| DynIndex::new_dyn(2)).collect();
+    let function = |index: &MultiIndex| -> f64 {
+        let mut coordinates = [0usize; 3];
+        for (axis, coordinate) in coordinates.iter_mut().enumerate() {
+            for bit in 0..2 {
+                *coordinate = 2 * *coordinate + index[2 * axis + bit];
+            }
+        }
+        let distance: f64 = coordinates
+            .iter()
+            .map(|&point| (point as f64 / 4.0 - 0.3).powi(2))
+            .sum();
+        1.0 / (0.05 + distance)
+    };
+    let options = AdaptiveInterpolateOptions {
+        tci_options: TCI2Options {
+            tolerance: 1e-6,
+            max_bond_dim: Some(4),
+            seed: Some(1),
+            ..TCI2Options::default()
+        },
+        ..AdaptiveInterpolateOptions::default()
+    };
+    let sequential = adaptiveinterpolate::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+        function,
+        None,
+        sites.clone(),
+        Vec::new(),
+        options.clone(),
+    )
+    .unwrap();
+    let expected_projectors: HashSet<_> = sequential
+        .patch_caches()
+        .iter()
+        .map(|cache| cache.projector().clone())
+        .collect();
+    assert!(
+        expected_projectors.len() > 1,
+        "the regression requires more than one patch"
+    );
+
+    let expected_values = dense_f64(&sequential);
+
+    for workers in [1usize, 2] {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let sites = sites.clone();
+        let options = options.clone();
+        std::thread::spawn(move || {
+            let pool = Arc::new(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .build()
+                    .unwrap(),
+            );
+            let domain =
+                hataori::Domain::external(Arc::clone(&pool), (0..workers).collect(), workers)
+                    .unwrap();
+            let result = adaptiveinterpolate_in::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+                &domain,
+                function,
+                None,
+                sites,
+                Vec::new(),
+                options,
+            );
+            let _ = sender.send(result);
+        });
+
+        let result = receiver
+            .recv_timeout(Duration::from_secs(60))
+            .expect("a domain worker must not wait on the process CPU pool")
+            .unwrap();
+        let projectors: HashSet<_> = result
+            .patch_caches()
+            .iter()
+            .map(|cache| cache.projector().clone())
+            .collect();
+        assert_eq!(projectors, expected_projectors, "workers = {workers}");
+        assert_eq!(
+            result.patch_caches().len(),
+            sequential.patch_caches().len(),
+            "workers = {workers}"
+        );
+        let values = dense_f64(&result);
+        assert_eq!(values.len(), expected_values.len(), "workers = {workers}");
+        for (value, expected) in values.iter().zip(&expected_values) {
+            assert!(
+                (value - expected).abs() < 1e-8,
+                "workers = {workers} differ from the sequential result by {}",
+                value - expected
+            );
+        }
+    }
+}
+
+#[cfg(feature = "adaptive-hataori-rayon")]
+#[test]
 fn hataori_entry_rejects_a_sequential_domain() {
     let error = adaptiveinterpolate_in::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         &hataori::Domain::sequential(),

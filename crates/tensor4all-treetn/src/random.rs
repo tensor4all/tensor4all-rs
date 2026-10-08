@@ -88,20 +88,26 @@ pub type DefaultIndex = Index<DynId, TagSet>;
 /// * `V` - Node name type
 ///
 /// # Arguments
-/// * `rng` - Random number generator for tensor data
+/// * `rng` - Caller-owned RNG for tensor data, including `dyn rand::RngCore`;
+///   consumed directly without reseeding or creating an auxiliary generator
 /// * `site_network` - Network topology and site (physical) indices
 /// * `link_space` - Specification for bond dimensions
 ///
 /// # Errors
 ///
 /// Returns an error when the operation fails (a shape or index mismatch, or
-/// /// a backend failure).
+/// a backend failure).
+///
+/// # Returns
+/// A network whose node tensors are filled in node order, with column-major
+/// data drawn from the supplied stream.
 ///
 /// # Example
 /// ```
 /// use tensor4all_treetn::{SiteIndexNetwork, random_treetn, LinkSpace};
 /// use tensor4all_core::index::{Index, DynId, TagSet};
-/// use rand::SeedableRng;
+/// use tensor4all_core::tensor::RandomScalar;
+/// use rand::{RngCore, SeedableRng};
 /// use rand_chacha::ChaCha8Rng;
 /// use std::collections::HashSet;
 ///
@@ -114,9 +120,17 @@ pub type DefaultIndex = Index<DynId, TagSet>;
 /// site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
 ///
 /// let mut rng = ChaCha8Rng::seed_from_u64(42);
-/// let treetn = random_treetn::<f64, _, _>(&mut rng, &site_network, LinkSpace::uniform(4)).unwrap();
+/// let mut reference = rng.clone();
+/// let erased: &mut dyn RngCore = &mut rng;
+/// let treetn = random_treetn::<f64, _, _>(erased, &site_network, LinkSpace::uniform(4)).unwrap();
 ///
-/// assert_eq!(treetn.node_count(), 2);
+/// for name in site_network.node_names() {
+///     let count = if name == "A" { 8 } else { 12 };
+///     let expected: Vec<f64> = (0..count).map(|_| f64::random_value(&mut reference)).collect();
+///     let tensor = treetn.tensor(treetn.node_index(name).unwrap()).unwrap();
+///     assert_eq!(tensor.to_vec::<f64>().unwrap(), expected);
+/// }
+/// assert_eq!(rng.get_word_pos(), reference.get_word_pos());
 /// ```
 pub fn random_treetn<T, R, V>(
     rng: &mut R,
@@ -125,7 +139,7 @@ pub fn random_treetn<T, R, V>(
 ) -> std::result::Result<TreeTN<IdxTensor, V>, TreeTNOperationError>
 where
     T: RandomScalar,
-    R: Rng,
+    R: Rng + ?Sized,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     // Step 1: Create link indices for each edge

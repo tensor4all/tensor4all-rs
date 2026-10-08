@@ -62,7 +62,9 @@ pub use self::matrixluci::MatrixLuciScalar;
 pub use cached_function::cache_key::CacheKey;
 pub use cached_function::error::CacheKeyError;
 pub use cached_function::index_int::IndexInt;
-pub use cached_function::multi_index_cache::{MultiIndexCache, DEFAULT_RETAINED_BYTE_LIMIT};
+pub use cached_function::multi_index_cache::{
+    CachedBatchError, MultiIndexCache, DEFAULT_RETAINED_BYTE_LIMIT,
+};
 pub use cached_function::CachedFunction;
 pub use error::{MatrixCIError, Result};
 pub use floating_zone::floating_zone_walk;

@@ -120,87 +120,43 @@ where
     F: Fn(QuanticsBatch<'_, T>) -> Result<Vec<V>>,
 {
     move |batch: GlobalIndexBatch<'_>| {
-        let n_points = batch.n_points();
-        let n_sites = batch.n_sites();
-        let mut cache = cache.borrow_mut();
-        let mut results: Vec<Option<V>> = Vec::with_capacity(n_points);
-        let mut miss_positions: Vec<usize> = Vec::new();
-        let mut miss_slots: Vec<usize> = Vec::new();
-        let mut miss_points: Vec<&[usize]> = Vec::new();
-        let mut miss_slot_of: std::collections::HashMap<&[usize], usize> =
-            std::collections::HashMap::new();
-
-        // Read the whole batch into one flat buffer first: a per-point vector
-        // would allocate once per requested point, which dominates the lookup
-        // cost for cheap targets.
-        let mut flat_indices: Vec<usize> = Vec::with_capacity(n_points * n_sites);
-        for point in 0..n_points {
-            for site in 0..n_sites {
-                flat_indices.push(batch.get(site, point).ok_or_else(|| {
-                    anyhow!(
-                        "invalid batch index: site {site}, point {point}, batch shape {n_sites}x{n_points}"
-                    )
-                })?);
-            }
-        }
-
-        for point in 0..n_points {
-            let quantics = &flat_indices[point * n_sites..(point + 1) * n_sites];
-            match cache.get(quantics)? {
-                Some(value) => results.push(Some(value)),
-                None => {
-                    results.push(None);
-                    miss_positions.push(point);
-                    let slot = match miss_slot_of.get(quantics) {
-                        Some(&slot) => slot,
-                        None => {
-                            let slot = miss_points.len();
-                            miss_points.push(quantics);
-                            miss_slot_of.insert(quantics, slot);
-                            slot
+        let shape = [batch.n_sites(), batch.n_points()];
+        let points = tensor4all_core::ColMajorArrayRef::new(batch.data(), &shape)?;
+        cache
+            .borrow_mut()
+            .evaluate_batched(points, |misses| {
+                let n_sites = misses.shape()[0];
+                let n_points = misses.shape()[1];
+                let mut flat: Vec<T> = Vec::new();
+                let mut n_dims = None;
+                for position in 0..n_points {
+                    let point = &misses.data()[position * n_sites..(position + 1) * n_sites];
+                    let values = convert(point)?;
+                    match n_dims {
+                        None => n_dims = Some(values.len()),
+                        Some(expected) if values.len() != expected => {
+                            return Err(anyhow!(
+                                "inconsistent point dimension: expected {expected}, got {}",
+                                values.len()
+                            ))
                         }
-                    };
-                    miss_slots.push(slot);
+                        Some(_) => {}
+                    }
+                    flat.extend_from_slice(&values);
                 }
-            }
-        }
-
-        if !miss_points.is_empty() {
-            let mut flat: Vec<T> = Vec::new();
-            let mut n_dims = 0usize;
-            for quantics in &miss_points {
-                let values = convert(quantics)?;
-                if n_dims == 0 {
-                    n_dims = values.len();
-                } else if values.len() != n_dims {
-                    return Err(anyhow!(
-                        "inconsistent point dimension: expected {n_dims}, got {}",
-                        values.len()
-                    ));
-                }
-                flat.extend_from_slice(&values);
-            }
-            let values = evaluate(QuanticsBatch::new(&flat, n_dims, miss_points.len())?)?;
-            if values.len() != miss_points.len() {
-                return Err(anyhow!(
+                let values = evaluate(QuanticsBatch::new(&flat, n_dims.unwrap_or(0), n_points)?)?;
+                anyhow::ensure!(
+                    values.len() == n_points,
                     "target function returned {} values for {} evaluated points",
                     values.len(),
-                    miss_points.len()
-                ));
-            }
-            for (quantics, value) in miss_points.iter().zip(values.iter()) {
-                cache.insert(quantics, value.clone())?;
-            }
-            drop(miss_slot_of);
-            for (position, slot) in miss_positions.iter().zip(miss_slots.iter()) {
-                results[*position] = Some(values[*slot].clone());
-            }
-        }
-
-        results
-            .into_iter()
-            .collect::<Option<Vec<V>>>()
-            .ok_or_else(|| anyhow!("internal error: a requested point has no value"))
+                    n_points
+                );
+                Ok(values)
+            })
+            .map_err(|error| match error {
+                tensor4all_core::CachedBatchError::Evaluation(source) => source,
+                other => anyhow::Error::new(other),
+            })
     }
 }
 
@@ -247,8 +203,7 @@ where
     }
 
     let tree_opts = options.to_treetci_options();
-    let (ranks, errors) =
-        optimize_with_proposer(&mut tci, &evaluate, &tree_opts, &DefaultProposer)?;
+    let result = optimize_with_proposer(&mut tci, &evaluate, &tree_opts, &DefaultProposer)?;
     let treetn = to_treetn(&tci, &evaluate, Some(0))?;
 
     // Convert TreeTN → SimpleTensorTrain<V> via the sanctioned bridge
@@ -263,7 +218,7 @@ where
     drop(evaluate);
     drop(cache);
 
-    Ok((tci, tt, ranks, errors))
+    Ok((tci, tt, result.ranks, result.errors))
 }
 
 /// TCI result wrapped with grid information.

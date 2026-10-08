@@ -6,8 +6,8 @@
 
 Make one caller-supplied `tenferro_cpu::CpuBackend` the root of plain tensor,
 graph, and eager-AD execution without consulting process-global defaults.
-Tensor4all does not define an executor abstraction or depend on a host
-scheduler.
+Tensor4all does not define an executor abstraction; Rayon is used only to
+recognize an entry thread that runs inside another pool.
 
 ## Public boundary
 
@@ -30,6 +30,13 @@ an explicit host adapter must call the context surface (and may wrap values in
 its own application type) rather than those convenience functions. Graph IR
 and `tenferro::CompiledGraph` remain backend-neutral; backend-prepared
 executables, workspaces, and caches stay private to the context-owned runtime.
+
+A plain concrete session entered from a Rayon worker runs inline and
+single-threaded on a context-local pool-less CPU backend instead of installing
+the supplied backend's pool inside the caller's Rayon pool; entries from any
+other thread use the supplied backend. See
+[tensorbackend session entry](tensorbackend-session-entry.md) and
+[tensor4all-rs#830](https://github.com/tensor4all/tensor4all-rs/issues/830).
 
 Separately created contexts never share a tensor4all mutex or cache. Backend
 identity checks remain tenferro's responsibility and errors are preserved as

@@ -130,6 +130,11 @@ Ports AlternatingCrossInterpolation.jl. Approximates an elementwise op on input 
 Ports TreeTCI.jl. Cross interpolation on tree-structured graphs → TreeTN.
 
 - `crossinterpolate2()` (tree entry), `TreeTCI2`, `TreeTciGraph`.
+- Tree entry points return `TreeTciRunResult`: access `result.treetn`,
+  `result.ranks`, `result.errors`, and `result.termination`. Optimizers return
+  `TreeTciOptimizationResult` with the same diagnostics. `TreeTciTermination`
+  distinguishes `Converged`, `MaxBondDimension`, and `MaxIterations`; convergence
+  describes sampled errors, not a full-network residual bound.
 - `tensor4all_treetci::materialize::to_treetn(tci_state, batch_eval, Some(root))` — materialize as TreeTN with a batched evaluator.
 
 ## tensor4all-interpolativeqtt — interpolative QTT

@@ -14,6 +14,35 @@
 
 use super::error;
 use super::{CacheBackend, IndexInt};
+use crate::ColMajorArrayRef;
+
+/// Failure while evaluating a batch through [`MultiIndexCache`].
+///
+/// Preserves invalid-index and callback diagnostics. Failed batches insert no
+/// new values, so a caller can correct the input or retry the callback.
+///
+/// # Examples
+/// ```
+/// use tensor4all_core::{ColMajorArrayRef, MultiIndexCache};
+/// let mut cache = MultiIndexCache::<f64>::new(&[2])?;
+/// let error = cache.evaluate_batched(ColMajorArrayRef::new(&[0], &[1, 1])?,
+///     |_| anyhow::bail!("unavailable")) .unwrap_err();
+/// assert_eq!(error.to_string(), "unavailable");
+/// assert!(cache.is_empty());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, thiserror::Error)]
+pub enum CachedBatchError {
+    /// The batch rank, site count, coordinates, or output count is invalid.
+    #[error(transparent)]
+    Index(#[from] error::CacheKeyError),
+    /// A batch view cannot represent the supplied flat storage.
+    #[error(transparent)]
+    Shape(#[from] crate::col_major_array::ColMajorArrayError),
+    /// The target callback failed; its complete source chain is retained.
+    #[error("{0}")]
+    Evaluation(#[source] anyhow::Error),
+}
 
 /// Logical payload bytes a [`MultiIndexCache`] retains by default.
 ///
@@ -223,6 +252,116 @@ where
                 Ok(None)
             }
         }
+    }
+
+    /// Evaluate only distinct cache misses and return values in request order.
+    ///
+    /// `indices` is a column-major `(local_dims.len(), n_points)` view. The
+    /// fallible `evaluate` callback receives the distinct missing points in
+    /// first-occurrence order, in one batch. It may borrow mutable or
+    /// thread-affine state; no `Send`/`Sync` bound is imposed on the callback.
+    /// Empty and all-hit batches do not invoke it. Duplicate misses are
+    /// evaluated once even when the retained-byte limit is zero.
+    ///
+    /// Inserts occur only after the entire callback succeeds with one value
+    /// per distinct miss. Failed batches retain no new entries, but lookup
+    /// counters still count requests inspected before failure. Hits/misses
+    /// count persistent lookups, so duplicates within a cold batch are misses.
+    /// Scratch consists of one flat miss buffer, integer keys and result slots,
+    /// bounded by the input batch; it is released after this call.
+    ///
+    /// # Errors
+    /// Returns [`CachedBatchError`] for invalid batch shape or coordinates,
+    /// callback failure, or a callback result with the wrong length.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{ColMajorArrayRef, MultiIndexCache};
+    /// let mut cache = MultiIndexCache::<f64>::new(&[4])?;
+    /// let mut evaluated = 0;
+    /// let values = cache.evaluate_batched(
+    ///     ColMajorArrayRef::new(&[2, 1, 2], &[1, 3])?, |misses| {
+    ///         evaluated += misses.shape()[1];
+    ///         Ok(misses.data().iter().map(|&i| 10.0 * i as f64).collect())
+    ///     })?;
+    /// assert_eq!(values, vec![20.0, 10.0, 20.0]);
+    /// assert_eq!(evaluated, 2);
+    /// assert_eq!(cache.len(), 2);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn evaluate_batched<F>(
+        &mut self,
+        indices: ColMajorArrayRef<'_, I>,
+        evaluate: F,
+    ) -> Result<Vec<V>, CachedBatchError>
+    where
+        F: FnOnce(ColMajorArrayRef<'_, I>) -> anyhow::Result<Vec<V>>,
+    {
+        if indices.ndim() != 2 {
+            return Err(error::CacheKeyError::InvalidTensorDim {
+                ndim: indices.ndim(),
+            }
+            .into());
+        }
+        let n_sites = indices.shape()[0];
+        let n_points = indices.shape()[1];
+        if n_sites != self.local_dims.len() {
+            return Err(error::CacheKeyError::InvalidIndexLength {
+                expected: self.local_dims.len(),
+                got: n_sites,
+            }
+            .into());
+        }
+        let pending =
+            MultiIndexCache::<usize, I>::with_retained_byte_limit(&self.local_dims, usize::MAX)?;
+        let mut miss_data = Vec::new();
+        let mut slots = Vec::with_capacity(n_points);
+        for position in 0..n_points {
+            // INVARIANT: The checked 2D view contains exactly n_sites*n_points
+            // elements, including empty columns for a zero-site scalar batch.
+            let point = &indices.data()[position * n_sites..(position + 1) * n_sites];
+            if let Some(value) = self.get(point)? {
+                slots.push(Ok(value));
+            } else {
+                let slot = match pending.backend.get(point) {
+                    Some(slot) => slot,
+                    None => {
+                        let slot = pending.len();
+                        pending.backend.insert(point, slot);
+                        miss_data.extend_from_slice(point);
+                        slot
+                    }
+                };
+                slots.push(Err(slot));
+            }
+        }
+        let n_misses = pending.len();
+        let values = if n_misses == 0 {
+            Vec::new()
+        } else {
+            let shape = [n_sites, n_misses];
+            let values = evaluate(ColMajorArrayRef::new(&miss_data, &shape)?)
+                .map_err(CachedBatchError::Evaluation)?;
+            if values.len() != n_misses {
+                return Err(error::CacheKeyError::BatchResultLength {
+                    expected: n_misses,
+                    got: values.len(),
+                }
+                .into());
+            }
+            for (position, value) in values.iter().enumerate() {
+                let point = &miss_data[position * n_sites..(position + 1) * n_sites];
+                self.insert(point, value.clone())?;
+            }
+            values
+        };
+        Ok(slots
+            .into_iter()
+            .map(|slot| match slot {
+                Ok(value) => value,
+                Err(position) => values[position].clone(),
+            })
+            .collect())
     }
 
     /// Store one successfully evaluated value.

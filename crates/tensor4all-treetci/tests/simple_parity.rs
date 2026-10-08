@@ -47,7 +47,12 @@ fn simple_tree_parity_matches_reference_points() {
         1.0 / (1.0 + norm_sq)
     };
 
-    let (tn, _ranks, _errors) = crossinterpolate2(
+    let tensor4all_treetci::TreeTciRunResult {
+        treetn: tn,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2(
         batch_eval_from_point(f),
         vec![2; 7],
         sample_graph(),
@@ -104,7 +109,12 @@ fn simple_tree_parity_matches_reference_points() {
 fn simple_tree_product_function_is_exact_on_branching_tree() {
     let f = |idx: &[usize]| idx.iter().fold(1.0, |acc, &x| acc * (x as f64 + 1.0));
 
-    let (tn, _ranks, _errors) = crossinterpolate2(
+    let tensor4all_treetci::TreeTciRunResult {
+        treetn: tn,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2(
         batch_eval_from_point(f),
         vec![2; 7],
         sample_graph(),
@@ -164,7 +174,12 @@ fn simple_tree_complex_product_function_is_exact_on_branching_tree() {
         })
     };
 
-    let (tn, _ranks, _errors) = crossinterpolate2(
+    let tensor4all_treetci::TreeTciRunResult {
+        treetn: tn,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2(
         batch_eval_from_point(f),
         vec![2; 7],
         sample_graph(),
@@ -232,7 +247,12 @@ fn simple_tree_complex_product_function_is_exact_on_two_site_tree() {
         })
     };
 
-    let (tn, _ranks, _errors) = crossinterpolate2(
+    let tensor4all_treetci::TreeTciRunResult {
+        treetn: tn,
+        ranks: _ranks,
+        errors: _errors,
+        ..
+    } = crossinterpolate2(
         batch_eval_from_point(f),
         vec![2; 2],
         graph,

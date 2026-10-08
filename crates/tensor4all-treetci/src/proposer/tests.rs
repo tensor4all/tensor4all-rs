@@ -1,12 +1,12 @@
 use super::{
-    sample_ordered_candidates, union_with_history, DefaultProposer, PivotCandidateProposer,
+    sample_ordered_candidates, union_with_pivots, DefaultProposer, PivotCandidateProposer,
     SimpleProposer, TruncatedDefaultProposer,
 };
 use crate::{
     column_2d, ncols_2d, AllEdges, EdgeVisitor, SubtreeKey, TreeTCI2, TreeTciEdge, TreeTciGraph,
 };
-use rand::rngs::SmallRng;
 use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use std::collections::{HashMap, HashSet};
 use tensor4all_core::ColMajorArray;
 
@@ -76,15 +76,15 @@ fn default_proposer_matches_neighbor_product_assembly() {
 }
 
 #[test]
-fn default_proposer_unions_history_candidates() {
+fn default_proposer_retains_current_edge_pivots() {
     let mut tci = TreeTCI2::<f64>::new(vec![2; 7], sample_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0, 0, 0, 0, 0, 0], vec![1, 0, 1, 0, 1, 0, 1]])
         .unwrap();
-    // History entry: ColMajorArray shape [4, 1], single column [1, 1, 1, 1]
-    tci.ijset_history.push(HashMap::from([(
+    // Current edge pivots: ColMajorArray shape [4, 1], single column [1, 1, 1, 1]
+    tci.ijset.insert(
         SubtreeKey::new(vec![0, 1, 2, 3]),
         ColMajorArray::new(vec![1, 1, 1, 1], vec![4, 1]).unwrap(),
-    )]));
+    );
 
     let (iset, _jset) = DefaultProposer
         .candidates(&tci, TreeTciEdge::new(3, 4))
@@ -94,19 +94,19 @@ fn default_proposer_unions_history_candidates() {
 }
 
 #[test]
-fn union_with_history_dedups_in_first_occurrence_order() {
+fn union_with_pivots_dedups_in_first_occurrence_order() {
     let key = SubtreeKey::new(vec![0, 1, 2]);
-    let history = HashMap::from([(
+    let pivots = HashMap::from([(
         key.clone(),
         ColMajorArray::new(vec![1, 1, 1, 0, 1, 2], vec![3, 2]).unwrap(), // [1,1,1], [0,1,2]
     )]);
 
     // `values` contains duplicates (the cartesian pivot expansion can produce
-    // them); history adds two columns, one of which is already present.
+    // them); current pivots add two columns, one of which is already present.
     let values = vec![vec![0, 0, 0], vec![0, 0, 0], vec![1, 1, 1], vec![2, 2, 2]];
-    let out = union_with_history(values, Some(&history), &key).unwrap();
+    let out = union_with_pivots(values, &pivots, &key).unwrap();
 
-    // First occurrence wins, both within `values` and across history: the
+    // First occurrence wins, both within `values` and across current pivots: the
     // already-seen [1,1,1] is not appended again, [0,1,2] is new and appended.
     assert_eq!(
         out,
@@ -228,8 +228,7 @@ fn truncated_default_proposer_keeps_site_vertex_budget() {
 #[test]
 fn truncated_default_proposer_keeps_previous_pivots_when_truncating() {
     let pivots = [vec![0, 0, 0, 0], vec![1, 1, 1, 1], vec![0, 2, 2, 2]];
-    let mut tci = star_state(2, &pivots);
-    tci.ijset_history.push(tci.ijset.clone());
+    let tci = star_state(2, &pivots);
     let edge = TreeTciEdge::new(0, 1);
     let (ikey, _) = tci.graph.subregion_vertices(edge).unwrap();
     let previous: Vec<Vec<usize>> = (0..ncols_2d(&tci.ijset[&ikey]).unwrap())
@@ -265,10 +264,9 @@ fn truncated_default_proposer_keeps_previous_pivots_when_truncating() {
 fn sample_ordered_candidates_samples_keep_set_when_it_exceeds_budget() {
     let candidates: Vec<Vec<usize>> = (0..6).map(|value| vec![value]).collect();
     let keep: HashSet<Vec<usize>> = [vec![1], vec![3], vec![4]].into_iter().collect();
-    // `SmallRng` rather than `ChaCha8Rng`: the private sampler takes the
-    // `SmallRng` that the pre-existing `rng_for_edge` produces. The assertions
-    // hold for any stream.
-    let mut rng = SmallRng::seed_from_u64(11);
+    // The generic sampler consumes the named caller-owned stream directly.
+
+    let mut rng = ChaCha8Rng::seed_from_u64(11);
     let sampled = sample_ordered_candidates(&candidates, &keep, 2, &mut rng);
     assert_eq!(sampled.len(), 2);
     assert!(sampled.iter().all(|candidate| keep.contains(candidate)));
@@ -277,4 +275,85 @@ fn sample_ordered_candidates_samples_keep_set_when_it_exceeds_budget() {
     // Within budget: returned unchanged.
     let all = sample_ordered_candidates(&candidates, &keep, 6, &mut rng);
     assert_eq!(all, candidates);
+}
+
+#[test]
+fn caller_stream_matches_direct_simple_candidate_draws() {
+    use rand::RngCore;
+    let mut state = TreeTCI2::<f64>::new(vec![2; 7], sample_graph()).unwrap();
+    state
+        .add_global_pivots(&[vec![0; 7], vec![1, 0, 1, 0, 1, 0, 1]])
+        .unwrap();
+    let edge = TreeTciEdge::new(1, 3);
+    let (left, right) = state.graph.subregion_vertices(edge).unwrap();
+    let mut actual_rng = ChaCha8Rng::seed_from_u64(73);
+    let mut reference_rng = actual_rng.clone();
+    for seed in [0, 999] {
+        let actual = SimpleProposer::seeded(seed)
+            .candidates_with_rng(&state, edge, &mut actual_rng)
+            .unwrap();
+        let expected_left =
+            super::random_candidates(&mut reference_rng, &state.local_dims, &left, 4);
+        let expected_right =
+            super::random_candidates(&mut reference_rng, &state.local_dims, &right, 4);
+        assert_eq!(
+            actual,
+            (
+                union_with_pivots(expected_left, &state.ijset, &left).unwrap(),
+                union_with_pivots(expected_right, &state.ijset, &right).unwrap()
+            )
+        );
+    }
+    assert_eq!(actual_rng.next_u64(), reference_rng.next_u64());
+}
+
+#[test]
+fn caller_stream_matches_direct_truncated_sampling() {
+    use rand::RngCore;
+    let mut state = TreeTCI2::<f64>::new(vec![2; 7], sample_graph()).unwrap();
+    state
+        .add_global_pivots(&[vec![0; 7], vec![1, 0, 1, 0, 1, 0, 1]])
+        .unwrap();
+    let edge = TreeTciEdge::new(1, 3);
+    let (u, v) = state.graph.separate_vertices(edge).unwrap();
+    let (left, right) = state.graph.subregion_vertices(edge).unwrap();
+    let default = DefaultProposer.candidates(&state, edge).unwrap();
+    let mut actual_rng = ChaCha8Rng::seed_from_u64(73);
+    let mut reference_rng = actual_rng.clone();
+    for seed in [0, 999] {
+        let actual = TruncatedDefaultProposer::seeded(seed)
+            .candidates_with_rng(&state, edge, &mut actual_rng)
+            .unwrap();
+        let expected_left = sample_ordered_candidates(
+            &default.0,
+            &super::pivot_columns(&state.ijset, &left).unwrap(),
+            super::truncated_candidate_budget(&state, u, &left).unwrap(),
+            &mut reference_rng,
+        );
+        let expected_right = sample_ordered_candidates(
+            &default.1,
+            &super::pivot_columns(&state.ijset, &right).unwrap(),
+            super::truncated_candidate_budget(&state, v, &right).unwrap(),
+            &mut reference_rng,
+        );
+        assert_eq!(actual, (expected_left, expected_right));
+    }
+    assert_eq!(actual_rng.next_u64(), reference_rng.next_u64());
+}
+
+#[test]
+fn deterministic_proposer_does_not_consume_caller_randomness() {
+    use rand::RngCore;
+    let mut state = TreeTCI2::<f64>::new(vec![2; 7], sample_graph()).unwrap();
+    state.add_global_pivots(&[vec![0; 7]]).unwrap();
+    let mut rng = ChaCha8Rng::seed_from_u64(73);
+    let mut reference = rng.clone();
+    let edge = TreeTciEdge::new(1, 3);
+    assert_eq!(
+        DefaultProposer
+            .candidates_with_rng(&state, edge, &mut rng)
+            .unwrap(),
+        DefaultProposer.candidates(&state, edge).unwrap()
+    );
+    assert_eq!(rng.next_u64(), reference.next_u64());
 }

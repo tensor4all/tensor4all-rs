@@ -86,6 +86,14 @@ can make unchanged workspace source newer than restored dep-info and trigger
 recompilation while registry and Git dependencies remain fresh. Do not rewrite
 source timestamps or change cache keys merely to make the hit indicator green.
 
+Before measuring coverage, `cargo llvm-cov clean --workspace --locked` removes
+restored workspace instrumentation and old profiles while retaining dependency
+builds. Prefix cache restores can contain obsolete workspace binaries that
+`--profraw-only` leaves behind; those binaries can distort the coverage report.
+The subsequent measurement uses `--no-clean` because this cleanup has already
+run. The generated root `coverage.json` is ignored locally and uploaded as a
+CI artifact rather than tracked in Git.
+
 Test, Doctests, and Coverage retain `build-diagnostics-*` artifacts for seven
 days. Their JSON summaries and timestamped Cargo logs distinguish `Fresh`
 artifacts from compilation and record the build-completion boundary. Cargo

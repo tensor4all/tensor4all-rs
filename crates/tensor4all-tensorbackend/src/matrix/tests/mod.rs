@@ -2,6 +2,8 @@ use super::*;
 use num_complex::{Complex32, Complex64};
 use tenferro::TypedTensor;
 
+mod transpose;
+
 #[test]
 fn fallible_matrix_constructors_reject_overflow_and_length_mismatch() {
     assert!(matches!(

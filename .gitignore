@@ -44,6 +44,7 @@ extern/
 external/
 
 # Coverage reports
+/coverage.json
 lcov*.info
 lcov-patch.info
 

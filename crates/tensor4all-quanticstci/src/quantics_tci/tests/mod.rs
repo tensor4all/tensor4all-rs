@@ -198,27 +198,23 @@ fn site_evaluator_handles_an_empty_batch_and_invalid_indices() {
 
 #[test]
 fn site_evaluator_rejects_inconsistent_converted_dimensions() {
-    let cache: Rc<RefCell<MultiIndexCache<f64>>> =
-        Rc::new(RefCell::new(MultiIndexCache::new(&[4]).unwrap()));
-    let evaluate = site_evaluator(
-        // The first converted point yields one coordinate, the second two.
-        |point: &[usize]| {
-            if point[0] == 0 {
-                Ok(vec![0.0_f64])
-            } else {
-                Ok(vec![0.0_f64, 1.0])
-            }
-        },
-        |_batch: QuanticsBatch<'_, f64>| Ok(vec![1.0_f64, 2.0]),
-        Rc::clone(&cache),
-    );
-    let batch = GlobalIndexBatch::new(&[0, 1], 1, 2).unwrap();
-    let error = evaluate(batch).unwrap_err().to_string();
-    assert!(
-        error.contains("inconsistent point dimension"),
-        "unexpected error: {error}"
-    );
-    assert!(cache.borrow().is_empty());
+    for first_dim in [0, 1] {
+        let cache: Rc<RefCell<MultiIndexCache<f64>>> =
+            Rc::new(RefCell::new(MultiIndexCache::new(&[4]).unwrap()));
+        let evaluate = site_evaluator(
+            // Zero coordinates are still a dimension, not an uninitialized sentinel.
+            |point: &[usize]| Ok(vec![0.0_f64; first_dim + usize::from(point[0] != 0)]),
+            |_batch: QuanticsBatch<'_, f64>| panic!("inconsistent dimensions reached target"),
+            Rc::clone(&cache),
+        );
+        let batch = GlobalIndexBatch::new(&[0, 1], 1, 2).unwrap();
+        let error = evaluate(batch).unwrap_err().to_string();
+        assert!(
+            error.contains("inconsistent point dimension"),
+            "unexpected error: {error}"
+        );
+        assert!(cache.borrow().is_empty());
+    }
 }
 
 #[test]

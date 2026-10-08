@@ -131,7 +131,10 @@ case/options, algorithm, seed, phase and block schedules. Count equality alone
 does not establish completeness. Historical unreceipted runs remain historical
 and do not establish behavior or performance of a newer implementation.
 
-The inherited rrLU extreme-magnitude problem is tracked separately in
-[core issue #779](https://github.com/tensor4all/tensor4all-rs/issues/779). RSI
+The rrLU extreme-magnitude repair for
+[core issue #779](https://github.com/tensor4all/tensor4all-rs/issues/779) is
+included through main's #840 changes, carried into the shared factorization
+engine used by both full-factor and row-only LUCI. Row-only pivot and residual
+diagnostics use robust magnitudes, including at a rank cap. RSI
 continues to require independent output validation; a zero local tolerance or
 reported zero local residual does not certify exact global reconstruction.
