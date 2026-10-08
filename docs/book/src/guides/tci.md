@@ -47,11 +47,11 @@ The most important parameters:
 
 | Parameter | Default | Guidance |
 |---|---|---|
-| `tolerance` | `1e-8` | Relative convergence threshold. Use `1e-6` for quick exploration, `1e-12` for high accuracy. |
+| `tolerance` | `1e-8` | Convergence threshold: relative by default, absolute with `normalize_error = false`. Use `1e-6` for quick exploration, `1e-12` for high accuracy. |
 | `max_bond_dim` | `usize::MAX` | Set to `50`--`500` for expensive functions to prevent runaway computation. |
 | `max_iter` | `20` | Increase to `50`--`100` for difficult functions that need more sweeps. |
 | `seed` | `None` | Set to `Some(42)` for reproducible results. |
-| `normalize_error` | `true` | When `true`, `tolerance` is relative to max |f|. Set `false` for absolute tolerance. |
+| `normalize_error` | `true` | When `true`, `tolerance` is relative to max \|f\|. Set `false` for absolute tolerance. |
 
 ### Interpreting the results
 
