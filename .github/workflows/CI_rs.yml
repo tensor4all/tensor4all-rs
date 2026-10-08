@@ -174,6 +174,13 @@ jobs:
 
       - name: Audit library panic paths
         # Clippy passes: 10m each; Rust tool: 25m; wrapper build+audit: 35m; CI: 40m.
+        # tenferro-rs #2004 made the CPU backend features mutually exclusive, so
+        # no single "all features" configuration builds; the workspace also has
+        # feature combinations that never built. Until the repository declares the
+        # configurations worth auditing, only the default-feature pass runs
+        # (see docs/worklogs/2026-10-08-tenferro-2004-consumer-migration.md).
+        env:
+          T4A_PANIC_AUDIT_SKIP_ALL_FEATURES: "1"
         timeout-minutes: 40
         run: python3 scripts/audit-library-panics.py
 

@@ -72,6 +72,15 @@ pub enum CudaExecutionContextError {
         /// Operation that observed the mismatch.
         operation: &'static str,
     },
+    /// The CUDA backend rejected entry into its execution session.
+    #[error("CUDA {operation} session entry failed: {source}; the backend rejects an entry it cannot admit")]
+    SessionEntry {
+        /// Operation that observed the rejection.
+        operation: &'static str,
+        /// Original backend admission diagnostic.
+        #[source]
+        source: Arc<dyn std::error::Error + Send + Sync + 'static>,
+    },
     /// A resident allocation belongs to another CUDA allocation domain.
     #[error("CUDA {operation} received a foreign allocation domain; use one CudaExecutionContext for upload, computation, and download")]
     ForeignAllocation {
@@ -284,6 +293,10 @@ impl CudaExecutionContext {
         let read = TensorRead::from_tensor(tensor);
         self.validate_host_placement_metadata(read.placement(), read.allocation_domain())?;
         self.with_backend_session(|session| session.upload_host_tensor(read))
+            .map_err(|source| CudaExecutionContextError::SessionEntry {
+                operation: "upload",
+                source: Arc::new(source),
+            })?
             .map_err(|source| CudaExecutionContextError::Transfer {
                 operation: "upload",
                 source: Arc::new(source),
@@ -314,6 +327,10 @@ impl CudaExecutionContext {
         self.validate_cuda_placement(tensor)?;
         let read = TensorRead::from_tensor(tensor);
         self.with_backend_session(|session| session.download_to_host(read))
+            .map_err(|source| CudaExecutionContextError::SessionEntry {
+                operation: "download",
+                source: Arc::new(source),
+            })?
             .map_err(|source| CudaExecutionContextError::Transfer {
                 operation: "download",
                 source: Arc::new(source),
@@ -448,7 +465,7 @@ impl CudaExecutionContext {
     fn with_backend_session<R: Send>(
         &self,
         f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, tenferro_tensor::SessionEntryError> {
         self.with_backend(|backend| backend.with_backend_session(f))
     }
 }

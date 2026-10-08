@@ -293,14 +293,19 @@ impl AnyScalar {
         rhs: &Self,
         op: &'static str,
         f: impl FnOnce(
+            &mut tenferro_ad::EagerSession<'_>,
             &tenferro_ad::EagerTensor,
             &tenferro_ad::EagerTensor,
         ) -> std::result::Result<tenferro_ad::EagerTensor, E>,
     ) -> Result<Self>
     where
-        E: std::error::Error + Send + Sync + 'static,
+        E: From<tenferro_ad::Error> + std::error::Error + Send + Sync + 'static,
     {
-        let result = f(lhs.as_tensor()?.as_inner()?, rhs.as_tensor()?.as_inner()?)
+        let lhs_inner = lhs.as_tensor()?.as_inner()?;
+        let rhs_inner = rhs.as_tensor()?.as_inner()?;
+        let result = lhs_inner
+            .runtime()
+            .with_eager_session(|session| f(session, lhs_inner, rhs_inner))
             .map_err(|error| operation_error(op, error))?;
         Self::from_tensor_result(IdxTensor::from_inner(vec![], result), op)
     }
@@ -308,13 +313,19 @@ impl AnyScalar {
     fn from_eager_unary<E>(
         input: &Self,
         op: &'static str,
-        f: impl FnOnce(&tenferro_ad::EagerTensor) -> std::result::Result<tenferro_ad::EagerTensor, E>,
+        f: impl FnOnce(
+            &mut tenferro_ad::EagerSession<'_>,
+            &tenferro_ad::EagerTensor,
+        ) -> std::result::Result<tenferro_ad::EagerTensor, E>,
     ) -> Result<Self>
     where
-        E: std::error::Error + Send + Sync + 'static,
+        E: From<tenferro_ad::Error> + std::error::Error + Send + Sync + 'static,
     {
-        let result =
-            f(input.as_tensor()?.as_inner()?).map_err(|error| operation_error(op, error))?;
+        let inner = input.as_tensor()?.as_inner()?;
+        let result = inner
+            .runtime()
+            .with_eager_session(|session| f(session, inner))
+            .map_err(|error| operation_error(op, error))?;
         Self::from_tensor_result(IdxTensor::from_inner(vec![], result), op)
     }
 
@@ -890,7 +901,8 @@ impl AnyScalar {
         if !self.tracks_grad() {
             return Ok(Self::from_backend_scalar(self.to_backend_scalar().conj()));
         }
-        Self::from_eager_unary(self, "conj", |tensor| tensor.conj()).map_err(AnyScalarError::from)
+        Self::from_eager_unary(self, "conj", |session, tensor| session.conj(tensor))
+            .map_err(AnyScalarError::from)
     }
 
     /// Returns the complex conjugate of this scalar.
@@ -1086,7 +1098,7 @@ impl AnyScalar {
                 self.to_backend_scalar() + rhs.to_backend_scalar(),
             ));
         }
-        Self::from_eager_binary(self, rhs, "add", |lhs, rhs| lhs.add(rhs))
+        Self::from_eager_binary(self, rhs, "add", |session, lhs, rhs| session.add(lhs, rhs))
     }
 
     pub(crate) fn try_mul(&self, rhs: &Self) -> Result<Self> {
@@ -1097,7 +1109,7 @@ impl AnyScalar {
                 self.to_backend_scalar() * rhs.to_backend_scalar(),
             ));
         }
-        Self::from_eager_binary(self, rhs, "mul", |lhs, rhs| lhs.mul(rhs))
+        Self::from_eager_binary(self, rhs, "mul", |session, lhs, rhs| session.mul(lhs, rhs))
     }
 
     pub(crate) fn try_div(&self, rhs: &Self) -> Result<Self> {
@@ -1108,7 +1120,7 @@ impl AnyScalar {
                 self.to_backend_scalar() / rhs.to_backend_scalar(),
             ));
         }
-        Self::from_eager_binary(self, rhs, "div", |lhs, rhs| lhs.div(rhs))
+        Self::from_eager_binary(self, rhs, "div", |session, lhs, rhs| session.div(lhs, rhs))
     }
 
     pub(crate) fn try_neg(&self) -> Result<Self> {
@@ -1116,7 +1128,7 @@ impl AnyScalar {
         if !self.tracks_grad() {
             return Ok(Self::from_backend_scalar(-self.to_backend_scalar()));
         }
-        Self::from_eager_unary(self, "neg", |tensor| tensor.neg())
+        Self::from_eager_unary(self, "neg", |session, tensor| session.neg(tensor))
     }
 
     fn try_real_part(&self) -> Result<Self> {
@@ -1125,7 +1137,9 @@ impl AnyScalar {
             return Ok(Self::from_real(self.real()));
         }
         if self.is_complex() {
-            Self::from_eager_unary(self, "real_part", |tensor| tensor.cast(DType::F64))
+            Self::from_eager_unary(self, "real_part", |session, tensor| {
+                session.cast(tensor, DType::F64)
+            })
         } else {
             self.try_mul(&Self::new_real(1.0))
         }
@@ -1139,10 +1153,12 @@ impl AnyScalar {
         if self.is_complex() {
             let factor = Self::new_complex(0.0, -1.0);
             let imaginary =
-                Self::from_eager_binary(self, &factor, "imag_part", |value, factor| {
-                    value.mul(factor)
+                Self::from_eager_binary(self, &factor, "imag_part", |session, value, factor| {
+                    session.mul(value, factor)
                 })?;
-            Self::from_eager_unary(&imaginary, "imag_part", |tensor| tensor.cast(DType::F64))
+            Self::from_eager_unary(&imaginary, "imag_part", |session, tensor| {
+                session.cast(tensor, DType::F64)
+            })
         } else {
             self.try_mul(&Self::new_real(0.0))
         }
@@ -1154,14 +1170,18 @@ impl AnyScalar {
             return Ok(Self::from_backend_scalar(self.to_backend_scalar().sqrt()));
         }
         if self.is_real() && self.real() < 0.0 {
-            let magnitude_input = Self::from_eager_unary(self, "sqrt", |tensor| tensor.neg())?;
+            let magnitude_input =
+                Self::from_eager_unary(self, "sqrt", |session, tensor| session.neg(tensor))?;
             let magnitude = magnitude_input.try_sqrt()?;
             let factor = Self::new_complex(0.0, 1.0);
-            return Self::from_eager_binary(&magnitude, &factor, "sqrt", |value, factor| {
-                value.mul(factor)
-            });
+            return Self::from_eager_binary(
+                &magnitude,
+                &factor,
+                "sqrt",
+                |session, value, factor| session.mul(value, factor),
+            );
         }
-        Self::from_eager_unary(self, "sqrt", |tensor| tensor.sqrt())
+        Self::from_eager_unary(self, "sqrt", |session, tensor| session.sqrt(tensor))
     }
 
     fn try_powf(&self, exponent: f64) -> Result<Self> {
@@ -1172,20 +1192,26 @@ impl AnyScalar {
             ));
         }
         if self.is_real() && self.real() < 0.0 && exponent.fract() != 0.0 {
-            let magnitude_input = Self::from_eager_unary(self, "powf", |tensor| tensor.neg())?;
+            let magnitude_input =
+                Self::from_eager_unary(self, "powf", |session, tensor| session.neg(tensor))?;
             let magnitude = magnitude_input.try_powf(exponent)?;
             let phase = std::f64::consts::PI * exponent;
             let factor = Self::new_complex(phase.cos(), phase.sin());
-            return Self::from_eager_binary(&magnitude, &factor, "powf", |value, factor| {
-                value.mul(factor)
-            });
+            return Self::from_eager_binary(
+                &magnitude,
+                &factor,
+                "powf",
+                |session, value, factor| session.mul(value, factor),
+            );
         }
         let exponent = if self.is_complex() {
             Self::new_complex(exponent, 0.0)
         } else {
             Self::new_real(exponent)
         };
-        Self::from_eager_binary(self, &exponent, "powf", |base, exponent| base.pow(exponent))
+        Self::from_eager_binary(self, &exponent, "powf", |session, base, exponent| {
+            session.pow(base, exponent)
+        })
     }
 
     fn try_powi(&self, exponent: i32) -> Result<Self> {
@@ -1656,10 +1682,12 @@ mod tests {
     fn tracked_backend_failure_preserves_typed_diagnostic_through_fallback() {
         let lhs = AnyScalar::new_real(2.0).enable_grad().unwrap();
         let rhs = AnyScalar::new_real(3.0).enable_grad().unwrap();
-        let operation = AnyScalar::from_eager_binary(&lhs, &rhs, "add", |_lhs, _rhs| {
-            Err(tenferro_tensor::Error::backend_failure(
-                "forced_add",
-                "forced tracked backend failure",
+        let operation = AnyScalar::from_eager_binary(&lhs, &rhs, "add", |_session, _lhs, _rhs| {
+            Err(tenferro_ad::Error::from(
+                tenferro_tensor::Error::backend_failure(
+                    "forced_add",
+                    "forced tracked backend failure",
+                ),
             ))
         });
         let result = AnyScalar::fallback_result(operation, "add", || ScalarValue::F64(5.0), true);
@@ -1672,7 +1700,7 @@ mod tests {
         match stored {
             AnyScalarTensorError::Operation { source, .. } => {
                 assert!(source
-                    .downcast_ref::<tenferro_tensor::Error>()
+                    .downcast_ref::<tenferro_ad::Error>()
                     .is_some_and(|error| error
                         .to_string()
                         .contains("forced tracked backend failure")));

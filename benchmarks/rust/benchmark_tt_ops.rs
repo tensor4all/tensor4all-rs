@@ -25,7 +25,7 @@ use tensor4all_core::{
     TensorContractionLike, IdxTensor,
 };
 use tensor4all_itensorlike::{CanonicalForm, ContractOptions, TensorTrain};
-use tenferro::{DotGeneralConfig, Tensor, TypedTensor};
+use tenferro::{DotGeneralConfig, Tensor};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 
@@ -164,7 +164,7 @@ fn deterministic_native_tensor(shape: Vec<usize>, seed: usize) -> Result<Tensor>
     let data = (0..len)
         .map(|idx| deterministic_value(idx, seed))
         .collect::<Vec<_>>();
-    Ok(Tensor::C64(TypedTensor::from_vec_col_major(shape, data)?))
+    Tensor::from_vec_col_major(shape, data).map_err(anyhow::Error::from)
 }
 
 fn make_sites(length: usize, phys_dim: usize) -> Vec<DynIndex> {
@@ -235,22 +235,22 @@ impl RawEagerInnerConfigs {
     fn new() -> Self {
         Self {
             first_site: DotGeneralConfig {
-                lhs_contracting_dims: vec![0],
-                rhs_contracting_dims: vec![0],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
+                lhs_contracting_dims: vec![0].into(),
+                rhs_contracting_dims: vec![0].into(),
+                lhs_batch_dims: Vec::new().into(),
+                rhs_batch_dims: Vec::new().into(),
             },
             env_bra: DotGeneralConfig {
-                lhs_contracting_dims: vec![0],
-                rhs_contracting_dims: vec![0],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
+                lhs_contracting_dims: vec![0].into(),
+                rhs_contracting_dims: vec![0].into(),
+                lhs_batch_dims: Vec::new().into(),
+                rhs_batch_dims: Vec::new().into(),
             },
             tmp_ket: DotGeneralConfig {
-                lhs_contracting_dims: vec![0, 1],
-                rhs_contracting_dims: vec![0, 1],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
+                lhs_contracting_dims: vec![0, 1].into(),
+                rhs_contracting_dims: vec![0, 1].into(),
+                lhs_batch_dims: Vec::new().into(),
+                rhs_batch_dims: Vec::new().into(),
             },
         }
     }
@@ -281,18 +281,45 @@ fn raw_eager_inner_t4a_shapes(
     }
 
     let mut env = bra[0]
-        .dot_general_with_conj(&ket[0], configs.first_site.clone(), true, false)
+        .runtime()
+        .with_eager_session(|session| {
+            session.dot_general_with_conj(
+                &bra[0],
+                &ket[0],
+                configs.first_site.clone(),
+                true,
+                false,
+            )
+        })
         .context("failed raw eager first-site contraction")?;
     maybe_snapshot_output(&env, snapshot_outputs)?;
 
     for site in 1..bra.len() {
         env = env
-            .dot_general_with_conj(&bra[site], configs.env_bra.clone(), false, true)
+            .runtime()
+            .with_eager_session(|session| {
+                session.dot_general_with_conj(
+                    &env,
+                    &bra[site],
+                    configs.env_bra.clone(),
+                    false,
+                    true,
+                )
+            })
             .with_context(|| format!("failed raw eager env-bra contraction at site {site}"))?;
         maybe_snapshot_output(&env, snapshot_outputs)?;
 
         env = env
-            .dot_general_with_conj(&ket[site], configs.tmp_ket.clone(), false, false)
+            .runtime()
+            .with_eager_session(|session| {
+                session.dot_general_with_conj(
+                    &env,
+                    &ket[site],
+                    configs.tmp_ket.clone(),
+                    false,
+                    false,
+                )
+            })
             .with_context(|| format!("failed raw eager tmp-ket contraction at site {site}"))?;
         maybe_snapshot_output(&env, snapshot_outputs)?;
     }

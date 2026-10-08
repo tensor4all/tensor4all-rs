@@ -1263,6 +1263,8 @@ fn projector_from_path(patch_order: &[DynIndex], path: &[usize]) -> Result<Proje
 }
 
 // Stable SplitMix64 derivation; changing these constants changes reproducible patch candidates.
+// Only the hataori worker paths seed patch candidates, so the helpers follow that feature.
+#[cfg(feature = "adaptive-hataori-rayon")]
 fn patch_seed(root_seed: u64, path: &[usize]) -> u64 {
     path.iter().enumerate().fold(
         splitmix64(root_seed ^ 0x6a09_e667_f3bc_c909),
@@ -1270,6 +1272,7 @@ fn patch_seed(root_seed: u64, path: &[usize]) -> u64 {
     )
 }
 
+#[cfg(feature = "adaptive-hataori-rayon")]
 fn splitmix64(mut value: u64) -> u64 {
     value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
     value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);

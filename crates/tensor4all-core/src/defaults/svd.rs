@@ -19,7 +19,7 @@ use num_complex::Complex64;
 use std::sync::Mutex;
 use tenferro::DType;
 use tenferro_ad::EagerTensor;
-use tenferro_linalg::EagerTensorLinalgExt;
+use tenferro_linalg::EagerSessionLinalgExt;
 #[cfg(test)]
 use tensor4all_tensorbackend::native_tensor_primal_to_dense_col_major;
 use thiserror::Error;
@@ -321,7 +321,8 @@ fn svd_truncated_inner_scoped(
     let k = m.min(n);
 
     let (mut u_inner, mut s_inner, mut vt_inner) = matrix_inner
-        .svd()
+        .runtime()
+        .with_eager_session(|session| session.svd(&matrix_inner))
         .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
     #[cfg(feature = "tenferro-cuda")]
     let s_full = if let Some(context) = context {
@@ -365,13 +366,16 @@ fn svd_truncated_inner_scoped(
     if r < k {
         let keep: Vec<usize> = (0..r).collect();
         u_inner = u_inner
-            .take_axis(1, &keep)
+            .runtime()
+            .with_eager_session(|session| session.take_axis(&u_inner, 1, &keep))
             .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
         s_inner = s_inner
-            .take_axis(0, &keep)
+            .runtime()
+            .with_eager_session(|session| session.take_axis(&s_inner, 0, &keep))
             .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
         vt_inner = vt_inner
-            .take_axis(0, &keep)
+            .runtime()
+            .with_eager_session(|session| session.take_axis(&vt_inner, 0, &keep))
             .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
     }
 
@@ -552,9 +556,12 @@ fn svd_assemble(
     let mut u_indices = left_indices;
     u_indices.push(bond_index.clone());
     let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
-    let u_reshaped = u_inner.reshape(&u_dims).map_err(|e| {
-        SvdError::ComputationError(anyhow::anyhow!("eager SVD U reshape failed: {e}"))
-    })?;
+    let u_reshaped = u_inner
+        .runtime()
+        .with_eager_session(|session| session.reshape(&u_inner, &u_dims))
+        .map_err(|e| {
+            SvdError::ComputationError(anyhow::anyhow!("eager SVD U reshape failed: {e}"))
+        })?;
     let u = IdxTensor::from_inner(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
 
     // S carries a fresh `sim` leg (ITensors convention S: [l, l'], V: l');
@@ -568,9 +575,12 @@ fn svd_assemble(
     let mut vh_indices = vec![sim_bond_index];
     vh_indices.extend(right_indices);
     let vh_dims: Vec<usize> = vh_indices.iter().map(|idx| idx.dim).collect();
-    let vt_reshaped = vt_inner.reshape(&vh_dims).map_err(|e| {
-        SvdError::ComputationError(anyhow::anyhow!("eager SVD V^T reshape failed: {e}"))
-    })?;
+    let vt_reshaped = vt_inner
+        .runtime()
+        .with_eager_session(|session| session.reshape(&vt_inner, &vh_dims))
+        .map_err(|e| {
+            SvdError::ComputationError(anyhow::anyhow!("eager SVD V^T reshape failed: {e}"))
+        })?;
     let vh = IdxTensor::from_inner(vh_indices, vt_reshaped).map_err(SvdError::ComputationError)?;
     let perm: Vec<usize> = (1..vh.indices.len()).chain(std::iter::once(0)).collect();
     let v = vh
@@ -654,9 +664,12 @@ fn svd_factorize_assemble(
     let mut u_indices = left_indices;
     u_indices.push(bond_index.clone());
     let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
-    let u_reshaped = u_inner.reshape(&u_dims).map_err(|e| {
-        SvdError::ComputationError(anyhow::anyhow!("eager SVD U reshape failed: {e}"))
-    })?;
+    let u_reshaped = u_inner
+        .runtime()
+        .with_eager_session(|session| session.reshape(&u_inner, &u_dims))
+        .map_err(|e| {
+            SvdError::ComputationError(anyhow::anyhow!("eager SVD U reshape failed: {e}"))
+        })?;
     let u = IdxTensor::from_inner(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
 
     let s_indices = vec![bond_index.clone(), bond_index.sim()];
@@ -665,9 +678,12 @@ fn svd_factorize_assemble(
     let mut vh_indices = vec![bond_index.clone()];
     vh_indices.extend(right_indices);
     let vh_dims: Vec<usize> = vh_indices.iter().map(|idx| idx.dim).collect();
-    let vt_reshaped = vt_inner.reshape(&vh_dims).map_err(|e| {
-        SvdError::ComputationError(anyhow::anyhow!("eager SVD V^T reshape failed: {e}"))
-    })?;
+    let vt_reshaped = vt_inner
+        .runtime()
+        .with_eager_session(|session| session.reshape(&vt_inner, &vh_dims))
+        .map_err(|e| {
+            SvdError::ComputationError(anyhow::anyhow!("eager SVD V^T reshape failed: {e}"))
+        })?;
     let vh = IdxTensor::from_inner(vh_indices, vt_reshaped).map_err(SvdError::ComputationError)?;
 
     Ok(SvdFactorizeResult {

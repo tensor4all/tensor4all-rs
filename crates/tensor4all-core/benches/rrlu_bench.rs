@@ -58,6 +58,7 @@ fn bench_rrlu(c: &mut Criterion) {
                         with_default_backend(|backend| {
                             backend.with_backend_session(|session| m.full_piv_lu(session))
                         })
+                        .unwrap()
                         .unwrap();
                     },
                     criterion::BatchSize::SmallInput,

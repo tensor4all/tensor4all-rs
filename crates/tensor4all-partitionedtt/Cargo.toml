@@ -8,7 +8,13 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["tenferro-cpu-faer", "adaptive-hataori-rayon"]
+# `adaptive-hataori-rayon` is deliberately not a default feature: its worker
+# callbacks enter the tenferro CPU session from Rayon workers, which tenferro-rs
+# #2004 rejects as `SessionEntryError::Contended` until an execution can hand its
+# child ticket to workers (see docs/worklogs/2026-10-08-tenferro-2004-consumer-migration.md).
+# The feature still compiles and its tests remain under `#[cfg(feature = ...)]`,
+# so they return with the fix.
+default = ["tenferro-cpu-faer"]
 adaptive-hataori-rayon = ["dep:hataori", "hataori/rayon"]
 adaptive-hataori-mpi = [
     "adaptive-hataori-rayon",

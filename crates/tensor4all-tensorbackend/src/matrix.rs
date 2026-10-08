@@ -25,7 +25,7 @@ use num_traits::{One, Zero};
 use std::ops::{Index, IndexMut};
 use tenferro::{DType, Tensor, TensorScalar, TypedTensor};
 use tenferro_ad::EagerTensor;
-use tenferro_linalg::EagerTensorLinalgExt;
+use tenferro_linalg::EagerSessionLinalgExt;
 
 /// A dense 2D matrix in column-major layout.
 ///
@@ -620,9 +620,16 @@ pub fn grouped_mat_mul_shared<T: MatrixScalar + TensorScalar>(
     if jobs.is_empty() {
         return Ok(());
     }
-    crate::context::with_default_session(|session| {
-        grouped_mat_mul_shared_in_session(lhs, rhs, output, jobs, session)
-    })
+    // The operation keeps its own error type, so the session-entry rejection is
+    // mapped here instead of through the tenferro-typed session helper.
+    match crate::context::default_context()
+        .with_session(|session| grouped_mat_mul_shared_in_session(lhs, rhs, output, jobs, session))
+    {
+        Ok(result) => result,
+        Err(source) => Err(GroupedGemmError::Backend {
+            source: anyhow::Error::new(source),
+        }),
+    }
 }
 
 /// Execute grouped GEMMs through one caller-configured CPU backend.
@@ -659,9 +666,13 @@ pub fn grouped_mat_mul_shared_with_backend<T: MatrixScalar + TensorScalar>(
         return Ok(());
     }
     use tenferro_tensor::BackendSessionHost;
-    backend.with_backend_session(|session| {
-        grouped_mat_mul_shared_in_session(lhs, rhs, output, jobs, session)
-    })
+    backend
+        .with_backend_session(|session| {
+            grouped_mat_mul_shared_in_session(lhs, rhs, output, jobs, session)
+        })
+        .map_err(|source| GroupedGemmError::Backend {
+            source: anyhow::Error::new(source),
+        })?
 }
 
 /// Execute grouped GEMMs while consuming all three flat buffers.
@@ -1309,13 +1320,13 @@ where
     let eager_ctx = crate::default_eager_ctx().map_err(|source| HermitianEigenError::Backend {
         source: Box::new(source),
     })?;
-    let input = EagerTensor::from_tensor_in(input_tensor, eager_ctx).map_err(|source| {
+    let input = EagerTensor::from_tensor_in(input_tensor, eager_ctx.clone()).map_err(|source| {
         HermitianEigenError::Backend {
             source: Box::new(source),
         }
     })?;
-    let (values, vectors) = input
-        .eigh()
+    let (values, vectors) = eager_ctx
+        .with_eager_session(|session| session.eigh(&input))
         .map_err(|source| HermitianEigenError::Backend {
             source: Box::new(source),
         })?;
