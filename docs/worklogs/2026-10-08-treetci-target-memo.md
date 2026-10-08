@@ -31,12 +31,29 @@ measurement performed in this work log.
 
 ## Validation and experiment
 
-Local validation and the predeclared paired experiment are recorded when
-complete. The [protocol](../../benchmarks/2026-10-08-treetci-memo-protocol.md)
-fixes cases, thresholds and noise gates before candidate execution. The oracle
-cost fixture is synthetic; no TreeTNCachedEvaluator throughput claim follows
-from it. The complete result manifest, rounds and confidence intervals belong
-under `benchmarks/results/2026-10-08-treetci-memo/`.
+The complete core suite and affected TreeTCI/quanticstci suites passed; the
+new public-boundary/memo tests passed for all four scalar kinds. Relevant core
+cache doctests (41), all TreeTCI doctests (35) and quanticstci doctests (36)
+passed. Strict changed-crate Clippy, library panic audit (zero new/stale
+findings) and deterministic repository-rules preview passed. Nextest is
+unavailable, so changed-crate suites used `cargo test --lib --tests`.
+
+The [predeclared paired experiment](../../benchmarks/2026-10-08-treetci-memo-protocol.md)
+passed all gates: the expensive-oracle primary time ratio was 0.2925 (95% CI
+0.2913–0.2942), about 3.42x faster, with 78–89% fewer actual target evaluations.
+Default-disabled paths were unchanged within measurement uncertainty.
+Cheap-oracle memo cases cost 2–5% more; opt-in behavior remains appropriate.
+All declared trajectory/sample signatures and memory/noise gates passed.
+[Complete results](../../benchmarks/results/2026-10-08-treetci-memo/README.md)
+retain all cases, confidence intervals, manifests and host observations.
+The oracle cost fixture is synthetic; no TreeTNCachedEvaluator throughput
+claim follows from it. No cases were selectively retried or omitted.
+
+Both burn worktrees initially shared a target. Switching package sources
+between worktrees exposed stale Cargo API artifacts despite the build lock;
+source timestamps were invalidated and the affected checks rerun. #849 now
+owns an isolated target with copied reusable release dependencies. Benchmark
+binaries were copied immutably and no owned build/test ran during measurement.
 
 The root README crate map and current examples remain accurate. Python uses
 `..Default::default()` for these options; the new memo is a Rust option and is

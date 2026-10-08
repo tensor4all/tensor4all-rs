@@ -1,0 +1,12 @@
+build commit=b546f4254afdfde2f77f00f6101abb0fdcd7858b RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3
+case=chain_cos_129 sites=129 min_s=1.1476 median_s=1.1547 evals=43250 iters=4 final_rank=2 pivots=d49a85e0eb5dc3dd samples=fb65620ad37ba262 sampled_rel_err=5.56e-9
+  ranks=[2, 2, 2, 2]
+  errors=["3e37fe61bc24f6ec", "3e27ffe957257fed", "3e27ffe957257fed", "3e27ffe957257fed"]
+case=quantics_chain_r20 sites=20 min_s=0.0244 median_s=0.0247 evals=16247 iters=4 final_rank=8 pivots=d70bef4b6765b684 samples=70823a9d8d5e51b3 sampled_rel_err=1.64e-8
+  ranks=[4, 8, 8, 8]
+  errors=["3e3215cebb358024", "3e3f931f99d09401", "3e3d18c2f39b5da7", "3e3d7a6609a70c20"]
+case=tree_3x10_plus_centre sites=31 min_s=0.0586 median_s=0.0587 evals=44918 iters=4 final_rank=9 pivots=decbe070a2f17d60 samples=ea67dde77549eb4e sampled_rel_err=7.29e-9
+  ranks=[4, 9, 9, 9]
+  errors=["3c74215e5dade614", "3e3c835c371fbb66", "3e3cb9c6eb2c4fe5", "3e3cb82684f5400d"]
+
+max_rss_kib=66768
