@@ -70,6 +70,7 @@ fn options(enable_global_pivots: bool) -> TreeTciOptions {
         max_nglobal_pivot: 5,
         tol_margin_global_search: 1.0,
         seed: Some(42),
+        evaluation_cache_bytes: None,
     }
 }
 

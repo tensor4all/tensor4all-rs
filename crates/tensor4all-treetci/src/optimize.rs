@@ -83,6 +83,8 @@ pub struct TreeTciOptimizationResult {
     pub errors: Vec<f64>,
     /// The stopping condition evaluated by this call's optimization loop.
     pub termination: TreeTciTermination,
+    /// Oracle evaluation and optional memo accounting for this optimization call.
+    pub evaluation: crate::TreeTciEvaluationStats,
 }
 
 /// MVP optimization options for TreeTCI.
@@ -128,6 +130,7 @@ pub struct TreeTciOptimizationResult {
 ///     max_nglobal_pivot: 10,
 ///     tol_margin_global_search: 5.0,
 ///     seed: Some(42),
+///     evaluation_cache_bytes: None,
 /// };
 /// assert!((opts.tolerance - 1e-12).abs() < 1e-20);
 /// assert_eq!(opts.max_iter, 50);
@@ -210,6 +213,19 @@ pub struct TreeTciOptions {
     /// `None` seeds from OS entropy. Only used when `enable_global_pivots`
     /// is `true`. Default: `None`.
     pub seed: Option<u64>,
+
+    /// Optional logical key/value byte budget for target memoization.
+    ///
+    /// `None` (default) evaluates every request and preserves callback semantics.
+    /// Use `Some(256 * 1024 * 1024)` for expensive deterministic targets.
+    /// `Some(0)` deduplicates only within each batch and retains no values.
+    /// At capacity, inserts are skipped and reported; no entries are evicted.
+    /// Memoization requires a fixed value for each point throughout the call,
+    /// and supports index spaces up to 1024 bits. Callback errors and wrong
+    /// output lengths are never cached. The cache belongs to this run, is
+    /// shared across updates/searches/final materialization, and is dropped
+    /// at return. Bytes exclude allocator overhead and do not bound total RSS.
+    pub evaluation_cache_bytes: Option<usize>,
 }
 
 impl TreeTciOptions {
@@ -250,6 +266,7 @@ impl Default for TreeTciOptions {
             max_nglobal_pivot: 5,
             tol_margin_global_search: 10.0,
             seed: None,
+            evaluation_cache_bytes: None,
         }
     }
 }
@@ -322,7 +339,7 @@ pub fn optimize_default<T, F>(
 ) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     options.validate()?;
     optimize_with_proposer(state, evaluate, options, &crate::DefaultProposer)
@@ -404,12 +421,25 @@ pub fn optimize_with_proposer<T, F, P>(
 ) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
     options.validate()?;
     with_seeded_streams(options, proposer, |streams| {
-        optimize_with_streams(state, evaluate, options, proposer, streams)
+        let evaluator = crate::evaluation::RunEvaluator::new(
+            evaluate,
+            &state.local_dims,
+            options.evaluation_cache_bytes,
+        )?;
+        let mut result = optimize_with_streams(
+            state,
+            |batch| evaluator.call(batch),
+            options,
+            proposer,
+            streams,
+        )?;
+        result.evaluation = evaluator.stats();
+        Ok(result)
     })
 }
 
@@ -477,15 +507,29 @@ pub fn optimize_with_proposer_with_rng<T, F, P, R>(
 ) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
     R: rand::Rng + ?Sized,
 {
     // Erase the caller's RNG type once so the run below is instantiated once
     // per scalar type instead of once per (scalar, RNG) pair.
+    options.validate()?;
     let mut stream: &mut R = rng;
     let mut streams = RandomStreams::Shared(&mut stream);
-    optimize_with_streams(state, evaluate, options, proposer, &mut streams)
+    let evaluator = crate::evaluation::RunEvaluator::new(
+        evaluate,
+        &state.local_dims,
+        options.evaluation_cache_bytes,
+    )?;
+    let mut result = optimize_with_streams(
+        state,
+        |batch| evaluator.call(batch),
+        options,
+        proposer,
+        &mut streams,
+    )?;
+    result.evaluation = evaluator.stats();
+    Ok(result)
 }
 
 /// Construct named seeded streams once at a high-level run boundary.
@@ -688,6 +732,7 @@ where
         ranks,
         errors,
         termination,
+        evaluation: Default::default(),
     })
 }
 
