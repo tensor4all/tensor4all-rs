@@ -320,7 +320,7 @@ where
         for r in 0..new_bond_dim {
             for l in 0..left_dim {
                 for s in 0..site_dim {
-                    tensor.set3(l, s, r, matrix[[l * site_dim + s, r]]);
+                    tensor.set3(l, s, r, matrix[[l + left_dim * s, r]]);
                 }
             }
         }
@@ -342,7 +342,7 @@ where
         for l in 0..new_bond_dim {
             for s in 0..site_dim {
                 for r in 0..right_dim {
-                    tensor.set3(l, s, r, matrix[[l, s * right_dim + r]]);
+                    tensor.set3(l, s, r, matrix[[l, s + site_dim * r]]);
                 }
             }
         }

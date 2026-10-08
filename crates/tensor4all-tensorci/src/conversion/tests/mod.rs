@@ -211,3 +211,16 @@ fn test_tensorci2_from_index_sets_rejects_zero_samples() {
 
     assert!(matches!(err, crate::TCIError::InvalidPivot { .. }));
 }
+
+#[test]
+fn test_split_indices_inverts_group_indices_in_both_directions() {
+    let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
+    let tensor = tensor4all_simplett::tensor3_from_data(data, 2, 3, 4).unwrap();
+
+    // `forward != next` groups `(left, site)`; `forward == next` groups `(site, right)`.
+    for (forward, next, rank) in [(true, false, 4), (true, true, 2)] {
+        let matrix = super::group_indices(&tensor, forward, next);
+        let rebuilt = super::split_indices(matrix, (2, 3, 4), rank, forward, next).unwrap();
+        assert_eq!(rebuilt, tensor, "forward={forward}, next={next}");
+    }
+}
