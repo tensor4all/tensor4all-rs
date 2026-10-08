@@ -11,7 +11,9 @@
   enumeration (`build_pi_i_set` has `left` fastest, `build_pi_j_set` has
   `site` fastest), the `MatrixCI` row/column positions, the site-tensor
   decoders (`update_site_tensor_from_matrix`, `tensor_from_left_matrix`), and
-  `conversion::split_indices`. All were changed together. `positions_in_set`
+  the TT-to-TCI2 conversion (`kronecker_append` / `kronecker_prepend` candidate
+  order and `split_indices`), whose LU pivot positions index the fused
+  matrices. All were changed together. `positions_in_set`
   looks values up by identity and needed no change.
 - The private `tensor3_to_left/right_matrix` helpers in `canonical.rs`,
   `vidal.rs` and `compression.rs` were already self-consistent and are left
@@ -22,7 +24,10 @@
 - Element-level tests pin the column-major positions for all five public
   helpers, the pivot-set enumeration, and the round trips through
   `tensor_from_left_matrix`, `update_site_tensor_from_matrix` and
-  `split_indices`. `crossinterpolate1` reproduces a function with unequal local
+  `split_indices`. Converting a bond-dimension-2 tensor train to TCI2 and
+  rebuilding with `fill_site_tensors` reproduces the original tensor, which
+  fails with a singular solve if the candidate order and the matrix order
+  disagree. `crossinterpolate1` reproduces a function with unequal local
   dimensions on its full grid.
 - Tests of `tensor4all-simplett`, `tensor4all-tensorci`,
   `tensor4all-partitionedtt` and `tensor4all-treetci` pass; no tolerance was

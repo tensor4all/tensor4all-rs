@@ -366,8 +366,8 @@ fn kronecker_append(indices: &[MultiIndex], local_dim: usize) -> Result<Vec<Mult
                 message: "TensorCI2 conversion candidate count overflowed usize".to_string(),
             })?;
     let mut result = Vec::with_capacity(capacity);
-    for index in indices {
-        for local in 0..local_dim {
+    for local in 0..local_dim {
+        for index in indices {
             let mut next = index.clone();
             next.push(local);
             result.push(next);
@@ -385,8 +385,8 @@ fn kronecker_prepend(local_dim: usize, indices: &[MultiIndex]) -> Result<Vec<Mul
                 message: "TensorCI2 conversion candidate count overflowed usize".to_string(),
             })?;
     let mut result = Vec::with_capacity(capacity);
-    for local in 0..local_dim {
-        for index in indices {
+    for index in indices {
+        for local in 0..local_dim {
             let mut next = Vec::new();
             next.push(local);
             next.extend(index.iter().copied());
