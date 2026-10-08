@@ -62,3 +62,23 @@ coverage threshold changes are introduced. Removed quanticstci scatter/dedup
 paths were reviewed for shared-helper coverage impact: the existing tests and
 new core batch tests cover mixed/all hits, duplicates, failure/retry, conversion
 failure, inconsistent dimensions, wrong result lengths and empty batches.
+
+## Hosted-CI retention counter follow-up
+
+The first hosted Test job failed in the existing plain-tensor allocation
+regression with a negative 15,448-byte balance. Backend initialization was
+tagged before the baseline snapshot, so asynchronous worker-context cleanup
+could subtract old allocations during the measured loop and could also mask
+actual retention. `CpuBackend::new()` creates and drops a temporary context;
+construct the caller-owned backend before starting the measurement.
+A standalone optimized reproduction that releases a tagged 4,096-byte setup
+buffer on the first measured operation fails; excluding setup allocation from
+tagging makes it pass. The integration test includes that delayed-cleanup case.
+Eager runtime initialization and tensor warmup stay tagged, preserving balanced
+accounting when runtime metadata is reallocated. The exact-zero retention
+assertion and allocator ownership/alignment/resize checks remain unchanged.
+Adjacent allocation-counter uses were inspected; this is core's sole tagged
+retention helper. Numerical tolerances and coverage thresholds are unchanged.
+The focused integration test passes in ordinary and optimized builds, plus
+40 independent processes in each profile (10 each with 1, 2, 4 and 8 Rayon
+threads). The optimized check is justified by the hosted optimized test failure.

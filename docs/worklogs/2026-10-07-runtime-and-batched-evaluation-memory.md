@@ -3,7 +3,8 @@
 ## Decisions
 
 - The retention regression tags allocations owned by its test thread, including
-  warmup state; unrelated harness cleanup cannot change the measured balance.
+  tensor warmup state; backend initialization remains untagged so delayed
+  worker-startup cleanup cannot change the measured balance.
   Trailing allocation tags preserve alignment and ownership through resize and
   cross-thread deallocation. Cached payload replacement remains balanced.
 - Plain native tensors use the existing untracked eager-value adoption seam.

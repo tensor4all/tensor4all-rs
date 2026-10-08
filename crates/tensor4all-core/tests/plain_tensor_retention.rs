@@ -124,6 +124,20 @@ fn assert_no_retention(name: &str, mut construct_and_drop: impl FnMut()) {
     );
 }
 
+fn check_delayed_warmup_cleanup() {
+    let mut calls = 0;
+    // Backend setup owns these bytes before the tensor measurement begins.
+    let mut startup = Some(vec![7_u8; 4096]);
+    let _measurement = Measurement::start();
+    assert_no_retention("delayed warmup cleanup", || {
+        calls += 1;
+        if calls == 17 {
+            drop(startup.take());
+        }
+    });
+    assert_eq!(calls, 16 + 256);
+}
+
 fn check_allocator_accounting() {
     // Harness allocations made before the loop may be released during it.
     let unrelated = vec![1_u8; 16_384];
@@ -172,11 +186,16 @@ fn check_allocator_accounting() {
 #[test]
 fn plain_tensor_construction_does_not_accumulate_runtime_records() {
     check_allocator_accounting();
-    let _measurement = Measurement::start();
+    check_delayed_warmup_cleanup();
     let index = DynIndex::new_dyn(2);
     let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
         CpuBackend::new(),
     )));
+    // CpuBackend::new() creates and drops a temporary worker context, whose
+    // workers can finish cleanup asynchronously. Construct the explicit backend
+    // before tagging tensor-owned allocations; keep eager runtime initialization
+    // and tensor warmup tagged so metadata reallocations have a balanced baseline.
+    let _measurement = Measurement::start();
     macro_rules! check_dtype {
         ($ty:ty, $data:expr) => {{
             let data: Vec<$ty> = $data;
