@@ -1,5 +1,6 @@
 use super::*;
 use crate::error::TCIError;
+use rand::Rng as _;
 use std::cell::Cell;
 use std::rc::Rc;
 use tensor4all_simplett::AbstractTensorTrain;
@@ -510,48 +511,59 @@ fn test_crossinterpolate2_pivot_errors_match_diagonal_values() {
 
 #[test]
 fn test_crossinterpolate2_rook_search_uses_partial_batch_requests() {
-    let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
-    let max_batch = Rc::new(Cell::new(0usize));
-    let total_requested = Rc::new(Cell::new(0usize));
-    let batched_f = {
-        let max_batch = Rc::clone(&max_batch);
-        let total_requested = Rc::clone(&total_requested);
-        move |indices: &[MultiIndex]| -> Vec<f64> {
-            max_batch.set(max_batch.get().max(indices.len()));
-            total_requested.set(total_requested.get() + indices.len());
-            indices
-                .iter()
-                .map(|idx| ((idx[0] + 1) * (idx[1] + 1)) as f64)
-                .collect()
+    for rank_cap in [1, 2] {
+        let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
+        let max_batch = Rc::new(Cell::new(0usize));
+        let total_requested = Rc::new(Cell::new(0usize));
+        let batched_f = {
+            let max_batch = Rc::clone(&max_batch);
+            let total_requested = Rc::clone(&total_requested);
+            move |indices: &[MultiIndex]| -> Vec<f64> {
+                max_batch.set(max_batch.get().max(indices.len()));
+                total_requested.set(total_requested.get() + indices.len());
+                indices
+                    .iter()
+                    .map(|idx| ((idx[0] + 1) * (idx[1] + 1)) as f64)
+                    .collect()
+            }
+        };
+
+        let local_dims = vec![8, 8];
+        let first_pivot = vec![vec![0, 0]];
+        let options = TCI2Options {
+            max_iter: 1,
+            max_bond_dim: Some(rank_cap),
+            pivot_search: PivotSearchStrategy::Rook,
+            ..Default::default()
+        };
+
+        let crate::TCI2OptimizationResult {
+            tci,
+            ranks: _ranks,
+            errors: _errors,
+            ..
+        } = crossinterpolate2(f, Some(batched_f), local_dims, first_pivot, options).unwrap();
+
+        assert!(
+            max_batch.get() < 64,
+            "rook search should request partial batches, got full batch of {} entries",
+            max_batch.get()
+        );
+        if rank_cap == 1 {
+            // Finding a nonzero pivot still uses only partial samples.
+            assert!(total_requested.get() < 64);
+        } else {
+            // Certifying an exactly zero residual can require all entries.
+            // Roundoff can instead trigger the ordinary tolerance stop.
+            // In either case, entries are requested only in partial batches.
+            assert!(total_requested.get() <= 64);
         }
-    };
-
-    let local_dims = vec![8, 8];
-    let first_pivot = vec![vec![0, 0]];
-    let options = TCI2Options {
-        max_iter: 1,
-        max_bond_dim: Some(2),
-        pivot_search: PivotSearchStrategy::Rook,
-        ..Default::default()
-    };
-
-    let crate::TCI2OptimizationResult {
-        tci: _tci,
-        ranks: _ranks,
-        errors: _errors,
-        ..
-    } = crossinterpolate2(f, Some(batched_f), local_dims, first_pivot, options).unwrap();
-
-    assert!(
-        max_batch.get() < 64,
-        "rook search should request partial batches, got full batch of {} entries",
-        max_batch.get()
-    );
-    assert!(
-        total_requested.get() < 64,
-        "rook search should avoid evaluating the full Pi matrix, requested {} entries",
-        total_requested.get()
-    );
+        let (values, _) = tci.to_tensor_train().unwrap().full_tensor().unwrap();
+        for (offset, value) in values.iter().enumerate() {
+            let expected = ((offset % 8 + 1) * (offset / 8 + 1)) as f64;
+            assert!((value - expected).abs() < 1e-12);
+        }
+    }
 }
 
 #[test]
@@ -1145,7 +1157,7 @@ fn test_global_search_oscillatory() {
     let tt = tci.to_tensor_train().unwrap();
 
     // Estimate true error
-    let mut rng = rand::rng();
+    let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
     let pivot_errors = estimate_true_error(&tt, &f, 20, None, &mut rng).unwrap();
 
     // Verify errors are sorted in descending order
@@ -1180,7 +1192,6 @@ fn test_global_search_oscillatory() {
 #[test]
 fn test_custom_global_pivot_finder() {
     use crate::globalpivot::{GlobalPivotFinder, GlobalPivotSearchInput};
-    use rand::Rng;
 
     // Custom finder: returns random pivots (same as Julia's CustomGlobalPivotFinder)
     struct RandomPivotFinder {
@@ -1193,13 +1204,13 @@ fn test_custom_global_pivot_finder() {
             input: &GlobalPivotSearchInput<T>,
             _f: &F,
             _abs_tol: f64,
-            rng: &mut impl Rng,
-        ) -> Vec<MultiIndex>
+            rng: &mut dyn rand::RngCore,
+        ) -> Result<Vec<MultiIndex>>
         where
             T: tensor4all_core::Scalar + tensor4all_simplett::TTScalar,
             F: Fn(&MultiIndex) -> T,
         {
-            (0..self.npivots)
+            Ok((0..self.npivots)
                 .map(|_| {
                     input
                         .local_dims
@@ -1207,7 +1218,7 @@ fn test_custom_global_pivot_finder() {
                         .map(|&d| rng.random_range(0..d))
                         .collect()
                 })
-                .collect()
+                .collect())
         }
     }
 
@@ -1263,8 +1274,10 @@ fn test_custom_global_pivot_finder() {
         j_set: (0..tci.len()).map(|p| tci.j_set(p).to_vec()).collect(),
     };
 
-    let mut rng = rand::rng();
-    let pivots = finder.find_global_pivots(&input, &f, 1e-4, &mut rng);
+    let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
+    let pivots = finder
+        .find_global_pivots(&input, &f, 1e-4, &mut rng)
+        .unwrap();
 
     // Custom finder should return npivots random pivots
     assert_eq!(pivots.len(), 10);
@@ -1294,7 +1307,6 @@ fn test_custom_global_pivot_finder() {
 #[test]
 fn test_optimize_with_finder_invokes_custom_finder() {
     use crate::globalpivot::{GlobalPivotFinder, GlobalPivotSearchInput};
-    use rand::Rng;
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -1308,14 +1320,14 @@ fn test_optimize_with_finder_invokes_custom_finder() {
             input: &GlobalPivotSearchInput<T>,
             _f: &F,
             _abs_tol: f64,
-            _rng: &mut impl Rng,
-        ) -> Vec<MultiIndex>
+            _rng: &mut dyn rand::RngCore,
+        ) -> Result<Vec<MultiIndex>>
         where
             T: tensor4all_core::Scalar + tensor4all_simplett::TTScalar,
             F: Fn(&MultiIndex) -> T,
         {
             self.calls.set(self.calls.get() + 1);
-            vec![vec![input.local_dims[0] - 1, input.local_dims[1] - 1]]
+            Ok(vec![vec![input.local_dims[0] - 1, input.local_dims[1] - 1]])
         }
     }
 

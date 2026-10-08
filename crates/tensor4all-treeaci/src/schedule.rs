@@ -74,6 +74,7 @@ pub(crate) fn run_local_sweeps<'a, T, V, F>(
     state: &mut TreeAciState<'a, T, V>,
     options: &TreeAciOptions<V>,
     operator: &mut F,
+    rng: &mut dyn rand::RngCore,
 ) -> Result<SweepHistory>
 where
     T: TreeAciScalar,
@@ -134,10 +135,10 @@ where
                         .ok_or(TreeAciError::InternalInvariant {
                             message: "enabled global Guard has no input evaluators",
                         })?;
-                let seed = options.rng_seed.wrapping_add((pass + 1) as u64);
+
                 #[cfg(test)]
                 let guard_started = std::time::Instant::now();
-                let search = find_global_pivots(state, input_evaluators, options, seed, operator)?;
+                let search = find_global_pivots(state, input_evaluators, options, rng, operator)?;
                 #[cfg(test)]
                 crate::state::profile_debug_stats::record(|stats| {
                     stats.global_guard += guard_started.elapsed();

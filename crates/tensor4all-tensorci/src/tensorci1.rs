@@ -1,5 +1,7 @@
 //! TensorCI1 - legacy one-site Tensor Cross Interpolation algorithm.
 
+use std::cell::RefCell;
+
 use crate::error::{validate_nonnegative_finite, validate_positive, Result, TCIError};
 use tensor4all_core::{
     AbstractMatrixCI, IndexSet, MatrixACA, MatrixLuciScalar, MultiIndex, Scalar,
@@ -10,6 +12,36 @@ use tensor4all_simplett::{
 use tensor4all_tensorbackend::{solve_matrix, transpose, Matrix, MatrixSolveScalar};
 
 mod matrix_ci;
+
+/// Typed error for a cache that failed to materialize after `ensure` returned.
+fn cache_missing() -> TCIError {
+    TCIError::InvalidOperation {
+        message: "TensorCI1 normalized tensor train cache was not populated".to_string(),
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Number of normalized tensor trains this thread has built. Test-only
+    /// instrumentation pinning the reuse contract of `to_tensor_train`.
+    pub(crate) static NORMALIZED_TENSOR_TRAIN_BUILDS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn normalized_tensor_train_builds() -> usize {
+    NORMALIZED_TENSOR_TRAIN_BUILDS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_normalized_tensor_train_builds() {
+    NORMALIZED_TENSOR_TRAIN_BUILDS.with(|counter| counter.set(0));
+}
+
+#[cfg(test)]
+fn count_normalized_tensor_train_build() {
+    NORMALIZED_TENSOR_TRAIN_BUILDS.with(|counter| counter.set(counter.get() + 1));
+}
 
 /// Direction of one-site TCI1 sweeps.
 ///
@@ -131,7 +163,13 @@ impl Default for TCI1Options {
 ///
 /// Use this state when interoperating with workflows that expect the TCI1
 /// representation. For repeated evaluation, convert it to
-/// [`SimpleTensorTrain`] with [`to_tensor_train`](Self::to_tensor_train).
+/// [`SimpleTensorTrain`] with [`to_tensor_train`](Self::to_tensor_train); both
+/// that conversion and [`evaluate`](Self::evaluate) reuse one cached
+/// normalized tensor train after the first call.
+///
+/// The evaluation cache uses interior mutability, so a `TensorCI1` is `Send`
+/// but not `Sync`. Share it across threads by cloning it or by moving it, not
+/// by taking a `&TensorCI1` from several threads.
 ///
 /// Related types: [`TensorCI2`](crate::TensorCI2) is the primary two-site TCI
 /// state; [`SimpleTensorTrain`] is the reusable tensor train representation produced
@@ -173,6 +211,22 @@ pub struct TensorCI1<T: Scalar + TTScalar> {
     pi_j_set: Vec<IndexSet<MultiIndex>>,
     pivot_errors: Vec<f64>,
     max_sample_value: f64,
+    /// Cached result of [`Self::to_tensor_train`]: one normalized tensor train
+    /// for this state, or `None` before the first evaluation.
+    ///
+    /// Ownership and capacity: the state owns exactly this one train, so the
+    /// cache adds `sizeof(T) * sum(left_rank * local_dim * right_rank)` of site
+    /// core data (the same order as one copy of `t_tensors`) plus the tensor
+    /// train metadata. It grows with nothing else and has no configuration.
+    /// [`Self::invalidate_normalized_cache`] drops it; the accessors
+    /// [`Self::t_tensors_mut`] and [`Self::pivot_matrices_mut`] call that for
+    /// every dependency write, so a pivot mutation never leaves a stale train
+    /// behind. The constructors fill those dependencies while this cache is
+    /// still empty.
+    ///
+    /// INVARIANT: the cache is a pure function of `t_tensors` and
+    /// `pivot_matrices`. Any new writer of either field must invalidate it.
+    normalized_cache: RefCell<Option<SimpleTensorTrain<T>>>,
 }
 
 impl<T> TensorCI1<T>
@@ -239,6 +293,7 @@ where
             pivot_errors: vec![f64::INFINITY; n - 1],
             local_dims,
             max_sample_value: 0.0,
+            normalized_cache: RefCell::new(None),
         })
     }
 
@@ -316,9 +371,9 @@ where
             }
             let next_tensor = matrix_row_as_matrix(&tci.pi[bond], row);
             tci.update_site_tensor_from_matrix(bond + 1, &next_tensor)?;
-            tci.pivot_matrices[bond] = single_entry_matrix(tci.pi[bond][[row, col]]);
+            tci.pivot_matrices_mut()[bond] = single_entry_matrix(tci.pi[bond][[row, col]]);
         }
-        tci.pivot_matrices[n - 1] = single_entry_matrix(T::one());
+        tci.pivot_matrices_mut()[n - 1] = single_entry_matrix(T::one());
 
         Ok(tci)
     }
@@ -444,17 +499,59 @@ where
     /// assert!((tt.evaluate(&[2, 3]).unwrap() - 6.0).abs() < 1e-10);
     /// ```
     pub fn to_tensor_train(&self) -> Result<SimpleTensorTrain<T>> {
+        self.ensure_normalized_tensor_train()?;
+        let cache = self.normalized_cache.borrow();
+        let tensor_train = cache.as_ref().ok_or_else(cache_missing)?;
+        Ok(tensor_train.clone())
+    }
+
+    /// Builds and caches the normalized tensor train when it is absent.
+    ///
+    /// The cache is a private invariant of this type, so a missing entry after
+    /// a successful fill is reported as a typed operation error rather than a
+    /// panic.
+    fn ensure_normalized_tensor_train(&self) -> Result<()> {
         if !self.is_site_tensors_available() {
             return Err(TCIError::InvalidOperation {
                 message: "TensorCI1 has no site tensors; run crossinterpolate1 first".to_string(),
             });
+        }
+        if self.normalized_cache.borrow().is_some() {
+            return Ok(());
         }
 
         let mut tensors = Vec::with_capacity(self.len());
         for site in 0..self.len() {
             tensors.push(self.normalized_site_tensor(site)?);
         }
-        SimpleTensorTrain::new(tensors).map_err(Into::into)
+        let tensor_train = SimpleTensorTrain::new(tensors)?;
+        #[cfg(test)]
+        count_normalized_tensor_train_build();
+        *self.normalized_cache.borrow_mut() = Some(tensor_train);
+        Ok(())
+    }
+
+    /// Drops the cached normalized tensor train after a pivot mutation.
+    fn invalidate_normalized_cache(&self) {
+        *self.normalized_cache.borrow_mut() = None;
+    }
+
+    /// Mutable access to the site tensors.
+    ///
+    /// The normalized cache is a function of the site tensors and the pivot
+    /// matrices, so every write goes through this accessor.
+    fn t_tensors_mut(&mut self) -> &mut Vec<tensor4all_simplett::Tensor3<T>> {
+        self.invalidate_normalized_cache();
+        &mut self.t_tensors
+    }
+
+    /// Mutable access to the pivot matrices.
+    ///
+    /// The normalized cache is a function of the site tensors and the pivot
+    /// matrices, so every write goes through this accessor.
+    fn pivot_matrices_mut(&mut self) -> &mut Vec<Matrix<T>> {
+        self.invalidate_normalized_cache();
+        &mut self.pivot_matrices
     }
 
     /// Evaluate the TCI1 approximation at one multi-index.
@@ -489,7 +586,10 @@ where
     /// assert!((tci.evaluate(&[2, 3]).unwrap() - 6.0).abs() < 1e-10);
     /// ```
     pub fn evaluate(&self, index: &[usize]) -> Result<T> {
-        self.to_tensor_train()?.evaluate(index).map_err(Into::into)
+        self.ensure_normalized_tensor_train()?;
+        let cache = self.normalized_cache.borrow();
+        let tensor_train = cache.as_ref().ok_or_else(cache_missing)?;
+        tensor_train.evaluate(index).map_err(Into::into)
     }
 
     /// Add one local pivot to a bond unless the local error is below `tolerance`.
@@ -616,7 +716,7 @@ where
                 cross.add_pivot_row(&self.pi[bond], row)?;
                 self.i_set[bond + 1].push(self.pi_i_set[bond][row].clone());
                 self.update_site_tensor_from_matrix(bond + 1, cross.pivot_rows())?;
-                self.pivot_matrices[bond] = cross.pivot_matrix();
+                self.pivot_matrices_mut()[bond] = cross.pivot_matrix();
                 if bond + 1 < self.len() - 1 {
                     self.refresh_pi_rows(bond + 1, f)?;
                 }
@@ -631,7 +731,7 @@ where
                 cross.add_pivot_col(&self.pi[bond], col)?;
                 self.j_set[bond].push(self.pi_j_set[bond + 1][col].clone());
                 self.update_site_tensor_from_matrix(bond, cross.pivot_cols())?;
-                self.pivot_matrices[bond] = cross.pivot_matrix();
+                self.pivot_matrices_mut()[bond] = cross.pivot_matrix();
                 if bond > 0 {
                     self.refresh_pi_cols(bond - 1, f)?;
                 }
@@ -779,7 +879,7 @@ where
             });
         }
 
-        self.t_tensors[site] = tensor;
+        self.t_tensors_mut()[site] = tensor;
         Ok(())
     }
 
@@ -823,7 +923,7 @@ where
         cross.add_pivot_col(&self.pi[bond], new_col)?;
         self.j_set[bond].push(self.pi_j_set[bond + 1][new_col].clone());
         self.update_site_tensor_from_matrix(bond, cross.pivot_cols())?;
-        self.pivot_matrices[bond] = cross.pivot_matrix();
+        self.pivot_matrices_mut()[bond] = cross.pivot_matrix();
         if bond > 0 {
             self.update_pi_cols(bond - 1, f)?;
         }
@@ -844,7 +944,7 @@ where
         cross.add_pivot_row(&self.pi[bond], new_row)?;
         self.i_set[bond + 1].push(self.pi_i_set[bond][new_row].clone());
         self.update_site_tensor_from_matrix(bond + 1, cross.pivot_rows())?;
-        self.pivot_matrices[bond] = cross.pivot_matrix();
+        self.pivot_matrices_mut()[bond] = cross.pivot_matrix();
         if bond + 1 < self.len() - 1 {
             self.update_pi_rows(bond + 1, f)?;
         }

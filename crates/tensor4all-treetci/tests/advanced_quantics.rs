@@ -79,7 +79,12 @@ fn quantics_grid_polynomial_matches_all_points_on_branching_tree() {
         f(&coords)
     };
 
-    let (tn, _ranks, errors) = crossinterpolate2(
+    let tensor4all_treetci::TreeTciRunResult {
+        treetn: tn,
+        ranks: _ranks,
+        errors,
+        ..
+    } = crossinterpolate2(
         batch_eval_from_point(qf),
         grid.local_dimensions(),
         branching_tree(grid.len()),
@@ -146,7 +151,9 @@ fn quantics_grid_batch_evaluator_matches_point_evaluator() {
     };
 
     // Run with point-eval-based batch closure
-    let (tn_point, _, _) = crossinterpolate2(
+    let tensor4all_treetci::TreeTciRunResult {
+        treetn: tn_point, ..
+    } = crossinterpolate2(
         batch_eval_from_point(qf),
         grid.local_dimensions(),
         branching_tree(grid.len()),
@@ -171,7 +178,9 @@ fn quantics_grid_batch_evaluator_matches_point_evaluator() {
         Ok(values)
     };
 
-    let (tn_batch, _, _) = crossinterpolate2(
+    let tensor4all_treetci::TreeTciRunResult {
+        treetn: tn_batch, ..
+    } = crossinterpolate2(
         batch_eval,
         grid.local_dimensions(),
         branching_tree(grid.len()),

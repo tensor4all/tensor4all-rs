@@ -5,17 +5,17 @@ mod private {
     use super::*;
 
     pub(super) trait Sealed {
-        fn sample_standard_normal(rng: &mut rand_chacha::ChaCha8Rng) -> Self;
+        fn sample_standard_normal(rng: &mut dyn rand::RngCore) -> Self;
     }
 
     impl Sealed for f64 {
-        fn sample_standard_normal(rng: &mut rand_chacha::ChaCha8Rng) -> Self {
+        fn sample_standard_normal(rng: &mut dyn rand::RngCore) -> Self {
             StandardNormal.sample(rng)
         }
     }
 
     impl Sealed for Complex64 {
-        fn sample_standard_normal(rng: &mut rand_chacha::ChaCha8Rng) -> Self {
+        fn sample_standard_normal(rng: &mut dyn rand::RngCore) -> Self {
             let re = StandardNormal.sample(rng);
             let im = StandardNormal.sample(rng);
             Complex64::new(re, im)
@@ -56,6 +56,6 @@ impl<T> AciScalar for T where
 {
 }
 
-pub(crate) fn sample_standard_normal<T: AciScalar>(rng: &mut rand_chacha::ChaCha8Rng) -> T {
+pub(crate) fn sample_standard_normal<T: AciScalar>(rng: &mut dyn rand::RngCore) -> T {
     <T as private::Sealed>::sample_standard_normal(rng)
 }

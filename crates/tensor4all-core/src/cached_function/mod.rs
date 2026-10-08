@@ -29,6 +29,7 @@
 pub mod cache_key;
 pub mod error;
 pub mod index_int;
+pub mod multi_index_cache;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -68,18 +69,27 @@ pub(crate) fn compute_coeffs<K: CacheKey>(
         });
     }
 
+    // INVARIANT: for an index space with cardinality greater than one, each
+    // coefficient consumed by a valid multi-index is at most `cardinality / 2`
+    // and the trailing coordinates only ever contribute zero; the `bits` guard
+    // above caps the cardinality at `2^K`.
+    let last_bond = local_dims.iter().rposition(|&d| d > 1);
     let mut coeffs = Vec::with_capacity(local_dims.len());
     let mut prod = K::ONE;
-    for &d in local_dims {
+    for (i, &d) in local_dims.iter().enumerate() {
         coeffs.push(prod.clone());
-        let dim = K::from_usize(d);
-        prod = prod
-            .checked_mul(dim)
-            .ok_or_else(|| error::CacheKeyError::Overflow {
-                total_bits: bits,
-                max_bits: K::BITS_COUNT,
-                key_type: std::any::type_name::<K>(),
-            })?;
+        if Some(i) < last_bond {
+            // Detects coefficient overflow if `total_bits` ever stops bounding
+            // the coefficients this loop produces.
+            let dim = K::from_usize(d);
+            prod = prod
+                .checked_mul(dim)
+                .ok_or_else(|| error::CacheKeyError::Overflow {
+                    total_bits: bits,
+                    max_bits: K::BITS_COUNT,
+                    key_type: std::any::type_name::<K>(),
+                })?;
+        }
     }
 
     Ok(coeffs)
@@ -130,6 +140,17 @@ enum InnerCache<V> {
 }
 
 impl<V: Clone + Send + Sync> InnerCache<V> {
+    /// Size in bytes of one key of the selected key type.
+    fn key_bytes(&self) -> usize {
+        match self {
+            Self::U64 { .. } => std::mem::size_of::<u64>(),
+            Self::U128 { .. } => std::mem::size_of::<u128>(),
+            Self::U256 { .. } => std::mem::size_of::<U256>(),
+            Self::U512 { .. } => std::mem::size_of::<U512>(),
+            Self::U1024 { .. } => std::mem::size_of::<U1024>(),
+        }
+    }
+
     /// Create a new cache, automatically selecting the key type.
     fn new(local_dims: &[usize]) -> Result<Self, error::CacheKeyError> {
         let bits = total_bits(local_dims);
@@ -339,6 +360,14 @@ impl<V: Clone + Send + Sync + 'static> CacheBackend<V> {
         match self {
             Self::Auto(inner) => inner.clear(),
             Self::Custom(cache) => cache.clear(),
+        }
+    }
+
+    /// Size in bytes of one key; the type-erased custom backend does not report one.
+    fn key_bytes(&self) -> usize {
+        match self {
+            Self::Auto(inner) => inner.key_bytes(),
+            Self::Custom(_) => 0,
         }
     }
 

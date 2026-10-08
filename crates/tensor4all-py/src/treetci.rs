@@ -231,12 +231,16 @@ fn crossinterpolate(
         }
     };
 
-    let (treetn, ranks, errors) = match run {
+    let result = match run {
         Ok(Ok(result)) => result,
         Ok(Err(error)) => return Err(take_error(&py_error, error.into())),
         Err(payload) => return Err(panic_error("TreeTCI", payload)),
     };
-    Ok((PyTreeTensorNetwork::from_inner(treetn), ranks, errors))
+    Ok((
+        PyTreeTensorNetwork::from_inner(result.treetn),
+        result.ranks,
+        result.errors,
+    ))
 }
 
 /// Register the TreeTCI bindings on the extension module.

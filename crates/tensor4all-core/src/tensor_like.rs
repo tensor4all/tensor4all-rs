@@ -483,7 +483,11 @@ pub struct FactorizeResult<T: TensorIndex> {
     pub bond_index: T::Index,
     /// Singular values (only for SVD).
     pub singular_values: Option<Vec<f64>>,
-    /// Rank of the factorization.
+    /// Retained bond dimension of the factorization.
+    ///
+    /// Tensor LU/CI factorization represents a rank-zero matrix selection
+    /// with a dimension-one bond and an exactly zero product. The selected
+    /// canonical factor keeps its unit diagonal; the other factor is zero.
     pub rank: usize,
     incremental_qr_state: Option<IncrementalQrState>,
 }
@@ -1347,7 +1351,7 @@ pub trait TensorConstructionLike: TensorContractionLike {
     /// Returns `Self::Error` when the input and output index lists differ in
     /// length (a length mismatch) or when a constituent diagonal or outer
     /// product reports a failure; propagates failures from [`Self::diagonal`],
-    /// [`Self::scalar_one`], and [`Self::outer_product`].
+    /// [`Self::scalar_one`], and [`TensorContractionLike::outer_product`].
     fn delta(
         input_indices: &[<Self as TensorIndex>::Index],
         output_indices: &[<Self as TensorIndex>::Index],
@@ -1840,7 +1844,7 @@ pub trait TensorConstructionLike: TensorContractionLike {
     /// (a duplicate-index failure), when a coordinate is out of range (an
     /// out of bounds failure), or when the underlying one-hot construction or
     /// contraction reports a failure; propagates failures from
-    /// [`Self::onehot`] and [`Self::contract`].
+    /// [`Self::onehot`] and [`TensorContractionLike::contract`].
     fn select_indices(
         &self,
         selected_indices: &[<Self as TensorIndex>::Index],

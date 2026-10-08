@@ -27,6 +27,7 @@ tenferro-provider-inject = [
 ]
 
 [dependencies]
+rand_chacha.workspace = true
 tensor4all-treetci = { path = "../tensor4all-treetci", default-features = false }
 tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
 tensor4all-core = { path = "../tensor4all-core", default-features = false }

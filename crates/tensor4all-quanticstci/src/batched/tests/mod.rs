@@ -14,7 +14,7 @@ fn test_batched_tci_2component_1d() {
         .build()
         .unwrap();
 
-    let options = QtciOptions::default().with_tolerance(1e-8);
+    let options = QtciOptions::default().with_tolerance(1e-8).with_rng_seed(0);
 
     // Use sin(x)+1 and cos(x) so all components are non-zero at x=0
     // (the default initial pivot).
@@ -232,7 +232,37 @@ fn batched_tci_rejects_short_callback_results() {
         QtciOptions::default(),
     );
     let error = result.err().unwrap();
-    assert!(error.to_string().contains("expected at least 2"));
+    assert!(
+        error
+            .to_string()
+            .contains("expected exactly 2 components per point"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn batched_tci_rejects_oversized_callback_results() {
+    // The components of a point are read with a fixed stride, so accepting a
+    // longer result would silently misalign every point after the first.
+    let grid = DiscretizedGrid::builder(&[2])
+        .with_lower_bound(&[0.0])
+        .with_upper_bound(&[1.0])
+        .build()
+        .unwrap();
+    let result = quanticscrossinterpolate_multicomponent::<f64, _>(
+        &grid,
+        pointwise_components_batch(|_| vec![1.0, 2.0, 3.0]),
+        &[2],
+        None,
+        QtciOptions::default(),
+    );
+    let error = result.err().unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("expected exactly 2 components per point"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
@@ -408,4 +438,71 @@ fn test_combine_component_tts_basic() {
             );
         }
     }
+}
+
+/// One stream drives every component: the two-component multichannel entry
+/// consumes exactly what two sequential single-component runs consume from the
+/// same stream, and the second component therefore continues the sequence
+/// instead of restarting it.
+#[test]
+fn multicomponent_with_rng_consumes_one_stream_across_components() {
+    let grid = DiscretizedGrid::builder(&[4])
+        .with_lower_bound(&[0.0])
+        .with_upper_bound(&[1.0])
+        .build()
+        .unwrap();
+    let options = QtciOptions {
+        tolerance: 1e-8,
+        max_bond_dim: Some(4),
+        n_random_init_pivot: 3,
+        rng_seed: Some(0),
+        ..QtciOptions::default()
+    };
+
+    let mut multichannel = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0);
+    let _ = quanticscrossinterpolate_multicomponent_with_rng::<f64, _, _>(
+        &grid,
+        pointwise_components_batch(|x: &[f64]| vec![1.0 + x[0], 2.0 * x[0] + 1.0]),
+        &[2],
+        None,
+        options.clone(),
+        &mut multichannel,
+    )
+    .unwrap();
+
+    // Two sequential single-component runs on a second stream.
+    let mut sequential = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0);
+    for _ in 0..2 {
+        let _ = quanticscrossinterpolate_batch_with_rng::<f64, _, _>(
+            &grid,
+            pointwise_coordinate_batch(|x: &[f64]| 1.0 + x[0]),
+            None,
+            options.clone(),
+            &mut sequential,
+        )
+        .unwrap();
+    }
+
+    let tail = |rng: &mut rand_chacha::ChaCha8Rng| {
+        (0..16)
+            .map(|_| rand::RngCore::next_u64(rng))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        tail(&mut multichannel),
+        tail(&mut sequential),
+        "two components must consume one shared stream, not a restarted one"
+    );
+
+    // The public entry point also accepts an erased stream (`?Sized` bound).
+    let mut inner = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0);
+    let erased: &mut dyn rand::RngCore = &mut inner;
+    let _ = quanticscrossinterpolate_batch_with_rng::<f64, _, _>(
+        &grid,
+        pointwise_coordinate_batch(|x: &[f64]| 1.0 + x[0]),
+        None,
+        options,
+        erased,
+    )
+    .unwrap();
 }

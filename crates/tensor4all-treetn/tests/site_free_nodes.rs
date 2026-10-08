@@ -612,12 +612,11 @@ fn zero_site_free_leaf_canonicalizes_to_zero_network() {
     assert_eq!(canonical.clone().norm().unwrap(), 0.0);
 }
 
-/// LU and CI canonicalization fails on a zero tensor that has to be factorized,
-/// whether the node is site-free or not, because a rank-zero split has no
-/// valid bond. The error keeps the root cause in its message and leaves the
-/// network unchanged.
+/// LU and CI canonicalization keep a valid dimension-one bond for a zero
+/// tensor, whether the factorized node is site-free or not. Both functional
+/// and in-place forms preserve the zero value and the external site index.
 #[test]
-fn lu_and_ci_canonicalization_reports_zero_tensor_cause() {
+fn lu_and_ci_canonicalization_preserve_zero_tensor_value() {
     let (site_a, bond) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
     let site_free_zero: Network = TreeTN::from_tensors(
         vec![
@@ -644,26 +643,27 @@ fn lu_and_ci_canonicalization_reports_zero_tensor_cause() {
         for form in [CanonicalForm::LU, CanonicalForm::CI] {
             let label = format!("{form:?} with zero node {zero_node}");
             let options = CanonicalizationOptions::forced().with_form(form);
-            let message = network
+            let expected = network.to_dense().unwrap();
+            let canonical = network
                 .clone()
                 .canonicalize([center.to_string()], options)
-                .unwrap_err()
-                .to_string();
-            assert!(
-                message.contains("canonicalize: factorization failed: invalid dimension 0"),
-                "{label}: {message}"
-            );
-
+                .unwrap();
             let mut in_place = network.clone();
-            assert!(
-                in_place
-                    .canonicalize_mut([center.to_string()], options)
-                    .is_err(),
-                "{label}"
-            );
-            assert_eq!(in_place.link_dims(), network.link_dims(), "{label}");
-            assert!(!in_place.is_canonicalized(), "{label}");
-            assert_values(&in_place, &network.to_dense().unwrap(), &label);
+            in_place
+                .canonicalize_mut([center.to_string()], options)
+                .unwrap();
+            for result in [&canonical, &in_place] {
+                assert_eq!(result.link_dims(), vec![1], "{label}");
+                assert!(result.is_canonicalized(), "{label}");
+                let actual = result.to_dense().unwrap();
+                assert_eq!(actual.indices(), expected.indices(), "{label}");
+                assert_eq!(actual.maxabs().unwrap(), 0.0, "{label}");
+                assert_eq!(actual.norm().unwrap(), 0.0, "{label}");
+            }
+
+            assert_eq!(network.link_dims(), vec![2], "{label}");
+            assert!(!network.is_canonicalized(), "{label}");
+            assert_values(network, &expected, &label);
         }
     }
 }

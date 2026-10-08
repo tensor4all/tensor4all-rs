@@ -7,19 +7,22 @@ use std::collections::{HashMap, HashSet};
 
 use bnum::types::{U1024, U256, U512};
 
-use crate::einsum_helper::EinsumScalar;
 use crate::einsum_helper::{matrix_times_col_vector, row_vector_times_matrix};
 use crate::error::{Result, SimpleTensorTrainError};
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{LocalIndex, MultiIndex, Tensor3, Tensor3Ops};
 
-/// Compute total bits needed for index space
+/// Compute total bits needed for the index space.
+///
+/// Each site contributes `ceil(log2(dim))` bits, the width of the largest
+/// mixed-radix key, so a binary site contributes one bit. Keys are bounded by
+/// `product(local_dims) - 1`, matching `tensor4all_core::CachedFunction`.
 fn compute_total_bits(local_dims: &[usize]) -> u32 {
     local_dims.iter().fold(0u32, |bits, &dim| {
         let dim_bits = if dim <= 1 {
             0
         } else {
-            (dim as u64).ilog2().saturating_add(1)
+            ((dim - 1) as u64).ilog2().saturating_add(1)
         };
         bits.saturating_add(dim_bits)
     })
@@ -253,7 +256,7 @@ pub struct TTCache<T: TTScalar> {
     site_dims: Vec<Vec<usize>>,
 }
 
-impl<T: TTScalar + EinsumScalar> TTCache<T> {
+impl<T: TTScalar> TTCache<T> {
     /// Create a new TTCache from a tensor train
     pub fn new<TT: AbstractTensorTrain<T>>(tt: &TT) -> Self {
         let n = tt.len();

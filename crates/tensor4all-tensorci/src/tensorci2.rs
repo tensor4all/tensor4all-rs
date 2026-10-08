@@ -77,6 +77,9 @@ pub struct TCI2Options {
     /// *relative* threshold: the bond error is divided by the maximum
     /// absolute function value seen so far. Typical choices are `1e-8` for
     /// moderate accuracy and `1e-12` for high accuracy.
+    /// With `normalize_error = false`, this is an absolute threshold.
+    /// Each half-sweep fixes its absolute threshold before updating any bond;
+    /// local LU updates retain their separate numerical relative cutoff.
     pub tolerance: f64,
     /// Maximum number of half-sweep iterations (default: `20`).
     ///
@@ -93,8 +96,9 @@ pub struct TCI2Options {
     /// Pivot search strategy (default: [`PivotSearchStrategy::Full`]).
     ///
     /// `Full` materializes the entire candidate matrix and finds the best
-    /// pivot exactly. `Rook` uses lazy block-rook search and is faster for
-    /// very large local dimensions but may miss some pivots.
+    /// pivot exactly. `Rook` uses lazy block-rook search and can reduce
+    /// evaluations for large local dimensions, but may miss some pivots.
+    /// Certifying an exactly zero residual can require all remaining entries.
     pub pivot_search: PivotSearchStrategy,
     /// Whether to normalize the bond error by the maximum observed sample
     /// value (default: `true`).
@@ -146,6 +150,20 @@ impl TCI2Options {
             validate_positive("max_bond_dim", max_bond_dim)?;
         }
         Ok(())
+    }
+
+    // Both optimizer and public sweep must give LU the same absolute threshold.
+    // This follows TensorCrossInterpolation.jl's optimize!/updatepivots!
+    // separation of the requested tolerance from LU's numerical relative floor.
+    fn sweep_tolerance(&self, max_sample_value: f64) -> Result<(f64, f64)> {
+        let normalization = if self.normalize_error && max_sample_value > 0.0 {
+            max_sample_value
+        } else {
+            1.0
+        };
+        let abs_tol = self.tolerance * normalization;
+        validate_nonnegative_finite("absolute sweep tolerance", abs_tol)?;
+        Ok((normalization, abs_tol))
     }
 }
 
@@ -256,6 +274,7 @@ struct PivotUpdateContext<'a, B> {
     batched_f: &'a Option<B>,
     left_orthogonal: bool,
     options: &'a TCI2Options,
+    abs_tol: f64,
     extra_i_set: &'a [MultiIndex],
     extra_j_set: &'a [MultiIndex],
 }
@@ -288,10 +307,14 @@ pub enum PivotSearchStrategy {
     Full,
     /// Use lazy block-rook pivoting over partial matrix blocks.
     ///
-    /// Avoids materializing the full candidate matrix, making it faster
-    /// for very large local dimensions. Error normalization uses the
-    /// maximum sample value observed through the lazy requests rather
-    /// than a full-grid scan.
+    /// Avoids materializing the full candidate matrix. Exactly zero starting
+    /// residual columns are skipped; an all-zero residual can require all
+    /// remaining entries to be inspected, one column at a time. Nonzero local
+    /// maxima are still heuristic. Error normalization uses the maximum sample
+    /// value observed through lazy requests rather than a full-grid scan.
+    /// The per-edge evaluator memoizes sampled entries, so this strategy is
+    /// not a cache-memory cap: exhaustive zero certification can retain the
+    /// complete candidate grid even though requests remain partial batches.
     Rook,
 }
 
@@ -559,7 +582,7 @@ where
     {
         validate_explicit_index_sets(&local_dims, &i_set, &j_set)?;
         let max_sample_value = max_sample_over_index_sets(&local_dims, &i_set, &j_set, f);
-        if max_sample_value < 1e-30 {
+        if max_sample_value == 0.0 {
             return Err(TCIError::InvalidPivot {
                 message: "explicit TensorCI2 index sets only sample zero values".to_string(),
             });
@@ -755,6 +778,7 @@ where
         B: Fn(&[MultiIndex]) -> Vec<T>,
     {
         options.validate()?;
+        let (_, abs_tol) = options.sweep_tolerance(self.max_sample_value)?;
         let n = self.len();
         self.invalidate_site_tensors();
         self.flush_pivot_errors();
@@ -770,6 +794,7 @@ where
                         batched_f,
                         left_orthogonal: true,
                         options,
+                        abs_tol,
                         extra_i_set: &empty,
                         extra_j_set: &empty,
                     },
@@ -785,6 +810,7 @@ where
                         batched_f,
                         left_orthogonal: false,
                         options,
+                        abs_tol,
                         extra_i_set: &empty,
                         extra_j_set: &empty,
                     },
@@ -1148,10 +1174,10 @@ where
                 let site_dim = self.local_dims[b];
                 let right_dim = np; // = |I_{b+1}|
 
-                // A numerically zero pivot matrix (the function underflows in
-                // this subdomain) cannot be solved; emit a zero core with the
-                // same bond shape instead of failing the solve.
-                if (0..np).all(|i| (0..nj).all(|j| Scalar::abs_val(p_mat[[i, j]]) < f64::EPSILON)) {
+                // An exactly zero pivot matrix cannot be solved; emit a zero
+                // core with the same bond shape. Small nonzero values must
+                // still be interpolated, regardless of their absolute scale.
+                if (0..np).all(|i| (0..nj).all(|j| p_mat[[i, j]].is_zero())) {
                     self.site_tensors[b] = try_tensor3_zeros(left_dim, site_dim, right_dim)?;
                     continue;
                 }
@@ -1522,6 +1548,57 @@ where
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
+    // The seeded high-level path uses an explicitly named RNG and delegates to
+    // the caller-owned-stream entry point.
+    let mut rng = seeded_rng(options.seed);
+    crossinterpolate2_with_rng(f, batched_f, local_dims, initial_pivots, options, &mut rng)
+}
+
+/// Interpolate on a caller-owned random stream.
+///
+/// Same as [`crossinterpolate2`], but consumes `rng` directly for the global
+/// pivot search instead of deriving a seed for a hidden generator. Use this
+/// when the caller needs to control or reproduce the pivot trajectory, for
+/// example by passing a `ChaCha8Rng` with a fixed seed.
+///
+/// # Errors
+/// Returns [`TCIError::InvalidConfiguration`] for invalid algorithm options,
+/// [`TCIError::DimensionMismatch`] if `local_dims` has fewer than 2 elements,
+/// or [`TCIError::InvalidPivot`] if all initial pivots evaluate to zero.
+/// # Examples
+///
+/// ```
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_tensorci::{crossinterpolate2_with_rng, TCI2Options};
+///
+/// let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
+/// let mut rng = ChaCha8Rng::seed_from_u64(42);
+/// let result = crossinterpolate2_with_rng::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>, _>(
+///     f,
+///     None,
+///     vec![4, 4],
+///     vec![vec![0, 0]],
+///     TCI2Options { max_iter: 2, ..TCI2Options::default() },
+///     &mut rng,
+/// )
+/// .unwrap();
+/// assert!(!result.ranks.is_empty());
+/// ```
+pub fn crossinterpolate2_with_rng<T, F, B, R>(
+    f: F,
+    batched_f: Option<B>,
+    local_dims: Vec<usize>,
+    initial_pivots: Vec<MultiIndex>,
+    options: TCI2Options,
+    rng: &mut R,
+) -> Result<TCI2OptimizationResult<T>>
+where
+    T: Scalar + TTScalar + Default + MatrixLuciScalar,
+    F: Fn(&MultiIndex) -> T,
+    B: Fn(&[MultiIndex]) -> Vec<T>,
+    R: rand::Rng + ?Sized,
+{
     options.validate()?;
     if local_dims.len() < 2 {
         return Err(TCIError::DimensionMismatch {
@@ -1547,7 +1624,7 @@ where
         }
     }
 
-    if tci.max_sample_value < 1e-30 {
+    if tci.max_sample_value == 0.0 {
         return Err(TCIError::InvalidPivot {
             message: "Initial pivots have zero function values".to_string(),
         });
@@ -1559,7 +1636,15 @@ where
         options.tol_margin_global_search,
     );
 
-    optimize_with_finder(tci, f, batched_f, options, finder)
+    optimize_with_finder_with_rng(tci, f, batched_f, options, finder, rng)
+}
+
+/// Builds the explicitly named RNG for the seeded production paths.
+pub(crate) fn seeded_rng(seed: Option<u64>) -> rand_chacha::ChaCha8Rng {
+    match seed {
+        Some(seed) => rand_chacha::ChaCha8Rng::seed_from_u64(seed),
+        None => rand_chacha::ChaCha8Rng::from_os_rng(),
+    }
 }
 
 /// Optimize an existing [`TensorCI2`] state with an injected global pivot finder.
@@ -1590,7 +1675,7 @@ where
 /// Returns [`TCIError::InvalidConfiguration`] for invalid algorithm options or
 /// [`TCIError::InvalidPivot`] when the input state has no pivots. It also
 /// forwards errors from two-site sweeps, tensor-train conversion, callback
-/// length validation, and final one-site cleanup.
+/// length validation, global pivot search, and final one-site cleanup.
 ///
 /// # Examples
 ///
@@ -1624,7 +1709,7 @@ where
 /// assert!((tt.evaluate(&[2, 3]).unwrap() - 6.0).abs() < 1e-10);
 /// ```
 pub fn optimize_with_finder<T, F, B, G>(
-    mut tci: TensorCI2<T>,
+    tci: TensorCI2<T>,
     f: F,
     batched_f: Option<B>,
     options: TCI2Options,
@@ -1635,6 +1720,59 @@ where
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
     G: GlobalPivotFinder,
+{
+    let mut rng = seeded_rng(options.seed);
+    optimize_with_finder_with_rng(tci, f, batched_f, options, finder, &mut rng)
+}
+
+/// Optimize with a caller-owned random stream.
+///
+/// Same as [`optimize_with_finder`], but consumes `rng` directly for the global
+/// pivot search instead of deriving a seed for a hidden generator, so a caller
+/// can pin or advance the stream itself.
+///
+/// # Errors
+/// Returns [`TCIError::InvalidConfiguration`] for invalid algorithm options or
+/// [`TCIError::InvalidPivot`] when the input state has no pivots. It also
+/// forwards errors from two-site sweeps, tensor-train conversion, callback
+/// length validation, global pivot search, and final one-site cleanup.
+/// # Examples
+///
+/// ```
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_tensorci::{
+///     optimize_with_finder_with_rng, DefaultGlobalPivotFinder, TCI2Options, TensorCI2,
+/// };
+///
+/// let mut tci = TensorCI2::<f64>::new(vec![4, 4]).unwrap();
+/// tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+/// let mut rng = ChaCha8Rng::seed_from_u64(7);
+/// let result = optimize_with_finder_with_rng::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>, _, _>(
+///     tci,
+///     |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64,
+///     None,
+///     TCI2Options { max_iter: 1, ..TCI2Options::default() },
+///     DefaultGlobalPivotFinder::default(),
+///     &mut rng,
+/// )
+/// .unwrap();
+/// assert!(result.ranks.last().copied().unwrap() >= 1);
+/// ```
+pub fn optimize_with_finder_with_rng<T, F, B, G, R>(
+    mut tci: TensorCI2<T>,
+    f: F,
+    batched_f: Option<B>,
+    options: TCI2Options,
+    finder: G,
+    rng: &mut R,
+) -> Result<TCI2OptimizationResult<T>>
+where
+    T: Scalar + TTScalar + Default + MatrixLuciScalar,
+    F: Fn(&MultiIndex) -> T,
+    B: Fn(&[MultiIndex]) -> Vec<T>,
+    G: GlobalPivotFinder,
+    R: rand::Rng + ?Sized,
 {
     options.validate()?;
     if tci.rank() == 0 {
@@ -1650,19 +1788,8 @@ where
     let mut nglobal_pivots_history: Vec<usize> = Vec::new();
     let mut termination = TCI2Termination::MaxIterations;
 
-    let mut rng = if let Some(seed) = options.seed {
-        rand::rngs::StdRng::seed_from_u64(seed)
-    } else {
-        rand::rngs::StdRng::from_os_rng()
-    };
-
     for iter in 0..options.max_iter {
-        let error_normalization = if options.normalize_error && tci.max_sample_value > 0.0 {
-            tci.max_sample_value
-        } else {
-            1.0
-        };
-        let abs_tol = options.tolerance * error_normalization;
+        let (error_normalization, abs_tol) = options.sweep_tolerance(tci.max_sample_value)?;
 
         // Determine sweep direction
         let is_forward = match options.sweep_strategy {
@@ -1702,6 +1829,7 @@ where
                         batched_f: &batched_f,
                         left_orthogonal: true,
                         options: &options,
+                        abs_tol,
                         extra_i_set: &extra_i_set[b + 1],
                         extra_j_set: &extra_j_set[b],
                     },
@@ -1717,6 +1845,7 @@ where
                         batched_f: &batched_f,
                         left_orthogonal: false,
                         options: &options,
+                        abs_tol,
                         extra_i_set: &extra_i_set[b + 1],
                         extra_j_set: &extra_j_set[b],
                     },
@@ -1742,7 +1871,10 @@ where
             j_set: tci.j_set.clone(),
         };
 
-        let global_pivots = finder.find_global_pivots(&input, &f, abs_tol, &mut rng);
+        // Erase the caller's RNG type once, so the generic pipeline below the
+        // public boundary is instantiated a single time.
+        let mut stream: &mut R = &mut *rng;
+        let global_pivots = finder.find_global_pivots(&input, &f, abs_tol, &mut stream)?;
         let n_global = global_pivots.len();
         tci.add_global_pivots(&global_pivots)?;
         nglobal_pivots_history.push(n_global);
@@ -1778,12 +1910,7 @@ where
     // Final 1-site sweep to:
     // 1. Remove unnecessary pivots added by global pivots
     // 2. Compute site tensors
-    let error_normalization = if options.normalize_error && tci.max_sample_value > 0.0 {
-        tci.max_sample_value
-    } else {
-        1.0
-    };
-    let abs_tol = options.tolerance * error_normalization;
+    let (_, abs_tol) = options.sweep_tolerance(tci.max_sample_value)?;
     tci.sweep1site(
         &f,
         true,
@@ -1896,9 +2023,9 @@ where
             &pi,
             Some(RrLUOptions {
                 max_bond_dim: context.options.max_bond_dim.unwrap_or(usize::MAX),
-                rel_tol: context.options.tolerance,
-                abs_tol: 0.0,
+                abs_tol: context.abs_tol,
                 left_orthogonal: context.left_orthogonal,
+                ..RrLUOptions::default()
             }),
         )?
     } else {
@@ -1917,9 +2044,9 @@ where
             },
             RrLUOptions {
                 max_bond_dim: context.options.max_bond_dim.unwrap_or(usize::MAX),
-                rel_tol: context.options.tolerance,
-                abs_tol: 0.0,
+                abs_tol: context.abs_tol,
                 left_orthogonal: context.left_orthogonal,
+                ..RrLUOptions::default()
             },
         );
         if let Some(err) = evaluator.take_error() {

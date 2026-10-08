@@ -1,13 +1,91 @@
 use crate::error::Result as TreeTciResult;
 use crate::{
-    globalpivot::{find_global_pivots, ScalarParts},
+    globalpivot::{find_global_pivots_erased, ScalarParts},
     update::update_edge,
     AllEdges, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer, TreeTCI2,
 };
 use anyhow::Result;
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use tensor4all_core::CommonScalar;
 use tensor4all_core::{MatrixLuciScalar as Scalar, RrLUOptions};
 use tensor4all_tensorbackend::FullPivLuScalar;
+
+/// The stopping condition reached by a TreeTCI optimization call.
+///
+/// Like the chain TCI's `TCI2Termination`, this distinguishes convergence
+/// from resource limits. Convergence describes sampled pivot errors, not a
+/// bound on the error over the entire index space.
+/// Additional reasons may be added; exhaustive matches need a fallback arm.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::TreeTciTermination;
+///
+/// let reason = TreeTciTermination::MaxBondDimension;
+/// assert_ne!(reason, TreeTciTermination::Converged);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TreeTciTermination {
+    /// Three trailing iterations have error strictly below `tolerance`,
+    /// final maximum rank equal to the minimum rank in that window, and
+    /// no newly accepted global pivots.
+    ///
+    /// Errors are normalized only when `normalize_error` is enabled.
+    /// Disabled searches and the search skipped on the final iteration
+    /// contribute zero pivots; this reason does not certify an exhaustive
+    /// residual check or a global search after that final iteration.
+    Converged,
+    /// The maximum rank reached `max_bond_dim` in three trailing iterations.
+    ///
+    /// This condition is checked before global search and convergence, so
+    /// it takes precedence even when the sampled error is below tolerance.
+    /// It does not imply that every edge has reached the cap.
+    MaxBondDimension,
+    /// `max_iter` iterations completed without either earlier stopping condition.
+    ///
+    /// A low error in the last iteration alone is insufficient for convergence.
+    MaxIterations,
+}
+
+/// Iteration diagnostics and stopping reason from optimizing a TreeTCI state.
+///
+/// The optimized state stays with the caller. [`crate::TreeTciRunResult`]
+/// additionally contains a materialized tree tensor network.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::{
+///     optimize_default, TreeTCI2, TreeTciGraph, TreeTciOptions, TreeTciTermination,
+/// };
+///
+/// let mut state = TreeTCI2::<f64>::new(vec![2, 2], TreeTciGraph::linear_chain(2)?)?;
+/// state.add_global_pivots(&[vec![0, 0]])?;
+/// let result = optimize_default(
+///     &mut state, |batch| Ok(vec![2.0; batch.n_points()]),
+///     &TreeTciOptions { seed: Some(0), ..Default::default() },
+/// )?;
+/// assert_eq!(result.termination, TreeTciTermination::Converged);
+/// assert_eq!(result.ranks, vec![1; 3]);
+/// assert_eq!(result.errors, vec![0.0; 3]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Clone, Debug)]
+pub struct TreeTciOptimizationResult {
+    /// Maximum bond dimension after each completed iteration.
+    pub ranks: Vec<usize>,
+    /// Maximum sampled bond error after each iteration, normalized when requested.
+    ///
+    /// Has the same length as `ranks`; these are not full-network residuals.
+    pub errors: Vec<f64>,
+    /// The stopping condition evaluated by this call's optimization loop.
+    pub termination: TreeTciTermination,
+    /// Oracle evaluation and optional memo accounting for this optimization call.
+    pub evaluation: crate::TreeTciEvaluationStats,
+}
 
 /// MVP optimization options for TreeTCI.
 ///
@@ -52,6 +130,7 @@ use tensor4all_tensorbackend::FullPivLuScalar;
 ///     max_nglobal_pivot: 10,
 ///     tol_margin_global_search: 5.0,
 ///     seed: Some(42),
+///     evaluation_cache_bytes: None,
 /// };
 /// assert!((opts.tolerance - 1e-12).abs() < 1e-20);
 /// assert_eq!(opts.max_iter, 50);
@@ -134,6 +213,19 @@ pub struct TreeTciOptions {
     /// `None` seeds from OS entropy. Only used when `enable_global_pivots`
     /// is `true`. Default: `None`.
     pub seed: Option<u64>,
+
+    /// Optional logical key/value byte budget for target memoization.
+    ///
+    /// `None` (default) evaluates every request and preserves callback semantics.
+    /// Use `Some(256 * 1024 * 1024)` for expensive deterministic targets.
+    /// `Some(0)` deduplicates only within each batch and retains no values.
+    /// At capacity, inserts are skipped and reported; no entries are evicted.
+    /// Memoization requires a fixed value for each point throughout the call,
+    /// and supports index spaces up to 1024 bits. Callback errors and wrong
+    /// output lengths are never cached. The cache belongs to this run, is
+    /// shared across updates/searches/final materialization, and is dropped
+    /// at return. Bytes exclude allocator overhead and do not bound total RSS.
+    pub evaluation_cache_bytes: Option<usize>,
 }
 
 impl TreeTciOptions {
@@ -174,117 +266,16 @@ impl Default for TreeTciOptions {
             max_nglobal_pivot: 5,
             tol_margin_global_search: 10.0,
             seed: None,
+            evaluation_cache_bytes: None,
         }
     }
-}
-
-/// Reason why a TreeTCI optimization loop stopped.
-///
-/// Reported in [`TreeTciOptimizeReport::termination`] by
-/// [`optimize_with_proposer`] and [`optimize_default`].
-///
-/// # Examples
-///
-/// ```
-/// use tensor4all_treetci::{
-///     optimize_default, GlobalIndexBatch, TreeTCI2, TreeTciEdge, TreeTciGraph,
-///     TreeTciOptions, TreeTciTermination,
-/// };
-/// use anyhow::Result;
-///
-/// // The 3x3 identity has rank 3; a cap of 1 cannot reach the tolerance, so
-/// // the loop stops once the rank has sat at the cap for three sweeps.
-/// let graph = TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap();
-/// let mut state = TreeTCI2::<f64>::new(vec![3, 3], graph).unwrap();
-/// state.add_global_pivots(&[vec![0, 0]]).unwrap();
-/// state.max_sample_value = 1.0;
-///
-/// let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
-///     Ok((0..batch.n_points())
-///         .map(|p| if batch.get(0, p) == batch.get(1, p) { 1.0 } else { 0.0 })
-///         .collect())
-/// };
-/// let options = TreeTciOptions {
-///     tolerance: 1e-12,
-///     max_iter: 10,
-///     max_bond_dim: Some(1),
-///     ..Default::default()
-/// };
-/// let report = optimize_default(&mut state, evaluate, &options).unwrap();
-/// assert_eq!(report.termination, TreeTciTermination::MaxBondDimension);
-/// assert_eq!(report.ranks, vec![1, 1, 1]);
-/// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum TreeTciTermination {
-    /// Over the last three sweeps every bond error was below
-    /// [`TreeTciOptions::tolerance`], no global pivots were added, and the
-    /// last rank equals the minimum rank of the window. When
-    /// [`TreeTciOptions::max_bond_dim`] is set, the final rank is strictly
-    /// below it: ranks never exceed the cap after a sweep, a final rank equal
-    /// to the cap would make the whole window sit at the cap (the last rank is
-    /// the window minimum), and that case is taken by the saturation stop,
-    /// which is checked first.
-    Converged,
-    /// [`TreeTciOptions::max_bond_dim`] is set and the maximal bond dimension
-    /// reached it in each of the last three sweeps. This stop is checked
-    /// before the convergence criterion.
-    MaxBondDimension,
-    /// [`TreeTciOptions::max_iter`] sweeps ran without either stop.
-    MaxIterations,
-}
-
-/// Result of a TreeTCI optimization loop.
-///
-/// Returned by [`optimize_with_proposer`] and [`optimize_default`]. `ranks`
-/// and `errors` hold one entry per sweep actually run.
-///
-/// # Examples
-///
-/// ```
-/// use tensor4all_treetci::{
-///     optimize_default, GlobalIndexBatch, TreeTCI2, TreeTciEdge, TreeTciGraph,
-///     TreeTciOptions, TreeTciTermination,
-/// };
-/// use anyhow::Result;
-///
-/// let graph = TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap();
-/// let mut state = TreeTCI2::<f64>::new(vec![2, 2], graph).unwrap();
-/// state.add_global_pivots(&[vec![0, 0]]).unwrap();
-/// state.max_sample_value = 1.0;
-///
-/// // f(i, j) = i + j + 1 has rank 2.
-/// let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
-///     Ok((0..batch.n_points())
-///         .map(|p| (batch.get(0, p).unwrap() + batch.get(1, p).unwrap() + 1) as f64)
-///         .collect())
-/// };
-/// let options = TreeTciOptions { tolerance: 1e-10, max_iter: 10, ..Default::default() };
-/// let report = optimize_default(&mut state, evaluate, &options).unwrap();
-///
-/// assert_eq!(report.termination, TreeTciTermination::Converged);
-/// assert_eq!(report.ranks.len(), report.errors.len());
-/// assert_eq!(report.ranks.last().copied(), Some(2));
-/// assert!(report.errors.last().copied().unwrap_or(1.0) < 1e-10);
-/// ```
-#[derive(Clone, Debug, PartialEq)]
-pub struct TreeTciOptimizeReport {
-    /// Maximal bond dimension after each sweep.
-    pub ranks: Vec<usize>,
-    /// Maximal bond error after each sweep, divided by
-    /// [`TreeTCI2::max_sample_value`] when
-    /// [`TreeTciOptions::normalize_error`] is set and the maximum is positive;
-    /// the raw bond error otherwise.
-    pub errors: Vec<f64>,
-    /// Why the loop stopped.
-    pub termination: TreeTciTermination,
 }
 
 /// Optimize a TreeTCI state with the MVP strategy choices:
 /// `AllEdges` visitation and [`DefaultProposer`](crate::DefaultProposer).
 ///
-/// Returns a [`TreeTciOptimizeReport`] with the per-sweep ranks and errors
-/// and the reason the loop stopped.
+/// Returns [`TreeTciOptimizationResult`] with per-iteration ranks, errors,
+/// and the stopping reason defined by [`TreeTciTermination`].
 ///
 /// This is a convenience wrapper around [`optimize_with_proposer`] with the
 /// default neighbor-product proposer.
@@ -292,6 +283,13 @@ pub struct TreeTciOptimizeReport {
 /// The evaluator may be called several times per edge update; see
 /// [`GlobalIndexBatch`](crate::GlobalIndexBatch#batch-sizes) for the batch
 /// sizes.
+///
+/// Repeated calls on the same function/topology/dimensions support increasing
+/// `max_bond_dim` or removing the cap. Current pivots and sampled normalization
+/// scale carry over; proposers retain the current edge's pivots directly.
+/// This call starts new diagnostics, a new convergence window and its own iteration budget,
+/// including the final-iteration global-search skip. It need not match one
+/// longer run. A failing evaluator can leave a partially updated state.
 ///
 /// # Errors
 ///
@@ -305,7 +303,7 @@ pub struct TreeTciOptimizeReport {
 /// ```
 /// use tensor4all_treetci::{
 ///     optimize_default, GlobalIndexBatch, TreeTCI2, TreeTciEdge,
-///     TreeTciGraph, TreeTciOptions, TreeTciTermination,
+///     TreeTciGraph, TreeTciOptions,
 /// };
 /// use anyhow::Result;
 ///
@@ -326,24 +324,22 @@ pub struct TreeTciOptimizeReport {
 /// };
 ///
 /// let options = TreeTciOptions { tolerance: 1e-10, max_iter: 5, ..Default::default() };
-/// let report = optimize_default(&mut state, evaluate, &options).unwrap();
+/// let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } = optimize_default(&mut state, evaluate, &options).unwrap();
 ///
-/// // The rank-2 identity converges within the sweep budget: one entry per
-/// // sweep actually run, at least the three-sweep convergence window.
-/// assert_eq!(report.termination, TreeTciTermination::Converged);
-/// assert!(report.ranks.len() >= 3 && report.ranks.len() <= 5);
-/// assert_eq!(report.ranks.len(), report.errors.len());
-/// assert_eq!(report.ranks.last().copied(), Some(2));
-/// assert!(report.errors.last().copied().unwrap_or(1.0) < 1e-8);
+/// // One entry per sweep actually run; the loop stops early once converged,
+/// // so this may be less than max_iter (5).
+/// assert_eq!(ranks, vec![2; 3]);
+/// assert_eq!(ranks.len(), errors.len());
+/// assert!(errors.last().copied().unwrap_or(1.0) < 1e-8);
 /// ```
 pub fn optimize_default<T, F>(
     state: &mut TreeTCI2<T>,
     evaluate: F,
     options: &TreeTciOptions,
-) -> TreeTciResult<TreeTciOptimizeReport>
+) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     options.validate()?;
     optimize_with_proposer(state, evaluate, options, &crate::DefaultProposer)
@@ -352,20 +348,8 @@ where
 /// Optimize a TreeTCI state with `AllEdges` visitation and a caller-supplied
 /// pivot candidate proposer.
 ///
-/// Returns a [`TreeTciOptimizeReport`]: the maximal bond dimension and the
-/// bond error after each sweep, and the [`TreeTciTermination`] reason. The
-/// loop stops with
-///
-/// - [`TreeTciTermination::MaxBondDimension`] when `max_bond_dim` is set and
-///   the rank reached it in each of the last three sweeps (checked first);
-/// - [`TreeTciTermination::Converged`] when, over the last three sweeps, every
-///   error is below `tolerance`, no global pivots were added, and the last
-///   rank equals the window minimum;
-/// - [`TreeTciTermination::MaxIterations`] when `max_iter` sweeps ran without
-///   either stop.
-///
-/// Every exit happens after a sweep, so the state can be materialized with
-/// [`to_treetn`](crate::to_treetn) whatever the reason.
+/// Returns [`TreeTciOptimizationResult`] with per-iteration ranks, errors,
+/// and the stopping reason defined by [`TreeTciTermination`].
 ///
 /// Use this when you need a custom proposer (e.g., [`SimpleProposer`](crate::SimpleProposer)
 /// or [`TruncatedDefaultProposer`](crate::TruncatedDefaultProposer)).
@@ -373,6 +357,19 @@ where
 /// The evaluator may be called several times per edge update; see
 /// [`GlobalIndexBatch`](crate::GlobalIndexBatch#batch-sizes) for the batch
 /// sizes.
+///
+/// Candidate generation uses one ChaCha8 stream seeded by
+/// [`PivotCandidateProposer::seed`] per optimization call; global searches use
+/// a separate ChaCha8 stream governed by [`TreeTciOptions::seed`]. Use
+/// [`optimize_with_proposer_with_rng`] to advance one caller-owned stream
+/// through both operations, including across continued calls.
+///
+/// Repeated calls on the same function/topology/dimensions support increasing
+/// `max_bond_dim` or removing the cap. Current pivots and sampled normalization
+/// scale carry over; proposers retain the current edge's pivots directly.
+/// This call starts new diagnostics, a new convergence window and its own iteration budget,
+/// including the final-iteration global-search skip. It need not match one
+/// longer run. A failing evaluator can leave a partially updated state.
 ///
 /// # Errors
 ///
@@ -386,7 +383,7 @@ where
 /// ```
 /// use tensor4all_treetci::{
 ///     optimize_with_proposer, GlobalIndexBatch, SimpleProposer,
-///     TreeTCI2, TreeTciEdge, TreeTciGraph, TreeTciOptions, TreeTciTermination,
+///     TreeTCI2, TreeTciEdge, TreeTciGraph, TreeTciOptions,
 /// };
 /// use anyhow::Result;
 ///
@@ -406,23 +403,187 @@ where
 /// };
 ///
 /// let proposer = SimpleProposer::seeded(42);
-/// let options = TreeTciOptions { tolerance: 1e-10, max_iter: 2, ..Default::default() };
-/// let report = optimize_with_proposer(
+/// let options = TreeTciOptions { tolerance: 1e-10, max_iter: 3, ..Default::default() };
+/// let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } = optimize_with_proposer(
 ///     &mut state, evaluate, &options, &proposer,
 /// ).unwrap();
 ///
-/// // Convergence needs three sweeps of history, so a two-sweep budget always
-/// // ends at the iteration limit, with one entry per sweep.
-/// assert_eq!(report.termination, TreeTciTermination::MaxIterations);
-/// assert_eq!(report.ranks.len(), 2);
-/// assert_eq!(report.errors.len(), 2);
+/// // One entry per sweep actually run; the loop stops early once converged,
+/// // so this may be less than max_iter (3).
+/// assert_eq!(ranks, vec![2; 3]);
+/// assert_eq!(ranks.len(), errors.len());
 /// ```
 pub fn optimize_with_proposer<T, F, P>(
     state: &mut TreeTCI2<T>,
     evaluate: F,
     options: &TreeTciOptions,
     proposer: &P,
-) -> TreeTciResult<TreeTciOptimizeReport>
+) -> TreeTciResult<TreeTciOptimizationResult>
+where
+    T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
+    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    P: PivotCandidateProposer,
+{
+    options.validate()?;
+    with_seeded_streams(options, proposer, |streams| {
+        let evaluator = crate::evaluation::RunEvaluator::new(
+            evaluate,
+            &state.local_dims,
+            options.evaluation_cache_bytes,
+        )?;
+        let mut result = optimize_with_streams(
+            state,
+            |batch| evaluator.call(batch),
+            options,
+            proposer,
+            streams,
+        )?;
+        result.evaluation = evaluator.stats();
+        Ok(result)
+    })
+}
+
+/// Optimize with a caller-owned random stream.
+///
+/// Returns [`TreeTciOptimizationResult`], including the stopping reason.
+/// Same as [`optimize_with_proposer`], but consumes `rng` for every global
+/// pivot search of the run instead of deriving one generator from
+/// [`TreeTciOptions::seed`], so the caller can reproduce or advance the run's
+/// randomness and share one stream across several runs. Candidate generation
+/// and global searches both consume the supplied stream directly. The seed
+/// stored in a proposer and [`TreeTciOptions::seed`] are ignored here.
+///
+/// Repeated calls on the same function/topology/dimensions support increasing
+/// `max_bond_dim` or removing the cap. Current pivots and sampled normalization
+/// scale carry over; proposers retain the current edge's pivots directly.
+/// This call starts new diagnostics, a new convergence window and its own iteration budget,
+/// including the final-iteration global-search skip. It need not match one
+/// longer run. A failing evaluator can leave a partially updated state.
+///
+/// # Errors
+/// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
+/// for invalid options. It
+/// also returns an error when the operation fails (a shape or index mismatch,
+/// or a backend failure).
+/// # Examples
+///
+/// ```
+/// use anyhow::Result;
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_treetci::{
+///     optimize_with_proposer_with_rng, GlobalIndexBatch, SimpleProposer, TreeTCI2, TreeTciEdge,
+///     TreeTciGraph, TreeTciOptions,
+/// };
+///
+/// let graph = TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap();
+/// let mut state = TreeTCI2::<f64>::new(vec![2, 2], graph).unwrap();
+/// state.add_global_pivots(&[vec![0, 0]]).unwrap();
+/// state.max_sample_value = 1.0;
+///
+/// let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+///     let mut vals = Vec::with_capacity(batch.n_points());
+///     for p in 0..batch.n_points() {
+///         let i = batch.get(0, p).unwrap();
+///         let j = batch.get(1, p).unwrap();
+///         vals.push(if i == j { 1.0 } else { 0.0 });
+///     }
+///     Ok(vals)
+/// };
+///
+/// let mut rng = ChaCha8Rng::seed_from_u64(3);
+/// let options = TreeTciOptions { tolerance: 1e-10, max_iter: 1, ..Default::default() };
+/// let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } = optimize_with_proposer_with_rng(
+///     &mut state, evaluate, &options, &SimpleProposer::default(), &mut rng,
+/// ).unwrap();
+/// assert_eq!(ranks.len(), errors.len());
+/// ```
+pub fn optimize_with_proposer_with_rng<T, F, P, R>(
+    state: &mut TreeTCI2<T>,
+    evaluate: F,
+    options: &TreeTciOptions,
+    proposer: &P,
+    rng: &mut R,
+) -> TreeTciResult<TreeTciOptimizationResult>
+where
+    T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
+    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    P: PivotCandidateProposer,
+    R: rand::Rng + ?Sized,
+{
+    // Erase the caller's RNG type once so the run below is instantiated once
+    // per scalar type instead of once per (scalar, RNG) pair.
+    options.validate()?;
+    let mut stream: &mut R = rng;
+    let mut streams = RandomStreams::Shared(&mut stream);
+    let evaluator = crate::evaluation::RunEvaluator::new(
+        evaluate,
+        &state.local_dims,
+        options.evaluation_cache_bytes,
+    )?;
+    let mut result = optimize_with_streams(
+        state,
+        |batch| evaluator.call(batch),
+        options,
+        proposer,
+        &mut streams,
+    )?;
+    result.evaluation = evaluator.stats();
+    Ok(result)
+}
+
+/// Construct named seeded streams once at a high-level run boundary.
+pub(crate) fn with_seeded_streams<P, T>(
+    options: &TreeTciOptions,
+    proposer: &P,
+    run: impl FnOnce(&mut RandomStreams<'_>) -> T,
+) -> T
+where
+    P: PivotCandidateProposer,
+{
+    let searches_run = options.enable_global_pivots && options.max_iter > 1;
+    let mut global = match (searches_run, options.seed) {
+        (true, None) => ChaCha8Rng::from_os_rng(),
+        (_, seed) => ChaCha8Rng::seed_from_u64(seed.unwrap_or(0)),
+    };
+    let mut candidates = ChaCha8Rng::seed_from_u64(proposer.seed());
+    run(&mut RandomStreams::Separate {
+        candidates: &mut candidates,
+        global: &mut global,
+    })
+}
+
+// Dispatch at candidate/search batch boundaries, never per tensor element.
+pub(crate) enum RandomStreams<'a> {
+    Shared(&'a mut dyn rand::RngCore),
+    Separate {
+        candidates: &'a mut dyn rand::RngCore,
+        global: &'a mut dyn rand::RngCore,
+    },
+}
+
+impl RandomStreams<'_> {
+    fn candidates(&mut self) -> &mut dyn rand::RngCore {
+        match self {
+            Self::Shared(rng) => *rng,
+            Self::Separate { candidates, .. } => *candidates,
+        }
+    }
+    fn global(&mut self) -> &mut dyn rand::RngCore {
+        match self {
+            Self::Shared(rng) => *rng,
+            Self::Separate { global, .. } => *global,
+        }
+    }
+}
+
+pub(crate) fn optimize_with_streams<T, F, P>(
+    state: &mut TreeTCI2<T>,
+    evaluate: F,
+    options: &TreeTciOptions,
+    proposer: &P,
+    streams: &mut RandomStreams<'_>,
+) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
@@ -433,6 +594,7 @@ where
     let mut ranks = Vec::new();
     let mut errors = Vec::new();
     let mut nglobal_pivots_history: Vec<usize> = Vec::new();
+    let mut termination = TreeTciTermination::MaxIterations;
     let visitor = AllEdges;
     const INNER_EDGE_PASSES: usize = 2;
     // Mirrors `tensor4all-tensorci`'s `TensorCI2Options::ncheck_history` default
@@ -443,7 +605,6 @@ where
     // global pivots: an iteration that injected pivots has not yet swept them,
     // so its error estimate is stale with respect to those pivots.
     const NCHECK_HISTORY: usize = 3;
-    let mut termination = TreeTciTermination::MaxIterations;
 
     for _iter in 0..options.max_iter {
         for _pass in 0..INNER_EDGE_PASSES {
@@ -459,11 +620,20 @@ where
                 left_orthogonal: true,
             };
 
-            state.ijset_history.push(state.ijset.clone());
+            // INVARIANT: AllEdges visits each edge once in this pass. Its
+            // two subtree keys are not changed by updates of other edges;
+            // proposers can retain its current pivots without a full snapshot.
             state.flush_pivot_errors();
 
             for edge in visitor.visit_order(state) {
-                update_edge(state, edge, &evaluate, &kernel_options, proposer)?;
+                update_edge(
+                    state,
+                    edge,
+                    &evaluate,
+                    &kernel_options,
+                    proposer,
+                    streams.candidates(),
+                )?;
             }
         }
 
@@ -516,18 +686,14 @@ where
                 1.0
             };
             let abs_tol = options.tolerance * error_scale;
-            let seed = match options.seed {
-                Some(base) => base.wrapping_add(_iter as u64),
-                None => rand::random(),
-            };
-            let pivots = find_global_pivots(
+            let pivots = find_global_pivots_erased(
                 state,
                 &evaluate,
                 options.nsearch,
                 options.max_nglobal_pivot,
                 options.tol_margin_global_search,
                 abs_tol,
-                seed,
+                streams.global(),
             )?;
             state.add_global_pivots(&pivots)?;
             nglobal_pivots_history.push(pivots.len());
@@ -535,14 +701,13 @@ where
             nglobal_pivots_history.push(0);
         }
 
-        // BUGFIX (local, not upstream): the sweep loop previously always ran
-        // to `max_iter` with no convergence check, wasting O(max_iter /
-        // actual_sweeps_needed) work on already-converged problems. See
-        // ~/tensor4all-rust/treetci-optimize-no-early-stop-bug.md.
+        // This Rust loop applies an early-convergence break rather than
+        // unconditionally running every requested sweep. Its error comparison
+        // uses the normalized errors when requested, consistent with tolerance.
+        // The stopping contract and upstream comparison are recorded in
+        // docs/design/treetci-termination.md (issues #834 and #835).
         //
-        // Mirrors `TreeTCI.jl`'s `convergencecriterion` (as locally patched
-        // for the scale-mismatch bug on branch `local-fix-convergence`,
-        // commit 06563dd): error-below-tolerance + rank-stable over the
+        // Error-below-tolerance + rank-stable over the
         // trailing window, with no global pivots added anywhere in the window
         // (including this iteration's search, so a stop here never leaves
         // unswept injected pivots). The bond-dimension saturation disjunct is
@@ -563,10 +728,11 @@ where
         }
     }
 
-    Ok(TreeTciOptimizeReport {
+    Ok(TreeTciOptimizationResult {
         ranks,
         errors,
         termination,
+        evaluation: Default::default(),
     })
 }
 

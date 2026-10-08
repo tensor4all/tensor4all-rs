@@ -70,3 +70,30 @@ fn test_flip_error_oversized_site_list() {
     let error = flip_operator(usize::MAX, BoundaryCondition::Periodic).unwrap_err();
     assert!(error.to_string().contains("site list"));
 }
+
+/// The fused site index must be output-major, `site = output * 2 + input`.
+/// The flip MPO's site tensors are invariant under swapping the bits, so only
+/// the packing helper can pin this convention; an input-major build would put
+/// the `input = 0, output = 1` amplitude at index 1 instead of 2.
+#[test]
+fn flip_mpo_packs_the_site_index_output_major() {
+    assert_eq!(pack_site_index(0, 0), 0);
+    assert_eq!(pack_site_index(1, 0), 1);
+    assert_eq!(pack_site_index(0, 1), 2);
+    assert_eq!(pack_site_index(1, 1), 3);
+
+    // Every site tensor of the built MPO uses that packing: the entries with
+    // weight for the `cin = 0` (carry -1) entry are the (0, 1) and (1, 0)
+    // pairs, i.e. indices 2 and 1.
+    let mpo = flip_mpo(2, BoundaryCondition::Periodic).unwrap();
+    let first = mpo.site_tensor(0);
+    assert_eq!(
+        first[[0, pack_site_index(0, 1), 0]],
+        Complex64::new(1.0, 0.0)
+    );
+    assert_eq!(
+        first[[0, pack_site_index(1, 0), 0]],
+        Complex64::new(1.0, 0.0)
+    );
+    assert_eq!(first[[0, pack_site_index(0, 0), 0]], Complex64::zero());
+}

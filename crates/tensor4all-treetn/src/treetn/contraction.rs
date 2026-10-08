@@ -70,11 +70,18 @@ fn indices_except_exact<I: IndexLike>(indices: &[I], excluded: &[I]) -> Vec<I> {
 }
 
 fn zipup_factorize_options(
+    alg: FactorizeAlg,
     canonical: Canonical,
     svd_policy: Option<SvdTruncationPolicy>,
     max_bond_dim: Option<usize>,
 ) -> Result<FactorizeOptions> {
-    let mut options = FactorizeOptions::svd().with_canonical(canonical);
+    let mut options = match alg {
+        FactorizeAlg::SVD => FactorizeOptions::svd(),
+        FactorizeAlg::QR => FactorizeOptions::qr(),
+        FactorizeAlg::LU => FactorizeOptions::lu(),
+        FactorizeAlg::CI => FactorizeOptions::ci(),
+    }
+    .with_canonical(canonical);
     if let Some(max_bond_dim) = max_bond_dim {
         options = options.with_max_bond_dim(max_bond_dim);
     }
@@ -83,7 +90,7 @@ fn zipup_factorize_options(
     }
     options
         .validate()
-        .map_err(|err| anyhow::anyhow!("invalid zipup factorization options: {err}"))?;
+        .context("invalid zipup factorization options")?;
     Ok(options)
 }
 
@@ -362,8 +369,23 @@ where
     /// # Errors
     ///
     /// Returns an error when the zip-up contraction fails (a shape or index
-    /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure). Invalid SVD policies and zero bond caps
+    /// are rejected before topology checks and single-node shortcuts, retaining
+    /// [`tensor4all_core::FactorizeError::InvalidOptions`] as the source.
     ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_treetn::TreeTN;
+    /// let shared = DynIndex::new_dyn(2);
+    /// let left = TreeTN::from_tensors(vec![
+    ///     IdxTensor::from_dense(vec![shared.clone()], vec![1.0, 2.0]).unwrap()], vec![0]).unwrap();
+    /// let right = TreeTN::from_tensors(vec![
+    ///     IdxTensor::from_dense(vec![shared], vec![5.0, 6.0]).unwrap()], vec![0]).unwrap();
+    /// let result = left.contract_zipup(&right, &0, None, None).unwrap();
+    /// assert_eq!(result.contract_to_tensor().unwrap().to_vec::<f64>().unwrap(), vec![17.0]);
+    /// assert!(left.contract_zipup(&right, &0, None, Some(0)).is_err());
+    /// ```
     pub fn contract_zipup(
         &self,
         other: &Self,
@@ -397,16 +419,31 @@ where
     /// * `other` - The other TreeTN to contract with (must have same topology)
     /// * `center` - The center node name towards which to contract
     /// * `form` - Canonical form (Unitary/LU/CI)
-    /// * `svd_policy` - Optional SVD truncation policy
-    /// * `max_bond_dim` - Optional maximum bond dimension
+    /// * `svd_policy` - Optional SVD truncation policy; only valid with `Unitary`.
+    ///   Use `None` for LU/CI or to keep the default SVD truncation behavior.
+    /// * `max_bond_dim` - Optional positive maximum bond dimension; `None` means no cap
     ///
     /// # Returns
     /// The contracted TreeTN result, or an error if topologies don't match or contraction fails.
     /// # Errors
     ///
     /// Returns an error when the zip-up contraction fails (a shape or index
-    /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure). Invalid policies, zero bond caps, and
+    /// SVD policies with LU/CI are rejected before topology checks and shortcuts,
+    /// retaining [`tensor4all_core::FactorizeError::InvalidOptions`] as the source.
     ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{DynIndex, FactorizeError, IdxTensor, SvdTruncationPolicy};
+    /// use tensor4all_treetn::{CanonicalForm, TreeTN};
+    /// let site = DynIndex::new_dyn(2);
+    /// let tree = TreeTN::from_tensors(vec![
+    ///     IdxTensor::from_dense(vec![site], vec![1.0, 2.0]).unwrap()], vec![0]).unwrap();
+    /// let error = tree.contract_zipup_with(
+    ///     &tree, &0, CanonicalForm::LU, Some(SvdTruncationPolicy::new(1e-8)), None).unwrap_err();
+    /// assert!(matches!(error.source.downcast_ref::<FactorizeError>(),
+    ///     Some(FactorizeError::InvalidOptions(_))));
+    /// ```
     pub fn contract_zipup_with(
         &self,
         other: &Self,
@@ -616,8 +653,14 @@ where
             return Ok(result);
         }
 
-        let factorize_left = zipup_factorize_options(Canonical::Left, svd_policy, max_bond_dim)?;
-        let factorize_right = zipup_factorize_options(Canonical::Right, svd_policy, max_bond_dim)?;
+        let factorize_left =
+            zipup_factorize_options(FactorizeAlg::SVD, Canonical::Left, svd_policy, max_bond_dim)?;
+        let factorize_right = zipup_factorize_options(
+            FactorizeAlg::SVD,
+            Canonical::Right,
+            svd_policy,
+            max_bond_dim,
+        )?;
         let mut remainder: Option<T> = None;
         let mut result_tensors: HashMap<V, T> = HashMap::new();
         let mut result_bonds: Vec<Option<T::Index>> = vec![None; node_count - 1];
@@ -865,6 +908,14 @@ where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
+        let alg = match form {
+            CanonicalForm::Unitary => FactorizeAlg::SVD,
+            CanonicalForm::LU => FactorizeAlg::LU,
+            CanonicalForm::CI => FactorizeAlg::CI,
+        };
+        let factorize_options =
+            zipup_factorize_options(alg, Canonical::Left, svd_policy, max_bond_dim)?;
+
         // 1. Verify topologies are compatible
         if !self.same_topology(other) {
             return Err(anyhow::anyhow!(
@@ -953,32 +1004,7 @@ where
                 .cloned()
         };
 
-        // 8. Set up factorization options based on form
-        let alg = match form {
-            CanonicalForm::Unitary => FactorizeAlg::SVD,
-            CanonicalForm::LU => FactorizeAlg::LU,
-            CanonicalForm::CI => FactorizeAlg::CI,
-        };
-
-        let mut factorize_options = match alg {
-            FactorizeAlg::SVD => FactorizeOptions::svd(),
-            FactorizeAlg::QR => FactorizeOptions::qr(),
-            FactorizeAlg::LU => FactorizeOptions::lu(),
-            FactorizeAlg::CI => FactorizeOptions::ci(),
-        }
-        .with_canonical(Canonical::Left);
-
-        if let Some(max_bond_dim) = max_bond_dim {
-            factorize_options = factorize_options.with_max_bond_dim(max_bond_dim);
-        }
-        if let Some(policy) = svd_policy {
-            factorize_options = factorize_options.with_svd_policy(policy);
-        }
-        factorize_options
-            .validate()
-            .map_err(|err| anyhow::anyhow!("invalid zipup factorization options: {err}"))?;
-
-        // 9. Process edges from leaves towards root
+        // 8. Process edges from leaves towards root
         for (source_name, destination_name) in &edges {
             // Get tensors from both networks
             let node_a_idx = tn_a
@@ -2286,26 +2312,53 @@ where
 /// 2. Contracts the tensors along common (site) indices
 /// 3. Decomposes the result back to a TreeTN using the original topology
 ///
+/// The decomposition is an SVD, so `max_bond_dim` and `svd_policy` bound and
+/// truncate the resulting bond dimensions. `qr_rtol` is QR-specific and is
+/// rejected instead of silently ignored; `ContractionMethod::Fit` with
+/// [`FactorizeAlg::QR`](tensor4all_core::FactorizeAlg::QR) is the QR-based
+/// decomposition path.
+///
 /// This is O(exp(n)) in memory and is primarily useful for debugging and testing.
 #[allow(clippy::too_many_arguments)]
 /// # Errors
 ///
-/// Returns an error when the contraction fails (a shape or index mismatch,
-/// or a backend failure).
+/// Returns an error when the contraction fails (a shape or index mismatch, or
+/// a backend failure), when the truncation options are invalid, or when
+/// `qr_rtol` is set.
 ///
 pub fn contract_naive_to_treetn<T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
     center: &V,
-    _max_bond_dim: Option<usize>,
-    _svd_policy: Option<SvdTruncationPolicy>,
-    _qr_rtol: Option<f64>,
+    max_bond_dim: Option<usize>,
+    svd_policy: Option<SvdTruncationPolicy>,
+    qr_rtol: Option<f64>,
 ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
+    // Validate the truncation request before any dense work, so the scalar and
+    // single-node shortcuts below cannot accept invalid options either.
+    if qr_rtol.is_some() {
+        return Err(anyhow::anyhow!(
+            "contract_naive_to_treetn decomposes with SVD and does not accept qr_rtol; \
+             use ContractionMethod::Fit with FactorizeAlg::QR for QR-based truncation"
+        )
+        .into());
+    }
+    let mut factorize_options = FactorizeOptions::svd();
+    if let Some(max_bond_dim) = max_bond_dim {
+        factorize_options = factorize_options.with_max_bond_dim(max_bond_dim);
+    }
+    if let Some(policy) = svd_policy {
+        factorize_options = factorize_options.with_svd_policy(policy);
+    }
+    factorize_options
+        .validate()
+        .context("contract_naive_to_treetn: invalid truncation options")?;
+
     // 1. Contract to full tensor using existing contract_naive
     let contracted_tensor = tn_a.contract_naive(tn_b)?;
 
@@ -2370,13 +2423,9 @@ where
 
     let topology = super::decompose::TreeTopology::new(nodes, edges);
 
-    // 3. Decompose back to TreeTN
-    let result = factorize_tensor_to_treetn_with(
-        &contracted_tensor,
-        &topology,
-        FactorizeOptions::svd(),
-        center,
-    )?;
+    // 3. Decompose back to TreeTN, honoring the caller's truncation options.
+    let result =
+        factorize_tensor_to_treetn_with(&contracted_tensor, &topology, factorize_options, center)?;
 
     Ok(result)
 }

@@ -12,8 +12,8 @@
 //! freely during sweeps. This is essential when zipup under-estimates the
 //! required bond dimension.
 
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain};
@@ -24,7 +24,7 @@ fn create_random_mpo(
     input_indices: &[DynIndex],
     output_indices: &[DynIndex],
     link_indices: &[DynIndex],
-    rng: &mut StdRng,
+    rng: &mut ChaCha8Rng,
 ) -> TensorTrain {
     let mut tensors = Vec::with_capacity(length);
     for i in 0..length {
@@ -72,8 +72,8 @@ fn test_fit_bond_growth_with_rtol() {
         .map(|_| DynIndex::new_dyn(bond_dim))
         .collect();
 
-    let mut rng1 = StdRng::seed_from_u64(42);
-    let mut rng2 = StdRng::seed_from_u64(123);
+    let mut rng1 = ChaCha8Rng::seed_from_u64(42);
+    let mut rng2 = ChaCha8Rng::seed_from_u64(123);
 
     let mpo_a = create_random_mpo(length, &s_input, &s_shared, &links_a, &mut rng1);
     let mpo_b = create_random_mpo(length, &s_shared, &s_output, &links_b, &mut rng2);

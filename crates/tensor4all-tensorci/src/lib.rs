@@ -81,6 +81,7 @@ pub use globalsearch::{estimate_true_error, floating_zone};
 pub use optfirstpivot::opt_first_pivot;
 pub use tensorci1::{crossinterpolate1, TCI1Options, TCI1SweepStrategy, TensorCI1};
 pub use tensorci2::{
-    crossinterpolate2, optimize_with_finder, PivotSearchStrategy, Sweep2Strategy,
-    TCI2OptimizationResult, TCI2Options, TCI2Termination, TensorCI2,
+    crossinterpolate2, crossinterpolate2_with_rng, optimize_with_finder,
+    optimize_with_finder_with_rng, PivotSearchStrategy, Sweep2Strategy, TCI2OptimizationResult,
+    TCI2Options, TCI2Termination, TensorCI2,
 };

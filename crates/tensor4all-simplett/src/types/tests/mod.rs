@@ -93,19 +93,32 @@ fn test_slice_site() {
 fn test_as_left_matrix() {
     let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
     let t = tensor3_from_data(data, 2, 3, 4).unwrap();
+    let (left_dim, site_dim) = (2usize, 3usize);
 
     let (mat, rows, cols) = t.as_left_matrix();
-    assert_eq!(rows, 6); // 2 * 3
+    assert_eq!(rows, left_dim * site_dim);
     assert_eq!(cols, 4);
     assert_eq!(mat.len(), 24);
 
-    // Column-major matrix data: row = l*site_dim + s, col = r.
-    // First column (r=0): rows (0,0), (0,1), (0,2), (1,0), ...
-    assert_eq!(mat[0], 0.0);
-    assert_eq!(mat[1], 2.0);
-    assert_eq!(mat[2], 4.0);
-    assert_eq!(mat[5], 5.0);
-    assert_eq!(mat[6], 6.0);
+    // The fused row index is site-major (`row = site + site_dim * left`), so
+    // `(left, site, right)` sits at `row + rows * right`, while the tensor's own
+    // flat order is `left + left_dim * (site + site_dim * right)`.
+    let flat = |l: usize, site: usize, r: usize| (l + 2 * (site + 3 * r)) as f64;
+    let at = |l: usize, site: usize, r: usize| (site + site_dim * l) + rows * r;
+    for (l, site, r) in [
+        (0, 0, 0),
+        (1, 0, 0),
+        (0, 1, 0),
+        (1, 1, 0),
+        (1, 2, 3),
+        (0, 2, 3),
+    ] {
+        assert_eq!(mat[at(l, site, r)], flat(l, site, r), "({l},{site},{r})");
+    }
+    // A column-major reshape of `(left, site)` would put `(1, 0, 0)` at row 1;
+    // this convention puts `(0, 1, 0)` there instead.
+    assert_eq!(at(0, 1, 0), 1);
+    assert_ne!(at(1, 0, 0), 1);
 
     let (fallible_mat, fallible_rows, fallible_cols) = t.try_as_left_matrix().unwrap();
     assert_eq!(
@@ -118,17 +131,25 @@ fn test_as_left_matrix() {
 fn test_as_right_matrix() {
     let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
     let t = tensor3_from_data(data, 2, 3, 4).unwrap();
+    let (left_dim, site_dim, right_dim) = (2usize, 3usize, 4usize);
 
     let (mat, rows, cols) = t.as_right_matrix();
-    assert_eq!(rows, 2); // left_dim
-    assert_eq!(cols, 12); // 3 * 4
+    assert_eq!(rows, left_dim);
+    assert_eq!(cols, site_dim * right_dim);
     assert_eq!(mat.len(), 24);
 
-    // Column-major matrix data with rows l and columns (s, r).
-    assert_eq!(mat[0], 0.0);
-    assert_eq!(mat[1], 1.0);
-    assert_eq!(mat[22], 22.0);
-    assert_eq!(mat[23], 23.0);
+    // The fused column index is right-major (`column = right + right_dim * site`),
+    // so `(left, site, right)` sits at `left + rows * column`.
+    let flat = |l: usize, site: usize, r: usize| (l + left_dim * (site + site_dim * r)) as f64;
+    let column = |site: usize, r: usize| r + right_dim * site;
+    let at = |l: usize, site: usize, r: usize| l + rows * column(site, r);
+    for (l, site, r) in [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 2, 3), (0, 2, 3)] {
+        assert_eq!(mat[at(l, site, r)], flat(l, site, r), "({l},{site},{r})");
+    }
+    // A column-major reshape of `(site, right)` would put `(0, 1, 0)` at column
+    // 1 (site fastest); this convention puts `(0, 0, 1)` there instead.
+    assert_eq!(column(0, 1), 1);
+    assert_ne!(column(1, 0), 1);
 
     let (fallible_mat, fallible_rows, fallible_cols) = t.try_as_right_matrix().unwrap();
     assert_eq!(

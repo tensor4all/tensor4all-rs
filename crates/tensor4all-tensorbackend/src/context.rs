@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use tenferro::{CompiledGraph, GraphCompiler, Runtime, Tensor, TracedGraph};
 use tenferro_ad::{AdContext, EagerRuntime};
-use tenferro_cpu::{BufferPoolStats, CpuBackend};
+use tenferro_cpu::{BufferPoolStats, CpuBackend, CpuContext};
 use tenferro_tensor::{BackendSession, BackendSessionHost};
 
 /// Caller-owned execution domain used by context-aware tensor algorithms.
@@ -119,6 +119,17 @@ impl Drop for CanonicalSessionGuard {
     }
 }
 
+/// Run one concrete session on `backend` under the canonical session guard.
+fn run_canonical_session<R: Send>(
+    backend: &mut CpuBackend,
+    f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+) -> R {
+    backend.with_backend_session(|session| {
+        let _guard = CanonicalSessionGuard::enter();
+        f(session)
+    })
+}
+
 impl CpuExecutionContextError {
     fn initialization(
         component: &'static str,
@@ -149,9 +160,14 @@ struct GraphState {
 
 /// Caller-owned CPU execution domain for plain, graph, and eager-AD work.
 ///
-/// The supplied backend is the only source of CPU execution resources. Backend
-/// clones preserve its runtime identity; this constructor never uses
-/// `CpuBackend::new`, `CpuContext::from_env`, or a process-global fallback.
+/// The supplied backend is the only source of CPU execution resources for every
+/// entry from a thread that is not a Rayon worker. A plain session entered from a
+/// Rayon worker runs inline and single-threaded on a context-local pool-less CPU
+/// backend instead: a worker that waits for a pool install is handed more of the
+/// enclosing pool's work, and that work may enter a session itself
+/// (tensor4all-rs#830). Backend clones preserve its runtime identity; this
+/// constructor never uses `CpuBackend::new`, `CpuContext::from_env`, or a
+/// process-global fallback.
 /// Graph preparation caches and the eager runtime are owned by this context and
 /// are released when it is dropped.
 ///
@@ -168,6 +184,7 @@ struct GraphState {
 /// ```
 pub struct CpuExecutionContext {
     backend: Mutex<CpuBackend>,
+    inline: OnceLock<CpuBackend>,
     graph: OnceLock<Result<Mutex<GraphState>, CpuExecutionContextError>>,
     eager: OnceLock<Result<Arc<EagerRuntime>, CpuExecutionContextError>>,
 }
@@ -189,6 +206,7 @@ impl CpuExecutionContext {
     pub fn from_backend(backend: CpuBackend) -> Self {
         Self {
             backend: Mutex::new(backend),
+            inline: OnceLock::new(),
             graph: OnceLock::new(),
             eager: OnceLock::new(),
         }
@@ -211,14 +229,39 @@ impl CpuExecutionContext {
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
         CanonicalSessionGuard::assert_inactive();
+        // A Rayon worker can be handed more of the enclosing pool's work while
+        // tenferro installs this session into the context's own pool. That stolen
+        // work may enter a session itself, on a thread whose tenferro execution is
+        // already active, which tenferro rejects. Entering from a worker therefore
+        // runs the session inline and single-threaded on that worker and leaves
+        // parallelism to the enclosing pool.
+        if rayon::current_thread_index().is_some() {
+            let mut backend = self.inline_backend();
+            return run_canonical_session(&mut backend, f);
+        }
         let mut backend = match self.backend.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        backend.with_backend_session(|session| {
-            let _guard = CanonicalSessionGuard::enter();
-            f(session)
-        })
+        run_canonical_session(&mut backend, f)
+    }
+
+    /// Backend used for one session entered from a Rayon worker.
+    ///
+    /// `CpuContext::with_threads(1)` owns no Rayon pool, so its executor runs
+    /// every operation on the calling thread and never installs a session into a
+    /// pool the caller does not belong to.
+    fn inline_backend(&self) -> CpuBackend {
+        self.inline
+            .get_or_init(|| match CpuContext::with_threads(1) {
+                Ok(context) => CpuBackend::from_context(Arc::new(context)),
+                // INVARIANT: `CpuContext::with_threads` rejects only a zero worker
+                // count, which this call never passes, so this arm is unreachable.
+                // Keeping the supplied backend is a last resort rather than a
+                // policy: it is the only remaining backend this context owns.
+                Err(_) => self.backend_clone(),
+            })
+            .clone()
     }
 
     fn backend_clone(&self) -> CpuBackend {
@@ -714,6 +757,61 @@ mod tests {
         release_tx.send(()).unwrap();
         for handle in handles {
             handle.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn session_from_a_rayon_worker_completes_without_waiting_on_the_context_pool() {
+        use rayon::prelude::*;
+
+        // The context owns a two-worker Rayon pool, and the enclosing pool hands
+        // the worker waiting for a session install more of its own items. A
+        // session entry that installs into the context pool therefore re-enters a
+        // session on a thread whose execution is already active; the one-worker
+        // case makes that sequence certain.
+        let context = Arc::new(CpuExecutionContext::from_backend(
+            CpuBackend::with_threads(2).unwrap(),
+        ));
+        for enclosing_workers in [1usize, 2] {
+            let pool = Arc::new(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(enclosing_workers)
+                    .build()
+                    .unwrap(),
+            );
+            let (sender, receiver) = mpsc::channel();
+            let context = Arc::clone(&context);
+            std::thread::spawn(move || {
+                let results = pool.install(|| {
+                    (0..2usize)
+                        .into_par_iter()
+                        .map(|_| {
+                            let lhs = Tensor::from_vec_col_major(
+                                vec![2, 2],
+                                vec![1.0_f64, 2.0, 3.0, 4.0],
+                            )
+                            .unwrap();
+                            let rhs =
+                                Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0]).unwrap();
+                            context
+                                .with_session(|session| lhs.matmul(&rhs, session))
+                                .unwrap()
+                                .as_slice::<f64>()
+                                .unwrap()
+                                .to_vec()
+                        })
+                        .collect::<Vec<_>>()
+                });
+                let _ = sender.send(results);
+            });
+
+            let results = receiver.recv_timeout(Duration::from_secs(60)).expect(
+                "a session entered from a Rayon worker must finish instead of waiting on the context pool",
+            );
+            assert_eq!(results.len(), 2, "enclosing workers = {enclosing_workers}");
+            for values in results {
+                assert_eq!(values, vec![23.0, 34.0]);
+            }
         }
     }
 

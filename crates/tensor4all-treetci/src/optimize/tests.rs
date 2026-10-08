@@ -1,8 +1,68 @@
-use super::{optimize_default, TreeTciOptimizeReport, TreeTciOptions, TreeTciTermination};
+use super::{optimize_default, TreeTciOptimizationResult, TreeTciOptions, TreeTciTermination};
 use crate::test_support::assert_scalar_close;
 use crate::{GlobalIndexBatch, TreeTCI2, TreeTciEdge, TreeTciGraph};
 use anyhow::Result;
 use tensor4all_core::IndexLike;
+
+#[test]
+fn accepted_global_pivots_prevent_sampled_convergence() {
+    // Deliberately restrict local updates to the initial cross. Its local
+    // pivot error is zero, but f = 1 + i + j has residual i*j against the
+    // rank-1 approximation (1+i)(1+j). Global search must keep the run open.
+    struct InitialCrossOnly;
+
+    impl crate::PivotCandidateProposer for InitialCrossOnly {
+        fn candidates_with_rng<T, R: rand::Rng + ?Sized>(
+            &self,
+            _state: &TreeTCI2<T>,
+            _edge: TreeTciEdge,
+            _rng: &mut R,
+        ) -> crate::TreeTciResult<(Vec<Vec<usize>>, Vec<Vec<usize>>)> {
+            Ok((vec![vec![0]], vec![vec![0]]))
+        }
+    }
+
+    for enable_global_pivots in [false, true] {
+        let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+        state.add_global_pivots(&[vec![0, 0]]).unwrap();
+        state.max_sample_value = 1.0;
+        let residual_points_seen = std::cell::Cell::new(0);
+        let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+            Ok((0..batch.n_points())
+                .map(|point| {
+                    let i = batch.get(0, point).unwrap();
+                    let j = batch.get(1, point).unwrap();
+                    if i == 1 && j == 1 {
+                        residual_points_seen.set(residual_points_seen.get() + 1);
+                    }
+                    (1 + i + j) as f64
+                })
+                .collect())
+        };
+        let options = TreeTciOptions {
+            tolerance: 1e-12,
+            max_iter: 4,
+            enable_global_pivots,
+            nsearch: 20,
+            seed: Some(7),
+            ..Default::default()
+        };
+        let result =
+            crate::optimize_with_proposer(&mut state, evaluate, &options, &InitialCrossOnly)
+                .unwrap();
+        let (reason, iterations) = if enable_global_pivots {
+            assert!(residual_points_seen.get() > 0);
+            (crate::TreeTciTermination::MaxIterations, 4)
+        } else {
+            assert_eq!(residual_points_seen.get(), 0);
+            (crate::TreeTciTermination::Converged, 3)
+        };
+        assert_eq!(result.termination, reason);
+        assert_eq!(result.ranks, vec![1; iterations]);
+        assert_eq!(result.errors, vec![0.0; iterations]);
+        assert_swept_pivot_sets(&state, usize::MAX);
+    }
+}
 
 fn two_site_graph() -> TreeTciGraph {
     TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap()
@@ -112,10 +172,11 @@ fn optimize_default_converges_on_two_site_identity() {
         Ok(values)
     };
 
-    let TreeTciOptimizeReport {
+    let TreeTciOptimizationResult {
         ranks,
         errors,
         termination,
+        ..
     } = optimize_default(
         &mut tci,
         batch_eval,
@@ -140,16 +201,9 @@ fn optimize_default_converges_on_two_site_identity() {
     assert_eq!(tci.max_bond_dim(), 2);
 }
 
-// Previously named `optimize_default_runs_all_iterations_like_upstream_tree_tci`
-// and asserted `ranks.len() == 4` / `errors.len() == 4` (max_iter), pinning
-// parity with upstream TreeTCI.jl's sweep loop, which has no early-convergence
-// break at all. That upstream behavior is a known bug: see
-// ~/gw/CombTCI/COMPATIBILITY.md's `treetci-fix-convergence-criterion.patch`
-// (a *different*, scale-mismatch bug in the same convergence-check area,
-// found and locally patched by the same user, not yet upstreamed) and
-// ~/tensor4all-rust/treetci-optimize-no-early-stop-bug.md for this crate's
-// specific issue (no break at all, not just a wrong-scale comparison).
-// Renamed and flipped to assert the fixed (early-stopping) behavior instead.
+// Regression for the early-convergence stop documented in
+// docs/design/treetci-termination.md: an already-converged run must stop
+// after the confirmation window rather than exhausting max_iter.
 #[test]
 fn optimize_default_stops_early_once_converged() {
     let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
@@ -165,10 +219,11 @@ fn optimize_default_stops_early_once_converged() {
         Ok(values)
     };
 
-    let TreeTciOptimizeReport {
+    let TreeTciOptimizationResult {
         ranks,
         errors,
         termination,
+        ..
     } = optimize_default(
         &mut tci,
         batch_eval,
@@ -211,10 +266,11 @@ fn optimize_default_stops_early_when_bond_dim_saturated() {
         Ok(values)
     };
 
-    let TreeTciOptimizeReport {
+    let TreeTciOptimizationResult {
         ranks,
         errors,
         termination,
+        ..
     } = optimize_default(
         &mut tci,
         batch_eval,
@@ -344,10 +400,11 @@ fn run_capped_and_check<F>(
         .iter()
         .fold(0.0_f64, |acc, v| acc.max(v.abs()));
 
-    let TreeTciOptimizeReport {
+    let TreeTciOptimizationResult {
         ranks,
         errors,
         termination,
+        ..
     } = optimize_default(&mut tci, &evaluate, options).unwrap();
     assert_eq!(termination, TreeTciTermination::MaxBondDimension);
 
@@ -440,7 +497,7 @@ fn capped_sparse_chain_with_global_pivots_stops_on_swept_state() {
     );
 
     // The public entry point from the issue report succeeds as well.
-    let (treetn, ranks, _) = crate::crossinterpolate2::<f64, _, _>(
+    let crate::TreeTciRunResult { treetn, ranks, .. } = crate::crossinterpolate2::<f64, _, _>(
         evaluate,
         vec![4; N_SITES],
         TreeTciGraph::linear_chain(N_SITES).unwrap(),
@@ -495,4 +552,46 @@ fn capped_star_tree_with_global_pivots_stops_on_swept_state() {
             &options,
         );
     }
+}
+
+#[test]
+fn optimizer_threads_the_caller_stream_through_each_edge_pass() {
+    use crate::{DefaultProposer, PivotCandidateProposer};
+    use rand::{RngCore, SeedableRng};
+    use rand_chacha::ChaCha8Rng;
+    use std::cell::RefCell;
+    struct RecordDraws(RefCell<Vec<u64>>);
+    impl PivotCandidateProposer for RecordDraws {
+        fn seed(&self) -> u64 {
+            panic!("caller-stream path must not read the seed")
+        }
+        fn candidates_with_rng<T, R: rand::Rng + ?Sized>(
+            &self,
+            state: &TreeTCI2<T>,
+            edge: TreeTciEdge,
+            rng: &mut R,
+        ) -> crate::TreeTciResult<(Vec<Vec<usize>>, Vec<Vec<usize>>)> {
+            self.0.borrow_mut().push(rng.next_u64());
+            DefaultProposer.candidates_with_rng(state, edge, rng)
+        }
+    }
+    let proposer = RecordDraws(RefCell::new(Vec::new()));
+    let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+    state.add_global_pivots(&[vec![0, 0]]).unwrap();
+    state.max_sample_value = 1.0;
+    let options = TreeTciOptions {
+        enable_global_pivots: false,
+        max_iter: 2,
+        ..Default::default()
+    };
+    let evaluate = |batch: GlobalIndexBatch<'_>| Ok(vec![1.0; batch.n_points()]);
+    let mut rng = ChaCha8Rng::seed_from_u64(73);
+    let mut reference = rng.clone();
+    super::optimize_with_proposer_with_rng(&mut state, evaluate, &options, &proposer, &mut rng)
+        .unwrap();
+    assert_eq!(
+        *proposer.0.borrow(),
+        (0..4).map(|_| reference.next_u64()).collect::<Vec<_>>()
+    );
+    assert_eq!(rng.next_u64(), reference.next_u64());
 }

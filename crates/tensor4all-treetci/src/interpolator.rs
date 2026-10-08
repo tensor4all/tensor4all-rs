@@ -49,8 +49,10 @@ use crate::{
 /// - `normalize_error` (always `false`: the tolerance is absolute), and
 /// - `seed` (the problem's seed, the only source of randomness).
 ///
-/// The remaining options (`max_iter`, the global pivot search settings) come
-/// from the engine. A single-node problem is evaluated exactly on its full
+/// The remaining options (`max_iter`, the global pivot search settings, and
+/// `evaluation_cache_bytes`) come from the engine. The optional target memo
+/// covers optimization; named network materialization calls the evaluator
+/// separately. A single-node problem is evaluated exactly on its full
 /// index set, which costs the product of its site dimensions.
 ///
 /// # Examples

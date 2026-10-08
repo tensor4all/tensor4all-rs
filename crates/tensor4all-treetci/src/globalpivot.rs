@@ -14,12 +14,12 @@
 use crate::error::Result as TreeTciResult;
 use crate::{materialize::to_treetn, GlobalIndexBatch, MultiIndex, TreeTCI2};
 use anyhow::Result;
-use rand::{Rng, SeedableRng};
+use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::MatrixLuciScalar as Scalar;
-use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor};
+use tensor4all_core::{floating_zone_walk, AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_tensorbackend::FullPivLuScalar;
-use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
+use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator};
 
 /// Search for multi-indices where the current approximation error is large.
 ///
@@ -27,15 +27,16 @@ use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
 ///
 /// 1. Materialize the current [`TreeTCI2`] state as a `TreeTN`.
 /// 2. Draw `nsearch` random starting points.
-/// 3. For each starting point, sweep every site coordinate and keep the
-///    point with the largest interpolation error `|f(idx) - tt(idx)|`.
+/// 3. Walk each start with [`floating_zone_walk`], retaining the maximizing
+///    coordinate between site scans and repeating sweeps until no improvement,
+///    an error above `10 * abs_tol * tol_margin`, or 100 sweeps.
 /// 4. Keep points whose error exceeds `abs_tol * tol_margin`.
 /// 5. Return at most `max_nglobal_pivot` distinct points.
 ///
-/// The approximation is read at all `nsearch * sum(local_dims)` candidates
-/// in one batch through a single [`TreeTNCachedEvaluator`], which shares
-/// subtree environments between candidates instead of contracting the whole
-/// network once per point.
+/// One [`TreeTNCachedEvaluator`] is reused across all starts and sweeps. Each
+/// coordinate scan is a batch hinted around the varied site, sharing subtree
+/// environments. The held coordinate is not evaluated again in its own scan.
+/// Site-free junctions (`local_dims[site] == 1`) need no coordinate scan.
 ///
 /// The returned pivots are full-site multi-indices ready for
 /// [`TreeTCI2::add_global_pivots`].
@@ -58,9 +59,10 @@ use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
 ///
 /// Up to `max_nglobal_pivot` distinct full-site multi-indices where the
 /// current approximation is (likely) poor, strongest first. An empty vector
-/// when nothing exceeds the threshold. Among candidates with equal errors the
-/// one generated first wins: within a start, the lower site and then the
-/// lower local value; across starts, the earlier start.
+/// when nothing exceeds the threshold. Among positive equal errors, the lower
+/// local value wins at each site; an all-zero scan keeps the held coordinate.
+/// Across starts, the earlier start wins. This is a greedy local search and
+/// can stall on flat zero fibers.
 ///
 /// # Errors
 ///
@@ -70,7 +72,8 @@ use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
 /// when `abs_tol` or `tol_margin` is not finite and nonnegative (an
 /// invalid configuration), when the candidate index array shape is
 /// malformed (a shape mismatch), or when reading the materialized
-/// approximation at the candidates fails (a contraction failure).
+/// approximation at the candidates fails (a contraction failure), or a
+/// sampled interpolation residual is non-finite.
 ///
 /// # Examples
 ///
@@ -95,8 +98,8 @@ use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
 /// let mut state = TreeTCI2::<f64>::new(vec![2, 2], graph)?;
 /// state.add_global_pivots(&[vec![0, 0]])?;
 ///
-/// // Every start other than (0, 0) reaches (1, 1) by changing one site, and
-/// // repeated finds are merged into one pivot.
+/// // Starts with a nonzero coordinate reach (1, 1); repeated finds
+/// // are merged into one pivot. The (0, 0) start has flat zero fibers.
 /// let pivots = find_global_pivots(&state, evaluate, 4, 2, 1.0, 1.0, 42)?;
 /// assert_eq!(pivots, vec![vec![1, 1]]);
 /// # Ok(())
@@ -115,14 +118,88 @@ where
     T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
+    // The seeded path uses an explicitly named RNG and delegates to the
+    // caller-owned-stream entry point.
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    find_global_pivots_with_rng(
+        state,
+        evaluate,
+        nsearch,
+        max_nglobal_pivot,
+        tol_margin,
+        abs_tol,
+        &mut rng,
+    )
+}
+
+/// Global pivot search on a caller-owned random stream.
+///
+/// Same as [`find_global_pivots`], but consumes `rng` directly for the random
+/// starting points instead of deriving their stream from a seed, so a caller
+/// can pin, advance, or share one stream across several searches. Pass a
+/// `rand_chacha::ChaCha8Rng` when a deterministic algorithm is required.
+///
+/// # Errors
+/// Returns an error when the current state cannot be materialized as a
+/// `TreeTN` (a rank mismatch or a singular pivot matrix), when the batch
+/// evaluator returns a wrong number of values (a batch length mismatch),
+/// when `abs_tol` or `tol_margin` is not finite and nonnegative (an
+/// invalid configuration), when the candidate index array shape is
+/// malformed (a shape mismatch), or when reading the materialized
+/// approximation at the candidates fails (a contraction failure), or a
+/// sampled interpolation residual is non-finite.
+pub fn find_global_pivots_with_rng<T, F, R>(
+    state: &TreeTCI2<T>,
+    evaluate: F,
+    nsearch: usize,
+    max_nglobal_pivot: usize,
+    tol_margin: f64,
+    abs_tol: f64,
+    rng: &mut R,
+) -> TreeTciResult<Vec<MultiIndex>>
+where
+    T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    R: Rng + ?Sized,
+{
+    // Erase the caller's RNG type once, so the search body below is
+    // instantiated once per scalar type instead of once per (scalar, RNG) pair.
+    let mut stream: &mut R = rng;
+    find_global_pivots_erased(
+        state,
+        evaluate,
+        nsearch,
+        max_nglobal_pivot,
+        tol_margin,
+        abs_tol,
+        &mut stream,
+    )
+}
+
+/// The search body on an already erased stream.
+///
+/// Callers inside the crate use this so the search is instantiated once per
+/// scalar type.
+pub(crate) fn find_global_pivots_erased<T, F>(
+    state: &TreeTCI2<T>,
+    evaluate: F,
+    nsearch: usize,
+    max_nglobal_pivot: usize,
+    tol_margin: f64,
+    abs_tol: f64,
+    rng: &mut dyn RngCore,
+) -> TreeTciResult<Vec<MultiIndex>>
+where
+    T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+{
     let params = SearchParams {
         nsearch,
         max_nglobal_pivot,
         tol_margin,
         abs_tol,
-        seed,
     };
-    search_with_readout(state, evaluate, params, cached_batched_readout)
+    search_with_readout(state, evaluate, params, rng, cached_walk_readout)
 }
 
 /// Scalar parameters of one global pivot search, as passed to
@@ -133,48 +210,43 @@ struct SearchParams {
     max_nglobal_pivot: usize,
     tol_margin: f64,
     abs_tol: f64,
-    seed: u64,
 }
 
-/// Reads the materialized approximation at every candidate in one batch.
-///
-/// `candidates` has shape `[site_indices.len(), n_points]` in column-major
-/// layout (one candidate per column, rows in `site_indices` order), which is
-/// the layout [`TreeTNCachedEvaluator::evaluate_batched`] expects. The
-/// evaluator is built once per search, so its environment caches are shared
-/// by all candidates of that search. A plain batched call is used on purpose:
-/// splitting the batch per varied site with `evaluate_batched_with_hint`
-/// measured 1.6-1.9x slower on the issue #792 workloads.
-fn cached_batched_readout(
-    treetn: &TreeTN<IdxTensor, usize>,
-    site_indices: &[DynIndex],
+/// Read one scan through the cache owned by this search. A site hint also
+/// identifies single-candidate scans, whose varied site cannot be inferred.
+fn cached_walk_readout(
+    evaluator: &mut TreeTNCachedEvaluator<'_, usize>,
+    _treetn: &TreeTN<IdxTensor, usize>,
+    _site_indices: &[DynIndex],
     candidates: ColMajorArrayRef<'_, usize>,
+    scan_site: Option<usize>,
 ) -> Result<Vec<AnyScalar>> {
-    let mut evaluator =
-        TreeTNCachedEvaluator::new(treetn, site_indices, CachedEvaluatorOptions::default())
-            .map_err(anyhow::Error::from)?;
+    let hint = scan_site.map(EvaluationHint::around).unwrap_or_default();
     evaluator
-        .evaluate_batched(candidates)
+        .evaluate_batched_with_hint(candidates, hint)
         .map_err(anyhow::Error::from)
 }
 
 /// [`find_global_pivots`] with the approximation readout supplied by the
-/// caller. Production passes [`cached_batched_readout`]; tests also pass the
+/// caller. Production passes [`cached_walk_readout`]; tests also pass the
 /// pointwise [`TreeTN::evaluate`] to check that the readout does not change
 /// the selected pivots.
 fn search_with_readout<T, F, R>(
     state: &TreeTCI2<T>,
     evaluate: F,
     params: SearchParams,
-    readout: R,
+    rng: &mut dyn RngCore,
+    mut readout: R,
 ) -> TreeTciResult<Vec<MultiIndex>>
 where
     T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
-    R: FnOnce(
+    R: FnMut(
+        &mut TreeTNCachedEvaluator<'_, usize>,
         &TreeTN<IdxTensor, usize>,
         &[DynIndex],
         ColMajorArrayRef<'_, usize>,
+        Option<usize>,
     ) -> Result<Vec<AnyScalar>>,
 {
     let SearchParams {
@@ -182,7 +254,6 @@ where
         max_nglobal_pivot,
         tol_margin,
         abs_tol,
-        seed,
     } = params;
     if !abs_tol.is_finite() || abs_tol < 0.0 {
         return Err(
@@ -219,93 +290,76 @@ where
         site_indices.push(tensor.indices()[0].clone());
     }
 
-    // Candidate points: for each random start, each site coordinate swept
-    // over its full local dimension (same local search as the chain finder).
-    let candidate_count = (0..n_sites)
-        .try_fold(0usize, |count, site| {
-            count.checked_add(state.local_dims[site])
-        })
-        .and_then(|per_start| per_start.checked_mul(nsearch))
-        .ok_or_else(|| anyhow::anyhow!("global-pivot candidate count overflowed usize"))?;
-    let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    let mut points: Vec<MultiIndex> = Vec::with_capacity(candidate_count);
-    for _ in 0..nsearch {
-        let start: MultiIndex = (0..n_sites)
-            .map(|site| rng.random_range(0..state.local_dims[site]))
-            .collect();
-        for site in 0..n_sites {
-            for value in 0..state.local_dims[site] {
-                let mut point = start.clone();
-                point[site] = value;
-                points.push(point);
-            }
-        }
-    }
-
-    // Evaluate the function at all candidates in one batch.
-    let flat_len = n_sites
-        .checked_mul(points.len())
+    // Cache ownership is one search, across every start/site/sweep. Scratch
+    // is bounded by one site scan rather than nsearch * sum(local_dims).
+    let mut cache =
+        TreeTNCachedEvaluator::new(&treetn, &site_indices, CachedEvaluatorOptions::default())
+            .map_err(anyhow::Error::from)?;
+    let max_points = state
+        .local_dims
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(1)
+        .saturating_sub(1)
+        .max(1);
+    let flat_capacity = n_sites
+        .checked_mul(max_points)
         .ok_or_else(|| anyhow::anyhow!("global-pivot flat batch size overflowed usize"))?;
-    let mut flat = Vec::with_capacity(flat_len);
-    for point in &points {
-        flat.extend_from_slice(point);
-    }
-    let f_values = evaluate(GlobalIndexBatch::new(&flat, n_sites, points.len())?)?;
-    if f_values.len() != points.len() {
-        return Err(anyhow::anyhow!(
-            "batch evaluator returned {} values for {} global-pivot candidates",
-            f_values.len(),
-            points.len()
-        )
-        .into());
-    }
-
-    // Read the current approximation at all candidates in one batch. `flat`
-    // holds one candidate per column of `n_sites` rows (column-major), in the
-    // row order of `site_indices`.
-    let shape = [n_sites, points.len()];
-    let values_ref = ColMajorArrayRef::new(&flat, &shape)
-        .map_err(|error| anyhow::anyhow!("failed to build candidate index array: {error}"))?;
-    let tt_values = readout(&treetn, &site_indices, values_ref)?;
-    if tt_values.len() != points.len() {
-        return Err(anyhow::anyhow!(
-            "approximation readout returned {} values for {} global-pivot candidates",
-            tt_values.len(),
-            points.len()
-        )
-        .into());
-    }
-
-    // Local search per starting point.
-    //
-    // Tie-breaking: the strict `>` keeps the first candidate in generation
-    // order (lower site, then lower local value) among equal errors; below,
-    // the stable sort keeps the earlier start among equal errors and the
-    // deduplication keeps the first occurrence. The cached readout contracts
-    // in a different order than the pointwise `TreeTN::evaluate` it replaced
-    // (issue #792), so `tt` can differ from it in the last bits. Rounding can
-    // therefore change acceptance for candidates near the error threshold as
-    // well as reorder candidates whose errors are close. The tie-breaking
-    // rule above remains unchanged for the computed errors.
-    let mut best: Vec<(f64, MultiIndex)> = Vec::new();
-    let mut point_index = 0usize;
+    let mut flat = Vec::with_capacity(flat_capacity);
+    let mut start = Vec::with_capacity(n_sites);
+    let threshold = abs_tol * tol_margin;
+    let mut best = Vec::with_capacity(nsearch);
     for _ in 0..nsearch {
-        let mut start_best: Option<(f64, MultiIndex)> = None;
-        for site in 0..n_sites {
-            for _value in 0..state.local_dims[site] {
-                let error = interp_error(f_values[point_index], tt_values[point_index].clone());
-                if start_best
-                    .as_ref()
-                    .is_none_or(|(best_error, _)| error > *best_error)
-                {
-                    start_best = Some((error, points[point_index].clone()));
+        start.clear();
+        start.extend(state.local_dims.iter().map(|&dim| rng.random_range(0..dim)));
+        // Match chain TCI / TensorCrossInterpolation.jl: at most 100 sweeps,
+        // early exit above 10 * the acceptance threshold. Infinite early-stop
+        // bounds disable only that exit; the sweep/no-improvement bounds remain.
+        let (point, error) = floating_zone_walk::<_, anyhow::Error>(
+            &state.local_dims,
+            &start,
+            100,
+            10.0 * threshold,
+            |scan_site, points| {
+                flat.clear();
+                for point in points {
+                    flat.extend_from_slice(point);
                 }
-                point_index += 1;
-            }
-        }
-        if let Some((error, point)) = start_best
-            && error > abs_tol * tol_margin
-        {
+                let f_values = evaluate(GlobalIndexBatch::new(&flat, n_sites, points.len())?)?;
+                if f_values.len() != points.len() {
+                    return Err(anyhow::anyhow!(
+                        "batch evaluator returned {} values for {} global-pivot candidates",
+                        f_values.len(),
+                        points.len(),
+                    ));
+                }
+                let shape = [n_sites, points.len()];
+                let values = ColMajorArrayRef::new(&flat, &shape).map_err(|error| {
+                    anyhow::anyhow!("failed to build candidate index array: {error}")
+                })?;
+                let tt_values = readout(&mut cache, &treetn, &site_indices, values, scan_site)?;
+                if tt_values.len() != points.len() {
+                    return Err(anyhow::anyhow!(
+                        "approximation readout returned {} values for {} global-pivot candidates",
+                        tt_values.len(),
+                        points.len(),
+                    ));
+                }
+                f_values
+                    .into_iter()
+                    .zip(tt_values)
+                    .map(|(f, tt)| {
+                        let error = interp_error(f, tt);
+                        if !error.is_finite() {
+                            return Err(anyhow::anyhow!("non-finite global pivot residual"));
+                        }
+                        Ok(error)
+                    })
+                    .collect()
+            },
+        )?;
+        if error > threshold {
             best.push((error, point));
         }
     }

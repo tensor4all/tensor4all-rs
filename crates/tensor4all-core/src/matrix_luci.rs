@@ -100,6 +100,11 @@ pub struct MatrixLuciFactors<T> {
 
 pub(crate) fn map_backend_error(err: crate::matrixluci::MatrixLuciError) -> MatrixCIError {
     match err {
+        crate::matrixluci::MatrixLuciError::NaNEncountered { matrix } => {
+            MatrixCIError::NaNEncountered {
+                matrix: matrix.to_string(),
+            }
+        }
         crate::matrixluci::MatrixLuciError::InvalidArgument { message } => {
             MatrixCIError::InvalidArgument { message }
         }
@@ -397,6 +402,9 @@ where
 /// The caller provides a block-fill closure that receives row and column
 /// index lists and writes the corresponding matrix block in column-major
 /// order.
+/// Exactly zero starting residual columns are skipped. An all-zero residual
+/// can require inspecting all remaining entries, without materializing the
+/// full candidate matrix.
 ///
 /// # Arguments
 ///

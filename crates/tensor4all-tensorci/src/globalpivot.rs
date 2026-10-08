@@ -6,9 +6,11 @@
 //! ([`DefaultGlobalPivotFinder`]) uses random starting points with local
 //! optimization.
 
-use rand::Rng;
-use tensor4all_core::{MultiIndex, Scalar};
-use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar};
+use rand::{Rng, RngCore};
+use tensor4all_core::{floating_zone_walk, MultiIndex, Scalar};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTCache, TTScalar, Tensor3Ops};
+
+use crate::error::{validate_nonnegative_finite, Result, TCIError};
 
 /// Snapshot of the current TCI state, passed to [`GlobalPivotFinder`].
 pub struct GlobalPivotSearchInput<T: Scalar + TTScalar> {
@@ -38,6 +40,7 @@ pub struct GlobalPivotSearchInput<T: Scalar + TTScalar> {
 /// Using the default implementation via [`DefaultGlobalPivotFinder`]:
 ///
 /// ```
+/// use rand::SeedableRng;
 /// use tensor4all_tensorci::{DefaultGlobalPivotFinder, GlobalPivotFinder,
 ///     GlobalPivotSearchInput};
 /// use tensor4all_simplett::SimpleTensorTrain;
@@ -54,21 +57,18 @@ pub struct GlobalPivotSearchInput<T: Scalar + TTScalar> {
 /// };
 ///
 /// let finder = DefaultGlobalPivotFinder::default();
-/// let mut rng = rand::rng();
+/// let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
 ///
-/// // f(i,j) = i*j has nonzero values, so pivots should be found
+/// // Every coordinate walk on f(i,j) = i+j reaches (3,3).
 /// let pivots = finder.find_global_pivots(
 ///     &input,
-///     &|idx: &Vec<usize>| (idx[0] * idx[1]) as f64,
-///     0.1,
+///     &|idx: &Vec<usize>| (idx[0] + idx[1]) as f64,
+///     0.5,
 ///     &mut rng,
-/// );
+/// )?;
 ///
-/// // All returned pivots must have valid indices
-/// for p in &pivots {
-///     assert_eq!(p.len(), 2);
-///     assert!(p[0] < 4 && p[1] < 4);
-/// }
+/// assert_eq!(pivots, vec![vec![3, 3]; 5]);
+/// # Ok::<(), tensor4all_tensorci::TCIError>(())
 /// ```
 pub trait GlobalPivotFinder {
     /// Find multi-indices with high interpolation error.
@@ -86,13 +86,23 @@ pub trait GlobalPivotFinder {
     ///
     /// Multi-indices where the interpolation error is large, up to the
     /// implementation's maximum count.
+    ///
+    /// # Errors
+    ///
+    /// The default finder returns [`TCIError::InvalidConfiguration`] for empty
+    /// or zero dimensions, or non-finite/negative tolerances or thresholds;
+    /// [`TCIError::DimensionMismatch`] if the grid and TT shapes differ;
+    /// [`TCIError::InvalidOperation`] for non-finite residuals; and
+    /// [`TCIError::SimpleTensorTrain`] for failed TT evaluation. Configuration
+    /// is validated even when search is disabled. Custom finders may return
+    /// other [`TCIError`] variants; the optimizer propagates them unchanged.
     fn find_global_pivots<T, F>(
         &self,
         input: &GlobalPivotSearchInput<T>,
         f: &F,
         abs_tol: f64,
-        rng: &mut impl Rng,
-    ) -> Vec<MultiIndex>
+        rng: &mut dyn RngCore,
+    ) -> Result<Vec<MultiIndex>>
     where
         T: Scalar + TTScalar,
         F: Fn(&MultiIndex) -> T;
@@ -103,10 +113,16 @@ pub trait GlobalPivotFinder {
 /// Algorithm:
 ///
 /// 1. Generate `nsearch` random initial points.
-/// 2. For each point, sweep all dimensions and pick the index with the
-///    largest interpolation error at each position.
+/// 2. For each point, retain each maximizing coordinate while sweeping the
+///    dimensions. Repeat until a full sweep no longer improves the error,
+///    the error exceeds `10 * abs_tol * tol_margin`, or 100 sweeps complete.
 /// 3. Keep points where the error exceeds `abs_tol * tol_margin`.
 /// 4. Return at most `max_nglobal_pivot` results.
+///
+/// The walk and stopping thresholds follow TensorCrossInterpolation.jl's
+/// default floating-zone search. Starts use the supplied RNG; repeated pivots
+/// are retained in search order. This does not guarantee identical Julia
+/// results, which also depend on RNGs, deduplication, and outer sweeps.
 ///
 /// # Examples
 ///
@@ -131,7 +147,8 @@ pub struct DefaultGlobalPivotFinder {
     pub nsearch: usize,
     /// Maximum number of pivots to add per iteration
     pub max_nglobal_pivot: usize,
-    /// Search for pivots with error > abs_tol × tol_margin
+    /// Search for pivots with error > abs_tol × tol_margin.
+    /// Must be finite and nonnegative; the default is 10.
     pub tol_margin: f64,
 }
 
@@ -162,52 +179,84 @@ impl GlobalPivotFinder for DefaultGlobalPivotFinder {
         input: &GlobalPivotSearchInput<T>,
         f: &F,
         abs_tol: f64,
-        rng: &mut impl Rng,
-    ) -> Vec<MultiIndex>
+        rng: &mut dyn RngCore,
+    ) -> Result<Vec<MultiIndex>>
     where
         T: Scalar + TTScalar,
         F: Fn(&MultiIndex) -> T,
     {
-        let n = input.local_dims.len();
+        validate_nonnegative_finite("abs_tol", abs_tol)?;
+        validate_nonnegative_finite("tol_margin", self.tol_margin)?;
+        let threshold = abs_tol * self.tol_margin;
+        validate_nonnegative_finite("abs_tol * tol_margin", threshold)?;
+        if input.local_dims.is_empty() || input.local_dims.contains(&0) {
+            return Err(TCIError::InvalidConfiguration {
+                message: "local_dims must contain positive dimensions".to_string(),
+            });
+        }
+        if input.local_dims.len() != input.current_tt.len()
+            || input
+                .local_dims
+                .iter()
+                .enumerate()
+                .any(|(site, &dim)| dim != input.current_tt.site_tensor(site).site_dim())
+        {
+            return Err(TCIError::DimensionMismatch {
+                message: "local_dims must match the tensor train's site dimensions".to_string(),
+            });
+        }
+        if self.nsearch == 0 || self.max_nglobal_pivot == 0 {
+            return Ok(Vec::new());
+        }
 
         // Generate random initial points
         let initial_points: Vec<MultiIndex> = (0..self.nsearch)
             .map(|_| {
-                (0..n)
-                    .map(|p| rng.random_range(0..input.local_dims[p]))
+                input
+                    .local_dims
+                    .iter()
+                    .map(|&dim| rng.random_range(0..dim))
                     .collect()
             })
             .collect();
 
+        // Reuse contractions across coordinate batches and random starts.
+        let mut tt_cache = TTCache::new(&input.current_tt);
         let mut found_pivots: Vec<MultiIndex> = Vec::new();
 
         for point in &initial_points {
-            let mut current_point = point.clone();
-            let mut best_error = 0.0f64;
-            let mut best_point = point.clone();
-
-            // Local search: sweep all dimensions
-            for p in 0..n {
-                let original = current_point[p];
-                for v in 0..input.local_dims[p] {
-                    current_point[p] = v;
-                    let f_val = f(&current_point);
-                    let tt_val = input
-                        .current_tt
-                        .evaluate(&current_point)
-                        .unwrap_or(T::zero());
-                    let diff = f_val - tt_val;
-                    let error = f64::sqrt(Scalar::abs_sq(diff));
-                    if error > best_error {
-                        best_error = error;
-                        best_point = current_point.clone();
-                    }
-                }
-                current_point[p] = original; // Reset to original for next dimension
-            }
+            // Match searchglobalpivots -> floatingzone in
+            // TensorCrossInterpolation.jl v0.9.14, src/tensorci2.jl:
+            // at most 100 sweeps, with early stopping at 10 * threshold.
+            // Overflow in this *early-stop* bound means no early stop;
+            // the acceptance threshold itself was validated above.
+            let (best_point, best_error) = floating_zone_walk(
+                &input.local_dims,
+                point,
+                100,
+                10.0 * threshold,
+                |_site, points| {
+                    let tt_values = tt_cache.evaluate_many(points, None)?;
+                    points
+                        .iter()
+                        .zip(tt_values)
+                        .map(|(point, tt_value)| {
+                            let error = Scalar::abs_val(f(point) - tt_value);
+                            if !error.is_finite() {
+                                return Err(TCIError::InvalidOperation {
+                                    message: format!(
+                                        "non-finite global pivot residual at {point:?}"
+                                    ),
+                                });
+                            }
+                            Ok(error)
+                        })
+                        .collect::<Result<Vec<_>>>()
+                },
+            )?;
 
             // Add point if error exceeds threshold
-            if best_error > abs_tol * self.tol_margin {
+            if best_error > threshold {
                 found_pivots.push(best_point);
             }
         }
@@ -215,7 +264,7 @@ impl GlobalPivotFinder for DefaultGlobalPivotFinder {
         // Limit number of pivots
         found_pivots.truncate(self.max_nglobal_pivot);
 
-        found_pivots
+        Ok(found_pivots)
     }
 }
 
@@ -245,9 +294,11 @@ mod tests {
         };
 
         let finder = DefaultGlobalPivotFinder::new(10, 3, 1.0);
-        let mut rng = rand::rng();
+        let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
 
-        let pivots = finder.find_global_pivots(&input, &f, 0.1, &mut rng);
+        let pivots = finder
+            .find_global_pivots(&input, &f, 0.1, &mut rng)
+            .unwrap();
 
         // Should find some pivots since the TT is zero but f is not
         // (except at i=0 or j=0)
@@ -268,14 +319,14 @@ mod tests {
                 _input: &GlobalPivotSearchInput<T>,
                 _f: &F,
                 _abs_tol: f64,
-                _rng: &mut impl Rng,
-            ) -> Vec<MultiIndex>
+                _rng: &mut dyn RngCore,
+            ) -> Result<Vec<MultiIndex>>
             where
                 T: Scalar + TTScalar,
                 F: Fn(&MultiIndex) -> T,
             {
                 // Always return a fixed pivot
-                vec![vec![1, 2]]
+                Ok(vec![vec![1, 2]])
             }
         }
 
@@ -295,8 +346,10 @@ mod tests {
             j_set: vec![],
         };
 
-        let mut rng = rand::rng();
-        let pivots = finder.find_global_pivots(&input, &f, 0.0, &mut rng);
+        let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
+        let pivots = finder
+            .find_global_pivots(&input, &f, 0.0, &mut rng)
+            .unwrap();
         assert_eq!(pivots, vec![vec![1, 2]]);
     }
 }

@@ -7,9 +7,7 @@
 
 use rand::Rng;
 use tensor4all_core::{floating_zone_walk, MultiIndex, Scalar};
-use tensor4all_simplett::{
-    AbstractTensorTrain, EinsumScalar, SimpleTensorTrain, TTCache, TTScalar, Tensor3Ops,
-};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTCache, TTScalar, Tensor3Ops};
 
 use crate::error::{Result, TCIError};
 
@@ -33,7 +31,7 @@ use crate::error::{Result, TCIError};
 ///
 /// // Exact function differs from the constant
 /// let f = |idx: &Vec<usize>| (idx[0] * idx[1]) as f64;
-/// let mut rng = rand::rng();
+/// let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0);
 ///
 /// let errors = estimate_true_error(&tt, &f, 10, None, &mut rng).unwrap();
 ///
@@ -67,16 +65,17 @@ use crate::error::{Result, TCIError};
 /// Returns [`TCIError::InvalidConfiguration`] for an invalid site dimension,
 /// [`TCIError::InvalidPivot`] for an invalid starting point, or
 /// [`TCIError::SimpleTensorTrain`] when tensor-train evaluation fails.
-pub fn estimate_true_error<T, F>(
+pub fn estimate_true_error<T, F, R>(
     tt: &SimpleTensorTrain<T>,
     f: &F,
     nsearch: usize,
     initial_points: Option<Vec<MultiIndex>>,
-    rng: &mut impl Rng,
+    rng: &mut R,
 ) -> Result<Vec<(MultiIndex, f64)>>
 where
-    T: Scalar + TTScalar + EinsumScalar,
+    T: Scalar + TTScalar,
     F: Fn(&MultiIndex) -> T,
+    R: Rng + ?Sized,
 {
     let site_dims: Vec<usize> = (0..tt.len())
         .map(|i| tt.site_tensor(i).site_dim())
@@ -102,7 +101,7 @@ where
 
     let mut pivot_errors: Vec<(MultiIndex, f64)> = points
         .into_iter()
-        .map(|init_p| floating_zone(tt, f, &site_dims, Some(&init_p), f64::MAX))
+        .map(|init_p| floating_zone(tt, f, &site_dims, &init_p, f64::MAX))
         .collect::<Result<_>>()?;
 
     // Sort by descending error
@@ -135,7 +134,7 @@ where
 /// let local_dims = vec![4, 4];
 ///
 /// // Search from (2, 2) without early stopping
-/// let (pivot, error) = floating_zone(&tt, &f, &local_dims, Some(&vec![2, 2]), f64::MAX).unwrap();
+/// let (pivot, error) = floating_zone(&tt, &f, &local_dims, &vec![2, 2], f64::MAX).unwrap();
 ///
 /// // Should find maximum error at (3, 3): |3*3 - 0| = 9
 /// assert_eq!(pivot, vec![3, 3]);
@@ -147,7 +146,9 @@ where
 /// * `tt` -- the tensor train approximation
 /// * `f` -- the exact function
 /// * `local_dims` -- number of values each index can take
-/// * `init_p` -- starting point (`None` draws a random starting point)
+/// * `init_p` -- starting point; must fit `local_dims`. Randomized starts are
+///   the caller's responsibility (`estimate_true_error` draws them from the
+///   caller-owned RNG it is given)
 /// * `early_stop_tol` -- stop early once the error exceeds this value
 ///
 ///   (use `f64::MAX` to search exhaustively)
@@ -164,11 +165,11 @@ pub fn floating_zone<T, F>(
     tt: &SimpleTensorTrain<T>,
     f: &F,
     local_dims: &[usize],
-    init_p: Option<&MultiIndex>,
+    init_p: &MultiIndex,
     early_stop_tol: f64,
 ) -> Result<(MultiIndex, f64)>
 where
-    T: Scalar + TTScalar + EinsumScalar,
+    T: Scalar + TTScalar,
     F: Fn(&MultiIndex) -> T,
 {
     if local_dims.len() != tt.len() {
@@ -186,22 +187,14 @@ where
         });
     }
 
-    // Julia's `_floatingzone` draws a random starting point when none is
-    // given; match that instead of fixing the all-zeros index.
-    let init_p = match init_p {
-        Some(p) => {
-            if p.len() != local_dims.len() || p.iter().zip(local_dims).any(|(&i, &d)| i >= d) {
-                return Err(TCIError::InvalidPivot {
-                    message: format!("initial pivot {p:?} does not fit local_dims {local_dims:?}"),
-                });
-            }
-            p.clone()
-        }
-        None => local_dims
-            .iter()
-            .map(|&d| rand::rng().random_range(0..d))
-            .collect(),
-    };
+    // The starting point is required: randomized starts are drawn by the
+    // caller from a caller-owned RNG (`estimate_true_error` does this), so this
+    // helper never consumes implicit entropy.
+    if init_p.len() != local_dims.len() || init_p.iter().zip(local_dims).any(|(&i, &d)| i >= d) {
+        return Err(TCIError::InvalidPivot {
+            message: format!("initial pivot {init_p:?} does not fit local_dims {local_dims:?}"),
+        });
+    }
 
     let max_sweeps =
         local_dims
@@ -213,7 +206,7 @@ where
     let mut tt_cache = TTCache::new(tt);
     let (pivot, error) = floating_zone_walk(
         local_dims,
-        &init_p,
+        init_p,
         max_sweeps,
         early_stop_tol,
         |_scan_site: Option<usize>, points: &[MultiIndex]| {
@@ -266,8 +259,7 @@ mod tests {
 
         // Start from (1, 1) so initial error is not zero: |1*1 - 1| = 0
         // Actually start from (2, 2) so initial error is |4 - 1| = 3
-        let (pivot, error) =
-            floating_zone(&tt, &f, &local_dims, Some(&vec![2, 2]), f64::MAX).unwrap();
+        let (pivot, error) = floating_zone(&tt, &f, &local_dims, &vec![2, 2], f64::MAX).unwrap();
 
         // Error should be > 0 since tt=1 but f(i,j)=i*j varies
         // The maximum error should be at (3,3): |9-1|=8
@@ -288,7 +280,7 @@ mod tests {
         let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
 
         let f = |idx: &MultiIndex| (idx[0] + idx[1]) as f64;
-        let mut rng = rand::rng();
+        let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
 
         let errors = estimate_true_error(&tt, &f, 10, None, &mut rng).unwrap();
 

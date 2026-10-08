@@ -1771,6 +1771,142 @@ fn test_contract_naive_dense_reference_limit_bounds_materialization() {
 }
 
 #[test]
+fn test_naive_contraction_honors_truncation_options() {
+    // `tn_a` has a rank-2 A-B cut with singular weights (1, 1e-6); `tn_b` is an
+    // all-ones network, so the contracted result keeps that rank-2 cut.
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let a0 = DynIndex::new_dyn(2);
+    let a1 = DynIndex::new_dyn(2);
+    let b0 = DynIndex::new_dyn(2);
+    let b1 = DynIndex::new_dyn(2);
+    let bond_a = DynIndex::new_dyn(2);
+    let bond_b = DynIndex::new_dyn(2);
+
+    // A[s0, a0, bond] = delta(s0 == a0 == bond)
+    let mut data_a = vec![0.0; 8];
+    for k in 0..2 {
+        data_a[k + 2 * k + 4 * k] = 1.0;
+    }
+    // B[bond, s1, a1] = weight[a1] * delta(bond == s1 == a1)
+    let mut data_b = vec![0.0; 8];
+    for (a1_value, weight) in [1.0_f64, 1e-6].into_iter().enumerate() {
+        data_b[a1_value + 2 * a1_value + 4 * a1_value] = weight;
+    }
+
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![
+            IdxTensor::from_dense(vec![s0.clone(), a0, bond_a.clone()], data_a).unwrap(),
+            IdxTensor::from_dense(vec![bond_a, s1.clone(), a1], data_b).unwrap(),
+        ],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![
+            IdxTensor::from_dense(vec![s0, b0, bond_b.clone()], vec![1.0; 8]).unwrap(),
+            IdxTensor::from_dense(vec![bond_b, s1, b1], vec![1.0; 8]).unwrap(),
+        ],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+
+    let bond_dims = |result: &TreeTN<IdxTensor, String>| {
+        result
+            .graph
+            .graph()
+            .edge_indices()
+            .map(|edge| result.bond_index(edge).unwrap().dim())
+            .collect::<Vec<_>>()
+    };
+    let naive_options =
+        || ContractionOptions::new(ContractionMethod::Naive).with_dense_reference_limit(64);
+
+    // Without truncation both singular values survive.
+    let untruncated = contract(&tn_a, &tn_b, &"A".to_string(), naive_options()).unwrap();
+    assert_eq!(bond_dims(&untruncated), vec![2]);
+
+    // `max_bond_dim` caps the decomposition and must no longer be ignored.
+    let capped = contract(
+        &tn_a,
+        &tn_b,
+        &"A".to_string(),
+        naive_options().with_max_bond_dim(1),
+    )
+    .unwrap();
+    assert_eq!(bond_dims(&capped), vec![1]);
+
+    // A relative cutoff above the discarded singular value truncates it too.
+    let cutoff = contract(
+        &tn_a,
+        &tn_b,
+        &"A".to_string(),
+        naive_options().with_svd_policy(SvdTruncationPolicy::new(1e-3)),
+    )
+    .unwrap();
+    assert_eq!(bond_dims(&cutoff), vec![1]);
+
+    // `qr_rtol` is QR-specific: reject it instead of silently ignoring it.
+    let error = contract(
+        &tn_a,
+        &tn_b,
+        &"A".to_string(),
+        naive_options().with_qr_rtol(1e-8),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("does not accept qr_rtol"));
+}
+
+#[test]
+fn test_naive_contraction_validates_options_before_the_scalar_shortcut() {
+    /// Renders an error together with its full source chain.
+    fn chain(error: &dyn std::error::Error) -> String {
+        let mut text = error.to_string();
+        let mut source = error.source();
+        while let Some(inner) = source {
+            text.push_str(" | ");
+            text.push_str(&inner.to_string());
+            source = inner.source();
+        }
+        text
+    }
+
+    // Single-site, shared index -> rank-0 result, which returns early.
+    let s = DynIndex::new_dyn(3);
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![IdxTensor::from_dense(vec![s.clone()], vec![1.0, 2.0, 3.0]).unwrap()],
+        vec!["A".to_string()],
+    )
+    .unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![IdxTensor::from_dense(vec![s], vec![1.0, 1.0, 1.0]).unwrap()],
+        vec!["A".to_string()],
+    )
+    .unwrap();
+
+    // Direct callers must see the same validation as the `contract` dispatcher,
+    // and the typed source must survive for callers that report error chains.
+    let zero_cap =
+        contract_naive_to_treetn(&tn_a, &tn_b, &"A".to_string(), Some(0), None, None).unwrap_err();
+    assert!(chain(&zero_cap).contains("max_bond_dim must be at least 1"));
+
+    let bad_threshold = contract_naive_to_treetn(
+        &tn_a,
+        &tn_b,
+        &"A".to_string(),
+        None,
+        Some(SvdTruncationPolicy::new(f64::NAN)),
+        None,
+    )
+    .unwrap_err();
+    assert!(chain(&bad_threshold).contains("finite and non-negative"));
+
+    let qr = contract_naive_to_treetn(&tn_a, &tn_b, &"A".to_string(), None, None, Some(1e-8))
+        .unwrap_err();
+    assert!(qr.to_string().contains("does not accept qr_rtol"));
+}
+
+#[test]
 fn test_find_common_indices() {
     let s0 = DynIndex::new_dyn(2);
     let bond = DynIndex::new_dyn(3);

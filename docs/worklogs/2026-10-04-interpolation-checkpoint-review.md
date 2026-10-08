@@ -48,6 +48,44 @@ impact: non-finite checks moved into the shared evaluator wrapper and remain
 covered at initial and later batches. No new static performance violation or
 measured performance claim was established;
 downstream-scale measurements remain with M4/M9. Existing sampled-estimate and
-calibrated-rounding limitations are unchanged. The branch is nine commits
-behind `origin/main`; synchronizing and revalidating that integrated candidate
-remain prerequisites before proposing a merge. No PR is part of this checkpoint.
+calibrated-rounding limitations are unchanged. That checkpoint was nine commits behind `origin/main`; the October 8
+synchronization described below supersedes that pending synchronization. No PR is part of this checkpoint.
+
+## October 8 main synchronization
+
+The branch incorporates main `602c1d753f264c0a0ebb9d6fb21137540314eea1`
+and uses its canonical `TreeTciOptimizationResult` / `TreeTciRunResult` rather
+than retaining a second optimizer report type. Main owns the optimization loop,
+RNG streams, continuation behavior and bounded target memo. The feature keeps
+its engine-independent adapter and named, fused and site-free materialization.
+Branch-specific termination assertions remain covered alongside main's RNG
+regressions. Design and usage-skill references use the canonical report.
+
+The driver retains its derivation through the Rust chain implementation
+introduced by Samuel Badr (@SamuelBadr) in `69a24e7e`. Source provenance now
+names that intermediate author explicitly, and this synchronization commit
+credits his GitHub-linked identity as a co-author. Existing historical
+commits and third-party license notices are preserved.
+
+Two frozen M2 cache-hit counters changed with the integrated evaluator/search:
+`treetci_quantics_tree` moves from 8519 to 8401, and its recycled-pivot variant
+from 8357 to 8204. Function evaluations remain 128 in both cases. Only these
+accounting fields are updated: all numerical expectations, ranks, split
+projectors, termination sequences and test tolerances are preserved. The
+fixed-depth performance evidence remains historical; no timing rerun or new
+performance claim is included.
+
+The synchronized TreeTCI, partitioned-tree and quantics suites passed 489
+tests with 12 pre-existing ignored tests. The TreeTN suite additionally passed
+860 tests with six pre-existing ignored tests. Their 347 doctests passed, and
+strict Clippy covered library and test targets of those four crates. Public
+error documentation, crate boundaries and the deterministic repository-rules
+preview passed. No tolerance or coverage threshold was changed.
+
+The complete mdBook guide test passed through `./scripts/test-mdbook.sh`,
+using its supplied-rustdoc-log mode with a dev-profile `book-tests` log and
+debug dependencies. The initial cold release preparation was stopped before
+chapter testing to keep the recovery validation within the host resource
+budget. Cargo jobs and test threads were limited to two, and the Cargo test
+harness was used because Nextest is unavailable. Hosted CI and the LLM rules
+review were not run locally; this push does not create a PR.

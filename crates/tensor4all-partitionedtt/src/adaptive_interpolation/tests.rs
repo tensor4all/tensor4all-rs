@@ -1,5 +1,6 @@
 use super::*;
 use num_complex::Complex64;
+use rand_chacha::ChaCha8Rng;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 #[cfg(feature = "adaptive-hataori-rayon")]
@@ -8,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tensor4all_core::contract;
 use tensor4all_tensorbackend::StorageKind;
+use tensor4all_tensorci::crossinterpolate2;
 
 fn dense_f64(result: &AdaptiveInterpolationResult<f64>) -> Vec<f64> {
     let tt = result.partitioned_tt().to_tensor_train().unwrap();
@@ -261,7 +263,7 @@ fn incompatible_recycled_pivots_are_replenished_for_nonzero_child() {
     let projector = Projector::from_pairs([(sites[0].clone(), 1)]).unwrap();
     let active = active_positions(&sites, &projector);
     let recycled = vec![vec![0, 0, 0], vec![0, 1, 1]];
-    let mut rng = StdRng::seed_from_u64(7);
+    let mut rng = ChaCha8Rng::seed_from_u64(7);
 
     let candidates =
         patch_candidates(&sites, &active, &projector, &[], &recycled, 3, &mut rng).unwrap();
@@ -498,7 +500,7 @@ fn malformed_wire_cores_are_rejected_before_reconstruction() {
 #[test]
 fn patch_candidate_count_overflow_is_rejected() {
     let sites = vec![DynIndex::new_dyn(usize::MAX), DynIndex::new_dyn(2)];
-    let mut rng = StdRng::seed_from_u64(1);
+    let mut rng = ChaCha8Rng::seed_from_u64(1);
 
     let error =
         patch_candidates(&sites, &[0, 1], &Projector::new(), &[], &[], 1, &mut rng).unwrap_err();
@@ -713,6 +715,111 @@ fn hataori_outer_matches_sequential_and_allows_nested_rayon() {
 
 #[cfg(feature = "adaptive-hataori-rayon")]
 #[test]
+fn hataori_workers_finish_a_split_interpolation_issue830() {
+    use std::collections::HashSet;
+    use std::time::Duration;
+
+    // Three binary axes with a sharp peak. The bond cap forces subdivision, so a
+    // patch runs the matrix LU inside a domain worker. A domain worker that waits
+    // on the process CPU pool there can be handed a second patch, whose own
+    // matrix work re-enters the same pool.
+    let sites: Vec<DynIndex> = (0..6).map(|_| DynIndex::new_dyn(2)).collect();
+    let function = |index: &MultiIndex| -> f64 {
+        let mut coordinates = [0usize; 3];
+        for (axis, coordinate) in coordinates.iter_mut().enumerate() {
+            for bit in 0..2 {
+                *coordinate = 2 * *coordinate + index[2 * axis + bit];
+            }
+        }
+        let distance: f64 = coordinates
+            .iter()
+            .map(|&point| (point as f64 / 4.0 - 0.3).powi(2))
+            .sum();
+        1.0 / (0.05 + distance)
+    };
+    let options = AdaptiveInterpolateOptions {
+        tci_options: TCI2Options {
+            tolerance: 1e-6,
+            max_bond_dim: Some(4),
+            seed: Some(1),
+            ..TCI2Options::default()
+        },
+        ..AdaptiveInterpolateOptions::default()
+    };
+    let sequential = adaptiveinterpolate::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+        function,
+        None,
+        sites.clone(),
+        Vec::new(),
+        options.clone(),
+    )
+    .unwrap();
+    let expected_projectors: HashSet<_> = sequential
+        .patch_caches()
+        .iter()
+        .map(|cache| cache.projector().clone())
+        .collect();
+    assert!(
+        expected_projectors.len() > 1,
+        "the regression requires more than one patch"
+    );
+
+    let expected_values = dense_f64(&sequential);
+
+    for workers in [1usize, 2] {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let sites = sites.clone();
+        let options = options.clone();
+        std::thread::spawn(move || {
+            let pool = Arc::new(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .build()
+                    .unwrap(),
+            );
+            let domain =
+                hataori::Domain::external(Arc::clone(&pool), (0..workers).collect(), workers)
+                    .unwrap();
+            let result = adaptiveinterpolate_in::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+                &domain,
+                function,
+                None,
+                sites,
+                Vec::new(),
+                options,
+            );
+            let _ = sender.send(result);
+        });
+
+        let result = receiver
+            .recv_timeout(Duration::from_secs(60))
+            .expect("a domain worker must not wait on the process CPU pool")
+            .unwrap();
+        let projectors: HashSet<_> = result
+            .patch_caches()
+            .iter()
+            .map(|cache| cache.projector().clone())
+            .collect();
+        assert_eq!(projectors, expected_projectors, "workers = {workers}");
+        assert_eq!(
+            result.patch_caches().len(),
+            sequential.patch_caches().len(),
+            "workers = {workers}"
+        );
+        let values = dense_f64(&result);
+        assert_eq!(values.len(), expected_values.len(), "workers = {workers}");
+        for (value, expected) in values.iter().zip(&expected_values) {
+            assert!(
+                (value - expected).abs() < 1e-8,
+                "workers = {workers} differ from the sequential result by {}",
+                value - expected
+            );
+        }
+    }
+}
+
+#[cfg(feature = "adaptive-hataori-rayon")]
+#[test]
 fn hataori_entry_rejects_a_sequential_domain() {
     let error = adaptiveinterpolate_in::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         &hataori::Domain::sequential(),
@@ -785,4 +892,136 @@ fn numerically_zero_child_patch_is_accepted_not_crash_issue598() {
         .to_tensor_train()
         .expect("valid combined tensor train");
     let _ = tt.bond_dims();
+}
+
+/// A structurally exact patch draws nothing, so it must not consume the caller's
+/// stream.
+///
+/// Single-site patches are evaluated point by point: there are no candidate
+/// pivots and no nested TCI. The high-level `adaptiveinterpolate` therefore
+/// never needs OS entropy for them, and the caller-owned entry point must leave
+/// the supplied stream exactly where it was.
+#[test]
+fn a_single_active_site_patch_consumes_no_randomness() {
+    use rand::RngCore as _;
+
+    let function = |index: &MultiIndex| (index[0] + 1) as f64;
+    let mut stream = ChaCha8Rng::seed_from_u64(7);
+    let mut reference = ChaCha8Rng::seed_from_u64(7);
+
+    let result = adaptiveinterpolate_with_rng::<f64, _, fn(&[MultiIndex]) -> Vec<f64>, _>(
+        function,
+        None,
+        vec![DynIndex::new_dyn(4)],
+        vec![vec![0]],
+        AdaptiveInterpolateOptions::default(),
+        &mut stream,
+    )
+    .expect("a single-site patch is exact");
+
+    assert_eq!(dense_f64(&result), vec![1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(
+        stream.next_u64(),
+        reference.next_u64(),
+        "an exact patch must not advance the caller's stream"
+    );
+}
+
+/// The candidate-pivot sampler and the nested TCI draw from the *same*
+/// caller-owned stream, and neither falls back to a hidden generator.
+///
+/// The two stages are reached through options: `n_initial_pivots` larger than
+/// the compatible pivots makes the sampler draw, while `nsearch = 0` leaves the
+/// nested global search inert; `nsearch > 0` makes the nested search draw.
+/// Isolating a stage completely is not observable from the public API, so the
+/// test pins the properties that are: a fixed seed reproduces the run *and* the
+/// stream position it leaves behind (a hidden `from_os_rng()` or per-patch
+/// reseed breaks this), pre-advancing the caller's stream changes what the run
+/// samples, and the run advances the caller's stream at all.
+#[test]
+fn the_patch_stages_draw_from_the_callers_stream_and_never_from_a_hidden_one() {
+    use rand::RngCore as _;
+    use tensor4all_tensorci::TCI2Options;
+
+    // Strictly positive, so no patch is classified as numerically zero.
+    fn function(index: &MultiIndex) -> f64 {
+        ((index[0] * 7 + index[1] * 3 + index[2] * 5) % 11) as f64 + 0.5
+    }
+
+    let run = |n_initial_pivots: usize, nsearch: usize, pre_draws: usize| {
+        let seen = Rc::new(RefCell::new(Vec::<MultiIndex>::new()));
+        let recorder = Rc::clone(&seen);
+        let mut stream = ChaCha8Rng::seed_from_u64(7);
+        for _ in 0..pre_draws {
+            let _: u64 = stream.next_u64();
+        }
+        let options = AdaptiveInterpolateOptions {
+            n_initial_pivots,
+            tci_options: TCI2Options {
+                nsearch,
+                max_nglobal_pivot: nsearch.max(1),
+                ..TCI2Options::default()
+            },
+            ..AdaptiveInterpolateOptions::default()
+        };
+        let result = adaptiveinterpolate_with_rng::<f64, _, fn(&[MultiIndex]) -> Vec<f64>, _>(
+            move |index: &MultiIndex| {
+                recorder.borrow_mut().push(index.clone());
+                function(index)
+            },
+            None,
+            binary_sites(3),
+            vec![vec![0, 0, 0]],
+            options,
+            &mut stream,
+        )
+        .expect("the test function is strictly positive and low-rank enough");
+        // Read the position *after* the run so two runs can be compared.
+        (dense_f64(&result), seen.borrow().clone(), stream.next_u64())
+    };
+
+    let untouched = ChaCha8Rng::seed_from_u64(7).next_u64();
+
+    // (1) A multi-patch run draws from the caller's stream.
+    let (data, seen, after) = run(3, 0, 0);
+    assert!(
+        seen.len() > 1,
+        "the run must sample beyond the single seed pivot, got {seen:?}"
+    );
+    assert_ne!(
+        after, untouched,
+        "the pipeline must consume the caller's stream instead of a hidden one"
+    );
+
+    // (2) A fixed seed reproduces the sampled points and the stream position.
+    let (data_repeat, seen_repeat, after_repeat) = run(3, 0, 0);
+    assert_eq!(data, data_repeat);
+    assert_eq!(seen, seen_repeat);
+    assert_eq!(
+        after, after_repeat,
+        "the same seed must consume the same number of draws"
+    );
+
+    // (3) The caller's position is authoritative: one extra draw before the call
+    // changes the sampled pivots.
+    let (_, seen_predrawn, _) = run(3, 0, 1);
+    assert_ne!(
+        seen_predrawn, seen,
+        "pre-advancing the caller's stream must change the sampled pivots"
+    );
+
+    // (4) The nested global search draws from the same caller-owned stream:
+    // enabling it changes how far the stream advances on an otherwise identical
+    // run. The sampled *pivots* need not move here, because an exactly
+    // convergent patch reaches the same full pivot set either way.
+    let (_, _, after_sampler_only) = run(1, 0, 0);
+    let (_, _, after_search) = run(1, 2, 0);
+    assert_ne!(
+        after_search, untouched,
+        "the nested TCI must consume the caller's stream"
+    );
+    assert_ne!(
+        after_sampler_only, after_search,
+        "enabling the nested global search must add draws on the same stream"
+    );
 }

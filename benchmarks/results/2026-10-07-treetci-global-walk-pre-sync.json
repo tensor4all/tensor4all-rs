@@ -1,0 +1,457 @@
+{
+  "baseline_commit": "b1bb828da13dff679684b59511151ee98358d697",
+  "candidate_commit": "bccbeea1",
+  "profile": "release",
+  "cpu": 2,
+  "hardware": "AMD Ryzen 9 6900HX / 16 logical CPUs / virtual Linux",
+  "thread_variables": {
+    "RAYON_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "BLAS_NUM_THREADS": "1"
+  },
+  "binary_sha256": {
+    "baseline": "5acee0d54b80c6ab20b52462d98a4a5eb942e87d518cbd8431d02f650f36a0df",
+    "candidate": "81a0ffb2fd26d556ad18d135475c3c665b7c5b89c118f38093b112c9017599ae"
+  },
+  "benchmark_sha256": "babf6ce94fac19f5be2a118267bcf464da3e3ac631b1c12b68bf6d3760006a62",
+  "warmups": [
+    {
+      "build": "baseline",
+      "pair": null,
+      "load_before": "0.34 1.34 1.43 1/444 1398723",
+      "load_after": "0.34 1.34 1.43 1/446 1398729",
+      "wall_seconds": 3.084371328353882,
+      "returncode": 0,
+      "stdout": "build commit=b1bb828da13dff679684b59511151ee98358d697 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=0.3547 median_s=0.3550 evals=42145 iters=4 final_rank=2 pivots=3d8b6a37988f7d2a samples=40988ea4f9613ee4 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e28000000000020\", \"3e28000000000020\", \"3e28000000000020\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0172 median_s=0.0175 evals=17946 iters=4 final_rank=8 pivots=45ccbee3c3dcd8ab samples=1f20dd0fd11cf18b sampled_rel_err=1.28e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e39734e02d66482\", \"3e3d2cda0d8c8845\", \"3e3bcbb3b6fbf3d1\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0364 median_s=0.0368 evals=50253 iters=4 final_rank=9 pivots=1360104c504748d5 samples=c579b4d6d8bf8ed1 sampled_rel_err=7.30e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3b0280f17db7ca\", \"3e3cb7f908e32455\", \"3e3cb7bf7da8b4cf\"]\n",
+      "stderr": "METRICS elapsed_s=3.08 max_rss_kb=152740\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "0.3547",
+          "median_s": "0.3550",
+          "evals": "42145",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "3d8b6a37988f7d2a",
+          "samples": "40988ea4f9613ee4",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0172",
+          "median_s": "0.0175",
+          "evals": "17946",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "45ccbee3c3dcd8ab",
+          "samples": "1f20dd0fd11cf18b",
+          "sampled_rel_err": "1.28e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0364",
+          "median_s": "0.0368",
+          "evals": "50253",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "1360104c504748d5",
+          "samples": "c579b4d6d8bf8ed1",
+          "sampled_rel_err": "7.30e-9"
+        }
+      ]
+    },
+    {
+      "build": "candidate",
+      "pair": null,
+      "load_before": "0.34 1.34 1.43 2/446 1398729",
+      "load_after": "0.44 1.32 1.43 1/445 1398755",
+      "wall_seconds": 6.204329013824463,
+      "returncode": 0,
+      "stdout": "build commit=bccbeea1 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=1.2169 median_s=1.3049 evals=43250 iters=4 final_rank=2 pivots=55a15abe1402ff6f samples=d2745eafc53a7a95 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0362 median_s=0.0383 evals=16247 iters=4 final_rank=8 pivots=6f9aab11e048b068 samples=e3077ffcc83c4238 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0819 median_s=0.0828 evals=44918 iters=4 final_rank=9 pivots=c058607a9085b5b6 samples=42dcd67ba416247b sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]\n",
+      "stderr": "METRICS elapsed_s=6.20 max_rss_kb=155824\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "1.2169",
+          "median_s": "1.3049",
+          "evals": "43250",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "55a15abe1402ff6f",
+          "samples": "d2745eafc53a7a95",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0362",
+          "median_s": "0.0383",
+          "evals": "16247",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "6f9aab11e048b068",
+          "samples": "e3077ffcc83c4238",
+          "sampled_rel_err": "1.64e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0819",
+          "median_s": "0.0828",
+          "evals": "44918",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "c058607a9085b5b6",
+          "samples": "42dcd67ba416247b",
+          "sampled_rel_err": "7.29e-9"
+        }
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "build": "baseline",
+      "pair": 1,
+      "load_before": "0.44 1.32 1.43 2/445 1398755",
+      "load_after": "0.44 1.32 1.43 1/438 1398770",
+      "wall_seconds": 3.1181609630584717,
+      "returncode": 0,
+      "stdout": "build commit=b1bb828da13dff679684b59511151ee98358d697 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=0.3573 median_s=0.3576 evals=42145 iters=4 final_rank=2 pivots=3d8b6a37988f7d2a samples=40988ea4f9613ee4 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e28000000000020\", \"3e28000000000020\", \"3e28000000000020\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0173 median_s=0.0181 evals=17946 iters=4 final_rank=8 pivots=45ccbee3c3dcd8ab samples=1f20dd0fd11cf18b sampled_rel_err=1.28e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e39734e02d66482\", \"3e3d2cda0d8c8845\", \"3e3bcbb3b6fbf3d1\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0372 median_s=0.0373 evals=50253 iters=4 final_rank=9 pivots=1360104c504748d5 samples=c579b4d6d8bf8ed1 sampled_rel_err=7.30e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3b0280f17db7ca\", \"3e3cb7f908e32455\", \"3e3cb7bf7da8b4cf\"]\n",
+      "stderr": "METRICS elapsed_s=3.11 max_rss_kb=151096\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "0.3573",
+          "median_s": "0.3576",
+          "evals": "42145",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "3d8b6a37988f7d2a",
+          "samples": "40988ea4f9613ee4",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0173",
+          "median_s": "0.0181",
+          "evals": "17946",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "45ccbee3c3dcd8ab",
+          "samples": "1f20dd0fd11cf18b",
+          "sampled_rel_err": "1.28e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0372",
+          "median_s": "0.0373",
+          "evals": "50253",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "1360104c504748d5",
+          "samples": "c579b4d6d8bf8ed1",
+          "sampled_rel_err": "7.30e-9"
+        }
+      ]
+    },
+    {
+      "build": "candidate",
+      "pair": 1,
+      "load_before": "0.44 1.32 1.43 2/438 1398770",
+      "load_after": "0.49 1.32 1.42 2/442 1398791",
+      "wall_seconds": 6.373570680618286,
+      "returncode": 0,
+      "stdout": "build commit=bccbeea1 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=1.2265 median_s=1.3457 evals=43250 iters=4 final_rank=2 pivots=55a15abe1402ff6f samples=d2745eafc53a7a95 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0353 median_s=0.0364 evals=16247 iters=4 final_rank=8 pivots=6f9aab11e048b068 samples=e3077ffcc83c4238 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0842 median_s=0.0853 evals=44918 iters=4 final_rank=9 pivots=c058607a9085b5b6 samples=42dcd67ba416247b sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]\n",
+      "stderr": "METRICS elapsed_s=6.37 max_rss_kb=164716\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "1.2265",
+          "median_s": "1.3457",
+          "evals": "43250",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "55a15abe1402ff6f",
+          "samples": "d2745eafc53a7a95",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0353",
+          "median_s": "0.0364",
+          "evals": "16247",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "6f9aab11e048b068",
+          "samples": "e3077ffcc83c4238",
+          "sampled_rel_err": "1.64e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0842",
+          "median_s": "0.0853",
+          "evals": "44918",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "c058607a9085b5b6",
+          "samples": "42dcd67ba416247b",
+          "sampled_rel_err": "7.29e-9"
+        }
+      ]
+    },
+    {
+      "build": "candidate",
+      "pair": 2,
+      "load_before": "0.49 1.32 1.42 3/442 1398791",
+      "load_after": "0.57 1.31 1.42 1/438 1398798",
+      "wall_seconds": 6.2845399379730225,
+      "returncode": 0,
+      "stdout": "build commit=bccbeea1 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=1.2265 median_s=1.3343 evals=43250 iters=4 final_rank=2 pivots=55a15abe1402ff6f samples=d2745eafc53a7a95 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0356 median_s=0.0357 evals=16247 iters=4 final_rank=8 pivots=6f9aab11e048b068 samples=e3077ffcc83c4238 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0836 median_s=0.0855 evals=44918 iters=4 final_rank=9 pivots=c058607a9085b5b6 samples=42dcd67ba416247b sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]\n",
+      "stderr": "METRICS elapsed_s=6.28 max_rss_kb=155280\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "1.2265",
+          "median_s": "1.3343",
+          "evals": "43250",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "55a15abe1402ff6f",
+          "samples": "d2745eafc53a7a95",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0356",
+          "median_s": "0.0357",
+          "evals": "16247",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "6f9aab11e048b068",
+          "samples": "e3077ffcc83c4238",
+          "sampled_rel_err": "1.64e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0836",
+          "median_s": "0.0855",
+          "evals": "44918",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "c058607a9085b5b6",
+          "samples": "42dcd67ba416247b",
+          "sampled_rel_err": "7.29e-9"
+        }
+      ]
+    },
+    {
+      "build": "baseline",
+      "pair": 2,
+      "load_before": "0.57 1.31 1.42 1/438 1398798",
+      "load_after": "0.57 1.31 1.42 1/438 1398812",
+      "wall_seconds": 3.144656181335449,
+      "returncode": 0,
+      "stdout": "build commit=b1bb828da13dff679684b59511151ee98358d697 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=0.3588 median_s=0.3606 evals=42145 iters=4 final_rank=2 pivots=3d8b6a37988f7d2a samples=40988ea4f9613ee4 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e28000000000020\", \"3e28000000000020\", \"3e28000000000020\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0178 median_s=0.0180 evals=17946 iters=4 final_rank=8 pivots=45ccbee3c3dcd8ab samples=1f20dd0fd11cf18b sampled_rel_err=1.28e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e39734e02d66482\", \"3e3d2cda0d8c8845\", \"3e3bcbb3b6fbf3d1\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0382 median_s=0.0391 evals=50253 iters=4 final_rank=9 pivots=1360104c504748d5 samples=c579b4d6d8bf8ed1 sampled_rel_err=7.30e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3b0280f17db7ca\", \"3e3cb7f908e32455\", \"3e3cb7bf7da8b4cf\"]\n",
+      "stderr": "METRICS elapsed_s=3.14 max_rss_kb=159820\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "0.3588",
+          "median_s": "0.3606",
+          "evals": "42145",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "3d8b6a37988f7d2a",
+          "samples": "40988ea4f9613ee4",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0178",
+          "median_s": "0.0180",
+          "evals": "17946",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "45ccbee3c3dcd8ab",
+          "samples": "1f20dd0fd11cf18b",
+          "sampled_rel_err": "1.28e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0382",
+          "median_s": "0.0391",
+          "evals": "50253",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "1360104c504748d5",
+          "samples": "c579b4d6d8bf8ed1",
+          "sampled_rel_err": "7.30e-9"
+        }
+      ]
+    },
+    {
+      "build": "baseline",
+      "pair": 3,
+      "load_before": "0.57 1.31 1.42 1/438 1398812",
+      "load_after": "0.60 1.30 1.42 1/440 1398816",
+      "wall_seconds": 3.134641408920288,
+      "returncode": 0,
+      "stdout": "build commit=b1bb828da13dff679684b59511151ee98358d697 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=0.3559 median_s=0.3567 evals=42145 iters=4 final_rank=2 pivots=3d8b6a37988f7d2a samples=40988ea4f9613ee4 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e28000000000020\", \"3e28000000000020\", \"3e28000000000020\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0177 median_s=0.0180 evals=17946 iters=4 final_rank=8 pivots=45ccbee3c3dcd8ab samples=1f20dd0fd11cf18b sampled_rel_err=1.28e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e39734e02d66482\", \"3e3d2cda0d8c8845\", \"3e3bcbb3b6fbf3d1\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0372 median_s=0.0380 evals=50253 iters=4 final_rank=9 pivots=1360104c504748d5 samples=c579b4d6d8bf8ed1 sampled_rel_err=7.30e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3b0280f17db7ca\", \"3e3cb7f908e32455\", \"3e3cb7bf7da8b4cf\"]\n",
+      "stderr": "METRICS elapsed_s=3.13 max_rss_kb=162564\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "0.3559",
+          "median_s": "0.3567",
+          "evals": "42145",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "3d8b6a37988f7d2a",
+          "samples": "40988ea4f9613ee4",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0177",
+          "median_s": "0.0180",
+          "evals": "17946",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "45ccbee3c3dcd8ab",
+          "samples": "1f20dd0fd11cf18b",
+          "sampled_rel_err": "1.28e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0372",
+          "median_s": "0.0380",
+          "evals": "50253",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "1360104c504748d5",
+          "samples": "c579b4d6d8bf8ed1",
+          "sampled_rel_err": "7.30e-9"
+        }
+      ]
+    },
+    {
+      "build": "candidate",
+      "pair": 3,
+      "load_before": "0.60 1.30 1.42 2/440 1398816",
+      "load_after": "0.63 1.30 1.41 1/440 1398831",
+      "wall_seconds": 6.37836766242981,
+      "returncode": 0,
+      "stdout": "build commit=bccbeea1 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=1.2583 median_s=1.3693 evals=43250 iters=4 final_rank=2 pivots=55a15abe1402ff6f samples=d2745eafc53a7a95 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0349 median_s=0.0363 evals=16247 iters=4 final_rank=8 pivots=6f9aab11e048b068 samples=e3077ffcc83c4238 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0838 median_s=0.0840 evals=44918 iters=4 final_rank=9 pivots=c058607a9085b5b6 samples=42dcd67ba416247b sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]\n",
+      "stderr": "METRICS elapsed_s=6.37 max_rss_kb=152548\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "1.2583",
+          "median_s": "1.3693",
+          "evals": "43250",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "55a15abe1402ff6f",
+          "samples": "d2745eafc53a7a95",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0349",
+          "median_s": "0.0363",
+          "evals": "16247",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "6f9aab11e048b068",
+          "samples": "e3077ffcc83c4238",
+          "sampled_rel_err": "1.64e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0838",
+          "median_s": "0.0840",
+          "evals": "44918",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "c058607a9085b5b6",
+          "samples": "42dcd67ba416247b",
+          "sampled_rel_err": "7.29e-9"
+        }
+      ]
+    }
+  ],
+  "flags": [],
+  "timing_validity": "No predeclared diagnostic flags",
+  "summary": {
+    "chain_cos_129": {
+      "median_baseline_s": 0.3576,
+      "median_candidate_s": 1.3457,
+      "paired_ratios": [
+        3.763143176733781,
+        3.700221852468109,
+        3.8388001121390523
+      ],
+      "median_ratio": 3.763143176733781,
+      "exact_percentile_bootstrap_95_interval": [
+        3.700221852468109,
+        3.8388001121390523
+      ]
+    },
+    "quantics_chain_r20": {
+      "median_baseline_s": 0.018,
+      "median_candidate_s": 0.0363,
+      "paired_ratios": [
+        2.011049723756906,
+        1.9833333333333336,
+        2.0166666666666666
+      ],
+      "median_ratio": 2.011049723756906,
+      "exact_percentile_bootstrap_95_interval": [
+        1.9833333333333336,
+        2.0166666666666666
+      ]
+    },
+    "tree_3x10_plus_centre": {
+      "median_baseline_s": 0.038,
+      "median_candidate_s": 0.0853,
+      "paired_ratios": [
+        2.28686327077748,
+        2.186700767263427,
+        2.210526315789474
+      ],
+      "median_ratio": 2.210526315789474,
+      "exact_percentile_bootstrap_95_interval": [
+        2.186700767263427,
+        2.28686327077748
+      ]
+    }
+  },
+  "effective_backend_threads": 1,
+  "thread_probe": "with_default_backend(|backend| backend.num_threads()), same pinned affinity and five thread variables",
+  "rustc": "1.98.1 (48a229cea 2026-09-01)",
+  "cargo": "1.98.1 (797e8a9bc 2026-08-05)"
+}

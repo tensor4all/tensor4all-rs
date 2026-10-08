@@ -189,7 +189,7 @@ pub(crate) fn tensor_to_col_major_vec<T: TensorScalar>(tensor: &TypedTensor<T>) 
         })
 }
 
-pub(crate) fn row_vector_times_matrix<T: TTScalar + EinsumScalar>(
+pub(crate) fn row_vector_times_matrix<T: TTScalar>(
     vector: &[T],
     matrix: &[T],
     rows: usize,
@@ -230,7 +230,7 @@ pub(crate) fn row_vector_times_matrix<T: TTScalar + EinsumScalar>(
         .collect())
 }
 
-pub(crate) fn matrix_times_col_vector<T: TTScalar + EinsumScalar>(
+pub(crate) fn matrix_times_col_vector<T: TTScalar>(
     matrix: &[T],
     rows: usize,
     cols: usize,

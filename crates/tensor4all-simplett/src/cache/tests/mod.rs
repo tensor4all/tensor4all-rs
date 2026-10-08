@@ -286,3 +286,57 @@ fn find_split_heuristic() {
     let split2 = cache.find_split_heuristic(&indices2).unwrap();
     assert_eq!(split2, 3);
 }
+
+/// The key width must count `ceil(log2(dim))` bits per site, so a binary site
+/// costs one bit. 700 and 1024 binary sites were rejected before that fix
+/// (700 sites need 1400 bits with the old over-estimate, and the first split
+/// candidate of a 700-site space left a 525-site half at 1050 bits).
+#[test]
+fn test_key_width_boundary_for_binary_sites() {
+    for sites in [700usize, 1024] {
+        let tt = SimpleTensorTrain::<f64>::constant(&vec![2usize; sites], 3.0);
+        let mut cache = TTCache::new(&tt);
+        assert_eq!(
+            cache.evaluate_many(&[vec![0usize; sites]], None).unwrap(),
+            vec![3.0],
+            "{sites} binary sites"
+        );
+        let mut edges = vec![0usize; sites];
+        edges[0] = 1;
+        edges[sites - 1] = 1;
+        assert_eq!(
+            cache.evaluate_many(&[edges], None).unwrap(),
+            vec![3.0],
+            "{sites} binary sites"
+        );
+    }
+    // The remaining hard cap itself stays covered by
+    // `flat_indexer_rejects_key_spaces_over_1024_bits`.
+}
+
+/// Distinct multi-indices must not collide through the mixed-radix key at a
+/// width that only became reachable once the width counted `ceil(log2(dim))`,
+/// and the largest key must be exactly `cardinality - 1`.
+#[test]
+fn test_key_width_boundary_flat_index_keys_are_distinct() {
+    let indexer = FlatIndexer::new(&vec![2usize; 1024]).unwrap();
+    let mut bit0 = vec![0usize; 1024];
+    bit0[0] = 1;
+    let mut bit1023 = vec![0usize; 1024];
+    bit1023[1023] = 1;
+    let keys = [
+        indexer.flat_index(&vec![0usize; 1024]),
+        indexer.flat_index(&vec![1usize; 1024]),
+        indexer.flat_index(&bit0),
+        indexer.flat_index(&bit1023),
+    ];
+    for first in 0..keys.len() {
+        for second in first + 1..keys.len() {
+            assert_ne!(
+                keys[first], keys[second],
+                "keys {first} and {second} collide"
+            );
+        }
+    }
+    assert_eq!(keys[1], IndexKey::U1024(U1024::MAX));
+}

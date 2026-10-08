@@ -1,0 +1,23 @@
+{
+  "baseline": "f11e30d847fadb3739aa2cc35f1bd0951186254d",
+  "candidate": "b546f4254afdfde2f77f00f6101abb0fdcd7858b",
+  "cpu": 2,
+  "environment": {
+    "RAYON_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "BLIS_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1"
+  },
+  "sources": {
+    "benchmarks/rust/benchmark_treetci_global_search.rs": "8258feab5c5339cbb0436d5c257de2780e5444db87f3593fa435e41689d39a0f",
+    "benchmarks/rust/benchmark_treetci_memo.rs": "039b2d130e6154b84392b5158df3911542cdb2d9ac53f8a16600acd40014bdfa",
+    "benchmarks/2026-10-08-treetci-memo-protocol.md": "e3ae5db7c0c455c13d3c87b9bf2fe0c2fd936e01f226545bce0dde7df16676c1"
+  },
+  "binary_sha256": {
+    "baseline": "f2c1d96ad3ed255708301d7389b9152ed6f3ee4fefaafa8dcc21d0f746132386",
+    "candidate": "d9e6005da1196ca82929802ed3a15d111919b25ee5dc8c5874f752c838b7b5db",
+    "memo_candidate": "74aeeffce4a2e9716cfbb0878ed37047ad00c7ce383d1fe1cdd5ec7b39580568"
+  }
+}

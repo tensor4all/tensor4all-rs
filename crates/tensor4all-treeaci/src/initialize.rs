@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 
-use rand::{rngs::StdRng, SeedableRng};
 use rand_distr::{Distribution, StandardNormal};
 use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
@@ -141,7 +140,7 @@ pub(crate) fn build_random_output<T: TreeAciScalar, V: TreeAciNode>(
     reference: &TreeTN<IdxTensor, V>,
     problem: &PreparedTreeProblem<V>,
     ranks: &[usize],
-    options: &TreeAciOptions<V>,
+    rng: &mut dyn rand::RngCore,
 ) -> Result<TreeTN<IdxTensor, V>> {
     let output_bonds = ranks
         .iter()
@@ -162,7 +161,6 @@ pub(crate) fn build_random_output<T: TreeAciScalar, V: TreeAciNode>(
             })?;
         replacement_bonds.insert(bond.clone(), replacement.clone());
     }
-    let mut rng = StdRng::seed_from_u64(options.rng_seed);
     let mut tensors = Vec::with_capacity(problem.node_order.len());
     for node in &problem.node_order {
         let node_index = reference
@@ -197,7 +195,7 @@ pub(crate) fn build_random_output<T: TreeAciScalar, V: TreeAciNode>(
         enforce_limit("core elements", elements, problem.max_core_elements)?;
         let values = (0..elements)
             .map(|_| {
-                let value: f64 = StandardNormal.sample(&mut rng);
+                let value: f64 = StandardNormal.sample(rng);
                 tensor4all_core::Scalar::from_f64(value)
             })
             .collect::<Vec<T>>();

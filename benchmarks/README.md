@@ -194,6 +194,12 @@ sampled error of the result on 2000 `ChaCha8Rng` points. The body lives in
 `rust/benchmark_treetci_global_search.rs`, included by the TreeTCI example.
 Build it at the baseline and candidate revisions and keep the binaries apart:
 
+For correctness repairs that change the search algorithm, trajectories may
+intentionally differ. Report requested tolerance, sampled error and evaluation
+counts alongside the complete timings, and describe the comparison as an
+algorithmic cost tradeoff. The [retained-coordinate search comparison](results/2026-10-07-treetci-global-walk.md)
+uses this protocol; it does not attribute timing differences solely to readout.
+
 ```bash
 T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
   cargo build --release -p tensor4all-treetci --example benchmark_global_search
@@ -206,6 +212,22 @@ An optional case name (`chain_cos_129`, `quantics_chain_r20`,
 [2026-09-30 report](results/2026-09-30-treetci-global-search.md) records the
 paired #792 comparison, the readout rounding margins, and a 200-seed
 `StdRng`/`ChaCha8Rng` quality comparison of the global search.
+
+#### TreeTCI optional target memo (#802)
+
+`benchmark_memo plain` and `benchmark_memo memo` compare a disabled target
+memo with a 256 MiB logical payload budget. The eight cases cover chains and
+site-free-centre trees, two sizes, and cheap versus synthetic expensive
+deterministic targets. Timing includes initialization, optimization, final
+materialization and cache drop. See the
+[paired protocol](2026-10-08-treetci-memo-protocol.md) for the complete cases,
+correctness checks, confidence intervals and acceptance gates.
+
+```bash
+cargo build --release -p tensor4all-treetci --features tensor4all-core/default --example benchmark_memo
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  taskset -c 2 ./target/release/examples/benchmark_memo memo
+```
 
 #### Other Rust benchmarks
 

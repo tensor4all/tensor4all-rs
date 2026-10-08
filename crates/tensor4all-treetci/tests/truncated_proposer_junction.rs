@@ -14,7 +14,7 @@ use anyhow::Result;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetci::{
     optimize_with_proposer, to_treetn, GlobalIndexBatch, TreeTCI2, TreeTciEdge, TreeTciGraph,
-    TreeTciOptimizeReport, TreeTciOptions, TruncatedDefaultProposer,
+    TreeTciOptimizationResult, TreeTciOptions, TruncatedDefaultProposer,
 };
 use tensor4all_treetn::TreeTN;
 
@@ -142,7 +142,7 @@ fn assert_truncated_proposer_converges(tree: &JunctionTree) {
         seed: Some(7),
         ..Default::default()
     };
-    let TreeTciOptimizeReport { ranks, errors, .. } = optimize_with_proposer(
+    let TreeTciOptimizationResult { ranks, errors, .. } = optimize_with_proposer(
         &mut state,
         evaluate,
         &options,

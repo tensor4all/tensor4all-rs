@@ -5,8 +5,6 @@
 //! component independently and combining the results into a single
 //! [`SimpleTensorTrain`] with an additional component site.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use anyhow::{anyhow, Result};
@@ -19,7 +17,48 @@ use tensor4all_tensorbackend::FullPivLuScalar;
 use crate::batch::QuanticsBatch;
 use crate::error::{QuanticsTCIError, Result as QtciResult};
 use crate::options::QtciOptions;
-use crate::quantics_tci::quanticscrossinterpolate_batch;
+use crate::quantics_tci::quanticscrossinterpolate_batch_with_rng;
+
+/// Interpolate a multi-component function with an explicitly named seed.
+///
+/// Builds a `ChaCha8Rng` from `QtciOptions::rng_seed` (OS entropy when unset)
+/// and delegates to [`quanticscrossinterpolate_multicomponent_with_rng`], so one
+/// stream drives every component.
+///
+/// # Errors
+/// Returns [`QuanticsTCIError::InvalidConfiguration`] when `output_dims` is
+/// empty or has a zero factor, or when the grid or options are invalid.
+/// Returns [`QuanticsTCIError::Operation`] when `f` returns a value count that
+/// does not equal `n_points * product(output_dims)`, or when the underlying
+/// component interpolation fails.
+pub fn quanticscrossinterpolate_multicomponent<V, F>(
+    grid: &DiscretizedGrid,
+    f: F,
+    output_dims: &[usize],
+    initial_pivots: Option<Vec<Vec<usize>>>,
+    options: QtciOptions,
+) -> QtciResult<(QuanticsTensorCI2Batched<V>, Vec<usize>, Vec<f64>)>
+where
+    F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
+    V: TTScalar
+        + Default
+        + Clone
+        + 'static
+        + TensorElement
+        + tensor4all_core::MatrixLuciScalar
+        + FullPivLuScalar
+        + tensor4all_treetci::globalpivot::ScalarParts,
+{
+    let mut rng = super::quantics_tci::seeded_quantics_stream(&options);
+    quanticscrossinterpolate_multicomponent_with_rng(
+        grid,
+        f,
+        output_dims,
+        initial_pivots,
+        options,
+        &mut rng,
+    )
+}
 
 /// Result of batched (vector/tensor-valued) Quantics TCI interpolation.
 ///
@@ -52,7 +91,7 @@ use crate::quantics_tci::quanticscrossinterpolate_batch;
 ///     },
 ///     &[2],
 ///     None,
-///     QtciOptions::default(),
+///     QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
 /// ).unwrap();
 ///
 /// assert_eq!(result.output_dims(), &[2]);
@@ -103,7 +142,7 @@ where
     ///     },
     ///     &[2],
     ///     None,
-    ///     QtciOptions::default(),
+    ///     QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
     /// ).unwrap();
     ///
     /// let tt = result.tensor_train();
@@ -140,7 +179,7 @@ where
     ///     },
     ///     &[2],
     ///     None,
-    ///     QtciOptions::default(),
+    ///     QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
     /// ).unwrap();
     ///
     /// assert_eq!(result.output_dims(), &[2]);
@@ -173,7 +212,7 @@ where
     ///     },
     ///     &[1],
     ///     None,
-    ///     QtciOptions::default(),
+    ///     QtciOptions { rng_seed: Some(0), ..QtciOptions::default() },
     /// ).unwrap();
     ///
     /// assert!(result.grid().grid_step().len() > 0);
@@ -183,13 +222,16 @@ where
     }
 }
 
-/// Interpolate a vector/tensor-valued function, evaluating `f` in batches.
+/// Interpolate a vector/tensor-valued function, evaluating `f` in batches, on a
+/// caller-owned random stream.
 ///
-/// Each output component is interpolated independently with
-/// [`quanticscrossinterpolate_batch`], and the per-component tensor trains are
+/// Each output component is interpolated with
+/// [`quanticscrossinterpolate_batch_with_rng`] on the *same* stream, in
+/// component order, and the per-component tensor trains are
 /// combined into a single [`SimpleTensorTrain`] with an additional component
-/// site at the end. A shared cache means each grid point is evaluated at most
-/// once across all components.
+/// site at the end. Every component run memoizes the points it evaluates, so a
+/// point is evaluated once per component; reusing one evaluation across
+/// components needs a caller-owned cache and is tracked on issue #747.
 ///
 /// # Arguments
 ///
@@ -202,7 +244,9 @@ where
 ///
 ///   `&[2, 2]` for 2x2 matrix)
 /// * `initial_pivots` - Initial pivot grid indices (0-indexed, optional)
-/// * `options` - TCI options
+/// * `options` - TCI options; `rng_seed` is ignored
+/// * `rng` - Caller-owned random stream. One stream drives every component, so
+///   the whole run is reproducible from the stream's position
 ///
 /// # Returns
 ///
@@ -219,9 +263,11 @@ where
 /// # Examples
 ///
 /// ```
+/// use rand::SeedableRng as _;
+/// use rand_chacha::ChaCha8Rng;
 /// use tensor4all_quanticstci::{
-///     quanticscrossinterpolate_multicomponent, AbstractTensorTrain, DiscretizedGrid, QtciOptions,
-///     QuanticsBatch,
+///     quanticscrossinterpolate_multicomponent_with_rng, AbstractTensorTrain, DiscretizedGrid,
+///     QtciOptions, QuanticsBatch,
 /// };
 ///
 /// let grid = DiscretizedGrid::builder(&[2])
@@ -239,12 +285,14 @@ where
 ///     Ok(values)
 /// };
 ///
-/// let (result, ranks, errors) = quanticscrossinterpolate_multicomponent::<f64, _>(
+/// let mut rng = ChaCha8Rng::seed_from_u64(0);
+/// let (result, ranks, errors) = quanticscrossinterpolate_multicomponent_with_rng::<f64, _, _>(
 ///     &grid,
 ///     f,
 ///     &[2],
 ///     None,
 ///     QtciOptions::default().with_tolerance(1e-8),
+///     &mut rng,
 /// ).unwrap();
 ///
 /// assert_eq!(result.tensor_train().len(), 3); // 2 grid sites + 1 component site
@@ -252,12 +300,13 @@ where
 /// assert!(!ranks.is_empty());
 /// assert!(!errors.is_empty());
 /// ```
-pub fn quanticscrossinterpolate_multicomponent<V, F>(
+pub fn quanticscrossinterpolate_multicomponent_with_rng<V, F, R>(
     grid: &DiscretizedGrid,
     f: F,
     output_dims: &[usize],
     initial_pivots: Option<Vec<Vec<usize>>>,
     options: QtciOptions,
+    rng: &mut R,
 ) -> QtciResult<(QuanticsTensorCI2Batched<V>, Vec<usize>, Vec<f64>)>
 where
     F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
@@ -269,6 +318,7 @@ where
         + tensor4all_core::MatrixLuciScalar
         + FullPivLuScalar
         + tensor4all_treetci::globalpivot::ScalarParts,
+    R: rand::Rng + ?Sized,
 {
     // Validate output_dims
     if output_dims.is_empty() {
@@ -288,8 +338,11 @@ where
         });
     }
 
-    // Shared across components: coordinate bits -> all component values.
-    let cache: Rc<RefCell<HashMap<Vec<u64>, Vec<V>>>> = Rc::new(RefCell::new(HashMap::new()));
+    // Each component run memoizes its own quantics points, so the callback is
+    // called once per (component run, point). A cross-component cache keyed by
+    // original coordinates is deliberately not kept here: float coordinates are
+    // not a mixed-radix index space, and sharing one discrete-keyed cache
+    // across components needs the caller-owned cache seam tracked in #747.
     let f = Rc::new(f);
 
     let mut component_tts: Vec<SimpleTensorTrain<V>> = Vec::with_capacity(n_components);
@@ -297,66 +350,41 @@ where
     let mut all_errors: Vec<Vec<f64>> = Vec::with_capacity(n_components);
 
     for component in 0..n_components {
-        let cache = Rc::clone(&cache);
         let f = Rc::clone(&f);
         let adapter = move |batch: QuanticsBatch<'_, f64>| -> Result<Vec<V>> {
             let n_points = batch.n_points();
-            let n_dims = batch.n_dims();
-            let mut values: Vec<Option<V>> = vec![None; n_points];
-            let mut missing: Vec<usize> = Vec::new();
-            for (point, value) in values.iter_mut().enumerate() {
-                let key = coordinate_key(&batch, point)?;
-                match cache.borrow().get(&key) {
-                    Some(components) => {
-                        *value = Some(components.get(component).cloned().ok_or_else(|| {
-                            anyhow!("cached point is missing component {component}")
-                        })?);
-                    }
-                    None => missing.push(point),
-                }
+            if n_points == 0 {
+                return Ok(Vec::new());
             }
-
-            if !missing.is_empty() {
-                let mut coordinates = Vec::with_capacity(n_dims * missing.len());
-                for &point in &missing {
-                    let point_values = batch
-                        .point(point)
-                        .ok_or_else(|| anyhow!("invalid batch point index {point}"))?;
-                    coordinates.extend_from_slice(point_values);
-                }
-                let returned = f(QuanticsBatch::new(&coordinates, n_dims, missing.len())?)?;
-                if returned.len() % missing.len() != 0
-                    || returned.len() / missing.len() < n_components
-                {
-                    return Err(anyhow!(
-                        "callback returned {} values for {} points, expected at least {} components per point",
-                        returned.len(),
-                        missing.len(),
-                        n_components
-                    ));
-                }
-                for (offset, &point) in missing.iter().enumerate() {
-                    let components = returned[offset * n_components..][..n_components].to_vec();
-                    values[point] = Some(
-                        components
-                            .get(component)
-                            .cloned()
-                            .ok_or_else(|| anyhow!("missing component {component}"))?,
-                    );
-                    cache
-                        .borrow_mut()
-                        .insert(coordinate_key(&batch, point)?, components);
-                }
+            let returned = f(batch)?;
+            let expected = n_points.checked_mul(n_components).ok_or_else(|| {
+                anyhow!(
+                    "expected value count overflows usize: {n_points} points x {n_components} components"
+                )
+            })?;
+            if returned.len() != expected {
+                return Err(anyhow!(
+                    "callback returned {} values for {n_points} points, expected exactly {n_components} components per point ({expected} values)",
+                    returned.len()
+                ));
             }
-
-            values
-                .into_iter()
-                .map(|value| value.ok_or_else(|| anyhow!("missing component value")))
-                .collect()
+            Ok((0..n_points)
+                .map(|point| returned[point * n_components + component])
+                .collect())
         };
 
-        let (qtci, ranks, errors) =
-            quanticscrossinterpolate_batch(grid, adapter, initial_pivots.clone(), options.clone())?;
+        // One stream serves every component, so the second component continues
+        // the caller's sequence instead of restarting it.
+        // Erase the caller's RNG type once so every component instantiates the
+        // batch pipeline a single time.
+        let mut stream: &mut R = rng;
+        let (qtci, ranks, errors) = quanticscrossinterpolate_batch_with_rng(
+            grid,
+            adapter,
+            initial_pivots.clone(),
+            options.clone(),
+            &mut stream,
+        )?;
 
         component_tts.push(qtci.tensor_train());
         all_ranks.push(ranks);
@@ -430,14 +458,6 @@ where
         initial_pivots,
         options,
     )
-}
-
-/// Key for the multi-component evaluation cache.
-fn coordinate_key(batch: &QuanticsBatch<'_, f64>, point: usize) -> Result<Vec<u64>> {
-    let values = batch
-        .point(point)
-        .ok_or_else(|| anyhow!("invalid batch point index {point}"))?;
-    Ok(values.iter().map(|value| value.to_bits()).collect())
 }
 
 /// Combine per-component tensor trains into a single TT with a component

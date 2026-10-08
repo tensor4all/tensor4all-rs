@@ -121,15 +121,17 @@ pub use batch::{
 #[allow(deprecated)]
 pub use batched::{
     quanticscrossinterpolate_batched, quanticscrossinterpolate_multicomponent,
-    QuanticsTensorCI2Batched,
+    quanticscrossinterpolate_multicomponent_with_rng, QuanticsTensorCI2Batched,
 };
 pub use error::QuanticsTCIError;
 pub use options::QtciOptions;
 #[allow(deprecated)]
 pub use quantics_tci::{
-    quanticscrossinterpolate, quanticscrossinterpolate_batch, quanticscrossinterpolate_discrete,
-    quanticscrossinterpolate_discrete_batch, quanticscrossinterpolate_from_arrays,
-    quanticscrossinterpolate_from_arrays_batch, QuanticsTensorCI2,
+    quanticscrossinterpolate, quanticscrossinterpolate_batch,
+    quanticscrossinterpolate_batch_with_rng, quanticscrossinterpolate_discrete,
+    quanticscrossinterpolate_discrete_batch, quanticscrossinterpolate_discrete_batch_with_rng,
+    quanticscrossinterpolate_from_arrays, quanticscrossinterpolate_from_arrays_batch,
+    quanticscrossinterpolate_from_arrays_batch_with_rng, CacheStats, QuanticsTensorCI2,
 };
 
 // Re-export commonly used types from dependencies

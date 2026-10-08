@@ -340,9 +340,10 @@ fn continuous_2d_gaussian() {
     );
 }
 
-/// Verify cachedata_origcoord() returns sensible data for a continuous grid.
+/// Verify the grid coordinate mapping for a continuous grid: evaluating at grid
+/// indices agrees with the target at the corresponding original coordinates.
 #[test]
-fn continuous_cachedata_origcoord() {
+fn continuous_coordinate_mapping_agrees_with_target() {
     let grid = DiscretizedGrid::builder(&[4]) // 2^4 = 16 points
         .with_lower_bound(&[0.0])
         .with_upper_bound(&[1.0])
@@ -360,18 +361,20 @@ fn continuous_cachedata_origcoord() {
         quanticscrossinterpolate_batch(&grid, pointwise_coordinate_batch(f), None, opts)
             .expect("sin interpolation should work");
 
-    let cache = qtci.cachedata_origcoord().unwrap();
-    assert!(!cache.is_empty(), "cache should not be empty");
-
-    for (coord, val) in &cache {
+    for grid_idx in [[0usize], [1], [5], [15]] {
+        let quantics = grid.grididx_to_quantics(&grid_idx).unwrap();
+        let coord = grid.quantics_to_origcoord(&quantics).unwrap();
         assert_eq!(coord.len(), 1);
-        let x = coord[0];
-        let expected = x.sin();
+        let expected = coord[0].sin();
+        let value = qtci.evaluate(&grid_idx).unwrap();
         assert!(
-            (val - expected).abs() < 1e-10,
-            "cached f({x}) = {val}, expected {expected}"
+            (value - expected).abs() < 1e-10,
+            "interpolated f({}) = {value}, expected {expected}",
+            coord[0]
         );
     }
+    assert!(qtci.num_evals() > 0);
+    assert!(qtci.cache_hit_ratio() >= 0.0 && qtci.cache_hit_ratio() <= 1.0);
 }
 
 /// Verify integral of a constant function over a continuous grid.

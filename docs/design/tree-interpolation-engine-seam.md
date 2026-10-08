@@ -313,14 +313,14 @@ that crate (`LICENSE-TCIALGORITHMS-MIT`).
 The review kept the proposed names: `TreeInterpolator`,
 `InterpolationProblem`, `InterpolationOutcome`, `InterpolationTermination`,
 and `InterpolationError` in `tensor4all_treetn::interpolation`. The TreeTCI
-side adds `TreeTciInterpolator`, `TreeTciOptimizeReport`, and
+side adds `TreeTciInterpolator`, `TreeTciOptimizationResult`, and
 `TreeTciTermination`.
 
 ## Implementation decisions
 
 - **Report from both optimizers.** `optimize_default`, the thin wrapper of
   `optimize_with_proposer` with `DefaultProposer`, returns the same
-  `TreeTciOptimizeReport { ranks, errors, termination }`.
+  `TreeTciOptimizationResult { ranks, errors, termination, evaluation }`.
   `TreeTciTermination` is `#[non_exhaustive]`.
 - **Cap precedence in TreeTCI.** The saturation stop is checked before the
   convergence criterion, ranks never exceed the cap after a sweep, and
@@ -333,8 +333,10 @@ side adds `TreeTciInterpolator`, `TreeTciOptimizeReport`, and
 - **Engine configuration.** `TreeTciInterpolator::new` takes
   `TreeTciOptions`. On every run the problem overrides `tolerance` (the
   absolute tolerance), `max_bond_dim` (the cap), `normalize_error` (always
-  `false`), and `seed` (the problem seed); `max_iter` and the global pivot
-  search settings come from the engine. `new` validates the options and
+  `false`), and `seed` (the problem seed); `max_iter`, the global pivot
+  search settings and `evaluation_cache_bytes` come from the engine. The
+  optional memo covers optimization; named materialization evaluates through
+  the adapter separately. `new` validates the options and
   requires `max_iter >= TreeTciInterpolator::MIN_MAX_ITER` (public constant,
   3). `Default` uses `TreeTciOptions::default()`.
 - **Proposer.** The engine always uses `DefaultProposer`, which is

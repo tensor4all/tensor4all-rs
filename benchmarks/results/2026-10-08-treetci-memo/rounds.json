@@ -1,0 +1,1542 @@
+[
+  {
+    "kind": "global",
+    "round": 0,
+    "label": "baseline",
+    "exit": 0,
+    "load_before": 2.41259765625,
+    "load_after": 2.29931640625,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 65140,
+    "cases": {
+      "chain_cos_129": {
+        "seconds": 1.201,
+        "signature": "case=chain_cos_129 sites=129 evals=43250 iters=4 final_rank=2 pivots=d49a85e0eb5dc3dd samples=fb65620ad37ba262 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]"
+      },
+      "quantics_chain_r20": {
+        "seconds": 0.0255,
+        "signature": "case=quantics_chain_r20 sites=20 evals=16247 iters=4 final_rank=8 pivots=d70bef4b6765b684 samples=70823a9d8d5e51b3 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]"
+      },
+      "tree_3x10_plus_centre": {
+        "seconds": 0.0608,
+        "signature": "case=tree_3x10_plus_centre sites=31 evals=44918 iters=4 final_rank=9 pivots=decbe070a2f17d60 samples=ea67dde77549eb4e sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]"
+      }
+    }
+  },
+  {
+    "kind": "global",
+    "round": 0,
+    "label": "candidate",
+    "exit": 0,
+    "load_before": 2.29931640625,
+    "load_after": 2.19482421875,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 66560,
+    "cases": {
+      "chain_cos_129": {
+        "seconds": 1.1422,
+        "signature": "case=chain_cos_129 sites=129 evals=43250 iters=4 final_rank=2 pivots=d49a85e0eb5dc3dd samples=fb65620ad37ba262 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]"
+      },
+      "quantics_chain_r20": {
+        "seconds": 0.0247,
+        "signature": "case=quantics_chain_r20 sites=20 evals=16247 iters=4 final_rank=8 pivots=d70bef4b6765b684 samples=70823a9d8d5e51b3 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]"
+      },
+      "tree_3x10_plus_centre": {
+        "seconds": 0.0605,
+        "signature": "case=tree_3x10_plus_centre sites=31 evals=44918 iters=4 final_rank=9 pivots=decbe070a2f17d60 samples=ea67dde77549eb4e sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]"
+      }
+    }
+  },
+  {
+    "kind": "memo",
+    "round": 0,
+    "label": "baseline",
+    "exit": 0,
+    "load_before": 2.19482421875,
+    "load_after": 2.19482421875,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 15248,
+    "cases": {
+      "cheap_chain_8": {
+        "seconds": 0.004387781,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 1955,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_chain_16": {
+        "seconds": 0.014113286,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 5073,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_branch_8": {
+        "seconds": 0.009026444,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 4479,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_branch_16": {
+        "seconds": 0.031783641,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 11325,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_chain_8": {
+        "seconds": 0.030173911,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 1955,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_chain_16": {
+        "seconds": 0.081629267,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 5073,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_branch_8": {
+        "seconds": 0.06922351,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 4479,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_branch_16": {
+        "seconds": 0.180836051,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 11325,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      }
+    }
+  },
+  {
+    "kind": "memo",
+    "round": 0,
+    "label": "candidate",
+    "exit": 0,
+    "load_before": 2.19482421875,
+    "load_after": 2.19482421875,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 15524,
+    "cases": {
+      "cheap_chain_8": {
+        "seconds": 0.004446796,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 211,
+        "entries": 211,
+        "bytes": 3376,
+        "drops": 0
+      },
+      "cheap_chain_16": {
+        "seconds": 0.014867529,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 1135,
+        "entries": 1135,
+        "bytes": 18160,
+        "drops": 0
+      },
+      "cheap_branch_8": {
+        "seconds": 0.009556945,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 612,
+        "entries": 612,
+        "bytes": 9792,
+        "drops": 0
+      },
+      "cheap_branch_16": {
+        "seconds": 0.033281722,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 2202,
+        "entries": 2202,
+        "bytes": 35232,
+        "drops": 0
+      },
+      "expensive_chain_8": {
+        "seconds": 0.006784264,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 211,
+        "entries": 211,
+        "bytes": 3376,
+        "drops": 0
+      },
+      "expensive_chain_16": {
+        "seconds": 0.029732721,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 1135,
+        "entries": 1135,
+        "bytes": 18160,
+        "drops": 0
+      },
+      "expensive_branch_8": {
+        "seconds": 0.017490499,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 612,
+        "entries": 612,
+        "bytes": 9792,
+        "drops": 0
+      },
+      "expensive_branch_16": {
+        "seconds": 0.062421227,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 2202,
+        "entries": 2202,
+        "bytes": 35232,
+        "drops": 0
+      }
+    }
+  },
+  {
+    "kind": "global",
+    "round": 1,
+    "label": "candidate",
+    "exit": 0,
+    "load_before": 2.19482421875,
+    "load_after": 2.09912109375,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 66632,
+    "cases": {
+      "chain_cos_129": {
+        "seconds": 1.1624,
+        "signature": "case=chain_cos_129 sites=129 evals=43250 iters=4 final_rank=2 pivots=d49a85e0eb5dc3dd samples=fb65620ad37ba262 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]"
+      },
+      "quantics_chain_r20": {
+        "seconds": 0.025,
+        "signature": "case=quantics_chain_r20 sites=20 evals=16247 iters=4 final_rank=8 pivots=d70bef4b6765b684 samples=70823a9d8d5e51b3 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]"
+      },
+      "tree_3x10_plus_centre": {
+        "seconds": 0.0599,
+        "signature": "case=tree_3x10_plus_centre sites=31 evals=44918 iters=4 final_rank=9 pivots=decbe070a2f17d60 samples=ea67dde77549eb4e sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]"
+      }
+    }
+  },
+  {
+    "kind": "global",
+    "round": 1,
+    "label": "baseline",
+    "exit": 0,
+    "load_before": 2.09912109375,
+    "load_after": 2.0107421875,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 65360,
+    "cases": {
+      "chain_cos_129": {
+        "seconds": 1.1607,
+        "signature": "case=chain_cos_129 sites=129 evals=43250 iters=4 final_rank=2 pivots=d49a85e0eb5dc3dd samples=fb65620ad37ba262 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]"
+      },
+      "quantics_chain_r20": {
+        "seconds": 0.0246,
+        "signature": "case=quantics_chain_r20 sites=20 evals=16247 iters=4 final_rank=8 pivots=d70bef4b6765b684 samples=70823a9d8d5e51b3 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]"
+      },
+      "tree_3x10_plus_centre": {
+        "seconds": 0.0588,
+        "signature": "case=tree_3x10_plus_centre sites=31 evals=44918 iters=4 final_rank=9 pivots=decbe070a2f17d60 samples=ea67dde77549eb4e sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]"
+      }
+    }
+  },
+  {
+    "kind": "memo",
+    "round": 1,
+    "label": "candidate",
+    "exit": 0,
+    "load_before": 2.0107421875,
+    "load_after": 2.0107421875,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 15328,
+    "cases": {
+      "cheap_chain_8": {
+        "seconds": 0.004435512,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 211,
+        "entries": 211,
+        "bytes": 3376,
+        "drops": 0
+      },
+      "cheap_chain_16": {
+        "seconds": 0.014415867,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 1135,
+        "entries": 1135,
+        "bytes": 18160,
+        "drops": 0
+      },
+      "cheap_branch_8": {
+        "seconds": 0.009239117,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 612,
+        "entries": 612,
+        "bytes": 9792,
+        "drops": 0
+      },
+      "cheap_branch_16": {
+        "seconds": 0.032533225,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 2202,
+        "entries": 2202,
+        "bytes": 35232,
+        "drops": 0
+      },
+      "expensive_chain_8": {
+        "seconds": 0.006655215,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 211,
+        "entries": 211,
+        "bytes": 3376,
+        "drops": 0
+      },
+      "expensive_chain_16": {
+        "seconds": 0.029325363,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 1135,
+        "entries": 1135,
+        "bytes": 18160,
+        "drops": 0
+      },
+      "expensive_branch_8": {
+        "seconds": 0.017198933,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 612,
+        "entries": 612,
+        "bytes": 9792,
+        "drops": 0
+      },
+      "expensive_branch_16": {
+        "seconds": 0.060463768,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 2202,
+        "entries": 2202,
+        "bytes": 35232,
+        "drops": 0
+      }
+    }
+  },
+  {
+    "kind": "memo",
+    "round": 1,
+    "label": "baseline",
+    "exit": 0,
+    "load_before": 2.0107421875,
+    "load_after": 2.0107421875,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 15232,
+    "cases": {
+      "cheap_chain_8": {
+        "seconds": 0.004141854,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 1955,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_chain_16": {
+        "seconds": 0.013551911,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 5073,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_branch_8": {
+        "seconds": 0.008780044,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 4479,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_branch_16": {
+        "seconds": 0.030464664,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 11325,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_chain_8": {
+        "seconds": 0.029234588,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 1955,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_chain_16": {
+        "seconds": 0.079207358,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 5073,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_branch_8": {
+        "seconds": 0.06690898,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 4479,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_branch_16": {
+        "seconds": 0.176971106,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 11325,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      }
+    }
+  },
+  {
+    "kind": "global",
+    "round": 2,
+    "label": "baseline",
+    "exit": 0,
+    "load_before": 2.0107421875,
+    "load_after": 1.9296875,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 65716,
+    "cases": {
+      "chain_cos_129": {
+        "seconds": 1.1505,
+        "signature": "case=chain_cos_129 sites=129 evals=43250 iters=4 final_rank=2 pivots=d49a85e0eb5dc3dd samples=fb65620ad37ba262 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]"
+      },
+      "quantics_chain_r20": {
+        "seconds": 0.0249,
+        "signature": "case=quantics_chain_r20 sites=20 evals=16247 iters=4 final_rank=8 pivots=d70bef4b6765b684 samples=70823a9d8d5e51b3 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]"
+      },
+      "tree_3x10_plus_centre": {
+        "seconds": 0.0593,
+        "signature": "case=tree_3x10_plus_centre sites=31 evals=44918 iters=4 final_rank=9 pivots=decbe070a2f17d60 samples=ea67dde77549eb4e sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]"
+      }
+    }
+  },
+  {
+    "kind": "global",
+    "round": 2,
+    "label": "candidate",
+    "exit": 0,
+    "load_before": 1.9296875,
+    "load_after": 1.85498046875,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 67252,
+    "cases": {
+      "chain_cos_129": {
+        "seconds": 1.1377,
+        "signature": "case=chain_cos_129 sites=129 evals=43250 iters=4 final_rank=2 pivots=d49a85e0eb5dc3dd samples=fb65620ad37ba262 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]"
+      },
+      "quantics_chain_r20": {
+        "seconds": 0.0245,
+        "signature": "case=quantics_chain_r20 sites=20 evals=16247 iters=4 final_rank=8 pivots=d70bef4b6765b684 samples=70823a9d8d5e51b3 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]"
+      },
+      "tree_3x10_plus_centre": {
+        "seconds": 0.0586,
+        "signature": "case=tree_3x10_plus_centre sites=31 evals=44918 iters=4 final_rank=9 pivots=decbe070a2f17d60 samples=ea67dde77549eb4e sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]"
+      }
+    }
+  },
+  {
+    "kind": "memo",
+    "round": 2,
+    "label": "baseline",
+    "exit": 0,
+    "load_before": 1.85498046875,
+    "load_after": 1.85498046875,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 15368,
+    "cases": {
+      "cheap_chain_8": {
+        "seconds": 0.004293365,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 1955,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_chain_16": {
+        "seconds": 0.013712327,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 5073,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_branch_8": {
+        "seconds": 0.008987221,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 4479,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_branch_16": {
+        "seconds": 0.031356555,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 11325,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_chain_8": {
+        "seconds": 0.029203776,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 1955,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_chain_16": {
+        "seconds": 0.079185486,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 5073,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_branch_8": {
+        "seconds": 0.066353669,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 4479,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_branch_16": {
+        "seconds": 0.176715944,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 11325,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      }
+    }
+  },
+  {
+    "kind": "memo",
+    "round": 2,
+    "label": "candidate",
+    "exit": 0,
+    "load_before": 1.85498046875,
+    "load_after": 1.85498046875,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 15716,
+    "cases": {
+      "cheap_chain_8": {
+        "seconds": 0.00439956,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 211,
+        "entries": 211,
+        "bytes": 3376,
+        "drops": 0
+      },
+      "cheap_chain_16": {
+        "seconds": 0.014284308,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 1135,
+        "entries": 1135,
+        "bytes": 18160,
+        "drops": 0
+      },
+      "cheap_branch_8": {
+        "seconds": 0.009245438,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 612,
+        "entries": 612,
+        "bytes": 9792,
+        "drops": 0
+      },
+      "cheap_branch_16": {
+        "seconds": 0.032298244,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 2202,
+        "entries": 2202,
+        "bytes": 35232,
+        "drops": 0
+      },
+      "expensive_chain_8": {
+        "seconds": 0.006705338,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 211,
+        "entries": 211,
+        "bytes": 3376,
+        "drops": 0
+      },
+      "expensive_chain_16": {
+        "seconds": 0.02868115,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 1135,
+        "entries": 1135,
+        "bytes": 18160,
+        "drops": 0
+      },
+      "expensive_branch_8": {
+        "seconds": 0.016961347,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 612,
+        "entries": 612,
+        "bytes": 9792,
+        "drops": 0
+      },
+      "expensive_branch_16": {
+        "seconds": 0.059879165,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 2202,
+        "entries": 2202,
+        "bytes": 35232,
+        "drops": 0
+      }
+    }
+  },
+  {
+    "kind": "global",
+    "round": 3,
+    "label": "candidate",
+    "exit": 0,
+    "load_before": 1.85498046875,
+    "load_after": 1.7861328125,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 66768,
+    "cases": {
+      "chain_cos_129": {
+        "seconds": 1.1547,
+        "signature": "case=chain_cos_129 sites=129 evals=43250 iters=4 final_rank=2 pivots=d49a85e0eb5dc3dd samples=fb65620ad37ba262 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]"
+      },
+      "quantics_chain_r20": {
+        "seconds": 0.0247,
+        "signature": "case=quantics_chain_r20 sites=20 evals=16247 iters=4 final_rank=8 pivots=d70bef4b6765b684 samples=70823a9d8d5e51b3 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]"
+      },
+      "tree_3x10_plus_centre": {
+        "seconds": 0.0587,
+        "signature": "case=tree_3x10_plus_centre sites=31 evals=44918 iters=4 final_rank=9 pivots=decbe070a2f17d60 samples=ea67dde77549eb4e sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]"
+      }
+    }
+  },
+  {
+    "kind": "global",
+    "round": 3,
+    "label": "baseline",
+    "exit": 0,
+    "load_before": 1.7861328125,
+    "load_after": 1.7861328125,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 65784,
+    "cases": {
+      "chain_cos_129": {
+        "seconds": 1.1484,
+        "signature": "case=chain_cos_129 sites=129 evals=43250 iters=4 final_rank=2 pivots=d49a85e0eb5dc3dd samples=fb65620ad37ba262 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]"
+      },
+      "quantics_chain_r20": {
+        "seconds": 0.0246,
+        "signature": "case=quantics_chain_r20 sites=20 evals=16247 iters=4 final_rank=8 pivots=d70bef4b6765b684 samples=70823a9d8d5e51b3 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]"
+      },
+      "tree_3x10_plus_centre": {
+        "seconds": 0.0587,
+        "signature": "case=tree_3x10_plus_centre sites=31 evals=44918 iters=4 final_rank=9 pivots=decbe070a2f17d60 samples=ea67dde77549eb4e sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]"
+      }
+    }
+  },
+  {
+    "kind": "memo",
+    "round": 3,
+    "label": "candidate",
+    "exit": 0,
+    "load_before": 1.7861328125,
+    "load_after": 1.7861328125,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 15512,
+    "cases": {
+      "cheap_chain_8": {
+        "seconds": 0.004465444,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 211,
+        "entries": 211,
+        "bytes": 3376,
+        "drops": 0
+      },
+      "cheap_chain_16": {
+        "seconds": 0.014259307,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 1135,
+        "entries": 1135,
+        "bytes": 18160,
+        "drops": 0
+      },
+      "cheap_branch_8": {
+        "seconds": 0.008980586,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 612,
+        "entries": 612,
+        "bytes": 9792,
+        "drops": 0
+      },
+      "cheap_branch_16": {
+        "seconds": 0.03257306,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 2202,
+        "entries": 2202,
+        "bytes": 35232,
+        "drops": 0
+      },
+      "expensive_chain_8": {
+        "seconds": 0.00667749,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 211,
+        "entries": 211,
+        "bytes": 3376,
+        "drops": 0
+      },
+      "expensive_chain_16": {
+        "seconds": 0.028937454,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 1135,
+        "entries": 1135,
+        "bytes": 18160,
+        "drops": 0
+      },
+      "expensive_branch_8": {
+        "seconds": 0.016974107,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 612,
+        "entries": 612,
+        "bytes": 9792,
+        "drops": 0
+      },
+      "expensive_branch_16": {
+        "seconds": 0.060487961,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 2202,
+        "entries": 2202,
+        "bytes": 35232,
+        "drops": 0
+      }
+    }
+  },
+  {
+    "kind": "memo",
+    "round": 3,
+    "label": "baseline",
+    "exit": 0,
+    "load_before": 1.7861328125,
+    "load_after": 1.72314453125,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 15280,
+    "cases": {
+      "cheap_chain_8": {
+        "seconds": 0.004130232,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 1955,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_chain_16": {
+        "seconds": 0.013597873,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 5073,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_branch_8": {
+        "seconds": 0.00874095,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 4479,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_branch_16": {
+        "seconds": 0.0313398,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 11325,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_chain_8": {
+        "seconds": 0.029316462,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 1955,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_chain_16": {
+        "seconds": 0.078947874,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 5073,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_branch_8": {
+        "seconds": 0.066663703,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 4479,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_branch_16": {
+        "seconds": 0.177243761,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 11325,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      }
+    }
+  },
+  {
+    "kind": "global",
+    "round": 4,
+    "label": "baseline",
+    "exit": 0,
+    "load_before": 1.72314453125,
+    "load_after": 1.72314453125,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 65880,
+    "cases": {
+      "chain_cos_129": {
+        "seconds": 1.1574,
+        "signature": "case=chain_cos_129 sites=129 evals=43250 iters=4 final_rank=2 pivots=d49a85e0eb5dc3dd samples=fb65620ad37ba262 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]"
+      },
+      "quantics_chain_r20": {
+        "seconds": 0.0251,
+        "signature": "case=quantics_chain_r20 sites=20 evals=16247 iters=4 final_rank=8 pivots=d70bef4b6765b684 samples=70823a9d8d5e51b3 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]"
+      },
+      "tree_3x10_plus_centre": {
+        "seconds": 0.0615,
+        "signature": "case=tree_3x10_plus_centre sites=31 evals=44918 iters=4 final_rank=9 pivots=decbe070a2f17d60 samples=ea67dde77549eb4e sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]"
+      }
+    }
+  },
+  {
+    "kind": "global",
+    "round": 4,
+    "label": "candidate",
+    "exit": 0,
+    "load_before": 1.72314453125,
+    "load_after": 1.6650390625,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 67096,
+    "cases": {
+      "chain_cos_129": {
+        "seconds": 1.1536,
+        "signature": "case=chain_cos_129 sites=129 evals=43250 iters=4 final_rank=2 pivots=d49a85e0eb5dc3dd samples=fb65620ad37ba262 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]"
+      },
+      "quantics_chain_r20": {
+        "seconds": 0.0246,
+        "signature": "case=quantics_chain_r20 sites=20 evals=16247 iters=4 final_rank=8 pivots=d70bef4b6765b684 samples=70823a9d8d5e51b3 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]"
+      },
+      "tree_3x10_plus_centre": {
+        "seconds": 0.0593,
+        "signature": "case=tree_3x10_plus_centre sites=31 evals=44918 iters=4 final_rank=9 pivots=decbe070a2f17d60 samples=ea67dde77549eb4e sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]"
+      }
+    }
+  },
+  {
+    "kind": "memo",
+    "round": 4,
+    "label": "baseline",
+    "exit": 0,
+    "load_before": 1.6650390625,
+    "load_after": 1.6650390625,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 15400,
+    "cases": {
+      "cheap_chain_8": {
+        "seconds": 0.004405315,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 1955,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_chain_16": {
+        "seconds": 0.014076045,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 5073,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_branch_8": {
+        "seconds": 0.008876236,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 4479,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_branch_16": {
+        "seconds": 0.031737839,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 11325,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_chain_8": {
+        "seconds": 0.029424545,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 1955,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_chain_16": {
+        "seconds": 0.079128153,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 5073,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_branch_8": {
+        "seconds": 0.066887131,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 4479,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_branch_16": {
+        "seconds": 0.177710518,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 11325,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      }
+    }
+  },
+  {
+    "kind": "memo",
+    "round": 4,
+    "label": "candidate",
+    "exit": 0,
+    "load_before": 1.6650390625,
+    "load_after": 1.6650390625,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 15720,
+    "cases": {
+      "cheap_chain_8": {
+        "seconds": 0.004464063,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 211,
+        "entries": 211,
+        "bytes": 3376,
+        "drops": 0
+      },
+      "cheap_chain_16": {
+        "seconds": 0.014316787,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 1135,
+        "entries": 1135,
+        "bytes": 18160,
+        "drops": 0
+      },
+      "cheap_branch_8": {
+        "seconds": 0.009345212,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 612,
+        "entries": 612,
+        "bytes": 9792,
+        "drops": 0
+      },
+      "cheap_branch_16": {
+        "seconds": 0.033646654,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 2202,
+        "entries": 2202,
+        "bytes": 35232,
+        "drops": 0
+      },
+      "expensive_chain_8": {
+        "seconds": 0.00675455,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 211,
+        "entries": 211,
+        "bytes": 3376,
+        "drops": 0
+      },
+      "expensive_chain_16": {
+        "seconds": 0.029282978,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 1135,
+        "entries": 1135,
+        "bytes": 18160,
+        "drops": 0
+      },
+      "expensive_branch_8": {
+        "seconds": 0.017361819,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 612,
+        "entries": 612,
+        "bytes": 9792,
+        "drops": 0
+      },
+      "expensive_branch_16": {
+        "seconds": 0.061428126,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 2202,
+        "entries": 2202,
+        "bytes": 35232,
+        "drops": 0
+      }
+    }
+  },
+  {
+    "kind": "global",
+    "round": 5,
+    "label": "candidate",
+    "exit": 0,
+    "load_before": 1.6650390625,
+    "load_after": 1.611328125,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 66864,
+    "cases": {
+      "chain_cos_129": {
+        "seconds": 1.1412,
+        "signature": "case=chain_cos_129 sites=129 evals=43250 iters=4 final_rank=2 pivots=d49a85e0eb5dc3dd samples=fb65620ad37ba262 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]"
+      },
+      "quantics_chain_r20": {
+        "seconds": 0.0246,
+        "signature": "case=quantics_chain_r20 sites=20 evals=16247 iters=4 final_rank=8 pivots=d70bef4b6765b684 samples=70823a9d8d5e51b3 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]"
+      },
+      "tree_3x10_plus_centre": {
+        "seconds": 0.0591,
+        "signature": "case=tree_3x10_plus_centre sites=31 evals=44918 iters=4 final_rank=9 pivots=decbe070a2f17d60 samples=ea67dde77549eb4e sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]"
+      }
+    }
+  },
+  {
+    "kind": "global",
+    "round": 5,
+    "label": "baseline",
+    "exit": 0,
+    "load_before": 1.611328125,
+    "load_after": 1.56201171875,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 66132,
+    "cases": {
+      "chain_cos_129": {
+        "seconds": 1.148,
+        "signature": "case=chain_cos_129 sites=129 evals=43250 iters=4 final_rank=2 pivots=d49a85e0eb5dc3dd samples=fb65620ad37ba262 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]"
+      },
+      "quantics_chain_r20": {
+        "seconds": 0.0244,
+        "signature": "case=quantics_chain_r20 sites=20 evals=16247 iters=4 final_rank=8 pivots=d70bef4b6765b684 samples=70823a9d8d5e51b3 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]"
+      },
+      "tree_3x10_plus_centre": {
+        "seconds": 0.0588,
+        "signature": "case=tree_3x10_plus_centre sites=31 evals=44918 iters=4 final_rank=9 pivots=decbe070a2f17d60 samples=ea67dde77549eb4e sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]"
+      }
+    }
+  },
+  {
+    "kind": "memo",
+    "round": 5,
+    "label": "candidate",
+    "exit": 0,
+    "load_before": 1.56201171875,
+    "load_after": 1.56201171875,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 15380,
+    "cases": {
+      "cheap_chain_8": {
+        "seconds": 0.004477834,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 211,
+        "entries": 211,
+        "bytes": 3376,
+        "drops": 0
+      },
+      "cheap_chain_16": {
+        "seconds": 0.014268702,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 1135,
+        "entries": 1135,
+        "bytes": 18160,
+        "drops": 0
+      },
+      "cheap_branch_8": {
+        "seconds": 0.009238751,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 612,
+        "entries": 612,
+        "bytes": 9792,
+        "drops": 0
+      },
+      "cheap_branch_16": {
+        "seconds": 0.032773681,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 2202,
+        "entries": 2202,
+        "bytes": 35232,
+        "drops": 0
+      },
+      "expensive_chain_8": {
+        "seconds": 0.006653519,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 211,
+        "entries": 211,
+        "bytes": 3376,
+        "drops": 0
+      },
+      "expensive_chain_16": {
+        "seconds": 0.029605428,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 1135,
+        "entries": 1135,
+        "bytes": 18160,
+        "drops": 0
+      },
+      "expensive_branch_8": {
+        "seconds": 0.017056323,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 612,
+        "entries": 612,
+        "bytes": 9792,
+        "drops": 0
+      },
+      "expensive_branch_16": {
+        "seconds": 0.061392648,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 2202,
+        "entries": 2202,
+        "bytes": 35232,
+        "drops": 0
+      }
+    }
+  },
+  {
+    "kind": "memo",
+    "round": 5,
+    "label": "baseline",
+    "exit": 0,
+    "load_before": 1.56201171875,
+    "load_after": 1.56201171875,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 15100,
+    "cases": {
+      "cheap_chain_8": {
+        "seconds": 0.004274998,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 1955,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_chain_16": {
+        "seconds": 0.013724713,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 5073,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_branch_8": {
+        "seconds": 0.008851488,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 4479,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_branch_16": {
+        "seconds": 0.030693705,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 11325,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_chain_8": {
+        "seconds": 0.029235037,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 1955,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_chain_16": {
+        "seconds": 0.080668465,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 5073,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_branch_8": {
+        "seconds": 0.070768334,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 4479,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_branch_16": {
+        "seconds": 0.177023751,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 11325,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      }
+    }
+  },
+  {
+    "kind": "global",
+    "round": 6,
+    "label": "baseline",
+    "exit": 0,
+    "load_before": 1.56201171875,
+    "load_after": 1.5166015625,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 65152,
+    "cases": {
+      "chain_cos_129": {
+        "seconds": 1.1535,
+        "signature": "case=chain_cos_129 sites=129 evals=43250 iters=4 final_rank=2 pivots=d49a85e0eb5dc3dd samples=fb65620ad37ba262 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]"
+      },
+      "quantics_chain_r20": {
+        "seconds": 0.0246,
+        "signature": "case=quantics_chain_r20 sites=20 evals=16247 iters=4 final_rank=8 pivots=d70bef4b6765b684 samples=70823a9d8d5e51b3 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]"
+      },
+      "tree_3x10_plus_centre": {
+        "seconds": 0.0597,
+        "signature": "case=tree_3x10_plus_centre sites=31 evals=44918 iters=4 final_rank=9 pivots=decbe070a2f17d60 samples=ea67dde77549eb4e sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]"
+      }
+    }
+  },
+  {
+    "kind": "global",
+    "round": 6,
+    "label": "candidate",
+    "exit": 0,
+    "load_before": 1.5166015625,
+    "load_after": 1.47509765625,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 67304,
+    "cases": {
+      "chain_cos_129": {
+        "seconds": 1.1335,
+        "signature": "case=chain_cos_129 sites=129 evals=43250 iters=4 final_rank=2 pivots=d49a85e0eb5dc3dd samples=fb65620ad37ba262 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]"
+      },
+      "quantics_chain_r20": {
+        "seconds": 0.0246,
+        "signature": "case=quantics_chain_r20 sites=20 evals=16247 iters=4 final_rank=8 pivots=d70bef4b6765b684 samples=70823a9d8d5e51b3 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]"
+      },
+      "tree_3x10_plus_centre": {
+        "seconds": 0.0586,
+        "signature": "case=tree_3x10_plus_centre sites=31 evals=44918 iters=4 final_rank=9 pivots=decbe070a2f17d60 samples=ea67dde77549eb4e sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]"
+      }
+    }
+  },
+  {
+    "kind": "memo",
+    "round": 6,
+    "label": "baseline",
+    "exit": 0,
+    "load_before": 1.47509765625,
+    "load_after": 1.47509765625,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 15684,
+    "cases": {
+      "cheap_chain_8": {
+        "seconds": 0.00422428,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 1955,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_chain_16": {
+        "seconds": 0.013993718,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 5073,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_branch_8": {
+        "seconds": 0.009154553,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 4479,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "cheap_branch_16": {
+        "seconds": 0.030919486,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 11325,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_chain_8": {
+        "seconds": 0.029243911,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 1955,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_chain_16": {
+        "seconds": 0.078381067,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 5073,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_branch_8": {
+        "seconds": 0.066019919,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 4479,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      },
+      "expensive_branch_16": {
+        "seconds": 0.174893206,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 11325,
+        "entries": 0,
+        "bytes": 0,
+        "drops": 0
+      }
+    }
+  },
+  {
+    "kind": "memo",
+    "round": 6,
+    "label": "candidate",
+    "exit": 0,
+    "load_before": 1.47509765625,
+    "load_after": 1.47509765625,
+    "steal_fraction": 0.0,
+    "affinity_ok": true,
+    "max_rss_kib": 15812,
+    "cases": {
+      "cheap_chain_8": {
+        "seconds": 0.004280019,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 211,
+        "entries": 211,
+        "bytes": 3376,
+        "drops": 0
+      },
+      "cheap_chain_16": {
+        "seconds": 0.013885087,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 1135,
+        "entries": 1135,
+        "bytes": 18160,
+        "drops": 0
+      },
+      "cheap_branch_8": {
+        "seconds": 0.009089503,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 612,
+        "entries": 612,
+        "bytes": 9792,
+        "drops": 0
+      },
+      "cheap_branch_16": {
+        "seconds": 0.031899444,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 2202,
+        "entries": 2202,
+        "bytes": 35232,
+        "drops": 0
+      },
+      "expensive_chain_8": {
+        "seconds": 0.006773961,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4372854500688396288, 4373487819385995264] termination=Converged samples=[4613937818241073152, 4607580719944764638]",
+        "requested": 1955,
+        "evaluated": 211,
+        "entries": 211,
+        "bytes": 3376,
+        "drops": 0
+      },
+      "expensive_chain_16": {
+        "seconds": 0.028601016,
+        "signature": "ranks=[3, 3, 3] errors=[4373915895913076053, 4373904900796798293, 4374186009269633024] termination=Converged samples=[4613937818241073150, 4607310578153909177]",
+        "requested": 5073,
+        "evaluated": 1135,
+        "entries": 1135,
+        "bytes": 18160,
+        "drops": 0
+      },
+      "expensive_branch_8": {
+        "seconds": 0.016910365,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4364832463852142592, 4375373115323755179, 4375373115323755179, 4375373115323755179] termination=Converged samples=[4613937818241073153, 4609108499108510654]",
+        "requested": 4479,
+        "evaluated": 612,
+        "entries": 612,
+        "bytes": 9792,
+        "drops": 0
+      },
+      "expensive_branch_16": {
+        "seconds": 0.059967293,
+        "signature": "ranks=[3, 3, 3, 3] errors=[4373825002951846571, 4377029712842937685, 4377029712842937685, 4377029712842937685] termination=Converged samples=[4613937818241073148, 4607419092228949447]",
+        "requested": 11325,
+        "evaluated": 2202,
+        "entries": 2202,
+        "bytes": 35232,
+        "drops": 0
+      }
+    }
+  }
+]

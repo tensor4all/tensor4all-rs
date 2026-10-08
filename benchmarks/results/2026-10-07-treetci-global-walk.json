@@ -1,0 +1,441 @@
+{
+  "baseline_commit": "4249c445",
+  "candidate_commit": "8b1ba82c318dedb3f0f42a8dfc7d36cb2ecbe04f",
+  "profile": "release",
+  "cpu": 2,
+  "hardware": "AMD Ryzen 9 6900HX / 16 logical CPUs / virtual Linux",
+  "thread_variables": {
+    "RAYON_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "BLAS_NUM_THREADS": "1"
+  },
+  "binary_sha256": {
+    "baseline": "eb409d448a6e7b0a7433391abd3e3ebf6036eb232659d07a46477218925e71aa",
+    "candidate": "8a4501dd9940284fc4294f4c5b419c000ec5709788e41d817bead8db3c2b650a"
+  },
+  "benchmark_sha256": "babf6ce94fac19f5be2a118267bcf464da3e3ac631b1c12b68bf6d3760006a62",
+  "warmups": [
+    {
+      "build": "baseline",
+      "pair": null,
+      "load_before": "0.90 1.16 1.35 1/444 1405381",
+      "load_after": "0.91 1.15 1.35 1/444 1405469",
+      "wall_seconds": 3.4281890392303467,
+      "returncode": 0,
+      "stdout": "build commit=4249c445 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=0.3737 median_s=0.4068 evals=42145 iters=4 final_rank=2 pivots=3d8b6a37988f7d2a samples=40988ea4f9613ee4 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e28000000000020\", \"3e28000000000020\", \"3e28000000000020\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0197 median_s=0.0205 evals=17946 iters=4 final_rank=8 pivots=45ccbee3c3dcd8ab samples=1f20dd0fd11cf18b sampled_rel_err=1.28e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e39734e02d66482\", \"3e3d2cda0d8c8845\", \"3e3bcbb3b6fbf3d1\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0397 median_s=0.0399 evals=50253 iters=4 final_rank=9 pivots=1360104c504748d5 samples=c579b4d6d8bf8ed1 sampled_rel_err=7.30e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3b0280f17db7ca\", \"3e3cb7f908e32455\", \"3e3cb7bf7da8b4cf\"]\n",
+      "stderr": "METRICS elapsed_s=3.42 max_rss_kb=149416\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "0.3737",
+          "median_s": "0.4068",
+          "evals": "42145",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "3d8b6a37988f7d2a",
+          "samples": "40988ea4f9613ee4",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0197",
+          "median_s": "0.0205",
+          "evals": "17946",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "45ccbee3c3dcd8ab",
+          "samples": "1f20dd0fd11cf18b",
+          "sampled_rel_err": "1.28e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0397",
+          "median_s": "0.0399",
+          "evals": "50253",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "1360104c504748d5",
+          "samples": "c579b4d6d8bf8ed1",
+          "sampled_rel_err": "7.30e-9"
+        }
+      ]
+    },
+    {
+      "build": "candidate",
+      "pair": null,
+      "load_before": "0.91 1.15 1.35 1/444 1405469",
+      "load_after": "0.92 1.15 1.35 1/444 1405495",
+      "wall_seconds": 6.410590410232544,
+      "returncode": 0,
+      "stdout": "build commit=8b1ba82c RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=1.2513 median_s=1.3722 evals=43250 iters=4 final_rank=2 pivots=55a15abe1402ff6f samples=d2745eafc53a7a95 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0359 median_s=0.0365 evals=16247 iters=4 final_rank=8 pivots=6f9aab11e048b068 samples=e3077ffcc83c4238 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0845 median_s=0.0857 evals=44918 iters=4 final_rank=9 pivots=c058607a9085b5b6 samples=42dcd67ba416247b sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]\n",
+      "stderr": "METRICS elapsed_s=6.40 max_rss_kb=148828\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "1.2513",
+          "median_s": "1.3722",
+          "evals": "43250",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "55a15abe1402ff6f",
+          "samples": "d2745eafc53a7a95",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0359",
+          "median_s": "0.0365",
+          "evals": "16247",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "6f9aab11e048b068",
+          "samples": "e3077ffcc83c4238",
+          "sampled_rel_err": "1.64e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0845",
+          "median_s": "0.0857",
+          "evals": "44918",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "c058607a9085b5b6",
+          "samples": "42dcd67ba416247b",
+          "sampled_rel_err": "7.29e-9"
+        }
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "build": "baseline",
+      "pair": 1,
+      "load_before": "0.92 1.15 1.35 1/444 1405495",
+      "load_after": "0.93 1.15 1.35 1/441 1405497",
+      "wall_seconds": 3.1812543869018555,
+      "returncode": 0,
+      "stdout": "build commit=4249c445 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=0.3564 median_s=0.3592 evals=42145 iters=4 final_rank=2 pivots=3d8b6a37988f7d2a samples=40988ea4f9613ee4 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e28000000000020\", \"3e28000000000020\", \"3e28000000000020\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0176 median_s=0.0186 evals=17946 iters=4 final_rank=8 pivots=45ccbee3c3dcd8ab samples=1f20dd0fd11cf18b sampled_rel_err=1.28e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e39734e02d66482\", \"3e3d2cda0d8c8845\", \"3e3bcbb3b6fbf3d1\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0390 median_s=0.0399 evals=50253 iters=4 final_rank=9 pivots=1360104c504748d5 samples=c579b4d6d8bf8ed1 sampled_rel_err=7.30e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3b0280f17db7ca\", \"3e3cb7f908e32455\", \"3e3cb7bf7da8b4cf\"]\n",
+      "stderr": "METRICS elapsed_s=3.18 max_rss_kb=142468\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "0.3564",
+          "median_s": "0.3592",
+          "evals": "42145",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "3d8b6a37988f7d2a",
+          "samples": "40988ea4f9613ee4",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0176",
+          "median_s": "0.0186",
+          "evals": "17946",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "45ccbee3c3dcd8ab",
+          "samples": "1f20dd0fd11cf18b",
+          "sampled_rel_err": "1.28e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0390",
+          "median_s": "0.0399",
+          "evals": "50253",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "1360104c504748d5",
+          "samples": "c579b4d6d8bf8ed1",
+          "sampled_rel_err": "7.30e-9"
+        }
+      ]
+    },
+    {
+      "build": "candidate",
+      "pair": 1,
+      "load_before": "0.93 1.15 1.35 1/441 1405497",
+      "load_after": "0.93 1.15 1.34 1/441 1405525",
+      "wall_seconds": 6.4599761962890625,
+      "returncode": 0,
+      "stdout": "build commit=8b1ba82c RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=1.2568 median_s=1.4005 evals=43250 iters=4 final_rank=2 pivots=55a15abe1402ff6f samples=d2745eafc53a7a95 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0359 median_s=0.0360 evals=16247 iters=4 final_rank=8 pivots=6f9aab11e048b068 samples=e3077ffcc83c4238 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0866 median_s=0.0867 evals=44918 iters=4 final_rank=9 pivots=c058607a9085b5b6 samples=42dcd67ba416247b sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]\n",
+      "stderr": "METRICS elapsed_s=6.45 max_rss_kb=151932\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "1.2568",
+          "median_s": "1.4005",
+          "evals": "43250",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "55a15abe1402ff6f",
+          "samples": "d2745eafc53a7a95",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0359",
+          "median_s": "0.0360",
+          "evals": "16247",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "6f9aab11e048b068",
+          "samples": "e3077ffcc83c4238",
+          "sampled_rel_err": "1.64e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0866",
+          "median_s": "0.0867",
+          "evals": "44918",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "c058607a9085b5b6",
+          "samples": "42dcd67ba416247b",
+          "sampled_rel_err": "7.29e-9"
+        }
+      ]
+    },
+    {
+      "build": "candidate",
+      "pair": 2,
+      "load_before": "0.93 1.15 1.34 1/441 1405525",
+      "load_after": "0.94 1.14 1.34 1/459 1405575",
+      "wall_seconds": 6.550930738449097,
+      "returncode": 0,
+      "stdout": "build commit=8b1ba82c RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=1.2325 median_s=1.4046 evals=43250 iters=4 final_rank=2 pivots=55a15abe1402ff6f samples=d2745eafc53a7a95 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0364 median_s=0.0372 evals=16247 iters=4 final_rank=8 pivots=6f9aab11e048b068 samples=e3077ffcc83c4238 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0892 median_s=0.0944 evals=44918 iters=4 final_rank=9 pivots=c058607a9085b5b6 samples=42dcd67ba416247b sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]\n",
+      "stderr": "METRICS elapsed_s=6.54 max_rss_kb=151404\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "1.2325",
+          "median_s": "1.4046",
+          "evals": "43250",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "55a15abe1402ff6f",
+          "samples": "d2745eafc53a7a95",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0364",
+          "median_s": "0.0372",
+          "evals": "16247",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "6f9aab11e048b068",
+          "samples": "e3077ffcc83c4238",
+          "sampled_rel_err": "1.64e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0892",
+          "median_s": "0.0944",
+          "evals": "44918",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "c058607a9085b5b6",
+          "samples": "42dcd67ba416247b",
+          "sampled_rel_err": "7.29e-9"
+        }
+      ]
+    },
+    {
+      "build": "baseline",
+      "pair": 2,
+      "load_before": "0.94 1.14 1.34 1/459 1405575",
+      "load_after": "0.94 1.14 1.34 1/446 1405601",
+      "wall_seconds": 3.3006601333618164,
+      "returncode": 0,
+      "stdout": "build commit=4249c445 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=0.3624 median_s=0.3807 evals=42145 iters=4 final_rank=2 pivots=3d8b6a37988f7d2a samples=40988ea4f9613ee4 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e28000000000020\", \"3e28000000000020\", \"3e28000000000020\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0186 median_s=0.0195 evals=17946 iters=4 final_rank=8 pivots=45ccbee3c3dcd8ab samples=1f20dd0fd11cf18b sampled_rel_err=1.28e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e39734e02d66482\", \"3e3d2cda0d8c8845\", \"3e3bcbb3b6fbf3d1\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0413 median_s=0.0417 evals=50253 iters=4 final_rank=9 pivots=1360104c504748d5 samples=c579b4d6d8bf8ed1 sampled_rel_err=7.30e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3b0280f17db7ca\", \"3e3cb7f908e32455\", \"3e3cb7bf7da8b4cf\"]\n",
+      "stderr": "METRICS elapsed_s=3.29 max_rss_kb=149176\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "0.3624",
+          "median_s": "0.3807",
+          "evals": "42145",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "3d8b6a37988f7d2a",
+          "samples": "40988ea4f9613ee4",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0186",
+          "median_s": "0.0195",
+          "evals": "17946",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "45ccbee3c3dcd8ab",
+          "samples": "1f20dd0fd11cf18b",
+          "sampled_rel_err": "1.28e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0413",
+          "median_s": "0.0417",
+          "evals": "50253",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "1360104c504748d5",
+          "samples": "c579b4d6d8bf8ed1",
+          "sampled_rel_err": "7.30e-9"
+        }
+      ]
+    },
+    {
+      "build": "baseline",
+      "pair": 3,
+      "load_before": "0.94 1.14 1.34 1/446 1405601",
+      "load_after": "0.94 1.14 1.34 1/446 1405615",
+      "wall_seconds": 3.199077844619751,
+      "returncode": 0,
+      "stdout": "build commit=4249c445 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=0.3643 median_s=0.3653 evals=42145 iters=4 final_rank=2 pivots=3d8b6a37988f7d2a samples=40988ea4f9613ee4 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e28000000000020\", \"3e28000000000020\", \"3e28000000000020\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0177 median_s=0.0193 evals=17946 iters=4 final_rank=8 pivots=45ccbee3c3dcd8ab samples=1f20dd0fd11cf18b sampled_rel_err=1.28e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e39734e02d66482\", \"3e3d2cda0d8c8845\", \"3e3bcbb3b6fbf3d1\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0385 median_s=0.0404 evals=50253 iters=4 final_rank=9 pivots=1360104c504748d5 samples=c579b4d6d8bf8ed1 sampled_rel_err=7.30e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3b0280f17db7ca\", \"3e3cb7f908e32455\", \"3e3cb7bf7da8b4cf\"]\n",
+      "stderr": "METRICS elapsed_s=3.19 max_rss_kb=149888\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "0.3643",
+          "median_s": "0.3653",
+          "evals": "42145",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "3d8b6a37988f7d2a",
+          "samples": "40988ea4f9613ee4",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0177",
+          "median_s": "0.0193",
+          "evals": "17946",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "45ccbee3c3dcd8ab",
+          "samples": "1f20dd0fd11cf18b",
+          "sampled_rel_err": "1.28e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0385",
+          "median_s": "0.0404",
+          "evals": "50253",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "1360104c504748d5",
+          "samples": "c579b4d6d8bf8ed1",
+          "sampled_rel_err": "7.30e-9"
+        }
+      ]
+    },
+    {
+      "build": "candidate",
+      "pair": 3,
+      "load_before": "0.94 1.14 1.34 1/446 1405615",
+      "load_after": "0.95 1.14 1.34 1/442 1405654",
+      "wall_seconds": 6.523218154907227,
+      "returncode": 0,
+      "stdout": "build commit=8b1ba82c RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 repeats=3\ncase=chain_cos_129 sites=129 min_s=1.2628 median_s=1.4111 evals=43250 iters=4 final_rank=2 pivots=55a15abe1402ff6f samples=d2745eafc53a7a95 sampled_rel_err=5.56e-9\n  ranks=[2, 2, 2, 2]\n  errors=[\"3e37fe61bc24f6ec\", \"3e27ffe957257fed\", \"3e27ffe957257fed\", \"3e27ffe957257fed\"]\ncase=quantics_chain_r20 sites=20 min_s=0.0358 median_s=0.0370 evals=16247 iters=4 final_rank=8 pivots=6f9aab11e048b068 samples=e3077ffcc83c4238 sampled_rel_err=1.64e-8\n  ranks=[4, 8, 8, 8]\n  errors=[\"3e3215cebb358024\", \"3e3f931f99d09401\", \"3e3d18c2f39b5da7\", \"3e3d7a6609a70c20\"]\ncase=tree_3x10_plus_centre sites=31 min_s=0.0846 median_s=0.0877 evals=44918 iters=4 final_rank=9 pivots=c058607a9085b5b6 samples=42dcd67ba416247b sampled_rel_err=7.29e-9\n  ranks=[4, 9, 9, 9]\n  errors=[\"3c74215e5dade614\", \"3e3c835c371fbb66\", \"3e3cb9c6eb2c4fe5\", \"3e3cb82684f5400d\"]\n",
+      "stderr": "METRICS elapsed_s=6.52 max_rss_kb=160528\n",
+      "cases": [
+        {
+          "case": "chain_cos_129",
+          "sites": "129",
+          "min_s": "1.2628",
+          "median_s": "1.4111",
+          "evals": "43250",
+          "iters": "4",
+          "final_rank": "2",
+          "pivots": "55a15abe1402ff6f",
+          "samples": "d2745eafc53a7a95",
+          "sampled_rel_err": "5.56e-9"
+        },
+        {
+          "case": "quantics_chain_r20",
+          "sites": "20",
+          "min_s": "0.0358",
+          "median_s": "0.0370",
+          "evals": "16247",
+          "iters": "4",
+          "final_rank": "8",
+          "pivots": "6f9aab11e048b068",
+          "samples": "e3077ffcc83c4238",
+          "sampled_rel_err": "1.64e-8"
+        },
+        {
+          "case": "tree_3x10_plus_centre",
+          "sites": "31",
+          "min_s": "0.0846",
+          "median_s": "0.0877",
+          "evals": "44918",
+          "iters": "4",
+          "final_rank": "9",
+          "pivots": "c058607a9085b5b6",
+          "samples": "42dcd67ba416247b",
+          "sampled_rel_err": "7.29e-9"
+        }
+      ]
+    }
+  ],
+  "flags": [],
+  "timing_validity": "No predeclared diagnostic flags",
+  "effective_backend_threads": 1,
+  "backend_threads_verification": "with_default_backend(|backend| backend.num_threads()) under the same thread environment and CPU affinity",
+  "tool_versions": {
+    "rustc": "1.98.1",
+    "cargo": "1.98.1"
+  },
+  "paired_summary": [
+    {
+      "case": "chain_cos_129",
+      "paired_ratios": [
+        3.8989420935412027,
+        3.6895193065405834,
+        3.862852450041062
+      ]
+    },
+    {
+      "case": "quantics_chain_r20",
+      "paired_ratios": [
+        1.935483870967742,
+        1.9076923076923076,
+        1.9170984455958546
+      ]
+    },
+    {
+      "case": "tree_3x10_plus_centre",
+      "paired_ratios": [
+        2.172932330827068,
+        2.2637889688249397,
+        2.1707920792079207
+      ]
+    }
+  ]
+}

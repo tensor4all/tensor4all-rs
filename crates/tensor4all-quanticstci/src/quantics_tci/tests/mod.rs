@@ -3,20 +3,10 @@ use approx::assert_relative_eq;
 use quanticsgrids::UnfoldingScheme;
 
 #[test]
-fn point_from_batch_rejects_out_of_bounds_point() {
-    let data = vec![0, 1];
-    let batch = GlobalIndexBatch::new(&data, 2, 1).unwrap();
-    let err = point_from_batch(batch, 1).unwrap_err();
-
-    assert!(err.to_string().contains("invalid batch index"));
-    assert!(err.to_string().contains("site 0"));
-    assert!(err.to_string().contains("point 1"));
-}
-
-#[test]
 fn site_evaluator_propagates_coordinate_conversion_failure() {
     let called = std::cell::Cell::new(false);
-    let cache: Rc<RefCell<HashMap<Vec<usize>, f64>>> = Rc::new(RefCell::new(HashMap::new()));
+    let cache: Rc<RefCell<MultiIndexCache<f64>>> =
+        Rc::new(RefCell::new(MultiIndexCache::new(&[4]).unwrap()));
     let evaluate = site_evaluator(
         |_point: &[usize]| anyhow::bail!("synthetic coordinate failure"),
         |_batch: QuanticsBatch<'_, f64>| {
@@ -35,34 +25,212 @@ fn site_evaluator_propagates_coordinate_conversion_failure() {
 
 #[test]
 fn site_evaluator_passes_converted_coordinates_and_caches_points() {
-    let cache: Rc<RefCell<HashMap<Vec<usize>, f64>>> = Rc::new(RefCell::new(HashMap::new()));
+    let calls = std::cell::Cell::new(0usize);
+    let cache: Rc<RefCell<MultiIndexCache<f64>>> =
+        Rc::new(RefCell::new(MultiIndexCache::new(&[4]).unwrap()));
     let evaluate = site_evaluator(
         |_point: &[usize]| Ok(vec![0.25]),
         |batch: QuanticsBatch<'_, f64>| {
             assert_eq!(batch.n_dims(), 1);
             assert_eq!(batch.n_points(), 1);
             assert_eq!(batch.get(0, 0), Some(0.25));
+            calls.set(calls.get() + 1);
             Ok(vec![batch.get(0, 0).unwrap() * 4.0])
         },
         Rc::clone(&cache),
     );
     let batch = GlobalIndexBatch::new(&[0], 1, 1).unwrap();
     assert_eq!(evaluate(batch).unwrap(), vec![1.0]);
-    // Evaluated points are recorded for the returned QuanticsTensorCI2 cache.
-    assert_eq!(cache.borrow().get(&vec![0]), Some(&1.0));
+    // The point is memoized, so the second identical request is a cache hit and
+    // does not call the target again.
+    assert_eq!(evaluate(batch).unwrap(), vec![1.0]);
+    assert_eq!(calls.get(), 1);
+    assert_eq!(cache.borrow().hits(), 1);
+    assert!(cache.borrow().is_cached(&[0]).unwrap());
+}
+
+#[test]
+fn site_evaluator_evaluates_repeated_points_in_one_batch_once() {
+    let calls = std::cell::Cell::new(0usize);
+    let cache: Rc<RefCell<MultiIndexCache<f64>>> =
+        Rc::new(RefCell::new(MultiIndexCache::new(&[4]).unwrap()));
+    let evaluate = site_evaluator(
+        |point: &[usize]| Ok(vec![point[0] as f64]),
+        |batch: QuanticsBatch<'_, f64>| {
+            calls.set(calls.get() + 1);
+            assert_eq!(batch.n_points(), 1, "the duplicate point is evaluated once");
+            Ok(vec![batch.get(0, 0).unwrap() * 10.0])
+        },
+        Rc::clone(&cache),
+    );
+    // One site, two points: the same quantics index twice.
+    let batch = GlobalIndexBatch::new(&[2, 2], 1, 2).unwrap();
+    assert_eq!(evaluate(batch).unwrap(), vec![20.0, 20.0]);
+    assert_eq!(calls.get(), 1);
+    assert_eq!(cache.borrow().len(), 1);
+}
+
+#[test]
+fn site_evaluator_serves_mixed_hits_and_misses_in_request_order() {
+    // Two sites with local dimension 4. Point 0 is cached up front; the batch
+    // requests [cached, new, cached, duplicate-of-new, invalid-free mix].
+    let calls = std::cell::Cell::new(0usize);
+    let converted = std::cell::RefCell::new(Vec::<Vec<usize>>::new());
+    let cache: Rc<RefCell<MultiIndexCache<f64>>> =
+        Rc::new(RefCell::new(MultiIndexCache::new(&[4, 4]).unwrap()));
+    cache.borrow_mut().insert(&[0, 0], 100.0).unwrap();
+
+    let evaluate = site_evaluator(
+        |point: &[usize]| {
+            converted.borrow_mut().push(point.to_vec());
+            Ok(point.iter().map(|&v| v as f64).collect::<Vec<f64>>())
+        },
+        |batch: QuanticsBatch<'_, f64>| {
+            calls.set(calls.get() + 1);
+            // Only the three distinct misses are converted and evaluated.
+            assert_eq!(batch.n_points(), 3);
+            Ok((0..3)
+                .map(|p| batch.get(0, p).unwrap() * 10.0 + batch.get(1, p).unwrap())
+                .collect())
+        },
+        Rc::clone(&cache),
+    );
+
+    // Flat column-major batch: two sites, five points.
+    let batch = GlobalIndexBatch::new(&[0, 0, 1, 2, 2, 1, 1, 2, 3, 3], 2, 5).unwrap();
+    let values = evaluate(batch).unwrap();
+    assert_eq!(
+        values,
+        vec![
+            100.0, // [0,0] served from the cache
+            12.0,  // [1,2] evaluated miss
+            21.0,  // [2,1] evaluated miss
+            12.0,  // [1,2] duplicate of that miss
+            33.0,  // [3,3] evaluated miss
+        ],
+        "request order is preserved"
+    );
+    assert_eq!(calls.get(), 1, "one batched call for the misses");
+    assert_eq!(
+        converted.borrow().as_slice(),
+        &[vec![1, 2], vec![2, 1], vec![3, 3]],
+        "only misses are converted, in first-seen order"
+    );
+    assert_eq!(cache.borrow().misses(), 4, "every request is counted once");
+    assert_eq!(cache.borrow().hits(), 1);
+}
+
+#[test]
+fn site_evaluator_does_not_cache_a_failed_target_and_recovers_after_it() {
+    #[derive(Debug)]
+    struct TargetError;
+    impl std::fmt::Display for TargetError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "typed target failure")
+        }
+    }
+    impl std::error::Error for TargetError {}
+
+    let attempts = std::cell::Cell::new(0usize);
+    let cache: Rc<RefCell<MultiIndexCache<f64>>> =
+        Rc::new(RefCell::new(MultiIndexCache::new(&[4]).unwrap()));
+    let evaluate = site_evaluator(
+        |_point: &[usize]| Ok(vec![0.0_f64]),
+        |_batch: QuanticsBatch<'_, f64>| {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() == 1 {
+                Err(anyhow::Error::new(TargetError))
+            } else {
+                Ok(vec![2.5_f64])
+            }
+        },
+        Rc::clone(&cache),
+    );
+
+    let batch = GlobalIndexBatch::new(&[1], 1, 1).unwrap();
+    let error = evaluate(batch).unwrap_err();
+    assert!(
+        error.downcast_ref::<TargetError>().is_some(),
+        "the target error keeps its type: {error}"
+    );
+    assert!(
+        cache.borrow().is_empty(),
+        "a failed evaluation is not cached"
+    );
+    assert_eq!(cache.borrow().misses(), 1);
+
+    // The next request re-evaluates and succeeds, and is then cached.
+    assert_eq!(evaluate(batch).unwrap(), vec![2.5]);
+    assert_eq!(attempts.get(), 2);
+    assert_eq!(evaluate(batch).unwrap(), vec![2.5]);
+    assert_eq!(attempts.get(), 2);
+    assert_eq!(cache.borrow().hits(), 1);
+}
+
+#[test]
+fn site_evaluator_handles_an_empty_batch_and_invalid_indices() {
+    let calls = std::cell::Cell::new(0usize);
+    let cache: Rc<RefCell<MultiIndexCache<f64>>> =
+        Rc::new(RefCell::new(MultiIndexCache::new(&[4]).unwrap()));
+    let evaluate = site_evaluator(
+        |_point: &[usize]| Ok(vec![0.0_f64]),
+        |_batch: QuanticsBatch<'_, f64>| {
+            calls.set(calls.get() + 1);
+            Ok(Vec::new())
+        },
+        Rc::clone(&cache),
+    );
+
+    // An empty batch is a no-op: nothing converts, evaluates or counts.
+    let empty = GlobalIndexBatch::new(&[], 1, 0).unwrap();
+    assert!(evaluate(empty).unwrap().is_empty());
+    assert_eq!(calls.get(), 0);
+    assert_eq!(cache.borrow().hits(), 0);
+    assert_eq!(cache.borrow().misses(), 0);
+
+    // An index that the cache rejects (rank or range) surfaces as an error and
+    // never reaches the target.
+    let out_of_range = GlobalIndexBatch::new(&[4], 1, 1).unwrap();
+    let error = evaluate(out_of_range).unwrap_err().to_string();
+    assert!(error.contains("out of range"), "unexpected error: {error}");
+    assert_eq!(calls.get(), 0);
+}
+
+#[test]
+fn site_evaluator_rejects_inconsistent_converted_dimensions() {
+    for first_dim in [0, 1] {
+        let cache: Rc<RefCell<MultiIndexCache<f64>>> =
+            Rc::new(RefCell::new(MultiIndexCache::new(&[4]).unwrap()));
+        let evaluate = site_evaluator(
+            // Zero coordinates are still a dimension, not an uninitialized sentinel.
+            |point: &[usize]| Ok(vec![0.0_f64; first_dim + usize::from(point[0] != 0)]),
+            |_batch: QuanticsBatch<'_, f64>| panic!("inconsistent dimensions reached target"),
+            Rc::clone(&cache),
+        );
+        let batch = GlobalIndexBatch::new(&[0, 1], 1, 2).unwrap();
+        let error = evaluate(batch).unwrap_err().to_string();
+        assert!(
+            error.contains("inconsistent point dimension"),
+            "unexpected error: {error}"
+        );
+        assert!(cache.borrow().is_empty());
+    }
 }
 
 #[test]
 fn site_evaluator_rejects_a_wrong_number_of_returned_values() {
-    let cache: Rc<RefCell<HashMap<Vec<usize>, f64>>> = Rc::new(RefCell::new(HashMap::new()));
+    let cache: Rc<RefCell<MultiIndexCache<f64>>> =
+        Rc::new(RefCell::new(MultiIndexCache::new(&[4]).unwrap()));
     let evaluate = site_evaluator(
         |_point: &[usize]| Ok(vec![0.0_f64]),
         |_batch: QuanticsBatch<'_, f64>| Ok(vec![1.0_f64, 2.0]),
-        cache,
+        Rc::clone(&cache),
     );
     let batch = GlobalIndexBatch::new(&[0], 1, 1).unwrap();
     let error = evaluate(batch).unwrap_err().to_string();
-    assert!(error.contains("returned 2 values for 1 points"));
+    assert!(error.contains("returned 2 values for 1 evaluated points"));
+    // A rejected evaluation is never cached.
+    assert!(cache.borrow().is_empty());
 }
 
 #[test]
@@ -76,6 +244,7 @@ fn test_discrete_simple_function() {
     let opts = QtciOptions::default()
         .with_tolerance(1e-10)
         .with_nrandominitpivot(3)
+        .with_rng_seed(0)
         .with_unfoldingscheme(UnfoldingScheme::Fused);
 
     let result = quanticscrossinterpolate_discrete_batch(
@@ -125,15 +294,18 @@ fn test_discrete_tci_structure() {
     assert_eq!(qtci.link_dims().len(), 1); // 2 sites = 1 bond
     assert!(qtci.rank() > 0);
 
-    // Verify that the function was called with correct grid indices by checking
-    // all cached values. The cache maps quantics indices to function values.
+    // The interpolation agrees with the target at grid points, which pins the
+    // quantics <-> grid-index mapping for inherent discrete grids.
     let grid = qtci.inherent_grid().unwrap();
-    for (quantics_idx, &cached_val) in qtci.cachedata() {
-        let grid_idx = grid.quantics_to_grididx(quantics_idx).unwrap();
+    for grid_idx in [[0usize, 0], [1, 2], [2, 3], [3, 3]] {
+        let quantics = grid.grididx_to_quantics(&grid_idx).unwrap();
+        assert_eq!(grid.quantics_to_grididx(&quantics).unwrap(), grid_idx);
         let expected = (grid_idx[0] + grid_idx[1]) as f64;
-        assert_relative_eq!(cached_val, expected, epsilon = 1e-10);
+        assert_relative_eq!(qtci.evaluate(&grid_idx).unwrap(), expected, epsilon = 1e-8);
     }
-    assert!(!qtci.cachedata().is_empty());
+    assert!(qtci.num_evals() > 0);
+    assert!(qtci.cache_stats().num_evals > 0);
+    assert!(qtci.cache_hit_ratio() >= 0.0 && qtci.cache_hit_ratio() <= 1.0);
 
     // Verify evaluate() matches f at known-exact points (same block in
     // quantics representation).
@@ -281,43 +453,22 @@ fn test_discrete_inherent_grid_accessor() {
     assert!(qtci.inherent_grid().is_some());
     assert!(qtci.discretized_grid().is_none());
 
-    // Verify that cached function values are correct, proving the grid
+    // Evaluating at grid points agrees with the target, which proves the grid
     // coordinate mapping works for inherent discrete grids.
     let grid = qtci.inherent_grid().unwrap();
-    for (quantics_idx, &cached_val) in qtci.cachedata() {
-        let grid_idx = grid.quantics_to_grididx(quantics_idx).unwrap();
+    for grid_idx in [[0usize, 0], [1, 2], [2, 3], [3, 3]] {
+        let quantics = grid.grididx_to_quantics(&grid_idx).unwrap();
+        assert_eq!(grid.quantics_to_grididx(&quantics).unwrap(), grid_idx);
         let expected = (grid_idx[0] + grid_idx[1]) as f64;
-        assert_relative_eq!(cached_val, expected, epsilon = 1e-10);
+        assert_relative_eq!(qtci.evaluate(&grid_idx).unwrap(), expected, epsilon = 1e-8);
     }
+    assert!(qtci.num_evals() > 0);
 
     // Verify evaluate() at known-exact points
     let val = qtci.evaluate(&[0, 0]).unwrap();
     assert_relative_eq!(val, 0.0, epsilon = 1e-8);
     let val = qtci.evaluate(&[3, 3]).unwrap();
     assert_relative_eq!(val, 6.0, epsilon = 1e-8);
-}
-
-#[test]
-fn test_discrete_cachedata_origcoord_error() {
-    // cachedata_origcoord() should return an error for inherent discrete grids
-    // because there are no original continuous coordinates.
-    // f is non-zero at the default initial pivot (grid index 0).
-    let f = |idx: &[usize]| idx[0] as f64 + 1.0;
-    let sizes = vec![4];
-
-    let opts = QtciOptions::default()
-        .with_tolerance(1e-10)
-        .with_nrandominitpivot(1)
-        .with_unfoldingscheme(UnfoldingScheme::Fused);
-
-    let (qtci, _ranks, _errors) =
-        quanticscrossinterpolate_discrete_batch(&sizes, pointwise_index_batch(f), None, opts)
-            .unwrap();
-
-    let result = qtci.cachedata_origcoord();
-    assert!(result.is_err());
-    let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("original coordinates are only available for discretized grids"));
 }
 
 #[test]
@@ -369,26 +520,22 @@ fn test_continuous_grid_interpolation() {
     assert!(qtci.inherent_grid().is_none());
     assert!(qtci.rank() > 0);
 
-    // cachedata should have some entries
-    assert!(!qtci.cachedata().is_empty());
-
-    // Verify cached function values via cachedata_origcoord.
-    // Each cached point should have the correct original coordinate and
-    // function value f(x) = x^2.
-    let origcoord_data = qtci.cachedata_origcoord().unwrap();
-    assert!(!origcoord_data.is_empty());
-    for (coord, val) in &origcoord_data {
+    // Evaluating at grid points agrees with the target f(x) = x^2, which pins
+    // the quantics <-> original-coordinate mapping.
+    for grid_idx in [[0usize], [1], [2], [7]] {
+        let quantics = grid.grididx_to_quantics(&grid_idx).unwrap();
+        let coord = grid.quantics_to_origcoord(&quantics).unwrap();
         assert_eq!(coord.len(), 1);
-        let x = coord[0];
-        let expected = x * x;
+        let expected = coord[0] * coord[0];
         assert!(
-            (val - expected).abs() < 1e-10,
-            "cached f({}) = {}, expected {}",
-            x,
-            val,
+            (qtci.evaluate(&grid_idx).unwrap() - expected).abs() < 1e-8,
+            "interpolated f({}) = {}, expected {}",
+            coord[0],
+            qtci.evaluate(&grid_idx).unwrap(),
             expected
         );
     }
+    assert!(qtci.num_evals() > 0);
 
     // Verify evaluate() produces finite values at grid endpoints
     let val = qtci.evaluate(&[0]).unwrap();
@@ -445,15 +592,16 @@ fn test_discrete_with_initial_pivots() {
 
     let (qtci, _ranks, _errors) = result.unwrap();
 
-    // Verify cached values match f(i,j) = i*j, proving the function was
-    // called with correct grid indices from the initial pivots and TCI sweep.
+    // Evaluating at grid points agrees with f(i,j) = i*j, which proves the
+    // function is reached with correct grid indices in both directions.
     let grid = qtci.inherent_grid().unwrap();
-    for (quantics_idx, &cached_val) in qtci.cachedata() {
-        let grid_idx = grid.quantics_to_grididx(quantics_idx).unwrap();
+    for grid_idx in [[0usize, 0], [1, 2], [2, 3], [3, 3]] {
+        let quantics = grid.grididx_to_quantics(&grid_idx).unwrap();
+        assert_eq!(grid.quantics_to_grididx(&quantics).unwrap(), grid_idx);
         let expected = (grid_idx[0] * grid_idx[1]) as f64;
-        assert_relative_eq!(cached_val, expected, epsilon = 1e-10);
+        assert_relative_eq!(qtci.evaluate(&grid_idx).unwrap(), expected, epsilon = 1e-8);
     }
-    assert!(!qtci.cachedata().is_empty());
+    assert!(qtci.num_evals() > 0);
 
     // Verify evaluate() at known-exact points
     let val = qtci.evaluate(&[0, 0]).unwrap();
@@ -505,19 +653,18 @@ fn test_continuous_grid_with_initial_pivots() {
 
     let (qtci, _ranks, _errors) = result.unwrap();
 
-    // Verify cached function values via cachedata_origcoord.
-    // Each cached point should store f(x) = x correctly.
-    let origcoord_data = qtci.cachedata_origcoord().unwrap();
-    assert!(!origcoord_data.is_empty());
-    for (coord, val) in &origcoord_data {
+    // Evaluating at grid points reproduces f(x) = x, which pins the
+    // quantics <-> original-coordinate mapping after a pivot-supplied run.
+    for grid_idx in [[0usize], [1], [2], [7]] {
+        let quantics = grid.grididx_to_quantics(&grid_idx).unwrap();
+        let coord = grid.quantics_to_origcoord(&quantics).unwrap();
         assert_eq!(coord.len(), 1);
-        let x = coord[0];
         assert!(
-            (val - x).abs() < 1e-10,
-            "cached f({}) = {}, expected {}",
-            x,
-            val,
-            x
+            (qtci.evaluate(&grid_idx).unwrap() - coord[0]).abs() < 1e-8,
+            "interpolated f({}) = {}, expected {}",
+            coord[0],
+            qtci.evaluate(&grid_idx).unwrap(),
+            coord[0]
         );
     }
 
@@ -604,18 +751,20 @@ fn test_from_arrays_valid() {
 
     let (qtci, _ranks, _errors) = result.unwrap();
     assert!(qtci.inherent_grid().is_some());
-    assert!(qtci.cachedata_origcoord().is_err());
     assert!(qtci.rank() > 0);
 
-    // Every cached point uses the supplied grid coordinates.
-    let grid = qtci.inherent_grid().unwrap();
-    let cache = qtci.cachedata();
-    assert!(!cache.is_empty());
-    for (quantics, val) in cache {
-        let indices = grid.quantics_to_grididx(quantics).unwrap();
-        let expected = xvals[0][indices[0]] + xvals[1][indices[1]];
-        assert!((val - expected).abs() < 1e-10);
+    // Evaluating at grid points uses the supplied coordinates.
+    for grid_idx in [[0usize, 0], [1, 2], [3, 3]] {
+        let expected = xvals[0][grid_idx[0]] + xvals[1][grid_idx[1]];
+        assert!(
+            (qtci.evaluate(&grid_idx).unwrap() - expected).abs() < 1e-8,
+            "interpolated f({:?}) = {}, expected {}",
+            grid_idx,
+            qtci.evaluate(&grid_idx).unwrap(),
+            expected
+        );
     }
+    assert!(qtci.num_evals() > 0);
 
     // Verify evaluate() at known-exact points.
     let val = qtci.evaluate(&[0, 0]).unwrap();

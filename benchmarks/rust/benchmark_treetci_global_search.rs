@@ -161,15 +161,14 @@ fn run_case(case: &Case, samples: &[usize], exact: &[f64]) -> Result<RunResult> 
     let initial = vec![0usize; n_sites];
     state.add_global_pivots(std::slice::from_ref(&initial))?;
     state.max_sample_value = f(&initial).abs();
-    let report = optimize_with_proposer(&mut state, evaluate, &options, &DefaultProposer)?;
-    let (ranks, errors) = (report.ranks, report.errors);
+    let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } =
+        optimize_with_proposer(&mut state, evaluate, &options, &DefaultProposer)?;
     let treetn = to_treetn(&state, evaluate, None)?;
     let seconds = started.elapsed().as_secs_f64();
 
     let mut hasher = DefaultHasher::new();
-    for history in &state.ijset_history {
-        hash_pivot_sets(&mut hasher, history);
-    }
+    // Since #833, only current pivot sets exist. Historical result files
+    // included pass snapshots and their fingerprints are not comparable.
     hash_pivot_sets(&mut hasher, &state.ijset);
     let pivot_fingerprint = hasher.finish();
 

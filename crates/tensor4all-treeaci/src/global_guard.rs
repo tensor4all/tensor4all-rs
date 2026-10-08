@@ -1,8 +1,8 @@
 //! Global floating-zone validation for locally sampled tree ACI sweeps.
 
+use rand::Rng as _;
 use std::{collections::HashMap, mem::size_of};
 
-use rand::{rngs::StdRng, Rng, SeedableRng};
 use tensor4all_core::floating_zone_walk;
 use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::{
@@ -36,7 +36,7 @@ pub(crate) fn find_global_pivots<'a, T, V, F>(
     state: &TreeAciState<'a, T, V>,
     input_evaluators: &mut InputEvaluators<'a, V>,
     options: &TreeAciOptions<V>,
-    seed: u64,
+    rng: &mut dyn rand::RngCore,
     operator: &mut F,
 ) -> Result<GlobalSearchReport>
 where
@@ -69,7 +69,6 @@ where
     // point vectors. Previously a caller could set a tiny working limit and
     // still allocate `nsearch * node_count` coordinates first.
     input_evaluators.enforce_guard_batch_budget_with_retained::<T>(nsearch, site_dims_bytes)?;
-    let mut rng = StdRng::seed_from_u64(seed);
     let starts = (0..nsearch)
         .map(|_| {
             site_dims

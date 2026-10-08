@@ -1,0 +1,776 @@
+{
+  "binary_sha256": "6a737efd161421c96b9361566006287fb7d61679e56391b31174b6074dc10065",
+  "commit": "7c3cfe0b",
+  "before": {
+    "cpu": [
+      15565620,
+      1546,
+      3826550,
+      952310074,
+      8327175,
+      0,
+      703062,
+      0,
+      0,
+      0
+    ],
+    "load": "3.98 25.38 19.13 1/446 1592991",
+    "meminfo": {
+      "MemAvailable": "19534968 kB",
+      "SwapFree": "3809296 kB"
+    }
+  },
+  "runs": [
+    {
+      "pair": 0,
+      "rank": 8,
+      "points": 256,
+      "mode": "legacy",
+      "elapsed_ms": 0.936818,
+      "rss_kib": 8380,
+      "stdout": "mode=legacy,rank=8,points=256,elapsed_ms=0.936818,max_relative_error=0.000e0,VmHWM:\t    8380 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 8,
+      "points": 256,
+      "mode": "unchunked",
+      "elapsed_ms": 0.994265,
+      "rss_kib": 8836,
+      "stdout": "mode=unchunked,rank=8,points=256,elapsed_ms=0.994265,max_relative_error=0.000e0,VmHWM:\t    8836 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 8,
+      "points": 256,
+      "mode": "bounded",
+      "elapsed_ms": 1.221863,
+      "rss_kib": 8684,
+      "stdout": "mode=bounded,rank=8,points=256,elapsed_ms=1.221863,max_relative_error=0.000e0,VmHWM:\t    8684 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 8,
+      "points": 1024,
+      "mode": "legacy",
+      "elapsed_ms": 3.056044,
+      "rss_kib": 10140,
+      "stdout": "mode=legacy,rank=8,points=1024,elapsed_ms=3.056044,max_relative_error=0.000e0,VmHWM:\t   10140 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 8,
+      "points": 1024,
+      "mode": "unchunked",
+      "elapsed_ms": 2.997534,
+      "rss_kib": 10168,
+      "stdout": "mode=unchunked,rank=8,points=1024,elapsed_ms=2.997534,max_relative_error=0.000e0,VmHWM:\t   10168 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 8,
+      "points": 1024,
+      "mode": "bounded",
+      "elapsed_ms": 3.710732,
+      "rss_kib": 9808,
+      "stdout": "mode=bounded,rank=8,points=1024,elapsed_ms=3.710732,max_relative_error=0.000e0,VmHWM:\t    9808 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 8,
+      "points": 4096,
+      "mode": "legacy",
+      "elapsed_ms": 11.860612,
+      "rss_kib": 15596,
+      "stdout": "mode=legacy,rank=8,points=4096,elapsed_ms=11.860612,max_relative_error=0.000e0,VmHWM:\t   15596 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 8,
+      "points": 4096,
+      "mode": "unchunked",
+      "elapsed_ms": 12.290196,
+      "rss_kib": 15924,
+      "stdout": "mode=unchunked,rank=8,points=4096,elapsed_ms=12.290196,max_relative_error=0.000e0,VmHWM:\t   15924 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 8,
+      "points": 4096,
+      "mode": "bounded",
+      "elapsed_ms": 14.142131,
+      "rss_kib": 15940,
+      "stdout": "mode=bounded,rank=8,points=4096,elapsed_ms=14.142131,max_relative_error=0.000e0,VmHWM:\t   15940 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 17,
+      "points": 256,
+      "mode": "legacy",
+      "elapsed_ms": 2.077438,
+      "rss_kib": 8832,
+      "stdout": "mode=legacy,rank=17,points=256,elapsed_ms=2.077438,max_relative_error=6.511e-16,VmHWM:\t    8832 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 17,
+      "points": 256,
+      "mode": "unchunked",
+      "elapsed_ms": 2.024458,
+      "rss_kib": 8868,
+      "stdout": "mode=unchunked,rank=17,points=256,elapsed_ms=2.024458,max_relative_error=6.511e-16,VmHWM:\t    8868 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 17,
+      "points": 256,
+      "mode": "bounded",
+      "elapsed_ms": 2.397348,
+      "rss_kib": 8920,
+      "stdout": "mode=bounded,rank=17,points=256,elapsed_ms=2.397348,max_relative_error=6.511e-16,VmHWM:\t    8920 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 17,
+      "points": 1024,
+      "mode": "legacy",
+      "elapsed_ms": 7.544725,
+      "rss_kib": 9968,
+      "stdout": "mode=legacy,rank=17,points=1024,elapsed_ms=7.544725,max_relative_error=6.903e-16,VmHWM:\t    9968 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 17,
+      "points": 1024,
+      "mode": "unchunked",
+      "elapsed_ms": 7.527383,
+      "rss_kib": 10148,
+      "stdout": "mode=unchunked,rank=17,points=1024,elapsed_ms=7.527383,max_relative_error=6.903e-16,VmHWM:\t   10148 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 17,
+      "points": 1024,
+      "mode": "bounded",
+      "elapsed_ms": 8.404748,
+      "rss_kib": 10476,
+      "stdout": "mode=bounded,rank=17,points=1024,elapsed_ms=8.404748,max_relative_error=6.903e-16,VmHWM:\t   10476 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 17,
+      "points": 4096,
+      "mode": "legacy",
+      "elapsed_ms": 30.232301,
+      "rss_kib": 16068,
+      "stdout": "mode=legacy,rank=17,points=4096,elapsed_ms=30.232301,max_relative_error=8.634e-16,VmHWM:\t   16068 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 17,
+      "points": 4096,
+      "mode": "unchunked",
+      "elapsed_ms": 29.63555,
+      "rss_kib": 16172,
+      "stdout": "mode=unchunked,rank=17,points=4096,elapsed_ms=29.635550,max_relative_error=8.634e-16,VmHWM:\t   16172 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 17,
+      "points": 4096,
+      "mode": "bounded",
+      "elapsed_ms": 32.697152,
+      "rss_kib": 16056,
+      "stdout": "mode=bounded,rank=17,points=4096,elapsed_ms=32.697152,max_relative_error=8.634e-16,VmHWM:\t   16056 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 33,
+      "points": 256,
+      "mode": "legacy",
+      "elapsed_ms": 9.055689,
+      "rss_kib": 9504,
+      "stdout": "mode=legacy,rank=33,points=256,elapsed_ms=9.055689,max_relative_error=8.421e-16,VmHWM:\t    9504 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 33,
+      "points": 256,
+      "mode": "unchunked",
+      "elapsed_ms": 9.003189,
+      "rss_kib": 9464,
+      "stdout": "mode=unchunked,rank=33,points=256,elapsed_ms=9.003189,max_relative_error=8.421e-16,VmHWM:\t    9464 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 33,
+      "points": 256,
+      "mode": "bounded",
+      "elapsed_ms": 9.233805,
+      "rss_kib": 9616,
+      "stdout": "mode=bounded,rank=33,points=256,elapsed_ms=9.233805,max_relative_error=8.421e-16,VmHWM:\t    9616 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 33,
+      "points": 1024,
+      "mode": "legacy",
+      "elapsed_ms": 35.750743,
+      "rss_kib": 10912,
+      "stdout": "mode=legacy,rank=33,points=1024,elapsed_ms=35.750743,max_relative_error=1.225e-15,VmHWM:\t   10912 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 33,
+      "points": 1024,
+      "mode": "unchunked",
+      "elapsed_ms": 35.998327,
+      "rss_kib": 10948,
+      "stdout": "mode=unchunked,rank=33,points=1024,elapsed_ms=35.998327,max_relative_error=1.225e-15,VmHWM:\t   10948 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 33,
+      "points": 1024,
+      "mode": "bounded",
+      "elapsed_ms": 36.947869,
+      "rss_kib": 10948,
+      "stdout": "mode=bounded,rank=33,points=1024,elapsed_ms=36.947869,max_relative_error=1.225e-15,VmHWM:\t   10948 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 33,
+      "points": 4096,
+      "mode": "legacy",
+      "elapsed_ms": 143.263232,
+      "rss_kib": 16812,
+      "stdout": "mode=legacy,rank=33,points=4096,elapsed_ms=143.263232,max_relative_error=1.225e-15,VmHWM:\t   16812 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 33,
+      "points": 4096,
+      "mode": "unchunked",
+      "elapsed_ms": 141.37565,
+      "rss_kib": 16636,
+      "stdout": "mode=unchunked,rank=33,points=4096,elapsed_ms=141.375650,max_relative_error=1.225e-15,VmHWM:\t   16636 kB"
+    },
+    {
+      "pair": 0,
+      "rank": 33,
+      "points": 4096,
+      "mode": "bounded",
+      "elapsed_ms": 145.140614,
+      "rss_kib": 16744,
+      "stdout": "mode=bounded,rank=33,points=4096,elapsed_ms=145.140614,max_relative_error=1.225e-15,VmHWM:\t   16744 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 8,
+      "points": 256,
+      "mode": "bounded",
+      "elapsed_ms": 1.107789,
+      "rss_kib": 8552,
+      "stdout": "mode=bounded,rank=8,points=256,elapsed_ms=1.107789,max_relative_error=0.000e0,VmHWM:\t    8552 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 8,
+      "points": 256,
+      "mode": "unchunked",
+      "elapsed_ms": 0.984316,
+      "rss_kib": 8776,
+      "stdout": "mode=unchunked,rank=8,points=256,elapsed_ms=0.984316,max_relative_error=0.000e0,VmHWM:\t    8776 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 8,
+      "points": 256,
+      "mode": "legacy",
+      "elapsed_ms": 0.996508,
+      "rss_kib": 8668,
+      "stdout": "mode=legacy,rank=8,points=256,elapsed_ms=0.996508,max_relative_error=0.000e0,VmHWM:\t    8668 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 8,
+      "points": 1024,
+      "mode": "bounded",
+      "elapsed_ms": 3.834213,
+      "rss_kib": 10084,
+      "stdout": "mode=bounded,rank=8,points=1024,elapsed_ms=3.834213,max_relative_error=0.000e0,VmHWM:\t   10084 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 8,
+      "points": 1024,
+      "mode": "unchunked",
+      "elapsed_ms": 3.201626,
+      "rss_kib": 9800,
+      "stdout": "mode=unchunked,rank=8,points=1024,elapsed_ms=3.201626,max_relative_error=0.000e0,VmHWM:\t    9800 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 8,
+      "points": 1024,
+      "mode": "legacy",
+      "elapsed_ms": 3.120925,
+      "rss_kib": 9976,
+      "stdout": "mode=legacy,rank=8,points=1024,elapsed_ms=3.120925,max_relative_error=0.000e0,VmHWM:\t    9976 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 8,
+      "points": 4096,
+      "mode": "bounded",
+      "elapsed_ms": 14.275081,
+      "rss_kib": 15856,
+      "stdout": "mode=bounded,rank=8,points=4096,elapsed_ms=14.275081,max_relative_error=0.000e0,VmHWM:\t   15856 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 8,
+      "points": 4096,
+      "mode": "unchunked",
+      "elapsed_ms": 12.777812,
+      "rss_kib": 15864,
+      "stdout": "mode=unchunked,rank=8,points=4096,elapsed_ms=12.777812,max_relative_error=0.000e0,VmHWM:\t   15864 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 8,
+      "points": 4096,
+      "mode": "legacy",
+      "elapsed_ms": 12.223602,
+      "rss_kib": 15564,
+      "stdout": "mode=legacy,rank=8,points=4096,elapsed_ms=12.223602,max_relative_error=0.000e0,VmHWM:\t   15564 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 17,
+      "points": 256,
+      "mode": "bounded",
+      "elapsed_ms": 2.315644,
+      "rss_kib": 8748,
+      "stdout": "mode=bounded,rank=17,points=256,elapsed_ms=2.315644,max_relative_error=6.511e-16,VmHWM:\t    8748 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 17,
+      "points": 256,
+      "mode": "unchunked",
+      "elapsed_ms": 2.086535,
+      "rss_kib": 8892,
+      "stdout": "mode=unchunked,rank=17,points=256,elapsed_ms=2.086535,max_relative_error=6.511e-16,VmHWM:\t    8892 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 17,
+      "points": 256,
+      "mode": "legacy",
+      "elapsed_ms": 2.038344,
+      "rss_kib": 9000,
+      "stdout": "mode=legacy,rank=17,points=256,elapsed_ms=2.038344,max_relative_error=6.511e-16,VmHWM:\t    9000 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 17,
+      "points": 1024,
+      "mode": "bounded",
+      "elapsed_ms": 8.286506,
+      "rss_kib": 10168,
+      "stdout": "mode=bounded,rank=17,points=1024,elapsed_ms=8.286506,max_relative_error=6.903e-16,VmHWM:\t   10168 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 17,
+      "points": 1024,
+      "mode": "unchunked",
+      "elapsed_ms": 7.561395,
+      "rss_kib": 10308,
+      "stdout": "mode=unchunked,rank=17,points=1024,elapsed_ms=7.561395,max_relative_error=6.903e-16,VmHWM:\t   10308 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 17,
+      "points": 1024,
+      "mode": "legacy",
+      "elapsed_ms": 8.035977,
+      "rss_kib": 10324,
+      "stdout": "mode=legacy,rank=17,points=1024,elapsed_ms=8.035977,max_relative_error=6.903e-16,VmHWM:\t   10324 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 17,
+      "points": 4096,
+      "mode": "bounded",
+      "elapsed_ms": 32.737307,
+      "rss_kib": 16128,
+      "stdout": "mode=bounded,rank=17,points=4096,elapsed_ms=32.737307,max_relative_error=8.634e-16,VmHWM:\t   16128 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 17,
+      "points": 4096,
+      "mode": "unchunked",
+      "elapsed_ms": 30.296278,
+      "rss_kib": 16096,
+      "stdout": "mode=unchunked,rank=17,points=4096,elapsed_ms=30.296278,max_relative_error=8.634e-16,VmHWM:\t   16096 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 17,
+      "points": 4096,
+      "mode": "legacy",
+      "elapsed_ms": 29.984903,
+      "rss_kib": 16220,
+      "stdout": "mode=legacy,rank=17,points=4096,elapsed_ms=29.984903,max_relative_error=8.634e-16,VmHWM:\t   16220 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 33,
+      "points": 256,
+      "mode": "bounded",
+      "elapsed_ms": 9.341435,
+      "rss_kib": 9232,
+      "stdout": "mode=bounded,rank=33,points=256,elapsed_ms=9.341435,max_relative_error=8.421e-16,VmHWM:\t    9232 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 33,
+      "points": 256,
+      "mode": "unchunked",
+      "elapsed_ms": 9.026975,
+      "rss_kib": 9264,
+      "stdout": "mode=unchunked,rank=33,points=256,elapsed_ms=9.026975,max_relative_error=8.421e-16,VmHWM:\t    9264 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 33,
+      "points": 256,
+      "mode": "legacy",
+      "elapsed_ms": 9.11996,
+      "rss_kib": 9576,
+      "stdout": "mode=legacy,rank=33,points=256,elapsed_ms=9.119960,max_relative_error=8.421e-16,VmHWM:\t    9576 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 33,
+      "points": 1024,
+      "mode": "bounded",
+      "elapsed_ms": 37.184811,
+      "rss_kib": 11008,
+      "stdout": "mode=bounded,rank=33,points=1024,elapsed_ms=37.184811,max_relative_error=1.225e-15,VmHWM:\t   11008 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 33,
+      "points": 1024,
+      "mode": "unchunked",
+      "elapsed_ms": 36.676628,
+      "rss_kib": 10972,
+      "stdout": "mode=unchunked,rank=33,points=1024,elapsed_ms=36.676628,max_relative_error=1.225e-15,VmHWM:\t   10972 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 33,
+      "points": 1024,
+      "mode": "legacy",
+      "elapsed_ms": 35.896093,
+      "rss_kib": 10844,
+      "stdout": "mode=legacy,rank=33,points=1024,elapsed_ms=35.896093,max_relative_error=1.225e-15,VmHWM:\t   10844 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 33,
+      "points": 4096,
+      "mode": "bounded",
+      "elapsed_ms": 146.091025,
+      "rss_kib": 16712,
+      "stdout": "mode=bounded,rank=33,points=4096,elapsed_ms=146.091025,max_relative_error=1.225e-15,VmHWM:\t   16712 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 33,
+      "points": 4096,
+      "mode": "unchunked",
+      "elapsed_ms": 144.233802,
+      "rss_kib": 16704,
+      "stdout": "mode=unchunked,rank=33,points=4096,elapsed_ms=144.233802,max_relative_error=1.225e-15,VmHWM:\t   16704 kB"
+    },
+    {
+      "pair": 1,
+      "rank": 33,
+      "points": 4096,
+      "mode": "legacy",
+      "elapsed_ms": 146.07214,
+      "rss_kib": 16456,
+      "stdout": "mode=legacy,rank=33,points=4096,elapsed_ms=146.072140,max_relative_error=1.225e-15,VmHWM:\t   16456 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 8,
+      "points": 256,
+      "mode": "legacy",
+      "elapsed_ms": 0.967986,
+      "rss_kib": 8316,
+      "stdout": "mode=legacy,rank=8,points=256,elapsed_ms=0.967986,max_relative_error=0.000e0,VmHWM:\t    8316 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 8,
+      "points": 256,
+      "mode": "unchunked",
+      "elapsed_ms": 0.936897,
+      "rss_kib": 8580,
+      "stdout": "mode=unchunked,rank=8,points=256,elapsed_ms=0.936897,max_relative_error=0.000e0,VmHWM:\t    8580 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 8,
+      "points": 256,
+      "mode": "bounded",
+      "elapsed_ms": 1.101086,
+      "rss_kib": 8724,
+      "stdout": "mode=bounded,rank=8,points=256,elapsed_ms=1.101086,max_relative_error=0.000e0,VmHWM:\t    8724 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 8,
+      "points": 1024,
+      "mode": "legacy",
+      "elapsed_ms": 3.029653,
+      "rss_kib": 10112,
+      "stdout": "mode=legacy,rank=8,points=1024,elapsed_ms=3.029653,max_relative_error=0.000e0,VmHWM:\t   10112 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 8,
+      "points": 1024,
+      "mode": "unchunked",
+      "elapsed_ms": 2.99017,
+      "rss_kib": 10056,
+      "stdout": "mode=unchunked,rank=8,points=1024,elapsed_ms=2.990170,max_relative_error=0.000e0,VmHWM:\t   10056 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 8,
+      "points": 1024,
+      "mode": "bounded",
+      "elapsed_ms": 3.668081,
+      "rss_kib": 10136,
+      "stdout": "mode=bounded,rank=8,points=1024,elapsed_ms=3.668081,max_relative_error=0.000e0,VmHWM:\t   10136 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 8,
+      "points": 4096,
+      "mode": "legacy",
+      "elapsed_ms": 11.837657,
+      "rss_kib": 15836,
+      "stdout": "mode=legacy,rank=8,points=4096,elapsed_ms=11.837657,max_relative_error=0.000e0,VmHWM:\t   15836 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 8,
+      "points": 4096,
+      "mode": "unchunked",
+      "elapsed_ms": 12.049545,
+      "rss_kib": 15588,
+      "stdout": "mode=unchunked,rank=8,points=4096,elapsed_ms=12.049545,max_relative_error=0.000e0,VmHWM:\t   15588 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 8,
+      "points": 4096,
+      "mode": "bounded",
+      "elapsed_ms": 13.89173,
+      "rss_kib": 15884,
+      "stdout": "mode=bounded,rank=8,points=4096,elapsed_ms=13.891730,max_relative_error=0.000e0,VmHWM:\t   15884 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 17,
+      "points": 256,
+      "mode": "legacy",
+      "elapsed_ms": 2.188226,
+      "rss_kib": 8956,
+      "stdout": "mode=legacy,rank=17,points=256,elapsed_ms=2.188226,max_relative_error=6.511e-16,VmHWM:\t    8956 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 17,
+      "points": 256,
+      "mode": "unchunked",
+      "elapsed_ms": 2.189809,
+      "rss_kib": 8988,
+      "stdout": "mode=unchunked,rank=17,points=256,elapsed_ms=2.189809,max_relative_error=6.511e-16,VmHWM:\t    8988 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 17,
+      "points": 256,
+      "mode": "bounded",
+      "elapsed_ms": 2.730314,
+      "rss_kib": 8728,
+      "stdout": "mode=bounded,rank=17,points=256,elapsed_ms=2.730314,max_relative_error=6.511e-16,VmHWM:\t    8728 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 17,
+      "points": 1024,
+      "mode": "legacy",
+      "elapsed_ms": 7.623506,
+      "rss_kib": 10180,
+      "stdout": "mode=legacy,rank=17,points=1024,elapsed_ms=7.623506,max_relative_error=6.903e-16,VmHWM:\t   10180 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 17,
+      "points": 1024,
+      "mode": "unchunked",
+      "elapsed_ms": 7.515924,
+      "rss_kib": 10304,
+      "stdout": "mode=unchunked,rank=17,points=1024,elapsed_ms=7.515924,max_relative_error=6.903e-16,VmHWM:\t   10304 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 17,
+      "points": 1024,
+      "mode": "bounded",
+      "elapsed_ms": 8.254283,
+      "rss_kib": 10272,
+      "stdout": "mode=bounded,rank=17,points=1024,elapsed_ms=8.254283,max_relative_error=6.903e-16,VmHWM:\t   10272 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 17,
+      "points": 4096,
+      "mode": "legacy",
+      "elapsed_ms": 29.853722,
+      "rss_kib": 16064,
+      "stdout": "mode=legacy,rank=17,points=4096,elapsed_ms=29.853722,max_relative_error=8.634e-16,VmHWM:\t   16064 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 17,
+      "points": 4096,
+      "mode": "unchunked",
+      "elapsed_ms": 30.280334,
+      "rss_kib": 15952,
+      "stdout": "mode=unchunked,rank=17,points=4096,elapsed_ms=30.280334,max_relative_error=8.634e-16,VmHWM:\t   15952 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 17,
+      "points": 4096,
+      "mode": "bounded",
+      "elapsed_ms": 32.381797,
+      "rss_kib": 15980,
+      "stdout": "mode=bounded,rank=17,points=4096,elapsed_ms=32.381797,max_relative_error=8.634e-16,VmHWM:\t   15980 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 33,
+      "points": 256,
+      "mode": "legacy",
+      "elapsed_ms": 9.223986,
+      "rss_kib": 9520,
+      "stdout": "mode=legacy,rank=33,points=256,elapsed_ms=9.223986,max_relative_error=8.421e-16,VmHWM:\t    9520 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 33,
+      "points": 256,
+      "mode": "unchunked",
+      "elapsed_ms": 9.048718,
+      "rss_kib": 9600,
+      "stdout": "mode=unchunked,rank=33,points=256,elapsed_ms=9.048718,max_relative_error=8.421e-16,VmHWM:\t    9600 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 33,
+      "points": 256,
+      "mode": "bounded",
+      "elapsed_ms": 9.2633,
+      "rss_kib": 9484,
+      "stdout": "mode=bounded,rank=33,points=256,elapsed_ms=9.263300,max_relative_error=8.421e-16,VmHWM:\t    9484 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 33,
+      "points": 1024,
+      "mode": "legacy",
+      "elapsed_ms": 35.893821,
+      "rss_kib": 11064,
+      "stdout": "mode=legacy,rank=33,points=1024,elapsed_ms=35.893821,max_relative_error=1.225e-15,VmHWM:\t   11064 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 33,
+      "points": 1024,
+      "mode": "unchunked",
+      "elapsed_ms": 36.680741,
+      "rss_kib": 10960,
+      "stdout": "mode=unchunked,rank=33,points=1024,elapsed_ms=36.680741,max_relative_error=1.225e-15,VmHWM:\t   10960 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 33,
+      "points": 1024,
+      "mode": "bounded",
+      "elapsed_ms": 37.02607,
+      "rss_kib": 10860,
+      "stdout": "mode=bounded,rank=33,points=1024,elapsed_ms=37.026070,max_relative_error=1.225e-15,VmHWM:\t   10860 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 33,
+      "points": 4096,
+      "mode": "legacy",
+      "elapsed_ms": 143.923179,
+      "rss_kib": 16728,
+      "stdout": "mode=legacy,rank=33,points=4096,elapsed_ms=143.923179,max_relative_error=1.225e-15,VmHWM:\t   16728 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 33,
+      "points": 4096,
+      "mode": "unchunked",
+      "elapsed_ms": 142.989713,
+      "rss_kib": 16868,
+      "stdout": "mode=unchunked,rank=33,points=4096,elapsed_ms=142.989713,max_relative_error=1.225e-15,VmHWM:\t   16868 kB"
+    },
+    {
+      "pair": 2,
+      "rank": 33,
+      "points": 4096,
+      "mode": "bounded",
+      "elapsed_ms": 145.677336,
+      "rss_kib": 16664,
+      "stdout": "mode=bounded,rank=33,points=4096,elapsed_ms=145.677336,max_relative_error=1.225e-15,VmHWM:\t   16664 kB"
+    }
+  ],
+  "affinity_valid": false,
+  "after": {
+    "cpu": [
+      15565858,
+      1546,
+      3826590,
+      952314610,
+      8327178,
+      0,
+      703100,
+      0,
+      0,
+      0
+    ],
+    "load": "3.98 25.38 19.13 1/447 1593076",
+    "meminfo": {
+      "MemAvailable": "19545056 kB",
+      "SwapFree": "3809772 kB"
+    }
+  },
+  "steal_fraction": 0.0,
+  "valid": false
+}

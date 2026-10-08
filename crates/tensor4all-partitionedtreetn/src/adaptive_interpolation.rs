@@ -15,9 +15,12 @@
 //! commit e501032278c9dd41b46c5851d8238169c8d178c5 (MIT license; Copyright
 //! 2023 Ritter.Marc and contributors), through the chain driver of the
 //! deprecated `tensor4all-partitionedtt` crate. See
-//! `LICENSE-TCIALGORITHMS-MIT` in this crate. The tree generalization, the
-//! evaluation cache, the sampled-zero policy, the re-embedding of fixed
-//! sites, and the L2 error contract are original to this crate.
+//! `LICENSE-TCIALGORITHMS-MIT` in this crate. The intermediate Rust chain
+//! driver was introduced by Samuel Badr (@SamuelBadr) in
+//! [tensor4all-rs commit 69a24e7e](https://github.com/tensor4all/tensor4all-rs/commit/69a24e7e).
+//! The tree generalization, the evaluation cache, the sampled-zero policy,
+//! the re-embedding of fixed sites, and the L2 error contract are original
+//! to this crate.
 //!
 //! # Error contract
 //!
