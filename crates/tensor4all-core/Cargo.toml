@@ -47,7 +47,10 @@ tenferro-provider-inject = [
 ]
 
 [dependencies]
-tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
+# `global-defaults` is required in every configuration: this crate re-exports
+# `TensorElement` and uses `Matrix`/`ExecutionContext`/`mat_mul` in un-gated code.
+# It selects no provider, so the `tenferro-*` provider features stay independent.
+tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false, features = ["global-defaults"] }
 num-complex.workspace = true
 num-traits.workspace = true
 thiserror.workspace = true
