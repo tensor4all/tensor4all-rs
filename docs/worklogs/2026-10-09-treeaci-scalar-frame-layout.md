@@ -37,7 +37,8 @@ zero to four and every axis ordering.
 257 checks pass: 254 debug tests/doctests, two diagnostics integration tests,
 and the focused low-temperature R=9 release regression. The R=9 numerical
 workload uses optimization because its debug run is impractically slow; its
-tolerance is unchanged. Deny-warning all-targets diagnostics Clippy passes.
+tolerance is unchanged. Deny-warning all-targets diagnostics Clippy, formatting,
+deterministic repository-rules preview and deny-warning rustdoc all pass.
 Removed paths were reviewed for coverage: the obsolete adapter's sole test
 still exercises the common scalar contraction, and existing axis/length error
 checks plus the new layout checks exercise its validation paths. No tolerance
