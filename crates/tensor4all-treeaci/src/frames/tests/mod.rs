@@ -796,8 +796,11 @@ fn batched_single_incoming_contraction_matches_scalar_path() {
     for (candidate, frame) in candidate_frames.iter().enumerate() {
         for outgoing_value in 0..core.dims[outgoing_axis] {
             let outgoing_offset = base_offset + outgoing_value * core.strides[outgoing_axis];
-            let expected =
-                super::accumulate_incoming(&core, &[(incoming_axis, frame)], 0, outgoing_offset);
+            let expected = super::accumulate_incoming(
+                &core,
+                std::iter::once((incoming_axis, frame.as_slice())),
+                outgoing_offset,
+            );
             assert_eq!(result[[outgoing_value, candidate]], expected);
         }
     }
@@ -876,8 +879,11 @@ fn batched_path_matches_scalar_path_on_random_core() {
                 // not just the hand-rolled dot product above -- this is what
                 // would actually catch a mistake shared between this test's
                 // hand-computed `expected` and the production scalar path.
-                let scalar_path_expected =
-                    super::accumulate_incoming(&core, &[(1, frame)], 0, outgoing_offset);
+                let scalar_path_expected = super::accumulate_incoming(
+                    &core,
+                    std::iter::once((1, frame.as_slice())),
+                    outgoing_offset,
+                );
                 assert!(
                     (actual - scalar_path_expected).abs() < 1e-10,
                     "batched result disagrees with the scalar accumulate_incoming path at \
@@ -1035,11 +1041,11 @@ fn two_incoming_core_matrix_batched_matches_scalar_contraction_on_every_pair() {
 
     for (n1, v1_vec) in v1_cols.iter().enumerate() {
         for (n2, v2_vec) in v2_cols.iter().enumerate() {
-            let incoming_frames = vec![
-                (incoming_edge_1, v1_vec.clone()),
-                (incoming_edge_2, v2_vec.clone()),
+            let incoming_frames = [
+                (incoming_edge_1, v1_vec.as_slice()),
+                (incoming_edge_2, v2_vec.as_slice()),
             ];
-            let expected = super::contract_prepared_core(
+            let expected = super::contract_prepared_core_slices(
                 &inputs[0],
                 &problem,
                 &cores,
@@ -3670,8 +3676,7 @@ fn assert_incoming_batch_matches_accumulator<T: FixtureScalar>(degree: usize) {
                 let offset = physical_offset + outgoing_value * core.strides[outgoing_axis];
                 scalar_flat.push(super::accumulate_incoming(
                     &core,
-                    &accumulator_axes,
-                    0,
+                    accumulator_axes.iter().copied(),
                     offset,
                 ));
             }
@@ -4158,4 +4163,194 @@ fn candidate_product_accounting_separates_the_batched_and_scalar_exponents() {
     let cross: Vec<usize> = records.iter().map(|r| r.packed_cross_elements).collect();
     assert_eq!(cross[1], 8 * cross[0]);
     assert_eq!(cross[2], 64 * cross[0]);
+}
+
+fn scalar_builder<'a, T: TreeAciScalar>(
+    input: &'a TreeTN<IdxTensor, usize>,
+    problem: &'a PreparedTreeProblem<usize>,
+    arena: &'a SampleArena,
+) -> super::FrameBuilder<'a, T, usize> {
+    super::FrameBuilder {
+        input,
+        input_index: 0,
+        problem,
+        arena,
+        cores: Rc::new(super::prepare_cores::<T, usize>(input, problem).unwrap()),
+        oriented_core_cache: Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
+        memo: (0..problem.directed_edges.len())
+            .map(|edge| vec![None; arena.directed_record_count(edge).unwrap()])
+            .collect(),
+        existing_frames: None,
+    }
+}
+
+fn assert_scalar_builder_reuses_layout<T: FixtureScalar + PartialEq + std::fmt::Debug>(
+    degree: usize,
+) {
+    let input = match degree {
+        0 => three_incoming_star::<T>(),
+        3 => three_incoming_star::<T>(),
+        4 => four_incoming_star::<T>(),
+        _ => unreachable!(),
+    };
+    let inputs = std::slice::from_ref(&input);
+    let problem = prepare_problem::<T, _>(inputs, &TreeAciOptions::default()).unwrap();
+    let edge = if degree == 0 {
+        problem
+            .directed_edges
+            .iter()
+            .position(|edge| edge.incoming_to_from.is_empty())
+            .unwrap()
+    } else {
+        hub_edge(&problem, degree)
+    };
+    let node = problem.node_positions[&problem.directed_edges[edge].from];
+    let seeds = (0..8)
+        .map(|i| {
+            problem
+                .physical
+                .iter()
+                .enumerate()
+                .map(|(j, p)| ((i >> (j % 3)) + i) % p.local_dim)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let (mut arena, mut active) = SampleArena::from_global_seeds(&problem, &seeds[..1]).unwrap();
+    let prefix = InputFrameStore::<T>::from_samples(inputs, &problem, &arena).unwrap();
+    let known = prefix.frames[0][edge].sample_count;
+    for seed in &seeds[1..] {
+        arena
+            .inject_global_point(&mut active, &problem, seed)
+            .unwrap();
+    }
+    let count = arena.directed_record_count(edge).unwrap();
+    assert!(count > 1);
+    let mut scalar = scalar_builder::<T>(&input, &problem, &arena);
+    let mut batched = scalar_builder::<T>(&input, &problem, &arena);
+    // Prime dependencies on both sides, so the counters measure this cut.
+    for &incoming in &problem.directed_edges[edge].incoming_to_from {
+        for sample in 0..arena.directed_record_count(incoming).unwrap() {
+            scalar.compute(incoming, sample).unwrap();
+            batched.compute(incoming, sample).unwrap();
+        }
+    }
+    super::debug_stats::reset();
+    let expected = (0..count)
+        .map(|sample| scalar.compute(edge, sample).unwrap())
+        .collect::<Vec<_>>();
+    let reads = super::debug_stats::core_element_reads();
+    let lookups = 1 + problem.physical[node].indices.len() + degree;
+    assert_eq!(super::debug_stats::axis_lookups(), (lookups * count) as u64);
+    super::debug_stats::reset();
+    batched.compute_batch(edge, 0..count).unwrap();
+    assert_eq!(super::debug_stats::core_element_reads(), reads);
+    for (actual, expected) in batched.memo[edge].iter().zip(&expected) {
+        assert_eq!(actual.as_ref().unwrap(), expected);
+    }
+    assert_eq!(
+        super::debug_stats::axis_lookups(),
+        lookups as u64,
+        "one scalar batch must prepare its axes once, independent of sample count"
+    );
+    // Memo hits and an empty range must not prepare any layout or read cores.
+    super::debug_stats::reset();
+    batched.compute_batch(edge, 0..count).unwrap();
+    batched.compute_batch(edge, count..count).unwrap();
+    assert_eq!(super::debug_stats::axis_lookups(), 0);
+    assert_eq!(super::debug_stats::core_element_reads(), 0);
+
+    // An append-only extension must pull old rows without layout work, then
+    // prepare one layout for new rows even when mixed with the old prefix.
+    let initial = InputFrameStore::<T>::from_samples(inputs, &problem, &arena).unwrap();
+    let mut extension = scalar_builder::<T>(&input, &problem, &arena);
+    extension.existing_frames = Some(&initial.frames[0]);
+    super::debug_stats::reset();
+    extension.compute_batch(edge, 0..count).unwrap();
+    assert_eq!(super::debug_stats::axis_lookups(), 0);
+    assert_eq!(super::debug_stats::core_element_reads(), 0);
+    for (actual, expected) in extension.memo[edge].iter().zip(&expected) {
+        assert_eq!(actual.as_ref().unwrap(), expected);
+    }
+    let mut mixed = scalar_builder::<T>(&input, &problem, &arena);
+    mixed.existing_frames = Some(&prefix.frames[0]);
+    for &incoming in &problem.directed_edges[edge].incoming_to_from {
+        for sample in 0..arena.directed_record_count(incoming).unwrap() {
+            mixed.compute(incoming, sample).unwrap();
+        }
+    }
+    assert!(count > known);
+    super::debug_stats::reset();
+    mixed.compute_batch(edge, 0..known).unwrap();
+    assert_eq!(super::debug_stats::axis_lookups(), 0);
+    assert_eq!(super::debug_stats::core_element_reads(), 0);
+    mixed.compute_batch(edge, 0..count).unwrap();
+    assert_eq!(super::debug_stats::axis_lookups(), lookups as u64);
+    assert_eq!(
+        super::debug_stats::scalar_compute_calls(),
+        (count - known) as u64
+    );
+    for (actual, expected) in mixed.memo[edge].iter().zip(&expected) {
+        assert_eq!(actual.as_ref().unwrap(), expected);
+    }
+    let extended = prefix.extend(inputs, &problem, &arena).unwrap();
+    for (sample, expected) in expected.iter().enumerate() {
+        assert_eq!(&extended.frame_values(0, edge, sample).unwrap(), expected);
+    }
+}
+
+#[test]
+fn scalar_builder_batch_reuses_layout_for_leaf_and_wide_cuts() {
+    for degree in [0, 3, 4] {
+        assert_scalar_builder_reuses_layout::<f32>(degree);
+        assert_scalar_builder_reuses_layout::<f64>(degree);
+        assert_scalar_builder_reuses_layout::<Complex32>(degree);
+        assert_scalar_builder_reuses_layout::<Complex64>(degree);
+    }
+}
+
+#[test]
+fn scalar_layout_rejects_different_incoming_cuts_and_invalid_lengths() {
+    let input = three_incoming_star::<f64>();
+    let inputs = std::slice::from_ref(&input);
+    let problem = prepare_problem::<f64, _>(inputs, &TreeAciOptions::default()).unwrap();
+    let edge = hub_edge(&problem, 3);
+    let cores = super::prepare_cores::<f64, _>(&input, &problem).unwrap();
+    let incoming = &problem.directed_edges[edge].incoming_to_from;
+    let layout =
+        super::prepare_scalar_core_layout(&input, &problem, &cores, edge, incoming.iter().copied())
+            .unwrap();
+    let physical = &problem.physical[layout.node];
+    let core = &cores[layout.node];
+    let vectors = layout
+        .incoming_axes
+        .iter()
+        .map(|&(_, axis)| vec![1.0; core.dims[axis]])
+        .collect::<Vec<_>>();
+    let frames = incoming
+        .iter()
+        .copied()
+        .zip(vectors.iter().map(Vec::as_slice))
+        .collect::<Vec<_>>();
+    for bad in [frames[..2].to_vec(), frames.iter().rev().copied().collect()] {
+        assert!(matches!(
+            layout.contract(core, physical, 0, bad.into_iter()),
+            Err(crate::TreeAciError::InternalInvariant { .. })
+        ));
+    }
+    let mut wrong_length = frames.clone();
+    wrong_length[0].1 = &[];
+    assert!(matches!(
+        layout.contract(core, physical, 0, wrong_length.into_iter()),
+        Err(crate::TreeAciError::InternalInvariant { .. })
+    ));
+    assert!(matches!(
+        super::prepare_scalar_core_layout(
+            &input,
+            &problem,
+            &cores,
+            problem.directed_edges.len(),
+            std::iter::empty()
+        ),
+        Err(crate::TreeAciError::InternalInvariant { .. })
+    ));
 }
