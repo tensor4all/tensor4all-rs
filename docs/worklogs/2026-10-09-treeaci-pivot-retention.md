@@ -38,7 +38,8 @@
   resolution is about 1e-7. This is not a full-grid maximum-error certificate.
 - A conditioned 26-site window converges at 7 with one-axis completion;
   complete-cross retention alone preserves its period-four cycle. The 28-site
-  window converges at 9 with complete-cross retention.
+  window converges at 9 with complete-cross retention and at 5 after one-axis
+  completion. Frozen public replays reproduce all three histories as prefixes.
 - R=10 NBlock W, absolute tolerance 1e-4, seed 0, cap 4096, changes from
   MaxSweeps at 20 to Converged at 18. Its 1,086 independently contracted sample
   residuals satisfy the unchanged 10*tolerance diagnostic gate; the maximum
