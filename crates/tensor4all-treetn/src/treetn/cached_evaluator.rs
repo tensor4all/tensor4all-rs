@@ -23,13 +23,15 @@ mod allocation_counter {
 
     thread_local! {
         static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
+        static REQUESTED_BYTES: Cell<usize> = const { Cell::new(0) };
     }
 
     pub(super) struct CountingAllocator;
 
     impl CountingAllocator {
-        fn record() {
+        fn record(bytes: usize) {
             let _ = ALLOCATIONS.try_with(|count| count.set(count.get().wrapping_add(1)));
+            let _ = REQUESTED_BYTES.try_with(|count| count.set(count.get().saturating_add(bytes)));
         }
     }
 
@@ -38,17 +40,17 @@ mod allocation_counter {
     // allocate or re-enter the allocator.
     unsafe impl GlobalAlloc for CountingAllocator {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            Self::record();
+            Self::record(layout.size());
             System.alloc(layout)
         }
 
         unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-            Self::record();
+            Self::record(layout.size());
             System.alloc_zeroed(layout)
         }
 
         unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-            Self::record();
+            Self::record(new_size);
             System.realloc(ptr, layout, new_size)
         }
 
@@ -67,6 +69,13 @@ mod allocation_counter {
         let before = allocations();
         let result = body();
         let after = allocations();
+        (result, after.saturating_sub(before))
+    }
+    /// Counts requested payload bytes, including reallocations, on this thread.
+    pub(super) fn measure_requested_bytes<R>(body: impl FnOnce() -> R) -> (R, usize) {
+        let before = REQUESTED_BYTES.with(Cell::get);
+        let result = body();
+        let after = REQUESTED_BYTES.with(Cell::get);
         (result, after.saturating_sub(before))
     }
 }
@@ -496,6 +505,15 @@ enum CachedScalar {
 }
 
 impl CachedScalar {
+    fn kind(&self) -> ScalarKind {
+        match self {
+            Self::F32(_) => ScalarKind::F32,
+            Self::F64(_) => ScalarKind::F64,
+            Self::C32(_) => ScalarKind::C32,
+            Self::C64(_) => ScalarKind::C64,
+        }
+    }
+
     fn into_any(self) -> AnyScalar {
         match self {
             Self::F32(value) => AnyScalar::from_value(value),
@@ -2186,6 +2204,11 @@ where
         values: ColMajorArrayRef<'_, usize>,
         hinted_center: bool,
     ) -> std::result::Result<Vec<CachedScalar>, TreeTNOperationError> {
+        if hinted_center {
+            if let Some(result) = self.try_contract_cached_edge_cut(center, values)? {
+                return Ok(result);
+            }
+        }
         #[cfg(test)]
         let environment_started = std::time::Instant::now();
         let environment_result = self.build_environment_cache(center, values);
@@ -2366,25 +2389,164 @@ where
         );
         self.last_stats.subtree_environment_count = subtree_environment_count;
         #[cfg(test)]
-        {
-            self.last_stats.message_cache_logical_bytes = self
-                .message_caches
-                .values()
-                .map(PackedMessageCache::logical_payload_bytes)
-                .sum();
-            self.last_stats.message_cache_key_count = self
-                .message_caches
-                .values()
-                .map(PackedMessageCache::key_count)
-                .sum();
-            self.last_stats.message_cache_owned_bytes_estimate = self
-                .message_caches
-                .values()
-                .map(PackedMessageCache::owned_retained_bytes_estimate)
-                .sum::<usize>()
-                .saturating_add(hash_map_owned_bytes_estimate(&self.message_caches));
-        }
+        self.update_cache_storage_stats();
         Ok((component_batches, cache))
+    }
+
+    #[cfg(test)]
+    fn update_cache_storage_stats(&mut self) {
+        self.last_stats.message_cache_logical_bytes = self
+            .message_caches
+            .values()
+            .map(PackedMessageCache::logical_payload_bytes)
+            .sum();
+        self.last_stats.message_cache_key_count = self
+            .message_caches
+            .values()
+            .map(PackedMessageCache::key_count)
+            .sum();
+        self.last_stats.message_cache_owned_bytes_estimate = self
+            .message_caches
+            .values()
+            .map(PackedMessageCache::owned_retained_bytes_estimate)
+            .sum::<usize>()
+            .saturating_add(hash_map_owned_bytes_estimate(&self.message_caches));
+    }
+
+    /// A hinted, fully cached cut needs neither the other center components
+    /// nor stacked copies of its packed columns. Cold and partial hits keep
+    /// the ordinary message-computation path and its admission accounting.
+    fn try_contract_cached_edge_cut(
+        &mut self,
+        center: &V,
+        values: ColMajorArrayRef<'_, usize>,
+    ) -> Result<Option<Vec<CachedScalar>>> {
+        let plan = self.rooted_plan_for_center(center)?;
+        let Some(neighbor) = plan
+            .children
+            .get(center)
+            .and_then(|children| children.first())
+        else {
+            return Ok(None);
+        };
+        let left_edge = (neighbor.clone(), center.clone());
+        let right_edge = (center.clone(), neighbor.clone());
+        let Some(left_cache) = self.message_caches.get(&left_edge) else {
+            return Ok(None);
+        };
+        let Some(right_cache) = self.message_caches.get(&right_edge) else {
+            return Ok(None);
+        };
+        if left_cache.key_count() == 0 || right_cache.key_count() == 0 {
+            return Ok(None);
+        }
+        let bond_dim = self
+            .parent_bond_indices
+            .get(&left_edge)
+            .ok_or_else(|| anyhow::anyhow!("cached cut is missing its bond index"))?
+            .dim();
+        if bond_dim == 0 {
+            return Ok(None);
+        }
+        if left_cache.bond_dim != bond_dim || right_cache.bond_dim != bond_dim {
+            return Err(anyhow::anyhow!(
+                "cached cut column dimension does not match its bond"
+            ));
+        }
+        let kind = tensor_scalar_kind(tensor_for_node(self.tree, center)?)?;
+        if left_cache.columns.first().map(CachedScalar::kind) != Some(kind)
+            || right_cache.columns.first().map(CachedScalar::kind) != Some(kind)
+        {
+            // Mixed real/complex networks use the existing promotion path.
+            return Ok(None);
+        }
+        let left_batch = self.build_directed_assignment_batch(neighbor, center, values)?;
+        let right_batch = self.build_directed_assignment_batch(center, neighbor, values)?;
+        #[cfg(feature = "diagnostics")]
+        let left_started = std::time::Instant::now();
+        let Some(left_positions) = left_batch
+            .keys
+            .iter()
+            .map(|key| left_cache.position(key))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
+        #[cfg(feature = "diagnostics")]
+        let left_elapsed = left_started.elapsed();
+        #[cfg(feature = "diagnostics")]
+        let right_started = std::time::Instant::now();
+        let Some(right_positions) = right_batch
+            .keys
+            .iter()
+            .map(|key| right_cache.position(key))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
+        #[cfg(feature = "diagnostics")]
+        let right_elapsed = right_started.elapsed();
+
+        let n_points = values.shape()[1];
+        let mut result = Vec::with_capacity(n_points);
+        for point in 0..n_points {
+            let left_assignment = left_batch.point_to_assignment.get(point).ok_or_else(|| {
+                anyhow::anyhow!("missing cached cut assignment for point {point}")
+            })?;
+            let right_assignment = right_batch.point_to_assignment.get(point).ok_or_else(|| {
+                anyhow::anyhow!("missing cached reverse assignment for point {point}")
+            })?;
+            let left_position = left_positions
+                .get(*left_assignment)
+                .ok_or_else(|| anyhow::anyhow!("missing cached cut column for point {point}"))?;
+            let right_position = right_positions.get(*right_assignment).ok_or_else(|| {
+                anyhow::anyhow!("missing cached reverse column for point {point}")
+            })?;
+            let left = left_cache.checked_column(*left_position)?;
+            let right = right_cache.checked_column(*right_position)?;
+            result.push(cached_column_dot(kind, left, right)?);
+        }
+        // Tentative all-hit probes do not count. Commit hits only after both
+        // directions and their checked assembly have succeeded.
+        self.message_caches
+            .get_mut(&left_edge)
+            .ok_or_else(|| anyhow::anyhow!("cached cut disappeared"))?
+            .record_hits(left_batch.keys.len());
+        self.message_caches
+            .get_mut(&right_edge)
+            .ok_or_else(|| anyhow::anyhow!("cached reverse cut disappeared"))?
+            .record_hits(right_batch.keys.len());
+        self.last_stats = CachedEvaluationStats {
+            subtree_environment_count: left_batch.keys.len(),
+            directed_message_count: left_batch.keys.len() + right_batch.keys.len(),
+            batched_message_contract_count: 2,
+            batched_center_contract_count: 1,
+            message_cache_hits: left_batch.keys.len() + right_batch.keys.len(),
+            warm_edge_cut_assembly_visits: n_points
+                .checked_mul(bond_dim)
+                .ok_or_else(|| anyhow::anyhow!("cached cut work count overflows usize"))?,
+            ..Default::default()
+        };
+        #[cfg(test)]
+        self.update_cache_storage_stats();
+        #[cfg(feature = "diagnostics")]
+        for (node, elapsed, hits) in [
+            (neighbor, left_elapsed, left_batch.keys.len()),
+            (center, right_elapsed, right_batch.keys.len()),
+        ] {
+            let (name, shape) = self.diagnostic_node(node)?;
+            diagnostics::record_guard(
+                &name,
+                shape,
+                diagnostics::PhaseMeasurement {
+                    elapsed,
+                    hits: hits as u64,
+                    misses: 0,
+                    kernel: Default::default(),
+                },
+            );
+        }
+        Ok(Some(result))
     }
 
     fn rooted_plan_for_center(&mut self, center: &V) -> Result<Arc<RootedMessagePlan<V>>> {
@@ -5602,28 +5764,20 @@ where
                 .ok_or_else(|| {
                     anyhow::anyhow!("reverse assignment offset overflows usize for point {point}")
                 })?;
-            let mut sum = T::default();
-            for bond in 0..assembly.bond_dim {
-                let left_offset = left_start.checked_add(bond).ok_or_else(|| {
-                    anyhow::anyhow!("cut message offset overflows usize for point {point}")
-                })?;
-                let right_offset = right_start.checked_add(bond).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "reverse center message offset overflows usize for point {point}"
-                    )
-                })?;
-                let left = left_values.get(left_offset).ok_or_else(|| {
-                    anyhow::anyhow!("cut message column is out of bounds for point {point}")
-                })?;
-                let right = right_values.get(right_offset).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "reverse center message column is out of bounds for point {point}"
-                    )
-                })?;
-                sum += *left * *right;
-                self.last_stats.warm_edge_cut_assembly_visits += 1;
-            }
-            result.push(sum);
+            let left_end = left_start
+                .checked_add(assembly.bond_dim)
+                .ok_or_else(|| anyhow::anyhow!("cut column end overflows usize"))?;
+            let right_end = right_start
+                .checked_add(assembly.bond_dim)
+                .ok_or_else(|| anyhow::anyhow!("reverse column end overflows usize"))?;
+            let left = left_values.get(left_start..left_end).ok_or_else(|| {
+                anyhow::anyhow!("cut message column is out of bounds for point {point}")
+            })?;
+            let right = right_values.get(right_start..right_end).ok_or_else(|| {
+                anyhow::anyhow!("reverse message column is out of bounds for point {point}")
+            })?;
+            result.push(column_dot(left, right, |value| Some(*value))?);
+            self.last_stats.warm_edge_cut_assembly_visits += assembly.bond_dim;
         }
         Ok(result)
     }
@@ -7014,6 +7168,54 @@ fn stacked_message_scalar_kind(message: &StackedMessage) -> Result<Option<Scalar
     message.tensor.as_ref().map(tensor_scalar_kind).transpose()
 }
 
+// Both owned and borrowed assembly use the same ordered, unconjugated dot.
+fn column_dot<S, T>(left: &[S], right: &[S], decode: impl Fn(&S) -> Option<T>) -> Result<T>
+where
+    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
+    if left.len() != right.len() {
+        return Err(anyhow::anyhow!("edge-cut columns have different lengths"));
+    }
+    let mut sum = T::default();
+    for (left, right) in left.iter().zip(right) {
+        let left =
+            decode(left).ok_or_else(|| anyhow::anyhow!("edge-cut column scalar kind mismatch"))?;
+        let right =
+            decode(right).ok_or_else(|| anyhow::anyhow!("edge-cut column scalar kind mismatch"))?;
+        sum += left * right;
+    }
+    Ok(sum)
+}
+
+fn cached_column_dot(
+    kind: ScalarKind,
+    left: &[CachedScalar],
+    right: &[CachedScalar],
+) -> Result<CachedScalar> {
+    match kind {
+        ScalarKind::F32 => column_dot(left, right, |value| match value {
+            CachedScalar::F32(value) => Some(*value),
+            _ => None,
+        })
+        .map(CachedScalar::F32),
+        ScalarKind::F64 => column_dot(left, right, |value| match value {
+            CachedScalar::F64(value) => Some(*value),
+            _ => None,
+        })
+        .map(CachedScalar::F64),
+        ScalarKind::C32 => column_dot(left, right, |value| match value {
+            CachedScalar::C32(value) => Some(*value),
+            _ => None,
+        })
+        .map(CachedScalar::C32),
+        ScalarKind::C64 => column_dot(left, right, |value| match value {
+            CachedScalar::C64(value) => Some(*value),
+            _ => None,
+        })
+        .map(CachedScalar::C64),
+    }
+}
+
 fn stacked_message_values_typed<T>(
     message: &StackedMessage,
     decode: impl Fn(&CachedScalar) -> Option<T>,
@@ -7405,6 +7607,18 @@ where
 
     fn column(&self, position: usize) -> &[T] {
         &self.columns[position * self.bond_dim..(position + 1) * self.bond_dim]
+    }
+
+    fn checked_column(&self, position: usize) -> Result<&[T]> {
+        let start = position
+            .checked_mul(self.bond_dim)
+            .ok_or_else(|| anyhow::anyhow!("cached column offset overflows usize"))?;
+        let end = start
+            .checked_add(self.bond_dim)
+            .ok_or_else(|| anyhow::anyhow!("cached column end overflows usize"))?;
+        self.columns
+            .get(start..end)
+            .ok_or_else(|| anyhow::anyhow!("cached column is out of bounds"))
     }
 
     /// Looks up every key without computing anything.
@@ -8792,6 +9006,357 @@ mod tests {
         );
     }
 
+    /// [AI Supplied] #671: a warm internal center needs exactly the two
+    /// directed messages on its selected cut, even when it has other arms.
+    #[test]
+    fn warm_internal_edge_cut_skips_unused_center_components() {
+        let (tree, indices) = five_node_chain();
+        let values = vec![0usize; 5 * 4];
+        let points = ColMajorArrayRef::new(&values, &[5, 4]).unwrap();
+        let expected = tree.evaluate(&indices, points).unwrap();
+        let mut evaluator =
+            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
+        for _ in 0..2 {
+            let actual = evaluator
+                .evaluate_batched_with_hint(points, EvaluationHint::around(2))
+                .unwrap();
+            assert_scalars_close(&actual, &expected);
+        }
+        let stats = evaluator.stats_for_test();
+        assert_eq!(stats.message_cache_misses, 0);
+        assert_eq!(
+            stats.batched_message_contract_count, 2,
+            "a fully cached cut must not assemble the other center components: {stats:?}"
+        );
+    }
+
+    /// [AI Supplied] #671: already retained columns may take arithmetic
+    /// proportional to the bond, but must not be copied into transient heaps.
+    /// The allocator observes requested bytes independently of evaluator stats.
+    #[test]
+    fn warm_edge_cut_requested_bytes_are_independent_of_bond_dimension() {
+        fn requested_bytes(bond: usize) -> usize {
+            let (tree, indices) =
+                typed_tree_from_edges::<f64>(&[(0, 1), (1, 2), (2, 3), (3, 4)], &[bond; 4]);
+            let values = (0..64)
+                .flat_map(|point| (0..5).map(move |site| (point >> site) & 1))
+                .collect::<Vec<_>>();
+            let points = ColMajorArrayRef::new(&values, &[5, 64]).unwrap();
+            let mut evaluator =
+                TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default())
+                    .unwrap();
+            let cold = evaluator
+                .evaluate_batched_typed::<f64>(points, EvaluationHint::around(2))
+                .unwrap();
+            let (warm, bytes) = allocation_counter::measure_requested_bytes(|| {
+                evaluator
+                    .evaluate_batched_typed::<f64>(points, EvaluationHint::around(2))
+                    .unwrap()
+            });
+            assert_eq!(warm, cold);
+            assert_eq!(evaluator.stats_for_test().message_cache_misses, 0);
+            bytes
+        }
+        assert_eq!(
+            requested_bytes(2),
+            requested_bytes(32),
+            "warm queries must borrow packed columns instead of copying bond-sized payloads"
+        );
+    }
+
+    /// [AI Supplied] Borrowing preserves the legacy ordered edge-cut values
+    /// at degree 2/3/4, for every dtype and duplicate/reordered assignments.
+    #[test]
+    fn borrowed_cached_cut_matches_owned_assembly_for_all_scalar_kinds() {
+        fn check<T: CachedEvaluatorTestScalar>() {
+            for arms in 2..=4 {
+                let (tree, indices) = unequal_star_tree::<T>(arms);
+                let base = star_points(&indices, 12);
+                let values = base
+                    .chunks(indices.len())
+                    .rev()
+                    .cycle()
+                    .take(32)
+                    .flat_map(|point| point.iter().copied())
+                    .collect::<Vec<_>>();
+                let shape = [indices.len(), 32];
+                let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+                let mut evaluator =
+                    TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default())
+                        .unwrap();
+                evaluator
+                    .evaluate_batched_with_hint(points, EvaluationHint::around(0))
+                    .unwrap();
+                let (batches, environment) = evaluator.build_environment_cache(&0, points).unwrap();
+                let expected = evaluator
+                    .contract_edge_cut_or_center(&0, points, &batches, &environment)
+                    .unwrap()
+                    .into_iter()
+                    .map(CachedScalar::into_any)
+                    .collect::<Vec<_>>();
+                let retained = evaluator
+                    .message_caches
+                    .iter()
+                    .map(|(edge, cache)| {
+                        (
+                            *edge,
+                            (
+                                cache.key_count(),
+                                cache.logical_payload_bytes(),
+                                cache.owned_retained_bytes_estimate(),
+                            ),
+                        )
+                    })
+                    .collect::<HashMap<_, _>>();
+                let actual = evaluator
+                    .evaluate_batched_with_hint(points, EvaluationHint::around(0))
+                    .unwrap();
+                assert_eq!(actual, expected);
+                let after = evaluator
+                    .message_caches
+                    .iter()
+                    .map(|(edge, cache)| {
+                        (
+                            *edge,
+                            (
+                                cache.key_count(),
+                                cache.logical_payload_bytes(),
+                                cache.owned_retained_bytes_estimate(),
+                            ),
+                        )
+                    })
+                    .collect::<HashMap<_, _>>();
+                assert_eq!(after, retained);
+                assert_eq!(evaluator.stats_for_test().batched_message_contract_count, 2);
+                assert_eq!(evaluator.stats_for_test().message_cache_misses, 0);
+            }
+        }
+        check::<f32>();
+        check::<f64>();
+        check::<Complex32>();
+        check::<Complex64>();
+    }
+
+    /// [AI Supplied] An abandoned all-hit probe must not count any hits;
+    /// left-miss and right-miss batches match the original admission path.
+    #[test]
+    fn borrowed_cut_partial_hits_keep_legacy_cache_accounting() {
+        let (tree, indices) = five_node_chain();
+        for changed_site in [0, 4] {
+            let mut candidate =
+                TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default())
+                    .unwrap();
+            let mut reference =
+                TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default())
+                    .unwrap();
+            let zeros = [0usize; 5];
+            let cold = ColMajorArrayRef::new(&zeros, &[5, 1]).unwrap();
+            for evaluator in [&mut candidate, &mut reference] {
+                evaluator
+                    .evaluate_batched_with_hint(cold, EvaluationHint::around(2))
+                    .unwrap();
+            }
+            let mut values = zeros;
+            values[changed_site] = 1;
+            let points = ColMajorArrayRef::new(&values, &[5, 1]).unwrap();
+            let actual = candidate
+                .evaluate_batched_with_hint(points, EvaluationHint::around(2))
+                .unwrap();
+            let (batches, environment) = reference.build_environment_cache(&2, points).unwrap();
+            let expected = reference
+                .contract_edge_cut_or_center(&2, points, &batches, &environment)
+                .unwrap()
+                .into_iter()
+                .map(CachedScalar::into_any)
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+            assert_eq!(
+                candidate.stats_for_test().message_cache_hits,
+                reference.stats_for_test().message_cache_hits
+            );
+            assert_eq!(
+                candidate.stats_for_test().message_cache_misses,
+                reference.stats_for_test().message_cache_misses
+            );
+            for (edge, cache) in &candidate.message_caches {
+                let expected = &reference.message_caches[edge];
+                assert_eq!(
+                    (
+                        cache.hits,
+                        cache.misses,
+                        cache.key_count(),
+                        cache.logical_payload_bytes()
+                    ),
+                    (
+                        expected.hits,
+                        expected.misses,
+                        expected.key_count(),
+                        expected.logical_payload_bytes()
+                    )
+                );
+            }
+        }
+    }
+
+    /// [AI Supplied] Packed columns reject malformed metadata rather than
+    /// panicking or silently reading a different scalar representation.
+    #[test]
+    fn borrowed_cut_checks_corrupt_cached_columns_before_recording_hits() {
+        let (tree, indices) = five_node_chain();
+        let zeros = [0usize; 5];
+        let points = ColMajorArrayRef::new(&zeros, &[5, 1]).unwrap();
+        for corruption in 0..5 {
+            let mut evaluator =
+                TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default())
+                    .unwrap();
+            evaluator
+                .evaluate_batched_with_hint(points, EvaluationHint::around(2))
+                .unwrap();
+            let edge = (1, 2);
+            let before = evaluator.message_caches[&edge].hits;
+            match corruption {
+                0 => {
+                    evaluator.parent_bond_indices.remove(&edge);
+                }
+                1 => {
+                    evaluator.message_caches.get_mut(&edge).unwrap().bond_dim += 1;
+                }
+                2 => {
+                    evaluator
+                        .message_caches
+                        .get_mut(&edge)
+                        .unwrap()
+                        .columns
+                        .truncate(1);
+                }
+                3 => {
+                    evaluator.message_caches.get_mut(&edge).unwrap().columns[1] =
+                        CachedScalar::F32(1.0);
+                }
+                _ => {
+                    evaluator
+                        .message_caches
+                        .get_mut(&edge)
+                        .unwrap()
+                        .positions
+                        .values_mut()
+                        .for_each(|position| *position = usize::MAX);
+                }
+            }
+            assert!(evaluator.try_contract_cached_edge_cut(&2, points).is_err());
+            assert_eq!(evaluator.message_caches[&edge].hits, before);
+        }
+        let cache = PackedMessageCache::<u32, f64>::new(2, 64);
+        assert!(cache.checked_column(usize::MAX).is_err());
+        assert!(column_dot(&[1.0f64], &[2.0, 3.0], |value| Some(*value)).is_err());
+        assert!(cached_column_dot(
+            ScalarKind::F32,
+            &[CachedScalar::F64(1.0)],
+            &[CachedScalar::F64(2.0)]
+        )
+        .is_err());
+        assert!(cached_column_dot(
+            ScalarKind::C32,
+            &[CachedScalar::F32(1.0)],
+            &[CachedScalar::F32(2.0)]
+        )
+        .is_err());
+        assert!(cached_column_dot(
+            ScalarKind::C64,
+            &[CachedScalar::F64(1.0)],
+            &[CachedScalar::F64(2.0)]
+        )
+        .is_err());
+    }
+
+    /// [AI Supplied] Full-width component keys and invalid coordinates
+    /// remain checked when a warm cut bypasses recursive assignment building.
+    #[test]
+    fn borrowed_cut_handles_wide_keys_and_rejects_invalid_warm_coordinates() {
+        let edges = (0..259).map(|node| (node, node + 1)).collect::<Vec<_>>();
+        let (tree, indices) = typed_tree_from_edges::<f64>(&edges, &[1; 259]);
+        let values = (0..4)
+            .flat_map(|point| {
+                (0..260).map(move |site| match point {
+                    0 | 3 => 0,
+                    1 => 1,
+                    _ => site % 2,
+                })
+            })
+            .collect::<Vec<_>>();
+        let points = ColMajorArrayRef::new(&values, &[260, 4]).unwrap();
+        let expected = tree.evaluate(&indices, points).unwrap();
+        let mut evaluator =
+            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
+        for _ in 0..2 {
+            let actual = evaluator
+                .evaluate_batched_with_hint(points, EvaluationHint::around(130))
+                .unwrap();
+            assert_typed_results::<f64>(&actual, &expected);
+        }
+        assert_eq!(evaluator.stats_for_test().batched_message_contract_count, 2);
+        assert_eq!(evaluator.stats_for_test().message_cache_misses, 0);
+        for edge in [(129, 130), (130, 129)] {
+            assert!(evaluator.message_caches[&edge]
+                .positions
+                .keys()
+                .any(|key| key.owned_heap_bytes() > 0));
+        }
+        let mut invalid = values;
+        invalid[259] = 2;
+        let points = ColMajorArrayRef::new(&invalid, &[260, 4]).unwrap();
+        assert!(evaluator
+            .evaluate_batched_with_hint(points, EvaluationHint::around(130))
+            .is_err());
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn borrowed_cut_records_only_its_two_cache_hits_without_message_kernels() {
+        let (tree, indices) = five_node_chain();
+        let values = [0usize; 20];
+        let points = ColMajorArrayRef::new(&values, &[5, 4]).unwrap();
+        let mut evaluator =
+            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
+        let expected = evaluator
+            .evaluate_batched_with_hint(points, EvaluationHint::around(2))
+            .unwrap();
+        diagnostics::reset();
+        let actual = evaluator
+            .evaluate_batched_with_hint(points, EvaluationHint::around(2))
+            .unwrap();
+        assert_eq!(actual, expected);
+        let records = diagnostics::snapshot();
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.guard_cache_hits)
+                .sum::<u64>(),
+            2
+        );
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.guard_cache_misses)
+                .sum::<u64>(),
+            0
+        );
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.guard_kernel.matmul_calls)
+                .sum::<u64>(),
+            0
+        );
+        assert!(records
+            .iter()
+            .any(|record| record.node == "tree:1" && record.coordination_number == 2));
+        assert!(records
+            .iter()
+            .any(|record| record.node == "tree:2" && record.coordination_number == 2));
+        assert!(!records.iter().any(|record| record.node == "tree:3"));
+    }
+
     /// [AI Supplied] The final edge-cut assembly is a dot product over the
     /// selected bond, so its deterministic work count is exactly one visit per
     /// requested point and bond coordinate.
@@ -9296,6 +9861,18 @@ mod tests {
         let mixed_warm = mixed_evaluator.evaluate_batched(mixed_points).unwrap();
         assert_typed_results::<f64>(&mixed_cold, &mixed_expected);
         assert_typed_results::<f64>(&mixed_warm, &mixed_expected);
+        for center in [0, 1] {
+            for _ in 0..2 {
+                let actual = mixed_evaluator
+                    .evaluate_batched_with_hint(mixed_points, EvaluationHint::around(center))
+                    .unwrap();
+                assert_typed_results::<f64>(&actual, &mixed_expected);
+            }
+            assert!(mixed_evaluator
+                .try_contract_cached_edge_cut(&center, mixed_points)
+                .unwrap()
+                .is_none());
+        }
 
         let (degree_four, degree_four_indices) = four_arm_star_tree();
         let values = [
@@ -11373,8 +11950,8 @@ mod tests {
         assert_scalars_close(&second, &expected);
         let stats = evaluator.stats_for_test();
         assert_eq!(
-            stats.message_cache_hits, 3,
-            "the three cut-directed messages should be reused after changing centers: {stats:?}"
+            stats.message_cache_hits, 2,
+            "both selected cut directions should be reused after changing centers: {stats:?}"
         );
         assert_eq!(
             stats.message_cache_misses, 0,
