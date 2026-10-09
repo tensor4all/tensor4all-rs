@@ -80,6 +80,15 @@ is removed from the active projection mask as soon as that capacity is used.
 Thus one Guard scan offering several pivots cannot overshoot a cut that had
 only one rank available.
 
+Guard detection is independent of that injection capacity. Unless the local
+residual already establishes a rank limit, an enabled search still validates
+the output when every cut is saturated. Significant residuals without any
+remaining headroom contribute to `RankLimited`; saturation cannot be treated
+as a successful guard scan. A final cleanup pass runs only when pivots were
+actually injected. Target values, reconstructed values,
+residuals, and guard thresholds must be finite, including the exact single-node
+shortcut. Callback and residual non-finiteness has a dedicated typed error.
+
 Convergence requires a window of `min_sweeps` consecutive pass results with
 no growth on **any** output edge, starting with the first result as the
 baseline. A rank decrease is allowed, but subsequent regrowth restarts the
@@ -99,8 +108,15 @@ tolerance as an absolute threshold on that normalized matrix. The sweep
 compares `error / scale` with that tolerance, so the factorization and sweep
 share a reference. A relative-to-largest-pivot rule would disagree whenever
 Schur-complement growth lifts a pivot above the largest entry. Normalization
-also makes the LUCI kernels' absolute `f64::EPSILON` pivot floor a fixed
-relative round-off floor for this mode. With absolute tolerance selected, the
+divides complex components by a real scalar rather than forming a complex
+divisor's squared norm, avoiding overflow or underflow from squaring a
+representable normalizer.
+CI canonicalization preserves all four supported scalar dtypes end to end.
+When a rank ceiling ends rrLU, the reported local error is the remaining Schur
+complement maximum, rather than the last accepted pivot. Thus a saturated cut
+whose local matrix is already exact does not by itself imply `RankLimited`.
+Normalization also makes the LUCI kernels' absolute `f64::EPSILON` pivot floor
+a fixed relative round-off floor for this mode. With absolute tolerance selected, the
 local matrix remains in raw output units and the configured threshold is
 absolute in those same units. The global guard follows the same policy: in
 relative mode it scales its threshold by the largest `|f|` among its random
@@ -154,6 +170,16 @@ follow the working budget, because they bound what survives between local
 updates rather than what one update may allocate. Within one preparation the
 byte budget is checked before any ceiling derived from it, so an impossible
 budget is reported as `working bytes` rather than as a derived ceiling.
+
+Local preflight plans and charges both candidate lists before enumeration.
+Frame contraction reserves their metadata together with its scalar buffers;
+the LUCI phase uses Core's conservative logical working estimate plus retained
+input values and candidate/pivot records. Provider-private workspace and
+allocator overhead are outside this estimated logical budget; it is not RSS.
+Guard's aggregate message budget is divided across evaluators and then their
+directed-edge caches, with floor rounding keeping the aggregate within the
+configured bound. History capacity grows with completed passes rather than
+reserving the entire requested stopping ceiling.
 
 The two state-owned cache families report through `TreeAciDiagnostics`, in the
 same logical-byte units. With the `diagnostics` feature, `query_cache` reports

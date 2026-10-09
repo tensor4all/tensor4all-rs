@@ -61,6 +61,7 @@ pub(crate) struct SweepHistory {
     pub(crate) termination: TreeAciTermination,
     pub(crate) global_pivots_found: Vec<usize>,
     pub(crate) evaluated_points: u64,
+    pub(crate) needs_cleanup: bool,
 }
 
 impl PassReport {
@@ -81,14 +82,17 @@ where
     V: TreeAciNode,
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
 {
-    let mut max_ranks = Vec::with_capacity(options.max_sweeps);
-    let mut max_errors = Vec::with_capacity(options.max_sweeps);
-    let mut global_pivots = Vec::with_capacity(options.max_sweeps);
-    let mut rank_limited = Vec::with_capacity(options.max_sweeps);
+    // A stopping ceiling is not a reservation for every possible pass.
+    let history_capacity = options.max_sweeps.min(32);
+    let mut max_ranks = Vec::with_capacity(history_capacity);
+    let mut max_errors = Vec::with_capacity(history_capacity);
+    let mut global_pivots = Vec::with_capacity(history_capacity);
+    let mut rank_limited = Vec::with_capacity(history_capacity);
     let mut previous_ranks = state.edge_ranks.clone();
     let mut stable_rank_passes = 0;
     let mut evaluated_points = 0u64;
     let mut termination = TreeAciTermination::MaxSweeps;
+    let mut needs_cleanup = false;
     // Guard evaluators own sizeable topology/message-cache state and are not
     // part of local ACI. Keep them lazy so disabling Guard (or configuring a
     // zero-search Guard) does not pay an input-rank-dependent setup cost.
@@ -111,55 +115,61 @@ where
         max_ranks.push(report.max_rank);
         max_errors.push(report.max_error);
         rank_limited.push(current_state_is_rank_limited(state, options));
+        needs_cleanup = false;
         let found = if options.enable_global_guard
             && options.nsearch_global_pivots > 0
             && options.max_nglobal_pivots > 0
             && !rank_limited[pass]
         {
             let injection_capacities = global_injection_capacities(state, options);
-            if injection_capacities.iter().any(|capacity| *capacity > 0) {
-                if input_evaluators.is_none() {
-                    let per_evaluator_budget = per_evaluator_message_cache_budget(
-                        options.message_cache_max_bytes,
-                        state.inputs.len(),
-                    )?;
-                    input_evaluators = Some(InputEvaluators::new_with_message_cache_max_bytes(
-                        state.inputs,
-                        &state.problem,
-                        per_evaluator_budget,
-                    )?);
-                }
-                let input_evaluators =
-                    input_evaluators
-                        .as_mut()
-                        .ok_or(TreeAciError::InternalInvariant {
-                            message: "enabled global Guard has no input evaluators",
-                        })?;
-
-                #[cfg(test)]
-                let guard_started = std::time::Instant::now();
-                let search = find_global_pivots(state, input_evaluators, options, rng, operator)?;
-                #[cfg(test)]
-                crate::state::profile_debug_stats::record(|stats| {
-                    stats.global_guard += guard_started.elapsed();
-                });
-                evaluated_points = evaluated_points
-                    .checked_add(search.evaluated_points)
-                    .ok_or(TreeAciError::SizeOverflow {
-                        context: "sweep evaluated point count",
-                    })?;
-                let found = search.pivots.len();
-                #[cfg(test)]
-                let injection_started = std::time::Instant::now();
-                inject_global_pivots(state, &search.pivots, &injection_capacities)?;
-                #[cfg(test)]
-                crate::state::profile_debug_stats::record(|stats| {
-                    stats.global_injection += injection_started.elapsed();
-                });
-                found
-            } else {
-                0
+            if input_evaluators.is_none() {
+                let per_evaluator_budget = per_evaluator_message_cache_budget(
+                    options.message_cache_max_bytes,
+                    state.inputs.len(),
+                )?;
+                input_evaluators = Some(InputEvaluators::new_with_message_cache_max_bytes(
+                    state.inputs,
+                    &state.problem,
+                    per_evaluator_budget,
+                )?);
             }
+            let input_evaluators =
+                input_evaluators
+                    .as_mut()
+                    .ok_or(TreeAciError::InternalInvariant {
+                        message: "enabled global Guard has no input evaluators",
+                    })?;
+
+            #[cfg(test)]
+            let guard_started = std::time::Instant::now();
+            let search = find_global_pivots(state, input_evaluators, options, rng, operator)?;
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.global_guard += guard_started.elapsed();
+            });
+            evaluated_points = evaluated_points
+                .checked_add(search.evaluated_points)
+                .ok_or(TreeAciError::SizeOverflow {
+                    context: "sweep evaluated point count",
+                })?;
+            let found = search.pivots.len();
+            // Detection is independent of injection headroom. An unresolved
+            // residual at a saturated ceiling is a rank limit, not success.
+            let can_inject = injection_capacities.iter().any(|capacity| *capacity > 0);
+            if found > 0 && !can_inject {
+                rank_limited[pass] = true;
+            }
+            #[cfg(test)]
+            let injection_started = std::time::Instant::now();
+            if can_inject {
+                needs_cleanup =
+                    inject_global_pivots(state, &search.pivots, &injection_capacities)? > 0;
+            }
+            #[cfg(test)]
+            crate::state::profile_debug_stats::record(|stats| {
+                stats.global_injection += injection_started.elapsed();
+            });
+            found
         } else {
             0
         };
@@ -187,6 +197,7 @@ where
         termination,
         global_pivots_found: global_pivots,
         evaluated_points,
+        needs_cleanup,
     })
 }
 

@@ -87,6 +87,7 @@ where
     let start_batch = TreeElementwiseBatch::new(&start_inputs, state.inputs.len(), nsearch)?;
     let mut start_outputs = vec![T::default(); nsearch];
     operator(start_batch, &mut start_outputs)?;
+    crate::scalar::ensure_finite_values(&start_outputs, "guard target")?;
     evaluated_points = checked_add_points(evaluated_points, nsearch)?;
     let max_output = start_outputs
         .iter()
@@ -104,6 +105,11 @@ where
     let max_output = state.edge_scales.iter().copied().fold(max_output, f64::max);
     let threshold =
         options.tolerance_policy().absolute_threshold(max_output) * options.global_tolerance_margin;
+    if !threshold.is_finite() {
+        return Err(TreeAciError::NonFiniteValue {
+            context: "guard threshold",
+        });
+    }
 
     let mut candidates = Vec::new();
     let start_storage_bytes = point_vector_storage_bytes(nsearch, site_dims.len())?;
@@ -135,19 +141,18 @@ where
                     TreeElementwiseBatch::new(&input_values, state.inputs.len(), points.len())?;
                 let mut target = vec![T::default(); points.len()];
                 operator(batch, &mut target)?;
+                crate::scalar::ensure_finite_values(&target, "guard target")?;
                 let approximation = output_evaluator.evaluate_expanded(
                     input_evaluators,
                     points,
                     &coordinates,
                     hint,
                 )?;
-                Ok(target
+                target
                     .into_iter()
                     .zip(approximation)
-                    .map(|(target, approximation)| {
-                        tensor4all_core::Scalar::abs_val(target - approximation)
-                    })
-                    .collect())
+                    .map(|(target, approximation)| guard_residual(target, approximation))
+                    .collect()
             },
         )?;
         if error > threshold {
@@ -199,6 +204,17 @@ where
             }
         })?,
     })
+}
+
+fn guard_residual<T: TreeAciScalar>(target: T, approximation: T) -> Result<f64> {
+    let error = tensor4all_core::Scalar::abs_val(target - approximation);
+    if !tensor4all_core::Scalar::abs_val(approximation).is_finite() || !error.is_finite() {
+        Err(TreeAciError::NonFiniteValue {
+            context: "guard residual",
+        })
+    } else {
+        Ok(error)
+    }
 }
 
 pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
@@ -644,7 +660,7 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
             .flat_map(|physical| physical.indices.iter().cloned())
             .collect::<Vec<_>>();
         let options = CachedEvaluatorOptions {
-            message_cache_max_bytes,
+            message_cache_max_bytes: message_cache_max_bytes / problem.directed_edges.len().max(1),
             ..CachedEvaluatorOptions::<V>::default()
         };
         let first_input = inputs.first().ok_or(TreeAciError::InternalInvariant {
@@ -867,13 +883,20 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
         plan: &CachedEvaluatorPlan<V>,
         message_cache_max_bytes: usize,
     ) -> Result<Self> {
+        let directed_caches =
+            output
+                .edge_count()
+                .checked_mul(2)
+                .ok_or(TreeAciError::SizeOverflow {
+                    context: "guard directed message cache count",
+                })?;
         let evaluator = TreeTNCachedEvaluator::with_plan(
             output,
             plan,
             CachedEvaluatorOptions {
                 #[cfg(feature = "diagnostics")]
                 diagnostic_namespace: "output".to_owned(),
-                message_cache_max_bytes,
+                message_cache_max_bytes: message_cache_max_bytes / directed_caches.max(1),
                 ..CachedEvaluatorOptions::<V>::default()
             },
         )?;

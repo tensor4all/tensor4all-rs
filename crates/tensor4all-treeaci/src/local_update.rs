@@ -54,9 +54,8 @@ impl LocalMatrixScale {
         if self.normalizer == 1.0 {
             return;
         }
-        let divisor = <T as tensor4all_core::Scalar>::from_f64(self.normalizer);
         for value in matrix.as_col_major_mut_slice() {
-            *value = *value / divisor;
+            *value = value.div_real(self.normalizer);
         }
     }
 
@@ -102,22 +101,32 @@ where
             message: "local update references an unknown directed edge",
         })?;
     let reverse = edge.reverse;
-    let row_candidates = enumerate_candidates(
+    // Plan both Cartesian sides and charge their records/pairs before either
+    // Vec is allocated. Element limits alone do not bound candidate metadata.
+    let row_layout = candidate_layout(
         problem,
         candidates,
         forward,
         "candidate rows",
         options.max_candidate_rows,
     )?;
-    let col_candidates = enumerate_candidates(
+    let col_layout = candidate_layout(
         problem,
         candidates,
         reverse,
         "candidate columns",
         options.max_candidate_cols,
     )?;
-    let row_count = row_candidates.len();
-    let col_count = col_candidates.len();
+    let metadata_bytes =
+        row_layout
+            .bytes
+            .checked_add(col_layout.bytes)
+            .ok_or(TreeAciError::SizeOverflow {
+                context: "local candidate metadata bytes",
+            })?;
+    enforce_limit("working bytes", metadata_bytes, options.max_working_bytes)?;
+    let row_count = row_layout.count;
+    let col_count = col_layout.count;
     let point_count = row_count
         .checked_mul(col_count)
         .ok_or(TreeAciError::SizeOverflow {
@@ -146,7 +155,11 @@ where
         row_count,
         col_count,
         max_cut_rank,
-    )?;
+    )?
+    .checked_add(metadata_bytes)
+    .ok_or(TreeAciError::SizeOverflow {
+        context: "local frame reservation bytes",
+    })?;
     let candidate_frame_scratch =
         inputs
             .iter()
@@ -195,6 +208,29 @@ where
             })?;
     enforce_limit("core elements", left_elements, problem.max_core_elements)?;
     enforce_limit("core elements", right_elements, problem.max_core_elements)?;
+    let luci_bytes = tensor4all_core::matrix_luci_factors_working_bytes::<T>(
+        row_count,
+        col_count,
+        factor_rank_bound,
+    )
+    .ok_or(TreeAciError::SizeOverflow {
+        context: "local LUCI working bytes",
+    })?;
+    let factor_bytes = input_value_elements
+        .checked_mul(size_of::<T>())
+        .and_then(|bytes| bytes.checked_add(luci_bytes))
+        // Selected pivot samples coexist with both full candidate lists.
+        .and_then(|bytes| {
+            metadata_bytes
+                .checked_mul(2)
+                .and_then(|meta| bytes.checked_add(meta))
+        })
+        .ok_or(TreeAciError::SizeOverflow {
+            context: "local factor working bytes",
+        })?;
+    enforce_limit("working bytes", factor_bytes, options.max_working_bytes)?;
+    let row_candidates = materialize_candidates(problem, candidates, forward, row_layout.count);
+    let col_candidates = materialize_candidates(problem, candidates, reverse, col_layout.count);
 
     let mut input_values = vec![T::default(); input_value_elements];
     #[cfg(test)]
@@ -520,13 +556,18 @@ fn select_pivot_samples(
         .collect()
 }
 
-fn enumerate_candidates<V: TreeAciNode>(
+struct CandidateLayout {
+    count: usize,
+    bytes: usize,
+}
+
+fn candidate_layout<V: TreeAciNode>(
     problem: &PreparedTreeProblem<V>,
     candidate_sets: &CandidateSets,
     edge: DirectedEdgeId,
     resource: &'static str,
     limit: usize,
-) -> Result<Vec<ComponentSample>> {
+) -> Result<CandidateLayout> {
     let directed = &problem.directed_edges[edge];
     let node =
         *problem
@@ -555,6 +596,44 @@ fn enumerate_candidates<V: TreeAciNode>(
             })?;
     }
     enforce_limit(resource, count, limit)?;
+    let bytes = directed
+        .incoming_to_from
+        .len()
+        .checked_mul(size_of::<(DirectedEdgeId, crate::samples::SampleId)>())
+        .and_then(|pairs| pairs.checked_add(size_of::<ComponentSample>()))
+        .and_then(|record| record.checked_mul(count))
+        .ok_or(TreeAciError::SizeOverflow {
+            context: "candidate metadata bytes",
+        })?;
+    Ok(CandidateLayout { count, bytes })
+}
+
+#[cfg(test)]
+fn enumerate_candidates<V: TreeAciNode>(
+    problem: &PreparedTreeProblem<V>,
+    candidate_sets: &CandidateSets,
+    edge: DirectedEdgeId,
+    resource: &'static str,
+    limit: usize,
+) -> Result<Vec<ComponentSample>> {
+    let layout = candidate_layout(problem, candidate_sets, edge, resource, limit)?;
+    Ok(materialize_candidates(
+        problem,
+        candidate_sets,
+        edge,
+        layout.count,
+    ))
+}
+
+fn materialize_candidates<V: TreeAciNode>(
+    problem: &PreparedTreeProblem<V>,
+    candidate_sets: &CandidateSets,
+    edge: DirectedEdgeId,
+    count: usize,
+) -> Vec<ComponentSample> {
+    let directed = &problem.directed_edges[edge];
+    // The layout validated this source and every incoming candidate set.
+    let node = problem.node_positions[&directed.from];
     let mut candidates = Vec::with_capacity(count);
     for encoded in 0..count {
         let mut quotient = encoded;
@@ -571,7 +650,7 @@ fn enumerate_candidates<V: TreeAciNode>(
             incoming: incoming_samples,
         });
     }
-    Ok(candidates)
+    candidates
 }
 
 #[cfg(test)]

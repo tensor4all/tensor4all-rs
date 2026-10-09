@@ -1,3 +1,5 @@
+mod scaling;
+
 use std::cell::Cell;
 
 use tensor4all_core::{DynIndex, IdxTensor};
@@ -303,9 +305,11 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
         })
     ));
 
-    // For this 2x2 two-node case the exact live element contract is:
+    // For this 2x2 two-node case the frame-phase scalar reservation is:
     // input values 4 + operator output 4 + two packed candidate sides
     // (2 + 2) * bond 2 * coexistence factor 2 = 24 elements = 192 bytes.
+    // Four candidate records coexist with those scalars. The old 192-byte
+    // estimate omitted them, along with the later LUCI working phase (#854).
     let working_limited = TreeAciOptions {
         max_working_bytes: 191,
         ..TreeAciOptions::default()
@@ -326,9 +330,9 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
         ),
         Err(TreeAciError::ResourceLimit {
             resource: "working bytes",
-            requested: 192,
+            requested,
             limit: 191
-        })
+        }) if requested == 192 + 4 * std::mem::size_of::<crate::samples::ComponentSample>()
     ));
 }
 
