@@ -432,7 +432,7 @@ impl<T: Scalar> RrLU<T> {
     }
 }
 
-fn validate_col_major_matrix_len(
+pub(crate) fn validate_col_major_matrix_len(
     nrows: usize,
     ncols: usize,
     actual_len: usize,

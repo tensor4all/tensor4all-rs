@@ -15,6 +15,11 @@ use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
 use tensor4all_tensorbackend::{mat_mul_owned, submatrix, triangular_solve_matrix_owned, Matrix};
 
+mod selected;
+pub use selected::matrix_luci_factors_from_pivots;
+mod preferred;
+pub use preferred::matrix_luci_factors_with_preferred_pivots;
+
 /// Matrix LU-based Cross Interpolation.
 ///
 /// This is a higher-level [`Matrix`] wrapper around the lower-level `matrixluci`
@@ -88,7 +93,7 @@ pub struct MatrixLuciFactors<T> {
     pub row_indices: Vec<usize>,
     /// Selected column indices.
     pub col_indices: Vec<usize>,
-    /// Pivot error history.
+    /// Pivot error history, or one measured maximum residual for fixed pivots.
     pub pivot_errors: Vec<f64>,
     /// Selected rank.
     pub rank: usize,

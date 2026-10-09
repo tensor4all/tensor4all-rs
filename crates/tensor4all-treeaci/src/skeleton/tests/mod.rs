@@ -131,3 +131,71 @@ fn skeleton_matches_a_dense_contraction_on_a_y_tree() {
     }
     assert!(worst < 1e-12, "Y-tree skeleton deviated by {worst}");
 }
+
+#[test]
+fn scalar_reference_preserves_inverse_gauge_orientation_without_conjugation() {
+    use num_complex::Complex64;
+    let problem = prepare(&[(0, 1)], 2);
+    let z = Complex64::new;
+    let tensors = SkeletonTensors {
+        node: vec![
+            vec![z(1.0, 1.0), z(0.0, 0.0), z(2.0, 0.0), z(0.0, 0.0)],
+            vec![z(0.0, 0.0), z(3.0, 0.0), z(0.0, 0.0), z(4.0, -1.0)],
+        ],
+        node_shape: vec![vec![2, 2], vec![2, 2]],
+        gauge: vec![Matrix::from_col_major_vec(
+            2,
+            2,
+            vec![z(1.0, 0.0), z(0.0, -1.0), z(2.0, 1.0), z(3.0, 0.0)],
+        )],
+    };
+    let actual = skeleton_evaluate(&tensors, &problem, &[0, 1]).unwrap();
+    // [1+i, 2] [[1, 2+i], [-i, 3]] [3, 4-i]^T = 34+2i.
+    assert!((actual - z(34.0, 2.0)).norm() < 1e-12);
+}
+
+#[test]
+fn scalar_reference_checks_point_and_skeleton_storage() {
+    let (problem, arena, pivots) = two_node_full_rank_fixture();
+    let mut oracle =
+        |s: &[usize]| Ok(1.0 + s[0] as f64 + 2.0 * s[1] as f64 + 3.0 * (s[0] * s[1]) as f64);
+    let tensors = skeleton_tensors(&problem, &arena, &pivots, &mut oracle).unwrap();
+    assert!(matches!(
+        skeleton_evaluate(&tensors, &problem, &[0]),
+        Err(TreeAciError::PointLengthMismatch { .. })
+    ));
+    assert!(matches!(
+        skeleton_evaluate(&tensors, &problem, &[2, 0]),
+        Err(TreeAciError::PhysicalCoordinateOutOfBounds { .. })
+    ));
+    let mut bad = tensors.clone();
+    bad.gauge.clear();
+    assert!(matches!(
+        skeleton_evaluate(&bad, &problem, &[0, 0]),
+        Err(TreeAciError::InternalInvariant { .. })
+    ));
+    let mut bad = tensors.clone();
+    bad.node_shape.clear();
+    assert!(matches!(
+        skeleton_evaluate(&bad, &problem, &[0, 0]),
+        Err(TreeAciError::InternalInvariant { .. })
+    ));
+    let mut bad = tensors.clone();
+    bad.node_shape[0][0] = 3;
+    assert!(matches!(
+        skeleton_evaluate(&bad, &problem, &[0, 0]),
+        Err(TreeAciError::InternalInvariant { .. })
+    ));
+    let mut bad = tensors.clone();
+    bad.node[0].clear();
+    assert!(matches!(
+        skeleton_evaluate(&bad, &problem, &[0, 0]),
+        Err(TreeAciError::InternalInvariant { .. })
+    ));
+    let mut bad = tensors;
+    bad.gauge[0] = Matrix::zeros(1, 2);
+    assert!(matches!(
+        skeleton_evaluate(&bad, &problem, &[0, 0]),
+        Err(TreeAciError::InternalInvariant { .. })
+    ));
+}
