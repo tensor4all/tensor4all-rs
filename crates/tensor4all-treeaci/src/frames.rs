@@ -241,6 +241,7 @@ pub(crate) mod debug_stats {
         static BATCHED_COMPUTE_CALLS: Cell<u64> = const { Cell::new(0) };
         static MEMO_HIT_COPIES: Cell<u64> = const { Cell::new(0) };
         static CORE_ELEMENT_READS: Cell<u64> = const { Cell::new(0) };
+        static AXIS_LOOKUPS: Cell<u64> = const { Cell::new(0) };
     }
 
     /// Records how many prepared-core elements a contraction route reads.
@@ -255,6 +256,14 @@ pub(crate) mod debug_stats {
 
     pub(crate) fn core_element_reads() -> u64 {
         CORE_ELEMENT_READS.with(Cell::get)
+    }
+
+    pub(crate) fn record_axis_lookup() {
+        AXIS_LOOKUPS.with(|count| count.set(count.get() + 1));
+    }
+
+    pub(crate) fn axis_lookups() -> u64 {
+        AXIS_LOOKUPS.with(Cell::get)
     }
 
     pub(crate) fn record_scalar_compute_call() {
@@ -301,6 +310,7 @@ pub(crate) mod debug_stats {
         BATCHED_COMPUTE_CALLS.with(|count| count.set(0));
         MEMO_HIT_COPIES.with(|count| count.set(0));
         CORE_ELEMENT_READS.with(|count| count.set(0));
+        AXIS_LOOKUPS.with(|count| count.set(0));
     }
 }
 
@@ -1835,8 +1845,9 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     ///   caller's own `reserved_bytes` ([`multi_incoming_scratch_elements`]
     ///   plus [`grouped_gemm_descriptor_bytes`]);
     /// * the **scalar** route, the same
-    ///   [`contract_prepared_core_slices`] contraction
-    ///   [`Self::candidate_frame`] performs, otherwise.
+    ///   [`contract_core_slice`] accumulator used by
+    ///   [`contract_prepared_core_slices`] and [`Self::candidate_frame`],
+    ///   reusing the group's already resolved layout, otherwise.
     ///
     /// The cross-size condition is what keeps a sparse or diagonal candidate
     /// set from silently materializing the full edge cross: the batched
@@ -1979,19 +1990,16 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     let incoming = candidate
                         .incoming
                         .iter()
-                        .map(|&(edge, id)| {
+                        .zip(&incoming_axes)
+                        .map(|(&(edge, id), &axis)| {
                             self.frame_slice(input, edge, id)
-                                .map(|values| (edge, values))
+                                .map(|values| (axis, values))
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    let values = contract_prepared_core_slices(
-                        tree,
-                        problem,
-                        cores,
-                        directed_edge,
-                        candidate.local_coordinate,
-                        &incoming,
-                    )?;
+                    // This group already prepared its axes and fixed-physical
+                    // offset. Reuse them for every scalar candidate instead
+                    // of rediscovering bonds and layout on the fallback path.
+                    let values = contract_core_slice(core, outgoing_axis, base_offset, &incoming)?;
                     results[candidate_index] = Some(values.into());
                 }
                 continue;
@@ -2941,11 +2949,6 @@ fn contract_prepared_core_slices<T: TreeAciScalar, V: TreeAciNode>(
     let mut incoming_axes = Vec::with_capacity(incoming_frames.len());
     for (incoming_edge, values) in incoming_frames {
         let incoming_bond = outgoing_bond(input, problem, *incoming_edge)?;
-        if values.len() != incoming_bond.dim() {
-            return Err(TreeAciError::InternalInvariant {
-                message: "incoming frame length differs from its bond dimension",
-            });
-        }
         incoming_axes.push((axis_of(&core.indices, incoming_bond)?, *values));
     }
 
@@ -2963,6 +2966,34 @@ fn contract_prepared_core_slices<T: TreeAciScalar, V: TreeAciNode>(
             (local_coordinate / physical.strides[physical_axis]) % physical.dims[physical_axis];
         base_offset += wanted * core.strides[axis];
     }
+    contract_core_slice(core, outgoing_axis, base_offset, &incoming_axes)
+}
+
+/// Contracts one fixed-physical slice with already resolved core axes.
+///
+/// Incoming vectors remain in their supplied order, preserving the scalar
+/// accumulator's exact recursive multiplication and summation order. Batch
+/// fallback callers can reuse one group's metadata without retaining another
+/// cache or preparing a layout for every candidate.
+fn contract_core_slice<T: TreeAciScalar>(
+    core: &PreparedCore<T>,
+    outgoing_axis: usize,
+    base_offset: usize,
+    incoming_axes: &[(usize, &[T])],
+) -> Result<Vec<T>> {
+    let outgoing_dim = *core
+        .dims
+        .get(outgoing_axis)
+        .ok_or(TreeAciError::InternalInvariant {
+            message: "scalar core contraction has an unknown outgoing axis",
+        })?;
+    for &(axis, values) in incoming_axes {
+        if core.dims.get(axis).copied() != Some(values.len()) {
+            return Err(TreeAciError::InternalInvariant {
+                message: "incoming frame length differs from its bond dimension",
+            });
+        }
+    }
     let outgoing_stride = core.strides[outgoing_axis];
 
     // `accumulate_incoming` bottoms out in exactly one core read per point of
@@ -2970,17 +3001,17 @@ fn contract_prepared_core_slices<T: TreeAciScalar, V: TreeAciNode>(
     // read count of this call is fixed by its shape alone.
     #[cfg(test)]
     debug_stats::record_core_element_reads(
-        outgoing.dim()
+        outgoing_dim
             * incoming_axes
                 .iter()
                 .map(|(_, values)| values.len())
                 .product::<usize>(),
     );
 
-    let mut result = vec![T::default(); outgoing.dim()];
+    let mut result = vec![T::default(); outgoing_dim];
     for (outgoing_value, slot) in result.iter_mut().enumerate() {
         let outgoing_offset = base_offset + outgoing_value * outgoing_stride;
-        *slot = accumulate_incoming(core, &incoming_axes, 0, outgoing_offset);
+        *slot = accumulate_incoming(core, incoming_axes, 0, outgoing_offset);
     }
     Ok(result)
 }
@@ -3630,6 +3661,8 @@ fn prepare_cores<T: TreeAciScalar, V: TreeAciNode>(
 }
 
 fn axis_of(indices: &[DynIndex], target: &DynIndex) -> Result<usize> {
+    #[cfg(test)]
+    debug_stats::record_axis_lookup();
     indices
         .iter()
         .position(|index| index == target)

@@ -176,7 +176,7 @@ fn continuous_walk_edges<V: TreeAciNode>(
     problem: &PreparedTreeProblem<V>,
 ) -> Result<Vec<DirectedEdgeId>> {
     let mut edges = Vec::new();
-    for phase in &problem.schedule.forward {
+    for phase in problem.schedule.forward.iter() {
         for path in &phase.paths {
             for step in &path.steps {
                 let base = step.edge.checked_mul(2).ok_or(TreeAciError::SizeOverflow {

@@ -80,6 +80,15 @@ is removed from the active projection mask as soon as that capacity is used.
 Thus one Guard scan offering several pivots cannot overshoot a cut that had
 only one rank available.
 
+Guard retains at most `max_nglobal_pivots` returned assignments across passes.
+Each next search rechecks them against the current output in the starting
+batch, with their targets counted once. Still-significant assignments keep
+their slots; resolved assignments release them for new random discoveries.
+Thus a random miss cannot erase an already established residual. The combined
+retained/start/evaluation storage is checked against the working budget.
+`global_pivots_found` includes retained assignments that still fail validation;
+it is not the number actually injected into candidate sets.
+
 Guard detection is independent of that injection capacity. Unless the local
 residual already establishes a rank limit, an enabled search still validates
 the output when every cut is saturated. Significant residuals without any

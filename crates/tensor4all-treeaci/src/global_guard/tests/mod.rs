@@ -1,4 +1,5 @@
 mod finite_values;
+mod known_pivots;
 mod start_residuals;
 
 use num_complex::{Complex32, Complex64};
@@ -393,6 +394,7 @@ fn global_search_rejects_the_start_batch_before_calling_the_operator() {
         &options,
         &mut seeded_rng(),
         &mut operator,
+        &[],
     )
     .expect_err("the start vectors must be budgeted before allocation/evaluation");
 
@@ -441,6 +443,7 @@ fn floating_zone_finds_a_feature_missing_from_the_output() {
         &options,
         &mut seeded_rng(),
         &mut identity,
+        &[],
     )
     .unwrap();
 
@@ -472,6 +475,7 @@ fn exact_output_has_no_global_pivot_and_injection_updates_every_cut() {
         &options,
         &mut seeded_rng(),
         &mut identity,
+        &[],
     )
     .unwrap();
     assert!(exact.pivots.is_empty());
@@ -570,6 +574,7 @@ fn max_nglobal_pivots_caps_what_the_guard_offers() {
         &options,
         &mut seeded_rng(),
         &mut identity,
+        &[],
     )
     .unwrap();
 

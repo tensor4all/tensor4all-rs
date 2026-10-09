@@ -97,6 +97,9 @@ where
     // part of local ACI. Keep them lazy so disabling Guard (or configuring a
     // zero-search Guard) does not pay an input-rank-dependent setup cost.
     let mut input_evaluators: Option<InputEvaluators<'a, V>> = None;
+    // Bounded by max_nglobal_pivots after each search. Random misses do not
+    // resolve residuals a previous search already proved incorrect.
+    let mut known_guard_pivots = Vec::new();
 
     for pass in 0..options.max_sweeps {
         let direction = if pass % 2 == 0 {
@@ -142,7 +145,14 @@ where
 
             #[cfg(test)]
             let guard_started = std::time::Instant::now();
-            let search = find_global_pivots(state, input_evaluators, options, rng, operator)?;
+            let search = find_global_pivots(
+                state,
+                input_evaluators,
+                options,
+                rng,
+                operator,
+                &known_guard_pivots,
+            )?;
             #[cfg(test)]
             crate::state::profile_debug_stats::record(|stats| {
                 stats.global_guard += guard_started.elapsed();
@@ -165,6 +175,7 @@ where
                 needs_cleanup =
                     inject_global_pivots(state, &search.pivots, &injection_capacities)? > 0;
             }
+            known_guard_pivots = search.pivots;
             #[cfg(test)]
             crate::state::profile_debug_stats::record(|stats| {
                 stats.global_injection += injection_started.elapsed();
@@ -228,19 +239,19 @@ where
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
 {
     #[cfg(test)]
-    let schedule_clone_started = std::time::Instant::now();
+    let schedule_acquire_started = std::time::Instant::now();
     let phases = match direction {
         PassDirection::Forward => state.problem.schedule.forward.clone(),
         PassDirection::Reverse => state.problem.schedule.reverse.clone(),
     };
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {
-        stats.schedule_clone += schedule_clone_started.elapsed();
+        stats.schedule_acquire += schedule_acquire_started.elapsed();
     });
     let mut update_trace = UpdateTrace::with_capacity(state.problem.directed_edges.len() / 2);
     let mut evaluated_points = 0u64;
 
-    for phase in &phases {
+    for phase in phases.iter() {
         if let Err(error) = run_phase_serial(
             state,
             options,
