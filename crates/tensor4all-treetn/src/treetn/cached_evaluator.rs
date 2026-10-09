@@ -7207,6 +7207,24 @@ where
     Ok((parent, order))
 }
 
+/// Key ownership accounting without scanning the map on cache hits.
+trait MessageCacheKey: Eq + Hash + Clone {
+    fn owned_heap_bytes(&self) -> usize;
+}
+
+impl MessageCacheKey for IndexKey {
+    fn owned_heap_bytes(&self) -> usize {
+        IndexKey::owned_heap_bytes(self)
+    }
+}
+
+#[cfg(test)]
+impl MessageCacheKey for u32 {
+    fn owned_heap_bytes(&self) -> usize {
+        0
+    }
+}
+
 /// A run-scoped, append-only cache of packed message columns for one
 /// directed edge.
 ///
@@ -7217,13 +7235,14 @@ where
 /// (column-major: column `i` occupies `columns[i * bond_dim .. (i+1) *
 /// bond_dim]`) instead of one heap allocation per message. The configured
 /// budget applies to logical column payload; observability separately reports
-/// an owned-storage estimate that includes retained vector capacity and the
-/// key map.
+/// an owned-storage estimate that includes retained vector capacity, the
+/// key map, and key-owned heap payloads.
 struct PackedMessageCache<K, T> {
     bond_dim: usize,
     max_bytes: usize,
     positions: HashMap<K, usize>,
     columns: Vec<T>,
+    key_heap_bytes: usize,
     hits: usize,
     misses: usize,
 }
@@ -7369,7 +7388,7 @@ impl<V, T> Drop for PreparedBranchSliceCache<V, T> {
 
 impl<K, T> PackedMessageCache<K, T>
 where
-    K: Eq + Hash + Clone,
+    K: MessageCacheKey,
     T: Clone,
 {
     fn new(bond_dim: usize, max_bytes: usize) -> Self {
@@ -7378,6 +7397,7 @@ where
             max_bytes,
             positions: HashMap::new(),
             columns: Vec::new(),
+            key_heap_bytes: 0,
             hits: 0,
             misses: 0,
         }
@@ -7437,7 +7457,8 @@ where
     }
 
     /// Estimates bytes owned by this cache, including vector capacity, key
-    /// storage, map entries/buckets, and the cache's fixed metadata.
+    /// storage (including key-owned heap payloads), map entries/buckets, and
+    /// the cache's fixed metadata.
     ///
     /// The `HashMap` bucket term uses
     /// [`HASH_MAP_BUCKET_OVERHEAD_ESTIMATE_BYTES`] because its allocator
@@ -7456,6 +7477,7 @@ where
                     .saturating_mul(std::mem::size_of::<T>()),
             )
             .saturating_add(self.positions.capacity().saturating_mul(per_bucket))
+            .saturating_add(self.key_heap_bytes)
     }
 
     fn hits(&self) -> usize {
@@ -7532,6 +7554,8 @@ where
                 if would_retain_bytes.is_some_and(|bytes| bytes <= self.max_bytes) {
                     let position = self.columns.len() / self.bond_dim;
                     self.columns.extend(column);
+                    self.key_heap_bytes =
+                        self.key_heap_bytes.saturating_add(key.owned_heap_bytes());
                     self.positions.insert(key, position);
                 } else {
                     computed_values.insert(key, column);
@@ -8491,6 +8515,124 @@ mod tests {
         assert_eq!(cache.retained_bytes(), logical);
         assert!(cache.owned_retained_bytes_estimate() >= logical);
         assert!(cache.owned_retained_bytes_estimate() > logical);
+    }
+
+    fn assert_wide_key_owned_bytes<T: CachedEvaluatorTestScalar>() {
+        let values = vec![T::from_parts(1.25, -0.5), T::from_parts(-2.0, 0.125)];
+        let column_bytes = values.len() * std::mem::size_of::<T>();
+        let narrow_key = FlatIndexer::try_new(&[2]).unwrap().encode(&[1]).unwrap();
+        let mut narrow = PackedMessageCache::<IndexKey, T>::new(2, column_bytes);
+        narrow
+            .get_or_compute_batch(&[narrow_key], |_| {
+                Ok::<_, anyhow::Error>(vec![values.clone()])
+            })
+            .unwrap();
+        assert_eq!(narrow.key_heap_bytes, 0);
+
+        for width in [130usize, 300, 700] {
+            let indexer = FlatIndexer::try_new(&vec![2; width]).unwrap();
+            let first = indexer.encode(&vec![1; width]).unwrap();
+            let mut other_values = vec![1; width];
+            other_values[0] = 0;
+            let refused = indexer.encode(&other_values).unwrap();
+            let mut cache = PackedMessageCache::<IndexKey, T>::new(2, column_bytes);
+            let slots = cache
+                .get_or_compute_batch(
+                    &[first.clone(), first.clone(), refused.clone()],
+                    |missing| {
+                        assert_eq!(missing, &[first.clone(), refused.clone()]);
+                        Ok::<_, anyhow::Error>(vec![values.clone(), values.clone()])
+                    },
+                )
+                .unwrap();
+            let CacheSlot::Cached(position) = slots[0] else {
+                panic!("the first column must be retained");
+            };
+            assert_eq!(slots[1], slots[0], "duplicate keys must share one column");
+            assert_eq!(cache.column(position), values);
+            assert_eq!(slots[2], CacheSlot::Uncached(values.clone()));
+            assert_eq!(cache.key_count(), 1);
+            let admitted_heap_bytes = cache.positions.keys().next().unwrap().owned_heap_bytes();
+            assert!(admitted_heap_bytes >= width.div_ceil(64) * 8);
+            assert_eq!(cache.key_heap_bytes, admitted_heap_bytes);
+            // Both maps and packed buffers have identical capacities and
+            // inline types. The wide key's heap is their sole size difference.
+            assert_eq!(cache.positions.capacity(), narrow.positions.capacity());
+            assert_eq!(cache.columns.capacity(), narrow.columns.capacity());
+            assert_eq!(
+                cache.owned_retained_bytes_estimate(),
+                narrow.owned_retained_bytes_estimate() + admitted_heap_bytes
+            );
+            assert_eq!(cache.logical_payload_bytes(), column_bytes);
+
+            let owned_before = cache.owned_retained_bytes_estimate();
+            let hits = cache
+                .get_or_compute_batch(&[first.clone(), first], |_| {
+                    panic!("cached keys must not invoke compute_missing")
+                })
+                .unwrap_or_else(|error: anyhow::Error| panic!("cache hit failed: {error}"));
+            assert_eq!(hits, vec![slots[0].clone(), slots[0].clone()]);
+            assert_eq!(cache.owned_retained_bytes_estimate(), owned_before);
+            let miss = cache
+                .get_or_compute_batch(std::slice::from_ref(&refused), |missing| {
+                    assert_eq!(missing, std::slice::from_ref(&refused));
+                    Ok::<_, anyhow::Error>(vec![values.clone()])
+                })
+                .unwrap();
+            assert_eq!(miss, vec![CacheSlot::Uncached(values.clone())]);
+            assert_eq!(cache.key_heap_bytes, admitted_heap_bytes);
+            assert_eq!(cache.owned_retained_bytes_estimate(), owned_before);
+
+            let failure = cache.get_or_compute_batch(std::slice::from_ref(&refused), |_| {
+                Err::<Vec<Vec<T>>, _>(anyhow::anyhow!("forced contraction failure"))
+            });
+            assert!(failure.is_err());
+            let invalid = cache.get_or_compute_batch(std::slice::from_ref(&refused), |_| {
+                Ok::<_, anyhow::Error>(vec![Vec::new()])
+            });
+            assert!(invalid.is_err());
+            assert_eq!(cache.key_heap_bytes, admitted_heap_bytes);
+            assert_eq!(cache.owned_retained_bytes_estimate(), owned_before);
+
+            let mut disabled = PackedMessageCache::<IndexKey, T>::new(2, 0);
+            disabled
+                .get_or_compute_batch(&[refused], |_| Ok::<_, anyhow::Error>(vec![values.clone()]))
+                .unwrap();
+            assert_eq!(disabled.key_count(), 0);
+            assert_eq!(disabled.key_heap_bytes, 0);
+        }
+    }
+
+    /// Wide retained keys own boxed/limb storage in addition to their inline
+    /// map buckets. Hits, refused misses, and errors must not charge it again.
+    #[test]
+    fn packed_message_cache_accounts_for_admitted_wide_key_heap_storage() {
+        assert_wide_key_owned_bytes::<f32>();
+        assert_wide_key_owned_bytes::<f64>();
+        assert_wide_key_owned_bytes::<Complex32>();
+        assert_wide_key_owned_bytes::<Complex64>();
+    }
+
+    #[test]
+    fn packed_message_cache_accumulates_multiple_wide_keys_once() {
+        let indexer = FlatIndexer::try_new(&[2; 300]).unwrap();
+        let first = indexer.encode(&[1; 300]).unwrap();
+        let second = indexer.encode(&[0; 300]).unwrap();
+        let mut cache = PackedMessageCache::<IndexKey, f64>::new(1, usize::MAX);
+        cache
+            .get_or_compute_batch(&[first.clone(), second.clone(), first.clone()], |missing| {
+                assert_eq!(missing, &[first.clone(), second.clone()]);
+                Ok::<_, anyhow::Error>(vec![vec![1.25], vec![-2.0]])
+            })
+            .unwrap();
+        assert_eq!(cache.key_count(), 2);
+        assert_eq!(cache.key_heap_bytes, 128);
+        cache
+            .get_or_compute_batch(&[second, first], |_| {
+                Err::<Vec<Vec<f64>>, _>(anyhow::anyhow!("cache hits must not compute"))
+            })
+            .unwrap();
+        assert_eq!(cache.key_heap_bytes, 128);
     }
 
     /// [AI Supplied] Packed message lookup must preserve the full bit width of

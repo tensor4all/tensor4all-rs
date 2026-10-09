@@ -1,4 +1,5 @@
 mod finite_values;
+mod start_residuals;
 
 use num_complex::{Complex32, Complex64};
 use rand::SeedableRng;
@@ -363,16 +364,22 @@ fn global_search_rejects_the_start_batch_before_calling_the_operator() {
     let options = TreeAciOptions {
         nsearch_global_pivots: 4,
         max_working_bytes: 64,
-        // Pin the element ceilings so the 64-byte budget exercises only the
-        // guard's start-batch charge. Left unset they would follow the budget
-        // down to two elements and preparation would refuse the tree first.
+        // Keep element ceilings independent of this guard-only byte ceiling.
         max_local_matrix_elements: Some(1 << 24),
         max_core_elements: Some(1 << 24),
         max_frame_elements: Some(1 << 24),
         ..TreeAciOptions::default()
     };
     let inputs = vec![input];
-    let state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let initialization_options = TreeAciOptions {
+        max_working_bytes: TreeAciOptions::<usize>::default().max_working_bytes,
+        ..options.clone()
+    };
+    let mut state =
+        TreeAciState::<f64, usize>::initialize(&inputs, &initialization_options).unwrap();
+    // Bootstrap has its own preflight. Tighten after initialization to
+    // isolate the guard's start-batch rejection rather than that earlier gate.
+    state.problem.max_working_bytes = options.max_working_bytes;
     let mut evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
     let mut operator_called = false;
     let mut operator = |_: crate::TreeElementwiseBatch<'_, f64>, _: &mut [f64]| {

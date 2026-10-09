@@ -12,6 +12,15 @@ use super::IndexKeyError;
 /// Little-endian `u64` limbs.
 pub(super) type Limbs = SmallVec<[u64; 2]>;
 
+/// Heap payload owned by the limbs, including spare allocation capacity.
+pub(super) fn owned_heap_bytes(limbs: &Limbs) -> usize {
+    if limbs.spilled() {
+        limbs.capacity().saturating_mul(std::mem::size_of::<u64>())
+    } else {
+        0
+    }
+}
+
 /// Number of limbs needed to hold `width_bits`.
 ///
 /// Saturates rather than truncating: a width whose limb count does not fit

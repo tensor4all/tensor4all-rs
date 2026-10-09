@@ -3,7 +3,7 @@
 use rand::Rng as _;
 use std::{collections::HashMap, mem::size_of};
 
-use tensor4all_core::floating_zone_walk;
+use tensor4all_core::floating_zone_walk_with_initial_error;
 use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::{
     CachedEvaluatorOptions, CachedEvaluatorPlan, EvaluationHint, TreeTN, TreeTNCachedEvaluator,
@@ -68,7 +68,20 @@ where
     // Refuse the complete start/evaluation peak before allocating the nested
     // point vectors. Previously a caller could set a tiny working limit and
     // still allocate `nsearch * node_count` coordinates first.
-    input_evaluators.enforce_guard_batch_budget_with_retained::<T>(nsearch, site_dims_bytes)?;
+    let start_error_bytes =
+        nsearch
+            .checked_mul(size_of::<f64>())
+            .ok_or(TreeAciError::SizeOverflow {
+                context: "guard start-error bytes",
+            })?;
+    let retained_start_bytes =
+        site_dims_bytes
+            .checked_add(start_error_bytes)
+            .ok_or(TreeAciError::SizeOverflow {
+                context: "guard retained start bytes",
+            })?;
+    input_evaluators
+        .enforce_guard_batch_budget_with_retained::<T>(nsearch, retained_start_bytes)?;
     let starts = (0..nsearch)
         .map(|_| {
             site_dims
@@ -83,11 +96,15 @@ where
         per_evaluator_message_cache_budget(options.message_cache_max_bytes, state.inputs.len())?,
     )?;
     let mut evaluated_points = 0usize;
-    let start_inputs = input_evaluators.evaluate::<T>(&starts)?;
+    let start_coordinates = input_evaluators.expand_points(&starts)?;
+    let start_hint = input_evaluators.hint_for_scan_site(None);
+    let start_inputs =
+        input_evaluators.evaluate_expanded::<T>(&starts, &start_coordinates, start_hint.clone())?;
     let start_batch = TreeElementwiseBatch::new(&start_inputs, state.inputs.len(), nsearch)?;
     let mut start_outputs = vec![T::default(); nsearch];
     operator(start_batch, &mut start_outputs)?;
     crate::scalar::ensure_finite_values(&start_outputs, "guard target")?;
+    drop(start_inputs);
     evaluated_points = checked_add_points(evaluated_points, nsearch)?;
     let max_output = start_outputs
         .iter()
@@ -111,18 +128,35 @@ where
         });
     }
 
+    // Reuse the exact targets already evaluated for the scale estimate.
+    // Evaluate the starting approximations in one batch, then retain only
+    // their checked residuals while the individual coordinate walks run.
+    let start_approximations = output_evaluator.evaluate_expanded::<T>(
+        input_evaluators,
+        &starts,
+        &start_coordinates,
+        start_hint,
+    )?;
+    let start_errors = start_outputs
+        .into_iter()
+        .zip(start_approximations)
+        .map(|(target, approximation)| guard_residual(target, approximation))
+        .collect::<Result<Vec<_>>>()?;
+    drop(start_coordinates);
+
     let mut candidates = Vec::new();
     let start_storage_bytes = point_vector_storage_bytes(nsearch, site_dims.len())?;
     let mut candidate_storage_bytes = 0usize;
-    for start in &starts {
-        let (pivot, error) = floating_zone_walk(
+    for (start, &start_error) in starts.iter().zip(&start_errors) {
+        let (pivot, error) = floating_zone_walk_with_initial_error(
             &site_dims,
             start,
+            start_error,
             options.nsweeps_global_search,
             threshold,
             |scan_site: Option<usize>, points: &[Vec<usize>]| -> Result<Vec<f64>> {
                 evaluated_points = checked_add_points(evaluated_points, points.len())?;
-                let retained_bytes = site_dims_bytes
+                let retained_bytes = retained_start_bytes
                     .checked_add(start_storage_bytes)
                     .and_then(|bytes| bytes.checked_add(candidate_storage_bytes))
                     .ok_or(TreeAciError::SizeOverflow {
@@ -154,7 +188,13 @@ where
                     .map(|(target, approximation)| guard_residual(target, approximation))
                     .collect()
             },
-        )?;
+        )
+        .map_err(|error| match error {
+            tensor4all_core::FloatingZoneError::Evaluation(error) => error,
+            _ => TreeAciError::InternalInvariant {
+                message: "prepared guard has invalid floating-zone input",
+            },
+        })?;
         if error > threshold {
             let entry_bytes = size_of::<(f64, Vec<usize>)>()
                 .checked_add(pivot.len().checked_mul(size_of::<usize>()).ok_or(
@@ -170,7 +210,7 @@ where
                     context: "guard candidate bytes",
                 },
             )?;
-            let retained_bytes = site_dims_bytes
+            let retained_bytes = retained_start_bytes
                 .checked_add(start_storage_bytes)
                 .and_then(|bytes| bytes.checked_add(candidate_storage_bytes))
                 .ok_or(TreeAciError::SizeOverflow {
@@ -711,6 +751,7 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
     }
 
     /// Evaluates an unstructured batch, with no scan site to hint.
+    #[cfg(test)]
     pub(crate) fn evaluate<T: TreeAciScalar>(&mut self, points: &[Vec<usize>]) -> Result<Vec<T>> {
         self.enforce_guard_batch_budget::<T>(points.len())?;
         let coordinates = self.expand_points(points)?;
@@ -718,6 +759,7 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         self.evaluate_expanded(points, &coordinates, hint)
     }
 
+    #[cfg(test)]
     fn enforce_guard_batch_budget<T: TreeAciScalar>(&self, point_count: usize) -> Result<()> {
         self.enforce_guard_batch_budget_with_retained::<T>(point_count, 0)
     }

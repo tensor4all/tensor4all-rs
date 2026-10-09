@@ -2,7 +2,9 @@ use num_complex::{Complex32, Complex64};
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
 
-use super::{algebraic_edge_bounds, bootstrap_samples, validate_initial_guess_scalar_kind};
+use super::{
+    algebraic_edge_bounds, bootstrap_axes, bootstrap_samples, validate_initial_guess_scalar_kind,
+};
 use crate::{problem::prepare_problem, TreeAciOptions};
 
 fn make_tree(edges: &[(usize, usize)], node_count: usize) -> TreeTN<IdxTensor, usize> {
@@ -157,4 +159,102 @@ fn bootstrap_samples_follow_generalized_digit_reversal() {
             vec![1, 0, 1, 0],
         ]
     );
+}
+
+#[test]
+fn compact_bootstrap_axes_preserve_full_component_digit_order() {
+    for edges in [
+        vec![(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)],
+        vec![(3, 0), (0, 4), (4, 1), (1, 5), (5, 2)],
+        vec![(2, 0), (2, 1), (2, 3), (3, 4), (3, 5)],
+        vec![(0, 1), (0, 2), (0, 3), (0, 4), (0, 5)],
+    ] {
+        for dims in [vec![1, 3, 2, 1, 4, 2], vec![2; 6], vec![1; 6]] {
+            let tree = make_tree_with_dims(&edges, &dims);
+            let problem = prepare_problem::<f64, _>(&[tree], &TreeAciOptions::default()).unwrap();
+            for target in [1, 2, 3, 5, 16, usize::MAX] {
+                let axes = bootstrap_axes(&problem, target).unwrap();
+                for (edge, compact) in axes.iter().enumerate() {
+                    let mut full = Vec::new();
+                    let mut pending = vec![edge];
+                    while let Some(id) = pending.pop() {
+                        let directed = &problem.directed_edges[id];
+                        full.push(problem.node_positions[&directed.from]);
+                        pending.extend(&directed.incoming_to_from);
+                    }
+                    full.sort_unstable_by(|a, b| b.cmp(a));
+                    let decode = |nodes: &[usize], mut ordinal: usize| {
+                        let mut point = vec![0; dims.len()];
+                        for &node in nodes {
+                            let dimension = problem.physical[node].local_dim;
+                            point[node] = ordinal % dimension;
+                            ordinal /= dimension;
+                        }
+                        point
+                    };
+                    let space = full.iter().fold(1usize, |p, &n| {
+                        p.saturating_mul(problem.physical[n].local_dim)
+                    });
+                    for ordinal in 0..target.min(space).min(128) {
+                        assert_eq!(decode(compact, ordinal), decode(&full, ordinal));
+                    }
+                    assert!(compact.len() <= usize::BITS as usize);
+                    assert!(compact.iter().all(|&n| problem.physical[n].local_dim > 1));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn compact_bootstrap_axes_stay_bounded_on_long_components() {
+    let n = 130;
+    let tree = make_tree(&(0..n - 1).map(|i| (i, i + 1)).collect::<Vec<_>>(), n);
+    let mut problem = prepare_problem::<f64, _>(&[tree], &TreeAciOptions::default()).unwrap();
+    for target in [2, 8, usize::MAX] {
+        let axes = bootstrap_axes(&problem, target).unwrap();
+        let bound = (usize::BITS - (target - 1).leading_zeros()) as usize;
+        assert!(axes.iter().all(|a| a.len() <= bound));
+    }
+    problem.max_working_bytes = 1;
+    assert!(matches!(
+        bootstrap_axes(&problem, 2),
+        Err(crate::TreeAciError::ResourceLimit { .. })
+    ));
+    assert!(bootstrap_axes(&problem, 1)
+        .unwrap()
+        .iter()
+        .all(Vec::is_empty));
+    assert!(matches!(
+        bootstrap_samples(&problem, &[1]),
+        Err(crate::TreeAciError::InternalInvariant { .. })
+    ));
+}
+
+#[test]
+fn bootstrap_checks_the_combined_axis_projection_and_point_peak() {
+    let tree = make_tree(&[(0, 1)], 2);
+    let mut problem = prepare_problem::<f64, _>(&[tree], &TreeAciOptions::default()).unwrap();
+    let combined = super::bootstrap_axis_working_bytes(&problem, 2).unwrap()
+        + crate::samples::ComponentProjectionScratch::working_bytes(&problem).unwrap()
+        + 4 * std::mem::size_of::<usize>();
+    problem.max_working_bytes = combined - 1;
+    assert!(matches!(bootstrap_samples(&problem, &[2]),
+        Err(crate::TreeAciError::ResourceLimit { requested, limit, .. })
+            if requested == combined && limit == combined - 1));
+    problem.max_working_bytes = combined;
+    let (_, candidates, pivots) = bootstrap_samples(&problem, &[2]).unwrap();
+    assert_eq!(
+        candidates.ids.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![2, 2]
+    );
+    assert_eq!(pivots.rank(0), 2);
+    // A rank-one run never needs suffix/projection work storage.
+    problem.max_working_bytes = 1;
+    let (_, candidates, pivots) = bootstrap_samples(&problem, &[1]).unwrap();
+    assert_eq!(
+        candidates.ids.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![1, 1]
+    );
+    assert_eq!(pivots.rank(0), 1);
 }
