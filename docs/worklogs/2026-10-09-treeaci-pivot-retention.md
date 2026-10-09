@@ -71,6 +71,10 @@ cap 800 have a small measured increase. Local admissibility is not a global
 Frobenius tolerance guarantee. Three-pass and final histories reproduce the
 full-run rank/error histories as exact prefixes in every family replay.
 
+The conditioned chi=40 windows of 26/28 sites both converge at 4 passes, and
+an additional chi=60 suffix of 33 sites converges at 7. Independent relative
+Frobenius errors are 1.61e-6, 1.72e-6, and 7.38e-7 respectively.
+
 R=10 NBlock W uses absolute tolerance 1e-4, seed 0, and cap 4096. It changes
 from MaxSweeps at 20 to Converged at 8. Independently contracted 1,086 samples
 satisfy the existing 10*tolerance diagnostic gate; maximum sampled absolute
@@ -86,6 +90,19 @@ printed precision. The original supplementary report lacks its seed and full
 parameters; these replays do not reproduce its reported non-convergence and
 are recorded as supplementary validation, not an exact reproduction.
 
+An additional raw-well search at seeds 0 and 4 through 12 finds convergence
+on both versions in every case. Some repaired runs take more passes (seed 4:
+4 to 9); this search provides no exact reproduction of the unspecified old
+well seed and no general performance improvement claim.
+
+The final public replays use an isolated release build of clean production
+commit e08b4972a00782372e0e6574835154e36122c906. All 15 primary replays converge;
+the six DMRG and six raw/RMS-well output-core files are byte-identical to the
+prototypes independently checked above. The final W replay reproduces its
+8-pass history and sampled residual. A shared-target executable whose SHA
+matched the pristine baseline was rejected before replay; its invalid manifest
+is retained with the local evidence. The separate build avoids mixed artifacts.
+
 All dataset cores come from the reference repository pinned at
 153b25a8aa059d0147b45955d0842b2f32fa5d1d or its archived precomputed inputs.
 No RSI algorithm is executed. Numerical replays use one algorithm thread;
@@ -95,8 +112,8 @@ sets to reduce reference cost. No overall timing claim is made.
 ## Validation and limits
 
 Core regressions cover all four scalar types, both factor orientations,
-partial/empty preferences, invalid seeds and preferences, zero/nonfinite
-exchange coefficients, singular trials, rank preservation, protected pivots,
+partial/empty preferences, invalid seeds and preferences, zero exchange
+coefficients, nonfinite residual predictions, singular trials, rank preservation, protected pivots,
 determinant-ratio ordering, actual residuals, and coefficient-cache reuse.
 TreeACI regressions cover both edge directions and tolerance modes, all scalar
 types, candidate remapping, rank reduction/zero output, one-axis completion,
@@ -113,5 +130,5 @@ reported separately on the pull request.
 
 This fixes the reproduced #784 family without changing convergence criteria.
 It cannot guarantee convergence for every input, monotone global error, or an
-optimal preferred cross. The separate branched-tree accuracy investigation
+optimal preferred cross. The separate mixed-capacity Guard investigation
 [#794](https://github.com/tensor4all/tensor4all-rs/issues/794) remains open.
