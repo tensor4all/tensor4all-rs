@@ -2488,6 +2488,9 @@ where
         let right_elapsed = right_started.elapsed();
 
         let n_points = values.shape()[1];
+        let assembly_visits = n_points
+            .checked_mul(bond_dim)
+            .ok_or_else(|| anyhow::anyhow!("cached cut work count overflows usize"))?;
         let mut result = Vec::with_capacity(n_points);
         for point in 0..n_points {
             let left_assignment = left_batch.point_to_assignment.get(point).ok_or_else(|| {
@@ -2522,9 +2525,7 @@ where
             batched_message_contract_count: 2,
             batched_center_contract_count: 1,
             message_cache_hits: left_batch.keys.len() + right_batch.keys.len(),
-            warm_edge_cut_assembly_visits: n_points
-                .checked_mul(bond_dim)
-                .ok_or_else(|| anyhow::anyhow!("cached cut work count overflows usize"))?,
+            warm_edge_cut_assembly_visits: assembly_visits,
             ..Default::default()
         };
         #[cfg(test)]
