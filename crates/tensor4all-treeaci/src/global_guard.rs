@@ -38,6 +38,7 @@ pub(crate) fn find_global_pivots<'a, T, V, F>(
     options: &TreeAciOptions<V>,
     rng: &mut dyn rand::RngCore,
     operator: &mut F,
+    known_pivots: &[Vec<usize>],
 ) -> Result<GlobalSearchReport>
 where
     T: TreeAciScalar,
@@ -46,6 +47,11 @@ where
 {
     let nsearch = options.nsearch_global_pivots;
     let max_pivots = options.max_nglobal_pivots;
+    if known_pivots.len() > max_pivots {
+        return Err(TreeAciError::InternalInvariant {
+            message: "retained guard pivots exceed the configured limit",
+        });
+    }
     if nsearch == 0 || max_pivots == 0 || state.problem.node_order.len() < 2 {
         return Ok(GlobalSearchReport {
             pivots: Vec::new(),
@@ -65,23 +71,34 @@ where
             .ok_or(TreeAciError::SizeOverflow {
                 context: "guard site-dimension bytes",
             })?;
+    for point in known_pivots {
+        input_evaluators.validate_point(point)?;
+    }
     // Refuse the complete start/evaluation peak before allocating the nested
     // point vectors. Previously a caller could set a tiny working limit and
     // still allocate `nsearch * node_count` coordinates first.
+    let nstarts = nsearch
+        .checked_add(known_pivots.len())
+        .ok_or(TreeAciError::SizeOverflow {
+            context: "guard starting-point count",
+        })?;
+    // The caller still owns its retained pivots while the combined start
+    // batch and its residuals are live. Charge both copies together.
+    let known_storage_bytes = point_vector_storage_bytes(known_pivots.len(), site_dims.len())?;
     let start_error_bytes =
-        nsearch
+        nstarts
             .checked_mul(size_of::<f64>())
             .ok_or(TreeAciError::SizeOverflow {
                 context: "guard start-error bytes",
             })?;
-    let retained_start_bytes =
-        site_dims_bytes
-            .checked_add(start_error_bytes)
-            .ok_or(TreeAciError::SizeOverflow {
-                context: "guard retained start bytes",
-            })?;
+    let retained_start_bytes = site_dims_bytes
+        .checked_add(start_error_bytes)
+        .and_then(|bytes| bytes.checked_add(known_storage_bytes))
+        .ok_or(TreeAciError::SizeOverflow {
+            context: "guard retained start bytes",
+        })?;
     input_evaluators
-        .enforce_guard_batch_budget_with_retained::<T>(nsearch, retained_start_bytes)?;
+        .enforce_guard_batch_budget_with_retained::<T>(nstarts, retained_start_bytes)?;
     let starts = (0..nsearch)
         .map(|_| {
             site_dims
@@ -89,6 +106,7 @@ where
                 .map(|dimension| rng.random_range(0..*dimension))
                 .collect::<Vec<_>>()
         })
+        .chain(known_pivots.iter().cloned())
         .collect::<Vec<_>>();
     let mut output_evaluator = GuardOutputEvaluator::new(
         &state.output,
@@ -100,12 +118,12 @@ where
     let start_hint = input_evaluators.hint_for_scan_site(None);
     let start_inputs =
         input_evaluators.evaluate_expanded::<T>(&starts, &start_coordinates, start_hint.clone())?;
-    let start_batch = TreeElementwiseBatch::new(&start_inputs, state.inputs.len(), nsearch)?;
-    let mut start_outputs = vec![T::default(); nsearch];
+    let start_batch = TreeElementwiseBatch::new(&start_inputs, state.inputs.len(), nstarts)?;
+    let mut start_outputs = vec![T::default(); nstarts];
     operator(start_batch, &mut start_outputs)?;
     crate::scalar::ensure_finite_values(&start_outputs, "guard target")?;
     drop(start_inputs);
-    evaluated_points = checked_add_points(evaluated_points, nsearch)?;
+    evaluated_points = checked_add_points(evaluated_points, nstarts)?;
     let max_output = start_outputs
         .iter()
         .copied()
@@ -144,10 +162,41 @@ where
         .collect::<Result<Vec<_>>>()?;
     drop(start_coordinates);
 
+    let candidate_entry_bytes = size_of::<(f64, Vec<usize>)>()
+        .checked_add(site_dims_bytes)
+        .ok_or(TreeAciError::SizeOverflow {
+            context: "guard candidate bytes",
+        })?;
     let mut candidates = Vec::new();
-    let start_storage_bytes = point_vector_storage_bytes(nsearch, site_dims.len())?;
+    let start_storage_bytes = point_vector_storage_bytes(nstarts, site_dims.len())?;
     let mut candidate_storage_bytes = 0usize;
-    for (start, &start_error) in starts.iter().zip(&start_errors) {
+    // Revalidate every returned pivot before allowing random misses to erase
+    // its failure. Local updates may repair it even without bond growth, so
+    // retaining the coordinate is more precise than a sticky rank-limit flag.
+    // No walk is needed for these points: their checked residual is known.
+    for (point, &error) in starts[nsearch..].iter().zip(&start_errors[nsearch..]) {
+        if error > threshold {
+            candidate_storage_bytes = candidate_storage_bytes
+                .checked_add(candidate_entry_bytes)
+                .ok_or(TreeAciError::SizeOverflow {
+                    context: "guard candidate bytes",
+                })?;
+            let retained_bytes = retained_start_bytes
+                .checked_add(start_storage_bytes)
+                .and_then(|bytes| bytes.checked_add(candidate_storage_bytes))
+                .ok_or(TreeAciError::SizeOverflow {
+                    context: "guard retained search bytes",
+                })?;
+            crate::problem::enforce_limit(
+                "working bytes",
+                retained_bytes,
+                input_evaluators.max_working_bytes,
+            )?;
+            candidates.push((error, point.clone()));
+        }
+    }
+    let known_candidate_count = candidates.len();
+    for (start, &start_error) in starts[..nsearch].iter().zip(&start_errors[..nsearch]) {
         let (pivot, error) = floating_zone_walk_with_initial_error(
             &site_dims,
             start,
@@ -196,20 +245,11 @@ where
             },
         })?;
         if error > threshold {
-            let entry_bytes = size_of::<(f64, Vec<usize>)>()
-                .checked_add(pivot.len().checked_mul(size_of::<usize>()).ok_or(
-                    TreeAciError::SizeOverflow {
-                        context: "guard pivot coordinate bytes",
-                    },
-                )?)
+            candidate_storage_bytes = candidate_storage_bytes
+                .checked_add(candidate_entry_bytes)
                 .ok_or(TreeAciError::SizeOverflow {
                     context: "guard candidate bytes",
                 })?;
-            candidate_storage_bytes = candidate_storage_bytes.checked_add(entry_bytes).ok_or(
-                TreeAciError::SizeOverflow {
-                    context: "guard candidate bytes",
-                },
-            )?;
             let retained_bytes = retained_start_bytes
                 .checked_add(start_storage_bytes)
                 .and_then(|bytes| bytes.checked_add(candidate_storage_bytes))
@@ -226,7 +266,12 @@ where
     }
     drop(starts);
     drop(site_dims);
-    candidates.sort_by(|(left, _), (right, _)| right.total_cmp(left));
+    // Previously returned failures keep their slots until a fresh evaluation
+    // resolves them. Replacing all of them with stronger random discoveries
+    // would merely move the same forgotten-residual defect to the next pass.
+    // Within both groups preserve deterministic descending-error order.
+    candidates[..known_candidate_count].sort_by(|(left, _), (right, _)| right.total_cmp(left));
+    candidates[known_candidate_count..].sort_by(|(left, _), (right, _)| right.total_cmp(left));
     let mut pivots = Vec::new();
     for (_, point) in candidates {
         if !pivots.contains(&point) {
@@ -869,27 +914,34 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
                 })?;
         let mut expanded = Vec::with_capacity(capacity);
         for point in points {
-            if point.len() != self.indices_per_node.len() {
-                return Err(TreeAciError::PointLengthMismatch {
-                    expected: self.indices_per_node.len(),
-                    actual: point.len(),
-                });
-            }
+            self.validate_point(point)?;
             for (node, coordinate) in point.iter().copied().enumerate() {
-                let local_dim = self.local_dims[node];
-                if coordinate >= local_dim {
-                    return Err(TreeAciError::PhysicalCoordinateOutOfBounds {
-                        node,
-                        coordinate,
-                        local_dim,
-                    });
-                }
                 for (&stride, &dimension) in self.strides[node].iter().zip(&self.dims[node]) {
                     expanded.push((coordinate / stride) % dimension);
                 }
             }
         }
         Ok(expanded)
+    }
+
+    fn validate_point(&self, point: &[usize]) -> Result<()> {
+        if point.len() != self.indices_per_node.len() {
+            return Err(TreeAciError::PointLengthMismatch {
+                expected: self.indices_per_node.len(),
+                actual: point.len(),
+            });
+        }
+        for (node, coordinate) in point.iter().copied().enumerate() {
+            let local_dim = self.local_dims[node];
+            if coordinate >= local_dim {
+                return Err(TreeAciError::PhysicalCoordinateOutOfBounds {
+                    node,
+                    coordinate,
+                    local_dim,
+                });
+            }
+        }
+        Ok(())
     }
 }
 

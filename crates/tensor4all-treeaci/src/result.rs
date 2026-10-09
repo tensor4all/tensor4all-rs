@@ -100,7 +100,8 @@ pub struct TreeAciResult<V: TreeAciNode> {
     pub max_ranks: Vec<usize>,
     /// Maximum normalized local error after each sweep.
     pub max_errors: Vec<f64>,
-    /// Number of distinct significant pivots found by each global guard run.
+    /// Number of distinct significant pivots returned by each global guard run,
+    /// including previously found points that still fail revalidation.
     pub global_pivots_found: Vec<usize>,
     /// Reason execution stopped.
     pub termination: TreeAciTermination,

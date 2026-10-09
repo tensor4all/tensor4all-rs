@@ -793,3 +793,70 @@ fn aggregate_guard_message_budget_must_be_respected() {
         "adequate budgets must permit message retention"
     );
 }
+
+fn detected_guard_residual_survives_random_misses<T: AuditScalar>() {
+    let sites = (0..6).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let bonds = (0..5).map(|_| DynIndex::new_dyn(1)).collect::<Vec<_>>();
+    let tensors = (0..6)
+        .map(|node| {
+            let mut axes = Vec::new();
+            if node > 0 {
+                axes.push(bonds[node - 1].clone());
+            }
+            axes.push(sites[node].clone());
+            if node < 5 {
+                axes.push(bonds[node].clone());
+            }
+            IdxTensor::from_dense(axes, vec![T::value(0.0, 0.0), T::value(1.0, 0.0)]).unwrap()
+        })
+        .collect();
+    let input = TreeTN::from_tensors(tensors, (0..6).collect::<Vec<_>>()).unwrap();
+    let options = TreeAciOptions {
+        max_bond_dim: Some(1),
+        rng_seed: 16,
+        min_sweeps: 2,
+        max_sweeps: 8,
+        nsearch_global_pivots: 1,
+        max_nglobal_pivots: 1,
+        nsweeps_global_search: 2,
+        global_tolerance_margin: 1.0,
+        ..Default::default()
+    };
+    let result =
+        tree_elementwise::<T, _, _>(|values| values[0], std::slice::from_ref(&input), &options)
+            .unwrap();
+    assert_eq!(result.termination, TreeAciTermination::RankLimited);
+    assert_eq!(result.global_pivots_found, vec![0, 1, 1]);
+    assert_eq!(result.max_errors, vec![0.0; 3]);
+    assert_eq!(
+        result
+            .diagnostics
+            .edge_ranks
+            .iter()
+            .map(|&(_, _, rank)| rank)
+            .collect::<Vec<_>>(),
+        vec![1; 5]
+    );
+    // This search remains inaccurate at the fixed candidate ceiling, although
+    // the target itself is representable with rank one. Report that limitation
+    // instead of accepting a known-wrong output as converged.
+    assert_eq!(
+        result
+            .tree
+            .to_dense()
+            .unwrap()
+            .sub(&input.to_dense().unwrap())
+            .unwrap()
+            .maxabs()
+            .unwrap(),
+        1.0
+    );
+}
+
+#[test]
+fn detected_guard_residual_survives_random_misses_for_all_scalar_kinds() {
+    detected_guard_residual_survives_random_misses::<f32>();
+    detected_guard_residual_survives_random_misses::<f64>();
+    detected_guard_residual_survives_random_misses::<Complex32>();
+    detected_guard_residual_survives_random_misses::<Complex64>();
+}

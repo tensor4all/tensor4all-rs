@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
@@ -2822,12 +2822,25 @@ impl FixtureScalar for f64 {
     }
 }
 
+impl FixtureScalar for f32 {
+    fn fixture(index: usize) -> Self {
+        <f64 as FixtureScalar>::fixture(index) as f32
+    }
+}
+
 impl FixtureScalar for Complex64 {
     fn fixture(index: usize) -> Self {
         Complex64::new(
             ((index * 37 % 23) as f64) / 7.0 - 1.5,
             ((index * 19 % 17) as f64) / 5.0 - 1.2,
         )
+    }
+}
+
+impl FixtureScalar for Complex32 {
+    fn fixture(index: usize) -> Self {
+        let value = <Complex64 as FixtureScalar>::fixture(index);
+        Complex32::new(value.re as f32, value.im as f32)
     }
 }
 
@@ -3234,6 +3247,108 @@ fn multi_incoming_batch_falls_back_to_scalar_when_the_working_budget_is_tight() 
         .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets, 0)
         .unwrap();
     assert!(fallback_elements * std::mem::size_of::<f64>() <= problem.max_working_bytes);
+}
+
+fn assert_scalar_fallback_reuses_group_layout<T: FixtureScalar + PartialEq + std::fmt::Debug>(
+    incoming_degree: usize,
+) {
+    let input = match incoming_degree {
+        3 => three_incoming_star::<T>(),
+        4 => four_incoming_star::<T>(),
+        _ => panic!("fixture requires three or four incoming edges"),
+    };
+    let inputs = vec![input];
+    let mut problem = prepare_problem::<T, _>(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = hub_edge(&problem, incoming_degree);
+    let seeds = vec![
+        vec![0; problem.node_order.len()],
+        problem
+            .physical
+            .iter()
+            .map(|physical| physical.local_dim - 1)
+            .collect(),
+        problem
+            .physical
+            .iter()
+            .map(|physical| usize::from(physical.local_dim > 1))
+            .collect(),
+    ];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<T>::from_samples(&inputs, &problem, &arena).unwrap();
+    let cross = full_cross_candidates(&problem, &candidate_sets, edge);
+    let batch_bytes = frames
+        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets, 0)
+        .unwrap()
+        * std::mem::size_of::<T>();
+    problem.max_working_bytes = batch_bytes - 1;
+    let node = problem.node_positions[&problem.directed_edges[edge].from];
+    let expected_lookups = 1 + problem.physical[node].indices.len() + incoming_degree;
+
+    for repeats in [1usize, 4] {
+        // Duplicate and reverse the complete cross to pin caller order while
+        // increasing scalar work without changing any group's layout.
+        let candidates = cross
+            .iter()
+            .rev()
+            .cycle()
+            .take(cross.len() * repeats)
+            .cloned()
+            .collect::<Vec<_>>();
+        super::debug_stats::reset();
+        let scalar = candidates
+            .iter()
+            .map(|candidate| {
+                frames
+                    .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let scalar_reads = super::debug_stats::core_element_reads();
+        for row_layout in [false, true] {
+            super::debug_stats::reset();
+            super::multi_incoming_debug_stats::reset();
+            let packed = if row_layout {
+                frames.candidate_frames_for_edge_rows(&inputs, &problem, 0, edge, &candidates, 0)
+            } else {
+                frames.candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
+            }
+            .unwrap();
+            assert_eq!(super::multi_incoming_debug_stats::batched_groups(), 0);
+            assert!(super::multi_incoming_debug_stats::scalar_groups() > 0);
+            assert_eq!(packed.to_candidate_vecs(), scalar);
+            assert_eq!(super::debug_stats::core_element_reads(), scalar_reads);
+            assert_eq!(
+                super::debug_stats::axis_lookups(),
+                expected_lookups as u64,
+                "layout discovery must not scale with candidate count or physical groups"
+            );
+        }
+    }
+}
+
+#[test]
+fn scalar_fallback_reuses_prepared_group_layout_for_all_scalar_kinds() {
+    for incoming_degree in [3usize, 4] {
+        assert_scalar_fallback_reuses_group_layout::<f32>(incoming_degree);
+        assert_scalar_fallback_reuses_group_layout::<f64>(incoming_degree);
+        assert_scalar_fallback_reuses_group_layout::<Complex32>(incoming_degree);
+        assert_scalar_fallback_reuses_group_layout::<Complex64>(incoming_degree);
+    }
+}
+
+#[test]
+fn scalar_core_slice_rejects_unknown_axes_and_mismatched_frame_lengths() {
+    let (core, outgoing, incoming, _) = reversed_axis_core::<f64>(3, &[2, 3, 2], 2);
+    assert!(matches!(
+        super::contract_core_slice(&core, core.dims.len(), 0, &[]),
+        Err(crate::TreeAciError::InternalInvariant { .. })
+    ));
+    for axis in [incoming[0], core.dims.len()] {
+        assert!(matches!(
+            super::contract_core_slice(&core, outgoing, 0, &[(axis, &[1.0])]),
+            Err(crate::TreeAciError::InternalInvariant { .. })
+        ));
+    }
 }
 
 /// Issue #726: the batched route is affordable only relative to what the

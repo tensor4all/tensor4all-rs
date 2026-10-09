@@ -114,7 +114,9 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     pub rng_seed: u64,
     /// Optional initial traversal root. Default: a deterministic diameter endpoint.
     pub root: Option<V>,
-    /// Run independent global-pivot searches before convergence. Default: `true`.
+    /// Run global-pivot validation before convergence. Default: `true`.
+    /// Previously found points are rechecked against the current output;
+    /// random misses cannot erase a still-significant known residual.
     pub enable_global_guard: bool,
     /// Maximum logical bytes retained by all guard evaluators' persistent
     /// message caches combined. Default: 256 MiB.
@@ -129,7 +131,10 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     pub message_cache_max_bytes: usize,
     /// Random starts per global search. Default: `5`.
     pub nsearch_global_pivots: usize,
-    /// Maximum pivots injected by one global search. Default: `5`.
+    /// Maximum distinct pivots returned and retained by a global search. Default: `5`.
+    /// Still-significant retained points keep their slots until revalidation
+    /// resolves them; new discoveries fill the remaining slots. Injection
+    /// also depends on each cut's available capacity.
     pub max_nglobal_pivots: usize,
     /// Coordinate sweeps allowed per global-search walk. Default: `100`.
     pub nsweeps_global_search: usize,

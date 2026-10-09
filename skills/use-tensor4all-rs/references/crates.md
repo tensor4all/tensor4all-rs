@@ -74,6 +74,19 @@ Shared interpolation plumbing includes `CachedFunction`, `MultiIndex`, packed as
 
 Do **not** depend on `tensor4all-tensorbackend` — it is internal (storage + linalg wrappers); use the public crates and never instantiate `CpuBackend` directly.
 
+## tensor4all-treeaci — native tree elementwise approximation
+
+- `tree_elementwise`, `tree_elementwise_batched`, and `hadamard_many` return a
+  `TreeAciResult` with the tree, sweep histories, diagnostics and stopping reason.
+  Inspect `termination`; `RankLimited` and `MaxSweeps` do not establish convergence.
+- An enabled global guard revalidates previously returned significant points
+  against the current output. `max_nglobal_pivots` bounds both returned and
+  retained points; unresolved points keep their slots before new discoveries.
+  `global_pivots_found` includes still-failing retained points and does not count
+  actual injections. Revalidation contributes to `diagnostics.evaluated_points`.
+- Local errors use the configured peak-relative or absolute policy. They are
+  sampled estimates, not independent full-network Frobenius error bounds.
+
 ## tensor4all-quanticstci — high-level quantics TCI
 
 Quantics encoding (binary bits across sites) often yields far lower bond dims. Port of QuanticsTCI.jl.

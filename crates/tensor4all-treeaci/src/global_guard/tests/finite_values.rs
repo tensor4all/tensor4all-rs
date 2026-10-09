@@ -32,7 +32,14 @@ fn nonfinite(value: f64) {
         output.fill(value);
         Ok(())
     };
-    let report = find_global_pivots(&state, &mut evaluators, &options, &mut rng, &mut operator);
+    let report = find_global_pivots(
+        &state,
+        &mut evaluators,
+        &options,
+        &mut rng,
+        &mut operator,
+        &[],
+    );
     eprintln!("NONFINITE_GUARD value={value:?} report={report:?}");
     assert!(report.is_err(), "non-finite guard values must be rejected");
 }
@@ -73,8 +80,15 @@ fn finite_control_preserves_pivot_coordinates() {
     .unwrap();
     let mut evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
-    let report =
-        find_global_pivots(&state, &mut evaluators, &options, &mut rng, &mut operator).unwrap();
+    let report = find_global_pivots(
+        &state,
+        &mut evaluators,
+        &options,
+        &mut rng,
+        &mut operator,
+        &[],
+    )
+    .unwrap();
     assert_eq!(report.pivots, vec![vec![0, 0]]);
 }
 
@@ -116,7 +130,14 @@ fn nonfinite_walk_target_after_a_finite_start_is_rejected() {
             }
             Ok(())
         };
-        let result = find_global_pivots(&state, &mut evaluators, &options, &mut rng, &mut operator);
+        let result = find_global_pivots(
+            &state,
+            &mut evaluators,
+            &options,
+            &mut rng,
+            &mut operator,
+            &[],
+        );
         assert!(
             calls > 2,
             "the finite start and its walk initialization must be evaluated"
@@ -159,7 +180,14 @@ fn overflowing_guard_threshold_is_rejected() {
         Ok(())
     };
     assert!(matches!(
-        find_global_pivots(&state, &mut evaluators, &options, &mut rng, &mut operator),
+        find_global_pivots(
+            &state,
+            &mut evaluators,
+            &options,
+            &mut rng,
+            &mut operator,
+            &[]
+        ),
         Err(crate::TreeAciError::NonFiniteValue {
             context: "guard threshold"
         })
