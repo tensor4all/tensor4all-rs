@@ -162,8 +162,9 @@ maximum relative oracle residual across both binaries was `2.655255541087604e-15
 
 The ACI fixture represents the same global function under these topologies.
 Most cases save 60 target evaluations per run (two passes ×30 guard starts);
-some degree-two cases save132 because changed initial contraction centers also
-alter roundoff-level walk continuations. These are fixture-specific descriptive
+some degree-two cases save 132. The additional reduction is not attributed
+to a confirmed per-trajectory cause; initial contraction centers and roundoff
+can change walk continuations. These are fixture-specific descriptive
 timings, not a general branching/TT parity verdict. No blanket ACI-versus-TCI
 or real-stage speedup is claimed.
 
