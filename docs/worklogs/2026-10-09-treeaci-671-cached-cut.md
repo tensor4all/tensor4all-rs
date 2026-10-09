@@ -84,8 +84,9 @@ A separate public-API prefix replay keeps every original W option, including
 are checked exactly, and every returned output is independently sampled at the
 same 1,086 points. Comb converges at pass 10. On NBlock, Guard returns no new
 pivots from pass 4 onward, every local error is below 1e-4, and every pass from
-5 through 20 grows at least one output edge. The schedule requires two passes
-without edge growth, so it correctly retains MaxSweeps under its current policy.
+5 through 20 grows at least one output edge. The schedule requires a rank-stability counter of at least two. Growth resets
+that counter to one; a following growth-free pass would raise it to two. Here
+it stays at one, so the schedule retains MaxSweeps under its current policy.
 The late maximum rank fluctuates between 72 and 76 and the sampled residual
 stays around 1.1e-4--1.4e-4. After the last Guard injection, the returned edge
 ranks reflect the local state without an injection-cleanup transformation.
