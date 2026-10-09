@@ -100,11 +100,11 @@ fn test_as_left_matrix() {
     assert_eq!(cols, 4);
     assert_eq!(mat.len(), 24);
 
-    // The fused row index is site-major (`row = site + site_dim * left`), so
-    // `(left, site, right)` sits at `row + rows * right`, while the tensor's own
-    // flat order is `left + left_dim * (site + site_dim * right)`.
+    // The fused row index is the column-major reshape of `(left, site)`
+    // (`row = left + left_dim * site`), so `(left, site, right)` sits at
+    // `row + rows * right`, which is the tensor's own flat position.
     let flat = |l: usize, site: usize, r: usize| (l + 2 * (site + 3 * r)) as f64;
-    let at = |l: usize, site: usize, r: usize| (site + site_dim * l) + rows * r;
+    let at = |l: usize, site: usize, r: usize| (l + left_dim * site) + rows * r;
     for (l, site, r) in [
         (0, 0, 0),
         (1, 0, 0),
@@ -115,10 +115,10 @@ fn test_as_left_matrix() {
     ] {
         assert_eq!(mat[at(l, site, r)], flat(l, site, r), "({l},{site},{r})");
     }
-    // A column-major reshape of `(left, site)` would put `(1, 0, 0)` at row 1;
-    // this convention puts `(0, 1, 0)` there instead.
-    assert_eq!(at(0, 1, 0), 1);
-    assert_ne!(at(1, 0, 0), 1);
+    assert_eq!(at(1, 0, 0), 1);
+    assert_eq!(at(0, 1, 0), left_dim);
+    let expected: Vec<f64> = (0..24).map(|x| x as f64).collect();
+    assert_eq!(mat, expected);
 
     let (fallible_mat, fallible_rows, fallible_cols) = t.try_as_left_matrix().unwrap();
     assert_eq!(
@@ -138,18 +138,19 @@ fn test_as_right_matrix() {
     assert_eq!(cols, site_dim * right_dim);
     assert_eq!(mat.len(), 24);
 
-    // The fused column index is right-major (`column = right + right_dim * site`),
-    // so `(left, site, right)` sits at `left + rows * column`.
+    // The fused column index is the column-major reshape of `(site, right)`
+    // (`column = site + site_dim * right`), so `(left, site, right)` sits at
+    // `left + rows * column`, which is the tensor's own flat position.
     let flat = |l: usize, site: usize, r: usize| (l + left_dim * (site + site_dim * r)) as f64;
-    let column = |site: usize, r: usize| r + right_dim * site;
+    let column = |site: usize, r: usize| site + site_dim * r;
     let at = |l: usize, site: usize, r: usize| l + rows * column(site, r);
     for (l, site, r) in [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 2, 3), (0, 2, 3)] {
         assert_eq!(mat[at(l, site, r)], flat(l, site, r), "({l},{site},{r})");
     }
-    // A column-major reshape of `(site, right)` would put `(0, 1, 0)` at column
-    // 1 (site fastest); this convention puts `(0, 0, 1)` there instead.
-    assert_eq!(column(0, 1), 1);
-    assert_ne!(column(1, 0), 1);
+    assert_eq!(column(1, 0), 1);
+    assert_eq!(column(0, 1), site_dim);
+    let expected: Vec<f64> = (0..24).map(|x| x as f64).collect();
+    assert_eq!(mat, expected);
 
     let (fallible_mat, fallible_rows, fallible_cols) = t.try_as_right_matrix().unwrap();
     assert_eq!(

@@ -1,7 +1,7 @@
 use crate::{crossinterpolate2, TCI2Options, TensorCI2, TensorCI2FromTensorTrainOptions};
 use num_complex::Complex64;
 use tensor4all_core::MultiIndex;
-use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
+use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
 
 #[test]
 fn test_tensorci2_from_tensor_train_preserves_values() {
@@ -210,4 +210,59 @@ fn test_tensorci2_from_index_sets_rejects_zero_samples() {
     .unwrap_err();
 
     assert!(matches!(err, crate::TCIError::InvalidPivot { .. }));
+}
+
+#[test]
+fn test_split_indices_inverts_group_indices_in_both_directions() {
+    let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
+    let tensor = tensor4all_simplett::tensor3_from_data(data, 2, 3, 4).unwrap();
+
+    // `forward != next` groups `(left, site)`; `forward == next` groups `(site, right)`.
+    for (forward, next, rank) in [(true, false, 4), (true, true, 2)] {
+        let matrix = super::group_indices(&tensor, forward, next);
+        let rebuilt = super::split_indices(matrix, (2, 3, 4), rank, forward, next).unwrap();
+        assert_eq!(rebuilt, tensor, "forward={forward}, next={next}");
+    }
+}
+
+#[test]
+fn test_converted_tensorci2_rebuilds_from_its_pivots() {
+    // T[a, b, c] = 1 when a = b = c in {0, 1}: bond dimension 2 on both links, so
+    // the LU pivot positions select among several fused candidates.
+    let first = tensor3_from_data(vec![1., 0., 0., 1.], 1, 2, 2).unwrap();
+    let middle = tensor3_from_data(
+        vec![1., 0., 0., 0., 0., 0., 0., 0., 0., 1., 0., 0.],
+        2,
+        3,
+        2,
+    )
+    .unwrap();
+    let last = tensor3_from_data(vec![1., 0., 0., 1., 0., 0., 0., 0.], 2, 4, 1).unwrap();
+    let source = SimpleTensorTrain::<f64>::new(vec![first, middle, last]).unwrap();
+    let (dense, dims) = source.full_tensor().unwrap();
+    let f = |index: &MultiIndex| dense[index[0] + dims[0] * (index[1] + dims[1] * index[2])];
+
+    for max_iter in [2, 3, 4] {
+        let mut converted = TensorCI2::from_tensor_train(
+            source.clone(),
+            TensorCI2FromTensorTrainOptions {
+                max_iter,
+                ..TensorCI2FromTensorTrainOptions::default()
+            },
+        )
+        .unwrap();
+        converted.fill_site_tensors(&f).unwrap();
+        let (rebuilt, rebuilt_dims) = converted.to_tensor_train().unwrap().full_tensor().unwrap();
+
+        assert_eq!(rebuilt_dims, dims);
+        let max_err = rebuilt
+            .iter()
+            .zip(dense.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f64, f64::max);
+        assert!(
+            max_err < 1e-10,
+            "max_iter={max_iter}: max abs error {max_err}"
+        );
+    }
 }
