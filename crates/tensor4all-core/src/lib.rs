@@ -67,7 +67,9 @@ pub use cached_function::multi_index_cache::{
 };
 pub use cached_function::CachedFunction;
 pub use error::{MatrixCIError, Result};
-pub use floating_zone::floating_zone_walk;
+pub use floating_zone::{
+    floating_zone_walk, floating_zone_walk_with_initial_error, FloatingZoneError,
+};
 pub use indexset::{IndexSet, LocalIndex, MultiIndex};
 pub use matrix_luci::{
     matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix,

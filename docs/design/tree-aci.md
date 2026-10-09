@@ -223,6 +223,26 @@ output cache is rebuilt per scan because the approximating output changes after
 each sweep. Performance parity remains workload-dependent, so it is not yet a
 drop-in train ACI replacement.
 
+The guard evaluates all starting targets and approximations together and
+retains their finite residuals. Coordinate walks reuse those initial errors;
+operator-point accounting counts each start once. Retained starting errors
+are included in the guard's logical working-storage estimate.
+
+Bootstrap enumeration preserves the original descending node-position digit
+order using compact component suffixes. Dimension-one axes have zero digits;
+only enough nontrivial axes to represent the largest initial rank are kept,
+at most `usize::BITS` per directed cut. Dependency-order propagation replaces
+repeated full-component traversals and sorting. One projection scratch buffer
+is reused across enumerated points, with each dependency overwritten before
+use. These temporary structures are preflighted together before allocation;
+rank-one bootstrap needs neither nontrivial suffixes nor projection scratch.
+
+Message caches follow the later approved append-only, evaluator-lifetime
+policy from PR #646. Their logical admission budget covers message payload;
+owned-storage diagnostics additionally count spare column capacity, map
+buckets, and heap payload owned by wide assignment keys. These estimates
+exclude allocator headers and are not hard resident-memory ceilings.
+
 This document records the durable repository architecture. The staged
 implementation history, including the edge-order experiment and its verdict,
 is in `docs/superpowers/plans/2026-08-14-treeaci-next-phase.md` and the

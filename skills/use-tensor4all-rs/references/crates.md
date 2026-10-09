@@ -65,10 +65,12 @@ Direct cross interpolation on integer indices. TCI2 is the primary algorithm; TC
 
 ## tensor4all-core — caching + multi-index plumbing (TCI substrate, ex-tensor4all-tcicore)
 
-Home of `CachedFunction` and `MultiIndex`. Prefer the higher-level crates; reach for this one only for those two types. `MultiIndex` is re-exported from `tensor4all-partitionedtt`, so you need a direct dep only for `CachedFunction`.
+Shared interpolation plumbing includes `CachedFunction`, `MultiIndex`, packed assignment keys, and floating-zone searches. Prefer the higher-level interpolation crates for complete algorithms. `MultiIndex` is re-exported from `tensor4all-partitionedtt`.
 
 - `CachedFunction::new(f, &local_dims)` — memoize expensive evaluations across sweeps. `.eval(&idx)`, `.cache_size()`, `.num_cache_hits()`. Worth it only when `f` is expensive; cheap functions lose to overhead.
 - `MultiIndex` = `Vec<usize>`, the coordinate type threaded through `tensorci` and `partitionedtt` callbacks.
+- `index_key::IndexKey::owned_heap_bytes()` reports the key's owned heap payload, including spare dynamic-limb capacity; excludes its inline struct and allocator metadata. Use this when estimating a cache containing packed assignment keys.
+- `floating_zone_walk_with_initial_error` reuses a previously evaluated starting residual, then follows the same scan order and stopping rule as `floating_zone_walk`. Its typed `FloatingZoneError` distinguishes invalid dimensions, starts, residuals, or stopping tolerances from callback failures. This avoids evaluating a batched guard start a second time.
 
 Do **not** depend on `tensor4all-tensorbackend` — it is internal (storage + linalg wrappers); use the public crates and never instantiate `CpuBackend` directly.
 

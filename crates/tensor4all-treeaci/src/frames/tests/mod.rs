@@ -6,8 +6,11 @@ use tensor4all_treetn::TreeTN;
 
 use super::InputFrameStore;
 use crate::{
-    problem::prepare_problem, problem::PreparedTreeProblem, samples::ComponentSample,
-    samples::SampleArena, TreeAciOptions, TreeAciScalar,
+    problem::prepare_problem,
+    problem::PreparedTreeProblem,
+    samples::ComponentSample,
+    samples::{ComponentProjectionScratch, SampleArena},
+    TreeAciOptions, TreeAciScalar,
 };
 use rand_chacha::ChaCha8Rng;
 
@@ -271,7 +274,12 @@ fn extend_new_samples_computes_only_new_ranges() {
         .position(|edge| edge.from == 1 && edge.to == 0)
         .expect("chain must have the selected directed edge");
     arena
-        .project_point_onto_edge(&problem, grown_edge, &[0, 0, 0, 0, 1])
+        .project_point_onto_edge(
+            &problem,
+            grown_edge,
+            &[0, 0, 0, 0, 1],
+            &mut ComponentProjectionScratch::new(&problem).unwrap(),
+        )
         .expect("project a new point onto one cut");
 
     super::debug_stats::reset();
@@ -334,7 +342,12 @@ fn paired_release_measurement_for_cut_local_extension() {
         .position(|edge| edge.from == 1 && edge.to == 0)
         .expect("chain must have the selected directed edge");
     arena
-        .project_point_onto_edge(&problem, grown_edge, &[0, 0, 0, 0, 1])
+        .project_point_onto_edge(
+            &problem,
+            grown_edge,
+            &[0, 0, 0, 0, 1],
+            &mut ComponentProjectionScratch::new(&problem).unwrap(),
+        )
         .expect("project a new point onto one cut");
 
     for _ in 0..8 {
@@ -2352,7 +2365,12 @@ fn extend_reuses_unchanged_edges_via_rc_instead_of_rebuilding_them() {
     // ancestor chain, so every edge on that chain gets a genuinely new
     // component sample rather than deduplicating back onto the seed's.
     arena
-        .project_point_onto_edge(&problem, leftward, &[0, 0, 0, 0, 1])
+        .project_point_onto_edge(
+            &problem,
+            leftward,
+            &[0, 0, 0, 0, 1],
+            &mut ComponentProjectionScratch::new(&problem).unwrap(),
+        )
         .expect("project a new point onto one directed edge's own ancestor chain");
 
     let counts_after: Vec<usize> = (0..edge_count)
