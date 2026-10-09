@@ -524,7 +524,10 @@ pub fn svd_with<T>(
 ///
 /// Returns `SvdError` when the tensor does not belong to `context`, when the
 /// indices or options are invalid, or when the factorization or explicit
-/// decision readback fails.
+/// decision readback fails. When this build cannot execute in `context`, the
+/// rejection carries
+/// [`IdxTensorError::UnsupportedExecutionContext`](crate::IdxTensorError::UnsupportedExecutionContext)
+/// as its source.
 pub fn svd_with_in<T>(
     t: &IdxTensor,
     left_inds: &[DynIndex],

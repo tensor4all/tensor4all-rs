@@ -484,7 +484,10 @@ pub fn factorize_full_rank(
 /// # Errors
 /// Returns `FactorizeError` when the tensor does not belong to `context`,
 /// when the storage, algorithm, or options are unsupported, or when the
-/// factorization or explicit decision readback fails.
+/// factorization or explicit decision readback fails. When this build cannot
+/// execute in `context`, the rejection carries
+/// [`IdxTensorError::UnsupportedExecutionContext`](crate::IdxTensorError::UnsupportedExecutionContext)
+/// as its source.
 pub fn factorize_in(
     t: &IdxTensor,
     left_inds: &[DynIndex],
@@ -525,7 +528,9 @@ pub fn factorize_in(
 /// # Errors
 /// Returns `FactorizeError` when the tensor does not belong to `context`,
 /// when the storage or algorithm is unsupported, or when the factorization
-/// fails.
+/// fails. When this build cannot execute in `context`, the rejection carries
+/// [`IdxTensorError::UnsupportedExecutionContext`](crate::IdxTensorError::UnsupportedExecutionContext)
+/// as its source.
 pub fn factorize_full_rank_in(
     t: &IdxTensor,
     left_inds: &[DynIndex],

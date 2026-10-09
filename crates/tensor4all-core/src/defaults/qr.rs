@@ -358,7 +358,10 @@ pub fn qr_with<T>(
 ///
 /// Returns `QrError` when the tensor does not belong to `context`, when the
 /// indices, storage, or options are invalid, or when the factorization or
-/// explicit decision readback fails.
+/// explicit decision readback fails. When this build cannot execute in
+/// `context`, the rejection carries
+/// [`IdxTensorError::UnsupportedExecutionContext`](crate::IdxTensorError::UnsupportedExecutionContext)
+/// as its source.
 pub fn qr_with_in<T>(
     t: &IdxTensor,
     left_inds: &[DynIndex],
