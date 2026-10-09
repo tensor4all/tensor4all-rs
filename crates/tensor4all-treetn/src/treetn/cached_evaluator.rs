@@ -5595,15 +5595,12 @@ where
             );
         };
         let cut_neighbor = cut_batch.neighbor.clone();
-        let cut_environment = environment_cache
-            .get(&cut_neighbor)
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "TreeTNCachedEvaluator: missing cut environment for neighbor {:?}",
-                    cut_neighbor
-                )
-            })?;
+        let cut_environment = environment_cache.get(&cut_neighbor).ok_or_else(|| {
+            anyhow::anyhow!(
+                "TreeTNCachedEvaluator: missing cut environment for neighbor {:?}",
+                cut_neighbor
+            )
+        })?;
 
         // Rooting at the other endpoint makes `center -> cut_neighbor` an
         // ordinary non-root message. The recursive message routine checks its
@@ -5669,7 +5666,7 @@ where
         }
 
         let scalar_kind = tensor_scalar_kind(tensor_for_node(self.tree, center)?)?;
-        if stacked_message_scalar_kind(&cut_environment)? != Some(scalar_kind)
+        if stacked_message_scalar_kind(cut_environment)? != Some(scalar_kind)
             || stacked_message_scalar_kind(&center_message)? != Some(scalar_kind)
         {
             return self.contract_center_for_points(
@@ -5682,7 +5679,7 @@ where
         let assembly = EdgeCutAssembly {
             values,
             cut_batch,
-            cut_environment: &cut_environment,
+            cut_environment,
             center_assignment_batch,
             center_message: &center_message,
             bond_dim,
@@ -9249,6 +9246,15 @@ mod tests {
         let cache = PackedMessageCache::<u32, f64>::new(2, 64);
         assert!(cache.checked_column(usize::MAX).is_err());
         assert!(column_dot(&[1.0f64], &[2.0, 3.0], |value| Some(*value)).is_err());
+        let unit_bond_cache = PackedMessageCache::<u32, f64>::new(1, 64);
+        assert!(unit_bond_cache.checked_column(usize::MAX).is_err());
+        assert!(cached_column_dot(
+            ScalarKind::F64,
+            &[CachedScalar::F64(1.0)],
+            &[CachedScalar::F32(2.0)]
+        )
+        .is_err());
+
         assert!(cached_column_dot(
             ScalarKind::F32,
             &[CachedScalar::F64(1.0)],
