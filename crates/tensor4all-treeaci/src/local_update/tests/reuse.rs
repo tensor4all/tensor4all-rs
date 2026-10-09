@@ -138,6 +138,90 @@ fn sufficient_previous_cross_is_retained_with_full_residual_validation() {
     verify_reuse::<Complex64>(Complex64::new(1.0, 0.25), 1e-12);
 }
 
+fn verify_partial_restoration<T: TreeAciScalar>(phase: T, rounding: f64) {
+    let inputs = vec![constant_input::<T>()];
+    let metadata = 6 * std::mem::size_of::<crate::samples::ComponentSample>();
+    let matrix_bytes = 9 * std::mem::size_of::<T>();
+    let scratch = tensor4all_core::matrix_luci_factors_working_bytes::<T>(3, 3, 1).unwrap();
+    let retention_bytes = 2 * matrix_bytes + 2 * scratch + 2 * metadata;
+    for relative in [false, true] {
+        let options = TreeAciOptions {
+            tolerance: if relative {
+                0.02 / 9.0
+            } else {
+                0.02 * phase.abs_val()
+            },
+            scale_tolerance: relative,
+            max_bond_dim: Some(1),
+            ..TreeAciOptions::default()
+        };
+        let problem = prepare_problem::<T, _>(&inputs, &options).unwrap();
+        let (arena, active) =
+            SampleArena::from_global_seeds(&problem, &[vec![0, 0], vec![1, 1], vec![2, 2]])
+                .unwrap();
+        let frames = InputFrameStore::from_samples(&inputs, &problem, &arena).unwrap();
+        let pairs = vec![(active.ids[0][1], active.ids[1][1])];
+        let target = [1.0, 2.0, 3.0, 2.0, 4.01, 6.0, 3.0, 6.0, 9.0].map(|x| T::from_f64(x) * phase);
+        for forward in [0, 1] {
+            for left_orthogonal in [false, true] {
+                for refine in [false, true] {
+                    let budgeted = TreeAciOptions {
+                        max_working_bytes: retention_bytes + if refine { scratch } else { 0 },
+                        ..options.clone()
+                    };
+                    let mut operator = |_: crate::TreeElementwiseBatch<'_, T>, output: &mut [T]| {
+                        output.copy_from_slice(&target);
+                        Ok(())
+                    };
+                    let result = materialize_and_factor_edge(
+                        &inputs,
+                        &problem,
+                        &active,
+                        &frames,
+                        forward,
+                        &budgeted,
+                        left_orthogonal,
+                        Some((&arena, &pairs)),
+                        &mut operator,
+                    )
+                    .unwrap();
+                    // The complete old (1, 1) cross exceeds the tolerance.
+                    // Only its column can be restored while preserving rank.
+                    // A budget that permits full retention alone must instead
+                    // keep the fresh cross, without failing the operation.
+                    assert_eq!(result.left.ncols(), 1);
+                    assert_eq!(result.row_samples[0].local_coordinate, 2);
+                    assert_eq!(
+                        result.col_samples[0].local_coordinate,
+                        if refine { 1 } else { 2 }
+                    );
+                    let approximation = mat_mul(&result.left, &result.right).unwrap();
+                    let error = target
+                        .iter()
+                        .zip(approximation.as_col_major_slice())
+                        .map(|(&a, &b)| Scalar::abs_val(a - b))
+                        .fold(0.0_f64, f64::max);
+                    assert!(
+                        (error - if refine { 0.015 } else { 0.01 } * phase.abs_val()).abs()
+                            < rounding
+                    );
+                    assert!(!budgeted
+                        .tolerance_policy()
+                        .exceeds(error, result.sampled_scale));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn rejected_complete_cross_can_restore_partial_pivots_with_a_separate_budget() {
+    verify_partial_restoration::<f32>(1.0, 2e-5);
+    verify_partial_restoration::<f64>(1.0, 1e-12);
+    verify_partial_restoration::<Complex32>(Complex32::new(1.0, 0.25), 2e-5);
+    verify_partial_restoration::<Complex64>(Complex64::new(1.0, 0.25), 1e-12);
+}
+
 #[test]
 fn previous_cross_never_prevents_rank_reduction_or_zero_target() {
     let inputs = vec![constant_input::<f64>()];

@@ -17,6 +17,8 @@ use tensor4all_tensorbackend::{mat_mul_owned, submatrix, triangular_solve_matrix
 
 mod selected;
 pub use selected::matrix_luci_factors_from_pivots;
+mod preferred;
+pub use preferred::matrix_luci_factors_with_preferred_pivots;
 
 /// Matrix LU-based Cross Interpolation.
 ///

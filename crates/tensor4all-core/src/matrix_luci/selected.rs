@@ -69,32 +69,7 @@ where
                 .into(),
         });
     }
-    for (position, &row) in rows.iter().enumerate() {
-        if row >= a.nrows() {
-            return Err(MatrixCIError::IndexOutOfBounds {
-                row,
-                col: 0,
-                nrows: a.nrows(),
-                ncols: a.ncols(),
-            });
-        }
-        if rows[..position].contains(&row) {
-            return Err(MatrixCIError::DuplicatePivotRow { row });
-        }
-    }
-    for (position, &col) in cols.iter().enumerate() {
-        if col >= a.ncols() {
-            return Err(MatrixCIError::IndexOutOfBounds {
-                row: 0,
-                col,
-                nrows: a.nrows(),
-                ncols: a.ncols(),
-            });
-        }
-        if cols[..position].contains(&col) {
-            return Err(MatrixCIError::DuplicatePivotCol { col });
-        }
-    }
+    validate_axes(a.nrows(), a.ncols(), rows, cols)?;
     if a.as_col_major_slice()
         .iter()
         .any(|&x| !Scalar::abs_val(x).is_finite())
@@ -242,3 +217,38 @@ where
 
 #[cfg(test)]
 mod tests;
+
+pub(super) fn validate_axes(
+    nrows: usize,
+    ncols: usize,
+    rows: &[usize],
+    cols: &[usize],
+) -> Result<()> {
+    for (position, &row) in rows.iter().enumerate() {
+        if row >= nrows {
+            return Err(MatrixCIError::IndexOutOfBounds {
+                row,
+                col: 0,
+                nrows,
+                ncols,
+            });
+        }
+        if rows[..position].contains(&row) {
+            return Err(MatrixCIError::DuplicatePivotRow { row });
+        }
+    }
+    for (position, &col) in cols.iter().enumerate() {
+        if col >= ncols {
+            return Err(MatrixCIError::IndexOutOfBounds {
+                row: 0,
+                col,
+                nrows,
+                ncols,
+            });
+        }
+        if cols[..position].contains(&col) {
+            return Err(MatrixCIError::DuplicatePivotCol { col });
+        }
+    }
+    Ok(())
+}

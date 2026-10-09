@@ -263,6 +263,7 @@ where
             context: "local factor working bytes",
         })?;
     enforce_limit("working bytes", factor_bytes, options.max_working_bytes)?;
+    let mut can_refine_previous = false;
     if previous.is_some() {
         // Frame retention is optional. The fresh factors coexist with the
         // retained original matrix and Core's reconstruction/completion
@@ -275,6 +276,14 @@ where
             .and_then(|bytes| factor_bytes.checked_add(bytes));
         if !matches!(extra, Some(bytes) if bytes <= options.max_working_bytes) {
             previous = None;
+        } else {
+            // Partial restoration retains a residual matrix and current cross
+            // while screening and reconstructing replacements. Give this
+            // optional search its own additional conservative Core estimate;
+            // a tighter budget can still reuse a complete admissible cross.
+            can_refine_previous = extra
+                .and_then(|bytes| bytes.checked_add(luci_bytes))
+                .is_some_and(|bytes| bytes <= options.max_working_bytes);
         }
     }
 
@@ -463,7 +472,7 @@ where
         // Preserve an already sufficient nested frame instead of replacing it
         // with a different near-threshold basis. Fresh LUCI still determines
         // the rank ceiling here, so every rank decrease remains possible.
-        if pairs.len() <= factors.rank {
+        if factors.rank > 0 && (pairs.len() <= factors.rank || can_refine_previous) {
             let mut rows = Vec::with_capacity(pairs.len());
             let mut cols = Vec::with_capacity(pairs.len());
             for &(a, b) in pairs {
@@ -485,6 +494,8 @@ where
                     arena.record(reverse, col)?,
                 )?);
             }
+            let preferred_rows = rows.iter().flatten().copied().collect::<Vec<_>>();
+            let preferred_cols = cols.iter().flatten().copied().collect::<Vec<_>>();
             let rows = rows.into_iter().collect::<Option<Vec<_>>>();
             let cols = cols.into_iter().collect::<Option<Vec<_>>>();
             // An adjacent update can invalidate one projection while the
@@ -501,8 +512,30 @@ where
                 }
             };
             match matrix_luci_factors_from_pivots(matrix, &rows, &cols, left_orthogonal) {
-                Ok(previous) if previous.pivot_errors[0] <= tolerance.local_threshold() => {
+                Ok(previous)
+                    if previous.rank <= factors.rank
+                        && previous.pivot_errors[0] <= tolerance.local_threshold() =>
+                {
                     factors = previous
+                }
+                Ok(_) | Err(tensor4all_core::MatrixCIError::SingularMatrix)
+                    if can_refine_previous =>
+                {
+                    let refined = tensor4all_core::matrix_luci_factors_with_preferred_pivots(
+                        matrix,
+                        &factors.row_indices,
+                        &factors.col_indices,
+                        &preferred_rows,
+                        &preferred_cols,
+                        left_orthogonal,
+                        tolerance.local_threshold(),
+                    )
+                    .map_err(|error| TreeAciError::Numerical {
+                        message: error.to_string(),
+                    })?;
+                    if refined.pivot_errors[0] <= tolerance.local_threshold() {
+                        factors = refined;
+                    }
                 }
                 Ok(_) | Err(tensor4all_core::MatrixCIError::SingularMatrix) => {}
                 Err(error) => {

@@ -148,9 +148,18 @@ to the current Cartesian candidate matrix, Core reconstructs it. When exactly
 one projection survives a neighbouring update, Core selects the missing axis
 from that prescribed slice. TreeACI accepts the reconstructed factors only
 when their measured maximum residual over the entire current local matrix
-satisfies the same tolerance. Singular or insufficient crosses fall back to
-fresh LUCI. Bootstrap samples and zero-output placeholders do not establish
-an admissible previous cross.
+satisfies the same tolerance. If the complete cross is singular, insufficient,
+or larger than the fresh rank, Core instead attempts single-pivot replacements
+in the fresh cross using the individually surviving old projections. This
+optional search retains the fresh rank and protects every selected preferred
+pivot. Each acceptance strictly increases overlap with old samples, bounding
+accepted replacements by twice the rank. A rank-one residual update screens
+replacement positions; feasible positions are tried by descending absolute
+determinant ratio, then predicted residual and position. Reconstruction and a
+full measured residual check decide acceptance, not the prediction alone.
+Rejected trials reuse the unchanged cross's solved coefficients. Bootstrap
+samples and zero-output placeholders do not establish a previous cross, and
+at least one complete old projection must survive the preflight.
 
 This preference reduces unnecessary replacement of already sufficient frames
 at the tolerance boundary. It does not union historical samples into candidate
@@ -158,9 +167,13 @@ axes, impose a rank floor, relax a threshold, or change the per-cut stability
 window and Guard conditions. It cannot guarantee convergence for every input.
 The interpolative factor is exactly identity at its pivot axis, and the full
 residual is measured after enforcing that algebraic invariant. An optional
-working reservation covers both the retained original matrix and Core's
-reconstruction/completion estimate while fresh factors are live. If that
-reservation does not fit, the ordinary owned-LUCI path remains available.
+working reservation covers both the retained original matrix and another
+Core reconstruction/completion estimate while fresh factors are live. Partial
+restoration requires one further conservative Core estimate for the residual,
+current cross, and trial reconstruction. A tighter budget can still retain an
+admissible complete cross; if even that reservation does not fit, the ordinary
+owned-LUCI path remains available. This local search can cost more per update
+and does not guarantee a globally optimal selection or monotone global error.
 
 ## Caches
 
