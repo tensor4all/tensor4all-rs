@@ -73,8 +73,8 @@ pub use floating_zone::{
 pub use indexset::{IndexSet, LocalIndex, MultiIndex};
 pub use matrix_luci::{
     matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix,
-    matrix_luci_factors_from_matrix_owned, matrix_luci_factors_working_bytes, MatrixLUCI,
-    MatrixLuciFactors,
+    matrix_luci_factors_from_matrix_owned, matrix_luci_factors_from_pivots,
+    matrix_luci_factors_working_bytes, MatrixLUCI, MatrixLuciFactors,
 };
 pub use matrixaca::MatrixACA;
 pub use matrixlu::{rrlu, rrlu_mut, RrLU, RrLUOptions};

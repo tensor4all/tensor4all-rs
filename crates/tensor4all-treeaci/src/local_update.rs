@@ -3,7 +3,9 @@
 use std::mem::size_of;
 
 use tensor4all_core::IdxTensor;
-use tensor4all_core::{matrix_luci_factors_from_matrix_owned, RrLUOptions};
+use tensor4all_core::{
+    matrix_luci_factors_from_matrix_owned, matrix_luci_factors_from_pivots, RrLUOptions,
+};
 #[cfg(test)]
 use tensor4all_tensorbackend::mat_mul;
 #[cfg(not(test))]
@@ -14,9 +16,11 @@ use tensor4all_treetn::TreeTN;
 use crate::{
     frames::InputFrameStore,
     problem::{enforce_limit, DirectedEdgeId, PreparedTreeProblem},
-    samples::{CandidateSets, ComponentSample},
+    samples::{CandidateSets, ComponentSample, SampleArena, SampleId},
     Result, TreeAciError, TreeAciNode, TreeAciOptions, TreeAciScalar, TreeElementwiseBatch,
 };
+
+pub(crate) type PreviousPivots<'a> = (&'a SampleArena, &'a [(SampleId, SampleId)]);
 
 #[derive(Clone, Debug)]
 pub(crate) struct LocalUpdateResult<T> {
@@ -82,6 +86,7 @@ pub(crate) fn materialize_and_factor_edge<T, V, F>(
     forward: DirectedEdgeId,
     options: &TreeAciOptions<V>,
     left_orthogonal: bool,
+    previous: Option<PreviousPivots<'_>>,
     operator: &mut F,
 ) -> Result<LocalUpdateResult<T>>
 where
@@ -194,6 +199,35 @@ where
         .min(row_count)
         .min(col_count)
         .max(1);
+    // A previous cross is reusable when at least one complete projection
+    // remains in this Cartesian candidate space. No candidate union or rank
+    // floor is introduced. Probe membership without allocation before charging
+    // the retained matrix needed by the full residual check.
+    let mut previous = match previous {
+        Some((arena, pairs)) if !pairs.is_empty() && pairs.len() <= factor_rank_bound => {
+            let mut rows_available = true;
+            let mut cols_available = true;
+            for &(a, b) in pairs {
+                let (row, col) = if forward.is_multiple_of(2) {
+                    (a, b)
+                } else {
+                    (b, a)
+                };
+                rows_available &=
+                    candidate_index(problem, candidates, forward, arena.record(forward, row)?)?
+                        .is_some();
+                cols_available &=
+                    candidate_index(problem, candidates, reverse, arena.record(reverse, col)?)?
+                        .is_some();
+            }
+            if rows_available || cols_available {
+                Some((arena, pairs))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
     let left_elements =
         row_count
             .checked_mul(factor_rank_bound)
@@ -229,6 +263,21 @@ where
             context: "local factor working bytes",
         })?;
     enforce_limit("working bytes", factor_bytes, options.max_working_bytes)?;
+    if previous.is_some() {
+        // Frame retention is optional. The fresh factors coexist with the
+        // retained original matrix and Core's reconstruction/completion
+        // buffers. Charge another full conservative LUCI estimate rather
+        // than relying on unused scratch within the ordinary estimate.
+        // A tight budget keeps the owned-LUCI path without a new run failure.
+        let extra = point_count
+            .checked_mul(size_of::<T>())
+            .and_then(|bytes| bytes.checked_add(luci_bytes))
+            .and_then(|bytes| factor_bytes.checked_add(bytes));
+        if !matches!(extra, Some(bytes) if bytes <= options.max_working_bytes) {
+            previous = None;
+        }
+    }
+
     let row_candidates = materialize_candidates(problem, candidates, forward, row_layout.count);
     let col_candidates = materialize_candidates(problem, candidates, reverse, col_layout.count);
 
@@ -395,6 +444,7 @@ where
     let local_scale = LocalMatrixScale::new(tolerance.local_normalizer(sampled_scale));
     let mut matrix = Matrix::from_col_major_vec(row_count, col_count, local_values);
     local_scale.normalize(&mut matrix);
+    let previous_matrix = previous.map(|_| matrix.clone());
     #[cfg(test)]
     let luci_started = std::time::Instant::now();
     let mut factors = matrix_luci_factors_from_matrix_owned(
@@ -409,6 +459,61 @@ where
     .map_err(|error| TreeAciError::Numerical {
         message: error.to_string(),
     })?;
+    if let (Some((arena, pairs)), Some(matrix)) = (previous, previous_matrix.as_ref()) {
+        // Preserve an already sufficient nested frame instead of replacing it
+        // with a different near-threshold basis. Fresh LUCI still determines
+        // the rank ceiling here, so every rank decrease remains possible.
+        if pairs.len() <= factors.rank {
+            let mut rows = Vec::with_capacity(pairs.len());
+            let mut cols = Vec::with_capacity(pairs.len());
+            for &(a, b) in pairs {
+                let (row, col) = if forward.is_multiple_of(2) {
+                    (a, b)
+                } else {
+                    (b, a)
+                };
+                rows.push(candidate_index(
+                    problem,
+                    candidates,
+                    forward,
+                    arena.record(forward, row)?,
+                )?);
+                cols.push(candidate_index(
+                    problem,
+                    candidates,
+                    reverse,
+                    arena.record(reverse, col)?,
+                )?);
+            }
+            let rows = rows.into_iter().collect::<Option<Vec<_>>>();
+            let cols = cols.into_iter().collect::<Option<Vec<_>>>();
+            // An adjacent update can invalidate one projection while the
+            // other still defines a sufficient nested frame. Complete only
+            // the missing axis, then validate the entire unchanged matrix.
+            let (rows, cols) = match (rows, cols) {
+                (Some(rows), Some(cols)) => (rows, cols),
+                (Some(rows), None) => (rows, Vec::new()),
+                (None, Some(cols)) => (Vec::new(), cols),
+                (None, None) => {
+                    return Err(TreeAciError::InternalInvariant {
+                        message: "previous cross lost both axes after preflight",
+                    })
+                }
+            };
+            match matrix_luci_factors_from_pivots(matrix, &rows, &cols, left_orthogonal) {
+                Ok(previous) if previous.pivot_errors[0] <= tolerance.local_threshold() => {
+                    factors = previous
+                }
+                Ok(_) | Err(tensor4all_core::MatrixCIError::SingularMatrix) => {}
+                Err(error) => {
+                    return Err(TreeAciError::Numerical {
+                        message: error.to_string(),
+                    })
+                }
+            }
+        }
+    }
+    drop(previous_matrix);
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {
         stats.luci += luci_started.elapsed();
@@ -447,6 +552,47 @@ where
         #[cfg(test)]
         local_values: retained_local_values,
     })
+}
+
+/// Inverse of `materialize_candidates` for a retained component sample.
+/// Missing incoming IDs mean that the previous sample is outside the current
+/// Cartesian space; they never justify padding or reordering output axes.
+fn candidate_index<V: TreeAciNode>(
+    problem: &PreparedTreeProblem<V>,
+    candidates: &CandidateSets,
+    forward: DirectedEdgeId,
+    sample: &ComponentSample,
+) -> Result<Option<usize>> {
+    let edge = &problem.directed_edges[forward];
+    let local_dim = problem.physical[problem.node_positions[&edge.from]].local_dim;
+    if sample.local_coordinate >= local_dim || sample.incoming.len() != edge.incoming_to_from.len()
+    {
+        return Ok(None);
+    }
+    let mut index = sample.local_coordinate;
+    let mut stride = local_dim;
+    for (&incoming, &(sample_edge, sample_id)) in edge.incoming_to_from.iter().zip(&sample.incoming)
+    {
+        if sample_edge != incoming {
+            return Ok(None);
+        }
+        let ids = &candidates.ids[incoming];
+        let Some(position) = ids.iter().position(|&id| id == sample_id) else {
+            return Ok(None);
+        };
+        index = position
+            .checked_mul(stride)
+            .and_then(|offset| index.checked_add(offset))
+            .ok_or(TreeAciError::SizeOverflow {
+                context: "previous-cross candidate index",
+            })?;
+        stride = stride
+            .checked_mul(ids.len())
+            .ok_or(TreeAciError::SizeOverflow {
+                context: "previous-cross candidate stride",
+            })?;
+    }
+    Ok(Some(index))
 }
 
 /// Bytes of `max_working_bytes` that stay live for the whole candidate-frame

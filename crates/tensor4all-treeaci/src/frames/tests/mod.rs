@@ -3512,6 +3512,7 @@ fn local_update_degrades_instead_of_refusing_an_aggregate_overrun() {
         edge,
         &options,
         true,
+        None,
         &mut square,
     )
     .expect("the default budget admits this edge");
@@ -3562,6 +3563,7 @@ fn local_update_degrades_instead_of_refusing_an_aggregate_overrun() {
         edge,
         &options,
         true,
+        None,
         &mut square,
     )
     .expect("an affordable scalar route must not be refused");

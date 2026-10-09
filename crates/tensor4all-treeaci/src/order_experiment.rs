@@ -27,6 +27,7 @@ where
         forward,
         options,
         true,
+        state.previous_pivots(forward),
         operator,
     )?;
     let directed =
