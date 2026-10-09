@@ -9244,6 +9244,32 @@ mod tests {
             assert!(evaluator.try_contract_cached_edge_cut(&2, points).is_err());
             assert_eq!(evaluator.message_caches[&edge].hits, before);
         }
+        // Corrupt only metadata, without allocating an impossible payload:
+        // work-count overflow must fail before result assembly or hit commit.
+        let repeated_zeros = [0usize; 10];
+        let repeated = ColMajorArrayRef::new(&repeated_zeros, &[5, 2]).unwrap();
+        let mut evaluator =
+            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
+        evaluator
+            .evaluate_batched_with_hint(repeated, EvaluationHint::around(2))
+            .unwrap();
+        let cut_edges = [(1, 2), (2, 1)];
+        let hits_before = cut_edges.map(|edge| evaluator.message_caches[&edge].hits);
+        evaluator
+            .parent_bond_indices
+            .insert((1, 2), DynIndex::new_dyn(usize::MAX));
+        for edge in cut_edges {
+            evaluator.message_caches.get_mut(&edge).unwrap().bond_dim = usize::MAX;
+        }
+        let error = evaluator
+            .try_contract_cached_edge_cut(&2, repeated)
+            .unwrap_err();
+        assert!(error.to_string().contains("work count overflows"));
+        assert_eq!(
+            cut_edges.map(|edge| evaluator.message_caches[&edge].hits),
+            hits_before
+        );
+
         let cache = PackedMessageCache::<u32, f64>::new(2, 64);
         assert!(cache.checked_column(usize::MAX).is_err());
         assert!(column_dot(&[1.0f64], &[2.0, 3.0], |value| Some(*value)).is_err());

@@ -47,7 +47,9 @@ axes, reordered and duplicate assignments. Retained key count, logical payload
 and owned-storage estimates are unchanged. Both possible partial-hit directions
 match legacy cache accounting and values. Additional checks cover wide heap
 keys on both sides of a 260-site cut, invalid warm coordinates, malformed packed
-columns, dtype/length mismatch, and two-hit diagnostics without message kernels.
+columns, dtype/length mismatch, work-count overflow without allocating an
+impossible payload or committing either hit, and two-hit diagnostics without
+message kernels.
 Existing cold/warm, zero-budget, chunking, multi-physical-axis, scalar-promotion
 and independent generic-contraction matrices continue to exercise the fallback.
 The center-changing effort assertion changes from three hits to the two actually
