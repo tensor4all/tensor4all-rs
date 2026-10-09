@@ -111,6 +111,12 @@ complete paired case summaries, all fitted coefficients and experiment hashes.
 It localizes a candidate-frame residual without claiming a production speedup
 or resolving the downstream GW workload.
 
+The [#686 completion comparison](results/2026-10-09-treeaci-686-completion.md)
+records scalar leaf/group reuse against merged #863, with the full initial
+inconclusive matrix and a separately declared complete confirmation using
+unchanged gates. Exact numerical/count parity and effort regressions support
+the issue closure; the timing evidence is descriptive.
+
 #### TreeTCI global pivot search (#792)
 
 `benchmark_global_search` runs the default TreeTCI loop (`DefaultProposer`,
