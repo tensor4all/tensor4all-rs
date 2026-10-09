@@ -71,14 +71,9 @@ pub trait Tensor3Ops<T: Clone + Default> {
     /// Fuse the `(left, site)` axes into a `(left_dim * site_dim, right_dim)`
     /// column-major matrix.
     ///
-    /// The matrix itself is column-major, but its fused **row index is
-    /// site-major**: `row = site + site_dim * left`, so the flat position of
-    /// element `(left, site, right)` is `site + site_dim * left +
-    /// left_dim * site_dim * right`. This is **not** the column-major reshape
-    /// of the `(left, site)` axes, which would use `row = left + left_dim *
-    /// site`; it is the convention the TCI1 machinery consumes. Unifying the
-    /// two orders is tracked in
-    /// [#821](https://github.com/tensor4all/tensor4all-rs/issues/821).
+    /// The fused row index is the column-major reshape of `(left, site)`:
+    /// `row = left + left_dim * site`, so the matrix buffer equals the
+    /// tensor's flat column-major buffer.
     ///
     /// # Panics
     ///
@@ -87,8 +82,7 @@ pub trait Tensor3Ops<T: Clone + Default> {
     fn as_left_matrix(&self) -> (Vec<T>, usize, usize);
 
     /// Fallibly fuse the `(left, site)` axes into a `(left_dim * site_dim,
-    /// right_dim)` column-major matrix with the site-major row index
-    /// `row = site + site_dim * left`.
+    /// right_dim)` column-major matrix with `row = left + left_dim * site`.
     ///
     /// # Errors
     ///
@@ -99,12 +93,9 @@ pub trait Tensor3Ops<T: Clone + Default> {
     /// Fuse the `(site, right)` axes into a `(left_dim, site_dim * right_dim)`
     /// column-major matrix.
     ///
-    /// The fused **column index is right-major**: `column = right + right_dim *
-    /// site`, so the flat position of element `(left, site, right)` is `left +
-    /// left_dim * (right + right_dim * site)`. This is **not** the column-major
-    /// reshape of the `(site, right)` axes, which would use `column = site +
-    /// site_dim * right`; see
-    /// [#821](https://github.com/tensor4all/tensor4all-rs/issues/821).
+    /// The fused column index is the column-major reshape of `(site, right)`:
+    /// `column = site + site_dim * right`, so the matrix buffer equals the
+    /// tensor's flat column-major buffer.
     ///
     /// # Panics
     ///
@@ -190,8 +181,8 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
         let cols = right_dim;
         let mut result = Vec::with_capacity(rows * cols);
         for r in 0..right_dim {
-            for l in 0..left_dim {
-                for s in 0..site_dim {
+            for s in 0..site_dim {
+                for l in 0..left_dim {
                     result.push(self[[l, s, r]]);
                 }
             }
@@ -215,8 +206,8 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
         })?;
         let mut result = Vec::with_capacity(len);
         for r in 0..right_dim {
-            for l in 0..left_dim {
-                for s in 0..site_dim {
+            for s in 0..site_dim {
+                for l in 0..left_dim {
                     result.push(self[[l, s, r]]);
                 }
             }
@@ -231,8 +222,8 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
         let rows = left_dim;
         let cols = site_dim * right_dim;
         let mut result = Vec::with_capacity(rows * cols);
-        for s in 0..site_dim {
-            for r in 0..right_dim {
+        for r in 0..right_dim {
+            for s in 0..site_dim {
                 for l in 0..left_dim {
                     result.push(self[[l, s, r]]);
                 }
@@ -257,8 +248,8 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
                     message: "right matrix size overflowed usize".to_string(),
                 })?;
         let mut result = Vec::with_capacity(len);
-        for s in 0..site_dim {
-            for r in 0..right_dim {
+        for r in 0..right_dim {
+            for s in 0..site_dim {
                 for l in 0..left_dim {
                     result.push(self[[l, s, r]]);
                 }
