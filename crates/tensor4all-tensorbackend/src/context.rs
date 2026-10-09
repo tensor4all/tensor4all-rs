@@ -836,8 +836,31 @@ mod tests {
                             // tenferro-rs #2004 rejects a worker entry it cannot
                             // wait for with a typed `SessionEntry` error instead of
                             // blocking on the context pool. Either outcome finishes,
-                            // which is what this test observes.
-                            match context.with_session(|session| lhs.matmul(&rhs, session)) {
+                            // which is what this test observes. The worker path reaches
+                            // tenferro through the process-global arbiter, which the
+                            // rest of this parallel suite also uses, so a rejection is
+                            // retried until the unrelated holder releases.
+                            let deadline = std::time::Instant::now()
+                                + std::time::Duration::from_secs(30);
+                            let outcome = loop {
+                                let outcome = context.with_session(|session| {
+                                    lhs.matmul(&rhs, session)
+                                });
+                                let contended = matches!(
+                                    &outcome,
+                                    Err(CpuExecutionContextError::SessionEntry { source })
+                                        if matches!(
+                                            source.downcast_ref::<tenferro_tensor::SessionEntryError>(),
+                                            Some(tenferro_tensor::SessionEntryError::Contended { .. })
+                                        )
+                                );
+                                if contended && std::time::Instant::now() < deadline {
+                                    std::thread::sleep(std::time::Duration::from_millis(1));
+                                    continue;
+                                }
+                                break outcome;
+                            };
+                            match outcome {
                                 Ok(Ok(product)) => {
                                     Some(product.as_slice::<f64>().unwrap().to_vec())
                                 }
