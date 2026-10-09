@@ -9,6 +9,17 @@ use tensor4all_treetn::{EvaluatedScalarKindMismatch, TreeTNOperationError};
 
 use crate::TreeAciError;
 
+/// Reject values whose magnitude cannot be used by the numerical criteria.
+pub(crate) fn ensure_finite_values<T: TreeAciScalar>(
+    values: &[T],
+    context: &'static str,
+) -> crate::Result<()> {
+    if values.iter().any(|value| !value.abs_val().is_finite()) {
+        return Err(TreeAciError::NonFiniteValue { context });
+    }
+    Ok(())
+}
+
 /// Maps a typed TreeTN batch-evaluation failure onto a TreeACI error.
 ///
 /// A dtype rejection keeps reporting [`TreeAciError::ScalarKind`], the same

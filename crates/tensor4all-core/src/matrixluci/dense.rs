@@ -78,9 +78,10 @@ impl DenseLuKernel {
 
         if rank >= full_rank {
             last_error = 0.0;
-        } else if rank == max_bond_dim && rank > 0 {
-            // Preserve the legacy tcicore-compatible semantics for max_bond_dim stopping.
-            last_error = accepted[rank - 1];
+        } else if rank == max_bond_dim {
+            // Complete pivoting makes the next diagonal the maximum of the
+            // remaining Schur complement, including the zero-rank ceiling.
+            last_error = diag_abs.get(rank).copied().unwrap_or(0.0);
         }
 
         accepted.push(last_error);

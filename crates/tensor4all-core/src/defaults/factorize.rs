@@ -39,7 +39,7 @@ use crate::{
     matrix_luci_factors_from_matrix_owned, rrlu_mut, MatrixLuciFactors, RrLUOptions,
     Scalar as MatrixScalar,
 };
-use num_complex::{Complex64, ComplexFloat};
+use num_complex::{Complex32, Complex64, ComplexFloat};
 use tenferro_ad::EagerTensor;
 use tensor4all_tensorbackend::{Matrix, TensorElement};
 
@@ -82,7 +82,8 @@ pub use crate::tensor_like::{
 ///
 /// # Errors
 /// Returns `FactorizeError` if:
-/// - The storage type is not supported (only DenseF64 and DenseC64)
+/// - The storage type is not supported (f64/Complex64 for all host methods,
+///   with f32/Complex32 additionally supported by CI)
 /// - QR is used with `Canonical::Right`
 /// - LU or CI is requested for a tracked tensor (those paths do not yet
 ///   preserve reverse-mode AD metadata)
@@ -105,13 +106,17 @@ pub fn factorize(
         ));
     }
 
-    if t.is_f64() {
+    if options.alg == FactorizeAlg::CI && t.is_f32() {
+        factorize_ci::<f32>(t, left_inds, options)
+    } else if options.alg == FactorizeAlg::CI && t.is_c32() {
+        factorize_ci::<Complex32>(t, left_inds, options)
+    } else if t.is_f64() {
         factorize_impl_f64(t, left_inds, options)
-    } else if t.is_complex() {
+    } else if t.is_c64() {
         factorize_impl_c64(t, left_inds, options)
     } else {
         Err(FactorizeError::UnsupportedStorage(
-            "factorize currently supports only f64 and Complex64 tensors",
+            "factorize requires f64/Complex64, or f32/Complex32 with CI",
         ))
     }
 }
@@ -421,13 +426,17 @@ pub fn factorize_full_rank(
         ));
     }
 
-    if t.is_f64() {
+    if alg == FactorizeAlg::CI && t.is_f32() {
+        factorize_ci_full_rank::<f32>(t, left_inds, canonical)
+    } else if alg == FactorizeAlg::CI && t.is_c32() {
+        factorize_ci_full_rank::<Complex32>(t, left_inds, canonical)
+    } else if t.is_f64() {
         factorize_impl_f64_full_rank(t, left_inds, alg, canonical)
-    } else if t.is_complex() {
+    } else if t.is_c64() {
         factorize_impl_c64_full_rank(t, left_inds, alg, canonical)
     } else {
         Err(FactorizeError::UnsupportedStorage(
-            "factorize currently supports only f64 and Complex64 tensors",
+            "factorize requires f64/Complex64, or f32/Complex32 with CI",
         ))
     }
 }

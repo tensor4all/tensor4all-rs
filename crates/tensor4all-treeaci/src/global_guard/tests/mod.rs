@@ -1,3 +1,5 @@
+mod finite_values;
+
 use num_complex::{Complex32, Complex64};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;

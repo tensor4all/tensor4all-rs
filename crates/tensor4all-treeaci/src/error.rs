@@ -168,6 +168,13 @@ pub enum TreeAciError {
         message: String,
     },
 
+    /// A sampled value, residual, or scale is not finite.
+    #[error("tree ACI encountered a non-finite {context}")]
+    NonFiniteValue {
+        /// Numerical boundary at which the value was rejected.
+        context: &'static str,
+    },
+
     /// A tensor payload could not be decoded as the requested scalar type.
     #[error("tree ACI scalar payload mismatch: {message}")]
     ScalarKind {

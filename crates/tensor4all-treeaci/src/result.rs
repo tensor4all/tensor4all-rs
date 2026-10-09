@@ -20,7 +20,8 @@ pub enum TreeAciTermination {
     /// guard criteria were satisfied. Local residuals and randomized guard
     /// searches are not a certificate of the full-grid maximum error.
     Converged,
-    /// At least one inaccurate edge reached its algebraic or configured rank cap.
+    /// An inaccurate edge reached its algebraic/configured rank cap, or the
+    /// guard found an unresolved residual while all cuts were saturated.
     RankLimited,
     /// The configured sweep limit was reached.
     #[default]

@@ -89,6 +89,21 @@ pub trait Scalar:
     /// Create from f64 value.
     fn from_f64(val: f64) -> Self;
 
+    /// Divide by a real scalar without forming a complex squared norm.
+    ///
+    /// The divisor is converted to the underlying real component precision.
+    /// IEEE division semantics apply for zero or non-finite divisors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::Scalar;
+    /// use num_complex::Complex64;
+    /// let value = Complex64::new(1e200, 5e199).div_real(1e200);
+    /// assert_eq!(value, Complex64::new(1.0, 0.5));
+    /// ```
+    fn div_real(self, divisor: f64) -> Self;
+
     /// Check if value is NaN.
     fn is_nan(self) -> bool;
 
@@ -102,6 +117,10 @@ pub trait Scalar:
 }
 
 impl Scalar for f64 {
+    #[inline]
+    fn div_real(self, divisor: f64) -> Self {
+        self / divisor
+    }
     #[inline]
     fn conj(self) -> Self {
         self
@@ -134,6 +153,10 @@ impl Scalar for f64 {
 }
 
 impl Scalar for f32 {
+    #[inline]
+    fn div_real(self, divisor: f64) -> Self {
+        self / divisor as f32
+    }
     #[inline]
     fn conj(self) -> Self {
         self
@@ -172,6 +195,10 @@ impl Scalar for f32 {
 
 impl Scalar for Complex64 {
     #[inline]
+    fn div_real(self, divisor: f64) -> Self {
+        self / divisor
+    }
+    #[inline]
     fn conj(self) -> Self {
         Complex64::conj(&self)
     }
@@ -203,6 +230,10 @@ impl Scalar for Complex64 {
 }
 
 impl Scalar for Complex32 {
+    #[inline]
+    fn div_real(self, divisor: f64) -> Self {
+        self / divisor as f32
+    }
     #[inline]
     fn conj(self) -> Self {
         Complex32::conj(&self)

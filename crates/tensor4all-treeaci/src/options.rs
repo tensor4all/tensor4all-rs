@@ -120,7 +120,9 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// message caches combined. Default: 256 MiB.
     ///
     /// The budget is divided evenly among all input evaluators and the output
-    /// evaluator used by global-pivot searches. A finite nonzero value retains
+    /// evaluator used by global-pivot searches, then among each evaluator's
+    /// directed-edge caches. Integer rounding may disable retention for very
+    /// small budgets. A finite nonzero value retains
     /// useful reuse while preventing repeated floating-zone scans from
     /// retaining an unbounded set of message payloads. Set it to zero to
     /// disable message retention without disabling the guard itself.
@@ -193,6 +195,11 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// [`Self::max_frame_elements`] in step, each to a quarter of the budget
     /// in elements of the run's scalar type. A ceiling set explicitly keeps
     /// overriding the budget in either direction.
+    ///
+    /// Checks candidate records before enumeration and charges frame and LUCI
+    /// phases separately, including the caller's simultaneously live data.
+    /// Counts conservative logical storage, not allocator overhead or
+    /// provider-private workspace; this field is not a process RSS bound.
     ///
     /// The retention budgets are separate and do not follow this one, because
     /// they bound what is kept *between* updates rather than what one update
