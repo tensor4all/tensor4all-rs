@@ -160,6 +160,10 @@ RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_memo memo
 ```
 
+The [2026-10-09 scalar frame-builder report](results/2026-10-09-scalar-frame-batch-layout.md)
+uses the same 120-case protocol for batch-local axis metadata reuse (#686).
+It preserves all case summaries and intervals without a production speedup claim.
+
 #### Chain evaluator cache-frontier controls (#671)
 
 The Criterion group `hiroshi_chain_evaluator_parity` compares TTCache and
