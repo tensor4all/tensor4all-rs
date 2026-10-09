@@ -1581,9 +1581,17 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         if directed.incoming_to_from.is_empty() {
             let bond_dim = self.bond_dim(input, directed_edge)?;
             let mut results = Vec::with_capacity(candidates.len());
+            let mut scalar_layout = None;
             for candidate in candidates {
                 let values: Rc<[T]> = self
-                    .candidate_frame(inputs, problem, input, directed_edge, candidate)?
+                    .candidate_frame(
+                        inputs,
+                        problem,
+                        input,
+                        directed_edge,
+                        candidate,
+                        &mut scalar_layout,
+                    )?
                     .into();
                 results.push(Some(values));
             }
@@ -1846,7 +1854,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     ///   plus [`grouped_gemm_descriptor_bytes`]);
     /// * the **scalar** route, the same
     ///   [`contract_core_slice`] accumulator used by
-    ///   [`contract_prepared_core_slices`] and [`Self::candidate_frame`],
+    ///   [`ScalarCoreLayout::contract`] and [`Self::candidate_frame`],
     ///   reusing the group's already resolved layout, otherwise.
     ///
     /// The cross-size condition is what keeps a sparse or diagonal candidate
@@ -1985,21 +1993,20 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             if !batched {
                 #[cfg(test)]
                 multi_incoming_debug_stats::record_scalar_group();
+                // One bounded adapter per physical group, reused for every
+                // scalar candidate and dropped before the next group's setup.
+                let mut scalar_incoming = Vec::with_capacity(incoming_edges.len());
                 for &candidate_index in &indices {
                     let candidate = &candidates[candidate_index];
-                    let incoming = candidate
-                        .incoming
-                        .iter()
-                        .zip(&incoming_axes)
-                        .map(|(&(edge, id), &axis)| {
-                            self.frame_slice(input, edge, id)
-                                .map(|values| (axis, values))
-                        })
-                        .collect::<Result<Vec<_>>>()?;
+                    scalar_incoming.clear();
+                    for (&(edge, id), &axis) in candidate.incoming.iter().zip(&incoming_axes) {
+                        scalar_incoming.push((axis, self.frame_slice(input, edge, id)?));
+                    }
                     // This group already prepared its axes and fixed-physical
                     // offset. Reuse them for every scalar candidate instead
                     // of rediscovering bonds and layout on the fallback path.
-                    let values = contract_core_slice(core, outgoing_axis, base_offset, &incoming)?;
+                    let values =
+                        contract_core_slice(core, outgoing_axis, base_offset, &scalar_incoming)?;
                     results[candidate_index] = Some(values.into());
                 }
                 continue;
@@ -2295,6 +2302,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         input: usize,
         directed_edge: DirectedEdgeId,
         sample: &ComponentSample,
+        scalar_layout: &mut Option<(usize, ScalarCoreLayout)>,
     ) -> Result<Vec<T>> {
         let cache_key = self.candidate_cache_key(problem, input, directed_edge, sample)?;
         // Fetched before the cache-hit check so the diagnostics hit path can
@@ -2348,13 +2356,34 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     .map(|values| (edge, values))
             })
             .collect::<Result<Vec<_>>>()?;
-        let values = contract_prepared_core_slices(
-            tree,
-            problem,
-            cores,
-            directed_edge,
+        if scalar_layout
+            .as_ref()
+            .is_some_and(|(prepared_input, layout)| {
+                *prepared_input != input || layout.edge != directed_edge
+            })
+        {
+            return Err(TreeAciError::InternalInvariant {
+                message: "scalar candidate layout reused for a different input or directed cut",
+            });
+        }
+        let (_, layout) = match scalar_layout {
+            Some(prepared) => prepared,
+            slot => slot.insert((
+                input,
+                prepare_scalar_core_layout(
+                    tree,
+                    problem,
+                    cores,
+                    directed_edge,
+                    incoming.iter().map(|&(edge, _)| edge),
+                )?,
+            )),
+        };
+        let values = layout.contract(
+            &cores[layout.node],
+            &problem.physical[layout.node],
             sample.local_coordinate,
-            &incoming,
+            incoming.iter().copied(),
         )?;
         if let Some(key) = cache_key {
             let values: Rc<[T]> = values.into();
@@ -2925,6 +2954,7 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
     }
 }
 
+#[cfg(test)]
 fn contract_prepared_core_slices<T: TreeAciScalar, V: TreeAciNode>(
     input: &TreeTN<IdxTensor, V>,
     problem: &PreparedTreeProblem<V>,
@@ -2951,7 +2981,8 @@ fn contract_prepared_core_slices<T: TreeAciScalar, V: TreeAciNode>(
 /// Axis metadata for one immutable prepared core and directed cut. Owned only
 /// by a scalar batch, with O(physical axes + incoming cuts) storage; it is not
 /// retained across updates or replicated for every directed cut.
-struct ScalarCoreLayout {
+pub(crate) struct ScalarCoreLayout {
+    edge: DirectedEdgeId,
     node: usize,
     outgoing_axis: usize,
     physical_axes: Vec<usize>,
@@ -2991,6 +3022,7 @@ fn prepare_scalar_core_layout<T: TreeAciScalar, V: TreeAciNode>(
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(ScalarCoreLayout {
+        edge,
         node,
         outgoing_axis,
         physical_axes,
@@ -3200,7 +3232,7 @@ fn single_incoming_all_physical_core_matrix<T: TreeAciScalar>(
 /// `core_matrix` is `outgoing_dim x incoming_dim` (from
 /// [`single_incoming_core_matrix`]); `incoming_frame_matrix` is
 /// `incoming_dim x n_candidates`. Returns `outgoing_dim x n_candidates`,
-/// column `c` being the same result [`contract_prepared_core_slices`] would have
+/// column `c` being the same result [`ScalarCoreLayout::contract`] would have
 /// produced for candidate `c` alone.
 fn contract_prepared_core_batched<T: TreeAciScalar>(
     core_matrix: &Matrix<T>,
@@ -3253,7 +3285,7 @@ fn diagnostics_record_matmul(elapsed: std::time::Duration, calls: usize) {
 /// `v1` is `incoming_dim_1 x n1`, `v2` is `incoming_dim_2 x n2`. Returns an
 /// `(outgoing_dim * n1) x n2` matrix: column `n2`, rows
 /// `[outgoing_dim * n1_index, outgoing_dim * (n1_index + 1))`, holds the
-/// `outgoing_dim`-length frame vector [`contract_prepared_core_slices`] would
+/// `outgoing_dim`-length frame vector [`ScalarCoreLayout::contract`] would
 /// produce for the `(n1_index, n2)` candidate alone.
 #[allow(clippy::too_many_arguments)]
 fn two_incoming_core_matrix_batched<T: TreeAciScalar>(

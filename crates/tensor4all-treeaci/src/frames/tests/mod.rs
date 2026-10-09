@@ -541,10 +541,24 @@ fn candidate_frame_hits_the_cache_on_a_repeated_lookup() {
 
     super::candidate_debug_stats::reset();
     let first = frames
-        .candidate_frame(std::slice::from_ref(&input), &problem, 0, 0, &candidate)
+        .candidate_frame(
+            std::slice::from_ref(&input),
+            &problem,
+            0,
+            0,
+            &candidate,
+            &mut None,
+        )
         .unwrap();
     let second = frames
-        .candidate_frame(std::slice::from_ref(&input), &problem, 0, 0, &candidate)
+        .candidate_frame(
+            std::slice::from_ref(&input),
+            &problem,
+            0,
+            0,
+            &candidate,
+            &mut None,
+        )
         .unwrap();
 
     assert_eq!(first, vec![1.0, 10.0]);
@@ -589,10 +603,24 @@ fn candidate_frame_stays_correct_when_the_shared_budget_has_no_headroom_for_cach
 
     super::candidate_debug_stats::reset();
     let first = frames
-        .candidate_frame(std::slice::from_ref(&input), &tight, 0, 0, &candidate)
+        .candidate_frame(
+            std::slice::from_ref(&input),
+            &tight,
+            0,
+            0,
+            &candidate,
+            &mut None,
+        )
         .unwrap();
     let second = frames
-        .candidate_frame(std::slice::from_ref(&input), &tight, 0, 0, &candidate)
+        .candidate_frame(
+            std::slice::from_ref(&input),
+            &tight,
+            0,
+            0,
+            &candidate,
+            &mut None,
+        )
         .unwrap();
 
     assert_eq!(first, vec![1.0, 10.0]);
@@ -635,7 +663,14 @@ fn extend_reclaims_candidate_cache_when_base_frames_consume_its_budget() {
     };
 
     frames
-        .candidate_frame(std::slice::from_ref(&input), &problem, 0, 0, &candidate)
+        .candidate_frame(
+            std::slice::from_ref(&input),
+            &problem,
+            0,
+            0,
+            &candidate,
+            &mut None,
+        )
         .unwrap();
     assert_eq!(frames.retained_bytes(), frame_budget);
 
@@ -652,7 +687,14 @@ fn extend_reclaims_candidate_cache_when_base_frames_consume_its_budget() {
 
     super::candidate_debug_stats::reset();
     extended
-        .candidate_frame(std::slice::from_ref(&input), &problem, 0, 0, &candidate)
+        .candidate_frame(
+            std::slice::from_ref(&input),
+            &problem,
+            0,
+            0,
+            &candidate,
+            &mut None,
+        )
         .unwrap();
     assert_eq!(super::candidate_debug_stats::misses(), 1);
     assert_eq!(super::candidate_debug_stats::hits(), 0);
@@ -1272,7 +1314,7 @@ fn complex_branch_candidate_batch_preserves_order_and_matches_scalar_frames() {
         .iter()
         .map(|candidate| {
             frames
-                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .candidate_frame(&inputs, &problem, 0, edge, candidate, &mut None)
                 .unwrap()
         })
         .collect::<Vec<_>>();
@@ -1320,7 +1362,7 @@ fn candidate_frames_for_edge_falls_back_on_a_leaf_edge_with_zero_incoming_edges(
         .iter()
         .map(|candidate| {
             frames
-                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .candidate_frame(&inputs, &problem, 0, edge, candidate, &mut None)
                 .unwrap()
         })
         .collect::<Vec<_>>();
@@ -1380,7 +1422,7 @@ fn candidate_frames_for_edge_batches_a_branch_edge_with_two_incoming_edges() {
         .iter()
         .map(|candidate| {
             frames
-                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .candidate_frame(&inputs, &problem, 0, edge, candidate, &mut None)
                 .unwrap()
         })
         .collect::<Vec<_>>();
@@ -1480,10 +1522,10 @@ fn frame_diagnostics_keys_are_namespaced_per_input_operand() {
 
     branch_diagnostics::reset();
     let from_input_0 = frames
-        .candidate_frame(&inputs, &problem, 0, edge, &candidate)
+        .candidate_frame(&inputs, &problem, 0, edge, &candidate, &mut None)
         .unwrap();
     let from_input_1 = frames
-        .candidate_frame(&inputs, &problem, 1, edge, &candidate)
+        .candidate_frame(&inputs, &problem, 1, edge, &candidate, &mut None)
         .unwrap();
     assert_eq!(from_input_0.len(), from_input_1.len());
 
@@ -1631,7 +1673,7 @@ fn candidate_frames_for_edge_batches_three_incoming_edges() {
         .iter()
         .map(|candidate| {
             frames
-                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .candidate_frame(&inputs, &problem, 0, edge, candidate, &mut None)
                 .unwrap()
         })
         .collect::<Vec<_>>();
@@ -2530,7 +2572,7 @@ fn branch_point_batched_speedup_vs_scalar_at_realistic_scale() {
         .iter()
         .map(|candidate| {
             scalar_frames
-                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .candidate_frame(&inputs, &problem, 0, edge, candidate, &mut None)
                 .unwrap()
         })
         .collect();
@@ -3036,7 +3078,7 @@ fn assert_multi_incoming_matches_scalar<T: FixtureScalar>(
         .iter()
         .map(|candidate| {
             scalar_frames
-                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .candidate_frame(&inputs, &problem, 0, edge, candidate, &mut None)
                 .unwrap()
         })
         .collect::<Vec<_>>();
@@ -3134,7 +3176,7 @@ fn multi_incoming_batch_preserves_order_for_duplicate_and_reordered_candidates()
         .iter()
         .map(|candidate| {
             scalar_frames
-                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .candidate_frame(&inputs, &problem, 0, edge, candidate, &mut None)
                 .unwrap()
         })
         .collect::<Vec<_>>();
@@ -3198,7 +3240,7 @@ fn multi_incoming_batch_falls_back_to_scalar_for_a_sparse_candidate_set() {
         .iter()
         .map(|candidate| {
             scalar_frames
-                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .candidate_frame(&inputs, &problem, 0, edge, candidate, &mut None)
                 .unwrap()
         })
         .collect::<Vec<_>>();
@@ -3241,7 +3283,7 @@ fn multi_incoming_batch_falls_back_to_scalar_when_the_working_budget_is_tight() 
         .iter()
         .map(|candidate| {
             scalar_frames
-                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .candidate_frame(&inputs, &problem, 0, edge, candidate, &mut None)
                 .unwrap()
         })
         .collect::<Vec<_>>();
@@ -3305,7 +3347,7 @@ fn assert_scalar_fallback_reuses_group_layout<T: FixtureScalar + PartialEq + std
             .iter()
             .map(|candidate| {
                 frames
-                    .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                    .candidate_frame(&inputs, &problem, 0, edge, candidate, &mut None)
                     .unwrap()
             })
             .collect::<Vec<_>>();
@@ -3911,7 +3953,7 @@ fn measure_three_incoming_case(m: usize, d: usize) {
             .iter()
             .map(|candidate| {
                 scalar_frames
-                    .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                    .candidate_frame(&inputs, &problem, 0, edge, candidate, &mut None)
                     .unwrap()
             })
             .collect();
@@ -4070,7 +4112,7 @@ fn measure_candidate_product_accounting(
         .iter()
         .map(|candidate| {
             scalar_frames
-                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .candidate_frame(&inputs, &problem, 0, edge, candidate, &mut None)
                 .unwrap()
         })
         .collect();
@@ -4351,6 +4393,154 @@ fn scalar_layout_rejects_different_incoming_cuts_and_invalid_lengths() {
             problem.directed_edges.len(),
             std::iter::empty()
         ),
+        Err(crate::TreeAciError::InternalInvariant { .. })
+    ));
+}
+
+fn assert_leaf_candidates_reuse_layout<T: FixtureScalar + PartialEq + std::fmt::Debug>() {
+    let inputs = vec![three_incoming_star::<T>()];
+    let mut problem = prepare_problem::<T, _>(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = problem
+        .directed_edges
+        .iter()
+        .position(|edge| edge.from == 2 && edge.incoming_to_from.is_empty())
+        .unwrap();
+    let node = problem.node_positions[&problem.directed_edges[edge].from];
+    let (arena, _) =
+        SampleArena::from_global_seeds(&problem, &[vec![0; problem.node_order.len()]]).unwrap();
+    let candidates = [2, 0, 1, 2, 0, 1]
+        .into_iter()
+        .map(|local_coordinate| ComponentSample {
+            local_coordinate,
+            incoming: vec![],
+        })
+        .collect::<Vec<_>>();
+    let reference = InputFrameStore::<T>::from_samples(&inputs, &problem, &arena).unwrap();
+    let expected = candidates
+        .iter()
+        .map(|candidate| {
+            reference
+                .candidate_frame(&inputs, &problem, 0, edge, candidate, &mut None)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let lookups = 1 + problem.physical[node].indices.len();
+    for retained in [false, true] {
+        let frames = InputFrameStore::<T>::from_samples(&inputs, &problem, &arena).unwrap();
+        problem.max_frame_bytes = if retained {
+            usize::MAX
+        } else {
+            frames.retained_bytes()
+        };
+        for rows in [false, true] {
+            super::debug_stats::reset();
+            super::candidate_debug_stats::reset();
+            let packed = if rows {
+                frames.candidate_frames_for_edge_rows(&inputs, &problem, 0, edge, &candidates, 0)
+            } else {
+                frames.candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
+            }
+            .unwrap();
+            assert_eq!(packed.to_candidate_vecs(), expected);
+            let warm = retained && rows;
+            assert_eq!(
+                super::debug_stats::axis_lookups(),
+                if warm { 0 } else { lookups as u64 }
+            );
+            assert_eq!(
+                super::candidate_debug_stats::misses(),
+                if retained {
+                    if warm {
+                        0
+                    } else {
+                        3
+                    }
+                } else {
+                    candidates.len() as u64
+                }
+            );
+            assert_eq!(
+                super::candidate_debug_stats::hits(),
+                if retained {
+                    if warm {
+                        candidates.len() as u64
+                    } else {
+                        3
+                    }
+                } else {
+                    0
+                }
+            );
+        }
+        super::debug_stats::reset();
+        let empty = frames
+            .candidate_frames_for_edge(&inputs, &problem, 0, edge, &[], 0)
+            .unwrap();
+        assert_eq!(empty.candidate_count(), 0);
+        assert_eq!(super::debug_stats::axis_lookups(), 0);
+    }
+}
+
+#[test]
+fn leaf_candidate_batches_reuse_layout_with_and_without_cache_headroom() {
+    assert_leaf_candidates_reuse_layout::<f32>();
+    assert_leaf_candidates_reuse_layout::<f64>();
+    assert_leaf_candidates_reuse_layout::<Complex32>();
+    assert_leaf_candidates_reuse_layout::<Complex64>();
+}
+
+#[test]
+fn scalar_candidate_layout_cannot_cross_directed_cuts() {
+    let inputs = vec![three_incoming_star::<f64>()];
+    let problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
+    let (arena, _) =
+        SampleArena::from_global_seeds(&problem, &[vec![0; problem.node_order.len()]]).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let leaves = problem
+        .directed_edges
+        .iter()
+        .enumerate()
+        .filter(|(_, edge)| edge.incoming_to_from.is_empty())
+        .map(|(id, _)| id)
+        .take(2)
+        .collect::<Vec<_>>();
+    let sample = ComponentSample {
+        local_coordinate: 0,
+        incoming: vec![],
+    };
+    let mut layout = None;
+    frames
+        .candidate_frame(&inputs, &problem, 0, leaves[0], &sample, &mut layout)
+        .unwrap();
+    assert!(matches!(
+        frames.candidate_frame(&inputs, &problem, 0, leaves[1], &sample, &mut layout),
+        Err(crate::TreeAciError::InternalInvariant { .. })
+    ));
+}
+
+#[test]
+fn scalar_candidate_layout_cannot_cross_inputs() {
+    let input = three_incoming_star::<f64>();
+    let inputs = vec![input.clone(), input];
+    let problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
+    let (arena, _) =
+        SampleArena::from_global_seeds(&problem, &[vec![0; problem.node_order.len()]]).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let leaf = problem
+        .directed_edges
+        .iter()
+        .position(|edge| edge.incoming_to_from.is_empty())
+        .unwrap();
+    let sample = ComponentSample {
+        local_coordinate: 0,
+        incoming: vec![],
+    };
+    let mut layout = None;
+    frames
+        .candidate_frame(&inputs, &problem, 0, leaf, &sample, &mut layout)
+        .unwrap();
+    assert!(matches!(
+        frames.candidate_frame(&inputs, &problem, 1, leaf, &sample, &mut layout),
         Err(crate::TreeAciError::InternalInvariant { .. })
     ));
 }

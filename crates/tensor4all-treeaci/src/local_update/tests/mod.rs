@@ -614,7 +614,7 @@ fn candidate_frames_batched_path_matches_scalar_path_on_a_chain() {
         .iter()
         .map(|candidate| {
             frames_scalar
-                .candidate_frame(&inputs, &problem, 0, edge, candidate)
+                .candidate_frame(&inputs, &problem, 0, edge, candidate, &mut None)
                 .unwrap()
         })
         .collect::<Vec<_>>();
