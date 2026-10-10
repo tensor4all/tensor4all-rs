@@ -124,6 +124,7 @@ jobs:
       # snapshot reachable and lets each run publish its own.
 
       - name: Restore the kache store
+        id: kache-restore
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/kache
@@ -150,7 +151,7 @@ jobs:
         # Compiled artifacts are valid whatever the tests did, so save on failure too. Only
         # trusted refs publish: a PR job stays restore-only instead of claiming a key that
         # another run could have refreshed.
-        if: ${{ always() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci/kache-salt-pilot') }}
+        if: ${{ always() && steps.kache-restore.outputs.cache-hit != 'true' && (github.ref == 'refs/heads/main' || github.head_ref == 'ci/kache-salt-pilot') }}
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/kache
@@ -274,6 +275,7 @@ jobs:
         # and kache owns compiled-artifact reuse.
 
       - name: Restore the kache store
+        id: kache-restore
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/kache
@@ -304,7 +306,7 @@ jobs:
         # Compiled artifacts are valid whatever the tests did, so save on failure too. Only
         # trusted refs publish: a PR job stays restore-only instead of claiming a key that
         # another run could have refreshed.
-        if: ${{ always() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci/kache-salt-pilot') }}
+        if: ${{ always() && steps.kache-restore.outputs.cache-hit != 'true' && (github.ref == 'refs/heads/main' || github.head_ref == 'ci/kache-salt-pilot') }}
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/kache
