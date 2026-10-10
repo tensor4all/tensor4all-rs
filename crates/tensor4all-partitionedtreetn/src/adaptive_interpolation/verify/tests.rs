@@ -472,6 +472,50 @@ fn scaled_squares_match_the_plain_sum() {
     large.add(1e300);
     large.add(1e300);
     assert!(close(large.norm(), 2.0_f64.sqrt() * 1e300));
+    // Infinite terms, in any order and repeated, give an infinite norm.
+    for terms in [
+        [f64::INFINITY, f64::INFINITY, 1.0],
+        [1.0, f64::INFINITY, f64::INFINITY],
+        [f64::INFINITY, 1.0, f64::INFINITY],
+    ] {
+        let mut sum = ScaledSquares::default();
+        for a in terms {
+            sum.add(a);
+        }
+        assert_eq!(sum.norm(), f64::INFINITY, "{terms:?}");
+    }
+}
+
+#[test]
+fn infinite_residuals_of_retained_patches_give_an_infinite_global_error() {
+    // Two retained patches whose residual overflowed: the global error is
+    // infinite, not NaN, under every classification.
+    let overflowed = measurement(MeasurementMethod::Exhaustive, 2.0, f64::INFINITY, 0.0);
+    let sampled = measurement(MeasurementMethod::Sampled, 2.0, f64::INFINITY, 0.0);
+    for acceptance in [&overflowed, &sampled] {
+        for audit in [None, Some(&overflowed)] {
+            let contribution = || Contribution {
+                patch_points: 2.0,
+                acceptance,
+                audit,
+                within_tolerance: false,
+            };
+            let contributions = [contribution(), contribution()];
+            let (global, certified) =
+                global_error(&contributions, 4.0, 0.1, Some(1.0), f64::EPSILON);
+            assert_eq!(certified, 0.0);
+            let GlobalL2Error::ToleranceNotMet {
+                measured_rms,
+                unmet_fraction,
+                ..
+            } = global
+            else {
+                panic!("expected ToleranceNotMet, got {global:?}");
+            };
+            assert_eq!(measured_rms, f64::INFINITY);
+            assert_eq!(unmet_fraction, 1.0);
+        }
+    }
 }
 
 fn measurement(method: MeasurementMethod, patch_points: f64, rms: f64, rel: f64) -> L2Measurement {

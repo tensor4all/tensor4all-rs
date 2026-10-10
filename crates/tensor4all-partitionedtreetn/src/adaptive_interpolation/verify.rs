@@ -282,7 +282,8 @@ pub(super) fn rms_of(magnitudes: impl Iterator<Item = f64> + Clone) -> f64 {
 }
 
 /// A sum of squares `sum a_i^2` kept as `scale^2 * ssq` (LAPACK's `lassq`),
-/// so that finite terms cannot overflow it.
+/// so that finite terms cannot overflow it. An infinite term makes the norm
+/// infinite; it never turns it into `NaN`.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct ScaledSquares {
     scale: f64,
@@ -298,7 +299,8 @@ impl ScaledSquares {
         if a > self.scale {
             self.ssq = 1.0 + self.ssq * (self.scale / a) * (self.scale / a);
             self.scale = a;
-        } else {
+        } else if self.scale.is_finite() {
+            // An infinite sum absorbs every term; `inf / inf` would be NaN.
             self.ssq += (a / self.scale) * (a / self.scale);
         }
     }
