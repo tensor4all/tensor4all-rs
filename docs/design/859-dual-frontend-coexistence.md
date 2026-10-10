@@ -339,13 +339,13 @@ exactly what is delivered, and §5c lists what is not.
 
 | Item | Notes |
 | --- | --- |
-| Read/write/output routes | the read route and the binary output-into route are delivered; the N-ary output route and caller-owned prepared plans are not |
+| Read/write/output routes | the read route, the binary output-into route and the N-ary output route (`PreparedEinsum::execute_into`) are delivered |
 | Remaining primitive/linalg operations | `scale`/`axpby`/`conj`/`outer_product`, the Hermitian eigen routes, `src_error_estimate`, the `Matrix`-level linalg wrappers |
 | Remaining `Matrix`/`Storage` routes | batched/grouped GEMM, `submatrix`/`swap`/`transpose`, and the `Storage`-level contraction/permutation routes |
 | Structured representation parity | structured/diagonal storage preservation on the explicit route (dtype promotion is delivered and shared) |
 | Compatibility bridges | only `LogicalTensor` exists; explicit detach/lift and materialization bridges are still to come |
 | Private child resources and the backend phase proof | the held session and the phase lease exist upstream; tensorbackend does not expose or prove them yet |
-| Reusable plan surface | the read route prepares a plan per call; a caller-held prepared plan across operations is still to come |
+| Reusable plan surface | delivered as `explicit::PreparedEinsum`: prepare once over borrowed operands, then `execute` or `execute_into` on whichever session the caller holds |
 | Measurements | bridge allocations/copies/registration are not measured, and no paired dispatch numbers are recorded for the explicit route |
 | A held *object* form | see the note below |
 

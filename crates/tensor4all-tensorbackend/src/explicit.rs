@@ -102,6 +102,128 @@ impl std::fmt::Debug for Session<'_> {
     }
 }
 
+/// One prepared N-ary einsum, reusable across operations of a session.
+///
+/// Preparing validates the labels and plans the contraction once; every
+/// [`PreparedEinsum::execute`] and [`PreparedEinsum::execute_into`] reuses that plan, so
+/// a stage keeps one plan across as many evaluations as it needs instead of preparing
+/// per call. The plan borrows its operands, so it cannot outlive them, and it holds no
+/// execution state: the session stays the caller's.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{explicit::PreparedEinsum, CpuExecutionContext};
+/// use tenferro::Tensor;
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_tensor::{TensorRead, TensorWrite};
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+/// let b = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0])?;
+/// let reads = [TensorRead::from_tensor(&a), TensorRead::from_tensor(&b)];
+/// let plan = PreparedEinsum::prepare(&reads, &[&[0, 1], &[1, 2]], &[0, 2])?;
+///
+/// // Reused across a stage, including into a caller-provided destination.
+/// let mut out = Tensor::from_vec_col_major(vec![2, 1], vec![0.0_f64, 0.0])?;
+/// context.with_concrete_session(|session| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+///     let product = plan.execute(session)?;
+///     assert_eq!(product.as_slice::<f64>()?, &[23.0, 34.0]);
+///     plan.execute_into(session, TensorWrite::Tensor(&mut out))?;
+///     Ok(())
+/// })??;
+/// assert_eq!(out.as_slice::<f64>()?, &[23.0, 34.0]);
+/// # Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+/// ```
+pub struct PreparedEinsum<'operands> {
+    plan: ConcreteEinsumPlan,
+    operands: Vec<tenferro_tensor::TensorRead<'operands>>,
+}
+
+impl std::fmt::Debug for PreparedEinsum<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("explicit::PreparedEinsum")
+            .field("operands", &self.operands.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'operands> PreparedEinsum<'operands> {
+    /// Plan an N-ary einsum over borrowed operands.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_einsum::Error::InvalidSubscripts`] for malformed labels, a
+    /// label list whose length does not match the operand's rank, or a label-list count
+    /// that does not match the operand count, and [`tenferro_einsum::Error`] from the
+    /// contraction planner when the expression cannot be planned.
+    pub fn prepare(
+        operands: &[tenferro_tensor::TensorRead<'operands>],
+        input_ids: &[&[usize]],
+        output_ids: &[usize],
+    ) -> tenferro_einsum::Result<Self> {
+        if operands.len() != input_ids.len() {
+            return Err(tenferro_einsum::Error::InvalidSubscripts {
+                message: format!(
+                    "einsum needs one label list per operand: {} operands, {} label lists",
+                    operands.len(),
+                    input_ids.len()
+                ),
+            });
+        }
+        let invalid = |error: anyhow::Error| tenferro_einsum::Error::InvalidSubscripts {
+            message: format!("{error}"),
+        };
+        let inputs = input_ids
+            .iter()
+            .map(|ids| checked_native_einsum_labels(ids))
+            .collect::<anyhow::Result<Vec<_>>>()
+            .map_err(invalid)?;
+        let output = checked_native_einsum_labels(output_ids).map_err(invalid)?;
+        let subscripts = EinsumSubscripts { inputs, output };
+        let plan = ConcreteEinsumPlan::prepare_read_subscripts(operands, &subscripts)?;
+        Ok(Self {
+            plan,
+            operands: operands.to_vec(),
+        })
+    }
+
+    /// Evaluate the prepared plan on `session`, allocating the result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_einsum::Error::Tensor`] when the session rejects the operands
+    /// or the contraction itself fails, and
+    /// [`tenferro_einsum::Error::Validation`] when the operands no longer match the
+    /// planned expression.
+    pub fn execute(&self, session: &mut Session<'_>) -> tenferro_einsum::Result<NativeTensor> {
+        self.plan
+            .execute_read(self.operands.as_slice(), session.backend())
+    }
+
+    /// Evaluate the prepared plan into a caller-provided destination.
+    ///
+    /// The destination is fully written and is never zero-filled first. Operands and
+    /// destination must already share one dtype; this route does not convert into a
+    /// caller-owned output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_einsum::Error::Tensor`] when the session rejects the operands,
+    /// the destination or the contraction, and
+    /// [`tenferro_einsum::Error::Validation`] when the operands no longer match the
+    /// planned expression.
+    pub fn execute_into(
+        &self,
+        session: &mut Session<'_>,
+        out: tenferro_tensor::TensorWrite<'_>,
+    ) -> tenferro_einsum::Result<()> {
+        self.plan
+            .execute_read_into(self.operands.as_slice(), session.backend(), out)
+    }
+}
+
 /// Promote a heterogeneous operand set to the dtype both frontends contract in.
 ///
 /// Returns an empty vector when every operand already has the common dtype, so the
@@ -134,6 +256,14 @@ fn promote_operands(
 impl<'session> Session<'session> {
     pub(crate) fn new(session: &'session mut dyn BackendSession) -> Self {
         Self { session }
+    }
+
+    /// The concrete session behind this explicit session.
+    ///
+    /// Exposed so a prepared plan can evaluate itself on the caller's session; it is
+    /// not a second entry point, and it never consults another backend.
+    pub fn backend(&mut self) -> &mut dyn BackendSession {
+        self.session
     }
 
     /// Reshape a concrete tensor without changing its column-major linearization.
