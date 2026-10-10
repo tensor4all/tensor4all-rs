@@ -316,7 +316,7 @@ session (pin bump `b3f4729` -> `ff94aeded`, PR #873).
 **This is a partial slice of B1, not the whole gate.** It delivers the session entry
 and the allocation-returning primitive/einsum/linalg routes over native tensors; the
 read/write/output routes, the compatibility bridges beyond `LogicalTensor`, the
-private child-resource surface, the backend phase proof, the `Matrix`/`Storage`
+`Matrix`/`Storage`
 families and the bridge-cost measurements are **not** in it. The table below states
 exactly what is delivered, and §5c lists what is not.
 
@@ -345,11 +345,11 @@ exactly what is delivered, and §5c lists what is not.
 | Remaining batched GEMM route | `batched_mat_mul_same_shape` builds its jobs and then enters the compatibility session; `grouped_mat_mul_shared` now has a session entry (`Session::grouped_mat_mul_shared` via `grouped_mat_mul_shared_in`) |
 | Session-free operations (no explicit route needed) | `scale`, `axpby`, `conj` on the structured paths, the `Storage`-level contraction/permutation kernels, and `Matrix` `submatrix`/`swap_rows`/`swap_cols`/`transpose` are pure host code that names no session, so an explicit caller uses them as they are. `outer_product` is already expressible as `contraction(lhs, &[], rhs, &[])` |
 | Structured representation parity | structured/diagonal storage preservation on the explicit route (dtype promotion is delivered and shared) |
-| Compatibility bridges | only `LogicalTensor` exists; explicit detach/lift and materialization bridges are still to come |
-| Private child resources and the backend phase proof | the held session and the phase lease exist upstream; tensorbackend does not expose or prove them yet |
+| Compatibility bridges | `LogicalTensor` for host snapshots, plus `explicit::lift` and `explicit::detach` as the named plain/AD boundary: adoption moves the value into the context's own eager runtime, materialization is a separate named call, and neither is implicit |
+| Private child resources and the backend phase proof | delivered: `HeldSession::phase` / `PhaseLane` lend the session's own pool to a phase scheduler, each lane running this frontend's session view over a private child session; tests cover one lane, one lane per worker, error cancellation observed by a peer, and recovery |
 | Reusable plan surface | delivered as `explicit::PreparedEinsum`: prepare once over borrowed operands, then `execute` or `execute_into` on whichever session the caller holds |
-| Measurements | bridge allocations/copies/registration are not measured, and no paired dispatch numbers are recorded for the explicit route |
-| A held *object* form | see the note below |
+| Measurements | delivered in section 5c-1: paired dispatch numbers for all three entry routes plus the separately reported bridge cost |
+| A held *object* form | delivered as `explicit::HeldSession`, see section 5d |
 
 Why the entry is callback-scoped here, and what the alternatives are: tenferro's held
 session borrows a `&CpuBackend` for the caller's scope (`CpuBackend::open_session(&self)`),
@@ -372,6 +372,72 @@ Either would give this frontend a held object without an upstream change; neithe
 taken here, because the object's ownership and the compatibility entry's worker policy
 are decisions for the maintainer rather than consequences of the pin. What is delivered
 is the callback-scoped entry plus the routes, which is what a stage needs today.
+
+### 5c-1. Paired dispatch and bridge measurements
+
+Protocol: `crates/tensor4all-tensorbackend/benches/explicit_dispatch.rs`, criterion, one arm
+per entry route over the same QR operation on a `CpuExecutionContext::from_backend(
+CpuBackend::with_threads(1))`, pinned with `taskset -c 0`, release build, 100 samples with 2 s
+warm-up and 5 s measurement per case. `compatibility` is `qr_native_tensor` (the
+process-global convenience entry), `explicit_scoped` is one `with_concrete_session` per
+call, `explicit_held` is one `HeldSession` with one operation view per call, and `bridge` is
+`lift` plus `detach`, which is reported on its own rather than folded into the kernel
+numbers.
+
+Measured 2026-10-10 on AMD EPYC 7713P, rustc 1.97.1, medians with criterion's interval:
+
+| case | median |
+| --- | ---: |
+| QR 2x2 `compatibility` | 1.973 us |
+| QR 2x2 `explicit_scoped` | 1.845 us |
+| QR 2x2 `explicit_held` | 1.384 us |
+| QR 16x16 `compatibility` | 7.614 us |
+| QR 16x16 `explicit_scoped` | 7.370 us |
+| QR 16x16 `explicit_held` | 6.950 us |
+| bridge `lift_detach` 2x2 | 3.934 us |
+| bridge `lift_detach` 16x16 | 4.187 us |
+
+What the numbers support: holding one session removes the per-operation session entry, worth
+0.46 us at 2x2 and 0.66 us at 16x16 against the callback-scoped explicit entry, and the
+explicit route does not add dispatch cost over the compatibility route. What they also show:
+one lift/detach round trip costs about as much as a small QR (3.9 to 4.2 us), so a stage that
+crosses the tracking boundary per operation would pay more than it saves - which is why the
+boundary is specified at stage or batch granularity and why its cost is reported here
+separately instead of being counted as free.
+
+### 5d. The held session form
+
+The route surface above is callback-scoped: `CpuExecutionContext::with_concrete_session`
+owns the backend borrow for the closure. A stage that spans many calls holds
+`explicit::HeldSession` instead.
+
+tenferro's held session borrows a `&CpuBackend`, while this context stores its backend in a
+mutex because the compatibility entry needs `&mut`. The context therefore cannot lend a
+`&CpuBackend` that outlives a guard, and an object owning both the guard and a session
+borrowing it is the self-referential struct the upstream design forbids. This record
+adopts the caller-owned-handle alternative that the earlier review identified:
+
+```text
+let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+let mut session = explicit::HeldSession::open(&backend)?;
+session.with_session(|view| view.qr(&a))?;
+session.close()?;
+```
+
+- `CpuBackend::clone` is documented to share the engine, arbiter, executor and buffer
+  resources, so the handle is the same execution domain and not a second one.
+- `HeldSession` owns no backend; it borrows the caller's handle, so nothing is
+  self-referential and the borrow checker enforces that the handle outlives the session.
+- `HeldSession` is `!Send + !Sync`, because it owns admission and the caller's narrowed CPU
+  mask on the opening thread. An in-source compile-time probe asserts it.
+- `with_session` hands out the same `Session` view the callback-scoped entry uses, so every
+  route is shared rather than duplicated, and the two entries cannot drift.
+- One root owner per engine still holds: a held session and a callback-scoped session on
+  the same engine conflict through the arbiter rather than nesting.
+
+This adds no second entry mechanism and changes no compatibility signature. It is the
+narrowest held-object shape expressible without an upstream owned-session constructor; a
+self-contained `Context::open_session()` would still need one.
 
 ## 6. Specified legacy-preservation tests
 

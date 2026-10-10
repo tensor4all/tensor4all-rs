@@ -99,9 +99,9 @@ fn explicit_solve_satisfies_the_linear_system() {
 ///
 /// Independence from the compatibility frontend is structural: this module never
 /// names `with_default_session`, the default context or the eager runtime, and the
-/// crate's session-entry audit covers the boundary. `default_context_hits` cannot
-/// prove it here, because the rest of this parallel test binary initializes the
-/// process-global context on its own.
+/// crate's session-entry audit covers the boundary. A process-wide initialization
+/// counter cannot prove it here, because the rest of this parallel test binary
+/// initializes the process-global context on its own.
 #[test]
 fn one_session_serves_a_batch() {
     let context = context(2);
@@ -737,4 +737,285 @@ fn session_typed_tensor_linalg_routes_run_on_the_session() {
         .expect("session entry")
         .expect_err("a rank-1 QR input must be rejected typed");
     assert!(!error.to_string().is_empty(), "{error}");
+}
+
+/// A held session keeps one entry open across a stage, and its routes agree with the
+/// callback-scoped entry.
+#[test]
+fn held_session_spans_a_stage_and_matches_the_scoped_entry() {
+    use tenferro_cpu::CpuBackend;
+
+    let context = context(1);
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let a = matrix();
+
+    let mut held = HeldSession::open(&backend).expect("held session");
+    assert!(format!("{held:?}").contains("explicit::HeldSession"));
+    let transposed = held
+        .with_session(|view| view.permute(&a, &[1, 0]))
+        .expect("held permute");
+    let total = held
+        .with_session(|view| view.sum(&transposed))
+        .expect("held sum");
+    let (q, _r) = held.with_session(|view| view.qr(&a)).expect("held QR");
+    held.close().expect("affinity restores");
+
+    let scoped = context
+        .with_concrete_session(|view| view.permute(&a, &[1, 0]))
+        .expect("session entry")
+        .expect("scoped permute");
+    assert_eq!(
+        transposed.as_slice::<f64>().expect("f64 payload"),
+        scoped.as_slice::<f64>().expect("f64 payload")
+    );
+    assert_eq!(total.as_slice::<f64>().expect("f64 payload"), &[10.0]);
+    assert_eq!(q.shape(), &[2, 2]);
+    // The reservation is released on close; the queued-caller test separately shows that a
+    // conflicting scoped entry waits for it rather than running in a second domain.
+    assert!(context.with_concrete_session(|_| ()).is_ok());
+}
+
+/// A held session is `!Send + !Sync`, and it borrows its backend handle rather than
+/// owning one.
+#[test]
+fn held_session_is_neither_send_nor_sync() {
+    const _: fn() = || {
+        trait AmbiguousIfImpl<A> {
+            fn item() {}
+        }
+        struct InvalidSend;
+        struct InvalidSync;
+        impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+        impl<T: ?Sized + Send> AmbiguousIfImpl<InvalidSend> for T {}
+        impl<T: ?Sized + Sync> AmbiguousIfImpl<InvalidSync> for T {}
+        let _ = <HeldSession<'static> as AmbiguousIfImpl<_>>::item;
+    };
+}
+
+/// A second held session on the opening thread is rejected as nested entry: upstream
+/// refuses any active CPU execution on that thread before it reaches the arbiter.
+#[test]
+fn a_second_held_session_on_the_opening_thread_is_rejected() {
+    use tenferro_cpu::CpuBackend;
+
+    let context = context(1);
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let first = HeldSession::open(&backend).expect("first held session");
+    let second = HeldSession::open(&backend);
+    assert!(
+        matches!(
+            second,
+            Err(tenferro_tensor::SessionEntryError::Reentered { .. })
+        ),
+        "nested entry on the opening thread is a typed reentry rejection"
+    );
+    first.close().expect("affinity restores");
+    // The reservation is released, so the same handle admits a new session.
+    let again = HeldSession::open(&backend).expect("held session after close");
+    again.close().expect("affinity restores");
+}
+
+/// The queued scoped caller waits for the held session's reservation and then succeeds:
+/// the two entries conflict through admission, not through a second domain.
+#[test]
+fn a_queued_scoped_caller_waits_for_the_held_session() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use tenferro_cpu::CpuBackend;
+
+    let context = Arc::new(context(1));
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let held = HeldSession::open(&backend).expect("held session");
+    let (sender, receiver) = mpsc::channel();
+    let waiter = Arc::clone(&context);
+    let handle = std::thread::spawn(move || {
+        let admitted = waiter.with_concrete_session(|_| ()).is_ok();
+        let _ = sender.send(admitted);
+    });
+
+    assert!(
+        receiver.recv_timeout(Duration::from_millis(300)).is_err(),
+        "a conflicting scoped caller must wait for the held session"
+    );
+    held.close().expect("affinity restores");
+    assert!(
+        receiver
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the queued caller completes after close"),
+        "the queued caller is admitted once the reservation is released"
+    );
+    handle.join().expect("waiter thread");
+}
+
+/// A held owner is rejected before the scoped entry takes the context's backend lock.
+///
+/// Without that rejection the owner would wait for a lock that a conflicting scoped caller
+/// can hold while it waits for the owner's admission. The owner runs in its own thread so a
+/// regression fails the timeout instead of hanging the suite.
+#[test]
+fn a_held_owner_is_rejected_before_taking_the_context_lock() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use tenferro_cpu::CpuBackend;
+
+    let context = Arc::new(context(1));
+    let (sender, receiver) = mpsc::channel();
+    let owner_context = Arc::clone(&context);
+    std::thread::spawn(move || {
+        let backend: CpuBackend = owner_context.with_backend(|backend| backend.clone());
+        let held = HeldSession::open(&backend).expect("held session");
+        let rejected = owner_context.with_concrete_session(|_| ()).is_err();
+        held.close().expect("affinity restores");
+        let _ = sender.send(rejected);
+    });
+    assert!(
+        receiver
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the held owner must not wait for the context backend lock"),
+        "the held owner's scoped entry is rejected typed"
+    );
+}
+
+/// A phase runs one lane per pool worker, each with this frontend's session view, and the
+/// held session survives it.
+#[test]
+fn held_session_phase_runs_every_lane_with_the_session_view() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    use tenferro_cpu::CpuBackend;
+
+    let context = context(2);
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let a = matrix();
+    let lanes = AtomicUsize::new(0);
+    let sums = Mutex::new(Vec::new());
+
+    let mut session = HeldSession::open(&backend).expect("held session");
+    session
+        .phase(|_index, lane| {
+            lanes.fetch_add(1, Ordering::Relaxed);
+            let total = lane.session().sum(&a)?;
+            sums.lock()
+                .expect("lane sums lock")
+                .push(total.as_slice::<f64>()?[0]);
+            Ok::<(), tenferro_tensor::Error>(())
+        })
+        .expect("phase runs");
+    assert_eq!(lanes.load(Ordering::Relaxed), 2);
+    assert_eq!(sums.into_inner().expect("lane sums"), vec![10.0, 10.0]);
+
+    // The held session is unchanged, and its routes still work.
+    let transposed = session
+        .with_session(|view| view.permute(&a, &[1, 0]))
+        .expect("held permute after a phase");
+    assert_eq!(
+        transposed.as_slice::<f64>().expect("f64 payload"),
+        &[1.0, 3.0, 2.0, 4.0]
+    );
+    session.close().expect("affinity restores");
+}
+
+/// A lane error cancels its peers, which observe the cancellation, and the held session
+/// stays usable afterwards.
+#[test]
+fn held_session_phase_cancels_peers_and_recovers() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::time::{Duration, Instant};
+    use tenferro_cpu::{CpuBackend, PhaseRunError};
+
+    let context = context(2);
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let barrier = Arc::new(Barrier::new(2));
+    let observed = Arc::new(AtomicBool::new(false));
+
+    let mut session = HeldSession::open(&backend).expect("held session");
+    let outcome: Result<(), PhaseRunError<&'static str>> = session.phase({
+        let observed = Arc::clone(&observed);
+        move |index, lane| {
+            barrier.wait();
+            if index == 0 {
+                return Err("lane zero failed");
+            }
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !lane.cancelled() {
+                assert!(
+                    Instant::now() < deadline,
+                    "the peer lane never observed cancellation"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            observed.store(true, Ordering::Relaxed);
+            Ok(())
+        }
+    });
+    assert!(matches!(
+        outcome,
+        Err(PhaseRunError::Lane("lane zero failed"))
+    ));
+    assert!(observed.load(Ordering::Relaxed));
+
+    // Recovery: a later operation and a later phase both work.
+    assert!(session.with_session(|view| view.sum(&matrix())).is_ok());
+    session
+        .phase(|_index, _lane| Ok::<(), tenferro_tensor::Error>(()))
+        .expect("a later phase runs");
+    session.close().expect("affinity restores");
+}
+
+/// A one-worker context drives a single inline lane, on the calling thread, with the session
+/// view available.
+#[test]
+fn held_session_phase_on_a_one_worker_context_drives_one_lane() {
+    use std::sync::Mutex;
+    use tenferro_cpu::CpuBackend;
+
+    let context = context(1);
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let a = matrix();
+    let total = Mutex::new(0.0_f64);
+
+    let mut session = HeldSession::open(&backend).expect("held session");
+    session
+        .phase(|_index, lane| {
+            assert!(
+                rayon::current_thread_index().is_none(),
+                "the one-worker lane runs on the caller, not on a pool worker"
+            );
+            let sum = lane.session().sum(&a)?;
+            *total.lock().expect("lane total lock") += sum.as_slice::<f64>()?[0];
+            Ok::<(), tenferro_tensor::Error>(())
+        })
+        .expect("phase runs");
+    assert_eq!(total.into_inner().expect("lane total"), 10.0);
+    session.close().expect("affinity restores");
+}
+
+/// The compatibility bridges are the explicit tracking boundary: a concrete value is moved
+/// into the context's own eager runtime, tracked there, and materialized back only by naming
+/// `detach`.
+#[test]
+fn explicit_bridges_are_the_tracking_boundary() {
+    let context = context(1);
+    let plain = matrix();
+    let tracked = lift(&context, plain).expect("lift");
+    assert!(format!("{tracked:?}").contains("EagerTensor"));
+
+    // Tracked arithmetic runs in the context's own runtime, not on the concrete route.
+    let runtime = context.eager_runtime().expect("eager runtime");
+    let doubled = runtime
+        .with_eager_session(|session| session.add(&tracked, &tracked))
+        .expect("eager add");
+    let back = detach(&doubled).expect("detach");
+    assert_eq!(
+        back.as_slice::<f64>().expect("f64 payload"),
+        &[2.0, 4.0, 6.0, 8.0]
+    );
+
+    // The materialized value is an ordinary concrete value: the explicit routes accept it.
+    let total = context
+        .with_concrete_session(|view| view.sum(&back))
+        .expect("session entry")
+        .expect("sum");
+    assert_eq!(total.as_slice::<f64>().expect("f64 payload"), &[20.0]);
 }

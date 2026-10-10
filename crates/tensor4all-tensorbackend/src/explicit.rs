@@ -49,6 +49,7 @@
 
 use tenferro::Tensor as NativeTensor;
 use tenferro::TensorSessionOpsExt;
+use tenferro_cpu::{CpuPhaseError, PhaseRunError};
 use tenferro_einsum::{ConcreteEinsumPlan, EinsumSubscripts, TensorEinsumExt};
 use tenferro_linalg::TensorLinalgExt;
 
@@ -99,6 +100,314 @@ impl std::fmt::Debug for Session<'_> {
         formatter
             .debug_struct("explicit::Session")
             .finish_non_exhaustive()
+    }
+}
+
+/// Failure reported by this frontend's compatibility bridges.
+///
+/// The original tenferro or tenferro-ad diagnostic is retained as the source.
+#[derive(Debug, thiserror::Error)]
+pub enum ConversionError {
+    /// Materializing a tracked value into a plain concrete value failed.
+    #[error("materializing a tracked value failed: {source}")]
+    Detach {
+        /// Original tenferro diagnostic.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    /// Adopting a plain concrete value into an eager runtime failed.
+    #[error("adopting a concrete value failed: {source}")]
+    Lift {
+        /// Original tenferro or tenferro-ad diagnostic.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+}
+
+/// Materialize a tracked eager value into a plain concrete value.
+///
+/// This is the explicit AD to plain boundary of the coexistence contract: the caller names
+/// the conversion, so tracking never disappears silently, and `no_grad` on an eager value is
+/// not this operation and does not select the concrete representation. The value keeps its
+/// dtype, logical shape and column-major layout; the result is an ordinary concrete tensor
+/// that this frontend's routes accept.
+///
+/// # Errors
+///
+/// Returns [`ConversionError::Detach`] when the tracked value cannot be materialized, for
+/// example because it is a lazy or prepared value that has not been evaluated.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{explicit, CpuExecutionContext};
+/// use tenferro::Tensor;
+/// use tenferro_ad::EagerTensor;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let plain = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+/// let tracked = explicit::lift(&context, plain)?;
+/// let back = explicit::detach(&tracked)?;
+/// assert_eq!(back.as_slice::<f64>()?, &[1.0, 2.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn detach(eager: &tenferro_ad::EagerTensor) -> Result<NativeTensor, ConversionError> {
+    eager.to_tensor().map_err(|source| ConversionError::Detach {
+        source: Box::new(source),
+    })
+}
+
+/// Adopt a plain concrete value into `context`'s eager runtime.
+///
+/// This is the explicit plain to AD boundary: the result is a tracked value in a graph owned
+/// by `context`'s own eager runtime, and nothing about it is inferred from the caller's
+/// ambient `no_grad` or capture state. The value is moved into the runtime, because a
+/// concrete tensor has one owner. Use [`detach`] for the opposite direction.
+///
+/// # Errors
+///
+/// Returns [`ConversionError::Lift`] when the context's eager runtime cannot be initialized
+/// or when the value cannot be adopted, for example because it is not a concrete host value.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{explicit, CpuExecutionContext};
+/// use tenferro::Tensor;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let plain = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
+/// let tracked = explicit::lift(&context, plain)?;
+/// // The adopted value is tracked, and its runtime is the context's own.
+/// assert_eq!(explicit::detach(&tracked)?.as_slice::<f64>()?, &[3.0, 4.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn lift(
+    context: &CpuExecutionContext,
+    tensor: NativeTensor,
+) -> Result<tenferro_ad::EagerTensor, ConversionError> {
+    let runtime = context
+        .eager_runtime()
+        .map_err(|source| ConversionError::Lift {
+            source: Box::new(source),
+        })?;
+    tenferro_ad::EagerTensor::from_tensor_in(tensor, runtime).map_err(|source| {
+        ConversionError::Lift {
+            source: Box::new(source),
+        }
+    })
+}
+
+/// One lane of a running phase over a [`HeldSession`].
+///
+/// A lane is bound to one worker of the context's pool and to one child session that stays
+/// open for the whole lane, so its scratch and prepared plans are reused across every work
+/// item the callback runs. [`PhaseLane::session`] hands out this frontend's [`Session`]
+/// view for that child.
+pub struct PhaseLane<'lane, 'session> {
+    lane: &'lane mut tenferro_cpu::PhaseLane<'session>,
+}
+
+impl std::fmt::Debug for PhaseLane<'_, '_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("explicit::PhaseLane")
+            .field("cancelled", &self.cancelled())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PhaseLane<'_, '_> {
+    /// The worker-local session view for this lane.
+    ///
+    /// Every route of this frontend is available on it, and it borrows the child session
+    /// for the duration of the call.
+    pub fn session(&mut self) -> Session<'_> {
+        Session::new(self.lane.session())
+    }
+
+    /// Whether some lane already failed or unwound.
+    ///
+    /// A lane callback must return cooperatively once this is set and must never wait
+    /// indefinitely for a peer: the phase can only join callbacks that terminate.
+    pub fn cancelled(&self) -> bool {
+        self.lane.cancelled()
+    }
+}
+
+/// A held concrete session over a caller-owned backend handle.
+///
+/// [`CpuExecutionContext::with_concrete_session`] scopes the session to one closure.
+/// A stage that spans many calls - a fit loop, a sweep, a batched driver - holds this
+/// instead: it borrows a backend handle the caller owns and keeps one session entry open
+/// until [`HeldSession::close`] or drop, handing out the same [`Session`] view the
+/// callback-scoped entry uses for every route.
+///
+/// The handle is obtained from the context, which keeps its backend behind a mutex for the
+/// compatibility entry, so the object is built from a caller-owned clone rather than from
+/// the context directly:
+///
+/// ```text
+/// let backend = context.with_backend(|backend| backend.clone());
+/// let mut session = explicit::HeldSession::open(&backend)?;
+/// ```
+///
+/// A clone shares the engine, arbiter, executor and buffer resources, so this is the same
+/// execution domain and not a second one. The held session is `!Send + !Sync`: it owns
+/// admission and the caller's narrowed CPU mask on the opening thread.
+///
+/// While a held session is open on a thread, that thread must not reach the context's other
+/// execution entries - the scoped [`CpuExecutionContext::with_concrete_session`] and the
+/// low-level [`CpuExecutionContext::with_backend`]. The scoped entry rejects it with a typed
+/// [`tenferro_tensor::SessionEntryError::Reentered`] before it takes the context's backend
+/// lock, so a held owner never waits for a lock that a conflicting scoped caller needs;
+/// `with_backend` is the caller-managed low-level route and carries the same restriction as
+/// a documented caller obligation.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{explicit::HeldSession, CpuExecutionContext};
+/// use tenferro::Tensor;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+/// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+///
+/// let mut session = HeldSession::open(&backend)?;
+/// // One entry, two operations, and the routes are the same as the scoped entry's.
+/// let transposed = session.with_session(|view| view.permute(&a, &[1, 0]))?;
+/// let sum = session.with_session(|view| view.sum(&transposed))?;
+/// assert_eq!(sum.as_slice::<f64>()?, &[10.0]);
+/// session.close()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub struct HeldSession<'backend> {
+    held: tenferro_cpu::CpuHeldSession<'backend>,
+}
+
+impl std::fmt::Debug for HeldSession<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("explicit::HeldSession")
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'backend> HeldSession<'backend> {
+    /// Open a held session on `backend`, which the caller keeps alive for the session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::SessionEntryError`]:
+    ///
+    /// - [`tenferro_tensor::SessionEntryError::Reentered`] when a CPU execution is already
+    ///   active on this thread, when an execution scope is open, or when `backend` is a
+    ///   child execution handle;
+    /// - [`tenferro_tensor::SessionEntryError::Contended`] when another root owns the
+    ///   engine's resources and this thread is a Rayon worker that cannot wait for them;
+    /// - [`tenferro_tensor::SessionEntryError::ResourcePoisoned`] for poisoned admission
+    ///   state;
+    /// - [`tenferro_tensor::SessionEntryError::Executor`] when the caller's CPU mask
+    ///   cannot be narrowed for the session.
+    ///
+    /// An ordinary cross-thread owner conflict **waits** in FIFO order rather than failing.
+    /// [`HeldSession::close`] reports an affinity-restoration failure; dropping the session
+    /// restores best-effort and cannot report one.
+    pub fn open(
+        backend: &'backend tenferro_cpu::CpuBackend,
+    ) -> Result<Self, tenferro_tensor::SessionEntryError> {
+        Ok(Self {
+            held: backend.open_session()?,
+        })
+    }
+
+    /// Run one operation view in this held session.
+    ///
+    /// The view is the same [`Session`] the callback-scoped entry hands out, built on this
+    /// session's own resources and dropped before this method returns.
+    pub fn with_session<R>(&mut self, f: impl FnOnce(&mut Session<'_>) -> R) -> R {
+        self.held.with_session(|view| f(&mut Session::new(view)))
+    }
+
+    /// Lend this session's CPU pool to a phase scheduler.
+    ///
+    /// Each lane runs `lane` on a worker of the context's own pool, with this frontend's
+    /// [`Session`] view, so the lane's work uses the same routes as the rest of the stage.
+    /// The lanes are joined before this returns, on the success, error and panic paths.
+    ///
+    /// The phase contract is the upstream one: one lane per worker for a multi-worker
+    /// context and a single inline lane otherwise, no second pool, cooperative cancellation
+    /// through the lane handle, and no legacy entry from inside a lane.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PhaseRunError::Session`] when a lane could not enter or clean up - including
+    /// a phase opened from a worker of the pool it would broadcast to, which is reported as
+    /// [`tenferro_tensor::SessionEntryError::Reentered`] - and [`PhaseRunError::Lane`] with a
+    /// lane callback's own error otherwise. Both are reported only after every lane finished.
+    ///
+    /// # Panics
+    ///
+    /// A panic inside a lane callback is resumed on the calling thread after every lane has
+    /// been joined first; this method does not panic on its own.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{explicit::HeldSession, CpuExecutionContext};
+    /// use tenferro::Tensor;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(2)?);
+    /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    ///
+    /// let mut session = HeldSession::open(&backend)?;
+    /// let total = std::sync::Mutex::new(0.0_f64);
+    /// session.phase(|_index, lane| {
+    ///     if lane.cancelled() {
+    ///         return Ok::<(), tenferro_tensor::Error>(());
+    ///     }
+    ///     let sum = lane.session().sum(&a)?;
+    ///     *total.lock().expect("lane total lock") += sum.as_slice::<f64>()?[0];
+    ///     Ok(())
+    /// })?;
+    /// assert!(
+    ///     total.into_inner().expect("lane total") > 0.0,
+    ///     "each lane summed the same tensor"
+    /// );
+    /// session.close()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn phase<E: Send>(
+        &mut self,
+        lane: impl Fn(usize, &mut PhaseLane<'_, '_>) -> Result<(), E> + Sync,
+    ) -> Result<(), PhaseRunError<E>> {
+        let outcome = self.held.phase(|phase| {
+            phase.run(|index, lane_handle| lane(index, &mut PhaseLane { lane: lane_handle }))
+        });
+        match outcome {
+            Ok(outcome) => outcome,
+            Err(CpuPhaseError::TargetPoolCaller { .. }) => Err(PhaseRunError::Session(
+                tenferro_tensor::SessionEntryError::Reentered {
+                    backend: "CpuExecutionContext",
+                },
+            )),
+        }
+    }
+
+    /// Close the session, releasing admission and the checked-out engine resources.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_cpu::CpuHeldSessionError`] when the calling thread's CPU affinity
+    /// cannot be restored. The resources and the reservation are released either way.
+    pub fn close(self) -> Result<(), tenferro_cpu::CpuHeldSessionError> {
+        self.held.close()
     }
 }
 
