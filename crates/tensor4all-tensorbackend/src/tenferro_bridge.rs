@@ -22,6 +22,7 @@ use tenferro_einsum::{
 use tenferro_linalg::TensorLinalgExt;
 
 use crate::any_scalar::promote_scalar_native;
+pub(crate) use crate::einsum_ids::{build_binary_einsum_ids, checked_native_einsum_labels};
 /// Error returned by the storage/tensor bridge helpers.
 ///
 /// Wraps the underlying tensor-element or backend diagnostic, preserving its
@@ -209,17 +210,6 @@ fn release_allocator_after_native_einsum_call() -> bool {
 #[cfg(test)]
 pub(crate) fn set_native_einsum_profile_enabled_for_tests(enabled: bool) {
     FORCE_NATIVE_EINSUM_PROFILE.with(|slot| slot.set(enabled));
-}
-
-fn checked_native_einsum_labels(labels: &[usize]) -> Result<Vec<u32>> {
-    labels
-        .iter()
-        .copied()
-        .map(|label| {
-            u32::try_from(label)
-                .map_err(|_| anyhow!("native einsum label {label} exceeds the supported u32 range"))
-        })
-        .collect()
 }
 
 fn native_einsum_signature(
@@ -899,72 +889,6 @@ fn cached_einsum_native_reads(
             .map_err(|(_, error)| anyhow!("native einsum output extraction failed: {error}"))
     })
     .map_err(|e| anyhow!("native read einsum failed: {e}"))
-}
-
-/// Build native einsum ids for a binary contraction.
-pub(crate) fn build_binary_einsum_ids(
-    lhs_rank: usize,
-    axes_a: &[usize],
-    rhs_rank: usize,
-    axes_b: &[usize],
-) -> Result<(Vec<u32>, Vec<u32>, Vec<u32>)> {
-    ensure!(
-        axes_a.len() == axes_b.len(),
-        "contract axis length mismatch: lhs {:?}, rhs {:?}",
-        axes_a,
-        axes_b
-    );
-
-    let mut lhs_ids = vec![u32::MAX; lhs_rank];
-    let mut rhs_ids = vec![u32::MAX; rhs_rank];
-    let mut next_id = 0u32;
-
-    let mut seen_lhs = vec![false; lhs_rank];
-    let mut seen_rhs = vec![false; rhs_rank];
-
-    for (&lhs_axis, &rhs_axis) in axes_a.iter().zip(axes_b.iter()) {
-        ensure!(
-            lhs_axis < lhs_rank,
-            "lhs contract axis {lhs_axis} out of range"
-        );
-        ensure!(
-            rhs_axis < rhs_rank,
-            "rhs contract axis {rhs_axis} out of range"
-        );
-        ensure!(
-            !seen_lhs[lhs_axis],
-            "duplicate lhs contract axis {lhs_axis}"
-        );
-        ensure!(
-            !seen_rhs[rhs_axis],
-            "duplicate rhs contract axis {rhs_axis}"
-        );
-        seen_lhs[lhs_axis] = true;
-        seen_rhs[rhs_axis] = true;
-        lhs_ids[lhs_axis] = next_id;
-        rhs_ids[rhs_axis] = next_id;
-        next_id += 1;
-    }
-
-    let mut output_ids = Vec::with_capacity(lhs_rank + rhs_rank - 2 * axes_a.len());
-    for (axis, slot) in lhs_ids.iter_mut().enumerate() {
-        if *slot == u32::MAX {
-            *slot = next_id;
-            output_ids.push(next_id);
-            next_id += 1;
-        } else {
-            let _ = axis;
-        }
-    }
-    for slot in &mut rhs_ids {
-        if *slot == u32::MAX {
-            *slot = next_id;
-            output_ids.push(next_id);
-            next_id += 1;
-        }
-    }
-
-    Ok((lhs_ids, rhs_ids, output_ids))
 }
 
 /// Build a dense native tensor from column-major data.

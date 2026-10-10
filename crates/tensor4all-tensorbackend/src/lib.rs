@@ -22,6 +22,12 @@ mod context;
 #[cfg(feature = "tenferro-cuda")]
 /// Explicit visible-ordinal-0 CUDA execution and transfer boundaries.
 mod cuda;
+#[cfg(feature = "explicit-context")]
+/// Einsum label helpers shared by both frontends.
+mod einsum_ids;
+#[cfg(feature = "explicit-context")]
+/// Opt-in explicit/concrete execution frontend (issue #859 B1).
+pub mod explicit;
 #[cfg(feature = "global-defaults")]
 /// Incremental QR state for successive randomized compression.
 mod incremental_qr;

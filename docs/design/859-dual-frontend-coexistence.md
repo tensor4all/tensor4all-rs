@@ -306,6 +306,76 @@ dispatch or partial output writes. No new process-global default backend, pool o
 cache is introduced by the explicit route; the existing upstream arbitration and
 thread-local reentry guards remain the safety mechanism.
 
+## 5bis. B1 delivery: the `explicit` frontend (partial)
+
+The first delivery of the new frontend shipped as `tensor4all_tensorbackend::explicit`
+(module `crates/tensor4all-tensorbackend/src/explicit.rs`, compiled under
+`explicit-context`), on the tenferro revision that provides the held concrete CPU
+session (pin bump `b3f4729` -> `ff94aeded`, PR #873).
+
+**This is a partial slice of B1, not the whole gate.** It delivers the session entry
+and the allocation-returning primitive/einsum/linalg routes over native tensors; the
+read/write/output routes, the compatibility bridges beyond `LogicalTensor`, the
+private child-resource surface, the backend phase proof, the `Matrix`/`Storage`
+families and the bridge-cost measurements are **not** in it. The table below states
+exactly what is delivered, and §5c lists what is not.
+
+| Element | Delivered |
+| --- | --- |
+| Context | the existing `CpuExecutionContext` |
+| Entry | `CpuExecutionContext::with_concrete_session`: one session entry for the whole callback, on the caller's own backend. A caller inside a Rayon worker is rejected typed instead of being rerouted to the compatibility frontend's unrelated inline backend |
+| Session | `explicit::Session`, a tensorbackend-owned view over the concrete `BackendSession`; neither the callback nor its value needs `Send`, because the tenferro entry at this pin runs it on the entering thread |
+| Primitive routes | `reshape`, `permute` (allocation-returning) |
+| Einsum routes | `contraction` (binary, by axes), `einsum` (N-ary, by integer labels), both evaluated session-direct |
+| Linalg routes | `qr`, `svd`, `solve` (allocation-returning) |
+| Shared implementation | the label validation and the axis-to-label construction are one implementation (`src/einsum_ids.rs`) used by both frontends; the evaluation is tenferro-einsum's session-direct `einsum_subscripts`, which compiles no semantic graph and starts no runtime worker |
+| No legacy entry | the module never names `with_default_session`, the default context or the eager runtime; the label helpers live outside the compatibility-only module so the explicit-only build compiles |
+| No eager/AD | the routes reach only concrete `Tensor`/`BackendSession` operations; no `EagerTensor`, semantic node or gradient slot is constructed and no eager owner lock is taken |
+| Errors | each route reports the backend's typed error; an invalid input, including a mismatched einsum label count, is rejected typed and never retried on the global or eager route. A nested canonical session entry is a typed `SessionEntryError::Reentered`, not a panic |
+| Tests | route-by-route agreement with the compatibility frontend for six routes, one session serving a batch, typed rejection instead of fallback, a mixed-precision rejection, cross-context reuse with the input storage pointer unchanged, and the typed nested-entry rejection |
+
+Deliberate difference from the compatibility frontend: the explicit routes do **not**
+promote operands to a common dtype; operands must already share one dtype and a
+mismatch is rejected typed. The compatibility frontend promotes. Closing that gap
+means moving the shared promotion helpers behind a session boundary, and it is listed
+below rather than claimed here.
+
+### 5c. B1 remaining after this slice
+
+| Item | Notes |
+| --- | --- |
+| Read/write/output routes | no public `TensorRead` or output-into route yet; the routes are allocation-returning |
+| Remaining primitive/linalg operations | `scale`/`axpby`/`conj`/`outer_product`, `triangular_solve`, `full_piv_lu`, the Hermitian eigen routes, `src_error_estimate` |
+| `Matrix`/`Storage` families | `mat_mul`, batched/grouped GEMM, `submatrix`/`swap`/`transpose`, the `Storage`-level contraction/permutation routes |
+| Structured/mixed-dtype parity | dtype promotion and structured representation preservation on the explicit route |
+| Compatibility bridges | only `LogicalTensor` exists; explicit detach/lift and materialization bridges are still to come |
+| Private child resources and the backend phase proof | the held session and the phase lease exist upstream; tensorbackend does not expose or prove them yet |
+| Reusable plan surface | no caller-owned prepared-plan route through the session |
+| Measurements | bridge allocations/copies/registration are not measured, and no paired dispatch numbers are recorded for the explicit route |
+| A held *object* form | see the note below |
+
+Why the entry is callback-scoped here, and what the alternatives are: tenferro's held
+session borrows a `&CpuBackend` for the caller's scope (`CpuBackend::open_session(&self)`),
+while this context stores its backend in a `Mutex<CpuBackend>` because the legacy
+`with_backend_session` needs `&mut`. What that rules out is the **single returned object
+that owns both the guard and a session borrowing it** - the self-referential struct the
+upstream design forbids. It does not rule out the two expressible alternatives:
+
+```text
+// 1. a lease that owns the guard, from which the held session is opened:
+let lease = context.borrow_backend()?;          // owns the MutexGuard
+let held = lease.open_session()?;              // borrows the lease, not the guard field
+
+// 2. a cloned handle, using the documented clone semantics:
+let backend = context.with_backend(|backend| backend.clone());
+let held = backend.open_session()?;
+```
+
+Either would give this frontend a held object without an upstream change; neither is
+taken here, because the object's ownership and the compatibility entry's worker policy
+are decisions for the maintainer rather than consequences of the pin. What is delivered
+is the callback-scoped entry plus the routes, which is what a stage needs today.
+
 ## 6. Specified legacy-preservation tests
 
 To be added with the B1 implementation (they are intentionally not written here,

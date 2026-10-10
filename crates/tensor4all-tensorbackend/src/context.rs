@@ -97,6 +97,9 @@ pub enum CpuExecutionContextError {
 
 const CANONICAL_SESSION_REENTRY_MESSAGE: &str = "recursive tensorbackend canonical session entry";
 
+/// Backend name carried by a canonical-session reentry rejection.
+const CANONICAL_SESSION_BACKEND: &str = "CpuExecutionContext";
+
 thread_local! {
     static CANONICAL_SESSION_ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
@@ -106,14 +109,25 @@ struct CanonicalSessionGuard {
 }
 
 impl CanonicalSessionGuard {
-    fn assert_inactive() {
-        CANONICAL_SESSION_ACTIVE.with(|active| {
-            assert!(!active.get(), "{CANONICAL_SESSION_REENTRY_MESSAGE}");
-        });
+    /// Whether a canonical session is already active on this thread.
+    fn is_active() -> bool {
+        CANONICAL_SESSION_ACTIVE.with(Cell::get)
+    }
+
+    /// Report a nested canonical session as the typed entry rejection instead of
+    /// panicking, so a public entry point never aborts a caller.
+    fn reentry_error() -> CpuExecutionContextError {
+        CpuExecutionContextError::SessionEntry {
+            source: Arc::new(tenferro_tensor::SessionEntryError::Reentered {
+                backend: CANONICAL_SESSION_BACKEND,
+            }),
+        }
     }
 
     fn enter() -> Self {
-        Self::assert_inactive();
+        // The entry point rejected a nested session before this ran; reaching an
+        // active guard here would mean a caller bypassed the canonical entry.
+        debug_assert!(!Self::is_active(), "{CANONICAL_SESSION_REENTRY_MESSAGE}");
         CANONICAL_SESSION_ACTIVE.with(|active| Self {
             previous: active.replace(true),
         })
@@ -132,9 +146,9 @@ impl Drop for CanonicalSessionGuard {
 ///
 /// Returns [`CpuExecutionContextError::SessionEntry`] when tenferro rejects the
 /// entry, for example because an execution is already active on this thread.
-fn run_canonical_session<R: Send>(
+fn run_canonical_session<R>(
     backend: &mut CpuBackend,
-    f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+    f: impl FnOnce(&mut dyn BackendSession) -> R,
 ) -> Result<R, CpuExecutionContextError> {
     backend
         .with_backend_session(|session| {
@@ -246,11 +260,13 @@ impl CpuExecutionContext {
     ///
     /// Returns [`CpuExecutionContextError::SessionEntry`] when tenferro rejects
     /// the session entry.
-    pub(crate) fn with_session<R: Send>(
+    pub(crate) fn with_session<R>(
         &self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+        f: impl FnOnce(&mut dyn BackendSession) -> R,
     ) -> Result<R, CpuExecutionContextError> {
-        CanonicalSessionGuard::assert_inactive();
+        if CanonicalSessionGuard::is_active() {
+            return Err(CanonicalSessionGuard::reentry_error());
+        }
         // A Rayon worker can be handed more of the enclosing pool's work while
         // tenferro installs this session into the context's own pool. That stolen
         // work may enter a session itself, on a thread whose tenferro execution is
@@ -700,17 +716,19 @@ mod tests {
     #[test]
     fn recursive_session_entry_fails_before_lock_and_restores_guard() {
         let context = context();
-        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            context.with_session(|_| context.with_session(|_| ()))
-        }))
-        .expect_err("recursive canonical session entry should panic");
-        let message = panic
-            .downcast_ref::<&str>()
-            .copied()
-            .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
-            .expect("recursive entry panic should contain a string message");
-        assert_eq!(message, CANONICAL_SESSION_REENTRY_MESSAGE);
+        let error = context
+            .with_session(|_| context.with_session(|_| ()))
+            .expect("the outer session entry")
+            .expect_err("a recursive canonical session entry must be rejected");
+        let CpuExecutionContextError::SessionEntry { source } = &error else {
+            panic!("the rejection must be a typed session entry error: {error}");
+        };
+        assert!(matches!(
+            source.downcast_ref::<tenferro_tensor::SessionEntryError>(),
+            Some(tenferro_tensor::SessionEntryError::Reentered { .. })
+        ));
 
+        // The guard is restored, so an independent entry still works.
         assert_eq!(context.with_session(|_| 7usize).unwrap(), 7);
     }
 

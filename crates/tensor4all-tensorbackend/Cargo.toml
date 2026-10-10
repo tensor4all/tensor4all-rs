@@ -81,6 +81,7 @@ criterion.workspace = true
 [[bench]]
 name = "grouped_gemm"
 harness = false
+required-features = ["global-defaults"]
 
 [[test]]
 name = "bench_einsum_native"
