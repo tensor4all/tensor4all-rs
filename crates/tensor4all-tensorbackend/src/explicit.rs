@@ -675,6 +675,51 @@ impl<'session> Session<'session> {
         crate::mat_mul_in(self.session, a, b)
     }
 
+    /// Execute grouped GEMMs on this session.
+    ///
+    /// Same validation, job translation and provider rules as
+    /// [`grouped_mat_mul_shared`](crate::grouped_mat_mul_shared), entered through this
+    /// session instead of the process-global one. A job whose contracted extent is
+    /// zero is a no-op segment, exactly as on the compatibility entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GroupedGemmError`](crate::GroupedGemmError) when the buffers and jobs
+    /// disagree, or when the session rejects the request.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{CpuExecutionContext, GroupedGemmJob, GroupedGemmOptions};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
+    /// let mut output = [0.0_f64];
+    /// context.with_concrete_session(|session| {
+    ///     session.grouped_mat_mul_shared(
+    ///         &[3.0],
+    ///         &[4.0],
+    ///         &mut output,
+    ///         &jobs,
+    ///         GroupedGemmOptions::default(),
+    ///     )
+    /// })??;
+    /// assert_eq!(output, [12.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[cfg(feature = "global-defaults")]
+    pub fn grouped_mat_mul_shared<T: crate::matrix::MatrixScalar + tenferro::TensorScalar>(
+        &mut self,
+        lhs: &[T],
+        rhs: &[T],
+        output: &mut [T],
+        jobs: &[crate::matrix::GroupedGemmJob],
+        options: crate::matrix::GroupedGemmOptions,
+    ) -> Result<(), crate::matrix::GroupedGemmError> {
+        crate::grouped_mat_mul_shared_in(self.session, lhs, rhs, output, jobs, options)
+    }
+
     /// Thin/economy QR decomposition.
     ///
     /// # Errors

@@ -611,3 +611,46 @@ fn prepared_einsum_runs_on_another_contexts_session() {
     );
     assert_eq!(producer.with_backend(|backend| backend.num_threads()), 1);
 }
+
+/// The session route runs a grouped GEMM through the shared descriptor, and an empty
+/// job list is a no-op.
+#[cfg(feature = "global-defaults")]
+#[test]
+fn session_grouped_mat_mul_shared_runs_on_the_session() {
+    use crate::{GroupedGemmJob, GroupedGemmOptions};
+
+    let context = context(1);
+    let jobs = [GroupedGemmJob::new(0, 0, 0, 2, 2, 2)];
+    let lhs = [1.0_f64, 2.0, 3.0, 4.0];
+    let rhs = [5.0_f64, 6.0, 7.0, 8.0];
+    let mut output = [0.0_f64; 4];
+    context
+        .with_concrete_session(|session| {
+            session.grouped_mat_mul_shared(
+                &lhs,
+                &rhs,
+                &mut output,
+                &jobs,
+                GroupedGemmOptions::default(),
+            )
+        })
+        .expect("session entry")
+        .expect("grouped GEMM");
+    // Column-major `[[1, 3], [2, 4]] * [[5, 7], [6, 8]]`.
+    assert_eq!(output, [23.0, 34.0, 31.0, 46.0]);
+
+    let mut untouched = [7.0_f64; 4];
+    context
+        .with_concrete_session(|session| {
+            session.grouped_mat_mul_shared(
+                &lhs,
+                &rhs,
+                &mut untouched,
+                &[],
+                GroupedGemmOptions::default(),
+            )
+        })
+        .expect("session entry")
+        .expect("empty job list");
+    assert_eq!(untouched, [7.0; 4], "an empty job list writes nothing");
+}
