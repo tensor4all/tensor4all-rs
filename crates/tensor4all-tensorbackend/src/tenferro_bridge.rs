@@ -22,7 +22,9 @@ use tenferro_einsum::{
 use tenferro_linalg::TensorLinalgExt;
 
 use crate::any_scalar::promote_scalar_native;
-pub(crate) use crate::einsum_ids::{build_binary_einsum_ids, checked_native_einsum_labels};
+pub(crate) use crate::einsum_ids::{
+    build_binary_einsum_ids, checked_native_einsum_labels, common_dtype, convert_native_tensor_in,
+};
 /// Error returned by the storage/tensor bridge helpers.
 ///
 /// Wraps the underlying tensor-element or backend diagnostic, preserving its
@@ -618,34 +620,8 @@ pub fn print_and_reset_native_einsum_profile() {
     });
 }
 
-fn common_dtype(dtypes: &[DType]) -> DType {
-    let has_f64 = dtypes.contains(&DType::F64);
-    let has_c64 = dtypes.contains(&DType::C64);
-    let has_c32 = dtypes.contains(&DType::C32);
-    let has_i32 = dtypes.contains(&DType::I32);
-    let has_i64 = dtypes.contains(&DType::I64);
-    let has_bool = dtypes.contains(&DType::Bool);
-    let has_complex = has_c64 || has_c32;
-    if has_c64 || (has_f64 && has_complex) {
-        DType::C64
-    } else if has_c32 {
-        DType::C32
-    } else if has_f64 || has_i64 || has_i32 {
-        DType::F64
-    } else if has_bool {
-        DType::Bool
-    } else {
-        DType::F32
-    }
-}
-
 fn convert_tensor(tensor: &NativeTensor, to: DType) -> Result<NativeTensor> {
-    if tensor.dtype() == to {
-        return tensor
-            .duplicate()
-            .map_err(|e| anyhow!("tensor duplication failed: {e}"));
-    }
-    with_default_session(|session| tensor.convert(to, session))
+    with_default_session(|session| convert_native_tensor_in(session, tensor, to))
         .map_err(|e| anyhow::Error::new(e).context(format!("tensor conversion to {to:?} failed")))
 }
 
