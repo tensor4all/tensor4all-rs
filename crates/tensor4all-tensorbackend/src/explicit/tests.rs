@@ -398,3 +398,140 @@ fn a_worker_caller_is_rejected_typed() {
     // The context stays usable from outside the pool.
     assert!(context.with_concrete_session(|_| ()).is_ok());
 }
+
+/// `sum` reduces to a rank-0 concrete value, and a rank-0 input is returned as is.
+#[test]
+fn sum_reduces_every_element() {
+    let context = context(1);
+    let a = matrix();
+    let total = context
+        .with_concrete_session(|session| session.sum(&a))
+        .expect("session entry")
+        .expect("sum");
+    assert!(total.shape().is_empty());
+    assert_eq!(total.as_slice::<f64>().expect("f64 payload"), &[10.0]);
+
+    let scalar = Tensor::from_vec_col_major(vec![], vec![7.0_f64]).expect("rank-0");
+    let again = context
+        .with_concrete_session(|session| session.sum(&scalar))
+        .expect("session entry")
+        .expect("rank-0 sum");
+    assert_eq!(again.as_slice::<f64>().expect("f64 payload"), &[7.0]);
+}
+
+/// `conj` conjugates a complex value and leaves a real one unchanged.
+#[test]
+fn conj_conjugates_complex_values() {
+    use num_complex::Complex64;
+
+    let context = context(1);
+    let complex = Tensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)],
+    )
+    .expect("complex vector");
+    let conjugated = context
+        .with_concrete_session(|session| session.conj(&complex))
+        .expect("session entry")
+        .expect("conj");
+    assert_eq!(
+        conjugated.as_slice::<Complex64>().expect("c64 payload"),
+        &[Complex64::new(1.0, -2.0), Complex64::new(3.0, 4.0)]
+    );
+
+    let real = context
+        .with_concrete_session(|session| session.conj(&matrix()))
+        .expect("session entry")
+        .expect("real conj");
+    assert_eq!(
+        real.as_slice::<f64>().expect("f64 payload"),
+        &[1.0, 2.0, 3.0, 4.0]
+    );
+}
+
+/// The read route contracts borrowed inputs without materializing them, and reports a
+/// mismatched label count typed.
+#[test]
+fn einsum_reads_contracts_borrowed_inputs() {
+    use tenferro_tensor::TensorRead;
+
+    let context = context(1);
+    let a = matrix();
+    let b = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0]).expect("rhs");
+    let reads = [TensorRead::from_tensor(&a), TensorRead::from_tensor(&b)];
+    let product = context
+        .with_concrete_session(|session| session.einsum_reads(&reads, &[&[0, 1], &[1, 2]], &[0, 2]))
+        .expect("session entry")
+        .expect("read einsum");
+    assert_eq!(
+        product.as_slice::<f64>().expect("f64 payload"),
+        &[23.0, 34.0]
+    );
+
+    let error = context
+        .with_concrete_session(|session| session.einsum_reads(&reads, &[&[0, 1]], &[0]))
+        .expect("session entry")
+        .expect_err("a mismatched label count must be rejected");
+    assert!(matches!(
+        error,
+        tenferro_einsum::Error::InvalidSubscripts { .. }
+    ));
+}
+
+/// The output route writes a caller-provided destination, and reports mismatched axes
+/// typed.
+#[test]
+fn contraction_into_writes_the_destination() {
+    use tenferro_tensor::TensorWrite;
+
+    let context = context(1);
+    let a = matrix();
+    let b = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0]).expect("rhs");
+    let mut out = Tensor::from_vec_col_major(vec![2, 1], vec![0.0_f64, 0.0]).expect("output");
+    context
+        .with_concrete_session(|session| {
+            session.contraction_into(&a, &[1], &b, &[0], TensorWrite::Tensor(&mut out))
+        })
+        .expect("session entry")
+        .expect("output contraction");
+    assert_eq!(out.as_slice::<f64>().expect("f64 payload"), &[23.0, 34.0]);
+
+    let mut rejected = Tensor::from_vec_col_major(vec![2, 1], vec![0.0_f64, 0.0]).expect("output");
+    let error = context
+        .with_concrete_session(|session| {
+            session.contraction_into(&a, &[1], &b, &[], TensorWrite::Tensor(&mut rejected))
+        })
+        .expect("session entry")
+        .expect_err("mismatched axis lists must be rejected");
+    assert!(matches!(
+        error,
+        tenferro_einsum::Error::InvalidSubscripts { .. }
+    ));
+}
+
+/// The session matrix route multiplies through the shared `Matrix` container, and
+/// reports a shape mismatch typed. `Matrix` belongs to the compatibility frontend, so
+/// this route exists only where that frontend does.
+#[cfg(feature = "global-defaults")]
+#[test]
+fn session_mat_mul_uses_the_shared_matrix_container() {
+    use crate::Matrix;
+
+    let context = context(1);
+    let a = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let identity = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 0.0, 0.0, 1.0]);
+    let product = context
+        .with_concrete_session(|session| session.mat_mul(&a, &identity))
+        .expect("session entry")
+        .expect("session mat_mul");
+    assert_eq!(product.as_col_major_slice(), &[1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(product.nrows(), 2);
+    assert_eq!(product.ncols(), 2);
+
+    let wide = Matrix::from_col_major_vec(3, 2, vec![1.0_f64; 6]);
+    let error = context
+        .with_concrete_session(|session| session.mat_mul(&a, &wide))
+        .expect("session entry")
+        .expect_err("disagreeing shapes must be rejected");
+    assert!(!error.to_string().is_empty(), "{error}");
+}

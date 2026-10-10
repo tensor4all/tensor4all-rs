@@ -2043,6 +2043,17 @@ pub trait BlasMul: Sized {
 
     #[doc(hidden)]
     fn blas_mat_mul_owned(a: Matrix<Self>, b: Matrix<Self>) -> Result<Matrix<Self>>;
+
+    /// Matrix multiplication `A * B` on a caller-supplied session.
+    ///
+    /// Same kernel, validation and result container as [`BlasMul::blas_mat_mul`],
+    /// entered through the given session instead of the process-global one.
+    #[doc(hidden)]
+    fn blas_mat_mul_in(
+        session: &mut dyn tenferro_tensor::BackendSession,
+        a: &Matrix<Self>,
+        b: &Matrix<Self>,
+    ) -> Result<Matrix<Self>>;
 }
 
 fn dot_general_matrices<T>(
@@ -2060,6 +2071,44 @@ where
 
     let c = with_default_session(|session| a_tensor.matmul(&b_tensor, session))
         .context("matrix multiplication failed")?;
+    dot_general_matrices_from::<T>(c, m, n, expected_len)
+}
+
+/// Matrix multiplication `A * B` on `session`.
+///
+/// # Errors
+///
+/// Returns an error when the multiplication fails on the session, returns the wrong
+/// dtype, or has a shape other than `m x n`.
+fn dot_general_matrices_in<T>(
+    session: &mut dyn tenferro_tensor::BackendSession,
+    a_tensor: Tensor,
+    b_tensor: Tensor,
+    m: usize,
+    n: usize,
+    expected_len: usize,
+) -> Result<Matrix<T>>
+where
+    T: TensorScalar,
+{
+    use tenferro::TensorSessionOpsExt;
+
+    let c = a_tensor
+        .matmul(&b_tensor, session)
+        .context("matrix multiplication failed")?;
+    dot_general_matrices_from::<T>(c, m, n, expected_len)
+}
+
+/// Validate and adopt one multiplication result, shared by both entries.
+fn dot_general_matrices_from<T>(
+    c: Tensor,
+    m: usize,
+    n: usize,
+    expected_len: usize,
+) -> Result<Matrix<T>>
+where
+    T: TensorScalar,
+{
     let c = T::into_typed(c)
         .map_err(|error| anyhow::anyhow!("matrix multiplication returned wrong dtype: {error}"))?;
     let result = Matrix::try_from_typed_tensor(c)?;
@@ -2131,6 +2180,33 @@ macro_rules! impl_blas_mul {
                 let a_tensor: Tensor = a.into_typed_tensor().into();
                 let b_tensor: Tensor = b.into_typed_tensor().into();
                 dot_general_matrices::<$t>(a_tensor, b_tensor, m, n, expected_len)
+            }
+
+            fn blas_mat_mul_in(
+                session: &mut dyn tenferro_tensor::BackendSession,
+                a: &Matrix<Self>,
+                b: &Matrix<Self>,
+            ) -> Result<Matrix<Self>> {
+                let m = a.nrows();
+                let k = a.ncols();
+                let n = b.ncols();
+                ensure!(
+                    b.nrows() == k,
+                    "matrix dimensions must agree for multiplication: left is {}x{}, right is {}x{}",
+                    m,
+                    k,
+                    b.nrows(),
+                    n
+                );
+                let expected_len = m.checked_mul(n).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "matrix multiplication output shape {m}x{n} overflows usize"
+                    )
+                })?;
+
+                let a_tensor: Tensor = a.to_typed_tensor().into();
+                let b_tensor: Tensor = b.to_typed_tensor().into();
+                dot_general_matrices_in(session, a_tensor, b_tensor, m, n, expected_len)
             }
         }
         )*
@@ -2236,6 +2312,28 @@ pub fn mat_mul<T: BlasMul>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>, Ma
 /// ```
 pub fn mat_mul_owned<T: BlasMul>(a: Matrix<T>, b: Matrix<T>) -> Result<Matrix<T>, MatrixMulError> {
     T::blas_mat_mul_owned(a, b).map_err(MatrixMulError::from)
+}
+
+/// Matrix multiplication `A * B` on a caller-supplied session.
+///
+/// Same kernel, shape validation and result container as [`mat_mul`], entered through
+/// the given session instead of the process-global one.
+///
+/// # Errors
+///
+/// Returns [`MatrixMulError`] when the shapes disagree or the session operation fails.
+///
+/// # Examples
+///
+/// [`mat_mul_in`] is usually reached through
+/// [`explicit::Session::mat_mul`](crate::explicit::Session::mat_mul), which holds the
+/// session for the whole stage.
+pub fn mat_mul_in<T: BlasMul>(
+    session: &mut dyn tenferro_tensor::BackendSession,
+    a: &Matrix<T>,
+    b: &Matrix<T>,
+) -> Result<Matrix<T>, MatrixMulError> {
+    T::blas_mat_mul_in(session, a, b).map_err(MatrixMulError::from)
 }
 
 /// Batched matrix multiplication for column-major matrices with one shared shape.
