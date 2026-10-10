@@ -1,5 +1,10 @@
 # TreeACI pivot retention at the tolerance boundary
 
+> Historical record: TreeACI pivot retention and its refresh flag were later
+> withdrawn to remove the regression tracked in #885. Issue #784 is reopened;
+> the original numerical results below describe the retained implementation,
+> not the current fresh-LUCI update policy. The public #874 Guard fixtures remain.
+
 ## Problem and decisions
 
 Issue [#784](https://github.com/tensor4all/tensor4all-rs/issues/784) records a

@@ -1,5 +1,10 @@
 # TreeACI Guard discoveries and old-pivot preference
 
+> Historical record: TreeACI pivot retention and its refresh flag were later
+> withdrawn to remove the regression tracked in #885. Issue #784 is reopened;
+> the original numerical results below describe the retained implementation,
+> not the current fresh-LUCI update policy. The public #874 Guard fixtures remain.
+
 [AI Supplied] Continues #854 after #870 merged. #874 is a confirmed regression
 in the new retention behavior, distinct from #794's unconfirmed claim of
 mixed-capacity searches whose pivots cannot be injected. No RSI algorithm or

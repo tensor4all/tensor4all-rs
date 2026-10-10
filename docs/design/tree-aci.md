@@ -140,52 +140,25 @@ guard performs bounded randomized coordinate searches with its configured
 acceptance margin. Independent validation remains necessary. Exhaustive
 checks belong only in small tests or explicit diagnostic programs.
 
-### Retaining admissible crosses
+### Fresh local crosses and tolerance-boundary cycling
 
-Fresh dense LUCI determines the local rank ceiling. If an established cross
-has no greater rank and at least one complete pivot projection still belongs
-to the current Cartesian candidate matrix, Core reconstructs it. When exactly
-one projection survives a neighbouring update, Core selects the missing axis
-from that prescribed slice. TreeACI accepts the reconstructed factors only
-when their measured maximum residual over the entire current local matrix
-satisfies the same tolerance. If the complete cross is singular, insufficient,
-or larger than the fresh rank, Core instead attempts single-pivot replacements
-in the fresh cross using the individually surviving old projections. This
-optional search retains the fresh rank and protects every selected preferred
-pivot. Each acceptance strictly increases overlap with old samples, bounding
-accepted replacements by twice the rank. A rank-one residual update screens
-replacement positions; feasible positions are tried by descending absolute
-determinant ratio, then predicted residual and position. Reconstruction and a
-full measured residual check decide acceptance, not the prediction alone.
-Rejected trials reuse the unchanged cross's solved coefficients. Bootstrap
-samples and zero-output placeholders do not establish a previous cross, and
-at least one complete old projection must survive the preflight.
+Every local update uses the fresh dense LUCI cross at the original tolerance
+and rank ceiling. TreeACI does not retain a previous cross or run preferred-
+pivot replacement searches. The retention mechanism introduced for #784 was
+withdrawn because its full-matrix screening and repeated reconstruction caused
+the severe G0 performance regression in #885.
 
-This preference reduces unnecessary replacement of already sufficient frames
-at the tolerance boundary. It does not union historical samples into candidate
-axes, impose a rank floor, relax a threshold, or change the per-cut stability
-window and Guard conditions. It cannot guarantee convergence for every input.
-The interpolative factor is exactly identity at its pivot axis, and the full
-residual is measured after enforcing that algebraic invariant. An optional
-working reservation covers both the retained original matrix and another
-Core reconstruction/completion estimate while fresh factors are live. Partial
-restoration requires one further conservative Core estimate for the residual,
-current cross, and trial reconstruction. A tighter budget can still retain an
-admissible complete cross; if even that reservation does not fit, the ordinary
-owned-LUCI path remains available. This local search can cost more per update
-and does not guarantee a globally optimal selection or monotone global error.
+Guard-injected candidate components are therefore available to fresh LUCI on
+every following update, including neighboring saturated cuts. There is no
+old-pivot preference or pending preference-refresh flag that can exclude a
+Guard discovery; the unchanged #874 public regressions still validate this
+behavior. Guard detection, revalidation, rank limits and cleanup remain in
+force.
 
-
-A successful global Guard injection suspends this old-pivot preference for
-one complete directional pass. Guard candidate components feed neighboring
-cuts, including saturated cuts, so the refresh covers the whole pass rather
-than only padded bonds. Fresh LUCI still uses the original tolerance and rank
-ceiling. After the pass and its canonicalization succeed, ordinary pivot
-preference resumes; a failed pass keeps the request pending. Empty, refused,
-or no-op injections do not create a refresh request. This prevents an
-admissible old local cross from repeatedly discarding a new Guard discovery
-(#874), without making injected ranks into a rank floor or forgetting a
-returned failure before Guard revalidation.
+Tolerance-boundary rank oscillation and non-improving sweeps remain unresolved
+under #784. The per-edge stability window, original tolerance and Guard
+conditions still determine termination; reaching the pass limit reports
+`MaxSweeps`. Withdrawal does not certify global accuracy or solve cycling.
 
 ## Caches
 
