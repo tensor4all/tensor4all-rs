@@ -459,6 +459,17 @@ pub enum IdxTensorError {
         #[source]
         source: Arc<dyn std::error::Error + Send + Sync + 'static>,
     },
+    /// This build of `tensor4all-core` cannot execute operations in the supplied
+    /// execution context, so the call was rejected before any runtime
+    /// initialisation, transfer, or output mutation.
+    #[error(
+        "IdxTensor cannot execute in the supplied execution context; \
+         rebuild tensor4all-core with `{required_feature}` enabled"
+    )]
+    UnsupportedExecutionContext {
+        /// Core feature that provides support for this context.
+        required_feature: &'static str,
+    },
 }
 
 impl From<anyhow::Error> for IdxTensorError {
@@ -519,6 +530,35 @@ impl IdxTensorError {
             operation,
             source: Self::boxed(error),
         }
+    }
+}
+
+/// Typed rejection for an execution context this build cannot execute in.
+#[cfg(not(feature = "tenferro-cuda"))]
+fn unsupported_execution_context_error() -> IdxTensorError {
+    IdxTensorError::UnsupportedExecutionContext {
+        required_feature: "tensor4all-core/tenferro-cuda",
+    }
+}
+
+/// [`FactorizeError`] form of [`unsupported_execution_context_error`].
+#[cfg(not(feature = "tenferro-cuda"))]
+fn unsupported_factorize_context_error() -> FactorizeError {
+    FactorizeError::ComputationError(anyhow::Error::new(unsupported_execution_context_error()))
+}
+
+/// Reject a context this build cannot execute in.
+///
+/// Called before runtime initialisation, transfer, or output mutation on every
+/// entry point that accepts a caller-owned context.
+#[cfg(not(feature = "tenferro-cuda"))]
+fn ensure_supported_execution_context(
+    context: &ExecutionContext,
+) -> std::result::Result<(), IdxTensorError> {
+    if matches!(context, ExecutionContext::Cpu(_)) {
+        Ok(())
+    } else {
+        Err(unsupported_execution_context_error())
     }
 }
 
@@ -6336,6 +6376,9 @@ impl IdxTensor {
                 rank.shape()
             )));
         }
+        #[cfg(not(feature = "tenferro-cuda"))]
+        ensure_supported_execution_context(context)
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
         let resident = rank.to_tensor().map_err(|error| {
             FactorizeError::ComputationError(
                 anyhow::Error::new(error).context("resident RRQR rank materialization failed"),
@@ -6353,6 +6396,9 @@ impl IdxTensor {
         #[cfg(not(feature = "tenferro-cuda"))]
         let host = match context {
             ExecutionContext::Cpu(_) => resident,
+            // Reachable only when the backend enables CUDA without core's feature.
+            #[allow(unreachable_patterns)]
+            _ => return Err(unsupported_factorize_context_error()),
         };
         let values = host.as_slice::<i64>().map_err(|error| {
             FactorizeError::ComputationError(
@@ -7938,7 +7984,9 @@ impl IdxTensor {
     /// # Errors
     ///
     /// Returns [`IdxTensorError`] when the indices, payload, context, or
-    /// explicit transfer is invalid.
+    /// explicit transfer is invalid. A non-CPU context is rejected with
+    /// [`IdxTensorError::UnsupportedExecutionContext`] when this build does not
+    /// support it.
     pub fn from_dense_in<T: TensorElement>(
         context: &ExecutionContext,
         indices: Vec<DynIndex>,
@@ -7947,6 +7995,8 @@ impl IdxTensor {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices)?;
         Self::validate_dense_payload_len(data.len(), &dims)?;
+        #[cfg(not(feature = "tenferro-cuda"))]
+        ensure_supported_execution_context(context)?;
         let native = dense_native_tensor_from_col_major(&data, &dims)
             .map_err(|error| IdxTensorError::operation("context-scoped construction", error))?;
         let inner = match context {
@@ -7985,6 +8035,10 @@ impl IdxTensor {
                     )
                 })?
             }
+            // Reachable only when the backend enables CUDA without core's feature.
+            #[cfg(not(feature = "tenferro-cuda"))]
+            #[allow(unreachable_patterns)]
+            _ => return Err(unsupported_execution_context_error()),
         };
         Self::from_inner(indices, inner).map_err(IdxTensorError::from)
     }
@@ -8011,13 +8065,17 @@ impl IdxTensor {
     /// # Errors
     ///
     /// Returns [`IdxTensorError`] when the index dimensions or context
-    /// construction is invalid.
+    /// construction is invalid. A non-CPU context is rejected with
+    /// [`IdxTensorError::UnsupportedExecutionContext`] when this build does not
+    /// support it.
     pub fn ones_in(
         context: &ExecutionContext,
         indices: &[DynIndex],
     ) -> std::result::Result<Self, IdxTensorError> {
         let dims = Self::expected_dims_from_indices(indices);
         let total_size = checked_total_size(&dims)?;
+        #[cfg(not(feature = "tenferro-cuda"))]
+        ensure_supported_execution_context(context)?;
         Self::from_dense_in(context, indices.to_vec(), vec![1.0_f64; total_size])
     }
 
@@ -8043,11 +8101,15 @@ impl IdxTensor {
     ///
     /// # Errors
     ///
-    /// Returns [`IdxTensorError`] when the tensor does not belong to `context`.
+    /// Returns [`IdxTensorError`] when the tensor does not belong to `context`,
+    /// including [`IdxTensorError::UnsupportedExecutionContext`] when this build
+    /// cannot execute in `context`.
     pub fn validate_context(
         &self,
         context: &ExecutionContext,
     ) -> std::result::Result<(), IdxTensorError> {
+        #[cfg(not(feature = "tenferro-cuda"))]
+        ensure_supported_execution_context(context)?;
         let Some(inner) = self.storage.eager() else {
             if matches!(context, ExecutionContext::Cpu(_)) {
                 return Ok(());
@@ -8075,6 +8137,10 @@ impl IdxTensor {
                     IdxTensorError::operation("CUDA context validation", anyhow::Error::new(error))
                 })?;
             }
+            // Reachable only when the backend enables CUDA without core's feature.
+            #[cfg(not(feature = "tenferro-cuda"))]
+            #[allow(unreachable_patterns)]
+            _ => return Err(unsupported_execution_context_error()),
         }
         Ok(())
     }
@@ -8120,7 +8186,8 @@ impl IdxTensor {
     ///
     /// Returns [`IdxTensorError`] when the tensor does not belong to `context`,
     /// when the explicit transfer fails, or when the storage is neither `f64`
-    /// nor `Complex64`.
+    /// nor `Complex64`. An unsupported context is rejected with
+    /// [`IdxTensorError::UnsupportedExecutionContext`] before any readback.
     pub fn read_decision_data(
         &self,
         context: &ExecutionContext,
@@ -8192,7 +8259,10 @@ impl IdxTensor {
     ///
     /// Returns [`IdxTensorError`] when the tensor does not belong to
     /// `context`, when the storage is neither `f64` nor `Complex64`, or when
-    /// the scalar construction, upload, or multiplication fails.
+    /// the scalar construction, upload, or multiplication fails. An unsupported
+    /// context is rejected with
+    /// [`IdxTensorError::UnsupportedExecutionContext`] before any upload or
+    /// arithmetic.
     pub fn scale_in(
         &self,
         factor: f64,
@@ -8251,6 +8321,8 @@ impl IdxTensor {
         factor: f64,
         context: &ExecutionContext,
     ) -> std::result::Result<EagerTensor, IdxTensorError> {
+        #[cfg(not(feature = "tenferro-cuda"))]
+        ensure_supported_execution_context(context)?;
         let native: NativeTensor = match operand.dtype() {
             DType::F64 => NativeTensor::from_vec_col_major(vec![], vec![factor]),
             DType::C64 => {
@@ -8276,6 +8348,10 @@ impl IdxTensor {
                     anyhow::Error::new(error).context("scalar upload failed"),
                 )
             })?,
+            // Reachable only when the backend enables CUDA without core's feature.
+            #[cfg(not(feature = "tenferro-cuda"))]
+            #[allow(unreachable_patterns)]
+            _ => return Err(unsupported_execution_context_error()),
         };
         IdxTensor::untracked_inner(resident, runtime).map_err(|error| {
             IdxTensorError::operation(
@@ -8297,6 +8373,10 @@ impl IdxTensor {
             ExecutionContext::Cuda(context) => context.eager_runtime().map_err(|error| {
                 IdxTensorError::operation("context-scoped scaling", anyhow::Error::new(error))
             }),
+            // Reachable only when the backend enables CUDA without core's feature.
+            #[cfg(not(feature = "tenferro-cuda"))]
+            #[allow(unreachable_patterns)]
+            _ => Err(unsupported_execution_context_error()),
         }
     }
 
@@ -8310,7 +8390,9 @@ impl IdxTensor {
     ///
     /// Returns [`IdxTensorError`] when the tensor does not belong to
     /// `context`, when the storage is neither `f64` nor `Complex64`, or when
-    /// the reductions or explicit readback fail.
+    /// the reductions or explicit readback fail. An unsupported context is
+    /// rejected with [`IdxTensorError::UnsupportedExecutionContext`] before any
+    /// reduction.
     pub fn norm_in(&self, context: &ExecutionContext) -> std::result::Result<f64, IdxTensorError> {
         self.validate_context(context)?;
         #[cfg(feature = "tenferro-cuda")]
@@ -8459,6 +8541,55 @@ mod tests {
     use num_complex::{Complex32, Complex64};
     use std::cell::Cell;
     use tensor4all_tensorbackend::StorageError;
+
+    #[cfg(not(feature = "tenferro-cuda"))]
+    #[test]
+    fn unsupported_context_error_is_classifiable_and_actionable() {
+        let error = unsupported_execution_context_error();
+        match &error {
+            IdxTensorError::UnsupportedExecutionContext { required_feature } => {
+                assert_eq!(*required_feature, "tensor4all-core/tenferro-cuda");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+        let message = error.to_string();
+        assert!(
+            message.contains("tensor4all-core/tenferro-cuda"),
+            "diagnostic must name the required feature: {message}"
+        );
+    }
+
+    #[cfg(not(feature = "tenferro-cuda"))]
+    #[test]
+    fn unsupported_context_error_survives_factorize_wrapping() {
+        let wrapped = unsupported_factorize_context_error();
+        let FactorizeError::ComputationError(inner) = &wrapped else {
+            panic!("unexpected error: {wrapped}");
+        };
+        assert!(inner.downcast_ref::<IdxTensorError>().is_some());
+        assert!(
+            std::error::Error::source(&wrapped)
+                .and_then(|source| source.downcast_ref::<IdxTensorError>())
+                .is_some(),
+            "the typed error must stay reachable through the source chain"
+        );
+    }
+
+    #[cfg(not(feature = "tenferro-cuda"))]
+    #[test]
+    fn supported_cpu_context_check_does_not_initialize_runtime() {
+        let cpu = Arc::new(tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+            tenferro_cpu::CpuBackend::new(),
+        ));
+        let context = ExecutionContext::Cpu(Arc::clone(&cpu));
+
+        assert!(format!("{cpu:?}").contains("eager_initialized: false"));
+        ensure_supported_execution_context(&context).unwrap();
+        assert!(
+            format!("{cpu:?}").contains("eager_initialized: false"),
+            "the support check must not initialise the eager runtime"
+        );
+    }
 
     #[test]
     fn structured_contraction_does_not_install_logical_dense_cache() {
