@@ -348,7 +348,7 @@ exactly what is delivered, and §5c lists what is not.
 | Compatibility bridges | `LogicalTensor` for host snapshots, plus `explicit::lift` and `explicit::detach` as the named plain/AD boundary: adoption moves the value into the context's own eager runtime, materialization is a separate named call, and neither is implicit |
 | Private child resources and the backend phase proof | delivered: `HeldSession::phase` / `PhaseLane` lend the session's own pool to a phase scheduler, each lane running this frontend's session view over a private child session; tests cover one lane, one lane per worker, error cancellation observed by a peer, and recovery |
 | Reusable plan surface | delivered as `explicit::PreparedEinsum`: prepare once over borrowed operands, then `execute` or `execute_into` on whichever session the caller holds |
-| Measurements | bridge allocations/copies/registration are not measured, and no paired dispatch numbers are recorded for the explicit route |
+| Measurements | delivered in section 5c-1: paired dispatch numbers for all three entry routes plus the separately reported bridge cost |
 | A held *object* form | delivered as `explicit::HeldSession`, see section 5d |
 
 Why the entry is callback-scoped here, and what the alternatives are: tenferro's held
@@ -372,6 +372,38 @@ Either would give this frontend a held object without an upstream change; neithe
 taken here, because the object's ownership and the compatibility entry's worker policy
 are decisions for the maintainer rather than consequences of the pin. What is delivered
 is the callback-scoped entry plus the routes, which is what a stage needs today.
+
+### 5c-1. Paired dispatch and bridge measurements
+
+Protocol: `crates/tensor4all-tensorbackend/benches/explicit_dispatch.rs`, criterion, one arm
+per entry route over the same QR operation on a `CpuExecutionContext::from_backend(
+CpuBackend::with_threads(1))`, pinned with `taskset -c 0`, release build, 100 samples with 2 s
+warm-up and 5 s measurement per case. `compatibility` is `qr_native_tensor` (the
+process-global convenience entry), `explicit_scoped` is one `with_concrete_session` per
+call, `explicit_held` is one `HeldSession` with one operation view per call, and `bridge` is
+`lift` plus `detach`, which is reported on its own rather than folded into the kernel
+numbers.
+
+Measured 2026-10-10 on AMD EPYC 7713P, rustc 1.97.1, medians with criterion's interval:
+
+| case | median |
+| --- | ---: |
+| QR 2x2 `compatibility` | 1.973 us |
+| QR 2x2 `explicit_scoped` | 1.845 us |
+| QR 2x2 `explicit_held` | 1.384 us |
+| QR 16x16 `compatibility` | 7.614 us |
+| QR 16x16 `explicit_scoped` | 7.370 us |
+| QR 16x16 `explicit_held` | 6.950 us |
+| bridge `lift_detach` 2x2 | 3.934 us |
+| bridge `lift_detach` 16x16 | 4.187 us |
+
+What the numbers support: holding one session removes the per-operation session entry, worth
+0.46 us at 2x2 and 0.66 us at 16x16 against the callback-scoped explicit entry, and the
+explicit route does not add dispatch cost over the compatibility route. What they also show:
+one lift/detach round trip costs about as much as a small QR (3.9 to 4.2 us), so a stage that
+crosses the tracking boundary per operation would pay more than it saves - which is why the
+boundary is specified at stage or batch granularity and why its cost is reported here
+separately instead of being counted as free.
 
 ### 5d. The held session form
 
