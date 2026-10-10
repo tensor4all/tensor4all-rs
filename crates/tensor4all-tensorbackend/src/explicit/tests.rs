@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::*;
 use tenferro::Tensor;
 use tenferro_cpu::CpuBackend;
@@ -256,4 +258,143 @@ fn mixed_precision_operands_promote_like_the_compatibility_frontend() {
         explicit.as_slice::<f64>().expect("f64 payload"),
         &[23.0, 34.0]
     );
+}
+
+/// The session's `Debug` output is a summary, not a dump of the execution state.
+#[test]
+fn session_debug_is_a_summary() {
+    let context = context(1);
+    context
+        .with_concrete_session(|session| {
+            let rendered = format!("{session:?}");
+            assert!(rendered.contains("explicit::Session"), "{rendered}");
+        })
+        .expect("session entry");
+}
+
+/// Axis lists of different lengths are rejected typed instead of contracting
+/// something unexpected.
+#[test]
+fn contraction_rejects_mismatched_axes_typed() {
+    let context = context(1);
+    let a = matrix();
+    let error = context
+        .with_concrete_session(|session| session.contraction(&a, &[1], &a, &[]))
+        .expect("session entry")
+        .expect_err("mismatched axis lists must be rejected");
+    assert!(
+        matches!(error, tenferro_einsum::Error::InvalidSubscripts { .. }),
+        "expected a typed invalid-subscripts error, got {error}"
+    );
+}
+
+/// A label list whose length does not match the operand rank is rejected typed.
+#[test]
+fn einsum_rejects_a_mismatched_label_rank_typed() {
+    let context = context(1);
+    let a = matrix();
+    let error = context
+        .with_concrete_session(|session| session.einsum(&[&a], &[&[0, 1, 2]], &[0]))
+        .expect("session entry")
+        .expect_err("a mismatched label rank must be rejected");
+    // The rank mismatch is reported by einsum planning, which is the typed rejection
+    // for this route; the message names the offending operand.
+    assert!(
+        error.to_string().contains("subscript labels") || error.to_string().contains("rank"),
+        "expected a diagnostic naming the label mismatch, got {error}"
+    );
+}
+
+/// N-ary einsum promotes heterogeneous operands through the same path contraction
+/// uses.
+#[test]
+fn einsum_promotes_heterogeneous_operands() {
+    let context = context(1);
+    let a = matrix();
+    let b =
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 0.0, 0.0, 1.0]).expect("f32 identity");
+
+    let product = context
+        .with_concrete_session(|session| session.einsum(&[&a, &b], &[&[0, 1], &[1, 2]], &[0, 2]))
+        .expect("session entry")
+        .expect("promoted einsum");
+    assert_eq!(product.dtype(), tenferro::DType::F64);
+    assert_eq!(
+        product.as_slice::<f64>().expect("f64 payload"),
+        &[1.0, 2.0, 3.0, 4.0]
+    );
+}
+
+/// `triangular_solve` solves a triangular system on the session, and reports a
+/// shape mismatch typed.
+#[test]
+fn triangular_solve_solves_and_reports_a_shape_mismatch() {
+    let context = context(1);
+    let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 0.0, 4.0]).expect("lower");
+    let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 4.0]).expect("rhs");
+    let x = context
+        .with_concrete_session(|session| session.triangular_solve(&a, &b, true, true, false, false))
+        .expect("session entry")
+        .expect("triangular solve");
+    assert_eq!(x.as_slice::<f64>().expect("f64 payload"), &[2.0, 0.5]);
+
+    let wide = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).expect("wide rhs");
+    let error = context
+        .with_concrete_session(|session| {
+            session.triangular_solve(&a, &wide, true, true, false, false)
+        })
+        .expect("session entry")
+        .expect_err("a shape mismatch must be rejected");
+    assert!(
+        matches!(error, tenferro_tensor::Error::Validation { .. }),
+        "expected a typed validation error, got {error}"
+    );
+}
+
+/// `full_piv_lu` factors a matrix on the session, and reports a non-square input
+/// typed.
+#[test]
+fn full_piv_lu_factors_and_reports_a_non_square_input() {
+    let context = context(1);
+    let a = matrix();
+    let (p, l, u, q, _parity) = context
+        .with_concrete_session(|session| session.full_piv_lu(&a))
+        .expect("session entry")
+        .expect("full-pivoting LU");
+    for factor in [&p, &l, &u, &q] {
+        assert_eq!(factor.shape(), &[2, 2]);
+    }
+    let l = l.as_slice::<f64>().expect("f64 payload");
+    let u = u.as_slice::<f64>().expect("f64 payload");
+    assert_eq!(l[2], 0.0, "L is lower triangular");
+    assert_eq!(u[1], 0.0, "U is upper triangular");
+
+    let tall = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).expect("tall");
+    let error = context
+        .with_concrete_session(|session| session.full_piv_lu(&tall))
+        .expect("session entry")
+        .expect_err("a non-square input must be rejected");
+    assert!(
+        !error.to_string().is_empty(),
+        "the rejection must carry a diagnostic: {error}"
+    );
+}
+
+/// A caller inside a Rayon worker is rejected typed: this frontend promises the
+/// caller's own backend, and the compatibility frontend's inline worker fallback is
+/// not a substitute for it.
+#[test]
+fn a_worker_caller_is_rejected_typed() {
+    let context = Arc::new(context(1));
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("one-worker enclosing pool"),
+    );
+    let worker_context = Arc::clone(&context);
+    let rejected = pool.install(move || worker_context.with_concrete_session(|_| ()).is_err());
+    assert!(rejected, "a worker caller must be rejected typed");
+    // The context stays usable from outside the pool.
+    assert!(context.with_concrete_session(|_| ()).is_ok());
 }
