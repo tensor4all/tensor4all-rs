@@ -432,7 +432,7 @@ impl<T: Scalar> RrLU<T> {
     }
 }
 
-fn validate_col_major_matrix_len(
+pub(crate) fn validate_col_major_matrix_len(
     nrows: usize,
     ncols: usize,
     actual_len: usize,
@@ -881,9 +881,23 @@ pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> R
     let n = lu.n_pivot;
     let (l, u) = extract_lu_from_factorized(data, nr, nc, n, opts.left_orthogonal)?;
 
-    // Set error to 0 if full rank
+    // A rank ceiling exits before the next pivot scan. Report the remaining
+    // Schur complement, not the magnitude of the last accepted pivot.
     if n >= nr.min(nc) {
         lu.error = 0.0;
+    } else if n == max_bond_dim {
+        lu.error = 0.0;
+        for col in n..nc {
+            for row in n..nr {
+                let residual = col_major_get(data, nr, row, col).abs_val();
+                if !residual.is_finite() {
+                    return Err(MatrixCIError::NaNEncountered {
+                        matrix: "residual".to_string(),
+                    });
+                }
+                lu.error = lu.error.max(residual);
+            }
+        }
     }
 
     lu.l = l;

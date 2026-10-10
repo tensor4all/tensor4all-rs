@@ -1,6 +1,7 @@
 //! Deterministic continuous minimum-retracing walks for tree sweeps.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use thiserror::Error;
 
@@ -26,8 +27,10 @@ pub(crate) struct PathPhase {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SweepPlan {
     pub(crate) start: usize,
-    pub(crate) forward: Vec<PathPhase>,
-    pub(crate) reverse: Vec<PathPhase>,
+    // Immutable run-scoped plans can be retained while execution mutates the
+    // state without copying every path and edge step on each directional pass.
+    pub(crate) forward: Arc<[PathPhase]>,
+    pub(crate) reverse: Arc<[PathPhase]>,
 }
 
 #[derive(Debug, Error)]
@@ -69,8 +72,8 @@ impl SweepPlan {
         if edges.is_empty() {
             return Ok(Self {
                 start: 0,
-                forward: Vec::new(),
-                reverse: Vec::new(),
+                forward: Arc::from([]),
+                reverse: Arc::from([]),
             });
         }
         let adjacency = adjacency(node_count, edges);
@@ -101,8 +104,8 @@ impl SweepPlan {
         }];
         let plan = Self {
             start,
-            forward,
-            reverse,
+            forward: forward.into(),
+            reverse: reverse.into(),
         };
         plan.validate(node_count, edges)?;
         Ok(plan)

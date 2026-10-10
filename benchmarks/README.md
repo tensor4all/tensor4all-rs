@@ -111,6 +111,12 @@ complete paired case summaries, all fitted coefficients and experiment hashes.
 It localizes a candidate-frame residual without claiming a production speedup
 or resolving the downstream GW workload.
 
+The [#686 completion comparison](results/2026-10-09-treeaci-686-completion.md)
+records scalar leaf/group reuse against merged #863, with the full initial
+inconclusive matrix and a separately declared complete confirmation using
+unchanged gates. Exact numerical/count parity and effort regressions support
+the issue closure; the timing evidence is descriptive.
+
 #### Adaptive TreeTN patch representation (M4)
 
 `benchmark_tree_patch_representation` compares eager patches, which retain
@@ -228,6 +234,36 @@ cargo build --release -p tensor4all-treetci --features tensor4all-core/default -
 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_memo memo
 ```
+
+The [2026-10-09 scalar frame-builder report](results/2026-10-09-scalar-frame-batch-layout.md)
+uses the same 120-case protocol for batch-local axis metadata reuse (#686).
+It preserves all case summaries and intervals without a production speedup claim.
+
+#### Chain evaluator cache-frontier controls (#671)
+
+The Criterion group `hiroshi_chain_evaluator_parity` compares TTCache and
+TreeTN on identical 16-site f64 chains, physical dimension 2, bond dimensions
+64/128/256 and a 64-point Cartesian coordinate batch. It retains the original
+`treetn_cold`/`treetn_warm` vertex-center controls and adds
+`treetn_around_split_*` (erased output) and `treetn_typed_around_split_*`
+(typed output) using the public `EvaluationHint::around` API used by TreeACI
+coordinate scans. A warm vertex contraction and a cached bond-split dot
+product perform different final work even when they return identical values.
+
+```bash
+RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 TENFERRO_NUM_THREADS=1 \
+  taskset -c 2 cargo bench -p tensor4all-treetn --bench cached_evaluator -- \
+  hiroshi_chain_evaluator_parity --warm-up-time 1 --measurement-time 1
+```
+
+The 24 cases check every TreeTN cold/warm route against TTCache before timing.
+Evaluator construction and oracle output conversion are outside timing; each
+API's native output remains in timing. This compares routes within one
+library revision, not a baseline/candidate speedup. The short host-specific
+[2026-10-09 report](results/2026-10-09-chain-cache-frontier.md) records all
+estimates and intervals. Neither the residual gap nor the topology proxy
+alone establishes a correctness bug or resolves the real SGW workload.
 
 #### Other Rust benchmarks
 

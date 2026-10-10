@@ -80,6 +80,24 @@ is removed from the active projection mask as soon as that capacity is used.
 Thus one Guard scan offering several pivots cannot overshoot a cut that had
 only one rank available.
 
+Guard retains at most `max_nglobal_pivots` returned assignments across passes.
+Each next search rechecks them against the current output in the starting
+batch, with their targets counted once. Still-significant assignments keep
+their slots; resolved assignments release them for new random discoveries.
+Thus a random miss cannot erase an already established residual. The combined
+retained/start/evaluation storage is checked against the working budget.
+`global_pivots_found` includes retained assignments that still fail validation;
+it is not the number actually injected into candidate sets.
+
+Guard detection is independent of that injection capacity. Unless the local
+residual already establishes a rank limit, an enabled search still validates
+the output when every cut is saturated. Significant residuals without any
+remaining headroom contribute to `RankLimited`; saturation cannot be treated
+as a successful guard scan. A final cleanup pass runs only when pivots were
+actually injected. Target values, reconstructed values,
+residuals, and guard thresholds must be finite, including the exact single-node
+shortcut. Callback and residual non-finiteness has a dedicated typed error.
+
 Convergence requires a window of `min_sweeps` consecutive pass results with
 no growth on **any** output edge, starting with the first result as the
 baseline. A rank decrease is allowed, but subsequent regrowth restarts the
@@ -99,8 +117,15 @@ tolerance as an absolute threshold on that normalized matrix. The sweep
 compares `error / scale` with that tolerance, so the factorization and sweep
 share a reference. A relative-to-largest-pivot rule would disagree whenever
 Schur-complement growth lifts a pivot above the largest entry. Normalization
-also makes the LUCI kernels' absolute `f64::EPSILON` pivot floor a fixed
-relative round-off floor for this mode. With absolute tolerance selected, the
+divides complex components by a real scalar rather than forming a complex
+divisor's squared norm, avoiding overflow or underflow from squaring a
+representable normalizer.
+CI canonicalization preserves all four supported scalar dtypes end to end.
+When a rank ceiling ends rrLU, the reported local error is the remaining Schur
+complement maximum, rather than the last accepted pivot. Thus a saturated cut
+whose local matrix is already exact does not by itself imply `RankLimited`.
+Normalization also makes the LUCI kernels' absolute `f64::EPSILON` pivot floor
+a fixed relative round-off floor for this mode. With absolute tolerance selected, the
 local matrix remains in raw output units and the configured threshold is
 absolute in those same units. The global guard follows the same policy: in
 relative mode it scales its threshold by the largest `|f|` among its random
@@ -114,6 +139,26 @@ full-grid maximum error: the tolerance controls edge-local residuals, and the
 guard performs bounded randomized coordinate searches with its configured
 acceptance margin. Independent validation remains necessary. Exhaustive
 checks belong only in small tests or explicit diagnostic programs.
+
+### Fresh local crosses and tolerance-boundary cycling
+
+Every local update uses the fresh dense LUCI cross at the original tolerance
+and rank ceiling. TreeACI does not retain a previous cross or run preferred-
+pivot replacement searches. The retention mechanism introduced for #784 was
+withdrawn because its full-matrix screening and repeated reconstruction caused
+the severe G0 performance regression in #885.
+
+Guard-injected candidate components are therefore available to fresh LUCI on
+every following update, including neighboring saturated cuts. There is no
+old-pivot preference or pending preference-refresh flag that can exclude a
+Guard discovery; the unchanged #874 public regressions still validate this
+behavior. Guard detection, revalidation, rank limits and cleanup remain in
+force.
+
+Tolerance-boundary rank oscillation and non-improving sweeps remain unresolved
+under #784. The per-edge stability window, original tolerance and Guard
+conditions still determine termination; reaching the pass limit reports
+`MaxSweeps`. Withdrawal does not certify global accuracy or solve cycling.
 
 ## Caches
 
@@ -154,6 +199,16 @@ follow the working budget, because they bound what survives between local
 updates rather than what one update may allocate. Within one preparation the
 byte budget is checked before any ceiling derived from it, so an impossible
 budget is reported as `working bytes` rather than as a derived ceiling.
+
+Local preflight plans and charges both candidate lists before enumeration.
+Frame contraction reserves their metadata together with its scalar buffers;
+the LUCI phase uses Core's conservative logical working estimate plus retained
+input values and candidate/pivot records. Provider-private workspace and
+allocator overhead are outside this estimated logical budget; it is not RSS.
+Guard's aggregate message budget is divided across evaluators and then their
+directed-edge caches, with floor rounding keeping the aggregate within the
+configured bound. History capacity grows with completed passes rather than
+reserving the entire requested stopping ceiling.
 
 The two state-owned cache families report through `TreeAciDiagnostics`, in the
 same logical-byte units. With the `diagnostics` feature, `query_cache` reports
@@ -196,6 +251,26 @@ entry points. Input message caches now persist across guard scans, while the
 output cache is rebuilt per scan because the approximating output changes after
 each sweep. Performance parity remains workload-dependent, so it is not yet a
 drop-in train ACI replacement.
+
+The guard evaluates all starting targets and approximations together and
+retains their finite residuals. Coordinate walks reuse those initial errors;
+operator-point accounting counts each start once. Retained starting errors
+are included in the guard's logical working-storage estimate.
+
+Bootstrap enumeration preserves the original descending node-position digit
+order using compact component suffixes. Dimension-one axes have zero digits;
+only enough nontrivial axes to represent the largest initial rank are kept,
+at most `usize::BITS` per directed cut. Dependency-order propagation replaces
+repeated full-component traversals and sorting. One projection scratch buffer
+is reused across enumerated points, with each dependency overwritten before
+use. These temporary structures are preflighted together before allocation;
+rank-one bootstrap needs neither nontrivial suffixes nor projection scratch.
+
+Message caches follow the later approved append-only, evaluator-lifetime
+policy from PR #646. Their logical admission budget covers message payload;
+owned-storage diagnostics additionally count spare column capacity, map
+buckets, and heap payload owned by wide assignment keys. These estimates
+exclude allocator headers and are not hard resident-memory ceilings.
 
 This document records the durable repository architecture. The staged
 implementation history, including the edge-order experiment and its verdict,

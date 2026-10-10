@@ -4,7 +4,7 @@ use criterion::{black_box, criterion_group, criterion_main, BatchSize, Benchmark
 use num_complex::{Complex32, Complex64};
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
-use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, TensorElement};
+use tensor4all_core::{AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor, TensorElement};
 use tensor4all_simplett::{
     tensor3_zeros, MultiIndex, SimpleTensorTrain, TTCache, Tensor3, Tensor3Ops,
 };
@@ -505,19 +505,45 @@ fn bench_warm_call_vs_bond(c: &mut Criterion) {
     group.finish();
 }
 
+// Keep each API's native output in the timed region. Converting erased values
+// for the oracle happens only outside timing, so typed-output costs stay visible.
+enum ChainReadout {
+    Erased(Vec<AnyScalar>),
+    Typed(Vec<f64>),
+}
+
+impl ChainReadout {
+    fn assert_matches(&self, expected: &[f64]) {
+        fn check(actual: impl Iterator<Item = f64>, expected: &[f64]) {
+            assert!(actual.zip(expected).all(|(actual, expected)| {
+                actual.is_finite()
+                    && expected.is_finite()
+                    && (actual - expected).abs()
+                        <= 1.0e-12 * actual.abs().max(expected.abs()).max(1.0)
+            }));
+        }
+        match self {
+            Self::Erased(values) => {
+                assert_eq!(values.len(), expected.len());
+                check(values.iter().map(AnyScalar::real), expected);
+            }
+            Self::Typed(values) => {
+                assert_eq!(values.len(), expected.len());
+                check(values.iter().copied(), expected);
+            }
+        }
+    }
+}
+
 /// Direct chain-evaluator parity protocol requested by Hiroshi Shinaoka in
 /// <https://github.com/tensor4all/tensor4all-rs/pull/646#issuecomment-5316892012>.
 ///
-/// Both evaluators see the same tensors, coordinate batch, scalar type, and a
-/// fixed midpoint. The APIs cannot express identical contraction objects:
-/// `TTCache` splits on a bond while `TreeTNCachedEvaluator` centers on a node.
-/// That semantic difference is retained and reported because it controls how
-/// much of a warm contraction each cache can reuse. `iter_batched_ref`
-/// constructs a fresh evaluator outside each timed region, so the sample
-/// measures one cold-cache evaluation without charging either implementation
-/// for construction. The representative bond dimensions are the review's
-/// requested 64, 128, and 256, rather than the small-rank cases that can hide
-/// scaling defects.
+/// Both evaluators use the same tensors and coordinate batch at bonds 64,
+/// 128 and 256. TTCache uses a bond split; the default TreeTN route contracts
+/// a vertex. The around-split hint also permits a cached cut readout, measured
+/// with erased and typed output APIs. Cold evaluator construction is outside
+/// timing; warm samples reuse messages. Every TreeTN route is checked against
+/// independent TTCache values before both cold and warm timing.
 fn bench_hiroshi_chain_evaluator_parity(c: &mut Criterion) {
     const N_SITES: usize = 16;
     const LOCAL_DIM: usize = 2;
@@ -534,28 +560,8 @@ fn bench_hiroshi_chain_evaluator_parity(c: &mut Criterion) {
     for bond_dim in [64usize, 128, 256] {
         let tt = create_tt_with_bond_dim(N_SITES, LOCAL_DIM, bond_dim);
         let (tree, site_indices) = tensor_train_to_treetn(&tt).unwrap();
-
-        // Validate numerical parity once, outside the timed measurements.
         let mut tt_check = TTCache::new(&tt);
         let expected = tt_check.evaluate_many(&indices, Some(SPLIT)).unwrap();
-        let mut tree_check = TreeTNCachedEvaluator::new(
-            &tree,
-            &site_indices,
-            CachedEvaluatorOptions::<usize> {
-                center: Some(SPLIT),
-                ..CachedEvaluatorOptions::default()
-            },
-        )
-        .unwrap();
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-        let actual = tree_check.evaluate_batched(points).unwrap();
-        assert_eq!(actual.len(), expected.len());
-        assert!(actual.iter().zip(&expected).all(|(actual, expected)| {
-            let actual = actual.real();
-            actual.is_finite()
-                && expected.is_finite()
-                && (actual - expected).abs() <= 1.0e-12 * actual.abs().max(expected.abs()).max(1.0)
-        }));
 
         group.bench_with_input(
             BenchmarkId::new("ttcache_cold", bond_dim),
@@ -572,36 +578,6 @@ fn bench_hiroshi_chain_evaluator_parity(c: &mut Criterion) {
                 )
             },
         );
-
-        group.bench_with_input(
-            BenchmarkId::new("treetn_cold", bond_dim),
-            &values,
-            |b, values| {
-                b.iter_batched_ref(
-                    || {
-                        TreeTNCachedEvaluator::new(
-                            &tree,
-                            &site_indices,
-                            CachedEvaluatorOptions::<usize> {
-                                center: Some(SPLIT),
-                                ..CachedEvaluatorOptions::default()
-                            },
-                        )
-                        .unwrap()
-                    },
-                    |evaluator| {
-                        let points = ColMajorArrayRef::new(black_box(values), &shape).unwrap();
-                        evaluator.evaluate_batched(points).unwrap()
-                    },
-                    BatchSize::LargeInput,
-                )
-            },
-        );
-
-        // The same batch after both persistent evaluators have cached every
-        // reusable environment/message, corresponding to the review's
-        // follow-up request to separate repeated-cache behavior from cold
-        // contraction work.
         let mut tt_warm = TTCache::new(&tt);
         tt_warm.evaluate_many(&indices, Some(SPLIT)).unwrap();
         group.bench_with_input(
@@ -616,26 +592,60 @@ fn bench_hiroshi_chain_evaluator_parity(c: &mut Criterion) {
             },
         );
 
-        let mut tree_warm = TreeTNCachedEvaluator::new(
-            &tree,
-            &site_indices,
-            CachedEvaluatorOptions::<usize> {
-                center: Some(SPLIT),
-                ..CachedEvaluatorOptions::default()
-            },
-        )
-        .unwrap();
-        tree_warm.evaluate_batched(points).unwrap();
-        group.bench_with_input(
-            BenchmarkId::new("treetn_warm", bond_dim),
-            &values,
-            |b, values| {
-                b.iter(|| {
-                    let points = ColMajorArrayRef::new(black_box(values), &shape).unwrap();
-                    tree_warm.evaluate_batched(points).unwrap()
-                })
-            },
-        );
+        // Keep the original default vertex-center control. Also measure the
+        // hinted route used by TreeACI's coordinate scans: it can retain both
+        // sides of a cut, while an unhinted warm vertex still contracts its
+        // center core. Equal values alone do not imply equal cached work.
+        for (route, hinted, typed) in [
+            ("treetn", false, false),
+            ("treetn_around_split", true, false),
+            ("treetn_typed_around_split", true, true),
+        ] {
+            let evaluate = |evaluator: &mut TreeTNCachedEvaluator<'_, usize>| {
+                let points = ColMajorArrayRef::new(black_box(&values), &shape).unwrap();
+                if typed {
+                    ChainReadout::Typed(
+                        evaluator
+                            .evaluate_batched_typed::<f64>(points, EvaluationHint::around(SPLIT))
+                            .unwrap(),
+                    )
+                } else {
+                    ChainReadout::Erased(
+                        if hinted {
+                            evaluator
+                                .evaluate_batched_with_hint(points, EvaluationHint::around(SPLIT))
+                        } else {
+                            evaluator.evaluate_batched(points)
+                        }
+                        .unwrap(),
+                    )
+                }
+            };
+            let make_evaluator = || {
+                TreeTNCachedEvaluator::new(
+                    &tree,
+                    &site_indices,
+                    CachedEvaluatorOptions::<usize> {
+                        center: Some(SPLIT),
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+            };
+            // Independent TTCache parity is checked before timing for every
+            // route/bond, including the newly selected hint path.
+            let mut check = make_evaluator();
+            let actual = evaluate(&mut check);
+            actual.assert_matches(&expected);
+            group.bench_function(BenchmarkId::new(format!("{route}_cold"), bond_dim), |b| {
+                b.iter_batched_ref(make_evaluator, &evaluate, BatchSize::LargeInput)
+            });
+            let mut warm = make_evaluator();
+            evaluate(&mut warm).assert_matches(&expected);
+            group.bench_function(BenchmarkId::new(format!("{route}_warm"), bond_dim), |b| {
+                b.iter(|| evaluate(black_box(&mut warm)))
+            });
+        }
     }
     group.finish();
 }

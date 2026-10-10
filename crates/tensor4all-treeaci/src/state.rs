@@ -25,7 +25,7 @@ pub(crate) mod profile_debug_stats {
         pub(crate) bootstrap: Duration,
         pub(crate) frames: Duration,
         pub(crate) proposals: Duration,
-        pub(crate) schedule_clone: Duration,
+        pub(crate) schedule_acquire: Duration,
         pub(crate) deferred_canonicalization: Duration,
         pub(crate) local_preparation: Duration,
         pub(crate) local_input_frames: Duration,

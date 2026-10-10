@@ -1,3 +1,7 @@
+mod finite_values;
+mod known_pivots;
+mod start_residuals;
+
 use num_complex::{Complex32, Complex64};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -361,16 +365,22 @@ fn global_search_rejects_the_start_batch_before_calling_the_operator() {
     let options = TreeAciOptions {
         nsearch_global_pivots: 4,
         max_working_bytes: 64,
-        // Pin the element ceilings so the 64-byte budget exercises only the
-        // guard's start-batch charge. Left unset they would follow the budget
-        // down to two elements and preparation would refuse the tree first.
+        // Keep element ceilings independent of this guard-only byte ceiling.
         max_local_matrix_elements: Some(1 << 24),
         max_core_elements: Some(1 << 24),
         max_frame_elements: Some(1 << 24),
         ..TreeAciOptions::default()
     };
     let inputs = vec![input];
-    let state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let initialization_options = TreeAciOptions {
+        max_working_bytes: TreeAciOptions::<usize>::default().max_working_bytes,
+        ..options.clone()
+    };
+    let mut state =
+        TreeAciState::<f64, usize>::initialize(&inputs, &initialization_options).unwrap();
+    // Bootstrap has its own preflight. Tighten after initialization to
+    // isolate the guard's start-batch rejection rather than that earlier gate.
+    state.problem.max_working_bytes = options.max_working_bytes;
     let mut evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
     let mut operator_called = false;
     let mut operator = |_: crate::TreeElementwiseBatch<'_, f64>, _: &mut [f64]| {
@@ -384,6 +394,7 @@ fn global_search_rejects_the_start_batch_before_calling_the_operator() {
         &options,
         &mut seeded_rng(),
         &mut operator,
+        &[],
     )
     .expect_err("the start vectors must be budgeted before allocation/evaluation");
 
@@ -432,6 +443,7 @@ fn floating_zone_finds_a_feature_missing_from_the_output() {
         &options,
         &mut seeded_rng(),
         &mut identity,
+        &[],
     )
     .unwrap();
 
@@ -463,6 +475,7 @@ fn exact_output_has_no_global_pivot_and_injection_updates_every_cut() {
         &options,
         &mut seeded_rng(),
         &mut identity,
+        &[],
     )
     .unwrap();
     assert!(exact.pivots.is_empty());
@@ -561,6 +574,7 @@ fn max_nglobal_pivots_caps_what_the_guard_offers() {
         &options,
         &mut seeded_rng(),
         &mut identity,
+        &[],
     )
     .unwrap();
 
@@ -1146,4 +1160,49 @@ fn diagnostic_guard_call_cost_on_a_branched_tree() {
             100.0 * (1.0 - single_elapsed.as_secs_f64() / elapsed.as_secs_f64()),
         );
     }
+}
+
+#[test]
+fn guard_candidates_survive_a_failed_pass_and_fresh_luci_can_reduce_rank() {
+    let (_, left_site, right_site) = delta_tree();
+    let bond = DynIndex::new_dyn(1);
+    let input = TreeTN::from_tensors(
+        vec![
+            IdxTensor::from_dense(vec![left_site, bond.clone()], vec![1.0, 1.0]).unwrap(),
+            IdxTensor::from_dense(vec![bond, right_site], vec![1.0, 1.0]).unwrap(),
+        ],
+        vec![0, 1],
+    )
+    .unwrap();
+    let inputs = vec![input];
+    let options = TreeAciOptions {
+        max_bond_dim: Some(2),
+        ..TreeAciOptions::default()
+    };
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    run_directional_pass(&mut state, &options, PassDirection::Forward, &mut identity).unwrap();
+    assert_eq!(
+        inject_global_pivots(&mut state, &[vec![1, 1]], &[1]).unwrap(),
+        1
+    );
+    assert_eq!(
+        inject_global_pivots(&mut state, &[vec![1, 1]], &[1]).unwrap(),
+        0
+    );
+    let injected_candidates = state.candidates.ids.clone();
+    let injected_generation = state.generation;
+    assert!(
+        run_directional_pass(&mut state, &options, PassDirection::Reverse, &mut |_, _| {
+            Err(crate::TreeAciError::InternalInvariant {
+                message: "failed refresh pass fixture",
+            })
+        })
+        .is_err()
+    );
+    assert_eq!(state.candidates.ids, injected_candidates);
+    assert_eq!(state.generation, injected_generation);
+    run_directional_pass(&mut state, &options, PassDirection::Reverse, &mut identity).unwrap();
+    assert_eq!(state.edge_ranks, vec![1]);
+    assert_eq!(inject_global_pivots(&mut state, &[], &[1]).unwrap(), 0);
+    assert!(inject_global_pivots(&mut state, &[vec![1, 1]], &[]).is_err());
 }

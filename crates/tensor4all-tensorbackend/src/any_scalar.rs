@@ -165,6 +165,15 @@ fn scalar_value_from_native(native: &NativeTensor) -> Result<ScalarValue> {
             .copied()
             .map(ScalarValue::C32)
             .ok_or_else(|| anyhow!("failed to read c32 scalar tensor value")),
+        // An external scalar kind is a caller-registered Rust type; it has no
+        // logical scalar value in this crate.
+        DType::External(_) => Err(anyhow::Error::new(tenferro_tensor::Error::unsupported(
+            "scalar snapshot",
+            format!(
+                "external scalar kind {:?} is not a supported scalar tensor",
+                native.dtype()
+            ),
+        ))),
         DType::C64 => native
             .as_slice::<Complex64>()
             .map_err(anyhow::Error::new)?
@@ -310,6 +319,13 @@ pub(crate) fn promote_scalar_native(native: &NativeTensor, target: DType) -> Res
             BackendScalar::from_value(Complex32::new(value.re as f32, value.im as f32))
         }
         (ScalarValue::C64(value), DType::C64) => BackendScalar::from_value(value),
+
+        (_, DType::External(_)) => {
+            return Err(anyhow::Error::new(tenferro_tensor::Error::unsupported(
+                "promotion",
+                "external scalar kinds are not promotable dtypes",
+            )));
+        }
     };
     Ok(promoted.native)
 }

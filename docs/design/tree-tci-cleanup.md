@@ -113,8 +113,7 @@ numerical tolerances, waive red gates, or publish assigned-scope checkpoints.
 
 #670 parallelism remains deferred until tenferro-rs refactoring and subsequent
 tensor4all-rs redesign. FIT initialization (#656), partitioned reconstruction
-(#752/#777), general site removal (#605), shared-MPO sum-target FIT (#748), and
-fused-layout unification (#821) remain separate. ACI accuracy/rank oscillation
+(#752/#777), general site removal (#605), and shared-MPO sum-target FIT (#748) remain separate. ACI accuracy/rank oscillation
 (#572/#784) is rechecked only after its external numerical prerequisite lands;
 remaining causes are separate investigations. Unreproduced guard repetition
 (#794) is not a basis for implementation changes.

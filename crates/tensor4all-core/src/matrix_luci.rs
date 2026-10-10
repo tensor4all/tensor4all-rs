@@ -88,7 +88,7 @@ pub struct MatrixLuciFactors<T> {
     pub row_indices: Vec<usize>,
     /// Selected column indices.
     pub col_indices: Vec<usize>,
-    /// Pivot error history.
+    /// Pivot error history, or one measured maximum residual for fixed pivots.
     pub pivot_errors: Vec<f64>,
     /// Selected rank.
     pub rank: usize,
@@ -395,6 +395,55 @@ where
     T: Scalar + crate::MatrixLuciScalar,
 {
     dense_matrix_luci_factors_from_matrix_owned(a, options.unwrap_or_default())
+}
+
+/// Conservative logical working-byte estimate for owned dense LUCI factors.
+///
+/// Includes the consumed matrix, rrLU L/U, factor construction, permutation
+/// and triangular-solve operands/results, and pivot/index metadata. The
+/// factor rank is bounded by `min(nrows, ncols, max_rank)`. The estimate sums
+/// potentially overlapping factor buffers conservatively; it excludes
+/// allocator overhead and provider-private workspace. Callers must add their
+/// own buffers retained across the factorization.
+///
+/// Returns `None` when checked shape/byte arithmetic overflows `usize`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::matrix_luci_factors_working_bytes;
+/// let bytes = matrix_luci_factors_working_bytes::<f64>(32, 32, 32).unwrap();
+/// // Even just the matrix and full-rank L/U require three matrix payloads.
+/// assert!(bytes >= 3 * 32 * 32 * std::mem::size_of::<f64>());
+/// assert!(matrix_luci_factors_working_bytes::<f64>(usize::MAX, 2, 1).is_none());
+/// ```
+pub fn matrix_luci_factors_working_bytes<T: Scalar>(
+    nrows: usize,
+    ncols: usize,
+    max_rank: usize,
+) -> Option<usize> {
+    let rank = max_rank.min(nrows).min(ncols);
+    let axes = nrows.checked_add(ncols)?;
+    let matrix = nrows.checked_mul(ncols)?;
+    // L/U, both output factors, permutation copies, and triangular solve
+    // operands/results. Charge both orientations rather than assuming which
+    // side has the larger solve, including Matrix/backend operand copies.
+    let factors = axes.checked_mul(rank)?.checked_mul(6)?;
+    let pivots = rank.checked_mul(rank)?.checked_mul(2)?;
+    let scalar_bytes = matrix
+        .checked_add(factors)?
+        .checked_add(pivots)?
+        .checked_mul(std::mem::size_of::<T>())?;
+    let index_bytes = axes
+        .checked_add(rank)?
+        .checked_mul(4)?
+        .checked_mul(std::mem::size_of::<usize>())?;
+    let error_bytes = rank
+        .checked_add(1)?
+        .checked_mul(std::mem::size_of::<f64>())?;
+    scalar_bytes
+        .checked_add(index_bytes)?
+        .checked_add(error_bytes)
 }
 
 /// Factorize a lazily supplied matrix with MatrixLUCI block-rook search.

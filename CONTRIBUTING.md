@@ -20,6 +20,42 @@ Small documentation and typo fixes may go directly to a pull request. For nontri
 5. Update rustdoc, guides, examples, and generated/public API claims affected by the change.
 6. Follow the shared Work Logs And Design Records policy and the [local format](docs/worklogs/README.md) when a decision record is needed; small fixes and AI assistance alone do not require one.
 
+### CI time budget and heavy tests
+
+The standard pipeline (`CI_rs`) is declared to stay fast, and it carries one total
+budget instead of per-test or per-job caps:
+
+- **40 minutes for the whole workflow.** The required `rollup-rs` gate measures the
+  span from the run's first job start to its last job completion and fails above it,
+  printing the per-job elapsed times. This gates completion; it does not cancel the
+  run, and the gate's own scheduling wait is not charged to the pipeline.
+- **5 minutes of suite execution** (`--budget-seconds 300`) in the test jobs, so a
+  single test that makes the suite slower than that fails the job that ran it.
+
+Do not raise either number to accommodate a slow test. A test that needs more is a
+heavy test:
+
+- keep it in `crates/*/tests/heavy_*.rs` and mark it
+  `#[ignore = "heavy: runs in the scheduled heavy-tests workflow (see CONTRIBUTING.md)"]`;
+- [`.github/workflows/heavy-tests.yml`](.github/workflows/heavy-tests.yml) runs those
+  files nightly (`-E 'binary(/^heavy_/)' --run-ignored ignored-only`), builds every
+  target for the compile check, and opens or updates a `ci-nightly` issue when it fails.
+
+Run the heavy suite locally with:
+
+```bash
+cargo build --locked --profile ci --workspace --all-targets
+cargo nextest run --locked --cargo-profile ci -p tensor4all-treeaci \
+    --run-ignored ignored-only -E 'binary(/^heavy_/)'
+```
+
+Example and bench targets stay out of the default suite for the same reason: they add
+no test execution but roughly a quarter of its compile CPU. `cargo clippy --workspace
+--all-targets` keeps them compiling on every pull request, and the nightly workflow
+builds them. The cross-repository policy is the shared `CI Total Time Budget` rule
+(`rules/common/docs-and-tests.md`); local validation is unchanged, see the
+[local validation table](#validate-locally).
+
 ### API naming
 
 Follow the repository vocabulary documented in the [architecture guide](docs/book/src/architecture.md#vocabulary-conventions):

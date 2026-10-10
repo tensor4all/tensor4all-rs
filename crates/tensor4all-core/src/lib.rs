@@ -67,11 +67,14 @@ pub use cached_function::multi_index_cache::{
 };
 pub use cached_function::CachedFunction;
 pub use error::{MatrixCIError, Result};
-pub use floating_zone::floating_zone_walk;
+pub use floating_zone::{
+    floating_zone_walk, floating_zone_walk_with_initial_error, FloatingZoneError,
+};
 pub use indexset::{IndexSet, LocalIndex, MultiIndex};
 pub use matrix_luci::{
     matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix,
-    matrix_luci_factors_from_matrix_owned, MatrixLUCI, MatrixLuciFactors,
+    matrix_luci_factors_from_matrix_owned, matrix_luci_factors_working_bytes, MatrixLUCI,
+    MatrixLuciFactors,
 };
 pub use matrixaca::MatrixACA;
 pub use matrixlu::{rrlu, rrlu_mut, RrLU, RrLUOptions};
@@ -122,7 +125,6 @@ pub use defaults::idx_tensor::{
 };
 #[cfg(feature = "tenferro-cuda")]
 pub use defaults::IdxTensorCudaError;
-#[cfg(feature = "backend-tenferro")]
 pub use tensor4all_tensorbackend::ExecutionContext;
 pub use tensor4all_tensorbackend::TensorElement;
 pub use tensor4all_tensorbackend::{

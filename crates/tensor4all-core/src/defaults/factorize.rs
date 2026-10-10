@@ -39,7 +39,7 @@ use crate::{
     matrix_luci_factors_from_matrix_owned, rrlu_mut, MatrixLuciFactors, RrLUOptions,
     Scalar as MatrixScalar,
 };
-use num_complex::{Complex64, ComplexFloat};
+use num_complex::{Complex32, Complex64, ComplexFloat};
 use tenferro_ad::EagerTensor;
 use tensor4all_tensorbackend::{Matrix, TensorElement};
 
@@ -82,7 +82,8 @@ pub use crate::tensor_like::{
 ///
 /// # Errors
 /// Returns `FactorizeError` if:
-/// - The storage type is not supported (only DenseF64 and DenseC64)
+/// - The storage type is not supported (f64/Complex64 for all host methods,
+///   with f32/Complex32 additionally supported by CI)
 /// - QR is used with `Canonical::Right`
 /// - LU or CI is requested for a tracked tensor (those paths do not yet
 ///   preserve reverse-mode AD metadata)
@@ -105,13 +106,17 @@ pub fn factorize(
         ));
     }
 
-    if t.is_f64() {
+    if options.alg == FactorizeAlg::CI && t.is_f32() {
+        factorize_ci::<f32>(t, left_inds, options)
+    } else if options.alg == FactorizeAlg::CI && t.is_c32() {
+        factorize_ci::<Complex32>(t, left_inds, options)
+    } else if t.is_f64() {
         factorize_impl_f64(t, left_inds, options)
-    } else if t.is_complex() {
+    } else if t.is_c64() {
         factorize_impl_c64(t, left_inds, options)
     } else {
         Err(FactorizeError::UnsupportedStorage(
-            "factorize currently supports only f64 and Complex64 tensors",
+            "factorize requires f64/Complex64, or f32/Complex32 with CI",
         ))
     }
 }
@@ -250,11 +255,13 @@ fn factorize_gram(
         .take(rank)
         .map(|(_, column)| *column)
         .collect();
-    let basis_inner = decomposition
+    let eigenvectors_inner = decomposition
         .eigenvectors
         .as_inner()
-        .map_err(FactorizeError::ComputationError)?
-        .take_cols(&retained_columns)
+        .map_err(FactorizeError::ComputationError)?;
+    let basis_inner = eigenvectors_inner
+        .runtime()
+        .with_eager_session(|session| session.take_cols(eigenvectors_inner, &retained_columns))
         .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
     let bond_index = DynIndex::new_bond(rank)
         .map_err(|error| FactorizeError::ComputationError(anyhow::anyhow!(error)))?;
@@ -349,8 +356,10 @@ fn reshape_factor(tensor: IdxTensor, indices: Vec<DynIndex>) -> Result<IdxTensor
     let dims: Vec<usize> = indices.iter().map(|index| index.dim).collect();
     let inner = tensor
         .as_inner()
-        .map_err(FactorizeError::ComputationError)?
-        .reshape(&dims)
+        .map_err(FactorizeError::ComputationError)?;
+    let inner = inner
+        .runtime()
+        .with_eager_session(|session| session.reshape(inner, &dims))
         .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
     IdxTensor::from_inner(indices, inner).map_err(FactorizeError::ComputationError)
 }
@@ -417,13 +426,17 @@ pub fn factorize_full_rank(
         ));
     }
 
-    if t.is_f64() {
+    if alg == FactorizeAlg::CI && t.is_f32() {
+        factorize_ci_full_rank::<f32>(t, left_inds, canonical)
+    } else if alg == FactorizeAlg::CI && t.is_c32() {
+        factorize_ci_full_rank::<Complex32>(t, left_inds, canonical)
+    } else if t.is_f64() {
         factorize_impl_f64_full_rank(t, left_inds, alg, canonical)
-    } else if t.is_complex() {
+    } else if t.is_c64() {
         factorize_impl_c64_full_rank(t, left_inds, alg, canonical)
     } else {
         Err(FactorizeError::UnsupportedStorage(
-            "factorize currently supports only f64 and Complex64 tensors",
+            "factorize requires f64/Complex64, or f32/Complex32 with CI",
         ))
     }
 }
@@ -471,7 +484,10 @@ pub fn factorize_full_rank(
 /// # Errors
 /// Returns `FactorizeError` when the tensor does not belong to `context`,
 /// when the storage, algorithm, or options are unsupported, or when the
-/// factorization or explicit decision readback fails.
+/// factorization or explicit decision readback fails. When this build cannot
+/// execute in `context`, the rejection carries
+/// [`IdxTensorError::UnsupportedExecutionContext`](crate::IdxTensorError::UnsupportedExecutionContext)
+/// as its source.
 pub fn factorize_in(
     t: &IdxTensor,
     left_inds: &[DynIndex],
@@ -512,7 +528,9 @@ pub fn factorize_in(
 /// # Errors
 /// Returns `FactorizeError` when the tensor does not belong to `context`,
 /// when the storage or algorithm is unsupported, or when the factorization
-/// fails.
+/// fails. When this build cannot execute in `context`, the rejection carries
+/// [`IdxTensorError::UnsupportedExecutionContext`](crate::IdxTensorError::UnsupportedExecutionContext)
+/// as its source.
 pub fn factorize_full_rank_in(
     t: &IdxTensor,
     left_inds: &[DynIndex],
