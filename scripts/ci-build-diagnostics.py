@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record bounded Cargo diagnostics and build/post-build elapsed time in CI."""
+"""Record bounded Cargo diagnostics, build/post-build time, and the suite budget."""
 
 import argparse
 from collections import deque
@@ -9,11 +9,17 @@ from pathlib import Path
 import platform
 import re
 import subprocess
+import sys
 import time
+
+# Nextest's own measure of the suite it ran: "Summary [  79.365s] 3662 tests run".
+SUITE_SUMMARY = re.compile(r"\s*Summary \[\s*([0-9.]+)s\]")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--budget-seconds", type=float,
+                        help="fail when the reported suite execution time exceeds this")
     parser.add_argument("name")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -34,6 +40,7 @@ def main():
                           if line.startswith("model name")), cpu_model)
     started = time.monotonic()
     build_finished = None
+    suite_seconds = None
     tail = deque(maxlen=200)
     fingerprints = []
     compiled = []
@@ -48,6 +55,9 @@ def main():
             tail.append(clean)
             if "Finished" in clean and "target(s) in" in clean:
                 build_finished = elapsed
+            summary_match = SUITE_SUMMARY.match(clean)
+            if summary_match:
+                suite_seconds = float(summary_match.group(1))
             if "fingerprint" in clean and len(fingerprints) < 60:
                 fingerprints.append(clean)
             if clean.lstrip().startswith("Compiling "):
@@ -56,9 +66,13 @@ def main():
                 fresh.append(clean.strip())
         returncode = process.wait()
     elapsed = time.monotonic() - started
+    budget_exceeded = (args.budget_seconds is not None and suite_seconds is not None
+                       and suite_seconds > args.budget_seconds)
     summary = {"command": command, "elapsed_seconds": elapsed,
                "build_finished_seconds": build_finished,
                "post_build_seconds": None if build_finished is None else elapsed - build_finished,
+               "suite_seconds": suite_seconds, "budget_seconds": args.budget_seconds,
+               "budget_exceeded": budget_exceeded,
                "returncode": returncode, "compiled": compiled, "fresh": fresh,
                "fingerprints_first_60": fingerprints,
                "rustc": rustc, "cpu_model": cpu_model, "cpu_count": os.cpu_count(),
@@ -71,7 +85,22 @@ def main():
     print(f"Observed Cargo Compiling lines: {len(compiled)}; Fresh lines: {len(fresh)}")
     print("\n".join(fingerprints))
     print("\n".join(list(tail)[-200 if returncode else -30:]))
-    return returncode
+    if returncode != 0:
+        # The command's own failure is the primary signal; the budget verdict is
+        # still recorded in the JSON next to it.
+        return returncode
+    if args.budget_seconds is None:
+        return 0
+    if suite_seconds is None:
+        print("error: a suite budget was requested but no nextest summary line was found",
+              file=sys.stderr)
+        return 2
+    if budget_exceeded:
+        print(f"error: the suite ran for {suite_seconds:.1f}s, above its "
+              f"{args.budget_seconds:.0f}s budget; move the slow test into the scheduled "
+              f"heavy-tests workflow (CONTRIBUTING.md, CI time budget)", file=sys.stderr)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
