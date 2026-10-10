@@ -175,6 +175,18 @@ admissible complete cross; if even that reservation does not fit, the ordinary
 owned-LUCI path remains available. This local search can cost more per update
 and does not guarantee a globally optimal selection or monotone global error.
 
+
+A successful global Guard injection suspends this old-pivot preference for
+one complete directional pass. Guard candidate components feed neighboring
+cuts, including saturated cuts, so the refresh covers the whole pass rather
+than only padded bonds. Fresh LUCI still uses the original tolerance and rank
+ceiling. After the pass and its canonicalization succeed, ordinary pivot
+preference resumes; a failed pass keeps the request pending. Empty, refused,
+or no-op injections do not create a refresh request. This prevents an
+admissible old local cross from repeatedly discarding a new Guard discovery
+(#874), without making injected ranks into a rank floor or forgetting a
+returned failure before Guard revalidation.
+
 ## Caches
 
 TreeACI owns three cache families. None outlives one `tree_elementwise` call;

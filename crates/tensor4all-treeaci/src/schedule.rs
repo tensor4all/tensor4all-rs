@@ -268,6 +268,10 @@ where
     }
 
     finalize_deferred_canonicalization(state)?;
+    // Only a successfully completed pass consumes the Guard's request. Its
+    // incoming samples can propagate through several cuts, including cuts
+    // that are saturated, so refreshing just the padded cut is insufficient.
+    state.refresh_pivots_after_guard = false;
 
     let max_rank = state.edge_ranks.iter().copied().max().unwrap_or(1);
     let tolerance = options.tolerance_policy();
