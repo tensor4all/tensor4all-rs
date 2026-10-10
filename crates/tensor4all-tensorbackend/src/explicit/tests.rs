@@ -654,3 +654,87 @@ fn session_grouped_mat_mul_shared_runs_on_the_session() {
         .expect("empty job list");
     assert_eq!(untouched, [7.0; 4], "an empty job list writes nothing");
 }
+
+/// The matrix-level linalg routes run on the session and agree with the compatibility
+/// frontend.
+#[cfg(feature = "global-defaults")]
+#[test]
+fn session_matrix_linalg_routes_match_the_compatibility_frontend() {
+    use crate::{full_piv_lu_matrix, solve_matrix, triangular_solve_matrix, Matrix};
+
+    let context = context(1);
+    let a = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 0.0, 0.0, 4.0]);
+    let b = Matrix::from_col_major_vec(2, 1, vec![6.0_f64, 8.0]);
+    let lower = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 1.0, 0.0, 4.0]);
+    let pivots = Matrix::from_col_major_vec(2, 2, vec![0.0_f64, 1.0, 2.0, 3.0]);
+
+    let (solved, triangular, factors) = context
+        .with_concrete_session(|session| {
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
+                session.solve_matrix(&a, &b)?,
+                session.triangular_solve_matrix(&lower, &b, true, true, false, false)?,
+                session.full_piv_lu_matrix(&pivots)?,
+            ))
+        })
+        .expect("session entry")
+        .expect("matrix linalg routes");
+
+    let expected_solve = solve_matrix(&a, &b).expect("compatibility solve");
+    let expected_triangular =
+        triangular_solve_matrix(&lower, &b, true, true, false, false).expect("compatibility solve");
+    assert_eq!(
+        solved.as_col_major_slice(),
+        expected_solve.as_col_major_slice()
+    );
+    assert_eq!(
+        triangular.as_col_major_slice(),
+        expected_triangular.as_col_major_slice()
+    );
+    let expected_lu = full_piv_lu_matrix(&pivots).expect("compatibility LU");
+    for (actual, expected) in [
+        (&factors.p, &expected_lu.p),
+        (&factors.l, &expected_lu.l),
+        (&factors.u, &expected_lu.u),
+        (&factors.q, &expected_lu.q),
+    ] {
+        assert_eq!(actual.as_col_major_slice(), expected.as_col_major_slice());
+    }
+}
+
+/// The typed-tensor linalg routes run on the session, and an unsupported shape is
+/// reported typed.
+#[cfg(feature = "global-defaults")]
+#[test]
+fn session_typed_tensor_linalg_routes_run_on_the_session() {
+    use tenferro::TypedTensor;
+
+    let context = context(1);
+    let qr_input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])
+        .expect("matrix");
+    let (q, r) = context
+        .with_concrete_session(|session| session.qr_backend(qr_input))
+        .expect("session entry")
+        .expect("session QR");
+    assert_eq!(q.shape(), &[2, 2]);
+    assert_eq!(r.shape(), &[2, 2]);
+
+    let svd_input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])
+        .expect("matrix");
+    let factors = context
+        .with_concrete_session(|session| session.svd_backend(&svd_input))
+        .expect("session entry")
+        .expect("session SVD");
+    let expected = crate::svd_backend(&svd_input).expect("compatibility SVD");
+    assert_eq!(
+        factors.s().as_slice().expect("s payload"),
+        expected.s().as_slice().expect("s payload")
+    );
+
+    let vector =
+        TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).expect("vector");
+    let error = context
+        .with_concrete_session(|session| session.qr_backend(vector))
+        .expect("session entry")
+        .expect_err("a rank-1 QR input must be rejected typed");
+    assert!(!error.to_string().is_empty(), "{error}");
+}
