@@ -88,6 +88,18 @@ pub struct TensorHermitianEigendecomposition {
     pub eigenvector_index: DynIndex,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Whole-value reads of eager payloads, so a test can see a per-element
+    /// loop that reads the tensor again for every element.
+    static EAGER_PAYLOAD_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn note_eager_payload_read() {
+    EAGER_PAYLOAD_READS.with(|reads| reads.set(reads.get() + 1));
+}
+
 thread_local! {
     static PAIRWISE_CONTRACT_PROFILE_STATE: RefCell<HashMap<&'static str, PairwiseContractProfileEntry>> =
         RefCell::new(HashMap::new());
@@ -953,9 +965,30 @@ impl IdxTensorStorage {
     fn for_each_payload_value(&self, mut f: impl FnMut(Complex64)) -> Result<()> {
         let payload_dims = self.payload_dims();
         let payload_len = checked_product(payload_dims)?;
+        // Read an eager payload once: `payload_value_at` reads the whole
+        // tensor value again for every element it returns.
+        let native = match self {
+            Self::Eager { inner, .. } => Some(inner),
+            Self::Compact(payload) => Some(&payload.payload),
+            _ => None,
+        };
+        let value = match native {
+            Some(native) => {
+                #[cfg(test)]
+                note_eager_payload_read();
+                Some(native.value()?)
+            }
+            None => None,
+        };
         let mut payload_coords = vec![0usize; payload_dims.len()];
         for _ in 0..payload_len {
-            f(self.payload_value_at(&payload_coords)?);
+            match &value {
+                Some(value) => f(IdxTensor::view_complex_value_at(
+                    value.as_tensor_view(),
+                    &payload_coords,
+                )?),
+                None => f(self.payload_value_at(&payload_coords)?),
+            }
             let mut carry = true;
             for (coordinate, &dim) in payload_coords.iter_mut().zip(payload_dims.iter()) {
                 if !carry {
@@ -5117,8 +5150,14 @@ impl IdxTensor {
                 ));
             }
         }
+        #[cfg(test)]
+        note_eager_payload_read();
         let value = native.value()?;
-        match value.as_tensor_view() {
+        IdxTensor::view_complex_value_at(value.as_tensor_view(), payload_coords)
+    }
+
+    fn view_complex_value_at(view: &TensorView<'_>, payload_coords: &[usize]) -> Result<Complex64> {
+        match view {
             TensorView::F32(view) => view
                 .get(payload_coords)
                 .copied()
@@ -8541,6 +8580,39 @@ mod tests {
     use num_complex::{Complex32, Complex64};
     use std::cell::Cell;
     use tensor4all_tensorbackend::StorageError;
+
+    /// `norm_squared` of `x`, and the eager-payload reads it took.
+    fn norm_squared_and_reads(x: &IdxTensor) -> (f64, usize) {
+        EAGER_PAYLOAD_READS.with(|reads| reads.set(0));
+        let value = x.norm_squared().unwrap();
+        (value, EAGER_PAYLOAD_READS.with(Cell::get))
+    }
+
+    #[test]
+    fn norm_squared_reads_a_dense_eager_payload_once() {
+        let data = (0..12)
+            .map(|i| Complex64::new(i as f64, 1.0))
+            .collect::<Vec<_>>();
+        let x =
+            IdxTensor::from_dense(vec![DynIndex::new_dyn(3), DynIndex::new_dyn(4)], data).unwrap();
+        let expected = (0..12).map(|i| (i * i) as f64 + 1.0).sum::<f64>();
+        let (value, reads) = norm_squared_and_reads(&x);
+        assert!((value - expected).abs() <= 1e-12 * expected);
+        // Once per call, not once per element.
+        assert_eq!(reads, 1);
+    }
+
+    #[test]
+    fn norm_squared_reads_a_diagonal_payload_once() {
+        let x = IdxTensor::from_diag(
+            vec![DynIndex::new_dyn(3), DynIndex::new_dyn(3)],
+            vec![1.0_f64, 2.0, 3.0],
+        )
+        .unwrap();
+        let (value, reads) = norm_squared_and_reads(&x);
+        assert!((value - 14.0).abs() <= 1e-12);
+        assert_eq!(reads, 1);
+    }
 
     #[cfg(not(feature = "tenferro-cuda"))]
     #[test]
