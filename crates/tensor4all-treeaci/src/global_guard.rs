@@ -438,6 +438,7 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
     state.input_frames = proposed_frames;
     state.edge_ranks = next_edge_ranks;
     state.generation = state.candidates.generation;
+    state.refresh_pivots_after_guard = true;
     Ok(injected)
 }
 
