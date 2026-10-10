@@ -115,16 +115,27 @@ jobs:
         # reuse-eligible (Cargo compares source timestamps), and kache below owns
         # compiled-artifact reuse in this job.
 
-      - uses: shinaoka/kache-action@91e8811371ab25482ce70882000db105a5884d40 # pilot: kunobi-ninja/kache-action#42
+      # The kache store is persisted here rather than through the action's own GitHub cache
+      # backend: that backend keys the whole store by the lockfile hash alone, and GitHub
+      # cache entries are immutable, so the entry freezes at the first run after a lockfile
+      # change and later commits cannot publish what they compiled. Measured: 1.8% of 168
+      # units hit for a new commit (build 612 s) against 100% for an exact re-run of the same
+      # commit (build 12 s). A per-commit key plus a prefix restore key keeps the newest
+      # snapshot reachable and lets each run publish its own.
+
+      - name: Restore the kache store
+        uses: actions/cache/restore@v4
         with:
-          # One store per pipeline: the `ci` profile here, release plus
-          # instrumentation in the coverage job.
-          cache-key-prefix: t4a-ci
-          # A GitHub cache entry is immutable, so without a salt the store freezes at the
-          # first run after a lockfile change (1.8% hits for the next commit, 100% only for
-          # an exact re-run). The salt changes the exact key per commit; the prefix restore
-          # key still restores the newest entry.
-          cache-key-salt: ${{ github.sha }}
+          path: ${{ runner.temp }}/kache
+          key: kache-t4a-ci-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: kache-t4a-ci-${{ hashFiles('**/Cargo.lock') }}-
+
+      - uses: kunobi-ninja/kache-action@ad7317540dcdd71c904f7a60a87b620a0c0e67ed # v1
+        with:
+          # The workflow owns store persistence (above); the action installs kache,
+          # configures RUSTC_WRAPPER and writes the job summary.
+          github-cache: "false"
+          cache-dir: ${{ runner.temp }}/kache
 
       - name: Run workspace tests
         # `--lib --bins --tests` leaves out example and bench targets: they add
@@ -134,6 +145,16 @@ jobs:
         # when the suite itself outgrows the default pipeline (CONTRIBUTING.md,
         # CI time budget).
         run: python3 scripts/ci-build-diagnostics.py --budget-seconds 300 nextest -- cargo nextest run --locked --cargo-profile ci --workspace --lib --bins --tests --timings -v
+
+      - name: Save the kache store
+        # Compiled artifacts are valid whatever the tests did, so save on failure too. Only
+        # trusted refs publish: a PR job stays restore-only instead of claiming a key that
+        # another run could have refreshed.
+        if: ${{ always() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci/kache-salt-pilot') }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/kache
+          key: kache-t4a-ci-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
 
       - name: Upload build diagnostics
         if: always()
@@ -252,12 +273,19 @@ jobs:
         # See the Test job: restored workspace artifacts are not reuse-eligible,
         # and kache owns compiled-artifact reuse.
 
-      - uses: shinaoka/kache-action@91e8811371ab25482ce70882000db105a5884d40 # pilot: kunobi-ninja/kache-action#42
+      - name: Restore the kache store
+        uses: actions/cache/restore@v4
         with:
-          # Instrumented release artifacts, kept apart from the `ci`-profile store
-          # the Test job uses. See the Test job for `cache-key-salt`.
-          cache-key-prefix: t4a-coverage
-          cache-key-salt: ${{ github.sha }}
+          path: ${{ runner.temp }}/kache
+          key: kache-t4a-coverage-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: kache-t4a-coverage-${{ hashFiles('**/Cargo.lock') }}-
+
+      - uses: kunobi-ninja/kache-action@ad7317540dcdd71c904f7a60a87b620a0c0e67ed # v1
+        with:
+          # Instrumented release artifacts, kept apart from the `ci`-profile store the Test
+          # job uses. See the Test job for why the workflow owns store persistence.
+          github-cache: "false"
+          cache-dir: ${{ runner.temp }}/kache
 
       - name: Clear stale workspace coverage artifacts
         # Prefix cache restores can contain obsolete instrumented workspace
@@ -271,6 +299,16 @@ jobs:
         run: |
           echo "Available CPUs: $(nproc); Cargo build jobs: $CARGO_BUILD_JOBS"
           python3 scripts/ci-build-diagnostics.py --budget-seconds 300 coverage -- cargo llvm-cov nextest --locked --release --no-clean --workspace --exclude tensor4all-hdf5 --lib --bins --tests --json --output-path coverage.json --timings -v
+
+      - name: Save the kache store
+        # Compiled artifacts are valid whatever the tests did, so save on failure too. Only
+        # trusted refs publish: a PR job stays restore-only instead of claiming a key that
+        # another run could have refreshed.
+        if: ${{ always() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci/kache-salt-pilot') }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/kache
+          key: kache-t4a-coverage-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
 
       - name: Upload build diagnostics
         if: always()
