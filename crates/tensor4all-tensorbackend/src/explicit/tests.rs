@@ -990,3 +990,32 @@ fn held_session_phase_on_a_one_worker_context_drives_one_lane() {
     assert_eq!(total.into_inner().expect("lane total"), 10.0);
     session.close().expect("affinity restores");
 }
+
+/// The compatibility bridges are the explicit tracking boundary: a concrete value is moved
+/// into the context's own eager runtime, tracked there, and materialized back only by naming
+/// `detach`.
+#[test]
+fn explicit_bridges_are_the_tracking_boundary() {
+    let context = context(1);
+    let plain = matrix();
+    let tracked = lift(&context, plain).expect("lift");
+    assert!(format!("{tracked:?}").contains("EagerTensor"));
+
+    // Tracked arithmetic runs in the context's own runtime, not on the concrete route.
+    let runtime = context.eager_runtime().expect("eager runtime");
+    let doubled = runtime
+        .with_eager_session(|session| session.add(&tracked, &tracked))
+        .expect("eager add");
+    let back = detach(&doubled).expect("detach");
+    assert_eq!(
+        back.as_slice::<f64>().expect("f64 payload"),
+        &[2.0, 4.0, 6.0, 8.0]
+    );
+
+    // The materialized value is an ordinary concrete value: the explicit routes accept it.
+    let total = context
+        .with_concrete_session(|view| view.sum(&back))
+        .expect("session entry")
+        .expect("sum");
+    assert_eq!(total.as_slice::<f64>().expect("f64 payload"), &[20.0]);
+}

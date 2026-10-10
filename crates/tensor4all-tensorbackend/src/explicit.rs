@@ -103,6 +103,103 @@ impl std::fmt::Debug for Session<'_> {
     }
 }
 
+/// Failure reported by this frontend's compatibility bridges.
+///
+/// The original tenferro or tenferro-ad diagnostic is retained as the source.
+#[derive(Debug, thiserror::Error)]
+pub enum ConversionError {
+    /// Materializing a tracked value into a plain concrete value failed.
+    #[error("materializing a tracked value failed: {source}")]
+    Detach {
+        /// Original tenferro diagnostic.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    /// Adopting a plain concrete value into an eager runtime failed.
+    #[error("adopting a concrete value failed: {source}")]
+    Lift {
+        /// Original tenferro or tenferro-ad diagnostic.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+}
+
+/// Materialize a tracked eager value into a plain concrete value.
+///
+/// This is the explicit AD to plain boundary of the coexistence contract: the caller names
+/// the conversion, so tracking never disappears silently, and `no_grad` on an eager value is
+/// not this operation and does not select the concrete representation. The value keeps its
+/// dtype, logical shape and column-major layout; the result is an ordinary concrete tensor
+/// that this frontend's routes accept.
+///
+/// # Errors
+///
+/// Returns [`ConversionError::Detach`] when the tracked value cannot be materialized, for
+/// example because it is a lazy or prepared value that has not been evaluated.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{explicit, CpuExecutionContext};
+/// use tenferro::Tensor;
+/// use tenferro_ad::EagerTensor;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let plain = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+/// let tracked = explicit::lift(&context, plain)?;
+/// let back = explicit::detach(&tracked)?;
+/// assert_eq!(back.as_slice::<f64>()?, &[1.0, 2.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn detach(eager: &tenferro_ad::EagerTensor) -> Result<NativeTensor, ConversionError> {
+    eager.to_tensor().map_err(|source| ConversionError::Detach {
+        source: Box::new(source),
+    })
+}
+
+/// Adopt a plain concrete value into `context`'s eager runtime.
+///
+/// This is the explicit plain to AD boundary: the result is a tracked value in a graph owned
+/// by `context`'s own eager runtime, and nothing about it is inferred from the caller's
+/// ambient `no_grad` or capture state. The value is moved into the runtime, because a
+/// concrete tensor has one owner. Use [`detach`] for the opposite direction.
+///
+/// # Errors
+///
+/// Returns [`ConversionError::Lift`] when the context's eager runtime cannot be initialized
+/// or when the value cannot be adopted, for example because it is not a concrete host value.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{explicit, CpuExecutionContext};
+/// use tenferro::Tensor;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let plain = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
+/// let tracked = explicit::lift(&context, plain)?;
+/// // The adopted value is tracked, and its runtime is the context's own.
+/// assert_eq!(explicit::detach(&tracked)?.as_slice::<f64>()?, &[3.0, 4.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn lift(
+    context: &CpuExecutionContext,
+    tensor: NativeTensor,
+) -> Result<tenferro_ad::EagerTensor, ConversionError> {
+    let runtime = context
+        .eager_runtime()
+        .map_err(|source| ConversionError::Lift {
+            source: Box::new(source),
+        })?;
+    tenferro_ad::EagerTensor::from_tensor_in(tensor, runtime).map_err(|source| {
+        ConversionError::Lift {
+            source: Box::new(source),
+        }
+    })
+}
+
 /// One lane of a running phase over a [`HeldSession`].
 ///
 /// A lane is bound to one worker of the context's pool and to one child session that stays
