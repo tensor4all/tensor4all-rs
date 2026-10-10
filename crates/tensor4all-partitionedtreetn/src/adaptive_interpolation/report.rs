@@ -148,7 +148,45 @@ impl L2Measurement {
     ///
     /// # Examples
     ///
-    /// See [`L2Measurement`].
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+    ///     patched_interpolate, PatchedInterpolationOptions,
+    /// };
+    /// use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
+    /// use tensor4all_treetci::TreeTciInterpolator;
+    /// use tensor4all_treetn::NodeNameNetwork;
+    ///
+    /// // f(x, y) = 1 + [x == y] has rank three; a cap of two cannot represent
+    /// // it, and a minimum of two bits retains the root with its measured error.
+    /// let (x, y) = (DynIndex::new_dyn(3), DynIndex::new_dyn(3));
+    /// let mut topology = NodeNameNetwork::new();
+    /// topology.add_node(0usize)?;
+    /// topology.add_node(1usize)?;
+    /// topology.add_edge(&0, &1)?;
+    /// let f = |p: &[usize]| if p[0] == p[1] { 2.0 } else { 1.0 };
+    /// let options = PatchedInterpolationOptions::new(2)
+    ///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(18.0_f64.sqrt())))
+    ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
+    ///     .with_min_patch_bits(2);
+    /// let result = patched_interpolate(
+    ///     &TreeTciInterpolator::default(),
+    ///     topology,
+    ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
+    ///     ColMajorArray::new(vec![0, 0], vec![2, 1])?,
+    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///         Ok(batch.data().chunks(2).map(f).collect())
+    ///     },
+    ///     &options,
+    /// )?;
+    /// let measurement = result.report.accepted[0].acceptance.as_ref().unwrap();
+    /// // All nine points of the patch were measured, and the error exceeds tau.
+    /// assert_eq!(measurement.patch_points, 9.0);
+    /// assert!(measurement.rms > 1e-10 * 18.0_f64.sqrt() / 3.0);
+    /// assert_eq!(measurement.error_norm(), Some(3.0 * measurement.rms));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn error_norm(&self) -> Option<f64> {
         finite(self.patch_points.sqrt() * self.rms)
     }
@@ -396,7 +434,48 @@ pub enum MaxReferenceSource {
 ///
 /// # Examples
 ///
-/// See [`L2ErrorReport`].
+/// ```
+/// use std::collections::BTreeMap;
+/// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+/// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+///     GlobalL2Error, MEASUREMENT_ROUNDING_FACTOR, patched_interpolate, PatchedInterpolationOptions,
+/// };
+/// use tensor4all_treetci::TreeTciInterpolator;
+/// use tensor4all_treetn::NodeNameNetwork;
+///
+/// // An exactly evaluated root with values (3, 4), so ||f|| = 5.
+/// let mut topology = NodeNameNetwork::new();
+/// topology.add_node(0usize)?;
+/// let result = patched_interpolate(
+///     &TreeTciInterpolator::default(),
+///     topology,
+///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
+///     ColMajorArray::new(vec![], vec![1, 0])?,
+///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///         Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
+///     },
+///     &PatchedInterpolationOptions::new(2),
+/// )?;
+/// let error = result.report.norm.l2_error().unwrap();
+/// let approximation_rms = error.approximation_rms.unwrap();
+/// let GlobalL2Error::Certified {
+///     rms_error,
+///     rounding_allowance_rms,
+///     rounding_limited,
+///     ..
+/// } = &error.global
+/// else {
+///     panic!("an exact root is certified");
+/// };
+/// assert_eq!(*rms_error, 0.0);
+/// // The rounding term follows the f64 evaluation of the patch network.
+/// assert_eq!(
+///     *rounding_allowance_rms,
+///     Some(MEASUREMENT_ROUNDING_FACTOR * f64::EPSILON * approximation_rms)
+/// );
+/// assert_eq!(*rounding_limited, Some(false));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum GlobalL2Error {
@@ -432,7 +511,8 @@ pub enum GlobalL2Error {
     /// feature that enters a patch only through a corner or an edge) can be
     /// missed by both; `rms_error_estimate` and `mean_square_rel_std_error`
     /// can then both be small while the true `E` is orders of magnitude
-    /// larger. Only [`GlobalL2Error::Certified`] is a guarantee.
+    /// larger. Only [`GlobalL2Error::Certified`] bounds `E`, and only up to
+    /// the rounding model of [`MEASUREMENT_ROUNDING_FACTOR`].
     #[non_exhaustive]
     Audited {
         /// Estimated `E / sqrt(|X|)` (exact and exhaustive contributions as
@@ -577,7 +657,48 @@ impl GlobalL2Error {
     ///
     /// # Examples
     ///
-    /// See [`L2ErrorReport`].
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+    ///     GlobalL2Error, patched_interpolate, PatchedInterpolationOptions,
+    /// };
+    /// use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
+    /// use tensor4all_treetci::TreeTciInterpolator;
+    /// use tensor4all_treetn::NodeNameNetwork;
+    ///
+    /// // f(x, y) = 1 + [x == y] has rank three; a cap of two cannot represent
+    /// // it, and a minimum of two bits retains the root with its measured error.
+    /// let (x, y) = (DynIndex::new_dyn(3), DynIndex::new_dyn(3));
+    /// let mut topology = NodeNameNetwork::new();
+    /// topology.add_node(0usize)?;
+    /// topology.add_node(1usize)?;
+    /// topology.add_edge(&0, &1)?;
+    /// let f = |p: &[usize]| if p[0] == p[1] { 2.0 } else { 1.0 };
+    /// let options = PatchedInterpolationOptions::new(2)
+    ///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(18.0_f64.sqrt())))
+    ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
+    ///     .with_min_patch_bits(2);
+    /// let result = patched_interpolate(
+    ///     &TreeTciInterpolator::default(),
+    ///     topology,
+    ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
+    ///     ColMajorArray::new(vec![0, 0], vec![2, 1])?,
+    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///         Ok(batch.data().chunks(2).map(f).collect())
+    ///     },
+    ///     &options,
+    /// )?;
+    /// let global = &result.report.norm.l2_error().unwrap().global;
+    /// let GlobalL2Error::ToleranceNotMet { measured_rms, .. } = global else {
+    ///     panic!("the retained patch misses its allowance");
+    /// };
+    /// assert_eq!(global.rms_value(), *measured_rms);
+    /// // One patch covers the domain: its acceptance is the global value.
+    /// let acceptance = result.report.accepted[0].acceptance.as_ref().unwrap();
+    /// assert_eq!(global.rms_value(), acceptance.rms);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn rms_value(&self) -> f64 {
         match self {
             Self::Certified { rms_error, .. } => *rms_error,
@@ -659,7 +780,45 @@ impl L2ErrorReport {
     ///
     /// # Examples
     ///
-    /// See [`L2ErrorReport`].
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+    ///     patched_interpolate, PatchedInterpolationOptions,
+    /// };
+    /// use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
+    /// use tensor4all_treetci::TreeTciInterpolator;
+    /// use tensor4all_treetn::NodeNameNetwork;
+    ///
+    /// // f(x, y) = 1 + [x == y] has rank three; a cap of two cannot represent
+    /// // it, and a minimum of two bits retains the root with its measured error.
+    /// let (x, y) = (DynIndex::new_dyn(3), DynIndex::new_dyn(3));
+    /// let mut topology = NodeNameNetwork::new();
+    /// topology.add_node(0usize)?;
+    /// topology.add_node(1usize)?;
+    /// topology.add_edge(&0, &1)?;
+    /// let f = |p: &[usize]| if p[0] == p[1] { 2.0 } else { 1.0 };
+    /// let options = PatchedInterpolationOptions::new(2)
+    ///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(18.0_f64.sqrt())))
+    ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
+    ///     .with_min_patch_bits(2);
+    /// let result = patched_interpolate(
+    ///     &TreeTciInterpolator::default(),
+    ///     topology,
+    ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
+    ///     ColMajorArray::new(vec![0, 0], vec![2, 1])?,
+    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///         Ok(batch.data().chunks(2).map(f).collect())
+    ///     },
+    ///     &options,
+    /// )?;
+    /// let error = result.report.norm.l2_error().unwrap();
+    /// assert_eq!(error.domain_points, 9.0);
+    /// assert_eq!(error.error_norm(), Some(3.0 * error.global.rms_value()));
+    /// // The measured error of the retained patch exceeds the allowance.
+    /// assert!(error.error_norm().unwrap() > result.report.norm.delta().unwrap());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn error_norm(&self) -> Option<f64> {
         finite(self.domain_points.sqrt() * self.global.rms_value())
     }
@@ -669,7 +828,34 @@ impl L2ErrorReport {
     ///
     /// # Examples
     ///
-    /// See [`L2ErrorReport`].
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+    ///     patched_interpolate, PatchedInterpolationOptions,
+    /// };
+    /// use tensor4all_treetci::TreeTciInterpolator;
+    /// use tensor4all_treetn::NodeNameNetwork;
+    ///
+    /// // An exactly evaluated root with values (3, 4), so ||f|| = 5.
+    /// let mut topology = NodeNameNetwork::new();
+    /// topology.add_node(0usize)?;
+    /// let result = patched_interpolate(
+    ///     &TreeTciInterpolator::default(),
+    ///     topology,
+    ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
+    ///     ColMajorArray::new(vec![], vec![1, 0])?,
+    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///         Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
+    ///     },
+    ///     &PatchedInterpolationOptions::new(2),
+    /// )?;
+    /// let error = result.report.norm.l2_error().unwrap();
+    /// let norm = error.approximation_norm().unwrap();
+    /// assert!((norm - 5.0).abs() < 1e-12);
+    /// assert_eq!(norm, 2.0_f64.sqrt() * error.approximation_rms.unwrap());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn approximation_norm(&self) -> Option<f64> {
         self.approximation_rms
             .and_then(|rms| finite(self.domain_points.sqrt() * rms))
@@ -746,7 +932,42 @@ impl NormReport {
     ///
     /// # Examples
     ///
-    /// See [`L2ErrorReport`].
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+    ///     patched_interpolate, PatchedInterpolationOptions,
+    /// };
+    /// use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance};
+    /// use tensor4all_treetci::TreeTciInterpolator;
+    /// use tensor4all_treetn::NodeNameNetwork;
+    ///
+    /// // The root with values (3, 4), so ||f|| = 5, under L2 and under SampledMax.
+    /// let run = |options: &PatchedInterpolationOptions| {
+    ///     let mut topology = NodeNameNetwork::new();
+    ///     topology.add_node(0usize)?;
+    ///     patched_interpolate(
+    ///         &TreeTciInterpolator::default(),
+    ///         topology,
+    ///         BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
+    ///         ColMajorArray::new(vec![], vec![1, 0])?,
+    ///         |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///             Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
+    ///         },
+    ///         options,
+    ///     )
+    ///     .map_err(Box::<dyn std::error::Error>::from)
+    /// };
+    /// let l2 = PatchedInterpolationOptions::new(2)
+    ///     .with_tolerance(ErrorTolerance { rtol: 1e-3, atol: 0.0 });
+    /// let l2_norm = run(&l2)?.report.norm;
+    /// let max_norm = run(&l2.clone().with_error_norm(ErrorNorm::sampled_max()))?.report.norm;
+    /// let error = l2_norm.l2_error().unwrap();
+    /// assert_eq!(error.domain_points, 2.0);
+    /// assert_eq!(error.global.rms_value(), 0.0);
+    /// assert!(max_norm.l2_error().is_none());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn l2_error(&self) -> Option<&L2ErrorReport> {
         match self {
             Self::L2 { error, .. } => Some(error),
@@ -759,7 +980,41 @@ impl NormReport {
     ///
     /// # Examples
     ///
-    /// See [`NormReport`].
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+    ///     patched_interpolate, PatchedInterpolationOptions,
+    /// };
+    /// use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance};
+    /// use tensor4all_treetci::TreeTciInterpolator;
+    /// use tensor4all_treetn::NodeNameNetwork;
+    ///
+    /// // The root with values (3, 4), so ||f|| = 5, under L2 and under SampledMax.
+    /// let run = |options: &PatchedInterpolationOptions| {
+    ///     let mut topology = NodeNameNetwork::new();
+    ///     topology.add_node(0usize)?;
+    ///     patched_interpolate(
+    ///         &TreeTciInterpolator::default(),
+    ///         topology,
+    ///         BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
+    ///         ColMajorArray::new(vec![], vec![1, 0])?,
+    ///         |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///             Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
+    ///         },
+    ///         options,
+    ///     )
+    ///     .map_err(Box::<dyn std::error::Error>::from)
+    /// };
+    /// let l2 = PatchedInterpolationOptions::new(2)
+    ///     .with_tolerance(ErrorTolerance { rtol: 1e-3, atol: 0.0 });
+    /// let l2_norm = run(&l2)?.report.norm;
+    /// let max_norm = run(&l2.clone().with_error_norm(ErrorNorm::sampled_max()))?.report.norm;
+    /// // delta = rtol * ||f||.
+    /// assert!((l2_norm.delta().unwrap() - 5e-3).abs() < 1e-15);
+    /// assert_eq!(max_norm.delta(), None);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn delta(&self) -> Option<f64> {
         match self {
             Self::L2 { tau, error, .. } => finite(error.domain_points.sqrt() * tau),
@@ -772,7 +1027,41 @@ impl NormReport {
     ///
     /// # Examples
     ///
-    /// See [`NormReport`].
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+    ///     patched_interpolate, PatchedInterpolationOptions,
+    /// };
+    /// use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance};
+    /// use tensor4all_treetci::TreeTciInterpolator;
+    /// use tensor4all_treetn::NodeNameNetwork;
+    ///
+    /// // The root with values (3, 4), so ||f|| = 5, under L2 and under SampledMax.
+    /// let run = |options: &PatchedInterpolationOptions| {
+    ///     let mut topology = NodeNameNetwork::new();
+    ///     topology.add_node(0usize)?;
+    ///     patched_interpolate(
+    ///         &TreeTciInterpolator::default(),
+    ///         topology,
+    ///         BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
+    ///         ColMajorArray::new(vec![], vec![1, 0])?,
+    ///         |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///             Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
+    ///         },
+    ///         options,
+    ///     )
+    ///     .map_err(Box::<dyn std::error::Error>::from)
+    /// };
+    /// let l2 = PatchedInterpolationOptions::new(2)
+    ///     .with_tolerance(ErrorTolerance { rtol: 1e-3, atol: 0.0 });
+    /// let l2_norm = run(&l2)?.report.norm;
+    /// let max_norm = run(&l2.clone().with_error_norm(ErrorNorm::sampled_max()))?.report.norm;
+    /// // The exact root is its own reference.
+    /// assert!((l2_norm.reference_norm().unwrap() - 5.0).abs() < 1e-12);
+    /// assert_eq!(max_norm.reference_norm(), None);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn reference_norm(&self) -> Option<f64> {
         match self {
             Self::L2 {
@@ -879,8 +1168,42 @@ impl PatchedInterpolationReport {
     ///
     /// # Examples
     ///
-    /// See [`PatchStatus`] for a run that meets its tolerance and
-    /// [`ToleranceNotMetBasis`] for one that does not.
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+    ///     patched_interpolate, PatchedInterpolationOptions, PatchStatus,
+    /// };
+    /// use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
+    /// use tensor4all_treetci::TreeTciInterpolator;
+    /// use tensor4all_treetn::NodeNameNetwork;
+    ///
+    /// // f(x, y) = 1 + [x == y] has rank three; a cap of two cannot represent
+    /// // it, and a minimum of two bits retains the root with its measured error.
+    /// let (x, y) = (DynIndex::new_dyn(3), DynIndex::new_dyn(3));
+    /// let mut topology = NodeNameNetwork::new();
+    /// topology.add_node(0usize)?;
+    /// topology.add_node(1usize)?;
+    /// topology.add_edge(&0, &1)?;
+    /// let f = |p: &[usize]| if p[0] == p[1] { 2.0 } else { 1.0 };
+    /// let options = PatchedInterpolationOptions::new(2)
+    ///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(18.0_f64.sqrt())))
+    ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
+    ///     .with_min_patch_bits(2);
+    /// let result = patched_interpolate(
+    ///     &TreeTciInterpolator::default(),
+    ///     topology,
+    ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
+    ///     ColMajorArray::new(vec![0, 0], vec![2, 1])?,
+    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///         Ok(batch.data().chunks(2).map(f).collect())
+    ///     },
+    ///     &options,
+    /// )?;
+    /// assert_eq!(result.report.accepted[0].status, PatchStatus::ToleranceNotMet);
+    /// assert!(!result.report.tolerance_met());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn tolerance_met(&self) -> bool {
         self.accepted
             .iter()
