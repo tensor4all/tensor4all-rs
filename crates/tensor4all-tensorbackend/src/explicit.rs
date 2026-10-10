@@ -422,6 +422,100 @@ impl<'session> Session<'session> {
     ) -> tenferro_tensor::Result<NativeTensor> {
         lhs.solve(rhs, self.session)
     }
+
+    /// Solve `A X = B` where `A` is triangular.
+    ///
+    /// - `left_side`: solve `A X = B` when true, `X A = B` when false;
+    /// - `lower`: `A` is lower triangular;
+    /// - `transpose_a`: solve with `A` transposed;
+    /// - `unit_diagonal`: treat the diagonal of `A` as one, ignoring the stored
+    ///   values.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for a shape mismatch or an
+    /// unsupported dtype, and [`tenferro_tensor::Error::BackendSource`] when the solve
+    /// itself fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro::Tensor;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// // Lower triangular, column-major.
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 0.0, 4.0])?;
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 4.0])?;
+    /// let x = context.with_concrete_session(|session| {
+    ///     session.triangular_solve(&a, &b, true, true, false, false)
+    /// })??;
+    /// assert_eq!(x.as_slice::<f64>()?, &[2.0, 0.5]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn triangular_solve(
+        &mut self,
+        lhs: &NativeTensor,
+        rhs: &NativeTensor,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> tenferro_tensor::Result<NativeTensor> {
+        lhs.triangular_solve(
+            rhs,
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+            self.session,
+        )
+    }
+
+    /// Full-pivoting LU decomposition `P A Q = L U`, returning
+    /// `(P, L, U, Q, parity)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for a non-square `A` or an
+    /// unsupported dtype, and [`tenferro_tensor::Error::BackendSource`] when the
+    /// factorization itself fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro::Tensor;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// let (p, l, u, q, _parity) = context
+    ///     .with_concrete_session(|session| session.full_piv_lu(&a))?
+    ///     .expect("full-pivoting LU");
+    /// for factor in [&p, &l, &u, &q] {
+    ///     assert_eq!(factor.shape(), &[2, 2]);
+    /// }
+    /// // Column-major, so index 0 is (0, 0), index 1 is (1, 0) and index 2 is (0, 1).
+    /// let l = l.as_slice::<f64>()?;
+    /// let u = u.as_slice::<f64>()?;
+    /// assert_eq!(l[2], 0.0, "L is lower triangular");
+    /// assert_eq!(u[1], 0.0, "U is upper triangular");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn full_piv_lu(
+        &mut self,
+        tensor: &NativeTensor,
+    ) -> tenferro_tensor::Result<(
+        NativeTensor,
+        NativeTensor,
+        NativeTensor,
+        NativeTensor,
+        NativeTensor,
+    )> {
+        tensor.full_piv_lu(self.session)
+    }
 }
 
 impl CpuExecutionContext {
