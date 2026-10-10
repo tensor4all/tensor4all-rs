@@ -340,8 +340,10 @@ exactly what is delivered, and §5c lists what is not.
 | Item | Notes |
 | --- | --- |
 | Read/write/output routes | the read route, the binary output-into route and the N-ary output route (`PreparedEinsum::execute_into`) are delivered |
-| Remaining primitive/linalg operations | `scale`/`axpby`/`conj`/`outer_product`, the Hermitian eigen routes, `src_error_estimate`, the `Matrix`-level linalg wrappers |
-| Remaining `Matrix`/`Storage` routes | batched/grouped GEMM, `submatrix`/`swap`/`transpose`, and the `Storage`-level contraction/permutation routes |
+| Remaining linalg operations | the Hermitian eigen routes and `src_error_estimate`; the Hermitian routes currently enter the process-global *eager* runtime, so they need the optional AD adapter rather than a concrete route, and `src_error_estimate` is session-free |
+| Remaining `Matrix`-level linalg routes | `solve_matrix`, `full_piv_lu_matrix`, the typed `qr_backend`/`svd_backend` wrappers and `triangular_solve_matrix` still enter the compatibility session |
+| Remaining batched/grouped GEMM route | `batched_mat_mul_same_shape` and `grouped_mat_mul_shared` build their jobs and then enter the compatibility session; the in-session kernel helper already exists and only needs a session-taking entry |
+| Session-free operations (no explicit route needed) | `scale`, `axpby`, `conj` on the structured paths, the `Storage`-level contraction/permutation kernels, and `Matrix` `submatrix`/`swap_rows`/`swap_cols`/`transpose` are pure host code that names no session, so an explicit caller uses them as they are. `outer_product` is already expressible as `contraction(lhs, &[], rhs, &[])` |
 | Structured representation parity | structured/diagonal storage preservation on the explicit route (dtype promotion is delivered and shared) |
 | Compatibility bridges | only `LogicalTensor` exists; explicit detach/lift and materialization bridges are still to come |
 | Private child resources and the backend phase proof | the held session and the phase lease exist upstream; tensorbackend does not expose or prove them yet |
