@@ -49,6 +49,7 @@
 
 use tenferro::Tensor as NativeTensor;
 use tenferro::TensorSessionOpsExt;
+use tenferro_cpu::{CpuPhaseError, PhaseRunError};
 use tenferro_einsum::{ConcreteEinsumPlan, EinsumSubscripts, TensorEinsumExt};
 use tenferro_linalg::TensorLinalgExt;
 
@@ -99,6 +100,43 @@ impl std::fmt::Debug for Session<'_> {
         formatter
             .debug_struct("explicit::Session")
             .finish_non_exhaustive()
+    }
+}
+
+/// One lane of a running phase over a [`HeldSession`].
+///
+/// A lane is bound to one worker of the context's pool and to one child session that stays
+/// open for the whole lane, so its scratch and prepared plans are reused across every work
+/// item the callback runs. [`PhaseLane::session`] hands out this frontend's [`Session`]
+/// view for that child.
+pub struct PhaseLane<'lane, 'session> {
+    lane: &'lane mut tenferro_cpu::PhaseLane<'session>,
+}
+
+impl std::fmt::Debug for PhaseLane<'_, '_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("explicit::PhaseLane")
+            .field("cancelled", &self.cancelled())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PhaseLane<'_, '_> {
+    /// The worker-local session view for this lane.
+    ///
+    /// Every route of this frontend is available on it, and it borrows the child session
+    /// for the duration of the call.
+    pub fn session(&mut self) -> Session<'_> {
+        Session::new(self.lane.session())
+    }
+
+    /// Whether some lane already failed or unwound.
+    ///
+    /// A lane callback must return cooperatively once this is set and must never wait
+    /// indefinitely for a peer: the phase can only join callbacks that terminate.
+    pub fn cancelled(&self) -> bool {
+        self.lane.cancelled()
     }
 }
 
@@ -196,6 +234,73 @@ impl<'backend> HeldSession<'backend> {
     /// session's own resources and dropped before this method returns.
     pub fn with_session<R>(&mut self, f: impl FnOnce(&mut Session<'_>) -> R) -> R {
         self.held.with_session(|view| f(&mut Session::new(view)))
+    }
+
+    /// Lend this session's CPU pool to a phase scheduler.
+    ///
+    /// Each lane runs `lane` on a worker of the context's own pool, with this frontend's
+    /// [`Session`] view, so the lane's work uses the same routes as the rest of the stage.
+    /// The lanes are joined before this returns, on the success, error and panic paths.
+    ///
+    /// The phase contract is the upstream one: one lane per worker for a multi-worker
+    /// context and a single inline lane otherwise, no second pool, cooperative cancellation
+    /// through the lane handle, and no legacy entry from inside a lane.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PhaseRunError::Session`] when a lane could not enter or clean up - including
+    /// a phase opened from a worker of the pool it would broadcast to, which is reported as
+    /// [`tenferro_tensor::SessionEntryError::Reentered`] - and [`PhaseRunError::Lane`] with a
+    /// lane callback's own error otherwise. Both are reported only after every lane finished.
+    ///
+    /// # Panics
+    ///
+    /// A panic inside a lane callback is resumed on the calling thread after every lane has
+    /// been joined first; this method does not panic on its own.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{explicit::HeldSession, CpuExecutionContext};
+    /// use tenferro::Tensor;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(2)?);
+    /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    ///
+    /// let mut session = HeldSession::open(&backend)?;
+    /// let total = std::sync::Mutex::new(0.0_f64);
+    /// session.phase(|_index, lane| {
+    ///     if lane.cancelled() {
+    ///         return Ok::<(), tenferro_tensor::Error>(());
+    ///     }
+    ///     let sum = lane.session().sum(&a)?;
+    ///     *total.lock().expect("lane total lock") += sum.as_slice::<f64>()?[0];
+    ///     Ok(())
+    /// })?;
+    /// assert!(
+    ///     total.into_inner().expect("lane total") > 0.0,
+    ///     "each lane summed the same tensor"
+    /// );
+    /// session.close()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn phase<E: Send>(
+        &mut self,
+        lane: impl Fn(usize, &mut PhaseLane<'_, '_>) -> Result<(), E> + Sync,
+    ) -> Result<(), PhaseRunError<E>> {
+        let outcome = self.held.phase(|phase| {
+            phase.run(|index, lane_handle| lane(index, &mut PhaseLane { lane: lane_handle }))
+        });
+        match outcome {
+            Ok(outcome) => outcome,
+            Err(CpuPhaseError::TargetPoolCaller { .. }) => Err(PhaseRunError::Session(
+                tenferro_tensor::SessionEntryError::Reentered {
+                    backend: "CpuExecutionContext",
+                },
+            )),
+        }
     }
 
     /// Close the session, releasing admission and the checked-out engine resources.

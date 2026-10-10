@@ -316,7 +316,7 @@ session (pin bump `b3f4729` -> `ff94aeded`, PR #873).
 **This is a partial slice of B1, not the whole gate.** It delivers the session entry
 and the allocation-returning primitive/einsum/linalg routes over native tensors; the
 read/write/output routes, the compatibility bridges beyond `LogicalTensor`, the
-private child-resource surface, the backend phase proof, the `Matrix`/`Storage`
+`Matrix`/`Storage`
 families and the bridge-cost measurements are **not** in it. The table below states
 exactly what is delivered, and §5c lists what is not.
 
@@ -346,7 +346,7 @@ exactly what is delivered, and §5c lists what is not.
 | Session-free operations (no explicit route needed) | `scale`, `axpby`, `conj` on the structured paths, the `Storage`-level contraction/permutation kernels, and `Matrix` `submatrix`/`swap_rows`/`swap_cols`/`transpose` are pure host code that names no session, so an explicit caller uses them as they are. `outer_product` is already expressible as `contraction(lhs, &[], rhs, &[])` |
 | Structured representation parity | structured/diagonal storage preservation on the explicit route (dtype promotion is delivered and shared) |
 | Compatibility bridges | only `LogicalTensor` exists; explicit detach/lift and materialization bridges are still to come |
-| Private child resources and the backend phase proof | the held session and the phase lease exist upstream; tensorbackend does not expose or prove them yet |
+| Private child resources and the backend phase proof | delivered: `HeldSession::phase` / `PhaseLane` lend the session's own pool to a phase scheduler, each lane running this frontend's session view over a private child session; tests cover one lane, one lane per worker, error cancellation observed by a peer, and recovery |
 | Reusable plan surface | delivered as `explicit::PreparedEinsum`: prepare once over borrowed operands, then `execute` or `execute_into` on whichever session the caller holds |
 | Measurements | bridge allocations/copies/registration are not measured, and no paired dispatch numbers are recorded for the explicit route |
 | A held *object* form | delivered as `explicit::HeldSession`, see section 5d |

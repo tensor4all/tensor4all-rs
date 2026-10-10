@@ -875,3 +875,118 @@ fn a_held_owner_is_rejected_before_taking_the_context_lock() {
         "the held owner's scoped entry is rejected typed"
     );
 }
+
+/// A phase runs one lane per pool worker, each with this frontend's session view, and the
+/// held session survives it.
+#[test]
+fn held_session_phase_runs_every_lane_with_the_session_view() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    use tenferro_cpu::CpuBackend;
+
+    let context = context(2);
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let a = matrix();
+    let lanes = AtomicUsize::new(0);
+    let sums = Mutex::new(Vec::new());
+
+    let mut session = HeldSession::open(&backend).expect("held session");
+    session
+        .phase(|_index, lane| {
+            lanes.fetch_add(1, Ordering::Relaxed);
+            let total = lane.session().sum(&a)?;
+            sums.lock()
+                .expect("lane sums lock")
+                .push(total.as_slice::<f64>()?[0]);
+            Ok::<(), tenferro_tensor::Error>(())
+        })
+        .expect("phase runs");
+    assert_eq!(lanes.load(Ordering::Relaxed), 2);
+    assert_eq!(sums.into_inner().expect("lane sums"), vec![10.0, 10.0]);
+
+    // The held session is unchanged, and its routes still work.
+    let transposed = session
+        .with_session(|view| view.permute(&a, &[1, 0]))
+        .expect("held permute after a phase");
+    assert_eq!(
+        transposed.as_slice::<f64>().expect("f64 payload"),
+        &[1.0, 3.0, 2.0, 4.0]
+    );
+    session.close().expect("affinity restores");
+}
+
+/// A lane error cancels its peers, which observe the cancellation, and the held session
+/// stays usable afterwards.
+#[test]
+fn held_session_phase_cancels_peers_and_recovers() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::time::{Duration, Instant};
+    use tenferro_cpu::{CpuBackend, PhaseRunError};
+
+    let context = context(2);
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let barrier = Arc::new(Barrier::new(2));
+    let observed = Arc::new(AtomicBool::new(false));
+
+    let mut session = HeldSession::open(&backend).expect("held session");
+    let outcome: Result<(), PhaseRunError<&'static str>> = session.phase({
+        let observed = Arc::clone(&observed);
+        move |index, lane| {
+            barrier.wait();
+            if index == 0 {
+                return Err("lane zero failed");
+            }
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !lane.cancelled() {
+                assert!(
+                    Instant::now() < deadline,
+                    "the peer lane never observed cancellation"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            observed.store(true, Ordering::Relaxed);
+            Ok(())
+        }
+    });
+    assert!(matches!(
+        outcome,
+        Err(PhaseRunError::Lane("lane zero failed"))
+    ));
+    assert!(observed.load(Ordering::Relaxed));
+
+    // Recovery: a later operation and a later phase both work.
+    assert!(session.with_session(|view| view.sum(&matrix())).is_ok());
+    session
+        .phase(|_index, _lane| Ok::<(), tenferro_tensor::Error>(()))
+        .expect("a later phase runs");
+    session.close().expect("affinity restores");
+}
+
+/// A one-worker context drives a single inline lane, on the calling thread, with the session
+/// view available.
+#[test]
+fn held_session_phase_on_a_one_worker_context_drives_one_lane() {
+    use std::sync::Mutex;
+    use tenferro_cpu::CpuBackend;
+
+    let context = context(1);
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let a = matrix();
+    let total = Mutex::new(0.0_f64);
+
+    let mut session = HeldSession::open(&backend).expect("held session");
+    session
+        .phase(|_index, lane| {
+            assert!(
+                rayon::current_thread_index().is_none(),
+                "the one-worker lane runs on the caller, not on a pool worker"
+            );
+            let sum = lane.session().sum(&a)?;
+            *total.lock().expect("lane total lock") += sum.as_slice::<f64>()?[0];
+            Ok::<(), tenferro_tensor::Error>(())
+        })
+        .expect("phase runs");
+    assert_eq!(total.into_inner().expect("lane total"), 10.0);
+    session.close().expect("affinity restores");
+}
