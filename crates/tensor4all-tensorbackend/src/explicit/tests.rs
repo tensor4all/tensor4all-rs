@@ -535,3 +535,122 @@ fn session_mat_mul_uses_the_shared_matrix_container() {
         .expect_err("disagreeing shapes must be rejected");
     assert!(!error.to_string().is_empty(), "{error}");
 }
+
+/// A prepared plan is built once and evaluated repeatedly on one session, both into a
+/// fresh value and into a caller-provided destination.
+#[test]
+fn prepared_einsum_reuses_one_plan_across_a_session() {
+    use tenferro_tensor::{TensorRead, TensorWrite};
+
+    let context = context(1);
+    let a = matrix();
+    let b = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0]).expect("rhs");
+    let reads = [TensorRead::from_tensor(&a), TensorRead::from_tensor(&b)];
+    let plan = PreparedEinsum::prepare(&reads, &[&[0, 1], &[1, 2]], &[0, 2]).expect("plan");
+    assert!(format!("{plan:?}").contains("explicit::PreparedEinsum"));
+
+    let mut out = Tensor::from_vec_col_major(vec![2, 1], vec![0.0_f64, 0.0]).expect("output");
+    context
+        .with_concrete_session(
+            |session| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+                for _ in 0..4 {
+                    let product = plan.execute(session)?;
+                    assert_eq!(product.as_slice::<f64>()?, &[23.0, 34.0]);
+                }
+                plan.execute_into(session, TensorWrite::Tensor(&mut out))?;
+                Ok(())
+            },
+        )
+        .expect("session entry")
+        .expect("prepared plan");
+    assert_eq!(out.as_slice::<f64>().expect("f64 payload"), &[23.0, 34.0]);
+}
+
+/// Preparing with a mismatched label count is rejected typed, and the plan cannot be
+/// built from it.
+#[test]
+fn prepared_einsum_rejects_a_mismatched_label_count() {
+    use tenferro_tensor::TensorRead;
+
+    let a = matrix();
+    let reads = [TensorRead::from_tensor(&a)];
+    let error = PreparedEinsum::prepare(&reads, &[], &[]).expect_err("must be rejected");
+    assert!(
+        matches!(error, tenferro_einsum::Error::InvalidSubscripts { .. }),
+        "expected a typed invalid-subscripts error, got {error}"
+    );
+
+    // A label outside the supported `u32` range is rejected before planning.
+    let error = PreparedEinsum::prepare(&reads, &[&[0usize, usize::MAX]], &[0])
+        .expect_err("an out-of-range label must be rejected");
+    assert!(
+        matches!(error, tenferro_einsum::Error::InvalidSubscripts { .. }),
+        "expected a typed invalid-subscripts error, got {error}"
+    );
+}
+
+/// A prepared plan borrows its operands and evaluates itself on whichever session the
+/// caller hands it, including one belonging to another context.
+#[test]
+fn prepared_einsum_runs_on_another_contexts_session() {
+    use tenferro_tensor::TensorRead;
+
+    let producer = context(1);
+    let consumer = context(4);
+    let a = matrix();
+    let reads = [TensorRead::from_tensor(&a)];
+    let plan = PreparedEinsum::prepare(&reads, &[&[0, 1]], &[1, 0]).expect("plan");
+
+    let transposed = consumer
+        .with_concrete_session(|session| plan.execute(session))
+        .expect("session entry")
+        .expect("prepared plan on another context");
+    assert_eq!(
+        transposed.as_slice::<f64>().expect("f64 payload"),
+        &[1.0, 3.0, 2.0, 4.0]
+    );
+    assert_eq!(producer.with_backend(|backend| backend.num_threads()), 1);
+}
+
+/// The session route runs a grouped GEMM through the shared descriptor, and an empty
+/// job list is a no-op.
+#[cfg(feature = "global-defaults")]
+#[test]
+fn session_grouped_mat_mul_shared_runs_on_the_session() {
+    use crate::{GroupedGemmJob, GroupedGemmOptions};
+
+    let context = context(1);
+    let jobs = [GroupedGemmJob::new(0, 0, 0, 2, 2, 2)];
+    let lhs = [1.0_f64, 2.0, 3.0, 4.0];
+    let rhs = [5.0_f64, 6.0, 7.0, 8.0];
+    let mut output = [0.0_f64; 4];
+    context
+        .with_concrete_session(|session| {
+            session.grouped_mat_mul_shared(
+                &lhs,
+                &rhs,
+                &mut output,
+                &jobs,
+                GroupedGemmOptions::default(),
+            )
+        })
+        .expect("session entry")
+        .expect("grouped GEMM");
+    // Column-major `[[1, 3], [2, 4]] * [[5, 7], [6, 8]]`.
+    assert_eq!(output, [23.0, 34.0, 31.0, 46.0]);
+
+    let mut untouched = [7.0_f64; 4];
+    context
+        .with_concrete_session(|session| {
+            session.grouped_mat_mul_shared(
+                &lhs,
+                &rhs,
+                &mut untouched,
+                &[],
+                GroupedGemmOptions::default(),
+            )
+        })
+        .expect("session entry")
+        .expect("empty job list");
+    assert_eq!(untouched, [7.0; 4], "an empty job list writes nothing");
+}
