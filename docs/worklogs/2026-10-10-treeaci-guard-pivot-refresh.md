@@ -94,3 +94,16 @@ Generated traces, binaries, hashes, input/output cores and independent
 quality calculations remain in the ignored downstream experiment directory.
 No coverage or existing numerical test threshold is relaxed. No production
 paths or existing tests are removed.
+
+## Current-base synchronization
+
+Main advanced to `fa7dffe6` while the initial PR checks were running, moving
+all tenferro dependencies to `ff94aeded9cc98d6c49889c8ef6fca365763d93a`.
+The same PR is synchronized with that base. On the new dependency revision,
+all 270 changed-crate tests/doctests and both release G0 regressions pass.
+The public counterexample remains Converged(3) with the same full dense error.
+All 15 control outputs are byte-identical to the pre-synchronization repaired
+outputs; W's numerical diagnostics and all 1086 sample values also match
+exactly. This preserves the independent accuracy evidence above. Earlier
+hosted checks cover the prior PR head; the synchronized head requires fresh
+hosted CI before merge.
