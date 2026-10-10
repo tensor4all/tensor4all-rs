@@ -102,6 +102,113 @@ impl std::fmt::Debug for Session<'_> {
     }
 }
 
+/// A held concrete session over a caller-owned backend handle.
+///
+/// [`CpuExecutionContext::with_concrete_session`] scopes the session to one closure.
+/// A stage that spans many calls - a fit loop, a sweep, a batched driver - holds this
+/// instead: it borrows a backend handle the caller owns and keeps one session entry open
+/// until [`HeldSession::close`] or drop, handing out the same [`Session`] view the
+/// callback-scoped entry uses for every route.
+///
+/// The handle is obtained from the context, which keeps its backend behind a mutex for the
+/// compatibility entry, so the object is built from a caller-owned clone rather than from
+/// the context directly:
+///
+/// ```text
+/// let backend = context.with_backend(|backend| backend.clone());
+/// let mut session = explicit::HeldSession::open(&backend)?;
+/// ```
+///
+/// A clone shares the engine, arbiter, executor and buffer resources, so this is the same
+/// execution domain and not a second one. The held session is `!Send + !Sync`: it owns
+/// admission and the caller's narrowed CPU mask on the opening thread.
+///
+/// While a held session is open on a thread, that thread must not reach the context's other
+/// execution entries - the scoped [`CpuExecutionContext::with_concrete_session`] and the
+/// low-level [`CpuExecutionContext::with_backend`]. The scoped entry rejects it with a typed
+/// [`tenferro_tensor::SessionEntryError::Reentered`] before it takes the context's backend
+/// lock, so a held owner never waits for a lock that a conflicting scoped caller needs;
+/// `with_backend` is the caller-managed low-level route and carries the same restriction as
+/// a documented caller obligation.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{explicit::HeldSession, CpuExecutionContext};
+/// use tenferro::Tensor;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+/// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+///
+/// let mut session = HeldSession::open(&backend)?;
+/// // One entry, two operations, and the routes are the same as the scoped entry's.
+/// let transposed = session.with_session(|view| view.permute(&a, &[1, 0]))?;
+/// let sum = session.with_session(|view| view.sum(&transposed))?;
+/// assert_eq!(sum.as_slice::<f64>()?, &[10.0]);
+/// session.close()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub struct HeldSession<'backend> {
+    held: tenferro_cpu::CpuHeldSession<'backend>,
+}
+
+impl std::fmt::Debug for HeldSession<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("explicit::HeldSession")
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'backend> HeldSession<'backend> {
+    /// Open a held session on `backend`, which the caller keeps alive for the session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::SessionEntryError`]:
+    ///
+    /// - [`tenferro_tensor::SessionEntryError::Reentered`] when a CPU execution is already
+    ///   active on this thread, when an execution scope is open, or when `backend` is a
+    ///   child execution handle;
+    /// - [`tenferro_tensor::SessionEntryError::Contended`] when another root owns the
+    ///   engine's resources and this thread is a Rayon worker that cannot wait for them;
+    /// - [`tenferro_tensor::SessionEntryError::ResourcePoisoned`] for poisoned admission
+    ///   state;
+    /// - [`tenferro_tensor::SessionEntryError::Executor`] when the caller's CPU mask
+    ///   cannot be narrowed for the session.
+    ///
+    /// An ordinary cross-thread owner conflict **waits** in FIFO order rather than failing.
+    /// [`HeldSession::close`] reports an affinity-restoration failure; dropping the session
+    /// restores best-effort and cannot report one.
+    pub fn open(
+        backend: &'backend tenferro_cpu::CpuBackend,
+    ) -> Result<Self, tenferro_tensor::SessionEntryError> {
+        Ok(Self {
+            held: backend.open_session()?,
+        })
+    }
+
+    /// Run one operation view in this held session.
+    ///
+    /// The view is the same [`Session`] the callback-scoped entry hands out, built on this
+    /// session's own resources and dropped before this method returns.
+    pub fn with_session<R>(&mut self, f: impl FnOnce(&mut Session<'_>) -> R) -> R {
+        self.held.with_session(|view| f(&mut Session::new(view)))
+    }
+
+    /// Close the session, releasing admission and the checked-out engine resources.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_cpu::CpuHeldSessionError`] when the calling thread's CPU affinity
+    /// cannot be restored. The resources and the reservation are released either way.
+    pub fn close(self) -> Result<(), tenferro_cpu::CpuHeldSessionError> {
+        self.held.close()
+    }
+}
+
 /// One prepared N-ary einsum, reusable across operations of a session.
 ///
 /// Preparing validates the labels and plans the contraction once; every

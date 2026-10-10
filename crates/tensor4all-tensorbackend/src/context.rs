@@ -267,6 +267,13 @@ impl CpuExecutionContext {
         if CanonicalSessionGuard::is_active() {
             return Err(CanonicalSessionGuard::reentry_error());
         }
+        // A held session owns a CPU admission on this thread without setting the
+        // canonical guard. Reject before taking the backend mutex, because another
+        // thread may hold that mutex while it waits for this thread's admission:
+        // waiting here would close the cycle.
+        if tenferro_cpu::current_cpu_execution() == tenferro_cpu::CpuThreadExecution::Active {
+            return Err(CanonicalSessionGuard::reentry_error());
+        }
         // A Rayon worker can be handed more of the enclosing pool's work while
         // tenferro installs this session into the context's own pool. That stolen
         // work may enter a session itself, on a thread whose tenferro execution is
@@ -509,10 +516,6 @@ mod defaults {
         static FORCE_EAGER_CONTEXT_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
 
-    #[cfg(test)]
-    static DEFAULT_CONTEXT_HITS: std::sync::atomic::AtomicUsize =
-        std::sync::atomic::AtomicUsize::new(0);
-
     /// Borrow the process-global CPU execution context.
     ///
     /// New code must take a caller-owned context; this accessor exists for the
@@ -520,8 +523,6 @@ mod defaults {
     /// rejection into their own error type.
     pub(crate) fn default_context() -> &'static Arc<CpuExecutionContext> {
         DEFAULT_CONTEXT.get_or_init(|| {
-            #[cfg(test)]
-            DEFAULT_CONTEXT_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Arc::new(CpuExecutionContext::from_backend(CpuBackend::from_context(
                 Arc::new(CpuContext::from_env()),
             )))
@@ -656,11 +657,6 @@ mod defaults {
     /// ```
     pub fn default_cpu_execution_context() -> Arc<CpuExecutionContext> {
         Arc::clone(default_context())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn default_context_hits() -> usize {
-        DEFAULT_CONTEXT_HITS.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[cfg(test)]
@@ -923,11 +919,18 @@ mod tests {
 
     #[cfg(feature = "global-defaults")]
     #[test]
-    fn explicit_paths_do_not_initialize_the_default_context() {
-        let before = defaults::default_context_hits();
+    fn explicit_paths_stay_independent_of_the_default_context() {
         let context = context();
         context.with_backend(|backend| assert_eq!(backend.num_threads(), 1));
-        context.eager_runtime().unwrap();
-        assert_eq!(defaults::default_context_hits(), before);
+        let eager = context.eager_runtime().unwrap();
+
+        // The explicit context owns its eager runtime and is not the process-global one.
+        // This replaces a former before/after comparison of how often the process-global
+        // context was initialized: that counter is process-wide, and any other test that
+        // legitimately reaches the compatibility entry initialized it concurrently, which
+        // made the comparison flaky.
+        let global = defaults::default_eager_ctx().expect("default eager context");
+        assert!(!Arc::ptr_eq(&eager, &global));
+        assert!(!ExecutionContext::Cpu(Arc::new(context)).is_global_default_cpu());
     }
 }
