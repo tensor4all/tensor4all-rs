@@ -32,13 +32,35 @@ Issue #784 is reopened. Withdrawal does not repair tolerance-boundary cycling
 and does not reinterpret `MaxSweeps` as success. Historical #870/#875 logs
 retain their original results with an explicit withdrawn-status note.
 
-The independently registered withdrawal study is pending. It requires all
-eight candidate G0 cases to converge, pass exact full-grid checks at unchanged
-settings, and restore each retained historical timing within 10% plus 0.03s.
-Baseline and candidate are built at the same current-main dependency graph;
-historical dependencies differ, so historical comparisons are not isolated
-causal attribution. No performance recovery, merged withdrawal or #885 closure
-is claimed until the complete study and required hosted checks pass.
+The complete [paired experiment](../experiments/treeaci-885-withdrawal.json)
+measures main `32c76331` against withdrawal production commit `23042b92` at
+identical dependency/feature resolution. Six-case construction time falls
+from 527.930 to 50.100 seconds (ratio 0.0949, a 90.51% reduction). Both R=10
+baselines exceed the predeclared 600-second deadline; both withdrawal cases
+return, in 12.618 seconds for the chain and 216.069 seconds for CTTN. Every
+declared case ran once in its registered order. Observable host-noise gates,
+the primary aggregate, all current-base non-regression gates, and all eight
+candidate exact-grid accuracy bounds pass. One pass provides descriptive
+ratios without confidence intervals. Historical dependencies differ, so those
+comparisons do not isolate a single commit's effect.
+
+**The full registered study fails.** It also required all candidate cases to
+report `Converged` and every historical timing to recover within 10% plus
+0.03s. Low-temperature R=9 reports `MaxSweeps`; R=6 and warm R=9 remain
+slower than history. The original protocol, all observations and failed gates
+are retained unchanged. This is the explicitly requested withdrawal of the
+costly repair with the original issue reopened, not a successful promotion
+under the broader all-restoration protocol. Remaining historical timing
+differences stay under umbrella #854; their causes are not established.
+
+The original #784 fixture still reports `MaxSweeps` at 20 passes, with
+independent relative Frobenius error about 3.0e-6 and no Guard discoveries.
+No stopping threshold or success label changed. All retained Core/TreeACI
+release tests and doctests pass (1,537 passed; 13 existing ignored), as do
+strict changed-crate Clippy, the explicit heavy R=9 regression, current-source
+API inventory and local repository-rules review. Public #874 real/complex
+fixtures are unchanged. Hosted CI must pass before auto-merge; merged status
+and issue closure are reported only when verified.
 
 Removed-test coverage attestation: prescribed-cross, preferred replacement and
 TreeACI retention-only tests cover code removed in this withdrawal. Independent
