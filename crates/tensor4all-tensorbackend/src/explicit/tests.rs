@@ -231,22 +231,29 @@ fn einsum_rejects_a_mismatched_label_count_typed() {
     assert_eq!(recovered.as_slice::<f64>().expect("f64 payload").len(), 4);
 }
 
-/// The explicit routes do not promote operands to a common dtype: a mixed-precision
-/// contraction is rejected typed instead of being converted. The compatibility
-/// frontend promotes, which is recorded as a difference in
-/// `docs/design/859-dual-frontend-coexistence.md`.
+/// Mixed-precision operands are promoted to a common dtype exactly as the
+/// compatibility frontend promotes them, and the result carries the promoted dtype.
+#[cfg(feature = "global-defaults")]
 #[test]
-fn mixed_precision_operands_are_rejected_typed() {
+fn mixed_precision_operands_promote_like_the_compatibility_frontend() {
     let context = context(1);
     let lhs = matrix();
     let rhs = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f32, 6.0]).expect("f32 rhs");
-    let error = context
+
+    let explicit = context
         .with_concrete_session(|session| session.contraction(&lhs, &[1], &rhs, &[0]))
         .expect("session entry")
-        .expect_err("a mixed-precision contraction must be rejected");
-    let message = error.to_string();
-    assert!(
-        !message.is_empty(),
-        "the rejection must carry a diagnostic: {error}"
+        .expect("promoted contraction");
+    let compatibility =
+        crate::contract_native_tensor(&lhs, &[1], &rhs, &[0]).expect("compatibility contraction");
+
+    assert_eq!(explicit.dtype(), compatibility.dtype());
+    assert_eq!(
+        explicit.as_slice::<f64>().expect("f64 payload"),
+        compatibility.as_slice::<f64>().expect("f64 payload")
+    );
+    assert_eq!(
+        explicit.as_slice::<f64>().expect("f64 payload"),
+        &[23.0, 34.0]
     );
 }

@@ -1,10 +1,13 @@
-//! Einsum label and axis-to-label helpers shared by both frontends.
+//! Label, axis and dtype helpers shared by both frontends.
 //!
 //! Compiled under `explicit-context` so the opt-in frontend does not depend on
 //! the compatibility module: both frontends validate labels and build binary
 //! contraction labels through this one implementation.
 
 use anyhow::{anyhow, ensure, Result};
+use tenferro::TensorSessionOpsExt;
+use tenferro::{DType, Tensor as NativeTensor};
+use tenferro_tensor::BackendSession;
 
 pub(crate) fn checked_native_einsum_labels(labels: &[usize]) -> Result<Vec<u32>> {
     labels
@@ -81,4 +84,43 @@ pub(crate) fn build_binary_einsum_ids(
     }
 
     Ok((lhs_ids, rhs_ids, output_ids))
+}
+
+/// The dtype both frontends promote a heterogeneous operand set to.
+///
+/// Homogeneous integer operands promote to `F64`, a mixed real/complex set to `C64`,
+/// and a homogeneous `F32` or `Bool` set keeps its dtype.
+pub(crate) fn common_dtype(dtypes: &[DType]) -> DType {
+    let has_f64 = dtypes.contains(&DType::F64);
+    let has_c64 = dtypes.contains(&DType::C64);
+    let has_c32 = dtypes.contains(&DType::C32);
+    let has_i32 = dtypes.contains(&DType::I32);
+    let has_i64 = dtypes.contains(&DType::I64);
+    let has_bool = dtypes.contains(&DType::Bool);
+    let has_complex = has_c64 || has_c32;
+    if has_c64 || (has_f64 && has_complex) {
+        DType::C64
+    } else if has_c32 {
+        DType::C32
+    } else if has_f64 || has_i64 || has_i32 {
+        DType::F64
+    } else if has_bool {
+        DType::Bool
+    } else {
+        DType::F32
+    }
+}
+
+/// Convert one native tensor to `to` on `session`, duplicating when it is already
+/// that dtype so the caller keeps an owned value either way.
+pub(crate) fn convert_native_tensor_in(
+    session: &mut dyn BackendSession,
+    tensor: &NativeTensor,
+    to: DType,
+) -> tenferro_tensor::Result<NativeTensor> {
+    if tensor.dtype() == to {
+        tensor.duplicate()
+    } else {
+        tensor.convert(to, session)
+    }
 }

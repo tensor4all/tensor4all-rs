@@ -55,7 +55,9 @@ use tenferro_linalg::TensorLinalgExt;
 use tenferro_tensor::BackendSession;
 
 use crate::context::{CpuExecutionContext, CpuExecutionContextError};
-use crate::einsum_ids::{build_binary_einsum_ids, checked_native_einsum_labels};
+use crate::einsum_ids::{
+    build_binary_einsum_ids, checked_native_einsum_labels, common_dtype, convert_native_tensor_in,
+};
 
 /// One explicit concrete session over a [`CpuExecutionContext`].
 ///
@@ -98,6 +100,35 @@ impl std::fmt::Debug for Session<'_> {
             .debug_struct("explicit::Session")
             .finish_non_exhaustive()
     }
+}
+
+/// Promote a heterogeneous operand set to the dtype both frontends contract in.
+///
+/// Returns an empty vector when every operand already has the common dtype, so the
+/// common case allocates nothing.
+///
+/// # Errors
+///
+/// Returns [`tenferro_einsum::Error::Tensor`] when an operand cannot be converted.
+fn promote_operands(
+    session: &mut dyn BackendSession,
+    operands: &[&NativeTensor],
+) -> tenferro_einsum::Result<Vec<NativeTensor>> {
+    let dtypes = operands
+        .iter()
+        .map(|tensor| tensor.dtype())
+        .collect::<Vec<_>>();
+    let target = common_dtype(&dtypes);
+    if operands.iter().all(|tensor| tensor.dtype() == target) {
+        return Ok(Vec::new());
+    }
+    operands
+        .iter()
+        .map(|tensor| {
+            convert_native_tensor_in(session, tensor, target)
+                .map_err(tenferro_einsum::Error::Tensor)
+        })
+        .collect()
 }
 
 impl<'session> Session<'session> {
@@ -175,12 +206,13 @@ impl<'session> Session<'session> {
     /// # Errors
     ///
     /// Returns [`tenferro_einsum::Error::InvalidSubscripts`] when the axis lists are
-    /// malformed or of different length, and [`tenferro_einsum::Error::Tensor`] when
-    /// the backend rejects the operands or the contraction itself fails.
+    /// malformed or of different length, and [`tenferro_einsum::Error::Tensor`] when the
+    /// backend rejects the operands, when an operand cannot be promoted, or when the
+    /// contraction itself fails.
     ///
-    /// Unlike the compatibility frontend, this route does not promote operands to a
-    /// common dtype: operands must already share one dtype, and a mismatch is
-    /// rejected typed by the backend rather than converted.
+    /// Operands are promoted to a common dtype exactly as the compatibility frontend
+    /// promotes them: a heterogeneous set contracts in the promoted dtype, and a set
+    /// that already shares one dtype is used as is.
     ///
     /// # Examples
     ///
@@ -213,7 +245,14 @@ impl<'session> Session<'session> {
             inputs: vec![lhs_ids, rhs_ids],
             output: output_ids,
         };
-        [lhs, rhs].einsum_subscripts(&subscripts, self.session)
+        let operands = [lhs, rhs];
+        let promoted = promote_operands(self.session, &operands)?;
+        let operands = if promoted.is_empty() {
+            operands.to_vec()
+        } else {
+            promoted.iter().collect::<Vec<_>>()
+        };
+        operands.einsum_subscripts(&subscripts, self.session)
     }
 
     /// N-ary einsum from integer labels, evaluated on this session.
@@ -227,12 +266,12 @@ impl<'session> Session<'session> {
     /// Returns [`tenferro_einsum::Error::InvalidSubscripts`] for malformed labels, a
     /// label list whose length does not match the operand's rank, or a label-list
     /// count that does not match the operand count, and
-    /// [`tenferro_einsum::Error::Tensor`] when the backend rejects the operands or the
-    /// contraction itself fails.
+    /// [`tenferro_einsum::Error::Tensor`] when the backend rejects the operands, when an
+    /// operand cannot be promoted, or when the contraction itself fails.
     ///
-    /// Unlike the compatibility frontend, this route does not promote operands to a
-    /// common dtype: operands must already share one dtype, and a mismatch is
-    /// rejected typed by the backend rather than converted.
+    /// Operands are promoted to a common dtype exactly as the compatibility frontend
+    /// promotes them: a heterogeneous set contracts in the promoted dtype, and a set
+    /// that already shares one dtype is used as is.
     ///
     /// # Examples
     ///
@@ -279,6 +318,12 @@ impl<'session> Session<'session> {
                     message: format!("{error}"),
                 }
             })?,
+        };
+        let promoted = promote_operands(self.session, operands)?;
+        let operands: Vec<&NativeTensor> = if promoted.is_empty() {
+            operands.to_vec()
+        } else {
+            promoted.iter().collect()
         };
         operands.einsum_subscripts(&subscripts, self.session)
     }
