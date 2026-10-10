@@ -41,7 +41,6 @@ where
         forward,
         options,
         left_orthogonal,
-        state.previous_pivots(forward),
         operator,
     )?;
     #[cfg(test)]

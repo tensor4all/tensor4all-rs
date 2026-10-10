@@ -1,4 +1,4 @@
-mod reuse;
+mod fresh;
 mod scaling;
 
 use std::cell::Cell;
@@ -87,7 +87,6 @@ fn local_entries_equal_direct_values_and_callback_layout_is_column_major() {
         0,
         &options,
         true,
-        None,
         &mut operator,
     )
     .unwrap();
@@ -127,7 +126,6 @@ fn local_truncation_uses_relative_or_absolute_sampled_scale() {
                 0,
                 &options,
                 left_orthogonal,
-                None,
                 &mut diagonal,
             )
             .unwrap();
@@ -180,7 +178,6 @@ fn luci_factors_reconstruct_rank_one_and_zero_targets() {
             0,
             &options,
             true,
-            None,
             &mut operator,
         )
         .unwrap();
@@ -224,7 +221,6 @@ fn zero_local_matrix_keeps_the_pivot_identity_in_the_interpolating_factor() {
             0,
             &options,
             left_orthogonal,
-            None,
             &mut zero,
         )
         .unwrap();
@@ -273,8 +269,7 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
     };
     assert!(matches!(
         materialize_and_factor_edge(
-            &inputs, &problem, &active, &frames, 0, &options, true,
-        None, &mut failing,
+            &inputs, &problem, &active, &frames, 0, &options, true, &mut failing,
         ),
         Err(TreeAciError::Callback { message }) if message == "sentinel"
     ));
@@ -302,7 +297,6 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
             0,
             &limited,
             true,
-            None,
             &mut unused,
         ),
         Err(TreeAciError::ResourceLimit {
@@ -333,7 +327,6 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
             0,
             &working_limited,
             true,
-        None,
             &mut working_unused,
         ),
         Err(TreeAciError::ResourceLimit {
@@ -494,7 +487,6 @@ fn run_local_update_measurement(
             forward,
             &options,
             true,
-            None,
             &mut operator,
         )
         .unwrap();

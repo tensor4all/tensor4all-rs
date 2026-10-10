@@ -597,7 +597,6 @@ fn an_already_represented_point_adds_nothing() {
     let injected = inject_global_pivots(&mut state, &[seed_point], &[1]).unwrap();
 
     assert_eq!(injected, 0);
-    assert!(!state.refresh_pivots_after_guard);
     assert_eq!(state.generation, generation_before);
 }
 
@@ -1164,7 +1163,7 @@ fn diagnostic_guard_call_cost_on_a_branched_tree() {
 }
 
 #[test]
-fn guard_pivot_refresh_survives_failed_passes_and_expires_after_a_complete_pass() {
+fn guard_candidates_survive_a_failed_pass_and_fresh_luci_can_reduce_rank() {
     let (_, left_site, right_site) = delta_tree();
     let bond = DynIndex::new_dyn(1);
     let input = TreeTN::from_tensors(
@@ -1182,17 +1181,16 @@ fn guard_pivot_refresh_survives_failed_passes_and_expires_after_a_complete_pass(
     };
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
     run_directional_pass(&mut state, &options, PassDirection::Forward, &mut identity).unwrap();
-    assert!(state.previous_pivots(0).is_some());
     assert_eq!(
         inject_global_pivots(&mut state, &[vec![1, 1]], &[1]).unwrap(),
         1
     );
-    assert!(state.previous_pivots(0).is_none());
     assert_eq!(
         inject_global_pivots(&mut state, &[vec![1, 1]], &[1]).unwrap(),
         0
     );
-    assert!(state.refresh_pivots_after_guard);
+    let injected_candidates = state.candidates.ids.clone();
+    let injected_generation = state.generation;
     assert!(
         run_directional_pass(&mut state, &options, PassDirection::Reverse, &mut |_, _| {
             Err(crate::TreeAciError::InternalInvariant {
@@ -1201,12 +1199,10 @@ fn guard_pivot_refresh_survives_failed_passes_and_expires_after_a_complete_pass(
         })
         .is_err()
     );
-    assert!(state.refresh_pivots_after_guard);
+    assert_eq!(state.candidates.ids, injected_candidates);
+    assert_eq!(state.generation, injected_generation);
     run_directional_pass(&mut state, &options, PassDirection::Reverse, &mut identity).unwrap();
-    assert!(state.previous_pivots(0).is_some());
     assert_eq!(state.edge_ranks, vec![1]);
     assert_eq!(inject_global_pivots(&mut state, &[], &[1]).unwrap(), 0);
-    assert!(!state.refresh_pivots_after_guard);
     assert!(inject_global_pivots(&mut state, &[vec![1, 1]], &[]).is_err());
-    assert!(!state.refresh_pivots_after_guard);
 }

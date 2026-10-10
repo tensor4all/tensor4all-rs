@@ -267,7 +267,6 @@ fn incomplete_commit_metadata_is_rejected_before_staging() {
         0,
         &options,
         true,
-        None,
         &mut identity,
     )
     .unwrap();

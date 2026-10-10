@@ -147,27 +147,9 @@ pub(crate) struct TreeAciState<'a, T: TreeAciScalar, V: TreeAciNode> {
     pub(crate) edge_errors: Vec<f64>,
     pub(crate) edge_scales: Vec<f64>,
     pub(crate) generation: u64,
-    /// A successful Guard injection requests fresh LUCI throughout the next
-    /// complete directional pass, so old admissible crosses cannot exclude
-    /// the new samples before the Guard has a chance to revalidate them.
-    pub(crate) refresh_pivots_after_guard: bool,
 }
 
 impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
-    /// Bootstrap pairs and zero skeletons have no established nonsingular
-    /// cross to reuse. A positive sampled scale marks a factored target cut.
-    pub(crate) fn previous_pivots(
-        &self,
-        forward: usize,
-    ) -> Option<crate::local_update::PreviousPivots<'_>> {
-        if self.refresh_pivots_after_guard {
-            return None;
-        }
-        let scale = *self.edge_scales.get(forward / 2)?;
-        let pairs = self.pivots.per_edge.get(forward / 2)?;
-        (scale > 0.0).then_some((&self.sample_arena, pairs.as_slice()))
-    }
-
     #[cfg(test)]
     pub(crate) fn initialize(
         inputs: &'a [TreeTN<IdxTensor, V>],
@@ -261,7 +243,6 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
             edge_errors: vec![0.0; edge_count],
             edge_scales: vec![0.0; edge_count],
             generation,
-            refresh_pivots_after_guard: false,
         })
     }
 }
