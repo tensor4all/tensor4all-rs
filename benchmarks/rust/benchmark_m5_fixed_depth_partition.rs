@@ -404,8 +404,7 @@ fn contract_axis(data: &[f64], dims: &[usize], axis: usize, v: &[f64]) -> (Vec<f
     let after: usize = dims[axis + 1..].iter().product();
     let mut out = vec![0.0; before * after];
     for a in 0..after {
-        for k in 0..d {
-            let w = v[k];
+        for (k, &w) in v.iter().enumerate().take(d) {
             if w == 0.0 {
                 continue;
             }
@@ -476,11 +475,11 @@ impl DenseNet {
             for i in inds {
                 if let Some(s) = active.iter().position(|a| a == i) {
                     ax.push(Axis::Site(s));
-                } else if parent[o].as_ref().map_or(false, |(_, b)| b == i) {
+                } else if parent[o].as_ref().is_some_and(|(_, b)| b == i) {
                     ax.push(Axis::Parent);
                 } else {
                     let c = (0..nn)
-                        .find(|&c| parent[c].as_ref().map_or(false, |(p, b)| *p == o && b == i))
+                        .find(|&c| parent[c].as_ref().is_some_and(|(p, b)| *p == o && b == i))
                         .ok_or("bond without child")?;
                     ax.push(Axis::Child(pos_in_order[c]));
                 }
@@ -625,7 +624,7 @@ fn run() -> Result<()> {
                 fixed
                     .iter()
                     .zip(pt)
-                    .all(|(f, &v)| f.map_or(true, |x| x == v))
+                    .all(|(f, &v)| f.is_none_or(|x| x == v))
             };
             let mut init: Vec<Vec<usize>> = Vec::new();
             let mut seen = HashSet::new();
@@ -778,7 +777,7 @@ fn run() -> Result<()> {
                 .fixed
                 .iter()
                 .zip(&test_points[i])
-                .all(|(f, &v)| f.map_or(true, |x| x == v))));
+                .all(|(f, &v)| f.is_none_or(|x| x == v))));
             if let Some(net) = &res.network {
                 if members.is_empty() {
                     continue;
