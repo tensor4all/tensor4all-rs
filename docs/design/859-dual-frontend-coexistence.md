@@ -328,7 +328,7 @@ exactly what is delivered, and §5c lists what is not.
 | Primitive routes | `reshape`, `permute`, `sum`, `conj` (allocation-returning) |
 | Einsum routes | `contraction` (binary, by axes), `einsum` (N-ary, by integer labels) and `einsum_reads` (borrowed `TensorRead` operands), evaluated session-direct, all promoting heterogeneous operands to the same common dtype the compatibility frontend uses, plus `contraction_into` writing a caller-provided destination |
 | Linalg routes | `qr`, `svd`, `solve`, `triangular_solve`, `full_piv_lu` (allocation-returning) |
-| Matrix route | `mat_mul` through the shared `Matrix` container, available where the compatibility frontend is (`global-defaults`) |
+| Matrix routes | `mat_mul` through the shared `Matrix` container and `grouped_mat_mul_shared`, both available where the compatibility frontend is (`global-defaults`) |
 | Shared implementation | the label validation and the axis-to-label construction are one implementation (`src/einsum_ids.rs`) used by both frontends; the evaluation is tenferro-einsum's session-direct `einsum_subscripts`, which compiles no semantic graph and starts no runtime worker |
 | No legacy entry | the module never names `with_default_session`, the default context or the eager runtime; the label helpers live outside the compatibility-only module so the explicit-only build compiles |
 | No eager/AD | the routes reach only concrete `Tensor`/`BackendSession` operations; no `EagerTensor`, semantic node or gradient slot is constructed and no eager owner lock is taken |
@@ -342,7 +342,7 @@ exactly what is delivered, and §5c lists what is not.
 | Read/write/output routes | the read route, the binary output-into route and the N-ary output route (`PreparedEinsum::execute_into`) are delivered |
 | Remaining linalg operations | the Hermitian eigen routes and `src_error_estimate`; the Hermitian routes currently enter the process-global *eager* runtime, so they need the optional AD adapter rather than a concrete route, and `src_error_estimate` is session-free |
 | Remaining `Matrix`-level linalg routes | `solve_matrix`, `full_piv_lu_matrix`, the typed `qr_backend`/`svd_backend` wrappers and `triangular_solve_matrix` still enter the compatibility session |
-| Remaining batched/grouped GEMM route | `batched_mat_mul_same_shape` and `grouped_mat_mul_shared` build their jobs and then enter the compatibility session; the in-session kernel helper already exists and only needs a session-taking entry |
+| Remaining batched GEMM route | `batched_mat_mul_same_shape` builds its jobs and then enters the compatibility session; `grouped_mat_mul_shared` now has a session entry (`Session::grouped_mat_mul_shared` via `grouped_mat_mul_shared_in`) |
 | Session-free operations (no explicit route needed) | `scale`, `axpby`, `conj` on the structured paths, the `Storage`-level contraction/permutation kernels, and `Matrix` `submatrix`/`swap_rows`/`swap_cols`/`transpose` are pure host code that names no session, so an explicit caller uses them as they are. `outer_product` is already expressible as `contraction(lhs, &[], rhs, &[])` |
 | Structured representation parity | structured/diagonal storage preservation on the explicit route (dtype promotion is delivered and shared) |
 | Compatibility bridges | only `LogicalTensor` exists; explicit detach/lift and materialization bridges are still to come |

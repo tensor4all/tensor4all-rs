@@ -594,8 +594,6 @@ pub(crate) fn grouped_mat_mul_shared_in_session<T: MatrixScalar + TensorScalar>(
 /// configured-provider failures. Invalid requests are rejected before backend
 /// execution and leave `output` unchanged.
 ///
-/// # Examples
-///
 /// Execute grouped GEMMs on shared column-major slices of a caller-supplied session.
 ///
 /// Same validation, job translation and provider rules as
@@ -607,6 +605,25 @@ pub(crate) fn grouped_mat_mul_shared_in_session<T: MatrixScalar + TensorScalar>(
 ///
 /// Returns [`GroupedGemmError`] under the same conditions as
 /// [`grouped_mat_mul_shared`].
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{grouped_mat_mul_shared_in, GroupedGemmJob, GroupedGemmOptions};
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_tensor::BackendSessionHost;
+///
+/// let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
+/// let mut output = [0.0_f64];
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// backend.with_backend_session(|session| {
+///     grouped_mat_mul_shared_in(
+///         session, &[3.0], &[4.0], &mut output, &jobs, GroupedGemmOptions::default(),
+///     )
+/// })??;
+/// assert_eq!(output, [12.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn grouped_mat_mul_shared_in<T: MatrixScalar + TensorScalar>(
     session: &mut dyn tenferro_tensor::BackendSession,
     lhs: &[T],
@@ -627,6 +644,13 @@ pub fn grouped_mat_mul_shared_in<T: MatrixScalar + TensorScalar>(
 /// The jobs are validated against the three buffers before any backend call;
 /// an empty job list is a no-op. Provider selection follows the same rules as
 /// [`GroupedGemmOptions`].
+///
+/// # Errors
+///
+/// Returns [`GroupedGemmError`] for checked arithmetic, buffer bounds,
+/// incompatible shared shapes, overlapping outputs, working-budget, view, or
+/// configured-provider failures. Invalid requests are rejected before backend
+/// execution and leave `output` unchanged.
 ///
 /// # Examples
 ///
