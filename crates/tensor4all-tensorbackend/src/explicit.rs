@@ -49,7 +49,7 @@
 
 use tenferro::Tensor as NativeTensor;
 use tenferro::TensorSessionOpsExt;
-use tenferro_einsum::{EinsumSubscripts, TensorEinsumExt};
+use tenferro_einsum::{ConcreteEinsumPlan, EinsumSubscripts, TensorEinsumExt};
 use tenferro_linalg::TensorLinalgExt;
 
 use tenferro_tensor::BackendSession;
@@ -326,6 +326,223 @@ impl<'session> Session<'session> {
             promoted.iter().collect()
         };
         operands.einsum_subscripts(&subscripts, self.session)
+    }
+
+    /// Sum every element of a concrete tensor, returning the rank-0 result.
+    ///
+    /// The compatibility frontend wraps the same rank-0 tensor in a
+    /// `BackendScalar`; this route stays on the concrete value so it works without
+    /// the compatibility feature.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an unsupported reduction
+    /// shape and [`tenferro_tensor::Error::BackendSource`] when the reduction itself
+    /// fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro::Tensor;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// let total = context.with_concrete_session(|session| session.sum(&x))??;
+    /// assert_eq!(total.shape(), &[] as &[usize]);
+    /// assert_eq!(total.as_slice::<f64>()?, &[10.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn sum(&mut self, tensor: &NativeTensor) -> tenferro_tensor::Result<NativeTensor> {
+        if tensor.shape().is_empty() {
+            return tensor.duplicate();
+        }
+        let axes = (0..tensor.shape().len()).collect::<Vec<_>>();
+        tensor.reduce_sum(Some(&axes), self.session)
+    }
+
+    /// Conjugate a concrete tensor.
+    ///
+    /// A real tensor is returned unchanged; a complex tensor is conjugated
+    /// elementwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] for a dtype the backend cannot
+    /// conjugate and [`tenferro_tensor::Error::BackendSource`] when the operation
+    /// itself fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro::Tensor;
+    /// use tenferro_cpu::CpuBackend;
+    /// use num_complex::Complex64;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let x = Tensor::from_vec_col_major(
+    ///     vec![2],
+    ///     vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)],
+    /// )?;
+    /// let conjugated = context.with_concrete_session(|session| session.conj(&x))??;
+    /// assert_eq!(
+    ///     conjugated.as_slice::<Complex64>()?,
+    ///     &[Complex64::new(1.0, -2.0), Complex64::new(3.0, 4.0)]
+    /// );
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn conj(&mut self, tensor: &NativeTensor) -> tenferro_tensor::Result<NativeTensor> {
+        tensor.conj(self.session)
+    }
+
+    /// N-ary einsum over borrowed read inputs, without materializing them.
+    ///
+    /// Same contract as [`Session::einsum`], except that the operands are
+    /// [`TensorRead`](tenferro_tensor::TensorRead) views: a non-contiguous or lazily
+    /// represented operand stays borrowed until the contract evaluates it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_einsum::Error::InvalidSubscripts`] for malformed labels or a
+    /// label list whose length does not match the operand's rank, and
+    /// [`tenferro_einsum::Error::Tensor`] when the backend rejects the operands or the
+    /// contraction itself fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro::Tensor;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::TensorRead;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0])?;
+    /// let reads = [TensorRead::from_tensor(&a), TensorRead::from_tensor(&b)];
+    /// let product = context
+    ///     .with_concrete_session(|session| session.einsum_reads(&reads, &[&[0, 1], &[1, 2]], &[0, 2]))??;
+    /// assert_eq!(product.as_slice::<f64>()?, &[23.0, 34.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn einsum_reads(
+        &mut self,
+        operands: &[tenferro_tensor::TensorRead<'_>],
+        input_ids: &[&[usize]],
+        output_ids: &[usize],
+    ) -> tenferro_einsum::Result<NativeTensor> {
+        if operands.len() != input_ids.len() {
+            return Err(tenferro_einsum::Error::InvalidSubscripts {
+                message: format!(
+                    "einsum needs one label list per operand: {} operands, {} label lists",
+                    operands.len(),
+                    input_ids.len()
+                ),
+            });
+        }
+        let invalid = |error: anyhow::Error| tenferro_einsum::Error::InvalidSubscripts {
+            message: format!("{error}"),
+        };
+        let inputs = input_ids
+            .iter()
+            .map(|ids| checked_native_einsum_labels(ids))
+            .collect::<anyhow::Result<Vec<_>>>()
+            .map_err(invalid)?;
+        let output = checked_native_einsum_labels(output_ids).map_err(invalid)?;
+        let subscripts = EinsumSubscripts { inputs, output };
+        let plan = ConcreteEinsumPlan::prepare_read_subscripts(operands, &subscripts)?;
+        plan.execute_read(operands, self.session)
+    }
+
+    /// Binary contraction into a caller-provided destination.
+    ///
+    /// The destination is fully written and is never zero-filled first. The operands
+    /// and the destination must already share one dtype: this route does not convert
+    /// into a caller-owned output, and a mismatch is rejected typed by the backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_einsum::Error::InvalidSubscripts`] when the axis lists are
+    /// malformed or of different length, and [`tenferro_einsum::Error::Tensor`] when the
+    /// backend rejects the operands, the destination or the contraction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro::Tensor;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::TensorWrite;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0])?;
+    /// let mut out = Tensor::from_vec_col_major(vec![2, 1], vec![0.0_f64, 0.0])?;
+    /// context.with_concrete_session(|session| {
+    ///     session.contraction_into(&a, &[1], &b, &[0], TensorWrite::Tensor(&mut out))
+    /// })??;
+    /// assert_eq!(out.as_slice::<f64>()?, &[23.0, 34.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn contraction_into(
+        &mut self,
+        lhs: &NativeTensor,
+        lhs_axes: &[usize],
+        rhs: &NativeTensor,
+        rhs_axes: &[usize],
+        out: tenferro_tensor::TensorWrite<'_>,
+    ) -> tenferro_einsum::Result<()> {
+        let (lhs_ids, rhs_ids, output_ids) =
+            build_binary_einsum_ids(lhs.shape().len(), lhs_axes, rhs.shape().len(), rhs_axes)
+                .map_err(|error| tenferro_einsum::Error::InvalidSubscripts {
+                    message: format!("{error}"),
+                })?;
+        let subscripts = EinsumSubscripts {
+            inputs: vec![lhs_ids, rhs_ids],
+            output: output_ids,
+        };
+        let inputs = [
+            tenferro_tensor::TensorRead::from_tensor(lhs),
+            tenferro_tensor::TensorRead::from_tensor(rhs),
+        ];
+        let plan = ConcreteEinsumPlan::prepare_read_subscripts(&inputs[..], &subscripts)?;
+        plan.execute_read_into(&inputs[..], self.session, out)
+    }
+
+    /// Matrix multiplication `A * B` on this session.
+    ///
+    /// The same kernel and shape validation as
+    /// [`mat_mul`](crate::mat_mul), entered through this session instead of the
+    /// process-global one, and returning the shared
+    /// [`Matrix`](crate::Matrix) container.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MatrixMulError`](crate::MatrixMulError) when the shapes disagree or
+    /// the session operation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{CpuExecutionContext, Matrix};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let a = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let b = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 0.0, 0.0, 1.0]);
+    /// let c = context.with_concrete_session(|session| session.mat_mul(&a, &b))??;
+    /// assert_eq!(c.as_col_major_slice(), &[1.0, 2.0, 3.0, 4.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[cfg(feature = "global-defaults")]
+    pub fn mat_mul<T: crate::matrix::BlasMul>(
+        &mut self,
+        a: &crate::matrix::Matrix<T>,
+        b: &crate::matrix::Matrix<T>,
+    ) -> Result<crate::matrix::Matrix<T>, crate::matrix::MatrixMulError> {
+        crate::mat_mul_in(self.session, a, b)
     }
 
     /// Thin/economy QR decomposition.

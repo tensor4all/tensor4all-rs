@@ -325,9 +325,10 @@ exactly what is delivered, and §5c lists what is not.
 | Context | the existing `CpuExecutionContext` |
 | Entry | `CpuExecutionContext::with_concrete_session`: one session entry for the whole callback, on the caller's own backend. A caller inside a Rayon worker is rejected typed instead of being rerouted to the compatibility frontend's unrelated inline backend |
 | Session | `explicit::Session`, a tensorbackend-owned view over the concrete `BackendSession`; neither the callback nor its value needs `Send`, because the tenferro entry at this pin runs it on the entering thread |
-| Primitive routes | `reshape`, `permute` (allocation-returning) |
-| Einsum routes | `contraction` (binary, by axes), `einsum` (N-ary, by integer labels), both evaluated session-direct, and both promoting heterogeneous operands to the same common dtype the compatibility frontend uses |
+| Primitive routes | `reshape`, `permute`, `sum`, `conj` (allocation-returning) |
+| Einsum routes | `contraction` (binary, by axes), `einsum` (N-ary, by integer labels) and `einsum_reads` (borrowed `TensorRead` operands), evaluated session-direct, all promoting heterogeneous operands to the same common dtype the compatibility frontend uses, plus `contraction_into` writing a caller-provided destination |
 | Linalg routes | `qr`, `svd`, `solve`, `triangular_solve`, `full_piv_lu` (allocation-returning) |
+| Matrix route | `mat_mul` through the shared `Matrix` container, available where the compatibility frontend is (`global-defaults`) |
 | Shared implementation | the label validation and the axis-to-label construction are one implementation (`src/einsum_ids.rs`) used by both frontends; the evaluation is tenferro-einsum's session-direct `einsum_subscripts`, which compiles no semantic graph and starts no runtime worker |
 | No legacy entry | the module never names `with_default_session`, the default context or the eager runtime; the label helpers live outside the compatibility-only module so the explicit-only build compiles |
 | No eager/AD | the routes reach only concrete `Tensor`/`BackendSession` operations; no `EagerTensor`, semantic node or gradient slot is constructed and no eager owner lock is taken |
@@ -338,13 +339,13 @@ exactly what is delivered, and §5c lists what is not.
 
 | Item | Notes |
 | --- | --- |
-| Read/write/output routes | no public `TensorRead` or output-into route yet; the routes are allocation-returning |
+| Read/write/output routes | the read route and the binary output-into route are delivered; the N-ary output route and caller-owned prepared plans are not |
 | Remaining primitive/linalg operations | `scale`/`axpby`/`conj`/`outer_product`, the Hermitian eigen routes, `src_error_estimate`, the `Matrix`-level linalg wrappers |
-| `Matrix`/`Storage` families | `mat_mul`, batched/grouped GEMM, `submatrix`/`swap`/`transpose`, the `Storage`-level contraction/permutation routes |
+| Remaining `Matrix`/`Storage` routes | batched/grouped GEMM, `submatrix`/`swap`/`transpose`, and the `Storage`-level contraction/permutation routes |
 | Structured representation parity | structured/diagonal storage preservation on the explicit route (dtype promotion is delivered and shared) |
 | Compatibility bridges | only `LogicalTensor` exists; explicit detach/lift and materialization bridges are still to come |
 | Private child resources and the backend phase proof | the held session and the phase lease exist upstream; tensorbackend does not expose or prove them yet |
-| Reusable plan surface | no caller-owned prepared-plan route through the session |
+| Reusable plan surface | the read route prepares a plan per call; a caller-held prepared plan across operations is still to come |
 | Measurements | bridge allocations/copies/registration are not measured, and no paired dispatch numbers are recorded for the explicit route |
 | A held *object* form | see the note below |
 
