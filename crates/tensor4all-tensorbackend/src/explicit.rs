@@ -641,6 +641,233 @@ impl<'session> Session<'session> {
         plan.execute_read_into(&inputs[..], self.session, out)
     }
 
+    /// Solve `A X = B` for column-major matrices on this session.
+    ///
+    /// Same kernel, conversion and validation as
+    /// [`solve_matrix`](crate::solve_matrix), entered through this session instead of
+    /// the process-global one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendLinalgError`](crate::BackendLinalgError) under the same
+    /// conditions as [`solve_matrix`](crate::solve_matrix).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{CpuExecutionContext, Matrix};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let a = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 0.0, 0.0, 4.0]);
+    /// let b = Matrix::from_col_major_vec(2, 1, vec![6.0_f64, 8.0]);
+    /// let x = context.with_concrete_session(|session| session.solve_matrix(&a, &b))??;
+    /// assert_eq!(x.as_col_major_slice(), &[3.0, 2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[cfg(feature = "global-defaults")]
+    pub fn solve_matrix<T>(
+        &mut self,
+        a: &crate::matrix::Matrix<T>,
+        b: &crate::matrix::Matrix<T>,
+    ) -> Result<crate::matrix::Matrix<T>, crate::backend::BackendLinalgError>
+    where
+        T: crate::backend::BackendLinalgScalar + Copy,
+        NativeTensor: From<tenferro::TypedTensor<T>>,
+    {
+        crate::solve_matrix_in(self.session, a, b)
+    }
+
+    /// Solve a triangular system for column-major matrices on this session.
+    ///
+    /// Same kernel, conversion and validation as
+    /// [`triangular_solve_matrix`](crate::triangular_solve_matrix), entered through this
+    /// session instead of the process-global one. `left_side`, `lower`, `transpose_a`
+    /// and `unit_diagonal` have the same meaning as on that entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendLinalgError`](crate::BackendLinalgError) under the same
+    /// conditions as [`triangular_solve_matrix`](crate::triangular_solve_matrix).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{CpuExecutionContext, Matrix};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let a = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 1.0, 0.0, 4.0]);
+    /// let b = Matrix::from_col_major_vec(2, 1, vec![4.0_f64, 4.0]);
+    /// let x = context.with_concrete_session(|session| {
+    ///     session.triangular_solve_matrix(&a, &b, true, true, false, false)
+    /// })??;
+    /// assert_eq!(x.as_col_major_slice(), &[2.0, 0.5]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[cfg(feature = "global-defaults")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn triangular_solve_matrix<T>(
+        &mut self,
+        a: &crate::matrix::Matrix<T>,
+        b: &crate::matrix::Matrix<T>,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> Result<crate::matrix::Matrix<T>, crate::backend::BackendLinalgError>
+    where
+        T: crate::backend::BackendLinalgScalar + Copy,
+        NativeTensor: From<tenferro::TypedTensor<T>>,
+    {
+        crate::triangular_solve_matrix_in(
+            self.session,
+            a,
+            b,
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+        )
+    }
+
+    /// Complete-pivoting LU decomposition of a column-major matrix on this session.
+    ///
+    /// Same kernel and conversion as
+    /// [`full_piv_lu_matrix`](crate::full_piv_lu_matrix), entered through this session
+    /// instead of the process-global one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendLinalgError`](crate::BackendLinalgError) under the same
+    /// conditions as [`full_piv_lu_matrix`](crate::full_piv_lu_matrix).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{CpuExecutionContext, Matrix};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let a = Matrix::from_col_major_vec(2, 2, vec![0.0_f64, 1.0, 2.0, 3.0]);
+    /// let factors = context.with_concrete_session(|session| session.full_piv_lu_matrix(&a))??;
+    /// assert_eq!(factors.p.nrows(), 2);
+    /// assert_eq!(factors.q.ncols(), 2);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[cfg(feature = "global-defaults")]
+    pub fn full_piv_lu_matrix<T>(
+        &mut self,
+        a: &crate::matrix::Matrix<T>,
+    ) -> Result<crate::backend::FullPivLuMatrixResult<T>, crate::backend::BackendLinalgError>
+    where
+        T: crate::backend::BackendLinalgScalar + Copy,
+    {
+        crate::full_piv_lu_matrix_in(self.session, a)
+    }
+
+    /// Thin/economy QR of a typed tensor on this session.
+    ///
+    /// Same kernel and conversion as [`qr_backend`](crate::qr_backend), entered through
+    /// this session instead of the process-global one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendLinalgError`](crate::BackendLinalgError) under the same
+    /// conditions as [`qr_backend`](crate::qr_backend).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro::TypedTensor;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])?;
+    /// let (q, r) = context.with_concrete_session(|session| session.qr_backend(a))??;
+    /// assert_eq!(q.shape(), &[2, 2]);
+    /// assert_eq!(r.shape(), &[2, 2]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[cfg(feature = "global-defaults")]
+    pub fn qr_backend<T>(
+        &mut self,
+        a: tenferro::TypedTensor<T>,
+    ) -> Result<
+        (tenferro::TypedTensor<T>, tenferro::TypedTensor<T>),
+        crate::backend::BackendLinalgError,
+    >
+    where
+        T: crate::backend::BackendLinalgScalar,
+    {
+        use tenferro::TensorScalar;
+
+        let (shape, data) = a.into_vec_col_major().map_err(|error| {
+            crate::backend::BackendLinalgError::from(anyhow::anyhow!(
+                "QR input host access failed: {error}"
+            ))
+        })?;
+        let tensor: NativeTensor =
+            <T as TensorScalar>::into_tensor(shape, data).map_err(|error| {
+                crate::backend::BackendLinalgError::from(anyhow::anyhow!(
+                    "QR input tensor construction failed: {error}"
+                ))
+            })?;
+        crate::qr_backend_in(self.session, tensor)
+    }
+
+    /// Thin/economy SVD of a typed tensor on this session.
+    ///
+    /// Same kernel and conversion as [`svd_backend`](crate::svd_backend), entered through
+    /// this session instead of the process-global one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendLinalgError`](crate::BackendLinalgError) under the same
+    /// conditions as [`svd_backend`](crate::svd_backend).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro::TypedTensor;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 2.0])?;
+    /// let factors = context.with_concrete_session(|session| session.svd_backend(&a))??;
+    /// assert_eq!(factors.s().as_slice()?, &[3.0, 2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[cfg(feature = "global-defaults")]
+    pub fn svd_backend<T>(
+        &mut self,
+        a: &tenferro::TypedTensor<T>,
+    ) -> Result<crate::backend::SvdResult<T>, crate::backend::BackendLinalgError>
+    where
+        T: crate::backend::BackendLinalgScalar,
+    {
+        use tenferro::TensorScalar;
+
+        let tensor: NativeTensor = <T as TensorScalar>::into_tensor(
+            a.shape().to_vec(),
+            a.host_data()
+                .map_err(|error| {
+                    crate::backend::BackendLinalgError::from(anyhow::anyhow!(
+                        "SVD input host access failed: {error}"
+                    ))
+                })?
+                .to_vec(),
+        )
+        .map_err(|error| {
+            crate::backend::BackendLinalgError::from(anyhow::anyhow!(
+                "SVD input tensor construction failed: {error}"
+            ))
+        })?;
+        crate::svd_backend_in(self.session, tensor)
+    }
+
     /// Matrix multiplication `A * B` on this session.
     ///
     /// The same kernel and shape validation as

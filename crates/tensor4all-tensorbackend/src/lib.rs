@@ -53,11 +53,13 @@ mod tensor_element;
 pub use any_scalar::BackendScalar;
 #[cfg(feature = "global-defaults")]
 pub use backend::{
-    full_piv_lu_backend, full_piv_lu_matrix, full_piv_lu_matrix_owned, qr_backend, solve_backend,
-    solve_matrix, solve_matrix_owned, src_error_estimate, src_error_estimate_general, svd_backend,
-    triangular_solve_backend, triangular_solve_matrix, triangular_solve_matrix_owned,
-    BackendLinalgError, BackendLinalgScalar, FullPivLuMatrixResult, FullPivLuResult,
-    FullPivLuScalar, MatrixSolveScalar, MatrixTriangularSolveScalar, SrcErrorEstimate, SvdResult,
+    full_piv_lu_backend, full_piv_lu_matrix, full_piv_lu_matrix_in, full_piv_lu_matrix_owned,
+    qr_backend, qr_backend_in, solve_backend, solve_matrix, solve_matrix_in, solve_matrix_owned,
+    src_error_estimate, src_error_estimate_general, svd_backend, svd_backend_in,
+    triangular_solve_backend, triangular_solve_matrix, triangular_solve_matrix_in,
+    triangular_solve_matrix_owned, BackendLinalgError, BackendLinalgScalar, FullPivLuMatrixResult,
+    FullPivLuResult, FullPivLuScalar, MatrixSolveScalar, MatrixTriangularSolveScalar,
+    SrcErrorEstimate, SvdResult,
 };
 #[cfg(feature = "global-defaults")]
 pub use context::{

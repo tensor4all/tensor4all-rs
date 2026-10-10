@@ -612,7 +612,20 @@ where
     T: BackendLinalgScalar + Copy,
     Tensor: From<TypedTensor<T>>,
 {
-    solve_matrix_direct_owned(a.clone(), b.clone())
+    with_default_session(|session| Ok(solve_matrix_direct_in(session, a, b)))
+        .map_err(|e| anyhow!("linear solve failed via tenferro-tensor: {e}"))?
+}
+
+fn solve_matrix_direct_in<T>(
+    session: &mut dyn tenferro_tensor::BackendSession,
+    a: &Matrix<T>,
+    b: &Matrix<T>,
+) -> Result<Matrix<T>>
+where
+    T: BackendLinalgScalar + Copy,
+    Tensor: From<TypedTensor<T>>,
+{
+    solve_matrix_direct_owned_in(session, a.clone(), b.clone())
 }
 
 fn solve_matrix_direct_owned<T>(a: Matrix<T>, b: Matrix<T>) -> Result<Matrix<T>>
@@ -620,12 +633,48 @@ where
     T: BackendLinalgScalar + Copy,
     Tensor: From<TypedTensor<T>>,
 {
+    with_default_session(|session| Ok(solve_matrix_direct_owned_in(session, a, b)))
+        .map_err(|e| anyhow!("linear solve failed via tenferro-tensor: {e}"))?
+}
+
+fn solve_matrix_direct_owned_in<T>(
+    session: &mut dyn tenferro_tensor::BackendSession,
+    a: Matrix<T>,
+    b: Matrix<T>,
+) -> Result<Matrix<T>>
+where
+    T: BackendLinalgScalar + Copy,
+    Tensor: From<TypedTensor<T>>,
+{
+    use tenferro_linalg::TensorLinalgExt;
+
     let a_tensor: Tensor = a.into_typed_tensor().into();
     let b_tensor: Tensor = b.into_typed_tensor().into();
-    let result = with_default_session(|session| a_tensor.solve(&b_tensor, session))
+    let result = a_tensor
+        .solve(&b_tensor, session)
         .map_err(|e| anyhow!("linear solve failed via tenferro-tensor: {e}"))?;
     let x = try_into_typed_result::<T>("solve", result)?;
     typed_tensor_to_matrix("solve", x)
+}
+
+/// Solve `A X = B` on a caller-supplied session.
+///
+/// Same kernel, conversion and validation as [`solve_matrix`], entered through the
+/// given session instead of the process-global one.
+///
+/// # Errors
+///
+/// Returns [`BackendLinalgError`] under the same conditions as [`solve_matrix`].
+pub fn solve_matrix_in<T>(
+    session: &mut dyn tenferro_tensor::BackendSession,
+    a: &Matrix<T>,
+    b: &Matrix<T>,
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
+where
+    T: BackendLinalgScalar + Copy,
+    Tensor: From<TypedTensor<T>>,
+{
+    solve_matrix_direct_in(session, a, b).map_err(BackendLinalgError::from)
 }
 
 fn triangular_solve_matrix_direct<T>(
@@ -640,7 +689,36 @@ where
     T: BackendLinalgScalar + Copy,
     Tensor: From<TypedTensor<T>>,
 {
-    triangular_solve_matrix_direct_owned(
+    with_default_session(|session| {
+        Ok(triangular_solve_matrix_direct_in(
+            session,
+            a,
+            b,
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+        ))
+    })
+    .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?
+}
+
+#[allow(clippy::too_many_arguments)]
+fn triangular_solve_matrix_direct_in<T>(
+    session: &mut dyn tenferro_tensor::BackendSession,
+    a: &Matrix<T>,
+    b: &Matrix<T>,
+    left_side: bool,
+    lower: bool,
+    transpose_a: bool,
+    unit_diagonal: bool,
+) -> Result<Matrix<T>>
+where
+    T: BackendLinalgScalar + Copy,
+    Tensor: From<TypedTensor<T>>,
+{
+    triangular_solve_matrix_direct_owned_in(
+        session,
         a.clone(),
         b.clone(),
         left_side,
@@ -662,10 +740,40 @@ where
     T: BackendLinalgScalar + Copy,
     Tensor: From<TypedTensor<T>>,
 {
+    with_default_session(|session| {
+        Ok(triangular_solve_matrix_direct_owned_in(
+            session,
+            a,
+            b,
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+        ))
+    })
+    .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?
+}
+
+#[allow(clippy::too_many_arguments)]
+fn triangular_solve_matrix_direct_owned_in<T>(
+    session: &mut dyn tenferro_tensor::BackendSession,
+    a: Matrix<T>,
+    b: Matrix<T>,
+    left_side: bool,
+    lower: bool,
+    transpose_a: bool,
+    unit_diagonal: bool,
+) -> Result<Matrix<T>>
+where
+    T: BackendLinalgScalar + Copy,
+    Tensor: From<TypedTensor<T>>,
+{
+    use tenferro_linalg::TensorLinalgExt;
+
     let a_tensor: Tensor = a.into_typed_tensor().into();
     let b_tensor: Tensor = b.into_typed_tensor().into();
-    let result = with_default_session(|session| {
-        a_tensor.triangular_solve(
+    let result = a_tensor
+        .triangular_solve(
             &b_tensor,
             left_side,
             lower,
@@ -673,10 +781,36 @@ where
             unit_diagonal,
             session,
         )
-    })
-    .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?;
+        .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?;
     let x = try_into_typed_result::<T>("triangular_solve", result)?;
     typed_tensor_to_matrix("triangular_solve", x)
+}
+
+/// Solve a triangular system on a caller-supplied session.
+///
+/// Same kernel, conversion and validation as [`triangular_solve_matrix`], entered
+/// through the given session instead of the process-global one.
+///
+/// # Errors
+///
+/// Returns [`BackendLinalgError`] under the same conditions as
+/// [`triangular_solve_matrix`].
+#[allow(clippy::too_many_arguments)]
+pub fn triangular_solve_matrix_in<T>(
+    session: &mut dyn tenferro_tensor::BackendSession,
+    a: &Matrix<T>,
+    b: &Matrix<T>,
+    left_side: bool,
+    lower: bool,
+    transpose_a: bool,
+    unit_diagonal: bool,
+) -> std::result::Result<Matrix<T>, BackendLinalgError>
+where
+    T: BackendLinalgScalar + Copy,
+    Tensor: From<TypedTensor<T>>,
+{
+    triangular_solve_matrix_direct_in(session, a, b, left_side, lower, transpose_a, unit_diagonal)
+        .map_err(BackendLinalgError::from)
 }
 
 impl MatrixSolveScalar for f64 {
@@ -970,7 +1104,26 @@ where
             .to_vec(),
     )
     .map_err(|e| anyhow!("SVD input tensor construction failed: {e}"))?;
-    let (u, s, vt) = with_default_session(|session| tensor.svd(session))
+    with_default_session(|session| Ok(svd_backend_in(session, tensor)))
+        .map_err(|e| anyhow!("SVD computation failed via tenferro-tensor: {e}"))?
+}
+
+/// SVD of a typed tensor on a caller-supplied session.
+///
+/// # Errors
+///
+/// Returns [`BackendLinalgError`] under the same conditions as [`svd_backend`].
+pub fn svd_backend_in<T>(
+    session: &mut dyn tenferro_tensor::BackendSession,
+    tensor: Tensor,
+) -> std::result::Result<SvdResult<T>, BackendLinalgError>
+where
+    T: BackendLinalgScalar,
+{
+    use tenferro_linalg::TensorLinalgExt;
+
+    let (u, s, vt) = tensor
+        .svd(session)
         .map_err(|e| anyhow!("SVD computation failed via tenferro-tensor: {e}"))?;
     Ok(SvdResult {
         u: require_host_linalg_tensor("svd", convert_for_typed::<T>("svd", u)?)?,
@@ -997,7 +1150,26 @@ where
         .map_err(|e| anyhow!("QR input host access failed: {e}"))?;
     let tensor = T::into_tensor(shape, data)
         .map_err(|e| anyhow!("QR input tensor construction failed: {e}"))?;
-    let (q, r) = with_default_session(|session| tensor.qr(session))
+    with_default_session(|session| Ok(qr_backend_in(session, tensor)))
+        .map_err(|e| anyhow!("QR computation failed via tenferro-tensor: {e}"))?
+}
+
+/// QR of a typed tensor on a caller-supplied session.
+///
+/// # Errors
+///
+/// Returns [`BackendLinalgError`] under the same conditions as [`qr_backend`].
+pub fn qr_backend_in<T>(
+    session: &mut dyn tenferro_tensor::BackendSession,
+    tensor: Tensor,
+) -> std::result::Result<(TypedTensor<T>, TypedTensor<T>), BackendLinalgError>
+where
+    T: BackendLinalgScalar,
+{
+    use tenferro_linalg::TensorLinalgExt;
+
+    let (q, r) = tensor
+        .qr(session)
         .map_err(|e| anyhow!("QR computation failed via tenferro-tensor: {e}"))?;
     Ok((
         convert_for_typed::<T>("qr", q)?,
@@ -1217,7 +1389,22 @@ fn full_piv_lu_tensor<T>(
 where
     T: BackendLinalgScalar,
 {
-    let (p, l, u, q, _parity) = with_default_session(|session| tensor.full_piv_lu(session))
+    with_default_session(|session| Ok(full_piv_lu_tensor_in(session, tensor)))
+        .map_err(|e| anyhow!("complete-pivoting LU failed via tenferro-tensor: {e}"))?
+}
+
+/// Complete-pivoting LU on a caller-supplied session.
+fn full_piv_lu_tensor_in<T>(
+    session: &mut dyn tenferro_tensor::BackendSession,
+    tensor: Tensor,
+) -> std::result::Result<FullPivLuResult<T>, BackendLinalgError>
+where
+    T: BackendLinalgScalar,
+{
+    use tenferro_linalg::TensorLinalgExt;
+
+    let (p, l, u, q, _parity) = tensor
+        .full_piv_lu(session)
         .map_err(|e| anyhow!("complete-pivoting LU failed via tenferro-tensor: {e}"))?;
     Ok(FullPivLuResult {
         p: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", p)?)?,
@@ -1249,6 +1436,32 @@ where
     full_piv_lu_tensor(tensor)
 }
 
+/// Complete-pivoting LU of a typed tensor on a caller-supplied session.
+///
+/// Same kernel and conversion as [`full_piv_lu_backend`], entered through the given
+/// session instead of the process-global one.
+///
+/// # Errors
+///
+/// Returns [`BackendLinalgError`] under the same conditions as
+/// [`full_piv_lu_backend`].
+pub fn full_piv_lu_backend_in<T>(
+    session: &mut dyn tenferro_tensor::BackendSession,
+    a: &TypedTensor<T>,
+) -> std::result::Result<FullPivLuResult<T>, BackendLinalgError>
+where
+    T: BackendLinalgScalar,
+{
+    let tensor = T::into_tensor(
+        a.shape().to_vec(),
+        a.host_data()
+            .map_err(|e| anyhow!("LU input host access failed: {e}"))?
+            .to_vec(),
+    )
+    .map_err(|e| anyhow!("LU input tensor construction failed: {e}"))?;
+    full_piv_lu_tensor_in(session, tensor)
+}
+
 /// Compute complete-pivoting LU for a column-major [`Matrix`].
 /// This is a convenience wrapper over [`full_piv_lu_backend`] for callers that
 /// use [`Matrix`] as their dense boundary type.
@@ -1274,6 +1487,32 @@ where
 {
     let tensor = matrix_to_typed_tensor(a);
     let decomp = full_piv_lu_backend(&tensor)?;
+    Ok(FullPivLuMatrixResult {
+        p: typed_tensor_to_matrix("full_piv_lu", decomp.p)?,
+        l: typed_tensor_to_matrix("full_piv_lu", decomp.l)?,
+        u: typed_tensor_to_matrix("full_piv_lu", decomp.u)?,
+        q: typed_tensor_to_matrix("full_piv_lu", decomp.q)?,
+    })
+}
+
+/// Complete-pivoting LU for a column-major [`Matrix`] on a caller-supplied session.
+///
+/// Same kernel and conversion as [`full_piv_lu_matrix`], entered through the given
+/// session instead of the process-global one.
+///
+/// # Errors
+///
+/// Returns [`BackendLinalgError`] under the same conditions as
+/// [`full_piv_lu_matrix`].
+pub fn full_piv_lu_matrix_in<T>(
+    session: &mut dyn tenferro_tensor::BackendSession,
+    a: &Matrix<T>,
+) -> std::result::Result<FullPivLuMatrixResult<T>, BackendLinalgError>
+where
+    T: BackendLinalgScalar + Copy,
+{
+    let tensor = matrix_to_typed_tensor(a);
+    let decomp = full_piv_lu_backend_in(session, &tensor)?;
     Ok(FullPivLuMatrixResult {
         p: typed_tensor_to_matrix("full_piv_lu", decomp.p)?,
         l: typed_tensor_to_matrix("full_piv_lu", decomp.l)?,
