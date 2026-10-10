@@ -411,8 +411,10 @@ pub enum GlobalL2Error {
     Certified {
         /// Measured `E / sqrt(|X|)`.
         rms_error: f64,
-        /// `MEASUREMENT_ROUNDING_FACTOR * eps * approximation_rms`; `None`
-        /// when `approximation_rms` is `None`.
+        /// `MEASUREMENT_ROUNDING_FACTOR * eps * approximation_rms`, with `eps`
+        /// the machine epsilon of the evaluated scalar type (`f32::EPSILON`
+        /// for `f32` and `Complex32`); `None` when `approximation_rms` is
+        /// `None`.
         rounding_allowance_rms: Option<f64>,
         /// `rounding_allowance_rms >= tau`: the allowance is not resolved by
         /// the measurement. `None` when `approximation_rms` is `None`.

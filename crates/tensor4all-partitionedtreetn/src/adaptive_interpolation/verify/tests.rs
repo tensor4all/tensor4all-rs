@@ -499,7 +499,7 @@ fn global_error_combines_disjoint_patches_by_volume() {
             within_tolerance: true,
         },
     ];
-    let (global, certified) = global_error(&contributions, 4.0, 0.2, Some(1.0));
+    let (global, certified) = global_error(&contributions, 4.0, 0.2, Some(1.0), f64::EPSILON);
     assert_eq!(certified, 1.0);
     let GlobalL2Error::Certified {
         rms_error,
@@ -519,7 +519,7 @@ fn global_error_combines_disjoint_patches_by_volume() {
     assert!(close(relative_error_bound.unwrap(), bound));
 
     // No approximation norm: no rounding term, flag, or relative bound.
-    let (global, _) = global_error(&contributions, 4.0, 0.2, None);
+    let (global, _) = global_error(&contributions, 4.0, 0.2, None, f64::EPSILON);
     assert!(matches!(
         global,
         GlobalL2Error::Certified {
@@ -530,7 +530,7 @@ fn global_error_combines_disjoint_patches_by_volume() {
         }
     ));
     // A denominator that is not positive gives no relative statement.
-    let (global, _) = global_error(&contributions, 4.0, 0.2, Some(0.05));
+    let (global, _) = global_error(&contributions, 4.0, 0.2, Some(0.05), f64::EPSILON);
     assert!(matches!(
         global,
         GlobalL2Error::Certified {
@@ -538,8 +538,20 @@ fn global_error_combines_disjoint_patches_by_volume() {
             ..
         }
     ));
+    // The allowance scales with the evaluation epsilon: a tau that resolves
+    // the f64 term is rounding-limited in f32.
+    let f32_epsilon = f64::from(f32::EPSILON);
+    let (global, _) = global_error(&contributions, 4.0, 1e-6, Some(1.0), f32_epsilon);
+    assert!(matches!(
+        global,
+        GlobalL2Error::Certified {
+            rounding_allowance_rms: Some(rounding),
+            rounding_limited: Some(true),
+            ..
+        } if rounding == MEASUREMENT_ROUNDING_FACTOR * f32_epsilon
+    ));
     // A tau below the rounding term is rounding-limited.
-    let (global, _) = global_error(&contributions, 4.0, 1e-20, Some(1.0));
+    let (global, _) = global_error(&contributions, 4.0, 1e-20, Some(1.0), f64::EPSILON);
     assert!(matches!(
         global,
         GlobalL2Error::Certified {
@@ -568,7 +580,7 @@ fn sampled_contributions_are_audited_or_acceptance_only() {
             within_tolerance: true,
         },
     ];
-    let (global, certified) = global_error(&audited, 4.0, 0.1, Some(1.0));
+    let (global, certified) = global_error(&audited, 4.0, 0.1, Some(1.0), f64::EPSILON);
     assert_eq!(certified, 0.5);
     let GlobalL2Error::Audited {
         rms_error_estimate,
@@ -587,7 +599,7 @@ fn sampled_contributions_are_audited_or_acceptance_only() {
         relative_bound_estimate.unwrap(),
         estimate / (1.0 - estimate)
     ));
-    let (global, _) = global_error(&audited, 4.0, 0.1, Some(0.1));
+    let (global, _) = global_error(&audited, 4.0, 0.1, Some(0.1), f64::EPSILON);
     assert!(matches!(
         global,
         GlobalL2Error::Audited {
@@ -610,7 +622,7 @@ fn sampled_contributions_are_audited_or_acceptance_only() {
             within_tolerance: true,
         },
     ];
-    let (global, _) = global_error(&unaudited, 4.0, 0.1, Some(1.0));
+    let (global, _) = global_error(&unaudited, 4.0, 0.1, Some(1.0), f64::EPSILON);
     let GlobalL2Error::AcceptanceOnly {
         acceptance_statistic_rms,
     } = global
@@ -638,7 +650,7 @@ fn unmet_contributions_keep_the_m3_classification_as_basis() {
         contribution(&met, None, true),
         contribution(&unmet, None, false),
     ];
-    let (global, certified) = global_error(&exhaustive, 4.0, 0.1, Some(1.0));
+    let (global, certified) = global_error(&exhaustive, 4.0, 0.1, Some(1.0), f64::EPSILON);
     // The unmet half is not certified although it was measured exhaustively.
     assert_eq!(certified, 0.5);
     let GlobalL2Error::ToleranceNotMet {
@@ -671,7 +683,7 @@ fn unmet_contributions_keep_the_m3_classification_as_basis() {
         contribution(&met, None, true),
         contribution(&sampled, Some(&audit), false),
     ];
-    let (global, certified) = global_error(&audited, 4.0, 0.1, Some(1.0));
+    let (global, certified) = global_error(&audited, 4.0, 0.1, Some(1.0), f64::EPSILON);
     assert_eq!(certified, 0.5);
     let GlobalL2Error::ToleranceNotMet {
         measured_rms,
@@ -700,7 +712,7 @@ fn unmet_contributions_keep_the_m3_classification_as_basis() {
         contribution(&met, None, true),
         contribution(&sampled, None, false),
     ];
-    let (global, certified) = global_error(&unaudited, 4.0, 0.1, Some(1.0));
+    let (global, certified) = global_error(&unaudited, 4.0, 0.1, Some(1.0), f64::EPSILON);
     assert_eq!(certified, 0.5);
     let GlobalL2Error::ToleranceNotMet {
         measured_rms,

@@ -288,6 +288,7 @@ use tensor4all_treetn::{NodeNameNetwork, TreeTN};
 use self::sampling::point_list_capacity;
 
 use crate::error::PartitionedTreeTNError;
+use crate::subdomain_tree_tn::ScalarKind;
 use crate::{ErrorNorm, L2Reference, PartitionedTreeTN, Projector, SubDomainTreeTN};
 
 use acceptance::SizePolicy;
@@ -1033,8 +1034,23 @@ where
             }),
             domain_points,
         );
-        let (global, certified_fraction) =
-            verify::global_error(&contributions, domain_points, pin.tau, approximation_rms);
+        // The rounding model scales with the coarsest precision the patch
+        // networks were evaluated in.
+        let mut epsilon = f64::EPSILON;
+        for (_, entry) in accepted {
+            let kind = entry
+                .subdomain
+                .scalar_kind()
+                .map_err(|source| PatchedInterpolationError::Partition { source })?;
+            epsilon = epsilon.max(kind.map_or(f64::EPSILON, ScalarKind::epsilon));
+        }
+        let (global, certified_fraction) = verify::global_error(
+            &contributions,
+            domain_points,
+            pin.tau,
+            approximation_rms,
+            epsilon,
+        );
         Ok(NormReport::L2 {
             reference_rms: pin.reference_rms,
             source: pin.source,

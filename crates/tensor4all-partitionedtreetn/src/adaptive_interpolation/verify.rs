@@ -322,11 +322,14 @@ pub(super) struct Contribution<'a> {
 /// the given (canonical path) order. A `ToleranceNotMet` contribution turns
 /// the M3 classification into [`GlobalL2Error::ToleranceNotMet`] with that
 /// classification as its basis, and is excluded from the certified fraction.
+/// `epsilon` is the machine epsilon of the precision the patch networks were
+/// evaluated in; it scales the rounding allowance.
 pub(super) fn global_error(
     contributions: &[Contribution<'_>],
     domain_points: f64,
     tau: f64,
     approximation_rms: Option<f64>,
+    epsilon: f64,
 ) -> (GlobalL2Error, f64) {
     let exact = |m: &L2Measurement| m.method != MeasurementMethod::Sampled;
     let certified_fraction: f64 = contributions
@@ -334,7 +337,13 @@ pub(super) fn global_error(
         .filter(|c| c.within_tolerance && exact(c.acceptance))
         .map(|c| c.patch_points / domain_points)
         .sum();
-    let (rms, basis) = classify(contributions, domain_points, tau, approximation_rms);
+    let (rms, basis) = classify(
+        contributions,
+        domain_points,
+        tau,
+        approximation_rms,
+        epsilon,
+    );
     if contributions.iter().all(|c| c.within_tolerance) {
         let global = match basis {
             ToleranceNotMetBasis::ExactOrExhaustive {
@@ -383,6 +392,7 @@ fn classify(
     domain_points: f64,
     tau: f64,
     approximation_rms: Option<f64>,
+    epsilon: f64,
 ) -> (f64, ToleranceNotMetBasis) {
     let weight = |c: &Contribution<'_>| (c.patch_points / domain_points).sqrt();
     let exact = |m: &L2Measurement| m.method != MeasurementMethod::Sampled;
@@ -393,8 +403,7 @@ fn classify(
     }
     if contributions.iter().all(|c| exact(c.acceptance)) {
         let rms_error = acceptance.norm();
-        let rounding =
-            approximation_rms.map(|rms| MEASUREMENT_ROUNDING_FACTOR * f64::EPSILON * rms);
+        let rounding = approximation_rms.map(|rms| MEASUREMENT_ROUNDING_FACTOR * epsilon * rms);
         let relative_error_bound = approximation_rms.zip(rounding).and_then(|(rms, rounding)| {
             let upper = rms_error * (1.0 + GLOBAL_ROUNDING_MARGIN) + rounding;
             let denominator = (1.0 - GLOBAL_ROUNDING_MARGIN) * rms - upper;

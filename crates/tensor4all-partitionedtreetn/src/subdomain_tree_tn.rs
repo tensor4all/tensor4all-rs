@@ -792,6 +792,14 @@ impl ScalarKind {
             Self::C64 => "Complex64",
         }
     }
+
+    /// Machine epsilon of the kind's real component type.
+    pub(crate) fn epsilon(self) -> f64 {
+        match self {
+            Self::F32 | Self::C32 => f64::from(f32::EPSILON),
+            Self::F64 | Self::C64 => f64::EPSILON,
+        }
+    }
 }
 
 fn scalar_kind(tensor: &IdxTensor) -> Result<ScalarKind> {

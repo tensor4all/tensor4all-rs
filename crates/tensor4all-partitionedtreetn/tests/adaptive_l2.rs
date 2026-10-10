@@ -7,8 +7,8 @@ mod adaptive_common;
 use std::collections::HashSet;
 
 use adaptive_common::*;
-use num_complex::Complex64;
-use tensor4all_core::{ColMajorArray, ColMajorArrayRef};
+use num_complex::{Complex32, Complex64};
+use tensor4all_core::{ColMajorArray, ColMajorArrayRef, CommonScalar, TensorElement};
 use tensor4all_partitionedtreetn::adaptive_interpolation::{
     patched_interpolate, GlobalL2Error, L2ReferenceSource, MeasurementMethod, NormReport,
     PatchedInterpolationError, PatchedInterpolationOptions, PatchedInterpolationReport,
@@ -768,6 +768,45 @@ fn a_tau_below_the_rounding_term_is_rounding_limited() {
     };
     assert!(rounding_allowance_rms.unwrap() > tau(&result.report));
     assert_eq!(rounding_limited, Some(true));
+}
+
+/// The rounding allowance scales with the machine epsilon of the evaluated
+/// scalar type: `tau = 1e-6` resolves the `f64` allowance (about `1.4e-13`)
+/// but not the `f32` one (about `7.7e-5`).
+fn check_rounding_allowance_follows_the_scalar_type<T>(epsilon: f64, limited: bool)
+where
+    T: CommonScalar + TensorElement,
+{
+    let problem = single_node(&[4]);
+    let f = |_: &[usize]| T::from_f64(1.0);
+    let options = l2_given(2, 2.0, 1e-6);
+    let result = run(&DenseEngine::new(), &problem, &f, &[], &options).unwrap();
+    let error = result.report.norm.l2_error().unwrap();
+    let approximation_rms = error.approximation_rms.unwrap();
+    let GlobalL2Error::Certified {
+        rms_error,
+        rounding_allowance_rms,
+        rounding_limited,
+        ..
+    } = error.global
+    else {
+        panic!("expected a certified error");
+    };
+    assert_eq!(rms_error, 0.0);
+    assert_eq!(
+        rounding_allowance_rms,
+        Some(MEASUREMENT_ROUNDING_FACTOR * epsilon * approximation_rms)
+    );
+    assert_eq!(rounding_limited, Some(limited));
+}
+
+#[test]
+fn the_rounding_allowance_follows_the_scalar_type() {
+    let f32_epsilon = f64::from(f32::EPSILON);
+    check_rounding_allowance_follows_the_scalar_type::<f64>(f64::EPSILON, false);
+    check_rounding_allowance_follows_the_scalar_type::<Complex64>(f64::EPSILON, false);
+    check_rounding_allowance_follows_the_scalar_type::<f32>(f32_epsilon, true);
+    check_rounding_allowance_follows_the_scalar_type::<Complex32>(f32_epsilon, true);
 }
 
 // ---------------------------------------------------------------------------

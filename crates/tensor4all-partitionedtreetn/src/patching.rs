@@ -616,10 +616,10 @@ where
     else {
         return Ok(None);
     };
-    let threshold = match projected.scalar_kind()? {
-        Some(ScalarKind::F32 | ScalarKind::C32) => 64.0 * f32::EPSILON as f64,
-        Some(ScalarKind::F64 | ScalarKind::C64) | None => 64.0 * f64::EPSILON,
-    };
+    let threshold = 64.0
+        * projected
+            .scalar_kind()?
+            .map_or(f64::EPSILON, ScalarKind::epsilon);
     projected.truncate(
         center,
         TruncationOptions::new().with_svd_policy(SvdTruncationPolicy::new(threshold)),
