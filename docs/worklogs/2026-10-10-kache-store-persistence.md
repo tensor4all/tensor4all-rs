@@ -29,6 +29,14 @@
 - Cold run under the new key scheme: 0% hits, 168 units compiled, and the run published a 994 MiB
   `ci` snapshot and a 1177 MiB instrumented `coverage` snapshot. The first run after the switch
   therefore pays a full build, as any cache does when the key scheme changes.
+- Warm numbers in the final configuration (a new commit on the branch restoring the snapshot the
+  previous commit published): the Test job restored the previous snapshot, kache reported 100.0% of
+  168 units served from cache with 0 compiled, and `build_finished_seconds` fell to 18.6 s from
+  612 s under the frozen key (suite 28.2 s, job 2m13s). Coverage likewise restored and reported
+  100.0% of 166 units with `build_finished_seconds` 30.7 s and its per-file check at 258/258 files
+  (suite 64.9 s, job 3m41s). The pipeline span was 4m17s against the 40-minute budget. A commit that
+  changes Rust sources still misses the changed crate and its dependents; 18.6 s is the
+  unchanged-units case, not a guarantee.
 - Constraint: a snapshot is ~1 GiB per job and the GitHub cache budget is 10 GiB per repository, so
   a frequently merged `main` keeps the newest entries and evicts older ones. Watch
   `gh api repos/<owner>/<repo>/actions/caches` before adding a third store, and consider dropping
