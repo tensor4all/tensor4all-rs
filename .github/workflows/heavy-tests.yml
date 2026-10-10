@@ -1,0 +1,93 @@
+name: Heavy tests
+
+# Scheduled home for the work that is too expensive for the push/PR pipeline
+# (see CONTRIBUTING.md, "CI time budget"):
+#
+#   - tests marked `#[ignore = "heavy: ..."]`, kept in `crates/*/tests/heavy_*.rs`;
+#   - example and bench targets, which the default suite no longer builds.
+#
+# The default pipeline declares one total budget and fails when it is exceeded;
+# this workflow lives outside that budget and carries its own bound below.
+
+on:
+  schedule:
+    # 18:00 UTC = 03:00 JST, when the daily pushes have gone quiet.
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+# A scheduled run and a manual dispatch would otherwise race between "no open
+# issue" and "create one".
+concurrency:
+  group: heavy-tests
+  cancel-in-progress: false
+
+jobs:
+  heavy:
+    name: Heavy tests
+    runs-on: ubuntu-22.04
+    # This workflow's own operational bound, not the default pipeline's budget:
+    # the r=9 heavy witness takes ~23 min in the `ci` profile and the
+    # `--all-targets` build ~13 min on the 4-vCPU runner.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install HDF5
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@nextest
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The default suite runs `--lib --bins --tests`; examples and benches keep
+      # compiling here and in `cargo clippy --workspace --all-targets` on every PR.
+      - name: Build every target
+        run: cargo build --locked --profile ci --workspace --all-targets
+
+      - name: Run heavy tests
+        run: >-
+          cargo nextest run --locked --cargo-profile ci --workspace
+          --run-ignored ignored-only -E 'binary(/^heavy_/)'
+
+      - name: Report Cargo artifact size
+        if: always()
+        run: |
+          if [[ -d target ]]; then
+            du -sh target
+          else
+            echo "target directory was not created"
+          fi
+
+  # A separate job, because a run that dies on the timeout above never reaches a
+  # later step. One rolling issue per failure kind: later failing runs append to
+  # it instead of filing a new one.
+  report:
+    name: Report a failing night
+    needs: heavy
+    if: ${{ always() && (needs.heavy.result == 'failure' || needs.heavy.result == 'cancelled') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: File or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          label=ci-nightly
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          printf -v body '%s\n\n%s\n\n%s\n' \
+            "The scheduled heavy suite failed in [run ${GITHUB_RUN_ID}](${run_url}) on \`${GITHUB_SHA:0:8}\`." \
+            "Reproduce locally: \`cargo nextest run --locked --cargo-profile ci -p tensor4all-treeaci --run-ignored ignored-only -E 'binary(/^heavy_/)'\`" \
+            "Heavy tests run outside the push/PR pipeline on purpose (CONTRIBUTING.md, CI time budget). Treat this as a real regression in the heavy witness, or as a change that pushed it past this workflow's bound."
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$label" --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --label "$label" --title "Scheduled heavy tests are failing" --body "$body"
+          fi
