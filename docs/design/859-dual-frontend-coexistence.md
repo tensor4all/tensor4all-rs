@@ -306,6 +306,41 @@ dispatch or partial output writes. No new process-global default backend, pool o
 cache is introduced by the explicit route; the existing upstream arbitration and
 thread-local reentry guards remain the safety mechanism.
 
+## 5bis. B1 delivery: the `explicit` frontend
+
+The first delivery of the new frontend shipped as `tensor4all_tensorbackend::explicit`
+(module `crates/tensor4all-tensorbackend/src/explicit.rs`, compiled under
+`explicit-context`), on the tenferro revision that provides the held concrete CPU
+session (pin bump `b3f4729` -> `ff94aeded`, PR #873).
+
+| Element | Delivered |
+| --- | --- |
+| Context | the existing `CpuExecutionContext` |
+| Entry | `CpuExecutionContext::with_concrete_session`, one session entry for the whole callback, on the caller's own backend only |
+| Session | `explicit::Session`, a tensorbackend-owned view over the concrete `BackendSession`; the callback and its value must be `Send`, because the backend may run the session on one of its own workers |
+| Routes | `reshape`, `permute`, `contraction` (binary, by axes), `einsum` (N-ary, by integer labels), `qr`, `svd`, `solve` |
+| Shared implementation | the operand/label validation and the axis-to-label construction are the same `pub(crate)` helpers the compatibility frontend uses; the einsum evaluation is tenferro-einsum's session-direct `einsum_subscripts`, so it compiles no semantic graph and starts no runtime worker |
+| No legacy entry | the module never names `with_default_session`, the default context or the eager runtime; the crate's session-entry audit covers the boundary |
+| No eager/AD | the routes reach only concrete `Tensor`/`BackendSession` operations; no `EagerTensor`, semantic node or gradient slot is constructed and no eager owner lock is taken |
+| Errors | each route reports the backend's typed error; an invalid input is never retried on the global or eager route |
+| Tests | route-by-route agreement with the compatibility frontend, one session serving a batch, a typed rejection instead of a fallback, host values crossing CPU-budget contexts without a copy, and the documented nested-entry rejection |
+
+Still open for B1: the `Matrix`/`Storage`-level and structured routes; a held
+*object* form of the session (today the entry is callback-scoped, because this
+context owns its backend behind a mutex, so the tenferro held session cannot outlive
+the guard - see the note below); explicit detach/lift bridges beyond
+`LogicalTensor`; and the bridge-cost measurements.
+
+Why the entry is callback-scoped rather than a held object here: tenferro's held
+session borrows a `&CpuBackend` for the caller's whole scope
+(`CpuBackend::open_session(&self)`), while this context stores its backend in a
+`Mutex<CpuBackend>` because the legacy `with_backend_session` needs `&mut`. A
+tensorbackend-owned held object would therefore have to own the guard and the session
+at once, which is the self-referential struct the upstream design forbids. A held
+object needs either an upstream owned-session constructor (`CpuBackend::into_session`
+or equivalent) or a change to this context's backend ownership; both are separate
+decisions, recorded here rather than taken silently.
+
 ## 6. Specified legacy-preservation tests
 
 To be added with the B1 implementation (they are intentionally not written here,

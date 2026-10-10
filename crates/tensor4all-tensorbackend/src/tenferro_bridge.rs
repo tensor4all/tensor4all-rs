@@ -211,7 +211,7 @@ pub(crate) fn set_native_einsum_profile_enabled_for_tests(enabled: bool) {
     FORCE_NATIVE_EINSUM_PROFILE.with(|slot| slot.set(enabled));
 }
 
-fn checked_native_einsum_labels(labels: &[usize]) -> Result<Vec<u32>> {
+pub(crate) fn checked_native_einsum_labels(labels: &[usize]) -> Result<Vec<u32>> {
     labels
         .iter()
         .copied()
