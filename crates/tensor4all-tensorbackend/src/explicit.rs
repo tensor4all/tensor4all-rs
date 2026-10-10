@@ -4,7 +4,7 @@
 //! [tensor4all-rs#859](https://github.com/tensor4all/tensor4all-rs/issues/859): a
 //! caller-supplied [`CpuExecutionContext`] plus one concrete session that a whole
 //! stage or batch reuses, instead of the process-global convenience surface in
-//! [`crate::context`]. The compatibility frontend keeps its own signatures,
+//! the compatibility entry point. The compatibility frontend keeps its own signatures,
 //! defaults and behaviour; nothing here reroutes it.
 //!
 //! Properties of this frontend, from the coexistence record
@@ -13,8 +13,10 @@
 //! - **One explicit entry.** [`CpuExecutionContext::with_concrete_session`] opens
 //!   the session for the whole closure, so a stage pays one entry rather than one
 //!   per operation, and the engine's prepared plans and buffer pool stay warm.
-//! - **No process-global selector.** No route here reads a default context, an
-//!   environment variable or a thread-local override.
+//! - **No process-global selector.** No route here selects an execution context or
+//!   backend from a default context, a thread-local override or an environment
+//!   variable. (Upstream profiling hooks may still read their own environment flags;
+//!   those do not choose where the work runs.)
 //! - **No eager, trace or AD records.** These routes reach only concrete
 //!   `Tensor`/`BackendSession` operations; they never construct `EagerTensor`,
 //!   semantic nodes or gradient slots, and they take no eager owner lock. Tracked
@@ -25,8 +27,8 @@
 //!   the compatibility frontend is [`LogicalTensor`](crate::LogicalTensor), which
 //!   carries dtype, shape and column-major data and no backend identity.
 //!
-//! The session is a [`BackendSession`] scope, not a value representation: the
-//! concrete values stay the ordinary tenferro tensors.
+//! The session is a [`tenferro_tensor::BackendSession`] scope, not a value
+//! representation: the concrete values stay the ordinary tenferro tensors.
 //!
 //! # Examples
 //!
@@ -50,8 +52,10 @@ use tenferro::TensorSessionOpsExt;
 use tenferro_einsum::{EinsumSubscripts, TensorEinsumExt};
 use tenferro_linalg::TensorLinalgExt;
 
+use tenferro_tensor::BackendSession;
+
 use crate::context::{CpuExecutionContext, CpuExecutionContextError};
-use crate::tenferro_bridge::{build_binary_einsum_ids, checked_native_einsum_labels};
+use crate::einsum_ids::{build_binary_einsum_ids, checked_native_einsum_labels};
 
 /// One explicit concrete session over a [`CpuExecutionContext`].
 ///
@@ -85,7 +89,7 @@ use crate::tenferro_bridge::{build_binary_einsum_ids, checked_native_einsum_labe
 /// # Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
 /// ```
 pub struct Session<'session> {
-    session: &'session mut dyn tenferro_tensor::BackendSession,
+    session: &'session mut dyn BackendSession,
 }
 
 impl std::fmt::Debug for Session<'_> {
@@ -97,7 +101,7 @@ impl std::fmt::Debug for Session<'_> {
 }
 
 impl<'session> Session<'session> {
-    pub(crate) fn new(session: &'session mut dyn tenferro_tensor::BackendSession) -> Self {
+    pub(crate) fn new(session: &'session mut dyn BackendSession) -> Self {
         Self { session }
     }
 
@@ -106,8 +110,10 @@ impl<'session> Session<'session> {
     /// # Errors
     ///
     /// Returns [`tenferro_tensor::Error::Validation`] when the element counts
-    /// differ or the requested layout is invalid, and [`tenferro_tensor::Error::Tensor`]
-    /// when the backend rejects the operation. It never retries on another route.
+    /// differ or the requested layout is invalid,
+    /// [`tenferro_tensor::Error::UnsupportedDType`] for a dtype the backend cannot
+    /// reshape, and [`tenferro_tensor::Error::BackendSource`] when the operation
+    /// itself fails. It never retries on another route.
     ///
     /// # Examples
     ///
@@ -135,8 +141,8 @@ impl<'session> Session<'session> {
     /// # Errors
     ///
     /// Returns [`tenferro_tensor::Error::Validation`] when `perm` is not a
-    /// permutation of the tensor's axes, and [`tenferro_tensor::Error::Tensor`] when
-    /// the backend rejects the operation.
+    /// permutation of the tensor's axes, and
+    /// [`tenferro_tensor::Error::BackendSource`] when the operation itself fails.
     ///
     /// # Examples
     ///
@@ -169,9 +175,12 @@ impl<'session> Session<'session> {
     /// # Errors
     ///
     /// Returns [`tenferro_einsum::Error::InvalidSubscripts`] when the axis lists are
-    /// malformed or of different length, [`tenferro_einsum::Error::Validation`] for a
-    /// shape or dtype mismatch, and [`tenferro_einsum::Error::Numerical`] when the
-    /// contraction itself fails.
+    /// malformed or of different length, and [`tenferro_einsum::Error::Tensor`] when
+    /// the backend rejects the operands or the contraction itself fails.
+    ///
+    /// Unlike the compatibility frontend, this route does not promote operands to a
+    /// common dtype: operands must already share one dtype, and a mismatch is
+    /// rejected typed by the backend rather than converted.
     ///
     /// # Examples
     ///
@@ -215,10 +224,15 @@ impl<'session> Session<'session> {
     ///
     /// # Errors
     ///
-    /// Returns [`tenferro_einsum::Error::InvalidSubscripts`] for malformed labels or a
-    /// label list whose length does not match the operand's rank,
-    /// [`tenferro_einsum::Error::Validation`] for an invalid contraction, and
-    /// [`tenferro_einsum::Error::Numerical`] when the contraction itself fails.
+    /// Returns [`tenferro_einsum::Error::InvalidSubscripts`] for malformed labels, a
+    /// label list whose length does not match the operand's rank, or a label-list
+    /// count that does not match the operand count, and
+    /// [`tenferro_einsum::Error::Tensor`] when the backend rejects the operands or the
+    /// contraction itself fails.
+    ///
+    /// Unlike the compatibility frontend, this route does not promote operands to a
+    /// common dtype: operands must already share one dtype, and a mismatch is
+    /// rejected typed by the backend rather than converted.
     ///
     /// # Examples
     ///
@@ -242,11 +256,15 @@ impl<'session> Session<'session> {
         input_ids: &[&[usize]],
         output_ids: &[usize],
     ) -> tenferro_einsum::Result<NativeTensor> {
-        assert_eq!(
-            operands.len(),
-            input_ids.len(),
-            "each einsum operand needs one label list"
-        );
+        if operands.len() != input_ids.len() {
+            return Err(tenferro_einsum::Error::InvalidSubscripts {
+                message: format!(
+                    "einsum needs one label list per operand: {} operands, {} label lists",
+                    operands.len(),
+                    input_ids.len()
+                ),
+            });
+        }
         let inputs = input_ids
             .iter()
             .map(|ids| checked_native_einsum_labels(ids))
@@ -270,8 +288,8 @@ impl<'session> Session<'session> {
     /// # Errors
     ///
     /// Returns [`tenferro_tensor::Error::Validation`] for an unsupported dtype or
-    /// rank, and [`tenferro_tensor::Error::Tensor`] when the backend cannot complete
-    /// the factorization.
+    /// rank, and [`tenferro_tensor::Error::BackendSource`] when the factorization
+    /// itself fails.
     ///
     /// # Examples
     ///
@@ -304,8 +322,8 @@ impl<'session> Session<'session> {
     /// # Errors
     ///
     /// Returns [`tenferro_tensor::Error::Validation`] for an unsupported dtype or
-    /// rank, and [`tenferro_tensor::Error::Tensor`] when the backend cannot complete
-    /// the factorization.
+    /// rank, and [`tenferro_tensor::Error::BackendSource`] when the factorization
+    /// itself fails.
     ///
     /// # Examples
     ///
@@ -336,7 +354,7 @@ impl<'session> Session<'session> {
     ///
     /// Returns [`tenferro_tensor::Error::Validation`] when `lhs` is not square, when
     /// the operands have mismatched shapes, or for an unsupported dtype, and
-    /// [`tenferro_tensor::Error::Tensor`] when the backend cannot complete the solve.
+    /// [`tenferro_tensor::Error::BackendSource`] when the solve itself fails.
     ///
     /// # Examples
     ///
@@ -385,21 +403,39 @@ impl CpuExecutionContext {
     ///
     /// # Errors
     ///
-    /// Returns [`CpuExecutionContextError::SessionEntry`] when the context's
-    /// backend refuses the session: [`tenferro_tensor::SessionEntryError`] keeps
-    /// its own typed cause for a nested entry, a busy resource the backend cannot
-    /// wait for, a mismatched execution scope or poisoned admission state.
+    /// Returns [`CpuExecutionContextError::SessionEntry`] when the session cannot be
+    /// opened, with [`tenferro_tensor::SessionEntryError`] as its typed cause:
+    /// [`tenferro_tensor::SessionEntryError::Reentered`] for a nested session on this
+    /// thread, [`tenferro_tensor::SessionEntryError::Contended`] for a caller inside the
+    /// context's own pool or a busy resource the backend cannot wait for, and
+    /// [`tenferro_tensor::SessionEntryError::ResourcePoisoned`] for poisoned admission
+    /// state. It also returns the same error when the calling thread cannot restore its
+    /// CPU affinity after `f` ran; that failure replaces the callback's value, exactly as
+    /// the compatibility entry reports it.
     ///
     /// # Panics
     ///
     /// Never. A panic in `f` propagates after the session is released.
     ///
-    /// The callback and its value must both be `Send`, because the backend may run
-    /// the session on one of its own workers.
-    pub fn with_concrete_session<R: Send>(
+    pub fn with_concrete_session<R>(
         &self,
-        f: impl FnOnce(&mut Session<'_>) -> R + Send,
+        f: impl FnOnce(&mut Session<'_>) -> R,
     ) -> Result<R, CpuExecutionContextError> {
+        // The compatibility frontend keeps its historical worker fallback, which
+        // runs the session on an unrelated one-thread backend. This frontend promises
+        // the caller's own backend, so a worker caller is rejected typed instead of
+        // being rerouted.
+        if rayon::current_thread_index().is_some() {
+            return Err(CpuExecutionContextError::SessionEntry {
+                source: std::sync::Arc::new(tenferro_tensor::SessionEntryError::Contended {
+                    backend: "CpuExecutionContext",
+                    message: "an explicit concrete session must be entered from outside the \
+                              context's own pool; the compatibility frontend keeps its \
+                              worker fallback"
+                        .to_owned(),
+                }),
+            });
+        }
         self.with_session(|session| f(&mut Session::new(session)))
     }
 }

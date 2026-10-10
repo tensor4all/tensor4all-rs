@@ -23,6 +23,9 @@ mod context;
 /// Explicit visible-ordinal-0 CUDA execution and transfer boundaries.
 mod cuda;
 #[cfg(feature = "explicit-context")]
+/// Einsum label helpers shared by both frontends.
+mod einsum_ids;
+#[cfg(feature = "explicit-context")]
 /// Opt-in explicit/concrete execution frontend (issue #859 B1).
 pub mod explicit;
 #[cfg(feature = "global-defaults")]
