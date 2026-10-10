@@ -675,6 +675,22 @@ fn svd_factorize_assemble(
         })?;
     let u = IdxTensor::from_inner(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
 
+    // The singular values are real. Contracting a real `S` with a complex
+    // factor in `assemble_svd_factors` takes the mixed-dtype einsum path,
+    // which traces and compiles a program on every call; giving `S` the
+    // factors' dtype keeps that contraction on the cached path.
+    let s_inner = if s_inner.dtype() != vt_inner.dtype() {
+        s_inner
+            .runtime()
+            .with_eager_session(|session| session.convert(&s_inner, vt_inner.dtype()))
+            .map_err(|e| {
+                SvdError::ComputationError(anyhow::anyhow!(
+                    "eager SVD S dtype conversion failed: {e}"
+                ))
+            })?
+    } else {
+        s_inner
+    };
     let s_indices = vec![bond_index.clone(), bond_index.sim()];
     let s = IdxTensor::from_diag_inner(s_indices, s_inner).map_err(SvdError::ComputationError)?;
 
