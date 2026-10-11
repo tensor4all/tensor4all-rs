@@ -109,9 +109,8 @@ Shape of the change:
      cached plan.
    - **Comparator**: the independent oracle above for small sizes, and the compatibility entry point for the
      sizes where an oracle is impractical. Outputs are validated outside the timed region.
-5. **Explicitly partial scope**: multi-thread throughput is *not* measured here. F2's recorded identity
-   mentions 1-thread and multi-thread runs; this slice delivers the 1-thread overhead baseline and its
-   protocol, and says so instead of reporting a 1-thread number as if it were the scaling result.
+5. **Worker sweep and first call**: the held arm is measured at 1, 2 and 4 workers, and one first call is
+   reported next to a warmed call (§4.1.1). What remains out of scope is named in §4.2.
 6. Repository gates: fmt, clippy with the repository flags, rustdoc `-D warnings`, the crate's tests and
    doctests, `scripts/repository-rules-review.py`, and the panic audit (F1 slice 2 was failed by an
    `unreachable!` there).
@@ -128,16 +127,17 @@ value outside the timed region. Displayed central estimates (criterion's 50-samp
 
 | sites | compatibility (compiled-graph route) | held session | direct session |
 | ---: | ---: | ---: | ---: |
-| 4 | 277.1 us | 86.7 us | 86.2 us |
-| 8 | 536.6 us | 169.9 us | 171.4 us |
-| 16 | 1.0511 ms | 338.0 us | 338.7 us |
+| 4 | 273.2 us | 87.4 us | 88.3 us |
+| 8 | 531.9 us | 172.3 us | 172.5 us |
+| 16 | 1.0572 ms | 340.3 us | 341.3 us |
 
 What the table supports:
 
-- **The explicit route is about 3.1-3.2x faster per call** than the compatibility route at these sizes, and
-  the ratio is flat across lengths, so the difference is per-site work rather than a fixed entry cost.
-- **The TT-level method and the same loop inlined are within about one percent** of each other at every
-  size (86.2 against 86.7 us, 171.4 against 169.9 us, 338.7 against 338.0 us). The win is the route, not the
+- **The explicit route is about 3.1-3.2x faster per call** than the compatibility route at these sizes
+  (3.13x, 3.09x, 3.11x for the run above), and the ratio is flat across lengths, so the difference is
+  per-site work rather than a fixed entry cost. An earlier run of the same arms agreed within a few percent.
+- **The TT-level method and the same loop inlined are within about one percent** of each other at every size
+  (88.3 against 87.4 us, 172.5 against 172.3 us, 341.3 against 340.3 us). The win is the route, not the
   wrapper.
 - **Naming what is being compared.** The compatibility arm is the compatibility route: it traces and runs a
   compiled graph on the process-global context, duplicates each operand per contraction, converts a
@@ -154,16 +154,60 @@ What the table does **not** support, and the record does not claim:
   separate them; the inlined-loop arm only bounds the wrapper's own overhead.
 - It is not an untracked-eager-frontend comparison. An `EagerTensor`-frontend arm at the same sizes is
   **deferred**, not delivered here.
-- It is not a scaling result: one worker only, no cold-start or allocation-pool protocol, and no
-  multi-thread arm (see §4.2).
+- It is not a scaling result: §4.1.1 shows this workload does not scale with workers at these sizes, and
+  reports the first call next to the steady state without attributing either.
+
+### 4.1.1 Threads and the first call
+
+Measured on `feat/859-f2-thread-and-cold-arms`, the same machine and one-worker setup as §4.1 for the
+compatibility arm; criterion's displayed central estimates for the worker sweep, and single `Instant`
+observations for the first call. Two further groups in the same bench answer the rest of F2's recorded
+identity.
+
+**Workers** (`simplett_inner_product_threads`, 16 sites, bond 4, held session, worker count verified per
+context):
+
+| workers | held session |
+| ---: | ---: |
+| 1 | 340.8 us |
+| 2 | 341.9 us |
+| 4 | 343.8 us |
+
+**No benefit from additional workers was observed for this size**: with 16 sites and bond 4 the per-site
+contraction is a 4 x bond x 4 tensor operation, and the two- and four-worker numbers are within about one
+percent of the one-worker one (one worker 340.8 us, two 341.9 us, four 343.8 us). This is one size, and it is a
+*configured worker budget* that was verified, not proof that no worker performs useful work. Read together
+with the source - sequentially dependent site contractions, small per-site operands, and one plan and one
+operand adaptation per `einsum_reads` call - it is consistent with substantial planning and dispatch overhead
+in this workload, which the sweep does not decompose. The compatibility arm cannot be measured at other
+worker counts in this bench, because the process-global context fixes its worker count when it first
+initializes; the one-worker comparison above is the only like-for-like one.
+
+**First call versus steady state** (`inner_product_first_call`, one worker, fresh context per size, printed
+rather than benchmarked so that criterion cannot average the first call away):
+
+| sites | first call on a fresh context | steady state |
+| ---: | ---: | ---: |
+| 4 | 141 us | 91 us |
+| 16 | 391 us | 349 us |
+
+These are two single observations, not a repeatable cold-start measurement: the first call is taken once,
+with backend construction and session opening excluded from the timer and process-wide allocator, code and
+cache state not reset, and the second number follows three warm-up calls. The first call costs about 1.55x
+(four sites) and 1.12x (16 sites) the warmed call here - an earlier run of the same code gave 1.65x and
+1.11x - and whether that is a stable first-call penalty, and
+whether it comes from plan construction, allocator growth or kernel/engine warm-up, is not established.
 
 ## 4.2 Explicitly partial scope
 
-F2's recorded identity mentions 1-thread and multi-thread runs. This slice delivers the one-worker
-measurement and its protocol above, and states that the multi-thread, cold-start and untracked-eager-arm
-comparisons are not part of it rather than reporting one worker's numbers as if they were the scaling
-result. The parity and oracle evidence in §4 is what supports the values; the timing table supports only
-the route comparison it was designed for.
+F2's recorded identity mentions 1-thread and multi-thread runs, cold/warm pairing and a reference
+comparator. This slice delivers the one-worker route comparison, the worker-count sweep and the first-call
+measurement above, with the independent dense oracle as the comparator for small sizes. What remains out of
+scope, and is named rather than implied: an **untracked-eager-frontend arm** (the workload's loop has no
+eager-frontend path without restructuring it; the compatibility arm is a compiled-graph route, not that
+arm), a warm/cold *allocation-pool* protocol beyond the first-call number, and any comparison against the
+Julia reference implementation. The parity and oracle evidence in §4 supports the values; the timing tables
+support the route and worker-count comparisons they were designed for.
 
 ## 5. Non-goals and explicit non-claims
 

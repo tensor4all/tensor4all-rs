@@ -13,6 +13,12 @@
 //! and verifies before measuring. The new route has **no** input-adaptation boundary to time: both operands
 //! are already concrete `TypedTensor` values inside the train.
 //!
+//! Two further groups answer the rest of F2's recorded identity. `simplett_inner_product_threads` repeats
+//! the held arm on explicit contexts with 1, 2 and 4 workers: the compatibility arm cannot join it, because
+//! the process-global context fixes its worker count when it first initializes. `simplett_inner_product_
+//! first_call` reports the very first call on a freshly built context next to the steady-state number for
+//! the same size, so "cold" is a measured first call rather than a criterion label.
+//!
 //! The difference between `compatibility` and `held_session` therefore covers compiled-graph trace and
 //! runtime work, operand duplication, the removed `2N - 1` matrix/tensor conversions and the different
 //! execution paths together, and it is a comparison of the two *routes*, not of session holding alone:
@@ -20,7 +26,7 @@
 //! to isolate any single cost; `direct_session` bounds what the TT-level wrapper adds on top of the same
 //! session route. Each arm's output is checked against the compatibility route before anything is timed.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{black_box, criterion_group, BenchmarkId, Criterion, Throughput};
 use std::time::Duration;
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::TensorRead;
@@ -89,10 +95,8 @@ fn direct_session<T: TTScalar>(
 }
 
 fn bench_inner_product(c: &mut Criterion) {
-    // Force and verify one worker on both routes before anything is measured.
-    // SAFETY: the bench is single-threaded here and no other thread reads the environment yet.
-    unsafe { std::env::set_var("RAYON_NUM_THREADS", "1") };
-    // The measured backend, verified directly rather than through a second context.
+    // The worker count was forced in `main` before the process-global context initialized; this arm verifies
+    // both counts rather than setting them, and measures one backend directly.
     let backend = CpuBackend::with_threads(1).expect("one-worker CPU backend");
     let explicit_threads = backend.num_threads();
     let compatibility_threads = default_cpu_execution_context()
@@ -193,6 +197,94 @@ fn bench_inner_product(c: &mut Criterion) {
     held.close().expect("close the held session");
 }
 
+/// Repeat the held arm on explicit contexts with different worker counts.
+///
+/// The compatibility arm is absent by construction: the process-global context takes its worker count when
+/// it first initializes, so a multi-thread comparison against it is not available in this bench.
+fn bench_threads(c: &mut Criterion) {
+    let mut group = c.benchmark_group("simplett_inner_product_threads");
+    let (sites, bond) = (16usize, 4usize);
+    let a = train(sites, bond, 0);
+    let b = train(sites, bond, 5);
+    let expected = a.inner_product(&b).expect("compatibility");
+    group.throughput(Throughput::Elements((sites * 4) as u64));
+
+    for workers in [1usize, 2, 4] {
+        let backend = CpuBackend::with_threads(workers).expect("CPU backend");
+        assert_eq!(backend.num_threads(), workers, "the measured worker count");
+        let mut held = HeldSession::open(&backend).expect("held explicit session");
+        // Validate outside timing, then measure the same trains at this worker count.
+        let value = held
+            .with_session(|session| a.inner_product_with_session(&b, session))
+            .expect("session inner product");
+        assert!(
+            (value - expected).abs() <= 1e-9 * expected.abs().max(1.0),
+            "{workers} workers: {value} != compatibility {expected}"
+        );
+        group.bench_with_input(
+            BenchmarkId::new("held_session", format!("{workers}w")),
+            &(&a, &b),
+            |bencher, (a, b)| {
+                bencher.iter(|| {
+                    black_box(
+                        held.with_session(|session| a.inner_product_with_session(b, session))
+                            .expect("session inner product"),
+                    )
+                })
+            },
+        );
+        held.close().expect("close the held session");
+    }
+    group.finish();
+}
+
+/// One observation of the first call on a freshly built context, next to a call made after three warm-ups.
+///
+/// Neither number is a criterion sample: the first call is taken once, with backend construction and session
+/// opening outside the timer and process-wide allocator, code and cache state left as they are, so this is a
+/// first call on a fresh backend rather than process-cold execution. The numbers are printed rather than
+/// benchmarked, because a criterion group would repeat the call and average the first one away.
+fn bench_first_call() {
+    println!("inner_product_first_call: first call on a fresh context against the steady state");
+    for (sites, bond) in [(4usize, 4usize), (16, 4)] {
+        let a = train(sites, bond, 0);
+        let b = train(sites, bond, 5);
+        let expected = a.inner_product(&b).expect("compatibility");
+
+        let backend = CpuBackend::with_threads(1).expect("one-worker CPU backend");
+        let mut held = HeldSession::open(&backend).expect("held explicit session");
+        let start = std::time::Instant::now();
+        let first = held
+            .with_session(|session| a.inner_product_with_session(&b, session))
+            .expect("first session inner product");
+        let first_elapsed = start.elapsed();
+        black_box(first);
+        assert!(
+            (first - expected).abs() <= 1e-9 * expected.abs().max(1.0),
+            "the first call must agree with compatibility"
+        );
+        // Warm the same context, then time the same call again.
+        for _ in 0..3 {
+            black_box(
+                held.with_session(|session| a.inner_product_with_session(&b, session))
+                    .expect("warm-up inner product"),
+            );
+        }
+        let start = std::time::Instant::now();
+        let warm = held
+            .with_session(|session| a.inner_product_with_session(&b, session))
+            .expect("warm session inner product");
+        let warm_elapsed = start.elapsed();
+        black_box(warm);
+        assert!((warm - expected).abs() <= 1e-9 * expected.abs().max(1.0));
+        held.close().expect("close the held session");
+
+        println!(
+            "inner_product_first_call: {sites}x4_bond{bond} first={first_elapsed:?} warm={warm_elapsed:?}"
+        );
+    }
+}
+
 fn criterion_config() -> Criterion {
     Criterion::default()
         .warm_up_time(Duration::from_secs(2))
@@ -203,6 +295,16 @@ fn criterion_config() -> Criterion {
 criterion_group! {
     name = benches;
     config = criterion_config();
-    targets = bench_inner_product
+    targets = bench_inner_product, bench_threads
 }
-criterion_main!(benches);
+
+fn main() {
+    // The one-worker comparison needs the process-global context to be initialized with one worker, so this
+    // has to come before anything calls the compatibility route - including the first-call block below.
+    // SAFETY: no worker pool exists yet at this point.
+    unsafe { std::env::set_var("RAYON_NUM_THREADS", "1") };
+    bench_first_call();
+    benches();
+    // `criterion_main!` would do this; the custom `main` has to keep the aggregate report.
+    Criterion::default().configure_from_args().final_summary();
+}
