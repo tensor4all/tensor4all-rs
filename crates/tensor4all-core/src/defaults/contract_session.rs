@@ -94,18 +94,22 @@ pub fn contract_pair_on_session(
     let lhs_operand = lhs.session_dense_operand(OP)?;
     let rhs_operand = rhs.session_dense_operand(OP)?;
 
-    let mut lhs_value = materialize_on_session(session, lhs_operand)?;
-    let mut rhs_value = materialize_on_session(session, rhs_operand)?;
+    let mut lhs_value = materialize_on_session(OP, session, lhs_operand)?;
+    let mut rhs_value = materialize_on_session(OP, session, rhs_operand)?;
     if options.lhs_conj {
-        lhs_value = session.conj(&lhs_value).map_err(session_error)?;
+        lhs_value = session
+            .conj(&lhs_value)
+            .map_err(|error| session_error(OP, error))?;
     }
     if options.rhs_conj {
-        rhs_value = session.conj(&rhs_value).map_err(session_error)?;
+        rhs_value = session
+            .conj(&rhs_value)
+            .map_err(|error| session_error(OP, error))?;
     }
 
     let value = session
         .contraction(&lhs_value, &spec.axes_a, &rhs_value, &spec.axes_b)
-        .map_err(session_error)?;
+        .map_err(|error| session_error(OP, error))?;
 
     IdxTensor::publish_dense_session_result(spec.result_indices.into_vec(), &value)
 }
@@ -186,28 +190,34 @@ pub fn inner_product_on_session(
         }
     };
 
-    let mut lhs_value = materialize_on_session(session, lhs_operand)?;
-    let mut rhs_value = materialize_on_session(session, rhs_operand)?;
+    let mut lhs_value = materialize_on_session(OP, session, lhs_operand)?;
+    let mut rhs_value = materialize_on_session(OP, session, rhs_operand)?;
     // The left operand is conjugated, exactly as the compatibility route conjugates it.
-    lhs_value = session.conj(&lhs_value).map_err(session_error)?;
+    lhs_value = session
+        .conj(&lhs_value)
+        .map_err(|error| session_error(OP, error))?;
 
     let product = match route {
         // Same index set: align the right operand to the left one's order and contract every axis.
         Route::Aligned(perm) => {
             let axes: Vec<usize> = (0..rhs_dims.len()).collect();
             if perm != axes {
-                rhs_value = session.permute(&rhs_value, &perm).map_err(session_error)?;
+                rhs_value = session
+                    .permute(&rhs_value, &perm)
+                    .map_err(|error| session_error(OP, error))?;
             }
             session
                 .contraction(&lhs_value, &axes, &rhs_value, &axes)
-                .map_err(session_error)?
+                .map_err(|error| session_error(OP, error))?
         }
         // Different index sets: contract the shared axes and reduce the rest.
         Route::Planned(spec) => {
             let contracted = session
                 .contraction(&lhs_value, &spec.axes_a, &rhs_value, &spec.axes_b)
-                .map_err(session_error)?;
-            session.sum(&contracted).map_err(session_error)?
+                .map_err(|error| session_error(OP, error))?;
+            session
+                .sum(&contracted)
+                .map_err(|error| session_error(OP, error))?
         }
     };
 
@@ -278,40 +288,115 @@ fn alignment_permutation(
     Some(perm)
 }
 
+/// Operation name the sum entry point reports; it shares the seam's adaptation, not its identity.
+const SUM_OP: &str = "sum_on_session";
+
+/// Sum every element of a dense host tensor on a caller-held explicit session.
+///
+/// The reduction companion of the F1 seam for the dense host representations this slice serves, so an app
+/// can reduce a value inside a region it holds open. The result is a plain scalar, published from the
+/// concrete value rather than adopted into any eager runtime.
+///
+/// **A zero-length axis is not parity with [`IdxTensor::sum`] on purpose** in this slice: the compatibility
+/// route accumulates from zero over the payload and answers `0`, while the session's reduction rejects a
+/// zero-length axis. The session keeps its backend's refusal rather than inventing a special case, and the
+/// difference is covered by a regression test. Everything else in the served domain matches.
+///
+/// # Errors
+///
+/// Returns a typed [`IdxTensorError`] under the same conditions as [`contract_pair_on_session`] refuses an
+/// operand - a tracked value, a device-resident operand, a diagonal, structured or compact payload, a
+/// deferred storage error, an unsupported dtype - when the session rejects the reduction, or when the
+/// result cannot be published.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::{sum_on_session, IdxTensor};
+/// use tensor4all_tensorbackend::CpuExecutionContext;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let i = Index::new_dyn(2);
+/// let k = Index::new_dyn(3);
+/// let tensor: IdxTensor =
+///     IdxTensor::from_dense(vec![i.clone(), k.clone()], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+///
+/// let total = context.with_concrete_session(|session| sum_on_session(session, &tensor))??;
+/// assert_eq!(total.real(), 21.0);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn sum_on_session(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    tensor: &IdxTensor,
+) -> Result<crate::AnyScalar, IdxTensorError> {
+    // The operand is adapted - and therefore refused - before any session work, as in the other slices.
+    let operand = tensor.session_dense_operand(SUM_OP)?;
+    let value = materialize_on_session(SUM_OP, session, operand)?;
+    // `Session::sum` reduces every axis and duplicates an already rank-zero value, so one call covers both.
+    let reduced = session
+        .sum(&value)
+        .map_err(|error| session_error(SUM_OP, error))?;
+    let published = IdxTensor::publish_dense_session_result(Vec::new(), &reduced)?;
+    let scalar = match reduced.dtype() {
+        tenferro::DType::F64 => {
+            crate::AnyScalar::from_published_f64(first_scalar::<f64>(&reduced)?, published)
+        }
+        tenferro::DType::C64 => crate::AnyScalar::from_published_c64(
+            first_scalar::<num_complex::Complex64>(&reduced)?,
+            published,
+        ),
+        other => {
+            return Err(IdxTensorError::operation(
+                SUM_OP,
+                anyhow::anyhow!(
+                    "the explicit-session route reduces the dtypes this seam serves, not {other:?}"
+                ),
+            ));
+        }
+    };
+    Ok(scalar)
+}
+
 /// Materialize one operand as an owned concrete host value of the caller's session.
 ///
 /// Host storage is converted by the existing bridge, which does not enter a runtime; an untracked eager
 /// host value is read through its borrowed representation and copied by the session itself.
 fn materialize_on_session(
+    op: &'static str,
     session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
     operand: SessionDenseOperand<'_>,
 ) -> Result<tenferro::Tensor, IdxTensorError> {
     match operand {
         SessionDenseOperand::Storage(storage, dims) => {
             tensor4all_tensorbackend::storage_to_native_tensor(&storage, &dims)
-                .map_err(|error| anyhow_error(anyhow::Error::new(error)))
+                .map_err(|error| anyhow_error(op, anyhow::Error::new(error)))
         }
         SessionDenseOperand::Read(read, rank) => {
             let ids: Vec<usize> = (0..rank).collect();
             session
                 .einsum_reads(&[*read], &[&ids], &ids)
-                .map_err(session_error)
+                .map_err(|error| session_error(op, error))
         }
     }
 }
 
-/// Map a session-side failure into this crate's error.
-fn session_error<E: Into<Box<dyn std::error::Error + Send + Sync>>>(error: E) -> IdxTensorError {
+/// Map a session-side failure into this crate's error, named by its own operation.
+fn session_error<E: Into<Box<dyn std::error::Error + Send + Sync>>>(
+    op: &'static str,
+    error: E,
+) -> IdxTensorError {
     IdxTensorError::Operation {
-        operation: OP,
+        operation: op,
         source: Arc::from(error.into()),
     }
 }
 
-/// Map a planning-side failure into this crate's error.
-fn anyhow_error(error: anyhow::Error) -> IdxTensorError {
+/// Map a planning-side failure into this crate's error, named by its own operation.
+fn anyhow_error(op: &'static str, error: anyhow::Error) -> IdxTensorError {
     IdxTensorError::Operation {
-        operation: OP,
+        operation: op,
         source: Arc::from(error.into_boxed_dyn_error()),
     }
 }

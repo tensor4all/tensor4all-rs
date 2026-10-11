@@ -39,7 +39,7 @@ pub use contract::{
     contract_pair_with_options, contract_with_options, outer_product,
     print_and_reset_contract_profile, reset_contract_profile, tensordot, ContractionOptions,
 };
-pub use contract_session::{contract_pair_on_session, inner_product_on_session};
+pub use contract_session::{contract_pair_on_session, inner_product_on_session, sum_on_session};
 #[cfg(feature = "tenferro-cuda")]
 pub use cuda::IdxTensorCudaError;
 pub use idx_tensor::{
