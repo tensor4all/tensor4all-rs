@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tenferro::{Tensor as NativeTensor, TensorScalar};
+
 use crate::defaults::contract::PairwiseContractionOptions;
 use crate::defaults::idx_tensor::{IdxTensor, IdxTensorError, SessionDenseOperand};
 use crate::index_ops::prepare_contraction;
@@ -170,17 +172,17 @@ pub fn inner_product_on_session(
     // the right cannot follow session work on the left.
     let lhs_operand = lhs.session_dense_operand(OP)?;
     let rhs_operand = rhs.session_dense_operand(OP)?;
-    // Planning is metadata too, so it happens before any numerical session work.
-    let aligned = alignment_permutation(lhs.indices(), rhs.indices());
-    let spec = match aligned {
-        Some(_) => None,
+    // Planning is metadata too, so it happens before any numerical session work, and the route is decided
+    // once: an aligned pair needs only the permutation, an unaligned one needs the planner's axes.
+    let route = match alignment_permutation(lhs.indices(), rhs.indices()) {
+        Some(perm) => Route::Aligned(perm),
         None => {
             let lhs_indices = lhs.operand_indices_for_contraction(true);
             let rhs_indices = rhs.operand_indices_for_contraction(false);
-            Some(
+            Route::Planned(Box::new(
                 prepare_contraction(&lhs_indices, &lhs_dims, &rhs_indices, &rhs_dims)
                     .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?,
-            )
+            ))
         }
     };
 
@@ -189,9 +191,9 @@ pub fn inner_product_on_session(
     // The left operand is conjugated, exactly as the compatibility route conjugates it.
     lhs_value = session.conj(&lhs_value).map_err(session_error)?;
 
-    let product = match (aligned, spec) {
+    let product = match route {
         // Same index set: align the right operand to the left one's order and contract every axis.
-        (Some(perm), None) => {
+        Route::Aligned(perm) => {
             let axes: Vec<usize> = (0..rhs_dims.len()).collect();
             if perm != axes {
                 rhs_value = session.permute(&rhs_value, &perm).map_err(session_error)?;
@@ -201,13 +203,12 @@ pub fn inner_product_on_session(
                 .map_err(session_error)?
         }
         // Different index sets: contract the shared axes and reduce the rest.
-        (None, Some(spec)) => {
+        Route::Planned(spec) => {
             let contracted = session
                 .contraction(&lhs_value, &spec.axes_a, &rhs_value, &spec.axes_b)
                 .map_err(session_error)?;
             session.sum(&contracted).map_err(session_error)?
         }
-        _ => unreachable!("alignment and planning are decided together"),
     };
 
     // The scalar is taken from the concrete value, not through the tensor's eager representation, which
@@ -215,16 +216,12 @@ pub fn inner_product_on_session(
     let published = IdxTensor::publish_dense_session_result(Vec::new(), &product)?;
     let scalar = match product.dtype() {
         tenferro::DType::F64 => {
-            let values = product
-                .as_slice::<f64>()
-                .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
-            crate::AnyScalar::from_published_f64(values[0], published)
+            let value = first_scalar::<f64>(&product)?;
+            crate::AnyScalar::from_published_f64(value, published)
         }
         tenferro::DType::C64 => {
-            let values = product
-                .as_slice::<num_complex::Complex64>()
-                .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
-            crate::AnyScalar::from_published_c64(values[0], published)
+            let value = first_scalar::<num_complex::Complex64>(&product)?;
+            crate::AnyScalar::from_published_c64(value, published)
         }
         other => {
             return Err(IdxTensorError::operation(
@@ -236,6 +233,28 @@ pub fn inner_product_on_session(
         }
     };
     Ok(scalar)
+}
+
+/// How the session should combine the two operands, decided before any session work.
+enum Route {
+    /// Both operands carry the same index set: permute the right one into the left one's order.
+    Aligned(Vec<usize>),
+    /// The index sets differ: contract the planned axes and reduce what is left.
+    ///
+    /// Boxed because the plan is much larger than the permutation and this enum is matched by value.
+    Planned(Box<crate::index_ops::ContractionSpec<crate::defaults::DynIndex>>),
+}
+
+/// Read the single element of a rank-zero result.
+fn first_scalar<T: TensorScalar>(value: &NativeTensor) -> Result<T, IdxTensorError> {
+    value
+        .as_slice::<T>()
+        .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?
+        .first()
+        .copied()
+        .ok_or_else(|| {
+            IdxTensorError::operation(OP, anyhow::anyhow!("the reduced result is empty"))
+        })
 }
 
 /// The permutation that reorders `rhs`'s axes into `lhs`'s index order, when both carry the same set.
