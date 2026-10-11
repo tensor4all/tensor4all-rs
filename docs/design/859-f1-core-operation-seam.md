@@ -1,7 +1,7 @@
 # F1 slice 1 — the core operation seam: pairwise contraction on an explicit session
 
 Short design for the first F1 package of [tensor4all-rs#859](https://github.com/tensor4all/tensor4all-rs/issues/859)
-("core operation/value seam"). **Revision 4**, after an independent pre-review rejected revision 1 (the
+("core operation/value seam"). **Revision 5**, adding slice 3. **Revision 4**, after an independent pre-review rejected revision 1 (the
 operand bridge it proposed - `try_materialized_inner` + `explicit::detach` - can enter the operand's owning
 eager/default runtime from inside the held session, and its result carrier cannot preserve the promised
 dtype coverage) and an independent post-review rejected revision 2's diff on four points: a repeated index
@@ -130,6 +130,42 @@ Evidence for slice 2 (`crates/tensor4all-core/tests/f1_session_inner_product.rs`
 parity, where the left-operand conjugation is observable; and refusals for a diagonal and a tracked operand
 inside one held session that keeps working for the next reduction and contraction. The source guard covers
 the new entry point automatically, because it checks the whole session module.
+
+## 4.2 Slice 3: the reduction (delivered after slices 1 and 2)
+
+`sum_on_session(session, tensor) -> AnyScalar` is the next reduction the app families need, so it is the
+next seam. It reuses slice 1's operand adaptation unchanged - same
+representations, same typed refusals, same deferred-error precedence, same uniqueness-free path - and runs
+`Session::sum`, which reduces every axis and duplicates an already rank-zero value, so one call covers the
+rank-zero and the general case. The scalar is published from the concrete value through the same
+`AnyScalar::from_published_*` route as slice 2, never through `AnyScalar::from_tensor`.
+
+**A zero-length axis is a documented non-parity**: the compatibility route accumulates from zero over the
+empty payload and answers `0`, while the session's reduction rejects a zero-length axis. The session keeps
+its backend's refusal rather than special-casing it, and a regression test covers it (including that the
+held session survives that session-side failure).
+
+**The dtype domain is the shared one: `f64` and `c64`.** `f32`/`c32` are refused by the same adaptation the
+contraction and inner-product slices use. The compatibility `sum` serves them (it routes through
+`AnyScalar`'s `f32`/`c32` variants), so this is a deliberate narrowing: widening that adaptation is one
+change with its own parity evidence for all three operations, not a side effect of adding a reduction. The
+refusal is typed and names the served domain, and the tests assert it.
+
+`norm`/`norm_squared` remain **deferred**: they are *algebraically* derivable from
+`inner_product_on_session` plus a square root, but that is not numerical parity. The compatibility route
+computes them through a scaled accumulation (Lassq-style), so a value whose squared magnitude underflows -
+`1e-200` is the example the review gave - has a representable compatibility norm and a zero derived one.
+A session norm therefore needs its own entry point and its own evidence, and this slice does not claim to
+close it.
+
+Evidence for slice 3 (`crates/tensor4all-core/tests/f1_session_sum.rs`, 5 tests): parity with
+`IdxTensor::sum` and with an input-data sum independent of it, for a `from_dense` operand, a fresh
+`from_storage` operand and a rank-zero operand; complex parity through all three of those representations,
+asserting both components and that a public operation routing through the scalar's carried tensor sees the
+same numbers; the empty-payload regression above; the `f32`/`c32` refusals with their typed message; and
+refusals for a diagonal and a tracked operand with successful reductions inside the same held region. Each
+failure is asserted by operation name - `sum_on_session` for this entry point, `contract_pair_on_session`
+for the shared contraction one - so a sum failure is not reported as a contraction.
 
 ## 5. Non-goals and explicit non-claims
 
