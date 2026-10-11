@@ -148,7 +148,8 @@ pub use defaults::idx_tensor::{
     print_and_reset_pairwise_contract_profile, reset_pairwise_contract_profile,
 };
 pub use defaults::{
-    contract_pair_on_session, inner_product_on_session, permute_on_session, sum_on_session,
+    contract_pair_on_session, inner_product_on_session, permute_indices_on_session,
+    permute_on_session, sum_on_session,
 };
 
 // Re-export linear algebra modules from defaults for backwards compatibility

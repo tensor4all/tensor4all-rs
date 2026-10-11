@@ -1,7 +1,7 @@
 # F1 slice 1 — the core operation seam: pairwise contraction on an explicit session
 
 Short design for the first F1 package of [tensor4all-rs#859](https://github.com/tensor4all/tensor4all-rs/issues/859)
-("core operation/value seam"). **Revision 6**, adding slice 4. **Revision 5**, adding slice 3. **Revision 4**, after an independent pre-review rejected revision 1 (the
+("core operation/value seam"). **Revision 7**, adding slice 5. **Revision 6**, adding slice 4. **Revision 5**, adding slice 3. **Revision 4**, after an independent pre-review rejected revision 1 (the
 operand bridge it proposed - `try_materialized_inner` + `explicit::detach` - can enter the operand's owning
 eager/default runtime from inside the held session, and its result carrier cannot preserve the promised
 dtype coverage) and an independent post-review rejected revision 2's diff on four points: a repeated index
@@ -197,6 +197,42 @@ malformed permutations with their exact messages and operation name; a non-conti
 (a compatibility permutation) fed to a further nonidentity session permutation and compared against the
 compatibility route on the same operand, plus its value multiset; and a permutation applied twice inside one
 held region returning the original.
+
+## 4.4 Slice 5: the index-order alignment (delivered after slice 4)
+
+`permute_indices_on_session(session, tensor, new_indices) -> IdxTensor` is the second numerical permutation
+form the app crates use: the one that aligns an operand to a caller-supplied index order before a
+contraction. The permutation is derived with the compatibility route's own helper
+(`compute_permutation_from_indices`), so an index list that is not a permutation of the tensor's own indices is
+refused with the same message, and a nonidentity alignment executes through slice 4's route, which means the
+same dense `f64`/`c64` domain and the same operand refusals. An identity order is metadata only: it returns the
+same storage under the supplied index list *for any representation*, including a diagonal or structured
+payload, exactly as the compatibility route does - which is why the seam keeps a crate-private index-metadata
+setter rather than materializing.
+
+**Full index equality ignores the dimension**, so a supplied list can carry a different shape than the
+tensor's matching index. The compatibility route rejects that when it builds a nonidentity result, and this
+route refuses it *before either branch* rather than silently keeping the tensor's own dimensions. For an
+identity order that is deliberately stricter than compatibility, which accepts malformed dimension metadata
+there; the record states the tightening instead of reproducing the hole.
+
+**The identity case keeps the representation, the storage and the eager cache.** It returns a crate-private
+metadata view (`aligned_identity_metadata`) that clones the storage enum value and the cache `Arc`, exactly
+what the compatibility route returns for an identity order - including for tracked, deferred, diagonal and
+structured payloads, which never reach admission.
+
+Evidence (`crates/tensor4all-core/tests/f1_session_permute_indices.rs`, 5 tests, plus one crate-owned unit
+test): parity with `IdxTensor::permute_indices` on indices, values and per-axis dimensions for a three-axis
+alignment, the identity order and an axis swap, including that the dimension multiset is preserved; the
+identity order keeping a diagonal payload diagonal and its values unchanged; a complex alignment against the
+compatibility values; a supplied index carrying a mismatched dimension refused with this entry point's
+message, in both the nonidentity and the identity order; the refusal reasons (length, foreign index, same-id
+different-prime) preserved with this entry point's operation name and a numerical alignment succeeding
+afterwards; and a nonidentity alignment of a diagonal and of a tracked operand refused under the permutation
+route's name, because the execution is delegated. The unit test asserts that the identity alignment shares
+the storage kind, the axis classes and the **eager cache `Arc`** (with a populated cache, via a compact
+payload) for dense, diagonal, tracked and deferred operands, and that a deferred operand keeps its retained
+diagnostic.
 
 ## 5. Non-goals and explicit non-claims
 

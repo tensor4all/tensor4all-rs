@@ -439,6 +439,88 @@ pub fn permute_on_session(
     IdxTensor::publish_dense_session_result(new_indices, &permuted)
 }
 
+/// Align a dense host tensor to a caller-supplied index order on a caller-held explicit session.
+///
+/// The numerical counterpart of [`IdxTensor::permute_indices`], which the app crates use to align operands
+/// before a contraction. The index list must be a permutation of the tensor's own indices by full index
+/// equality, exactly as the compatibility route requires; the permutation is derived with the same helper,
+/// so the two routes refuse the same inputs with the same messages. Execution is
+/// [`permute_on_session`]'s, so this route serves the same dense `f64`/`c64` domain, and an identity
+/// permutation is metadata only - it returns the same storage under the supplied index list, for any
+/// representation, without touching the session.
+///
+/// # Errors
+///
+/// Returns a typed [`IdxTensorError`] when the index list is not a permutation of the tensor's indices (the
+/// compatibility helper's reason, reported under this entry point's operation name), when a supplied index
+/// carries a different dimension than the tensor's matching index (this route's own message), under the same
+/// conditions as a nonidentity [`permute_on_session`] refuses an operand - whose errors keep that route's
+/// operation name, because the execution is delegated - and when the session rejects the permutation or the
+/// result cannot be published. A delegated storage error keeps its original source rather than being
+/// re-labelled.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::{permute_indices_on_session, IdxTensor};
+/// use tensor4all_tensorbackend::CpuExecutionContext;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let i = Index::new_dyn(2);
+/// let k = Index::new_dyn(3);
+/// let tensor: IdxTensor =
+///     IdxTensor::from_dense(vec![i.clone(), k.clone()], (1..=6).map(|v| v as f64).collect())?;
+///
+/// let aligned = context.with_concrete_session(|session| {
+///     permute_indices_on_session(session, &tensor, &[k.clone(), i.clone()])
+/// })??;
+/// assert_eq!(aligned.indices()[0], k);
+/// assert_eq!(aligned.to_vec::<f64>()?, vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn permute_indices_on_session(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    tensor: &IdxTensor,
+    new_indices: &[crate::defaults::DynIndex],
+) -> Result<IdxTensor, IdxTensorError> {
+    const OP: &str = "permute_indices_on_session";
+    // The compatibility route's own permutation derivation, so invalid index lists are refused identically.
+    let perm = crate::defaults::idx_tensor::compute_permutation_from_indices(
+        tensor.indices(),
+        new_indices,
+    )
+    .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
+
+    // Full index equality ignores the dimension, so a supplied list can carry a different shape than the
+    // tensor's matching index. The compatibility route rejects that for a nonidentity order when it builds
+    // the result, and this route refuses it before either branch rather than silently keeping the tensor's
+    // own dimensions. For an identity order that is deliberately stricter than compatibility, which accepts
+    // malformed dimension metadata there.
+    for (position, supplied) in new_indices.iter().enumerate() {
+        let expected = &tensor.indices()[perm[position]];
+        if supplied.dim != expected.dim {
+            return Err(IdxTensorError::operation(
+                OP,
+                anyhow::anyhow!(
+                    "index {position} is supplied with dimension {} but the tensor's matching index has dimension {}",
+                    supplied.dim,
+                    expected.dim
+                ),
+            ));
+        }
+    }
+
+    if perm.iter().copied().eq(0..perm.len()) {
+        // Identity is metadata only: the same storage and eager cache under the supplied index list, for
+        // any representation.
+        return Ok(tensor.aligned_identity_metadata(new_indices));
+    }
+
+    permute_on_session(session, tensor, &perm)
+}
+
 /// Materialize one operand as an owned concrete host value of the caller's session.
 ///
 /// Host storage is converted by the existing bridge, which does not enter a runtime; an untracked eager

@@ -8673,6 +8673,19 @@ impl IdxTensor {
         }
     }
 
+    /// The identity alignment: the same storage and eager cache under a supplied index list.
+    ///
+    /// Exactly what `permute_indices` returns for an identity order, so the session route stays metadata
+    /// only for that case. The caller has already established that the supplied list is a permutation of
+    /// this tensor's indices with matching dimensions.
+    pub(crate) fn aligned_identity_metadata(&self, indices: &[DynIndex]) -> Self {
+        Self {
+            indices: indices.to_vec(),
+            storage: self.storage.clone(),
+            eager_cache: Arc::clone(&self.eager_cache),
+        }
+    }
+
     /// Whether every index of this tensor is distinct.
     ///
     /// The contraction planner assumes it: a repeated index makes its result-length arithmetic
@@ -9025,6 +9038,90 @@ mod tests {
         );
         assert!(!conjugated.tracks_grad());
         assert!(conjugated.detach().is_err());
+    }
+
+    #[test]
+    fn session_identity_alignment_shares_storage_and_cache_for_every_representation() {
+        use tensor4all_tensorbackend::CpuExecutionContext;
+
+        let backend = tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend");
+        let context = CpuExecutionContext::from_backend(backend);
+        let i = DynIndex::new_dyn(2);
+        let k = DynIndex::new_dyn(2);
+
+        let dense = IdxTensor::from_dense(vec![i.clone(), k.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])
+            .unwrap();
+        let diagonal =
+            IdxTensor::from_diag(vec![i.clone(), k.clone()], vec![1.0_f64, 2.0]).unwrap();
+        // A compact payload materializes its logical-dense cache, so sharing a populated cache is
+        // observable here rather than being an empty-Arc comparison.
+        diagonal.as_inner().unwrap();
+        assert!(
+            diagonal.eager_cache.get().is_some(),
+            "the compact payload populated its eager cache"
+        );
+        let tracked = dense.clone().enable_grad().expect("tracked operand");
+        let deferred = {
+            let tensor =
+                IdxTensor::from_diag(vec![i.clone(), k.clone()], vec![1.0_f64, 2.0]).unwrap();
+            tensor.as_inner().unwrap();
+            let target = Arc::as_ptr(tensor.eager_cache.get().unwrap());
+            conjugate_with_injected_failure(
+                &tensor,
+                target,
+                "forced eager cache conjugation failure",
+            )
+        };
+
+        // The identity order: the same index list, which is the branch this test is about.
+        let order = vec![i.clone(), k.clone()];
+        for (label, tensor) in [
+            ("dense", dense),
+            ("diagonal", diagonal),
+            ("tracked", tracked),
+            ("deferred", deferred),
+        ] {
+            let before_kind = tensor.storage_kind();
+            let before_classes = tensor.storage.axis_classes().to_vec();
+            let before_cache = Arc::as_ptr(&tensor.eager_cache);
+            let identity = context
+                .with_concrete_session(|session| {
+                    crate::defaults::contract_session::permute_indices_on_session(
+                        session, &tensor, &order,
+                    )
+                })
+                .expect("session entry")
+                .expect("identity alignment is metadata only");
+
+            assert_eq!(identity.indices(), order.as_slice(), "{label}");
+            assert_eq!(identity.storage_kind(), before_kind, "{label}");
+            assert_eq!(
+                identity.storage.axis_classes(),
+                before_classes.as_slice(),
+                "{label}"
+            );
+            assert_eq!(
+                Arc::as_ptr(&identity.eager_cache),
+                before_cache,
+                "{label}: the eager cache is shared, not rebuilt"
+            );
+            assert_eq!(identity.tracks_grad(), tensor.tracks_grad(), "{label}");
+            match (&tensor.storage, &identity.storage) {
+                (
+                    IdxTensorStorage::Deferred { error: before, .. },
+                    IdxTensorStorage::Deferred { error: after, .. },
+                ) => assert_eq!(
+                    before.to_string(),
+                    after.to_string(),
+                    "{label}: the retained diagnostic is the same one"
+                ),
+                _ => assert_eq!(
+                    identity.to_vec::<f64>().unwrap(),
+                    tensor.to_vec::<f64>().unwrap(),
+                    "{label}"
+                ),
+            }
+        }
     }
 
     #[test]
