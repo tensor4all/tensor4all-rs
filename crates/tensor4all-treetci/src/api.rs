@@ -151,8 +151,149 @@ where
             center_site,
             proposer,
             streams,
+            None,
         )
     })
+}
+
+/// Interpolate a tree tensor network with a caller-owned execution context.
+///
+/// The same algorithm, options, stopping rule and streaming as [`crossinterpolate2`]; what differs is the
+/// resource the per-edge MatrixLUCI factorization runs in. Without a context it is assembled through the
+/// process-global CPU context; with one, the factor assembly goes through the context-scoped core entry, which
+/// consults no process-global context.
+///
+/// **The context covers the factorization only.** The evaluator and the final materialization keep their own
+/// routes, so this is a caller-owned budget for one part of the stage, not for the whole run. **A caller on a
+/// Rayon worker cannot use this entry point**: the concrete session entry rejects worker threads rather than
+/// silently serializing or falling back to the global context, so the run fails typed. Call it from a thread
+/// that owns its execution, as the scoped and held CPU session entries require.
+///
+/// # Errors
+///
+/// Returns [`crate::TreeTciError::InvalidConfiguration`] for invalid options, and
+/// [`crate::TreeTciError::Operation`] for the dimension mismatches, invalid initial pivots, callback failures
+/// and backend failures [`crossinterpolate2`] reports - including the concrete-session entry refusal when a
+/// Rayon worker calls this entry point, because the factorization cannot enter the caller's context there.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::{crossinterpolate2_in, DefaultProposer, TreeTciGraph, TreeTciOptions};
+/// use tensor4all_tensorbackend::CpuExecutionContext;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let result = crossinterpolate2_in::<f64, _, _>(
+///     |batch| Ok(vec![2.0; batch.n_points()]), vec![2, 2],
+///     TreeTciGraph::linear_chain(2)?, vec![vec![0, 0]],
+///     TreeTciOptions::default(), None, &DefaultProposer, &context,
+/// )?;
+/// assert_eq!(result.ranks, vec![1; 3]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[allow(clippy::too_many_arguments)]
+pub fn crossinterpolate2_in<T, F, P>(
+    evaluate: F,
+    local_dims: Vec<usize>,
+    graph: TreeTciGraph,
+    initial_pivots: Vec<MultiIndex>,
+    options: TreeTciOptions,
+    center_site: Option<usize>,
+    proposer: &P,
+    context: &tensor4all_tensorbackend::CpuExecutionContext,
+) -> TreeTciResult<TreeTciRunResult>
+where
+    T: FullPivLuScalar
+        + CommonScalar
+        + tensor4all_core::MatrixLuciScalar
+        + tensor4all_core::TensorElement
+        + crate::globalpivot::ScalarParts,
+    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    P: PivotCandidateProposer,
+{
+    options.validate()?;
+    with_seeded_streams(&options, proposer, |streams| {
+        crossinterpolate2_with_streams(
+            evaluate,
+            local_dims,
+            graph,
+            initial_pivots,
+            &options,
+            center_site,
+            proposer,
+            streams,
+            Some(context),
+        )
+    })
+}
+
+/// Interpolate a tree tensor network on a caller-owned random stream and execution context.
+///
+/// The caller-stream counterpart of [`crossinterpolate2_in`]: the supplied stream drives every global pivot
+/// search, and the factor assembly runs in `context`. The two are independent, so a caller can advance its own
+/// randomness across runs while keeping the factorization's budget to itself.
+///
+/// # Errors
+///
+/// Returns [`crate::TreeTciError::InvalidConfiguration`] for invalid options, and
+/// [`crate::TreeTciError::Operation`] for the same dimension mismatches, invalid initial pivots, callback
+/// failures, backend failures and concrete-session entry refusal [`crossinterpolate2_in`] reports.
+///
+/// # Examples
+///
+/// ```
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_treetci::{crossinterpolate2_with_rng_in, DefaultProposer, TreeTciGraph, TreeTciOptions};
+/// use tensor4all_tensorbackend::CpuExecutionContext;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let mut rng = ChaCha8Rng::seed_from_u64(0);
+/// let result = crossinterpolate2_with_rng_in::<f64, _, _, _>(
+///     |batch| Ok(vec![2.0; batch.n_points()]), vec![2, 2],
+///     TreeTciGraph::linear_chain(2)?, vec![vec![0, 0]],
+///     TreeTciOptions::default(), None, &DefaultProposer, &mut rng, &context,
+/// )?;
+/// assert_eq!(result.ranks, vec![1; 3]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[allow(clippy::too_many_arguments)]
+pub fn crossinterpolate2_with_rng_in<T, F, P, R>(
+    evaluate: F,
+    local_dims: Vec<usize>,
+    graph: TreeTciGraph,
+    initial_pivots: Vec<MultiIndex>,
+    options: TreeTciOptions,
+    center_site: Option<usize>,
+    proposer: &P,
+    rng: &mut R,
+    context: &tensor4all_tensorbackend::CpuExecutionContext,
+) -> TreeTciResult<TreeTciRunResult>
+where
+    T: FullPivLuScalar
+        + CommonScalar
+        + tensor4all_core::MatrixLuciScalar
+        + tensor4all_core::TensorElement
+        + crate::globalpivot::ScalarParts,
+    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    P: PivotCandidateProposer,
+    R: rand::Rng + ?Sized,
+{
+    let mut stream: &mut R = rng;
+    let mut streams = RandomStreams::Shared(&mut stream);
+    crossinterpolate2_with_streams(
+        evaluate,
+        local_dims,
+        graph,
+        initial_pivots,
+        &options,
+        center_site,
+        proposer,
+        &mut streams,
+        Some(context),
+    )
 }
 
 /// Interpolate a tree tensor network on a caller-owned random stream.
@@ -225,6 +366,7 @@ where
         center_site,
         proposer,
         &mut streams,
+        None,
     )
 }
 
@@ -240,6 +382,7 @@ fn crossinterpolate2_with_streams<T, F, P>(
     center_site: Option<usize>,
     proposer: &P,
     streams: &mut RandomStreams<'_>,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> TreeTciResult<TreeTciRunResult>
 where
     T: FullPivLuScalar
@@ -304,7 +447,7 @@ where
         return Err(anyhow::anyhow!("initial pivots must not all evaluate to zero").into());
     }
 
-    let result = optimize_with_streams(&mut tci, evaluate, options, proposer, streams)?;
+    let result = optimize_with_streams(&mut tci, evaluate, options, proposer, streams, context)?;
     let treetn = to_treetn(&tci, evaluate, center_site)?;
 
     Ok(TreeTciRunResult {

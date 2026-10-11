@@ -91,14 +91,26 @@ random stream. 16 sites, local dimension 4, three repetitions per run:
   TreeTN SRC contraction helpers instead, and that was wrong: the `default_cpu_execution_context()`
   occurrences in `treetn/contraction/src_chain.rs` and `src_probe.rs` are inside their `#[cfg(test)]` modules,
   and the production SRC path already has a context-scoped entry (`contract_src_with_rng_in`).
-  The recommended order for giving `G0` its own budget, none of it in this record:
+  The recommended order for giving `G0` its own budget, and what steps 1-2 delivered:
   1. a context-taking entry for the LUCI factorization that wraps the existing session-scoped helper with the
-     caller's own session, so the core seam stays one function wide;
+     caller's own session, so the core seam stays one function wide - **delivered** (`crossinterpolate2_in`,
+     `crossinterpolate2_with_rng_in`, and the context threaded through the optimizer, the per-edge update and
+     the factorization; see `docs/design/859-f3-tci-context.md`);
   2. thread that entry, as an option rather than a new requirement, from `crossinterpolate2` into
-     `update.rs`'s factorization;
+     `update.rs`'s factorization - **delivered**, with the legacy entry unchanged;
   3. measure what is left of the budget gap, then give the remaining ops on the path context-taking twins
      from the twelve sites - the full-pivot-LU, SVD and QR entries the TCI path actually reaches, not all
      twelve blindly.
+
+  **The step-3 measurement says the factorization's budget is not where the gap is.** With the process-global
+  context fixed at one worker, giving the factorization its own context makes the stage *slower* rather than
+  faster: 22.5-23.9 ms with no caller context against 24.0-25.4 ms with four caller workers, while the
+  penalty the global budget itself causes is about 4 ms (25.3-26.7 ms at four global workers). Peak process
+  threads do grow with the caller budget (2, 3 and 6 at one, one and four caller workers), so the caller's
+  context really is used - and every configuration converges with identical ranks and errors. A same-count
+  comparison (four global, four caller) shows no win from the owned factorization either. What remains is the
+  evaluator, the global pivot search's readout and the final materialization, which step 3 has to place before
+  any further threading: the factorization is a small part of this stage, exactly as §1.1's ablation said.
 - **The downstream workaround stays valid.** The child-process isolation the report describes achieves a
   stage-local budget today; nothing here replaces it.
 

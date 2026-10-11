@@ -102,7 +102,10 @@ pub mod visitor;
 #[cfg(test)]
 mod test_support;
 
-pub use api::{crossinterpolate2, crossinterpolate2_with_rng, TreeTciRunResult};
+pub use api::{
+    crossinterpolate2, crossinterpolate2_in, crossinterpolate2_with_rng,
+    crossinterpolate2_with_rng_in, TreeTciRunResult,
+};
 pub use assemble::MultiIndex;
 pub use batch::GlobalIndexBatch;
 pub use error::{Result as TreeTciResult, TreeTciError};

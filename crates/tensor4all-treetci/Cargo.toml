@@ -41,5 +41,6 @@ name = "g0_stage_budget"
 harness = false
 
 [dev-dependencies]
+tenferro-cpu.workspace = true
 approx.workspace = true
 quanticsgrids.workspace = true

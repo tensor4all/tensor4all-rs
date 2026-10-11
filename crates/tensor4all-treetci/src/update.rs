@@ -5,7 +5,8 @@ use crate::{
 };
 use anyhow::{ensure, Result};
 use tensor4all_core::{
-    matrix_luci_factors_from_matrix, MatrixLuciFactors, MatrixLuciScalar as Scalar, RrLUOptions,
+    matrix_luci_factors_from_matrix, matrix_luci_factors_from_matrix_owned_in, MatrixLuciFactors,
+    MatrixLuciScalar as Scalar, RrLUOptions,
 };
 use tensor4all_core::{ColMajorArray, CommonScalar};
 use tensor4all_tensorbackend::Matrix;
@@ -28,6 +29,7 @@ pub(crate) fn update_edge<T, F, P, R>(
     options: &RrLUOptions,
     proposer: &P,
     rng: &mut R,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> Result<MatrixLuciFactors<T>>
 where
     T: Scalar + CommonScalar,
@@ -60,7 +62,15 @@ where
     // `evaluate_candidate_matrix` already returns column-major data with
     // `left_candidates.len()` rows, so this hands over the buffer as-is.
     let matrix = Matrix::from_col_major_vec(left_candidates.len(), right_candidates.len(), values);
-    let selection = matrix_luci_factors_from_matrix(&matrix, Some(options.clone()))?;
+    // A caller-owned context sends the factor assembly through the context-scoped core entry, which consults
+    // no process-global context and may consume the matrix; without one the legacy borrowed route is kept
+    // exactly as it was.
+    let selection = match context {
+        Some(context) => {
+            matrix_luci_factors_from_matrix_owned_in(matrix, Some(options.clone()), context)?
+        }
+        None => matrix_luci_factors_from_matrix(&matrix, Some(options.clone()))?,
+    };
 
     // The LU can select zero pivots when the sampled submatrix is numerically
     // zero (the function underflows in a subdomain). Keep at least one index
@@ -132,7 +142,15 @@ where
 {
     use rand::SeedableRng;
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
-    update_edge(state, edge, evaluate, options, &DefaultProposer, &mut rng)
+    update_edge(
+        state,
+        edge,
+        evaluate,
+        options,
+        &DefaultProposer,
+        &mut rng,
+        None,
+    )
 }
 
 /// Evaluate the function on the full `I x J` candidate matrix for one edge.

@@ -425,6 +425,7 @@ where
     P: PivotCandidateProposer,
 {
     options.validate()?;
+    // The public optimizer keeps the legacy route: no caller-owned context.
     with_seeded_streams(options, proposer, |streams| {
         let evaluator = crate::evaluation::RunEvaluator::new(
             evaluate,
@@ -437,6 +438,7 @@ where
             options,
             proposer,
             streams,
+            None,
         )?;
         result.evaluation = evaluator.stats();
         Ok(result)
@@ -527,6 +529,7 @@ where
         options,
         proposer,
         &mut streams,
+        None,
     )?;
     result.evaluation = evaluator.stats();
     Ok(result)
@@ -583,6 +586,7 @@ pub(crate) fn optimize_with_streams<T, F, P>(
     options: &TreeTciOptions,
     proposer: &P,
     streams: &mut RandomStreams<'_>,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
@@ -633,6 +637,7 @@ where
                     &kernel_options,
                     proposer,
                     streams.candidates(),
+                    context,
                 )?;
             }
         }

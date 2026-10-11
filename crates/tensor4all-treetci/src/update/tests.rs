@@ -259,3 +259,71 @@ fn evaluate_candidate_matrix_is_independent_of_chunk_size() {
         assert_eq!(calls, expected_calls, "chunk {chunk_points}");
     }
 }
+
+/// The caller's context is the one the factorization runs in.
+///
+/// Holding the process-global backend for the whole call is the discriminating part: the legacy path resolves
+/// its factor assembly through that backend and cannot run here, while the context path can - so this fails if
+/// the context parameter is ignored. The fixture is rank-deficient and rectangular (`i == j` on a 3x2 grid),
+/// which forces the backend factor assembly rather than the rank-zero shortcut.
+#[test]
+fn update_edge_with_a_context_ignores_the_process_global_backend() {
+    use rand::SeedableRng;
+    use tenferro_cpu::CpuBackend;
+    use tensor4all_tensorbackend::{with_default_backend, CpuExecutionContext};
+
+    let mut tci = TreeTCI2::<f64>::new(vec![3, 2], two_site_graph()).unwrap();
+    tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+    tci.flush_pivot_errors();
+
+    let batch_eval = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        let mut values = Vec::with_capacity(batch.n_points());
+        for point in 0..batch.n_points() {
+            let i = batch.get(0, point).unwrap();
+            let j = batch.get(1, point).unwrap();
+            values.push(if i == j { 1.0 } else { 0.0 });
+        }
+        Ok(values)
+    };
+
+    let backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    let context = CpuExecutionContext::from_backend(backend);
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
+
+    let selection = with_default_backend(|_global| {
+        // The context entry must complete while the process-global backend is held by this scope: a route
+        // that resolved its factor assembly through the global backend would block here, which is the
+        // dispatch evidence. (The legacy entry cannot be asserted to *fail* inside the scope, because
+        // entering the global session while its backend is held blocks rather than erroring.)
+        super::update_edge(
+            &mut tci,
+            TreeTciEdge::new(0, 1),
+            batch_eval,
+            &no_truncation_options(),
+            &crate::DefaultProposer,
+            &mut rng,
+            Some(&context),
+        )
+        .expect("the context entry does not need the process-global backend")
+    });
+
+    // The same pivots and errors the legacy route produces outside the held scope.
+    let mut reference = TreeTCI2::<f64>::new(vec![3, 2], two_site_graph()).unwrap();
+    reference.add_global_pivots(&[vec![0, 0]]).unwrap();
+    reference.flush_pivot_errors();
+    let expected = update_edge_default(
+        &mut reference,
+        TreeTciEdge::new(0, 1),
+        batch_eval,
+        &no_truncation_options(),
+    )
+    .unwrap();
+
+    assert_eq!(selection.rank, expected.rank);
+    assert_eq!(selection.pivot_errors, expected.pivot_errors);
+    assert_eq!(
+        selection.row_indices, expected.row_indices,
+        "the same row pivots"
+    );
+    assert_eq!(selection.col_indices, expected.col_indices);
+}

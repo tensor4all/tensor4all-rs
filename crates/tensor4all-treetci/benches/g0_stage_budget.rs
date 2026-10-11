@@ -33,8 +33,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use tenferro_cpu::CpuBackend;
+use tensor4all_tensorbackend::CpuExecutionContext;
 use tensor4all_treetci::{
-    crossinterpolate2, DefaultProposer, GlobalIndexBatch, TreeTciGraph, TreeTciOptions,
+    crossinterpolate2, crossinterpolate2_in, DefaultProposer, GlobalIndexBatch, TreeTciGraph,
+    TreeTciOptions,
 };
 
 /// The G0-shaped workload: a small tree, a cheap local integrator, global pivots on.
@@ -53,6 +56,24 @@ fn main() {
     let global_pivots = std::env::var("T4A_G0_GLOBAL_PIVOTS")
         .map(|value| value != "0")
         .unwrap_or(true);
+    // `0` runs the legacy entry (no caller context). A positive value gives the factorization its own
+    // context with that many workers, which is the point of the two-budget protocol: the process-global
+    // context stays at whatever `RAYON_NUM_THREADS` fixed at initialization, and only the caller's budget
+    // moves. Built outside the timed region.
+    let caller_threads: usize = std::env::var("T4A_G0_CALLER_THREADS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let caller_context = (caller_threads > 0).then(|| {
+        let backend = CpuBackend::with_threads(caller_threads).expect("caller CPU backend");
+        let context = CpuExecutionContext::from_backend(backend);
+        assert_eq!(
+            context.with_backend(|backend| backend.num_threads()),
+            caller_threads,
+            "the caller context's worker count"
+        );
+        context
+    });
 
     let workers_env = std::env::var("RAYON_NUM_THREADS").unwrap_or_else(|_| "<unset>".to_string());
     let workers_observed = tensor4all_tensorbackend::default_cpu_execution_context()
@@ -107,15 +128,27 @@ fn main() {
         };
         let cpu_before = read_cpu_ticks();
         let start = Instant::now();
-        let result = crossinterpolate2::<f64, _, _>(
-            oracle,
-            local_dims.clone(),
-            graph.clone(),
-            pivots.clone(),
-            options.clone(),
-            None,
-            &DefaultProposer,
-        )
+        let result = match &caller_context {
+            Some(context) => crossinterpolate2_in::<f64, _, _>(
+                oracle,
+                local_dims.clone(),
+                graph.clone(),
+                pivots.clone(),
+                options.clone(),
+                None,
+                &DefaultProposer,
+                context,
+            ),
+            None => crossinterpolate2::<f64, _, _>(
+                oracle,
+                local_dims.clone(),
+                graph.clone(),
+                pivots.clone(),
+                options.clone(),
+                None,
+                &DefaultProposer,
+            ),
+        }
         .expect("a G0-shaped TreeTCI run");
         let elapsed = start.elapsed();
         // Read the process's own CPU time as close to the call as possible: the sampler's teardown must not
@@ -144,7 +177,8 @@ fn main() {
         println!(
             "g0_stage_budget: sites={sites} local_dim={local_dim} global_pivots={global_pivots} \
              repetitions={repetitions} workers_env={workers_env} workers_observed={workers_observed} \
-             repetition={repetition} elapsed={elapsed:?} peak_process_threads={} cpu_ticks={ticks} \
+             caller_threads={caller_threads} repetition={repetition} elapsed={elapsed:?} \
+             peak_process_threads={} cpu_ticks={ticks} \
              cpu_ticks_per_second={ticks_per_second} cpu_utilisation={utilisation} termination={:?} \
              ranks={:?} errors={:?}",
             peak_threads.load(Ordering::Relaxed),
