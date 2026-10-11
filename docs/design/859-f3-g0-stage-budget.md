@@ -80,17 +80,25 @@ random stream. 16 sites, local dimension 4, three repetitions per run:
   idle. That is consistent with pool wake-up and spin overhead on tiny operands rather than with useful
   parallelism. It does not yet separate nested parallelism inside the SRC/probe contractions from
   per-contraction pool wake-ups, nor does it break the search into materialization versus evaluation.
-- **Where the budget can be controlled.** `tensor4all-treetci` has no execution-context parameter at all
-  (`src/api.rs`'s entry points take options, pivots, a graph and a proposer). Its numerical work therefore
-  reaches the process-global context elsewhere: the full-pivot-LU solves the TCI path performs go through
-  `with_default_session` in `tensor4all-tensorbackend/src/backend.rs` (the solve at `:228`), whose worker count
-  is the process-global context's. An earlier revision of this record pointed at the TreeTN SRC contraction
-  helpers instead, and that was wrong: the `default_cpu_execution_context()` occurrences in
-  `treetn/contraction/src_chain.rs` and `src_probe.rs` are inside their `#[cfg(test)]` modules, and the
-  production SRC path already has a context-scoped entry (`contract_src_with_rng_in`). Giving `G0` its own
-  budget needs a control surface threaded from the TCI entry point to the operations that actually run - the
-  LUCI solves and whatever else the path calls - or an explicitly scoped budget override. That work is **not**
-  in this record, and the ablated path above is not an SRC measurement.
+- **Where the budget can be controlled, with the inventory.** `tensor4all-treetci` has no execution-context
+  parameter at all (`src/api.rs`'s entry points take options, pivots, a graph and a proposer), and its
+  per-sweep factorization goes through `matrix_luci_factors_from_matrix` in
+  `tensor4all-treetci/src/update.rs:63`. That helper lives in `tensor4all-core`, which already offers
+  session-scoped variants (`matrix_luci_factors_from_matrix_owned_in`), but the operations it calls reach the
+  process-global context through `tensor4all-tensorbackend/src/backend.rs`: **twelve production
+  `with_default_session` call sites** in that file (lines 228, 615, 636, 692, 743, 1054, 1107, 1153, 1206, 1245,
+  1392), whose worker count is the process-global context's. An earlier revision of this record pointed at the
+  TreeTN SRC contraction helpers instead, and that was wrong: the `default_cpu_execution_context()`
+  occurrences in `treetn/contraction/src_chain.rs` and `src_probe.rs` are inside their `#[cfg(test)]` modules,
+  and the production SRC path already has a context-scoped entry (`contract_src_with_rng_in`).
+  The recommended order for giving `G0` its own budget, none of it in this record:
+  1. a context-taking entry for the LUCI factorization that wraps the existing session-scoped helper with the
+     caller's own session, so the core seam stays one function wide;
+  2. thread that entry, as an option rather than a new requirement, from `crossinterpolate2` into
+     `update.rs`'s factorization;
+  3. measure what is left of the budget gap, then give the remaining ops on the path context-taking twins
+     from the twelve sites - the full-pivot-LU, SVD and QR entries the TCI path actually reaches, not all
+     twelve blindly.
 - **The downstream workaround stays valid.** The child-process isolation the report describes achieves a
   stage-local budget today; nothing here replaces it.
 
