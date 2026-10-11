@@ -102,15 +102,31 @@ random stream. 16 sites, local dimension 4, three repetitions per run:
      from the twelve sites - the full-pivot-LU, SVD and QR entries the TCI path actually reaches, not all
      twelve blindly.
 
-  **Where the remaining cost reaches the process-global context.** The pivot search materializes the current
-  approximation once per search (`treetci/src/globalpivot.rs`, through `to_treetn`) and reads it with a
-  `TreeTNCachedEvaluator` (`tensor4all-treetn`). That readout ends in the evaluation of the tree, whose
-  contraction goes through the bridge's `einsum_native_tensors` (`tensor4all-tensorbackend`), i.e. the
-  **compatibility einsum on the process-global context** - not the eager runtime and not the caller's context.
-  The threading plan for the readout is therefore, in order: (i) a context-taking einsum twin on the bridge
-  that wraps the explicit frontend's session route, (ii) a context-taking evaluation path in the tree
-  evaluator / cached evaluator, (iii) the same option-threading the factorization step already uses from the
-  TCI entry point. None of that is in this record.
+  **Where the remaining cost reaches the process-global context, corrected.** An earlier revision of this
+  section said the pivot search's readout ends in the bridge's `einsum_native_tensors`. **That was wrong**, and
+  a pre-review of the design built on it falsified the claim against the source:
+
+  - the search materializes the current approximation once per search (`treetci/src/globalpivot.rs`, through
+    `to_treetn`) and reads it with a `TreeTNCachedEvaluator` (`tensor4all-treetn`);
+  - for the homogeneous `f64`/`Complex64` single-physical-index trees `to_treetn` produces - which is what the
+    benchmark above measures - the cached evaluator takes **raw message kernels** (`cached_evaluator.rs`),
+    slicing host data directly and using `mat_mul_owned` for larger grouped messages; it never reaches
+    `TensorLike::contract`, and a fully warm hinted query answers from cached columns with no backend
+    contraction at all;
+  - where it does take the generic cached path (`f32`/`c32`, heterogeneous trees, multi-index layouts), it
+    contracts through `contract_with_options`, which reaches the bridge's `einsum_native_tensor_reads` - a
+    different function from the borrowed-tensor entry - and that path also selects physical indices and stacks
+    tensors through their eager runtimes;
+  - `contract` is an associated function on `TensorContractionLike`, not a method of the blanket-implemented
+    `TensorLike`, so the design's proposed override was not even expressible.
+
+  So the readout is not one seam, and its cost is **not yet attributed**. What the inventory does show, with a
+  demonstrated caller on this stage's path, is the **final materialization's nonzero full-pivot solve**
+  (`treetci/src/materialize.rs`, `T::solve_right_full_piv_lu`) - reached once per pivot search and again for the
+  final tree - which goes to the process-global session through
+  `tensor4all-tensorbackend/src/backend.rs`'s solve. That is a different entry from the LUCI helper step 3a
+  threaded, so it is the next candidate; it needs its own design, pre-review and measurement, none of which
+  this record contains.
 
   **The step-3 measurement says the factorization's budget is not where the gap is.** With the process-global
   context fixed at one worker, giving the factorization its own context makes the stage *slower* rather than
