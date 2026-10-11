@@ -272,9 +272,10 @@ fn structured_and_tracked_operands_are_refused_by_name() {
 
 #[test]
 fn the_entry_point_and_its_helpers_contain_no_default_context_entry() {
-    // A direct-source guard, not a transitive zero-entry proof: it pins the text of the entry point, of
-    // its operand helper in the crate's own module, and of the whole session module against the symbols
-    // that would mean reaching the default or compatibility path. Identity comparison cannot do this:
+    // A direct-source guard, not a transitive zero-entry proof: it pins the text of the session module -
+    // which carries both entry points - and of the operand helper in the crate's own module, against the
+    // symbols that would mean reaching the default or compatibility path. It deliberately also bans the
+    // eager-adopting scalar wrapper, because publication is as much a boundary as adaptation. Identity comparison cannot do this:
     // `is_global_default_cpu` itself initializes the process-global eager runtime, and it stays false
     // even when an adaptation secretly used the default runtime.
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -298,6 +299,10 @@ fn the_entry_point_and_its_helpers_contain_no_default_context_entry() {
         "explicit::detach",
         ".storage()",
         "ensure_storage_ready",
+        // Scalar publication must take the value from the concrete result: `AnyScalar::from_tensor`
+        // extracts it through the tensor's eager representation, which adopts a freshly materialized
+        // value into the process-global eager runtime.
+        "AnyScalar::from_tensor",
     ];
     let mut violations = Vec::new();
     for (name, source) in [

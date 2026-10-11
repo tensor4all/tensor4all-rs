@@ -1,7 +1,7 @@
 # F1 slice 1 — the core operation seam: pairwise contraction on an explicit session
 
 Short design for the first F1 package of [tensor4all-rs#859](https://github.com/tensor4all/tensor4all-rs/issues/859)
-("core operation/value seam"). **Revision 3**, after an independent pre-review rejected revision 1 (the
+("core operation/value seam"). **Revision 4**, after an independent pre-review rejected revision 1 (the
 operand bridge it proposed - `try_materialized_inner` + `explicit::detach` - can enter the operand's owning
 eager/default runtime from inside the held session, and its result carrier cannot preserve the promised
 dtype coverage) and an independent post-review rejected revision 2's diff on four points: a repeated index
@@ -109,6 +109,27 @@ stays free of default-context access so that stage R can move or gate it without
    error it is.
 6. Repository gates: fmt, clippy with the repository flags, rustdoc `-D warnings`, doctests,
    `scripts/repository-rules-review.py`, unit tests for the touched crate.
+
+## 4.1 Slice 2: the inner product on a session (delivered after slice 1)
+
+`inner_product_on_session(session, lhs, rhs) -> AnyScalar` is the reduction companion slice 1 needed for
+F2 (#510), and it reuses slice 1's operand adaptation untouched - same representations, same typed refusals,
+same deferred-error precedence, same uniqueness refusal before planning. It mirrors
+`IdxTensor::inner_product`: when both operands carry the same index set, the right operand is aligned to the
+left one's order with `Session::permute` and contracted over every axis; otherwise the shared axes are
+contracted and the remaining axes are reduced with `Session::sum`. The left operand is conjugated on the
+session, as the compatibility route conjugates it. The result is published as a rank-zero `IdxTensor` and
+returned as an `AnyScalar` built from the concrete value, *not* through `AnyScalar::from_tensor`: that
+wrapper extracts its scalar through the tensor's eager representation, which would adopt a freshly
+materialized value into the process-global eager runtime - the exact boundary this seam exists to keep.
+Both operands are adapted, and therefore refused, before either is materialized, and the planning that the
+unaligned branch needs happens before any numerical session work.
+
+Evidence for slice 2 (`crates/tensor4all-core/tests/f1_session_inner_product.rs`): parity with
+`IdxTensor::inner_product` for `f64` across the same-order, permuted, subset and disjoint cases; `c64`
+parity, where the left-operand conjugation is observable; and refusals for a diagonal and a tracked operand
+inside one held session that keeps working for the next reduction and contraction. The source guard covers
+the new entry point automatically, because it checks the whole session module.
 
 ## 5. Non-goals and explicit non-claims
 

@@ -381,6 +381,32 @@ impl AnyScalar {
         Self::wrap_tensor(tensor)
     }
 
+    /// Wrap an `f64` scalar whose rank-0 value is already published as plain host storage.
+    ///
+    /// [`AnyScalar::from_tensor`] extracts its value through the tensor's eager representation, which for a
+    /// freshly materialized tensor populates an eager cache from the process-global eager runtime. An
+    /// explicit-session route must not do that, so this constructor takes the value directly; the tensor is
+    /// carried only so the scalar still behaves like one.
+    pub(crate) fn from_published_f64(value: f64, tensor: IdxTensor) -> Self {
+        Self {
+            tensor: Ok(tensor),
+            value: ScalarValue::F64(value),
+            tracks_grad: false,
+        }
+    }
+
+    /// Wrap a `c64` scalar whose rank-0 value is already published as plain host storage.
+    ///
+    /// See [`AnyScalar::from_published_f64`] for why an explicit-session route cannot use
+    /// [`AnyScalar::from_tensor`].
+    pub(crate) fn from_published_c64(value: Complex64, tensor: IdxTensor) -> Self {
+        Self {
+            tensor: Ok(tensor),
+            value: ScalarValue::C64(value),
+            tracks_grad: false,
+        }
+    }
+
     pub(crate) fn as_tensor(&self) -> Result<&IdxTensor> {
         self.tensor
             .as_ref()

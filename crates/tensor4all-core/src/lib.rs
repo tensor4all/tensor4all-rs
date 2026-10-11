@@ -144,10 +144,10 @@ pub use defaults::contract::{
     outer_product, print_and_reset_contract_profile, reset_contract_profile, tensordot,
     ContractionOptions, PairwiseContractionOptions, PreparedContraction,
 };
-pub use defaults::contract_pair_on_session;
 pub use defaults::idx_tensor::{
     print_and_reset_pairwise_contract_profile, reset_pairwise_contract_profile,
 };
+pub use defaults::{contract_pair_on_session, inner_product_on_session};
 
 // Re-export linear algebra modules from defaults for backwards compatibility
 // This allows `tensor4all_core::svd::...`, `tensor4all_core::qr::...`, etc.

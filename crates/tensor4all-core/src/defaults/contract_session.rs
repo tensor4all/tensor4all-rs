@@ -108,6 +108,157 @@ pub fn contract_pair_on_session(
     IdxTensor::publish_dense_session_result(spec.result_indices.into_vec(), &value)
 }
 
+/// Compute the inner product of two dense host tensors on a caller-held explicit session.
+///
+/// This is the reduction companion of [`contract_pair_on_session`] and the operation #510's TT inner
+/// product runs hottest. It mirrors [`IdxTensor::inner_product`]: when both operands carry the same index
+/// set the right operand is aligned to the left one's order on the session and contracted with the left
+/// operand conjugated, and otherwise the two are contracted over their shared indices and the remaining
+/// axes are reduced on the session. The result is a plain scalar.
+///
+/// # Errors
+///
+/// Returns a typed [`IdxTensorError`] under exactly the conditions [`contract_pair_on_session`] refuses an
+/// operand - a tracked value, a device-resident operand, a diagonal, structured or compact payload, an
+/// unsupported dtype, a repeated index, an incompatible index space - when the session rejects the
+/// contraction or the reduction, or when the result cannot be published.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::{inner_product_on_session, IdxTensor};
+/// use tensor4all_tensorbackend::CpuExecutionContext;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let i = Index::new_dyn(2);
+/// let j = Index::new_dyn(2);
+/// let lhs: IdxTensor =
+///     IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+/// let rhs: IdxTensor =
+///     IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64, 1.0, 1.0, 1.0])?;
+///
+/// let value = context.with_concrete_session(|session| {
+///     inner_product_on_session(session, &lhs, &rhs)
+/// })??;
+/// // conj(lhs) contracted with rhs over both indices: 1 + 2 + 3 + 4.
+/// assert_eq!(value.real(), 10.0);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn inner_product_on_session(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    lhs: &IdxTensor,
+    rhs: &IdxTensor,
+) -> Result<crate::AnyScalar, IdxTensorError> {
+    // Malformed index lists are refused before planning, as in the contraction entry point.
+    if !lhs.has_unique_indices() || !rhs.has_unique_indices() {
+        return Err(IdxTensorError::Operation {
+            operation: OP,
+            source: Arc::from(
+                anyhow::anyhow!(
+                    "every index of an operand must be distinct; an inner product needs a valid index space"
+                )
+                .into_boxed_dyn_error(),
+            ),
+        });
+    }
+
+    let lhs_dims = lhs.dims();
+    let rhs_dims = rhs.dims();
+    // Both operands are adapted - and therefore refused - before either is materialized, so a refusal on
+    // the right cannot follow session work on the left.
+    let lhs_operand = lhs.session_dense_operand(OP)?;
+    let rhs_operand = rhs.session_dense_operand(OP)?;
+    // Planning is metadata too, so it happens before any numerical session work.
+    let aligned = alignment_permutation(lhs.indices(), rhs.indices());
+    let spec = match aligned {
+        Some(_) => None,
+        None => {
+            let lhs_indices = lhs.operand_indices_for_contraction(true);
+            let rhs_indices = rhs.operand_indices_for_contraction(false);
+            Some(
+                prepare_contraction(&lhs_indices, &lhs_dims, &rhs_indices, &rhs_dims)
+                    .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?,
+            )
+        }
+    };
+
+    let mut lhs_value = materialize_on_session(session, lhs_operand)?;
+    let mut rhs_value = materialize_on_session(session, rhs_operand)?;
+    // The left operand is conjugated, exactly as the compatibility route conjugates it.
+    lhs_value = session.conj(&lhs_value).map_err(session_error)?;
+
+    let product = match (aligned, spec) {
+        // Same index set: align the right operand to the left one's order and contract every axis.
+        (Some(perm), None) => {
+            let axes: Vec<usize> = (0..rhs_dims.len()).collect();
+            if perm != axes {
+                rhs_value = session.permute(&rhs_value, &perm).map_err(session_error)?;
+            }
+            session
+                .contraction(&lhs_value, &axes, &rhs_value, &axes)
+                .map_err(session_error)?
+        }
+        // Different index sets: contract the shared axes and reduce the rest.
+        (None, Some(spec)) => {
+            let contracted = session
+                .contraction(&lhs_value, &spec.axes_a, &rhs_value, &spec.axes_b)
+                .map_err(session_error)?;
+            session.sum(&contracted).map_err(session_error)?
+        }
+        _ => unreachable!("alignment and planning are decided together"),
+    };
+
+    // The scalar is taken from the concrete value, not through the tensor's eager representation, which
+    // would adopt it into the process-global eager runtime.
+    let published = IdxTensor::publish_dense_session_result(Vec::new(), &product)?;
+    let scalar = match product.dtype() {
+        tenferro::DType::F64 => {
+            let values = product
+                .as_slice::<f64>()
+                .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
+            crate::AnyScalar::from_published_f64(values[0], published)
+        }
+        tenferro::DType::C64 => {
+            let values = product
+                .as_slice::<num_complex::Complex64>()
+                .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
+            crate::AnyScalar::from_published_c64(values[0], published)
+        }
+        other => {
+            return Err(IdxTensorError::operation(
+                OP,
+                anyhow::anyhow!(
+                    "the explicit-session route returns f64 and c64 scalars, not {other:?}"
+                ),
+            ));
+        }
+    };
+    Ok(scalar)
+}
+
+/// The permutation that reorders `rhs`'s axes into `lhs`'s index order, when both carry the same set.
+///
+/// Returns `None` when an index of `lhs` does not appear in `rhs`, which is the case the caller handles by
+/// contracting the shared axes and reducing the rest.
+fn alignment_permutation(
+    lhs_indices: &[crate::defaults::DynIndex],
+    rhs_indices: &[crate::defaults::DynIndex],
+) -> Option<Vec<usize>> {
+    if lhs_indices.len() != rhs_indices.len() {
+        return None;
+    }
+    let mut perm = Vec::with_capacity(lhs_indices.len());
+    for index in lhs_indices {
+        let position = rhs_indices
+            .iter()
+            .position(|candidate| candidate == index)?;
+        perm.push(position);
+    }
+    Some(perm)
+}
+
 /// Materialize one operand as an owned concrete host value of the caller's session.
 ///
 /// Host storage is converted by the existing bridge, which does not enter a runtime; an untracked eager
