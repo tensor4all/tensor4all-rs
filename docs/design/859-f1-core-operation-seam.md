@@ -1,7 +1,7 @@
 # F1 slice 1 — the core operation seam: pairwise contraction on an explicit session
 
 Short design for the first F1 package of [tensor4all-rs#859](https://github.com/tensor4all/tensor4all-rs/issues/859)
-("core operation/value seam"). **Revision 5**, adding slice 3. **Revision 4**, after an independent pre-review rejected revision 1 (the
+("core operation/value seam"). **Revision 6**, adding slice 4. **Revision 5**, adding slice 3. **Revision 4**, after an independent pre-review rejected revision 1 (the
 operand bridge it proposed - `try_materialized_inner` + `explicit::detach` - can enter the operand's owning
 eager/default runtime from inside the held session, and its result carrier cannot preserve the promised
 dtype coverage) and an independent post-review rejected revision 2's diff on four points: a repeated index
@@ -166,6 +166,37 @@ same numbers; the empty-payload regression above; the `f32`/`c32` refusals with 
 refusals for a diagonal and a tracked operand with successful reductions inside the same held region. Each
 failure is asserted by operation name - `sum_on_session` for this entry point, `contract_pair_on_session`
 for the shared contraction one - so a sum failure is not reported as a contraction.
+
+## 4.3 Slice 4: the nonidentity permutation (delivered after slices 1-3)
+
+`permute_on_session(session, tensor, perm) -> IdxTensor` is the numerical counterpart of
+`IdxTensor::permute`: the compatibility entry point materializes an eager transpose, so this is work an app
+holding a region open cannot do on the compatibility route. The convention is the compatibility one
+(`perm[new_axis] = old_axis`), the validation is the compatibility route's own three checks with its
+messages, and an identity permutation returns the tensor unchanged with no session work - the one case that
+is metadata only. The nonidentity case adapts the operand through the shared admission (same refusals, same
+deferred-error precedence), runs a single-operand einsum whose output labels are the requested order (which
+materializes a contiguous host result rather than leaving a transposed view), and publishes it with the
+permuted index list.
+
+**The identity shortcut is not an admission bypass by accident.** Because it returns before admission,
+nonidentity permutations of a narrower dtype are refused while identity permutations of the same tensor
+succeed, and identity also succeeds for a tracked, diagonal, device-resident or deferred operand. That is the
+compatibility route's behaviour as well - it clones after validating, and only a nonidentity permutation
+materializes - so the record states it instead of moving admission ahead of the shortcut and breaking
+compatibility. The shared validation itself is one private helper used by both entry points, so the three
+refusals cannot drift apart.
+
+Evidence (`crates/tensor4all-core/tests/f1_session_permute.rs`, 6 tests): parity with `IdxTensor::permute`
+and an independent stride oracle in which each result element is checked against the old element it came
+from, for two representations and three three-axis permutations, one of which is neither a reversal nor a
+rotation; complex values against an explicit expected vector; identity on a rank-one vector, rank zero and a
+square matrix; **`f32` and `c32` nonidentity refusals naming the served domain, with the identity case
+succeeding on the same tensors**; identity succeeding on a diagonal and on a tracked operand; the three
+malformed permutations with their exact messages and operation name; a non-contiguous eager operand
+(a compatibility permutation) fed to a further nonidentity session permutation and compared against the
+compatibility route on the same operand, plus its value multiset; and a permutation applied twice inside one
+held region returning the original.
 
 ## 5. Non-goals and explicit non-claims
 

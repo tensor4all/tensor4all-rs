@@ -359,6 +359,86 @@ pub fn sum_on_session(
     Ok(scalar)
 }
 
+/// Permute a dense host tensor's axes on a caller-held explicit session.
+///
+/// The numerical counterpart of [`IdxTensor::permute`]: the compatibility entry point materializes an eager
+/// transpose, which is numerical work rather than metadata, so an app that holds a region open needs this
+/// route too. The permutation convention is the compatibility one - `perm[new_axis] = old_axis` - and the
+/// result is the same materialized dense host value with the same permuted index list. An identity
+/// permutation is returned unchanged, exactly as the compatibility route returns a clone, and performs no
+/// session work.
+///
+/// # Errors
+///
+/// Returns a typed [`IdxTensorError`] for a permutation whose length does not match the rank, an axis out of
+/// range or repeated - with the shared validator's messages - and, **for a nonidentity permutation**, under
+/// the same conditions as [`contract_pair_on_session`] refuses an operand: a tracked value, a
+/// device-resident operand, a diagonal, structured or compact payload, a deferred storage error, or an
+/// `f32`/`c32` or non-floating dtype. It also returns one when the session rejects the permutation or the
+/// result cannot be published.
+///
+/// **An identity permutation never reaches those refusals**: like the compatibility route it returns the
+/// tensor unchanged, whatever its representation or dtype, because it is metadata only. Execution - and
+/// therefore the `f64`/`c64` domain of this seam - applies to the nonidentity case.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::{permute_on_session, IdxTensor};
+/// use tensor4all_tensorbackend::CpuExecutionContext;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let i = Index::new_dyn(2);
+/// let k = Index::new_dyn(3);
+/// let tensor: IdxTensor =
+///     IdxTensor::from_dense(vec![i.clone(), k.clone()], (1..=6).map(|v| v as f64).collect())?;
+///
+/// let transposed = context.with_concrete_session(|session| {
+///     permute_on_session(session, &tensor, &[1, 0])
+/// })??;
+/// assert_eq!(transposed.indices()[0], k);
+/// assert_eq!(transposed.indices()[1], i);
+/// // Column-major with the axes swapped: row major in the old order.
+/// assert_eq!(transposed.to_vec::<f64>()?, vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn permute_on_session(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    tensor: &IdxTensor,
+    perm: &[usize],
+) -> Result<IdxTensor, IdxTensorError> {
+    const PERMUTE_OP: &str = "permute_on_session";
+    let rank = tensor.indices().len();
+    // The shared validator, before any session work: one definition of the contract for both entry points.
+    if let Err(message) = crate::defaults::idx_tensor::validate_permutation(rank, perm) {
+        return Err(IdxTensorError::operation(
+            PERMUTE_OP,
+            anyhow::anyhow!(message),
+        ));
+    }
+    if perm.iter().copied().eq(0..rank) {
+        // Identity is metadata only: no session work, exactly as the compatibility route clones.
+        return Ok(tensor.clone());
+    }
+
+    let operand = tensor.session_dense_operand(PERMUTE_OP)?;
+    let value = materialize_on_session(PERMUTE_OP, session, operand)?;
+    let input_ids: Vec<usize> = (0..rank).collect();
+    let read = tenferro::TensorRead::from_tensor(&value);
+    // Output labels in the requested order: new axis `i` takes old axis `perm[i]`.
+    let permuted = session
+        .einsum_reads(&[read], &[&input_ids], perm)
+        .map_err(|error| session_error(PERMUTE_OP, error))?;
+
+    let new_indices: Vec<crate::defaults::DynIndex> = perm
+        .iter()
+        .map(|&axis| tensor.indices()[axis].clone())
+        .collect();
+    IdxTensor::publish_dense_session_result(new_indices, &permuted)
+}
+
 /// Materialize one operand as an owned concrete host value of the caller's session.
 ///
 /// Host storage is converted by the existing bridge, which does not enter a runtime; an untracked eager

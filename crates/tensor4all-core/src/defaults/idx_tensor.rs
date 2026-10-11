@@ -3750,17 +3750,8 @@ impl IdxTensor {
     /// assert_eq!(permuted.dims(), vec![3, 2]);
     /// ```
     pub fn permute(&self, perm: &[usize]) -> std::result::Result<Self, IdxTensorError> {
-        if !(perm.len() == self.indices.len()) {
-            return Err(anyhow::anyhow!("permutation length must match tensor rank").into());
-        };
-        let mut seen = HashSet::new();
-        for &axis in perm {
-            if !(axis < self.indices.len()) {
-                return Err(anyhow::anyhow!("permutation axis {axis} out of range").into());
-            };
-            if !(seen.insert(axis)) {
-                return Err(anyhow::anyhow!("duplicate axis {axis} in permutation").into());
-            };
+        if let Err(message) = validate_permutation(self.indices.len(), perm) {
+            return Err(anyhow::anyhow!(message).into());
         }
         if perm.iter().copied().eq(0..perm.len()) {
             return Ok(self.clone());
@@ -8587,6 +8578,26 @@ pub(crate) enum SessionDenseOperand<'a> {
     /// Boxed because a read representation is much larger than the storage variant, and this enum is
     /// passed by value.
     Read(Box<TensorRead<'a>>, usize),
+}
+
+/// Validate a permutation for [`IdxTensor::permute`] and the explicit-session permutation route.
+///
+/// The message is the one both entry points report, so a caller sees the same refusal either way; the
+/// callers keep their own operation context.
+pub(crate) fn validate_permutation(rank: usize, perm: &[usize]) -> std::result::Result<(), String> {
+    if perm.len() != rank {
+        return Err("permutation length must match tensor rank".to_string());
+    }
+    let mut seen = HashSet::new();
+    for &axis in perm {
+        if axis >= rank {
+            return Err(format!("permutation axis {axis} out of range"));
+        }
+        if !seen.insert(axis) {
+            return Err(format!("duplicate axis {axis} in permutation"));
+        }
+    }
+    Ok(())
 }
 
 impl IdxTensor {
