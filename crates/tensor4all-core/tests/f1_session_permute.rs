@@ -226,7 +226,7 @@ fn the_identity_shortcut_and_the_dtype_domain_are_permutation_specific() {
                     tensor4all_core::IdxTensorError::Operation { operation, source } => {
                         assert_eq!(operation, "permute_on_session", "{label}");
                         assert!(
-                            source.to_string().contains("f64 and c64"),
+                            source.to_string().contains("f64 and c64 operands"),
                             "{label}: {source}"
                         );
                     }

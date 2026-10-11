@@ -29,8 +29,9 @@ const OP: &str = "contract_pair_on_session";
 /// # Errors
 ///
 /// Returns a typed [`IdxTensorError`] for an operand whose representation or dtype this slice does not
-/// serve - a tracked value, a device-resident operand, a diagonal, structured or compact payload, an
-/// integer or `f32`/`c32` operand - for an operand whose index list repeats an index, for incompatible
+/// serve - a tracked value, a device-resident operand, a diagonal, structured or compact payload, or an
+/// `f32`/`c32` or non-floating dtype, because this route's scalar carrier is a rank-zero `IdxTensor` whose
+/// compact storage holds only `f64` and `c64` - for an operand whose index list repeats an index, for incompatible
 /// index spaces (the planner's shape and dimension errors), when the session rejects the contraction, or
 /// when the result cannot be published. A deferred storage error is returned as
 /// [`IdxTensorError::Storage`] with its original source.
@@ -331,7 +332,9 @@ pub fn sum_on_session(
     session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
     tensor: &IdxTensor,
 ) -> Result<crate::AnyScalar, IdxTensorError> {
-    // The operand is adapted - and therefore refused - before any session work, as in the other slices.
+    // The operand is adapted - and therefore refused - before any session work, as in the other slices. The
+    // scalar's carrier here is a rank-zero `IdxTensor`, whose compact storage holds `f64` and `c64`, so this
+    // route keeps the narrow policy even though its result is a scalar.
     let operand = tensor.session_dense_operand(SUM_OP)?;
     let value = materialize_on_session(SUM_OP, session, operand)?;
     // `Session::sum` reduces every axis and duplicates an already rank-zero value, so one call covers both.
@@ -539,10 +542,14 @@ pub fn permute_indices_on_session(
 /// Returns [`IdxTensorError::NaNInput`] naming `norm_squared_on_session` when an element or the accumulated
 /// result is NaN. Otherwise it returns a typed [`IdxTensorError`] for the representation and dtype refusals
 /// the shared admission applies - a tracked value, a device-resident operand, a diagonal, structured or
-/// compact payload, a deferred storage error, or an `f32`/`c32` or non-floating dtype; note that this is the
-/// admission's refusal, not the compatibility route's `ScalarTypeMismatch`, and that the contraction route's
+/// compact payload, a deferred storage error, or a non-floating dtype; note that this is the admission's
+/// refusal, not the compatibility route's `ScalarTypeMismatch`, and that the contraction route's
 /// repeated-index and planning refusals do not apply here - and for a materialization, session-copy or
 /// host-read failure while the operand is brought onto the caller's session.
+///
+/// **`f32` and `c32` operands are served here**, because this route returns a scalar: they are promoted into
+/// the same `f64` accumulation the compatibility route uses for them. A route whose result is a dense tensor
+/// cannot serve them, because this crate's compact storage holds only `f64` and `c64`.
 ///
 /// # Examples
 ///
@@ -567,34 +574,58 @@ pub fn norm_squared_on_session(
     tensor: &IdxTensor,
 ) -> Result<f64, IdxTensorError> {
     const OP: &str = "norm_squared_on_session";
-    let operand = tensor.session_dense_operand(OP)?;
+    let operand = tensor.session_dense_operand_with(
+        crate::defaults::idx_tensor::SessionDtypePolicy::AnyFloating,
+        OP,
+    )?;
     let value = materialize_on_session(OP, session, operand)?;
-    let squared = match value.dtype() {
-        tenferro::DType::F64 => {
-            let values = value
-                .as_slice::<f64>()
-                .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
-            crate::defaults::idx_tensor::lassq_norm_squared(
-                values
-                    .iter()
-                    .map(|value| num_complex::Complex64::new(*value, 0.0)),
-            )
-        }
-        tenferro::DType::C64 => {
-            let values = value
-                .as_slice::<num_complex::Complex64>()
-                .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
-            crate::defaults::idx_tensor::lassq_norm_squared(values.iter().copied())
-        }
-        other => {
-            return Err(IdxTensorError::operation(
-                OP,
-                anyhow::anyhow!(
+    let squared =
+        match value.dtype() {
+            // The compatibility route accumulates every accepted floating dtype in `f64`, so promoting here is
+            // its behaviour rather than a widening of this route's own.
+            tenferro::DType::F32 => {
+                let values = value
+                    .as_slice::<f32>()
+                    .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
+                crate::defaults::idx_tensor::lassq_norm_squared(
+                    values
+                        .iter()
+                        .map(|value| num_complex::Complex64::new(f64::from(*value), 0.0)),
+                )
+            }
+            tenferro::DType::C32 => {
+                let values = value
+                    .as_slice::<num_complex::Complex32>()
+                    .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
+                crate::defaults::idx_tensor::lassq_norm_squared(values.iter().map(|value| {
+                    num_complex::Complex64::new(f64::from(value.re), f64::from(value.im))
+                }))
+            }
+            tenferro::DType::F64 => {
+                let values = value
+                    .as_slice::<f64>()
+                    .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
+                crate::defaults::idx_tensor::lassq_norm_squared(
+                    values
+                        .iter()
+                        .map(|value| num_complex::Complex64::new(*value, 0.0)),
+                )
+            }
+            tenferro::DType::C64 => {
+                let values = value
+                    .as_slice::<num_complex::Complex64>()
+                    .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
+                crate::defaults::idx_tensor::lassq_norm_squared(values.iter().copied())
+            }
+            other => {
+                return Err(IdxTensorError::operation(
+                    OP,
+                    anyhow::anyhow!(
                     "the explicit-session route serves the dtypes this seam serves, not {other:?}"
                 ),
-            ));
-        }
-    };
+                ));
+            }
+        };
     squared.ok_or(IdxTensorError::NaNInput { operation: OP })
 }
 
@@ -608,7 +639,9 @@ pub fn norm_squared_on_session(
 /// Returns [`IdxTensorError::NaNInput`] when an element or the accumulated result is NaN, and
 /// [`IdxTensorError::Operation`] for the representation and dtype refusals the shared admission applies (a
 /// tracked value, a device-resident operand, a diagonal, structured or compact payload, a deferred storage
-/// error, an `f32`/`c32` or non-floating dtype) and for a materialization, session-copy or host-read failure.
+/// error, or a non-floating dtype) and for a materialization, session-copy or host-read failure. `f32` and
+/// `c32` operands are **served** by this route, promoted into the same `f64` accumulation the compatibility
+/// route uses.
 /// Both carry `norm_squared_on_session` as their operation name, because the computation is delegated - the
 /// same shape as slice 5's delegation and as the compatibility route's own `norm` delegating to
 /// `norm_squared`.

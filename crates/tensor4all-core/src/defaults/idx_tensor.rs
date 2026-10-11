@@ -8600,6 +8600,21 @@ pub(crate) enum SessionDenseOperand<'a> {
     Read(Box<TensorRead<'a>>, usize),
 }
 
+/// Which operand dtypes a session route admits.
+///
+/// This is conservative per-operand admission for compact-storage publication, not "accept whenever the
+/// resulting dtype would fit": a route that publishes into an `IdxTensor` admits only the dtypes this crate's
+/// compact `Storage` holds, `f64`/`c64`, even where a mixed narrow/wide pair would have produced a wide
+/// result. Only a route whose whole result is a plain `f64` - the norms - admits the narrower floats, where
+/// they are promoted into the same `f64` accumulation the compatibility route uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionDtypePolicy {
+    /// `f64` and `c64` only, for routes whose result is a tensor.
+    CompactStorageOnly,
+    /// Every floating dtype the compatibility route serves, for routes whose result is a scalar.
+    AnyFloating,
+}
+
 /// Validate a permutation for [`IdxTensor::permute`] and the explicit-session permutation route.
 ///
 /// The message is the one both entry points report, so a caller sees the same refusal either way; the
@@ -8628,6 +8643,15 @@ impl IdxTensor {
     /// default-context entry happens behind the caller's held session.
     pub(crate) fn session_dense_operand(
         &self,
+        operation: &'static str,
+    ) -> std::result::Result<SessionDenseOperand<'_>, IdxTensorError> {
+        self.session_dense_operand_with(SessionDtypePolicy::CompactStorageOnly, operation)
+    }
+
+    /// The same adaptation, under an explicit dtype policy.
+    pub(crate) fn session_dense_operand_with(
+        &self,
+        policy: SessionDtypePolicy,
         operation: &'static str,
     ) -> std::result::Result<SessionDenseOperand<'_>, IdxTensorError> {
         let refuse = |reason: String| IdxTensorError::operation(operation, anyhow::anyhow!(reason));
@@ -8679,8 +8703,11 @@ impl IdxTensor {
                         Box::new(inner.tensor_read()),
                         rank,
                     )),
+                    DType::F32 | DType::C32 if policy == SessionDtypePolicy::AnyFloating => Ok(
+                        SessionDenseOperand::Read(Box::new(inner.tensor_read()), rank),
+                    ),
                     other => Err(refuse(format!(
-                        "this route serves f64 and c64 operands, not {other:?}"
+                        "this numerical route accepts f64 and c64 operands for compact-storage                          publication, not {other:?}"
                     ))),
                 }
             }

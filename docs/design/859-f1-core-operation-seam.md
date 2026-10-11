@@ -1,7 +1,7 @@
 # F1 slice 1 — the core operation seam: pairwise contraction on an explicit session
 
 Short design for the first F1 package of [tensor4all-rs#859](https://github.com/tensor4all/tensor4all-rs/issues/859)
-("core operation/value seam"). **Revision 8**, adding slice 6. **Revision 7**, adding slice 5. **Revision 6**, adding slice 4. **Revision 5**, adding slice 3. **Revision 4**, after an independent pre-review rejected revision 1 (the
+("core operation/value seam"). **Revision 9**, adding slice 7. **Revision 8**, adding slice 6. **Revision 7**, adding slice 5. **Revision 6**, adding slice 4. **Revision 5**, adding slice 3. **Revision 4**, after an independent pre-review rejected revision 1 (the
 operand bridge it proposed - `try_materialized_inner` + `explicit::detach` - can enter the operand's owning
 eager/default runtime from inside the held session, and its result carrier cannot preserve the promised
 dtype coverage) and an independent post-review rejected revision 2's diff on four points: a repeated index
@@ -247,9 +247,10 @@ returns `0` too. The accumulator still matters for rounding and for in-range mag
 reproduces it exactly rather than summing squares itself, but the record no longer claims a visible
 representability difference.
 
-The dtype domain is the shared one: `f32`/`c32` are refused by the same adaptation, with the shared refusal
-rather than the compatibility route's `ScalarTypeMismatch`, and diagonal or structured payloads are refused
-for the same reason as in the other slices.
+The dtype domain was the shared narrow one when this slice landed; §4.6 widens it for the norms, because their
+whole result is a plain `f64`. The refusal is the shared adaptation's rather than the compatibility route's
+`ScalarTypeMismatch`, and diagonal or structured payloads are refused for the same reason as in the other
+slices.
 
 Evidence (`crates/tensor4all-core/tests/f1_session_norm.rs`, 4 tests): exact parity with `norm_squared` and
 `norm` for `f64` and `c64` dense operands, plus independently known results (`[3, 4]` and `[3 + 4i]` both 25);
@@ -262,6 +263,36 @@ non-contiguous eager operand, several infinities and a complex infinity (all agr
 NaN in a complex component refused through both entry points, and `f32` refusals under this entry point's
 name through both; the diagonal and tracked refusals with the same operation name; and repeated calls inside
 one held session agreeing.
+
+## 4.6 Slice 7: which dtypes a route can serve follows from its result carrier
+
+The shared operand adaptation now takes a dtype policy, and the norms use the wider one: `f32` and `c32`
+operands are served there, promoted into the same `f64` accumulation the compatibility route already uses for
+them. Everything else keeps the narrow policy, because the result is published into an `IdxTensor` over
+compact storage, which holds only `f64` and `c64`:
+
+| route | result carrier | dtypes its numerical path admits |
+| --- | --- | --- |
+| `norm_squared_on_session`, `norm_on_session` | a plain `f64` | `f32`, `f64`, `c32`, `c64`, the narrower ones promoted exactly as compatibility promotes them |
+| `sum_on_session` | an `AnyScalar` over a rank-zero `IdxTensor` on compact storage | `f64`, `c64` |
+| `inner_product_on_session` | an `AnyScalar` over a rank-zero `IdxTensor` on compact storage | `f64`, `c64` |
+| `contract_pair_on_session` | a dense `IdxTensor` over compact storage, with the planned result indices | `f64`, `c64` |
+| `permute_on_session`, `permute_indices_on_session` | a dense `IdxTensor` over compact storage | `f64`, `c64` (an *identity* permutation stays metadata only and accepts any dtype, as §4.3 and §4.4 record) |
+
+**This is conservative per-operand admission for compact-storage publication, not "accept whenever the
+resulting dtype would fit".** A mixed `f32`/`f64` pair would contract to `f64` on the backend, which compact
+storage can hold, and this slice still refuses the narrow operand rather than admitting mixed widths on those
+routes. The refusal therefore says what a caller can act on - "this numerical route accepts f64 and c64
+operands for compact-storage publication, not `f32`" - instead of implying that the public result type cannot
+represent the dtype. Widening the carriers themselves, or admitting mixed widths, is **not** part of this
+slice, and §4.5's earlier statement of the narrower norm domain is superseded here.
+
+Evidence (`crates/tensor4all-core/tests/f1_session_narrow_floats.rs`, 4 tests): the norms serve `f32` and
+`c32` with exact parity against `norm_squared`/`norm` (whose compatibility values come from the same promotion);
+`sum` refuses `f32`/`c32` under its own operation name although compatibility serves them, so the refusal is
+this seam's carrier limit and not the input's; the tensor-publishing routes refuse them too, for the same
+reason, while a scalar route with an `f64` carrier keeps working afterwards; and `c64` still takes the wide
+path unchanged.
 
 ## 5. Non-goals and explicit non-claims
 

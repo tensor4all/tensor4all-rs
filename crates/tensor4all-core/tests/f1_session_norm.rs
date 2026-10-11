@@ -220,25 +220,29 @@ fn representations_and_nonfinite_values_are_served_or_refused_as_documented() {
         );
     }
 
-    // `f32`/`c32` are refused under this entry point's name, for both entry points.
+    // `f32`/`c32` are **served** by the norms since slice 7: they are promoted into the same `f64`
+    // accumulation the compatibility route uses.
     let f32_tensor = IdxTensor::from_dense(vec![i.clone()], vec![1.5_f32, 2.5]).unwrap();
+    let compatibility = f32_tensor
+        .norm_squared()
+        .expect("compatibility norm_squared");
     for squared in [true, false] {
-        let error = context
+        let value = context
             .with_concrete_session(|session| {
                 if squared {
                     norm_squared_on_session(session, &f32_tensor)
                 } else {
-                    norm_on_session(session, &f32_tensor).map(|_| 0.0)
+                    norm_on_session(session, &f32_tensor)
                 }
             })
             .expect("session entry")
-            .expect_err("a narrower dtype is refused");
-        match error {
-            tensor4all_core::IdxTensorError::Operation { operation, .. } => {
-                assert_eq!(operation, "norm_squared_on_session")
-            }
-            other => panic!("expected a typed operation refusal, got {other:?}"),
-        }
+            .expect("the norms serve f32");
+        let expected = if squared {
+            compatibility
+        } else {
+            compatibility.sqrt()
+        };
+        assert_eq!(value, expected);
     }
 }
 

@@ -126,7 +126,7 @@ fn the_dtype_domain_is_the_shared_one_and_its_refusals_are_typed() {
     assert!(
         refused
             .iter()
-            .all(|message| message.contains("f64 and c64")),
+            .all(|message| message.contains("f64 and c64 operands")),
         "the dtype refusal names the served domain: {refused:?}"
     );
 }
