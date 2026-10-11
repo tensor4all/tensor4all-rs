@@ -339,6 +339,9 @@ unresolved-issue list is in this roadmap or the findings record.
 
 ### M6. Adaptive patched contraction (L)
 
+Design: [tree-patched-contraction.md](./tree-patched-contraction.md)
+(proposal).
+
 Outcome: the contraction side of the method is complete on trees. This line
 works on existing `PartitionedTreeTN` values and does not depend on M1 or M2;
 it is ordered after them to keep the interpolation line first, and starts
