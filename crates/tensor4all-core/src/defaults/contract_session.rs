@@ -605,9 +605,13 @@ pub fn norm_squared_on_session(
 ///
 /// # Errors
 ///
-/// Returns the same typed errors as [`norm_squared_on_session`], reported under that entry point's operation
-/// name because the computation is delegated - the same shape as slice 5's delegation and as the
-/// compatibility route's own `norm` delegating to `norm_squared`.
+/// Returns [`IdxTensorError::NaNInput`] when an element or the accumulated result is NaN, and
+/// [`IdxTensorError::Operation`] for the representation and dtype refusals the shared admission applies (a
+/// tracked value, a device-resident operand, a diagonal, structured or compact payload, a deferred storage
+/// error, an `f32`/`c32` or non-floating dtype) and for a materialization, session-copy or host-read failure.
+/// Both carry `norm_squared_on_session` as their operation name, because the computation is delegated - the
+/// same shape as slice 5's delegation and as the compatibility route's own `norm` delegating to
+/// `norm_squared`.
 ///
 /// # Examples
 ///
