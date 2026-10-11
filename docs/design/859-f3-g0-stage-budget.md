@@ -102,6 +102,16 @@ random stream. 16 sites, local dimension 4, three repetitions per run:
      from the twelve sites - the full-pivot-LU, SVD and QR entries the TCI path actually reaches, not all
      twelve blindly.
 
+  **Where the remaining cost reaches the process-global context.** The pivot search materializes the current
+  approximation once per search (`treetci/src/globalpivot.rs`, through `to_treetn`) and reads it with a
+  `TreeTNCachedEvaluator` (`tensor4all-treetn`). That readout ends in the evaluation of the tree, whose
+  contraction goes through the bridge's `einsum_native_tensors` (`tensor4all-tensorbackend`), i.e. the
+  **compatibility einsum on the process-global context** - not the eager runtime and not the caller's context.
+  The threading plan for the readout is therefore, in order: (i) a context-taking einsum twin on the bridge
+  that wraps the explicit frontend's session route, (ii) a context-taking evaluation path in the tree
+  evaluator / cached evaluator, (iii) the same option-threading the factorization step already uses from the
+  TCI entry point. None of that is in this record.
+
   **The step-3 measurement says the factorization's budget is not where the gap is.** With the process-global
   context fixed at one worker, giving the factorization its own context makes the stage *slower* rather than
   faster: 22.5-23.9 ms with no caller context against 24.0-25.4 ms with four caller workers, while the
