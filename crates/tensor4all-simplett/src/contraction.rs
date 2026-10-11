@@ -165,6 +165,139 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
         // Final result should be 1x1
         Ok(result[[0, 0]])
     }
+
+    /// Compute the inner product with another train on a caller-held explicit session.
+    ///
+    /// The same site-by-site computation as [`SimpleTensorTrain::inner_product`], with every contraction
+    /// running on the caller's session: the operands are read through borrowed views instead of being
+    /// duplicated, and the running environment stays a concrete tensor between sites instead of being
+    /// converted into a [`Matrix`] and back at every site. The method performs no session entry of its own,
+    /// so a caller can hold one session across a wider region.
+    ///
+    /// The result is this crate's bilinear product, with no conjugation of either operand, exactly as the
+    /// compatibility entry point computes it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the trains have different lengths, when a
+    /// site dimension differs at site 0 or at a later site, when the session rejects a contraction, when the
+    /// final environment cannot be read back, or when it is not the 1x1 environment the train invariants
+    /// imply - a core replaced through `site_tensors_mut` can break that.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let a = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
+    /// let b = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let value = context.with_concrete_session(|session| {
+    ///     a.inner_product_with_session(&b, session)
+    /// })??;
+    /// assert!((value - 12.0).abs() < 1e-10);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn inner_product_with_session(
+        &self,
+        other: &Self,
+        session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    ) -> Result<T> {
+        if self.len() != other.len() {
+            return Err(SimpleTensorTrainError::InvalidOperation {
+                message: format!(
+                    "Cannot compute inner_product product of tensor trains with different lengths: {} vs {}",
+                    self.len(),
+                    other.len()
+                ),
+            });
+        }
+
+        if self.is_empty() {
+            return Ok(T::zero());
+        }
+
+        let n = self.len();
+
+        let a0 = self.site_tensor(0);
+        let b0 = other.site_tensor(0);
+        if a0.site_dim() != b0.site_dim() {
+            return Err(SimpleTensorTrainError::InvalidOperation {
+                message: format!(
+                    "Site dimensions mismatch at site 0: {} vs {}",
+                    a0.site_dim(),
+                    b0.site_dim()
+                ),
+            });
+        }
+
+        // result[ra, rb] = sum_s a[0, s, ra] * b[0, s, rb]
+        let mut environment = session
+            .einsum_reads(
+                &[T::tensor_read(a0.as_inner()), T::tensor_read(b0.as_inner())],
+                &[&[0, 1, 2], &[0, 1, 3]],
+                &[2, 3],
+            )
+            .map_err(|err| {
+                contraction_helper_error("Failed to contract first inner_product site", err)
+            })?;
+
+        for i in 1..n {
+            let a = self.site_tensor(i);
+            let b = other.site_tensor(i);
+
+            if a.site_dim() != b.site_dim() {
+                return Err(SimpleTensorTrainError::InvalidOperation {
+                    message: format!(
+                        "Site dimensions mismatch at site {}: {} vs {}",
+                        i,
+                        a.site_dim(),
+                        b.site_dim()
+                    ),
+                });
+            }
+
+            // The environment stays a concrete tensor between sites; only the contraction runs on the
+            // session, and the environment read borrows it for the duration of that one call.
+            environment = session
+                .einsum_reads(
+                    &[
+                        tenferro_tensor::TensorRead::from_tensor(&environment),
+                        T::tensor_read(a.as_inner()),
+                        T::tensor_read(b.as_inner()),
+                    ],
+                    // The environment carries (a's left bond, b's left bond); each site tensor joins on its
+                    // own left bond and on the shared site axis.
+                    &[&[0, 1], &[0, 2, 3], &[1, 2, 4]],
+                    &[3, 4],
+                )
+                .map_err(|err| {
+                    contraction_helper_error(
+                        &format!("Failed to contract inner_product site {i}"),
+                        err,
+                    )
+                })?;
+        }
+
+        // A valid train ends with unit boundary bonds, so the environment is 1x1 and the scalar is its only
+        // element. Reading it checked turns a malformed train into a typed error instead of a silent
+        // difference from the compatibility route, which selects the same element.
+        let values = environment
+            .as_slice::<T>()
+            .map_err(inner_product_read_error)?;
+        match values {
+            [value] => Ok(*value),
+            other => Err(contraction_helper_error(
+                "inner_product_with_session",
+                format!(
+                    "the final environment must hold one element, got {}",
+                    other.len()
+                ),
+            )),
+        }
+    }
 }
 
 /// Free-function wrapper for [`SimpleTensorTrain::inner_product`].

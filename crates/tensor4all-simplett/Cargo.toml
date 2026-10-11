@@ -46,7 +46,14 @@ tenferro-tensor.workspace = true
 approx.workspace = true
 rand_chacha.workspace = true
 criterion.workspace = true
+# The session tests and the held-session benchmark open an explicit one-worker context, which needs the
+# concrete CPU backend type.
+tenferro-cpu.workspace = true
 
 [[bench]]
 name = "cache_overhead"
+harness = false
+
+[[bench]]
+name = "inner_product_session"
 harness = false
