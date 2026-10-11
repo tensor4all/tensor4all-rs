@@ -25,8 +25,10 @@ type Error = Box<dyn std::error::Error>;
 
 fn read_f64(path: &std::path::Path) -> Result<Vec<f64>, Error> {
     Ok(fs::read(path)?
-        .chunks_exact(8)
-        .map(|b| f64::from_le_bytes(b.try_into().expect("8-byte chunk")))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|b| f64::from_le_bytes(*b))
         .collect())
 }
 
