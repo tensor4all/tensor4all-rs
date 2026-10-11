@@ -40,7 +40,7 @@ more; any claim about trees must be checked on such a topology.
 Record any new port, derivation, or algorithm origin in
 `docs/PROVENANCE_AND_CITATION_POLICY.md` in the PR that introduces it.
 
-## Current state (including the interpolation branch)
+## Current state
 
 | Capability | Chain (`tensor4all-partitionedtt`, deprecated) | Tree (`tensor4all-partitionedtreetn`) |
 |---|---|---|
@@ -51,9 +51,6 @@ Record any new port, derivation, or algorithm origin in
 | Adaptive patched interpolation | yes (`adaptiveinterpolate`) | sequential, generic over the M1 engine trait (`adaptive_interpolation::patched_interpolate`, M2) |
 | Global L2 reconstruction and merge | no | yes ([orthogonal-target-reconstruction.md](./orthogonal-target-reconstruction.md)) |
 | Parallel patch execution | Hataori Rayon/MPI for interpolation ([adaptive-tci-parallel-execution.md](./adaptive-tci-parallel-execution.md)) | none |
-
-The interpolation entry in the table is implemented on this branch, not yet
-merged into `main`.
 
 The deprecated chain crate is design lineage only, not a verification
 baseline. Branch `feat/treetci-adaptive-patching` holds a sequential TreeTCI
