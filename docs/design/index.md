@@ -8,6 +8,7 @@
 | [tenferro-main-session-migration.md](./tenferro-main-session-migration.md) | First issue #623 slice: pin current tenferro main and migrate internal CPU calls to its canonical session API |
 | [explicit-cpu-execution-context.md](./explicit-cpu-execution-context.md) | Issue #663 explicit plain, graph, eager-AD, and logical reconstruction context |
 | [tensorbackend-session-entry.md](./tensorbackend-session-entry.md) | Issue #623 slice: centralize concrete CPU sessions on explicit contexts before CUDA dispatch |
+| [859-f1-core-operation-seam.md](./859-f1-core-operation-seam.md) | Issue #859 package F1, slice 1: pairwise contraction on a caller-held explicit session, its supported representations, typed refusals and evidence plan |
 | [859-dual-frontend-coexistence.md](./859-dual-frontend-coexistence.md) | Issue #859 milestone B0: recorded coexistence baseline, legacy entry-site inventory, and the specified opt-in explicit/concrete frontend |
 | [869-core-cuda-feature-mismatch.md](./869-core-cuda-feature-mismatch.md) | Issue #869 typed rejection of execution contexts a core build cannot support, including the backend-CUDA-without-core-CUDA build |
 | [cuda-tree-contraction.md](./cuda-tree-contraction.md) | Issues #623/#553 single-CUDA explicit transfer and TreeTN contraction vertical slice |
