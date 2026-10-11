@@ -4264,6 +4264,7 @@ dependencies = [
  "rand_chacha",
  "serde_json",
  "tensor4all-core",
+ "tensor4all-tensorbackend",
  "tensor4all-treeaci",
  "tensor4all-treersi",
  "tensor4all-treetn",
