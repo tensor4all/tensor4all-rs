@@ -40,8 +40,8 @@ pub use contract::{
     print_and_reset_contract_profile, reset_contract_profile, tensordot, ContractionOptions,
 };
 pub use contract_session::{
-    contract_pair_on_session, inner_product_on_session, permute_indices_on_session,
-    permute_on_session, sum_on_session,
+    contract_pair_on_session, inner_product_on_session, norm_on_session, norm_squared_on_session,
+    permute_indices_on_session, permute_on_session, sum_on_session,
 };
 #[cfg(feature = "tenferro-cuda")]
 pub use cuda::IdxTensorCudaError;

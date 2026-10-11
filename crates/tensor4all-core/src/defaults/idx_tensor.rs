@@ -4889,6 +4889,26 @@ impl IdxTensor {
     }
 }
 
+/// The compatibility `norm_squared` accumulation over host values, for the session route.
+///
+/// The same [`Lassq`] accumulator the compatibility entry point uses, so the session route reproduces its
+/// scaled accumulation exactly. The accumulator scales before squaring, so individually underflowing squares
+/// can still add up to a representable result; `None` means a NaN was observed, which the compatibility route
+/// reports as [`IdxTensorError::NaNInput`].
+pub(crate) fn lassq_norm_squared(
+    values: impl IntoIterator<Item = Complex64>,
+) -> std::option::Option<f64> {
+    let mut norm = Lassq::default();
+    for value in values {
+        if value.re.is_nan() || value.im.is_nan() {
+            return None;
+        }
+        norm.add_complex(value);
+    }
+    let squared = norm.norm_squared();
+    (!squared.is_nan()).then_some(squared)
+}
+
 #[derive(Debug, Default)]
 struct Lassq {
     scale: f64,

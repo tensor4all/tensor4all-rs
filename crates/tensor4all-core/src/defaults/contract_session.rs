@@ -521,6 +521,117 @@ pub fn permute_indices_on_session(
     permute_on_session(session, tensor, &perm)
 }
 
+/// Compute the squared Euclidean norm of a dense host tensor on a caller-held explicit session.
+///
+/// The compatibility entry point accumulates the norm over the tensor's payload through a scaled
+/// accumulator), so it computes the same value as the compatibility route rather than an algebraic
+/// shortcut. The session's part is the materialization: the operand is adapted and materialized on the
+/// caller's session instead of through the compatibility route.
+///
+/// Note what that accumulator does and does not change here: this API squares the accumulated norm, so for a
+/// tensor whose norm is representable but whose square is not - the `1e-200` scale - the returned value is
+/// `0` in the compatibility route as well, and [`norm_on_session`] squares-and-roots the same value. The
+/// accumulator's benefit is that individually underflowing squares can still add up to a representable
+/// result; it is not a promise about any single fixture.
+///
+/// # Errors
+///
+/// Returns [`IdxTensorError::NaNInput`] naming `norm_squared_on_session` when an element or the accumulated
+/// result is NaN. Otherwise it returns a typed [`IdxTensorError`] for the representation and dtype refusals
+/// the shared admission applies - a tracked value, a device-resident operand, a diagonal, structured or
+/// compact payload, a deferred storage error, or an `f32`/`c32` or non-floating dtype; note that this is the
+/// admission's refusal, not the compatibility route's `ScalarTypeMismatch`, and that the contraction route's
+/// repeated-index and planning refusals do not apply here - and for a materialization, session-copy or
+/// host-read failure while the operand is brought onto the caller's session.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::{norm_squared_on_session, IdxTensor};
+/// use tensor4all_tensorbackend::CpuExecutionContext;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let i = Index::new_dyn(2);
+/// let tensor: IdxTensor = IdxTensor::from_dense(vec![i.clone()], vec![3.0_f64, 4.0])?;
+///
+/// let squared = context.with_concrete_session(|session| {
+///     norm_squared_on_session(session, &tensor)
+/// })??;
+/// assert!((squared - 25.0).abs() < 1e-12);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn norm_squared_on_session(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    tensor: &IdxTensor,
+) -> Result<f64, IdxTensorError> {
+    const OP: &str = "norm_squared_on_session";
+    let operand = tensor.session_dense_operand(OP)?;
+    let value = materialize_on_session(OP, session, operand)?;
+    let squared = match value.dtype() {
+        tenferro::DType::F64 => {
+            let values = value
+                .as_slice::<f64>()
+                .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
+            crate::defaults::idx_tensor::lassq_norm_squared(
+                values
+                    .iter()
+                    .map(|value| num_complex::Complex64::new(*value, 0.0)),
+            )
+        }
+        tenferro::DType::C64 => {
+            let values = value
+                .as_slice::<num_complex::Complex64>()
+                .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
+            crate::defaults::idx_tensor::lassq_norm_squared(values.iter().copied())
+        }
+        other => {
+            return Err(IdxTensorError::operation(
+                OP,
+                anyhow::anyhow!(
+                    "the explicit-session route serves the dtypes this seam serves, not {other:?}"
+                ),
+            ));
+        }
+    };
+    squared.ok_or(IdxTensorError::NaNInput { operation: OP })
+}
+
+/// Compute the Euclidean norm of a dense host tensor on a caller-held explicit session.
+///
+/// The square root of [`norm_squared_on_session`], exactly as the compatibility route defines
+/// [`IdxTensor::norm`] as the square root of [`IdxTensor::norm_squared`].
+///
+/// # Errors
+///
+/// Returns the same typed errors as [`norm_squared_on_session`], reported under that entry point's operation
+/// name because the computation is delegated - the same shape as slice 5's delegation and as the
+/// compatibility route's own `norm` delegating to `norm_squared`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::{norm_on_session, IdxTensor};
+/// use tensor4all_tensorbackend::CpuExecutionContext;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let i = Index::new_dyn(2);
+/// let tensor: IdxTensor = IdxTensor::from_dense(vec![i.clone()], vec![3.0_f64, 4.0])?;
+///
+/// let norm = context.with_concrete_session(|session| norm_on_session(session, &tensor))??;
+/// assert!((norm - 5.0).abs() < 1e-12);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn norm_on_session(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    tensor: &IdxTensor,
+) -> Result<f64, IdxTensorError> {
+    Ok(norm_squared_on_session(session, tensor)?.sqrt())
+}
+
 /// Materialize one operand as an owned concrete host value of the caller's session.
 ///
 /// Host storage is converted by the existing bridge, which does not enter a runtime; an untracked eager

@@ -1,7 +1,7 @@
 # F1 slice 1 — the core operation seam: pairwise contraction on an explicit session
 
 Short design for the first F1 package of [tensor4all-rs#859](https://github.com/tensor4all/tensor4all-rs/issues/859)
-("core operation/value seam"). **Revision 7**, adding slice 5. **Revision 6**, adding slice 4. **Revision 5**, adding slice 3. **Revision 4**, after an independent pre-review rejected revision 1 (the
+("core operation/value seam"). **Revision 8**, adding slice 6. **Revision 7**, adding slice 5. **Revision 6**, adding slice 4. **Revision 5**, adding slice 3. **Revision 4**, after an independent pre-review rejected revision 1 (the
 operand bridge it proposed - `try_materialized_inner` + `explicit::detach` - can enter the operand's owning
 eager/default runtime from inside the held session, and its result carrier cannot preserve the promised
 dtype coverage) and an independent post-review rejected revision 2's diff on four points: a repeated index
@@ -151,12 +151,10 @@ contraction and inner-product slices use. The compatibility `sum` serves them (i
 change with its own parity evidence for all three operations, not a side effect of adding a reduction. The
 refusal is typed and names the served domain, and the tests assert it.
 
-`norm`/`norm_squared` remain **deferred**: they are *algebraically* derivable from
-`inner_product_on_session` plus a square root, but that is not numerical parity. The compatibility route
-computes them through a scaled accumulation (Lassq-style), so a value whose squared magnitude underflows -
-`1e-200` is the example the review gave - has a representable compatibility norm and a zero derived one.
-A session norm therefore needs its own entry point and its own evidence, and this slice does not claim to
-close it.
+`norm`/`norm_squared` were deferred here and landed in §4.5 with their own entry points and evidence. They
+were *algebraically* derivable from `inner_product_on_session` plus a square root, but that is not numerical
+parity: the compatibility route uses a scaled accumulator, and a derived value would not necessarily round
+the same way. §4.5 records what the accumulator does and does not make observable through this API.
 
 Evidence for slice 3 (`crates/tensor4all-core/tests/f1_session_sum.rs`, 5 tests): parity with
 `IdxTensor::sum` and with an input-data sum independent of it, for a `from_dense` operand, a fresh
@@ -234,12 +232,43 @@ the storage kind, the axis classes and the **eager cache `Arc`** (with a populat
 payload) for dense, diagonal, tracked and deferred operands, and that a deferred operand keeps its retained
 diagnostic.
 
+## 4.5 Slice 6: `norm_squared` and `norm` (delivered after slice 5)
+
+`norm_squared_on_session` and `norm_on_session` compute the compatibility route's values, using its own
+scaled accumulator (`Lassq`) over the values the session materialized, so the two routes agree exactly -
+including on fixtures whose direct squares underflow or overflow. The session's part is the materialization:
+the operand is adapted and materialized on the caller's session instead of through the compatibility route.
+
+**An earlier roadmap note in §4.2 said the scaled accumulation is why this needed its own slice, and that
+claim is narrower than `1e-200`-style examples suggested.** The public API squares the accumulator's norm, so
+for a tensor whose norm is representable but whose square is not, `norm_squared` returns `0` in the
+compatibility route as well; and `norm` is defined as the square root of that same squared value, so it
+returns `0` too. The accumulator still matters for rounding and for in-range magnitudes, and this route
+reproduces it exactly rather than summing squares itself, but the record no longer claims a visible
+representability difference.
+
+The dtype domain is the shared one: `f32`/`c32` are refused by the same adaptation, with the shared refusal
+rather than the compatibility route's `ScalarTypeMismatch`, and diagonal or structured payloads are refused
+for the same reason as in the other slices.
+
+Evidence (`crates/tensor4all-core/tests/f1_session_norm.rs`, 4 tests): exact parity with `norm_squared` and
+`norm` for `f64` and `c64` dense operands, plus independently known results (`[3, 4]` and `[3 + 4i]` both 25);
+**a discriminating fixture**: for `[1.0, 1.0]` the accumulator squares `sqrt(2)`, which is not exactly the
+naive sum `2`, and the session route reproduces the accumulator's value while sixteen copies of `1e-162` -
+whose individual squares underflow - give a representable non-zero result, so this is not a comparison
+between two implementations that both sum squares; representation and nonfinite coverage: a fresh
+`from_storage` operand, rank-zero real and complex operands, an empty payload, a zero-length axis, a
+non-contiguous eager operand, several infinities and a complex infinity (all agreeing with compatibility), a
+NaN in a complex component refused through both entry points, and `f32` refusals under this entry point's
+name through both; the diagonal and tracked refusals with the same operation name; and repeated calls inside
+one held session agreeing.
+
 ## 5. Non-goals and explicit non-claims
 
 - No change to `IdxTensor`'s representation, no new storage kind, no change to the compatibility route's
   numerics or routing.
-- Not F1 complete: `Matrix`, structured payloads, reductions and the remaining operation families are
-  later slices with their own parity evidence.
+- Not F1 complete: `Matrix`, structured payloads, *remaining* reductions and the other operation families
+  are later slices with their own parity evidence.
 - No AD, no CUDA device-resident contraction, no session-taking variant for metadata operations.
 - No benchmark and no speedup claim: this slice is the seam. F2 measures.
 - If a later slice replaces the `IdxTensor` result with a concrete carrier, that is an API change and will
