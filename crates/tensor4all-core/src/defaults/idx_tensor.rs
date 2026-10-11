@@ -537,7 +537,7 @@ impl IdxTensorError {
         }
     }
 
-    fn operation(operation: &'static str, error: anyhow::Error) -> Self {
+    pub(crate) fn operation(operation: &'static str, error: anyhow::Error) -> Self {
         Self::Operation {
             operation,
             source: Self::boxed(error),
@@ -1631,7 +1631,7 @@ impl IdxTensor {
         Ok(())
     }
 
-    fn operand_indices_for_contraction(&self, conjugate: bool) -> Vec<DynIndex> {
+    pub(crate) fn operand_indices_for_contraction(&self, conjugate: bool) -> Vec<DynIndex> {
         if conjugate {
             self.indices.iter().map(|index| index.conj()).collect()
         } else {
@@ -8574,6 +8574,135 @@ fn encode_col_major_linear(indices: &[usize], dims: &[usize]) -> Result<usize> {
     Ok(linear)
 }
 
+/// A dense host operand prepared for the explicit-session contraction route.
+///
+/// The variant follows the tensor's own representation instead of materializing it, which is what keeps
+/// [`contract_pair_on_session`](crate::contract_pair_on_session) from entering an owning eager runtime -
+/// or the process-global one - while the caller's concrete session is open.
+pub(crate) enum SessionDenseOperand<'a> {
+    /// Owned dense host storage, with the operand's logical dimensions.
+    Storage(Arc<Storage>, Vec<usize>),
+    /// A borrowed read representation of an untracked eager host value, with the logical rank.
+    ///
+    /// Boxed because a read representation is much larger than the storage variant, and this enum is
+    /// passed by value.
+    Read(Box<TensorRead<'a>>, usize),
+}
+
+impl IdxTensor {
+    /// Prepare this tensor as a dense host operand for the explicit-session contraction route.
+    ///
+    /// Every representation and dtype this slice does not serve is refused with a typed error naming
+    /// `operation`, so neither AD tracking nor a structured payload can be dropped silently, and no
+    /// default-context entry happens behind the caller's held session.
+    pub(crate) fn session_dense_operand(
+        &self,
+        operation: &'static str,
+    ) -> std::result::Result<SessionDenseOperand<'_>, IdxTensorError> {
+        let refuse = |reason: String| IdxTensorError::operation(operation, anyhow::anyhow!(reason));
+        // A retained deferred error takes precedence over the representation refusals below: it is the
+        // failure that actually happened, and the metadata queries used there read through the retained
+        // source, so reporting a generic refusal instead would lose its typed source.
+        if let IdxTensorStorage::Deferred { error, .. } = &self.storage {
+            return Err(IdxTensorError::Storage {
+                source: error.as_ref().clone(),
+            });
+        }
+        if self.tracks_grad() {
+            return Err(refuse(
+                "a tracked value cannot enter the plain explicit-session route; detach it explicitly before the region"
+                    .to_string(),
+            ));
+        }
+        if self.is_cuda_resident() {
+            return Err(refuse(
+                "a device-resident operand needs the resident plan route, not the host session route"
+                    .to_string(),
+            ));
+        }
+        let rank = self.indices.len();
+        let dense = Self::dense_axis_classes(rank);
+        let dims = self.dims();
+        match &self.storage {
+            IdxTensorStorage::Materialized(storage) => {
+                if storage.axis_classes() != dense.as_slice() {
+                    return Err(refuse(
+                        "a non-dense (diagonal or structured) payload is not served by this slice"
+                            .to_string(),
+                    ));
+                }
+                Ok(SessionDenseOperand::Storage(storage.clone(), dims))
+            }
+            IdxTensorStorage::Eager {
+                inner,
+                axis_classes,
+            } => {
+                if axis_classes.as_slice() != dense.as_slice() {
+                    return Err(refuse(
+                        "a non-dense (diagonal or structured) payload is not served by this slice"
+                            .to_string(),
+                    ));
+                }
+                match inner.dtype() {
+                    DType::F64 | DType::C64 => Ok(SessionDenseOperand::Read(
+                        Box::new(inner.tensor_read()),
+                        rank,
+                    )),
+                    other => Err(refuse(format!(
+                        "this route serves f64 and c64 operands, not {other:?}"
+                    ))),
+                }
+            }
+            IdxTensorStorage::Compact(_) => Err(refuse(
+                "a compact structured payload is not served by this slice".to_string(),
+            )),
+            IdxTensorStorage::Deferred { error, .. } => Err(IdxTensorError::Storage {
+                source: error.as_ref().clone(),
+            }),
+        }
+    }
+
+    /// Whether every index of this tensor is distinct.
+    ///
+    /// The contraction planner assumes it: a repeated index makes its result-length arithmetic
+    /// underflow, and the public API can produce one (`replace_indices`) without validating. The
+    /// explicit-session route refuses such an operand before planning instead.
+    pub(crate) fn has_unique_indices(&self) -> bool {
+        let mut seen = HashSet::with_capacity(self.indices.len());
+        self.indices.iter().all(|index| seen.insert(index))
+    }
+
+    /// Publish a concrete dense result as this crate's indexed tensor.
+    ///
+    /// Only `f64` and `c64` are accepted: compact storage has no other scalar kind, and widening a
+    /// narrower result here would change its precision silently.
+    pub(crate) fn publish_dense_session_result(
+        indices: Vec<DynIndex>,
+        value: &NativeTensor,
+    ) -> std::result::Result<Self, IdxTensorError> {
+        let dims: Vec<usize> = value.shape().to_vec();
+        let storage = match value.dtype() {
+            DType::F64 => value
+                .as_slice::<f64>()
+                .map(|data| Storage::from_dense_col_major(data.to_vec(), &dims)),
+            DType::C64 => value
+                .as_slice::<Complex64>()
+                .map(|data| Storage::from_dense_col_major(data.to_vec(), &dims)),
+            other => {
+                return Err(IdxTensorError::operation(
+                    "contract_pair_on_session",
+                    anyhow::anyhow!(format!(
+                        "the explicit-session route publishes f64 and c64 results, not {other:?}"
+                    )),
+                ));
+            }
+        }
+        .map_err(|error| IdxTensorError::operation("host read", anyhow::Error::new(error)))?
+        .map_err(IdxTensorError::from)?;
+        Self::from_storage(indices, Arc::new(storage))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8885,6 +9014,35 @@ mod tests {
         );
         assert!(!conjugated.tracks_grad());
         assert!(conjugated.detach().is_err());
+    }
+
+    #[test]
+    fn session_operand_reports_a_deferred_error_before_any_representation_refusal() {
+        // The deferred representation is reached through the existing injected-failure fixture: a dense
+        // tracked value whose conjugation failed retains its graph and its original diagnostic. The route
+        // must return that storage error rather than its generic tracked-value refusal.
+        let i = DynIndex::new_dyn(2);
+        let j = DynIndex::new_dyn(2);
+        let tensor = IdxTensor::from_diag(vec![i, j], vec![1.0_f64, 2.0]).unwrap();
+        tensor.as_inner().unwrap();
+        let target = Arc::as_ptr(tensor.eager_cache.get().unwrap());
+        let deferred = conjugate_with_injected_failure(
+            &tensor,
+            target,
+            "forced eager cache conjugation failure",
+        );
+
+        let error = match deferred.session_dense_operand("contract_pair_on_session") {
+            Ok(_) => panic!("a deferred operand must be refused"),
+            Err(error) => error,
+        };
+        match error {
+            IdxTensorError::Storage { source } => assert!(
+                matches!(source, TensorStorageError::Conjugation { .. }),
+                "the deferred diagnostic must survive: {source:?}"
+            ),
+            other => panic!("expected the deferred storage error, got {other:?}"),
+        }
     }
 
     #[test]

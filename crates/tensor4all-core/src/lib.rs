@@ -144,6 +144,7 @@ pub use defaults::contract::{
     outer_product, print_and_reset_contract_profile, reset_contract_profile, tensordot,
     ContractionOptions, PairwiseContractionOptions, PreparedContraction,
 };
+pub use defaults::contract_pair_on_session;
 pub use defaults::idx_tensor::{
     print_and_reset_pairwise_contract_profile, reset_pairwise_contract_profile,
 };
