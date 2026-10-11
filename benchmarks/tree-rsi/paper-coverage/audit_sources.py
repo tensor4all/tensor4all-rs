@@ -1,5 +1,5 @@
 """Capture source evidence and active dependency graphs, including untracked files."""
-import json,pathlib,re,subprocess
+import json,os,pathlib,re,subprocess
 from fixtures import OUT,ROOT,AUTHOR,save,sha
 
 def evidence(path,patterns):
@@ -19,8 +19,9 @@ def main():
     result['author_dmrg']=evidence(AUTHOR/'test/mps_dmrg.py',[r'fulleval_thres',r'tt_to_tensor',r'eps=',r'oversampling =',r'skdim ='])
     result['author_lu']=evidence(AUTHOR/'src/rank_revealing.py',[r'def prrldu',r'k = min\(Nr, Nc\)',r'while s < k',r'for s in range\(min\(k, maxdim\)\)',r'np.outer'])
     result['rust_options']=evidence(ROOT/'crates/tensor4all-treersi/src/options.rs',[r'ceil\(',r'rel_tol:',r'oversampling:',r'sketch_dim:'])
-    gw=pathlib.Path('/root/projects/gw-rs')
-    if gw.exists():
+    # Optional downstream checkout, e.g. GW_RS_PATH=../gw-rs; skipped when unset.
+    gw=pathlib.Path(os.environ['GW_RS_PATH']) if os.environ.get('GW_RS_PATH') else None
+    if gw is not None and gw.exists():
         result['downstream']={
             'g0':evidence(gw/'g0_rsi/src/main.rs',[r'tree_rsi_elementwise',r'N_TEST:',r'VAL_TOL:',r'Validation: max relerr',r'abs_tol:']),
             'product':evidence(gw/'sgw_rsi/src/ops/rsi.rs',[r'tree_rsi_elementwise',r'local_pivot_error',r'abs_tol:',r'let error']),
