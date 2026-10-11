@@ -34,18 +34,63 @@ release build, on the local AMD EPYC 7713P:
   times come from a different model, tree size and oracle cost. What it establishes is the direction - this
   path over-parallelizes - which is one of the three mechanisms the report left open.
 
+## 1.1 Measured: an ablation of the global pivot search, with the process's own thread and CPU figures
+
+The same bench now also reports, per repetition, the peak number of process threads sampled while the stage ran
+and the process's own CPU ticks across the call, and it can run the stage with the global pivot search disabled
+(`T4A_G0_GLOBAL_PIVOTS=0`). The seed is pinned, so the two configurations differ in the search and not in the
+random stream. 16 sites, local dimension 4, three repetitions per run:
+
+| configuration | elapsed | peak process threads | CPU ticks (10 ms) |
+| --- | ---: | ---: | ---: |
+| global pivots on, 1 worker | 23.5 / 19.0 / 19.2 ms | 2 | 2 |
+| global pivots on, 4 workers | 25.2 / 25.2 / 25.4 ms | 6 | 3 / 4 / 5 |
+| global pivots on, 64 workers | 27.5 / 25.8 / 26.3 ms | 66 | 7 / 9 / 10 |
+| global pivots off, 1 worker | 3.47 / 2.52 / 2.51 ms | 2 | 0 (below tick resolution) |
+| global pivots off, 4 workers | 5.96 / 4.90 / 4.72 ms | 6 | 1 / 2 / 0 |
+
+- **Disabling the search removes about 85-90% of this stage's end-to-end time at one worker** (19-24 ms to
+  2.5-3.5 ms) and about 77-81% at four workers. This is an *ablation*, not a measurement of the search alone:
+  disabling it also removes any pivots it would have accepted, so the remaining time covers initialization,
+  candidate generation, oracle evaluation, LUCI factorization and assembly, and the final materialization -
+  not only "sweep contractions", which an earlier revision of this record said.
+- **The ablation did the same sweep work in both configurations**: every run reports `Converged` with the same
+  complete ranks history (`[2, 2, 2]`) and the same error history, and the ranks history has one entry per
+  iteration, so the iteration counts match. That does not establish identical per-edge ranks, pivot sets or
+  candidate work, and the search itself draws random starts, so it is a strong but not complete check.
+- **Larger worker budgets were slower in every displayed repetition**, in both configurations (19-24 ms to
+  25-28 ms with the search; 2.5-3.5 ms to 4.7-6.0 ms without it), so the effect is not confined to the search.
+- **The extra CPU is not buying wall time**: the process's own CPU ticks rise from 2 to 7-10 per 20-27 ms run
+  as the budget grows, while the wall time rises too, and most of a 64-core machine stays idle. That is
+  *consistent with* scheduling and pool overhead - wake-ups, spin, and repeated pool entry on tiny operands -
+  rather than useful parallelism; it does not attribute the cost to work inside any particular operation, and
+  process-wide totals cannot say which workers did what. Nested tasks can also reuse one pool, so the peak
+  thread count does not distinguish nesting from repeated entry.
+- The CPU figures come from `USER_HZ` ticks (10 ms granularity) and are reported as raw tick deltas next to the
+  conversion, with a ratio only when the delta can support one; the ~3 ms runs are reported as below that
+  resolution rather than as zero. The thread count is a sampled maximum over an interval that approximately
+  covers the call, and the sampler's own thread is included.
+- The 16-site `G0` shape is still small. Whether a downstream `R=10` run with a more expensive oracle behaves
+  the same **may differ, and is not measured here**.
+
 ## 2. What remains open
 
-- **Which mechanism dominates.** This measurement shows that extra workers hurt, but not whether the cost is
-  nested parallelism inside the SRC/probe contractions, per-contraction pool wake-ups on tiny operands, or
-  the global pivot search's materialization and evaluation. CPU utilization and peak-thread measurements, plus
-  a per-stage breakdown (pivot search vs materialization vs evaluation vs factorization), would separate them.
-- **Where the budget can be controlled.** The G0 path reaches the process-global context from
-  `tensor4all-treetn`'s SRC contraction arms and their helpers (`treetn/contraction.rs` and its
-  `contraction/src_chain.rs` and `src_probe.rs` modules call `default_cpu_execution_context()` in many
-  places), and `tensor4all-treetci` has no execution-context parameter at all. Giving `G0` its own budget
-  therefore needs a control surface threaded from the TCI entry point down to those call sites, or an
-  explicitly scoped budget override - not just a documentation change. That work is **not** in this record.
+- **Which mechanism dominates, now narrowed but not settled.** §1.1 shows the global pivot search is ~90% of
+  the stage and that both it and the sweep contractions get slower with more workers, while CPU stays mostly
+  idle. That is consistent with pool wake-up and spin overhead on tiny operands rather than with useful
+  parallelism. It does not yet separate nested parallelism inside the SRC/probe contractions from
+  per-contraction pool wake-ups, nor does it break the search into materialization versus evaluation.
+- **Where the budget can be controlled.** `tensor4all-treetci` has no execution-context parameter at all
+  (`src/api.rs`'s entry points take options, pivots, a graph and a proposer). Its numerical work therefore
+  reaches the process-global context elsewhere: the full-pivot-LU solves the TCI path performs go through
+  `with_default_session` in `tensor4all-tensorbackend/src/backend.rs` (the solve at `:228`), whose worker count
+  is the process-global context's. An earlier revision of this record pointed at the TreeTN SRC contraction
+  helpers instead, and that was wrong: the `default_cpu_execution_context()` occurrences in
+  `treetn/contraction/src_chain.rs` and `src_probe.rs` are inside their `#[cfg(test)]` modules, and the
+  production SRC path already has a context-scoped entry (`contract_src_with_rng_in`). Giving `G0` its own
+  budget needs a control surface threaded from the TCI entry point to the operations that actually run - the
+  LUCI solves and whatever else the path calls - or an explicitly scoped budget override. That work is **not**
+  in this record, and the ablated path above is not an SRC measurement.
 - **The downstream workaround stays valid.** The child-process isolation the report describes achieves a
   stage-local budget today; nothing here replaces it.
 
@@ -54,5 +99,6 @@ release build, on the local AMD EPYC 7713P:
 - The bench prints the requested and observed worker counts, every repetition's stage time, the resulting
   ranks and the final error, so a run is self-describing and the two configurations are compared on the same
   workload in the same binary.
-- Limits: one machine, one tree shape, three repetitions, release build, and a cheap integrator. No CPU
-  utilization or peak-thread instrumentation, no CUDA path, and no downstream reproduction.
+- Limits: one machine, one tree shape, release build, a cheap integrator, and (for the CPU figures) `USER_HZ`
+  at 10 ms granularity. No per-operation or per-worker attribution, no CUDA path, and no downstream
+  reproduction.
