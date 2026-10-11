@@ -162,6 +162,12 @@ fn main() -> Result<(), Error> {
                 min_sweeps: request["min_sweeps"].as_u64().unwrap_or(2) as usize,
                 rng_seed: seed,
                 root: Some(root),
+                max_working_bytes: request["max_working_bytes"]
+                    .as_u64()
+                    .map(|b| b as usize)
+                    .unwrap_or(
+                        tensor4all_treeaci::TreeAciOptions::<usize>::default().max_working_bytes,
+                    ),
                 ..Default::default()
             };
             let result = tensor4all_treeaci::hadamard_many::<f64, _>(&inputs, &options)?;

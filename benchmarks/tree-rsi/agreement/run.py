@@ -69,11 +69,10 @@ def chain_edges(n):
     return [(i, i + 1) for i in range(n - 1)]
 
 
-def g0_like_pair(nbits):
+def g0_like_pair(nbits, eta=0.08):
     kx, ky, w = bits_grid(nbits, 3)
     eps = -0.5 * (np.cos(2 * np.pi * kx) + np.cos(2 * np.pi * ky))
     omega = 2.0 * (w - 0.5)
-    eta = 0.08
     f = eta / ((omega - eps) ** 2 + eta ** 2)
     g = np.exp(-((omega - 0.2) ** 2) / 0.3) * (1.0 + 0.5 * np.cos(2 * np.pi * kx) * np.cos(2 * np.pi * ky))
     return f, g
@@ -143,6 +142,26 @@ def make_cases(author):
                     ref="dense", input_rtol=1e-8,
                     note="G0-like (kx,ky,omega) 3x8 bits, gw-rs comb (CTTN), junction degree 3, inputs at 1e-8")
 
+    def comb_case(nbits, pair, note, caps, root=1):
+        f, g = pair
+        return dict(kind="tree", dense=[f, g], edges=comb_edges(nbits), caps=caps, ref="dense",
+                    input_rtol=1e-8, root=root, junction=1, aci_max_working_bytes=6 << 30,
+                    note=note + f", gw-rs comb (CTTN) {nbits} bits/axis, junction ky0 degree 3, root {root}, inputs at 1e-8")
+
+    def ball_pair(nbits):
+        kx, ky, w = bits_grid(nbits, 3)
+        f = 1.0 / (1.0 + 20.0 * ((kx - 0.5) ** 2 + (ky - 0.45) ** 2 + (w - 0.55) ** 2))
+        g = np.cos(2 * np.pi * (kx + 2 * ky + 3 * w)) * np.exp(-((kx - 0.3) ** 2 + (w - 0.6) ** 2) / 0.2)
+        return f, g
+
+    cases["g0_comb8_big"] = lambda: comb_case(8, g0_like_pair(8), "G0-like eta 0.08", [256, 384])
+    cases["g0_comb8_leafroot"] = lambda: comb_case(8, g0_like_pair(8), "G0-like eta 0.08",
+                                                   [64, 128, 192, 256], root=2 + 3 * 7)
+    cases["g0_comb8_eta02"] = lambda: comb_case(8, g0_like_pair(8, 0.2), "G0-like eta 0.2",
+                                                [32, 64, 96, 128, 192])
+    cases["ball_comb8"] = lambda: comb_case(8, ball_pair(8), "3D Lorentzian ball x 3D plane wave",
+                                            [32, 64, 96, 128, 192, 256])
+    cases["g0_comb9"] = lambda: comb_case(9, g0_like_pair(9), "G0-like eta 0.08", [64, 128, 192, 256, 384])
     cases["g0_grouped"] = g0_grouped
     cases["g0_comb8"] = g0_comb8
     cases["qtt_gauss"] = gauss
@@ -168,8 +187,9 @@ def materialize(case):
         del case["dense"]
     case["n"] = n
     case["physical_dims"] = [int(c["array"].shape[-1]) for c in case["operands"][0]]
-    # Root: the paper's left-to-right order on chains; the degree-3 junction on combs.
-    case["root"] = n - 1 if case["kind"] == "tt" else 1
+    # Root: the paper's left-to-right order on chains; the degree-3 junction on combs
+    # unless the case names another root.
+    case.setdefault("root", n - 1 if case["kind"] == "tt" else 1)
     if case["kind"] == "tt":
         case["tt"] = [tn.tt_from_fixture(o) for o in case["operands"]]
     if case["ref"] == "dense":
@@ -334,7 +354,7 @@ def main():
             case["caps"] = [int(c) for c in args.caps.split(",")]
         fixture = out / name / "fixture"
         write_fixture(case, fixture)
-        header = {"case": name, "kind": case["kind"], "n": case["n"], "note": case["note"],
+        header = {"case": name, "kind": case["kind"], "n": case["n"], "note": case["note"], "root": case["root"],
                   "physical_dims": sorted(set(case["physical_dims"])), "input_ranks": case["input_ranks"],
                   "reference": case["ref"], "input_error": case.get("input_error"),
                   "input_rtol": case.get("input_rtol", 1e-12),
@@ -352,7 +372,10 @@ def main():
                 row[f"rsi_s{seed}"] = summarize(case, rec, cores)
                 outputs[f"rsi_s{seed}"] = cores
             # TreeACI from the same source tree.
-            rec, cores = run_worker(worker, fixture, "aci", {"cap": cap, "seed": 1, "root": case["root"]},
+            aci_request = {"cap": cap, "seed": 1, "root": case["root"]}
+            if "aci_max_working_bytes" in case:
+                aci_request["max_working_bytes"] = case["aci_max_working_bytes"]
+            rec, cores = run_worker(worker, fixture, "aci", aci_request,
                                     out / name / f"aci-c{cap}")
             row["aci"] = summarize(case, rec, cores)
             outputs["aci"] = cores
@@ -396,6 +419,11 @@ def summarize(case, rec, cores):
         out["termination"] = d["termination"]
     else:
         out["sketch_dim"] = d["sketch_dim"]
+        out["sketched_edges"] = sum(1 for e in d["edges"] if not e["exact_columns"])
+        if "junction" in case:
+            j = case["junction"]
+            out["junction_edges"] = [[e["child"], e["parent"], "exact" if e["exact_columns"] else "sketched"]
+                                     for e in d["edges"] if j in (e["child"], e["parent"])]
     return out
 
 

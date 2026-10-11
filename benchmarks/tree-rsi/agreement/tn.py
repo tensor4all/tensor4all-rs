@@ -100,7 +100,10 @@ def tree_to_dense(cores):
             sites += s
         sites = sorted(sites)
         out = sites + ([bond[(min(v, parent[v]), max(v, parent[v]))]] if parent[v] is not None else [])
-        sub[v] = (np.einsum(*operands, out, optimize=True), out, sites)
+        # einsum accepts at most 52 labels; renumber the ones this call uses.
+        used = {lab: i for i, lab in enumerate(sorted({x for ops in operands[1::2] for x in ops} | set(out)))}
+        local = [x if i % 2 == 0 else [used[y] for y in x] for i, x in enumerate(operands)]
+        sub[v] = (np.einsum(*local, [used[y] for y in out], optimize=True), out, sites)
     return sub[root][0]
 
 
