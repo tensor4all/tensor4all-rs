@@ -14,26 +14,37 @@ use tensor4all_treersi::{hadamard_many, TreeRsiOptions};
 use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
 
 type Tree = TreeTN<IdxTensor, usize>;
-const TARGET: f64 = 1e-8;
-const SAMPLES: usize = 2048;
-const BLOCKS: usize = 3;
-const SEEDS: [u64; 3] = [1, 2, 3];
-const CASES: [(&str, usize, usize); 6] = [
-    ("chain", 16, 2),
-    ("chain", 32, 2),
-    ("chain", 32, 4),
-    ("chain", 64, 4),
-    ("binary", 15, 2),
-    ("star", 64, 1),
-];
+type Error = Box<dyn std::error::Error>;
 
-fn values(
-    tree: &Tree,
-    sites: &[DynIndex],
-    points: &[usize],
-) -> Result<Vec<f64>, Box<dyn std::error::Error>> {
+/// Fixed experiment settings; `main` always uses [`PROTOCOL`].
+struct Protocol<'a> {
+    cases: &'a [(&'a str, usize, usize)],
+    seeds: &'a [u64],
+    blocks: usize,
+    samples: usize,
+    target: f64,
+    algorithms: [&'a str; 2],
+}
+
+const PROTOCOL: Protocol<'static> = Protocol {
+    cases: &[
+        ("chain", 16, 2),
+        ("chain", 32, 2),
+        ("chain", 32, 4),
+        ("chain", 64, 4),
+        ("binary", 15, 2),
+        ("star", 64, 1),
+    ],
+    seeds: &[1, 2, 3],
+    blocks: 3,
+    samples: 2048,
+    target: 1e-8,
+    algorithms: ["rsi", "treeaci"],
+};
+
+fn values(tree: &Tree, sites: &[DynIndex], points: &[usize]) -> Result<Vec<f64>, Error> {
     let mut evaluator = TreeTNCachedEvaluator::new(tree, sites, CachedEvaluatorOptions::default())?;
-    let mut out = Vec::with_capacity(SAMPLES);
+    let mut out = Vec::with_capacity(points.len() / sites.len());
     for chunk in points.chunks(sites.len() * 512) {
         for x in evaluator.evaluate_batched(ColMajorArrayRef::new(
             chunk,
@@ -124,30 +135,49 @@ fn run(
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Error> {
     let path = std::env::args()
         .nth(1)
         .ok_or("supply a new output path; use benchmarks/tree-rsi/run.py")?;
+    experiment(
+        &PROTOCOL,
+        &path,
+        &std::env::var("RSI_SOURCE_SHA256")?,
+        &std::env::var("RSI_BINARY_SHA256")?,
+    )
+}
+
+fn experiment(
+    protocol: &Protocol<'_>,
+    path: &str,
+    source_sha256: &str,
+    binary_sha256: &str,
+) -> Result<(), Error> {
+    let Protocol {
+        cases,
+        seeds,
+        blocks: timing_blocks,
+        samples,
+        target,
+        algorithms,
+    } = *protocol;
     if let Some(parent) = Path::new(&path).parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&path)?;
+    let mut file = OpenOptions::new().create_new(true).write(true).open(path)?;
     let mut write = |value: serde_json::Value| -> std::io::Result<()> {
         writeln!(file, "{value}")?;
         file.flush()
     };
     write(
-        json!({"type":"protocol","cases":CASES,"seeds":SEEDS,"blocks":BLOCKS,"samples":SAMPLES,
-        "sample_seed":20260929u64,"target":TARGET,"metric":"sampled relative L2 of amplitude differences",
+        json!({"type":"protocol","cases":cases,"seeds":seeds,"blocks":timing_blocks,"samples":samples,
+        "sample_seed":20260929u64,"target":target,"metric":"sampled relative L2 of amplitude differences",
         "timed_region":"public product call on prebuilt inputs; includes API RNG initialization",
         "selection":"one fixed setting, no grid search; all seeds must meet target before timing a case",
-        "source_sha256":std::env::var("RSI_SOURCE_SHA256")?,"binary_sha256":std::env::var("RSI_BINARY_SHA256")?}),
+        "source_sha256":source_sha256,"binary_sha256":binary_sha256}),
     )?;
     let mut accepted = true;
-    for (topology, n, bond) in CASES {
+    for &(topology, n, bond) in cases {
         let name = format!("{topology}-n{n}-chi{bond}");
         let sites = (0..n).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
         let edges = (1..n)
@@ -171,7 +201,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .collect::<Vec<_>>();
         let mut rng = ChaCha8Rng::seed_from_u64(20260929);
-        let points = (0..n * SAMPLES)
+        let points = (0..n * samples)
             .map(|_| rng.random_range(0..2usize))
             .collect::<Vec<_>>();
         // Input truth is evaluated once, outside every warmup and timed call.
@@ -183,13 +213,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if phase == "timing" && !case_ok {
                 continue;
             }
-            let blocks = if phase == "accuracy" { 1 } else { BLOCKS };
+            let blocks = if phase == "accuracy" {
+                1
+            } else {
+                timing_blocks
+            };
             for block in 0..blocks {
-                for seed in SEEDS {
+                for &seed in seeds {
+                    let [first, second] = algorithms;
                     let order = if (block + seed as usize).is_multiple_of(2) {
-                        ["rsi", "treeaci"]
+                        [first, second]
                     } else {
-                        ["treeaci", "rsi"]
+                        [second, first]
                     };
                     for algorithm in order {
                         match run(algorithm, &inputs, bond * bond, seed, n - 1).and_then(
@@ -201,7 +236,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             },
                         ) {
                             Ok((seconds, error, diagnostics)) => {
-                                case_ok &= error.is_some_and(|e| e <= TARGET);
+                                case_ok &= error.is_some_and(|e| e <= target);
                                 write(
                                     json!({"type":"observation","case":name,"phase":phase,"block":block,
                                     "seed":seed,"algorithm":algorithm,"seconds":seconds,"error":error,"cap":bond*bond,"diagnostics":diagnostics}),
@@ -231,7 +266,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::relative_error;
+    use super::{experiment, relative_error, run, Protocol};
+
+    fn protocol(target: f64, algorithms: [&'static str; 2]) -> Protocol<'static> {
+        Protocol {
+            cases: &[("chain", 4, 2), ("binary", 3, 1), ("star", 4, 1)],
+            seeds: &[1, 2],
+            blocks: 1,
+            samples: 16,
+            target,
+            algorithms,
+        }
+    }
+
+    fn records(
+        target: f64,
+        algorithms: [&'static str; 2],
+        tag: &str,
+    ) -> (bool, Vec<serde_json::Value>) {
+        let dir = std::env::temp_dir().join(format!("tree-rsi-bench-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("out.jsonl");
+        let ok = experiment(
+            &protocol(target, algorithms),
+            path.to_str().unwrap(),
+            "src",
+            "bin",
+        )
+        .is_ok();
+        let lines = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        std::fs::remove_dir_all(&dir).unwrap();
+        (ok, lines)
+    }
+
+    #[test]
+    fn exact_caps_pass_and_reach_the_timing_phase() {
+        // Caps chi^2 hold the exact product, so both algorithms are exact.
+        let (ok, lines) = records(1e-8, ["rsi", "treeaci"], "pass");
+        assert!(ok);
+        assert_eq!(lines[0]["type"], "protocol");
+        assert_eq!(lines[0]["source_sha256"], "src");
+        let observations = lines.iter().filter(|l| l["type"] == "observation");
+        let timing = observations
+            .clone()
+            .filter(|l| l["phase"] == "timing")
+            .count();
+        assert_eq!(timing, 3 * 2 * 2); // cases x seeds x algorithms, one block
+        for record in observations {
+            assert!(record["error"].as_f64().unwrap() <= 1e-8, "{record}");
+            assert!(!record["diagnostics"]["edge_ranks"]
+                .as_array()
+                .unwrap()
+                .is_empty());
+        }
+    }
+
+    #[test]
+    fn missed_targets_and_failures_skip_timing_and_reject_the_run() {
+        let (ok, lines) = records(-1.0, ["rsi", "treeaci"], "miss");
+        assert!(!ok);
+        assert!(lines.iter().all(|l| l["phase"] != "timing"));
+        let (ok, lines) = records(1e-8, ["rsi", "unknown"], "fail");
+        assert!(!ok);
+        assert!(lines
+            .iter()
+            .any(|l| l["type"] == "failure" && l["failure"] == "unknown algorithm"));
+        assert!(run("unknown", &[], 1, 0, 0).is_err());
+    }
     #[test]
     fn accuracy_metric_uses_amplitude_differences_and_rejects_invalid_records() {
         assert_eq!(relative_error(&[2.0, 4.0], &[1.0, 2.0]), Some(1.0));
