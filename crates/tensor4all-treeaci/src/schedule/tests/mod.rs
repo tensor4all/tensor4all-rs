@@ -368,3 +368,66 @@ fn continuous_minimum_retracing_walk_preserves_pivot_gauges_on_binary_tree() {
         .zip(expected)
         .all(|(actual, expected)| (actual - expected).abs() < 1.0e-9));
 }
+
+/// Classification and injection capacity answer different questions. A
+/// saturated bad cut may be locally rank-limited even if an accurate cut has
+/// headroom. Retain the early classification and lazy capacity scan contract.
+#[test]
+fn rank_limit_and_capacity_policy_preserve_mixed_cut_and_tolerance_semantics() {
+    let inputs = vec![product_tree(&[(0, 1), (1, 2), (2, 3)], 4)];
+    let options = TreeAciOptions {
+        tolerance: 1e-3,
+        max_bond_dim: Some(4),
+        ..TreeAciOptions::default()
+    };
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    // This test isolates the scheduler's per-cut metadata policy. No local
+    // contraction is performed with these deliberately selected dimensions.
+    state.edge_ranks = vec![2, 2, 3];
+    state.algebraic_edge_bounds = vec![2, 5, 3];
+    state.edge_scales = vec![1.0; 3];
+    for errors in [
+        vec![0.0; 3],
+        vec![0.01, 0.0, 0.0],
+        vec![0.0, 0.01, 0.0],
+        vec![0.01, 0.01, 0.0],
+    ] {
+        let expected_limited = errors == [0.01, 0.0, 0.0];
+        state.edge_errors = errors;
+        for guard in [false, true] {
+            for searches in [0, 2] {
+                let configured = TreeAciOptions {
+                    enable_global_guard: guard,
+                    nsearch_global_pivots: searches,
+                    ..options.clone()
+                };
+                assert_eq!(
+                    current_state_is_rank_limited(&state, &configured),
+                    expected_limited
+                );
+                assert_eq!(global_injection_capacities(&state, &configured), [0, 2, 0]);
+            }
+        }
+    }
+    state.edge_errors = vec![0.05, 0.0, 0.0];
+    state.edge_scales = vec![100.0; 3];
+    assert!(!current_state_is_rank_limited(&state, &options));
+    let absolute = TreeAciOptions {
+        scale_tolerance: false,
+        ..options.clone()
+    };
+    assert!(current_state_is_rank_limited(&state, &absolute));
+    let uncapped = TreeAciOptions {
+        max_bond_dim: None,
+        ..options.clone()
+    };
+    assert_eq!(global_injection_capacities(&state, &uncapped), [0, 3, 0]);
+    let saturated = TreeAciOptions {
+        max_bond_dim: Some(1),
+        ..absolute
+    };
+    assert_eq!(global_injection_capacities(&state, &saturated), [0, 0, 0]);
+    assert!(current_state_is_rank_limited(&state, &saturated));
+    state.edge_errors.fill(0.0);
+    assert!(!current_state_is_rank_limited(&state, &saturated));
+}

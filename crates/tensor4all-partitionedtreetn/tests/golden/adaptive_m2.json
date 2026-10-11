@@ -1,0 +1,4372 @@
+{
+  "about": "Frozen M2 outputs of patched_interpolate; see tests/adaptive_m2_golden.rs",
+  "scenarios": [
+    {
+      "discrete": {
+        "accepted": [
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:3",
+                  "site:4",
+                  "bond:j:1"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "bond:a:1",
+                  "site:5"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                5,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:3",
+                  "site:4",
+                  "bond:j:1"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "bond:a:1",
+                  "site:5"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                5,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          }
+        ],
+        "cache_hits": 126,
+        "engine_terminations": [],
+        "function_evaluations": 96,
+        "splits": 1,
+        "zero_projectors": []
+      },
+      "floating": {
+        "accepted": [
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 12.02230453491211,
+            "nodes": [
+              [
+                -13.190591807616022,
+                -17.312651747496023,
+                -23.083535663328046
+              ],
+              [
+                0.5710644881985996,
+                0.8209052017854872
+              ],
+              [
+                -0.5390536964233673,
+                -0.8422714006615114
+              ],
+              [
+                0.24627398411680845,
+                0.4155873481971142,
+                0.4463715962117152,
+                0.7532520686072691
+              ],
+              [
+                1.0
+              ],
+              [
+                1.0,
+                0.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 140.182124376297,
+            "nodes": [
+              [
+                92.48441407293302,
+                144.50689698895775,
+                208.08993166409917
+              ],
+              [
+                -0.4830773429113347,
+                -0.8755776840267941
+              ],
+              [
+                -0.4362735065193694,
+                -0.8998141071961995
+              ],
+              [
+                0.14429406630347058,
+                0.3336800283267757,
+                0.36975354490264345,
+                0.8550550725873629
+              ],
+              [
+                1.0
+              ],
+              [
+                0.0,
+                1.0
+              ]
+            ]
+          }
+        ],
+        "engine_calls": [],
+        "reference_scale": 10.0
+      },
+      "name": "dense_split_at_junction"
+    },
+    {
+      "discrete": {
+        "accepted": [
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:3",
+                  "bond:j:1",
+                  "site:4"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "site:5",
+                  "bond:a:1"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                4,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:3",
+                  "bond:j:1",
+                  "site:4"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "site:5",
+                  "bond:a:1"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                4,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          }
+        ],
+        "cache_hits": 126,
+        "engine_terminations": [],
+        "function_evaluations": 96,
+        "splits": 1,
+        "zero_projectors": []
+      },
+      "floating": {
+        "accepted": [
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 12.851428985595703,
+            "nodes": [
+              [
+                -13.893326959114809,
+                -18.234991633838117,
+                -24.313322178450903
+              ],
+              [
+                0.5710644881985996,
+                0.8209052017854872
+              ],
+              [
+                0.5390536964233673,
+                0.8422714006615114
+              ],
+              [
+                0.5098023903017329,
+                0.8602915336341743,
+                0.0,
+                0.0
+              ],
+              [
+                1.0
+              ],
+              [
+                -0.45864291977025123,
+                -0.8886206570548643
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 140.182124376297,
+            "nodes": [
+              [
+                -91.44031736122572,
+                -142.87549587691475,
+                -205.7407140627577
+              ],
+              [
+                0.4830773429113344,
+                0.8755776840267944
+              ],
+              [
+                -0.43627350651936947,
+                -0.8998141071961995
+              ],
+              [
+                0.0,
+                0.0,
+                0.396911150685467,
+                0.9178570359601426
+              ],
+              [
+                1.0
+              ],
+              [
+                0.3350096676548046,
+                0.9422146902791408
+              ]
+            ]
+          }
+        ],
+        "engine_calls": [],
+        "reference_scale": 10.0
+      },
+      "name": "dense_split_at_multi_site_node"
+    },
+    {
+      "discrete": {
+        "accepted": [
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:3",
+                  "site:4"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "site:5",
+                  "bond:a:1"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                3,
+                0
+              ],
+              [
+                4,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:3",
+                  "site:4"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "site:5",
+                  "bond:a:1"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                3,
+                0
+              ],
+              [
+                4,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:3",
+                  "site:4"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "site:5",
+                  "bond:a:1"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                3,
+                1
+              ],
+              [
+                4,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:3",
+                  "site:4"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "site:5",
+                  "bond:a:1"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                3,
+                1
+              ],
+              [
+                4,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          }
+        ],
+        "cache_hits": 262,
+        "engine_terminations": [],
+        "function_evaluations": 96,
+        "splits": 3,
+        "zero_projectors": []
+      },
+      "floating": {
+        "accepted": [
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 7.61566162109375,
+            "nodes": [
+              [
+                7.082851293000234,
+                9.2962423220628,
+                12.394989762750406
+              ],
+              [
+                -0.5710644881985998,
+                -0.8209052017854871
+              ],
+              [
+                -0.5390536964233674,
+                -0.8422714006615114
+              ],
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                1.0
+              ],
+              [
+                0.4586429197702521,
+                0.8886206570548639
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 60.61929702758789,
+            "nodes": [
+              [
+                36.293681582888325,
+                56.70887747326307,
+                81.66078356149877
+              ],
+              [
+                0.4830773429113347,
+                0.8755776840267941
+              ],
+              [
+                -0.43627350651936936,
+                -0.8998141071961995
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                1.0
+              ],
+              [
+                -0.3350096676548059,
+                -0.9422146902791405
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 166.9761848449707,
+            "nodes": [
+              [
+                74.25433548370371,
+                134.58598306421314,
+                204.19942258018554
+              ],
+              [
+                -0.4157597602677943,
+                -0.9094744755858001
+              ],
+              [
+                -0.3635424856527066,
+                -0.9315776194850601
+              ],
+              [
+                0.0,
+                1.0,
+                0.0,
+                0.0
+              ],
+              [
+                1.0
+              ],
+              [
+                0.2617329702427042,
+                0.9651403277699734
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 1684.125519990921,
+            "nodes": [
+              [
+                599.0464175601774,
+                1235.533236217866,
+                1946.9008570705762
+              ],
+              [
+                -0.36354248565270636,
+                -0.9315776194850603
+              ],
+              [
+                -0.31040178171134053,
+                -0.9506054564909804
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              [
+                1.0
+              ],
+              [
+                0.21409592140700764,
+                0.9768126414194711
+              ]
+            ]
+          }
+        ],
+        "engine_calls": [],
+        "reference_scale": 10.0
+      },
+      "name": "dense_every_site_of_a_node_fixed"
+    },
+    {
+      "discrete": {
+        "accepted": [
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n1:1",
+                  "site:0"
+                ],
+                "name": "n0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n0:1",
+                  "bond:n2:1",
+                  "site:1"
+                ],
+                "name": "n1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:n1:1"
+                ],
+                "name": "n2"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n1:1",
+                  "site:0"
+                ],
+                "name": "n0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n0:1",
+                  "bond:n2:1",
+                  "site:1"
+                ],
+                "name": "n1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:n1:1"
+                ],
+                "name": "n2"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n1:1",
+                  "site:0"
+                ],
+                "name": "n0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n2:1",
+                  "site:1",
+                  "bond:n0:1"
+                ],
+                "name": "n1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:n1:1"
+                ],
+                "name": "n2"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          }
+        ],
+        "cache_hits": 38,
+        "engine_terminations": [],
+        "function_evaluations": 8,
+        "splits": 2,
+        "zero_projectors": []
+      },
+      "floating": {
+        "accepted": [
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 1.5625,
+            "nodes": [
+              [
+                1.0,
+                0.0
+              ],
+              [
+                1.0,
+                0.0
+              ],
+              [
+                1.0,
+                1.5625
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 3.73828125,
+            "nodes": [
+              [
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0
+              ],
+              [
+                1.8125,
+                3.73828125
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 2.947998046875,
+            "nodes": [
+              [
+                0.0,
+                4.263655721482674
+              ],
+              [
+                -0.5710644881985998,
+                -0.8209052017854871
+              ],
+              [
+                -0.5390536964233672,
+                -0.8422714006615114
+              ]
+            ]
+          }
+        ],
+        "engine_calls": [],
+        "reference_scale": 10.0
+      },
+      "name": "dense_canonical_order_chain"
+    },
+    {
+      "discrete": {
+        "accepted": [
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:3",
+                  "site:4",
+                  "bond:j:1"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "bond:a:1",
+                  "site:5"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                0
+              ],
+              [
+                5,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:3",
+                  "site:4",
+                  "bond:j:1"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "bond:a:1",
+                  "site:5"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                1
+              ],
+              [
+                5,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:3",
+                  "site:4",
+                  "bond:j:1"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "bond:a:1",
+                  "site:5"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                2
+              ],
+              [
+                5,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          }
+        ],
+        "cache_hits": 151,
+        "engine_terminations": [],
+        "function_evaluations": 96,
+        "splits": 2,
+        "zero_projectors": [
+          [
+            [
+              5,
+              0
+            ]
+          ]
+        ]
+      },
+      "floating": {
+        "accepted": [
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 13.310408592224121,
+            "nodes": [
+              [
+                25.556771627256065,
+                0.0,
+                0.0
+              ],
+              [
+                0.5710644881985996,
+                0.8209052017854873
+              ],
+              [
+                -0.5390536964233673,
+                -0.8422714006615114
+              ],
+              [
+                -0.246273984116808,
+                -0.4155873481971144,
+                -0.4463715962117151,
+                -0.7532520686072692
+              ],
+              [
+                1.0
+              ],
+              [
+                0.0,
+                1.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 97.34869748353958,
+            "nodes": [
+              [
+                0.0,
+                144.5068969889578,
+                0.0
+              ],
+              [
+                0.48307734291133464,
+                0.8755776840267941
+              ],
+              [
+                -0.43627350651936925,
+                -0.8998141071961995
+              ],
+              [
+                -0.14429406630347152,
+                -0.3336800283267752,
+                -0.3697535449026435,
+                -0.855055072587363
+              ],
+              [
+                1.0
+              ],
+              [
+                0.0,
+                1.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 553.1086122989655,
+            "nodes": [
+              [
+                0.0,
+                0.0,
+                720.3620628218803
+              ],
+              [
+                -0.4157597602677945,
+                -0.9094744755858001
+              ],
+              [
+                -0.36354248565270636,
+                -0.9315776194850603
+              ],
+              [
+                0.09313571738005333,
+                0.2735861698039073,
+                0.308512063821427,
+                0.9062541874754422
+              ],
+              [
+                1.0
+              ],
+              [
+                0.0,
+                1.0
+              ]
+            ]
+          }
+        ],
+        "engine_calls": [],
+        "reference_scale": 10.0
+      },
+      "name": "dense_vanishing_region"
+    },
+    {
+      "discrete": {
+        "accepted": [
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:t:1",
+                  "site:0"
+                ],
+                "name": "s"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:1",
+                  "bond:s:1"
+                ],
+                "name": "t"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:t:1",
+                  "site:0"
+                ],
+                "name": "s"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:1",
+                  "bond:s:1"
+                ],
+                "name": "t"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                2
+              ]
+            ],
+            "termination": "Converged"
+          }
+        ],
+        "cache_hits": 26,
+        "engine_terminations": [],
+        "function_evaluations": 24,
+        "splits": 1,
+        "zero_projectors": [
+          [
+            [
+              0,
+              0
+            ]
+          ]
+        ]
+      },
+      "floating": {
+        "accepted": [
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 8.0,
+            "nodes": [
+              [
+                0.0,
+                1.0,
+                0.0
+              ],
+              [
+                1.0,
+                2.0,
+                3.0,
+                4.0,
+                5.0,
+                6.0,
+                7.0,
+                8.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 3.0,
+            "nodes": [
+              [
+                0.0,
+                0.0,
+                1.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -3.0,
+                0.0,
+                0.0
+              ]
+            ]
+          }
+        ],
+        "engine_calls": [],
+        "reference_scale": 1.0
+      },
+      "name": "dense_exact_one_site_patches"
+    },
+    {
+      "discrete": {
+        "accepted": [
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n1:1",
+                  "site:0"
+                ],
+                "name": "n0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n0:1",
+                  "bond:n2:1",
+                  "site:1"
+                ],
+                "name": "n1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:n1:1"
+                ],
+                "name": "n2"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n1:1",
+                  "site:0"
+                ],
+                "name": "n0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n0:1",
+                  "bond:n2:1",
+                  "site:1"
+                ],
+                "name": "n1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:n1:1"
+                ],
+                "name": "n2"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n1:1",
+                  "site:0"
+                ],
+                "name": "n0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n0:1",
+                  "bond:n2:1",
+                  "site:1"
+                ],
+                "name": "n1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:n1:1"
+                ],
+                "name": "n2"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                1
+              ],
+              [
+                1,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n1:1",
+                  "site:0"
+                ],
+                "name": "n0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n0:1",
+                  "bond:n2:1",
+                  "site:1"
+                ],
+                "name": "n1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:n1:1"
+                ],
+                "name": "n2"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                1
+              ],
+              [
+                1,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          }
+        ],
+        "cache_hits": 22,
+        "engine_terminations": [],
+        "function_evaluations": 8,
+        "splits": 3,
+        "zero_projectors": []
+      },
+      "floating": {
+        "accepted": [
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 1.5625,
+            "nodes": [
+              [
+                1.0,
+                0.0
+              ],
+              [
+                1.0,
+                0.0
+              ],
+              [
+                1.0,
+                1.5625
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 3.73828125,
+            "nodes": [
+              [
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0
+              ],
+              [
+                1.8125,
+                3.73828125
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 4.64453125,
+            "nodes": [
+              [
+                0.0,
+                1.0
+              ],
+              [
+                1.0,
+                0.0
+              ],
+              [
+                1.8125,
+                4.64453125
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 16.185791015625,
+            "nodes": [
+              [
+                0.0,
+                1.0
+              ],
+              [
+                0.0,
+                1.0
+              ],
+              [
+                5.28515625,
+                16.185791015625
+              ]
+            ]
+          }
+        ],
+        "engine_calls": [],
+        "reference_scale": 10.0
+      },
+      "name": "dense_recycled_pivots"
+    },
+    {
+      "discrete": {
+        "accepted": [
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:3",
+                  "site:4",
+                  "bond:j:1"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "bond:a:1",
+                  "site:5"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                0
+              ],
+              [
+                5,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:3",
+                  "site:4",
+                  "bond:j:1"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "bond:a:1",
+                  "site:5"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                1
+              ],
+              [
+                5,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:3",
+                  "site:4",
+                  "bond:j:1"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "bond:a:1",
+                  "site:5"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                2
+              ],
+              [
+                5,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:3",
+                  "site:4",
+                  "bond:j:1"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "bond:a:1",
+                  "site:5"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                0
+              ],
+              [
+                5,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:3",
+                  "site:4",
+                  "bond:j:1"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "bond:a:1",
+                  "site:5"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                1
+              ],
+              [
+                5,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:3",
+                  "site:4",
+                  "bond:j:1"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "bond:a:1",
+                  "site:5"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                2
+              ],
+              [
+                5,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          }
+        ],
+        "cache_hits": 282,
+        "engine_terminations": [],
+        "function_evaluations": 96,
+        "splits": 3,
+        "zero_projectors": []
+      },
+      "floating": {
+        "accepted": [
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 6.8698883056640625,
+            "nodes": [
+              [
+                13.190591807616023,
+                0.0,
+                0.0
+              ],
+              [
+                0.5710644881985996,
+                0.8209052017854873
+              ],
+              [
+                -0.5390536964233673,
+                -0.8422714006615114
+              ],
+              [
+                -0.24627398411680712,
+                -0.4155873481971152,
+                -0.4463715962117152,
+                -0.7532520686072692
+              ],
+              [
+                1.0
+              ],
+              [
+                1.0,
+                0.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 98.86070728302002,
+            "nodes": [
+              [
+                0.0,
+                128.75500660606792,
+                0.0
+              ],
+              [
+                -0.4157597602677945,
+                -0.9094744755858001
+              ],
+              [
+                -0.3635424856527064,
+                -0.9315776194850603
+              ],
+              [
+                0.09313571738005355,
+                0.273586169803907,
+                0.3085120638214271,
+                0.9062541874754422
+              ],
+              [
+                1.0
+              ],
+              [
+                1.0,
+                0.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 790.8417320251465,
+            "nodes": [
+              [
+                0.0,
+                0.0,
+                911.1539671549883
+              ],
+              [
+                0.32226379780430436,
+                0.946649906050144
+              ],
+              [
+                -0.27025639012821795,
+                -0.9627883898317763
+              ],
+              [
+                -0.04725546107303713,
+                -0.19788224324333242,
+                -0.2274169064139814,
+                -0.952308295608547
+              ],
+              [
+                1.0
+              ],
+              [
+                1.0,
+                0.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 62.30316638946533,
+            "nodes": [
+              [
+                92.48441407293295,
+                0.0,
+                0.0
+              ],
+              [
+                -0.48307734291133464,
+                -0.8755776840267941
+              ],
+              [
+                -0.4362735065193695,
+                -0.8998141071961995
+              ],
+              [
+                0.14429406630347041,
+                0.33368002832677596,
+                0.36975354490264345,
+                0.8550550725873631
+              ],
+              [
+                1.0
+              ],
+              [
+                0.0,
+                1.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 1068.771964609623,
+            "nodes": [
+              [
+                0.0,
+                1290.9486709125356,
+                0.0
+              ],
+              [
+                0.36354248565270675,
+                0.9315776194850602
+              ],
+              [
+                0.31040178171134064,
+                0.9506054564909804
+              ],
+              [
+                0.06459642484718886,
+                0.23012476351810288,
+                0.2624229759416985,
+                0.9348818517923007
+              ],
+              [
+                1.0
+              ],
+              [
+                0.0,
+                1.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 9664.52132344246,
+            "nodes": [
+              [
+                0.0,
+                0.0,
+                10788.969187737259
+              ],
+              [
+                0.2890045919356117,
+                0.957327710786714
+              ],
+              [
+                -0.23901904712240396,
+                -0.9710148789347659
+              ],
+              [
+                -0.035997564160816786,
+                -0.17323827752393697,
+                -0.20023645064454937,
+                -0.963637918726894
+              ],
+              [
+                1.0
+              ],
+              [
+                0.0,
+                1.0
+              ]
+            ]
+          }
+        ],
+        "engine_calls": [],
+        "reference_scale": 20.0
+      },
+      "name": "dense_seeded_branched"
+    },
+    {
+      "discrete": {
+        "accepted": [
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "c64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "c64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "c64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "c64",
+                "legs": [
+                  "site:3",
+                  "site:4",
+                  "bond:j:1"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "c64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "c64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "bond:a:1",
+                  "site:5"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                5,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "c64",
+                "legs": [
+                  "bond:j:1",
+                  "site:0"
+                ],
+                "name": "a"
+              },
+              {
+                "dtype": "c64",
+                "legs": [
+                  "bond:c:1",
+                  "site:1",
+                  "bond:j:1"
+                ],
+                "name": "b"
+              },
+              {
+                "dtype": "c64",
+                "legs": [
+                  "bond:e:1",
+                  "site:2",
+                  "bond:b:1"
+                ],
+                "name": "c"
+              },
+              {
+                "dtype": "c64",
+                "legs": [
+                  "site:3",
+                  "site:4",
+                  "bond:j:1"
+                ],
+                "name": "d"
+              },
+              {
+                "dtype": "c64",
+                "legs": [
+                  "bond:c:1"
+                ],
+                "name": "e"
+              },
+              {
+                "dtype": "c64",
+                "legs": [
+                  "bond:b:1",
+                  "bond:d:1",
+                  "bond:a:1",
+                  "site:5"
+                ],
+                "name": "j"
+              }
+            ],
+            "projector": [
+              [
+                5,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          }
+        ],
+        "cache_hits": 126,
+        "engine_terminations": [],
+        "function_evaluations": 96,
+        "splits": 1,
+        "zero_projectors": []
+      },
+      "floating": {
+        "accepted": [
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 6.720672546566868,
+            "nodes": [
+              [
+                3.297647951904009,
+                6.595295903808025,
+                4.328162936874008,
+                8.656325873748031,
+                5.770883915832013,
+                11.541767831664039
+              ],
+              [
+                -0.5710644881985999,
+                -0.0,
+                -0.8209052017854871,
+                1.5023621482429126e-16
+              ],
+              [
+                -0.5390536964233673,
+                -0.0,
+                -0.8422714006615114,
+                0.0
+              ],
+              [
+                0.2462739841168084,
+                -0.0,
+                0.41558734819711396,
+                -6.442040240611586e-17,
+                0.44637159621171507,
+                -1.0762786096128063e-16,
+                0.7532520686072693,
+                -1.9363313315198997e-16
+              ],
+              [
+                1.0,
+                0.0
+              ],
+              [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 55.41185003376365,
+            "nodes": [
+              [
+                -34.68165527734985,
+                11.560551759116619,
+                -54.19008637085914,
+                18.063362123619715,
+                -78.03372437403719,
+                26.0112414580124
+              ],
+              [
+                0.4830773429113347,
+                -0.0,
+                0.8755776840267941,
+                -6.665034617723863e-17
+              ],
+              [
+                -0.4362735065193696,
+                -0.0,
+                -0.8998141071961994,
+                6.665034617723866e-17
+              ],
+              [
+                0.1442940663034706,
+                -0.0,
+                0.33368002832677546,
+                -0.0,
+                0.36975354490264345,
+                1.836329532705526e-17,
+                0.8550550725873629,
+                -1.1017977196233155e-16
+              ],
+              [
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ]
+            ]
+          }
+        ],
+        "engine_calls": [],
+        "reference_scale": 10.0
+      },
+      "name": "dense_complex"
+    },
+    {
+      "discrete": {
+        "accepted": [
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n1:1",
+                  "site:0"
+                ],
+                "name": "n0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n0:1",
+                  "bond:n2:1",
+                  "site:1"
+                ],
+                "name": "n1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:n1:1"
+                ],
+                "name": "n2"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n1:1",
+                  "site:0"
+                ],
+                "name": "n0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n0:1",
+                  "bond:n2:1",
+                  "site:1"
+                ],
+                "name": "n1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:n1:1"
+                ],
+                "name": "n2"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n1:1",
+                  "site:0"
+                ],
+                "name": "n0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n0:1",
+                  "bond:n2:1",
+                  "site:1"
+                ],
+                "name": "n1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:n1:1"
+                ],
+                "name": "n2"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                1
+              ],
+              [
+                1,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 1,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n1:1",
+                  "site:0"
+                ],
+                "name": "n0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:n0:1",
+                  "bond:n2:1",
+                  "site:1"
+                ],
+                "name": "n1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:n1:1"
+                ],
+                "name": "n2"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                1
+              ],
+              [
+                1,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          }
+        ],
+        "cache_hits": 42,
+        "engine_terminations": [],
+        "function_evaluations": 8,
+        "splits": 3,
+        "zero_projectors": []
+      },
+      "floating": {
+        "accepted": [
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 1.5625,
+            "nodes": [
+              [
+                1.0,
+                0.0
+              ],
+              [
+                1.0,
+                0.0
+              ],
+              [
+                1.0,
+                1.5625
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 2.24609375,
+            "nodes": [
+              [
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0
+              ],
+              [
+                1.4375,
+                2.24609375
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 2.05078125,
+            "nodes": [
+              [
+                0.0,
+                1.0
+              ],
+              [
+                1.0,
+                0.0
+              ],
+              [
+                1.3125,
+                2.05078125
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 2.947998046875,
+            "nodes": [
+              [
+                0.0,
+                1.0
+              ],
+              [
+                0.0,
+                1.0
+              ],
+              [
+                1.88671875,
+                2.947998046875
+              ]
+            ]
+          }
+        ],
+        "engine_calls": [],
+        "reference_scale": 2.0
+      },
+      "name": "dense_iteration_limit"
+    },
+    {
+      "discrete": {
+        "accepted": [
+          {
+            "max_bond_dim": 3,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x0:2",
+                  "bond:y0:3",
+                  "bond:z:2"
+                ],
+                "name": "r"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x1:2",
+                  "bond:r:2",
+                  "site:0"
+                ],
+                "name": "x0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:1",
+                  "bond:x2:2",
+                  "bond:x0:2"
+                ],
+                "name": "x1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:x1:2"
+                ],
+                "name": "x2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:y1:3",
+                  "bond:r:3",
+                  "site:3"
+                ],
+                "name": "y0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:4",
+                  "bond:y2:2",
+                  "bond:y0:3"
+                ],
+                "name": "y1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:5",
+                  "bond:y1:2"
+                ],
+                "name": "y2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:6",
+                  "bond:r:2"
+                ],
+                "name": "z"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                0
+              ],
+              [
+                3,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 3,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x0:2",
+                  "bond:y0:3",
+                  "bond:z:2"
+                ],
+                "name": "r"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x1:2",
+                  "bond:r:2",
+                  "site:0"
+                ],
+                "name": "x0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:1",
+                  "bond:x2:2",
+                  "bond:x0:2"
+                ],
+                "name": "x1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:x1:2"
+                ],
+                "name": "x2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:y1:3",
+                  "bond:r:3",
+                  "site:3"
+                ],
+                "name": "y0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:4",
+                  "bond:y2:2",
+                  "bond:y0:3"
+                ],
+                "name": "y1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:5",
+                  "bond:y1:2"
+                ],
+                "name": "y2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:6",
+                  "bond:r:2"
+                ],
+                "name": "z"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                0
+              ],
+              [
+                3,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 3,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x0:2",
+                  "bond:y0:3",
+                  "bond:z:2"
+                ],
+                "name": "r"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x1:2",
+                  "bond:r:2",
+                  "site:0"
+                ],
+                "name": "x0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:1",
+                  "bond:x2:2",
+                  "bond:x0:2"
+                ],
+                "name": "x1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:x1:2"
+                ],
+                "name": "x2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:y1:3",
+                  "bond:r:3",
+                  "site:3"
+                ],
+                "name": "y0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:4",
+                  "bond:y2:2",
+                  "bond:y0:3"
+                ],
+                "name": "y1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:5",
+                  "bond:y1:2"
+                ],
+                "name": "y2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:6",
+                  "bond:r:2"
+                ],
+                "name": "z"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                1
+              ],
+              [
+                3,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 3,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x0:2",
+                  "bond:y0:3",
+                  "bond:z:2"
+                ],
+                "name": "r"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x1:2",
+                  "bond:r:2",
+                  "site:0"
+                ],
+                "name": "x0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:1",
+                  "bond:x2:2",
+                  "bond:x0:2"
+                ],
+                "name": "x1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:x1:2"
+                ],
+                "name": "x2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:y1:3",
+                  "bond:r:3",
+                  "site:3"
+                ],
+                "name": "y0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:4",
+                  "bond:y2:2",
+                  "bond:y0:3"
+                ],
+                "name": "y1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:5",
+                  "bond:y1:2"
+                ],
+                "name": "y2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:6",
+                  "bond:r:2"
+                ],
+                "name": "z"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                1
+              ],
+              [
+                3,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          }
+        ],
+        "cache_hits": 8401,
+        "engine_terminations": [
+          "BondCapReached",
+          "BondCapReached",
+          "BondCapReached",
+          "Converged",
+          "Converged",
+          "Converged",
+          "Converged"
+        ],
+        "function_evaluations": 128,
+        "splits": 3,
+        "zero_projectors": []
+      },
+      "floating": {
+        "accepted": [
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 0.13329869104011136,
+            "nodes": [
+              [
+                0.13329869104011136,
+                0.10623662774740147,
+                0.0750000000140956,
+                0.05000000001751181,
+                0.09395508124580582,
+                0.06275478501484212,
+                0.048240794026740905,
+                0.043741085164934315,
+                9.397052872628792e-12,
+                1.1674535358985535e-11,
+                0.018886720830537218,
+                0.012669856676561411
+              ],
+              [
+                1.0,
+                0.0,
+                -0.0,
+                1.0,
+                0.0,
+                0.0,
+                -0.0,
+                0.0
+              ],
+              [
+                0.5152920776112763,
+                1.0,
+                -0.0033038649533101627,
+                0.0,
+                -0.2729381164169143,
+                -0.0,
+                0.004955797429965244,
+                1.0
+              ],
+              [
+                2.220446049250313e-16,
+                1.0,
+                0.9999999999999998,
+                -0.0
+              ],
+              [
+                1.0,
+                2.220446049250313e-16,
+                -4.855602750301142e-17,
+                0.0,
+                1.0000000000000002,
+                -1.1102230246251565e-16,
+                -0.0,
+                -5.191622861461213e-16,
+                1.0000000000000002,
+                0.0,
+                0.0,
+                -0.0,
+                0.0,
+                0.0,
+                -0.0,
+                -0.0,
+                -0.0,
+                0.0
+              ],
+              [
+                -0.003428020683029276,
+                1.0,
+                2.220446049250313e-16,
+                -4.855602750301142e-17,
+                0.49828598965848486,
+                0.0,
+                1.0000000000000002,
+                -1.1102230246251565e-16,
+                0.5051420310245445,
+                -0.0,
+                -5.191622861461213e-16,
+                1.0000000000000002
+              ],
+              [
+                0.0,
+                1.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                1.0,
+                -0.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 1.2886281846995953,
+            "nodes": [
+              [
+                1.2886281846995953,
+                1.0937163872589928,
+                0.10035530533569079,
+                0.14594173437706193,
+                0.7046504546596564,
+                0.6193174819615004,
+                0.8361687897997302,
+                0.694769258172662,
+                0.04815353689046053,
+                0.06916948958470795,
+                0.4447669697731043,
+                0.3753783213076669
+              ],
+              [
+                1.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.004955797429965243,
+                1.0,
+                -0.27293811641691434,
+                0.0,
+                -0.003303864953310162,
+                0.0,
+                0.5152920776112763,
+                1.0
+              ],
+              [
+                1.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              [
+                0.0,
+                -0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -0.0,
+                0.0,
+                0.0,
+                1.0,
+                -1.8041124150158794e-16,
+                3.157746004288962e-16,
+                0.0,
+                0.9999999999999999,
+                2.220446049250313e-16,
+                -0.0,
+                3.538768551447188e-16,
+                0.9999999999999993
+              ],
+              [
+                1.0,
+                -1.8041124150158794e-16,
+                3.157746004288962e-16,
+                0.06368581612536116,
+                0.0,
+                0.9999999999999999,
+                2.220446049250313e-16,
+                0.6454380612915437,
+                -0.0,
+                3.538768551447188e-16,
+                0.9999999999999993,
+                0.29087612258309453
+              ],
+              [
+                0.0,
+                1.0,
+                1.0,
+                0.0
+              ],
+              [
+                -5.551115123125783e-16,
+                1.0,
+                1.0000000000000009,
+                -0.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 0.24062500000476258,
+            "nodes": [
+              [
+                0.24062500000476258,
+                0.14027268900518905,
+                0.17500000000000002,
+                0.10000000000129526,
+                0.21875000000003236,
+                0.12501884510962416,
+                0.06562500000317506,
+                0.0393484593367927,
+                1.4832231271262073e-21,
+                8.63504075337738e-13,
+                0.043750000000021584,
+                0.025012563406416104
+              ],
+              [
+                0.0,
+                -0.0,
+                -0.0,
+                0.0,
+                1.0,
+                -2.886579864025407e-15,
+                -0.0,
+                1.0000000000000049
+              ],
+              [
+                0.7082911823574786,
+                1.0,
+                -2.886579864025407e-15,
+                0.85713567889478,
+                0.01049043087441258,
+                -0.0,
+                1.0000000000000049,
+                0.00001256193413507965
+              ],
+              [
+                -9.992007221626409e-16,
+                1.0,
+                1.000000000000001,
+                -0.0
+              ],
+              [
+                1.0,
+                5.551115123125783e-16,
+                -2.876486927457882e-15,
+                0.0,
+                1.0000000000000002,
+                -1.3877787807814457e-15,
+                -0.0,
+                -7.11102148581892e-16,
+                1.0000000000000042,
+                0.0,
+                0.0,
+                -0.0,
+                0.0,
+                0.0,
+                -0.0,
+                -0.0,
+                -0.0,
+                0.0
+              ],
+              [
+                -0.0034280206830329396,
+                1.0,
+                5.551115123125783e-16,
+                -2.876486927457882e-15,
+                0.49828598965848364,
+                0.0,
+                1.0000000000000002,
+                -1.3877787807814457e-15,
+                0.5051420310245495,
+                -0.0,
+                -7.11102148581892e-16,
+                1.0000000000000042
+              ],
+              [
+                0.0,
+                1.0,
+                1.0,
+                -0.0
+              ],
+              [
+                0.0,
+                1.0,
+                1.0,
+                -0.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 0.32812500000083916,
+            "nodes": [
+              [
+                0.32812500000083916,
+                0.1879885597499886,
+                0.2843750001533946,
+                0.25180342415379653,
+                0.2625000000799957,
+                0.19657193771899448,
+                0.15312500000055948,
+                0.08782570649999241,
+                0.1093750001022631,
+                0.12203561610253102,
+                0.08750000005333045,
+                0.08104795847932965
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                1.1102230246251565e-16,
+                0.0,
+                0.9999999999999999
+              ],
+              [
+                0.7082911823574806,
+                1.0,
+                1.1102230246251565e-16,
+                0.8571356788947817,
+                0.010490430874408959,
+                0.0,
+                0.9999999999999999,
+                0.000012561934132135185
+              ],
+              [
+                0.0,
+                1.0000000000000002,
+                1.0,
+                -3.609623098417423e-16
+              ],
+              [
+                0.0,
+                0.0,
+                -0.0,
+                -0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.9999999999999996,
+                1.1102230246251565e-16,
+                -6.66133816324761e-17,
+                -6.304134429316015e-16,
+                0.9999999999999997,
+                3.3306690738754696e-16,
+                1.2132920747818926e-15,
+                3.0332301869547316e-16,
+                0.9999999999999997
+              ],
+              [
+                1.1102230246251565e-16,
+                0.9999999999999996,
+                -6.66133816324761e-17,
+                0.6454380612915455,
+                0.9999999999999997,
+                -6.304134429316015e-16,
+                3.3306690738754696e-16,
+                0.06368581612536142,
+                3.0332301869547316e-16,
+                1.2132920747818926e-15,
+                0.9999999999999997,
+                0.2908761225830934
+              ],
+              [
+                -4.440892098500626e-16,
+                1.0,
+                1.0000000000000004,
+                -0.0
+              ],
+              [
+                -1.1102230246251565e-16,
+                1.0,
+                1.0000000000000002,
+                -0.0
+              ]
+            ]
+          }
+        ],
+        "engine_calls": [
+          {
+            "error_estimate": 1.8041124150158794e-16,
+            "tolerance": 1.2886281846995953e-8
+          },
+          {
+            "error_estimate": 1.1449174941446927e-16,
+            "tolerance": 1.2886281846995953e-8
+          },
+          {
+            "error_estimate": 3.122502256758253e-17,
+            "tolerance": 1.2886281846995953e-8
+          },
+          {
+            "error_estimate": 0.0,
+            "tolerance": 1.2886281846995953e-8
+          },
+          {
+            "error_estimate": 0.0,
+            "tolerance": 1.2886281846995953e-8
+          },
+          {
+            "error_estimate": 0.0,
+            "tolerance": 1.2886281846995953e-8
+          },
+          {
+            "error_estimate": 0.0,
+            "tolerance": 1.2886281846995953e-8
+          }
+        ],
+        "reference_scale": 1.2886281846995953
+      },
+      "name": "treetci_quantics_tree"
+    },
+    {
+      "discrete": {
+        "accepted": [
+          {
+            "max_bond_dim": 3,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x0:2",
+                  "bond:y0:3",
+                  "bond:z:2"
+                ],
+                "name": "r"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x1:2",
+                  "bond:r:2",
+                  "site:0"
+                ],
+                "name": "x0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:1",
+                  "bond:x2:2",
+                  "bond:x0:2"
+                ],
+                "name": "x1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:x1:2"
+                ],
+                "name": "x2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:y1:3",
+                  "bond:r:3",
+                  "site:3"
+                ],
+                "name": "y0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:4",
+                  "bond:y2:2",
+                  "bond:y0:3"
+                ],
+                "name": "y1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:5",
+                  "bond:y1:2"
+                ],
+                "name": "y2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:6",
+                  "bond:r:2"
+                ],
+                "name": "z"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                0
+              ],
+              [
+                3,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 3,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x0:2",
+                  "bond:y0:3",
+                  "bond:z:2"
+                ],
+                "name": "r"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x1:2",
+                  "bond:r:2",
+                  "site:0"
+                ],
+                "name": "x0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:1",
+                  "bond:x2:2",
+                  "bond:x0:2"
+                ],
+                "name": "x1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:x1:2"
+                ],
+                "name": "x2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:y1:3",
+                  "bond:r:3",
+                  "site:3"
+                ],
+                "name": "y0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:4",
+                  "bond:y2:2",
+                  "bond:y0:3"
+                ],
+                "name": "y1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:5",
+                  "bond:y1:2"
+                ],
+                "name": "y2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:6",
+                  "bond:r:2"
+                ],
+                "name": "z"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                0
+              ],
+              [
+                3,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 3,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x0:2",
+                  "bond:y0:3",
+                  "bond:z:2"
+                ],
+                "name": "r"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x1:2",
+                  "bond:r:2",
+                  "site:0"
+                ],
+                "name": "x0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:1",
+                  "bond:x2:2",
+                  "bond:x0:2"
+                ],
+                "name": "x1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:x1:2"
+                ],
+                "name": "x2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:y1:3",
+                  "bond:r:3",
+                  "site:3"
+                ],
+                "name": "y0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:4",
+                  "bond:y2:2",
+                  "bond:y0:3"
+                ],
+                "name": "y1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:5",
+                  "bond:y1:2"
+                ],
+                "name": "y2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:6",
+                  "bond:r:2"
+                ],
+                "name": "z"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                1
+              ],
+              [
+                3,
+                0
+              ]
+            ],
+            "termination": "Converged"
+          },
+          {
+            "max_bond_dim": 3,
+            "nodes": [
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x0:2",
+                  "bond:y0:3",
+                  "bond:z:2"
+                ],
+                "name": "r"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:x1:2",
+                  "bond:r:2",
+                  "site:0"
+                ],
+                "name": "x0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:1",
+                  "bond:x2:2",
+                  "bond:x0:2"
+                ],
+                "name": "x1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:2",
+                  "bond:x1:2"
+                ],
+                "name": "x2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "bond:y1:3",
+                  "bond:r:3",
+                  "site:3"
+                ],
+                "name": "y0"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:4",
+                  "bond:y2:2",
+                  "bond:y0:3"
+                ],
+                "name": "y1"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:5",
+                  "bond:y1:2"
+                ],
+                "name": "y2"
+              },
+              {
+                "dtype": "f64",
+                "legs": [
+                  "site:6",
+                  "bond:r:2"
+                ],
+                "name": "z"
+              }
+            ],
+            "projector": [
+              [
+                0,
+                1
+              ],
+              [
+                3,
+                1
+              ]
+            ],
+            "termination": "Converged"
+          }
+        ],
+        "cache_hits": 8204,
+        "engine_terminations": [
+          "BondCapReached",
+          "BondCapReached",
+          "BondCapReached",
+          "Converged",
+          "Converged",
+          "Converged",
+          "Converged"
+        ],
+        "function_evaluations": 128,
+        "splits": 3,
+        "zero_projectors": []
+      },
+      "floating": {
+        "accepted": [
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 0.13329869104011136,
+            "nodes": [
+              [
+                0.13329869104011136,
+                0.10623662774740147,
+                0.0750000000140956,
+                0.05000000001751181,
+                0.09395508124580582,
+                0.06275478501484212,
+                0.048240794026740905,
+                0.043741085164934315,
+                9.397052872628792e-12,
+                1.1674535358985535e-11,
+                0.018886720830537218,
+                0.012669856676561411
+              ],
+              [
+                1.0,
+                0.0,
+                -0.0,
+                1.0,
+                0.0,
+                0.0,
+                -0.0,
+                0.0
+              ],
+              [
+                0.5152920776112763,
+                1.0,
+                -0.0033038649533101627,
+                0.0,
+                -0.2729381164169143,
+                -0.0,
+                0.004955797429965244,
+                1.0
+              ],
+              [
+                2.220446049250313e-16,
+                1.0,
+                0.9999999999999998,
+                -0.0
+              ],
+              [
+                1.0,
+                2.220446049250313e-16,
+                -4.855602750301142e-17,
+                0.0,
+                1.0000000000000002,
+                -1.1102230246251565e-16,
+                -0.0,
+                -5.191622861461213e-16,
+                1.0000000000000002,
+                0.0,
+                0.0,
+                -0.0,
+                0.0,
+                0.0,
+                -0.0,
+                -0.0,
+                -0.0,
+                0.0
+              ],
+              [
+                -0.003428020683029276,
+                1.0,
+                2.220446049250313e-16,
+                -4.855602750301142e-17,
+                0.49828598965848486,
+                0.0,
+                1.0000000000000002,
+                -1.1102230246251565e-16,
+                0.5051420310245445,
+                -0.0,
+                -5.191622861461213e-16,
+                1.0000000000000002
+              ],
+              [
+                0.0,
+                1.0,
+                1.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                1.0,
+                -0.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 1.2886281846995953,
+            "nodes": [
+              [
+                1.2886281846995953,
+                1.0937163872589928,
+                0.10035530533569079,
+                0.14594173437706193,
+                0.7046504546596564,
+                0.6193174819615004,
+                0.8361687897997302,
+                0.694769258172662,
+                0.04815353689046053,
+                0.06916948958470795,
+                0.4447669697731043,
+                0.3753783213076669
+              ],
+              [
+                1.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.004955797429965243,
+                1.0,
+                -0.27293811641691434,
+                0.0,
+                -0.003303864953310162,
+                0.0,
+                0.5152920776112763,
+                1.0
+              ],
+              [
+                1.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              [
+                0.0,
+                -0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -0.0,
+                0.0,
+                0.0,
+                1.0,
+                -1.8041124150158794e-16,
+                3.157746004288962e-16,
+                0.0,
+                0.9999999999999999,
+                2.220446049250313e-16,
+                -0.0,
+                3.538768551447188e-16,
+                0.9999999999999993
+              ],
+              [
+                1.0,
+                -1.8041124150158794e-16,
+                3.157746004288962e-16,
+                0.06368581612536116,
+                0.0,
+                0.9999999999999999,
+                2.220446049250313e-16,
+                0.6454380612915437,
+                -0.0,
+                3.538768551447188e-16,
+                0.9999999999999993,
+                0.29087612258309453
+              ],
+              [
+                0.0,
+                1.0,
+                1.0,
+                0.0
+              ],
+              [
+                -5.551115123125783e-16,
+                1.0,
+                1.0000000000000009,
+                -0.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 0.24062500000476258,
+            "nodes": [
+              [
+                0.24062500000476258,
+                0.14027268900518905,
+                0.17500000000000002,
+                0.10000000000129526,
+                0.21875000000003236,
+                0.12501884510962416,
+                0.06562500000317506,
+                0.0393484593367927,
+                1.4832231271262073e-21,
+                8.63504075337738e-13,
+                0.043750000000021584,
+                0.025012563406416104
+              ],
+              [
+                0.0,
+                -0.0,
+                -0.0,
+                0.0,
+                1.0,
+                -2.886579864025407e-15,
+                -0.0,
+                1.0000000000000049
+              ],
+              [
+                0.7082911823574786,
+                1.0,
+                -2.886579864025407e-15,
+                0.85713567889478,
+                0.01049043087441258,
+                -0.0,
+                1.0000000000000049,
+                0.00001256193413507965
+              ],
+              [
+                -9.992007221626409e-16,
+                1.0,
+                1.000000000000001,
+                -0.0
+              ],
+              [
+                1.0,
+                5.551115123125783e-16,
+                -2.876486927457882e-15,
+                0.0,
+                1.0000000000000002,
+                -1.3877787807814457e-15,
+                -0.0,
+                -7.11102148581892e-16,
+                1.0000000000000042,
+                0.0,
+                0.0,
+                -0.0,
+                0.0,
+                0.0,
+                -0.0,
+                -0.0,
+                -0.0,
+                0.0
+              ],
+              [
+                -0.0034280206830329396,
+                1.0,
+                5.551115123125783e-16,
+                -2.876486927457882e-15,
+                0.49828598965848364,
+                0.0,
+                1.0000000000000002,
+                -1.3877787807814457e-15,
+                0.5051420310245495,
+                -0.0,
+                -7.11102148581892e-16,
+                1.0000000000000042
+              ],
+              [
+                0.0,
+                1.0,
+                1.0,
+                -0.0
+              ],
+              [
+                0.0,
+                1.0,
+                1.0,
+                -0.0
+              ]
+            ]
+          },
+          {
+            "error_estimate": 0.0,
+            "max_sample_magnitude": 0.32812500000083916,
+            "nodes": [
+              [
+                0.32812500000083916,
+                0.1879885597499886,
+                0.2843750001533946,
+                0.25180342415379653,
+                0.2625000000799957,
+                0.19657193771899448,
+                0.15312500000055948,
+                0.08782570649999241,
+                0.1093750001022631,
+                0.12203561610253102,
+                0.08750000005333045,
+                0.08104795847932965
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                1.1102230246251565e-16,
+                0.0,
+                0.9999999999999999
+              ],
+              [
+                0.7082911823574806,
+                1.0,
+                1.1102230246251565e-16,
+                0.8571356788947817,
+                0.010490430874408959,
+                0.0,
+                0.9999999999999999,
+                0.000012561934132135185
+              ],
+              [
+                0.0,
+                1.0000000000000002,
+                1.0,
+                -3.609623098417423e-16
+              ],
+              [
+                0.0,
+                0.0,
+                -0.0,
+                -0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.9999999999999996,
+                1.1102230246251565e-16,
+                -6.66133816324761e-17,
+                -6.304134429316015e-16,
+                0.9999999999999997,
+                3.3306690738754696e-16,
+                1.2132920747818926e-15,
+                3.0332301869547316e-16,
+                0.9999999999999997
+              ],
+              [
+                1.1102230246251565e-16,
+                0.9999999999999996,
+                -6.66133816324761e-17,
+                0.6454380612915455,
+                0.9999999999999997,
+                -6.304134429316015e-16,
+                3.3306690738754696e-16,
+                0.06368581612536142,
+                3.0332301869547316e-16,
+                1.2132920747818926e-15,
+                0.9999999999999997,
+                0.2908761225830934
+              ],
+              [
+                -4.440892098500626e-16,
+                1.0,
+                1.0000000000000004,
+                -0.0
+              ],
+              [
+                -1.1102230246251565e-16,
+                1.0,
+                1.0000000000000002,
+                -0.0
+              ]
+            ]
+          }
+        ],
+        "engine_calls": [
+          {
+            "error_estimate": 1.8041124150158794e-16,
+            "tolerance": 1.2886281846995953e-8
+          },
+          {
+            "error_estimate": 1.1449174941446927e-16,
+            "tolerance": 1.2886281846995953e-8
+          },
+          {
+            "error_estimate": 3.122502256758253e-17,
+            "tolerance": 1.2886281846995953e-8
+          },
+          {
+            "error_estimate": 0.0,
+            "tolerance": 1.2886281846995953e-8
+          },
+          {
+            "error_estimate": 0.0,
+            "tolerance": 1.2886281846995953e-8
+          },
+          {
+            "error_estimate": 0.0,
+            "tolerance": 1.2886281846995953e-8
+          },
+          {
+            "error_estimate": 0.0,
+            "tolerance": 1.2886281846995953e-8
+          }
+        ],
+        "reference_scale": 1.2886281846995953
+      },
+      "name": "treetci_quantics_tree_recycled"
+    }
+  ]
+}

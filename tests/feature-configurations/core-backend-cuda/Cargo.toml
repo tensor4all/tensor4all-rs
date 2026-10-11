@@ -1,0 +1,30 @@
+[package]
+name = "core-backend-cuda-config-check"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Isolated on purpose: ordinary workspace builds must not acquire a CUDA-toolkit
+# requirement, and another member's features could unify core onto a CUDA-enabled
+# build, which would stop this package from testing the mixed configuration of
+# #869. See README.md.
+[workspace]
+resolver = "2"
+
+[profile.dev]
+debug = 0
+
+[[test]]
+name = "rejection"
+path = "tests/rejection.rs"
+
+[dev-dependencies]
+# core without CUDA, backend with CUDA: the mixed configuration of #869.
+tensor4all-core = { path = "../../../crates/tensor4all-core", default-features = false, features = [
+    "tenferro-cpu-faer",
+] }
+tensor4all-tensorbackend = { path = "../../../crates/tensor4all-tensorbackend", default-features = false, features = [
+    "tenferro-cuda",
+] }
+tenferro-cpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "b3f47296244ff7b7c55ac0a75f782cb0835418c1", default-features = false }
+num-complex = "0.4"

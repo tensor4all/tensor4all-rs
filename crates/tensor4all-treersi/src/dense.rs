@@ -1,8 +1,6 @@
 //! Column-major layout adapters around context-scoped backend matrix products.
 
-use tensor4all_tensorbackend::{
-    batched_mat_mul_same_shape_owned_in, mat_mul_owned_in, CpuExecutionContext, Matrix,
-};
+use tensor4all_tensorbackend::{CpuExecutionContext, GroupedGemmJob, GroupedGemmOptions, Matrix};
 
 use crate::{
     scalar::{component_product_underflows, min_nonzero_component_magnitude},
@@ -34,7 +32,10 @@ fn gemm<T: TreeRsiScalar>(
             b.ncols(),
         )?;
     }
-    mat_mul_owned_in(a, b, context).map_err(TreeRsiError::numerical)
+    context
+        .with_concrete_session(|session| session.mat_mul(&a, &b))
+        .map_err(TreeRsiError::numerical)?
+        .map_err(TreeRsiError::numerical)
 }
 
 /// Rejects a contraction if any scalar component product would round to zero.
@@ -236,9 +237,25 @@ pub(crate) fn contract_axis_diag_probe<T: TreeRsiScalar>(
             1,
         )?;
     }
-    let data =
-        batched_mat_mul_same_shape_owned_in(k, rows, n, 1, input.data, weights.to_vec(), context)
-            .map_err(TreeRsiError::numerical)?;
+    // One matrix-vector product per probe label, all in one grouped call.
+    let jobs = (0..k)
+        .map(|batch| {
+            GroupedGemmJob::new(batch * rows, batch * input_batch_len, batch * n, rows, n, 1)
+        })
+        .collect::<Vec<_>>();
+    let mut data = vec![T::zero(); rows * k];
+    context
+        .with_concrete_session(|session| {
+            session.grouped_mat_mul_shared(
+                &input.data,
+                weights,
+                &mut data,
+                &jobs,
+                GroupedGemmOptions::default(),
+            )
+        })
+        .map_err(TreeRsiError::numerical)?
+        .map_err(TreeRsiError::numerical)?;
     Ok(Dense { dims, data })
 }
 

@@ -29,29 +29,29 @@ tenferro-cuda = [
     "tenferro-linalg/cuda",
 ]
 tenferro-cpu-faer = [
-    "tenferro/cpu-faer",
-    "tenferro-ad/cpu-faer",
-    "tenferro-cpu/cpu-faer",
+    "tenferro/native",
+    "tenferro-ad/native",
+    "tenferro-cpu/native",
     "tenferro-einsum/autodiff",
-    "tenferro-einsum/cpu-faer",
+    "tenferro-einsum/native",
     "tenferro-linalg/autodiff",
-    "tenferro-linalg/cpu-faer",
+    "tenferro-linalg/native",
 ]
 tenferro-system-blas = [
-    "tenferro/cpu-blas",
-    "tenferro-ad/cpu-blas",
-    "tenferro-cpu/cpu-blas",
+    "tenferro/blas",
+    "tenferro-ad/blas",
+    "tenferro-cpu/blas",
     "tenferro-einsum/autodiff",
-    "tenferro-einsum/cpu-blas",
+    "tenferro-einsum/blas",
     "tenferro-linalg/autodiff",
-    "tenferro-linalg/cpu-blas",
+    "tenferro-linalg/blas",
 ]
 tenferro-provider-inject = [
-    "tenferro/cpu-blas",
-    "tenferro-ad/cpu-blas",
+    "tenferro/blas",
+    "tenferro-ad/blas",
     "tenferro-cpu/provider-inject",
     "tenferro-einsum/autodiff",
-    "tenferro-einsum/cpu-blas",
+    "tenferro-einsum/blas",
     "tenferro-linalg/autodiff",
     "tenferro-linalg/provider-inject",
 ]
@@ -79,8 +79,14 @@ approx.workspace = true
 criterion.workspace = true
 
 [[bench]]
+name = "explicit_dispatch"
+harness = false
+required-features = ["global-defaults"]
+
+[[bench]]
 name = "grouped_gemm"
 harness = false
+required-features = ["global-defaults"]
 
 [[test]]
 name = "bench_einsum_native"

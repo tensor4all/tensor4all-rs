@@ -14,7 +14,9 @@ Add `tensor4all-partitionedtreetn`, a TreeTN-native successor to
 migration window. The new crate supports arbitrary named tree topologies,
 including branched trees and multiple external site indices per node.
 
-Adaptive interpolation is not part of this crate or this migration task.
+Adaptive interpolation was not part of this migration task. It is added to
+this crate later as a patch driver that depends only on the engine trait in
+`tensor4all-treetn` (see [Adaptive interpolation ownership](#adaptive-interpolation-ownership)).
 
 ## Compatibility window
 
@@ -255,13 +257,30 @@ adds global L2 error accounting and superposition output without changing the
 local `PatchingOptions::cutoff` semantics above.
 
 `adaptiveinterpolate`, `AdaptiveInterpolateOptions`, TreeTCI termination changes,
-pivot recycling, sampled-zero inference, and TreeTCI checked-arithmetic work are
-out of scope. The new crate does not depend on `tensor4all-treetci`.
+pivot recycling, sampled-zero inference, and TreeTCI checked-arithmetic work were
+out of scope of this migration. The reason was to keep the new crate free of
+TCI dependencies: it does not depend on `tensor4all-treetci`.
 
-The existing unmerged branch
-`feat/treetci-adaptive-patching@85df576` remains a separate TreeTCI work item.
-This migration neither reimplements it nor decides its public result type,
-zero-detection policy, or merge disposition.
+Amended by the [tree interpolation engine seam](tree-interpolation-engine-seam.md)
+(milestone M1 of the [tree adaptive patching roadmap](tree-adaptive-patching-roadmap.md)):
+
+- Adaptive interpolation belongs to this crate as a patch driver (milestone
+  M2) that is generic over the `TreeInterpolator` trait in
+  `tensor4all_treetn::interpolation`. The crate still depends on no
+  interpolation engine, so the reason above remains satisfied. Pivot recycling
+  and the sampled-zero policy belong to that driver. The TreeTCI termination
+  report and the TreeTCI engine (`TreeTciInterpolator`) live in
+  `tensor4all-treetci`.
+- The unmerged branch `feat/treetci-adaptive-patching@85df576` is reference
+  material for M2, not a merge candidate; the seam contract replaces its
+  public result type and zero-detection policy.
+- The M2 driver derives its patch queue from TCIAlgorithms.jl through
+  `tensor4all-partitionedtt`. The M2 PR records that derivation in
+  `docs/PROVENANCE_AND_CITATION_POLICY.md` and follows the license and
+  derivation-notice obligations stated below for code derived from that crate
+  (`LICENSE-TCIALGORITHMS-MIT`).
+- Implemented in M2 as `tensor4all_partitionedtreetn::adaptive_interpolation`
+  ([tree-pqtci-driver.md](tree-pqtci-driver.md)).
 
 ## Errors
 
@@ -285,7 +304,12 @@ scientific credit for “Adaptive Patching for Tensor Train Computations.” Bec
 `adaptive_interpolation.rs` is not copied, the new crate does not claim a code
 derivation from TCIAlgorithms.jl and does not copy
 `LICENSE-TCIALGORITHMS-MIT`. The deprecated TT crate retains its existing
-TCIAlgorithms derivation notice and license.
+TCIAlgorithms derivation notice and license. This holds for the migration
+only: the M2 adaptive interpolation driver (see
+[Adaptive interpolation ownership](#adaptive-interpolation-ownership)) derives
+its patch queue from TCIAlgorithms.jl through `tensor4all-partitionedtt`, and
+the M2 PR adds the derivation notice, the provenance record, and
+`LICENSE-TCIALGORITHMS-MIT` to this crate.
 
 ## Documentation surface
 
@@ -337,8 +361,10 @@ impact attestation in the worklog/PR body.
 
 ## Deferred work
 
-- Adaptive interpolation and the disposition of
-  `feat/treetci-adaptive-patching`.
+- Adaptive interpolation (the M2 patch driver of the
+  [tree adaptive patching roadmap](tree-adaptive-patching-roadmap.md); see
+  [Adaptive interpolation ownership](#adaptive-interpolation-ownership)).
+  Implemented in M2 ([tree-pqtci-driver.md](tree-pqtci-driver.md)).
 - Common-refinement addition for different overlapping projector layouts.
 - Contraction between different named topologies.
 - Generic tensor storage beyond `IdxTensor`.

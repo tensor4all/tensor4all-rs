@@ -678,3 +678,102 @@ fn test_invalid_index_errors_before_and_after_the_cache_is_built() {
     ));
     assert!((tci.evaluate(&[2, 3]).unwrap() - 6.0).abs() < 1e-10);
 }
+
+#[test]
+fn test_crossinterpolate1_unequal_dims_matches_function_on_full_grid() {
+    let dims = vec![2usize, 3, 4];
+    let f = |idx: &MultiIndex| {
+        let (a, b, c) = (idx[0] as f64, idx[1] as f64, idx[2] as f64);
+        (1.0 + a) * (2.0 + b) + 0.5 * (1.0 + b) * (3.0 + c) * (a + 1.0)
+    };
+    let (tci, _, _) = crossinterpolate1::<f64, _>(
+        f,
+        dims.clone(),
+        vec![1, 2, 3],
+        TCI1Options {
+            tolerance: 1e-12,
+            ..TCI1Options::default()
+        },
+    )
+    .unwrap();
+    let tt = tci.to_tensor_train().unwrap();
+
+    let mut max_err = 0.0f64;
+    for a in 0..dims[0] {
+        for b in 0..dims[1] {
+            for c in 0..dims[2] {
+                let index = vec![a, b, c];
+                max_err = max_err.max((tt.evaluate(&index).unwrap() - f(&index)).abs());
+            }
+        }
+    }
+    assert!(max_err < 1e-9, "max abs error {max_err}");
+}
+
+#[test]
+fn test_pi_sets_enumerate_the_column_major_fused_grid() {
+    let (tci, _, _) = crossinterpolate1::<f64, _>(
+        |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 2) + idx[2] * idx[0]) as f64,
+        vec![2, 3, 4],
+        vec![1, 2, 3],
+        TCI1Options {
+            tolerance: 1e-12,
+            ..TCI1Options::default()
+        },
+    )
+    .unwrap();
+
+    for site in 0..tci.len() {
+        let site_dim = tci.local_dims[site];
+        let left_dim = tci.i_set[site].len();
+        let pi_i_set = tci.build_pi_i_set(site).unwrap();
+        assert_eq!(pi_i_set.len(), left_dim * site_dim);
+        for position in 0..pi_i_set.len() {
+            // `position = left + left_dim * site`
+            let mut expected = tci.i_set[site][position % left_dim].clone();
+            expected.push(position / left_dim);
+            assert_eq!(pi_i_set[position], expected);
+        }
+
+        let right_dim = tci.j_set[site].len();
+        let pi_j_set = tci.build_pi_j_set(site).unwrap();
+        assert_eq!(pi_j_set.len(), site_dim * right_dim);
+        for position in 0..pi_j_set.len() {
+            // `position = site + site_dim * right`
+            let mut expected = vec![position % site_dim];
+            expected.extend(tci.j_set[site][position / site_dim].iter().copied());
+            assert_eq!(pi_j_set[position], expected);
+        }
+    }
+}
+
+#[test]
+fn test_tensor_from_left_matrix_inverts_as_left_matrix() {
+    let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
+    let tensor = tensor4all_simplett::tensor3_from_data(data, 2, 3, 4).unwrap();
+    let (flat, rows, cols) = tensor.as_left_matrix();
+    let matrix = Matrix::from_col_major_vec(rows, cols, flat);
+
+    let rebuilt = tensor_from_left_matrix(2, 3, 4, &matrix).unwrap();
+    assert_eq!(rebuilt, tensor);
+}
+
+#[test]
+fn test_update_site_tensor_from_matrix_decodes_left_and_right_fusions() {
+    let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
+    let expected = tensor4all_simplett::tensor3_from_data(data, 2, 3, 4).unwrap();
+
+    let mut tci = TensorCI1::<f64>::new(vec![3, 3, 3]).unwrap();
+    tci.i_set[1] = IndexSet::from_vec(vec![vec![0], vec![1]]);
+    tci.j_set[1] = IndexSet::from_vec(vec![vec![0], vec![1], vec![2], vec![3]]);
+
+    let (flat, rows, cols) = expected.as_left_matrix();
+    tci.update_site_tensor_from_matrix(1, &Matrix::from_col_major_vec(rows, cols, flat))
+        .unwrap();
+    assert_eq!(tci.t_tensors[1], expected);
+
+    let (flat, rows, cols) = expected.as_right_matrix();
+    tci.update_site_tensor_from_matrix(1, &Matrix::from_col_major_vec(rows, cols, flat))
+        .unwrap();
+    assert_eq!(tci.t_tensors[1], expected);
+}

@@ -52,6 +52,7 @@ fn bench_dense_vs_tenferro(c: &mut Criterion) {
                         with_default_backend(|backend| {
                             backend.with_backend_session(|session| mat.full_piv_lu(session))
                         })
+                        .unwrap()
                         .unwrap(),
                     );
                 });

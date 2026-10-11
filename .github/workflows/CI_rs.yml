@@ -111,11 +111,52 @@ jobs:
       - uses: taiki-e/install-action@nextest
 
       - uses: Swatinem/rust-cache@v2
+        # No `cache-workspace-crates`: restored workspace artifacts are never
+        # reuse-eligible (Cargo compares source timestamps), and kache below owns
+        # compiled-artifact reuse in this job.
+
+      # The kache store is persisted here rather than through the action's own GitHub cache
+      # backend: that backend keys the whole store by the lockfile hash alone, and GitHub
+      # cache entries are immutable, so the entry freezes at the first run after a lockfile
+      # change and later commits cannot publish what they compiled. Measured: 1.8% of 168
+      # units hit for a new commit (build 612 s) against 100% for an exact re-run of the same
+      # commit (build 12 s). A per-commit key plus a prefix restore key keeps the newest
+      # snapshot reachable and lets each run publish its own.
+
+      - name: Restore the kache store
+        id: kache-restore
+        uses: actions/cache/restore@v4
         with:
-          cache-workspace-crates: true
+          path: ${{ runner.temp }}/kache
+          key: kache-t4a-ci-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: kache-t4a-ci-${{ hashFiles('**/Cargo.lock') }}-
+
+      - uses: kunobi-ninja/kache-action@ad7317540dcdd71c904f7a60a87b620a0c0e67ed # v1
+        with:
+          # The workflow owns store persistence (above); the action installs kache,
+          # configures RUSTC_WRAPPER and writes the job summary.
+          github-cache: "false"
+          cache-dir: ${{ runner.temp }}/kache
 
       - name: Run workspace tests
-        run: python3 scripts/ci-build-diagnostics.py nextest -- cargo nextest run --locked --cargo-profile ci --workspace --timings -v
+        # `--lib --bins --tests` leaves out example and bench targets: they add
+        # 0.0 s of test execution here but ~26% of the compile CPU, and
+        # `cargo clippy --workspace --all-targets` plus the scheduled heavy-tests
+        # workflow keep them compiling. The diagnostics wrapper fails this job
+        # when the suite itself outgrows the default pipeline (CONTRIBUTING.md,
+        # CI time budget).
+        run: python3 scripts/ci-build-diagnostics.py --budget-seconds 300 nextest -- cargo nextest run --locked --cargo-profile ci --workspace --lib --bins --tests --timings -v
+
+      - name: Save the kache store
+        # Compiled artifacts are valid whatever the tests did, so save on failure too. Only
+        # trusted branches publish: a PR job stays restore-only instead of claiming a key that
+        # the next main run wants to refresh. Snapshots from a pull request are scoped to its
+        # merge ref anyway, so nothing reads them.
+        if: ${{ always() && steps.kache-restore.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/kache
+          key: kache-t4a-ci-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
 
       - name: Upload build diagnostics
         if: always()
@@ -174,6 +215,13 @@ jobs:
 
       - name: Audit library panic paths
         # Clippy passes: 10m each; Rust tool: 25m; wrapper build+audit: 35m; CI: 40m.
+        # tenferro-rs #2004 made the CPU backend features mutually exclusive, so
+        # no single "all features" configuration builds; the workspace also has
+        # feature combinations that never built. Until the repository declares the
+        # configurations worth auditing, only the default-feature pass runs
+        # (see docs/worklogs/2026-10-08-tenferro-2004-consumer-migration.md).
+        env:
+          T4A_PANIC_AUDIT_SKIP_ALL_FEATURES: "1"
         timeout-minutes: 40
         run: python3 scripts/audit-library-panics.py
 
@@ -224,8 +272,23 @@ jobs:
           tool: cargo-llvm-cov,nextest
 
       - uses: Swatinem/rust-cache@v2
+        # See the Test job: restored workspace artifacts are not reuse-eligible,
+        # and kache owns compiled-artifact reuse.
+
+      - name: Restore the kache store
+        id: kache-restore
+        uses: actions/cache/restore@v4
         with:
-          cache-workspace-crates: true
+          path: ${{ runner.temp }}/kache
+          key: kache-t4a-coverage-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: kache-t4a-coverage-${{ hashFiles('**/Cargo.lock') }}-
+
+      - uses: kunobi-ninja/kache-action@ad7317540dcdd71c904f7a60a87b620a0c0e67ed # v1
+        with:
+          # Instrumented release artifacts, kept apart from the `ci`-profile store the Test
+          # job uses. See the Test job for why the workflow owns store persistence.
+          github-cache: "false"
+          cache-dir: ${{ runner.temp }}/kache
 
       - name: Clear stale workspace coverage artifacts
         # Prefix cache restores can contain obsolete instrumented workspace
@@ -233,10 +296,23 @@ jobs:
         run: cargo llvm-cov clean --workspace --locked
 
       - name: Generate release coverage JSON
-        # Release-mode measurement: the repository's normal verification mode.
+        # Release-mode measurement: the repository's normal verification mode. The
+        # same 300 s suite budget and the same target trim as the Test job apply;
+        # instrumented execution of the healthy suite measures ~63 s.
         run: |
           echo "Available CPUs: $(nproc); Cargo build jobs: $CARGO_BUILD_JOBS"
-          python3 scripts/ci-build-diagnostics.py coverage -- cargo llvm-cov nextest --locked --release --no-clean --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json --timings -v
+          python3 scripts/ci-build-diagnostics.py --budget-seconds 300 coverage -- cargo llvm-cov nextest --locked --release --no-clean --workspace --exclude tensor4all-hdf5 --lib --bins --tests --json --output-path coverage.json --timings -v
+
+      - name: Save the kache store
+        # Compiled artifacts are valid whatever the tests did, so save on failure too. Only
+        # trusted branches publish: a PR job stays restore-only instead of claiming a key that
+        # the next main run wants to refresh. Snapshots from a pull request are scoped to its
+        # merge ref anyway, so nothing reads them.
+        if: ${{ always() && steps.kache-restore.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/kache
+          key: kache-t4a-coverage-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
 
       - name: Upload build diagnostics
         if: always()
@@ -270,6 +346,10 @@ jobs:
       - doctest
       - scripts
     if: always()
+    permissions:
+      contents: read
+      # Reads this run's job timings for the total time budget below.
+      actions: read
     steps:
       - name: All Rust checks passed
         if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
@@ -277,3 +357,46 @@ jobs:
       - name: Some Rust checks failed or cancelled
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
         run: exit 1
+
+      # The single total time budget for this pipeline (CONTRIBUTING.md,
+      # "CI time budget"). It gates completion, it does not cancel: the span is
+      # this attempt's first job start to its last job completion, so overlapping
+      # jobs are never summed and the gate's own scheduling wait is not charged to
+      # the pipeline. No per-test and no per-job caps are declared anywhere else. A
+      # run of 2026-10-09 measured 112 min against a healthy 12-35 min population
+      # (median 20, p90 26).
+      - name: Check the total pipeline time budget
+        # Only a run's first attempt measures a pipeline: a re-run carries the start
+        # times of the jobs it did not re-run, which would charge its own latency to
+        # the pipeline. The per-job suite budgets still apply to every attempt.
+        if: ${{ always() && github.run_attempt == 1 }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUDGET_SECONDS: "2400"
+        run: |
+          set -euo pipefail
+          if ! jobs=$(gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100"); then
+            echo "::error::the CI time budget could not be verified (the job listing failed); re-run once the API or its permissions are back"
+            exit 1
+          fi
+          # `gh api` has no jq --arg flags, so the budget is passed to jq here. This
+          # job is excluded so its own queue time is not charged to the pipeline.
+          if ! summary=$(jq --argjson budget "$BUDGET_SECONDS" '
+                [.[] | .jobs[]
+                 | select(.started_at != null and .completed_at != null
+                          and .conclusion != "skipped" and .name != "rollup-rs")]
+                | map(. + {elapsed: ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601))})
+                | if length == 0 then error("no completed jobs") else . end
+                | {span_seconds: ((map(.completed_at | fromdateiso8601) | max) - (map(.started_at | fromdateiso8601) | min)),
+                   budget_seconds: $budget,
+                   jobs: (sort_by(-.elapsed) | map({name, seconds: .elapsed}))}
+                | . + {over_budget: (.span_seconds > .budget_seconds)}' <<<"$jobs"); then
+            echo "::error::the CI time budget could not be verified (the job listing could not be parsed); re-run once the API or its permissions are back"
+            exit 1
+          fi
+          jq -r '"pipeline span: \(.span_seconds)s / budget \(.budget_seconds)s", (.jobs[] | "  \(.seconds)s  \(.name)")' <<<"$summary"
+          if [ "$(jq -r '.over_budget' <<<"$summary")" = "true" ]; then
+            echo "::error::the pipeline took $(jq -r '.span_seconds' <<<"$summary")s, above its $((BUDGET_SECONDS / 60))-minute total budget. Move the slow test into the scheduled heavy-tests workflow (CONTRIBUTING.md); do not raise this budget."
+            exit 1
+          fi

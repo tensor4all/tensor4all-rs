@@ -18,6 +18,10 @@ use crate::{
 /// physical indices at corresponding nodes. A node may own zero, one, or many
 /// physical indices; no quantization is required. The callback receives an
 /// `n_inputs × n_points` column-major batch.
+/// Scalar support includes f32, f64, Complex32, and Complex64. Sampled callback
+/// outputs and guard residuals must be finite; non-finite values are rejected
+/// with [`crate::TreeAciError::NonFiniteValue`] (or a lower-layer numerical
+/// error during local factorization).
 ///
 /// # Arguments
 ///
@@ -127,11 +131,7 @@ where
     let mut state = TreeAciState::<T, V>::initialize_with_rng(inputs, options, rng)?;
     let history = run_local_sweeps(&mut state, options, &mut operator, rng)?;
     let mut evaluated_points = history.evaluated_points;
-    if history
-        .global_pivots_found
-        .last()
-        .is_some_and(|found| *found > 0)
-    {
+    if history.needs_cleanup {
         let direction = if history.max_ranks.len() % 2 == 0 {
             PassDirection::Forward
         } else {

@@ -45,24 +45,26 @@ pub trait Tensor4Ops<T: Clone + Default> {
     /// `(left_dim, right_dim)` matrix.
     fn slice_site(&self, s1: usize, s2: usize) -> Vec<T>;
 
-    /// Fuse the `(left, site_dim_1, site_dim_2)` axes into a column-major
-    /// `(left_dim * site_dim_1 * site_dim_2, right_dim)` matrix.
+    /// Fuse the `(left, site_dim_1, site_dim_2)` axes into the rows of a
+    /// column-major `(left_dim * site_dim_1 * site_dim_2, right_dim)` matrix.
     ///
-    /// The fused row index is minor-axis-major: `row = s2 + site_dim_2 * (s1 +
-    /// site_dim_1 * left)`, which is not the column-major reshape of those
-    /// axes; see [#821](https://github.com/tensor4all/tensor4all-rs/issues/821).
+    /// The fused row index is the column-major reshape of those axes: `row =
+    /// left + left_dim * (s1 + site_dim_1 * s2)`.
     fn as_left_matrix(&self) -> (Vec<T>, usize, usize);
 
-    /// Fuse the `(site_dim_1, site_dim_2, right)` axes into a column-major
-    /// `(left_dim, site_dim_1 * site_dim_2 * right_dim)` matrix with the
-    /// right-major column index `column = right + right_dim * (s2 + site_dim_2
-    /// * s1)`; see [#821](https://github.com/tensor4all/tensor4all-rs/issues/821).
+    /// Fuse the `(site_dim_1, site_dim_2, right)` axes into the columns of a
+    /// column-major `(left_dim, site_dim_1 * site_dim_2 * right_dim)` matrix.
+    ///
+    /// The fused column index is the column-major reshape of those axes:
+    /// `column = s1 + site_dim_1 * (s2 + site_dim_2 * right)`.
     fn as_right_matrix(&self) -> (Vec<T>, usize, usize);
 
-    /// Fuse the `(left, site_dim_1)` axes into rows and `(site_dim_2, right)`
-    /// into columns of a column-major `(left_dim * site_dim_1, site_dim_2 *
-    /// right_dim)` matrix, with `row = s1 + site_dim_1 * left` and `column =
-    /// right + right_dim * s2`; see [#821](https://github.com/tensor4all/tensor4all-rs/issues/821).
+    /// Fuse `(left, site_dim_1)` into rows and `(site_dim_2, right)` into
+    /// columns of a column-major `(left_dim * site_dim_1, site_dim_2 *
+    /// right_dim)` matrix.
+    ///
+    /// Both fused indices are column-major reshapes: `row = left + left_dim *
+    /// s1` and `column = s2 + site_dim_2 * right`.
     fn as_center_matrix(&self) -> (Vec<T>, usize, usize);
 }
 
@@ -116,9 +118,9 @@ impl<T: Clone + Default + TensorScalar> Tensor4Ops<T> for Tensor4<T> {
         let cols = right_dim;
         let mut result = Vec::with_capacity(rows * cols);
         for r in 0..right_dim {
-            for l in 0..left_dim {
+            for s2 in 0..site_dim_2 {
                 for s1 in 0..site_dim_1 {
-                    for s2 in 0..site_dim_2 {
+                    for l in 0..left_dim {
                         result.push(self[[l, s1, s2, r]]);
                     }
                 }
@@ -135,9 +137,9 @@ impl<T: Clone + Default + TensorScalar> Tensor4Ops<T> for Tensor4<T> {
         let rows = left_dim;
         let cols = site_dim_1 * site_dim_2 * right_dim;
         let mut result = Vec::with_capacity(rows * cols);
-        for s1 in 0..site_dim_1 {
+        for r in 0..right_dim {
             for s2 in 0..site_dim_2 {
-                for r in 0..right_dim {
+                for s1 in 0..site_dim_1 {
                     for l in 0..left_dim {
                         result.push(self[[l, s1, s2, r]]);
                     }
@@ -155,10 +157,10 @@ impl<T: Clone + Default + TensorScalar> Tensor4Ops<T> for Tensor4<T> {
         let rows = left_dim * site_dim_1;
         let cols = site_dim_2 * right_dim;
         let mut result = Vec::with_capacity(rows * cols);
-        for s2 in 0..site_dim_2 {
-            for r in 0..right_dim {
-                for l in 0..left_dim {
-                    for s1 in 0..site_dim_1 {
+        for r in 0..right_dim {
+            for s2 in 0..site_dim_2 {
+                for s1 in 0..site_dim_1 {
+                    for l in 0..left_dim {
                         result.push(self[[l, s1, s2, r]]);
                     }
                 }

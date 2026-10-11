@@ -354,8 +354,8 @@ fn profile_high_rank_chain_phases_and_candidate_cache() {
             crate::frames::debug_stats::memo_hit_copies(),
         );
         eprintln!(
-            "high-rank chain chi={chi} pass metadata: schedule_clone={:?}, deferred_canonicalization={:?}",
-            profile.schedule_clone, profile.deferred_canonicalization,
+            "high-rank chain chi={chi} pass metadata: schedule_acquire={:?}, deferred_canonicalization={:?}",
+            profile.schedule_acquire, profile.deferred_canonicalization,
         );
         eprintln!(
             "high-rank chain chi={chi} retained frame payload: base={base_frame_bytes} bytes, candidate_cache={candidate_cache_entries} entries/{candidate_cache_bytes} bytes"

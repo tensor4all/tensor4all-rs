@@ -262,33 +262,17 @@ fn timed_hilbert_matrix_luci_once(size: usize, left_orthogonal: bool) -> MatrixL
 
     let start = Instant::now();
     let left = if left_orthogonal {
-        rrlu_cols_times_pivot_solve(
-            &lu,
-            &tensor4all_tensorbackend::default_cpu_execution_context(),
-        )
-        .unwrap()
+        rrlu_cols_times_pivot_solve(&lu, Linalg::Global).unwrap()
     } else {
-        rrlu_colmatrix(
-            &lu,
-            &tensor4all_tensorbackend::default_cpu_execution_context(),
-        )
-        .unwrap()
+        rrlu_colmatrix(&lu, Linalg::Global).unwrap()
     };
     timing.left_factor = start.elapsed();
 
     let start = Instant::now();
     let right = if left_orthogonal {
-        rrlu_rowmatrix(
-            &lu,
-            &tensor4all_tensorbackend::default_cpu_execution_context(),
-        )
-        .unwrap()
+        rrlu_rowmatrix(&lu, Linalg::Global).unwrap()
     } else {
-        rrlu_pivot_solve_times_rows(
-            &lu,
-            &tensor4all_tensorbackend::default_cpu_execution_context(),
-        )
-        .unwrap()
+        rrlu_pivot_solve_times_rows(&lu, Linalg::Global).unwrap()
     };
     timing.right_factor = start.elapsed();
 

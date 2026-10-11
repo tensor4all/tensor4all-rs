@@ -753,8 +753,8 @@ where
                 message: "TensorCI1 PiIset size overflowed usize".to_string(),
             })?;
         let mut values = Vec::with_capacity(capacity);
-        for i_multi in self.i_set[site].values() {
-            for local in 0..self.local_dims[site] {
+        for local in 0..self.local_dims[site] {
+            for i_multi in self.i_set[site].values() {
                 let mut value = i_multi.clone();
                 value.push(local);
                 values.push(value);
@@ -770,8 +770,8 @@ where
                 message: "TensorCI1 PiJset size overflowed usize".to_string(),
             })?;
         let mut values = Vec::with_capacity(capacity);
-        for local in 0..self.local_dims[site] {
-            for j_multi in self.j_set[site].values() {
+        for j_multi in self.j_set[site].values() {
+            for local in 0..self.local_dims[site] {
                 let mut value = vec![local];
                 value.extend(j_multi.iter().copied());
                 values.push(value);
@@ -845,9 +845,9 @@ where
             for left in 0..left_dim {
                 for local in 0..site_dim {
                     for right in 0..right_dim {
-                        let row = left
-                            .checked_mul(site_dim)
-                            .and_then(|row| row.checked_add(local))
+                        let row = local
+                            .checked_mul(left_dim)
+                            .and_then(|row| row.checked_add(left))
                             .ok_or_else(|| TCIError::InvalidOperation {
                                 message: "TensorCI1 site row offset overflowed usize".to_string(),
                             })?;
@@ -859,12 +859,7 @@ where
             for left in 0..left_dim {
                 for local in 0..site_dim {
                     for right in 0..right_dim {
-                        tensor.set3(
-                            left,
-                            local,
-                            right,
-                            matrix[[left, local * right_dim + right]],
-                        );
+                        tensor.set3(left, local, right, matrix[[left, local + site_dim * right]]);
                     }
                 }
             }
@@ -1224,9 +1219,9 @@ where
     for left in 0..left_dim {
         for local in 0..site_dim {
             for right in 0..right_dim {
-                let row = left
-                    .checked_mul(site_dim)
-                    .and_then(|row| row.checked_add(local))
+                let row = local
+                    .checked_mul(left_dim)
+                    .and_then(|row| row.checked_add(left))
                     .ok_or_else(|| TCIError::InvalidOperation {
                         message: "TensorCI1 site row offset overflowed usize".to_string(),
                     })?;

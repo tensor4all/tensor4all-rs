@@ -5,9 +5,106 @@ patches. The crate supports arbitrary named tree topologies, multiple site
 indices per node, homogeneous `f64`/`Complex64` partitions, strict algebra, and
 volume-proportional adaptive patching.
 
-Adaptive patching is bond-cap-driven and independent of adaptive interpolation:
-this crate does **not** provide TCI, sampled-zero inference, or a dependency on
-`tensor4all-treetci`.
+Adaptive patching is bond-cap-driven and independent of adaptive interpolation.
+
+## Adaptive patched interpolation
+
+`adaptive_interpolation::patched_interpolate` builds a partition directly from
+a batch evaluator on an arbitrary named tree. It runs an interpolation engine
+implementing `tensor4all_treetn::interpolation::TreeInterpolator` (for example
+`tensor4all_treetci::TreeTciInterpolator`) on the whole domain, and otherwise
+fixes the next site of `patch_order` and retries on every child. The crate
+depends on the engine trait only, not on `tensor4all-treetci`.
+
+The accuracy requirement is `PatchedInterpolationOptions::error_norm` with
+`tolerance: ErrorTolerance { rtol, atol }`:
+
+- `ErrorNorm::L2` (the default) is the unweighted discrete L2 error over the
+  whole domain against `delta = max(atol, rtol * S)`, with `S` an L2 norm of
+  the function. `L2Reference::Given(S)` is the usual choice;
+  `L2Reference::Required` (the default) fails before any evaluation unless
+  `rtol = 0` or the root has at most one site, and `L2Reference::MonteCarlo`
+  is an explicit opt-in estimate that can loosen the allowance for localized
+  functions. The allowance is split by patch volume (`rms_P(f - f~) <= tau`
+  with `tau = delta / sqrt(|X|)`), and the driver measures every accepted and
+  zero patch itself: exhaustively up to
+  `VerificationOptions::max_exhaustive_points`, otherwise on fresh uniform
+  samples with an independent audit. A failed measurement of a converged run
+  reruns the engine with the worst points as pivots, then splits.
+- `ErrorNorm::SampledMax` is the M2 criterion: the engine's sampled error
+  estimate against `max(atol, rtol * max_reference)`. It is **neither** a
+  certified bound nor a measured error, and makes no L2 claim.
+- `ErrorNorm::MaxAbs` and `ErrorNorm::WeightedL2` are placeholders that fail
+  with `UnsupportedNorm` before any evaluation.
+
+Two optional bounds count patch size in generalized bits, one per active
+(unfixed) site whatever its dimension. `min_patch_bits` stops splitting below
+a minimum: a failing patch is then retained and reported as
+`PatchStatus::ToleranceNotMet`, never certified, and the run reports
+`GlobalL2Error::ToleranceNotMet`, whose error can exceed `delta`.
+`capped_patches: CappedPatches::AcceptUpTo { bits }` accepts a patch that
+reaches the bond cap when it has at most `bits` active sites and passes its
+error check; larger capped patches split, and converged patches never split
+for their size. Both default to the M3 behavior.
+
+The opt-in `cache_candidates` starts every child patch from the largest
+values of its inherited evaluation cache as well (no new evaluations). It
+mitigates the corner-localized misses described below without excluding
+them.
+
+The report's `GlobalL2Error` states what an L2 run can claim. `Certified`
+(every contribution exact or exhaustive, every patch within its allowance)
+bounds the absolute error
+`E <= delta (1 + GLOBAL_ROUNDING_MARGIN) + MEASUREMENT_ROUNDING_FACTOR * eps *
+||f~||`, up to a calibrated (not proven) rounding model, and carries a conservative bound
+on `E / ||f||` when `||f~||` exceeds `E`. `Audited` gives an estimate with a
+standard error, never a bound; `AcceptanceOnly` (audits off) gives neither an
+estimate nor a relative statement. `ToleranceNotMet` takes precedence when a
+patch was retained without meeting its allowance; its `basis` says which of
+the three applies to its measured value. Sampled measurements cannot bound
+the L2 error of a black-box function.
+
+Known limitation: the acceptance sample and the audit are both uniform, so
+both can miss a localized feature that enters a patch only through a corner
+or an edge, and the audit's standard error does not reveal such a miss (it is
+computed from the same points). An `Audited` result can then underestimate
+the error by orders of magnitude. Raising `VerificationOptions::samples`
+makes this less likely but does not exclude it; only `Certified` results
+(every contribution exact or exhaustive) are guarantees. See "Known
+limitation: corner-localized misses" in
+[`docs/design/tree-patching-error-contract.md`](../../docs/design/tree-patching-error-contract.md).
+
+- Patches are processed sequentially in FIFO order; each has an evaluation
+  cache, so no point is evaluated twice, and measured values reach the
+  children of a split. Patches with at most one active site are evaluated
+  exactly without the engine.
+- A patch whose candidate samples are all exactly zero is a zero patch under
+  `SampledMax`; under L2 the zero approximation is measured first. Zero
+  patches are reported in `PatchedInterpolationReport::zero_patches` and
+  omitted from the partition.
+- Randomness comes from per-patch seeds derived from
+  `PatchedInterpolationOptions::seed`. For a fixed seed, a deterministic
+  evaluator, and a deterministic engine the report and every stored node
+  tensor are identical across runs on fresh threads within one process,
+  provided the measured network values are reproducible. This is tested for
+  `f64` on trees with exactly one site per node. The cached evaluator's
+  generic path (a site-free node, a node with several sites, or `f32`/`c32`
+  data) can differ at rounding level between threads and processes, an open
+  limitation tracked in
+  [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
+  Issue #795 closed the tracking/test gap through #816, not the planner fix.
+  The intended scope is bitwise identical results on the same machine and
+  build across threads, thread counts, and processes, with no cross-machine
+  promise; generic-path measurements still need deterministic contraction
+  paths, and reproducibility across processes is not claimed until a
+  two-process test passes. Issue #791 was fixed by #793: the old TreeTN
+  site/edge construction and dense-axis order nondeterminism is resolved.
+  `site_space` still has unspecified set iteration order, and cached generic
+  evaluation retains the distinct planner limitation above.
+
+The patch queue and pivot recycling derive from TCIAlgorithms.jl (MIT) through
+the deprecated `tensor4all-partitionedtt`; this crate carries
+`LICENSE-TCIALGORITHMS-MIT`.
 
 ## Truncation convention
 

@@ -9,7 +9,7 @@ use crate::{ExecutionContext, IdxTensor};
 use num_complex::{Complex64, ComplexFloat};
 use tenferro::DType;
 use tenferro_ad::EagerTensor;
-use tenferro_linalg::EagerTensorLinalgExt;
+use tenferro_linalg::EagerSessionLinalgExt;
 use thiserror::Error;
 
 /// Error type for QR operations in tensor4all-linalg.
@@ -303,7 +303,8 @@ pub fn qr_with<T>(
         .map_err(QrError::ComputationError)?;
     let k = m.min(n);
     let (q_inner, r_inner) = matrix_inner
-        .qr()
+        .runtime()
+        .with_eager_session(|session| session.qr(&matrix_inner))
         .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
 
     let r = qr_retained_rank(&r_inner, k, n, options, None)?;
@@ -357,7 +358,10 @@ pub fn qr_with<T>(
 ///
 /// Returns `QrError` when the tensor does not belong to `context`, when the
 /// indices, storage, or options are invalid, or when the factorization or
-/// explicit decision readback fails.
+/// explicit decision readback fails. When this build cannot execute in
+/// `context`, the rejection carries
+/// [`IdxTensorError::UnsupportedExecutionContext`](crate::IdxTensorError::UnsupportedExecutionContext)
+/// as its source.
 pub fn qr_with_in<T>(
     t: &IdxTensor,
     left_inds: &[DynIndex],
@@ -371,7 +375,8 @@ pub fn qr_with_in<T>(
         .map_err(QrError::ComputationError)?;
     let k = m.min(n);
     let (q_inner, r_inner) = matrix_inner
-        .qr()
+        .runtime()
+        .with_eager_session(|session| session.qr(&matrix_inner))
         .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
 
     let r = qr_retained_rank(&r_inner, k, n, options, Some(context))?;
@@ -440,10 +445,12 @@ fn qr_assemble(
     if r < k {
         let keep: Vec<usize> = (0..r).collect();
         q_inner = q_inner
-            .take_axis(1, &keep)
+            .runtime()
+            .with_eager_session(|session| session.take_axis(&q_inner, 1, &keep))
             .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
         r_inner = r_inner
-            .take_axis(0, &keep)
+            .runtime()
+            .with_eager_session(|session| session.take_axis(&r_inner, 0, &keep))
             .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
     }
 
@@ -454,17 +461,23 @@ fn qr_assemble(
     let mut q_indices = left_indices.clone();
     q_indices.push(bond_index.clone());
     let q_dims: Vec<usize> = q_indices.iter().map(|idx| idx.dim).collect();
-    let q_reshaped = q_inner.reshape(&q_dims).map_err(|e| {
-        QrError::ComputationError(anyhow::anyhow!("eager QR Q reshape failed: {e}"))
-    })?;
+    let q_reshaped = q_inner
+        .runtime()
+        .with_eager_session(|session| session.reshape(&q_inner, &q_dims))
+        .map_err(|e| {
+            QrError::ComputationError(anyhow::anyhow!("eager QR Q reshape failed: {e}"))
+        })?;
     let q = IdxTensor::from_inner(q_indices, q_reshaped).map_err(QrError::ComputationError)?;
 
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
     let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
-    let r_reshaped = r_inner.reshape(&r_dims).map_err(|e| {
-        QrError::ComputationError(anyhow::anyhow!("eager QR R reshape failed: {e}"))
-    })?;
+    let r_reshaped = r_inner
+        .runtime()
+        .with_eager_session(|session| session.reshape(&r_inner, &r_dims))
+        .map_err(|e| {
+            QrError::ComputationError(anyhow::anyhow!("eager QR R reshape failed: {e}"))
+        })?;
     let r = IdxTensor::from_inner(r_indices, r_reshaped).map_err(QrError::ComputationError)?;
 
     Ok((q, r))

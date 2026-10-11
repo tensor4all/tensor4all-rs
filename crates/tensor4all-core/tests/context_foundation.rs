@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use num_complex::Complex64;
+
 use tenferro_cpu::CpuBackend;
 use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
 use tensor4all_tensorbackend::CpuExecutionContext;
@@ -79,4 +81,50 @@ fn decision_readback_downloads_through_the_owning_cuda_runtime() {
         tensor4all_tensorbackend::CudaExecutionContext::new().unwrap(),
     ));
     assert!(tensor.read_decision_data(&foreign).is_err());
+}
+
+#[test]
+fn context_scoped_cpu_scaling_and_norm_preserve_values() {
+    let context = cpu_context();
+    let tensor =
+        IdxTensor::from_dense_in(&context, vec![DynIndex::new_dyn(2)], vec![3.0_f64, 4.0]).unwrap();
+
+    assert!((tensor.norm_in(&context).unwrap() - 5.0).abs() < 1e-12);
+    for factor in [0.0_f64, 1.0, 2.0] {
+        let scaled = tensor.scale_in(factor, &context).unwrap();
+        for (actual, expected) in scaled
+            .to_vec::<f64>()
+            .unwrap()
+            .iter()
+            .zip([3.0 * factor, 4.0 * factor])
+        {
+            assert!((actual - expected).abs() < 1e-12, "factor {factor}");
+        }
+        assert!((scaled.norm_in(&context).unwrap() - 5.0 * factor).abs() < 1e-12);
+    }
+    // Scaling must not mutate the operand held in the context.
+    assert_eq!(tensor.to_vec::<f64>().unwrap(), vec![3.0, 4.0]);
+
+    let ones = IdxTensor::ones_in(&context, &[]).unwrap();
+    assert_eq!(ones.to_vec::<f64>().unwrap(), vec![1.0]);
+}
+
+#[test]
+fn context_scoped_complex_cpu_operations_preserve_values() {
+    let context = cpu_context();
+    let tensor = IdxTensor::from_dense_in(
+        &context,
+        vec![DynIndex::new_dyn(2)],
+        vec![Complex64::new(3.0, 4.0), Complex64::new(0.0, 0.0)],
+    )
+    .unwrap();
+
+    assert!((tensor.norm_in(&context).unwrap() - 5.0).abs() < 1e-12);
+    assert_eq!(tensor.read_decision_data(&context).unwrap(), vec![3.0, 0.0]);
+
+    let scaled = tensor.scale_in(2.0, &context).unwrap();
+    assert_eq!(
+        scaled.to_vec::<Complex64>().unwrap(),
+        vec![Complex64::new(6.0, 8.0), Complex64::new(0.0, 0.0)]
+    );
 }

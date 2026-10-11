@@ -1,6 +1,9 @@
 use super::*;
 use crate::index::DefaultIndex as Index;
-use crate::{SingularValueMeasure, SvdTruncationPolicy, ThresholdScale, TruncationRule};
+use crate::{
+    Canonical, FactorizeOptions, SingularValueMeasure, SvdTruncationPolicy, ThresholdScale,
+    TruncationRule,
+};
 use num_complex::Complex64;
 use tenferro::Tensor as NativeTensor;
 
@@ -204,4 +207,56 @@ fn svd_with_in_matches_host_path_on_explicit_cpu_context() {
     assert_eq!(u_in.dims(), u.dims());
     u_in.validate_context(&context).unwrap();
     s_in.validate_context(&context).unwrap();
+}
+
+fn complex_matrix(rows: &DynIndex, cols: &DynIndex) -> IdxTensor {
+    let len = rows.dim() * cols.dim();
+    IdxTensor::from_dense(
+        vec![rows.clone(), cols.clone()],
+        (0..len)
+            .map(|i| Complex64::new(i as f64 - 2.5, 0.5 * i as f64 - 1.0))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap()
+}
+
+/// `svd_for_factorize` gives `S` the factors' dtype, so `factorize` never
+/// contracts a real `S` with a complex factor: that mixed-dtype pair takes the
+/// einsum path that compiles a program per call (#890).
+#[test]
+fn svd_for_factorize_gives_s_the_factors_dtype() {
+    let (rows, cols) = (Index::new_dyn(3), Index::new_dyn(4));
+    let complex = complex_matrix(&rows, &cols);
+    let result =
+        svd_for_factorize(&complex, std::slice::from_ref(&rows), &SvdOptions::new()).unwrap();
+    assert!(result.vh.is_complex());
+    assert!(result.s.is_complex());
+
+    let real = IdxTensor::from_dense(
+        vec![rows.clone(), cols],
+        (0..12).map(|i| i as f64 - 5.0).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let result = svd_for_factorize(&real, &[rows], &SvdOptions::new()).unwrap();
+    assert!(!result.s.is_complex());
+}
+
+/// With the complex `S`, both canonical forms still reconstruct the input.
+#[test]
+fn factorize_svd_reconstructs_complex_input_in_both_canonical_forms() {
+    let (rows, cols) = (Index::new_dyn(3), Index::new_dyn(4));
+    let complex = complex_matrix(&rows, &cols);
+    for canonical in [Canonical::Left, Canonical::Right] {
+        let options = FactorizeOptions {
+            canonical,
+            ..FactorizeOptions::svd()
+        };
+        let result = crate::factorize(&complex, std::slice::from_ref(&rows), &options).unwrap();
+        let reconstructed = crate::contract_pair(&result.left, &result.right).unwrap();
+        let error = reconstructed.sub(&complex).unwrap().norm().unwrap();
+        assert!(
+            error <= 1e-12 * complex.norm().unwrap(),
+            "{canonical:?}: reconstruction error {error:e}"
+        );
+    }
 }

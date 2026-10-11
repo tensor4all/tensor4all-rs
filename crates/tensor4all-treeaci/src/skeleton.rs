@@ -130,111 +130,99 @@ where
             message: "skeleton gauge count differs from prepared edge count",
         });
     }
-    let mut forward_states = vec![0; tensors.gauge.len()];
-    let mut reverse_states = vec![0; tensors.gauge.len()];
-    evaluate_edge_assignments(
-        tensors,
-        problem,
-        sigma,
-        0,
-        &mut forward_states,
-        &mut reverse_states,
-    )
-}
 
-fn evaluate_edge_assignments<T, V>(
-    tensors: &SkeletonTensors<T>,
-    problem: &PreparedTreeProblem<V>,
-    sigma: &[usize],
-    edge_number: usize,
-    forward_states: &mut [usize],
-    reverse_states: &mut [usize],
-) -> Result<T>
-where
-    T: TreeAciScalar,
-    V: TreeAciNode,
-{
-    if edge_number == tensors.gauge.len() {
-        let mut value = T::one();
-        for (node_position, &coordinate) in sigma.iter().enumerate() {
-            let shape =
-                tensors
-                    .node_shape
-                    .get(node_position)
-                    .ok_or(TreeAciError::InternalInvariant {
-                        message: "skeleton node shape is missing",
-                    })?;
-            let incidents = incident_edges(problem, node_position)?;
-            if shape.len() != incidents.len() + 1 {
+    // Independent reference contraction of the fixed-point skeleton. All
+    // physical coordinates have already been selected; the resulting network
+    // has only a scalar output. This avoids explicitly summing rank^(2E)
+    // products whose cancellation amplifies round-off in the inverse gauges.
+    use tensor4all_core::{DynIndex, IdxTensor, IdxTensorError};
+    let tensor_error = |error: IdxTensorError| TreeAciError::Numerical {
+        message: error.to_string(),
+    };
+    use tensor4all_treetn::TreeTN;
+    let forward_bonds = tensors
+        .gauge
+        .iter()
+        .map(|g| DynIndex::new_dyn(g.ncols()))
+        .collect::<Vec<_>>();
+    let reverse_bonds = tensors
+        .gauge
+        .iter()
+        .map(|g| DynIndex::new_dyn(g.nrows()))
+        .collect::<Vec<_>>();
+    let mut cores = Vec::with_capacity(sigma.len() + tensors.gauge.len());
+    for (node_position, &coordinate) in sigma.iter().enumerate() {
+        let shape =
+            tensors
+                .node_shape
+                .get(node_position)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "skeleton node shape is missing",
+                })?;
+        let incidents = incident_edges(problem, node_position)?;
+        if shape.len() != incidents.len() + 1
+            || shape[0] != problem.physical[node_position].local_dim
+        {
+            return Err(TreeAciError::InternalInvariant {
+                message: "skeleton node shape has the wrong incident-edge count",
+            });
+        }
+        let values = tensors
+            .node
+            .get(node_position)
+            .ok_or(TreeAciError::InternalInvariant {
+                message: "skeleton node tensor is missing",
+            })?;
+        let count = checked_product(&shape[1..])?;
+        let mut sliced = Vec::with_capacity(count);
+        for bond_assignment in 0..count {
+            let index = bond_assignment
+                .checked_mul(shape[0])
+                .and_then(|x| x.checked_add(coordinate))
+                .ok_or(TreeAciError::SizeOverflow {
+                    context: "skeleton node offset",
+                })?;
+            sliced.push(*values.get(index).ok_or(TreeAciError::InternalInvariant {
+                message: "skeleton node offset exceeds tensor storage",
+            })?);
+        }
+        let mut indices = Vec::with_capacity(incidents.len());
+        for (axis, &(edge, _)) in incidents.iter().enumerate() {
+            let source = &problem.directed_edges[2 * edge].from;
+            let bond = if problem.node_order[node_position] == *source {
+                &reverse_bonds[edge]
+            } else {
+                &forward_bonds[edge]
+            };
+            if shape[axis + 1] != tensors.gauge[edge].nrows()
+                || tensors.gauge[edge].nrows() != tensors.gauge[edge].ncols()
+            {
                 return Err(TreeAciError::InternalInvariant {
-                    message: "skeleton node shape has the wrong incident-edge count",
+                    message: "skeleton bond state exceeds node axis dimension",
                 });
             }
-            let mut flat = coordinate;
-            let mut stride = shape[0];
-            for (axis, &(edge, _incoming)) in incidents.iter().enumerate() {
-                let directed = &problem.directed_edges[2 * edge];
-                let state = if problem.node_order[node_position] == directed.from {
-                    reverse_states[edge]
-                } else {
-                    forward_states[edge]
-                };
-                if state >= shape[axis + 1] {
-                    return Err(TreeAciError::InternalInvariant {
-                        message: "skeleton bond state exceeds node axis dimension",
-                    });
-                }
-                flat =
-                    flat.checked_add(stride.checked_mul(state).ok_or(
-                        TreeAciError::SizeOverflow {
-                            context: "skeleton node offset",
-                        },
-                    )?)
-                    .ok_or(TreeAciError::SizeOverflow {
-                        context: "skeleton node offset",
-                    })?;
-                stride = stride
-                    .checked_mul(shape[axis + 1])
-                    .ok_or(TreeAciError::SizeOverflow {
-                        context: "skeleton node stride",
-                    })?;
-            }
-            let tensor =
-                tensors
-                    .node
-                    .get(node_position)
-                    .ok_or(TreeAciError::InternalInvariant {
-                        message: "skeleton node tensor is missing",
-                    })?;
-            value = value
-                * *tensor.get(flat).ok_or(TreeAciError::InternalInvariant {
-                    message: "skeleton node offset exceeds tensor storage",
-                })?;
+            indices.push(bond.clone());
         }
-        for edge in 0..tensors.gauge.len() {
-            value = value * tensors.gauge[edge][[reverse_states[edge], forward_states[edge]]];
-        }
-        return Ok(value);
+        cores.push(IdxTensor::from_dense(indices, sliced).map_err(tensor_error)?);
     }
-
-    let rank = tensors.gauge[edge_number].nrows();
-    let mut value = T::zero();
-    for forward in 0..rank {
-        for reverse in 0..rank {
-            forward_states[edge_number] = forward;
-            reverse_states[edge_number] = reverse;
-            value = value
-                + evaluate_edge_assignments(
-                    tensors,
-                    problem,
-                    sigma,
-                    edge_number + 1,
-                    forward_states,
-                    reverse_states,
-                )?;
-        }
+    for (edge, gauge) in tensors.gauge.iter().enumerate() {
+        cores.push(
+            IdxTensor::from_dense(
+                vec![reverse_bonds[edge].clone(), forward_bonds[edge].clone()],
+                gauge.as_col_major_slice().to_vec(),
+            )
+            .map_err(tensor_error)?,
+        );
     }
-    Ok(value)
+    let n = cores.len();
+    let network = TreeTN::from_tensors(cores, (0..n).collect::<Vec<_>>())?;
+    let values = network.to_dense()?.to_vec::<T>().map_err(tensor_error)?;
+    values
+        .first()
+        .copied()
+        .ok_or(TreeAciError::InternalInvariant {
+            message: "skeleton contraction has no scalar value",
+        })
 }
 
 fn incident_edges<V: TreeAciNode>(

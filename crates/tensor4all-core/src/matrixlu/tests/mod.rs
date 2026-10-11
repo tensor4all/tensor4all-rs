@@ -331,6 +331,65 @@ fn test_rrlu_pivot_errors_truncated() {
     assert!(lu3.last_pivot_error().abs() < 1e-14);
 }
 
+#[test]
+fn rank_ceiling_reports_the_remaining_residual() {
+    fn check<T: Scalar>() {
+        for left_orthogonal in [false, true] {
+            for entries in [[1.0, 1.0, 1.0, 1.0], [4.0, 0.0, 0.0, 2.0]] {
+                let matrix = Matrix::from_col_major_vec(
+                    2,
+                    2,
+                    entries.into_iter().map(T::from_f64).collect(),
+                );
+                for max_bond_dim in [0, 1, 2] {
+                    let lu = rrlu(
+                        &matrix,
+                        Some(RrLUOptions {
+                            max_bond_dim,
+                            left_orthogonal,
+                            ..Default::default()
+                        }),
+                    )
+                    .unwrap();
+                    let reconstructed = mat_mul(&lu.left(true), &lu.right(true)).unwrap();
+                    let residual = matrix
+                        .as_col_major_slice()
+                        .iter()
+                        .zip(reconstructed.as_col_major_slice())
+                        .map(|(&a, &b)| (a - b).abs_val())
+                        .fold(0.0_f64, f64::max);
+                    assert_eq!(lu.last_pivot_error(), residual);
+                    assert_eq!(lu.pivot_errors().last().copied(), Some(residual));
+                }
+            }
+        }
+    }
+    check::<f32>();
+    check::<f64>();
+    check::<num_complex::Complex32>();
+    check::<Complex64>();
+}
+
+#[test]
+fn rank_ceiling_rejects_nonfinite_final_residual() {
+    let large = 1e308_f64;
+    let matrix = from_vec2d(vec![vec![large, large], vec![large, -large]]);
+    for left_orthogonal in [false, true] {
+        let result = rrlu(
+            &matrix,
+            Some(RrLUOptions {
+                max_bond_dim: 1,
+                left_orthogonal,
+                ..Default::default()
+            }),
+        );
+        assert!(matches!(
+            result,
+            Err(MatrixCIError::NaNEncountered { matrix }) if matrix == "residual"
+        ));
+    }
+}
+
 /// Julia: "LU for matrices with very small absolute values"
 #[test]
 fn test_rrlu_small_values_abstol() {

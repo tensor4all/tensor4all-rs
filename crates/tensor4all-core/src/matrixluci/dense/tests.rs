@@ -68,6 +68,40 @@ fn pivot_errors_cover_empty_and_zero_pivot_stops() {
 }
 
 #[test]
+fn rank_ceiling_errors_include_the_next_residual() {
+    for (max_bond_dim, expected) in [(0, vec![4.0]), (1, vec![4.0, 2.0])] {
+        assert_eq!(
+            DenseLuKernel::compute_pivot_errors::<f64>(
+                &[4.0, 2.0],
+                2,
+                2,
+                &PivotKernelOptions {
+                    max_bond_dim,
+                    ..Default::default()
+                }
+            ),
+            expected
+        );
+    }
+    let rows = vec![vec![1.0, 1.0], vec![1.0, 1.0]];
+    let options = PivotKernelOptions {
+        max_bond_dim: 1,
+        ..Default::default()
+    };
+    let selection = dense_factorize(&rows, options.clone());
+    assert_eq!(selection.rank, 1);
+    assert_eq!(selection.pivot_errors, vec![1.0, 0.0]);
+    assert_pivot_parity(
+        rows,
+        options,
+        RrLUOptions {
+            max_bond_dim: 1,
+            ..Default::default()
+        },
+    );
+}
+
+#[test]
 fn dense_kernel_uses_rectangular_rrlu_fallback() {
     let out = dense_factorize(
         &[vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 7.0]],

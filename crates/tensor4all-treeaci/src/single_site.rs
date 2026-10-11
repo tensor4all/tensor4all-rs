@@ -82,6 +82,7 @@ where
     let batch = TreeElementwiseBatch::new(&input_values, inputs.len(), point_count)?;
     let mut output_values = vec![T::default(); point_count];
     operator(batch, &mut output_values)?;
+    crate::scalar::ensure_finite_values(&output_values, "single-node output")?;
     let output_tensor =
         IdxTensor::from_dense(indices, output_values).map_err(|error| TreeAciError::Numerical {
             message: error.to_string(),

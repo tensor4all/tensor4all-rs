@@ -74,6 +74,7 @@ relationship; the role is stated only on the first row.
 | `tensor4all-partitionedtt` | Partitioned TT over subdomains | [PartitionedMPSs.jl](https://github.com/tensor4all/PartitionedMPSs.jl) | Port |
 | `tensor4all-partitionedtt` | | [TCIAlgorithms.jl](https://github.com/tensor4all/TCIAlgorithms.jl) | Derived (MIT): adaptive TCI interpolation |
 | `tensor4all-partitionedtreetn` | Eagerly masked partitioned TreeTN representation and adaptive patching | [PartitionedMPSs.jl](https://github.com/tensor4all/PartitionedMPSs.jl) | Inspired (independent TreeTN implementation) |
+| `tensor4all-partitionedtreetn` | | [TCIAlgorithms.jl](https://github.com/tensor4all/TCIAlgorithms.jl) | Derived (MIT): adaptive interpolation patch queue, accept-or-split flow, and pivot recycling (`src/adaptive_interpolation.rs`), through `tensor4all-partitionedtt` |
 | `tensor4all-hdf5` | HDF5 serialization | [ITensors.jl](https://github.com/ITensor/ITensors.jl) / ITensorMPS.jl file formats | Compatible (round-trip validated) |
 | `tensor4all-capi` | C FFI surface for language bindings | — | Original (consumed by [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl)) |
 
@@ -99,10 +100,15 @@ list is best-effort; corrections and additions are welcome.
 | Alternating cross interpolation (ACI) | `aci` | M. K. Ritter et al., [arXiv:2604.00037](https://arxiv.org/abs/2604.00037) |
 | Partitioned tensor trains / adaptive patching | `partitionedtt`, `partitionedtreetn` | G. Grosso, M. K. Ritter, S. Rohshap, S. Badr, A. Kauch, M. Wallerberger, J. von Delft, H. Shinaoka, "Adaptive Patching for Tensor Train Computations", [arXiv:2602.22372](https://arxiv.org/abs/2602.22372) |
 
-The TreeTN-native partitioned crate does not contain adaptive interpolation
-and has no TCIAlgorithms.jl code derivation or TCIAlgorithms license. The
-legacy crate retains its existing TCIAlgorithms derivation notice and license.
+The TreeTN-native partitioned crate contains a tree adaptive interpolation
+driver whose patch queue, accept-or-split flow, and pivot recycling derive from
+TCIAlgorithms.jl through the legacy crate's chain driver; it carries the
+derivation notice in `src/adaptive_interpolation.rs` and
+`LICENSE-TCIALGORITHMS-MIT`. Its partition representation and patch algebra
+remain an independent TreeTN implementation. The legacy crate retains its
+existing TCIAlgorithms derivation notice and license.
 
 License-bearing derivations are declared in the affected crate
 (`tensor4all-treetn`: `LICENSE-APACHE`, SPDX `MIT AND Apache-2.0`;
-`tensor4all-partitionedtt`: `LICENSE-TCIALGORITHMS-MIT`, crate remains MIT).
+`tensor4all-partitionedtt` and `tensor4all-partitionedtreetn`:
+`LICENSE-TCIALGORITHMS-MIT`, crates remain MIT).

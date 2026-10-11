@@ -29,6 +29,20 @@ fn reverse_steps(plan: &SweepPlan) -> Vec<(usize, usize, usize)> {
     pass_steps(&plan.reverse)
 }
 
+#[test]
+fn retaining_schedule_shares_paths_and_preserves_both_walks() {
+    let original = plan(5, &[(0, 1), (1, 2), (1, 3), (3, 4)]);
+    let retained = original.clone();
+    assert!(std::sync::Arc::ptr_eq(&original.forward, &retained.forward));
+    assert!(std::sync::Arc::ptr_eq(&original.reverse, &retained.reverse));
+    let forward = forward_steps(&original);
+    let reverse = reverse_steps(&original);
+    drop(original);
+    assert_eq!(forward_steps(&retained), forward);
+    assert_eq!(reverse_steps(&retained), reverse);
+    assert_minimum_continuous_walk(5, &[(0, 1), (1, 2), (1, 3), (3, 4)], &retained);
+}
+
 fn directed_counts(steps: &[(usize, usize, usize)]) -> BTreeMap<(usize, usize, usize), usize> {
     let mut counts = BTreeMap::new();
     for &step in steps {
@@ -173,11 +187,11 @@ fn rejects_non_trees_before_planning() {
 fn validation_rejects_discontinuity_and_wrong_reverse() {
     let edges = [(0, 1), (1, 2), (1, 3)];
     let mut discontinuous = plan(4, &edges);
-    discontinuous.forward[0].paths[0].steps[1].from = 3;
+    std::sync::Arc::make_mut(&mut discontinuous.forward)[0].paths[0].steps[1].from = 3;
     assert!(discontinuous.validate(4, &edges).is_err());
 
     let mut invalid_reverse = plan(4, &edges);
-    invalid_reverse.reverse[0].paths[0].steps[0].edge = usize::MAX;
+    std::sync::Arc::make_mut(&mut invalid_reverse.reverse)[0].paths[0].steps[0].edge = usize::MAX;
     assert!(invalid_reverse.validate(4, &edges).is_err());
 }
 

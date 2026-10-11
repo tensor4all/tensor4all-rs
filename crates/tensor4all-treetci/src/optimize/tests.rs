@@ -1,4 +1,4 @@
-use super::{optimize_default, TreeTciOptions};
+use super::{optimize_default, TreeTciOptimizationResult, TreeTciOptions, TreeTciTermination};
 use crate::test_support::assert_scalar_close;
 use crate::{GlobalIndexBatch, TreeTCI2, TreeTciEdge, TreeTciGraph};
 use anyhow::Result;
@@ -172,7 +172,12 @@ fn optimize_default_converges_on_two_site_identity() {
         Ok(values)
     };
 
-    let crate::TreeTciOptimizationResult { ranks, errors, .. } = optimize_default(
+    let TreeTciOptimizationResult {
+        ranks,
+        errors,
+        termination,
+        ..
+    } = optimize_default(
         &mut tci,
         batch_eval,
         &TreeTciOptions {
@@ -185,6 +190,7 @@ fn optimize_default_converges_on_two_site_identity() {
     )
     .unwrap();
 
+    assert_eq!(termination, TreeTciTermination::Converged);
     assert_eq!(ranks.last().copied(), Some(2));
     assert_scalar_close(
         errors.last().copied().unwrap_or(f64::NAN),
@@ -213,7 +219,12 @@ fn optimize_default_stops_early_once_converged() {
         Ok(values)
     };
 
-    let crate::TreeTciOptimizationResult { ranks, errors, .. } = optimize_default(
+    let TreeTciOptimizationResult {
+        ranks,
+        errors,
+        termination,
+        ..
+    } = optimize_default(
         &mut tci,
         batch_eval,
         &TreeTciOptions {
@@ -226,6 +237,7 @@ fn optimize_default_stops_early_once_converged() {
     )
     .unwrap();
 
+    assert_eq!(termination, TreeTciTermination::Converged);
     // The 2x2 identity function is exactly rank 2 and converges on the first
     // sweep; the loop must not keep going through the remaining max_iter-1
     // sweeps once the error is already below tolerance.
@@ -254,7 +266,12 @@ fn optimize_default_stops_early_when_bond_dim_saturated() {
         Ok(values)
     };
 
-    let crate::TreeTciOptimizationResult { ranks, errors, .. } = optimize_default(
+    let TreeTciOptimizationResult {
+        ranks,
+        errors,
+        termination,
+        ..
+    } = optimize_default(
         &mut tci,
         batch_eval,
         &TreeTciOptions {
@@ -267,12 +284,71 @@ fn optimize_default_stops_early_when_bond_dim_saturated() {
     )
     .unwrap();
 
+    assert_eq!(termination, TreeTciTermination::MaxBondDimension);
+
     // Rank-3 identity capped at max_bond_dim = 1 can never reach the 1e-12
     // tolerance; without the bond-dim-saturation criterion this would run
     // all 10 sweeps.
     assert!(ranks.len() < 10);
     assert!(ranks.iter().all(|&r| r <= 1));
     assert!(errors.last().copied().unwrap_or(0.0) > 1e-12);
+}
+
+// Convergence needs three sweeps of history, so a budget of two sweeps can
+// only end at the iteration limit, even on an exactly representable function.
+#[test]
+fn optimize_default_reports_iteration_limit() {
+    let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+    tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+    let batch_eval = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        Ok((0..batch.n_points())
+            .map(|p| (batch.get(0, p).unwrap() + batch.get(1, p).unwrap() + 1) as f64)
+            .collect())
+    };
+
+    let report = optimize_default(
+        &mut tci,
+        batch_eval,
+        &TreeTciOptions {
+            tolerance: 1e-12,
+            max_iter: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(report.termination, TreeTciTermination::MaxIterations);
+    assert_eq!(report.ranks, vec![2, 2]);
+    assert_eq!(report.errors.len(), 2);
+}
+
+// A cap equal to the exact rank: both stops hold after three sweeps, and the
+// saturation stop is checked first.
+#[test]
+fn optimize_default_prefers_saturation_when_rank_equals_cap() {
+    let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+    tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+    let batch_eval = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        Ok((0..batch.n_points())
+            .map(|p| (batch.get(0, p).unwrap() + batch.get(1, p).unwrap() + 1) as f64)
+            .collect())
+    };
+
+    let report = optimize_default(
+        &mut tci,
+        batch_eval,
+        &TreeTciOptions {
+            tolerance: 1e-12,
+            max_iter: 10,
+            max_bond_dim: Some(2),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(report.termination, TreeTciTermination::MaxBondDimension);
+    assert_eq!(report.ranks, vec![2, 2, 2]);
+    assert!(report.errors.iter().all(|&error| error < 1e-12));
 }
 
 /// Number of distinct multi-indices on the subtree `key`.
@@ -324,8 +400,13 @@ fn run_capped_and_check<F>(
         .iter()
         .fold(0.0_f64, |acc, v| acc.max(v.abs()));
 
-    let crate::TreeTciOptimizationResult { ranks, errors, .. } =
-        optimize_default(&mut tci, &evaluate, options).unwrap();
+    let TreeTciOptimizationResult {
+        ranks,
+        errors,
+        termination,
+        ..
+    } = optimize_default(&mut tci, &evaluate, options).unwrap();
+    assert_eq!(termination, TreeTciTermination::MaxBondDimension);
 
     // The cap is below the function's rank, so the loop must have stopped
     // through the bond-dimension saturation stop, not through convergence or

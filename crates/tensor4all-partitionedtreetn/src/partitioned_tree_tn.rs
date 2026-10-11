@@ -154,6 +154,37 @@ where
         Ok(Self { data })
     }
 
+    /// Construct a partition from patches whose projectors are pairwise
+    /// disjoint by construction, such as the leaves of one split tree.
+    ///
+    /// Each patch must already satisfy its own invariants (for example built
+    /// with [`SubDomainTreeTN::from_masked_data`]). Topology, site-space, and
+    /// dtype consistency are checked against the first patch, which is linear
+    /// in the patch count; the quadratic pairwise overlap check of
+    /// [`Self::from_subdomains`] is skipped and kept only as a debug assertion.
+    pub(crate) fn from_disjoint_subdomains(subdomains: Vec<SubDomainTreeTN<V>>) -> Result<Self> {
+        if let Some(template) = subdomains.first() {
+            let dtype = template.scalar_kind()?;
+            for candidate in subdomains.iter().skip(1) {
+                ensure_same_tree_structure(template.data(), candidate.data())?;
+                ensure_same_dtype(dtype, candidate.scalar_kind()?)?;
+            }
+        }
+        debug_assert!(
+            subdomains.iter().enumerate().all(|(position, left)| {
+                subdomains[position + 1..]
+                    .iter()
+                    .all(|right| !left.projector().is_compatible_with(right.projector()))
+            }),
+            "from_disjoint_subdomains requires pairwise disjoint projectors"
+        );
+        let data = subdomains
+            .into_iter()
+            .map(|subdomain| (subdomain.projector().clone(), subdomain))
+            .collect();
+        Ok(Self { data })
+    }
+
     /// Construct a partition containing one patch.
     ///
     /// # Errors

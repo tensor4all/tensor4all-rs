@@ -143,6 +143,38 @@ pub(crate) struct InjectionReport {
     pub(crate) total_added: usize,
 }
 
+/// Reusable temporary storage for one directed component projection.
+/// Every dependency is overwritten before its consumer reads it, so entries
+/// from an earlier projection need neither clearing nor generation tags.
+pub(crate) struct ComponentProjectionScratch {
+    projected: Vec<Option<SampleId>>,
+    stack: Vec<(DirectedEdgeId, bool)>,
+}
+
+impl ComponentProjectionScratch {
+    pub(crate) fn working_bytes<V: TreeAciNode>(problem: &PreparedTreeProblem<V>) -> Result<usize> {
+        problem
+            .directed_edges
+            .len()
+            .checked_mul(
+                std::mem::size_of::<Option<SampleId>>()
+                    + 2 * std::mem::size_of::<(DirectedEdgeId, bool)>(),
+            )
+            .ok_or(TreeAciError::SizeOverflow {
+                context: "component projection scratch bytes",
+            })
+    }
+
+    pub(crate) fn new<V: TreeAciNode>(problem: &PreparedTreeProblem<V>) -> Result<Self> {
+        let bytes = Self::working_bytes(problem)?;
+        crate::problem::enforce_limit("working bytes", bytes, problem.max_working_bytes)?;
+        Ok(Self {
+            projected: vec![None; problem.directed_edges.len()],
+            stack: Vec::new(),
+        })
+    }
+}
+
 impl SampleArena {
     pub(crate) fn checkpoint(&self) -> SampleArenaCheckpoint {
         SampleArenaCheckpoint {
@@ -243,6 +275,7 @@ impl SampleArena {
         problem: &PreparedTreeProblem<V>,
         edge: DirectedEdgeId,
         point: &[usize],
+        scratch: &mut ComponentProjectionScratch,
     ) -> Result<SampleId> {
         self.validate_point(problem, point)?;
         if edge >= problem.directed_edges.len() {
@@ -250,8 +283,14 @@ impl SampleArena {
                 message: "component projection references an unknown directed edge",
             });
         }
-        let mut projected = vec![None; problem.directed_edges.len()];
-        let mut stack = vec![(edge, false)];
+        if scratch.projected.len() != problem.directed_edges.len() {
+            return Err(TreeAciError::InternalInvariant {
+                message: "component projection scratch differs from directed edge count",
+            });
+        }
+        let ComponentProjectionScratch { projected, stack } = scratch;
+        stack.clear();
+        stack.push((edge, false));
         while let Some((edge_id, dependencies_ready)) = stack.pop() {
             let directed = &problem.directed_edges[edge_id];
             if !dependencies_ready {

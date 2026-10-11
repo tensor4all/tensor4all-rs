@@ -114,20 +114,27 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     pub rng_seed: u64,
     /// Optional initial traversal root. Default: a deterministic diameter endpoint.
     pub root: Option<V>,
-    /// Run independent global-pivot searches before convergence. Default: `true`.
+    /// Run global-pivot validation before convergence. Default: `true`.
+    /// Previously found points are rechecked against the current output;
+    /// random misses cannot erase a still-significant known residual.
     pub enable_global_guard: bool,
     /// Maximum logical bytes retained by all guard evaluators' persistent
     /// message caches combined. Default: 256 MiB.
     ///
     /// The budget is divided evenly among all input evaluators and the output
-    /// evaluator used by global-pivot searches. A finite nonzero value retains
+    /// evaluator used by global-pivot searches, then among each evaluator's
+    /// directed-edge caches. Integer rounding may disable retention for very
+    /// small budgets. A finite nonzero value retains
     /// useful reuse while preventing repeated floating-zone scans from
     /// retaining an unbounded set of message payloads. Set it to zero to
     /// disable message retention without disabling the guard itself.
     pub message_cache_max_bytes: usize,
     /// Random starts per global search. Default: `5`.
     pub nsearch_global_pivots: usize,
-    /// Maximum pivots injected by one global search. Default: `5`.
+    /// Maximum distinct pivots returned and retained by a global search. Default: `5`.
+    /// Still-significant retained points keep their slots until revalidation
+    /// resolves them; new discoveries fill the remaining slots. Injection
+    /// also depends on each cut's available capacity.
     pub max_nglobal_pivots: usize,
     /// Coordinate sweeps allowed per global-search walk. Default: `100`.
     pub nsweeps_global_search: usize,
@@ -193,6 +200,11 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// [`Self::max_frame_elements`] in step, each to a quarter of the budget
     /// in elements of the run's scalar type. A ceiling set explicitly keeps
     /// overriding the budget in either direction.
+    ///
+    /// Checks candidate records before enumeration and charges frame and LUCI
+    /// phases separately, including the caller's simultaneously live data.
+    /// Counts conservative logical storage, not allocator overhead or
+    /// provider-private workspace; this field is not a process RSS bound.
     ///
     /// The retention budgets are separate and do not follow this one, because
     /// they bound what is kept *between* updates rather than what one update

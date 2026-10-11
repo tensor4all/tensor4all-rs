@@ -110,6 +110,7 @@ fn tensor_dtype_name(dtype: DType) -> &'static str {
         DType::Bool => "bool",
         DType::C32 => "c32",
         DType::C64 => "c64",
+        DType::External(_) => "external",
     }
 }
 
@@ -234,3 +235,16 @@ impl_tensor_element!(f32, DType::F32);
 impl_tensor_element!(f64, DType::F64);
 impl_tensor_element!(Complex32, DType::C32);
 impl_tensor_element!(Complex64, DType::C64);
+
+#[cfg(test)]
+mod external_dtype_tests {
+    use super::*;
+
+    #[test]
+    fn external_kind_is_named_external() {
+        assert_eq!(
+            tensor_dtype_name(DType::External(core::any::TypeId::of::<u8>())),
+            "external"
+        );
+    }
+}

@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Run the compiler-backed production library panic audit.
 
+Set ``T4A_PANIC_AUDIT_SKIP_ALL_FEATURES=1`` when the workspace has no single
+buildable all-features configuration; only the default-feature Clippy pass runs.
+
+Set ``T4A_PANIC_AUDIT_EXCLUDED_FEATURES`` to a comma- or semicolon-separated
+list of workspace features to leave out of the ``--all-features`` pass, when the
+workspace cannot enable all of its features at once (for example mutually
+exclusive CPU backend features). Every other workspace feature is still enabled,
+so crates that need a non-default feature to build stay covered.
+
 This wrapper keeps the historical ``--root``/``--baseline`` interface and
 ``T4A_PANIC_AUDIT_BIN`` override. The Rust tool asks Cargo/Clippy to compile
 workspace ``crates/`` library and binary targets, parses only the four exact

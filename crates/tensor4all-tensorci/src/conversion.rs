@@ -320,7 +320,7 @@ where
         for r in 0..new_bond_dim {
             for l in 0..left_dim {
                 for s in 0..site_dim {
-                    tensor.set3(l, s, r, matrix[[l * site_dim + s, r]]);
+                    tensor.set3(l, s, r, matrix[[l + left_dim * s, r]]);
                 }
             }
         }
@@ -342,7 +342,7 @@ where
         for l in 0..new_bond_dim {
             for s in 0..site_dim {
                 for r in 0..right_dim {
-                    tensor.set3(l, s, r, matrix[[l, s * right_dim + r]]);
+                    tensor.set3(l, s, r, matrix[[l, s + site_dim * r]]);
                 }
             }
         }
@@ -366,8 +366,8 @@ fn kronecker_append(indices: &[MultiIndex], local_dim: usize) -> Result<Vec<Mult
                 message: "TensorCI2 conversion candidate count overflowed usize".to_string(),
             })?;
     let mut result = Vec::with_capacity(capacity);
-    for index in indices {
-        for local in 0..local_dim {
+    for local in 0..local_dim {
+        for index in indices {
             let mut next = index.clone();
             next.push(local);
             result.push(next);
@@ -385,8 +385,8 @@ fn kronecker_prepend(local_dim: usize, indices: &[MultiIndex]) -> Result<Vec<Mul
                 message: "TensorCI2 conversion candidate count overflowed usize".to_string(),
             })?;
     let mut result = Vec::with_capacity(capacity);
-    for local in 0..local_dim {
-        for index in indices {
+    for index in indices {
+        for local in 0..local_dim {
             let mut next = Vec::new();
             next.push(local);
             next.extend(index.iter().copied());

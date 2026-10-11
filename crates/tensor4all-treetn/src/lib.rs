@@ -10,6 +10,8 @@
 //! - [`TreeTN`]: The main tree tensor network type, parameterized by tensor and node name types.
 //! - [`DefaultTreeTN`]: A convenient alias for `TreeTN<IdxTensor, NodeIndex>`.
 //! - [`NamedGraph`]: A graph wrapper that maps node names to internal graph indices.
+//! - [`interpolation`]: The engine-independent contract for interpolating a
+//!   function on a tree ([`interpolation::TreeInterpolator`]).
 //!
 //! # Features
 //!
@@ -33,6 +35,7 @@ mod cuda;
 mod dmrg;
 mod error;
 mod gse;
+pub mod interpolation;
 mod link_index_network;
 mod linsolve;
 mod local_update_support;

@@ -111,6 +111,81 @@ complete paired case summaries, all fitted coefficients and experiment hashes.
 It localizes a candidate-frame residual without claiming a production speedup
 or resolving the downstream GW workload.
 
+The [#686 completion comparison](results/2026-10-09-treeaci-686-completion.md)
+records scalar leaf/group reuse against merged #863, with the full initial
+inconclusive matrix and a separately declared complete confirmation using
+unchanged gates. Exact numerical/count parity and effort regressions support
+the issue closure; the timing evidence is descriptive.
+
+#### Adaptive TreeTN patch representation (M4)
+
+`benchmark_tree_patch_representation` compares eager patches, which retain
+projected site axes masked to zero, with a compact candidate that selects each
+projected site value and removes that axis. Patches come from the real
+`patched_interpolate` driver with `TreeTciInterpolator`. The workload is the
+spectral function `eta / ((e - mu)^2 + eta^2)` of a three-dimensional
+tight-binding band `e = -2 (cos 2 pi x + cos 2 pi y + cos 2 pi z)` on `bits`
+quantics bits per variable, on an interleaved chain (`chain`) or on a tree whose
+site-free root of degree three carries one arm per variable (`tree`). The
+shared body is in `rust/benchmark_tree_patch_representation.rs` and the crate
+example is a thin include. Modes:
+
+- `calibrate <chain|tree> <bits> <eta> <cap>`: one monolithic TreeTCI run, to
+  find parameters whose unpatched rank is realistic;
+- `patch <chain|tree> <bits> <eta> <cap>`: one patched run; patch count and
+  per-patch realized bond dimensions;
+- `check <chain|tree> <bits> <eta> <cap>`: payload, conversion, and every
+  correctness check, without timing;
+- `measure <chain|tree> <bits> <eta> <cap> [label]`: the pre-registered
+  comparison.
+
+`measure` times `TreeTN::norm`, `TreeTN::truncate` with bond cap `cap / 2` at
+the chain middle or the tree root, and the direct sum `TreeTN::add` of a patch
+with itself. The `norm` and `truncate` operands are cloned before the timer
+starts; only the operation is timed, and results are dropped after the timer
+stops. A timing sample is one pass over all patches (repeated so a sample lasts
+at least 200 ms). Per operation it runs one warm-up pass per representation,
+then an eager/eager noise study, then alternating eager/compact pairs. Only the
+`select_indices` and rebuild of the compact conversion are timed. Correctness
+is checked independently of the conversion: the eager network is evaluated at
+full sample points and the compact network at the same points restricted to its
+active sites; the eager network must vanish outside its projector; norms must
+agree; and the results of `truncate` and `add` are compared the same way.
+
+```bash
+T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
+  cargo build --release -p tensor4all-partitionedtreetn \
+    --example benchmark_tree_patch_representation
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+MKL_NUM_THREADS=1 BLAS_NUM_THREADS=1 \
+  taskset -c 2 ./target/release/examples/benchmark_tree_patch_representation \
+    measure chain 12 1.2 128 run-a
+```
+
+Pre-register the workloads, the thresholds, and the decision rule in
+`results/` before collecting timings, run every configuration in at least two
+independent processes, and save the complete stdout as JSONL beside the
+protocol; do not replace an existing result file. No protocol for this
+runner has been committed yet (M4 is deferred; see the roadmap).
+
+#### Fixed-depth tree pQTCI partition exploration (M5)
+
+`benchmark_m5_fixed_depth_partition` fixes the first `k` quantics bits in a
+chosen order and runs one uncapped TreeTCI per resulting patch, on chains and
+branched trees. It is an exploratory study, not a run of the adaptive pQTCI
+driver and not a comparison of split selectors. The source lives in
+`rust/benchmark_m5_fixed_depth_partition.rs`, included by the
+PartitionedTreeTN example of the same name.
+
+```bash
+cargo run --release -p tensor4all-partitionedtreetn \
+  --example benchmark_m5_fixed_depth_partition -- \
+  ridge tree 8 0.03 0,1,2,3,4,5,6 msb 16 20
+```
+
+The recorded runs, their matched-accuracy comparison, and their caveats are in
+[`2026-10-03-m5-fixed-depth-exploration.md`](results/2026-10-03-m5-fixed-depth-exploration.md).
+
 #### TreeTCI global pivot search (#792)
 
 `benchmark_global_search` runs the default TreeTCI loop (`DefaultProposer`,
@@ -159,6 +234,36 @@ cargo build --release -p tensor4all-treetci --features tensor4all-core/default -
 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_memo memo
 ```
+
+The [2026-10-09 scalar frame-builder report](results/2026-10-09-scalar-frame-batch-layout.md)
+uses the same 120-case protocol for batch-local axis metadata reuse (#686).
+It preserves all case summaries and intervals without a production speedup claim.
+
+#### Chain evaluator cache-frontier controls (#671)
+
+The Criterion group `hiroshi_chain_evaluator_parity` compares TTCache and
+TreeTN on identical 16-site f64 chains, physical dimension 2, bond dimensions
+64/128/256 and a 64-point Cartesian coordinate batch. It retains the original
+`treetn_cold`/`treetn_warm` vertex-center controls and adds
+`treetn_around_split_*` (erased output) and `treetn_typed_around_split_*`
+(typed output) using the public `EvaluationHint::around` API used by TreeACI
+coordinate scans. A warm vertex contraction and a cached bond-split dot
+product perform different final work even when they return identical values.
+
+```bash
+RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 TENFERRO_NUM_THREADS=1 \
+  taskset -c 2 cargo bench -p tensor4all-treetn --bench cached_evaluator -- \
+  hiroshi_chain_evaluator_parity --warm-up-time 1 --measurement-time 1
+```
+
+The 24 cases check every TreeTN cold/warm route against TTCache before timing.
+Evaluator construction and oracle output conversion are outside timing; each
+API's native output remains in timing. This compares routes within one
+library revision, not a baseline/candidate speedup. The short host-specific
+[2026-10-09 report](results/2026-10-09-chain-cache-frontier.md) records all
+estimates and intervals. Neither the residual gap nor the topology proxy
+alone establishes a correctness bug or resolves the real SGW workload.
 
 #### Other Rust benchmarks
 

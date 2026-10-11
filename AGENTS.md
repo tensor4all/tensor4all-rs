@@ -158,6 +158,14 @@ See the [local validation table](CONTRIBUTING.md#validate-locally).
 - **Test tolerance changes** (unit tests, codecov targets, ...) require explicit
   user approval.
 
+### Test Suite Time Budget
+
+CI carries one total time budget and one suite-execution budget; see
+[CONTRIBUTING.md](CONTRIBUTING.md#ci-time-budget-and-heavy-tests) for the current
+numbers, the `crates/*/tests/heavy_*.rs` plus `#[ignore]` convention, and the local
+heavy-test command. Do not add a per-test or per-job timeout instead of moving a slow
+test to the scheduled heavy-tests workflow.
+
 ### Coverage and Path Exercise
 
 - Every distinct control-flow path (error branches, layout variants, boundary

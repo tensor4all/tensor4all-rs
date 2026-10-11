@@ -8,7 +8,7 @@ use anyhow::{ensure, Result};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use tensor4all_core::MatrixLuciScalar as Scalar;
-use tensor4all_core::{DynIndex, IdxTensor};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::TreeTN;
 
@@ -56,6 +56,94 @@ where
     T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
+    let node_names = (0..state.graph.n_sites()).collect::<Vec<_>>();
+    let site_indices = state
+        .local_dims
+        .iter()
+        .map(|&dim| vec![DynIndex::new_dyn(dim)])
+        .collect::<Vec<_>>();
+    to_named_treetn_chunked(
+        state,
+        evaluate,
+        center_site,
+        &node_names,
+        &site_indices,
+        chunk_points,
+    )
+}
+
+/// Materialize a swept TreeTCI state with caller-chosen node names and site
+/// indices.
+///
+/// Vertex `v` becomes the node `node_names[v]` whose site legs are
+/// `site_indices[v]`, listed before the bond legs. The product of their
+/// dimensions must equal the vertex's local dimension, and the vertex
+/// coordinate is split column-major over them (the first index varies
+/// fastest). An empty list is allowed only for a dimension-one vertex, whose
+/// unit leg is then omitted. Both splits are pure reshapes of the column-major
+/// site tensor.
+pub(crate) fn to_named_treetn<T, F, V>(
+    state: &TreeTCI2<T>,
+    evaluate: F,
+    center_site: Option<usize>,
+    node_names: &[V],
+    site_indices: &[Vec<DynIndex>],
+) -> TreeTciResult<TreeTN<IdxTensor, V>>
+where
+    T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    V: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+{
+    to_named_treetn_chunked(
+        state,
+        &evaluate,
+        center_site,
+        node_names,
+        site_indices,
+        EVALUATION_CHUNK_POINTS,
+    )
+}
+
+fn to_named_treetn_chunked<T, F, V>(
+    state: &TreeTCI2<T>,
+    evaluate: &F,
+    center_site: Option<usize>,
+    node_names: &[V],
+    site_indices: &[Vec<DynIndex>],
+    chunk_points: usize,
+) -> TreeTciResult<TreeTN<IdxTensor, V>>
+where
+    T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    V: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+{
+    let n_vertices = state.graph.n_sites();
+    if node_names.len() != n_vertices || site_indices.len() != n_vertices {
+        return Err(anyhow::anyhow!(
+            "materialization needs one node name and one site-index list per vertex: \
+             {n_vertices} vertices, {} names, {} site-index lists",
+            node_names.len(),
+            site_indices.len()
+        )
+        .into());
+    }
+    for (vertex, indices) in site_indices.iter().enumerate() {
+        let product = indices
+            .iter()
+            .try_fold(1usize, |product, index| product.checked_mul(index.dim()))
+            .ok_or_else(|| {
+                anyhow::anyhow!("site dimension product of vertex {vertex} overflowed usize")
+            })?;
+        if product != state.local_dims[vertex] {
+            return Err(anyhow::anyhow!(
+                "site indices of vertex {vertex} have dimension product {product}, \
+                 but the vertex has local dimension {}",
+                state.local_dims[vertex]
+            )
+            .into());
+        }
+    }
+
     let root = center_site.unwrap_or(0);
     let (parents, distances) = state.graph.bfs_tree(root)?;
 
@@ -90,7 +178,7 @@ where
     sites.sort_by_key(|&site| (distances[site], site));
 
     let mut tensors = Vec::with_capacity(sites.len());
-    let mut node_names = Vec::with_capacity(sites.len());
+    let mut names = Vec::with_capacity(sites.len());
     for site in sites {
         let parent_edge = parents[site]
             .map(|parent| state.graph.edge_between(site, parent))
@@ -120,10 +208,10 @@ where
         let index_count = incoming_edges
             .len()
             .checked_add(out_edges.len())
-            .and_then(|count| count.checked_add(1))
+            .and_then(|count| count.checked_add(site_indices[site].len()))
             .ok_or_else(|| anyhow::anyhow!("materialized site index count overflowed usize"))?;
         let mut indices = Vec::with_capacity(index_count);
-        indices.push(DynIndex::new_dyn(state.local_dims[site]));
+        indices.extend(site_indices[site].iter().cloned());
         for edge in &incoming_edges {
             indices.push(
                 bond_indices
@@ -142,10 +230,10 @@ where
         }
 
         tensors.push(IdxTensor::from_dense(indices, data)?);
-        node_names.push(site);
+        names.push(node_names[site].clone());
     }
 
-    TreeTN::from_tensors(tensors, node_names).map_err(TreeTciError::from)
+    TreeTN::from_tensors(tensors, names).map_err(TreeTciError::from)
 }
 
 fn site_tensor_with_parent<T, F>(

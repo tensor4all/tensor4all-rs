@@ -55,6 +55,11 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum FactorizeError {
     /// Factorization computation failed.
+    ///
+    /// The underlying error is preserved as an `anyhow` source, so a typed
+    /// cause such as
+    /// [`IdxTensorError::UnsupportedExecutionContext`](crate::IdxTensorError::UnsupportedExecutionContext)
+    /// stays reachable through `downcast_ref`.
     #[error("Factorization failed: {0}")]
     ComputationError(
         /// The underlying error

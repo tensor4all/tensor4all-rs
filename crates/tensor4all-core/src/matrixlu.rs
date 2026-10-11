@@ -432,7 +432,7 @@ impl<T: Scalar> RrLU<T> {
     }
 }
 
-fn validate_col_major_matrix_len(
+pub(crate) fn validate_col_major_matrix_len(
     nrows: usize,
     ncols: usize,
     actual_len: usize,
@@ -975,6 +975,7 @@ impl Default for RrLUOptions {
 pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> Result<RrLU<T>> {
     let opts = options.unwrap_or_default();
     let left_orthogonal = opts.left_orthogonal;
+    let rank_cap = opts.max_bond_dim;
     let state = factorize_mut_in_place(a, opts)?;
     let nrows = a.nrows();
     let ncols = a.ncols();
@@ -986,6 +987,26 @@ pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> R
         left_orthogonal,
     )?;
 
+    // A rank ceiling exits before the next pivot scan. Report the remaining
+    // Schur complement, not the magnitude of the last accepted pivot.
+    let mut error = state.error;
+    let max_bond_dim = rank_cap.min(nrows).min(ncols);
+    if state.n_pivot < nrows.min(ncols) && state.n_pivot == max_bond_dim {
+        let data = a.as_col_major_slice();
+        error = 0.0;
+        for col in state.n_pivot..ncols {
+            for row in state.n_pivot..nrows {
+                let residual = col_major_get(data, nrows, row, col).abs_val();
+                if !residual.is_finite() {
+                    return Err(MatrixCIError::NaNEncountered {
+                        matrix: "residual".to_string(),
+                    });
+                }
+                error = error.max(residual);
+            }
+        }
+    }
+
     Ok(RrLU {
         row_permutation: state.row_permutation,
         col_permutation: state.col_permutation,
@@ -993,7 +1014,7 @@ pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> R
         u,
         left_orthogonal,
         n_pivot: state.n_pivot,
-        error: state.error,
+        error,
     })
 }
 

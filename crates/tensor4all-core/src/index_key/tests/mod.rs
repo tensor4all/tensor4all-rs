@@ -113,6 +113,71 @@ fn wide_arms_are_selected_by_width() {
     }
 }
 
+#[test]
+fn owned_heap_bytes_accounts_for_every_storage_arm() {
+    for bits in [0usize, 64, 128, 129, 256, 257, 512, 513, 700, 1024] {
+        let indexer = FlatIndexer::try_new(&vec![2usize; bits]).unwrap();
+        let key = indexer.encode(&vec![1usize; bits]).unwrap();
+        let expected = match key.repr() {
+            Repr::U64(_) | Repr::U128(_) => 0,
+            Repr::U256(_) => 32,
+            Repr::U512(_) => 64,
+            Repr::Limbs(limbs) => {
+                assert!(limbs.spilled());
+                assert!(limbs.capacity() >= bits.div_ceil(64));
+                limbs.capacity() * std::mem::size_of::<u64>()
+            }
+        };
+        assert_eq!(key.owned_heap_bytes(), expected, "{bits} bits");
+        let cloned = key.clone();
+        assert_eq!(cloned, key);
+        match cloned.repr() {
+            Repr::Limbs(limbs) => assert_eq!(
+                cloned.owned_heap_bytes(),
+                limbs.capacity() * std::mem::size_of::<u64>()
+            ),
+            _ => assert_eq!(cloned.owned_heap_bytes(), expected),
+        }
+    }
+}
+
+#[test]
+fn owned_heap_bytes_uses_key_capacity_instead_of_builder_capacity() {
+    for bits in [0usize, 64, 128, 130, 300, 700] {
+        let key = FlatIndexer::try_new(&vec![2usize; bits])
+            .unwrap()
+            .encode(&vec![1usize; bits])
+            .unwrap();
+        let mut builder = KeyBuilder::with_capacity_bits(4096).unwrap();
+        builder.push(&key).unwrap();
+        let composed = builder.finish();
+        assert_eq!(composed, key);
+        if let Repr::Limbs(limbs) = composed.repr() {
+            assert_eq!(
+                composed.owned_heap_bytes(),
+                limbs.capacity() * std::mem::size_of::<u64>()
+            );
+        } else {
+            assert_eq!(composed.owned_heap_bytes(), key.owned_heap_bytes());
+        }
+    }
+
+    // Inline limb storage is part of its owner, never a heap payload.
+    let inline = dynamic::zeroed(64).unwrap();
+    assert!(!inline.spilled());
+    assert_eq!(dynamic::owned_heap_bytes(&inline), 0);
+    let mut spilled = dynamic::zeroed(700).unwrap();
+    spilled.reserve(20);
+    let allocated = spilled.capacity() * std::mem::size_of::<u64>();
+    spilled.truncate(9);
+    assert_eq!(dynamic::owned_heap_bytes(&spilled), allocated);
+    let key_with_spare_capacity = IndexKey {
+        width_bits: 513,
+        repr: Repr::Limbs(spilled),
+    };
+    assert_eq!(key_with_spare_capacity.owned_heap_bytes(), allocated);
+}
+
 /// #628: "the exact layout should not inflate every fixed-width key merely
 /// because the enum has a large inline variant".
 ///

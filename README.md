@@ -61,7 +61,7 @@ validated in CI. Longer runnable examples live in the
 | [tensor4all-interpolativeqtt](crates/tensor4all-interpolativeqtt/) | Interpolative QTT construction |
 | [tensor4all-quanticstransform](crates/tensor4all-quanticstransform/) | Quantics transformation operators |
 | [tensor4all-treetci](crates/tensor4all-treetci/) | Tree-structured cross interpolation |
-| [tensor4all-partitionedtreetn](crates/tensor4all-partitionedtreetn/) | Partitioned TreeTNs with eager masking and adaptive patching |
+| [tensor4all-partitionedtreetn](crates/tensor4all-partitionedtreetn/) | Partitioned TreeTNs with eager masking, adaptive patching, and adaptive patched interpolation |
 | [tensor4all-partitionedtt](crates/tensor4all-partitionedtt/) | **Deprecated:** partitioned tensor trains and adaptive TCI interpolation during migration |
 | [tensor4all-hdf5](crates/tensor4all-hdf5/) | ITensors.jl-compatible HDF5 serialization |
 | [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |

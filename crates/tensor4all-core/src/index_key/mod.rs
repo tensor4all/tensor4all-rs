@@ -178,6 +178,32 @@ impl IndexKey {
         self.width_bits
     }
 
+    /// Returns the heap payload bytes owned by this key, including spare limb capacity.
+    ///
+    /// Inline keys of at most 128 bits own no heap payload. Wider fixed-width
+    /// keys own their boxed storage; limb-backed keys include the allocation's
+    /// full capacity. This excludes the inline [`IndexKey`] value, allocator
+    /// headers, allocator rounding, and any temporary builder storage. Use it
+    /// when accounting for keys retained in a cache or collection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::index_key::FlatIndexer;
+    /// let narrow = FlatIndexer::try_new(&[2, 2]).unwrap().encode(&[1, 0]).unwrap();
+    /// assert_eq!(narrow.owned_heap_bytes(), 0);
+    /// let wide = FlatIndexer::try_new(&[2; 130]).unwrap().encode(&[1; 130]).unwrap();
+    /// assert_eq!(wide.owned_heap_bytes(), 32);
+    /// ```
+    pub fn owned_heap_bytes(&self) -> usize {
+        match &self.repr {
+            Repr::U64(_) | Repr::U128(_) => 0,
+            Repr::U256(value) => std::mem::size_of_val(value.as_ref()),
+            Repr::U512(value) => std::mem::size_of_val(value.as_ref()),
+            Repr::Limbs(value) => dynamic::owned_heap_bytes(value),
+        }
+    }
+
     /// The storage arm, for tests that pin which arm a width selects.
     #[cfg(test)]
     fn repr(&self) -> &Repr {

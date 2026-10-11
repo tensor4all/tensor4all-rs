@@ -2,6 +2,8 @@
 
 For eager subdomain decomposition and volume-budgeted adaptive patching on
 named TreeTNs, continue to the [Partitioned TreeTNs guide](partitioned-treetn.md).
+It also covers adaptive patched interpolation of a function on a named tree
+with an L2 error that the driver measures itself (`patched_interpolate`).
 
 The `tensor4all-treetn` crate provides a generic tree tensor network (`TreeTN`) that supports
 arbitrary tree topologies — not just linear chains. This guide covers construction, canonicalization,

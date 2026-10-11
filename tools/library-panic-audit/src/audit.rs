@@ -173,6 +173,7 @@ struct ProductionSelection {
     targets: Vec<ProductionTarget>,
     excluded_packages: Vec<String>,
     all_features: bool,
+    feature_names: Vec<String>,
 }
 
 impl ProductionSelection {
@@ -213,6 +214,7 @@ impl ProductionSelection {
         let mut targets = Vec::new();
         let mut all_workspace_packages = Vec::new();
         let mut all_features = false;
+        let mut feature_names = BTreeSet::new();
         for package in packages {
             let package_id = package
                 .get("id")
@@ -231,6 +233,15 @@ impl ProductionSelection {
                 .and_then(Value::as_object)
                 .ok_or_else(|| anyhow!("cargo metadata package omitted features"))?;
             let package_has_nondefault_features = feature_map.keys().any(|name| name != "default");
+            // Cargo's `--features` accepts a union of names that exist in any
+            // selected package, so the workspace union is what the all-features
+            // pass enables apart from the excluded names.
+            feature_names.extend(
+                feature_map
+                    .keys()
+                    .filter(|name| name.as_str() != "default")
+                    .cloned(),
+            );
             let manifest = package
                 .get("manifest_path")
                 .and_then(Value::as_str)
@@ -282,6 +293,7 @@ impl ProductionSelection {
             targets,
             excluded_packages,
             all_features,
+            feature_names: feature_names.into_iter().collect(),
         })
     }
 
@@ -341,9 +353,88 @@ fn command_detail(stdout: &[u8], stderr: &[u8]) -> String {
     String::from_utf8_lossy(stdout).trim().to_string()
 }
 
+/// Which Cargo feature selection one Clippy pass audits.
+#[derive(Clone, Copy, Debug)]
+enum FeaturePass<'a> {
+    /// The workspace's default features.
+    Default,
+    /// Every workspace feature, or every feature except the excluded names.
+    All(Option<&'a str>),
+}
+
+impl FeaturePass<'_> {
+    fn label(self) -> String {
+        match self {
+            Self::Default => "(default features)".to_owned(),
+            Self::All(None) => "(--all-features)".to_owned(),
+            Self::All(Some(features)) => format!("(--features {features})"),
+        }
+    }
+}
+
+/// Skip the second Clippy pass entirely.
+///
+/// Set to `1` when the workspace has no single buildable "all features"
+/// configuration, so only the default-feature pass runs. Record why in the
+/// repository that sets it; the audit no longer covers feature-gated code.
+const SKIP_ALL_FEATURES_ENV: &str = "T4A_PANIC_AUDIT_SKIP_ALL_FEATURES";
+
+fn skip_all_features() -> bool {
+    std::env::var(SKIP_ALL_FEATURES_ENV).is_ok_and(|value| value == "1")
+}
+
+/// Comma- or semicolon-separated workspace feature names to leave out of the
+/// `--all-features` pass.
+///
+/// A workspace whose features cannot all be enabled at once (for example
+/// mutually exclusive CPU backend features) lists the features that would make
+/// the single pass fail; every other workspace feature is still enabled, so a
+/// crate that needs a non-default feature to build keeps it.
+const EXCLUDED_FEATURES_ENV: &str = "T4A_PANIC_AUDIT_EXCLUDED_FEATURES";
+
+fn configured_excluded_features() -> Result<BTreeSet<String>> {
+    let Ok(raw) = std::env::var(EXCLUDED_FEATURES_ENV) else {
+        return Ok(BTreeSet::new());
+    };
+    let excluded = raw
+        .split([';', ','])
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    if excluded.is_empty() {
+        bail!("{EXCLUDED_FEATURES_ENV} is set but lists no feature name");
+    }
+    Ok(excluded)
+}
+
+/// Every workspace feature except the excluded names, as one `--features` list.
+fn enabled_features(available: &[String], excluded: &BTreeSet<String>) -> Result<String> {
+    let unknown = excluded
+        .iter()
+        .filter(|name| !available.iter().any(|feature| feature == *name))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        bail!(
+            "{EXCLUDED_FEATURES_ENV} names features this workspace does not define: {}",
+            unknown.join(", ")
+        );
+    }
+    let enabled = available
+        .iter()
+        .filter(|name| !excluded.contains(*name))
+        .cloned()
+        .collect::<Vec<_>>();
+    if enabled.is_empty() {
+        bail!("every workspace feature is excluded; nothing left to audit");
+    }
+    Ok(enabled.join(","))
+}
+
 fn run_clippy(
     selection: &ProductionSelection,
-    all_features: bool,
+    pass: FeaturePass<'_>,
 ) -> Result<(BTreeSet<PathBuf>, BTreeSet<Finding>)> {
     let mut command = Command::new("cargo");
     command.args(["clippy", "--workspace"]);
@@ -351,8 +442,16 @@ fn run_clippy(
         command.args(["--exclude", package]);
     }
     command.args(["--lib", "--bins", "--message-format=json"]);
-    if all_features {
-        command.arg("--all-features");
+    match pass {
+        FeaturePass::Default => {}
+        FeaturePass::All(features) => match features {
+            None => {
+                command.arg("--all-features");
+            }
+            Some(features) => {
+                command.args(["--features", features]);
+            }
+        },
     }
     command.args(["--"]);
     command.args(["-A", "clippy::all", "--cap-lints", "warn"]);
@@ -368,11 +467,7 @@ fn run_clippy(
     if !output.status.success() {
         bail!(
             "cargo clippy {} failed: {}",
-            if all_features {
-                "(--all-features)"
-            } else {
-                "(default features)"
-            },
+            pass.label(),
             command_detail(&output.stdout, &output.stderr)
         );
     }
@@ -1767,10 +1862,17 @@ fn build_report(actual: &BTreeSet<Finding>, baseline: &BTreeSet<Finding>) -> Aud
 pub(crate) fn audit(root_arg: &Path, baseline_path: &Path) -> Result<AuditReport> {
     let selection = ProductionSelection::load(root_arg)?;
     let baseline = load_baseline(baseline_path)?;
-    let (default_sources, mut actual) = run_clippy(&selection, false)?;
+    let (default_sources, mut actual) = run_clippy(&selection, FeaturePass::Default)?;
     let mut source_files = default_sources;
-    if selection.all_features {
-        let (all_feature_sources, all_feature_findings) = run_clippy(&selection, true)?;
+    if selection.all_features && !skip_all_features() {
+        let excluded = configured_excluded_features()?;
+        let features = if excluded.is_empty() {
+            None
+        } else {
+            Some(enabled_features(&selection.feature_names, &excluded)?)
+        };
+        let (all_feature_sources, all_feature_findings) =
+            run_clippy(&selection, FeaturePass::All(features.as_deref()))?;
         source_files.extend(all_feature_sources);
         actual.extend(all_feature_findings);
     }
@@ -1781,6 +1883,32 @@ pub(crate) fn audit(root_arg: &Path, baseline_path: &Path) -> Result<AuditReport
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enabled_features_drops_only_the_excluded_names() {
+        let available = ["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()];
+        let excluded = BTreeSet::from(["beta".to_owned()]);
+        assert_eq!(
+            enabled_features(&available, &excluded).unwrap(),
+            "alpha,gamma"
+        );
+        assert!(enabled_features(&available, &BTreeSet::new()).is_ok());
+    }
+
+    #[test]
+    fn enabled_features_rejects_unknown_or_complete_exclusions() {
+        let available = ["alpha".to_owned()];
+        let unknown = BTreeSet::from(["nope".to_owned()]);
+        let error = enabled_features(&available, &unknown)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("does not define"), "{error}");
+        let everything = BTreeSet::from(["alpha".to_owned()]);
+        let error = enabled_features(&available, &everything)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("nothing left"), "{error}");
+    }
     use serde_json::json;
     use std::time::{SystemTime, UNIX_EPOCH};
 

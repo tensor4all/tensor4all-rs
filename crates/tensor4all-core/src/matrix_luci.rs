@@ -14,9 +14,56 @@ use crate::matrixluci::PivotKernel;
 use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
 use tensor4all_tensorbackend::{
-    default_cpu_execution_context, mat_mul_owned_in, submatrix, triangular_solve_matrix_owned_in,
-    CpuExecutionContext, Matrix,
+    mat_mul_owned, submatrix, triangular_solve_matrix_owned, CpuExecutionContext, Matrix,
 };
+
+/// Where MatrixLUCI factor assembly runs its matrix products and solves.
+///
+/// `Global` keeps the compatibility routes of the legacy entry points;
+/// `Context` runs every operation in one explicit concrete session of the
+/// caller's context and never consults the process-global default.
+#[derive(Clone, Copy)]
+pub(crate) enum Linalg<'a> {
+    Global,
+    Context(&'a CpuExecutionContext),
+}
+
+impl Linalg<'_> {
+    fn mat_mul<T>(self, a: Matrix<T>, b: Matrix<T>) -> std::result::Result<Matrix<T>, String>
+    where
+        T: Scalar + crate::MatrixLuciScalar,
+    {
+        match self {
+            Self::Global => mat_mul_owned(a, b).map_err(|err| err.to_string()),
+            Self::Context(context) => context
+                .with_concrete_session(|session| session.mat_mul(&a, &b))
+                .map_err(|err| err.to_string())?
+                .map_err(|err| err.to_string()),
+        }
+    }
+
+    fn triangular_solve<T>(
+        self,
+        a: Matrix<T>,
+        b: Matrix<T>,
+        left_side: bool,
+        lower: bool,
+    ) -> std::result::Result<Matrix<T>, String>
+    where
+        T: Scalar + crate::MatrixLuciScalar,
+    {
+        match self {
+            Self::Global => triangular_solve_matrix_owned(a, b, left_side, lower, false, false)
+                .map_err(|err| err.to_string()),
+            Self::Context(context) => context
+                .with_concrete_session(|session| {
+                    T::matrix_luci_triangular_solve_in(session, &a, &b, left_side, lower)
+                })
+                .map_err(|err| err.to_string())?
+                .map_err(|err| err.to_string()),
+        }
+    }
+}
 
 /// Matrix LU-based Cross Interpolation.
 ///
@@ -91,7 +138,7 @@ pub struct MatrixLuciFactors<T> {
     pub row_indices: Vec<usize>,
     /// Selected column indices.
     pub col_indices: Vec<usize>,
-    /// Pivot error history, using the selected kernel's diagnostic convention.
+    /// Pivot error history, or one measured maximum residual for fixed pivots.
     pub pivot_errors: Vec<f64>,
     /// Selected rank.
     pub rank: usize,
@@ -164,7 +211,12 @@ where
     let rank = lu.n_pivot;
     Ok(MatrixLuciRowInterpolation {
         rows: lu.row_permutation[..rank].to_vec(),
-        interpolation: cols_times_pivot_solve(&lu.l, &lu.row_permutation, rank, context)?,
+        interpolation: cols_times_pivot_solve(
+            &lu.l,
+            &lu.row_permutation,
+            rank,
+            Linalg::Context(context),
+        )?,
         pivot_magnitudes: lu.pivot_magnitudes,
     })
 }
@@ -275,7 +327,7 @@ fn apply_col_permutation<T: Scalar>(matrix: &Matrix<T>, permutation: &[usize]) -
     result
 }
 
-pub(crate) fn rrlu_colmatrix<T>(lu: &RrLU<T>, context: &CpuExecutionContext) -> Result<Matrix<T>>
+pub(crate) fn rrlu_colmatrix<T>(lu: &RrLU<T>, linalg: Linalg<'_>) -> Result<Matrix<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
@@ -286,11 +338,12 @@ where
     let rows = index_range(0, rank);
     let cols = index_range(0, rank);
     let right_pivot_cols = submatrix(lu.right_unpermuted(), &rows, &cols);
-    mat_mul_owned_in(lu.left(true), right_pivot_cols, context)
+    linalg
+        .mat_mul(lu.left(true), right_pivot_cols)
         .map_err(|err| backend_linalg_error(format!("MatrixLUCI colmatrix multiply failed: {err}")))
 }
 
-pub(crate) fn rrlu_rowmatrix<T>(lu: &RrLU<T>, context: &CpuExecutionContext) -> Result<Matrix<T>>
+pub(crate) fn rrlu_rowmatrix<T>(lu: &RrLU<T>, linalg: Linalg<'_>) -> Result<Matrix<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
@@ -301,14 +354,12 @@ where
     let rows = index_range(0, rank);
     let cols = index_range(0, rank);
     let left_pivot_rows = submatrix(lu.left_unpermuted(), &rows, &cols);
-    mat_mul_owned_in(left_pivot_rows, lu.right(true), context)
+    linalg
+        .mat_mul(left_pivot_rows, lu.right(true))
         .map_err(|err| backend_linalg_error(format!("MatrixLUCI rowmatrix multiply failed: {err}")))
 }
 
-pub(crate) fn rrlu_cols_times_pivot_solve<T>(
-    lu: &RrLU<T>,
-    context: &CpuExecutionContext,
-) -> Result<Matrix<T>>
+pub(crate) fn rrlu_cols_times_pivot_solve<T>(lu: &RrLU<T>, linalg: Linalg<'_>) -> Result<Matrix<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
@@ -316,7 +367,7 @@ where
         lu.left_unpermuted(),
         lu.row_permutation(),
         lu.npivots(),
-        context,
+        linalg,
     )
 }
 
@@ -324,7 +375,7 @@ fn cols_times_pivot_solve<T>(
     left: &Matrix<T>,
     row_permutation: &[usize],
     rank: usize,
-    context: &CpuExecutionContext,
+    linalg: Linalg<'_>,
 ) -> Result<Matrix<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
@@ -336,11 +387,11 @@ where
         let rest_rows = index_range(rank, left.nrows());
         let pivot = submatrix(left, &pivot_rows, &pivot_cols);
         let rest = submatrix(left, &rest_rows, &pivot_cols);
-        let solved =
-            triangular_solve_matrix_owned_in(pivot, rest, false, true, false, false, context)
-                .map_err(|err| {
-                    backend_linalg_error(format!("MatrixLUCI lower triangular solve failed: {err}"))
-                })?;
+        let solved = linalg
+            .triangular_solve(pivot, rest, false, true)
+            .map_err(|err| {
+                backend_linalg_error(format!("MatrixLUCI lower triangular solve failed: {err}"))
+            })?;
         for row in 0..solved.nrows() {
             for col in 0..solved.ncols() {
                 result[[rank + row, col]] = solved[[row, col]];
@@ -350,10 +401,7 @@ where
     Ok(apply_row_permutation(&result, row_permutation))
 }
 
-pub(crate) fn rrlu_pivot_solve_times_rows<T>(
-    lu: &RrLU<T>,
-    context: &CpuExecutionContext,
-) -> Result<Matrix<T>>
+pub(crate) fn rrlu_pivot_solve_times_rows<T>(lu: &RrLU<T>, linalg: Linalg<'_>) -> Result<Matrix<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
@@ -365,11 +413,11 @@ where
         let rest_cols = index_range(rank, lu.ncols());
         let pivot = submatrix(lu.right_unpermuted(), &pivot_rows, &pivot_cols);
         let rest = submatrix(lu.right_unpermuted(), &pivot_rows, &rest_cols);
-        let solved =
-            triangular_solve_matrix_owned_in(pivot, rest, true, false, false, false, context)
-                .map_err(|err| {
-                    backend_linalg_error(format!("MatrixLUCI upper triangular solve failed: {err}"))
-                })?;
+        let solved = linalg
+            .triangular_solve(pivot, rest, true, false)
+            .map_err(|err| {
+                backend_linalg_error(format!("MatrixLUCI upper triangular solve failed: {err}"))
+            })?;
         for row in 0..solved.nrows() {
             for col in 0..solved.ncols() {
                 result[[row, rank + col]] = solved[[row, col]];
@@ -379,19 +427,19 @@ where
     Ok(apply_col_permutation(&result, lu.col_permutation()))
 }
 
-fn factors_from_rrlu<T>(lu: &RrLU<T>, context: &CpuExecutionContext) -> Result<MatrixLuciFactors<T>>
+fn factors_from_rrlu<T>(lu: &RrLU<T>, linalg: Linalg<'_>) -> Result<MatrixLuciFactors<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
     let left = if lu.is_left_orthogonal() {
-        rrlu_cols_times_pivot_solve(lu, context)?
+        rrlu_cols_times_pivot_solve(lu, linalg)?
     } else {
-        rrlu_colmatrix(lu, context)?
+        rrlu_colmatrix(lu, linalg)?
     };
     let right = if lu.is_left_orthogonal() {
-        rrlu_rowmatrix(lu, context)?
+        rrlu_rowmatrix(lu, linalg)?
     } else {
-        rrlu_pivot_solve_times_rows(lu, context)?
+        rrlu_pivot_solve_times_rows(lu, linalg)?
     };
 
     Ok(MatrixLuciFactors {
@@ -412,19 +460,19 @@ where
     T: Scalar + crate::MatrixLuciScalar,
 {
     let lu = rrlu(a, Some(options))?;
-    factors_from_rrlu(&lu, &default_cpu_execution_context())
+    factors_from_rrlu(&lu, Linalg::Global)
 }
 
 pub(crate) fn dense_matrix_luci_factors_from_matrix_owned<T>(
     mut a: Matrix<T>,
     options: RrLUOptions,
-    context: &CpuExecutionContext,
+    linalg: Linalg<'_>,
 ) -> Result<MatrixLuciFactors<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
     let lu = rrlu_mut(&mut a, Some(options))?;
-    factors_from_rrlu(&lu, context)
+    factors_from_rrlu(&lu, linalg)
 }
 
 pub(crate) fn lazy_matrix_luci_factors_from_blocks<T, F>(
@@ -516,7 +564,9 @@ pub fn matrix_luci_factors_from_matrix_owned<T>(
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
-    matrix_luci_factors_from_matrix_owned_in(a, options, &default_cpu_execution_context())
+    let options = options.unwrap_or_default();
+    validate_owned_luci_input(&a, &options)?;
+    dense_matrix_luci_factors_from_matrix_owned(a, options, Linalg::Global)
 }
 
 /// Factorize a dense matrix with MatrixLUCI in a caller-owned CPU context.
@@ -574,7 +624,56 @@ where
 {
     let options = options.unwrap_or_default();
     validate_owned_luci_input(&a, &options)?;
-    dense_matrix_luci_factors_from_matrix_owned(a, options, context)
+    dense_matrix_luci_factors_from_matrix_owned(a, options, Linalg::Context(context))
+}
+
+/// Conservative logical working-byte estimate for owned dense LUCI factors.
+///
+/// Includes the consumed matrix, rrLU L/U, factor construction, permutation
+/// and triangular-solve operands/results, and pivot/index metadata. The
+/// factor rank is bounded by `min(nrows, ncols, max_rank)`. The estimate sums
+/// potentially overlapping factor buffers conservatively; it excludes
+/// allocator overhead and provider-private workspace. Callers must add their
+/// own buffers retained across the factorization.
+///
+/// Returns `None` when checked shape/byte arithmetic overflows `usize`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::matrix_luci_factors_working_bytes;
+/// let bytes = matrix_luci_factors_working_bytes::<f64>(32, 32, 32).unwrap();
+/// // Even just the matrix and full-rank L/U require three matrix payloads.
+/// assert!(bytes >= 3 * 32 * 32 * std::mem::size_of::<f64>());
+/// assert!(matrix_luci_factors_working_bytes::<f64>(usize::MAX, 2, 1).is_none());
+/// ```
+pub fn matrix_luci_factors_working_bytes<T: Scalar>(
+    nrows: usize,
+    ncols: usize,
+    max_rank: usize,
+) -> Option<usize> {
+    let rank = max_rank.min(nrows).min(ncols);
+    let axes = nrows.checked_add(ncols)?;
+    let matrix = nrows.checked_mul(ncols)?;
+    // L/U, both output factors, permutation copies, and triangular solve
+    // operands/results. Charge both orientations rather than assuming which
+    // side has the larger solve, including Matrix/backend operand copies.
+    let factors = axes.checked_mul(rank)?.checked_mul(6)?;
+    let pivots = rank.checked_mul(rank)?.checked_mul(2)?;
+    let scalar_bytes = matrix
+        .checked_add(factors)?
+        .checked_add(pivots)?
+        .checked_mul(std::mem::size_of::<T>())?;
+    let index_bytes = axes
+        .checked_add(rank)?
+        .checked_mul(4)?
+        .checked_mul(std::mem::size_of::<usize>())?;
+    let error_bytes = rank
+        .checked_add(1)?
+        .checked_mul(std::mem::size_of::<f64>())?;
+    scalar_bytes
+        .checked_add(index_bytes)?
+        .checked_add(error_bytes)
 }
 
 /// Factorize a lazily supplied matrix with MatrixLUCI block-rook search.

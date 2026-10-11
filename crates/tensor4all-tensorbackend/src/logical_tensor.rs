@@ -148,7 +148,8 @@ impl LogicalTensor {
     /// Returns [`LogicalTensorError::Tensor`] if the native tensor is not
     /// host-readable with its declared dtype.
     pub fn from_native(tensor: &Tensor) -> Result<Self, LogicalTensorError> {
-        let data = match tensor.dtype() {
+        let dtype = tensor.dtype();
+        let data = match dtype {
             DType::F32 => LogicalTensorData::F32(
                 tensor
                     .as_slice::<f32>()
@@ -211,7 +212,17 @@ impl LogicalTensor {
                         source,
                     })?
                     .to_vec(),
-            ),
+            ), // An external scalar kind carries a caller-registered Rust type, not a
+            // host payload this crate can snapshot.
+            DType::External(_) => {
+                return Err(LogicalTensorError::Tensor {
+                    operation: "snapshot",
+                    source: tenferro_tensor::Error::unsupported(
+                        "snapshot",
+                        format!("external scalar kind {dtype:?} has no logical-tensor payload"),
+                    ),
+                })
+            }
         };
         Self::new(tensor.shape().to_vec(), data)
     }
@@ -275,6 +286,13 @@ impl CpuExecutionContext {
     pub fn reconstruct(&self, tensor: &LogicalTensor) -> Result<Tensor, LogicalTensorError> {
         let host = tensor.to_native()?;
         self.with_session(|session| session.upload_host_tensor(TensorRead::from_tensor(&host)))
+            .map_err(|source| LogicalTensorError::Tensor {
+                operation: "target-context upload",
+                source: tenferro_tensor::Error::runtime_state_source(
+                    "target-context upload",
+                    source,
+                ),
+            })?
             .map_err(|source| LogicalTensorError::Tensor {
                 operation: "target-context upload",
                 source,

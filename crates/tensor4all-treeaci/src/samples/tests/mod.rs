@@ -1,7 +1,9 @@
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
 
-use super::{projection_debug_stats, CandidateSets, PivotPairs, SampleArena};
+use super::{
+    projection_debug_stats, CandidateSets, ComponentProjectionScratch, PivotPairs, SampleArena,
+};
 use crate::{problem::prepare_problem, TreeAciError, TreeAciOptions};
 
 fn make_tree(edges: &[(usize, usize)], node_count: usize) -> TreeTN<IdxTensor, usize> {
@@ -154,7 +156,12 @@ fn project_point_onto_edge_touches_only_the_requested_edges_ancestor_chain() {
     let target_edge = 0;
     projection_debug_stats::reset();
     let id = arena
-        .project_point_onto_edge(&problem, target_edge, &[1, 1, 1, 1])
+        .project_point_onto_edge(
+            &problem,
+            target_edge,
+            &[1, 1, 1, 1],
+            &mut ComponentProjectionScratch::new(&problem).unwrap(),
+        )
         .unwrap();
     candidates.push_unique(target_edge, id);
 
@@ -186,6 +193,49 @@ fn project_point_onto_edge_touches_only_the_requested_edges_ancestor_chain() {
 }
 
 #[test]
+fn projection_scratch_reuse_overwrites_stale_dependencies_and_recovers_after_errors() {
+    let problem = prepare(&[(0, 1), (0, 2), (2, 3), (2, 4)], 5);
+    let mut scratch = ComponentProjectionScratch::new(&problem).unwrap();
+    let (mut arena, _) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
+    let projected_allocation = scratch.projected.as_ptr();
+    for point in [[1, 0, 1, 0, 1], [0, 1, 0, 1, 0], [1; 5]] {
+        for edge in (0..problem.directed_edges.len()).rev() {
+            let id = arena
+                .project_point_onto_edge(&problem, edge, &point, &mut scratch)
+                .unwrap();
+            let mut fresh = arena.clone();
+            let reference = fresh
+                .project_point_onto_edge(
+                    &problem,
+                    edge,
+                    &point,
+                    &mut ComponentProjectionScratch::new(&problem).unwrap(),
+                )
+                .unwrap();
+            assert_eq!(id, reference);
+            assert_eq!(scratch.projected.as_ptr(), projected_allocation);
+        }
+    }
+    assert!(arena
+        .project_point_onto_edge(&problem, usize::MAX, &[0; 5], &mut scratch)
+        .is_err());
+    assert!(arena
+        .project_point_onto_edge(&problem, 0, &[2; 5], &mut scratch)
+        .is_err());
+    scratch.projected.pop();
+    assert!(matches!(
+        arena.project_point_onto_edge(&problem, 0, &[0; 5], &mut scratch),
+        Err(TreeAciError::InternalInvariant { .. })
+    ));
+    let mut tiny = problem.clone();
+    tiny.max_working_bytes = 1;
+    assert!(matches!(
+        ComponentProjectionScratch::new(&tiny),
+        Err(TreeAciError::ResourceLimit { .. })
+    ));
+}
+
+#[test]
 fn masked_injection_projects_only_active_cuts_and_their_dependencies() {
     let problem = prepare(&[(0, 1), (0, 2), (0, 3)], 4);
     let point = [1, 1, 1, 1];
@@ -194,10 +244,20 @@ fn masked_injection_projects_only_active_cuts_and_their_dependencies() {
 
     let mut expected = SampleArena::from_global_seeds(&problem, &[]).unwrap().0;
     expected
-        .project_point_onto_edge(&problem, forward, &point)
+        .project_point_onto_edge(
+            &problem,
+            forward,
+            &point,
+            &mut ComponentProjectionScratch::new(&problem).unwrap(),
+        )
         .unwrap();
     expected
-        .project_point_onto_edge(&problem, reverse, &point)
+        .project_point_onto_edge(
+            &problem,
+            reverse,
+            &point,
+            &mut ComponentProjectionScratch::new(&problem).unwrap(),
+        )
         .unwrap();
 
     let (mut actual, mut candidates) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
@@ -231,10 +291,20 @@ fn project_point_onto_edge_materializes_to_the_same_point_as_inject_global_point
     let forward = 0;
     let reverse = problem.directed_edges[forward].reverse;
     let direct_forward_id = direct_arena
-        .project_point_onto_edge(&problem, forward, &point)
+        .project_point_onto_edge(
+            &problem,
+            forward,
+            &point,
+            &mut ComponentProjectionScratch::new(&problem).unwrap(),
+        )
         .unwrap();
     let direct_reverse_id = direct_arena
-        .project_point_onto_edge(&problem, reverse, &point)
+        .project_point_onto_edge(
+            &problem,
+            reverse,
+            &point,
+            &mut ComponentProjectionScratch::new(&problem).unwrap(),
+        )
         .unwrap();
 
     let (mut injected_arena, mut active) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
@@ -269,7 +339,12 @@ fn checkpoint_rollback_removes_appended_records_and_dedup_entries() {
     let checkpoint = arena.checkpoint();
 
     let first_id = arena
-        .project_point_onto_edge(&problem, 0, &[1, 1, 1, 1])
+        .project_point_onto_edge(
+            &problem,
+            0,
+            &[1, 1, 1, 1],
+            &mut ComponentProjectionScratch::new(&problem).unwrap(),
+        )
         .unwrap();
     assert!(arena.record_count() > before_records);
     assert!(arena.retained_bytes() > before_bytes);
@@ -279,7 +354,12 @@ fn checkpoint_rollback_removes_appended_records_and_dedup_entries() {
     assert_eq!(arena.retained_bytes(), before_bytes);
 
     let repeated_id = arena
-        .project_point_onto_edge(&problem, 0, &[1, 1, 1, 1])
+        .project_point_onto_edge(
+            &problem,
+            0,
+            &[1, 1, 1, 1],
+            &mut ComponentProjectionScratch::new(&problem).unwrap(),
+        )
         .unwrap();
     assert_eq!(repeated_id, first_id);
     assert!(arena.record(0, repeated_id).is_ok());
