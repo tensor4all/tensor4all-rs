@@ -15,7 +15,6 @@ use tensor4all_core::CudaExecutionContext;
 fn probe_cuda_qr_with_in_matches_cpu() {
     use tensor4all_core::qr::{qr_with, qr_with_in, QrOptions};
     use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
-    use tensor4all_tensorbackend::CpuExecutionContext;
 
     let cuda = Arc::new(CudaExecutionContext::new().unwrap());
     let context = ExecutionContext::Cuda(Arc::clone(&cuda));
@@ -59,10 +58,10 @@ fn probe_cuda_qr_with_in_matches_cpu() {
 
         let options = QrOptions::new().with_rtol(1e-10);
         let (q, r) = if dtype_c64 {
-            qr_with_in::<num_complex::Complex64>(&resident, &[i.clone()], &options, &context)
+            qr_with_in::<num_complex::Complex64>(&resident, std::slice::from_ref(&i), &options, &context)
                 .unwrap()
         } else {
-            qr_with_in::<f64>(&resident, &[i.clone()], &options, &context).unwrap()
+            qr_with_in::<f64>(&resident, std::slice::from_ref(&i), &options, &context).unwrap()
         };
         q.validate_context(&context).unwrap();
         r.validate_context(&context).unwrap();
@@ -72,9 +71,9 @@ fn probe_cuda_qr_with_in_matches_cpu() {
 
         // Numerical parity against CPU, via explicit download + whole-result maxabs
         let (cpu_q, cpu_r) = if dtype_c64 {
-            qr_with::<num_complex::Complex64>(&host, &[i.clone()], &options).unwrap()
+            qr_with::<num_complex::Complex64>(&host, std::slice::from_ref(&i), &options).unwrap()
         } else {
-            qr_with::<f64>(&host, &[i.clone()], &options).unwrap()
+            qr_with::<f64>(&host, std::slice::from_ref(&i), &options).unwrap()
         };
         assert_eq!(q.dims(), cpu_q.dims());
         assert_eq!(r.dims(), cpu_r.dims());
@@ -127,10 +126,10 @@ fn probe_cuda_qr_with_in_matches_cpu() {
         }
 
         // Context-free entry rejects resident inputs before any work
-        assert!(qr_with::<f64>(&resident, &[i.clone()], &options).is_err());
+        assert!(qr_with::<f64>(&resident, std::slice::from_ref(&i), &options).is_err());
         // Foreign context is rejected
         let foreign = ExecutionContext::Cuda(Arc::new(CudaExecutionContext::new().unwrap()));
-        assert!(qr_with_in::<f64>(&resident, &[i.clone()], &options, &foreign).is_err());
+        assert!(qr_with_in::<f64>(&resident, std::slice::from_ref(&i), &options, &foreign).is_err());
     }
 }
 
@@ -162,7 +161,7 @@ fn probe_cuda_svd_with_in_matches_cpu() {
     let resident = host.upload_cuda(&cuda).unwrap();
 
     let options = SvdOptions::new().with_policy(SvdTruncationPolicy::new(1e-10));
-    let (u, s, v) = svd_with_in::<f64>(&resident, &[i.clone()], &options, &context).unwrap();
+    let (u, s, v) = svd_with_in::<f64>(&resident, std::slice::from_ref(&i), &options, &context).unwrap();
     u.validate_context(&context).unwrap();
     v.validate_context(&context).unwrap();
     // S uses diagonal storage (download support for resident diagonal factors
@@ -170,14 +169,14 @@ fn probe_cuda_svd_with_in_matches_cpu() {
     // host readability, matching the cuda_transfer test idiom.
     assert!(s.to_vec::<f64>().is_err());
 
-    let (cpu_u, cpu_s, _cpu_v) = svd_with::<f64>(&host, &[i.clone()], &options).unwrap();
+    let (cpu_u, cpu_s, _cpu_v) = svd_with::<f64>(&host, std::slice::from_ref(&i), &options).unwrap();
     assert_eq!(s.dims(), cpu_s.dims());
     assert_eq!(u.dims(), cpu_u.dims());
     // Rank decision parity: the fixture truncates to rank 2 on both paths.
     assert_eq!(s.dims(), vec![2, 2]);
 
     // Context-free entry rejects resident inputs before any work
-    assert!(svd_with::<f64>(&resident, &[i.clone()], &options).is_err());
+    assert!(svd_with::<f64>(&resident, std::slice::from_ref(&i), &options).is_err());
 }
 
 #[test]
@@ -274,7 +273,7 @@ fn probe_cuda_incremental_probe_batch_matches_host() {
         None,
         &resident_a,
         &block_a,
-        &[left.clone()],
+        std::slice::from_ref(&left),
         &context,
     )
     .unwrap();
@@ -285,7 +284,7 @@ fn probe_cuda_incremental_probe_batch_matches_host() {
         Some(&first),
         &resident_b,
         &block_b,
-        &[left.clone()],
+        std::slice::from_ref(&left),
         &context,
     )
     .unwrap();
@@ -297,13 +296,13 @@ fn probe_cuda_incremental_probe_batch_matches_host() {
 
     // Host growth loop for reference
     let host_first =
-        IdxTensor::factorize_probe_batch_incremental(None, &host_a, &block_a, &[left.clone()])
+        IdxTensor::factorize_probe_batch_incremental(None, &host_a, &block_a, std::slice::from_ref(&left))
             .unwrap();
     let host_grown = IdxTensor::factorize_probe_batch_incremental(
         Some(&host_first),
         &host_b,
         &block_b,
-        &[left.clone()],
+        std::slice::from_ref(&left),
     )
     .unwrap();
     assert_eq!(host_grown.rank, grown.rank);
@@ -340,7 +339,7 @@ fn probe_cuda_incremental_probe_batch_matches_host() {
         None,
         &resident_a,
         &block_a,
-        &[left.clone()]
+        std::slice::from_ref(&left)
     )
     .is_err());
 }

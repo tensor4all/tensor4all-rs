@@ -19,8 +19,6 @@ use tenferro::{
 };
 use tenferro_ad::{extension::adopt_untracked_eager_value, EagerRuntime, EagerTensor};
 use tenferro_einsum::{EagerSessionEinsumExt, EinsumSubscripts};
-#[cfg(feature = "tenferro-cuda")]
-use tenferro_linalg::EagerTensorLinalgExt;
 use tenferro_linalg::{EagerSessionLinalgExt, RankRevealingQrOptions};
 use tensor4all_tensorbackend::{
     contract_native_tensor, default_eager_ctx, dense_native_tensor_from_col_major,
@@ -6355,8 +6353,6 @@ impl IdxTensor {
         &self,
         context: &ExecutionContext,
     ) -> std::result::Result<tensor4all_tensorbackend::SrcErrorEstimate, FactorizeError> {
-        use tensor4all_tensorbackend::SrcErrorEstimate;
-
         let indices = self.indices();
         if indices.len() != 2 {
             return Err(FactorizeError::ComputationError(anyhow::anyhow!(
@@ -6386,33 +6382,19 @@ impl IdxTensor {
                 "SRC device estimator requires a CUDA execution context"
             )));
         };
-        // RRQR restores original sketch-column order, so the factor is square
-        // but not generally triangular. Solve its adjoint as a general system.
-        let adjoint = inner
-            .transpose(&[1, 0])
-            .and_then(|transposed| transposed.conj())
+        // RRQR restores original sketch-column order, so the factor is square but not generally triangular.
+        // The pinned eager API offers no general solve, so this estimator reads the resident factor back once and
+        // reuses the host estimator: it returns scalars either way, and the round-trip sits on an error estimate
+        // rather than in a sweep.
+        let native = inner
+            .to_tensor()
             .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
-        let identity = Self::resident_identity(cuda, nrows, inner.dtype())?;
-        // Solve F^H X = I for X = F^{-†}.
-        let solved = adjoint.solve(&identity).map_err(|error| {
-            FactorizeError::ComputationError(
-                anyhow::Error::new(error).context("SRC inverse-adjoint general solve failed"),
-            )
-        })?;
-        let column_sums = solved
-            .abs()
-            .and_then(|magnitudes| magnitudes.reduce_sum_squares(&[0]))
+        let host_native = cuda
+            .download(&native)
             .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
-        let total = inner
-            .abs()
-            .and_then(|magnitudes| magnitudes.reduce_sum_squares(&[0, 1]))
-            .and_then(|scalar| scalar.reshape(&[1]))
-            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
-        let column_norms_sq = Self::read_resident_vector(&column_sums, ncols, context)?;
-        let total_norm_sq = Self::read_resident_vector(&total, 1, context)?;
-        Self::src_estimate_from_decision_scalars(&column_norms_sq, total_norm_sq[0], ncols)
-            .map(|(error, norm)| SrcErrorEstimate { error, norm })
-            .map_err(FactorizeError::ComputationError)
+        let restored = Self::from_native(self.indices().to_vec(), host_native)
+            .map_err(FactorizeError::ComputationError)?;
+        restored.host_src_error_estimate_general()
     }
 
     /// Read the scalar integer rank returned by RRQR through its owning context.
@@ -6467,62 +6449,6 @@ impl IdxTensor {
         })
     }
 
-    /// Build an `n x n` identity in the operand's owning runtime.
-    ///
-    /// Host-originated construction data takes the same explicit upload path
-    /// as [`IdxTensor::from_dense_in`]; the transfer is part of the estimator's
-    /// decision payload, not hidden arithmetic.
-    #[cfg(feature = "tenferro-cuda")]
-    fn resident_identity(
-        cuda: &Arc<tensor4all_tensorbackend::CudaExecutionContext>,
-        n: usize,
-        dtype: DType,
-    ) -> std::result::Result<EagerTensor, FactorizeError> {
-        let native = match dtype {
-            DType::F64 => {
-                let mut data = vec![0.0_f64; n * n];
-                for diagonal in 0..n {
-                    data[diagonal + diagonal * n] = 1.0;
-                }
-                NativeTensor::from_vec_col_major(vec![n, n], data)
-            }
-            DType::C64 => {
-                let mut data = vec![Complex64::new(0.0, 0.0); n * n];
-                for diagonal in 0..n {
-                    data[diagonal + diagonal * n] = Complex64::new(1.0, 0.0);
-                }
-                NativeTensor::from_vec_col_major(vec![n, n], data)
-            }
-            _other => {
-                return Err(FactorizeError::UnsupportedStorage(
-                    "SRC adaptive estimation currently supports f64 and Complex64 QR factors",
-                ));
-            }
-        }
-        .map_err(|error| {
-            FactorizeError::ComputationError(
-                anyhow::Error::new(error).context("SRC estimator identity construction failed"),
-            )
-        })?;
-        let uploaded = cuda.upload_cuda(&native).map_err(|error| {
-            FactorizeError::ComputationError(
-                anyhow::Error::new(error).context("SRC estimator identity upload failed"),
-            )
-        })?;
-        let runtime = cuda.eager_runtime().map_err(|error| {
-            FactorizeError::ComputationError(
-                anyhow::Error::new(error).context("SRC estimator eager runtime failed"),
-            )
-        })?;
-        // `validate_context` already pinned the factor to this exact CUDA
-        // context, so the uploaded identity lands in the factor's runtime.
-        IdxTensor::untracked_inner(uploaded, runtime).map_err(|error| {
-            FactorizeError::ComputationError(
-                anyhow::Error::new(error).context("SRC estimator identity wrapping failed"),
-            )
-        })
-    }
-
     /// Wrap a resident decision vector and read it back through `context`.
     #[cfg(feature = "tenferro-cuda")]
     fn read_resident_vector(
@@ -6541,41 +6467,6 @@ impl IdxTensor {
         decision
             .read_decision_data(context)
             .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))
-    }
-
-    /// Scalar Appendix-C formula from the `ncols + 1` decision values.
-    ///
-    /// Mirrors `src_error_estimate_from_inverse_adjoint`: column norms must be
-    /// finite and nonzero, and both estimates must be finite.
-    #[cfg(feature = "tenferro-cuda")]
-    fn src_estimate_from_decision_scalars(
-        column_norms_sq: &[f64],
-        total_norm_sq: f64,
-        ncols: usize,
-    ) -> std::result::Result<(f64, f64), anyhow::Error> {
-        if !total_norm_sq.is_finite() {
-            return Err(anyhow::anyhow!(
-                "SRC estimator requires finite entries in R"
-            ));
-        }
-        let mut inverse_column_error_sq = 0.0_f64;
-        for (col, &column_norm_sq) in column_norms_sq.iter().enumerate() {
-            if !column_norm_sq.is_finite() || column_norm_sq == 0.0 {
-                return Err(anyhow::anyhow!(
-                    "SRC inverse-adjoint solve returned an invalid column norm at column {col}"
-                ));
-            }
-            inverse_column_error_sq += 1.0 / column_norm_sq;
-        }
-        let sketch_width = ncols as f64;
-        let error_sq = inverse_column_error_sq / sketch_width;
-        let norm_estimate_sq = total_norm_sq / sketch_width;
-        if !error_sq.is_finite() || !norm_estimate_sq.is_finite() {
-            return Err(anyhow::anyhow!(
-                "SRC estimator produced a non-finite estimate"
-            ));
-        }
-        Ok((error_sq.sqrt(), norm_estimate_sq.sqrt()))
     }
 }
 
@@ -8455,15 +8346,17 @@ impl IdxTensor {
             })?;
             let rank = inner.shape().len();
             let axes: Vec<usize> = (0..rank).collect();
-            let squared = inner
-                .abs()
-                .and_then(|magnitudes| magnitudes.reduce_sum_squares(&axes))
+            // One eager session on the operand's own runtime, as the other CUDA-only paths in this module do.
+            let scalar = inner
+                .runtime()
+                .with_eager_session(|session| {
+                    let magnitudes = session.abs(inner)?;
+                    let squared = session.reduce_sum_squares(&magnitudes, Some(&axes))?;
+                    session.reshape(&squared, [1])
+                })
                 .map_err(|error| {
                     IdxTensorError::operation("context-scoped norm", anyhow::anyhow!("{error}"))
                 })?;
-            let scalar = squared.reshape(&[1]).map_err(|error| {
-                IdxTensorError::operation("context-scoped norm", anyhow::anyhow!("{error}"))
-            })?;
             let values = Self::read_resident_vector(&scalar, 1, context).map_err(|error| {
                 IdxTensorError::operation("context-scoped norm", anyhow::Error::new(error))
             })?;

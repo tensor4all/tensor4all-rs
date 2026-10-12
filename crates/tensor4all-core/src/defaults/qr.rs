@@ -167,14 +167,15 @@ fn resident_row_norms(
     k: usize,
     context: &ExecutionContext,
 ) -> Result<Vec<f64>, QrError> {
-    let upper = r_inner
-        .triu(0)
-        .map_err(|error| QrError::ComputationError(anyhow::Error::new(error)))?;
-    let magnitudes = upper
-        .abs()
-        .map_err(|error| QrError::ComputationError(anyhow::Error::new(error)))?;
-    let sum_squares = magnitudes
-        .reduce_sum_squares(&[1])
+    // The resident factor's own runtime runs the reduction in one eager session, as the neighbouring CUDA-only
+    // paths do; only the decision vector crosses back through `context`.
+    let sum_squares = r_inner
+        .runtime()
+        .with_eager_session(|session| {
+            let upper = session.triu(r_inner, 0)?;
+            let magnitudes = session.abs(&upper)?;
+            session.reduce_sum_squares(&magnitudes, Some(&[1]))
+        })
         .map_err(|error| QrError::ComputationError(anyhow::Error::new(error)))?;
     if sum_squares.shape() != [k] {
         return Err(QrError::ComputationError(anyhow::anyhow!(
