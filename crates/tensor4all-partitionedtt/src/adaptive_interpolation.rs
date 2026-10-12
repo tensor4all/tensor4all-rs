@@ -1101,6 +1101,9 @@ where
                 &patch_order,
                 &options,
                 &mut rng,
+                // The collective path stays on the compatibility route: a rank's patch work is not a worker lane,
+                // and each rank keeps its own process-global backend.
+                &mut PatchRoute::Global,
             )
             .map(patch_outcome_to_wire)
         })
