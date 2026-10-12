@@ -140,3 +140,34 @@ implementing:
 
 None of this changes the target: making wait and overlap measurable on this route is still what F5 owes. It
 changes the wrapper's ownership model, where the primitives live, and what a rejection preserves.
+
+## 7. API findings from the first implementation attempt (revision 2 must start here)
+
+I started revision 2 as a tensorbackend-only slice (a caller-owned pinned buffer, a caller-owned device buffer,
+and pending submit/is-ready/wait wrappers) and stopped when the pinned revision's API turned out not to offer what
+that shape needs. The findings are the useful part, so they are recorded instead of a half-built wrapper:
+
+1. **There is no way to allocate the destination of a pending upload.** Upstream `upload_pending` takes
+   `destination: &mut Tensor`, so the caller must already own a device tensor, and the pinned revision exposes no
+   device-allocation entry at this level (`CudaRuntime` has no `allocate_device_like`; the synchronous
+   `upload_cuda` allocates its own destination internally). A pending upload therefore needs either an upstream
+   allocation entry, or the wrapper has to obtain the destination from a synchronous upload first - which defeats
+   the point. This is the concrete blocker for the upload half.
+2. **`Tensor` is not a host-data carrier here.** The pinned `Tensor` (tenferro-runtime) has no `host_data` accessor
+   and is not `Clone`, so a wrapper cannot copy a host value's identity and bytes from it directly; the
+   synchronous entries go through their own materialization path, which is what a revision-2 design has to reuse
+   rather than reinvent.
+3. **The pending packages are not `Send`.** `PinnedHostBuffer` (and therefore the rejected submission package and
+   the pending handles) carry raw pointers and are neither `Send` nor `Sync`, matching the pre-review's finding
+   that a rejection cannot be retained in an existing `Send + Sync` error source. A wrapper may keep a
+   `CudaBackend` clone alive for the handle's lifetime (that part works: the pending value does not borrow the
+   runtime, only the destination), but the handle itself must stay on its thread.
+4. **What does work, verified while trying:** `CudaBackend::runtime()` is reachable through the context's backend
+   guard, `PinnedHostBuffer::new(runtime, bytes)` allocates with `as_slice`/`as_mut_slice` accessors,
+   `upload_pending`/`download_pending` submit without waiting, `PendingDownload`/`PendingUpload` expose
+   `is_ready`/`wait`, and a `CudaBackend` clone can keep the runtime alive for the handle. The download half is
+   therefore implementable today; the upload half needs finding 1 resolved first.
+
+So revision 2 should either start with the **download-only** surface (measurable wait and overlap on the
+device-to-host side, which is where the transfer is visible at these sizes) or wait for an upstream allocation
+entry for the upload side. Starting with download-only is the smaller and independently useful step.
