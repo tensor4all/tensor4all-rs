@@ -836,6 +836,49 @@ where
     quanticscrossinterpolate_batch_with_rng(grid, f, initial_pivots, options, &mut rng)
 }
 
+/// Batched Grid interpolation whose run-time execution runs in a caller-owned CPU context.
+///
+/// The same algorithm, options, stopping rule and diagnostics as [`quanticscrossinterpolate_batch`]; what differs
+/// is the resource the stage's session-bound work runs in. Without a context it goes through the process-global CPU
+/// context; with one, both session-bound parts of the run - the optimizer's factor assembly and materializations,
+/// and the final materialization of the returned tensor train - go through `context`.
+///
+/// The caller's own function and the pivot search's readout are unchanged and still use their existing routes, so
+/// this is a caller-owned budget for the stage's session-bound work, not for everything the run touches.
+///
+/// # Errors
+///
+/// Returns the same errors as [`quanticscrossinterpolate_batch`], plus a [`QuanticsTCIError::Operation`] when the
+/// caller's context refuses a factorization or a solve.
+pub fn quanticscrossinterpolate_batch_in<V, F>(
+    grid: &DiscretizedGrid,
+    f: F,
+    initial_pivots: Option<Vec<Vec<usize>>>,
+    options: QtciOptions,
+    context: &tensor4all_tensorbackend::CpuExecutionContext,
+) -> QtciResult<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
+where
+    V: TTScalar
+        + Default
+        + Clone
+        + 'static
+        + tensor4all_core::TensorElement
+        + tensor4all_core::MatrixLuciScalar
+        + FullPivLuScalar
+        + tensor4all_treetci::globalpivot::ScalarParts,
+    F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
+{
+    let mut rng = seeded_quantics_stream(&options);
+    quanticscrossinterpolate_batch_with_rng_impl(
+        grid,
+        f,
+        initial_pivots,
+        options,
+        &mut rng,
+        Some(context),
+    )
+}
+
 /// Interpolate a function with an explicit Grid, one point at a time.
 ///
 /// Deprecated: `f` is called once per grid point, which is the wrong boundary

@@ -8,8 +8,9 @@ use std::time::Instant;
 
 use tenferro_cpu::CpuBackend;
 use tensor4all_quanticstci::{
-    pointwise_index_batch, quanticscrossinterpolate_discrete_batch,
-    quanticscrossinterpolate_discrete_batch_in, QtciOptions,
+    pointwise_coordinate_batch, pointwise_index_batch, quanticscrossinterpolate_batch,
+    quanticscrossinterpolate_batch_in, quanticscrossinterpolate_discrete_batch,
+    quanticscrossinterpolate_discrete_batch_in, DiscretizedGrid, QtciOptions,
 };
 use tensor4all_tensorbackend::CpuExecutionContext;
 
@@ -83,6 +84,77 @@ fn the_context_entry_is_measured_against_the_plain_one() -> TestResult {
 
     println!(
         "quanticstci_context: reps={reps} plain_ms_per_run={:.3} context_ms_per_run={:.3}",
+        plain.as_secs_f64() * 1e3 / reps as f64,
+        with_context.as_secs_f64() * 1e3 / reps as f64
+    );
+    Ok(())
+}
+
+fn grid() -> DiscretizedGrid {
+    DiscretizedGrid::builder(&[4])
+        .with_lower_bound(&[0.0])
+        .with_upper_bound(&[1.0])
+        .include_endpoint(true)
+        .build()
+        .expect("grid")
+}
+
+fn run_grid(context: Option<&CpuExecutionContext>) -> TestResult<(Vec<usize>, Vec<f64>)> {
+    let f = |coords: &[f64]| coords[0].sin();
+    let (_, ranks, errors) = match context {
+        Some(context) => quanticscrossinterpolate_batch_in::<f64, _>(
+            &grid(),
+            pointwise_coordinate_batch(f),
+            None,
+            options(),
+            context,
+        )?,
+        None => quanticscrossinterpolate_batch::<f64, _>(
+            &grid(),
+            pointwise_coordinate_batch(f),
+            None,
+            options(),
+        )?,
+    };
+    Ok((ranks, errors))
+}
+
+#[test]
+fn the_grid_context_entry_computes_what_the_plain_entry_computes() -> TestResult {
+    let (plain_ranks, plain_errors) = run_grid(None)?;
+    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    let (context_ranks, context_errors) = run_grid(Some(&context))?;
+    assert_eq!(context_ranks, plain_ranks, "ranks");
+    assert_eq!(
+        context_errors.len(),
+        plain_errors.len(),
+        "error history length"
+    );
+    for (with, without) in context_errors.iter().zip(&plain_errors) {
+        assert!(
+            (with - without).abs() <= 1e-9 * without.abs().max(1.0),
+            "{with} != {without}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn the_grid_context_entry_is_measured_against_the_plain_one() -> TestResult {
+    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    let reps = 5;
+    let started = Instant::now();
+    for _ in 0..reps {
+        let _ = run_grid(None)?;
+    }
+    let plain = started.elapsed();
+    let started = Instant::now();
+    for _ in 0..reps {
+        let _ = run_grid(Some(&context))?;
+    }
+    let with_context = started.elapsed();
+    println!(
+        "quanticstci_grid_context: reps={reps} plain_ms_per_run={:.3} context_ms_per_run={:.3}",
         plain.as_secs_f64() * 1e3 / reps as f64,
         with_context.as_secs_f64() * 1e3 / reps as f64
     );
