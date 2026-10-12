@@ -397,6 +397,23 @@ pub trait MatrixSolveScalar: BackendLinalgScalar + crate::matrix::MatrixScalar {
     fn solve_matrix_owned_impl(a: Matrix<Self>, b: Matrix<Self>) -> Result<Matrix<Self>> {
         Self::solve_matrix_impl(&a, &b)
     }
+
+    /// Solve `a * x = b` on a session the caller already entered.
+    ///
+    /// The session-taking counterpart of [`Self::solve_matrix_impl`], for callers that own their execution - a
+    /// worker lane entered by the phase that owns it, for example - rather than a context they may enter
+    /// themselves.
+    ///
+    /// # Errors
+    ///
+    /// Returns the backend's solve failure: a non-square factor, an incompatible right-hand side, a singular
+    /// factor, or a session-level execution failure.
+    #[doc(hidden)]
+    fn solve_matrix_in_impl(
+        session: &mut dyn tenferro_tensor::BackendSession,
+        a: &Matrix<Self>,
+        b: &Matrix<Self>,
+    ) -> Result<Matrix<Self>>;
 }
 
 /// Error returned by the CPU backend linear-algebra dispatch helpers.
@@ -929,6 +946,14 @@ impl MatrixSolveScalar for f64 {
         solve_matrix_direct(a, b)
     }
 
+    fn solve_matrix_in_impl(
+        session: &mut dyn tenferro_tensor::BackendSession,
+        a: &Matrix<Self>,
+        b: &Matrix<Self>,
+    ) -> Result<Matrix<Self>> {
+        solve_matrix_direct_in(session, a, b)
+    }
+
     fn solve_matrix_owned_impl(a: Matrix<Self>, b: Matrix<Self>) -> Result<Matrix<Self>> {
         solve_matrix_direct_owned(a, b)
     }
@@ -961,6 +986,14 @@ impl MatrixTriangularSolveScalar for f64 {
 impl MatrixSolveScalar for Complex64 {
     fn solve_matrix_impl(a: &Matrix<Self>, b: &Matrix<Self>) -> Result<Matrix<Self>> {
         solve_matrix_direct(a, b)
+    }
+
+    fn solve_matrix_in_impl(
+        session: &mut dyn tenferro_tensor::BackendSession,
+        a: &Matrix<Self>,
+        b: &Matrix<Self>,
+    ) -> Result<Matrix<Self>> {
+        solve_matrix_direct_in(session, a, b)
     }
 
     fn solve_matrix_owned_impl(a: Matrix<Self>, b: Matrix<Self>) -> Result<Matrix<Self>> {
@@ -1011,6 +1044,40 @@ impl MatrixSolveScalar for f32 {
                 .collect(),
         );
         let x64 = solve_matrix_direct(&a64, &b64)?;
+        Ok(Matrix::from_col_major_vec(
+            x64.nrows(),
+            x64.ncols(),
+            x64.as_col_major_slice()
+                .iter()
+                .map(|&value| value as f32)
+                .collect(),
+        ))
+    }
+
+    fn solve_matrix_in_impl(
+        session: &mut dyn tenferro_tensor::BackendSession,
+        a: &Matrix<Self>,
+        b: &Matrix<Self>,
+    ) -> Result<Matrix<Self>> {
+        // Same narrow-scalar promotion as the global route: solve in double precision on the caller's session and
+        // narrow the result.
+        let a64 = Matrix::from_col_major_vec(
+            a.nrows(),
+            a.ncols(),
+            a.as_col_major_slice()
+                .iter()
+                .map(|&value| value as f64)
+                .collect(),
+        );
+        let b64 = Matrix::from_col_major_vec(
+            b.nrows(),
+            b.ncols(),
+            b.as_col_major_slice()
+                .iter()
+                .map(|&value| value as f64)
+                .collect(),
+        );
+        let x64 = solve_matrix_direct_in(session, &a64, &b64)?;
         Ok(Matrix::from_col_major_vec(
             x64.nrows(),
             x64.ncols(),
@@ -1085,6 +1152,40 @@ impl MatrixSolveScalar for Complex32 {
                 .collect(),
         );
         let x64 = solve_matrix_direct(&a64, &b64)?;
+        Ok(Matrix::from_col_major_vec(
+            x64.nrows(),
+            x64.ncols(),
+            x64.as_col_major_slice()
+                .iter()
+                .map(|&value| Complex32::new(value.re as f32, value.im as f32))
+                .collect(),
+        ))
+    }
+
+    fn solve_matrix_in_impl(
+        session: &mut dyn tenferro_tensor::BackendSession,
+        a: &Matrix<Self>,
+        b: &Matrix<Self>,
+    ) -> Result<Matrix<Self>> {
+        // Same narrow-scalar promotion as the global route: solve in double precision on the caller's session and
+        // narrow the result.
+        let a64 = Matrix::from_col_major_vec(
+            a.nrows(),
+            a.ncols(),
+            a.as_col_major_slice()
+                .iter()
+                .map(|&value| Complex64::new(value.re as f64, value.im as f64))
+                .collect(),
+        );
+        let b64 = Matrix::from_col_major_vec(
+            b.nrows(),
+            b.ncols(),
+            b.as_col_major_slice()
+                .iter()
+                .map(|&value| Complex64::new(value.re as f64, value.im as f64))
+                .collect(),
+        );
+        let x64 = solve_matrix_direct_in(session, &a64, &b64)?;
         Ok(Matrix::from_col_major_vec(
             x64.nrows(),
             x64.ncols(),

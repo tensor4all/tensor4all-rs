@@ -68,11 +68,14 @@ A TCI2 twin that takes the lane's session, threaded to the operations that reall
 The existing context-taking LUCI entry covers dense assembly only, so the **rook/lazy-block factor solve must get
 its own session-taking form** or be excluded explicitly.
 
-**Landed so far (in this worktree, uncommitted):** the core seam. `Linalg` gained a `Session(&mut Session)`
+**Landed in slice 1:** the core seam `Linalg` gained a `Session(&mut Session)`
 variant, its helpers take `&mut Linalg` (a session cannot be copied the way a context can), and
 `matrix_luci_factors_from_matrix_owned_on_session` is the session-taking twin of the dense owned entry. The
-lazy/rook path is **not** threaded yet, so it stays on the global route for now; core's tests (509) and the new
-doctest pass with the change.
+lazy/rook path is **not** threaded yet, so it stays on the global route. `tensor4all-tensorci` now carries an
+internal `TciLinalg` route through its optimizer, sweeps and site-tensor fill, with the public entries delegating
+to the global route as before and a new `crossinterpolate2_with_rng_on_session` entry taking a session the caller
+already entered. Tensor4all's own tests (core 509, tensorbackend 278+185, tensorci 92+integration) pass, and the
+new session entry completes while the process-global backend is held.
 
 **Two structural obstacles the consumer threading has to solve first** (found while attempting it):
 

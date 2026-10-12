@@ -14,8 +14,8 @@ use crate::matrixluci::PivotKernel;
 use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
 use tensor4all_tensorbackend::{
-    explicit::Session,
-    mat_mul_owned, submatrix, triangular_solve_matrix_owned, CpuExecutionContext, Matrix,
+    explicit::Session, mat_mul_owned, submatrix, triangular_solve_matrix_owned,
+    CpuExecutionContext, Matrix,
 };
 
 /// Where MatrixLUCI factor assembly runs its matrix products and solves.
@@ -45,9 +45,7 @@ impl Linalg<'_, '_> {
                 .with_concrete_session(|session| session.mat_mul(&a, &b))
                 .map_err(|err| err.to_string())?
                 .map_err(|err| err.to_string()),
-            Self::Session(session) => session
-                .mat_mul(&a, &b)
-                .map_err(|err| err.to_string()),
+            Self::Session(session) => session.mat_mul(&a, &b).map_err(|err| err.to_string()),
         }
     }
 
@@ -372,7 +370,10 @@ where
         .map_err(|err| backend_linalg_error(format!("MatrixLUCI rowmatrix multiply failed: {err}")))
 }
 
-pub(crate) fn rrlu_cols_times_pivot_solve<T>(lu: &RrLU<T>, linalg: &mut Linalg<'_, '_>) -> Result<Matrix<T>>
+pub(crate) fn rrlu_cols_times_pivot_solve<T>(
+    lu: &RrLU<T>,
+    linalg: &mut Linalg<'_, '_>,
+) -> Result<Matrix<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
@@ -414,7 +415,10 @@ where
     Ok(apply_row_permutation(&result, row_permutation))
 }
 
-pub(crate) fn rrlu_pivot_solve_times_rows<T>(lu: &RrLU<T>, linalg: &mut Linalg<'_, '_>) -> Result<Matrix<T>>
+pub(crate) fn rrlu_pivot_solve_times_rows<T>(
+    lu: &RrLU<T>,
+    linalg: &mut Linalg<'_, '_>,
+) -> Result<Matrix<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
 {

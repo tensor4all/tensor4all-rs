@@ -3904,6 +3904,7 @@ dependencies = [
  "num-traits",
  "rand 0.9.5",
  "rand_chacha",
+ "tenferro-cpu",
  "tensor4all-core",
  "tensor4all-simplett",
  "tensor4all-tensorbackend",
