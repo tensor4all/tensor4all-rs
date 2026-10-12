@@ -58,8 +58,13 @@ fn probe_cuda_qr_with_in_matches_cpu() {
 
         let options = QrOptions::new().with_rtol(1e-10);
         let (q, r) = if dtype_c64 {
-            qr_with_in::<num_complex::Complex64>(&resident, std::slice::from_ref(&i), &options, &context)
-                .unwrap()
+            qr_with_in::<num_complex::Complex64>(
+                &resident,
+                std::slice::from_ref(&i),
+                &options,
+                &context,
+            )
+            .unwrap()
         } else {
             qr_with_in::<f64>(&resident, std::slice::from_ref(&i), &options, &context).unwrap()
         };
@@ -129,7 +134,9 @@ fn probe_cuda_qr_with_in_matches_cpu() {
         assert!(qr_with::<f64>(&resident, std::slice::from_ref(&i), &options).is_err());
         // Foreign context is rejected
         let foreign = ExecutionContext::Cuda(Arc::new(CudaExecutionContext::new().unwrap()));
-        assert!(qr_with_in::<f64>(&resident, std::slice::from_ref(&i), &options, &foreign).is_err());
+        assert!(
+            qr_with_in::<f64>(&resident, std::slice::from_ref(&i), &options, &foreign).is_err()
+        );
     }
 }
 
@@ -161,7 +168,8 @@ fn probe_cuda_svd_with_in_matches_cpu() {
     let resident = host.upload_cuda(&cuda).unwrap();
 
     let options = SvdOptions::new().with_policy(SvdTruncationPolicy::new(1e-10));
-    let (u, s, v) = svd_with_in::<f64>(&resident, std::slice::from_ref(&i), &options, &context).unwrap();
+    let (u, s, v) =
+        svd_with_in::<f64>(&resident, std::slice::from_ref(&i), &options, &context).unwrap();
     u.validate_context(&context).unwrap();
     v.validate_context(&context).unwrap();
     // S uses diagonal storage (download support for resident diagonal factors
@@ -169,7 +177,8 @@ fn probe_cuda_svd_with_in_matches_cpu() {
     // host readability, matching the cuda_transfer test idiom.
     assert!(s.to_vec::<f64>().is_err());
 
-    let (cpu_u, cpu_s, _cpu_v) = svd_with::<f64>(&host, std::slice::from_ref(&i), &options).unwrap();
+    let (cpu_u, cpu_s, _cpu_v) =
+        svd_with::<f64>(&host, std::slice::from_ref(&i), &options).unwrap();
     assert_eq!(s.dims(), cpu_s.dims());
     assert_eq!(u.dims(), cpu_u.dims());
     // Rank decision parity: the fixture truncates to rank 2 on both paths.
@@ -295,9 +304,13 @@ fn probe_cuda_incremental_probe_batch_matches_host() {
     // FactorizeResult::new); the estimator below takes the full-solve branch.
 
     // Host growth loop for reference
-    let host_first =
-        IdxTensor::factorize_probe_batch_incremental(None, &host_a, &block_a, std::slice::from_ref(&left))
-            .unwrap();
+    let host_first = IdxTensor::factorize_probe_batch_incremental(
+        None,
+        &host_a,
+        &block_a,
+        std::slice::from_ref(&left),
+    )
+    .unwrap();
     let host_grown = IdxTensor::factorize_probe_batch_incremental(
         Some(&host_first),
         &host_b,
