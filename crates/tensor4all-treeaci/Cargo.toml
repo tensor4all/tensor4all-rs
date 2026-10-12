@@ -34,7 +34,12 @@ tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 [dev-dependencies]
 criterion.workspace = true
 serde_json.workspace = true
+tenferro-cpu.workspace = true
 
 [[bench]]
 name = "aci_scaling"
+harness = false
+
+[[bench]]
+name = "f7_context_overhead"
 harness = false

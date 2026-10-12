@@ -25,6 +25,7 @@ pub(crate) fn update_edge_transaction<T, V, F>(
     options: &TreeAciOptions<V>,
     left_orthogonal: bool,
     operator: &mut F,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> Result<EdgeCommitReport>
 where
     T: TreeAciScalar,
@@ -42,6 +43,7 @@ where
         options,
         left_orthogonal,
         operator,
+        context,
     )?;
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {

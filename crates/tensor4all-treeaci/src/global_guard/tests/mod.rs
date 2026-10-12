@@ -468,7 +468,14 @@ fn exact_output_has_no_global_pivot_and_injection_updates_every_cut() {
     let inputs = vec![input];
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
     let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
-    run_directional_pass(&mut state, &options, PassDirection::Forward, &mut identity).unwrap();
+    run_directional_pass(
+        &mut state,
+        &options,
+        PassDirection::Forward,
+        &mut identity,
+        None,
+    )
+    .unwrap();
     let exact = find_global_pivots(
         &state,
         &mut input_evaluators,
@@ -647,9 +654,16 @@ fn injection_skips_saturated_cuts_but_retains_recursive_records() {
         "padding another cut must not replace an inactive bond"
     );
     assert!(state.sample_arena.record_count() > records_before);
-    run_directional_pass(&mut state, &options, PassDirection::Forward, &mut identity).unwrap();
+    run_directional_pass(
+        &mut state,
+        &options,
+        PassDirection::Forward,
+        &mut identity,
+        None,
+    )
+    .unwrap();
     let edge_one_pivots_before = state.pivots.per_edge[1].clone();
-    update_edge_transaction(&mut state, 0, &options, true, &mut identity).unwrap();
+    update_edge_transaction(&mut state, 0, &options, true, &mut identity, None).unwrap();
     assert_eq!(state.pivots.per_edge[1], edge_one_pivots_before);
     state.output.verify_internal_consistency().unwrap();
 }
@@ -1180,7 +1194,14 @@ fn guard_candidates_survive_a_failed_pass_and_fresh_luci_can_reduce_rank() {
         ..TreeAciOptions::default()
     };
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
-    run_directional_pass(&mut state, &options, PassDirection::Forward, &mut identity).unwrap();
+    run_directional_pass(
+        &mut state,
+        &options,
+        PassDirection::Forward,
+        &mut identity,
+        None,
+    )
+    .unwrap();
     assert_eq!(
         inject_global_pivots(&mut state, &[vec![1, 1]], &[1]).unwrap(),
         1
@@ -1191,17 +1212,28 @@ fn guard_candidates_survive_a_failed_pass_and_fresh_luci_can_reduce_rank() {
     );
     let injected_candidates = state.candidates.ids.clone();
     let injected_generation = state.generation;
-    assert!(
-        run_directional_pass(&mut state, &options, PassDirection::Reverse, &mut |_, _| {
+    assert!(run_directional_pass(
+        &mut state,
+        &options,
+        PassDirection::Reverse,
+        &mut |_, _| {
             Err(crate::TreeAciError::InternalInvariant {
                 message: "failed refresh pass fixture",
             })
-        })
-        .is_err()
-    );
+        },
+        None
+    )
+    .is_err());
     assert_eq!(state.candidates.ids, injected_candidates);
     assert_eq!(state.generation, injected_generation);
-    run_directional_pass(&mut state, &options, PassDirection::Reverse, &mut identity).unwrap();
+    run_directional_pass(
+        &mut state,
+        &options,
+        PassDirection::Reverse,
+        &mut identity,
+        None,
+    )
+    .unwrap();
     assert_eq!(state.edge_ranks, vec![1]);
     assert_eq!(inject_global_pivots(&mut state, &[], &[1]).unwrap(), 0);
     assert!(inject_global_pivots(&mut state, &[vec![1, 1]], &[]).is_err());

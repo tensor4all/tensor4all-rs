@@ -3925,6 +3925,7 @@ dependencies = [
  "rand_chacha",
  "rand_distr",
  "serde_json",
+ "tenferro-cpu",
  "tensor4all-core",
  "tensor4all-tensorbackend",
  "tensor4all-treetn",

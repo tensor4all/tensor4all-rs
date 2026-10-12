@@ -111,7 +111,7 @@ fn assert_arms_agree(fixture: fn() -> Fixture) {
             TreeAciState::<f64, usize>::initialize(&inputs, &options).expect("fixture state");
         let mut operator = sum_operator;
         outcomes.push(
-            run_arm(&mut state, &options, order, sweeps, &mut operator)
+            run_arm(&mut state, &options, order, sweeps, &mut operator, None)
                 .expect("edge-order arm must run"),
         );
     }
@@ -146,7 +146,7 @@ fn pivot_only_update_changes_pivots_but_not_the_stored_output() {
     let pivots_before = state.pivots.clone();
     let mut operator = sum_operator;
 
-    pivot_only_update(&mut state, 0, &options, &mut operator).expect("update must run");
+    pivot_only_update(&mut state, 0, &options, &mut operator, None).expect("update must run");
 
     assert_ne!(state.pivots, pivots_before, "pivots must change");
     assert!(state
@@ -170,6 +170,7 @@ fn continuous_arm_reports_interpolation_and_held_out_errors() {
         EdgeOrder::ContinuousWalk,
         1,
         &mut operator,
+        None,
     )
     .expect("arm must run");
 

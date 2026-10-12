@@ -53,7 +53,8 @@ fn one_edge_commit_materializes_the_exact_operator_tree() {
         }
         Ok(())
     };
-    let report = update_edge_transaction(&mut state, 0, &options, true, &mut identity).unwrap();
+    let report =
+        update_edge_transaction(&mut state, 0, &options, true, &mut identity, None).unwrap();
 
     assert_eq!(report.forward, 0);
     assert_eq!(report.new_rank, 1);
@@ -81,7 +82,8 @@ fn commit_sets_pivot_pairs_and_replaces_candidate_sets() {
         }
         Ok(())
     };
-    let report = update_edge_transaction(&mut state, 0, &options, true, &mut identity).unwrap();
+    let report =
+        update_edge_transaction(&mut state, 0, &options, true, &mut identity, None).unwrap();
 
     let edge_number = 0;
     assert_eq!(state.pivots.rank(edge_number), report.new_rank);
@@ -116,7 +118,7 @@ fn reverse_direction_commit_keeps_pivot_pairs_in_canonical_orientation() {
         Ok(())
     };
 
-    update_edge_transaction(&mut state, 1, &options, false, &mut identity).unwrap();
+    update_edge_transaction(&mut state, 1, &options, false, &mut identity, None).unwrap();
 
     assert_eq!(
         state.pivots.forward_ids(0),
@@ -146,7 +148,7 @@ fn proposal_error_leaves_output_samples_and_generation_unchanged() {
             message: "stop".into(),
         })
     };
-    let result = update_edge_transaction(&mut state, 0, &options, true, &mut failing);
+    let result = update_edge_transaction(&mut state, 0, &options, true, &mut failing, None);
     assert!(matches!(result, Err(TreeAciError::Callback { .. })));
     assert!(state
         .output
@@ -179,7 +181,7 @@ fn frame_extension_error_rolls_back_interned_samples() {
         Ok(())
     };
 
-    let result = update_edge_transaction(&mut state, 0, &options, true, &mut identity);
+    let result = update_edge_transaction(&mut state, 0, &options, true, &mut identity, None);
 
     assert!(matches!(
         result,
@@ -268,6 +270,7 @@ fn incomplete_commit_metadata_is_rejected_before_staging() {
         &options,
         true,
         &mut identity,
+        None,
     )
     .unwrap();
     let output_before = state.output.to_dense().unwrap();

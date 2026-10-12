@@ -83,6 +83,35 @@ where
     tree_elementwise_batched_with_rng(operator, inputs, options, &mut rng)
 }
 
+/// Tree elementwise ACI whose run-time execution runs in a caller-owned CPU context.
+///
+/// The same algorithm, options, stopping rule and diagnostics as
+/// [`tree_elementwise_batched_with_rng`]; what differs is the resource the stage's session-bound work runs in. With
+/// a context, the per-edge factorizations and the candidate-matrix products run through `context` instead of the
+/// process-global CPU context. The frame contractions this crate performs itself still use their existing route,
+/// as the inventory records, and the caller's own operator is untouched.
+///
+/// # Errors
+///
+/// Returns the same errors as [`tree_elementwise_batched_with_rng`], plus
+/// [`crate::TreeAciError::Numerical`] when the caller's context refuses a factorization or a product.
+pub fn tree_elementwise_batched_with_rng_in<T, V, F, R>(
+    operator: F,
+    inputs: &[TreeTN<IdxTensor, V>],
+    options: &TreeAciOptions<V>,
+    rng: &mut R,
+    context: &tensor4all_tensorbackend::CpuExecutionContext,
+) -> Result<TreeAciResult<V>>
+where
+    T: TreeAciScalar,
+    V: TreeAciNode,
+    F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
+    R: rand::Rng + ?Sized,
+{
+    let mut stream: &mut R = rng;
+    tree_elementwise_batched_erased(operator, inputs, options, &mut stream, Some(context))
+}
+
 /// Tree elementwise ACI on a caller-owned random stream.
 ///
 /// Same as [`tree_elementwise_batched`], but consumes `rng` and ignores
@@ -108,7 +137,7 @@ where
     // Erase the caller's RNG type once so the run below is instantiated once
     // per scalar type instead of once per (scalar, RNG) pair.
     let mut stream: &mut R = rng;
-    tree_elementwise_batched_erased(operator, inputs, options, &mut stream)
+    tree_elementwise_batched_erased(operator, inputs, options, &mut stream, None)
 }
 
 fn tree_elementwise_batched_erased<T, V, F>(
@@ -116,6 +145,7 @@ fn tree_elementwise_batched_erased<T, V, F>(
     inputs: &[TreeTN<IdxTensor, V>],
     options: &TreeAciOptions<V>,
     rng: &mut dyn rand::RngCore,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> Result<TreeAciResult<V>>
 where
     T: TreeAciScalar,
@@ -129,7 +159,7 @@ where
         return evaluate_single_site(inputs, options, &mut operator);
     }
     let mut state = TreeAciState::<T, V>::initialize_with_rng(inputs, options, rng)?;
-    let history = run_local_sweeps(&mut state, options, &mut operator, rng)?;
+    let history = run_local_sweeps(&mut state, options, &mut operator, rng, context)?;
     let mut evaluated_points = history.evaluated_points;
     if history.needs_cleanup {
         let direction = if history.max_ranks.len() % 2 == 0 {
@@ -137,7 +167,7 @@ where
         } else {
             PassDirection::Reverse
         };
-        let cleanup = run_directional_pass(&mut state, options, direction, &mut operator)?;
+        let cleanup = run_directional_pass(&mut state, options, direction, &mut operator, context)?;
         evaluated_points = evaluated_points
             .checked_add(cleanup.evaluated_points)
             .ok_or(crate::TreeAciError::SizeOverflow {
@@ -288,6 +318,7 @@ where
         inputs,
         options,
         &mut stream,
+        None,
     )
 }
 
