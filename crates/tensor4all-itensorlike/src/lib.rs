@@ -8,7 +8,7 @@ pub mod options;
 pub mod prelude;
 pub mod tensortrain;
 
-pub use contract::contract;
+pub use contract::{contract, contract_in};
 pub use error::{Result, TensorTrainError};
 pub use linsolve::linsolve;
 pub use options::{

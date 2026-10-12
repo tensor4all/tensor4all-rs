@@ -3,8 +3,12 @@
 //! This module provides both a free function [`contract`] and an impl method
 //! [`TensorTrain::contract`] for contracting two tensor trains.
 
+use rand_chacha::rand_core::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+use tensor4all_tensorbackend::ExecutionContext;
 use tensor4all_treetn::contraction::{
-    contract as treetn_contract, ContractionMethod, ContractionOptions as TreeTNContractionOptions,
+    contract as treetn_contract, contract_src_with_rng_in, ContractionMethod,
+    ContractionOptions as TreeTNContractionOptions,
 };
 use tensor4all_treetn::CanonicalForm;
 
@@ -30,17 +34,20 @@ use crate::tensortrain::TensorTrain;
 /// Returns an error when the contraction or operation fails (a shape or
 /// /// index mismatch, or a backend failure).
 ///
-pub fn contract(
+/// Shared entry validation for every contraction route. Both [`contract`] and
+/// [`contract_in`] run exactly this, in this order, so the routes cannot drift
+/// on empty inputs, unequal lengths, invalid SVD options or a non-multiple-of-2
+/// Fit sweep count.
+fn validate_contraction_inputs(
     a: &TensorTrain,
     b: &TensorTrain,
     options: &ContractOptions,
-) -> Result<TensorTrain> {
+) -> Result<()> {
     if a.is_empty() || b.is_empty() {
         return Err(TensorTrainError::InvalidStructure {
             message: "Cannot contract empty tensor trains".to_string(),
         });
     }
-
     if a.len() != b.len() {
         return Err(TensorTrainError::InvalidStructure {
             message: format!(
@@ -50,9 +57,7 @@ pub fn contract(
             ),
         });
     }
-
     validate_svd_truncation_options(options.max_bond_dim(), options.svd_policy())?;
-
     if matches!(options.method(), ContractMethod::Fit) && !options.nhalfsweeps().is_multiple_of(2) {
         return Err(TensorTrainError::OperationError {
             message: format!(
@@ -61,41 +66,21 @@ pub fn contract(
             ),
         });
     }
+    Ok(())
+}
 
-    // Convert ContractOptions to TreeTN ContractionOptions
-    let treetn_method = match options.method() {
-        ContractMethod::Zipup => ContractionMethod::Zipup,
-        ContractMethod::Fit => ContractionMethod::Fit,
-        ContractMethod::Naive => ContractionMethod::Naive,
-        ContractMethod::Src => ContractionMethod::Src,
-    };
-
-    // Convert nhalfsweeps to nfullsweeps (nhalfsweeps / 2)
-    let nfullsweeps = options.nhalfsweeps() / 2;
-    let treetn_options = TreeTNContractionOptions::new(treetn_method)
-        .with_nfullsweeps(nfullsweeps)
-        .with_src_options(options.src_options().clone());
-
-    let treetn_options = if let Some(max_bond_dim) = options.max_bond_dim() {
-        treetn_options.with_max_bond_dim(max_bond_dim)
-    } else {
-        treetn_options
-    };
-
-    let treetn_options = if let Some(policy) = options.svd_policy() {
-        treetn_options.with_svd_policy(policy)
-    } else {
-        treetn_options
-    };
-    let treetn_options = if let Some(limit) = options.dense_reference_limit() {
-        treetn_options.with_dense_reference_limit(limit)
-    } else {
-        treetn_options
-    };
+/// The method dispatch shared by every contraction route. Callers run
+/// [`validate_contraction_inputs`] first, so the dispatch may assume the
+/// validated contract and does not re-check it.
+fn contract_dispatch(
+    a: &TensorTrain,
+    b: &TensorTrain,
+    options: &ContractOptions,
+) -> Result<TensorTrain> {
+    let treetn_options = to_treetn_options(options);
 
     // Use the last site as the canonical center (consistent with existing behavior)
     let center = a.len() - 1;
-
     let result_inner = if matches!(options.method(), ContractMethod::Zipup) {
         a.as_treetn()
             .contract_zipup_with(
@@ -116,6 +101,131 @@ pub fn contract(
         })?
     };
 
+    TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary))
+}
+
+/// Contract two tensor trains, returning a new tensor train.
+///
+/// This performs element-wise contraction of corresponding sites,
+/// similar to MPO-MPO contraction in ITensor.
+///
+/// # Arguments
+/// * `a` - The first tensor train
+/// * `b` - The second tensor train
+/// * `options` - Contraction options (method, max_bond_dim, rtol, nhalfsweeps)
+///
+/// # Returns
+/// A new tensor train resulting from the contraction.
+///
+/// # Errors
+///
+/// Returns an error when the contraction or operation fails (a shape or
+/// index mismatch, or a backend failure).
+pub fn contract(
+    a: &TensorTrain,
+    b: &TensorTrain,
+    options: &ContractOptions,
+) -> Result<TensorTrain> {
+    validate_contraction_inputs(a, b, options)?;
+    contract_dispatch(a, b, options)
+}
+
+/// Convert [`ContractOptions`] to the caller-independent TreeTN contraction
+/// options, sharing the method, SVD policy, bond cap and dense-reference limit
+/// across every dispatch route.
+fn to_treetn_options(options: &ContractOptions) -> TreeTNContractionOptions {
+    // Convert nhalfsweeps to nfullsweeps (nhalfsweeps / 2)
+    let nfullsweeps = options.nhalfsweeps() / 2;
+    let mut treetn_options = TreeTNContractionOptions::new(match options.method() {
+        ContractMethod::Zipup => ContractionMethod::Zipup,
+        ContractMethod::Fit => ContractionMethod::Fit,
+        ContractMethod::Naive => ContractionMethod::Naive,
+        ContractMethod::Src => ContractionMethod::Src,
+    })
+    .with_nfullsweeps(nfullsweeps)
+    .with_src_options(options.src_options().clone());
+    if let Some(max_bond_dim) = options.max_bond_dim() {
+        treetn_options = treetn_options.with_max_bond_dim(max_bond_dim);
+    }
+    if let Some(policy) = options.svd_policy() {
+        treetn_options = treetn_options.with_svd_policy(policy);
+    }
+    if let Some(limit) = options.dense_reference_limit() {
+        treetn_options = treetn_options.with_dense_reference_limit(limit);
+    }
+    treetn_options
+}
+
+/// Contract two tensor trains, running the SRC method in a caller-owned
+/// execution context.
+///
+/// The same algorithm, options and validation as [`contract`]; what differs is
+/// the resource the SRC projection runs in. With a context, the method's
+/// session-bound work runs through `context` instead of the process-global
+/// execution context. The Zip-up, Fit and Naive methods are refused with a
+/// typed error rather than silently run on the process-global context: treetn
+/// has no session-taking twin for their canonicalize / sweep / naive paths
+/// yet, which is recorded in the F7 inventory
+/// (`docs/design/859-f7-consumer-inventory.md`).
+///
+/// # Arguments
+/// * `a` - The first tensor train
+/// * `b` - The second tensor train
+/// * `options` - Contraction options (method, max_bond_dim, rtol, nhalfsweeps)
+/// * `context` - The caller-owned execution context the SRC method runs in
+///
+/// # Returns
+/// A new tensor train resulting from the contraction.
+///
+/// # Errors
+///
+/// Returns the same errors as [`contract`], plus a backend error when the
+/// caller-owned context refuses the SRC projection, and a typed
+/// [`TensorTrainError::OperationError`] when `options.method()` is not SRC
+/// (the caller-owned route cannot honor the supplied context for those
+/// methods yet).
+pub fn contract_in(
+    a: &TensorTrain,
+    b: &TensorTrain,
+    options: &ContractOptions,
+    context: &ExecutionContext,
+) -> Result<TensorTrain> {
+    validate_contraction_inputs(a, b, options)?;
+
+    if !matches!(options.method(), ContractMethod::Src) {
+        // Refuse rather than silently run on the process-global context: the
+        // caller explicitly supplied a context, and treetn has no session
+        // twin for the Zip-up/Fit/Naive paths yet (F7 inventory records the
+        // needed treetn-side twins).
+        return Err(TensorTrainError::OperationError {
+            message: format!(
+                "contract_in: the {} method has no caller-owned route yet; use \
+                 `contract()`, or wait for the treetn session twins recorded in \
+                 the F7 inventory",
+                match options.method() {
+                    ContractMethod::Zipup => "Zip-up",
+                    ContractMethod::Fit => "Fit",
+                    ContractMethod::Naive => "Naive",
+                    ContractMethod::Src => "SRC",
+                },
+            ),
+        });
+    }
+
+    let mut rng = ChaCha8Rng::seed_from_u64(options.src_options().seed);
+    // Use the last site as the canonical center (consistent with existing behavior).
+    let center = a.len() - 1;
+    let result_inner = contract_src_with_rng_in(
+        a.as_treetn(),
+        b.as_treetn(),
+        &center,
+        to_treetn_options(options),
+        &mut rng,
+        context,
+    )
+    .map_err(|e| TensorTrainError::InvalidStructure {
+        message: format!("TreeTN SRC contraction failed: {}", e),
+    })?;
     TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary))
 }
 
@@ -154,6 +264,35 @@ impl TensorTrain {
     ///
     pub fn contract_pair(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
         self.contract(other, options)
+    }
+
+    /// Contract two tensor trains, running the SRC method in a caller-owned
+    /// execution context.
+    ///
+    /// Same contract as [`crate::contract_in`]; see that function for the
+    /// method coverage and the inventory record of the routes that stay on the
+    /// process-global context.
+    ///
+    /// # Arguments
+    /// * `other` - The other tensor train to contract with
+    /// * `options` - Contraction options (method, max_bond_dim, rtol, nhalfsweeps)
+    /// * `context` - The caller-owned execution context the SRC method runs in
+    ///
+    /// # Returns
+    /// A new tensor train resulting from the contraction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the pair is incompatible (a shape or index
+    /// mismatch), the contraction fails (a backend failure), or the
+    /// caller-owned context refuses the SRC projection.
+    pub fn contract_in(
+        &self,
+        other: &Self,
+        options: &ContractOptions,
+        context: &ExecutionContext,
+    ) -> Result<Self> {
+        contract_in(self, other, options, context)
     }
 }
 

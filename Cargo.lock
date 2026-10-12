@@ -3760,6 +3760,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "approx 0.5.1",
+ "criterion",
  "num-complex 0.4.6",
  "petgraph 0.7.1",
  "rand 0.9.5",

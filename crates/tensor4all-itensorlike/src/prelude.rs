@@ -1,5 +1,5 @@
 //! Commonly used types for chain-facing tensor train operations backed by
-//! [`TreeTN`](crate::tensor4all_treetn::TreeTN).
+//! [`tensor4all_treetn::TreeTN`].
 //!
 //! ```rust
 //! # fn main() -> anyhow::Result<()> {

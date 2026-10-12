@@ -35,10 +35,16 @@ thiserror.workspace = true
 petgraph.workspace = true
 rand.workspace = true
 anyhow.workspace = true
+rand_chacha.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 rand_chacha.workspace = true
 approx.workspace = true
 tenferro.workspace = true
 tenferro-ad.workspace = true
 tenferro-cpu.workspace = true
+
+[[bench]]
+name = "f7_contract_src_overhead"
+harness = false
