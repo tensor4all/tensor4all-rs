@@ -58,6 +58,7 @@ tensor4all-tensorci = { path = "../tensor4all-tensorci", default-features = fals
 tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false, features = ["simplett-bridge"] }
 
 [dev-dependencies]
+tenferro-cpu.workspace = true
 approx.workspace = true
 rayon.workspace = true
 

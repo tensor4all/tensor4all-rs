@@ -122,6 +122,26 @@ current evaluators return `T`/`Vec<T>` and cannot fail.
 Restoring `adaptive-hataori-rayon` to `tensor4all-partitionedtt`'s defaults is an **implementation step gated on
 worker evidence**, not a current fact, and the same change must cover more than one and two workers.
 
+### 2.6 Landed: the phase consumer (slice 3a)
+
+`adaptiveinterpolate_on_phase` runs each wave's patches as work items on the lanes of a held session: one loop per
+pool worker, one session view per work item, per-patch seeds derived from the path as the Hataori entry derives
+them, and outcomes written back per index so the wave's result does not depend on scheduling. `process_patch`
+carries a `PatchRoute` (global or session) instead of a context, and the patch's TCI runs through the
+session-taking entry from slice 1. Every existing entry - sequential, Hataori, MPI - keeps the global route and
+its signature.
+
+Evidence in `crates/tensor4all-partitionedtt/tests/phase_execution.rs`: parity of projectors and dense values with
+the sequential entry for one and two lanes, the wave's evaluations distributed across **more than one** pool
+worker, and the phase completing **while the process-global backend is held** (a bounded hold of 20 s against a
+~1 s phase, so a wrong route fails the test instead of hanging it).
+
+Not covered, and therefore open: the design's third oracle (an unrelated *non-waiting* entry must be refused while
+the phase holds its reservation). In this configuration an unrelated entry **waits**, so a refusal test would
+assert the wrong behaviour; the arbiter's non-waiting path is what that oracle needs. The callback-capability
+signatures of §2.4 are also not in this slice: the callbacks still receive only indices, and the lane session is
+what carries the capability.
+
 ## 3. Contracts
 
 - **Per-lane execution state**: one held phase per fan-out, one lane/session per pool worker, reused across work

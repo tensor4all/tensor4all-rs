@@ -112,6 +112,13 @@ pub enum PartitionedTTError {
     #[error("Distributed adaptive interpolation failed: {0}")]
     DistributedAdaptiveInterpolation(String),
 
+    /// A held-session phase could not run this work, or a lane failed outside a patch.
+    #[error("phase execution failed: {message}")]
+    PhaseExecution {
+        /// The phase or lane failure, rendered with its source chain.
+        message: String,
+    },
+
     /// Invalid site-index or pivot input for adaptive interpolation
     #[error("Invalid adaptive interpolation input: {0}")]
     InvalidAdaptiveInterpolationInput(String),

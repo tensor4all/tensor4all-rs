@@ -12,6 +12,8 @@ use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 #[cfg(feature = "adaptive-hataori-mpi")]
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -20,9 +22,11 @@ use tensor4all_itensorlike::TensorTrain;
 #[cfg(feature = "adaptive-hataori-mpi")]
 use tensor4all_simplett::Tensor3Ops;
 use tensor4all_simplett::{tensor3_from_data, SimpleTensorTrain, TTScalar};
+use tensor4all_tensorbackend::explicit::{HeldSession, PhaseLane, Session};
 use tensor4all_tensorbackend::StorageScalar;
 use tensor4all_tensorci::{
-    crossinterpolate2_with_rng, TCI2OptimizationResult, TCI2Options, TCI2Termination, TensorCI2,
+    crossinterpolate2_with_rng, crossinterpolate2_with_rng_on_session, TCI2OptimizationResult,
+    TCI2Options, TCI2Termination, TensorCI2,
 };
 use tensor4all_treetn::{tensor_train_to_treetn, TreeTN};
 
@@ -619,6 +623,7 @@ where
                 &patch_order,
                 &options,
                 &mut stream,
+                &mut PatchRoute::Global,
             )? {
                 PatchOutcome::Accepted(patch) => accepted.push(patch),
                 PatchOutcome::Split(children) => next_wave.extend(children),
@@ -628,6 +633,252 @@ where
     }
 
     assemble_result(accepted, &site_indices, &patch_order)
+}
+
+/// Adaptively interpolate patches on the lanes of one held session.
+///
+/// The same wave algorithm, patch order and result as [`adaptiveinterpolate`], but each wave's patches are work
+/// items on the *held session's own pool*: every lane pulls items in a loop and runs each patch's numerical work
+/// on its own session, so no worker enters a context or consults the process-global route. The caller owns the
+/// session: opening it (and closing it) stays with the caller, which is what makes the issuing execution the
+/// owner of this work.
+///
+/// A patch's random stream is derived from its path and the configured seed, exactly as the Hataori parallel
+/// entry derives it, so the result does not depend on how the lanes were scheduled.
+///
+/// # Errors
+///
+/// Returns [`PartitionedTTError::InvalidAdaptiveInterpolationInput`] for empty site indices, empty initial
+/// pivots or a dimension mismatch, [`PartitionedTTError::PhaseExecution`] when the phase cannot be run or a lane
+/// fails outside a patch, and the patch's own error - a configuration error, a pivot error, or a backend failure
+/// from the session - when one patch fails.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtt::{adaptiveinterpolate_on_phase, AdaptiveInterpolateOptions, DynIndex, MultiIndex};
+/// use tensor4all_tensorbackend::{explicit::HeldSession, CpuExecutionContext};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let backend = context.with_backend(|backend| backend.clone());
+/// let mut held = HeldSession::open(&backend)?;
+/// let sites = vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+/// let mut result = adaptiveinterpolate_on_phase::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+///     &mut held,
+///     |index: &MultiIndex| (index[0] + 1) as f64,
+///     None,
+///     sites,
+///     Vec::new(),
+///     AdaptiveInterpolateOptions::default(),
+/// )?;
+/// assert!(result.patch_caches().len() >= 1);
+/// held.close()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn adaptiveinterpolate_on_phase<T, F, B>(
+    held: &mut HeldSession<'_>,
+    f: F,
+    batched_f: Option<B>,
+    site_indices: Vec<DynIndex>,
+    initial_pivots: Vec<MultiIndex>,
+    options: AdaptiveInterpolateOptions,
+) -> Result<AdaptiveInterpolationResult<T>>
+where
+    T: Scalar
+        + TTScalar
+        + MatrixLuciScalar
+        + TensorElement
+        + StorageScalar
+        + Default
+        + Copy
+        + Send
+        + Sync,
+    F: Fn(&MultiIndex) -> T + Send + Sync,
+    B: Fn(&[MultiIndex]) -> Vec<T> + Send + Sync,
+{
+    let patch_order = validate_inputs(&site_indices, &initial_pivots, &options)?;
+    let root_dims = site_indices.iter().map(|index| index.dim).collect();
+    let mut wave = vec![PendingPatch {
+        path: Vec::new(),
+        recycled_pivots: Vec::new(),
+        cache: PatchCache::new(root_dims),
+    }];
+    let mut accepted = Vec::new();
+
+    while !wave.is_empty() {
+        let outcomes = run_wave_on_phase(
+            held,
+            &wave,
+            &f,
+            batched_f.as_ref(),
+            &site_indices,
+            &initial_pivots,
+            &patch_order,
+            &options,
+        )?;
+        let mut next_wave = Vec::new();
+        for outcome in outcomes {
+            match outcome {
+                PatchOutcome::Accepted(patch) => accepted.push(patch),
+                PatchOutcome::Split(children) => next_wave.extend(children),
+            }
+        }
+        wave = next_wave;
+    }
+
+    assemble_result(accepted, &site_indices, &patch_order)
+}
+
+/// A phase-execution error, for the invariant breaches this runner detects in its own bookkeeping.
+struct PhaseExecution;
+
+impl PhaseExecution {
+    fn message(message: &str) -> PartitionedTTError {
+        PartitionedTTError::PhaseExecution {
+            message: message.to_string(),
+        }
+    }
+}
+
+/// Run one wave's patches as work items on the held session's lanes.
+///
+/// One loop per pool worker: a lane pulls the next index, runs that patch on its own session, and stops when the
+/// wave is exhausted or a peer failed. Outcomes are written back per index, so the wave's order - and therefore
+/// the wave's result - does not depend on scheduling.
+#[allow(clippy::too_many_arguments)]
+fn run_wave_on_phase<T, F, B>(
+    held: &mut HeldSession<'_>,
+    wave: &[PendingPatch<T>],
+    f: &F,
+    batched_f: Option<&B>,
+    site_indices: &[DynIndex],
+    initial_pivots: &[MultiIndex],
+    patch_order: &[DynIndex],
+    options: &AdaptiveInterpolateOptions,
+) -> Result<Vec<PatchOutcome<T>>>
+where
+    T: Scalar
+        + TTScalar
+        + MatrixLuciScalar
+        + TensorElement
+        + StorageScalar
+        + Default
+        + Copy
+        + Send
+        + Sync,
+    F: Fn(&MultiIndex) -> T + Send + Sync,
+    B: Fn(&[MultiIndex]) -> Vec<T> + Send + Sync,
+{
+    // The patches are owned by the queue and taken by exactly one lane each, so no patch has to be cloned and no
+    // outcome can be written twice.
+    let items: Mutex<Vec<Option<PendingPatch<T>>>> =
+        Mutex::new(wave.iter().map(|_| None).collect());
+    drop(items);
+    let mut owned: Vec<Option<PendingPatch<T>>> = Vec::with_capacity(wave.len());
+    for patch in wave {
+        owned.push(Some(PendingPatch {
+            path: patch.path.clone(),
+            recycled_pivots: patch.recycled_pivots.clone(),
+            cache: patch.cache.clone(),
+        }));
+    }
+    let items = Mutex::new(owned);
+    let slots: Vec<Mutex<Option<Result<PatchOutcome<T>>>>> =
+        (0..wave.len()).map(|_| Mutex::new(None)).collect();
+    let next = AtomicUsize::new(0);
+    let first_error: Mutex<Option<PartitionedTTError>> = Mutex::new(None);
+
+    // A poisoned lock is only ever a lane that unwound, which the phase reports as a lane failure; the queue and
+    // slots themselves stay readable, so recovery is the right reading rather than a second panic.
+    held.phase(|_lane_index, lane: &mut PhaseLane<'_, '_>| -> Result<()> {
+        loop {
+            if lane.cancelled()
+                || first_error
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .is_some()
+            {
+                return Ok(());
+            }
+            let index = next.fetch_add(1, Ordering::Relaxed);
+            if index >= wave.len() {
+                return Ok(());
+            }
+            let (patch, path) = {
+                let mut queue = items
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let slot = queue.get_mut(index).ok_or_else(|| {
+                    PhaseExecution::message("the work queue lost an item of this wave")
+                })?;
+                let patch = slot.take().ok_or_else(|| {
+                    PhaseExecution::message("a work item of this wave was handed out twice")
+                })?;
+                let path = patch.path.clone();
+                (patch, path)
+            };
+            let mut rng =
+                ChaCha8Rng::seed_from_u64(patch_seed(options.tci_options.seed.unwrap_or(0), &path));
+            let outcome = {
+                // One session view per work item: it borrows the lane only for that item, so the lane stays
+                // available to report cancellation between items.
+                let mut session = lane.session();
+                let mut route = PatchRoute::Session(&mut session);
+                process_patch(
+                    patch,
+                    f,
+                    batched_f,
+                    site_indices,
+                    initial_pivots,
+                    patch_order,
+                    options,
+                    &mut rng,
+                    &mut route,
+                )
+            };
+            let mut slot = slots
+                .get(index)
+                .ok_or_else(|| PhaseExecution::message("an outcome slot is missing for this wave"))?
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match outcome {
+                Ok(outcome) => *slot = Some(Ok(outcome)),
+                Err(error) => {
+                    *slot = Some(Err(error));
+                    let mut first = first_error
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if first.is_none() {
+                        *first = slot.take().and_then(|result| result.err());
+                    }
+                    return Ok(());
+                }
+            }
+        }
+    })
+    .map_err(|source| PartitionedTTError::PhaseExecution {
+        message: format!("{source}"),
+    })?;
+
+    let first_error = first_error
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+
+    let mut outcomes = Vec::with_capacity(slots.len());
+    for slot in slots {
+        let slot = slot
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let outcome = slot.ok_or_else(|| {
+            PhaseExecution::message("a lane did not report an outcome for its work item")
+        })??;
+        outcomes.push(outcome);
+    }
+    Ok(outcomes)
 }
 
 /// Adaptively interpolate patches in parallel on an explicit Hataori Rayon domain.
@@ -702,6 +953,7 @@ where
                 &patch_order,
                 &options,
                 &mut rng,
+                &mut PatchRoute::Global,
             )
         })
         .map_err(|source| {
@@ -938,6 +1190,53 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Where one patch's numerical work runs.
+///
+/// `Global` keeps every existing entry unchanged; `Session` runs the patch on an already-entered session - the
+/// lane a phase handed to this worker - instead of the process-global route.
+enum PatchRoute<'a, 'session> {
+    Global,
+    Session(&'a mut Session<'session>),
+}
+
+impl PatchRoute<'_, '_> {
+    /// Run one patch's TCI on this route.
+    fn interpolate<T, F, B, R>(
+        &mut self,
+        f: F,
+        batched_f: Option<B>,
+        local_dims: Vec<usize>,
+        candidate_pivots: Vec<MultiIndex>,
+        options: TCI2Options,
+        rng: &mut R,
+    ) -> Result<TCI2OptimizationResult<T>>
+    where
+        T: Scalar + TTScalar + MatrixLuciScalar + TensorElement + StorageScalar + Default + Copy,
+        F: Fn(&MultiIndex) -> T,
+        B: Fn(&[MultiIndex]) -> Vec<T>,
+        R: rand::Rng + ?Sized,
+    {
+        let result = match self {
+            Self::Global => {
+                crossinterpolate2_with_rng(f, batched_f, local_dims, candidate_pivots, options, rng)
+            }
+            Self::Session(session) => crossinterpolate2_with_rng_on_session(
+                f,
+                batched_f,
+                local_dims,
+                candidate_pivots,
+                options,
+                rng,
+                session,
+            ),
+        };
+        result.map_err(PartitionedTTError::from)
+    }
+}
+
+// INVARIANT: the parameter list is the patch's boundary (patch data, evaluator pair, index metadata, options,
+// stream) plus the execution route; grouping them would only move the same values through another layer.
+#[allow(clippy::too_many_arguments)]
 fn process_patch<T, F, B>(
     patch: PendingPatch<T>,
     f: &F,
@@ -947,6 +1246,7 @@ fn process_patch<T, F, B>(
     patch_order: &[DynIndex],
     options: &AdaptiveInterpolateOptions,
     rng: &mut dyn rand::RngCore,
+    route: &mut PatchRoute<'_, '_>,
 ) -> Result<PatchOutcome<T>>
 where
     T: Scalar + TTScalar + MatrixLuciScalar + TensorElement + StorageScalar + Default + Copy,
@@ -1028,7 +1328,7 @@ where
     let local_f = |pivot: &MultiIndex| evaluator.eval(pivot);
     let local_batch = batched_f.map(|_| |pivots: &[MultiIndex]| evaluator.eval_many(pivots));
     let tci_options = options.tci_options.clone();
-    let tci_result = crossinterpolate2_with_rng(
+    let tci_result = route.interpolate(
         local_f,
         local_batch,
         local_dims,
@@ -1264,7 +1564,6 @@ fn projector_from_path(patch_order: &[DynIndex], path: &[usize]) -> Result<Proje
 
 // Stable SplitMix64 derivation; changing these constants changes reproducible patch candidates.
 // Only the hataori worker paths seed patch candidates, so the helpers follow that feature.
-#[cfg(feature = "adaptive-hataori-rayon")]
 fn patch_seed(root_seed: u64, path: &[usize]) -> u64 {
     path.iter().enumerate().fold(
         splitmix64(root_seed ^ 0x6a09_e667_f3bc_c909),
@@ -1272,7 +1571,6 @@ fn patch_seed(root_seed: u64, path: &[usize]) -> u64 {
     )
 }
 
-#[cfg(feature = "adaptive-hataori-rayon")]
 fn splitmix64(mut value: u64) -> u64 {
     value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
     value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
