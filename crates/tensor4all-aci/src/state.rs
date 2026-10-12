@@ -242,6 +242,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         input: usize,
         site: usize,
         row_indices: &[usize],
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
     ) -> Result<()> {
         let n = self.len();
         validate_input_site(input, site, self.n_inputs(), n)?;
@@ -266,7 +267,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         validate_selection("row", row_indices, full_rows)?;
 
         let core_matrix = self.input_core_left_matrix(input, site);
-        let full_frame = frame_matmul_checked(&source, core_matrix, "left", input, site)?;
+        let full_frame = frame_matmul_checked(&source, core_matrix, "left", input, site, context)?;
         let full_data = full_frame.as_col_major_slice();
         let mut selected = Matrix::zeros(row_indices.len(), core.right_dim());
         for (selected_row, &full_row) in row_indices.iter().enumerate() {
@@ -284,6 +285,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         input: usize,
         site: usize,
         col_indices: &[usize],
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
     ) -> Result<()> {
         let n = self.len();
         validate_input_site(input, site, self.n_inputs(), n)?;
@@ -310,7 +312,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         validate_selection("column", col_indices, full_cols)?;
 
         let core_matrix = self.input_core_right_matrix(input, site);
-        let full_frame = frame_matmul_checked(core_matrix, &source, "right", input, site)?;
+        let full_frame = frame_matmul_checked(core_matrix, &source, "right", input, site, context)?;
         let full_data = full_frame.as_col_major_slice();
         let mut selected = Matrix::zeros(core.left_dim(), col_indices.len());
         for (selected_col, &full_col) in col_indices.iter().enumerate() {
@@ -323,7 +325,12 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         Ok(())
     }
 
-    pub(crate) fn update_left_frames(&mut self, site: usize, row_indices: &[usize]) -> Result<()> {
+    pub(crate) fn update_left_frames(
+        &mut self,
+        site: usize,
+        row_indices: &[usize],
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    ) -> Result<()> {
         if frame_batching_enabled()
             && let Some(frames) = self.batched_left_frame_updates(site, row_indices)?
         {
@@ -334,12 +341,17 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         }
 
         for input in 0..self.n_inputs() {
-            self.update_left_frame(input, site, row_indices)?;
+            self.update_left_frame(input, site, row_indices, context)?;
         }
         Ok(())
     }
 
-    pub(crate) fn update_right_frames(&mut self, site: usize, col_indices: &[usize]) -> Result<()> {
+    pub(crate) fn update_right_frames(
+        &mut self,
+        site: usize,
+        col_indices: &[usize],
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    ) -> Result<()> {
         if frame_batching_enabled()
             && let Some(frames) = self.batched_right_frame_updates(site, col_indices)?
         {
@@ -350,7 +362,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         }
 
         for input in 0..self.n_inputs() {
-            self.update_right_frame(input, site, col_indices)?;
+            self.update_right_frame(input, site, col_indices, context)?;
         }
         Ok(())
     }
@@ -881,9 +893,9 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         solution_cores[bond + 1] = new_right_core;
 
         if left_orthogonal {
-            self.update_left_frames(bond, &row_indices)?;
+            self.update_left_frames(bond, &row_indices, context)?;
         } else {
-            self.update_right_frames(bond + 1, &col_indices)?;
+            self.update_right_frames(bond + 1, &col_indices, context)?;
         }
         self.pivot_errors[bond] = pivot_error;
         self.pivot_scales[bond] = sampled_scale;
@@ -955,11 +967,11 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             let previous_left_dim = previous.left_dim();
             let previous_site_dim = previous.site_dim();
             let previous_matrix = left_matrix_julia_order(previous)?;
-            let product = matmul_checked_owned(previous_matrix, left_factor, site - 1)?;
+            let product = matmul_checked_owned(previous_matrix, left_factor, site - 1, context)?;
             solution_cores[site - 1] =
                 matrix_into_tensor3(product, previous_left_dim, previous_site_dim, new_rank)?;
 
-            self.update_right_frames(site, &col_indices)?;
+            self.update_right_frames(site, &col_indices, context)?;
         }
 
         self.solution = SimpleTensorTrain::new(solution_cores)?;
@@ -1272,6 +1284,7 @@ fn matmul_checked_owned<T: AciScalar>(
     left: Matrix<T>,
     right: Matrix<T>,
     site: usize,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> Result<Matrix<T>> {
     if left.ncols() != right.nrows() {
         return Err(AciError::InvalidInitialGuess {
@@ -1286,7 +1299,18 @@ fn matmul_checked_owned<T: AciScalar>(
         });
     }
 
-    mat_mul_owned(left, right).map_err(|err| AciError::InvalidInitialGuess {
+    // The caller-owned route multiplies on the supplied context; the compatibility route keeps its own path.
+    let result: std::result::Result<Matrix<T>, String> = match context {
+        Some(context) => {
+            match context.with_concrete_session(|session| session.mat_mul(&left, &right)) {
+                Ok(Ok(product)) => Ok(product),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(error) => Err(error.to_string()),
+            }
+        }
+        None => mat_mul_owned(left, right).map_err(|error| error.to_string()),
+    };
+    result.map_err(|err| AciError::InvalidInitialGuess {
         message: format!("solution core update at site {site} failed: {err}"),
     })
 }
@@ -1297,6 +1321,7 @@ fn frame_matmul_checked<T: AciScalar>(
     direction: &'static str,
     input: usize,
     site: usize,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> Result<Matrix<T>> {
     if left.ncols() != right.nrows() {
         return Err(AciError::InvalidInitialGuess {
@@ -1311,7 +1336,17 @@ fn frame_matmul_checked<T: AciScalar>(
         });
     }
 
-    mat_mul(left, right).map_err(|err| AciError::InvalidInitialGuess {
+    let result: std::result::Result<Matrix<T>, String> = match context {
+        Some(context) => {
+            match context.with_concrete_session(|session| session.mat_mul(left, right)) {
+                Ok(Ok(product)) => Ok(product),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(error) => Err(error.to_string()),
+            }
+        }
+        None => mat_mul(left, right).map_err(|error| error.to_string()),
+    };
+    result.map_err(|err| AciError::InvalidInitialGuess {
         message: format!("{direction} frame update at input {input}, site {site} failed: {err}"),
     })
 }

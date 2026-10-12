@@ -1,9 +1,9 @@
 //! ACI's factorizations in a caller-owned context (#859 F7).
 //!
-//! The context entry must compute what the plain one computes, and the factorization share it moves must be
-//! measurable. What it does *not* yet claim: that the whole workload runs in that context - the contractions
-//! between input cores and the solution still use their existing routes, so no held-global dispatch proof is
-//! available here (recorded in `docs/design/859-f7-consumer-inventory.md`).
+//! The context entry must compute what the plain one computes, and the share it moves must be measurable. What it
+//! does *not* claim: that the whole workload runs in that context - the batched frame updates and the caller's own
+//! operator keep their existing routes, so no held-global dispatch proof is available here (recorded in
+//! `docs/design/859-f7-consumer-inventory.md`).
 
 use std::time::Instant;
 
@@ -99,7 +99,7 @@ fn the_context_route_is_measured_against_the_plain_one() -> TestResult {
 
     println!(
         "aci_elementwise_context: reps={reps} plain_ms_per_run={:.3} context_ms_per_run={:.3} \
-         (the context entry moves the workload's MatrixLUCI factorizations only)",
+         (the context entry moves the workload's MatrixLUCI factorizations and frame products; the batched frame updates keep their existing route)",
         plain.as_secs_f64() * 1e3 / reps as f64,
         with_context.as_secs_f64() * 1e3 / reps as f64
     );

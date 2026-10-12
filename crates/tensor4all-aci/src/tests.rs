@@ -783,7 +783,7 @@ fn elementwise_problem_updates_left_frame_for_selected_rows() {
     let input = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
 
-    problem.update_left_frame(0, 0, &[0, 1]).unwrap();
+    problem.update_left_frame(0, 0, &[0, 1], None).unwrap();
 
     assert_eq!(problem.left_frame_shape(0, 1), Some((2, 1)));
 }
@@ -797,7 +797,7 @@ fn elementwise_problem_updates_left_frame_values() {
     .unwrap();
     let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
 
-    problem.update_left_frame(0, 0, &[0, 1]).unwrap();
+    problem.update_left_frame(0, 0, &[0, 1], None).unwrap();
 
     assert_eq!(problem.left_frame_shape(0, 1), Some((2, 2)));
     assert_eq!(problem.left_frame_value(0, 1, 0, 0), Some(1.0));
@@ -816,7 +816,7 @@ fn elementwise_problem_updates_all_left_frames_for_selected_rows() {
     let b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
     let mut problem = ElementwiseProblem::new(vec![a, b], AciOptions::default(), None).unwrap();
 
-    problem.update_left_frames(0, &[0, 1]).unwrap();
+    problem.update_left_frames(0, &[0, 1], None).unwrap();
 
     assert_eq!(problem.left_frame_shape(0, 1), Some((2, 1)));
     assert_eq!(problem.left_frame_shape(1, 1), Some((2, 1)));
@@ -827,7 +827,7 @@ fn elementwise_problem_updates_right_frame_for_selected_columns() {
     let input = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
 
-    problem.update_right_frame(0, 2, &[0, 1]).unwrap();
+    problem.update_right_frame(0, 2, &[0, 1], None).unwrap();
 
     assert_eq!(problem.right_frame_shape(0, 2), Some((1, 2)));
 }
@@ -841,7 +841,7 @@ fn elementwise_problem_updates_right_frame_values() {
     .unwrap();
     let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
 
-    problem.update_right_frame(0, 1, &[0, 1]).unwrap();
+    problem.update_right_frame(0, 1, &[0, 1], None).unwrap();
 
     assert_eq!(problem.right_frame_shape(0, 1), Some((2, 2)));
     assert_eq!(problem.right_frame_value(0, 1, 0, 0), Some(3.0));
@@ -859,11 +859,11 @@ fn elementwise_problem_rejects_invalid_frame_selection_indices() {
     let input = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
 
-    let left_err = problem.update_left_frame(0, 0, &[2]).unwrap_err();
+    let left_err = problem.update_left_frame(0, 0, &[2], None).unwrap_err();
     assert!(matches!(left_err, AciError::InvalidInitialGuess { .. }));
     assert!(left_err.to_string().contains("row index"));
 
-    let right_err = problem.update_right_frame(0, 2, &[2]).unwrap_err();
+    let right_err = problem.update_right_frame(0, 2, &[2], None).unwrap_err();
     assert!(matches!(right_err, AciError::InvalidInitialGuess { .. }));
     assert!(right_err.to_string().contains("column index"));
 }
@@ -967,7 +967,7 @@ fn elementwise_problem_one_bond_zero_update_keeps_right_frames_nonzero_dimension
     let options = AciOptions::<f64>::default();
     let mut problem =
         ElementwiseProblem::new(vec![input_a, input_b], options.clone(), None).unwrap();
-    problem.update_left_frames(0, &[0]).unwrap();
+    problem.update_left_frames(0, &[0], None).unwrap();
     for input in 0..problem.n_inputs() {
         problem.right_frames[input][2] = None;
     }
@@ -1574,7 +1574,7 @@ fn initial_guess_zero_initializes_nonzero_dimensional_right_frames() {
         assert_eq!(problem.right_frame_shape(input, 2), Some((1, 1)));
         assert_eq!(problem.right_frame_shape(input, 3), Some((1, 1)));
     }
-    problem.update_left_frames(0, &[0]).unwrap();
+    problem.update_left_frames(0, &[0], None).unwrap();
     assert!(problem.local_input_value(0, 1, 0, 0).is_ok());
 
     let mut operator = zero_batch;
@@ -1937,9 +1937,9 @@ where
 
     let start = Instant::now();
     if left_orthogonal {
-        problem.update_left_frames(bond, &row_indices)?;
+        problem.update_left_frames(bond, &row_indices, None)?;
     } else {
-        problem.update_right_frames(bond + 1, &col_indices)?;
+        problem.update_right_frames(bond + 1, &col_indices, None)?;
     }
     problem.pivot_errors[bond] = pivot_error;
     problem.pivot_scales[bond] = sampled_scale;

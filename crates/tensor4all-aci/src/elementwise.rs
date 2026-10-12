@@ -156,9 +156,10 @@ where
 /// factorizations run. Without a context they are assembled through the process-global CPU context; with one,
 /// every MatrixLUCI factorization of this workload goes through `context`.
 ///
-/// The rest of this workload - the contractions between input cores and the solution - is unchanged and still
-/// runs on its existing routes, so this is a caller-owned budget for the factorizations only, not for the whole
-/// run. That limit is recorded in `docs/design/859-f7-consumer-inventory.md`.
+/// Both kinds of session-bound work follow the context: the MatrixLUCI factorizations and the frame products that
+/// update the input frames during a sweep. The batched frame updates - the grouped-GEMM path - and the caller's own
+/// operator are unchanged and keep their existing routes, which is recorded in
+/// `docs/design/859-f7-consumer-inventory.md`.
 ///
 /// # Errors
 ///
