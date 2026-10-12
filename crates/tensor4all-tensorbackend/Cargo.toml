@@ -76,6 +76,7 @@ tenferro-gpu = { workspace = true, optional = true }
 
 [dev-dependencies]
 approx.workspace = true
+tenferro.workspace = true
 criterion.workspace = true
 
 [[bench]]

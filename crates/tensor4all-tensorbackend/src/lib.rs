@@ -68,7 +68,10 @@ pub use context::{
 #[cfg(feature = "explicit-context")]
 pub use context::{CpuExecutionContext, CpuExecutionContextError, ExecutionContext};
 #[cfg(feature = "tenferro-cuda")]
-pub use cuda::{CudaExecutionContext, CudaExecutionContextError, CUDA_ORDINAL};
+pub use cuda::{
+    CudaExecutionContext, CudaExecutionContextError, CudaPinnedBuffer, PendingCudaDownload,
+    CUDA_ORDINAL,
+};
 #[cfg(feature = "global-defaults")]
 pub use incremental_qr::{IncrementalQr, IncrementalQrScalar};
 #[cfg(feature = "explicit-context")]

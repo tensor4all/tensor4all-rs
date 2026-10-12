@@ -85,12 +85,34 @@ Each per-node call in the component example also clones the network metadata and
 transfer includes native duplication, a session entry and eager wrapping; the per-node figure is therefore an
 upper bound on the data movement, not a measurement of it alone.
 
-**What these numbers do not cover, because this crate does not expose it yet:** waiting on an asynchronous transfer,
-and producer/consumer overlap. There is no stream, pending-transfer handle or readiness event on this route, so
-every transfer is synchronous: the compute figures are *synchronised compute latency*, and "wait" cannot be told
-apart from "work". Making wait and overlap separately observable needs a stream and pending-handle surface to be
-migrated - that is F5's remaining work, and this tutorial must not be read as evidence that it is done. The SRC
-route has its own separated breakdown (setup, upload, warm-up, steady, download, CPU) in
+### Device-to-host wait and overlap, measured
+
+The device-to-host side now has a pending route, so a copy's *submission* and its *completion* can be measured
+separately, and two copies can be in flight at once:
+
+```bash
+cargo test -p tensor4all-treetn --features tenferro-cuda --test cuda_async_download
+```
+
+On the same machine, two 8 MiB copies with the pinned allocations included and uploads excluded:
+
+| shape | time |
+| --- | ---: |
+| submit, wait, submit, wait | 89.552 ms |
+| submit both, then wait for both | 11.425 ms |
+
+So **overlap is real on this route** - roughly eight times faster here - and the difference between the two rows is
+exactly the wait that a synchronous transfer hides. `CudaExecutionContext::download_pending` takes the pinned
+revision's ownership contract literally: it consumes the device tensor (the pinned API has no way to copy one) and
+hands it back from `wait`, and a rejected submission keeps only its diagnostic because the rejected package is
+neither `Send` nor `Sync`.
+
+**Still not measurable, and not claimed:** the *host-to-device* side. A pending upload needs a device destination
+that the pinned revision offers no way to allocate, so uploads remain synchronous and their wait cannot be
+separated from their work. A caller should read the upload figure above as "synchronised upload latency" and not
+as a transfer plus a wait.
+
+The SRC route has its own separated breakdown (setup, upload, warm-up, steady, download, CPU) in
 `cuda_src_timing_breakdown` under `crates/tensor4all-treetn/tests/cuda_src_contraction.rs`, where its upload figure
 carries the same first-use caveat.
 

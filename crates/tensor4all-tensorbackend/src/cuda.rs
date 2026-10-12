@@ -5,7 +5,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use tenferro::Tensor;
 use tenferro_ad::{ContextId, EagerRuntime};
-use tenferro_gpu::cuda::{cuda_devices, CudaBackend};
+use tenferro_gpu::cuda::{
+    cuda_devices, download_pending, CompletionUnproven, CudaBackend, PendingDownload,
+    PinnedHostBuffer,
+};
 use tenferro_tensor::{
     AllocationDomainId, BackendSessionHost, DeviceId, DeviceKind, GpuBackendKind, MemoryKind,
     Placement, TensorRead,
@@ -145,6 +148,92 @@ impl fmt::Debug for CudaExecutionContext {
             .field("device_name", &self.device_name)
             .field("eager_initialized", &self.eager.get().is_some())
             .finish_non_exhaustive()
+    }
+}
+
+/// A caller-owned pinned host buffer for a pending transfer.
+pub struct CudaPinnedBuffer {
+    buffer: PinnedHostBuffer,
+}
+
+impl std::fmt::Debug for CudaPinnedBuffer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CudaPinnedBuffer")
+            .field("byte_len", &self.buffer.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl CudaPinnedBuffer {
+    /// Number of bytes this buffer holds.
+    pub fn byte_len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    /// The staged bytes, for reading back what a download filled.
+    pub fn as_slice(&self) -> &[u8] {
+        self.buffer.as_slice()
+    }
+
+    /// The staged bytes, mutably, for staging an upload's source.
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        self.buffer.as_mut_slice()
+    }
+}
+
+/// One submitted device-to-host transfer.
+///
+/// Dropping the handle moves the transfer into the runtime's retirement queue, where a later query releases it
+/// without waiting - but only while something still owns the runtime, which is why the handle keeps a backend
+/// clone. Releasing the last runtime owner is a different event: that synchronizes initialized streams. Dropping
+/// never proves the copy; only [`PendingCudaDownload::wait`] hands back filled bytes.
+pub struct PendingCudaDownload {
+    inner: PendingDownload,
+    _keep_alive: CudaBackend,
+}
+
+impl std::fmt::Debug for PendingCudaDownload {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PendingCudaDownload")
+            .finish_non_exhaustive()
+    }
+}
+
+impl PendingCudaDownload {
+    /// Whether the copy's event has completed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaExecutionContextError::Transfer`] when the event query itself fails for a reason other than
+    /// "not ready".
+    pub fn is_ready(&mut self) -> Result<bool, CudaExecutionContextError> {
+        self.inner
+            .is_ready()
+            .map_err(|source| CudaExecutionContextError::Transfer {
+                operation: "download readiness",
+                source: Arc::new(source),
+            })
+    }
+
+    /// Wait for the copy and return the device source plus the filled pinned buffer.
+    ///
+    /// The device source is handed back rather than consumed here, and the filled buffer is returned raw: turning
+    /// those bytes into a host value is the caller's step, so its cost is not hidden behind the wait.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaExecutionContextError::Transfer`] when the copy reports an unproven completion; the filled
+    /// buffer must then be discarded rather than read.
+    pub fn wait(self) -> Result<(Tensor, CudaPinnedBuffer), CudaExecutionContextError> {
+        let (tensor, buffer) = self.inner.wait().map_err(|source: CompletionUnproven| {
+            CudaExecutionContextError::Transfer {
+                operation: "download wait",
+                source: Arc::new(source),
+            }
+        })?;
+        Ok((tensor, CudaPinnedBuffer { buffer }))
     }
 }
 
@@ -335,6 +424,68 @@ impl CudaExecutionContext {
                 operation: "download",
                 source: Arc::new(source),
             })
+    }
+
+    /// Allocate a pinned host buffer of `bytes` bytes.
+    ///
+    /// The bytes are the caller's: stage what the device expects (column-major, native endianness) through
+    /// [`CudaPinnedBuffer::as_mut_slice`], and read a download's result through
+    /// [`CudaPinnedBuffer::as_slice`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaExecutionContextError::Transfer`] when the pinned allocation fails, and
+    /// [`CudaExecutionContextError::PlacementMismatch`] when `bytes` is zero, which the pinned allocator rejects.
+    pub fn allocate_pinned(
+        &self,
+        bytes: usize,
+    ) -> Result<CudaPinnedBuffer, CudaExecutionContextError> {
+        if bytes == 0 {
+            return Err(CudaExecutionContextError::PlacementMismatch {
+                operation: "allocate pinned buffer",
+            });
+        }
+        self.with_backend(|backend| PinnedHostBuffer::new(backend.runtime(), bytes))
+            .map(|buffer| CudaPinnedBuffer { buffer })
+            .map_err(|source| CudaExecutionContextError::Transfer {
+                operation: "allocate pinned buffer",
+                source: Arc::new(source),
+            })
+    }
+
+    /// Submit a device-to-host copy without waiting for it.
+    ///
+    /// Takes the device tensor **by value**: the pinned revision's pending entry consumes its source, and the
+    /// value comes back from [`PendingCudaDownload::wait`]. Nothing is copied behind the caller's back to work
+    /// around that - a caller that wants to keep its tensor should not use this route.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaExecutionContextError::PlacementMismatch`] when the tensor is not resident on this exact
+    /// context, and [`CudaExecutionContextError::Transfer`] when the submission is rejected (for example when the
+    /// pinned buffer's length does not match). A rejection's recoverable package is **not** retained on this
+    /// route - only its diagnostic - because that package is neither `Send` nor `Sync`; the buffer is dropped with
+    /// it.
+    pub fn download_pending(
+        &self,
+        tensor: Tensor,
+        buffer: CudaPinnedBuffer,
+    ) -> Result<PendingCudaDownload, CudaExecutionContextError> {
+        self.validate_cuda_placement(&tensor)?;
+        // Keeps the runtime alive until the handle is gone: pinned buffers hold a weak runtime reference and leak
+        // if it cannot be upgraded when they are destroyed.
+        let keep_alive = self.with_backend(|backend| backend.clone());
+        let inner = self
+            .with_backend(|backend| download_pending(backend.runtime(), tensor, buffer.buffer))
+            .map_err(|source| CudaExecutionContextError::Transfer {
+                operation: "download submit",
+                // The rejected package is not `Send`; only its diagnostic can be retained here.
+                source: Arc::new(std::io::Error::other(format!("{source:?}"))),
+            })?;
+        Ok(PendingCudaDownload {
+            inner,
+            _keep_alive: keep_alive,
+        })
     }
 
     /// Validate an owned tensor's placement without transferring or reading it.
