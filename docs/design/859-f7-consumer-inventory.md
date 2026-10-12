@@ -118,8 +118,29 @@ reason; the F7 migration must not silently claim them:
 | `tensor4all-py` | as `capi` | F6 |
 | `tensor4all-hdf5` | I/O only; no numerical route | — |
 
-## 6. Keeping this honest
+## 6. Per-crate verdicts, first pass
+
+A first read of the untouched crates, so the migration order rests on what each crate actually does rather than
+on its position in the graph. Every verdict names the call site that decides it.
+
+| crate | verdict | evidence |
+| --- | --- | --- |
+| `tensor4all-interpolativeqtt` | **host-only; no session surface needed at this layer** | its API is Lagrange-basis evaluation and `interpolation_tensor`, which builds a host `Tensor3<f64>`; it contains no contraction, solve or TCI call at all, so whatever consumes its values decides the route. |
+| `tensor4all-quanticstransform` | **host operator construction; the numerics belong to whoever applies it** | `QuanticsOperator = LinearOperator<IdxTensor, usize>` and the operators are built from host `IdxTensor`s; applying one goes through `tensor4all-treetn`'s entries, which already have session-taking twins. A session surface is needed at the *apply* call site, not in the transform. |
+| `tensor4all-itensorlike` | **thread-through** | `contract` delegates to `tensor4all-treetn`'s `contract` (`contract.rs:112`), so a session-taking `contract` here is a pass-through to a twin that exists. |
+| `tensor4all-quanticstci` | **thread-through** | `quanticscrossinterpolate*` builds a grid and calls `tensor4all-treetci`'s TCI, whose context-taking entries exist; the same pass-through shape applies. |
+| `tensor4all-partitionedtreetn` | **thread-through** | its adaptive interpolation drives `TreeTciInterpolator` over tree TNs; the entries below it are context-taking already. |
+| `tensor4all-aci` | **has numerics of its own** | it calls core's LUCI directly - `matrix_luci_factors_from_matrix_owned` (`state.rs:812`) and `matrix_luci_factors_from_matrix` (`state.rs:890`) - so it needs either the `_in` twins at those two call sites or a session-taking ACI entry. This is the most substantive of the four. |
+| `tensor4all-treeaci` | **not yet assessed** | it has the largest number of numerical-ish call sites in the workspace; a verdict needs a read of its driver, not a count. |
+| `tensor4all-hdf5` | **no route to choose** | input/output only. |
+| `tensor4all-capi`, `tensor4all-py` | **F6's business** | a new ABI surface, not a threaded parameter, so they are not part of this pass. |
+
+## 7. Keeping this honest
 
 Re-run the three commands in §1-§3 after any landing that adds a session-taking entry, changes a default
 feature, or moves a compatibility path; the tables are only as good as the checkout they were taken from. When a
 row changes, say what changed and cite the PR, so that "migrated" keeps meaning "measured", not "planned".
+
+Read this file from `origin/main` or a fresh worktree, never from a long-lived checkout: during this pass a stale
+main checkout made a merged entry point look absent, and only a fresh worktree showed the real state. A verdict
+taken from the wrong tree is worse than no verdict.
