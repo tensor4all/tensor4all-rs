@@ -3779,12 +3779,15 @@ name = "tensor4all-partitionedtreetn"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "criterion",
  "num-complex 0.4.6",
  "rand 0.9.5",
  "rand_chacha",
  "serde_json",
+ "tenferro-cpu",
  "tensor4all-core",
  "tensor4all-quanticstransform",
+ "tensor4all-tensorbackend",
  "tensor4all-treetci",
  "tensor4all-treetn",
  "thiserror 2.0.20",

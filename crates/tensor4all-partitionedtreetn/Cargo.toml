@@ -32,6 +32,9 @@ tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 
 [dev-dependencies]
+criterion.workspace = true
+tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
+tenferro-cpu.workspace = true
 num-complex.workspace = true
 serde_json.workspace = true
 # Path-only cross-layer dev-dependency (stripped from published manifests) so
@@ -43,3 +46,7 @@ tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform", defau
 tensor4all-treetci = { path = "../tensor4all-treetci", default-features = false, features = ["tenferro-cpu-faer"] }
 rand.workspace = true
 rand_chacha.workspace = true
+
+[[bench]]
+name = "f7_engine_context_overhead"
+harness = false

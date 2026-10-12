@@ -139,7 +139,7 @@ where
     )
 }
 
-fn to_named_treetn_chunked<T, F, V>(
+pub(crate) fn to_named_treetn_chunked<T, F, V>(
     state: &TreeTCI2<T>,
     evaluate: &F,
     center_site: Option<usize>,

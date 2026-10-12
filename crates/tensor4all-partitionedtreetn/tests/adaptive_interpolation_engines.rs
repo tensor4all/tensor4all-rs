@@ -7,9 +7,11 @@ use adaptive_common::*;
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tensor4all_partitionedtreetn::adaptive_interpolation::PatchedInterpolationOptions;
+use tensor4all_partitionedtreetn::adaptive_interpolation::{
+    PatchedInterpolationOptions, PatchedInterpolationResult,
+};
 use tensor4all_partitionedtreetn::ErrorNorm;
-use tensor4all_treetci::TreeTciInterpolator;
+use tensor4all_treetci::{TreeTciInterpolator, TreeTciInterpolatorIn};
 
 // ---------------------------------------------------------------------------
 // TreeTCI end to end
@@ -121,4 +123,69 @@ fn the_cache_supports_domains_wider_than_128_bits() {
             "{value} vs {expected}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Caller-owned context engine (issue #859 F7)
+// ---------------------------------------------------------------------------
+
+/// `patched_interpolate` with the context-carrying TreeTCI engine produces the
+/// same result as with the plain engine: same seed, same patches, dense
+/// values equal up to tight tolerance, and the same accuracy contract. The
+/// engine is the pluggable numeric provider, so the patched driver needs no
+/// change - this pins that the caller-owned route is a drop-in engine.
+#[test]
+fn caller_owned_context_engine_matches_plain_engine_end_to_end() {
+    let problem = chain("q", 7, 2);
+    let f = |p: &[usize]| {
+        let x = quantics(p);
+        gaussian(x, 0.3, 0.02) + 0.5 * gaussian(x, 0.71, 0.05)
+    };
+    let rtol = 1e-8;
+    let options = sampled_max(4)
+        .with_tolerance(tol(rtol))
+        .with_error_norm(ErrorNorm::sampled_max_with_reference(max_abs(&problem, &f)));
+    let pivots = [vec![0, 1, 0, 0, 1, 1, 0]];
+
+    let plain = run(
+        &TreeTciInterpolator::default(),
+        &problem,
+        &f,
+        &pivots,
+        &options,
+    )
+    .unwrap();
+
+    let context = std::sync::Arc::new(tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+        tenferro_cpu::CpuBackend::with_threads(1).unwrap(),
+    ));
+    let engine =
+        TreeTciInterpolatorIn::new(tensor4all_treetci::TreeTciOptions::default(), context).unwrap();
+    let contextual = run(&engine, &problem, &f, &pivots, &options).unwrap();
+
+    // Same patch structure on the same seed.
+    assert_eq!(contextual.report.splits, plain.report.splits);
+
+    // Dense parity over the whole domain, up to a tight relative tolerance.
+    let dense = |result: &PatchedInterpolationResult<Name>| {
+        let network = result.partition.to_treetn().unwrap();
+        full_domain(&problem.dims())
+            .iter()
+            .map(|p| network.evaluate_point(&problem.sites, p).unwrap().real())
+            .collect::<Vec<f64>>()
+    };
+    let a = dense(&plain);
+    let b = dense(&contextual);
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(&b) {
+        let scale = x.abs().max(y.abs()).max(1.0);
+        assert!(
+            (x - y).abs() <= 1e-12 * scale,
+            "caller-owned engine diverged from the plain engine: |{x} - {y}|"
+        );
+    }
+
+    // Both routes still meet the accuracy contract.
+    assert_accurate(&plain, &problem, &f, rtol);
+    assert_accurate(&contextual, &problem, &f, rtol);
 }

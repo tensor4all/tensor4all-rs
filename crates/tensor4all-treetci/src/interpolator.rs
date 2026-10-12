@@ -25,8 +25,9 @@ use crate::error::Result as TreeTciResult;
 use crate::globalpivot::ScalarParts;
 use crate::materialize::to_named_treetn;
 use crate::{
-    column_2d, ncols_2d, optimize_with_proposer, DefaultProposer, GlobalIndexBatch, MultiIndex,
-    TreeTCI2, TreeTciEdge, TreeTciError, TreeTciGraph, TreeTciOptions, TreeTciTermination,
+    column_2d, ncols_2d, optimize_with_proposer, optimize_with_proposer_in, DefaultProposer,
+    GlobalIndexBatch, MultiIndex, TreeTCI2, TreeTciEdge, TreeTciError, TreeTciGraph,
+    TreeTciOptions, TreeTciTermination,
 };
 
 /// Tree interpolation engine backed by TreeTCI.
@@ -284,6 +285,157 @@ where
             None,
             &layout.node_names,
             &layout.vertex_sites,
+        )
+        .map_err(classify)?;
+        let pivots = joined_pivots(&state, &layout)
+            .map_err(|source| InterpolationError::Engine { source })?;
+
+        let (Some(&final_rank), Some(&error_estimate)) =
+            (report.ranks.last(), report.errors.last())
+        else {
+            return Err(InterpolationError::Engine {
+                source: anyhow::anyhow!("TreeTCI finished without running a sweep"),
+            });
+        };
+        Ok(InterpolationOutcome {
+            network,
+            termination: map_termination(report.termination, final_rank, problem.max_bond_dim()),
+            error_estimate,
+            max_sample_magnitude: state.max_sample_value,
+            pivots: Some(pivots),
+        })
+    }
+}
+
+/// A [`TreeInterpolator`] engine whose run-time numerics run in a caller-owned
+/// CPU execution context (issue #859 F7).
+///
+/// Same options, validation, stopping rule and diagnostics as
+/// [`TreeTciInterpolator`]; what differs is the resource the optimizer and the
+/// final materialization run in. Both go through their caller-owned twins
+/// (`optimize_with_proposer_in`, `to_treetn_chunked` with a context) instead
+/// of the process-global CPU context. Callers that drive a patched or
+/// per-patch driver over a tree interpolation engine pass this type as the
+/// engine; the driver needs no change.
+#[derive(Clone, Debug)]
+pub struct TreeTciInterpolatorIn {
+    inner: TreeTciInterpolator,
+    context: std::sync::Arc<tensor4all_tensorbackend::CpuExecutionContext>,
+}
+
+impl TreeTciInterpolatorIn {
+    /// Build a context-carrying engine from TreeTCI options.
+    ///
+    /// The same configuration checks as [`TreeTciInterpolator::new`]; the
+    /// engine holds the given context and routes every run through it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeTciError::InvalidConfiguration`] when the options fail
+    /// the checks of [`optimize_with_proposer`] or when `max_iter` is below
+    /// [`TreeTciInterpolator::MIN_MAX_ITER`].
+    pub fn new(
+        options: TreeTciOptions,
+        context: std::sync::Arc<tensor4all_tensorbackend::CpuExecutionContext>,
+    ) -> TreeTciResult<Self> {
+        Ok(Self {
+            inner: TreeTciInterpolator::new(options)?,
+            context,
+        })
+    }
+
+    /// Borrow the engine's options as given to [`Self::new`].
+    pub fn options(&self) -> &TreeTciOptions {
+        self.inner.options()
+    }
+
+    /// Borrow the caller-owned context this engine runs in.
+    pub fn context(&self) -> &tensor4all_tensorbackend::CpuExecutionContext {
+        &self.context
+    }
+}
+
+impl<T> TreeInterpolator<T> for TreeTciInterpolatorIn
+where
+    T: FullPivLuScalar
+        + CommonScalar
+        + tensor4all_core::MatrixLuciScalar
+        + tensor4all_core::TensorElement
+        + ScalarParts,
+{
+    /// Run TreeTCI on `problem` in the caller-owned context.
+    ///
+    /// The same errors as [`TreeTciInterpolator`]'s implementation, plus
+    /// [`InterpolationError::Engine`] when the caller-owned context refuses an
+    /// optimizer or materialization step.
+    ///
+    /// # Errors
+    ///
+    /// - [`InterpolationError::InvalidProblem`] when the product of a node's
+    ///   site dimensions (or the full index set of a single-node problem)
+    ///   overflows `usize`, or a single-node point list cannot be reserved.
+    /// - [`InterpolationError::Evaluator`] when `evaluate` returns an error or
+    ///   a number of values other than the number of points, at any stage, or
+    ///   a non-finite scalar component or magnitude in any batch.
+    /// - [`InterpolationError::AllSamplesZero`] when every initial pivot
+    ///   evaluates to exactly zero.
+    /// - [`InterpolationError::Engine`] when TreeTCI fails for any other
+    ///   reason (graph construction, pivot bookkeeping, a singular solve, or
+    ///   materialization), including a refusal by the caller-owned context.
+    fn interpolate<V, F>(
+        &self,
+        problem: &InterpolationProblem<V>,
+        evaluate: F,
+    ) -> Result<InterpolationOutcome<V>, InterpolationError>
+    where
+        V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+        F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
+    {
+        let layout = VertexLayout::new(problem)?;
+
+        let initial = problem.initial_pivots();
+        let initial_values =
+            call_evaluator(&evaluate, initial.data(), layout.n_sites()).map_err(classify_anyhow)?;
+        let max_initial = initial_sample_scale(&initial_values)?;
+
+        if layout.vertex_count() == 1 {
+            return interpolate_single_node(&layout, &evaluate);
+        }
+
+        let options = self.inner.run_options(
+            problem.absolute_tolerance(),
+            problem.max_bond_dim(),
+            problem.seed(),
+        );
+        let vertex_evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<T>> {
+            let sites = layout.vertex_batch_to_sites(batch)?;
+            call_evaluator(&evaluate, &sites, layout.n_sites())
+        };
+
+        let graph = TreeTciGraph::new(layout.vertex_count(), &layout.edges).map_err(engine)?;
+        let mut state = TreeTCI2::<T>::new(layout.local_dims.clone(), graph).map_err(engine)?;
+        let vertex_pivots = layout
+            .site_columns_to_vertices(initial)
+            .map_err(|source| InterpolationError::Engine { source })?;
+        state.add_global_pivots(&vertex_pivots).map_err(engine)?;
+        state.max_sample_value = max_initial;
+
+        let report = optimize_with_proposer_in(
+            &mut state,
+            vertex_evaluate,
+            &options,
+            &DefaultProposer,
+            &self.context,
+        )
+        .map_err(classify)?;
+        let network = crate::materialize::to_named_treetn_chunked(
+            &state,
+            &vertex_evaluate,
+            None,
+            &layout.node_names,
+            &layout.vertex_sites,
+            crate::batch::EVALUATION_CHUNK_POINTS,
+            Some(&self.context),
         )
         .map_err(classify)?;
         let pivots = joined_pivots(&state, &layout)
