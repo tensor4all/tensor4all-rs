@@ -116,8 +116,8 @@ pub use interpolator::TreeTciInterpolator;
 pub use key::SubtreeKey;
 pub use materialize::to_treetn;
 pub use optimize::{
-    optimize_default, optimize_with_proposer, optimize_with_proposer_with_rng,
-    TreeTciOptimizationResult, TreeTciOptions, TreeTciTermination,
+    optimize_default, optimize_with_proposer, optimize_with_proposer_in,
+    optimize_with_proposer_with_rng, TreeTciOptimizationResult, TreeTciOptions, TreeTciTermination,
 };
 pub use proposer::{
     DefaultProposer, PivotCandidateProposer, SimpleProposer, TruncatedDefaultProposer,

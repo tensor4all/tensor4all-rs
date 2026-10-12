@@ -445,6 +445,55 @@ where
     })
 }
 
+/// Optimize with an explicit proposer whose run-time execution runs in a caller-owned CPU context.
+///
+/// The same algorithm, options, stopping rule and diagnostics as [`optimize_with_proposer`]; what differs is the
+/// resource the stage's session-bound work runs in. Without a context it goes through the process-global CPU
+/// context; with one, the factor assembly and the materialization solve run on `context`, as
+/// [`crossinterpolate2_in`](crate::crossinterpolate2_in) does for a whole run.
+///
+/// The caller's evaluator and the pivot search's readout are unchanged and still use their existing routes, so this
+/// is a caller-owned budget for the stage's session-bound work, not for everything the run touches.
+///
+/// # Errors
+///
+/// Returns [`crate::TreeTciError::InvalidConfiguration`] for invalid options,
+/// [`crate::TreeTciError::InvalidGraph`] for a malformed topology,
+/// [`crate::TreeTciError::IndexOutOfBounds`] for an out-of-range candidate, and
+/// [`crate::TreeTciError::Operation`] when the evaluator, the pivot search, a factorization the caller's context
+/// refuses, or the materialization solve fails. A failing evaluator can leave a partially updated state.
+pub fn optimize_with_proposer_in<T, F, P>(
+    state: &mut TreeTCI2<T>,
+    evaluate: F,
+    options: &TreeTciOptions,
+    proposer: &P,
+    context: &tensor4all_tensorbackend::CpuExecutionContext,
+) -> TreeTciResult<TreeTciOptimizationResult>
+where
+    T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
+    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    P: PivotCandidateProposer,
+{
+    options.validate()?;
+    with_seeded_streams(options, proposer, |streams| {
+        let evaluator = crate::evaluation::RunEvaluator::new(
+            evaluate,
+            &state.local_dims,
+            options.evaluation_cache_bytes,
+        )?;
+        let mut result = optimize_with_streams(
+            state,
+            |batch| evaluator.call(batch),
+            options,
+            proposer,
+            streams,
+            Some(context),
+        )?;
+        result.evaluation = evaluator.stats();
+        Ok(result)
+    })
+}
+
 /// Optimize with a caller-owned random stream.
 ///
 /// Returns [`TreeTciOptimizationResult`], including the stopping reason.
