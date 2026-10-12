@@ -353,7 +353,8 @@ fn to_treetn_is_independent_of_chunk_size_on_chain_and_branched_tree() {
             let reference_bits = tensor_bits(&tn, n_sites);
             for chunk_points in [1, 7] {
                 let chunked =
-                    to_treetn_chunked(&state, &smooth_eval, Some(center), chunk_points).unwrap();
+                    to_treetn_chunked(&state, &smooth_eval, Some(center), chunk_points, None)
+                        .unwrap();
                 assert_eq!(
                     tensor_bits(&chunked, n_sites),
                     reference_bits,
@@ -642,4 +643,243 @@ fn to_named_treetn_rejects_mismatched_names_and_site_dimensions() {
         .evaluate_point(&[first, unit, second], &[1, 0, 1])
         .unwrap();
     assert_scalar_close(value.real(), 1.0, 1.0, 1e-12);
+}
+
+// --- F3 step 3d: the materialization solve in a caller-owned context ---
+
+mod materialization_context {
+    use super::*;
+    use std::time::Duration;
+    use tenferro_cpu::CpuBackend;
+    use tensor4all_tensorbackend::{
+        with_default_backend, CpuExecutionContext, CpuExecutionContextError,
+    };
+
+    /// A 4-site chain whose nonzero, nonsingular pivot data really reaches the
+    /// solve (`site_tensor_with_parent`), so the fixtures below exercise the
+    /// context-taking route rather than the zero-pivot early return.
+    fn nonzero_state() -> TreeTCI2<f64> {
+        let mut tci = TreeTCI2::<f64>::new(vec![3, 2, 2, 3], four_site_graph()).unwrap();
+        tci.add_global_pivots(&[vec![0, 0, 0, 0]]).unwrap();
+        tci.flush_pivot_errors();
+        tci
+    }
+
+    fn four_site_graph() -> TreeTciGraph {
+        TreeTciGraph::new(
+            4,
+            &[
+                TreeTciEdge::new(0, 1),
+                TreeTciEdge::new(1, 2),
+                TreeTciEdge::new(2, 3),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn smooth(batch: GlobalIndexBatch<'_>) -> Result<Vec<f64>> {
+        let mut values = Vec::with_capacity(batch.n_points());
+        for point in 0..batch.n_points() {
+            let mut total = 1.0;
+            for site in 0..4 {
+                let value = batch.get(site, point).unwrap() as f64;
+                total += value * 0.5 + (site as f64) * value * value;
+            }
+            values.push(total);
+        }
+        Ok(values)
+    }
+
+    fn one_worker_context() -> CpuExecutionContext {
+        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"))
+    }
+
+    fn dense_values(tn: &TreeTN<IdxTensor, usize>) -> Vec<f64> {
+        tn.to_dense().unwrap().to_vec::<f64>().unwrap()
+    }
+
+    #[test]
+    fn to_treetn_chunked_with_a_context_ignores_the_process_global_backend() {
+        // Warm the process-global eager runtime first: publishing a physical
+        // tensor adopts into it, and its *cold* initialization takes the
+        // global context's backend lock, which this test holds. Warm
+        // publication is a cached handle and takes no such lock.
+        let warm_state = nonzero_state();
+        let warm_context = one_worker_context();
+        let _ = to_treetn_chunked(
+            &warm_state,
+            &smooth,
+            Some(1),
+            EVALUATION_CHUNK_POINTS,
+            Some(&warm_context),
+        )
+        .expect("warm-up materialization");
+
+        let legacy =
+            to_treetn_chunked(&warm_state, &smooth, Some(1), EVALUATION_CHUNK_POINTS, None)
+                .expect("legacy materialization");
+
+        // The scoped route must complete *while* the process-global backend is
+        // held by this scope: a materialization that resolved its solve
+        // through the global session would block here, which is the dispatch
+        // evidence. The run happens on a worker thread so a wrong route fails
+        // this test instead of hanging the suite; the panic releases the lock.
+        let scoped = with_default_backend(|_global| {
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let state = nonzero_state();
+                let context = one_worker_context();
+                let result = to_treetn_chunked(
+                    &state,
+                    &smooth,
+                    Some(1),
+                    EVALUATION_CHUNK_POINTS,
+                    Some(&context),
+                );
+                let _ = done_tx.send(());
+                result
+            });
+            match done_rx.recv_timeout(std::time::Duration::from_secs(120)) {
+                Ok(()) => worker.join().expect("worker thread").expect("scoped materialization"),
+                Err(_) => panic!(
+                    "the scoped materialization did not finish while the process-global backend was held"
+                ),
+            }
+        });
+
+        let scoped_values = dense_values(&scoped);
+        let legacy_values = dense_values(&legacy);
+        assert_eq!(scoped_values.len(), legacy_values.len());
+        for (index, (left, right)) in scoped_values.iter().zip(legacy_values.iter()).enumerate() {
+            assert!(
+                (left - right).abs() <= 1e-12 * right.abs().max(1.0),
+                "entry {index}: {left} != {right}"
+            );
+        }
+    }
+
+    #[test]
+    /// The negative control for the dispatch test above: under the same
+    /// held-global condition, the legacy route really does block on that
+    /// resource and then completes once the lock is released, so "the scoped
+    /// route completed" is discriminating evidence. Ignored by default because
+    /// it waits out a bounded timeout.
+    #[ignore = "negative control; waits out a bounded timeout"]
+    fn negative_control_legacy_route_blocks_while_the_global_backend_is_held() {
+        let warm_state = nonzero_state();
+        let warm_context = one_worker_context();
+        let _ = to_treetn_chunked(
+            &warm_state,
+            &smooth,
+            Some(1),
+            EVALUATION_CHUNK_POINTS,
+            Some(&warm_context),
+        )
+        .expect("warm-up materialization");
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker = with_default_backend(|_global| {
+            let worker = std::thread::spawn(move || {
+                let state = nonzero_state();
+                let _ = started_tx.send(());
+                let result =
+                    to_treetn_chunked(&state, &smooth, Some(1), EVALUATION_CHUNK_POINTS, None);
+                let _ = done_tx.send(());
+                result
+            });
+            started_rx
+                .recv_timeout(Duration::from_secs(30))
+                .expect("the worker starts while the global backend is held");
+            match done_rx.recv_timeout(Duration::from_secs(8)) {
+                Ok(()) => panic!("the legacy route completed while the global backend was held"),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("the worker died before reporting: it neither blocked nor completed")
+                }
+            }
+            worker
+        });
+
+        // Released now: the blocked legacy route must have been waiting for this
+        // resource, not failing for another reason.
+        let materialized = worker.join().expect("the worker thread lives");
+        let materialized =
+            materialized.expect("the legacy route completes once the lock is released");
+        assert!(materialized.to_dense().unwrap().maxabs().unwrap() > 0.0);
+    }
+
+    #[test]
+    fn a_zero_pivot_matrix_needs_no_session_on_the_context_route() {
+        // The zero-pivot early return sits above the solve, so a worker may
+        // take the context route even though entering the concrete session
+        // from a worker is refused.
+        let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+        state.add_global_pivots(&[vec![0, 0]]).unwrap();
+        let zero =
+            |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![0.0; batch.n_points()]) };
+        let context = one_worker_context();
+        let pool = ::rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+
+        let tn = pool
+            .install(|| {
+                to_treetn_chunked(
+                    &state,
+                    &zero,
+                    Some(0),
+                    EVALUATION_CHUNK_POINTS,
+                    Some(&context),
+                )
+            })
+            .expect("a zero pivot matrix takes the early return");
+        assert_eq!(tn.to_dense().unwrap().maxabs().unwrap(), 0.0);
+    }
+
+    #[test]
+    fn a_nonzero_solve_from_a_rayon_worker_is_refused_typed() {
+        // The counterpart of the previous test: once a nonzero solve is
+        // reached, the concrete session entry is entered and a worker is
+        // refused rather than silently rerouted.
+        let state = nonzero_state();
+        let context = one_worker_context();
+        let pool = ::rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+
+        let error = pool
+            .install(|| {
+                to_treetn_chunked(
+                    &state,
+                    &smooth,
+                    Some(1),
+                    EVALUATION_CHUNK_POINTS,
+                    Some(&context),
+                )
+            })
+            .expect_err("a worker may not enter the caller's concrete session");
+
+        // The refusal must survive as a typed entry error rather than as text:
+        // walk the source chain to the concrete-session error.
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+        let mut found = false;
+        while let Some(candidate) = source {
+            if let Some(refusal) = candidate.downcast_ref::<CpuExecutionContextError>() {
+                found = matches!(refusal, CpuExecutionContextError::SessionEntry { .. });
+                break;
+            }
+            source = candidate.source();
+        }
+        assert!(
+            found,
+            "the entry refusal must stay in the source chain: {error}"
+        );
+        assert!(
+            format!("{error}").contains("explicit concrete session"),
+            "the refusal must stay visible: {error}"
+        );
+    }
 }

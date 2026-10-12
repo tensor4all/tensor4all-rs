@@ -125,8 +125,10 @@ random stream. 16 sites, local dimension 4, three repetitions per run:
   (`treetci/src/materialize.rs`, `T::solve_right_full_piv_lu`) - reached once per pivot search and again for the
   final tree - which goes to the process-global session through
   `tensor4all-tensorbackend/src/backend.rs`'s solve. That is a different entry from the LUCI helper step 3a
-  threaded, so it is the next candidate; it needs its own design, pre-review and measurement, none of which
-  this record contains.
+  threaded, so it was the next candidate; it has since been threaded and **relocating it showed no clear
+  end-to-end benefit** on this workload (`docs/design/859-f3-materialization-context.md` §6). That is a
+  placement result, not an attribution: the solve's share and the remaining cost's location are both still
+  open, and the next measurement has to accumulate per-component times rather than compare placements.
 
   **The step-3 measurement says the factorization's budget is not where the gap is.** With the process-global
   context fixed at one worker, giving the factorization its own context makes the stage *slower* rather than

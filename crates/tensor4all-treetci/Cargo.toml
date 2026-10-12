@@ -42,5 +42,6 @@ harness = false
 
 [dev-dependencies]
 tenferro-cpu.workspace = true
+rayon.workspace = true
 approx.workspace = true
 quanticsgrids.workspace = true

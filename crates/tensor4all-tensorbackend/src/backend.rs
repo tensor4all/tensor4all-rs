@@ -8,7 +8,7 @@ use num_complex::{Complex32, Complex64, ComplexFloat};
 use tenferro::{DType, Tensor, TensorScalar, TensorSessionOpsExt, TypedTensor};
 use tenferro_linalg::TensorLinalgExt;
 
-use crate::context::with_default_session;
+use crate::context::{with_default_session, CpuExecutionContext};
 use crate::matrix::Matrix;
 
 /// Result of SVD decomposition `A = U * diag(S) * Vt`.
@@ -161,8 +161,8 @@ pub trait BackendLinalgScalar: TensorScalar {}
 /// materialization: it lets an algorithm layer ask for the backend's
 /// full-pivot LU solve without depending on any higher crate. The four
 /// supported scalar types (f32, f64, Complex32, Complex64) are implemented
-/// here; `f32`/`Complex32` inputs are solved in double precision by the
-/// backend and converted back.
+/// here; the backend solves each in its own scalar type along its own kernel
+/// route, and this trait adds no promotion of its own.
 ///
 /// # Errors
 ///
@@ -185,6 +185,35 @@ pub trait FullPivLuScalar: BackendLinalgScalar {
         pivot_rows: usize,
         pivot_cols: usize,
     ) -> std::result::Result<Vec<Self>, BackendLinalgError>;
+
+    /// Same solve, in a caller-owned execution context.
+    ///
+    /// The shapes and values are interpreted exactly as in
+    /// [`Self::solve_right_full_piv_lu`]; only the session that performs the
+    /// solve is the caller's, so the work runs on the caller's backend instead
+    /// of the process-global canonical session. The context is entered after
+    /// the operands are prepared and validated; a caller that must avoid
+    /// entering a session for a degenerate input decides that before calling
+    /// this method (the materialization layer's all-zero pivot shortcut is one
+    /// such caller).
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`BackendLinalgError`] when the pivot matrix is not square
+    /// (a shape mismatch), when the shapes are incompatible (`lhs_cols !=
+    /// pivot_rows`, a shape mismatch), when entering the caller's context is
+    /// rejected - a Rayon worker is refused typed rather than rerouted, with
+    /// the original entry error kept as the source - or when the backend
+    /// full-pivot LU solve fails (a backend failure).
+    fn solve_right_full_piv_lu_in(
+        context: &CpuExecutionContext,
+        lhs_values: &[Self],
+        lhs_rows: usize,
+        lhs_cols: usize,
+        pivot_values: &[Self],
+        pivot_rows: usize,
+        pivot_cols: usize,
+    ) -> std::result::Result<Vec<Self>, BackendLinalgError>;
 }
 
 macro_rules! impl_full_piv_lu_scalar {
@@ -198,49 +227,131 @@ macro_rules! impl_full_piv_lu_scalar {
                 pivot_rows: usize,
                 pivot_cols: usize,
             ) -> std::result::Result<Vec<Self>, BackendLinalgError> {
-                if pivot_rows != pivot_cols {
-                    return Err(BackendLinalgError::from(anyhow::anyhow!(
-                        "full-pivot solve requires a square pivot matrix, got {}x{}",
-                        pivot_rows,
-                        pivot_cols
-                    )));
-                }
-                if lhs_cols != pivot_rows {
-                    return Err(BackendLinalgError::from(anyhow::anyhow!(
-                        "cannot solve T * P = Pi1 with Pi1 shape {}x{} and P shape {}x{}",
-                        lhs_rows,
-                        lhs_cols,
-                        pivot_rows,
-                        pivot_cols
-                    )));
-                }
+                let inputs = FullPivLuSolveInputs::new(
+                    lhs_values,
+                    lhs_rows,
+                    lhs_cols,
+                    pivot_values,
+                    pivot_rows,
+                    pivot_cols,
+                )?;
+                let solved_t =
+                    with_default_session(|session| inputs.solve(session)).map_err(|e| {
+                        BackendLinalgError::from(anyhow::anyhow!("full_piv_lu_solve failed: {e}"))
+                    })?;
+                inputs.finish::<Self>(solved_t)
+            }
 
-                let lhs_t = transpose_column_major(lhs_values, lhs_rows, lhs_cols);
-                let pivot_t = transpose_column_major(pivot_values, pivot_rows, pivot_cols);
-                let pivot_tensor = tenferro_tensor::Tensor::from_vec_col_major(
-                    vec![pivot_cols, pivot_rows],
-                    pivot_t,
-                )
-                .map_err(|e| BackendLinalgError::from(anyhow::Error::new(e)))?;
-                let lhs_tensor =
-                    tenferro_tensor::Tensor::from_vec_col_major(vec![lhs_cols, lhs_rows], lhs_t)
-                        .map_err(|e| BackendLinalgError::from(anyhow::Error::new(e)))?;
-                let solved_t = with_default_session(|session| {
-                    pivot_tensor.full_piv_lu_solve(&lhs_tensor, session)
-                })
-                .map_err(|e| {
-                    BackendLinalgError::from(anyhow::anyhow!("full_piv_lu_solve failed: {e}"))
-                })?;
-
-                let solved_t_values = solved_t.as_slice::<Self>().map_err(|e| {
-                    BackendLinalgError::from(anyhow::anyhow!(
-                        "full_piv_lu_solve returned unexpected dtype: {e}"
-                    ))
-                })?;
-                Ok(transpose_column_major(solved_t_values, lhs_cols, lhs_rows))
+            fn solve_right_full_piv_lu_in(
+                context: &CpuExecutionContext,
+                lhs_values: &[Self],
+                lhs_rows: usize,
+                lhs_cols: usize,
+                pivot_values: &[Self],
+                pivot_rows: usize,
+                pivot_cols: usize,
+            ) -> std::result::Result<Vec<Self>, BackendLinalgError> {
+                let inputs = FullPivLuSolveInputs::new(
+                    lhs_values,
+                    lhs_rows,
+                    lhs_cols,
+                    pivot_values,
+                    pivot_rows,
+                    pivot_cols,
+                )?;
+                // A rejected entry keeps its own error as the source: the
+                // caller asked for its context, so a worker refusal must stay
+                // visible as a refusal rather than as text.
+                let solved_t = context
+                    .with_concrete_session(|session| inputs.solve(session.backend()))
+                    .map_err(|error| BackendLinalgError::from(anyhow::Error::new(error)))?
+                    .map_err(|error| {
+                        BackendLinalgError::from(anyhow::anyhow!(
+                            "full_piv_lu_solve failed: {error}"
+                        ))
+                    })?;
+                inputs.finish::<Self>(solved_t)
             }
         }
     };
+}
+
+/// Validated, transposed operands for a right full-pivot LU solve.
+///
+/// Preparing them is session-free on purpose: an invalid shape must fail
+/// before any context is entered.
+struct FullPivLuSolveInputs {
+    pivot_tensor: tenferro_tensor::Tensor,
+    lhs_tensor: tenferro_tensor::Tensor,
+    lhs_cols: usize,
+    lhs_rows: usize,
+}
+
+impl FullPivLuSolveInputs {
+    fn new<T: BackendLinalgScalar + num_traits::Zero>(
+        lhs_values: &[T],
+        lhs_rows: usize,
+        lhs_cols: usize,
+        pivot_values: &[T],
+        pivot_rows: usize,
+        pivot_cols: usize,
+    ) -> std::result::Result<Self, BackendLinalgError> {
+        if pivot_rows != pivot_cols {
+            return Err(BackendLinalgError::from(anyhow::anyhow!(
+                "full-pivot solve requires a square pivot matrix, got {}x{}",
+                pivot_rows,
+                pivot_cols
+            )));
+        }
+        if lhs_cols != pivot_rows {
+            return Err(BackendLinalgError::from(anyhow::anyhow!(
+                "cannot solve T * P = Pi1 with Pi1 shape {}x{} and P shape {}x{}",
+                lhs_rows,
+                lhs_cols,
+                pivot_rows,
+                pivot_cols
+            )));
+        }
+
+        let lhs_t = transpose_column_major(lhs_values, lhs_rows, lhs_cols);
+        let pivot_t = transpose_column_major(pivot_values, pivot_rows, pivot_cols);
+        let pivot_tensor =
+            tenferro_tensor::Tensor::from_vec_col_major(vec![pivot_cols, pivot_rows], pivot_t)
+                .map_err(|e| BackendLinalgError::from(anyhow::Error::new(e)))?;
+        let lhs_tensor =
+            tenferro_tensor::Tensor::from_vec_col_major(vec![lhs_cols, lhs_rows], lhs_t)
+                .map_err(|e| BackendLinalgError::from(anyhow::Error::new(e)))?;
+        Ok(Self {
+            pivot_tensor,
+            lhs_tensor,
+            lhs_cols,
+            lhs_rows,
+        })
+    }
+
+    fn solve(
+        &self,
+        session: &mut dyn tenferro_tensor::BackendSession,
+    ) -> tenferro_tensor::Result<tenferro_tensor::Tensor> {
+        self.pivot_tensor
+            .full_piv_lu_solve(&self.lhs_tensor, session)
+    }
+
+    fn finish<T: BackendLinalgScalar + num_traits::Zero>(
+        &self,
+        solved_t: tenferro_tensor::Tensor,
+    ) -> std::result::Result<Vec<T>, BackendLinalgError> {
+        let solved_t_values = solved_t.as_slice::<T>().map_err(|e| {
+            BackendLinalgError::from(anyhow::anyhow!(
+                "full_piv_lu_solve returned unexpected dtype: {e}"
+            ))
+        })?;
+        Ok(transpose_column_major(
+            solved_t_values,
+            self.lhs_cols,
+            self.lhs_rows,
+        ))
+    }
 }
 
 impl_full_piv_lu_scalar!(f32);

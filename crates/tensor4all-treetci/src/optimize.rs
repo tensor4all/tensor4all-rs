@@ -699,6 +699,7 @@ where
                 options.tol_margin_global_search,
                 abs_tol,
                 streams.global(),
+                context,
             )?;
             state.add_global_pivots(&pivots)?;
             nglobal_pivots_history.push(pivots.len());

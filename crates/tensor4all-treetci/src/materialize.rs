@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use tensor4all_core::MatrixLuciScalar as Scalar;
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
-use tensor4all_tensorbackend::FullPivLuScalar;
+use tensor4all_tensorbackend::{CpuExecutionContext, FullPivLuScalar};
 use tensor4all_treetn::TreeTN;
 
 /// Materialize a converged TreeTCI state as a `TreeTN`.
@@ -40,7 +40,7 @@ where
     T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
-    to_treetn_chunked(state, &evaluate, center_site, EVALUATION_CHUNK_POINTS)
+    to_treetn_chunked(state, &evaluate, center_site, EVALUATION_CHUNK_POINTS, None)
 }
 
 /// [`to_treetn`] with an explicit number of points per evaluator call.
@@ -51,6 +51,7 @@ pub(crate) fn to_treetn_chunked<T, F>(
     evaluate: &F,
     center_site: Option<usize>,
     chunk_points: usize,
+    context: Option<&CpuExecutionContext>,
 ) -> TreeTciResult<TreeTN<IdxTensor, usize>>
 where
     T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
@@ -69,6 +70,7 @@ where
         &node_names,
         &site_indices,
         chunk_points,
+        context,
     )
 }
 
@@ -101,6 +103,7 @@ where
         node_names,
         site_indices,
         EVALUATION_CHUNK_POINTS,
+        None,
     )
 }
 
@@ -111,6 +114,7 @@ fn to_named_treetn_chunked<T, F, V>(
     node_names: &[V],
     site_indices: &[Vec<DynIndex>],
     chunk_points: usize,
+    context: Option<&CpuExecutionContext>,
 ) -> TreeTciResult<TreeTN<IdxTensor, V>>
 where
     T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
@@ -202,6 +206,7 @@ where
                 &out_keys,
                 evaluate,
                 chunk_points,
+                context,
             )?
         };
 
@@ -236,6 +241,10 @@ where
     TreeTN::from_tensors(tensors, names).map_err(TreeTciError::from)
 }
 
+// INVARIANT: the parameter list is the site's boundary (state, site, parent
+// edge, incoming and outgoing keys, evaluator, chunk size) plus the optional
+// caller context; a parameter object here would be passed straight through.
+#[allow(clippy::too_many_arguments)]
 fn site_tensor_with_parent<T, F>(
     state: &TreeTCI2<T>,
     site: usize,
@@ -244,6 +253,7 @@ fn site_tensor_with_parent<T, F>(
     out_keys: &[SubtreeKey],
     evaluate: &F,
     chunk_points: usize,
+    context: Option<&CpuExecutionContext>,
 ) -> Result<Vec<T>>
 where
     T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
@@ -294,8 +304,13 @@ where
         return Ok(vec![T::zero(); len]);
     }
 
-    T::solve_right_full_piv_lu(&pi1_values, rows, cols, &p_values, p_rows, cols)
-        .map_err(anyhow::Error::from)
+    let solve = match context {
+        Some(context) => {
+            T::solve_right_full_piv_lu_in(context, &pi1_values, rows, cols, &p_values, p_rows, cols)
+        }
+        None => T::solve_right_full_piv_lu(&pi1_values, rows, cols, &p_values, p_rows, cols),
+    };
+    solve.map_err(anyhow::Error::from)
 }
 
 fn site_side_key<T>(state: &TreeTCI2<T>, site: usize, edge: TreeTciEdge) -> Result<SubtreeKey> {

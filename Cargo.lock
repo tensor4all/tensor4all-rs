@@ -3953,6 +3953,7 @@ dependencies = [
  "quanticsgrids",
  "rand 0.9.5",
  "rand_chacha",
+ "rayon",
  "tenferro-cpu",
  "tenferro-linalg",
  "tenferro-tensor",

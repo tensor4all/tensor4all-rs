@@ -1,8 +1,8 @@
-use crate::batch::checked_batch_len;
+use crate::batch::{checked_batch_len, EVALUATION_CHUNK_POINTS};
 use crate::error::Result as TreeTciResult;
 use crate::optimize::{with_seeded_streams, RandomStreams};
 use crate::{
-    materialize::to_treetn, optimize::optimize_with_streams, GlobalIndexBatch, MultiIndex,
+    materialize::to_treetn_chunked, optimize::optimize_with_streams, GlobalIndexBatch, MultiIndex,
     PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciOptions, TreeTciTermination,
 };
 use anyhow::Result;
@@ -159,22 +159,27 @@ where
 /// Interpolate a tree tensor network with a caller-owned execution context.
 ///
 /// The same algorithm, options, stopping rule and streaming as [`crossinterpolate2`]; what differs is the
-/// resource the per-edge MatrixLUCI factorization runs in. Without a context it is assembled through the
-/// process-global CPU context; with one, the factor assembly goes through the context-scoped core entry, which
-/// consults no process-global context.
+/// resource the session-bound stages run in. Without a context they go through the process-global CPU context;
+/// with one, both the per-edge MatrixLUCI factor assembly and the two materializations - the one the global
+/// pivot search performs and the final one - run on the caller's context, through entries that consult no
+/// process-global context.
 ///
-/// **The context covers the factorization only.** The evaluator and the final materialization keep their own
-/// routes, so this is a caller-owned budget for one part of the stage, not for the whole run. **A caller on a
-/// Rayon worker cannot use this entry point**: the concrete session entry rejects worker threads rather than
-/// silently serializing or falling back to the global context, so the run fails typed. Call it from a thread
-/// that owns its execution, as the scoped and held CPU session entries require.
+/// **What is not covered, so that this is a budget for part of the stage and not the whole run:** the caller's
+/// own evaluator, the pivot search's readout (which for a homogeneous single-index tree takes raw message
+/// kernels and cached columns, and can still reach the global session for larger grouped messages, narrow
+/// scalars or generic layouts), and physical tensor publication, which adopts into the process-global eager
+/// runtime. **A caller on a Rayon worker cannot use this entry point**: the concrete session entry rejects
+/// worker threads rather than silently serializing or falling back to the global context, so the run fails
+/// typed once a nonzero solve is reached. Call it from a thread that owns its execution, as the scoped and held
+/// CPU session entries require.
 ///
 /// # Errors
 ///
 /// Returns [`crate::TreeTciError::InvalidConfiguration`] for invalid options, and
 /// [`crate::TreeTciError::Operation`] for the dimension mismatches, invalid initial pivots, callback failures
 /// and backend failures [`crossinterpolate2`] reports - including the concrete-session entry refusal when a
-/// Rayon worker calls this entry point, because the factorization cannot enter the caller's context there.
+/// Rayon worker calls this entry point, because neither the factor assembly nor the materialization solve can
+/// enter the caller's context there.
 ///
 /// # Examples
 ///
@@ -231,8 +236,9 @@ where
 /// Interpolate a tree tensor network on a caller-owned random stream and execution context.
 ///
 /// The caller-stream counterpart of [`crossinterpolate2_in`]: the supplied stream drives every global pivot
-/// search, and the factor assembly runs in `context`. The two are independent, so a caller can advance its own
-/// randomness across runs while keeping the factorization's budget to itself.
+/// search, and the factor assembly and the materialization solve run in `context`. The two are independent, so
+/// a caller can advance its own randomness across runs while keeping those stages' budget to itself. Physical
+/// tensor publication still adopts into the process-global eager runtime.
 ///
 /// # Errors
 ///
@@ -448,7 +454,13 @@ where
     }
 
     let result = optimize_with_streams(&mut tci, evaluate, options, proposer, streams, context)?;
-    let treetn = to_treetn(&tci, evaluate, center_site)?;
+    let treetn = to_treetn_chunked(
+        &tci,
+        &evaluate,
+        center_site,
+        EVALUATION_CHUNK_POINTS,
+        context,
+    )?;
 
     Ok(TreeTciRunResult {
         treetn,

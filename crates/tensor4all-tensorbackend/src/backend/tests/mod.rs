@@ -527,3 +527,144 @@ fn full_piv_lu_matrix_owned_preserves_shape_error() {
     assert_eq!(owned_error, borrowed_error);
     assert!(owned_error.contains("incompatible shapes"), "{owned_error}");
 }
+
+// --- A caller-owned execution context for the full-pivot LU solve ---
+
+fn one_worker_context() -> crate::CpuExecutionContext {
+    let backend = tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend");
+    crate::CpuExecutionContext::from_backend(backend)
+}
+
+/// `T * P = Pi1` with a nontrivial 2x2 pivot and a *rectangular* left-hand
+/// side, so the column-major transposition in the solve is exercised rather
+/// than an identity or square fixture. `convert` maps the real fixture values
+/// into the scalar type under test.
+fn rectangular_operands<T>(mut convert: impl FnMut(f64) -> T) -> (Vec<T>, Vec<T>) {
+    let pivot = [2.0, -1.0, 4.0, 3.0]
+        .into_iter()
+        .map(&mut convert)
+        .collect();
+    let pi1 = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        .into_iter()
+        .map(&mut convert)
+        .collect();
+    (pi1, pivot)
+}
+
+#[test]
+fn the_context_solve_agrees_with_the_legacy_solve_for_f64_and_complex64() {
+    let context = one_worker_context();
+
+    let (pi1, pivot) = rectangular_operands::<f64>(|value| value);
+    let legacy = f64::solve_right_full_piv_lu(&pi1, 3, 2, &pivot, 2, 2).expect("legacy solve");
+    let scoped =
+        f64::solve_right_full_piv_lu_in(&context, &pi1, 3, 2, &pivot, 2, 2).expect("context solve");
+    assert_eq!(legacy, scoped);
+
+    let pivot = vec![
+        Complex64::new(2.0, 1.0),
+        Complex64::new(-1.0, 3.0),
+        Complex64::new(4.0, -2.0),
+        Complex64::new(3.0, 5.0),
+    ];
+    let pi1 = vec![
+        Complex64::new(1.0, 2.0),
+        Complex64::new(2.0, -1.0),
+        Complex64::new(3.0, 0.5),
+        Complex64::new(4.0, -0.5),
+        Complex64::new(5.0, 1.5),
+        Complex64::new(6.0, -2.5),
+    ];
+    let legacy =
+        Complex64::solve_right_full_piv_lu(&pi1, 3, 2, &pivot, 2, 2).expect("legacy solve");
+    let scoped = Complex64::solve_right_full_piv_lu_in(&context, &pi1, 3, 2, &pivot, 2, 2)
+        .expect("context solve");
+    assert_eq!(legacy, scoped);
+}
+
+#[test]
+fn the_narrow_scalars_also_reach_a_nonzero_context_solve() {
+    let context = one_worker_context();
+
+    let (pi1, pivot) = rectangular_operands::<f32>(|value| value as f32);
+    let legacy = f32::solve_right_full_piv_lu(&pi1, 3, 2, &pivot, 2, 2).expect("legacy solve");
+    let scoped =
+        f32::solve_right_full_piv_lu_in(&context, &pi1, 3, 2, &pivot, 2, 2).expect("context solve");
+    assert_eq!(legacy, scoped);
+
+    let pivot = vec![
+        Complex32::new(2.0, 1.0),
+        Complex32::new(-1.0, 3.0),
+        Complex32::new(4.0, -2.0),
+        Complex32::new(3.0, 5.0),
+    ];
+    let pi1 = vec![
+        Complex32::new(1.0, 2.0),
+        Complex32::new(2.0, -1.0),
+        Complex32::new(3.0, 0.5),
+        Complex32::new(4.0, -0.5),
+        Complex32::new(5.0, 1.5),
+        Complex32::new(6.0, -2.5),
+    ];
+    let legacy =
+        Complex32::solve_right_full_piv_lu(&pi1, 3, 2, &pivot, 2, 2).expect("legacy solve");
+    let scoped = Complex32::solve_right_full_piv_lu_in(&context, &pi1, 3, 2, &pivot, 2, 2)
+        .expect("context solve");
+    assert_eq!(legacy, scoped);
+}
+
+#[test]
+fn the_context_solve_keeps_the_shape_validation_and_its_precedence() {
+    let context = one_worker_context();
+    let pivot = vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let pi1 = vec![1.0_f64, 2.0, 3.0, 4.0];
+
+    let legacy = f64::solve_right_full_piv_lu(&pi1, 2, 2, &pivot, 2, 3)
+        .expect_err("a non-square pivot must be refused");
+    let scoped = f64::solve_right_full_piv_lu_in(&context, &pi1, 2, 2, &pivot, 2, 3)
+        .expect_err("a non-square pivot must be refused");
+    assert!(scoped.source.to_string().contains("square pivot matrix"));
+    assert_eq!(legacy.source.to_string(), scoped.source.to_string());
+
+    // An incompatible left-hand side is refused too.
+    let pivot = vec![1.0_f64, 0.0, 0.0, 1.0];
+    let scoped = f64::solve_right_full_piv_lu_in(&context, &pi1, 2, 3, &pivot, 2, 2)
+        .expect_err("an incompatible left-hand side must be refused");
+    assert!(scoped
+        .source
+        .to_string()
+        .contains("cannot solve T * P = Pi1"));
+
+    // With both shapes wrong, the square-pivot check keeps precedence.
+    let scoped = f64::solve_right_full_piv_lu_in(&context, &pi1, 2, 3, &pivot, 2, 3)
+        .expect_err("both shape errors must be refused");
+    assert!(scoped.source.to_string().contains("square pivot matrix"));
+}
+
+#[test]
+fn a_context_solve_from_a_rayon_worker_is_refused_typed() {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .expect("1-thread pool");
+    let (pi1, pivot) = rectangular_operands::<f64>(|value| value);
+    let context = one_worker_context();
+
+    let error = pool
+        .install(|| f64::solve_right_full_piv_lu_in(&context, &pi1, 3, 2, &pivot, 2, 2))
+        .expect_err("a worker entry must be refused");
+    let rendered = format!("{error}");
+    assert!(
+        rendered.contains("explicit concrete session"),
+        "the refusal must stay visible as an entry refusal: {rendered}"
+    );
+    // The refusal keeps its own type as the source instead of being flattened
+    // into the message.
+    assert!(
+        error
+            .source
+            .downcast_ref::<crate::CpuExecutionContextError>()
+            .is_some(),
+        "the entry refusal must be the error's source: {rendered}"
+    );
+}
