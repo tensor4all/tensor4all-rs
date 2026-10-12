@@ -56,5 +56,9 @@ name = "cuda_quickstart"
 required-features = ["tenferro-cuda", "tenferro-cpu-faer"]
 
 [[example]]
+name = "cuda_component_upload"
+required-features = ["tenferro-cuda", "tenferro-cpu-faer"]
+
+[[example]]
 name = "cuda_tree_contraction"
 required-features = ["tenferro-cuda", "tenferro-cpu-faer"]

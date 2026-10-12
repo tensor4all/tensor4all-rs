@@ -82,7 +82,7 @@ fn make_chain_pair() -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
             vec![
                 IdxTensor::from_dense(
                     vec![shared[0].clone(), outputs[0].clone(), bonds[0].clone()],
-                    (0..8).map(|x| num(x)).collect(),
+                    (0..8).map(&num).collect(),
                 )
                 .unwrap(),
                 IdxTensor::from_dense(

@@ -45,6 +45,14 @@ pub enum CudaTreeTNError {
     /// The selected root name had no graph node.
     #[error("CUDA TreeTN root node is missing; repair the network topology")]
     MissingRoot,
+    /// A selected node name has no node in this network.
+    #[error(
+        "CUDA TreeTN upload selected an unknown node name; pick names from node_names(): {name}"
+    )]
+    UnknownNode {
+        /// Name that selected no node.
+        name: String,
+    },
     /// A node index had no tensor payload.
     #[error(
         "CUDA TreeTN node tensor is missing; repair the network before transfer or contraction"
@@ -148,6 +156,96 @@ impl<V> TreeTN<IdxTensor, V>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
+    /// Upload the named nodes into one caller-owned CUDA context.
+    ///
+    /// Component-wise counterpart of [`Self::upload_cuda`]: only the selected nodes are transferred, every other
+    /// node keeps whatever representation it had. The call is staged - all selected transfers happen first, then
+    /// the cloned metadata graph is updated - so a failure changes none of the caller's values and none of its
+    /// graph. The one documented side effect is that a source tensor a failed call had already begun to transfer
+    /// can gain a lazily initialised CPU eager cache.
+    ///
+    /// A partly uploaded network is metadata-accessible but **not contractible**: [`Self::contract_to_tensor_cuda`]
+    /// still requires every node to be resident, and keeps refusing mixed networks. Selection is resolved before
+    /// any transfer starts: an empty selection returns a clone, duplicates are collapsed, and a node already
+    /// resident in `context` is left as it is rather than transferred twice. A node held by a *different* context
+    /// is not classified here - the upload boundary reports it with its own typed error, so nothing is silently
+    /// re-uploaded or silently skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaTreeTNError::UnknownNode`] when a selected name has no node,
+    /// [`CudaTreeTNError::MissingTensor`] when a selected node has no tensor payload, [`CudaTreeTNError::Upload`]
+    /// when one transfer fails (including a source that is not a host value, such as one belonging to another
+    /// context), and [`CudaTreeTNError::Replacement`] when a transferred tensor cannot replace its node in the
+    /// cloned network. None of these publish a partial network.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{CudaExecutionContext, DynIndex, IdxTensor};
+    /// use tensor4all_treetn::{CudaTreeTNError, TreeTN};
+    ///
+    /// let upload: fn(
+    ///     &TreeTN<IdxTensor, usize>,
+    ///     &[usize],
+    ///     &CudaExecutionContext,
+    /// ) -> Result<TreeTN<IdxTensor, usize>, CudaTreeTNError> = TreeTN::upload_nodes_cuda;
+    /// assert_eq!(
+    ///     std::mem::size_of_val(&upload),
+    ///     std::mem::size_of::<fn(
+    ///         &TreeTN<IdxTensor, usize>,
+    ///         &[usize],
+    ///         &CudaExecutionContext,
+    ///     ) -> Result<TreeTN<IdxTensor, usize>, CudaTreeTNError>>(),
+    /// );
+    /// # let _ = (Arc::new(1usize), DynIndex::new_dyn(2), IdxTensor::from_dense(vec![], vec![]));
+    /// ```
+    pub fn upload_nodes_cuda(
+        &self,
+        nodes: &[V],
+        context: &CudaExecutionContext,
+    ) -> Result<Self, CudaTreeTNError> {
+        // Resolve the whole selection before transferring anything.
+        let mut selected: Vec<NodeIndex> = Vec::with_capacity(nodes.len());
+        for name in nodes {
+            let node = self
+                .node_index(name)
+                .ok_or_else(|| CudaTreeTNError::UnknownNode {
+                    name: format!("{name:?}"),
+                })?;
+            if !selected.contains(&node) {
+                selected.push(node);
+            }
+        }
+
+        let mut replacements = Vec::with_capacity(selected.len());
+        for node in selected {
+            let tensor = self
+                .tensor(node)
+                .ok_or(CudaTreeTNError::MissingTensor { node })?;
+            // A node that is already resident in this context is left as it is: the goal is residency, and the
+            // upload boundary rejects a source that is not a host value, so re-selecting it must be a no-op rather
+            // than an error. Whether a *different* context holds the value is not guessed here - the upload
+            // boundary reports that case with its own typed error.
+            if tensor.validate_cuda_residency(context).is_ok() {
+                continue;
+            }
+            let uploaded = tensor
+                .upload_cuda(context)
+                .map_err(|source| CudaTreeTNError::Upload { node, source })?;
+            replacements.push((node, uploaded));
+        }
+
+        let mut result = self.clone();
+        for (node, tensor) in replacements {
+            result
+                .replace_tensor(node, tensor)
+                .map_err(|source| CudaTreeTNError::Replacement { node, source })?;
+        }
+        Ok(result)
+    }
+
     /// Upload every node into one caller-owned CUDA context.
     ///
     /// The source TreeTN and all of its metadata remain unchanged. The returned

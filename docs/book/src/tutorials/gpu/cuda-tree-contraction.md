@@ -52,7 +52,7 @@ cargo run --release -p tensor4all-treetn --example cuda_tree_contraction \
   --features tenferro-cuda,tenferro-cpu-faer -- --chain-length 6 --bond-dim 4 --iterations 10
 ```
 
-| phase | time |
+| phase (one run, cold: the first figure of each shape carries first-use initialisation) | time |
 | --- | ---: |
 | host tree construction | 4.97 ms |
 | CUDA context setup | 198.28 ms |
@@ -64,18 +64,35 @@ cargo run --release -p tensor4all-treetn --example cuda_tree_contraction \
 
 Two things follow, and both are the point of separating the phases:
 
-- **The fixed costs dominate**: one context plus one upload costs about 510 ms, while ten contractions cost
-  1.8 ms. For a workload this small the device route is not worth it; the device only pays off when enough work
-  is amortised against one setup and one transfer.
+- **The first call of a shape is not the shape's cost.** A second, component-wise example separates the transfer
+  from the initialisation that precedes it on first use:
+
+  ```bash
+  cargo run --release -p tensor4all-treetn --example cuda_component_upload \
+    --features tenferro-cuda,tenferro-cpu-faer -- --chain-length 6 --bond-dim 4
+  ```
+
+  On the same machine it reports, for a six-node chain: the first per-node upload `427.42 ms` (that call carries
+  the route's first-use initialisation), the remaining five `0.05–0.09 ms` each, a warmed second pass of `0.32 ms`
+  in total, and the whole-network upload `0.36 ms` then `0.28 ms`. **The transfer itself is sub-millisecond for a
+  chain this size**: the hundreds of milliseconds in the table above are first-use initialisation inside the
+  context and the first transfer, not data movement. The table is worth reading as "what a user pays the first
+  time", and the component example is worth reading as "what the transfer costs once that is paid".
 - **The device is not automatically faster per operation**: 0.176 ms versus 0.138 ms per contraction here. A
   branching tree contraction of small tensors does not have the arithmetic intensity that a device kernel wants.
 
-**What these numbers do not cover, because this crate does not expose it yet:** the *wait* on an asynchronous
-transfer and producer/consumer *overlap*. There is no stream or readiness surface on this route, so transfers are
-synchronous and the example cannot tell "waiting" apart from "working"; the component-wise transfer migration that
-F5 still owes is what would make those two measurable. The SRC route has its own separated breakdown (setup,
-upload, warm-up, steady, download, CPU) in `cuda_src_timing_breakdown` under
-`crates/tensor4all-treetn/tests/cuda_src_contraction.rs`, which is where the mixed workload's numbers live.
+Each per-node call in the component example also clones the network metadata and updates one node, and each
+transfer includes native duplication, a session entry and eager wrapping; the per-node figure is therefore an
+upper bound on the data movement, not a measurement of it alone.
+
+**What these numbers do not cover, because this crate does not expose it yet:** waiting on an asynchronous transfer,
+and producer/consumer overlap. There is no stream, pending-transfer handle or readiness event on this route, so
+every transfer is synchronous: the compute figures are *synchronised compute latency*, and "wait" cannot be told
+apart from "work". Making wait and overlap separately observable needs a stream and pending-handle surface to be
+migrated - that is F5's remaining work, and this tutorial must not be read as evidence that it is done. The SRC
+route has its own separated breakdown (setup, upload, warm-up, steady, download, CPU) in
+`cuda_src_timing_breakdown` under `crates/tensor4all-treetn/tests/cuda_src_contraction.rs`, where its upload figure
+carries the same first-use caveat.
 
 ## Using it from another project
 
