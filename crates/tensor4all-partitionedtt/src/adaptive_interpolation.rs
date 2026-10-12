@@ -646,6 +646,12 @@ where
 /// A patch's random stream is derived from its path and the configured seed, exactly as the Hataori parallel
 /// entry derives it, so the result does not depend on how the lanes were scheduled.
 ///
+/// **Ownership of the result.** The numerical work runs on the lanes' sessions, but the returned patch tensors
+/// are host values adopted into the process-global eager runtime, as every other entry of this module already
+/// produces them. They are usable after the held session has been closed, which is the contract the tests
+/// exercise; they are not bound to the issuing execution. Moving that adoption onto the caller's execution is a
+/// separate change (see `docs/design/859-f4-interpolation-child-executions.md`).
+///
 /// # Errors
 ///
 /// Returns [`PartitionedTTError::InvalidAdaptiveInterpolationInput`] for empty site indices, empty initial

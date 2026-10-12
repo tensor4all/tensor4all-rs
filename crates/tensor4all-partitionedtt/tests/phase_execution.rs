@@ -93,7 +93,7 @@ fn the_phase_entry_matches_the_sequential_entry() {
     );
     let expected_values = dense_values(&sequential);
 
-    for threads in [1usize, 2] {
+    for threads in [1usize, 2, 4] {
         let mut held = held_session(threads);
         let result = adaptiveinterpolate_on_phase::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
             &mut held,

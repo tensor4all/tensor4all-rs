@@ -93,7 +93,7 @@ loops), and projector/cache bookkeeping. Error adaptation must preserve typed fa
 stringify entry failures, and the site solve flattens errors, so an end-to-end typed-rejection assertion needs
 those adapted rather than inherited.
 
-### 2.3 Publication, after issuance closes
+### 2.3 Publication: decided per site, and the decision is recorded on each entry
 
 Results must be usable under the issuing context once the fan-out has ended. The remaining global publication is
 outside TCI2: the interpolation's final assembly, the simplett bridge's `IdxTensor::from_dense` publication, and
@@ -117,10 +117,17 @@ collectively before any blocking collective.
 "A callback error" is defined as the paths that already exist: a malformed batch length is an error, while the
 current evaluators return `T`/`Vec<T>` and cannot fail.
 
-### 2.5 Feature restoration
+### 2.5 Feature restoration: decided, and the answer is not to restore it
 
-Restoring `adaptive-hataori-rayon` to `tensor4all-partitionedtt`'s defaults is an **implementation step gated on
-worker evidence**, not a current fact, and the same change must cover more than one and two workers.
+`adaptive-hataori-rayon` stays **out** of `tensor4all-partitionedtt`'s defaults, now with a reason that is
+measured rather than provisional: its worker callbacks reach the session through the compatibility route, which
+runs them on an unrelated one-thread fallback backend - the split-forcing fixture completes while the process-global
+backend is held, which is exactly that fallback - so restoring it to the defaults would advertise a worker path
+that does not run in the issuing execution. The feature and its tests remain as the legacy path.
+
+The supported worker path is `adaptiveinterpolate_on_phase`, which is not behind a feature at all. That is a
+deliberate departure from `#857`'s step 4, justified by its supersession: the phase entry is what `#859` Phase 4
+asks for, and it is the entry that runs on the caller's lanes.
 
 ### 2.6 Landed: the phase consumer (slice 3a)
 
@@ -132,7 +139,8 @@ session-taking entry from slice 1. Every existing entry - sequential, Hataori, M
 its signature.
 
 Evidence in `crates/tensor4all-partitionedtt/tests/phase_execution.rs`: parity of projectors and dense values with
-the sequential entry for one and two lanes, and the phase completing **while the process-global backend is held**
+the sequential entry for one, two and four lanes (read after the session is closed, which is the ownership
+contract of §2.3), and the phase completing **while the process-global backend is held**
 (a bounded 15 s hold against a sub-second phase, so a wrong route fails the test instead of hanging it).
 
 Lane-level distribution is **not** asserted: which lane takes which item is scheduler-dependent - a wave can hold a
