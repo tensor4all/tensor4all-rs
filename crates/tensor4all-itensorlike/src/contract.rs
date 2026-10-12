@@ -160,11 +160,11 @@ fn to_treetn_options(options: &ContractOptions) -> TreeTNContractionOptions {
 /// execution context.
 ///
 /// The same algorithm, options and validation as [`contract`]; what differs is
-/// the resource the SRC projection runs in. With a context, the method's
-/// session-bound work runs through `context` instead of the process-global
-/// execution context. The Zip-up, Fit and Naive methods are refused with a
-/// typed error rather than silently run on the process-global context: treetn
-/// has no session-taking twin for their canonicalize / sweep / naive paths
+/// the resource the method's numerical work runs in. With a context, SRC runs
+/// through treetn's `contract_src_with_rng_in` and Zip-up through treetn's
+/// `contract_zipup_with_in` (both context-scoped). Fit and Naive are refused
+/// with a typed error rather than silently run on the process-global context:
+/// treetn has no session-taking twin for their sweep / dense-reference paths
 /// yet, which is recorded in the F7 inventory
 /// (`docs/design/859-f7-consumer-inventory.md`).
 ///
@@ -179,11 +179,12 @@ fn to_treetn_options(options: &ContractOptions) -> TreeTNContractionOptions {
 ///
 /// # Errors
 ///
-/// Returns the same errors as [`contract`], plus a backend error when the
-/// caller-owned context refuses the SRC projection, and a typed
-/// [`TensorTrainError::OperationError`] when `options.method()` is not SRC
-/// (the caller-owned route cannot honor the supplied context for those
-/// methods yet).
+/// Returns the same errors as [`contract`], plus a structural error when the
+/// caller-owned context refuses a Zip-up contraction (including a provenance
+/// or factorization refusal), and a typed
+/// [`TensorTrainError::OperationError`] for the Fit and Naive methods (the
+/// caller-owned route cannot honor the supplied context for those methods
+/// yet).
 pub fn contract_in(
     a: &TensorTrain,
     b: &TensorTrain,
@@ -192,11 +193,35 @@ pub fn contract_in(
 ) -> Result<TensorTrain> {
     validate_contraction_inputs(a, b, options)?;
 
+    if matches!(options.method(), ContractMethod::Zipup) {
+        // `validate_contraction_inputs` rejects empty trains, so `len() >= 1`
+        // and the canonical center below cannot underflow.
+        // Use the last site as the canonical center (consistent with existing behavior).
+        let center = a.len() - 1;
+        // Zip-up runs in the caller-owned context through treetn's twin
+        // (`contract_zipup_with_in`): the per-site contractions and
+        // factorizations use the context-scoped core entries.
+        let result_inner = a
+            .as_treetn()
+            .contract_zipup_with_in(
+                b.as_treetn(),
+                &center,
+                CanonicalForm::Unitary,
+                options.svd_policy(),
+                options.max_bond_dim(),
+                context,
+            )
+            .map_err(|e| TensorTrainError::InvalidStructure {
+                message: format!("Zip-up contraction failed: {}", e),
+            })?;
+        return TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary));
+    }
+
     if !matches!(options.method(), ContractMethod::Src) {
-        // Refuse rather than silently run on the process-global context: the
-        // caller explicitly supplied a context, and treetn has no session
-        // twin for the Zip-up/Fit/Naive paths yet (F7 inventory records the
-        // needed treetn-side twins).
+        // Fit and Naive are refused rather than silently run on the
+        // process-global context: the caller explicitly supplied a context,
+        // and treetn has no session twin for their sweep/dense-reference
+        // internals yet (recorded in the F7 inventory).
         return Err(TensorTrainError::OperationError {
             message: format!(
                 "contract_in: the {} method has no caller-owned route yet; use \
@@ -213,6 +238,7 @@ pub fn contract_in(
     }
 
     let mut rng = ChaCha8Rng::seed_from_u64(options.src_options().seed);
+    // `validate_contraction_inputs` rejects empty trains, so `len() >= 1`.
     // Use the last site as the canonical center (consistent with existing behavior).
     let center = a.len() - 1;
     let result_inner = contract_src_with_rng_in(
@@ -269,9 +295,9 @@ impl TensorTrain {
     /// Contract two tensor trains, running the SRC method in a caller-owned
     /// execution context.
     ///
-    /// Same contract as [`crate::contract_in`]; see that function for the
-    /// method coverage and the inventory record of the routes that stay on the
-    /// process-global context.
+    /// Same contract as [`crate::contract_in`]: SRC and Zip-up run in the
+    /// caller-owned context; Fit and Naive are refused with a typed error. See
+    /// that function for the inventory record.
     ///
     /// # Arguments
     /// * `other` - The other tensor train to contract with

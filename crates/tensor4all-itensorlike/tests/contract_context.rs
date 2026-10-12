@@ -14,9 +14,11 @@
 //!   execution context differs),
 //! - validation parity: malformed options fail exactly as on the plain route,
 //! - provenance: global-built inputs are refused with a typed error, and
-//! - delegation: Zip-up, Fit and Naive keep their existing route under
-//!   `contract_in` (the F7 inventory records that exclusion and the treetn-side
-//!   twins they need).
+//! - Zip-up: the same caller-owned route through treetn's
+//!   `contract_zipup_with_in`, agreeing with the plain route to tight
+//!   tolerance, and
+//! - refusal: Fit and Naive are refused with a typed error naming the method
+//!   (the F7 inventory records the treetn-side twins they need).
 
 use tenferro_cpu::CpuBackend;
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
@@ -211,14 +213,40 @@ fn src_route_keeps_same_id_primed_indices_distinct() {
 }
 
 #[test]
-fn non_src_methods_are_refused_instead_of_silently_global() {
+fn zipup_context_route_matches_plain_route() {
+    // Zip-up now has a caller-owned route (treetn's `contract_zipup_with_in`):
+    // the context-built trains run in the supplied context and agree with the
+    // plain route to tight tolerance.
+    let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    let context = one_thread_context();
+    let build = in_context_build(&context);
+    let ctx_a = mpo(&sites, 1, &build);
+    let ctx_b = mpo(&sites, 4, &build);
+    let options = ContractOptions::zipup().with_max_bond_dim(8);
+
+    let (ga, gb) = global_fixture();
+    let plain = contract(&ga, &gb, &options).unwrap();
+    let contextual = contract_in(&ctx_a, &ctx_b, &options, &context).unwrap();
+
+    let (a, b) = (dense(&plain), dense(&contextual));
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(&b) {
+        let scale = x.abs().max(y.abs()).max(1.0);
+        assert!(
+            (x - y).abs() <= 1e-11 * scale,
+            "zip-up context route diverged: |{x} - {y}|"
+        );
+    }
+}
+
+#[test]
+fn fit_and_naive_are_refused_instead_of_silently_global() {
     // A caller who supplies a context must never get a silent process-global
-    // run: Zip-up, Fit and Naive are refused with a typed error naming the
-    // method, plain `contract` stays available for them.
+    // run: Fit and Naive are refused with a typed error naming the method,
+    // plain `contract` stays available for them.
     let (a, b) = global_fixture();
     let context = one_thread_context();
     for (options, name) in [
-        (ContractOptions::zipup().with_max_bond_dim(4), "Zip-up"),
         (ContractOptions::fit().with_max_bond_dim(4), "Fit"),
         (ContractOptions::naive().with_max_bond_dim(4), "Naive"),
     ] {
@@ -230,5 +258,5 @@ fn non_src_methods_are_refused_instead_of_silently_global() {
         );
     }
     // The plain route still runs them.
-    assert!(contract(&a, &b, &ContractOptions::zipup().with_max_bond_dim(4)).is_ok());
+    assert!(contract(&a, &b, &ContractOptions::fit().with_max_bond_dim(4)).is_ok());
 }

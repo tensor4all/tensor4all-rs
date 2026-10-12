@@ -48,8 +48,9 @@ use anyhow::{Context, Result};
 
 use crate::algorithm::CanonicalForm;
 use tensor4all_core::{
-    validate_svd_truncation_options, Canonical, FactorizeAlg, FactorizeOptions, IndexLike,
-    SvdTruncationPolicy, TensorIndex, TensorLike,
+    contract_pair_on_session, factorize_in, validate_svd_truncation_options, Canonical,
+    FactorizeAlg, FactorizeOptions, IndexLike, PairwiseContractionOptions, SvdTruncationPolicy,
+    TensorContractionLike, TensorFactorizationLike, TensorIndex, TensorLike,
 };
 use tensor4all_tensorbackend::{default_cpu_execution_context, ExecutionContext};
 
@@ -92,6 +93,151 @@ fn zipup_factorize_options(
         .validate()
         .context("invalid zipup factorization options")?;
     Ok(options)
+}
+
+// ---------------------------------------------------------------------------
+// Zip-up leaf execution strategy (issue #859 F7)
+// ---------------------------------------------------------------------------
+
+/// Per-leaf execution strategy for the zip-up contraction.
+///
+/// `GlobalLeaves` keeps every existing call site unchanged (process-global
+/// route); `SessionLeaves` runs the same leaves in a caller-owned context and
+/// serves `IdxTensor` networks - the tensor type every in-repo TreeTN network
+/// uses - with a typed error for anything else rather than a silent global
+/// run. The public [`TreeTN::contract_zipup_with_in`] entry selects the
+/// session strategy statically for `IdxTensor` networks.
+trait ZipupLeafOps<T>: Sized
+where
+    T: TensorLike,
+{
+    /// Contract two node tensors.
+    fn contract_pair(&self, lhs: &T, rhs: &T) -> Result<T>;
+
+    /// Contract a small tensor list (the zip-up `R + A + B` blocks).
+    fn contract_list(&self, tensors: &[T]) -> Result<T>;
+
+    /// Factorize `tensor` against `left_inds` (the direct factorization the
+    /// general-graph path used).
+    fn factorize(
+        &self,
+        tensor: &T,
+        left_inds: &[T::Index],
+        options: &FactorizeOptions,
+    ) -> Result<tensor4all_core::FactorizeResult<T>>;
+
+    /// Factorize `tensor` against `left_inds` with the automatic Gram
+    /// shortcut (the chain path's call).
+    fn factorize_auto(
+        &self,
+        tensor: &T,
+        left_inds: &[T::Index],
+        options: &FactorizeOptions,
+    ) -> Result<tensor4all_core::FactorizeResult<T>>;
+}
+
+/// The process-global route: exactly the calls the plain implementation makes.
+struct GlobalLeaves;
+
+impl<T> ZipupLeafOps<T> for GlobalLeaves
+where
+    T: TensorLike + TensorContractionLike + TensorFactorizationLike,
+{
+    fn contract_pair(&self, lhs: &T, rhs: &T) -> Result<T> {
+        lhs.contract_pair(rhs).map_err(anyhow::Error::from)
+    }
+
+    fn contract_list(&self, tensors: &[T]) -> Result<T> {
+        let refs: Vec<&T> = tensors.iter().collect();
+        T::contract(&refs).map_err(anyhow::Error::from)
+    }
+
+    fn factorize(
+        &self,
+        tensor: &T,
+        left_inds: &[T::Index],
+        options: &FactorizeOptions,
+    ) -> Result<tensor4all_core::FactorizeResult<T>> {
+        tensor
+            .factorize(left_inds, options)
+            .map_err(anyhow::Error::from)
+    }
+
+    fn factorize_auto(
+        &self,
+        tensor: &T,
+        left_inds: &[T::Index],
+        options: &FactorizeOptions,
+    ) -> Result<tensor4all_core::FactorizeResult<T>> {
+        tensor
+            .factorize_auto(left_inds, options)
+            .map_err(anyhow::Error::from)
+    }
+}
+
+/// The caller-owned-context route: session-scoped contractions
+/// (`contract_pair_on_session`) and factorizations (`factorize_in`) on
+/// `IdxTensor` networks. The `factorize_auto` Gram shortcut has no
+/// context-scoped twin, so the session strategy uses the direct truncated-SVD
+/// factorization with the same options; results agree to tight tolerance
+/// (recorded in `docs/design/859-f7-consumer-inventory.md`).
+struct SessionLeaves<'a>(&'a tensor4all_tensorbackend::ExecutionContext);
+
+impl ZipupLeafOps<tensor4all_core::IdxTensor> for SessionLeaves<'_> {
+    fn contract_pair(
+        &self,
+        lhs: &tensor4all_core::IdxTensor,
+        rhs: &tensor4all_core::IdxTensor,
+    ) -> Result<tensor4all_core::IdxTensor> {
+        match self.0 {
+            tensor4all_tensorbackend::ExecutionContext::Cpu(cpu) => cpu
+                .with_concrete_session(|session| {
+                    contract_pair_on_session(session, lhs, rhs, PairwiseContractionOptions::new())
+                })
+                .map_err(anyhow::Error::from)?
+                .map_err(anyhow::Error::from),
+            #[allow(unreachable_patterns)]
+            _ => Err(anyhow::anyhow!(
+                "zip-up in a non-CPU execution context is not supported"
+            )),
+        }
+    }
+
+    fn contract_list(
+        &self,
+        tensors: &[tensor4all_core::IdxTensor],
+    ) -> Result<tensor4all_core::IdxTensor> {
+        if tensors.len() == 1 {
+            return Ok(tensors[0].clone());
+        }
+        let mut acc = self.contract_pair(&tensors[0], &tensors[1])?;
+        for tensor in &tensors[2..] {
+            acc = self.contract_pair(&acc, tensor)?;
+        }
+        Ok(acc)
+    }
+
+    fn factorize(
+        &self,
+        tensor: &tensor4all_core::IdxTensor,
+        left_inds: &[tensor4all_core::DynIndex],
+        options: &FactorizeOptions,
+    ) -> Result<tensor4all_core::FactorizeResult<tensor4all_core::IdxTensor>> {
+        factorize_in(tensor, left_inds, options, self.0)
+            .map_err(|error| anyhow::anyhow!("context factorization failed: {error}"))
+    }
+
+    /// The Gram shortcut has no context-scoped twin, so the session route
+    /// factorizes directly with the same options.
+    fn factorize_auto(
+        &self,
+        tensor: &tensor4all_core::IdxTensor,
+        left_inds: &[tensor4all_core::DynIndex],
+        options: &FactorizeOptions,
+    ) -> Result<tensor4all_core::FactorizeResult<tensor4all_core::IdxTensor>> {
+        factorize_in(tensor, left_inds, options, self.0)
+            .map_err(|error| anyhow::anyhow!("context factorization failed: {error}"))
+    }
 }
 
 impl<T, V> TreeTN<T, V>
@@ -464,6 +610,7 @@ where
             svd_policy,
             max_bond_dim,
             ZipupTopologyMode::PruneScalarSubtrees,
+            &GlobalLeaves,
         )
         .map_err(TreeTNOperationError::from)
     }
@@ -488,6 +635,7 @@ where
             svd_policy,
             max_bond_dim,
             ZipupTopologyMode::PreserveInputTopology,
+            &GlobalLeaves,
         )
     }
 
@@ -596,7 +744,8 @@ where
 
     // Inspired by ITensorMPS.jl v0.3.45, commit 794c97d, src/mpo.jl;
     // independently implemented via Rust APIs.
-    fn contract_zipup_chain(
+    #[allow(clippy::too_many_arguments)]
+    fn contract_zipup_chain<L: ZipupLeafOps<T>>(
         &self,
         other: &Self,
         center: &V,
@@ -604,6 +753,7 @@ where
         svd_policy: Option<SvdTruncationPolicy>,
         max_bond_dim: Option<usize>,
         topology_mode: ZipupTopologyMode,
+        leaves: &L,
     ) -> Result<Self>
     where
         V: Ord,
@@ -646,7 +796,7 @@ where
             let tensor_b = tn_b
                 .tensor(node_b)
                 .ok_or_else(|| anyhow::anyhow!("contract_zipup: single tensor missing"))?;
-            let contracted = tensor_a.contract_pair(tensor_b)?;
+            let contracted = leaves.contract_pair(tensor_a, tensor_b)?;
             let mut result = TreeTN::new();
             result.add_tensor(chain[0].clone(), contracted)?;
             result.set_canonical_region([center.clone()])?;
@@ -694,11 +844,12 @@ where
                 .ok_or_else(|| anyhow::anyhow!("contract_zipup: second site bond missing"))?;
 
             let contracted = if let Some(ref remainder) = remainder {
-                T::contract(&[remainder, tensor_a, tensor_b])
+                leaves
+                    .contract_list(&[remainder.clone(), tensor_a.clone(), tensor_b.clone()])
                     .context("contract_zipup: site contraction failed")?
             } else {
-                tensor_a
-                    .contract_pair(tensor_b)
+                leaves
+                    .contract_pair(tensor_a, tensor_b)
                     .context("contract_zipup: first site contraction failed")?
             };
             let left_inds =
@@ -713,9 +864,7 @@ where
             // dimension-one bond via the shared empty-side factorization.
             let factorized =
                 super::factorize_allowing_empty_side(&contracted, &left_inds, |tensor, left| {
-                    tensor
-                        .factorize_auto(left, &factorize_left)
-                        .map_err(anyhow::Error::from)
+                    leaves.factorize_auto(tensor, left, &factorize_left)
                 })
                 .context("contract_zipup: site factorization failed")?;
             result_bonds[site] = Some(factorized.bond_index.clone());
@@ -753,23 +902,26 @@ where
             .tensor(last_b)
             .ok_or_else(|| anyhow::anyhow!("contract_zipup: last tensor missing"))?;
         let final_block = if let Some(ref remainder) = remainder {
-            T::contract(&[
-                remainder,
-                penultimate_tensor_a,
-                penultimate_tensor_b,
-                last_tensor_a,
-                last_tensor_b,
-            ])
-            .context("contract_zipup: final block contraction failed")?
+            leaves
+                .contract_list(&[
+                    remainder.clone(),
+                    penultimate_tensor_a.clone(),
+                    penultimate_tensor_b.clone(),
+                    last_tensor_a.clone(),
+                    last_tensor_b.clone(),
+                ])
+                .context("contract_zipup: final block contraction failed")?
         } else {
-            let block_a = penultimate_tensor_a
-                .contract_pair(last_tensor_a)
+            // Keep the tree-wise pairing of the plain schedule: pair each
+            // tree's last two tensors, then pair the two blocks.
+            let block_a = leaves
+                .contract_pair(penultimate_tensor_a, last_tensor_a)
                 .context("contract_zipup: first final operand failed")?;
-            let block_b = penultimate_tensor_b
-                .contract_pair(last_tensor_b)
+            let block_b = leaves
+                .contract_pair(penultimate_tensor_b, last_tensor_b)
                 .context("contract_zipup: second final operand failed")?;
-            block_a
-                .contract_pair(&block_b)
+            leaves
+                .contract_pair(&block_a, &block_b)
                 .context("contract_zipup: final operand contraction failed")?
         };
         let final_indices = final_block.external_indices();
@@ -801,9 +953,7 @@ where
         } else {
             let factorized =
                 super::factorize_allowing_empty_side(&final_block, &left_inds, |tensor, left| {
-                    tensor
-                        .factorize_auto(left, &factorize_right)
-                        .map_err(anyhow::Error::from)
+                    leaves.factorize_auto(tensor, left, &factorize_right)
                 })
                 .context("contract_zipup: final block factorization failed")?;
             result_bonds[node_count - 2] = Some(factorized.bond_index);
@@ -894,7 +1044,8 @@ where
         Ok(result)
     }
 
-    fn contract_zipup_impl(
+    #[allow(clippy::too_many_arguments)]
+    fn contract_zipup_impl<L: ZipupLeafOps<T>>(
         &self,
         other: &Self,
         center: &V,
@@ -902,6 +1053,7 @@ where
         svd_policy: Option<SvdTruncationPolicy>,
         max_bond_dim: Option<usize>,
         topology_mode: ZipupTopologyMode,
+        leaves: &L,
     ) -> Result<Self>
     where
         V: Ord,
@@ -942,6 +1094,7 @@ where
                         svd_policy,
                         max_bond_dim,
                         topology_mode,
+                        leaves,
                     );
                 }
             }
@@ -973,7 +1126,7 @@ where
                 })?)
                 .ok_or_else(|| anyhow::anyhow!("contract_zipup_with: tensor not found in tn_b"))?;
 
-            let contracted = t_a.contract_pair(t_b)?;
+            let contracted = leaves.contract_pair(t_a, t_b)?;
             let node_name = tn_a
                 .graph
                 .node_name(node_idx)
@@ -1036,8 +1189,8 @@ where
 
             let c_temp = if is_leaf {
                 // Leaf node: contract A[source] * B[source]
-                tensor_a
-                    .contract_pair(&tensor_b)
+                leaves
+                    .contract_pair(&tensor_a, &tensor_b)
                     .context("Failed to contract leaf tensors")?
             } else {
                 // Internal node: contract [R_accumulated..., A[source], B[source]]
@@ -1047,8 +1200,9 @@ where
                 }
                 tensor_list.push(tensor_a);
                 tensor_list.push(tensor_b);
-                let tensor_refs: Vec<&T> = tensor_list.iter().collect();
-                T::contract(&tensor_refs).context("Failed to contract internal node tensors")?
+                leaves
+                    .contract_list(&tensor_list)
+                    .context("Failed to contract internal node tensors")?
             };
 
             // Factorize child tensor and pass the right factor to destination (even if destination is root)
@@ -1077,9 +1231,7 @@ where
             // empty-side factorization instead of being pruned.
             let factorize_result =
                 super::factorize_allowing_empty_side(&c_temp, &left_inds, |tensor, left| {
-                    tensor
-                        .factorize(left, &factorize_options)
-                        .map_err(anyhow::Error::from)
+                    leaves.factorize(tensor, left, &factorize_options)
                 })
                 .context("Failed to factorize")?;
 
@@ -1118,9 +1270,9 @@ where
             let mut tensor_list = r_list;
             tensor_list.push(root_tensor_a);
             tensor_list.push(root_tensor_b);
-            let tensor_refs: Vec<&T> = tensor_list.iter().collect();
-            let root_result =
-                T::contract(&tensor_refs).context("Failed to contract root node tensors")?;
+            let root_result = leaves
+                .contract_list(&tensor_list)
+                .context("Failed to contract root node tensors")?;
 
             // Store root result (no factorization needed)
             result_tensors.insert(root_name.clone(), root_result);
@@ -1404,6 +1556,96 @@ where
         }
 
         Ok(())
+    }
+}
+
+impl<V> TreeTN<tensor4all_core::IdxTensor, V>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    <tensor4all_core::DynIndex as IndexLike>::Id:
+        Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+{
+    /// Contract two TreeTNs with the same topology using zip-up, running the
+    /// contraction's numerical work in a caller-owned execution context.
+    ///
+    /// The same algorithm, arguments and validation as
+    /// [`TreeTN::contract_zipup_with`]; what differs is the resource the
+    /// per-site contractions and factorizations run in (issue #859 F7). They go
+    /// through the context-scoped core entries (`contract_pair_on_session`,
+    /// `factorize_in`) instead of the process-global route. The `Unitary` (SVD)
+    /// form is supported; `LU` and `CI` forms have no context-scoped
+    /// factorization path in core and are refused with a typed error rather
+    /// than silently run on the global context. The `factorize_auto` Gram
+    /// shortcut has no context-scoped twin, so the context route uses the
+    /// direct truncated-SVD factorization with the same options; results agree
+    /// with the plain route to tight tolerance (recorded in
+    /// `docs/design/859-f7-consumer-inventory.md`).
+    ///
+    /// # Arguments
+    /// * `other` - The other TreeTN to contract with (must have same topology)
+    /// * `center` - The center node name towards which to contract
+    /// * `form` - Canonical form (`Unitary` runs in `context`; `LU`/`CI` are refused)
+    /// * `svd_policy` - Optional SVD truncation policy; only valid with `Unitary`.
+    /// * `max_bond_dim` - Optional positive maximum bond dimension; `None` means no cap
+    /// * `context` - The caller-owned execution context the numerics run in
+    ///
+    /// # Returns
+    /// The contracted TreeTN result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the zip-up contraction fails (a shape or index
+    /// mismatch, a backend failure), when the caller-owned context refuses a
+    /// contraction or factorization, or when `form` is `LU`/`CI` (no
+    /// context-scoped factorization path for those forms).
+    ///
+    /// # Examples
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_tensorbackend::{CpuExecutionContext, ExecutionContext};
+    /// use tensor4all_treetn::{CanonicalForm, TreeTN};
+    /// use tenferro_cpu::CpuBackend;
+    /// let site = DynIndex::new_dyn(2);
+    /// let context = ExecutionContext::Cpu(Arc::new(
+    ///     CpuExecutionContext::from_backend(CpuBackend::new())));
+    /// let a = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense_in(&context, vec![site.clone()], vec![1.0, 2.0]).unwrap()],
+    ///     vec![0]).unwrap();
+    /// let b = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense_in(&context, vec![site], vec![1.0, 1.0]).unwrap()],
+    ///     vec![0]).unwrap();
+    /// let result = a.contract_zipup_with_in(&b, &0, CanonicalForm::Unitary, None, None, &context)?;
+    /// assert_eq!(result.node_count(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn contract_zipup_with_in(
+        &self,
+        other: &Self,
+        center: &V,
+        form: CanonicalForm,
+        svd_policy: Option<SvdTruncationPolicy>,
+        max_bond_dim: Option<usize>,
+        context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<Self, TreeTNOperationError>
+    where
+        V: Ord,
+    {
+        if form != CanonicalForm::Unitary {
+            return Err(TreeTNOperationError::from(anyhow::anyhow!(
+                "contract_zipup_with_in: the {form:?} form has no context-scoped                  factorization path; use contract_zipup_with() or the Unitary form"
+            )));
+        }
+        self.contract_zipup_impl(
+            other,
+            center,
+            form,
+            svd_policy,
+            max_bond_dim,
+            ZipupTopologyMode::PruneScalarSubtrees,
+            &SessionLeaves(context),
+        )
+        .map_err(TreeTNOperationError::from)
     }
 }
 
