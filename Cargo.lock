@@ -3166,7 +3166,7 @@ dependencies = [
 [[package]]
 name = "t4a-cubecl"
 version = "0.10.2"
-source = "git+https://github.com/tensor4all/cubecl.git?rev=eb2c8894d585d2d119a1b76fcc3094bc44b73deb#eb2c8894d585d2d119a1b76fcc3094bc44b73deb"
+source = "git+https://github.com/tensor4all/cubecl.git?rev=bf20b930256823f1d9ef62a54f43bbf06dc70f46#bf20b930256823f1d9ef62a54f43bbf06dc70f46"
 dependencies = [
  "half",
  "t4a-cubecl-core",
@@ -3180,7 +3180,7 @@ dependencies = [
 [[package]]
 name = "t4a-cubecl-common"
 version = "0.10.2"
-source = "git+https://github.com/tensor4all/cubecl.git?rev=eb2c8894d585d2d119a1b76fcc3094bc44b73deb#eb2c8894d585d2d119a1b76fcc3094bc44b73deb"
+source = "git+https://github.com/tensor4all/cubecl.git?rev=bf20b930256823f1d9ef62a54f43bbf06dc70f46#bf20b930256823f1d9ef62a54f43bbf06dc70f46"
 dependencies = [
  "backtrace",
  "bytemuck",
@@ -3219,7 +3219,7 @@ dependencies = [
 [[package]]
 name = "t4a-cubecl-core"
 version = "0.10.2"
-source = "git+https://github.com/tensor4all/cubecl.git?rev=eb2c8894d585d2d119a1b76fcc3094bc44b73deb#eb2c8894d585d2d119a1b76fcc3094bc44b73deb"
+source = "git+https://github.com/tensor4all/cubecl.git?rev=bf20b930256823f1d9ef62a54f43bbf06dc70f46#bf20b930256823f1d9ef62a54f43bbf06dc70f46"
 dependencies = [
  "bitflags",
  "bytemuck",
@@ -3246,7 +3246,7 @@ dependencies = [
 [[package]]
 name = "t4a-cubecl-cpp"
 version = "0.10.2"
-source = "git+https://github.com/tensor4all/cubecl.git?rev=eb2c8894d585d2d119a1b76fcc3094bc44b73deb#eb2c8894d585d2d119a1b76fcc3094bc44b73deb"
+source = "git+https://github.com/tensor4all/cubecl.git?rev=bf20b930256823f1d9ef62a54f43bbf06dc70f46#bf20b930256823f1d9ef62a54f43bbf06dc70f46"
 dependencies = [
  "bytemuck",
  "derive-new",
@@ -3262,7 +3262,7 @@ dependencies = [
 [[package]]
 name = "t4a-cubecl-cuda"
 version = "0.10.2"
-source = "git+https://github.com/tensor4all/cubecl.git?rev=eb2c8894d585d2d119a1b76fcc3094bc44b73deb#eb2c8894d585d2d119a1b76fcc3094bc44b73deb"
+source = "git+https://github.com/tensor4all/cubecl.git?rev=bf20b930256823f1d9ef62a54f43bbf06dc70f46#bf20b930256823f1d9ef62a54f43bbf06dc70f46"
 dependencies = [
  "bytemuck",
  "cudarc",
@@ -3279,7 +3279,7 @@ dependencies = [
 [[package]]
 name = "t4a-cubecl-ir"
 version = "0.10.2"
-source = "git+https://github.com/tensor4all/cubecl.git?rev=eb2c8894d585d2d119a1b76fcc3094bc44b73deb#eb2c8894d585d2d119a1b76fcc3094bc44b73deb"
+source = "git+https://github.com/tensor4all/cubecl.git?rev=bf20b930256823f1d9ef62a54f43bbf06dc70f46#bf20b930256823f1d9ef62a54f43bbf06dc70f46"
 dependencies = [
  "derive-new",
  "derive_more",
@@ -3301,7 +3301,7 @@ dependencies = [
 [[package]]
 name = "t4a-cubecl-macros"
 version = "0.10.2"
-source = "git+https://github.com/tensor4all/cubecl.git?rev=eb2c8894d585d2d119a1b76fcc3094bc44b73deb#eb2c8894d585d2d119a1b76fcc3094bc44b73deb"
+source = "git+https://github.com/tensor4all/cubecl.git?rev=bf20b930256823f1d9ef62a54f43bbf06dc70f46#bf20b930256823f1d9ef62a54f43bbf06dc70f46"
 dependencies = [
  "darling 0.23.0",
  "derive-new",
@@ -3317,7 +3317,7 @@ dependencies = [
 [[package]]
 name = "t4a-cubecl-macros-internal"
 version = "0.10.2"
-source = "git+https://github.com/tensor4all/cubecl.git?rev=eb2c8894d585d2d119a1b76fcc3094bc44b73deb#eb2c8894d585d2d119a1b76fcc3094bc44b73deb"
+source = "git+https://github.com/tensor4all/cubecl.git?rev=bf20b930256823f1d9ef62a54f43bbf06dc70f46#bf20b930256823f1d9ef62a54f43bbf06dc70f46"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -3328,7 +3328,7 @@ dependencies = [
 [[package]]
 name = "t4a-cubecl-opt"
 version = "0.10.2"
-source = "git+https://github.com/tensor4all/cubecl.git?rev=eb2c8894d585d2d119a1b76fcc3094bc44b73deb#eb2c8894d585d2d119a1b76fcc3094bc44b73deb"
+source = "git+https://github.com/tensor4all/cubecl.git?rev=bf20b930256823f1d9ef62a54f43bbf06dc70f46#bf20b930256823f1d9ef62a54f43bbf06dc70f46"
 dependencies = [
  "float-ord",
  "log",
@@ -3345,7 +3345,7 @@ dependencies = [
 [[package]]
 name = "t4a-cubecl-runtime"
 version = "0.10.2"
-source = "git+https://github.com/tensor4all/cubecl.git?rev=eb2c8894d585d2d119a1b76fcc3094bc44b73deb#eb2c8894d585d2d119a1b76fcc3094bc44b73deb"
+source = "git+https://github.com/tensor4all/cubecl.git?rev=bf20b930256823f1d9ef62a54f43bbf06dc70f46#bf20b930256823f1d9ef62a54f43bbf06dc70f46"
 dependencies = [
  "ahash",
  "async-channel",
@@ -3374,7 +3374,7 @@ dependencies = [
 [[package]]
 name = "t4a-cubecl-std"
 version = "0.10.2"
-source = "git+https://github.com/tensor4all/cubecl.git?rev=eb2c8894d585d2d119a1b76fcc3094bc44b73deb#eb2c8894d585d2d119a1b76fcc3094bc44b73deb"
+source = "git+https://github.com/tensor4all/cubecl.git?rev=bf20b930256823f1d9ef62a54f43bbf06dc70f46#bf20b930256823f1d9ef62a54f43bbf06dc70f46"
 dependencies = [
  "half",
  "num-traits",
@@ -3390,7 +3390,7 @@ dependencies = [
 [[package]]
 name = "t4a-cubecl-wgpu"
 version = "0.10.2"
-source = "git+https://github.com/tensor4all/cubecl.git?rev=eb2c8894d585d2d119a1b76fcc3094bc44b73deb#eb2c8894d585d2d119a1b76fcc3094bc44b73deb"
+source = "git+https://github.com/tensor4all/cubecl.git?rev=bf20b930256823f1d9ef62a54f43bbf06dc70f46#bf20b930256823f1d9ef62a54f43bbf06dc70f46"
 dependencies = [
  "async-channel",
  "bytemuck",
@@ -3412,7 +3412,7 @@ dependencies = [
 [[package]]
 name = "t4a-cubecl-zspace"
 version = "0.10.2"
-source = "git+https://github.com/tensor4all/cubecl.git?rev=eb2c8894d585d2d119a1b76fcc3094bc44b73deb#eb2c8894d585d2d119a1b76fcc3094bc44b73deb"
+source = "git+https://github.com/tensor4all/cubecl.git?rev=bf20b930256823f1d9ef62a54f43bbf06dc70f46#bf20b930256823f1d9ef62a54f43bbf06dc70f46"
 dependencies = [
  "derive-new",
  "serde",
@@ -3435,7 +3435,7 @@ dependencies = [
 [[package]]
 name = "tenferro-ad"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=ff94aeded9cc98d6c49889c8ef6fca365763d93a#ff94aeded9cc98d6c49889c8ef6fca365763d93a"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=3f802fa1e0d6f008a22e264c1122fd1f7a24ac44#3f802fa1e0d6f008a22e264c1122fd1f7a24ac44"
 dependencies = [
  "computegraph",
  "lru",
@@ -3453,12 +3453,12 @@ dependencies = [
 [[package]]
 name = "tenferro-core-ops"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=ff94aeded9cc98d6c49889c8ef6fca365763d93a#ff94aeded9cc98d6c49889c8ef6fca365763d93a"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=3f802fa1e0d6f008a22e264c1122fd1f7a24ac44#3f802fa1e0d6f008a22e264c1122fd1f7a24ac44"
 
 [[package]]
 name = "tenferro-cpu"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=ff94aeded9cc98d6c49889c8ef6fca365763d93a#ff94aeded9cc98d6c49889c8ef6fca365763d93a"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=3f802fa1e0d6f008a22e264c1122fd1f7a24ac44#3f802fa1e0d6f008a22e264c1122fd1f7a24ac44"
 dependencies = [
  "cblas-inject",
  "cblas-sys",
@@ -3486,7 +3486,7 @@ dependencies = [
 [[package]]
 name = "tenferro-cpu-basic"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=ff94aeded9cc98d6c49889c8ef6fca365763d93a#ff94aeded9cc98d6c49889c8ef6fca365763d93a"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=3f802fa1e0d6f008a22e264c1122fd1f7a24ac44#3f802fa1e0d6f008a22e264c1122fd1f7a24ac44"
 dependencies = [
  "num-complex 0.4.6",
  "num-traits",
@@ -3498,7 +3498,7 @@ dependencies = [
 [[package]]
 name = "tenferro-cpu-fused"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=ff94aeded9cc98d6c49889c8ef6fca365763d93a#ff94aeded9cc98d6c49889c8ef6fca365763d93a"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=3f802fa1e0d6f008a22e264c1122fd1f7a24ac44#3f802fa1e0d6f008a22e264c1122fd1f7a24ac44"
 dependencies = [
  "num-complex 0.4.6",
  "num-traits",
@@ -3512,7 +3512,7 @@ dependencies = [
 [[package]]
 name = "tenferro-einsum"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=ff94aeded9cc98d6c49889c8ef6fca365763d93a#ff94aeded9cc98d6c49889c8ef6fca365763d93a"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=3f802fa1e0d6f008a22e264c1122fd1f7a24ac44#3f802fa1e0d6f008a22e264c1122fd1f7a24ac44"
 dependencies = [
  "computegraph",
  "cpueinsum",
@@ -3534,7 +3534,7 @@ dependencies = [
 [[package]]
 name = "tenferro-gpu"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=ff94aeded9cc98d6c49889c8ef6fca365763d93a#ff94aeded9cc98d6c49889c8ef6fca365763d93a"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=3f802fa1e0d6f008a22e264c1122fd1f7a24ac44#3f802fa1e0d6f008a22e264c1122fd1f7a24ac44"
 dependencies = [
  "cudarc",
  "libloading 0.8.9",
@@ -3556,7 +3556,7 @@ dependencies = [
 [[package]]
 name = "tenferro-internal-cpu-kernels"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=ff94aeded9cc98d6c49889c8ef6fca365763d93a#ff94aeded9cc98d6c49889c8ef6fca365763d93a"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=3f802fa1e0d6f008a22e264c1122fd1f7a24ac44#3f802fa1e0d6f008a22e264c1122fd1f7a24ac44"
 dependencies = [
  "num-complex 0.4.6",
  "num-traits",
@@ -3571,7 +3571,7 @@ dependencies = [
 [[package]]
 name = "tenferro-internal-extension-macros"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=ff94aeded9cc98d6c49889c8ef6fca365763d93a#ff94aeded9cc98d6c49889c8ef6fca365763d93a"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=3f802fa1e0d6f008a22e264c1122fd1f7a24ac44#3f802fa1e0d6f008a22e264c1122fd1f7a24ac44"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3581,7 +3581,7 @@ dependencies = [
 [[package]]
 name = "tenferro-internal-ops"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=ff94aeded9cc98d6c49889c8ef6fca365763d93a#ff94aeded9cc98d6c49889c8ef6fca365763d93a"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=3f802fa1e0d6f008a22e264c1122fd1f7a24ac44#3f802fa1e0d6f008a22e264c1122fd1f7a24ac44"
 dependencies = [
  "computegraph",
  "num-complex 0.4.6",
@@ -3594,7 +3594,7 @@ dependencies = [
 [[package]]
 name = "tenferro-linalg"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=ff94aeded9cc98d6c49889c8ef6fca365763d93a#ff94aeded9cc98d6c49889c8ef6fca365763d93a"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=3f802fa1e0d6f008a22e264c1122fd1f7a24ac44#3f802fa1e0d6f008a22e264c1122fd1f7a24ac44"
 dependencies = [
  "cblas-inject",
  "cblas-sys",
@@ -3626,7 +3626,7 @@ dependencies = [
 [[package]]
 name = "tenferro-runtime"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=ff94aeded9cc98d6c49889c8ef6fca365763d93a#ff94aeded9cc98d6c49889c8ef6fca365763d93a"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=3f802fa1e0d6f008a22e264c1122fd1f7a24ac44#3f802fa1e0d6f008a22e264c1122fd1f7a24ac44"
 dependencies = [
  "computegraph",
  "lru",
@@ -3643,7 +3643,7 @@ dependencies = [
 [[package]]
 name = "tenferro-tensor"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=ff94aeded9cc98d6c49889c8ef6fca365763d93a#ff94aeded9cc98d6c49889c8ef6fca365763d93a"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=3f802fa1e0d6f008a22e264c1122fd1f7a24ac44#3f802fa1e0d6f008a22e264c1122fd1f7a24ac44"
 dependencies = [
  "num-complex 0.4.6",
  "num-traits",
@@ -3656,7 +3656,7 @@ dependencies = [
 [[package]]
 name = "tenferro-tensor-core"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=ff94aeded9cc98d6c49889c8ef6fca365763d93a#ff94aeded9cc98d6c49889c8ef6fca365763d93a"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=3f802fa1e0d6f008a22e264c1122fd1f7a24ac44#3f802fa1e0d6f008a22e264c1122fd1f7a24ac44"
 dependencies = [
  "num-complex 0.4.6",
  "smallvec",
