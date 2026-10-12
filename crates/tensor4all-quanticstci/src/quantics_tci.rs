@@ -15,7 +15,7 @@ use quanticsgrids::{DiscretizedGrid, InherentDiscreteGrid};
 use tensor4all_core::MultiIndexCache;
 use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar};
 use tensor4all_tensorbackend::FullPivLuScalar;
-use tensor4all_treetci::materialize::to_treetn;
+use tensor4all_treetci::materialize::{to_treetn, to_treetn_in};
 use tensor4all_treetci::{
     optimize_with_proposer, optimize_with_proposer_in, DefaultProposer, GlobalIndexBatch, TreeTCI2,
     TreeTciGraph,
@@ -205,15 +205,19 @@ where
     }
 
     let tree_opts = options.to_treetci_options();
-    // The optimizer carries the context to the factor assembly and the materialization solve inside the run; the
-    // final `to_treetn` below still goes through its existing route, which is recorded as the remaining step.
+    // Both session-bound parts of the run carry the context: the optimizer (factor assembly and the search's
+    // materialization solves) and the final materialization below. The caller's function and the readout are
+    // unchanged.
     let result = match context {
         Some(context) => {
             optimize_with_proposer_in(&mut tci, &evaluate, &tree_opts, &DefaultProposer, context)?
         }
         None => optimize_with_proposer(&mut tci, &evaluate, &tree_opts, &DefaultProposer)?,
     };
-    let treetn = to_treetn(&tci, &evaluate, Some(0))?;
+    let treetn = match context {
+        Some(context) => to_treetn_in(&tci, &evaluate, Some(0), context)?,
+        None => to_treetn(&tci, &evaluate, Some(0))?,
+    };
 
     // Convert TreeTN → SimpleTensorTrain<V> via the sanctioned bridge
     let tt: SimpleTensorTrain<V> =
@@ -1229,9 +1233,8 @@ where
 /// in. Without a context it goes through the process-global CPU context; with one, the factor assembly and the
 /// materialization solve inside the run go through `context`.
 ///
-/// The final materialization of the returned tensor train, the caller's own function and the pivot search's readout
-/// are unchanged and still use their existing routes, so this is a caller-owned budget for part of the stage, not
-/// for everything the run touches.
+/// The caller's own function and the pivot search's readout are unchanged and still use their existing routes, so
+/// this is a caller-owned budget for the stage's session-bound work, not for everything the run touches.
 ///
 /// # Errors
 ///

@@ -114,7 +114,7 @@ pub use globalpivot::{find_global_pivots, find_global_pivots_with_rng};
 pub use graph::{TreeTciEdge, TreeTciGraph};
 pub use interpolator::TreeTciInterpolator;
 pub use key::SubtreeKey;
-pub use materialize::to_treetn;
+pub use materialize::{to_treetn, to_treetn_in};
 pub use optimize::{
     optimize_default, optimize_with_proposer, optimize_with_proposer_in,
     optimize_with_proposer_with_rng, TreeTciOptimizationResult, TreeTciOptions, TreeTciTermination,

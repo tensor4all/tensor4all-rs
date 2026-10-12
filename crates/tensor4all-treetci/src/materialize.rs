@@ -43,6 +43,38 @@ where
     to_treetn_chunked(state, &evaluate, center_site, EVALUATION_CHUNK_POINTS, None)
 }
 
+/// Materialize a tree tensor network in a caller-owned CPU context.
+///
+/// The same materialization as [`to_treetn`], with the stage's session-bound work - the factor solves that build
+/// each site tensor - running on `context` instead of the process-global CPU context. The caller's evaluator is
+/// unchanged, and this is the entry a consumer that drives the TCI itself uses for its final materialization, as
+/// `tensor4all-quanticstci` does.
+///
+/// # Errors
+///
+/// Returns [`crate::TreeTciError::InvalidGraph`] for a malformed topology,
+/// [`crate::TreeTciError::IndexOutOfBounds`] for an out-of-range index, and [`crate::TreeTciError::Operation`]
+/// when the evaluator fails, a pivot matrix is singular in a way the solve cannot handle, or the caller's context
+/// refuses a solve.
+pub fn to_treetn_in<T, F>(
+    state: &TreeTCI2<T>,
+    evaluate: F,
+    center_site: Option<usize>,
+    context: &CpuExecutionContext,
+) -> TreeTciResult<TreeTN<IdxTensor, usize>>
+where
+    T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+{
+    to_treetn_chunked(
+        state,
+        &evaluate,
+        center_site,
+        EVALUATION_CHUNK_POINTS,
+        Some(context),
+    )
+}
+
 /// [`to_treetn`] with an explicit number of points per evaluator call.
 ///
 /// The result does not depend on `chunk_points`; tests use it to check that.
