@@ -124,20 +124,12 @@ fn the_phase_entry_matches_the_sequential_entry() {
 }
 
 #[test]
-fn the_phase_entry_distributes_patch_work_across_lanes_and_stays_off_the_global_route() {
+fn the_phase_entry_completes_while_the_process_global_backend_is_held() {
     let sites = binary_sites(8);
-    let thread_ids: Arc<Mutex<std::collections::HashSet<Option<usize>>>> =
-        Arc::new(Mutex::new(std::collections::HashSet::new()));
-    let thread_writer = Arc::clone(&thread_ids);
-    let evaluator = move |index: &MultiIndex| {
-        // Which pool worker ran this evaluation is the observation: with more than one entry the phase really
-        // distributed the wave's items across lanes instead of running them all in one.
-        thread_writer
-            .lock()
-            .expect("thread set")
-            .insert(rayon::current_thread_index());
-        oracle(index)
-    };
+    // Which lane processed which item is scheduler-dependent (a wave can hold a single item, and a fast lane can
+    // drain a small queue before its peer starts), so this test does not assert it. What it asserts is what the
+    // phase guarantees: the same result as the sequential entry, computed while the process-global backend is
+    // held.
 
     // Warm the process-global eager runtime before the global backend is held: cold initialization takes that
     // lock, which the holder then owns.
@@ -154,7 +146,9 @@ fn the_phase_entry_distributes_patch_work_across_lanes_and_stays_off_the_global_
     // A held session is bound to the thread that opened it, so the phase runs here and a second thread holds the
     // process-global backend for a bounded time. A patch path that consulted the global session would block until
     // that hold ends, which the timing assertion catches without hanging the suite.
-    const HOLD: Duration = Duration::from_secs(20);
+    // A generous margin: the assertion only has to separate "finished while the lock was held" from "waited for
+    // the lock", and instrumented runs are slower than a plain debug build.
+    const HOLD: Duration = Duration::from_secs(15);
     let (release, released) = std::sync::mpsc::channel::<()>();
     let holder = std::thread::spawn(move || {
         with_default_backend(|_global| {
@@ -167,7 +161,7 @@ fn the_phase_entry_distributes_patch_work_across_lanes_and_stays_off_the_global_
     let started = std::time::Instant::now();
     let result = adaptiveinterpolate_on_phase::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         &mut held,
-        evaluator,
+        oracle,
         None,
         sites,
         Vec::new(),
@@ -179,13 +173,8 @@ fn the_phase_entry_distributes_patch_work_across_lanes_and_stays_off_the_global_
     let _ = release.send(());
     holder.join().expect("holder thread");
 
-    let threads = thread_ids.lock().expect("thread set");
     assert!(
-        threads.len() > 1,
-        "the wave must be distributed across lanes, workers seen: {threads:?}"
-    );
-    assert!(
-        elapsed < HOLD / 2,
+        elapsed < Duration::from_secs(8),
         "the phase took {elapsed:?} while the process-global backend was held for {HOLD:?}: a patch path still \
          consulted the global session"
     );

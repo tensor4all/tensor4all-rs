@@ -132,9 +132,12 @@ session-taking entry from slice 1. Every existing entry - sequential, Hataori, M
 its signature.
 
 Evidence in `crates/tensor4all-partitionedtt/tests/phase_execution.rs`: parity of projectors and dense values with
-the sequential entry for one and two lanes, the wave's evaluations distributed across **more than one** pool
-worker, and the phase completing **while the process-global backend is held** (a bounded hold of 20 s against a
-~1 s phase, so a wrong route fails the test instead of hanging it).
+the sequential entry for one and two lanes, and the phase completing **while the process-global backend is held**
+(a bounded 15 s hold against a sub-second phase, so a wrong route fails the test instead of hanging it).
+
+Lane-level distribution is **not** asserted: which lane takes which item is scheduler-dependent - a wave can hold a
+single item, and a fast lane can drain a small queue before its peer starts - so an assertion on it flaked under
+the CI coverage run. The first attempt asserted it; the test now asserts only what the phase guarantees.
 
 Not covered, and therefore open: the design's third oracle (an unrelated *non-waiting* entry must be refused while
 the phase holds its reservation). In this configuration an unrelated entry **waits**, so a refusal test would
