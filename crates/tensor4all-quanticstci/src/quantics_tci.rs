@@ -17,7 +17,8 @@ use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetci::materialize::to_treetn;
 use tensor4all_treetci::{
-    optimize_with_proposer, DefaultProposer, GlobalIndexBatch, TreeTCI2, TreeTciGraph,
+    optimize_with_proposer, optimize_with_proposer_in, DefaultProposer, GlobalIndexBatch, TreeTCI2,
+    TreeTciGraph,
 };
 use tensor4all_treetn::treetn_to_tensor_train as bridge_treetn_to_tensor_train;
 
@@ -168,6 +169,7 @@ fn run_treetci_batch<V, F>(
     cache: MemoCache<V>,
     pivots: Vec<Vec<usize>>,
     options: &QtciOptions,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> QtciResult<(TreeTCI2<V>, SimpleTensorTrain<V>, Vec<usize>, Vec<f64>)>
 where
     V: TTScalar
@@ -203,7 +205,14 @@ where
     }
 
     let tree_opts = options.to_treetci_options();
-    let result = optimize_with_proposer(&mut tci, &evaluate, &tree_opts, &DefaultProposer)?;
+    // The optimizer carries the context to the factor assembly and the materialization solve inside the run; the
+    // final `to_treetn` below still goes through its existing route, which is recorded as the remaining step.
+    let result = match context {
+        Some(context) => {
+            optimize_with_proposer_in(&mut tci, &evaluate, &tree_opts, &DefaultProposer, context)?
+        }
+        None => optimize_with_proposer(&mut tci, &evaluate, &tree_opts, &DefaultProposer)?,
+    };
     let treetn = to_treetn(&tci, &evaluate, Some(0))?;
 
     // Convert TreeTN → SimpleTensorTrain<V> via the sanctioned bridge
@@ -725,6 +734,29 @@ where
     F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
     R: rand::Rng + ?Sized,
 {
+    quanticscrossinterpolate_batch_with_rng_impl(grid, f, initial_pivots, options, rng, None)
+}
+
+fn quanticscrossinterpolate_batch_with_rng_impl<V, F, R>(
+    grid: &DiscretizedGrid,
+    f: F,
+    initial_pivots: Option<Vec<Vec<usize>>>,
+    options: QtciOptions,
+    rng: &mut R,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+) -> QtciResult<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
+where
+    V: TTScalar
+        + Default
+        + Clone
+        + 'static
+        + tensor4all_core::TensorElement
+        + tensor4all_core::MatrixLuciScalar
+        + FullPivLuScalar
+        + tensor4all_treetci::globalpivot::ScalarParts,
+    F: Fn(QuanticsBatch<'_, f64>) -> Result<Vec<V>>,
+    R: rand::Rng + ?Sized,
+{
     let local_dims = grid.local_dimensions();
     let cache: MemoCache<V> = Rc::new(RefCell::new(new_memo_cache(&local_dims)?));
     let grid_for_evaluation = grid.clone();
@@ -751,8 +783,14 @@ where
         &mut stream,
     )?;
 
-    let (tci, tt, ranks, errors) =
-        run_treetci_batch(local_dims, evaluate, cache.clone(), pivots, &options)?;
+    let (tci, tt, ranks, errors) = run_treetci_batch(
+        local_dims,
+        evaluate,
+        cache.clone(),
+        pivots,
+        &options,
+        context,
+    )?;
     let cache_stats = memo_cache_stats(&cache);
     Ok((
         QuanticsTensorCI2::from_discretized(tt, tci, grid.clone(), cache_stats),
@@ -1174,6 +1212,81 @@ where
     F: Fn(QuanticsBatch<'_, usize>) -> Result<Vec<V>>,
     R: rand::Rng + ?Sized,
 {
+    quanticscrossinterpolate_discrete_batch_with_rng_impl(
+        size,
+        f,
+        initial_pivots,
+        options,
+        rng,
+        None,
+    )
+}
+
+/// Batched discrete-grid interpolation whose run-time execution runs in a caller-owned CPU context.
+///
+/// The same algorithm, options, stopping rule and diagnostics as
+/// [`quanticscrossinterpolate_discrete_batch`]; what differs is the resource the stage's session-bound work runs
+/// in. Without a context it goes through the process-global CPU context; with one, the factor assembly and the
+/// materialization solve inside the run go through `context`.
+///
+/// The final materialization of the returned tensor train, the caller's own function and the pivot search's readout
+/// are unchanged and still use their existing routes, so this is a caller-owned budget for part of the stage, not
+/// for everything the run touches.
+///
+/// # Errors
+///
+/// Returns the same errors as [`quanticscrossinterpolate_discrete_batch`], plus a
+/// [`QuanticsTCIError::Operation`] when the caller's context refuses a factorization.
+pub fn quanticscrossinterpolate_discrete_batch_in<V, F>(
+    size: &[usize],
+    f: F,
+    initial_pivots: Option<Vec<Vec<usize>>>,
+    options: QtciOptions,
+    context: &tensor4all_tensorbackend::CpuExecutionContext,
+) -> QtciResult<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
+where
+    V: TTScalar
+        + Default
+        + Clone
+        + 'static
+        + tensor4all_core::TensorElement
+        + tensor4all_core::MatrixLuciScalar
+        + FullPivLuScalar
+        + tensor4all_treetci::globalpivot::ScalarParts,
+    F: Fn(QuanticsBatch<'_, usize>) -> Result<Vec<V>>,
+{
+    let mut rng = seeded_quantics_stream(&options);
+    quanticscrossinterpolate_discrete_batch_with_rng_impl(
+        size,
+        f,
+        initial_pivots,
+        options,
+        &mut rng,
+        Some(context),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn quanticscrossinterpolate_discrete_batch_with_rng_impl<V, F, R>(
+    size: &[usize],
+    f: F,
+    initial_pivots: Option<Vec<Vec<usize>>>,
+    options: QtciOptions,
+    rng: &mut R,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+) -> QtciResult<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
+where
+    V: TTScalar
+        + Default
+        + Clone
+        + 'static
+        + tensor4all_core::TensorElement
+        + tensor4all_core::MatrixLuciScalar
+        + FullPivLuScalar
+        + tensor4all_treetci::globalpivot::ScalarParts,
+    F: Fn(QuanticsBatch<'_, usize>) -> Result<Vec<V>>,
+    R: rand::Rng + ?Sized,
+{
     if size.is_empty() {
         return Err(QuanticsTCIError::InvalidConfiguration {
             message: "this method requires at least one grid dimension, got an empty size"
@@ -1233,8 +1346,14 @@ where
         &mut stream,
     )?;
 
-    let (tci, tt, ranks, errors) =
-        run_treetci_batch(local_dims, evaluate, cache.clone(), pivots, &options)?;
+    let (tci, tt, ranks, errors) = run_treetci_batch(
+        local_dims,
+        evaluate,
+        cache.clone(),
+        pivots,
+        &options,
+        context,
+    )?;
     let cache_stats = memo_cache_stats(&cache);
     Ok((
         QuanticsTensorCI2::from_inherent(tt, tci, grid, cache_stats),

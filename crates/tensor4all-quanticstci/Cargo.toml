@@ -42,4 +42,5 @@ rand.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
+tenferro-cpu.workspace = true
 tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-faer"] }
