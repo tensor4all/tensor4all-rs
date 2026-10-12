@@ -6,7 +6,6 @@
 //! unrelated entry waits rather than being refused, so a test asserting a refusal would be asserting the wrong
 //! behaviour; that oracle needs the arbiter's non-waiting entry path and is recorded as still open.
 
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tensor4all_core::{DynIndex, MultiIndex};
