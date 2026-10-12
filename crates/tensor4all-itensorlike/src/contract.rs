@@ -237,24 +237,24 @@ pub fn contract_in(
         return TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary));
     }
 
-    if !matches!(options.method(), ContractMethod::Src) {
-        // Naive is refused rather than silently run on the process-global
-        // context: the caller explicitly supplied a context, and treetn has no
-        // session twin for its dense-reference internals yet (recorded in the
-        // F7 inventory).
-        return Err(TensorTrainError::OperationError {
-            message: format!(
-                "contract_in: the {} method has no caller-owned route yet; use \
-                 `contract()`, or wait for the treetn session twins recorded in \
-                 the F7 inventory",
-                match options.method() {
-                    ContractMethod::Zipup => "Zip-up",
-                    ContractMethod::Fit => "Fit",
-                    ContractMethod::Naive => "Naive",
-                    ContractMethod::Src => "SRC",
-                },
-            ),
-        });
+    if matches!(options.method(), ContractMethod::Naive) {
+        // The Naive dense reference runs in the caller-owned context through
+        // treetn's dispatch (`contract_in` -> `contract_naive_to_treetn_with_leaves`):
+        // its dense product, pairwise product and decomposition factorizations
+        // use the session leaves.
+        // `validate_contraction_inputs` rejects empty trains, so `len() >= 1`.
+        let center = a.len() - 1;
+        let result_inner = tensor4all_treetn::contract_in(
+            a.as_treetn(),
+            b.as_treetn(),
+            &center,
+            to_treetn_options(options),
+            context,
+        )
+        .map_err(|e| TensorTrainError::InvalidStructure {
+            message: format!("TreeTN Naive contraction failed: {}", e),
+        })?;
+        return TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary));
     }
 
     let mut rng = ChaCha8Rng::seed_from_u64(options.src_options().seed);

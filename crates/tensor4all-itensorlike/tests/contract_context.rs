@@ -274,6 +274,49 @@ fn fit_context_route_matches_plain_route() {
     );
 }
 
+/// Regression for the index-identity rule on the Naive route: same-ID indices
+/// that differ by prime level are never conflated. The primed middle site
+/// leaves the dense-reference decomposition without a physical index for the
+/// node (the two same-ID indices differ only in prime level), so both routes
+/// refuse the shape - a route that conflated the primed index with its
+/// unprimed twin would instead succeed.
+#[test]
+fn naive_context_route_refuses_same_id_primed_indices_like_the_plain_route() {
+    let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    let primed_sites: Vec<DynIndex> =
+        vec![sites[0].clone(), sites[1].clone().prime(), sites[2].clone()];
+    let options = ContractOptions::naive()
+        .with_max_bond_dim(8)
+        .with_dense_reference_limit(1 << 20);
+
+    let plain = contract(
+        &mpo(&sites, 1, &global_build),
+        &mpo(&primed_sites, 4, &global_build),
+        &options,
+    )
+    .unwrap_err();
+
+    let context = one_thread_context();
+    let build = in_context_build(&context);
+    let contextual = contract_in(
+        &mpo(&sites, 1, &build),
+        &mpo(&primed_sites, 4, &build),
+        &options,
+        &context,
+    )
+    .unwrap_err();
+
+    let (plain_message, contextual_message) = (format!("{plain}"), format!("{contextual}"));
+    assert!(
+        plain_message.contains("physical indices"),
+        "expected the primed shape to be refused for a missing physical index, got: {plain_message}"
+    );
+    assert!(
+        contextual_message.contains("physical indices"),
+        "the caller-owned route must refuse the primed shape the same way, got: {contextual_message}"
+    );
+}
+
 /// Regression for the index-identity rule on the Fit route: same-ID indices
 /// that differ by prime level are not conflated.
 ///
@@ -327,21 +370,57 @@ fn fit_context_route_handles_same_id_primed_indices_like_the_plain_route() {
 }
 
 #[test]
-fn naive_is_refused_instead_of_silently_global() {
-    // A caller who supplies a context must never get a silent process-global
-    // run: Naive is refused with a typed error naming the method, plain
-    // `contract` stays available for it.
-    let (a, b) = global_fixture();
+fn naive_context_route_matches_plain_route() {
+    // The Naive dense reference now has a caller-owned route (treetn's
+    // `contract_naive_to_treetn_with_leaves` via the context dispatch): the
+    // context-built trains run in the supplied context and agree with the
+    // plain route to tight tolerance.
+    let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
     let context = one_thread_context();
+    let build = in_context_build(&context);
+    let ctx_a = mpo(&sites, 1, &build);
+    let ctx_b = mpo(&sites, 4, &build);
     let options = ContractOptions::naive()
-        .with_max_bond_dim(4)
+        .with_max_bond_dim(8)
         .with_dense_reference_limit(1 << 20);
-    let error = contract_in(&a, &b, &options, &context).unwrap_err();
-    let message = format!("{error}");
+
+    let (ga, gb) = global_fixture();
+    let plain = contract(&ga, &gb, &options).unwrap();
+    let contextual = contract_in(&ctx_a, &ctx_b, &options, &context).unwrap();
+
+    let (a, b) = (dense(&plain), dense(&contextual));
+    assert_eq!(a.len(), b.len());
+    let difference: f64 = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| (x - y).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    let reference: f64 = a.iter().map(|x| x.powi(2)).sum::<f64>().sqrt();
+    let residual = difference / reference.max(1e-30);
     assert!(
-        message.contains("Naive") && message.contains("no caller-owned route"),
-        "expected a typed refusal naming Naive, got: {message}"
+        residual <= 1e-10,
+        "naive context route residual {residual} exceeds 1e-10"
     );
-    // The plain route still runs it.
-    assert!(contract(&a, &b, &options).is_ok());
+}
+
+#[test]
+fn naive_context_route_requires_the_dense_reference_limit() {
+    // Without a dense-reference limit both routes refuse before any dense
+    // work; the caller-owned route keeps that contract.
+    let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    let context = one_thread_context();
+    let build = in_context_build(&context);
+    let options = ContractOptions::naive().with_max_bond_dim(4);
+    let error = contract_in(
+        &mpo(&sites, 1, &build),
+        &mpo(&sites, 4, &build),
+        &options,
+        &context,
+    )
+    .unwrap_err();
+    assert!(
+        format!("{error}").contains("dense/reference limit"),
+        "expected the dense-reference refusal, got: {error}"
+    );
 }

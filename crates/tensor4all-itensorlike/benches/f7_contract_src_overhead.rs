@@ -183,6 +183,55 @@ fn bench_context_fit(criterion: &mut Criterion) {
     });
 }
 
+fn bench_plain_naive(criterion: &mut Criterion) {
+    pin_one_thread();
+    let sites: Vec<DynIndex> = (0..6).map(|_| DynIndex::new_dyn(2)).collect();
+    let global = |seed: usize| {
+        mpo(&sites, seed, &|indices, values| {
+            IdxTensor::from_dense(indices, values).expect("global node")
+        })
+    };
+    let a = global(1);
+    let b = global(4);
+    let options = ContractOptions::naive()
+        .with_max_bond_dim(16)
+        .with_dense_reference_limit(1 << 20);
+    let mut group = criterion.benchmark_group("f7/plain-naive");
+    group.measurement_time(Duration::from_millis(800));
+    group.bench_function("one_thread_global_route", |bench| {
+        bench.iter_batched(
+            || (a.clone(), b.clone()),
+            |(a, b)| contract(black_box(&a), black_box(&b), &options),
+            BatchSize::SmallInput,
+        )
+    });
+}
+
+fn bench_context_naive(criterion: &mut Criterion) {
+    pin_one_thread();
+    let sites: Vec<DynIndex> = (0..6).map(|_| DynIndex::new_dyn(2)).collect();
+    let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
+        CpuBackend::with_threads(1).expect("1T backend"),
+    )));
+    let build = |indices: Vec<DynIndex>, values: Vec<f64>| {
+        IdxTensor::from_dense_in(&context, indices, values).expect("in-context node")
+    };
+    let a = mpo(&sites, 1, &build);
+    let b = mpo(&sites, 4, &build);
+    let options = ContractOptions::naive()
+        .with_max_bond_dim(16)
+        .with_dense_reference_limit(1 << 20);
+    let mut group = criterion.benchmark_group("f7/context-naive");
+    group.measurement_time(Duration::from_millis(800));
+    group.bench_function("one_thread_caller_owned", |bench| {
+        bench.iter_batched(
+            || (a.clone(), b.clone()),
+            |(a, b)| contract_in(black_box(&a), black_box(&b), &options, &context),
+            BatchSize::SmallInput,
+        )
+    });
+}
+
 fn bench_plain(criterion: &mut Criterion) {
     pin_one_thread();
     let sites: Vec<DynIndex> = (0..6).map(|_| DynIndex::new_dyn(2)).collect();
@@ -235,6 +284,8 @@ criterion_group!(
     bench_plain_zipup,
     bench_context_zipup,
     bench_plain_fit,
-    bench_context_fit
+    bench_context_fit,
+    bench_plain_naive,
+    bench_context_naive
 );
 criterion_main!(benches);

@@ -167,7 +167,30 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
-    factorize_tensor_to_treetn_with_root_impl(tensor, topology, options, root)
+    factorize_tensor_to_treetn_with_root_impl(
+        tensor,
+        topology,
+        options,
+        root,
+        &crate::treetn::contraction::GlobalLeaves,
+    )
+    .map_err(TreeTNOperationError::from)
+}
+
+/// The same decomposition with an explicit leaf strategy (issue #859 F7).
+pub(crate) fn factorize_tensor_to_treetn_with_leaves<T, V>(
+    tensor: &T,
+    topology: &TreeTopology<V, T::Index>,
+    options: FactorizeOptions,
+    root: &V,
+    leaves: &dyn crate::treetn::contraction::LeafOps<T>,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+{
+    factorize_tensor_to_treetn_with_root_impl(tensor, topology, options, root, leaves)
         .map_err(TreeTNOperationError::from)
 }
 
@@ -176,6 +199,7 @@ fn factorize_tensor_to_treetn_with_root_impl<T, V>(
     topology: &TreeTopology<V, T::Index>,
     options: FactorizeOptions,
     root: &V,
+    leaves: &dyn crate::treetn::contraction::LeafOps<T>,
 ) -> Result<TreeTN<T, V>>
 where
     T: TensorLike,
@@ -371,8 +395,8 @@ where
         // Perform factorization using TensorFactorizationLike::factorize
         // left will have the node's physical indices + bond index
         // right will have bond index + remaining indices
-        let factorize_result = current_tensor
-            .factorize(&left_inds, &factorize_options)
+        let factorize_result = leaves
+            .factorize(&current_tensor, &left_inds, &factorize_options)
             .map_err(|e| anyhow::anyhow!("Factorization failed: {:?}", e))?;
 
         let left_indices = factorize_result.left.external_indices();

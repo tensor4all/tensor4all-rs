@@ -483,6 +483,17 @@ where
     where
         V: Ord,
     {
+        self.contract_to_tensor_with_leaves(&GlobalLeaves)
+    }
+
+    /// The same contraction with an explicit leaf strategy (issue #859 F7).
+    pub(crate) fn contract_to_tensor_with_leaves(
+        &self,
+        leaves: &dyn LeafOps<T>,
+    ) -> std::result::Result<T, TreeTNOperationError>
+    where
+        V: Ord,
+    {
         if self.node_count() == 0 {
             return Err(anyhow::anyhow!("Cannot contract empty TreeTN").into());
         }
@@ -541,7 +552,8 @@ where
 
             // Contract and store result at `to`
             // (bond indices are auto-detected via is_contractable)
-            let contracted = T::contract(&[&to_tensor, &from_tensor])
+            let contracted = leaves
+                .contract_list(&[to_tensor.clone(), from_tensor.clone()])
                 .context("Failed to contract along edge")?;
             tensors.insert(to, contracted);
         }
@@ -1520,6 +1532,21 @@ where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
+        self.contract_naive_with_leaves(other, &GlobalLeaves)
+    }
+
+    /// The same dense-reference contraction with an explicit leaf strategy
+    /// (issue #859 F7).
+    pub(crate) fn contract_naive_with_leaves(
+        &self,
+        other: &Self,
+        leaves: &dyn LeafOps<T>,
+    ) -> std::result::Result<T, TreeTNOperationError>
+    where
+        V: Ord,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
         // 1. Verify topologies are compatible
         if !self.same_topology(other) {
             return Err(
@@ -1533,19 +1560,19 @@ where
 
         // 3. Convert both networks to full tensors
         let tensor1 = tn1
-            .contract_to_tensor()
+            .contract_to_tensor_with_leaves(leaves)
             .map_err(|e| anyhow::anyhow!("contract_naive: failed to contract tn1: {}", e))?;
         let tensor2 = tn2
-            .contract_to_tensor()
+            .contract_to_tensor_with_leaves(leaves)
             .map_err(|e| anyhow::anyhow!("contract_naive: failed to contract tn2: {}", e))?;
 
         // 4. Exact pairwise product over common site indices. If the caller
         // explicitly asks for a reference product with no common site indices
         // (for example partial_contract with an empty spec), this is the
         // corresponding outer product reference.
-        tensor1
-            .contract_pair(&tensor2)
-            .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))
+        leaves
+            .contract_pair(&tensor1, &tensor2)
+            .map_err(TreeTNOperationError::from)
     }
 
     /// Validate that `canonical_region` and edge `ortho_towards` are consistent.
@@ -2427,9 +2454,9 @@ fn fit_options_from(options: &ContractionOptions) -> FitContractionOptions {
 /// The same validation and method dispatch as [`contract`]; what differs is
 /// the resource each method's numerical work runs in. Zip-up, Fit and SRC go
 /// through their context-scoped twins (`contract_zipup_with_in`,
-/// `contract_fit_in`, `contract_src_with_rng_in`); Naive has no context-scoped
-/// dense-reference path yet and is refused with a typed error rather than
-/// silently run on the process-global context.
+/// `contract_fit_in`, `contract_src_with_rng_in`); the Naive dense reference
+/// also runs in `context` (its dense product, the pairwise product and the
+/// decomposition's factorizations go through the session leaves).
 ///
 /// # Arguments
 /// * `tn_a` - The first TreeTN
@@ -2461,12 +2488,6 @@ where
         Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
 {
     validate_contract_options(&options)?;
-    if options.method == ContractionMethod::Naive {
-        return Err(TreeTNOperationError::from(anyhow::anyhow!(
-            "contract_in: the Naive method has no caller-owned route yet; use \
-             contract() or the Zipup/Fit/Src methods"
-        )));
-    }
     tn_a.validate_context(context)?;
     tn_b.validate_context(context)?;
 
@@ -2486,11 +2507,18 @@ where
             let mut rng = ChaCha8Rng::seed_from_u64(options.src_options.seed);
             contract_src_with_rng_in(tn_a, tn_b, center, options, &mut rng, context)
         }
-        // Refused above; kept as a typed error so no unreachable panic exists
-        // in the library path.
-        ContractionMethod::Naive => Err(TreeTNOperationError::from(anyhow::anyhow!(
-            "contract_in: the Naive method has no caller-owned route yet"
-        ))),
+        ContractionMethod::Naive => {
+            validate_naive_dense_reference_limit(tn_a, tn_b, &options)?;
+            contract_naive_to_treetn_with_leaves(
+                tn_a,
+                tn_b,
+                center,
+                options.max_bond_dim,
+                options.svd_policy,
+                options.qr_rtol,
+                &SessionLeaves(context.clone()),
+            )
+        }
     }
 }
 /// Contract two TreeTNs using the specified method.
@@ -2784,6 +2812,34 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
+    contract_naive_to_treetn_with_leaves(
+        tn_a,
+        tn_b,
+        center,
+        max_bond_dim,
+        svd_policy,
+        qr_rtol,
+        &GlobalLeaves,
+    )
+}
+
+/// The same dense-reference contraction-to-TreeTN with an explicit leaf
+/// strategy (issue #859 F7; used by the caller-owned `contract_in` Naive
+/// branch).
+pub(crate) fn contract_naive_to_treetn_with_leaves<T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    max_bond_dim: Option<usize>,
+    svd_policy: Option<SvdTruncationPolicy>,
+    qr_rtol: Option<f64>,
+    leaves: &dyn LeafOps<T>,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike + tensor4all_core::TensorFactorizationLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
     // Validate the truncation request before any dense work, so the scalar and
     // single-node shortcuts below cannot accept invalid options either.
     if qr_rtol.is_some() {
@@ -2804,8 +2860,8 @@ where
         .validate()
         .context("contract_naive_to_treetn: invalid truncation options")?;
 
-    // 1. Contract to full tensor using existing contract_naive
-    let contracted_tensor = tn_a.contract_naive(tn_b)?;
+    // 1. Contract to full tensor using the shared dense-reference path
+    let contracted_tensor = tn_a.contract_naive_with_leaves(tn_b, leaves)?;
 
     // Handle rank-0 (scalar) result: wrap directly in a single-node TreeTN
     if contracted_tensor.external_indices().is_empty() {
@@ -2816,7 +2872,7 @@ where
     }
 
     // 2. Build topology from tn_a's structure and decompose
-    use super::decompose::factorize_tensor_to_treetn_with;
+    use super::decompose::factorize_tensor_to_treetn_with_leaves;
 
     // Build topology using full indices (not positions).
     // Consider site indices from BOTH tn_a and tn_b, since the contracted result
@@ -2869,8 +2925,13 @@ where
     let topology = super::decompose::TreeTopology::new(nodes, edges);
 
     // 3. Decompose back to TreeTN, honoring the caller's truncation options.
-    let result =
-        factorize_tensor_to_treetn_with(&contracted_tensor, &topology, factorize_options, center)?;
+    let result = factorize_tensor_to_treetn_with_leaves(
+        &contracted_tensor,
+        &topology,
+        factorize_options,
+        center,
+        leaves,
+    )?;
 
     Ok(result)
 }
