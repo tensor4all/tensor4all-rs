@@ -40,6 +40,10 @@ tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 name = "g0_stage_budget"
 harness = false
 
+[[bench]]
+name = "stage_components"
+harness = false
+
 [dev-dependencies]
 tenferro-cpu.workspace = true
 rayon.workspace = true

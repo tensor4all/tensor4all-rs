@@ -150,3 +150,51 @@ random stream. 16 sites, local dimension 4, three repetitions per run:
 - Limits: one machine, one tree shape, release build, a cheap integrator, and (for the CPU figures) `USER_HZ`
   at 10 ms granularity. No per-operation or per-worker attribution, no CUDA path, and no downstream
   reproduction.
+
+## 3. Measured: the stage's cost is the search's readout, and the worker penalty is in the session-bound machinery
+
+`crates/tensor4all-treetci/benches/stage_components.rs` (`harness = false`) splits the same G0-shaped stage using
+only the public API: it grows a state with the stage's own optimizer (unmeasured fixture), then measures the
+caller's oracle directly (ns per point), a materialization of that state (`to_treetn`, its oracle points counted),
+a global pivot search of that state at the run's own search budget (`find_global_pivots`), and the end-to-end run
+with and without the search. Release build, three repetitions, medians, local AMD EPYC 7713P, 8-site chain,
+local dimension 4, `max_bond_dim = 16`, `max_iter = 30`, the state converged to ranks `[2, 2, 2]` in 3 iterations,
+default search budget (`nsearch = 5`, `max_nglobal_pivot = 5`):
+
+| component (median) | 1 worker | 4 workers | change |
+| --- | ---: | ---: | ---: |
+| caller's oracle | 27.4 ns/point | 27.2 ns/point | - |
+| materialize the state: total | 0.124 ms | 0.243 ms | +96% |
+| - of which machinery (solve + publication + tree) | 0.120 ms | 0.240 ms | +100% |
+| - of which the caller's oracle | 0.004 ms | 0.004 ms | - |
+| one search at the run's budget: total | 1.787 ms | 1.906 ms | +7% |
+| - of which the readout (`total - oracle - materialization`) | 1.657 ms | 1.669 ms | +1% |
+| the whole stage, search on | 6.180 ms | 7.485 ms | +21% |
+| the whole stage, search off (ablation) | 1.023 ms | 1.974 ms | +93% |
+
+Derived from those numbers (the search's contribution is the difference of the two stage rows, divided by the
+per-search figure):
+
+- **The global pivot search is ~83% of the stage at one worker and ~74% at four**: `6.180 - 1.023 = 5.157 ms`
+  against `1.787 ms` per search gives **2.9 searches**, i.e. one per non-final sweep of a run that converged in
+  3 iterations - the same count at four workers (`5.511 / 1.906 = 2.9`).
+- **Within a search the readout dominates**: 92% of it at one worker, 88% at four. Three searches put it at
+  ~80% (one worker) / ~67% (four) of the whole stage.
+- **The session-bound machinery is small but not negligible**: a materialization is ~0.12 ms of which ~0.004 ms
+  is the caller's oracle; with one per search plus the final one, that is ~0.5 ms, ~8% of the one-worker stage
+  (~13% at four). The caller's own function is ~1.5% of the stage.
+- **The worker penalty is in the machinery, not in the readout.** Doubling the worker count doubles the
+  materialization's machinery and doubles the non-search part of the stage (`0.962 -> 1.913 ms`), while the
+  readout is flat (`1.657 -> 1.669 ms`). The stage's +21% is the sum of a doubled machinery and the extra work
+  each search's materialization now does.
+
+That is consistent with both placement results earlier in this record: threading the factorization (step 3a) or
+the materialization solve (step 3d) into a caller-owned context changed nothing end-to-end, and by this
+attribution it could not - the penalty follows the work into whichever context performs it, and the work it
+follows is ~8-13% of the stage rather than the readout that dominates.
+
+**Caveats, stated because these are differences of measured quantities rather than internal instrumentation:**
+the oracle share assumes the caller's per-point cost is constant across stages; the readout figure absorbs
+whatever else a search does; the component search and materialization are measured on the converged state while
+the run's earlier searches act on smaller states; and this is one machine, one shape and one search budget.
+What the numbers establish is the ordering and the worker-count dependence, not an exact time budget.

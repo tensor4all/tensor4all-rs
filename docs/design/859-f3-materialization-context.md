@@ -131,7 +131,11 @@ schedule measurement.
 
 Attributing the stage would need accumulated per-component times (solve, preparation, publication, oracle
 evaluation, search/readout) rather than a placement comparison, and a budget question would need a wider sweep
-of global/caller combinations than the four above. Neither is in this step.
+of global/caller combinations than the four above. **That attribution has since been made**:
+`859-f3-g0-stage-budget.md` §3 measures the components and finds the search's *readout* to be ~67-80% of the
+stage while the session-bound materialization machinery is ~8-13%, with the worker penalty living in that
+machinery (it doubles) rather than in the readout (which is flat). So this step's neutral result is explained:
+the cost this step moved was never the dominant one, and the penalty follows the work into any context.
 
 Together with step 3a this leaves two verified negative results and one falsified hypothesis: the factorization
 is not where the gap is (step 3a); relocating the solve does not move the stage either (here); and the readout
