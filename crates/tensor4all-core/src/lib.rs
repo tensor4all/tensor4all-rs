@@ -74,6 +74,7 @@ pub use indexset::{IndexSet, LocalIndex, MultiIndex};
 pub use matrix_luci::{
     matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix,
     matrix_luci_factors_from_matrix_owned, matrix_luci_factors_from_matrix_owned_in,
+    matrix_luci_factors_from_matrix_owned_on_session,
     matrix_luci_factors_working_bytes, matrix_luci_row_interpolation_owned_in, MatrixLUCI,
     MatrixLuciFactors, MatrixLuciRowInterpolation,
 };

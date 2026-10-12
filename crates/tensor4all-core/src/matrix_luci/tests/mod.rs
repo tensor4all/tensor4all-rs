@@ -262,17 +262,17 @@ fn timed_hilbert_matrix_luci_once(size: usize, left_orthogonal: bool) -> MatrixL
 
     let start = Instant::now();
     let left = if left_orthogonal {
-        rrlu_cols_times_pivot_solve(&lu, Linalg::Global).unwrap()
+        rrlu_cols_times_pivot_solve(&lu, &mut Linalg::Global).unwrap()
     } else {
-        rrlu_colmatrix(&lu, Linalg::Global).unwrap()
+        rrlu_colmatrix(&lu, &mut Linalg::Global).unwrap()
     };
     timing.left_factor = start.elapsed();
 
     let start = Instant::now();
     let right = if left_orthogonal {
-        rrlu_rowmatrix(&lu, Linalg::Global).unwrap()
+        rrlu_rowmatrix(&lu, &mut Linalg::Global).unwrap()
     } else {
-        rrlu_pivot_solve_times_rows(&lu, Linalg::Global).unwrap()
+        rrlu_pivot_solve_times_rows(&lu, &mut Linalg::Global).unwrap()
     };
     timing.right_factor = start.elapsed();
 

@@ -14,6 +14,7 @@ use crate::matrixluci::PivotKernel;
 use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
 use tensor4all_tensorbackend::{
+    explicit::Session,
     mat_mul_owned, submatrix, triangular_solve_matrix_owned, CpuExecutionContext, Matrix,
 };
 
@@ -22,14 +23,19 @@ use tensor4all_tensorbackend::{
 /// `Global` keeps the compatibility routes of the legacy entry points;
 /// `Context` runs every operation in one explicit concrete session of the
 /// caller's context and never consults the process-global default.
-#[derive(Clone, Copy)]
-pub(crate) enum Linalg<'a> {
+pub(crate) enum Linalg<'a, 'session> {
     Global,
     Context(&'a CpuExecutionContext),
+    /// A caller-supplied session, entered by the caller rather than opened here.
+    ///
+    /// This is the form a worker lane uses: the session was entered by the phase that owns
+    /// the worker, so re-entering a context here would either be refused or pick another
+    /// backend.
+    Session(&'a mut Session<'session>),
 }
 
-impl Linalg<'_> {
-    fn mat_mul<T>(self, a: Matrix<T>, b: Matrix<T>) -> std::result::Result<Matrix<T>, String>
+impl Linalg<'_, '_> {
+    fn mat_mul<T>(&mut self, a: Matrix<T>, b: Matrix<T>) -> std::result::Result<Matrix<T>, String>
     where
         T: Scalar + crate::MatrixLuciScalar,
     {
@@ -39,11 +45,14 @@ impl Linalg<'_> {
                 .with_concrete_session(|session| session.mat_mul(&a, &b))
                 .map_err(|err| err.to_string())?
                 .map_err(|err| err.to_string()),
+            Self::Session(session) => session
+                .mat_mul(&a, &b)
+                .map_err(|err| err.to_string()),
         }
     }
 
     fn triangular_solve<T>(
-        self,
+        &mut self,
         a: Matrix<T>,
         b: Matrix<T>,
         left_side: bool,
@@ -61,6 +70,10 @@ impl Linalg<'_> {
                 })
                 .map_err(|err| err.to_string())?
                 .map_err(|err| err.to_string()),
+            Self::Session(session) => {
+                T::matrix_luci_triangular_solve_in(session, &a, &b, left_side, lower)
+                    .map_err(|err| err.to_string())
+            }
         }
     }
 }
@@ -215,7 +228,7 @@ where
             &lu.l,
             &lu.row_permutation,
             rank,
-            Linalg::Context(context),
+            &mut Linalg::Context(context),
         )?,
         pivot_magnitudes: lu.pivot_magnitudes,
     })
@@ -327,7 +340,7 @@ fn apply_col_permutation<T: Scalar>(matrix: &Matrix<T>, permutation: &[usize]) -
     result
 }
 
-pub(crate) fn rrlu_colmatrix<T>(lu: &RrLU<T>, linalg: Linalg<'_>) -> Result<Matrix<T>>
+pub(crate) fn rrlu_colmatrix<T>(lu: &RrLU<T>, linalg: &mut Linalg<'_, '_>) -> Result<Matrix<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
@@ -343,7 +356,7 @@ where
         .map_err(|err| backend_linalg_error(format!("MatrixLUCI colmatrix multiply failed: {err}")))
 }
 
-pub(crate) fn rrlu_rowmatrix<T>(lu: &RrLU<T>, linalg: Linalg<'_>) -> Result<Matrix<T>>
+pub(crate) fn rrlu_rowmatrix<T>(lu: &RrLU<T>, linalg: &mut Linalg<'_, '_>) -> Result<Matrix<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
@@ -359,7 +372,7 @@ where
         .map_err(|err| backend_linalg_error(format!("MatrixLUCI rowmatrix multiply failed: {err}")))
 }
 
-pub(crate) fn rrlu_cols_times_pivot_solve<T>(lu: &RrLU<T>, linalg: Linalg<'_>) -> Result<Matrix<T>>
+pub(crate) fn rrlu_cols_times_pivot_solve<T>(lu: &RrLU<T>, linalg: &mut Linalg<'_, '_>) -> Result<Matrix<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
@@ -375,7 +388,7 @@ fn cols_times_pivot_solve<T>(
     left: &Matrix<T>,
     row_permutation: &[usize],
     rank: usize,
-    linalg: Linalg<'_>,
+    linalg: &mut Linalg<'_, '_>,
 ) -> Result<Matrix<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
@@ -401,7 +414,7 @@ where
     Ok(apply_row_permutation(&result, row_permutation))
 }
 
-pub(crate) fn rrlu_pivot_solve_times_rows<T>(lu: &RrLU<T>, linalg: Linalg<'_>) -> Result<Matrix<T>>
+pub(crate) fn rrlu_pivot_solve_times_rows<T>(lu: &RrLU<T>, linalg: &mut Linalg<'_, '_>) -> Result<Matrix<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
@@ -427,7 +440,7 @@ where
     Ok(apply_col_permutation(&result, lu.col_permutation()))
 }
 
-fn factors_from_rrlu<T>(lu: &RrLU<T>, linalg: Linalg<'_>) -> Result<MatrixLuciFactors<T>>
+fn factors_from_rrlu<T>(lu: &RrLU<T>, linalg: &mut Linalg<'_, '_>) -> Result<MatrixLuciFactors<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
@@ -460,19 +473,19 @@ where
     T: Scalar + crate::MatrixLuciScalar,
 {
     let lu = rrlu(a, Some(options))?;
-    factors_from_rrlu(&lu, Linalg::Global)
+    factors_from_rrlu(&lu, &mut Linalg::Global)
 }
 
 pub(crate) fn dense_matrix_luci_factors_from_matrix_owned<T>(
     mut a: Matrix<T>,
     options: RrLUOptions,
-    linalg: Linalg<'_>,
+    mut linalg: Linalg<'_, '_>,
 ) -> Result<MatrixLuciFactors<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
     let lu = rrlu_mut(&mut a, Some(options))?;
-    factors_from_rrlu(&lu, linalg)
+    factors_from_rrlu(&lu, &mut linalg)
 }
 
 pub(crate) fn lazy_matrix_luci_factors_from_blocks<T, F>(
@@ -625,6 +638,62 @@ where
     let options = options.unwrap_or_default();
     validate_owned_luci_input(&a, &options)?;
     dense_matrix_luci_factors_from_matrix_owned(a, options, Linalg::Context(context))
+}
+
+/// Factorize a dense matrix with MatrixLUCI in a session the caller already entered.
+///
+/// Session-taking counterpart of [`matrix_luci_factors_from_matrix_owned_in`], for callers that own their
+/// execution rather than a context: a worker lane entered by the phase that owns it, for example, whose session
+/// must be used as it is. The rank-revealing pivot search is identical; the factor assembly's matrix products
+/// and triangular solves run on `session`, and neither a process-global context nor a fresh session entry is
+/// consulted.
+///
+/// # Arguments
+///
+/// * `a` - Dense column-major matrix to factorize; its storage is reused.
+/// * `options` - Optional rank and tolerance controls. `None` uses the default LUCI settings.
+/// * `session` - An already-entered explicit session that runs the factor assembly.
+///
+/// # Returns
+///
+/// A [`MatrixLuciFactors`] value with the selected pivots, pivot error history, rank, and factors satisfying
+/// `a ~= left * right`.
+///
+/// # Errors
+///
+/// Returns [`MatrixCIError::InvalidArgument`] for negative or nonfinite tolerances, infinite input magnitudes,
+/// or backend solve failures; returns [`MatrixCIError::NaNEncountered`] for NaN input or factors.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{matrix_luci_factors_from_matrix_owned_on_session, RrLUOptions};
+/// use tensor4all_tensorbackend::{from_vec2d, mat_mul, CpuExecutionContext};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::new());
+/// let a = from_vec2d(vec![vec![1.0_f64, 2.0], vec![2.0, 4.0]]);
+/// let factors = context.with_concrete_session(|session| {
+///     matrix_luci_factors_from_matrix_owned_on_session(
+///         a.clone(),
+///         Some(RrLUOptions { left_orthogonal: true, ..RrLUOptions::default() }),
+///         session,
+///     )
+/// })??;
+/// assert_eq!(factors.rank, 1);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn matrix_luci_factors_from_matrix_owned_on_session<T>(
+    a: Matrix<T>,
+    options: Option<RrLUOptions>,
+    session: &mut Session<'_>,
+) -> Result<MatrixLuciFactors<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+{
+    let options = options.unwrap_or_default();
+    validate_owned_luci_input(&a, &options)?;
+    dense_matrix_luci_factors_from_matrix_owned(a, options, Linalg::Session(session))
 }
 
 /// Conservative logical working-byte estimate for owned dense LUCI factors.
