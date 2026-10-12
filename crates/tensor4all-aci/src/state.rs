@@ -6,7 +6,8 @@ use crate::{
     initial_guess_with_rng, AciError, AciOptions, ElementwiseBatch, LocalBlockEvaluator, Result,
 };
 use tensor4all_core::{
-    matrix_luci_factors_from_matrix, matrix_luci_factors_from_matrix_owned, RrLUOptions,
+    matrix_luci_factors_from_matrix, matrix_luci_factors_from_matrix_owned,
+    matrix_luci_factors_from_matrix_owned_in, RrLUOptions,
 };
 use tensor4all_simplett::{
     tensor3_from_data, AbstractTensorTrain, EinsumScalar, SimpleTensorTrain, TTCache, Tensor3,
@@ -69,12 +70,16 @@ impl<T: AciScalar> InputCoreMatrices<T> {
 }
 
 impl<T: AciScalar> ElementwiseProblem<T> {
-    pub(crate) fn new(inputs: Vec<SimpleTensorTrain<T>>, options: AciOptions<T>) -> Result<Self>
+    pub(crate) fn new(
+        inputs: Vec<SimpleTensorTrain<T>>,
+        options: AciOptions<T>,
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    ) -> Result<Self>
     where
         T: EinsumScalar,
     {
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rng_seed);
-        Self::new_with_rng(inputs, options, &mut rng)
+        Self::new_with_rng(inputs, options, &mut rng, context)
     }
 
     /// Builds the problem on a caller-owned random stream.
@@ -85,6 +90,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         inputs: Vec<SimpleTensorTrain<T>>,
         options: AciOptions<T>,
         rng: &mut dyn rand::RngCore,
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
     ) -> Result<Self>
     where
         T: EinsumScalar,
@@ -123,7 +129,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             pivot_scales: vec![0.0; n.saturating_sub(1)],
             input_caches,
         };
-        problem.initialize_right_frames()?;
+        problem.initialize_right_frames(context)?;
         Ok(problem)
     }
 
@@ -751,6 +757,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         left_orthogonal: bool,
         options: &AciOptions<T>,
         op: &mut F,
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
     ) -> Result<()>
     where
         F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
@@ -809,23 +816,29 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             }
 
             let local_matrix = evaluator.materialize_local_matrix()?;
-            let factors_result = matrix_luci_factors_from_matrix_owned(
-                local_matrix,
-                Some(RrLUOptions {
-                    max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
-                    rel_tol: if options.scale_tolerance {
-                        options.tolerance
-                    } else {
-                        0.0
-                    },
-                    abs_tol: if options.scale_tolerance {
-                        0.0
-                    } else {
-                        options.tolerance
-                    },
-                    left_orthogonal,
-                }),
-            );
+            let lu_options = RrLUOptions {
+                max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
+                rel_tol: if options.scale_tolerance {
+                    options.tolerance
+                } else {
+                    0.0
+                },
+                abs_tol: if options.scale_tolerance {
+                    0.0
+                } else {
+                    options.tolerance
+                },
+                left_orthogonal,
+            };
+            // The context-taking twin consumes its matrix, so the caller-owned route keeps the borrowed form.
+            let factors_result = match context {
+                Some(context) => matrix_luci_factors_from_matrix_owned_in(
+                    local_matrix,
+                    Some(lu_options),
+                    context,
+                ),
+                None => matrix_luci_factors_from_matrix_owned(local_matrix, Some(lu_options)),
+            };
             (factors_result?, evaluator.max_output_abs())
         };
 
@@ -878,7 +891,10 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         Ok(())
     }
 
-    fn initialize_right_frames(&mut self) -> Result<()> {
+    fn initialize_right_frames(
+        &mut self,
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    ) -> Result<()> {
         let n = self.solution.len();
         let mut solution_cores = self.solution.site_tensors().to_vec();
 
@@ -887,15 +903,22 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             let site_dim = current.site_dim();
             let right_dim = current.right_dim();
             let matrix = right_matrix_julia_order(current)?;
-            let factors = matrix_luci_factors_from_matrix(
-                &matrix,
-                Some(RrLUOptions {
-                    left_orthogonal: false,
-                    rel_tol: 0.0,
-                    abs_tol: 0.0,
-                    max_bond_dim: usize::MAX,
-                }),
-            )?;
+            let lu_options = RrLUOptions {
+                left_orthogonal: false,
+                rel_tol: 0.0,
+                abs_tol: 0.0,
+                max_bond_dim: usize::MAX,
+            };
+            // The context-taking twins consume their matrix, so the caller-owned route pays one copy here; this
+            // runs once per site while the constructor builds the right frames, not per sweep.
+            let factors = match context {
+                Some(context) => matrix_luci_factors_from_matrix_owned_in(
+                    matrix.clone(),
+                    Some(lu_options),
+                    context,
+                )?,
+                None => matrix_luci_factors_from_matrix(&matrix, Some(lu_options))?,
+            };
 
             let ncols =
                 checked_frame_mul(site_dim, right_dim, "solution right matrix column count")?;

@@ -147,7 +147,41 @@ where
     // Erase the caller's RNG type once so the run below is instantiated once
     // per scalar type instead of once per (scalar, RNG) pair.
     let mut stream: &mut R = rng;
-    elementwise_batched_erased(op, inputs, options, &mut stream)
+    elementwise_batched_erased(op, inputs, options, &mut stream, None)
+}
+
+/// Batched elementwise ACI whose factorizations run in a caller-owned CPU context.
+///
+/// The same algorithm, options and result as [`elementwise_batched_with_rng`]; what differs is where the ACI
+/// factorizations run. Without a context they are assembled through the process-global CPU context; with one,
+/// every MatrixLUCI factorization of this workload goes through `context`.
+///
+/// The rest of this workload - the contractions between input cores and the solution - is unchanged and still
+/// runs on its existing routes, so this is a caller-owned budget for the factorizations only, not for the whole
+/// run. That limit is recorded in `docs/design/859-f7-consumer-inventory.md`.
+///
+/// # Errors
+///
+/// Returns [`crate::AciError::EmptyInputs`] when no input is supplied, [`crate::AciError::LengthMismatch`] or
+/// [`crate::AciError::SiteDimMismatch`] for inputs that do not agree on their site dimensions,
+/// [`crate::AciError::InvalidOptions`] for invalid options, [`crate::AciError::InvalidInitialGuess`] when the
+/// initial guess is degenerate, [`crate::AciError::Operator`] when the caller's operator callback fails,
+/// [`crate::AciError::OperatorOutputLength`] when it writes the wrong number of values, and
+/// [`crate::AciError::MatrixCI`] when a factorization fails - including one the caller's context refuses.
+pub fn elementwise_batched_with_rng_in<T, F, R>(
+    op: F,
+    inputs: &[SimpleTensorTrain<T>],
+    options: &AciOptions<T>,
+    rng: &mut R,
+    context: &tensor4all_tensorbackend::CpuExecutionContext,
+) -> Result<AciResult<T>>
+where
+    T: AciScalar + EinsumScalar + PartialEq,
+    F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
+    R: rand::Rng + ?Sized,
+{
+    let mut stream: &mut R = rng;
+    elementwise_batched_erased(op, inputs, options, &mut stream, Some(context))
 }
 
 fn elementwise_batched_erased<T, F>(
@@ -155,6 +189,7 @@ fn elementwise_batched_erased<T, F>(
     inputs: &[SimpleTensorTrain<T>],
     options: &AciOptions<T>,
     rng: &mut dyn rand::RngCore,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> Result<AciResult<T>>
 where
     T: AciScalar + EinsumScalar + PartialEq,
@@ -167,7 +202,8 @@ where
         return elementwise_batched_one_site(op, inputs);
     }
 
-    let mut problem = ElementwiseProblem::new_with_rng(inputs.to_vec(), options.clone(), rng)?;
+    let mut problem =
+        ElementwiseProblem::new_with_rng(inputs.to_vec(), options.clone(), rng, context)?;
 
     let mut ranks = Vec::new();
     let mut errors = Vec::new();
@@ -178,11 +214,11 @@ where
         let forward = iteration % 2 == 0;
         if forward {
             for bond in 0..problem.len() - 1 {
-                problem.local_update(bond, true, options, &mut op)?;
+                problem.local_update(bond, true, options, &mut op, context)?;
             }
         } else {
             for bond in (0..problem.len() - 1).rev() {
-                problem.local_update(bond, false, options, &mut op)?;
+                problem.local_update(bond, false, options, &mut op, context)?;
             }
         }
 
@@ -247,7 +283,7 @@ where
         && problem.solution.rank() > cap
     {
         for bond in 0..problem.len() - 1 {
-            problem.local_update(bond, true, options, &mut op)?;
+            problem.local_update(bond, true, options, &mut op, context)?;
         }
     }
 

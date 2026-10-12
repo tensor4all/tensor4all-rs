@@ -47,7 +47,8 @@ pub(crate) mod validation;
 
 pub use batch::ElementwiseBatch;
 pub use elementwise::{
-    elementwise, elementwise_batched, elementwise_batched_with_rng, elementwise_with_rng,
+    elementwise, elementwise_batched, elementwise_batched_with_rng,
+    elementwise_batched_with_rng_in, elementwise_with_rng,
 };
 pub use error::{AciError, Result};
 #[allow(unused_imports)]

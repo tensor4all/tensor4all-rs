@@ -43,6 +43,8 @@ tensor4all-simplett = { path = "../tensor4all-simplett", default-features = fals
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 
 [dev-dependencies]
+rand_chacha.workspace = true
+tenferro-cpu.workspace = true
 tensor4all-treeaci = { path = "../tensor4all-treeaci", default-features = false }
 tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false, features = ["simplett-bridge"] }
 approx.workspace = true

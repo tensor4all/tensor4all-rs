@@ -3673,6 +3673,7 @@ dependencies = [
  "rand 0.9.5",
  "rand_chacha",
  "rand_distr",
+ "tenferro-cpu",
  "tensor4all-core",
  "tensor4all-simplett",
  "tensor4all-tensorbackend",
