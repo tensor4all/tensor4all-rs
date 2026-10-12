@@ -42,7 +42,7 @@ lives in `partitionedtt`, and is deliberately not default).
 tensor4all-tensorbackend            (chooses the route: contexts, sessions, compatibility entries)
   └── tensor4all-core               (session-taking twins + compatibility entries)
         ├── tensor4all-simplett     (session-taking inner product)
-        ├── tensor4all-treetn       (session-taking SRC contraction, evaluator)
+        ├── tensor4all-treetn       (context-taking contraction dispatch: SRC / zip-up / fit / naive)
         │     ├── tensor4all-treetci      (context-taking TCI entries)
         │     ├── tensor4all-treeaci
         │     ├── tensor4all-treersi
@@ -57,19 +57,24 @@ Reproduce: `grep -hoE 'tensor4all-[a-z0-9]+ *= *\{ *path' crates/*/Cargo.toml`.
 
 A crate that appears with no session-taking entry of its own is **not** necessarily on the global route: it
 inherits whatever its dependencies do. The distinction that matters is who *chooses* the route (only
-`tensorbackend`), who *threads* it (core, simplett, treetn, treetci, tensorci, partitionedtt) and who has never
-been touched.
+`tensorbackend`), who *threads* it (core, simplett, treetn, treetci, tensorci, partitionedtt, and - since the
+F7 consumer pass - aci, treeaci, itensorlike, quanticstci and partitionedtreetn, whose engine carries the
+context) and who has never been touched.
 
 ## 3. Session/explicit public surface per crate
 
 | crate | session/context-taking public entries (this checkout) |
 | --- | --- |
-| `tensor4all-core` | `contract_pair_on_session`, `inner_product_on_session`, `sum_on_session`, `permute_on_session`, `permute_indices_on_session`, `norm_squared_on_session`, `norm_on_session`, `matrix_luci_factors_from_matrix_owned_in`, `matrix_luci_factors_from_matrix_owned_on_session`, `matrix_luci_row_interpolation_owned_in`, `factorize_in`, `factorize_full_rank_in`, `from_dense_in`, `ones_in`, `norm_in` |
+| `tensor4all-core` | `contract_pair_on_session`, `inner_product_on_session`, `sum_on_session`, `permute_on_session`, `permute_indices_on_session`, `norm_squared_on_session`, `norm_on_session`, `matrix_luci_factors_from_matrix_owned_in`, `matrix_luci_factors_from_matrix_owned_on_session`, `matrix_luci_row_interpolation_owned_in`, `factorize_in`, `factorize_full_rank_in`, `from_dense_in`, `ones_in`, `norm_in`, `svd_with_in`, `qr_with_in`, `scale_in` |
 | `tensor4all-simplett` | `SimpleTensorTrain::inner_product_with_session` |
-| `tensor4all-treetn` | `contract_in` (dispatch), `contract_src_with_rng_in`, `contract_zipup_with_in`, `contract_fit_in`, `new_in` |
-| `tensor4all-treetci` | `crossinterpolate2_in`, `crossinterpolate2_with_rng_in` (both cover the factor assembly **and** the materialization solve) |
+| `tensor4all-treetn` | `contract_in` (dispatch over SRC / zip-up / fit / naive), `contract_src_with_rng_in`, `contract_zipup_with_in`, `contract_fit_in`, `new_in` |
+| `tensor4all-treetci` | `crossinterpolate2_in`, `crossinterpolate2_with_rng_in` (both cover the factor assembly **and** the materialization solve), `optimize_with_proposer_in`, `to_treetn_in` |
 | `tensor4all-tensorci` | `crossinterpolate2_with_rng_on_session` (dense factor assembly and site solves) |
 | `tensor4all-partitionedtt` | `adaptiveinterpolate_in` (Hataori domain, compatibility route), `adaptiveinterpolate_on_phase` (held-session lanes) |
+| `tensor4all-quanticstci` | `quanticscrossinterpolate_discrete_batch_in`, `quanticscrossinterpolate_batch_in` (thread the caller's context to `treetci`'s entries) |
+| `tensor4all-aci` | `elementwise_batched_with_rng_in` (LUCI and frame products in the caller's context) |
+| `tensor4all-treeaci` | `tree_elementwise_batched_with_rng_in` (LUCI and candidate-matrix products in the caller's context) |
+| `tensor4all-itensorlike` | `contract_in` (SRC / Zip-up / Fit / Naive through treetn's twins) |
 | `tensor4all-treersi` | `hadamard_many_in`, `hadamard_many_with_rng_in` |
 | everything else | none yet (see §5) |
 
@@ -78,11 +83,12 @@ Reproduce: `grep -rhoE "pub fn [a-z_0-9]*(_in|_on_session|_on_phase|_with_contex
 Indicative file counts of the two route families, to show where work remains rather than to score crates:
 `grep -rl "Session<'_>\|CpuExecutionContext\|HeldSession\|PhaseLane" crates/<crate>/src` versus
 `grep -rl "default_eager_ctx\|with_default_session\|default_cpu_execution_context\|with_default_backend"
-crates/<crate>/src`. In this checkout the first is non-zero for `core` (12), `treetci` (7), `treersi` (3),
-`simplett` (2), `treetn` (2), `tensorci` (1), `partitionedtt` (1), and zero for `aci`, `treeaci`,
-`itensorlike`, `quanticstci`, `quanticstransform`, `interpolativeqtt`, `partitionedtreetn`, `capi`. The second is
-non-zero only for `core` (3) and `treetn` (4) and `treetci` (2) and `treersi` (1): the other crates reach the
-global route transitively, which is why a per-crate count cannot decide whether a crate is migrated.
+crates/<crate>/src`. In this checkout (after the F7 consumer pass, #940-#947) the first is non-zero for `core`
+(12), `treetci` (8), `treeaci` (5), `treersi` (3), `simplett` (2), `treetn` (2), `aci` (2), `tensorci` (1),
+`partitionedtt` (1), `quanticstci` (1), and zero for `itensorlike`, `quanticstransform`, `interpolativeqtt`,
+`partitionedtreetn`, `capi`. The second is non-zero only for `core` (3) and `treetn` (4) and `treetci` (2) and
+`treersi` (1): the other crates reach the global route transitively, which is why a per-crate count cannot
+decide whether a crate is migrated.
 
 ## 4. Compatibility surface intentionally retained (declared, not advertised as migrated)
 
@@ -109,11 +115,11 @@ reason; the F7 migration must not silently claim them:
 | --- | --- | --- |
 | `tensor4all-aci` | wired (#935, #941): `elementwise_batched_with_rng_in` threads a caller-owned context to its LUCI and frame products | done; the batched frame updates stay on their existing route (no session-taking batched-GEMM twin) |
 | `tensor4all-treeaci` | wired (this PR): `tree_elementwise_batched_with_rng_in` threads a caller-owned context to its LUCI and candidate-matrix products | done; its own frame contractions stay on their existing route for now |
-| `tensor4all-itensorlike` | wired: `contract_in` routes all four methods (SRC, Zip-up, Fit, Naive) through treetn's context twins | done for every method |
-| `tensor4all-quanticstci` | thread to `treetci`'s context entries | nothing but the work |
+| `tensor4all-itensorlike` | done (#943/#945/#946/#947): `contract_in` routes all four methods (SRC, Zip-up, Fit, Naive) through treetn's context twins | — |
+| `tensor4all-quanticstci` | done (#940): both batch entries thread the caller's context to `treetci`'s entries | — |
 | `tensor4all-quanticstransform` | mostly operator construction (metadata + host assembly) | nothing but the work |
 | `tensor4all-interpolativeqtt` | thread to `simplett`/`treetn` session entries | nothing but the work |
-| `tensor4all-partitionedtreetn` | wired (this PR): the engine layer carries the context - `TreeTciInterpolatorIn` in `tensor4all-treetci` runs `patched_interpolate` (and any `TreeInterpolator` driver) in a caller-owned context; the patched driver and its trait need no change | done; the engine's internals were already context-threaded in #937/#939 |
+| `tensor4all-partitionedtreetn` | done (#944): the engine layer carries the context - `TreeTciInterpolatorIn` in `tensor4all-treetci` runs `patched_interpolate` (and any `TreeInterpolator` driver) in a caller-owned context; the patched driver and its trait need no change | — |
 | `tensor4all-capi` | new ABI surface would be required (F6), not a threaded parameter | F6's ABI decision |
 | `tensor4all-py` | as `capi` | F6 |
 | `tensor4all-hdf5` | I/O only; no numerical route | — |
@@ -149,3 +155,9 @@ row changes, say what changed and cite the PR, so that "migrated" keeps meaning 
 Read this file from `origin/main` or a fresh worktree, never from a long-lived checkout: during this pass a stale
 main checkout made a merged entry point look absent, and only a fresh worktree showed the real state. A verdict
 taken from the wrong tree is worse than no verdict.
+
+Re-verified on a fresh `origin/main` worktree after the consumer pass (#940 quanticstci, #941 aci, #942 treeaci,
+#943 itensorlike SRC, #944 partitionedtreetn, #945 treetn zip-up + itensorlike Zip-up, #946 treetn fit +
+itensorlike Fit, #947 treetn naive + itensorlike Naive): §1 default features are unchanged; §2's dependency
+layers are unchanged (the tree's treetn node now names the full contraction dispatch, and the threading list
+gained the five consumer crates); §3's entry table and route-family counts above are from that checkout.
