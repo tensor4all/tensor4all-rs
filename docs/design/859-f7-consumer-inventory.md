@@ -131,9 +131,14 @@ on its position in the graph. Every verdict names the call site that decides it.
 | `tensor4all-quanticstci` | **thread-through** | `quanticscrossinterpolate*` builds a grid and calls `tensor4all-treetci`'s TCI, whose context-taking entries exist; the same pass-through shape applies. |
 | `tensor4all-partitionedtreetn` | **thread-through** | its adaptive interpolation drives `TreeTciInterpolator` over tree TNs; the entries below it are context-taking already. |
 | `tensor4all-aci` | **has numerics of its own; first slice landed** | it calls core's LUCI directly, in `local_update` (the per-bond factorization) and `initialize_right_frames` (the constructor). `elementwise_batched_with_rng_in` now threads a caller-owned context to both, with parity and a measurement; the contractions between input cores and the solution still use their existing routes, so the whole workload does not yet run in that context. |
-| `tensor4all-treeaci` | **not yet assessed** | it has the largest number of numerical-ish call sites in the workspace; a verdict needs a read of its driver, not a count. |
+| `tensor4all-treeaci` | **has numerics of its own - the largest of the remaining set** | its frame contractions call `tensor4all_tensorbackend::mat_mul`/`mat_mul_owned` directly (`frames.rs:3244`, `:3260`) and its local update factorizes through core's LUCI (`local_update.rs:400`, `matrix_luci_factors_from_matrix_owned`). Both kinds already have session-taking twins (`tensor4all-tensorbackend`'s `Session::mat_mul`, core's `..._owned_in`), so the migration is feasible but is the biggest slice left; it also does its own memory accounting against `GroupedGemmJob`, which that slice has to keep consistent. |
 | `tensor4all-hdf5` | **no route to choose** | input/output only. |
 | `tensor4all-capi`, `tensor4all-py` | **F6's business** | a new ABI surface, not a threaded parameter, so they are not part of this pass. |
+
+The verdict pass is now complete: every workspace crate that carries numerical work has a named call site deciding
+whether it needs a session surface of its own (`aci`, `treeaci`), a pass-through entry (`itensorlike`,
+`quanticstci`, `partitionedtreetn`), or nothing at all (`interpolativeqtt`, `quanticstransform`, `hdf5`), with
+`capi`/`py` left to F6.
 
 ## 7. Keeping this honest
 
