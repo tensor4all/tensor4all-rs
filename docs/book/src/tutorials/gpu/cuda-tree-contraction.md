@@ -41,6 +41,42 @@ A successful run prints the GPU name and residual, for example:
 device="NVIDIA A100 80GB PCIe" residual_max_abs=0.000e0
 ```
 
+## Measured: where the time goes
+
+The example reports each phase separately, which is what makes the numbers interpretable - a single wall-clock
+figure would hide that this route is dominated by fixed costs rather than by the contraction. On the local A100
+80GB PCIe (driver 580.126.09), release build, chain length 6, bond dimension 4, 10 iterations:
+
+```bash
+cargo run --release -p tensor4all-treetn --example cuda_tree_contraction \
+  --features tenferro-cuda,tenferro-cpu-faer -- --chain-length 6 --bond-dim 4 --iterations 10
+```
+
+| phase | time |
+| --- | ---: |
+| host tree construction | 4.97 ms |
+| CUDA context setup | 198.28 ms |
+| upload (the tree) | 313.46 ms |
+| first call (JIT and caches) | 2.02 ms |
+| steady contraction, synchronised | 0.176 ms / iteration |
+| download | 0.086 ms |
+| CPU contraction of the same tree, for reference | 0.138 ms / iteration |
+
+Two things follow, and both are the point of separating the phases:
+
+- **The fixed costs dominate**: one context plus one upload costs about 510 ms, while ten contractions cost
+  1.8 ms. For a workload this small the device route is not worth it; the device only pays off when enough work
+  is amortised against one setup and one transfer.
+- **The device is not automatically faster per operation**: 0.176 ms versus 0.138 ms per contraction here. A
+  branching tree contraction of small tensors does not have the arithmetic intensity that a device kernel wants.
+
+**What these numbers do not cover, because this crate does not expose it yet:** the *wait* on an asynchronous
+transfer and producer/consumer *overlap*. There is no stream or readiness surface on this route, so transfers are
+synchronous and the example cannot tell "waiting" apart from "working"; the component-wise transfer migration that
+F5 still owes is what would make those two measurable. The SRC route has its own separated breakdown (setup,
+upload, warm-up, steady, download, CPU) in `cuda_src_timing_breakdown` under
+`crates/tensor4all-treetn/tests/cuda_src_contraction.rs`, which is where the mixed workload's numbers live.
+
 ## Using it from another project
 
 The crates are not published to crates.io yet. Enable CUDA on both crates imported by the quickstart:
