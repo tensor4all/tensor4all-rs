@@ -217,11 +217,31 @@ pub fn contract_in(
         return TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary));
     }
 
+    if matches!(options.method(), ContractMethod::Fit) {
+        // `validate_contraction_inputs` rejects empty trains, so `len() >= 1`.
+        let center = a.len() - 1;
+        // Fit runs in the caller-owned context through treetn's dispatch
+        // (`contract_in`), which routes it to `contract_fit_in`: the initial
+        // zip-up, the environment contractions and the per-sweep
+        // factorizations use the context-scoped core entries.
+        let result_inner = tensor4all_treetn::contract_in(
+            a.as_treetn(),
+            b.as_treetn(),
+            &center,
+            to_treetn_options(options),
+            context,
+        )
+        .map_err(|e| TensorTrainError::InvalidStructure {
+            message: format!("TreeTN Fit contraction failed: {e}"),
+        })?;
+        return TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary));
+    }
+
     if !matches!(options.method(), ContractMethod::Src) {
-        // Fit and Naive are refused rather than silently run on the
-        // process-global context: the caller explicitly supplied a context,
-        // and treetn has no session twin for their sweep/dense-reference
-        // internals yet (recorded in the F7 inventory).
+        // Naive is refused rather than silently run on the process-global
+        // context: the caller explicitly supplied a context, and treetn has no
+        // session twin for its dense-reference internals yet (recorded in the
+        // F7 inventory).
         return Err(TensorTrainError::OperationError {
             message: format!(
                 "contract_in: the {} method has no caller-owned route yet; use \

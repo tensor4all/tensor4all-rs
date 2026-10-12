@@ -237,11 +237,29 @@ fn test_fit_environment_get_or_compute_caches_leaf_environment() {
 
     let from = "A".to_string();
     let to = "B".to_string();
-    let computed = env.get_or_compute(&from, &to, &tn_a, &tn_b, &tn_c).unwrap();
+    let computed = env
+        .get_or_compute(
+            &from,
+            &to,
+            &tn_a,
+            &tn_b,
+            &tn_c,
+            &crate::treetn::contraction::GlobalLeaves,
+        )
+        .unwrap();
     assert!(env.contains(&from, &to));
     assert_eq!(env.len(), 1);
 
-    let cached = env.get_or_compute(&from, &to, &tn_a, &tn_b, &tn_c).unwrap();
+    let cached = env
+        .get_or_compute(
+            &from,
+            &to,
+            &tn_a,
+            &tn_b,
+            &tn_c,
+            &crate::treetn::contraction::GlobalLeaves,
+        )
+        .unwrap();
     assert_eq!(env.len(), 1);
     assert!(computed.distance(&cached).unwrap() < 1e-12);
 }

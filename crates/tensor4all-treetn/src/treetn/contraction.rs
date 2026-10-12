@@ -99,15 +99,15 @@ fn zipup_factorize_options(
 // Zip-up leaf execution strategy (issue #859 F7)
 // ---------------------------------------------------------------------------
 
-/// Per-leaf execution strategy for the zip-up contraction.
+/// Per-leaf execution strategy for the contraction schedules (zip-up and fit).
 ///
 /// `GlobalLeaves` keeps every existing call site unchanged (process-global
 /// route); `SessionLeaves` runs the same leaves in a caller-owned context and
 /// serves `IdxTensor` networks - the tensor type every in-repo TreeTN network
 /// uses - with a typed error for anything else rather than a silent global
-/// run. The public [`TreeTN::contract_zipup_with_in`] entry selects the
-/// session strategy statically for `IdxTensor` networks.
-trait ZipupLeafOps<T>: Sized
+/// run. The public context entries select the session strategy statically for
+/// `IdxTensor` networks.
+pub(crate) trait LeafOps<T>: Send + Sync
 where
     T: TensorLike,
 {
@@ -116,6 +116,13 @@ where
 
     /// Contract a small tensor list (the zip-up `R + A + B` blocks).
     fn contract_list(&self, tensors: &[T]) -> Result<T>;
+
+    /// Contract a list of tensor references (the fit environments' inputs).
+    fn contract_refs(&self, tensors: &[&T]) -> Result<T>;
+
+    /// Outer-product two tensors that share no contracted index (the fit
+    /// environment's disconnected components).
+    fn outer_product(&self, lhs: &T, rhs: &T) -> Result<T>;
 
     /// Factorize `tensor` against `left_inds` (the direct factorization the
     /// general-graph path used).
@@ -136,10 +143,19 @@ where
     ) -> Result<tensor4all_core::FactorizeResult<T>>;
 }
 
-/// The process-global route: exactly the calls the plain implementation makes.
-struct GlobalLeaves;
+impl<T> std::fmt::Debug for dyn LeafOps<T>
+where
+    T: TensorLike,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LeafOps")
+    }
+}
 
-impl<T> ZipupLeafOps<T> for GlobalLeaves
+/// The process-global route: exactly the calls the plain implementation makes.
+pub(crate) struct GlobalLeaves;
+
+impl<T> LeafOps<T> for GlobalLeaves
 where
     T: TensorLike + TensorContractionLike + TensorFactorizationLike,
 {
@@ -150,6 +166,14 @@ where
     fn contract_list(&self, tensors: &[T]) -> Result<T> {
         let refs: Vec<&T> = tensors.iter().collect();
         T::contract(&refs).map_err(anyhow::Error::from)
+    }
+
+    fn contract_refs(&self, tensors: &[&T]) -> Result<T> {
+        T::contract(tensors).map_err(anyhow::Error::from)
+    }
+
+    fn outer_product(&self, lhs: &T, rhs: &T) -> Result<T> {
+        lhs.outer_product(rhs).map_err(anyhow::Error::from)
     }
 
     fn factorize(
@@ -181,15 +205,64 @@ where
 /// context-scoped twin, so the session strategy uses the direct truncated-SVD
 /// factorization with the same options; results agree to tight tolerance
 /// (recorded in `docs/design/859-f7-consumer-inventory.md`).
-struct SessionLeaves<'a>(&'a tensor4all_tensorbackend::ExecutionContext);
+pub(crate) struct SessionLeaves(pub(crate) tensor4all_tensorbackend::ExecutionContext);
 
-impl ZipupLeafOps<tensor4all_core::IdxTensor> for SessionLeaves<'_> {
+impl SessionLeaves {
+    /// Adopt an operand into the session's own eager runtime.
+    ///
+    /// This is an explicit **dense readback and rebuild**: the operand's dense
+    /// payload is read (`to_vec`) and reconstructed inside the context
+    /// (`from_dense_in`), so it costs the operand's dense size per leaf. It is
+    /// required because the plain helpers build some intermediates - for
+    /// example the singleton boundaries of `factorize_allowing_empty_side` -
+    /// on the process-global route, and because a session's own results carry
+    /// the session's eager AD context: operands from different AD contexts
+    /// fail the next operation even when every tensor validates against the
+    /// same execution context. Compact storages (diagonal) are refused rather
+    /// than silently densified.
+    fn adopt_dense_readback(
+        &self,
+        tensor: &tensor4all_core::IdxTensor,
+    ) -> Result<tensor4all_core::IdxTensor> {
+        if tensor.is_diag() {
+            return Err(anyhow::anyhow!(
+                "context adoption refuses compact (diagonal) operands rather \
+                 than silently densifying them"
+            ));
+        }
+        let indices = tensor.external_indices().to_vec();
+        if tensor.is_f64() {
+            let values = tensor
+                .to_vec::<f64>()
+                .map_err(|error| anyhow::anyhow!("context adoption readback failed: {error}"))?;
+            tensor4all_core::IdxTensor::from_dense_in(&self.0, indices, values)
+                .map_err(|error| anyhow::anyhow!("context adoption failed: {error}"))
+        } else if tensor.is_c64() {
+            let values = tensor
+                .to_vec::<num_complex::Complex64>()
+                .map_err(|error| anyhow::anyhow!("context adoption readback failed: {error}"))?;
+            tensor4all_core::IdxTensor::from_dense_in(&self.0, indices, values)
+                .map_err(|error| anyhow::anyhow!("context adoption failed: {error}"))
+        } else {
+            Err(anyhow::anyhow!(
+                "context adoption supports f64 and Complex64 tensors only"
+            ))
+        }
+    }
+}
+
+impl LeafOps<tensor4all_core::IdxTensor> for SessionLeaves {
     fn contract_pair(
         &self,
         lhs: &tensor4all_core::IdxTensor,
         rhs: &tensor4all_core::IdxTensor,
     ) -> Result<tensor4all_core::IdxTensor> {
-        match self.0 {
+        let (lhs, rhs) = (
+            self.adopt_dense_readback(lhs)?,
+            self.adopt_dense_readback(rhs)?,
+        );
+        let (lhs, rhs) = (&lhs, &rhs);
+        match &self.0 {
             tensor4all_tensorbackend::ExecutionContext::Cpu(cpu) => cpu
                 .with_concrete_session(|session| {
                     contract_pair_on_session(session, lhs, rhs, PairwiseContractionOptions::new())
@@ -217,13 +290,41 @@ impl ZipupLeafOps<tensor4all_core::IdxTensor> for SessionLeaves<'_> {
         Ok(acc)
     }
 
+    fn contract_refs(
+        &self,
+        tensors: &[&tensor4all_core::IdxTensor],
+    ) -> Result<tensor4all_core::IdxTensor> {
+        if tensors.len() == 1 {
+            return self.adopt_dense_readback(tensors[0]);
+        }
+        let mut acc = self.contract_pair(tensors[0], tensors[1])?;
+        for tensor in &tensors[2..] {
+            acc = self.contract_pair(&acc, tensor)?;
+        }
+        Ok(acc)
+    }
+
+    fn outer_product(
+        &self,
+        lhs: &tensor4all_core::IdxTensor,
+        rhs: &tensor4all_core::IdxTensor,
+    ) -> Result<tensor4all_core::IdxTensor> {
+        let (lhs, rhs) = (
+            self.adopt_dense_readback(lhs)?,
+            self.adopt_dense_readback(rhs)?,
+        );
+        lhs.outer_product(&rhs)
+            .map_err(|error| anyhow::anyhow!("context outer product failed: {error}"))
+    }
+
     fn factorize(
         &self,
         tensor: &tensor4all_core::IdxTensor,
         left_inds: &[tensor4all_core::DynIndex],
         options: &FactorizeOptions,
     ) -> Result<tensor4all_core::FactorizeResult<tensor4all_core::IdxTensor>> {
-        factorize_in(tensor, left_inds, options, self.0)
+        let tensor = self.adopt_dense_readback(tensor)?;
+        factorize_in(&tensor, left_inds, options, &self.0)
             .map_err(|error| anyhow::anyhow!("context factorization failed: {error}"))
     }
 
@@ -235,7 +336,7 @@ impl ZipupLeafOps<tensor4all_core::IdxTensor> for SessionLeaves<'_> {
         left_inds: &[tensor4all_core::DynIndex],
         options: &FactorizeOptions,
     ) -> Result<tensor4all_core::FactorizeResult<tensor4all_core::IdxTensor>> {
-        factorize_in(tensor, left_inds, options, self.0)
+        factorize_in(tensor, left_inds, options, &self.0)
             .map_err(|error| anyhow::anyhow!("context factorization failed: {error}"))
     }
 }
@@ -628,6 +729,33 @@ where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
+        self.contract_zipup_preserving_topology_with_leaves(
+            other,
+            center,
+            form,
+            svd_policy,
+            max_bond_dim,
+            &GlobalLeaves,
+        )
+    }
+
+    /// The same schedule as [`Self::contract_zipup_preserving_topology_with`]
+    /// with an explicit leaf strategy (issue #859 F7; used by the fit
+    /// contraction's context route).
+    pub(crate) fn contract_zipup_preserving_topology_with_leaves(
+        &self,
+        other: &Self,
+        center: &V,
+        form: CanonicalForm,
+        svd_policy: Option<SvdTruncationPolicy>,
+        max_bond_dim: Option<usize>,
+        leaves: &dyn LeafOps<T>,
+    ) -> Result<Self>
+    where
+        V: Ord,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
         self.contract_zipup_impl(
             other,
             center,
@@ -635,7 +763,7 @@ where
             svd_policy,
             max_bond_dim,
             ZipupTopologyMode::PreserveInputTopology,
-            &GlobalLeaves,
+            leaves,
         )
     }
 
@@ -745,7 +873,7 @@ where
     // Inspired by ITensorMPS.jl v0.3.45, commit 794c97d, src/mpo.jl;
     // independently implemented via Rust APIs.
     #[allow(clippy::too_many_arguments)]
-    fn contract_zipup_chain<L: ZipupLeafOps<T>>(
+    fn contract_zipup_chain(
         &self,
         other: &Self,
         center: &V,
@@ -753,7 +881,7 @@ where
         svd_policy: Option<SvdTruncationPolicy>,
         max_bond_dim: Option<usize>,
         topology_mode: ZipupTopologyMode,
-        leaves: &L,
+        leaves: &dyn LeafOps<T>,
     ) -> Result<Self>
     where
         V: Ord,
@@ -1045,7 +1173,7 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn contract_zipup_impl<L: ZipupLeafOps<T>>(
+    fn contract_zipup_impl(
         &self,
         other: &Self,
         center: &V,
@@ -1053,7 +1181,7 @@ where
         svd_policy: Option<SvdTruncationPolicy>,
         max_bond_dim: Option<usize>,
         topology_mode: ZipupTopologyMode,
-        leaves: &L,
+        leaves: &dyn LeafOps<T>,
     ) -> Result<Self>
     where
         V: Ord,
@@ -1643,7 +1771,7 @@ where
             svd_policy,
             max_bond_dim,
             ZipupTopologyMode::PruneScalarSubtrees,
-            &SessionLeaves(context),
+            &SessionLeaves(context.clone()),
         )
         .map_err(TreeTNOperationError::from)
     }
@@ -2258,6 +2386,113 @@ where
     ensure_dense_reference_limit("contract", "contracted result", &output, max_elements)
 }
 
+/// Shared entry validation for every contraction dispatch ([`contract`] and
+/// [`contract_in`]): invalid truncation options or an invalid SRC
+/// configuration are rejected on every method, including the single-node and
+/// zero-sweep short-cuts, so the sibling entries cannot drift.
+fn validate_contract_options(options: &ContractionOptions) -> Result<()> {
+    validate_svd_truncation_options(options.max_bond_dim, options.svd_policy)
+        .context("invalid contraction options")?;
+    if options.method == ContractionMethod::Src {
+        options
+            .src_options
+            .validate(options.max_bond_dim)
+            .context("invalid SRC options")?;
+    }
+    Ok(())
+}
+
+/// Assemble the fit contraction options from the shared contraction options.
+fn fit_options_from(options: &ContractionOptions) -> FitContractionOptions {
+    let mut fit_options =
+        FitContractionOptions::new(options.nfullsweeps).with_factorize_alg(options.factorize_alg);
+    if let Some(max_bond_dim) = options.max_bond_dim {
+        fit_options = fit_options.with_max_bond_dim(max_bond_dim);
+    }
+    if let Some(policy) = options.svd_policy {
+        fit_options = fit_options.with_svd_policy(policy);
+    }
+    if let Some(qr_rtol) = options.qr_rtol {
+        fit_options = fit_options.with_qr_rtol(qr_rtol);
+    }
+    if let Some(tol) = options.convergence_tol {
+        fit_options = fit_options.with_convergence_tol(tol);
+    }
+    fit_options
+}
+
+/// Contract two `IdxTensor` TreeTNs with the shared contraction options, in a
+/// caller-owned execution context (issue #859 F7).
+///
+/// The same validation and method dispatch as [`contract`]; what differs is
+/// the resource each method's numerical work runs in. Zip-up, Fit and SRC go
+/// through their context-scoped twins (`contract_zipup_with_in`,
+/// `contract_fit_in`, `contract_src_with_rng_in`); Naive has no context-scoped
+/// dense-reference path yet and is refused with a typed error rather than
+/// silently run on the process-global context.
+///
+/// # Arguments
+/// * `tn_a` - The first TreeTN
+/// * `tn_b` - The second TreeTN
+/// * `center` - The center node name towards which to contract
+/// * `options` - Contraction options (method, cap, policy, sweeps)
+/// * `context` - The caller-owned execution context the numerics run in
+///
+/// # Returns
+/// The contracted TreeTN.
+///
+/// # Errors
+///
+/// Returns [`TreeTNOperationError`] when the options are invalid (the shared
+/// truncation and SRC validation), when an operand does not validate against
+/// `context`, when the selected method's context-scoped twin refuses a
+/// contraction or factorization, or for the Naive method, which has no
+/// caller-owned route.
+pub fn contract_in<V>(
+    tn_a: &TreeTN<tensor4all_core::IdxTensor, V>,
+    tn_b: &TreeTN<tensor4all_core::IdxTensor, V>,
+    center: &V,
+    options: ContractionOptions,
+    context: &tensor4all_tensorbackend::ExecutionContext,
+) -> std::result::Result<TreeTN<tensor4all_core::IdxTensor, V>, TreeTNOperationError>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    <tensor4all_core::DynIndex as IndexLike>::Id:
+        Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+{
+    validate_contract_options(&options)?;
+    if options.method == ContractionMethod::Naive {
+        return Err(TreeTNOperationError::from(anyhow::anyhow!(
+            "contract_in: the Naive method has no caller-owned route yet; use \
+             contract() or the Zipup/Fit/Src methods"
+        )));
+    }
+    tn_a.validate_context(context)?;
+    tn_b.validate_context(context)?;
+
+    match options.method {
+        ContractionMethod::Zipup => tn_a.contract_zipup_with_in(
+            tn_b,
+            center,
+            CanonicalForm::Unitary,
+            options.svd_policy,
+            options.max_bond_dim,
+            context,
+        ),
+        ContractionMethod::Fit => {
+            super::fit::contract_fit_in(tn_a, tn_b, center, fit_options_from(&options), context)
+        }
+        ContractionMethod::Src => {
+            let mut rng = ChaCha8Rng::seed_from_u64(options.src_options.seed);
+            contract_src_with_rng_in(tn_a, tn_b, center, options, &mut rng, context)
+        }
+        // Refused above; kept as a typed error so no unreachable panic exists
+        // in the library path.
+        ContractionMethod::Naive => Err(TreeTNOperationError::from(anyhow::anyhow!(
+            "contract_in: the Naive method has no caller-owned route yet"
+        ))),
+    }
+}
 /// Contract two TreeTNs using the specified method.
 ///
 /// This is the main entry point for TreeTN contraction. It dispatches to the
@@ -2278,46 +2513,14 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    // Validate before method dispatch so an invalid policy or `max_bond_dim ==
-    // 0` is rejected on every method (Zipup, Fit, Naive) including their
-    // single-node / zero-sweep / dense short-cuts.
-    validate_svd_truncation_options(options.max_bond_dim, options.svd_policy)
-        .context("contract: invalid contraction options")?;
-    if options.method == ContractionMethod::Src {
-        options
-            .src_options
-            .validate(options.max_bond_dim)
-            .context("contract: invalid SRC options")?;
-    }
+    validate_contract_options(&options)?;
 
     match options.method {
         ContractionMethod::Zipup => {
             tn_a.contract_zipup(tn_b, center, options.svd_policy, options.max_bond_dim)
         }
         ContractionMethod::Fit => {
-            let fit_options = FitContractionOptions::new(options.nfullsweeps)
-                .with_factorize_alg(options.factorize_alg);
-            let fit_options = if let Some(max_bond_dim) = options.max_bond_dim {
-                fit_options.with_max_bond_dim(max_bond_dim)
-            } else {
-                fit_options
-            };
-            let fit_options = if let Some(policy) = options.svd_policy {
-                fit_options.with_svd_policy(policy)
-            } else {
-                fit_options
-            };
-            let fit_options = if let Some(qr_rtol) = options.qr_rtol {
-                fit_options.with_qr_rtol(qr_rtol)
-            } else {
-                fit_options
-            };
-            let fit_options = if let Some(tol) = options.convergence_tol {
-                fit_options.with_convergence_tol(tol)
-            } else {
-                fit_options
-            };
-            super::fit::contract_fit(tn_a, tn_b, center, fit_options)
+            super::fit::contract_fit(tn_a, tn_b, center, fit_options_from(&options))
         }
         ContractionMethod::Naive => {
             validate_naive_dense_reference_limit(tn_a, tn_b, &options)?;

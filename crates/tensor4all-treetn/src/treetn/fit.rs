@@ -39,6 +39,7 @@ use tensor4all_core::{
     Canonical, FactorizeAlg, FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorLike,
 };
 
+use super::contraction::{GlobalLeaves, LeafOps, SessionLeaves};
 use super::localupdate::{LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater};
 use super::TreeTN;
 
@@ -199,7 +200,7 @@ where
     components
 }
 
-fn contract_fit_tensor_refs<T>(tensors: &[&T]) -> Result<T>
+fn contract_fit_tensor_refs<T>(tensors: &[&T], leaves: &dyn LeafOps<T>) -> Result<T>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -212,7 +213,7 @@ where
 
     let components = tensor_connected_components(tensors);
     if components.len() == 1 {
-        return T::contract(tensors).map_err(|e| anyhow::anyhow!("contract failed: {}", e));
+        return leaves.contract_refs(tensors);
     }
 
     let mut contracted_components = Vec::with_capacity(components.len());
@@ -224,7 +225,8 @@ where
         let contracted = if component_refs.len() == 1 {
             component_refs[0].clone()
         } else {
-            T::contract(&component_refs)
+            leaves
+                .contract_refs(&component_refs)
                 .map_err(|e| anyhow::anyhow!("component contract failed: {}", e))?
         };
         contracted_components.push(contracted);
@@ -235,8 +237,8 @@ where
         .next()
         .ok_or_else(|| anyhow::anyhow!("fit contraction produced no components"))?;
     for component in iter {
-        result = result
-            .outer_product(&component)
+        result = leaves
+            .outer_product(&result, &component)
             .map_err(|e| anyhow::anyhow!("component outer product failed: {}", e))?;
     }
 
@@ -342,6 +344,7 @@ where
         tn_a: &TreeTN<T, V>,
         tn_b: &TreeTN<T, V>,
         tn_c: &TreeTN<T, V>,
+        leaves: &dyn LeafOps<T>,
     ) -> std::result::Result<T, TreeTNOperationError>
     where
         <T::Index as IndexLike>::Id:
@@ -375,11 +378,11 @@ where
         // Recursively get or compute child environments
         let child_envs: Vec<T> = child_neighbors
             .iter()
-            .map(|child| self.get_or_compute(child, from, tn_a, tn_b, tn_c))
+            .map(|child| self.get_or_compute(child, from, tn_a, tn_b, tn_c, leaves))
             .collect::<std::result::Result<Vec<_>, TreeTNOperationError>>()?;
 
         // Compute the environment for (from, to) using child environments
-        let env = compute_single_node_environment(from, to, tn_a, tn_b, tn_c, &child_envs)?;
+        let env = compute_single_node_environment(from, to, tn_a, tn_b, tn_c, &child_envs, leaves)?;
 
         // Cache and return
         self.envs.insert((from.clone(), to.clone()), env.clone());
@@ -537,6 +540,7 @@ where
         to: &V,
         target: &TreeTN<T, V>,
         psi: &TreeTN<T, V>,
+        leaves: &dyn LeafOps<T>,
     ) -> std::result::Result<T, TreeTNOperationError> {
         if let Some(env) = self.envs.get(&(from.clone(), to.clone())) {
             return Ok(env.clone());
@@ -550,14 +554,14 @@ where
         )?;
         let child_envs = child_neighbors
             .iter()
-            .map(|child| self.get_or_compute(child, from, target, psi))
+            .map(|child| self.get_or_compute(child, from, target, psi, leaves))
             .collect::<std::result::Result<Vec<_>, TreeTNOperationError>>()?;
 
         let target_tensor = tensor_at_node(target, from, "sum target")?;
         let psi_conj = tensor_at_node(psi, from, "fit state")?.conj();
         let mut tensor_refs = vec![target_tensor, &psi_conj];
         tensor_refs.extend(child_envs.iter());
-        let env = contract_fit_tensor_refs(&tensor_refs)
+        let env = contract_fit_tensor_refs(&tensor_refs, leaves)
             .map_err(|e| anyhow::anyhow!("sum target environment contraction failed: {e}"))?;
         self.envs.insert((from.clone(), to.clone()), env.clone());
         Ok(env)
@@ -567,11 +571,12 @@ where
         &mut self,
         target: &TreeTN<T, V>,
         psi: &TreeTN<T, V>,
+        leaves: &dyn LeafOps<T>,
     ) -> std::result::Result<(), TreeTNOperationError> {
         for from in psi.node_names() {
             let neighbors: Vec<_> = psi.site_index_network().neighbors(&from).collect();
             for to in neighbors {
-                self.get_or_compute(&from, &to, target, psi)?;
+                self.get_or_compute(&from, &to, target, psi, leaves)?;
             }
         }
         Ok(())
@@ -651,6 +656,7 @@ fn fit_two_site_update<T, V>(
     local_optimum: T,
     left_bond_indices: &[T::Index],
     config: FitFactorizeConfig,
+    leaves: &dyn LeafOps<T>,
 ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
@@ -707,8 +713,8 @@ where
     // norm ends up on `node_v` together with the canonical center.
     let factorize_result =
         super::factorize_allowing_empty_side(&local_optimum, &left_inds, |tensor, left| {
-            tensor
-                .factorize(left, &options)
+            leaves
+                .factorize(tensor, left, &options)
                 .map_err(|e| anyhow::anyhow!("factorization failed: {e}"))
         })?;
     if let Some(factorize_started) = factorize_started {
@@ -756,6 +762,7 @@ fn compute_leaf_environment<T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
     tn_c: &TreeTN<T, V>,
+    leaves: &dyn LeafOps<T>,
 ) -> Result<T>
 where
     T: TensorLike,
@@ -771,7 +778,7 @@ where
 
     // A, B, and C must form one connected local environment.
     let c_conj = tensor_c.conj();
-    let env = contract_fit_tensor_refs(&[tensor_a, tensor_b, &c_conj])?;
+    let env = contract_fit_tensor_refs(&[tensor_a, tensor_b, &c_conj], leaves)?;
 
     if let Some(started) = started {
         with_fit_profile(|profile| {
@@ -793,6 +800,7 @@ fn compute_single_node_environment<T, V>(
     tn_b: &TreeTN<T, V>,
     tn_c: &TreeTN<T, V>,
     child_envs: &[T],
+    leaves: &dyn LeafOps<T>,
 ) -> Result<T>
 where
     T: TensorLike,
@@ -808,7 +816,7 @@ where
 
     if child_envs.is_empty() {
         // Leaf node: compute from tensors directly
-        return compute_leaf_environment(node, towards, tn_a, tn_b, tn_c);
+        return compute_leaf_environment(node, towards, tn_a, tn_b, tn_c, leaves);
     }
 
     // Non-leaf: all local tensors and child environments must form one
@@ -816,7 +824,7 @@ where
     let c_conj = tensor_c.conj();
     let mut tensor_refs: Vec<&T> = vec![tensor_a, tensor_b, &c_conj];
     tensor_refs.extend(child_envs.iter());
-    let result = contract_fit_tensor_refs(&tensor_refs)?;
+    let result = contract_fit_tensor_refs(&tensor_refs, leaves)?;
 
     if let Some(started) = started {
         with_fit_profile(|profile| {
@@ -857,6 +865,10 @@ where
     pub qr_rtol: Option<f64>,
     /// Factorization algorithm
     pub factorize_alg: FactorizeAlg,
+    /// Leaf execution strategy for this updater's numeric leaves
+    /// (`GlobalLeaves` by default; the caller-owned context route installs
+    /// `SessionLeaves` through [`Self::with_leaves`]).
+    pub(crate) leaves: Box<dyn LeafOps<T>>,
 }
 
 impl<T, V> FitUpdater<T, V>
@@ -877,6 +889,16 @@ where
     /// Note: sim_internal_inds() should be called on tn_a and tn_b before passing
     /// if index collision is a concern. This is not done here because contraction
     /// module (which provides sim_internal_inds) is currently disabled.
+    /// Install a leaf execution strategy (issue #859 F7).
+    ///
+    /// Used by the caller-owned context entry (`contract_fit_in`) to route the
+    /// updater's contractions and factorizations through a context-scoped
+    /// strategy instead of the process-global route.
+    pub(crate) fn with_leaves(mut self, leaves: Box<dyn LeafOps<T>>) -> Self {
+        self.leaves = leaves;
+        self
+    }
+
     pub fn new(
         tn_a: TreeTN<T, V>,
         tn_b: TreeTN<T, V>,
@@ -892,6 +914,7 @@ where
             svd_policy: rtol.map(SvdTruncationPolicy::new),
             qr_rtol: None,
             factorize_alg: FactorizeAlg::SVD,
+            leaves: Box::new(GlobalLeaves),
         }
     }
 
@@ -990,6 +1013,7 @@ where
                 &self.tn_a,
                 &self.tn_b,
                 full_treetn,
+                self.leaves.as_ref(),
             )?);
         }
 
@@ -1003,6 +1027,7 @@ where
                     &self.tn_a,
                     &self.tn_b,
                     full_treetn,
+                    self.leaves.as_ref(),
                 )?);
             }
         }
@@ -1010,7 +1035,7 @@ where
         let contract_started = fit_profile_enabled().then(Instant::now);
         let mut tensor_refs = vec![a_u, b_u, a_v, b_v];
         tensor_refs.extend(env_tensors.iter());
-        let local_optimum = contract_fit_tensor_refs(&tensor_refs)?;
+        let local_optimum = contract_fit_tensor_refs(&tensor_refs, self.leaves.as_ref())?;
         if let Some(contract_started) = contract_started {
             with_fit_profile(|profile| {
                 profile.two_site_contract_time += contract_started.elapsed();
@@ -1029,6 +1054,7 @@ where
                 qr_rtol: self.qr_rtol,
                 factorize_alg: self.factorize_alg,
             },
+            self.leaves.as_ref(),
         )
     }
 
@@ -1156,7 +1182,11 @@ where
         for (target_index, (target, env)) in
             self.targets.iter().zip(self.envs.iter_mut()).enumerate()
         {
-            env.prepare(target, psi).map_err(|error| {
+            // `SumFitUpdater` has no leaf strategy of its own: `fit_sum`'s
+            // public entry has no caller-owned context route, so this driver
+            // always runs on the process-global route (unlike `FitUpdater`,
+            // which carries `self.leaves`).
+            env.prepare(target, psi, &GlobalLeaves).map_err(|error| {
                 anyhow::anyhow!(
                     "fit_sum: target {target_index} initial environment construction failed: {error}"
                 )
@@ -1227,7 +1257,7 @@ where
             for neighbor in &u_neighbors {
                 if neighbor != node_v {
                     env_tensors.push(
-                        env.get_or_compute(neighbor, node_u, target, full_treetn)
+                        env.get_or_compute(neighbor, node_u, target, full_treetn, &GlobalLeaves)
                             .map_err(|error| {
                                 anyhow::anyhow!(
                                     "fit_sum: target {target_index} environment contraction failed: {error}"
@@ -1239,7 +1269,7 @@ where
             for neighbor in &v_neighbors {
                 if neighbor != node_u {
                     env_tensors.push(
-                        env.get_or_compute(neighbor, node_v, target, full_treetn)
+                        env.get_or_compute(neighbor, node_v, target, full_treetn, &GlobalLeaves)
                             .map_err(|error| {
                                 anyhow::anyhow!(
                                     "fit_sum: target {target_index} environment contraction failed: {error}"
@@ -1252,11 +1282,12 @@ where
             let contract_started = fit_profile_enabled().then(Instant::now);
             let mut tensor_refs = vec![target_u, target_v];
             tensor_refs.extend(env_tensors.iter());
-            let contribution = contract_fit_tensor_refs(&tensor_refs).map_err(|error| {
-                anyhow::anyhow!(
+            let contribution =
+                contract_fit_tensor_refs(&tensor_refs, &GlobalLeaves).map_err(|error| {
+                    anyhow::anyhow!(
                     "fit_sum: target {target_index} local contribution contraction failed: {error}"
                 )
-            })?;
+                })?;
             if let Some(contract_started) = contract_started {
                 with_fit_profile(|profile| {
                     profile.two_site_contract_time += contract_started.elapsed();
@@ -1287,6 +1318,7 @@ where
             local_sum,
             &left_bond_indices,
             self.factorize_config,
+            &GlobalLeaves,
         )
         .map_err(|error| anyhow::anyhow!("fit_sum: two-site update failed: {error}"))
         .map_err(TreeTNOperationError::from)
@@ -1651,6 +1683,85 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
+    contract_fit_with_leaves(tn_a, tn_b, center, options, Box::new(GlobalLeaves))
+}
+
+/// Fit contraction whose numerical work runs in a caller-owned execution
+/// context (issue #859 F7).
+///
+/// The same algorithm, arguments and validation as [`contract`](crate::contraction::contract); what
+/// differs is the resource the initial zip-up, the environment contractions
+/// and the per-sweep factorizations run in. They go through the
+/// context-scoped core entries (`contract_pair_on_session`, `factorize_in`)
+/// instead of the process-global route. Inputs must be host-only or belong to
+/// the supplied context (`TreeTN::validate_context`); `LU`/`CI` factorization
+/// algorithms and the `factorize_auto` Gram shortcut have no context-scoped
+/// twin, so the context route factorizes directly with the same options and
+/// agrees with the plain route to tight tolerance.
+///
+/// # Refusal contract
+///
+/// The caller-owned route refuses, with a typed factorization error, shapes
+/// the plain route happens to factorize: in particular an operand site index
+/// that is the *prime* of the other operand's index (same id, different prime
+/// level) leaves an unpaired primed site whose context-scoped factorization is
+/// refused rather than conflated with its unprimed twin. Refusing is the
+/// explicit contract here; the divergence is recorded in
+/// `docs/worklogs/2026-10-12-f7-treetn-fit-context.md`.
+///
+/// # Arguments
+/// * `tn_a` - First input TreeTN
+/// * `tn_b` - Second input TreeTN
+/// * `center` - Center node name
+/// * `options` - Fit contraction options
+/// * `context` - The caller-owned execution context the numerics run in
+///
+/// # Returns
+/// The contracted TreeTN.
+///
+/// # Errors
+///
+/// Returns [`TreeTNOperationError`] when the topology or options are invalid,
+/// when an operand does not validate against `context`, when the
+/// context-scoped factorization refuses an operand (see the refusal contract
+/// above), or when the caller-owned context refuses a contraction or
+/// factorization.
+pub fn contract_fit_in<V>(
+    tn_a: &TreeTN<tensor4all_core::IdxTensor, V>,
+    tn_b: &TreeTN<tensor4all_core::IdxTensor, V>,
+    center: &V,
+    options: FitContractionOptions,
+    context: &tensor4all_tensorbackend::ExecutionContext,
+) -> std::result::Result<TreeTN<tensor4all_core::IdxTensor, V>, TreeTNOperationError>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    <tensor4all_core::DynIndex as IndexLike>::Id:
+        Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+{
+    tn_a.validate_context(context)?;
+    tn_b.validate_context(context)?;
+    contract_fit_with_leaves(
+        tn_a,
+        tn_b,
+        center,
+        options,
+        Box::new(SessionLeaves(context.clone())),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn contract_fit_with_leaves<T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    options: FitContractionOptions,
+    leaves: Box<dyn LeafOps<T>>,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
     use crate::CanonicalForm;
     let profile_enabled = fit_profile_enabled();
     if profile_enabled {
@@ -1669,12 +1780,13 @@ where
     // Initialize C using the SVD-based zipup contraction while preserving
     // the input topology required by variational sweeps.
     let zipup_started = profile_enabled.then(Instant::now);
-    let mut tn_c = tn_a.contract_zipup_preserving_topology_with(
+    let mut tn_c = tn_a.contract_zipup_preserving_topology_with_leaves(
         tn_b,
         center,
         CanonicalForm::Unitary,
         options.svd_policy,
         options.max_bond_dim,
+        leaves.as_ref(),
     )?;
     if let Some(zipup_started) = zipup_started {
         with_fit_profile(|profile| {
@@ -1694,6 +1806,7 @@ where
 
     // Create FitUpdater (environments are computed lazily)
     let mut updater = FitUpdater::new(tn_a.clone(), tn_b.clone(), options.max_bond_dim, None)
+        .with_leaves(leaves)
         .with_svd_policy(options.svd_policy)
         .with_qr_rtol(options.qr_rtol)
         .with_factorize_alg(options.factorize_alg);

@@ -240,23 +240,108 @@ fn zipup_context_route_matches_plain_route() {
 }
 
 #[test]
-fn fit_and_naive_are_refused_instead_of_silently_global() {
+fn fit_context_route_matches_plain_route() {
+    // Fit now has a caller-owned route (treetn's `contract_fit_in` via the
+    // context dispatch): the context-built trains run in the supplied context
+    // and agree with the plain route to tight tolerance.
+    let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    let context = one_thread_context();
+    let build = in_context_build(&context);
+    let ctx_a = mpo(&sites, 1, &build);
+    let ctx_b = mpo(&sites, 4, &build);
+    let options = ContractOptions::fit().with_max_bond_dim(8).with_nsweeps(2);
+
+    let (ga, gb) = global_fixture();
+    let plain = contract(&ga, &gb, &options).unwrap();
+    let contextual = contract_in(&ctx_a, &ctx_b, &options, &context).unwrap();
+
+    // Whole-result comparison: a fresh-ID mismatch (zip-up renames internal
+    // indices per run) rules out `sub`/`maxabs`, so report the norm-based
+    // residual `||a - b|| / ||a||` of the two dense payloads instead.
+    let (a, b) = (dense(&plain), dense(&contextual));
+    assert_eq!(a.len(), b.len());
+    let difference: f64 = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| (x - y).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    let reference: f64 = a.iter().map(|x| x.powi(2)).sum::<f64>().sqrt();
+    let residual = difference / reference.max(1e-30);
+    assert!(
+        residual <= 1e-10,
+        "fit context route residual {residual} exceeds 1e-10"
+    );
+}
+
+/// Regression for the index-identity rule on the Fit route: same-ID indices
+/// that differ by prime level are not conflated.
+///
+/// The plain route factorizes the primed shape and its result differs from the
+/// same-prime-level result, so the primed index is demonstrably not conflated
+/// with its unprimed twin. The caller-owned route refuses the same shape with a
+/// typed factorization error (its documented refusal contract, recorded in
+/// `docs/worklogs/2026-10-12-f7-treetn-fit-context.md`): refusing beats
+/// conflating, which would have made the two results equal.
+#[test]
+fn fit_context_route_handles_same_id_primed_indices_like_the_plain_route() {
+    let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    let primed_sites: Vec<DynIndex> =
+        vec![sites[0].clone(), sites[1].clone().prime(), sites[2].clone()];
+    let options = ContractOptions::fit().with_max_bond_dim(8).with_nsweeps(2);
+
+    let same_plev = contract(
+        &mpo(&sites, 1, &global_build),
+        &mpo(&sites, 4, &global_build),
+        &options,
+    )
+    .unwrap();
+    let primed_plain = contract(
+        &mpo(&sites, 1, &global_build),
+        &mpo(&primed_sites, 4, &global_build),
+        &options,
+    )
+    .unwrap();
+
+    // Distinctness: the primed middle site is not conflated with the unprimed
+    // one, so the result differs from the same-prime-level contraction.
+    assert_ne!(dense(&same_plev), dense(&primed_plain));
+
+    // Documented divergence: the caller-owned route rejects this primed shape
+    // (its factorization path refuses the unpaired primed site) instead of
+    // conflating it with the unprimed twin - a typed error, recorded in
+    // docs/worklogs/2026-10-12-f7-treetn-fit-context.md.
+    let context = one_thread_context();
+    let build = in_context_build(&context);
+    let error = contract_in(
+        &mpo(&sites, 1, &build),
+        &mpo(&primed_sites, 4, &build),
+        &options,
+        &context,
+    )
+    .unwrap_err();
+    assert!(
+        format!("{error}").contains("factorization"),
+        "expected the caller-owned route to refuse the primed shape, got: {error}"
+    );
+}
+
+#[test]
+fn naive_is_refused_instead_of_silently_global() {
     // A caller who supplies a context must never get a silent process-global
-    // run: Fit and Naive are refused with a typed error naming the method,
-    // plain `contract` stays available for them.
+    // run: Naive is refused with a typed error naming the method, plain
+    // `contract` stays available for it.
     let (a, b) = global_fixture();
     let context = one_thread_context();
-    for (options, name) in [
-        (ContractOptions::fit().with_max_bond_dim(4), "Fit"),
-        (ContractOptions::naive().with_max_bond_dim(4), "Naive"),
-    ] {
-        let error = contract_in(&a, &b, &options, &context).unwrap_err();
-        let message = format!("{error}");
-        assert!(
-            message.contains(name) && message.contains("no caller-owned route"),
-            "expected a typed refusal naming {name}, got: {message}"
-        );
-    }
-    // The plain route still runs them.
-    assert!(contract(&a, &b, &ContractOptions::fit().with_max_bond_dim(4)).is_ok());
+    let options = ContractOptions::naive()
+        .with_max_bond_dim(4)
+        .with_dense_reference_limit(1 << 20);
+    let error = contract_in(&a, &b, &options, &context).unwrap_err();
+    let message = format!("{error}");
+    assert!(
+        message.contains("Naive") && message.contains("no caller-owned route"),
+        "expected a typed refusal naming Naive, got: {message}"
+    );
+    // The plain route still runs it.
+    assert!(contract(&a, &b, &options).is_ok());
 }
