@@ -142,6 +142,66 @@ random stream. 16 sites, local dimension 4, three repetitions per run:
 - **The downstream workaround stays valid.** The child-process isolation the report describes achieves a
   stage-local budget today; nothing here replaces it.
 
+## 2.1 Thread-count precedence, and what a downstream caller should set
+
+The report asks for two things this section answers directly: the thread-count precedence, and recommended
+settings. Both are grounded in the entries that exist today, not in proposals.
+
+**The two budgets, and which one an operation takes.**
+
+| Budget | Set by | Applies to |
+| --- | --- | --- |
+| process-global | `RAYON_NUM_THREADS`, read when the process-global tenferro CPU context first initializes | every operation with no caller context: the legacy `crossinterpolate2`/`optimize_with_proposer` entries, and the ops on this path that still have no context-taking twin (§2's inventory) |
+| caller-owned | `CpuExecutionContext::from_backend(CpuBackend::with_threads(n))`, passed to an `_in` entry | only the operations threaded through that context: the per-edge factorization, the optimizer, and the materialization solve (`crossinterpolate2_in`, `optimize_with_proposer_in`, `to_treetn_in`) |
+
+An operation with a context-taking twin takes the **caller's** context and never the global one; an operation
+without a twin still takes the global one. The stage's effective parallelism is therefore the *larger* of the
+two for its un-threaded remainder, which is why the caller's context bounds the stage only partially today.
+
+**Measured, `sites = 8` and `sites = 14`, `local_dim = 4`, global pivots on, the bench's pinned options
+(`seed = 20_261_011`, `tolerance = 1e-8`, `max_iter = 30`, `max_bond_dim = 16`)** (`cargo bench -p
+tensor4all-treetci --bench g0_stage_budget`; each row is one process, because the global context fixes its
+worker count at first initialization). The `sites = 8`, one-worker row reproduces §3's end-to-end figure
+(6.18 ms) within noise, so the two sections measure the same workload:
+
+| configuration | `sites = 8` (3 reps) | `sites = 14` (1 rep) | peak process threads |
+| --- | --- | --- | --- |
+| global 1 worker | 7.41 / 6.23 / 6.32 ms | 15.25 ms | 2 |
+| global 4 workers | 9.16 / 7.72 / 7.67 ms | - | 6 |
+| global 64 workers (this machine) | 9.01 / 7.63 / 7.50 ms | 21.14 ms | 66 |
+| global 64 workers, caller context at 1 worker | 7.38 / 6.20 / 6.29 ms | 18.25 ms | 67 |
+| global pivots **off**, global 1 / 64 workers | 1.80 / 3.30 ms | - | 2 / 66 |
+
+Three things follow, and they are the answer to the report:
+
+1. **More workers make this path slower, not faster** (at `sites = 14`, 21.1 ms at 64 workers against 15.2 ms at
+   one, with CPU ticks 7 against 1: more CPU for worse wall time is the over-parallelization signature).
+2. **A one-worker caller context recovers the whole gap at `sites = 8`** (6.20-6.29 ms, matching the global
+   one-worker run) while the process-global budget stays at 64 for the later `Pi`/`W`/`Sigma` stages - which is
+   exactly the independence the report says it needs. At `sites = 14` it recovers only part of it (18.25 ms
+   against 15.25 at one worker and 21.14 at 64), because the global pivot search's readout and the final
+   materialization still run on the global context; §3's component split places that remainder in the search's
+   readout (92% of a search at one worker) and the materialization machinery (0.12 ms per call at one worker,
+   doubling at four), which is the attribution §2 asked for.
+3. **Peak process threads are not a measure of the stage's own parallelism.** The global pool is created even
+   when the stage runs on a caller context (67 peak threads in the two-budget row), so a thread count that
+   grows with the global budget does not mean the stage used it.
+
+**Recommended downstream settings.**
+
+- Pass a caller-owned context with **one worker** to the G0 stage (`crossinterpolate2_in` with
+  `CpuBackend::with_threads(1)`), and leave the process-global budget alone for the later stages. This is the
+  operation-local control the report asks for, and it needs no child process for the threaded share.
+- **Do not** set `RAYON_NUM_THREADS=1` process-wide to fix G0: it serializes `Pi`/`W`/`Sigma` too, which the
+  report already established.
+- Keep the child-process isolation described in the report for the **residual** - the search's readout and the
+  final materialization - until §2's attribution is done and those ops have context-taking twins. Today the
+  caller context does not cover them, so a process-level budget is still the only bound for that share.
+- Treat a stage-local context as a **bound, not a speed-up**: on this workload the caller's factorization
+  budget was never the bottleneck (§2's step-3 measurement), so the win comes from *lowering* the budget, not
+  from owning the factorization.
+
+
 ## 3. Evidence and limits
 
 - The bench prints the requested and observed worker counts, every repetition's stage time, the resulting
