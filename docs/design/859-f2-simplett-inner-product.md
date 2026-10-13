@@ -222,3 +222,51 @@ support the route and worker-count comparisons they were designed for.
 - No new backend capability: `Session::einsum_reads` and `Session::sum` already exist, and no kernel changes.
 - Not a claim that the removed conversions are the dominant cost: the record reports the measured difference
   and the mechanism the source shows, not a causal explanation the measurement cannot support.
+
+## 6. Post-fix status, the before/after envelope, and the regression note
+
+[#510](https://github.com/tensor4all/tensor4all-rs/issues/510)'s acceptance criterion is a reproducible
+tensor4all benchmark that shows the small-chi TT inner-product gap before and after the tenferro-side fix
+([tenferro-rs#872](https://github.com/tensor4all/tenferro-rs/issues/872), closed 2026-05-21). This section
+records where each half of that criterion is measured, and the envelope a future change should be held to.
+
+**The pin is post-fix, so §4.1 measures the after state.** The workspace pins tenferro at
+`3f802fa1e0d6f008a22e264c1122fd1f7a24ac44`, committed 2026-10-10 - about five months after #872 closed - so
+every number in §4.1 is measured on the fixed backend.
+
+**The before/after is recorded upstream, where the kernels are.** The issue's table is tenferro's pairwise
+`site_update` benchmark, and #510's comment of 2026-05-20 records the same points after the fix (one thread,
+OpenBLAS backend):
+
+| chi | ITensors median (before) | tenferro normal (before) | tenferro normal (after) | tenferro cached (after) |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 3.26 us | 20.38 us | 2.24 us | 0.98 us |
+| 2 | 3.72 us | 20.65 us | - | - |
+| 4 | 3.78 us | 19.21 us | - | - |
+
+The small-`chi` gap the issue tracked is closed on the tenferro side (roughly 9x at `chi = 1`, and the cached
+figure is below the ITensors median). What that leaves on the tensor4all side is **not** the backend entry any
+more: it is the route, which is what §4.1 measures.
+
+**The graph/traced route does not avoid the per-call cost - measured, not assumed.** The issue's proposed
+work items 4 and 5 ask whether tensor4all's graph compilation or traced execution avoids repeated backend
+installs in realistic TT workloads. §4.1 answers it for this workload: the compatibility arm *is* the
+compiled-graph route, and it is **3.1x slower** per call than the explicit session (273.2 us against 87.4 us
+at four sites), flat across lengths. The source explains the direction - that route traces and runs a compiled
+graph on the process-global context, duplicates each operand per contraction, converts a contraction result
+into a `Matrix` and back at each site (`2N - 1` conversions) and builds a plan per contraction - so more graph
+compilation is not the lever here; the session-held route is.
+
+**The regression envelope to hold.** The explicit route's per-site cost is flat on this workload:
+87.4/4, 172.3/8 and 340.3/16 sites give 21.9, 21.5 and 21.3 us per site (physical dimension 4, bond dimension
+4, one worker, AMD EPYC 7713P). A future change should be investigated if, on this workload and machine:
+
+- the explicit route's per-site time exceeds **~30 us** (about 40% above the measured envelope), or
+- the explicit-to-compatibility ratio falls below **2x** (measured 3.09-3.13x).
+
+This is a note for whoever changes the route, not a CI threshold: the bench is `criterion`-based and
+machine-dependent, and §4.2 already names the untracked-eager arm and the Julia comparison as deferred. The
+ITensors.jl comparison itself stays upstream, because that is where the same kernels are called and where the
+before/after table above lives; a tensor4all-side re-implementation of the Julia reference would measure a
+different loop, not this one.
+
