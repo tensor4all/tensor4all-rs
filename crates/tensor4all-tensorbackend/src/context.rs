@@ -409,10 +409,44 @@ impl CpuExecutionContext {
 
     /// Return retained-buffer statistics for this context's graph backend.
     ///
+    /// `buffers` counts the retained allocations and `capacity_bytes` their
+    /// total element capacity. A context whose pool has just been released by
+    /// [`Self::reset_graph_buffer_pool`] reports zero.
+    ///
     /// # Errors
     ///
     /// Returns [`CpuExecutionContextError`] when graph initialization or the
     /// backend statistics query fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro::program::{CoreSemanticOp, ProgramInputSpec};
+    /// use tenferro::{DType, Tensor, TraceContext};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    ///
+    /// let mut trace = TraceContext::new();
+    /// let input = trace.input(ProgramInputSpec::new(DType::F64, [2_usize.into()]))?;
+    /// let output = trace.add_op(CoreSemanticOp::Neg, &[input])?[0];
+    /// let graph = trace.finish(&[output])?;
+    /// let compiled = context.compile_graph(&graph)?;
+    /// let values = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0])?;
+    /// let output = context.run_graph(&compiled, &[&values])?;
+    /// assert_eq!(output[0].as_slice::<f64>()?, &[-1.0, 2.0]);
+    ///
+    /// // Releasing the pool empties it.
+    /// let before = context.graph_buffer_pool_stats()?;
+    /// context.reset_graph_buffer_pool()?;
+    /// let after = context.graph_buffer_pool_stats()?;
+    /// assert_eq!(after.buffers, 0);
+    /// assert_eq!(after.capacity_bytes, 0);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn graph_buffer_pool_stats(&self) -> Result<BufferPoolStats, CpuExecutionContextError> {
         self.with_graph_state(|_, _, backend| backend.buffer_pool_stats())?
             .map_err(|source| CpuExecutionContextError::graph("buffer-pool statistics", source))
@@ -420,10 +454,31 @@ impl CpuExecutionContext {
 
     /// Release retained buffers owned by this context's graph backend.
     ///
+    /// The graph runtime, its compiled plans and its prepared-plan cache are
+    /// kept, so callers can keep running previously compiled graphs afterwards.
+    ///
     /// # Errors
     ///
     /// Returns [`CpuExecutionContextError`] when graph initialization or reset
     /// fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// context.reset_graph_buffer_pool()?;
+    ///
+    /// // The pool retains nothing afterwards, and the runtime stays usable.
+    /// let stats = context.graph_buffer_pool_stats()?;
+    /// assert_eq!(stats.buffers, 0);
+    /// assert_eq!(stats.capacity_bytes, 0);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn reset_graph_buffer_pool(&self) -> Result<(), CpuExecutionContextError> {
         self.with_graph_state(|_, _, backend| backend.reset_buffer_pool())?
             .map_err(|source| CpuExecutionContextError::graph("buffer-pool reset", source))
@@ -915,6 +970,61 @@ mod tests {
                 assert_eq!(values, vec![23.0, 34.0]);
             }
         }
+    }
+
+    #[test]
+    fn graph_pool_stats_and_reset_track_the_context_backend_pool() {
+        use tenferro_cpu::with_cpu_exec_session;
+        use tenferro_tensor::TensorBuffer;
+
+        let context = context();
+        let mut trace = TraceContext::new();
+        let input = trace
+            .input(ProgramInputSpec::new(DType::F64, [2_usize.into()]))
+            .unwrap();
+        let output = trace.add_op(CoreSemanticOp::Neg, &[input]).unwrap()[0];
+        let graph = trace.finish(&[output]).unwrap();
+        let compiled = context.compile_graph(&graph).unwrap();
+        let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0]).unwrap();
+        let output = context.run_graph(&compiled, &[&input]).unwrap();
+        assert_eq!(output[0].as_slice::<f64>().unwrap(), &[-1.0, 2.0]);
+        drop(output);
+
+        // Return one host tensor to the pool the context owns.
+        context
+            .with_session(|session| {
+                with_cpu_exec_session(session, |cpu| {
+                    cpu.reclaim_buffer(
+                        Tensor::from_vec_col_major(vec![8], vec![1.0_f64; 8]).unwrap(),
+                    );
+                })
+            })
+            .unwrap()
+            .expect("the CPU context must expose its execution session");
+
+        // The graph-side view reports the pool the context's backend holds.
+        let retained = context.graph_buffer_pool_stats().unwrap();
+        assert!(retained.buffers >= 1);
+        assert!(retained.capacity_bytes >= 8 * std::mem::size_of::<f64>());
+        assert_eq!(
+            retained,
+            context.with_backend(|backend| backend.buffer_pool_stats().unwrap())
+        );
+
+        context.reset_graph_buffer_pool().unwrap();
+        assert_eq!(
+            context.graph_buffer_pool_stats().unwrap(),
+            BufferPoolStats::default()
+        );
+        assert_eq!(
+            context.with_backend(|backend| backend.buffer_pool_stats().unwrap()),
+            BufferPoolStats::default()
+        );
+
+        // Releasing the pool keeps the runtime and its prepared plan cache.
+        let output = context.run_graph(&compiled, &[&input]).unwrap();
+        assert_eq!(output[0].as_slice::<f64>().unwrap(), &[-1.0, 2.0]);
+        assert!(context.graph_cache_stats().unwrap().prepared_plans.entries > 0);
     }
 
     #[cfg(feature = "global-defaults")]

@@ -218,3 +218,15 @@ fn test_center_canonicalize_function_c64() {
 fn test_evaluate_matches_original_c64() {
     test_evaluate_matches_original_generic::<Complex64>();
 }
+
+#[test]
+fn test_site_tensor_train_set_two_site_tensors_rejects_one_site_train() {
+    // `new` accepts n == 1 and `canonicalize` returns `Ok` for it, so the
+    // rejection message must not compute `len() - 2` on a one-site train.
+    let t: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+    let mut stt = SiteTensorTrain::<f64>::new(vec![t.clone()], 0).unwrap();
+    assert!(matches!(
+        stt.set_two_site_tensors(0, t.clone(), t),
+        Err(SimpleTensorTrainError::InvalidOperation { .. })
+    ));
+}

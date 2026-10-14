@@ -264,10 +264,23 @@ struct EdgeExpansionStats {
 
 /// Build Krylov references from `operator`, expand the TreeTN state, and return
 /// the expanded state.
+///
 /// # Errors
 ///
-/// Returns an error when the subspace expansion fails (a shape or index
-/// /// mismatch, a non-convergence failure, or a backend failure).
+/// Returns [`GseError::InvalidOption`] when `density_weight_cutoff` or
+/// `hermitian_tol` is negative or not finite, or when
+/// `reference_max_bond_dim` is set to zero; [`GseError::MissingCenter`] when
+/// `center` is not a node of `init`; [`GseError::TopologyMismatch`] when the
+/// state and the operator MPO topology differ; and
+/// [`GseError::UnsupportedStateSiteCount`],
+/// [`GseError::UnsupportedMultipleSiteMappings`], [`GseError::MissingMapping`]
+/// or [`GseError::InvalidMapping`] when a node does not carry exactly one
+/// input and one output operator index. A generated reference that does not
+/// hold one state index per node, or whose site dimension disagrees with the
+/// target, fails with [`GseError::UnsupportedStateSiteCount`] or
+/// [`GseError::InvalidMapping`]. Failures of the underlying operator
+/// application, norm or canonicalization are reported as
+/// [`GseError::Algorithm`].
 ///
 pub fn global_subspace_expand<V>(
     operator: &LinearOperator<IdxTensor, V>,
@@ -300,8 +313,14 @@ where
 /// references being returned or mutated.
 /// # Errors
 ///
-/// Returns an error when the subspace expansion fails (a shape or index
-/// /// mismatch, a non-convergence failure, or a backend failure).
+/// Returns [`GseError::InvalidOption`] for an invalid `density_weight_cutoff`,
+/// `hermitian_tol` or `reference_max_bond_dim`, [`GseError::MissingCenter`]
+/// when `center` is not a node of `init`, [`GseError::TopologyMismatch`] when a
+/// supplied reference does not share the target topology, and
+/// [`GseError::UnsupportedStateSiteCount`] or [`GseError::InvalidMapping`] when
+/// a reference or the target violates the single-site state contract.
+/// Failures of the underlying canonicalization, index relabeling or edge
+/// expansion are reported as [`GseError::Algorithm`].
 ///
 pub fn global_subspace_expand_with_references<V>(
     init: TreeTN<IdxTensor, V>,
@@ -1341,20 +1360,17 @@ where
             node: format!("{node:?}"),
             count: 0,
         })?;
-    if site_space.len() != 1 {
-        return Err(GseError::UnsupportedStateSiteCount {
+    // Exactly one state index per node: testing `next()` twice expresses that
+    // directly, without the unreachable `None` arm that a length check
+    // followed by a single `next()` leaves behind.
+    let mut indices = site_space.iter();
+    match (indices.next(), indices.next()) {
+        (Some(index), None) => Ok(index.clone()),
+        _ => Err(GseError::UnsupportedStateSiteCount {
             node: format!("{node:?}"),
             count: site_space.len(),
-        });
+        }),
     }
-    site_space
-        .iter()
-        .next()
-        .cloned()
-        .ok_or_else(|| GseError::UnsupportedStateSiteCount {
-            node: format!("{node:?}"),
-            count: 0,
-        })
 }
 
 fn product_dim(indices: &[DynIndex]) -> std::result::Result<usize, GseError> {
@@ -1608,6 +1624,30 @@ mod tests {
             err,
             GseError::InvalidMapping { reason, .. }
                 if reason == "reference site dimension does not match target"
+        ));
+    }
+
+    #[test]
+    fn single_site_index_reports_missing_node_and_multi_site_nodes() {
+        let target = product_chain_state(2, 2);
+
+        let err = single_site_index(&target, &"missing").unwrap_err();
+        assert!(matches!(
+            err,
+            GseError::UnsupportedStateSiteCount { node, count }
+                if node == "\"missing\"" && count == 0
+        ));
+
+        let s0 = DynIndex::new_dyn(2);
+        let s1 = DynIndex::new_dyn(2);
+        let tensor = IdxTensor::from_dense(vec![s0, s1], vec![0.0; 4]).unwrap();
+        let multi =
+            TreeTN::<IdxTensor, &'static str>::from_tensors(vec![tensor], vec!["site0"]).unwrap();
+        let err = single_site_index(&multi, &"site0").unwrap_err();
+        assert!(matches!(
+            err,
+            GseError::UnsupportedStateSiteCount { node, count }
+                if node == "\"site0\"" && count == 2
         ));
     }
 

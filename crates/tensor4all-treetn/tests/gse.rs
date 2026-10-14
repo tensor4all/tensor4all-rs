@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorContractionLike};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy, TensorContractionLike};
 use tensor4all_treetn::{
     global_subspace_expand, global_subspace_expand_with_references, gse_tdvp, GseError, GseOptions,
     GseTdvpOptions, IndexMapping, LinearOperator, TdvpOptions, TreeTN,
@@ -562,6 +562,8 @@ fn global_subspace_expand_builds_operator_references() {
         &"site0",
         GseOptions::default()
             .with_krylov_dim(1)
+            .with_reference_svd_policy(SvdTruncationPolicy::new(1.0e-10))
+            .with_hermitian_tol(1.0e-10)
             .with_density_weight_cutoff(1.0e-14),
     )
     .unwrap();
@@ -933,6 +935,58 @@ fn gse_rejects_reference_topology_mismatch() {
     .unwrap_err();
 
     assert!(matches!(err, GseError::TopologyMismatch));
+}
+
+#[test]
+fn global_subspace_expand_rejects_missing_center_and_topology_mismatch() {
+    let zero = Complex64::new(0.0, 0.0);
+    let one = Complex64::new(1.0, 0.0);
+    let (state, sites) = product_chain_state([[one, zero], [one, zero]]);
+    let operator = identity_or_x_operator(
+        &sites,
+        &["site0", "site1"],
+        &[("site0", "site1")],
+        &["site1"],
+    );
+
+    let err =
+        global_subspace_expand(&operator, state, &"missing", GseOptions::default()).unwrap_err();
+    assert!(matches!(
+        err,
+        GseError::MissingCenter { center } if center == "\"missing\""
+    ));
+
+    // A three-site state cannot share the two-site operator topology.
+    let (star, _) = product_star_state([[one, zero], [one, zero], [one, zero]]);
+    let err = global_subspace_expand(&operator, star, &"site0", GseOptions::default()).unwrap_err();
+    assert!(matches!(err, GseError::TopologyMismatch));
+}
+
+#[test]
+fn gse_rejects_reference_with_multiple_state_sites_per_node() {
+    let zero = Complex64::new(0.0, 0.0);
+    let one = Complex64::new(1.0, 0.0);
+    let (state, _) = product_chain_state([[one, zero], [one, zero]]);
+
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let tensor = IdxTensor::from_dense(vec![s0, s1], vec![zero; 4]).unwrap();
+    let reference =
+        TreeTN::<IdxTensor, &'static str>::from_tensors(vec![tensor], vec!["site0"]).unwrap();
+
+    let err = global_subspace_expand_with_references(
+        state,
+        vec![reference],
+        &"site0",
+        GseOptions::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        GseError::UnsupportedStateSiteCount { node, count }
+            if node == "\"site0\"" && count == 2
+    ));
 }
 
 #[test]

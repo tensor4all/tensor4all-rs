@@ -715,12 +715,15 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
         inv_sv: DiagMatrix,
         tensor2: Tensor3<T>,
     ) -> Result<()> {
-        if i >= self.len() - 1 {
+        // A two-site update needs an adjacent pair, so an empty or one-site
+        // train has no valid site: `len() - 1` / `len() - 2` would underflow.
+        let n = self.len();
+        if n < 2 || i >= n - 1 {
             return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "Cannot set two-site tensors at site {} (max {})",
                     i,
-                    self.len() - 2
+                    n.saturating_sub(2)
                 ),
             });
         }

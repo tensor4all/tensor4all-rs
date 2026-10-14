@@ -377,12 +377,15 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
         tensor1: Tensor3<T>,
         tensor2: Tensor3<T>,
     ) -> Result<()> {
-        if i >= self.len() - 1 {
+        // A two-site update needs an adjacent pair, so a one-site train has no
+        // valid site: `len() - 2` in the message would underflow.
+        let n = self.len();
+        if n < 2 || i >= n - 1 {
             return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "Cannot set two-site tensors at site {} (max {})",
                     i,
-                    self.len() - 2
+                    n.saturating_sub(2)
                 ),
             });
         }

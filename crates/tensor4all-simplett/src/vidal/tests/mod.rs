@@ -299,6 +299,28 @@ fn test_inverse_set_two_site_tensors_out_of_bounds() {
 }
 
 #[test]
+fn test_inverse_set_two_site_tensors_rejects_degenerate_train() {
+    let t: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+
+    // Empty train: `new` and `from_vidal` both return `Ok` for it, so the
+    // guard must not compute `len() - 1` before rejecting.
+    let empty = VidalTensorTrain::<f64>::new(Vec::new(), Vec::new()).unwrap();
+    let mut inv = InverseTensorTrain::from_vidal(&empty).unwrap();
+    assert!(matches!(
+        inv.set_two_site_tensors(0, t.clone(), DiagMatrix::default(), t.clone()),
+        Err(SimpleTensorTrainError::InvalidOperation { .. })
+    ));
+
+    // One-site train: no adjacent pair exists for any index.
+    let one = VidalTensorTrain::<f64>::new(vec![t.clone()], Vec::new()).unwrap();
+    let mut inv = InverseTensorTrain::from_vidal(&one).unwrap();
+    assert!(matches!(
+        inv.set_two_site_tensors(0, t.clone(), DiagMatrix::default(), t),
+        Err(SimpleTensorTrainError::InvalidOperation { .. })
+    ));
+}
+
+#[test]
 fn test_inverse_accessors() {
     let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
     let mut inv = InverseTensorTrain::from_tensor_train(&tt).unwrap();
