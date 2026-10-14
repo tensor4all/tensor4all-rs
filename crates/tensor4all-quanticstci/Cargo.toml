@@ -10,6 +10,7 @@ authors = [
 license.workspace = true
 repository.workspace = true
 description = "High-level Quantics TCI interface for function interpolation"
+autotests = false
 
 [features]
 default = ["tenferro-cpu-faer"]
@@ -44,3 +45,7 @@ rand.workspace = true
 approx.workspace = true
 tenferro-cpu.workspace = true
 tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-faer"] }
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

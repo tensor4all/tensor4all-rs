@@ -3,14 +3,14 @@
 //! tests: each prints what it measures. Run one with
 //!
 //! ```text
-//! cargo test --release -p tensor4all-partitionedtreetn --test adaptive_l2_diagnostics \
-//!     -- --ignored --nocapture --test-threads 1 <name>
+//! cargo test --release -p tensor4all-partitionedtreetn --test integration \
+//!     -- --ignored --nocapture --test-threads 1 adaptive_l2_diagnostics::<name>
 //! ```
 //!
 //! The numbers quoted in the record are evaluation and patch counts, which
 //! do not depend on timing or thread settings.
 
-mod adaptive_common;
+use crate::adaptive_common;
 
 use std::fmt::Debug;
 use std::hash::Hash;

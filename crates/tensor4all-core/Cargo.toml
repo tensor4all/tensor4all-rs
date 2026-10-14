@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Core tensor types, indices, and operations (SVD, QR, contraction) for tensor4all"
+autotests = false
 
 [features]
 default = ["backend-tenferro", "tenferro-cpu-faer"]
@@ -95,3 +96,15 @@ harness = false
 [[bench]]
 name = "lazy_block_rook"
 harness = false
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"
+
+[[test]]
+name = "plain_tensor_retention"
+path = "tests/plain_tensor_retention.rs"
+
+[[test]]
+name = "linalg_svd"
+path = "tests/linalg_svd.rs"

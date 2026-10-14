@@ -323,7 +323,7 @@ TreeTN contraction lane separately:
 
 ```bash
 cargo test --release -p tensor4all-treetn \
-  --features tenferro-cuda --test cuda_tree_contraction -- --nocapture
+  --features tenferro-cuda --test integration -- --nocapture cuda_tree_contraction::
 ```
 
 Two-site TreeTN DMRG against a Pauli Heisenberg Hamiltonian

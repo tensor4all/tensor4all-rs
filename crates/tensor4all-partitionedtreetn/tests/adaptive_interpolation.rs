@@ -4,7 +4,7 @@
 //! exactly, and reports `BondCapReached` when the exact rank reaches the cap,
 //! so splitting is tested independently of any real engine.
 
-mod adaptive_common;
+use crate::adaptive_common;
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};

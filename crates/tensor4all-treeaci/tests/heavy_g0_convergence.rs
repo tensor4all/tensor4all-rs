@@ -7,8 +7,7 @@
 //! on every push. CONTRIBUTING.md, "CI time budget", has the selection command and
 //! the budgets this file stays outside of.
 
-#[path = "support/g0.rs"]
-mod g0;
+use crate::g0;
 
 use num_complex::Complex64;
 use tensor4all_core::ColMajorArrayRef;

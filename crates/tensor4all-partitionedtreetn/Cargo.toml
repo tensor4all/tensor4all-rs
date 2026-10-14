@@ -10,6 +10,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+autotests = false
 
 [features]
 default = ["tenferro-cpu-faer"]
@@ -50,3 +51,7 @@ rand_chacha.workspace = true
 [[bench]]
 name = "f7_engine_context_overhead"
 harness = false
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

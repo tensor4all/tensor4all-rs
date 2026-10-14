@@ -25,7 +25,7 @@ below is an open decision for the B1 change, not a commitment made here.
 | Public API inventory | generated, never committed: `cargo run -p xtask --release -- api-dump` → `target/api-dump/tensor4all_tensorbackend.md` (978 lines at this revision) |
 | Workspace consumers | 12 other workspace crates depend on `tensor4all-tensorbackend`: `aci`, `capi`, `core`, `interpolativeqtt`, `itensorlike`, `partitionedtt`, `quanticstci`, `simplett`, `tensorci`, `treeaci`, `treetci`, `treetn` |
 | Hosted workspace test job | `cargo nextest run --locked --cargo-profile ci --workspace --timings -v` (`.github/workflows/CI_rs.yml`, "Run workspace tests") |
-| Hosted coverage job (HDF5-excluded) | `cargo llvm-cov nextest --locked --release --no-clean --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json` (same workflow) |
+| Hosted coverage job (HDF5-excluded) | `cargo llvm-cov nextest --locked --cargo-profile coverage --no-clean --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json` (same workflow) |
 
 Two upstream facts constrain B1 and are recorded here so the dependency is
 explicit rather than discovered mid-implementation:

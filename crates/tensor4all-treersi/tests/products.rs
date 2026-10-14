@@ -7,8 +7,7 @@ use tensor4all_treersi::{hadamard_many, hadamard_many_with_rng_in, TreeRsiOption
 use tensor4all_treetn::TreeTN;
 
 type Tree = TreeTN<IdxTensor, usize>;
-#[path = "../examples/support/mod.rs"]
-mod support;
+use crate::support;
 use support::random_tree;
 
 fn whole_product<T: TreeRsiScalar>(sample: impl Fn(f64, f64) -> T + Copy, tolerance: f64) {

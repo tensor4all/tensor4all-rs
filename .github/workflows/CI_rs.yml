@@ -238,6 +238,12 @@ jobs:
       - name: Check crate boundaries and dev cycles
         run: python3 scripts/check-crate-boundaries.py
 
+      - name: Test test-target checker
+        run: python3 scripts/test-check-test-targets.py
+
+      - name: Check every integration test file is compiled
+        run: python3 scripts/check-test-targets.py
+
       - name: Test coverage threshold checker
         run: python3 scripts/test-check-coverage.py
 
@@ -253,7 +259,7 @@ jobs:
     name: Coverage
     runs-on: ubuntu-22.04
     env:
-      CARGO_BUILD_JOBS: 2
+      CARGO_BUILD_JOBS: 4
     steps:
       - uses: actions/checkout@v4
 
@@ -285,7 +291,7 @@ jobs:
 
       - uses: kunobi-ninja/kache-action@ad7317540dcdd71c904f7a60a87b620a0c0e67ed # v1
         with:
-          # Instrumented release artifacts, kept apart from the `ci`-profile store the Test
+          # Instrumented `coverage`-profile artifacts, kept apart from the `ci`-profile store the Test
           # job uses. See the Test job for why the workflow owns store persistence.
           github-cache: "false"
           cache-dir: ${{ runner.temp }}/kache
@@ -295,13 +301,14 @@ jobs:
         # binaries. Remove those and old profiles, but retain dependency builds.
         run: cargo llvm-cov clean --workspace --locked
 
-      - name: Generate release coverage JSON
-        # Release-mode measurement: the repository's normal verification mode. The
-        # same 300 s suite budget and the same target trim as the Test job apply;
-        # instrumented execution of the healthy suite measures ~63 s.
+      - name: Generate coverage JSON
+        # The `coverage` profile is release with opt-level 1 for workspace code
+        # (dependencies stay at opt-level 3): compiling the instrumented test
+        # binaries dominates this job, not running them. The same 300 s suite
+        # budget and the same target trim as the Test job apply.
         run: |
           echo "Available CPUs: $(nproc); Cargo build jobs: $CARGO_BUILD_JOBS"
-          python3 scripts/ci-build-diagnostics.py --budget-seconds 300 coverage -- cargo llvm-cov nextest --locked --release --no-clean --workspace --exclude tensor4all-hdf5 --lib --bins --tests --json --output-path coverage.json --timings -v
+          python3 scripts/ci-build-diagnostics.py --budget-seconds 300 coverage -- cargo llvm-cov nextest --locked --cargo-profile coverage --no-clean --workspace --exclude tensor4all-hdf5 --lib --bins --tests --json --output-path coverage.json --timings -v
 
       - name: Save the kache store
         # Compiled artifacts are valid whatever the tests did, so save on failure too. Only

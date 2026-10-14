@@ -6,11 +6,11 @@
 //! limitation exists. Run it with
 //!
 //! ```text
-//! cargo test --release -p tensor4all-partitionedtreetn --test adaptive_l2_corner_miss \
-//!     -- --ignored --nocapture
+//! cargo test --release -p tensor4all-partitionedtreetn --test integration \
+//!     -- --ignored --nocapture adaptive_l2_corner_miss::
 //! ```
 
-mod adaptive_common;
+use crate::adaptive_common;
 
 use adaptive_common::*;
 use tensor4all_core::DynIndex;

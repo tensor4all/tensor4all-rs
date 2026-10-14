@@ -5,9 +5,9 @@
 //! The ratio reported is `||evaluated - exact|| / (eps * ||exact||)`.
 //!
 //! Run with `cargo test --release -p tensor4all-partitionedtreetn --test
-//! adaptive_rounding_calibration -- --ignored --nocapture`.
+//! integration -- --ignored --nocapture adaptive_rounding_calibration::`.
 
-mod adaptive_common;
+use crate::adaptive_common;
 
 use std::collections::HashMap;
 

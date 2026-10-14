@@ -1,7 +1,7 @@
 //! `patched_interpolate` under `ErrorNorm::L2` with the TreeTCI engine,
 //! checked against dense references on small branched trees.
 
-mod adaptive_common;
+use crate::adaptive_common;
 
 use std::sync::OnceLock;
 

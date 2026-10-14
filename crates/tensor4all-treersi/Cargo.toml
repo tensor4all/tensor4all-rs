@@ -6,6 +6,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+autotests = false
 
 [features]
 default = ["tenferro-cpu-faer", "global-defaults"]
@@ -33,3 +34,7 @@ tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 
 [dev-dependencies]
 tenferro-cpu.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

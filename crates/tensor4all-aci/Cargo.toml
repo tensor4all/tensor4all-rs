@@ -10,6 +10,7 @@ authors = [
 ]
 license.workspace = true
 repository.workspace = true
+autotests = false
 
 [features]
 default = ["tenferro-cpu-faer"]
@@ -57,3 +58,7 @@ harness = false
 [[bench]]
 name = "treeaci_parity"
 harness = false
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

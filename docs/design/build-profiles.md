@@ -58,15 +58,31 @@ strip = "symbols"
 ```
 
 Run release-equivalent CI tests locally with `cargo test --profile ci` or
-`cargo nextest run --cargo-profile ci`. Coverage remains on its
-instrumentation-owned profile and does not use `ci`.
+`cargo nextest run --cargo-profile ci`. Coverage does not use `ci`; it has
+its own profile:
+
+```toml
+[profile.coverage]
+inherits = "release"
+opt-level = 1
+incremental = false
+
+[profile.coverage.package."*"]
+opt-level = 3
+```
+
+Compiling every instrumented test binary dominates the coverage job, so
+workspace code builds at opt-level 1 while dependencies keep release
+optimization. Each package's integration tests are one `integration` target
+(`tests/main.rs`, `autotests = false`) for the same reason; files that install
+process-global state keep a `[[test]]` target of their own.
 
 Coverage includes ordinary library artifacts, including the C API shared
 library. Check the full C API package, including unit and integration tests,
 when validating coverage locally:
 
 ```bash
-cargo llvm-cov nextest --locked --release -p tensor4all-capi --json --output-path coverage.json
+cargo llvm-cov nextest --locked --cargo-profile coverage -p tensor4all-capi --json --output-path coverage.json
 ```
 
 C API entry points use `#[cfg_attr(not(test), unsafe(no_mangle))]`. This retains

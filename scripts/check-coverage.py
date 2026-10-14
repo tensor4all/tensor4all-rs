@@ -24,7 +24,7 @@ def main():
             # passing when the attestation file is absent.
             print(
                 f"error: coverage attestation file '{parser.coverage}' not found. "
-                "Run `cargo llvm-cov --release --workspace --exclude "
+                "Run `cargo llvm-cov --profile coverage --workspace --exclude "
                 "tensor4all-hdf5 --json --output-path coverage.json` first, or "
                 "pipe a coverage.json to stdin.",
                 file=sys.stderr,

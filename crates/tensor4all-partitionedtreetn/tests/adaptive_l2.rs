@@ -2,7 +2,7 @@
 //! test engines: the verification, retry, split, zero-patch, reference, and
 //! error paths of the M3 error contract.
 
-mod adaptive_common;
+use crate::adaptive_common;
 
 use std::collections::HashSet;
 

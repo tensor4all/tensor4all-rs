@@ -8,7 +8,7 @@
 //! no retries, and seed 0. Every patch has at most 16 points, so every patch
 //! is measured exhaustively and the RMS values have closed forms.
 
-mod adaptive_common;
+use crate::adaptive_common;
 
 use adaptive_common::*;
 use tensor4all_partitionedtreetn::adaptive_interpolation::{

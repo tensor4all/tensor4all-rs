@@ -9,6 +9,7 @@ description = "ITensors.jl-like API for tensor operations"
 readme = "README.md"
 keywords = ["tensor", "itensor", "tensor-network"]
 categories = ["science", "mathematics"]
+autotests = false
 
 [features]
 default = ["tenferro-cpu-faer"]
@@ -48,3 +49,7 @@ tenferro-cpu.workspace = true
 [[bench]]
 name = "f7_contract_src_overhead"
 harness = false
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

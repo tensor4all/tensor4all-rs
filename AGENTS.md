@@ -178,7 +178,7 @@ test to the scheduled heavy-tests workflow.
   authoritative; a local run is optional:
 
 ```bash
-cargo llvm-cov --release --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
+cargo llvm-cov --profile coverage --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
 ```
 

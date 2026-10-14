@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use anyhow::Result;
 use common::{assert_complex_samples_close, assert_real_samples_close};

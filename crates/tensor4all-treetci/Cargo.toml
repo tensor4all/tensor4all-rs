@@ -9,6 +9,7 @@ authors = [
 license.workspace = true
 repository.workspace = true
 description = "Tree Tensor Cross Interpolation on tree graphs"
+autotests = false
 
 [features]
 default = ["tenferro-cpu-faer"]
@@ -49,3 +50,7 @@ tenferro-cpu.workspace = true
 rayon.workspace = true
 approx.workspace = true
 quanticsgrids.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

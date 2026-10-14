@@ -6,6 +6,7 @@ edition.workspace = true
 authors = ["Marc Ritter <Ritter.Marc@physik.uni-muenchen.de>", "Hiroshi Shinaoka <h.shinaoka@gmail.com>", "tensor4all contributors"]
 license.workspace = true
 repository.workspace = true
+autotests = false
 
 [features]
 default = ["tenferro-cpu-faer"]
@@ -40,3 +41,7 @@ uint.workspace = true
 [[bench]]
 name = "end_to_end_chain_tci"
 harness = false
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

@@ -32,7 +32,7 @@
 //! Re-recording is an explicit, reviewed step: run the ignored test
 //! `record_m2_golden` with `T4A_RECORD_M2_GOLDEN=1`.
 
-mod adaptive_common;
+use crate::adaptive_common;
 
 use std::sync::Mutex;
 
@@ -680,7 +680,7 @@ fn m2_golden_outputs_are_reproduced() {
 
 /// Records the golden outputs. Run only on the reference implementation, and
 /// review the diff: `T4A_RECORD_M2_GOLDEN=1 cargo test -p
-/// tensor4all-partitionedtreetn --test adaptive_m2_golden -- --ignored`.
+/// tensor4all-partitionedtreetn --test integration -- --ignored adaptive_m2_golden::`.
 #[test]
 #[ignore = "re-records the committed golden outputs; run explicitly with T4A_RECORD_M2_GOLDEN=1"]
 fn record_m2_golden() {

@@ -1,7 +1,7 @@
 //! `patched_interpolate` end to end with the TreeTCI engine, and with a
 //! fiber test engine on a domain wider than 128 bits.
 
-mod adaptive_common;
+use crate::adaptive_common;
 
 use adaptive_common::*;
 use rand::Rng;

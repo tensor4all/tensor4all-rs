@@ -15,8 +15,7 @@
 //! route; the inventory (docs/design/859-f7-consumer-inventory.md) records
 //! that exclusion.
 
-#[path = "support/g0.rs"]
-mod g0;
+use crate::g0;
 
 use num_complex::Complex64;
 use rand_chacha::rand_core::SeedableRng;

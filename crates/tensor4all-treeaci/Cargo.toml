@@ -6,6 +6,7 @@ edition = "2021"
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+autotests = false
 
 [features]
 default = ["tenferro-cpu-faer"]
@@ -43,3 +44,7 @@ harness = false
 [[bench]]
 name = "f7_context_overhead"
 harness = false
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

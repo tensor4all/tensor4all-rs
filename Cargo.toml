@@ -65,6 +65,16 @@ inherits = "release"
 incremental = false
 strip = "symbols"
 
+# Coverage builds every test binary with instrumentation, so workspace code uses
+# opt-level 1 to cut compile time while dependencies keep release optimization.
+[profile.coverage]
+inherits = "release"
+opt-level = 1
+incremental = false
+
+[profile.coverage.package."*"]
+opt-level = 3
+
 [workspace.dependencies]
 num-complex = "0.4"
 num-traits = "0.2"
