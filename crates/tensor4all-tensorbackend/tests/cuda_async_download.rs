@@ -34,8 +34,10 @@ fn wait_ready(pending: &mut tensor4all_tensorbackend::PendingCudaDownload) {
 fn decode_f64(buffer: &tensor4all_tensorbackend::CudaPinnedBuffer) -> Vec<f64> {
     buffer
         .as_slice()
-        .chunks_exact(std::mem::size_of::<f64>())
-        .map(|bytes| f64::from_ne_bytes(bytes.try_into().expect("8 bytes")))
+        .as_chunks::<{ std::mem::size_of::<f64>() }>()
+        .0
+        .iter()
+        .map(|bytes| f64::from_ne_bytes(*bytes))
         .collect()
 }
 
