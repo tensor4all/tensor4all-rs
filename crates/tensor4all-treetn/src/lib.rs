@@ -52,7 +52,7 @@ mod treetn;
 
 pub use algorithm::{CanonicalForm, CompressionAlgorithm, ContractionAlgorithm};
 #[cfg(feature = "tenferro-cuda")]
-pub use cuda::CudaTreeTNError;
+pub use cuda::{CudaTreeTNError, CudaTreeTNPendingDownload};
 pub use dmrg::{dmrg, dmrg_with_treetn_operator, DmrgError, DmrgOptions, DmrgResult};
 pub use error::{
     LinearOperatorIndexApplyError, LinearOperatorIndexBindingError, LinearOperatorTaggedApplyError,

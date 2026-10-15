@@ -3,7 +3,11 @@
 use std::sync::Arc;
 
 use tenferro_ad::EagerTensor;
-use tensor4all_tensorbackend::{CudaExecutionContext, CudaExecutionContextError, StorageKind};
+use tenferro_tensor::{DType, Tensor as NativeTensor};
+use tensor4all_tensorbackend::{
+    CudaExecutionContext, CudaExecutionContextError, CudaPinnedBuffer, PendingCudaDownload,
+    StorageKind,
+};
 
 use super::idx_tensor::{IdxTensor, TensorStorageError};
 
@@ -215,6 +219,64 @@ impl IdxTensor {
             .map_err(|source| operation_error("download tensor construction", source))
     }
 
+    /// Submit a device-to-host transfer of this tensor without waiting for it.
+    ///
+    /// The host value is reconstructed in [`PendingCudaIdxDownload::wait`] from the filled pinned buffer,
+    /// preserving this tensor's ordered indices, so submission and completion can be measured separately.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorCudaError::DeferredStorage`] for a deferred storage payload,
+    /// [`IdxTensorCudaError::Tracked`] for a tracked value and [`IdxTensorCudaError::Context`] when the tensor is
+    /// not resident in this exact context. Returns [`IdxTensorCudaError::Operation`] when the tensor holds no
+    /// elements (the pinned allocator rejects a zero-byte request) or when its shape or byte count overflows
+    /// `usize`, and [`IdxTensorCudaError::Context`] again when the pinned allocation or the submission is
+    /// refused.
+    pub fn download_pending(
+        &self,
+        context: &CudaExecutionContext,
+    ) -> Result<PendingCudaIdxDownload, IdxTensorCudaError> {
+        self.validate_cuda_residency(context)?;
+        let resident = self
+            .cuda_duplicate_native()
+            .map_err(|source| operation_error("download pending materialization", source))?;
+        let dtype = resident.dtype();
+        let shape = resident.shape().to_vec();
+        let elements = shape
+            .iter()
+            .try_fold(1usize, |total, extent| total.checked_mul(*extent))
+            .ok_or_else(|| {
+                operation_error(
+                    "download pending byte count",
+                    "the shape product overflows usize",
+                )
+            })?;
+        let bytes = elements.checked_mul(dtype_size(dtype)).ok_or_else(|| {
+            operation_error(
+                "download pending byte count",
+                "the byte count overflows usize",
+            )
+        })?;
+        if bytes == 0 {
+            return Err(operation_error(
+                "download pending allocation",
+                "an empty tensor has no pinned buffer to fill; use the synchronous download",
+            ));
+        }
+        let buffer = context
+            .allocate_pinned(bytes)
+            .map_err(|source| context_error("download pending allocation", source))?;
+        let pending = context
+            .download_pending(resident, buffer)
+            .map_err(|source| context_error("download pending submit", source))?;
+        Ok(PendingCudaIdxDownload {
+            inner: pending,
+            indices: self.indices.clone(),
+            dtype,
+            shape,
+        })
+    }
+
     /// Validate CUDA placement and eager-runtime identity without reading data.
     ///
     /// This checks the existing eager value's context identity and
@@ -267,6 +329,196 @@ impl IdxTensor {
             .validate_cuda_placement_metadata(read.placement(), read.allocation_domain())
             .map_err(|source| context_error("validate CUDA residency", source))
     }
+}
+
+/// One submitted device-to-host transfer of an indexed tensor.
+///
+/// Dropping the handle moves the transfer into the runtime's retirement queue, where a later query releases it
+/// without waiting - provided the copy has completed and the queue can admit it, since the pinned implementation's
+/// queue is bounded and a transfer that cannot be admitted is retained rather than released. Reclamation also
+/// needs something that still owns the runtime, and releasing the *last* runtime owner is a different event
+/// that synchronizes initialized streams. Dropping never proves the copy; only
+/// [`PendingCudaIdxDownload::wait`] hands back a host value.
+pub struct PendingCudaIdxDownload {
+    inner: PendingCudaDownload,
+    indices: Vec<crate::DynIndex>,
+    dtype: DType,
+    shape: Vec<usize>,
+}
+
+impl std::fmt::Debug for PendingCudaIdxDownload {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PendingCudaIdxDownload")
+            .field("dtype", &self.dtype)
+            .field("shape", &self.shape)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PendingCudaIdxDownload {
+    /// Whether the copy's event has completed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::defaults::{IdxTensorCudaError, PendingCudaIdxDownload};
+    ///
+    /// let ready: fn(&mut PendingCudaIdxDownload) -> Result<bool, IdxTensorCudaError> =
+    ///     PendingCudaIdxDownload::is_ready;
+    /// assert!(std::mem::size_of_val(&ready) > 0);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorCudaError::Context`] when the event query itself fails for a reason other than
+    /// "not ready".
+    pub fn is_ready(&mut self) -> Result<bool, IdxTensorCudaError> {
+        self.inner
+            .is_ready()
+            .map_err(|source| context_error("download pending readiness", source))
+    }
+
+    /// Wait for the copy and return the host value with this tensor's ordered indices.
+    ///
+    /// The host payload is built from the filled pinned bytes and the tensor's own metadata; no second transfer
+    /// happens here. Decoding and host construction are part of the wait, so their cost is not hidden behind it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::defaults::{IdxTensor, IdxTensorCudaError, PendingCudaIdxDownload};
+    ///
+    /// let wait: fn(PendingCudaIdxDownload) -> Result<IdxTensor, IdxTensorCudaError> =
+    ///     PendingCudaIdxDownload::wait;
+    /// assert!(std::mem::size_of_val(&wait) > 0);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorCudaError::Context`] when the copy reports an unproven completion (the filled buffer
+    /// must then be discarded rather than read), and [`IdxTensorCudaError::Operation`] when the bytes cannot be
+    /// reconstructed for the tensor's dtype.
+    pub fn wait(self) -> Result<IdxTensor, IdxTensorCudaError> {
+        let (_device, buffer) = self
+            .inner
+            .wait()
+            .map_err(|source| context_error("download pending wait", source))?;
+        let host = host_native_from_pinned(&buffer, self.dtype, &self.shape)
+            .map_err(|source| operation_error("download pending reconstruction", source))?;
+        IdxTensor::from_native(self.indices, host)
+            .map_err(|source| operation_error("download pending tensor construction", source))
+    }
+}
+
+/// The byte width of one element of `dtype`, or `0` for a dtype with no host layout.
+fn dtype_size(dtype: DType) -> usize {
+    match dtype {
+        DType::Bool => 1,
+        DType::F32 | DType::I32 => 4,
+        DType::F64 | DType::I64 | DType::C32 => 8,
+        DType::C64 => 16,
+        // An externally-owned dtype has no host layout this route can rebuild.
+        DType::External(_) => 0,
+    }
+}
+
+/// Rebuild a host tensor from a filled pinned buffer and the tensor's own metadata.
+fn host_native_from_pinned(
+    buffer: &CudaPinnedBuffer,
+    dtype: DType,
+    shape: &[usize],
+) -> Result<NativeTensor, String> {
+    let bytes = buffer.as_slice();
+    let shape = shape.to_vec();
+    match dtype {
+        DType::F32 => NativeTensor::from_vec_col_major(shape, decode_f32(bytes)?)
+            .map_err(|error| format!("{error}")),
+        DType::F64 => NativeTensor::from_vec_col_major(shape, decode_f64(bytes)?)
+            .map_err(|error| format!("{error}")),
+        DType::I32 => NativeTensor::from_vec_col_major(shape, decode_i32(bytes)?)
+            .map_err(|error| format!("{error}")),
+        DType::I64 => NativeTensor::from_vec_col_major(shape, decode_i64(bytes)?)
+            .map_err(|error| format!("{error}")),
+        DType::C32 => NativeTensor::from_vec_col_major(shape, decode_c32(bytes)?)
+            .map_err(|error| format!("{error}")),
+        DType::C64 => NativeTensor::from_vec_col_major(shape, decode_c64(bytes)?)
+            .map_err(|error| format!("{error}")),
+        // The pinned pending route rejects a Bool copy and has no layout for an externally-owned dtype, so
+        // neither can reach this reconstruction through the pending entry.
+        DType::Bool | DType::External(_) => {
+            Err(format!("the pending route does not reconstruct {dtype:?}"))
+        }
+    }
+}
+
+/// Decode `bytes` as native-endian values of one fixed width, rejecting a partial trailing value.
+macro_rules! decode_exact {
+    ($bytes:expr, $ty:ty, $width:literal) => {{
+        let bytes: &[u8] = $bytes;
+        if bytes.len() % $width != 0 {
+            Err(format!(
+                "a buffer of {} bytes is not a whole number of {}-byte values",
+                bytes.len(),
+                $width
+            ))
+        } else {
+            Ok(bytes
+                .as_chunks::<$width>()
+                .0
+                .iter()
+                .map(|chunk| <$ty>::from_ne_bytes(*chunk))
+                .collect::<Vec<$ty>>())
+        }
+    }};
+}
+
+fn decode_f32(bytes: &[u8]) -> Result<Vec<f32>, String> {
+    decode_exact!(bytes, f32, 4)
+}
+
+fn decode_f64(bytes: &[u8]) -> Result<Vec<f64>, String> {
+    decode_exact!(bytes, f64, 8)
+}
+
+fn decode_i32(bytes: &[u8]) -> Result<Vec<i32>, String> {
+    decode_exact!(bytes, i32, 4)
+}
+
+fn decode_i64(bytes: &[u8]) -> Result<Vec<i64>, String> {
+    decode_exact!(bytes, i64, 8)
+}
+
+/// Decode a buffer of native-endian complex values, one `(real, imaginary)` pair per value.
+///
+/// The real parts are decoded as one run and paired with their imaginary neighbours: the pinned representation is
+/// `repr(C) { re, im }`, so the bytes of a complex value are its two scalars back to back.
+fn decode_c32(bytes: &[u8]) -> Result<Vec<num_complex::Complex32>, String> {
+    let values = decode_f32(bytes)?;
+    if values.len() % 2 != 0 {
+        return Err(format!(
+            "a Complex32 buffer of {} values is not a whole number of pairs",
+            values.len()
+        ));
+    }
+    Ok(values
+        .chunks_exact(2)
+        .map(|pair| num_complex::Complex32::new(pair[0], pair[1]))
+        .collect())
+}
+
+fn decode_c64(bytes: &[u8]) -> Result<Vec<num_complex::Complex64>, String> {
+    let values = decode_f64(bytes)?;
+    if values.len() % 2 != 0 {
+        return Err(format!(
+            "a Complex64 buffer of {} values is not a whole number of pairs",
+            values.len()
+        ));
+    }
+    Ok(values
+        .chunks_exact(2)
+        .map(|pair| num_complex::Complex64::new(pair[0], pair[1]))
+        .collect())
 }
 
 #[cfg(test)]

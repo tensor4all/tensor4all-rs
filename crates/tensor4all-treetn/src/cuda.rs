@@ -5,6 +5,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use petgraph::stable_graph::NodeIndex;
+use tensor4all_core::defaults::PendingCudaIdxDownload;
 use tensor4all_core::{
     IdxTensor, IdxTensorCudaError, IdxTensorError, TensorContractionLike, TensorIndex,
 };
@@ -199,7 +200,11 @@ where
     ///         &CudaExecutionContext,
     ///     ) -> Result<TreeTN<IdxTensor, usize>, CudaTreeTNError>>(),
     /// );
-    /// # let _ = (Arc::new(1usize), DynIndex::new_dyn(2), IdxTensor::from_dense(vec![], vec![]));
+    /// # let _ = (
+    /// #     Arc::new(1usize),
+    /// #     DynIndex::new_dyn(2),
+    /// #     IdxTensor::from_dense(Vec::<DynIndex>::new(), Vec::<f64>::new()),
+    /// # );
     /// ```
     pub fn upload_nodes_cuda(
         &self,
@@ -348,6 +353,68 @@ where
         Ok(result)
     }
 
+    /// Submit a pending device-to-host transfer of every node, without waiting for any of them.
+    ///
+    /// The whole network is preflighted before the first submission: every node must carry a tensor that is
+    /// device-resident in `context`, and a failure to resolve one refuses the call before anything is submitted.
+    /// Submission and completion are then separable, which is what lets a caller measure the wait instead of
+    /// assuming it. The host network is produced by [`CudaTreeTNPendingDownload::wait`]; this entry never returns
+    /// a network with some nodes still on the device.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::defaults::IdxTensor;
+    /// use tensor4all_treetn::{CudaTreeTNError, CudaTreeTNPendingDownload, TreeTN};
+    ///
+    /// let submit: fn(
+    ///     &TreeTN<IdxTensor, usize>,
+    ///     &tensor4all_tensorbackend::CudaExecutionContext,
+    /// ) -> Result<CudaTreeTNPendingDownload<usize>, CudaTreeTNError> = TreeTN::download_pending;
+    /// assert!(std::mem::size_of_val(&submit) > 0);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaTreeTNError::EmptyNetwork`] for an empty network (the synchronous [`TreeTN::download`]
+    /// returns an empty clone instead), [`CudaTreeTNError::MissingTensor`] when a node carries no tensor, and
+    /// [`CudaTreeTNError::Download`] naming the node when a node is not device-resident in `context` or its
+    /// submission is refused. The first two carry no node, because the failure is not node-local.
+    pub fn download_pending(
+        &self,
+        context: &CudaExecutionContext,
+    ) -> Result<CudaTreeTNPendingDownload<V>, CudaTreeTNError> {
+        let nodes = self.node_indices();
+        if nodes.is_empty() {
+            return Err(CudaTreeTNError::EmptyNetwork);
+        }
+        // Preflight every node before the first submission: a placement or tensor failure is reported before
+        // anything is submitted, so such a call transfers nothing. A *submission* failure part-way through the
+        // loop below cannot undo the submissions already made; it is reported with its node and the caller's
+        // network is untouched.
+        let mut tensors = Vec::with_capacity(nodes.len());
+        for node in nodes {
+            let tensor = self
+                .tensor(node)
+                .ok_or(CudaTreeTNError::MissingTensor { node })?;
+            tensor
+                .validate_cuda_residency(context)
+                .map_err(|source| CudaTreeTNError::Download { node, source })?;
+            tensors.push((node, tensor));
+        }
+        let mut pending = Vec::with_capacity(tensors.len());
+        for (node, tensor) in tensors {
+            let submitted = tensor
+                .download_pending(context)
+                .map_err(|source| CudaTreeTNError::Download { node, source })?;
+            pending.push((node, submitted));
+        }
+        Ok(CudaTreeTNPendingDownload {
+            pending,
+            template: self.clone(),
+        })
+    }
+
     /// Contract a dense CUDA-resident TreeTN to one CUDA-resident tensor.
     ///
     /// This is an explicitly dense full-network contraction. It validates every
@@ -485,6 +552,106 @@ where
             .map_err(|source| CudaTreeTNError::Dtype { node: root, source })?;
         if common_dtype != Some(dtype) {
             return Err(CudaTreeTNError::MixedDtype { node: root });
+        }
+        Ok(result)
+    }
+}
+
+/// Every node's submitted device-to-host transfer, owned until they are waited on.
+///
+/// Dropping the handle leaves each contained transfer in the runtime's retirement queue, where a later query
+/// releases it without waiting - provided the copy has completed and the queue can admit it, since the pinned
+/// implementation's queue is bounded and a transfer that cannot be admitted is retained rather than released.
+/// Reclamation also needs something that still owns the runtime, and releasing the *last* runtime owner is a
+/// different event that synchronizes initialized streams. Dropping never proves a copy; only
+/// [`CudaTreeTNPendingDownload::wait`] hands back a host network.
+pub struct CudaTreeTNPendingDownload<V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    pending: Vec<(NodeIndex, PendingCudaIdxDownload)>,
+    template: TreeTN<IdxTensor, V>,
+}
+
+impl<V> std::fmt::Debug for CudaTreeTNPendingDownload<V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CudaTreeTNPendingDownload")
+            .field("nodes", &self.pending.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<V> CudaTreeTNPendingDownload<V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    /// Whether every submitted transfer's event has completed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::{CudaTreeTNError, CudaTreeTNPendingDownload};
+    ///
+    /// let ready: fn(&mut CudaTreeTNPendingDownload<usize>) -> Result<bool, CudaTreeTNError> =
+    ///     CudaTreeTNPendingDownload::is_ready;
+    /// assert!(std::mem::size_of_val(&ready) > 0);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaTreeTNError::Download`] naming the first node whose event query fails for a reason other
+    /// than "not ready".
+    pub fn is_ready(&mut self) -> Result<bool, CudaTreeTNError> {
+        for (node, pending) in &mut self.pending {
+            let ready = pending
+                .is_ready()
+                .map_err(|source| CudaTreeTNError::Download {
+                    node: *node,
+                    source,
+                })?;
+            if !ready {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Wait for every transfer and return the complete host network.
+    ///
+    /// The network is published only when every node has been reconstructed: a node whose completion is unproven
+    /// makes this fail. No buffers reach the caller on that path - the pinned route keeps an unproven package
+    /// retained rather than handing it back - so there is nothing here for the caller to discard. No second
+    /// transfer happens either: each node's host value is rebuilt from its filled pinned bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::defaults::IdxTensor;
+    /// use tensor4all_treetn::{CudaTreeTNError, CudaTreeTNPendingDownload, TreeTN};
+    ///
+    /// let wait: fn(
+    ///     CudaTreeTNPendingDownload<usize>,
+    /// ) -> Result<TreeTN<IdxTensor, usize>, CudaTreeTNError> = CudaTreeTNPendingDownload::wait;
+    /// assert!(std::mem::size_of_val(&wait) > 0);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaTreeTNError::Download`] naming the node whose wait failed and
+    /// [`CudaTreeTNError::Replacement`] naming the node whose host value could not be stored.
+    pub fn wait(self) -> Result<TreeTN<IdxTensor, V>, CudaTreeTNError> {
+        let mut result = self.template;
+        for (node, pending) in self.pending {
+            let host = pending
+                .wait()
+                .map_err(|source| CudaTreeTNError::Download { node, source })?;
+            result
+                .replace_tensor(node, host)
+                .map_err(|source| CudaTreeTNError::Replacement { node, source })?;
         }
         Ok(result)
     }

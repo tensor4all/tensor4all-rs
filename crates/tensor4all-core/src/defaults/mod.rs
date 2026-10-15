@@ -44,7 +44,7 @@ pub use contract_session::{
     permute_indices_on_session, permute_on_session, sum_on_session,
 };
 #[cfg(feature = "tenferro-cuda")]
-pub use cuda::IdxTensorCudaError;
+pub use cuda::{IdxTensorCudaError, PendingCudaIdxDownload};
 pub use idx_tensor::{
     compute_permutation_from_indices, diag_idx_tensor, print_and_reset_pairwise_contract_profile,
     reset_pairwise_contract_profile, unfold_split, IdxTensor, IdxTensorError, TensorStorageError,
