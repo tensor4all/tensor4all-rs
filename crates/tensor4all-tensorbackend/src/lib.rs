@@ -70,7 +70,7 @@ pub use context::{CpuExecutionContext, CpuExecutionContextError, ExecutionContex
 #[cfg(feature = "tenferro-cuda")]
 pub use cuda::{
     CudaExecutionContext, CudaExecutionContextError, CudaPinnedBuffer, PendingCudaDownload,
-    CUDA_ORDINAL,
+    PendingCudaUpload, CUDA_ORDINAL,
 };
 #[cfg(feature = "global-defaults")]
 pub use incremental_qr::{IncrementalQr, IncrementalQrScalar};

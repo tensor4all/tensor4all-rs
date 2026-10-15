@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tenferro::Tensor;
 use tenferro_ad::{ContextId, EagerRuntime};
 use tenferro_gpu::cuda::{
-    cuda_devices, download_pending, CompletionUnproven, CudaBackend, PendingDownload,
-    PinnedHostBuffer,
+    cuda_devices, download_pending, upload_pending, CompletionUnproven, CudaBackend,
+    PendingDownload, PendingUpload, PinnedHostBuffer,
 };
 use tenferro_tensor::{
     AllocationDomainId, BackendSessionHost, DeviceId, DeviceKind, GpuBackendKind, MemoryKind,
@@ -185,9 +185,11 @@ impl CudaPinnedBuffer {
 /// One submitted device-to-host transfer.
 ///
 /// Dropping the handle moves the transfer into the runtime's retirement queue, where a later query releases it
-/// without waiting - but only while something still owns the runtime, which is why the handle keeps a backend
-/// clone. Releasing the last runtime owner is a different event: that synchronizes initialized streams. Dropping
-/// never proves the copy; only [`PendingCudaDownload::wait`] hands back filled bytes.
+/// without waiting - provided the copy has completed and the queue can admit it, since the pinned implementation's
+/// queue is bounded and a transfer that cannot be admitted is retained rather than released. Reclamation also
+/// needs something that still owns the runtime, which is why the handle keeps a backend clone. Releasing the last
+/// runtime owner is a different event: that synchronizes initialized streams. Dropping never proves the copy;
+/// only [`PendingCudaDownload::wait`] hands back filled bytes.
 pub struct PendingCudaDownload {
     inner: PendingDownload,
     _keep_alive: CudaBackend,
@@ -230,6 +232,81 @@ impl PendingCudaDownload {
         let (tensor, buffer) = self.inner.wait().map_err(|source: CompletionUnproven| {
             CudaExecutionContextError::Transfer {
                 operation: "download wait",
+                source: Arc::new(source),
+            }
+        })?;
+        Ok((tensor, CudaPinnedBuffer { buffer }))
+    }
+}
+
+/// One submitted host-to-device transfer.
+///
+/// Dropping the handle moves the transfer into the runtime's retirement queue, where a later query releases it
+/// without waiting - provided the copy has completed and the queue can admit it, since the pinned implementation's
+/// queue is bounded and a transfer that cannot be admitted is retained rather than released. Reclamation also
+/// needs something that still owns the runtime, which is why the handle keeps a backend clone. Releasing the last
+/// runtime owner is a different event: that synchronizes initialized streams. Dropping never proves the copy;
+/// only [`PendingCudaUpload::wait`] hands back the written device tensor.
+pub struct PendingCudaUpload {
+    inner: PendingUpload,
+    _keep_alive: CudaBackend,
+}
+
+impl std::fmt::Debug for PendingCudaUpload {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PendingCudaUpload")
+            .finish_non_exhaustive()
+    }
+}
+
+impl PendingCudaUpload {
+    /// Whether the copy's event has completed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaExecutionContextError::Transfer`] when the event query itself fails for a reason other than
+    /// "not ready".
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{CudaExecutionContextError, PendingCudaUpload};
+    /// let is_ready: fn(&mut PendingCudaUpload) -> Result<bool, CudaExecutionContextError> =
+    ///     PendingCudaUpload::is_ready;
+    /// assert!(std::mem::size_of_val(&is_ready) > 0);
+    /// ```
+    pub fn is_ready(&mut self) -> Result<bool, CudaExecutionContextError> {
+        self.inner
+            .is_ready()
+            .map_err(|source| CudaExecutionContextError::Transfer {
+                operation: "upload readiness",
+                source: Arc::new(source),
+            })
+    }
+
+    /// Wait for the copy and return the written device destination plus the source buffer.
+    ///
+    /// The device destination is handed back rather than consumed here, and the source buffer is returned raw:
+    /// it is the caller's staging storage, not a host value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaExecutionContextError::Transfer`] when the copy reports an unproven completion; the device
+    /// tensor must then be discarded rather than read.
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{CudaExecutionContextError, CudaPinnedBuffer, PendingCudaUpload};
+    /// let wait: fn(
+    ///     PendingCudaUpload,
+    /// ) -> Result<(tenferro::Tensor, CudaPinnedBuffer), CudaExecutionContextError> =
+    ///     PendingCudaUpload::wait;
+    /// assert!(std::mem::size_of_val(&wait) > 0);
+    /// ```
+    pub fn wait(self) -> Result<(Tensor, CudaPinnedBuffer), CudaExecutionContextError> {
+        let (tensor, buffer) = self.inner.wait().map_err(|source: CompletionUnproven| {
+            CudaExecutionContextError::Transfer {
+                operation: "upload wait",
                 source: Arc::new(source),
             }
         })?;
@@ -483,6 +560,58 @@ impl CudaExecutionContext {
                 source: Arc::new(std::io::Error::other(format!("{source:?}"))),
             })?;
         Ok(PendingCudaDownload {
+            inner,
+            _keep_alive: keep_alive,
+        })
+    }
+
+    /// Submit a host-to-device copy without waiting for it.
+    ///
+    /// Takes the destination tensor **by value**: the pinned revision's pending entry consumes its destination,
+    /// and the value comes back from [`PendingCudaUpload::wait`] together with the source buffer. Nothing is
+    /// copied behind the caller's back to work around that - a caller that wants to keep its tensor should not
+    /// use this route.
+    ///
+    /// Stage the bytes the device expects (column-major, native endianness) through
+    /// [`CudaPinnedBuffer::as_mut_slice`] before submitting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaExecutionContextError::PlacementMismatch`] when the destination is not resident on this
+    /// exact context, and [`CudaExecutionContextError::Transfer`] when the submission is rejected (for example
+    /// when the pinned buffer's length does not match the destination). A rejection's recoverable package is
+    /// **not** retained on this route - only its diagnostic - because that package is neither `Send` nor `Sync`;
+    /// the buffer is dropped with it.
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{
+    ///     CudaExecutionContext, CudaExecutionContextError, CudaPinnedBuffer, PendingCudaUpload,
+    /// };
+    /// let upload: fn(
+    ///     &CudaExecutionContext,
+    ///     CudaPinnedBuffer,
+    ///     tenferro::Tensor,
+    /// ) -> Result<PendingCudaUpload, CudaExecutionContextError> = CudaExecutionContext::upload_pending;
+    /// assert!(std::mem::size_of_val(&upload) > 0);
+    /// ```
+    pub fn upload_pending(
+        &self,
+        source: CudaPinnedBuffer,
+        destination: Tensor,
+    ) -> Result<PendingCudaUpload, CudaExecutionContextError> {
+        self.validate_cuda_placement(&destination)?;
+        // Keeps the runtime alive until the handle is gone: pinned buffers hold a weak runtime reference and leak
+        // if it cannot be upgraded when they are destroyed.
+        let keep_alive = self.with_backend(|backend| backend.clone());
+        let inner = self
+            .with_backend(|backend| upload_pending(backend.runtime(), source.buffer, destination))
+            .map_err(|source| CudaExecutionContextError::Transfer {
+                operation: "upload submit",
+                // The rejected package is not `Send`; only its diagnostic can be retained here.
+                source: Arc::new(std::io::Error::other(format!("{source:?}"))),
+            })?;
+        Ok(PendingCudaUpload {
             inner,
             _keep_alive: keep_alive,
         })

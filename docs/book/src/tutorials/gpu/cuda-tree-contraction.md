@@ -107,10 +107,25 @@ revision's ownership contract literally: it consumes the device tensor (the pinn
 hands it back from `wait`, and a rejected submission keeps only its diagnostic because the rejected package is
 neither `Send` nor `Sync`.
 
-**Still not measurable, and not claimed:** the *host-to-device* side. A pending upload needs a device destination
-that the pinned revision offers no way to allocate, so uploads remain synchronous and their wait cannot be
-separated from their work. A caller should read the upload figure above as "synchronised upload latency" and not
-as a transfer plus a wait.
+**The host-to-device side is measurable too, and now measured.** `CudaExecutionContext::upload_pending` takes a
+pinned source buffer and a device destination and returns a `PendingCudaUpload` whose submission and completion
+are separable, exactly like the download route; the pinned revision's pending entry consumes the destination, so
+the device tensor comes back from `PendingCudaUpload::wait` together with the source buffer, and a caller that
+wants to keep its tensor should not use this route. The upload figure above stays what it was - a *synchronised*
+upload latency through `upload_cuda`, which is the route the tree-contraction tutorial uses - but it is no longer
+the only thing that can be said about uploads:
+
+```bash
+cargo test -p tensor4all-tensorbackend --features tenferro-cuda --test cuda_async_upload
+```
+
+On the same machine, two 8 MiB copies: `serial_two_uploads=59.840ms`, `batched_two_uploads=30.729ms`, with the
+pinned allocations, the caller's staging, placement validation, the runtime's allocation/event work, readiness
+polling and the wait's cleanup inside each figure, the destinations excluded, and the returned values dropped
+after the timer in both regions. **Those figures are printed, not asserted, and they are not a controlled
+overlap comparison**: the serial region runs first, so it also carries first-use effects. What the test
+demonstrates is the ordering - two uploads are submitted and outstanding before either is waited on - and that
+is what the route makes measurable; a controlled comparison would need the first-use effects separated.
 
 The SRC route has its own separated breakdown (setup, upload, warm-up, steady, download, CPU) in
 `cuda_src_timing_breakdown` under `crates/tensor4all-treetn/tests/cuda_src_contraction.rs`, where its upload figure
