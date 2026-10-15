@@ -80,14 +80,16 @@ jobs:
         run: |
           set -euo pipefail
           label=ci-nightly
+          title="Scheduled heavy tests are failing"
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           printf -v body '%s\n\n%s\n\n%s\n' \
             "The scheduled heavy suite failed in [run ${GITHUB_RUN_ID}](${run_url}) on \`${GITHUB_SHA:0:8}\`." \
             "Reproduce locally: \`cargo nextest run --locked --cargo-profile ci -p tensor4all-treeaci --run-ignored ignored-only -E 'test(/^heavy_/)'\`" \
             "Heavy tests run outside the push/PR pipeline on purpose (CONTRIBUTING.md, CI time budget). Treat this as a real regression in the heavy witness, or as a change that pushed it past this workflow's bound."
-          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$label" --state open --limit 1 --json number --jq '.[0].number // empty')
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$label" --state open \
+            --search "in:title \"$title\"" --limit 1 --json number --jq '.[0].number // empty')
           if [ -n "$number" ]; then
             gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
           else
-            gh issue create --repo "$GITHUB_REPOSITORY" --label "$label" --title "Scheduled heavy tests are failing" --body "$body"
+            gh issue create --repo "$GITHUB_REPOSITORY" --label "$label" --title "$title" --body "$body"
           fi

@@ -31,6 +31,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-workspace-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -66,6 +67,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-workspace-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run rustdoc tests
         run: python3 scripts/ci-build-diagnostics.py rustdoc -- cargo test --locked --doc --profile ci --workspace -j 8 --timings -vv
@@ -99,6 +101,10 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      # Deletes this PR's superseded kache snapshots (see below).
+      actions: write
     steps:
       - uses: actions/checkout@v4
 
@@ -111,6 +117,8 @@ jobs:
       - uses: taiki-e/install-action@nextest
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
         # No `cache-workspace-crates`: restored workspace artifacts are never
         # reuse-eligible (Cargo compares source timestamps), and kache below owns
         # compiled-artifact reuse in this job.
@@ -148,15 +156,35 @@ jobs:
         run: python3 scripts/ci-build-diagnostics.py --budget-seconds 300 nextest -- cargo nextest run --locked --cargo-profile ci --workspace --lib --bins --tests --timings -v
 
       - name: Save the kache store
-        # Compiled artifacts are valid whatever the tests did, so save on failure too. Only
-        # trusted branches publish: a PR job stays restore-only instead of claiming a key that
-        # the next main run wants to refresh. Snapshots from a pull request are scoped to its
-        # merge ref anyway, so nothing reads them.
-        if: ${{ always() && steps.kache-restore.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        # Compiled artifacts are valid whatever the tests did, so save on failure too. Pull
+        # requests save as well: a snapshot is scoped to the PR's merge ref, where the next
+        # push to the same PR restores it ahead of main's, so a re-push only recompiles
+        # what it changed. Main never reads PR snapshots.
+        id: kache-save
+        if: ${{ always() && steps.kache-restore.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/kache
           key: kache-t4a-ci-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
+
+      - name: Prune this pull request's older kache snapshots
+        # Only a PR's newest snapshot is ever restored. Older ones (~1.7 GB each) would
+        # only push main's snapshots out of the 10 GB repository cache. Fork PRs get a
+        # read-only token and keep LRU eviction instead.
+        if: >-
+          ${{ always() && steps.kache-save.outcome == 'success'
+          && github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: kache-t4a-ci-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key kache-t4a-ci- \
+              --limit 100 --json id,key --jq ".[] | select(.key != \"$KEEP\") | .id" |
+            while read -r id; do
+              gh cache delete "$id" --repo "$GITHUB_REPOSITORY"
+            done
 
       - name: Upload build diagnostics
         if: always()
@@ -200,6 +228,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-workspace-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check generated C API header
         run: ./scripts/check-capi-header.sh
@@ -255,101 +284,11 @@ jobs:
       - name: Test SRC benchmark gate runner
         run: python3 scripts/test-run-src-benchmark-gates.py
 
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-22.04
-    env:
-      CARGO_BUILD_JOBS: 4
-    steps:
-      - uses: actions/checkout@v4
-
-      # book-tests depends on tensor4all-hdf5, so --exclude tensor4all-hdf5
-      # still builds the HDF5 stack; the dev package is required for that.
-      - name: Install HDF5
-        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov,nextest
-
-      - uses: Swatinem/rust-cache@v2
-        # See the Test job: restored workspace artifacts are not reuse-eligible,
-        # and kache owns compiled-artifact reuse.
-
-      - name: Restore the kache store
-        id: kache-restore
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/kache
-          key: kache-t4a-coverage-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
-          restore-keys: kache-t4a-coverage-${{ hashFiles('**/Cargo.lock') }}-
-
-      - uses: kunobi-ninja/kache-action@ad7317540dcdd71c904f7a60a87b620a0c0e67ed # v1
-        with:
-          # Instrumented `coverage`-profile artifacts, kept apart from the `ci`-profile store the Test
-          # job uses. See the Test job for why the workflow owns store persistence.
-          github-cache: "false"
-          cache-dir: ${{ runner.temp }}/kache
-
-      - name: Clear stale workspace coverage artifacts
-        # Prefix cache restores can contain obsolete instrumented workspace
-        # binaries. Remove those and old profiles, but retain dependency builds.
-        run: cargo llvm-cov clean --workspace --locked
-
-      - name: Generate coverage JSON
-        # The `coverage` profile is release with opt-level 1 for workspace code
-        # (dependencies stay at opt-level 3): compiling the instrumented test
-        # binaries dominates this job, not running them. The same 300 s suite
-        # budget and the same target trim as the Test job apply.
-        run: |
-          echo "Available CPUs: $(nproc); Cargo build jobs: $CARGO_BUILD_JOBS"
-          python3 scripts/ci-build-diagnostics.py --budget-seconds 300 coverage -- cargo llvm-cov nextest --locked --cargo-profile coverage --no-clean --workspace --exclude tensor4all-hdf5 --lib --bins --tests --json --output-path coverage.json --timings -v
-
-      - name: Save the kache store
-        # Compiled artifacts are valid whatever the tests did, so save on failure too. Only
-        # trusted branches publish: a PR job stays restore-only instead of claiming a key that
-        # the next main run wants to refresh. Snapshots from a pull request are scoped to its
-        # merge ref anyway, so nothing reads them.
-        if: ${{ always() && steps.kache-restore.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}/kache
-          key: kache-t4a-coverage-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
-
-      - name: Upload build diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-diagnostics-${{ github.job }}
-          path: |
-            target/ci-build-diagnostics
-            target/cargo-timings
-            target/llvm-cov-target/cargo-timings
-          retention-days: 7
-
-      - name: Check per-file thresholds
-        run: python3 scripts/check-coverage.py coverage.json
-
-      - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-json
-          path: coverage.json
-          if-no-files-found: ignore
-          retention-days: 7
-
   rollup-rs:
     runs-on: ubuntu-latest
     needs:
       - lint
       - test
-      - coverage
       - doctest
       - scripts
     if: always()

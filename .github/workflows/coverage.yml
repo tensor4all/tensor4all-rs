@@ -1,0 +1,139 @@
+name: Coverage
+
+# Workspace coverage and the per-file thresholds run nightly, not on every push
+# or pull request: compiling the instrumented test binaries is the most
+# expensive build in the repository, and coverage regressions are slow-moving.
+# A failing night files or updates a `ci-nightly` issue, as heavy-tests.yml does.
+
+on:
+  schedule:
+    # 19:00 UTC = 04:00 JST, an hour after heavy-tests.yml.
+    - cron: "0 19 * * *"
+  workflow_dispatch:
+
+# A scheduled run and a manual dispatch would otherwise race between "no open
+# issue" and "create one".
+concurrency:
+  group: coverage
+  cancel-in-progress: false
+
+env:
+  CI_BUILD_DIAGNOSTICS: target/ci-build-diagnostics
+
+jobs:
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-22.04
+    env:
+      CARGO_BUILD_JOBS: 4
+    steps:
+      - uses: actions/checkout@v4
+
+      # book-tests depends on tensor4all-hdf5, so --exclude tensor4all-hdf5
+      # still builds the HDF5 stack; the dev package is required for that.
+      - name: Install HDF5
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,nextest
+
+      - uses: Swatinem/rust-cache@v2
+        # See the Test job in CI_rs.yml: restored workspace artifacts are not
+        # reuse-eligible, and kache owns compiled-artifact reuse.
+
+      - name: Restore the kache store
+        id: kache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/kache
+          key: kache-t4a-coverage-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: kache-t4a-coverage-${{ hashFiles('**/Cargo.lock') }}-
+
+      - uses: kunobi-ninja/kache-action@ad7317540dcdd71c904f7a60a87b620a0c0e67ed # v1
+        with:
+          # Instrumented `coverage`-profile artifacts, kept apart from the `ci`-profile store
+          # CI_rs.yml's Test job uses. See that job for why the workflow owns store persistence.
+          github-cache: "false"
+          cache-dir: ${{ runner.temp }}/kache
+
+      - name: Clear stale workspace coverage artifacts
+        # Prefix cache restores can contain obsolete instrumented workspace
+        # binaries. Remove those and old profiles, but retain dependency builds.
+        run: cargo llvm-cov clean --workspace --locked
+
+      - name: Generate coverage JSON
+        # The `coverage` profile is release with opt-level 1 for workspace code
+        # (dependencies stay at opt-level 3): compiling the instrumented test
+        # binaries dominates this job, not running them. The same 300 s suite
+        # budget and the same target trim as CI_rs.yml's Test job apply.
+        run: |
+          echo "Available CPUs: $(nproc); Cargo build jobs: $CARGO_BUILD_JOBS"
+          python3 scripts/ci-build-diagnostics.py --budget-seconds 300 coverage -- cargo llvm-cov nextest --locked --cargo-profile coverage --no-clean --workspace --exclude tensor4all-hdf5 --lib --bins --tests --json --output-path coverage.json --timings -v
+
+      - name: Save the kache store
+        # Compiled artifacts are valid whatever the tests did, so save on failure too.
+        # Only main publishes; a dispatch on another branch stays restore-only.
+        if: ${{ always() && steps.kache-restore.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/kache
+          key: kache-t4a-coverage-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics-${{ github.job }}
+          path: |
+            target/ci-build-diagnostics
+            target/cargo-timings
+            target/llvm-cov-target/cargo-timings
+          retention-days: 7
+
+      - name: Check per-file thresholds
+        run: python3 scripts/check-coverage.py coverage.json
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-json
+          path: coverage.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # A separate job, so a run that dies before its last step still reports.
+  report:
+    name: Report a failing night
+    needs: coverage
+    if: ${{ always() && (needs.coverage.result == 'failure' || needs.coverage.result == 'cancelled') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: File or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          label=ci-nightly
+          title="Scheduled coverage is failing"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          printf -v body '%s\n\n%s\n' \
+            "The scheduled coverage run failed in [run ${GITHUB_RUN_ID}](${run_url}) on \`${GITHUB_SHA:0:8}\`." \
+            "Reproduce locally: \`cargo llvm-cov --profile coverage --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json && python3 scripts/check-coverage.py coverage.json\`"
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$label" --state open \
+            --search "in:title \"$title\"" --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --label "$label" --title "$title" --body "$body"
+          fi

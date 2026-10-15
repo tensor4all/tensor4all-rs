@@ -110,6 +110,15 @@ The subsequent measurement uses `--no-clean` because this cleanup has already
 run. The generated root `coverage.json` is ignored locally and uploaded as a
 CI artifact rather than tracked in Git.
 
+The Test job persists its kache store with a per-commit key and a prefix
+restore key. Pull requests save too: the snapshot is scoped to the PR's merge
+ref, and the next push to that PR restores it ahead of main's. After saving,
+the job deletes that PR's older snapshots, because only the newest is ever
+restored and the repository cache is capped at 10 GB. `Swatinem/rust-cache`
+saves on main only; pull requests restore main's dependency cache. Coverage
+runs nightly (`.github/workflows/coverage.yml`) and keeps its own
+instrumented store, saved from main.
+
 Test, Doctests, and Coverage retain `build-diagnostics-*` artifacts for seven
 days. Their JSON summaries and timestamped Cargo logs distinguish `Fresh`
 artifacts from compilation and record the build-completion boundary. Cargo

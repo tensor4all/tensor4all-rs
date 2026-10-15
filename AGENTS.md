@@ -175,7 +175,8 @@ test to the scheduled heavy-tests workflow.
 - Before pushing a deletion PR, attest in the PR body that removed code paths
   were reviewed for coverage impact (shared rules `common/docs-and-tests.md`:
   coverage is CI-owned, the local gate is attestation-based). CI coverage is
-  authoritative; a local run is optional:
+  authoritative and runs nightly (`.github/workflows/coverage.yml`), so a PR
+  does not show it; a local run is optional:
 
 ```bash
 cargo llvm-cov --profile coverage --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
