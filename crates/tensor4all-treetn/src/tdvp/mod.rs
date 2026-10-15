@@ -1224,7 +1224,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the solve or sweep fails (a shape or index
-/// /// mismatch, a non-convergence failure, or a backend failure).
+/// mismatch, a non-convergence failure, or a backend failure).
 ///
 /// # Examples
 /// ```

@@ -106,7 +106,7 @@ pub fn physical_frequency_bounds(config: &FourierTutorialConfig) -> (f64, f64) {
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_gaussian_qtt(
     grid: &DiscretizedGrid,
@@ -136,7 +136,7 @@ pub fn build_gaussian_qtt(
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_fourier_operator(
     config: &FourierTutorialConfig,
@@ -164,7 +164,7 @@ pub fn global_index_to_quantics_sites(index: usize, bits: usize) -> Vec<usize> {
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn transform_gaussian(
     qtci: &QuanticsTensorCI2<f64>,
@@ -184,7 +184,7 @@ pub fn transform_gaussian(
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn evaluate_tree_point(
     tn: &TreeTN<IdxTensor, usize>,
@@ -199,7 +199,7 @@ pub fn evaluate_tree_point(
 /// # Errors
 ///
 /// Returns an error when the collection fails (a shape mismatch or
-/// /// backend failure).
+/// backend failure).
 ///
 pub fn collect_samples(
     transformed: &TreeTN<IdxTensor, usize>,
@@ -288,7 +288,7 @@ pub fn print_summary(
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
@@ -320,7 +320,7 @@ pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_bond_dims_csv(
     path: &Path,
@@ -341,7 +341,7 @@ pub fn write_bond_dims_csv(
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_fourier_operator_bond_dims_csv(
     path: &Path,

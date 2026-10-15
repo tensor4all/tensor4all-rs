@@ -388,7 +388,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the global-subspace TDVP fails (a shape or index
-/// /// mismatch, a non-convergence failure, or a backend failure).
+/// mismatch, a non-convergence failure, or a backend failure).
 ///
 pub fn gse_tdvp<V>(
     operator: &LinearOperator<IdxTensor, V>,

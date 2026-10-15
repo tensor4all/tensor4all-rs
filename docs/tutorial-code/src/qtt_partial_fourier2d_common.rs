@@ -130,7 +130,7 @@ pub fn interleaved_site_values(
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_input_grid(
     config: &PartialFourier2dConfig,
@@ -147,7 +147,7 @@ pub fn build_input_grid(
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_frequency_grid(
     config: &PartialFourier2dConfig,
@@ -173,7 +173,7 @@ fn k_t_names() -> Vec<&'static str> {
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_source_qtt(
     grid: &DiscretizedGrid,
@@ -218,7 +218,7 @@ pub fn build_source_qtt(
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_partial_fourier_operator(
     config: &PartialFourier2dConfig,
@@ -256,7 +256,7 @@ fn single_site_index_from_state(
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn transform_x_dimension(
     qtci: &QuanticsTensorCI2<f64>,
@@ -277,7 +277,7 @@ pub fn transform_x_dimension(
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn evaluate_tree_point(
     tn: &TreeTN<IdxTensor, usize>,
@@ -290,7 +290,7 @@ pub fn evaluate_tree_point(
 /// # Errors
 ///
 /// Returns an error when the collection fails (a shape mismatch or
-/// /// backend failure).
+/// backend failure).
 ///
 pub fn collect_samples(
     transformed: &TreeTN<IdxTensor, usize>,
@@ -369,7 +369,7 @@ fn write_optional_usize(value: Option<usize>) -> String {
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_samples_csv(
     path: &Path,
@@ -405,7 +405,7 @@ pub fn write_samples_csv(
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_bond_dims_csv(
     path: &Path,
@@ -431,7 +431,7 @@ pub fn write_bond_dims_csv(
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_operator_bond_dims_csv(
     path: &Path,

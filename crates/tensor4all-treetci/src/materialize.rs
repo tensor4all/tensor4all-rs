@@ -29,7 +29,7 @@ use tensor4all_treetn::TreeTN;
 /// # Errors
 ///
 /// Returns an error when the operation fails (a shape or index mismatch, or
-/// /// a backend failure).
+/// a backend failure).
 ///
 pub fn to_treetn<T, F>(
     state: &TreeTCI2<T>,

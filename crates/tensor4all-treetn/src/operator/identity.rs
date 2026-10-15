@@ -30,7 +30,7 @@ use tensor4all_core::{DynIndex, IdxTensor, TensorConstructionLike};
 /// # Errors
 ///
 /// Returns an error when the operator construction fails (an overflow or
-/// /// invalid-configuration failure, or a shape mismatch).
+/// invalid-configuration failure, or a shape mismatch).
 ///
 /// # Example
 ///

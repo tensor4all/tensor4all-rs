@@ -1281,7 +1281,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, an
-    /// /// SVD or non-convergence failure, or a backend failure).
+    /// SVD or non-convergence failure, or a backend failure).
     ///
     /// # Examples
     ///

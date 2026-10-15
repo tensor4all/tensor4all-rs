@@ -19,7 +19,7 @@ use tensor4all_itensorlike::ContractOptions;
 /// # Errors
 ///
 /// Returns an error when the contraction or operation fails (a shape or
-/// /// index mismatch, or a backend failure).
+/// index mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -54,7 +54,7 @@ pub fn contract(
 /// # Errors
 ///
 /// Returns an error when the contraction or operation fails (a shape or
-/// /// index mismatch, or a backend failure).
+/// index mismatch, or a backend failure).
 ///
 /// # Examples
 ///

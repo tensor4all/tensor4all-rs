@@ -142,7 +142,7 @@ fn preview_f64(values: &[f64], n: usize) -> String {
 /// # Errors
 ///
 /// Returns an error when the collection fails (a shape mismatch or
-/// /// backend failure).
+/// backend failure).
 ///
 pub fn print_treetn_summary(
     label: &str,
@@ -181,7 +181,7 @@ fn evaluate_tree_point(
 /// # Errors
 ///
 /// Returns an error when the collection fails (a shape mismatch or
-/// /// backend failure).
+/// backend failure).
 ///
 pub fn collect_samples<F, G>(
     cosh_qtci: &QuanticsTensorCI2<f64>,
@@ -240,7 +240,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the collection fails (a shape mismatch or
-/// /// backend failure).
+/// backend failure).
 ///
 pub fn collect_bond_profile(
     cosh_tt: &SimpleTensorTrain<f64>,
@@ -284,7 +284,7 @@ pub fn collect_bond_profile(
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
@@ -322,7 +322,7 @@ pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_bond_dims_csv(path: &Path, rows: &[BondProfileRow]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;

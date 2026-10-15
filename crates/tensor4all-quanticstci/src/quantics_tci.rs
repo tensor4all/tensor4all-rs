@@ -436,7 +436,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the grid coordinate conversion fails (an
-    /// /// grid shape mismatch failure) or the evaluation fails.
+    /// grid shape mismatch failure) or the evaluation fails.
     ///
     /// # Examples
     ///

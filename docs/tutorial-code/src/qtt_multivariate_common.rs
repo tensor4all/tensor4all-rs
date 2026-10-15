@@ -50,7 +50,7 @@ pub fn point_count(config: &MultivariateTutorialConfig) -> usize {
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_multivariate_grid(
     config: &MultivariateTutorialConfig,
@@ -68,7 +68,7 @@ pub fn build_multivariate_grid(
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_multivariate_qtt<F>(
     grid: &DiscretizedGrid,
@@ -195,7 +195,7 @@ fn evaluate_dense_qtt(qtt: &QuanticsTensorCI2<f64>) -> Result<Vec<f64>, Box<dyn 
 /// # Errors
 ///
 /// Returns an error when the collection fails (a shape mismatch or
-/// /// backend failure).
+/// backend failure).
 ///
 pub fn collect_samples<F>(
     interleaved: &QuanticsTensorCI2<f64>,
@@ -260,7 +260,7 @@ pub fn collect_bond_dims(interleaved: &[usize], grouped: &[usize]) -> Vec<BondDi
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_samples_csv(
     path: &Path,
@@ -296,7 +296,7 @@ pub fn write_samples_csv(
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_bond_dims_csv(path: &Path, rows: &[BondDimRow]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;

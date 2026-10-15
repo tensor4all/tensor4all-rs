@@ -122,7 +122,7 @@ pub fn transformed_reference(x: usize, y: usize, bits: usize, mode: AffineBounda
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_source_qtt(config: &AffineTutorialConfig) -> Result<AffineQttOutput, Box<dyn Error>> {
     let n = point_count(config.bits);
@@ -172,7 +172,7 @@ fn boundary_conditions(mode: AffineBoundaryMode) -> Vec<BoundaryCondition> {
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_affine_operator(
     config: &AffineTutorialConfig,
@@ -186,7 +186,7 @@ pub fn build_affine_operator(
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn evaluate_tree_point(
     tn: &TreeTN<IdxTensor, usize>,
@@ -201,7 +201,7 @@ pub fn evaluate_tree_point(
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn apply_affine_operator(
     source: &QuanticsTensorCI2<f64>,
@@ -224,7 +224,7 @@ pub fn apply_affine_operator(
 /// # Errors
 ///
 /// Returns an error when the collection fails (a shape mismatch or
-/// /// backend failure).
+/// backend failure).
 ///
 pub fn collect_samples(
     periodic: &TreeTN<IdxTensor, usize>,
@@ -329,7 +329,7 @@ fn write_optional_usize(value: Option<usize>) -> String {
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_samples_csv(path: &Path, samples: &[AffineSamplePoint]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
@@ -369,7 +369,7 @@ pub fn write_samples_csv(path: &Path, samples: &[AffineSamplePoint]) -> Result<(
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_bond_dims_csv(path: &Path, rows: &[AffineBondDimRow]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
@@ -398,7 +398,7 @@ pub fn write_bond_dims_csv(path: &Path, rows: &[AffineBondDimRow]) -> Result<(),
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_operator_bond_dims_csv(
     path: &Path,

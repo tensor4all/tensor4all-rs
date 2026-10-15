@@ -2329,7 +2329,7 @@ impl MatrixScalar for Complex32 {
 /// # Errors
 ///
 /// Returns an error when the operation fails (a shape or index mismatch, or
-/// /// a backend failure).
+/// a backend failure).
 ///
 /// # Examples
 ///
@@ -2356,7 +2356,7 @@ pub fn mat_mul<T: BlasMul>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>, Ma
 /// # Errors
 ///
 /// Returns an error when the operation fails (a shape or index mismatch, or
-/// /// a backend failure).
+/// a backend failure).
 ///
 /// # Examples
 ///

@@ -90,7 +90,7 @@ impl<T> TreeTCI2<T> {
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     pub fn new(local_dims: Vec<usize>, graph: TreeTciGraph) -> TreeTciResult<Self> {
         if !(local_dims.len() > 1) {

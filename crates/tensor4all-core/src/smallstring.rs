@@ -119,7 +119,7 @@ impl<const MAX_LEN: usize, C: SmallChar> SmallString<MAX_LEN, C> {
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     pub fn from_str(s: &str) -> Result<Self, SmallStringError> {
         let mut data = [C::ZERO; MAX_LEN];

@@ -643,7 +643,7 @@ pub trait TensorVectorSpace: TensorIndex {
     /// # Errors
     ///
     /// Returns `Self::Error` when the norm cannot be evaluated (a materialization
-    /// /// or backend failure).
+    /// or backend failure).
     ///
     /// # Examples
     /// ```
@@ -717,7 +717,7 @@ pub trait TensorVectorSpace: TensorIndex {
     /// # Errors
     ///
     /// Returns `Self::Error` when the norm cannot be evaluated (a materialization
-    /// /// or backend failure).
+    /// or backend failure).
     ///
     /// # Examples
     /// ```
@@ -758,7 +758,7 @@ pub trait TensorVectorSpace: TensorIndex {
     /// # Errors
     ///
     /// Returns `Self::Error` when the maximum cannot be evaluated (a
-    /// /// materialization or backend failure).
+    /// materialization or backend failure).
     ///
     /// # Examples
     /// ```
@@ -984,7 +984,7 @@ pub trait TensorFactorizationLike: TensorIndex {
     /// # Errors
     ///
     /// Returns `FactorizeError` when the factorization fails (a non-convergence,
-    /// /// singular, or unsupported-storage failure).
+    /// singular, or unsupported-storage failure).
     ///
     fn factorize(
         &self,
@@ -1073,7 +1073,7 @@ pub trait TensorFactorizationLike: TensorIndex {
     /// # Errors
     ///
     /// Returns `FactorizeError` when the factorization fails (a non-convergence,
-    /// /// singular, or unsupported-storage failure).
+    /// singular, or unsupported-storage failure).
     ///
     fn factorize_full_rank(
         &self,

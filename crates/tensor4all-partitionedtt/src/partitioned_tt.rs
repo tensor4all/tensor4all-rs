@@ -260,7 +260,7 @@ impl PartitionedTT {
     /// # Errors
     ///
     /// Returns an error when the norm cannot be evaluated (a materialization or
-    /// /// backend failure).
+    /// backend failure).
     ///
     /// # Examples
     ///
@@ -300,7 +300,7 @@ impl PartitionedTT {
     /// # Errors
     ///
     /// Returns an error when the contraction fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     pub fn contract(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
         let mut result = Self::new();
@@ -351,7 +351,7 @@ impl PartitionedTT {
     /// # Errors
     ///
     /// Returns an error when the partitions are incompatible (a shape mismatch)
-    /// /// or the addition fails.
+    /// or the addition fails.
     ///
     pub fn add(&self, other: &Self, options: &TruncateOptions) -> Result<Self> {
         // Collect unique projectors from both (union)
@@ -455,7 +455,7 @@ impl PartitionedTT {
     /// # Errors
     ///
     /// Returns an error when the conversion fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     pub fn to_tensor_train(&self) -> Result<TensorTrain> {
         if self.is_empty() {

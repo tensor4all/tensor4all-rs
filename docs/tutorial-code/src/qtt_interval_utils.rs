@@ -27,7 +27,7 @@ pub struct SamplePoint {
 /// # Errors
 ///
 /// Returns an error when the collection fails (a shape mismatch or
-/// /// backend failure).
+/// backend failure).
 ///
 pub fn collect_samples<F>(
     qtci: &QuanticsTensorCI2<f64>,
@@ -147,7 +147,7 @@ pub fn print_summary(
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box<dyn Error>> {
     // Plain CSV output: one row per grid point so Julia can recreate the figure.
@@ -170,7 +170,7 @@ pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_bond_dims_csv(path: &Path, bond_dims: &[usize]) -> Result<(), Box<dyn Error>> {
     // Plain CSV output: one row per bond in the QTT.

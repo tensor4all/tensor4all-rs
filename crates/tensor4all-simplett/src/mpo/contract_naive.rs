@@ -36,7 +36,7 @@ use crate::einsum_helper::{einsum_tensors, typed_tensor_reshape, EinsumScalar};
 /// # Errors
 ///
 /// Returns an error when the contraction or operation fails (a shape or
-/// /// index mismatch, or a backend failure).
+/// index mismatch, or a backend failure).
 ///
 pub fn contract_naive<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,

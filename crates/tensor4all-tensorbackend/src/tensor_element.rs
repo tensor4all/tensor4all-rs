@@ -22,7 +22,7 @@ pub trait TensorElement: TensorScalar + Copy + Send + Sync + 'static {
     /// # Errors
     ///
     /// Returns an error when the data length does not match the dimensions (a
-    /// /// shape mismatch) or the backend conversion fails.
+    /// shape mismatch) or the backend conversion fails.
     ///
     fn dense_native_tensor_from_col_major(data: &[Self], dims: &[usize]) -> Result<NativeTensor>;
 
@@ -69,7 +69,7 @@ pub trait TensorElement: TensorScalar + Copy + Send + Sync + 'static {
     /// # Errors
     ///
     /// Returns an error when the diagonal payload is incompatible (a shape
-    /// /// mismatch) or the backend conversion fails.
+    /// mismatch) or the backend conversion fails.
     ///
     fn diag_native_tensor_from_col_major(
         data: &[Self],
@@ -80,7 +80,7 @@ pub trait TensorElement: TensorScalar + Copy + Send + Sync + 'static {
     /// # Errors
     ///
     /// Returns an error when the scalar cannot be converted (a dtype mismatch or
-    /// /// backend failure).
+    /// backend failure).
     ///
     fn scalar_native_tensor(value: Self) -> Result<NativeTensor>;
 
@@ -88,7 +88,7 @@ pub trait TensorElement: TensorScalar + Copy + Send + Sync + 'static {
     /// # Errors
     ///
     /// Returns an error when the native tensor cannot be materialized (a dtype
-    /// /// mismatch or backend failure).
+    /// mismatch or backend failure).
     ///
     fn dense_values_from_native_col_major(tensor: &NativeTensor) -> Result<Vec<Self>>;
 
@@ -96,7 +96,7 @@ pub trait TensorElement: TensorScalar + Copy + Send + Sync + 'static {
     /// # Errors
     ///
     /// Returns an error when the native tensor cannot be materialized (a dtype
-    /// /// mismatch or backend failure).
+    /// mismatch or backend failure).
     ///
     fn diag_values_from_native_temp(tensor: &NativeTensor) -> Result<Vec<Self>>;
 }

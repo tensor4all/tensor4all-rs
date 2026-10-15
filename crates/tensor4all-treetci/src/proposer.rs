@@ -125,7 +125,7 @@ impl PivotCandidateProposer for DefaultProposer {
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     fn candidates_with_rng<T, R: Rng + ?Sized>(
         &self,
@@ -211,7 +211,7 @@ impl PivotCandidateProposer for SimpleProposer {
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     fn candidates_with_rng<T, R: Rng + ?Sized>(
         &self,
@@ -316,7 +316,7 @@ impl PivotCandidateProposer for TruncatedDefaultProposer {
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     fn candidates_with_rng<T, R: Rng + ?Sized>(
         &self,

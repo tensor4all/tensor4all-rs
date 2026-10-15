@@ -45,7 +45,7 @@ impl<V: Clone + Hash + Eq, I: Clone + Eq> TreeTopology<V, I> {
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     pub fn validate(&self) -> std::result::Result<(), TreeTNOperationError> {
         let n = self.nodes.len();

@@ -277,7 +277,7 @@ impl<T: TTScalar> TTCache<T> {
     /// # Errors
     ///
     /// Returns an error when the site dimensions are invalid (a shape mismatch)
-    /// /// or the cache cannot be configured.
+    /// or the cache cannot be configured.
     ///
     pub fn with_site_dims<TT: AbstractTensorTrain<T>>(
         tt: &TT,
@@ -537,7 +537,7 @@ impl<T: TTScalar> TTCache<T> {
     /// # Errors
     ///
     /// Returns an error when the cached evaluation fails (a missing-index or
-    /// /// invalid-state failure).
+    /// invalid-state failure).
     ///
     pub fn evaluate(&mut self, indices: &[LocalIndex]) -> Result<T> {
         let n = self.len();
@@ -591,7 +591,7 @@ impl<T: TTScalar> TTCache<T> {
     /// # Errors
     ///
     /// Returns an error when a cached evaluation fails (a missing-index or
-    /// /// invalid-state failure).
+    /// invalid-state failure).
     ///
     pub fn evaluate_many(
         &mut self,

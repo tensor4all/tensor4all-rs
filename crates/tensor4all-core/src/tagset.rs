@@ -87,7 +87,7 @@ pub trait TagSetLike: Default + Clone + PartialEq + Eq {
     /// # Errors
     ///
     /// Returns an error when the string cannot be parsed as a tag or tag set (an
-    /// /// invalid-input failure).
+    /// invalid-input failure).
     ///
     fn from_str(s: &str) -> Result<Self, TagSetError> {
         let mut tagset = Self::default();
@@ -187,7 +187,7 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar>
     /// # Errors
     ///
     /// Returns an error when the string cannot be parsed as a tag or tag set (an
-    /// /// invalid-input failure).
+    /// invalid-input failure).
     ///
     pub fn from_str(s: &str) -> Result<Self, TagSetError> {
         <Self as TagSetLike>::from_str(s)
@@ -448,7 +448,7 @@ impl DynamicTagSet {
     /// # Errors
     ///
     /// Returns an error when the string cannot be parsed as a tag or tag set (an
-    /// /// invalid-input failure).
+    /// invalid-input failure).
     ///
     pub fn from_str(s: &str) -> Result<Self, TagSetError> {
         <Self as TagSetLike>::from_str(s)

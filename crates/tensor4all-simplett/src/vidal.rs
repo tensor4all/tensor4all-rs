@@ -214,7 +214,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     pub fn from_tensor_train(tt: &SimpleTensorTrain<T>) -> Result<Self>
     where
@@ -228,7 +228,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     /// # Errors
     ///
     /// Returns an error when the tensor train cannot be converted (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     pub fn from_tensor_train_with_partition(
         tt: &SimpleTensorTrain<T>,
@@ -403,7 +403,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     /// # Errors
     ///
     /// Returns an error when the dimensions are invalid (a shape mismatch) or the
-    /// /// construction fails.
+    /// construction fails.
     ///
     pub fn new(tensors: Vec<Tensor3<T>>, singular_values: Vec<DiagMatrix>) -> Result<Self> {
         let n = tensors.len();
@@ -551,7 +551,7 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
     /// # Errors
     ///
     /// Returns an error when the Vidal representation is invalid (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     pub fn from_vidal(vidal: &VidalTensorTrain<T>) -> Result<Self> {
         let n = vidal.len();
@@ -671,7 +671,7 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     pub fn from_tensor_train(tt: &SimpleTensorTrain<T>) -> Result<Self>
     where
@@ -706,7 +706,7 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
     /// # Errors
     ///
     /// Returns an error when the two-site tensors are incompatible (a shape
-    /// /// mismatch) or the merge fails (a backend failure).
+    /// mismatch) or the merge fails (a backend failure).
     ///
     pub fn set_two_site_tensors(
         &mut self,

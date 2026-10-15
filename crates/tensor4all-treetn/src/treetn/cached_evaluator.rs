@@ -972,7 +972,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     fn new(tree: &TreeTN<IdxTensor, V>, center: &V) -> Result<Self> {
         Self::from_neighbors(&sorted_neighbors(tree), center)

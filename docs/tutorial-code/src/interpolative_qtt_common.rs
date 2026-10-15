@@ -102,7 +102,7 @@ pub fn interpolation_options(config: &InterpolativeQttTutorialConfig) -> Interpo
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_single_scale_smooth_qtt(
     config: &InterpolativeQttTutorialConfig,
@@ -122,7 +122,7 @@ pub fn build_single_scale_smooth_qtt(
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_multi_scale_inverse_square_1d_qtt(
     config: &InterpolativeQttTutorialConfig,
@@ -144,7 +144,7 @@ pub fn build_multi_scale_inverse_square_1d_qtt(
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_multi_scale_inverse_square_2d_qtt(
     config: &InterpolativeQttTutorialConfig,
@@ -191,7 +191,7 @@ fn quantics_to_tt_indices(quantics: &[usize]) -> Result<Vec<usize>, Box<dyn Erro
 /// # Errors
 ///
 /// Returns an error when the collection fails (a shape mismatch or
-/// /// backend failure).
+/// backend failure).
 ///
 pub fn collect_1d_samples<F>(
     case_name: &'static str,
@@ -234,7 +234,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the collection fails (a shape mismatch or
-/// /// backend failure).
+/// backend failure).
 ///
 pub fn collect_2d_samples<F>(
     tt: &SimpleTensorTrain<f64>,
@@ -322,7 +322,7 @@ pub fn max_abs_error_2d(samples: &[InterpolativeQtt2dSample]) -> f64 {
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_1d_samples_csv(
     path: &Path,
@@ -347,7 +347,7 @@ pub fn write_1d_samples_csv(
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_2d_samples_csv(
     path: &Path,
@@ -378,7 +378,7 @@ pub fn write_2d_samples_csv(
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_bond_dims_csv(
     path: &Path,

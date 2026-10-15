@@ -121,7 +121,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Errors
     ///
     /// Returns an error when the matrix dimensions are invalid (a shape mismatch)
-    /// /// or the initial pivot is out of range (an out of bounds failure).
+    /// or the initial pivot is out of range (an out of bounds failure).
     ///
     /// # Examples
     ///
@@ -302,7 +302,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Errors
     ///
     /// Returns an error when the pivot column is out of range (an out of bounds
-    /// /// failure) or the ACA update fails.
+    /// failure) or the ACA update fails.
     ///
     /// # Examples
     ///
@@ -345,7 +345,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Errors
     ///
     /// Returns an error when the pivot row is out of range (an out of bounds
-    /// /// failure) or the ACA update fails.
+    /// failure) or the ACA update fails.
     ///
     /// # Examples
     ///
@@ -399,7 +399,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Errors
     ///
     /// Returns an error when the pivot is out of range (an out of bounds failure)
-    /// /// or the ACA update fails.
+    /// or the ACA update fails.
     ///
     /// # Examples
     ///
@@ -431,7 +431,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// # Errors
     ///
     /// Returns an error when no valid pivot exists (a singular failure) or the
-    /// /// ACA update fails.
+    /// ACA update fails.
     ///
     /// # Examples
     ///

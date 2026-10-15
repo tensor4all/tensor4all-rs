@@ -29,7 +29,7 @@ use crate::tensortrain::TensorTrain;
 /// # Errors
 ///
 /// Returns an error when the solve or sweep fails (a shape or index
-/// /// mismatch, a non-convergence failure, or a backend failure).
+/// mismatch, a non-convergence failure, or a backend failure).
 ///
 pub fn linsolve(
     operator: &TensorTrain,
@@ -277,7 +277,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the solve or sweep fails (a shape or index
-    /// /// mismatch, a non-convergence failure, or a backend failure).
+    /// mismatch, a non-convergence failure, or a backend failure).
     ///
     pub fn linsolve(&self, rhs: &Self, init: Self, options: &LinsolveOptions) -> Result<Self> {
         linsolve(self, rhs, init, options)

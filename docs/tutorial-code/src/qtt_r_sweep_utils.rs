@@ -42,7 +42,7 @@ pub fn discrete_index_to_unit_interval(index: i64, npoints: usize) -> f64 {
 /// # Errors
 ///
 /// Returns an error when the collection fails (a shape mismatch or
-/// /// backend failure).
+/// backend failure).
 ///
 pub fn collect_samples<F>(
     r: usize,
@@ -152,7 +152,7 @@ fn preview_f64(values: &[f64], n: usize) -> String {
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_samples_csv(path: &Path, samples: &[SweepSample]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
@@ -181,7 +181,7 @@ pub fn write_samples_csv(path: &Path, samples: &[SweepSample]) -> Result<(), Box
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_stats_csv(path: &Path, stats: &[SweepStats]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;

@@ -121,7 +121,7 @@ impl SVDScalar for Complex64 {
 /// # Errors
 ///
 /// Returns an error when the factorization fails (a non-convergence, singular,
-/// /// or backend failure).
+/// or backend failure).
 ///
 pub fn factorize<T: SVDScalar>(
     matrix: &Matrix2<T>,
@@ -323,7 +323,7 @@ fn factorize_rsvd<T: SVDScalar>(
 /// # Errors
 ///
 /// Returns an error when the LU factorization fails (a singular or backend
-/// /// failure).
+/// failure).
 ///
 pub fn factorize_lu<T>(
     matrix: &Matrix2<T>,
@@ -392,7 +392,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the cross-interpolation factorization fails (a
-/// /// non-convergence or backend failure).
+/// non-convergence or backend failure).
 ///
 pub fn factorize_ci<T>(
     matrix: &Matrix2<T>,

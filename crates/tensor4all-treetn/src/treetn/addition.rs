@@ -58,7 +58,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the site spaces are incompatible (a shape mismatch)
-    /// /// or the reindexing fails.
+    /// or the reindexing fails.
     ///
     /// # Examples
     /// ```
@@ -151,7 +151,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the site spaces are incompatible (a shape mismatch)
-    /// /// or the addition fails.
+    /// or the addition fails.
     ///
     /// # Examples
     /// ```
@@ -305,7 +305,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the networks are incompatible (a shape or index
-    /// /// mismatch) or the addition fails (a backend failure).
+    /// mismatch) or the addition fails (a backend failure).
     ///
     /// # Examples
     ///
@@ -467,7 +467,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the networks are incompatible (a shape or index
-    /// /// mismatch) or the axpby fails (a backend failure).
+    /// mismatch) or the axpby fails (a backend failure).
     ///
     /// # Examples
     /// ```
