@@ -472,7 +472,6 @@ where
     ///
     /// # Errors
     ///
-    /// This method is infallible and always returns `Ok`.
     ///
     /// # Examples
     ///
@@ -494,7 +493,9 @@ where
     /// assert!((sum - 8.0).abs() < 1e-8);
     /// ```
     pub fn sum(&self) -> QtciResult<V> {
-        Ok(self.tt.sum())
+        self.tt.sum().map_err(|error| QuanticsTCIError::Operation {
+            source: anyhow::Error::new(error).context("failed to sum the tensor train"),
+        })
     }
 
     /// Integral over the continuous domain (left Riemann sum).

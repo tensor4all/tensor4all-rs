@@ -16,7 +16,7 @@ fn test_tensortrain_constant_generic<T: TTScalar>() {
     assert_eq!(tt.len(), 2);
 
     // Sum should be 5.0 * 2 * 2 = 20.0
-    let sum = tt.sum();
+    let sum = tt.sum().unwrap();
     assert!(sum.abs_sq().sqrt() - 20.0 < 1e-10);
 }
 
@@ -25,7 +25,7 @@ fn test_tensortrain_constant_single_site_generic<T: TTScalar>() {
     assert_eq!(tt.len(), 1);
     assert_eq!(tt.site_dims(), vec![3]);
 
-    let sum = tt.sum();
+    let sum = tt.sum().unwrap();
     assert!((sum.abs_sq().sqrt() - 15.0).abs() < 1e-10);
 
     let (data, shape) = tt.full_tensor().unwrap();
@@ -66,7 +66,7 @@ fn test_tensortrain_scale_generic<T: TTScalar>() {
     tt.scale_mut(T::from_f64(3.0));
 
     // Sum should be 3.0 * 2 * 2 = 12.0
-    let sum = tt.sum();
+    let sum = tt.sum().unwrap();
     assert!((sum.abs_sq().sqrt() - 12.0).abs() < 1e-10);
 }
 
@@ -133,8 +133,8 @@ fn test_full_tensor_matches_evaluate_generic<T: TTScalar>() {
 fn test_log_norm_matches_norm_generic<T: TTScalar>() {
     let tt = SimpleTensorTrain::<T>::constant(&[2, 3], T::from_f64(2.0));
 
-    let norm = tt.norm();
-    let log_norm = tt.log_norm();
+    let norm = tt.norm().unwrap();
+    let log_norm = tt.log_norm().unwrap();
 
     // log_norm should equal ln(norm)
     assert!(
@@ -160,8 +160,8 @@ fn test_log_norm_with_varied_values_generic<T: TTScalar>() {
 
     let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
 
-    let norm = tt.norm();
-    let log_norm = tt.log_norm();
+    let norm = tt.norm().unwrap();
+    let log_norm = tt.log_norm().unwrap();
 
     assert!(
         (log_norm - norm.ln()).abs() < 1e-10,
@@ -173,7 +173,7 @@ fn test_log_norm_with_varied_values_generic<T: TTScalar>() {
 
 fn test_log_norm_zero_tensor_generic<T: TTScalar>() {
     let tt = SimpleTensorTrain::<T>::zeros(&[2, 3]);
-    let log_norm = tt.log_norm();
+    let log_norm = tt.log_norm().unwrap();
 
     assert!(log_norm.is_infinite() && log_norm < 0.0);
 }
@@ -299,12 +299,12 @@ fn test_partial_sum_all_dims_generic<
 >() {
     // f(i,j,k) = 1.0 for all indices → sum = 2*3*2 = 12
     let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
-    let full_sum = tt.sum();
+    let full_sum = tt.sum().unwrap();
 
     let result = tt.partial_sum(&[0, 1, 2]).unwrap();
     // Should be 1-site TT with a single scalar
     assert_eq!(result.len(), 1);
-    let partial_val = result.sum();
+    let partial_val = result.sum().unwrap();
     assert!(
         (full_sum - partial_val).abs_sq().sqrt() < 1e-12,
         "partial_sum all dims: expected {full_sum:?}, got {partial_val:?}"
@@ -582,7 +582,7 @@ where
     };
 
     let tt_orig = build_tt();
-    let orig_sum = tt_orig.sum();
+    let orig_sum = tt_orig.sum().unwrap();
 
     let mut tt_svd = build_tt();
     tt_svd
@@ -594,7 +594,7 @@ where
         })
         .unwrap();
 
-    let svd_sum = tt_svd.sum();
+    let svd_sum = tt_svd.sum().unwrap();
     assert!(
         <T as tensor4all_core::Scalar>::abs_sq(orig_sum - svd_sum).sqrt() < 1e-8,
         "SVD compression changed sum: orig={orig_sum:?}, svd={svd_sum:?}"

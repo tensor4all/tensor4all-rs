@@ -239,6 +239,14 @@ where
             current = new_current;
         }
 
+        if *current.dims() != [1, 1] {
+            return Err(MPOError::InvalidOperation {
+                message: format!(
+                    "Final contraction resulted in a {:?} environment, expected [1, 1]",
+                    current.dims()
+                ),
+            });
+        }
         let result = current[[0, 0]];
 
         // Apply transformation if present

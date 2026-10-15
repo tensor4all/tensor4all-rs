@@ -163,6 +163,14 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
         }
 
         // Final result should be 1x1
+        if result.nrows() != 1 || result.ncols() != 1 {
+            return Err(SimpleTensorTrainError::InvalidOperation {
+                message: format!(
+                    "Final contraction resulted in a {:?} environment, expected [1, 1]",
+                    (result.nrows(), result.ncols())
+                ),
+            });
+        }
         Ok(result[[0, 0]])
     }
 

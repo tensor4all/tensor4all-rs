@@ -197,7 +197,7 @@ pub type DiagMatrix = Vec<f64>;
 /// assert!((val - 1.0).abs() < 1e-12);
 ///
 /// // The sum is also preserved: 1.0 * 2 * 3 = 6.0
-/// assert!((tt2.sum() - 6.0).abs() < 1e-10);
+/// assert!((tt2.sum().unwrap() - 6.0).abs() < 1e-10);
 /// ```
 #[derive(Debug, Clone)]
 pub struct VidalTensorTrain<T: TTScalar> {
@@ -534,7 +534,7 @@ impl<T: TTScalar + Scalar + Default> AbstractTensorTrain<T> for VidalTensorTrain
 /// assert!((val - 1.0).abs() < 1e-12);
 ///
 /// // The sum is also preserved: 1.0 * 2 * 3 = 6.0
-/// assert!((tt2.sum() - 6.0).abs() < 1e-10);
+/// assert!((tt2.sum().unwrap() - 6.0).abs() < 1e-10);
 /// ```
 #[derive(Debug, Clone)]
 pub struct InverseTensorTrain<T: TTScalar> {

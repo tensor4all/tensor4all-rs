@@ -16,8 +16,8 @@ fn test_site_tensor_train_preserves_values_generic<T: TTScalar + Scalar + Defaul
     let stt = SiteTensorTrain::from_tensor_train(&tt, 1).unwrap();
 
     // Check that evaluation is preserved
-    let original_sum = tt.sum();
-    let stt_sum = stt.sum();
+    let original_sum = tt.sum().unwrap();
+    let stt_sum = stt.sum().unwrap();
     assert!(
         (original_sum - stt_sum).abs_sq().sqrt() < 1e-10,
         "Sum mismatch"
@@ -51,8 +51,8 @@ fn test_set_center_generic<T: TTScalar + Scalar + Default>() {
     assert_eq!(stt.center(), 1);
 
     // Sum should still be preserved
-    let original_sum = tt.sum();
-    let stt_sum = stt.sum();
+    let original_sum = tt.sum().unwrap();
+    let stt_sum = stt.sum().unwrap();
     assert!(
         (original_sum - stt_sum).abs_sq().sqrt() < 1e-10,
         "Sum mismatch after moving center"
@@ -64,8 +64,8 @@ fn test_to_tensor_train_generic<T: TTScalar + Scalar + Default>() {
     let stt = SiteTensorTrain::from_tensor_train(&tt, 1).unwrap();
     let tt_back = stt.to_tensor_train();
 
-    let original_sum = tt.sum();
-    let converted_sum = tt_back.sum();
+    let original_sum = tt.sum().unwrap();
+    let converted_sum = tt_back.sum().unwrap();
     assert!(
         (original_sum - converted_sum).abs_sq().sqrt() < 1e-10,
         "Sum mismatch after round-trip"
@@ -76,13 +76,13 @@ fn test_center_canonicalize_function_generic<T: TTScalar + Scalar + Default>() {
     let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
     let mut tensors: Vec<Tensor3<T>> = tt.site_tensors().to_vec();
 
-    let original_sum = tt.sum();
+    let original_sum = tt.sum().unwrap();
 
     center_canonicalize(&mut tensors, 1).unwrap();
 
     // Reconstruct and verify sum
     let tt_new = SimpleTensorTrain::from_tensors_unchecked(tensors);
-    let new_sum = tt_new.sum();
+    let new_sum = tt_new.sum().unwrap();
     assert!(
         (original_sum - new_sum).abs_sq().sqrt() < 1e-10,
         "Sum mismatch"

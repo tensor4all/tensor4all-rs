@@ -596,7 +596,7 @@ where
     )?;
 
     let tt = tci.to_tensor_train()?;
-    let sum = tt.sum();
+    let sum = tt.sum()?;
 
     // Return sum / normalization
     let inv_norm = <T as Scalar>::from_f64(1.0 / normalization);

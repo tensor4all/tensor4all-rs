@@ -191,7 +191,7 @@ assert_eq!(cache.retained_bytes(), 8 + std::mem::size_of::<f64>());
 
 For a uniform half-open grid on `[x_min, x_max)`, the quantics tensor train sum becomes a Riemann integral after multiplying by the cell width:
 
-`integral = tt.sum() * (x_max - x_min) / 2^R`
+`integral = tt.sum().unwrap() * (x_max - x_min) / 2^R`
 
 ```rust
 # use tensor4all_simplett::AbstractTensorTrain;
@@ -210,7 +210,7 @@ For a uniform half-open grid on `[x_min, x_max)`, the quantics tensor train sum 
 #     TCI2Options { tolerance: 1e-12, seed: Some(42), ..Default::default() },
 # ).unwrap();
 let tt = tci.to_tensor_train().unwrap();
-let integral = tt.sum() * (x_max - 0.0) / (1usize << r) as f64;
+let integral = tt.sum().unwrap() * (x_max - 0.0) / (1usize << r) as f64;
 
 // For f(x) = exp(-3x) on [0, 1): integral = (1 - e^{-3}) / 3
 let exact_integral = (1.0 - (-3.0_f64).exp()) / 3.0;

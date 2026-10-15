@@ -730,7 +730,7 @@ fn test_crossinterpolate2_5sites_constant() {
     let tt = tt_result.unwrap();
 
     // Sum should be 2.5 * 2^5 = 80
-    let sum = tt.sum();
+    let sum = tt.sum().unwrap();
     assert!((sum - 80.0).abs() < 1e-8, "Expected sum=80, got {}", sum);
 }
 

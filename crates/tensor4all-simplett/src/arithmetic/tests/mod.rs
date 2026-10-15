@@ -9,7 +9,7 @@ fn test_add_constant_tensors() {
     let result = tt1.add(&tt2).unwrap();
 
     // Sum should be (1.0 + 2.0) * 2 * 3 = 18.0
-    assert!((result.sum() - 18.0).abs() < 1e-10);
+    assert!((result.sum().unwrap() - 18.0).abs() < 1e-10);
 }
 
 #[test]
@@ -20,7 +20,7 @@ fn test_sub_constant_tensors() {
     let result = tt1.sub(&tt2).unwrap();
 
     // Sum should be (5.0 - 2.0) * 2 * 3 = 18.0
-    assert!((result.sum() - 18.0).abs() < 1e-10);
+    assert!((result.sum().unwrap() - 18.0).abs() < 1e-10);
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn test_add_single_site_constant_tensors() {
     for i in 0..3 {
         assert!((result.evaluate(&[i]).unwrap() - 3.0).abs() < 1e-10);
     }
-    assert!((result.sum() - 9.0).abs() < 1e-10);
+    assert!((result.sum().unwrap() - 9.0).abs() < 1e-10);
 }
 
 #[test]
@@ -46,7 +46,7 @@ fn test_sub_single_site_constant_tensors() {
     for i in 0..3 {
         assert!((result.evaluate(&[i]).unwrap() - 3.0).abs() < 1e-10);
     }
-    assert!((result.sum() - 9.0).abs() < 1e-10);
+    assert!((result.sum().unwrap() - 9.0).abs() < 1e-10);
 }
 
 #[test]
@@ -54,7 +54,7 @@ fn test_negate() {
     let tt = SimpleTensorTrain::<f64>::constant(&[2, 2], 3.0);
     let neg_tt = tt.negate();
 
-    assert!((neg_tt.sum() + tt.sum()).abs() < 1e-10);
+    assert!((neg_tt.sum().unwrap() + tt.sum().unwrap()).abs() < 1e-10);
 }
 
 #[test]
@@ -65,7 +65,7 @@ fn test_add_operator() {
     let result = (&tt1 + &tt2).unwrap();
 
     // Sum should be 2.0 * 2 * 2 = 8.0
-    assert!((result.sum() - 8.0).abs() < 1e-10);
+    assert!((result.sum().unwrap() - 8.0).abs() < 1e-10);
 }
 
 #[test]
@@ -141,7 +141,7 @@ fn test_add_three_sites() {
     let tt2 = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
     let result = tt1.add(&tt2).unwrap();
     // Sum should be (1+2)*2*3*2 = 36
-    assert!((result.sum() - 36.0).abs() < 1e-10);
+    assert!((result.sum().unwrap() - 36.0).abs() < 1e-10);
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn test_sub_by_value_operator() {
     let tt2 = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
     let result = (tt1 - tt2).unwrap();
     // (5-2)*2*3 = 18
-    assert!((result.sum() - 18.0).abs() < 1e-10);
+    assert!((result.sum().unwrap() - 18.0).abs() < 1e-10);
 }
 
 #[test]
@@ -158,23 +158,23 @@ fn test_add_by_value_operator() {
     let tt1 = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     let tt2 = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
     let result = (tt1 + tt2).unwrap();
-    assert!((result.sum() - 18.0).abs() < 1e-10);
+    assert!((result.sum().unwrap() - 18.0).abs() < 1e-10);
 }
 
 #[test]
 fn test_neg_by_value_operator() {
     let tt = SimpleTensorTrain::<f64>::constant(&[2, 2], 3.0);
     let neg_tt = -tt;
-    assert!((neg_tt.sum() + 12.0).abs() < 1e-10);
+    assert!((neg_tt.sum().unwrap() + 12.0).abs() < 1e-10);
 }
 
 #[test]
 fn test_neg_by_ref_operator() {
     let tt = SimpleTensorTrain::<f64>::constant(&[2, 2], 3.0);
     let neg_tt = -&tt;
-    assert!((neg_tt.sum() + 12.0).abs() < 1e-10);
+    assert!((neg_tt.sum().unwrap() + 12.0).abs() < 1e-10);
     // Original should still be accessible
-    assert!((tt.sum() - 12.0).abs() < 1e-10);
+    assert!((tt.sum().unwrap() - 12.0).abs() < 1e-10);
 }
 
 #[test]
@@ -182,16 +182,16 @@ fn test_mul_by_value_operator() {
     let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
     let result = tt * 3.0;
     // 2*3 * 2*3 = 36
-    assert!((result.sum() - 36.0).abs() < 1e-10);
+    assert!((result.sum().unwrap() - 36.0).abs() < 1e-10);
 }
 
 #[test]
 fn test_mul_by_ref_operator() {
     let tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
     let result = &tt * 3.0;
-    assert!((result.sum() - 36.0).abs() < 1e-10);
+    assert!((result.sum().unwrap() - 36.0).abs() < 1e-10);
     // Original accessible
-    assert!((tt.sum() - 12.0).abs() < 1e-10);
+    assert!((tt.sum().unwrap() - 12.0).abs() < 1e-10);
 }
 
 #[test]
@@ -199,7 +199,7 @@ fn test_sub_by_ref_operator() {
     let tt1 = SimpleTensorTrain::<f64>::constant(&[2, 3], 5.0);
     let tt2 = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);
     let result = (&tt1 - &tt2).unwrap();
-    assert!((result.sum() - 18.0).abs() < 1e-10);
+    assert!((result.sum().unwrap() - 18.0).abs() < 1e-10);
 }
 
 fn test_arithmetic_generic<T: TTScalar>() {
@@ -207,21 +207,21 @@ fn test_arithmetic_generic<T: TTScalar>() {
     let tt2 = SimpleTensorTrain::<T>::constant(&[2, 3], T::from_f64(2.0));
 
     let add_result = tt1.add(&tt2).unwrap();
-    let add_sum = add_result.sum();
+    let add_sum = add_result.sum().unwrap();
     assert!(
         (add_sum - T::from_f64(18.0)).abs_sq().sqrt() < 1e-10,
         "add sum mismatch"
     );
 
     let sub_result = tt1.sub(&tt2).unwrap();
-    let sub_sum = sub_result.sum();
+    let sub_sum = sub_result.sum().unwrap();
     assert!(
         (sub_sum - T::from_f64(-6.0)).abs_sq().sqrt() < 1e-10,
         "sub sum mismatch"
     );
 
     let neg_result = tt1.negate();
-    let neg_sum = neg_result.sum();
+    let neg_sum = neg_result.sum().unwrap();
     assert!(
         (neg_sum - T::from_f64(-6.0)).abs_sq().sqrt() < 1e-10,
         "negate sum mismatch"

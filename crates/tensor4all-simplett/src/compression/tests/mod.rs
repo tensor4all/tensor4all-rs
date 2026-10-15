@@ -10,14 +10,14 @@ where
     f64: From<<T as TensorScalar>::Real>,
 {
     let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], <T as Scalar>::from_f64(1.0));
-    let original_sum = tt.sum();
+    let original_sum = tt.sum().unwrap();
 
     let mut tt_compressed = tt.clone();
     tt_compressed
         .compress(&CompressionOptions::default())
         .unwrap();
 
-    let compressed_sum = tt_compressed.sum();
+    let compressed_sum = tt_compressed.sum().unwrap();
     assert!(<T as Scalar>::abs_sq(original_sum - compressed_sum).sqrt() < 1e-10);
 }
 
@@ -54,14 +54,14 @@ where
     t2.set3(1, 1, 0, <T as Scalar>::from_f64(1.0));
 
     let tt = SimpleTensorTrain::new(vec![t0, t1, t2]).unwrap();
-    let original_sum = tt.sum();
+    let original_sum = tt.sum().unwrap();
 
     let mut tt_compressed = tt.clone();
     tt_compressed
         .compress(&CompressionOptions::default())
         .unwrap();
 
-    let compressed_sum = tt_compressed.sum();
+    let compressed_sum = tt_compressed.sum().unwrap();
     assert!(<T as Scalar>::abs_sq(original_sum - compressed_sum).sqrt() < 1e-8);
 }
 
@@ -86,7 +86,7 @@ where
     }
 
     let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
-    let original_norm = tt.norm();
+    let original_norm = tt.norm().unwrap();
 
     let options = CompressionOptions {
         max_bond_dim: Some(2),
@@ -98,7 +98,7 @@ where
     tt_compressed.compress(&options).unwrap();
 
     // Norm should be approximately preserved (with some truncation error)
-    let compressed_norm = tt_compressed.norm();
+    let compressed_norm = tt_compressed.norm().unwrap();
     assert!((original_norm - compressed_norm).abs() < original_norm * 0.1);
 }
 
@@ -140,7 +140,7 @@ where
     f64: From<<T as TensorScalar>::Real>,
 {
     let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], <T as Scalar>::from_f64(1.0));
-    let original_sum = tt.sum();
+    let original_sum = tt.sum().unwrap();
 
     let mut tt_compressed = tt.clone();
     let options = CompressionOptions {
@@ -149,7 +149,7 @@ where
     };
     tt_compressed.compress(&options).unwrap();
 
-    let compressed_sum = tt_compressed.sum();
+    let compressed_sum = tt_compressed.sum().unwrap();
     assert!(<T as Scalar>::abs_sq(original_sum - compressed_sum).sqrt() < 1e-10);
 }
 
@@ -172,7 +172,7 @@ where
         }
     }
     let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
-    let original_norm = tt.norm();
+    let original_norm = tt.norm().unwrap();
 
     let options = CompressionOptions {
         method: CompressionMethod::SVD,
@@ -183,7 +183,7 @@ where
     let mut tt_compressed = tt.clone();
     tt_compressed.compress(&options).unwrap();
 
-    let compressed_norm = tt_compressed.norm();
+    let compressed_norm = tt_compressed.norm().unwrap();
     assert!((original_norm - compressed_norm).abs() < original_norm * 0.1);
 }
 

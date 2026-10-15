@@ -15,8 +15,8 @@ fn test_vidal_to_tensor_train_preserves_sum() {
     let vidal = VidalTensorTrain::from_tensor_train(&tt).unwrap();
     let tt_back = vidal.to_tensor_train();
 
-    let original_sum = tt.sum();
-    let converted_sum = tt_back.sum();
+    let original_sum = tt.sum().unwrap();
+    let converted_sum = tt_back.sum().unwrap();
 
     assert!(
         (original_sum - converted_sum).abs() < 1e-8,
@@ -41,8 +41,8 @@ fn test_inverse_to_tensor_train_preserves_sum() {
     let inverse = InverseTensorTrain::from_tensor_train(&tt).unwrap();
     let tt_back = inverse.to_tensor_train();
 
-    let original_sum = tt.sum();
-    let converted_sum = tt_back.sum();
+    let original_sum = tt.sum().unwrap();
+    let converted_sum = tt_back.sum().unwrap();
 
     assert!(
         (original_sum - converted_sum).abs() < 1e-8,

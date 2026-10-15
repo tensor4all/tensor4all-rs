@@ -37,7 +37,7 @@
 //! assert!((value - 1.0).abs() < 1e-12);
 //!
 //! // 3. Sum over all indices: 1.0 * 2 * 3 * 2 = 12.0
-//! let sum = tt.sum();
+//! let sum = tt.sum().unwrap();
 //! assert!((sum - 12.0).abs() < 1e-10);
 //!
 //! // 4. Compress to reduce bond dimensions

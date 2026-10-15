@@ -1,6 +1,6 @@
 //! Abstract traits for tensor train objects
 
-use crate::error::Result;
+use crate::error::{Result, SimpleTensorTrainError};
 use crate::types::{LocalIndex, Tensor3, Tensor3Ops};
 use tenferro_tensor::TensorScalar;
 
@@ -64,10 +64,10 @@ impl<T> TTScalar for T where T: tensor4all_core::CommonScalar + TensorScalar {}
 /// let val = tt.evaluate(&[0, 0, 0]).unwrap();
 /// assert!((val - 1.0).abs() < 1e-12);
 ///
-/// let s = tt.sum();
+/// let s = tt.sum().unwrap();
 /// assert!((s - 24.0).abs() < 1e-10);
 ///
-/// let n = tt.norm();
+/// let n = tt.norm().unwrap();
 /// assert!((n - 24.0_f64.sqrt()).abs() < 1e-10);
 /// ```
 pub trait AbstractTensorTrain<T: TTScalar>: Sized {
@@ -220,17 +220,22 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     ///
     /// // Constant TT with value 2.0 over 3×4 grid: sum = 2.0 * 3 * 4 = 24.0
     /// let tt = SimpleTensorTrain::<f64>::constant(&[3, 4], 2.0);
-    /// let s = tt.sum();
+    /// let s = tt.sum().unwrap();
     /// assert!((s - 24.0).abs() < 1e-10);
     ///
     /// // Zero TT sums to 0.0
     /// let zero_tt = SimpleTensorTrain::<f64>::zeros(&[2, 3]);
-    /// assert!((zero_tt.sum() - 0.0).abs() < 1e-12);
+    /// assert!((zero_tt.sum().unwrap() - 0.0).abs() < 1e-12);
     /// ```
     #[allow(clippy::needless_range_loop)]
-    fn sum(&self) -> T {
+    /// # Errors
+    ///
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the final contraction does not leave exactly one
+    /// element, which happens for a train whose last core has a non-unit right bond - a state reachable through
+    /// the public mutable accessors. The same check [`AbstractTensorTrain::evaluate`] applies to the same object.
+    fn sum(&self) -> Result<T> {
         if self.is_empty() {
-            return T::zero();
+            return Ok(T::zero());
         }
 
         // Start with sum over first tensor
@@ -271,7 +276,16 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
             current = next;
         }
 
-        current[0]
+        if current.len() != 1 {
+            return Err(SimpleTensorTrainError::InvalidOperation {
+                message: format!(
+                    "Final contraction resulted in {} elements, expected 1",
+                    current.len()
+                ),
+            });
+        }
+
+        Ok(current[0])
     }
 
     /// Squared Frobenius norm: `sum_i |T[i]|^2`.
@@ -284,11 +298,16 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     /// // Constant TT: T[i,j] = 2.0 on a 3x4 grid
     /// let tt = SimpleTensorTrain::<f64>::constant(&[3, 4], 2.0);
     /// // norm^2 = 2^2 * 3 * 4 = 48
-    /// assert!((tt.norm2() - 48.0).abs() < 1e-10);
+    /// assert!((tt.norm2().unwrap() - 48.0).abs() < 1e-10);
     /// ```
-    fn norm2(&self) -> f64 {
+    /// # Errors
+    ///
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the final contraction does not leave exactly one
+    /// element, which happens for a train whose last core has a non-unit right bond - a state reachable through
+    /// the public mutable accessors. The same check [`AbstractTensorTrain::evaluate`] applies to the same object.
+    fn norm2(&self) -> Result<f64> {
         if self.is_empty() {
-            return 0.0;
+            return Ok(0.0);
         }
 
         // Contract tt with its conjugate
@@ -339,7 +358,16 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
         }
 
         // Final result should be a single element (1x1)
-        current[0].abs_sq().sqrt()
+        if current.len() != 1 {
+            return Err(SimpleTensorTrainError::InvalidOperation {
+                message: format!(
+                    "Final contraction resulted in {} elements, expected 1",
+                    current.len()
+                ),
+            });
+        }
+
+        Ok(current[0].abs_sq().sqrt())
     }
 
     /// Frobenius norm: `sqrt(sum_i |T[i]|^2)`.
@@ -351,10 +379,15 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     ///
     /// let tt = SimpleTensorTrain::<f64>::constant(&[3, 4], 2.0);
     /// // norm = sqrt(48) ~ 6.928
-    /// assert!((tt.norm() - 48.0_f64.sqrt()).abs() < 1e-10);
+    /// assert!((tt.norm().unwrap() - 48.0_f64.sqrt()).abs() < 1e-10);
     /// ```
-    fn norm(&self) -> f64 {
-        self.norm2().sqrt()
+    /// # Errors
+    ///
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the final contraction does not leave exactly one
+    /// element, which happens for a train whose last core has a non-unit right bond - a state reachable through
+    /// the public mutable accessors. The same check [`AbstractTensorTrain::evaluate`] applies to the same object.
+    fn norm(&self) -> Result<f64> {
+        Ok(self.norm2()?.sqrt())
     }
 
     /// Logarithm of the Frobenius norm: `ln(norm())`.
@@ -371,16 +404,21 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
     ///
     /// let tt = SimpleTensorTrain::<f64>::constant(&[3, 4], 2.0);
-    /// let log_n = tt.log_norm();
-    /// assert!((log_n - tt.norm().ln()).abs() < 1e-10);
+    /// let log_n = tt.log_norm().unwrap();
+    /// assert!((log_n - tt.norm().unwrap().ln()).abs() < 1e-10);
     ///
     /// // Zero TT returns negative infinity
     /// let zero_tt = SimpleTensorTrain::<f64>::zeros(&[2, 3]);
-    /// assert_eq!(zero_tt.log_norm(), f64::NEG_INFINITY);
+    /// assert_eq!(zero_tt.log_norm().unwrap(), f64::NEG_INFINITY);
     /// ```
-    fn log_norm(&self) -> f64 {
+    /// # Errors
+    ///
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the final contraction does not leave exactly one
+    /// element, which happens for a train whose last core has a non-unit right bond - a state reachable through
+    /// the public mutable accessors. The same check [`AbstractTensorTrain::evaluate`] applies to the same object.
+    fn log_norm(&self) -> Result<f64> {
         if self.is_empty() {
-            return f64::NEG_INFINITY;
+            return Ok(f64::NEG_INFINITY);
         }
 
         // Contract tt with its conjugate, normalizing at each step
@@ -415,7 +453,7 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
             }
         } else if self.len() == 1 {
             // Single site with zero norm
-            return f64::NEG_INFINITY;
+            return Ok(f64::NEG_INFINITY);
         }
 
         // Contract through remaining tensors
@@ -464,11 +502,20 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
 
         // Final result: norm = sqrt(norm2), where norm2 = final_val * cumulative_scale
         // log(norm) = 0.5 * log(norm2) = 0.5 * (log(final_val) + log_scale)
+        if current.len() != 1 {
+            return Err(SimpleTensorTrainError::InvalidOperation {
+                message: format!(
+                    "Final contraction resulted in {} elements, expected 1",
+                    current.len()
+                ),
+            });
+        }
+
         let final_val = current[0].abs_sq().sqrt();
-        if final_val > 0.0 {
+        Ok(if final_val > 0.0 {
             0.5 * (final_val.ln() + log_scale)
         } else {
             f64::NEG_INFINITY
-        }
+        })
     }
 }

@@ -17,7 +17,7 @@ use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, SimpleTensorT
 
 let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 assert!((tt.evaluate(&[0, 1, 2]).unwrap() - 1.0).abs() < 1e-12);
-assert!((tt.sum() - 24.0).abs() < 1e-12); // 2*3*4 entries
+assert!((tt.sum().unwrap() - 24.0).abs() < 1e-12); // 2*3*4 entries
 
 // Adding two constants inflates bond dim; compression recovers rank 1.
 let big = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0)

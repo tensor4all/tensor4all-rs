@@ -48,7 +48,7 @@ use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 /// assert!((val - 3.0).abs() < 1e-12);
 ///
 /// // Sum over all indices: 3.0 * 2 * 3 * 4 = 72.0
-/// let s = tt.sum();
+/// let s = tt.sum().unwrap();
 /// assert!((s - 72.0).abs() < 1e-10);
 /// ```
 #[derive(Debug, Clone)]
@@ -138,7 +138,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     ///
     /// let tt = SimpleTensorTrain::<f64>::zeros(&[2, 3]);
     /// assert!((tt.evaluate(&[1, 2]).unwrap()).abs() < 1e-14);
-    /// assert!((tt.sum()).abs() < 1e-14);
+    /// assert!((tt.sum().unwrap()).abs() < 1e-14);
     /// ```
     pub fn zeros(site_dims: &[usize]) -> Self {
         let tensors: Vec<Tensor3<T>> = site_dims.iter().map(|&d| tensor3_zeros(1, d, 1)).collect();
@@ -161,7 +161,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// assert!((tt.evaluate(&[1, 2, 3]).unwrap() - 5.0).abs() < 1e-12);
     ///
     /// // Sum = 5.0 * 2 * 3 * 4 = 120.0
-    /// assert!((tt.sum() - 120.0).abs() < 1e-10);
+    /// assert!((tt.sum().unwrap() - 120.0).abs() < 1e-10);
     /// ```
     pub fn constant(site_dims: &[usize], value: T) -> Self {
         if site_dims.is_empty() {
@@ -259,7 +259,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// let mut tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     /// tt.scale_mut(3.0);
     /// assert!((tt.evaluate(&[0, 0]).unwrap() - 3.0).abs() < 1e-12);
-    /// assert!((tt.sum() - 18.0).abs() < 1e-10);
+    /// assert!((tt.sum().unwrap() - 18.0).abs() < 1e-10);
     /// ```
     pub fn scale_mut(&mut self, factor: T) {
         if !self.tensors.is_empty() {
@@ -537,6 +537,14 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         if result_tensors.is_empty() {
             // All dims summed → return 1-site TT wrapping scalar
             // tprod should be 1×1
+            if tprod.nrows() != 1 || tprod.ncols() != 1 {
+                return Err(SimpleTensorTrainError::InvalidOperation {
+                    message: format!(
+                        "Final contraction resulted in a {:?} environment, expected [1, 1]",
+                        (tprod.nrows(), tprod.ncols())
+                    ),
+                });
+            }
             let scalar = tprod[[0, 0]];
             let mut t = tensor3_zeros(1, 1, 1);
             t.set3(0, 0, 0, scalar);

@@ -33,7 +33,7 @@ where
         println!("evaluate{:?} = {:?}", indices, value);
     }
 
-    println!("sum = {:?}", tt.sum());
+    println!("sum = {:?}", tt.sum().unwrap());
 
     let (dense, shape) = tt.full_tensor().unwrap();
     println!("full_tensor shape = {:?}", shape);
@@ -45,7 +45,7 @@ fn main() {
     let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
     let tt_value = tt.evaluate(&[0, 1, 2]).unwrap();
     assert!((tt_value - 1.0).abs() < 1e-12);
-    let tt_total = tt.sum();
+    let tt_total = tt.sum().unwrap();
     assert!((tt_total - 24.0).abs() < 1e-12);
 
     // Compress with a truncation tolerance.
@@ -55,7 +55,7 @@ fn main() {
         ..Default::default()
     };
     let compressed = tt.compressed(&options).unwrap();
-    assert!((compressed.sum() - 24.0).abs() < 1e-10);
+    assert!((compressed.sum().unwrap() - 24.0).abs() < 1e-10);
 
     print_tt_info("original tt", &tt);
     print_tt_info("compressed tt", &compressed);

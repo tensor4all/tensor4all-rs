@@ -666,6 +666,22 @@ impl<T: TTScalar> TTCache<T> {
             .map(|r| self.evaluate_right(r))
             .collect::<Result<Vec<_>>>()?;
 
+        // The environments must pair up element for element: `zip` would silently truncate a malformed train's
+        // final bond to its `r == 0` component, which is the projection the reductions must not return either
+        // (issue #913).
+        for (&il, &ir) in mapper.idx_to_left.iter().zip(&mapper.idx_to_right) {
+            let (left, right) = (&left_envs[il], &right_envs[ir]);
+            if left.len() != right.len() {
+                return Err(SimpleTensorTrainError::InvalidOperation {
+                    message: format!(
+                        "Final environment has {} left and {} right elements, expected equal lengths",
+                        left.len(),
+                        right.len()
+                    ),
+                });
+            }
+        }
+
         // Compute results using position mappings
         let results: Vec<T> = mapper
             .idx_to_left

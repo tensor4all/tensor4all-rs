@@ -38,7 +38,7 @@ use tensor4all_simplett::prelude::*;
 
 let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 assert!((tt.evaluate(&[0, 1, 2]).unwrap() - 1.0).abs() < 1e-12);
-assert!((tt.sum() - 24.0).abs() < 1e-12);
+assert!((tt.sum().unwrap() - 24.0).abs() < 1e-12);
 ```
 
 The root `README.md` is kept intentionally short and its Rust snippets are
