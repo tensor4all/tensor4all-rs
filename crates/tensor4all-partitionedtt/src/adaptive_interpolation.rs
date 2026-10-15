@@ -1713,13 +1713,13 @@ fn patch_candidates(
         .iter()
         .map(|&position| site_indices[position].dim)
         .collect();
-    let point_count = local_dims.iter().try_fold(1usize, |count, &dim| {
-        count.checked_mul(dim).ok_or_else(|| {
-            PartitionedTTError::InvalidAdaptiveInterpolationInput(
-                "active patch point count exceeds usize".to_string(),
-            )
-        })
-    })?;
+    // Saturating, not checked: `point_count` only caps `desired` and bounds the deterministic fallback
+    // enumeration, and both stop once `desired` candidates are found, so the exact count is never needed when it
+    // is huge. A patch of more than 64 binary sites (the high-dimensional QTT case this path exists for) would
+    // otherwise be refused for a number nobody reads.
+    let point_count = local_dims
+        .iter()
+        .fold(1usize, |count, &dim| count.saturating_mul(dim));
     let desired = target.max(candidates.len()).min(point_count);
     let random_attempts = desired
         .checked_mul(20)

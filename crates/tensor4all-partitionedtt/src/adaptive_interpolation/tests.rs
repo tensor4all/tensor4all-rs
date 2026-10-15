@@ -498,18 +498,19 @@ fn malformed_wire_cores_are_rejected_before_reconstruction() {
 }
 
 #[test]
-fn patch_candidate_count_overflow_is_rejected() {
+fn patch_candidate_count_overflow_saturates_instead_of_refusing() {
+    // A site dimension that overflows the patch's point count must not refuse the patch: the count is only a cap
+    // on how many candidates to look for, and the enumeration stops as soon as it has them (issue #949).
     let sites = vec![DynIndex::new_dyn(usize::MAX), DynIndex::new_dyn(2)];
     let mut rng = ChaCha8Rng::seed_from_u64(1);
 
-    let error =
-        patch_candidates(&sites, &[0, 1], &Projector::new(), &[], &[], 1, &mut rng).unwrap_err();
+    let candidates = patch_candidates(&sites, &[0, 1], &Projector::new(), &[], &[], 1, &mut rng)
+        .expect("an overflowing point count must saturate, not refuse the patch");
 
-    assert!(matches!(
-        error,
-        PartitionedTTError::InvalidAdaptiveInterpolationInput(message)
-            if message.contains("point count")
-    ));
+    assert!(
+        !candidates.is_empty(),
+        "the enumeration must still return the candidates it was asked for"
+    );
 }
 
 #[test]
@@ -1023,5 +1024,39 @@ fn the_patch_stages_draw_from_the_callers_stream_and_never_from_a_hidden_one() {
     assert_ne!(
         after_sampler_only, after_search,
         "enabling the nested global search must add draws on the same stream"
+    );
+}
+
+#[test]
+fn a_patch_of_more_than_sixty_four_binary_sites_interpolates() {
+    // 100 binary sites put the patch's point count at 2^100, which overflows `usize`. The count is only ever used
+    // as a cap on how many candidates to look for, so the patch must interpolate rather than be refused (issue
+    // #949). The result is deliberately not materialized: the dense value would have 2^100 entries.
+    let sites = binary_sites(100);
+    let function = |_index: &MultiIndex| 1.0_f64;
+    let result = adaptiveinterpolate::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+        function,
+        None,
+        sites,
+        vec![vec![0; 100]],
+        AdaptiveInterpolateOptions::default(),
+    )
+    .expect("a 100-site binary patch must interpolate");
+
+    let accepted = result
+        .patch_caches()
+        .iter()
+        .map(AcceptedPatchCache::len)
+        .sum::<usize>();
+    assert!(accepted > 0, "the patch must accept at least one pivot");
+
+    // A numerical check that does not materialize 2^100 entries: the oracle is constant 1, so the retained
+    // sample at the all-zero pivot must be exactly 1.
+    let cache = &result.patch_caches()[0];
+    let local = vec![0usize; cache.active_positions().len()];
+    assert_eq!(
+        cache.get(&local),
+        Some(&1.0),
+        "the retained sample at the initial pivot must be the oracle's value"
     );
 }
