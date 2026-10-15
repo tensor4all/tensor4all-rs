@@ -13,7 +13,10 @@
 //! - **floating outputs** (raw column-major node data in that leg order and
 //!   the floating report values), compared within [`M2_GOLDEN_RTOL`] relative
 //!   to each tensor's largest magnitude (each value's own magnitude for
-//!   report values).
+//!   report values). Each stored node may be negated, because a factorization
+//!   may move signs between nodes and their bond legs; the product of those
+//!   per-node signs is compared per accepted patch, so a gauge that preserves
+//!   the represented function passes and one that flips its sign does not.
 //!
 //! The discrete outputs rest on floating-point decisions, so the scenarios
 //! keep their decisions away from the thresholds. The dense-engine scenarios
@@ -551,126 +554,202 @@ fn as_floats(value: &Value) -> Vec<f64> {
         .collect()
 }
 
-fn assert_close_scalar(context: &str, expected: &Value, actual: &Value) {
+fn check_close_scalar(context: &str, expected: &Value, actual: &Value) -> Result<(), String> {
     let (expected, actual) = (expected.as_f64().unwrap(), actual.as_f64().unwrap());
     let scale = expected.abs().max(actual.abs());
-    assert!(
-        (expected - actual).abs() <= M2_GOLDEN_RTOL * scale,
-        "{context}: expected {expected:e}, got {actual:e}"
-    );
+    if (expected - actual).abs() <= M2_GOLDEN_RTOL * scale {
+        Ok(())
+    } else {
+        Err(format!("{context}: expected {expected:e}, got {actual:e}"))
+    }
 }
 
-/// Put one stored node's data into a canonical **sign gauge**.
+/// Index of the entry that orients a stored node: its largest magnitude.
 ///
-/// A tree network's stored data is defined only up to a per-node sign: a
-/// factorization may move signs between a node and its bond legs and the
-/// represented tensor is unchanged. The `tenferro-rs` revision pinned here
-/// moved exactly that convention - its coordinated strided-rs bump changed the
-/// factorization's sign choices, so every node's data is either bit-identical
-/// to the recorded one or its exact negation (`tensor4all-rs#930`,
-/// `tenferro-rs#2166`). Comparing raw node data would therefore freeze a gauge
-/// rather than an output.
-///
-/// The sign is fixed by the node's **largest-magnitude** entry, which is the
-/// numerically robust choice: a tiny entry's sign can be noise. The guard the
-/// golden provides is not weakened by this: the discrete outputs (projector
-/// keys and their canonical order, split count, ranks, the ID-free leg layout,
-/// terminations) are compared exactly, and the gauge-invariant scalars
-/// (`max_sample_magnitude` and `error_estimate` per accepted patch) are
-/// compared *before* the node data - so a sign change that was not compensated
-/// by the neighbouring nodes and their shared legs, which is what would change
-/// the represented function, still fails there.
-fn canonical_sign(mut values: Vec<f64>) -> Vec<f64> {
-    let largest = values.iter().fold(0.0_f64, |m, value| m.max(value.abs()));
-    if largest > 0.0 {
-        let sign = values
-            .iter()
-            .find(|value| value.abs() == largest)
-            .copied()
-            .unwrap_or(1.0);
-        if sign < 0.0 {
-            for value in &mut values {
-                *value = -*value;
-            }
+/// `None` for an all-zero node, whose gauge carries no information.
+fn pivot_index(values: &[f64]) -> Option<usize> {
+    let mut largest = 0.0_f64;
+    let mut pivot = None;
+    for (index, value) in values.iter().enumerate() {
+        if value.abs() > largest {
+            largest = value.abs();
+            pivot = Some(index);
         }
     }
-    values
+    pivot
 }
 
-fn assert_close_tensor(context: &str, expected: &Value, actual: &Value) {
+/// Sign of `values[pivot]`, or `None` when the node is zero there.
+fn pivot_sign(values: &[f64], pivot: usize) -> Option<f64> {
+    let value = *values.get(pivot)?;
+    if value < 0.0 {
+        Some(-1.0)
+    } else if value > 0.0 {
+        Some(1.0)
+    } else {
+        None
+    }
+}
+
+fn orient(values: &[f64], sign: f64) -> Vec<f64> {
+    values.iter().map(|value| value * sign).collect()
+}
+
+/// Compare one stored node, and report the gauge sign each side contributed.
+///
+/// A tree network's stored data is defined only up to per-node signs, because a
+/// factorization may move signs between a node and its bond legs without
+/// changing the represented tensor. The `tenferro-rs` revision pinned here moved
+/// exactly that convention: its coordinated strided-rs bump changed the
+/// factorization's sign choices, so node data may be the exact negation of the
+/// recorded one (`tensor4all-rs#930`, `tenferro-rs#2166`). Comparing raw node
+/// data would therefore freeze a gauge rather than an output.
+///
+/// The node is oriented on the sign of its **largest-magnitude** entry, which is
+/// the numerically robust choice: a tiny entry's sign can be noise. The pivot
+/// index comes from the recorded node and orients both sides, so a rounding
+/// difference inside a near-tie cannot move the pivot between them.
+///
+/// `Ok(None)` means the recorded node is identically zero. Its values are still
+/// compared; the patch simply has no represented sign to compare, because a
+/// contraction containing an all-zero node is the zero function.
+///
+/// # Errors
+///
+/// Returns the message naming the first difference: a length mismatch, or node
+/// values that differ beyond [`M2_GOLDEN_RTOL`].
+fn check_close_tensor(
+    context: &str,
+    expected: &Value,
+    actual: &Value,
+) -> Result<Option<(f64, f64)>, String> {
+    let (expected_raw, actual_raw) = (as_floats(expected), as_floats(actual));
+    if expected_raw.len() != actual_raw.len() {
+        return Err(format!("{context}: length"));
+    }
+    // A recorded all-zero node has no gauge, so it contributes no sign; its
+    // values are still compared, and the produced node must be zero too.
+    let pivot = pivot_index(&expected_raw);
+    let (expected_sign, actual_sign) = match pivot {
+        Some(pivot) => (
+            pivot_sign(&expected_raw, pivot).unwrap_or(1.0),
+            pivot_sign(&actual_raw, pivot).unwrap_or(1.0),
+        ),
+        None => (1.0, 1.0),
+    };
     let (expected, actual) = (
-        canonical_sign(as_floats(expected)),
-        canonical_sign(as_floats(actual)),
+        orient(&expected_raw, expected_sign),
+        orient(&actual_raw, actual_sign),
     );
-    assert_eq!(expected.len(), actual.len(), "{context}: length");
     let scale = expected.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
     let difference = expected
         .iter()
         .zip(&actual)
         .fold(0.0_f64, |m, (a, b)| m.max((a - b).abs()));
-    assert!(
-        difference <= M2_GOLDEN_RTOL * scale,
-        "{context}: max difference {difference:e} exceeds {M2_GOLDEN_RTOL:e} * {scale:e}"
-    );
+    if difference <= M2_GOLDEN_RTOL * scale {
+        Ok(pivot.map(|_| (expected_sign, actual_sign)))
+    } else {
+        Err(format!(
+            "{context}: max difference {difference:e} exceeds {M2_GOLDEN_RTOL:e} * {scale:e}"
+        ))
+    }
 }
 
-fn assert_matches_golden(expected: &Value, actual: &Value) {
+/// Compare a recorded scenario against a produced one.
+///
+/// Each stored node may carry the sign gauge of the factorization, so nodes are
+/// compared up to an exact negation; their product per accepted patch is what
+/// keeps the represented function's sign (`tensor4all-rs#930`,
+/// `tenferro-rs#2166`). A patch with a recorded all-zero node is the zero
+/// function and has no sign to compare. The discrete outputs, the leg layout,
+/// the split count and the gauge-invariant scalars remain exact comparisons.
+///
+/// # Errors
+///
+/// Returns the message naming the first difference. The golden test treats any
+/// difference as fatal; the sign-gauge regression test asserts that a
+/// compensated gauge passes and an uncompensated one does not.
+fn compare_matches_golden(expected: &Value, actual: &Value) -> Result<(), String> {
     let name = expected["name"].as_str().unwrap();
-    assert_eq!(
-        expected["discrete"], actual["discrete"],
-        "scenario {name}: discrete outputs differ"
-    );
+    if expected["discrete"] != actual["discrete"] {
+        return Err(format!("scenario {name}: discrete outputs differ"));
+    }
     let (expected, actual) = (&expected["floating"], &actual["floating"]);
-    assert_close_scalar(
+    check_close_scalar(
         &format!("{name}: reference_scale"),
         &expected["reference_scale"],
         &actual["reference_scale"],
-    );
+    )?;
     let patches = expected["accepted"].as_array().unwrap();
-    for (index, (e, a)) in patches
-        .iter()
-        .zip(actual["accepted"].as_array().unwrap())
-        .enumerate()
-    {
+    let actual_patches = actual["accepted"].as_array().unwrap();
+    if patches.len() != actual_patches.len() {
+        return Err(format!("{name}: accepted patch count"));
+    }
+    for (index, (e, a)) in patches.iter().zip(actual_patches).enumerate() {
         let context = format!("{name}: accepted patch {index}");
-        assert_close_scalar(
+        check_close_scalar(
             &format!("{context} max_sample_magnitude"),
             &e["max_sample_magnitude"],
             &a["max_sample_magnitude"],
-        );
-        assert_close_scalar(
+        )?;
+        check_close_scalar(
             &format!("{context} error_estimate"),
             &e["error_estimate"],
             &a["error_estimate"],
-        );
-        for (node, (e, a)) in e["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .zip(a["nodes"].as_array().unwrap())
-            .enumerate()
-        {
-            assert_close_tensor(&format!("{context} node {node}"), e, a);
+        )?;
+        let expected_nodes = e["nodes"].as_array().unwrap();
+        let actual_nodes = a["nodes"].as_array().unwrap();
+        if expected_nodes.len() != actual_nodes.len() {
+            return Err(format!("{context}: node count"));
+        }
+        // The per-node gauge signs are taken at the recorded node's pivot, so
+        // their product is the patch's represented sign: negating one node
+        // negates every term of the contraction, and an odd number of extra
+        // negations flips the represented function. A recorded all-zero node
+        // makes the patch identically zero, where no sign is defined.
+        let mut expected_sign = 1.0_f64;
+        let mut actual_sign = 1.0_f64;
+        let mut sign_is_defined = true;
+        for (node, (e, a)) in expected_nodes.iter().zip(actual_nodes).enumerate() {
+            match check_close_tensor(&format!("{context} node {node}"), e, a)? {
+                Some((node_expected, node_actual)) => {
+                    expected_sign *= node_expected;
+                    actual_sign *= node_actual;
+                }
+                None => sign_is_defined = false,
+            }
+        }
+        if sign_is_defined && expected_sign != actual_sign {
+            return Err(format!(
+                "{context}: the node sign gauge changes the represented function\
+                 (recorded {expected_sign:+}, produced {actual_sign:+})"
+            ));
         }
     }
-    for (index, (e, a)) in expected["engine_calls"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .zip(actual["engine_calls"].as_array().unwrap())
-        .enumerate()
-    {
+    let engine_calls = expected["engine_calls"].as_array().unwrap();
+    let actual_calls = actual["engine_calls"].as_array().unwrap();
+    if engine_calls.len() != actual_calls.len() {
+        return Err(format!("{name}: engine call count"));
+    }
+    for (index, (e, a)) in engine_calls.iter().zip(actual_calls).enumerate() {
         let context = format!("{name}: engine call {index}");
-        assert_close_scalar(
+        check_close_scalar(
             &format!("{context} tolerance"),
             &e["tolerance"],
             &a["tolerance"],
-        );
-        assert_close_scalar(
+        )?;
+        check_close_scalar(
             &format!("{context} error_estimate"),
             &e["error_estimate"],
             &a["error_estimate"],
-        );
+        )?;
+    }
+    Ok(())
+}
+
+fn assert_matches_golden(expected: &Value, actual: &Value) {
+    if let Err(message) = compare_matches_golden(expected, actual) {
+        panic!("{message}");
     }
 }
 
@@ -716,6 +795,64 @@ fn m2_golden_outputs_are_reproduced() {
         let actual: Value = serde_json::from_str(&actual.to_string()).unwrap();
         assert_matches_golden(expected, &actual);
     }
+}
+
+/// The comparator keeps the represented function's sign: a per-node sign gauge
+/// is accepted only when the product of the patch's per-node signs is unchanged
+/// (`tensor4all-rs#930`, `tenferro-rs#2166`).
+#[test]
+fn golden_comparator_keeps_the_represented_function_sign() {
+    let recorded = json!({
+        "name": "sign-gauge",
+        "discrete": {"node_count": 2, "bond_dim": 1},
+        "floating": {
+            "reference_scale": 6.0,
+            "accepted": [{
+                "max_sample_magnitude": 6.0,
+                "error_estimate": 0.0,
+                "nodes": [[2.0], [3.0]],
+            }],
+            "engine_calls": [],
+        }
+    });
+    assert!(compare_matches_golden(&recorded, &recorded).is_ok());
+
+    // One negated node of a two-node patch represents a different function
+    // (2 * 3 != -2 * 3). Normalizing every node on its own would accept this.
+    let mut single_flip = recorded.clone();
+    single_flip["floating"]["accepted"][0]["nodes"][0][0] = json!(-2.0);
+    assert!(compare_matches_golden(&recorded, &single_flip).is_err());
+
+    // Negating both nodes preserves it: this is the gauge the pinned
+    // tenferro-rs revision moved.
+    let mut compensated = recorded.clone();
+    compensated["floating"]["accepted"][0]["nodes"][0][0] = json!(-2.0);
+    compensated["floating"]["accepted"][0]["nodes"][1][0] = json!(-3.0);
+    assert!(compare_matches_golden(&recorded, &compensated).is_ok());
+
+    // A rounding difference inside a near-tie must not move the pivot and
+    // reject a node the tolerance accepts.
+    let mut near_tie = recorded.clone();
+    near_tie["floating"]["accepted"][0]["nodes"] = json!([[1.0, -1.0], [1.0]]);
+    let mut near_tie_rounded = near_tie.clone();
+    near_tie_rounded["floating"]["accepted"][0]["nodes"] = json!([[1.0 - 1e-12, -1.0], [1.0]]);
+    assert!(compare_matches_golden(&near_tie, &near_tie_rounded).is_ok());
+
+    // A patch with an all-zero node represents zero, so it has no sign to
+    // compare, but its values are still compared.
+    let mut zero = recorded.clone();
+    zero["floating"]["accepted"][0]["nodes"] = json!([[0.0], [3.0]]);
+    let mut zero_negated = zero.clone();
+    zero_negated["floating"]["accepted"][0]["nodes"] = json!([[0.0], [-3.0]]);
+    assert!(compare_matches_golden(&zero, &zero_negated).is_ok());
+    let mut zero_replaced = zero.clone();
+    zero_replaced["floating"]["accepted"][0]["nodes"] = json!([[1.0], [3.0]]);
+    assert!(compare_matches_golden(&zero, &zero_replaced).is_err());
+
+    // The discrete outputs stay exact, and a different node count is refused.
+    let mut extra_node = recorded.clone();
+    extra_node["floating"]["accepted"][0]["nodes"] = json!([[2.0], [3.0], [1.0]]);
+    assert!(compare_matches_golden(&recorded, &extra_node).is_err());
 }
 
 /// Records the golden outputs. Run only on the reference implementation, and
