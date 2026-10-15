@@ -92,10 +92,10 @@ ndarray = "0.17"
 quanticsgrids = { git = "https://github.com/tensor4all/quanticsgrids-rs", rev = "8214b72" }
 hdf5-rt = { git = "https://github.com/tensor4all/hdf5-rt", default-features = false }
 hataori = { git = "https://github.com/shinaoka/hataori-rs.git", rev = "59d0ccd6b403e285b7e716a8ae6d12d851da13b1", default-features = false }
-tenferro = { package = "tenferro-runtime", git = "https://github.com/tensor4all/tenferro-rs.git", rev = "5482e690034cbc47f9f5853935911b4ee1fda0c7", default-features = false }
-tenferro-ad = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "5482e690034cbc47f9f5853935911b4ee1fda0c7", default-features = false }
-tenferro-cpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "5482e690034cbc47f9f5853935911b4ee1fda0c7", default-features = false }
-tenferro-einsum = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "5482e690034cbc47f9f5853935911b4ee1fda0c7", default-features = false }
-tenferro-linalg = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "5482e690034cbc47f9f5853935911b4ee1fda0c7", default-features = false }
-tenferro-tensor = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "5482e690034cbc47f9f5853935911b4ee1fda0c7", default-features = false }
-tenferro-gpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "5482e690034cbc47f9f5853935911b4ee1fda0c7", default-features = false }
+tenferro = { package = "tenferro-runtime", git = "https://github.com/tensor4all/tenferro-rs.git", rev = "278ff65743fda720f70d7aaeb5c9d814cc51d8b5", default-features = false }
+tenferro-ad = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "278ff65743fda720f70d7aaeb5c9d814cc51d8b5", default-features = false }
+tenferro-cpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "278ff65743fda720f70d7aaeb5c9d814cc51d8b5", default-features = false }
+tenferro-einsum = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "278ff65743fda720f70d7aaeb5c9d814cc51d8b5", default-features = false }
+tenferro-linalg = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "278ff65743fda720f70d7aaeb5c9d814cc51d8b5", default-features = false }
+tenferro-tensor = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "278ff65743fda720f70d7aaeb5c9d814cc51d8b5", default-features = false }
+tenferro-gpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "278ff65743fda720f70d7aaeb5c9d814cc51d8b5", default-features = false }

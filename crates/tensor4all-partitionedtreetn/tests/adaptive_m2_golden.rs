@@ -560,8 +560,48 @@ fn assert_close_scalar(context: &str, expected: &Value, actual: &Value) {
     );
 }
 
+/// Put one stored node's data into a canonical **sign gauge**.
+///
+/// A tree network's stored data is defined only up to a per-node sign: a
+/// factorization may move signs between a node and its bond legs and the
+/// represented tensor is unchanged. The `tenferro-rs` revision pinned here
+/// moved exactly that convention - its coordinated strided-rs bump changed the
+/// factorization's sign choices, so every node's data is either bit-identical
+/// to the recorded one or its exact negation (`tensor4all-rs#930`,
+/// `tenferro-rs#2166`). Comparing raw node data would therefore freeze a gauge
+/// rather than an output.
+///
+/// The sign is fixed by the node's **largest-magnitude** entry, which is the
+/// numerically robust choice: a tiny entry's sign can be noise. The guard the
+/// golden provides is not weakened by this: the discrete outputs (projector
+/// keys and their canonical order, split count, ranks, the ID-free leg layout,
+/// terminations) are compared exactly, and the gauge-invariant scalars
+/// (`max_sample_magnitude` and `error_estimate` per accepted patch) are
+/// compared *before* the node data - so a sign change that was not compensated
+/// by the neighbouring nodes and their shared legs, which is what would change
+/// the represented function, still fails there.
+fn canonical_sign(mut values: Vec<f64>) -> Vec<f64> {
+    let largest = values.iter().fold(0.0_f64, |m, value| m.max(value.abs()));
+    if largest > 0.0 {
+        let sign = values
+            .iter()
+            .find(|value| value.abs() == largest)
+            .copied()
+            .unwrap_or(1.0);
+        if sign < 0.0 {
+            for value in &mut values {
+                *value = -*value;
+            }
+        }
+    }
+    values
+}
+
 fn assert_close_tensor(context: &str, expected: &Value, actual: &Value) {
-    let (expected, actual) = (as_floats(expected), as_floats(actual));
+    let (expected, actual) = (
+        canonical_sign(as_floats(expected)),
+        canonical_sign(as_floats(actual)),
+    );
     assert_eq!(expected.len(), actual.len(), "{context}: length");
     let scale = expected.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
     let difference = expected
