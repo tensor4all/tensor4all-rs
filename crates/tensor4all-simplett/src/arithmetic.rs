@@ -15,7 +15,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     /// # Examples
     ///
@@ -146,7 +146,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     /// # Examples
     ///
@@ -185,7 +185,7 @@ impl<T: TTScalar> std::ops::Add for SimpleTensorTrain<T> {
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     fn add(self, other: Self) -> Self::Output {
         SimpleTensorTrain::add(&self, &other)
@@ -198,7 +198,7 @@ impl<T: TTScalar> std::ops::Add for &SimpleTensorTrain<T> {
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     fn add(self, other: Self) -> Self::Output {
         SimpleTensorTrain::add(self, other)
@@ -211,7 +211,7 @@ impl<T: TTScalar> std::ops::Sub for SimpleTensorTrain<T> {
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     fn sub(self, other: Self) -> Self::Output {
         SimpleTensorTrain::sub(&self, &other)
@@ -224,7 +224,7 @@ impl<T: TTScalar> std::ops::Sub for &SimpleTensorTrain<T> {
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     fn sub(self, other: Self) -> Self::Output {
         SimpleTensorTrain::sub(self, other)

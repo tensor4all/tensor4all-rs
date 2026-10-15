@@ -99,7 +99,7 @@ impl<'a, T> ColMajorArrayRef<'a, T> {
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     pub fn new(data: &'a [T], shape: &'a [usize]) -> Result<Self, ColMajorArrayError> {
         let expected =
@@ -166,7 +166,7 @@ impl<'a, T> ColMajorArrayMut<'a, T> {
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     pub fn new(data: &'a mut [T], shape: &'a [usize]) -> Result<Self, ColMajorArrayError> {
         let expected =
@@ -247,7 +247,7 @@ impl<T> ColMajorArray<T> {
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     pub fn new(data: Vec<T>, shape: Vec<usize>) -> Result<Self, ColMajorArrayError> {
         let expected =
@@ -374,7 +374,7 @@ impl<T> ColMajorArray<T> {
     /// # Errors
     ///
     /// Returns an error when the column length does not match the row count (a
-    /// /// shape mismatch).
+    /// shape mismatch).
     ///
     pub fn push_column(&mut self, col: &[T]) -> Result<(), ColMajorArrayError>
     where
@@ -407,7 +407,7 @@ impl<T: Clone> ColMajorArray<T> {
     /// # Errors
     ///
     /// Returns an error when the dimensions are invalid (a shape mismatch) or the
-    /// /// fill fails.
+    /// fill fails.
     ///
     pub fn filled(shape: Vec<usize>, value: T) -> Result<Self, ColMajorArrayError> {
         let n = checked_shape_numel(&shape).ok_or_else(|| ColMajorArrayError::ShapeOverflow {

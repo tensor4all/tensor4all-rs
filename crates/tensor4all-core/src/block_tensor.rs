@@ -67,7 +67,7 @@ impl<T: TensorLike> BlockTensor<T> {
     /// # Errors
     ///
     /// Returns an error when the block count does not match the shape (a shape
-    /// /// mismatch).
+    /// mismatch).
     ///
     /// # Examples
     ///
@@ -118,7 +118,7 @@ impl<T: TensorLike> BlockTensor<T> {
     /// # Errors
     ///
     /// Returns an error when the block count does not match the shape (a shape
-    /// /// mismatch).
+    /// mismatch).
     ///
     /// # Examples
     ///
@@ -275,7 +275,7 @@ impl<T: TensorLike> BlockTensor<T> {
     /// # Errors
     ///
     /// Returns an error when the blocks have inconsistent indices (a shape or
-    /// /// index mismatch).
+    /// index mismatch).
     ///
     /// # Examples
     ///

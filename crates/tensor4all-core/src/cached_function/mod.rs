@@ -443,7 +443,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the cache dimensions are invalid (a shape mismatch)
-    /// /// or the construction fails.
+    /// or the construction fails.
     ///
     /// # Examples
     ///
@@ -476,7 +476,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the batch configuration is invalid (an
-    /// /// invalid-configuration failure).
+    /// invalid-configuration failure).
     ///
     /// # Examples
     ///
@@ -517,7 +517,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the key type configuration is invalid (an
-    /// /// invalid-configuration failure).
+    /// invalid-configuration failure).
     ///
     /// # Example
     ///
@@ -580,7 +580,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the configuration is invalid (an
-    /// /// invalid-configuration failure).
+    /// invalid-configuration failure).
     ///
     /// # Examples
     ///

@@ -29,21 +29,21 @@ pub trait StorageScalar: Clone + Send + Sync + 'static {
     /// # Errors
     ///
     /// Returns an error when the data length does not match the logical dimension
-    /// /// product (a shape mismatch).
+    /// product (a shape mismatch).
     ///
     fn build_dense_storage(data: Vec<Self>, logical_dims: &[usize]) -> Result<Storage>;
     /// Build a diagonal [`Storage`] from diagonal payload data.
     /// # Errors
     ///
     /// Returns an error when the diagonal payload is incompatible with the logical
-    /// /// rank (a shape mismatch).
+    /// rank (a shape mismatch).
     ///
     fn build_diag_storage(diag_data: Vec<Self>, logical_rank: usize) -> Result<Storage>;
     /// Build a structured [`Storage`] from explicit payload metadata.
     /// # Errors
     ///
     /// Returns an error when the structured metadata is inconsistent (an
-    /// /// invalid-storage failure).
+    /// invalid-storage failure).
     ///
     fn build_structured_storage(
         data: Vec<Self>,
@@ -304,7 +304,7 @@ impl<T> StructuredStorage<T> {
     /// # Errors
     ///
     /// Returns an error when the data length does not match the logical dimension
-    /// /// product (a shape mismatch).
+    /// product (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -330,7 +330,7 @@ impl<T> StructuredStorage<T> {
     /// # Errors
     ///
     /// Returns an error when the diagonal payload is incompatible with the logical
-    /// /// rank (a shape mismatch).
+    /// rank (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -606,7 +606,7 @@ impl<T: Clone> StructuredStorage<T> {
     /// # Errors
     ///
     /// Returns an error when the permutation is not a valid reordering of the axes
-    /// /// (an invalid-index failure).
+    /// (an invalid-index failure).
     ///
     /// # Examples
     ///
@@ -1082,7 +1082,7 @@ impl Storage {
     /// # Errors
     ///
     /// Returns an error when the data length does not match the logical dimension
-    /// /// product (a shape mismatch).
+    /// product (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1110,7 +1110,7 @@ impl Storage {
     /// # Errors
     ///
     /// Returns an error when the diagonal payload is incompatible with the logical
-    /// /// rank (a shape mismatch).
+    /// rank (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1175,7 +1175,7 @@ impl Storage {
     /// # Errors
     ///
     /// Returns an error when the structured metadata is inconsistent (an
-    /// /// invalid-storage failure).
+    /// invalid-storage failure).
     ///
     /// # Examples
     ///
@@ -1263,7 +1263,7 @@ impl Storage {
     /// # Errors
     ///
     /// Returns an error when the diagonal payload is incompatible with the logical
-    /// /// rank (a shape mismatch).
+    /// rank (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1288,7 +1288,7 @@ impl Storage {
     /// # Errors
     ///
     /// Returns an error when the diagonal payload is incompatible with the logical
-    /// /// rank (a shape mismatch).
+    /// rank (a shape mismatch).
     ///
     /// # Examples
     ///

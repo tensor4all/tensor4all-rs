@@ -85,7 +85,7 @@ pub fn periodic_difference(x: usize, xprime: usize, n: usize) -> usize {
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_kernel_qtt(
     config: &DifferenceKernelTutorialConfig,
@@ -122,7 +122,7 @@ pub fn build_kernel_qtt(
 /// # Errors
 ///
 /// Returns an error when the operation fails (a shape mismatch or backend
-/// /// failure).
+/// failure).
 ///
 pub fn real_qtt_to_complex(
     tt: &SimpleTensorTrain<f64>,
@@ -153,7 +153,7 @@ pub fn real_qtt_to_complex(
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_periodic_difference_kernel_mpo(
     kernel_tt: &SimpleTensorTrain<f64>,
@@ -174,7 +174,7 @@ pub fn integer_to_quantics_sites(value: usize, bits: usize) -> Vec<usize> {
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn evaluate_difference_kernel_mpo(
     mpo: &SimpleTensorTrain<Complex64>,
@@ -196,7 +196,7 @@ pub fn evaluate_difference_kernel_mpo(
 /// # Errors
 ///
 /// Returns an error when the collection fails (a shape mismatch or
-/// /// backend failure).
+/// backend failure).
 ///
 pub fn collect_samples(
     kernel: &QuanticsTensorCI2<f64>,
@@ -256,7 +256,7 @@ fn write_optional_usize(value: Option<usize>) -> String {
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_samples_csv(
     path: &Path,
@@ -294,7 +294,7 @@ pub fn write_samples_csv(
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_bond_dims_csv(
     path: &Path,

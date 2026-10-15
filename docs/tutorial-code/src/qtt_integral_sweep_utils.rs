@@ -27,7 +27,7 @@ pub fn print_sweep_row(row: &IntegralSweepRow) {
 /// # Errors
 ///
 /// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// failure).
 ///
 pub fn write_sweep_csv(path: &Path, rows: &[IntegralSweepRow]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;

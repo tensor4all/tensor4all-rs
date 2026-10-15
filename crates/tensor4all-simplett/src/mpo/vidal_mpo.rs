@@ -27,7 +27,7 @@ impl<T: TTScalar> VidalMPO<T> {
     /// # Errors
     ///
     /// Returns an error when the MPO cannot be converted (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure).
     ///
     pub fn from_mpo(_mpo: MPO<T>) -> Result<Self> {
         // TODO: Implement SVD-based conversion to Vidal form
@@ -104,7 +104,7 @@ impl<T: TTScalar> VidalMPO<T> {
     /// # Errors
     ///
     /// Returns an error when the conversion fails (a shape or index mismatch,
-    /// /// or a backend failure).
+    /// or a backend failure).
     ///
     pub fn into_mpo(self) -> Result<MPO<T>> {
         // TODO: Implement conversion back to MPO

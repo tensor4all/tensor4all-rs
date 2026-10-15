@@ -313,7 +313,7 @@ pub fn try_tensor3_zeros<T: Clone + Default + TensorScalar>(
 /// # Errors
 ///
 /// Returns an error when the construction or conversion fails (a shape or
-/// /// index mismatch, or a backend failure).
+/// index mismatch, or a backend failure).
 ///
 /// # Examples
 ///

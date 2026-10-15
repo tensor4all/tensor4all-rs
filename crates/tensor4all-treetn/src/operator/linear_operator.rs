@@ -219,7 +219,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the MPO and state are incompatible (a shape or index
-    /// /// mismatch) or the binding fails.
+    /// mismatch) or the binding fails.
     ///
     pub fn from_mpo_and_state(
         mpo: TreeTN<T, V>,
@@ -324,7 +324,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the local application fails (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure).
     ///
     pub fn apply_local(
         &self,
@@ -456,7 +456,7 @@ where
     /// # Errors
     ///
     /// Returns an error when a node is not found (a missing-index failure) or the
-    /// /// new name is a duplicate (a duplicate operation failure).
+    /// new name is a duplicate (a duplicate operation failure).
     ///
     /// # Examples
     ///
@@ -634,7 +634,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the state site space is incompatible (a shape
-    /// /// mismatch) or the binding fails.
+    /// mismatch) or the binding fails.
     ///
     pub fn set_input_space_from_state(
         &mut self,
@@ -676,7 +676,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the state site space is incompatible (a shape
-    /// /// mismatch) or the binding fails.
+    /// mismatch) or the binding fails.
     ///
     pub fn set_output_space_from_state(
         &mut self,
@@ -870,7 +870,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the restructure is incompatible (a shape or index
-    /// /// mismatch) or the rebuild fails (a backend failure).
+    /// mismatch) or the rebuild fails (a backend failure).
     ///
     /// # Examples
     ///

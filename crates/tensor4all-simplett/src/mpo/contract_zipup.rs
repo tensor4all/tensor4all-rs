@@ -40,7 +40,7 @@ use tenferro_tensor::TypedTensor;
 /// # Errors
 ///
 /// Returns an error when the contraction or operation fails (a shape or
-/// /// index mismatch, or a backend failure).
+/// index mismatch, or a backend failure).
 ///
 pub fn contract_zipup<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,

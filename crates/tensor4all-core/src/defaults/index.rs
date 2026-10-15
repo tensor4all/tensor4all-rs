@@ -75,7 +75,7 @@ impl TagSet {
     /// # Errors
     ///
     /// Returns an error when the string cannot be parsed as an index (an
-    /// /// invalid-input failure).
+    /// invalid-input failure).
     ///
     pub fn from_str(s: &str) -> Result<Self, TagSetError> {
         Ok(Self(Arc::new(InlineTagSet::from_str(s)?)))
@@ -88,7 +88,7 @@ impl TagSet {
     /// # Errors
     ///
     /// Returns an error when the tag string is invalid (an invalid-input
-    /// /// failure).
+    /// failure).
     ///
     /// # Example
     /// ```

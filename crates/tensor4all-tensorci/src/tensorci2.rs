@@ -447,7 +447,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the options or input dimensions are invalid (an
-    /// /// invalid-configuration failure).
+    /// invalid-configuration failure).
     ///
     pub fn new(local_dims: Vec<usize>) -> Result<Self> {
         if local_dims.len() < 2 {
@@ -724,7 +724,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the conversion fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     pub fn to_tensor_train(&self) -> Result<SimpleTensorTrain<T>> {
         let tensors = self.site_tensors.clone();
@@ -735,7 +735,7 @@ where
     /// # Errors
     ///
     /// Returns an error when a pivot is invalid (an invalid-index or
-    /// /// out-of-bounds failure).
+    /// out-of-bounds failure).
     ///
     pub fn add_global_pivots(&mut self, pivots: &[MultiIndex]) -> Result<()> {
         // Validate the complete batch before mutating any index set.
@@ -1216,7 +1216,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the site tensors cannot be built (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure).
     ///
     fn fill_site_tensors_on_session<F>(
         &mut self,

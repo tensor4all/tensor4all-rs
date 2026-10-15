@@ -281,7 +281,7 @@ impl ApplyOptions {
 /// # Errors
 ///
 /// Returns an error when the operator and state are incompatible (a shape or
-/// /// index mismatch) or the application fails (a backend failure).
+/// index mismatch) or the application fails (a backend failure).
 ///
 /// # Example
 ///
@@ -435,7 +435,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the index binding fails (a shape or index mismatch,
-/// /// or a missing-index failure).
+/// or a missing-index failure).
 ///
 /// # Examples
 /// ```
@@ -507,7 +507,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the operator and state are incompatible (a shape or
-/// /// index mismatch) or a mapped index is missing (a missing-index failure).
+/// index mismatch) or a mapped index is missing (a missing-index failure).
 ///
 /// # Examples
 /// ```
@@ -595,7 +595,7 @@ where
 /// # Errors
 ///
 /// Returns an error when a numbered tag is ambiguous or missing (a
-/// /// missing-index failure) or the application fails (a backend failure).
+/// missing-index failure) or the application fails (a backend failure).
 ///
 /// # Examples
 /// ```

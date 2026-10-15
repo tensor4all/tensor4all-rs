@@ -120,7 +120,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the contraction or operation fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     pub fn apply_projected(&self, x: &T) -> std::result::Result<T, TreeTNOperationError> {
         let mut proj_op = self

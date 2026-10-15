@@ -302,7 +302,7 @@ impl SubDomainTT {
     /// # Errors
     ///
     /// Returns an error when the norm cannot be evaluated (a materialization or
-    /// /// backend failure).
+    /// backend failure).
     ///
     pub fn norm(&self) -> Result<f64> {
         self.data
@@ -315,7 +315,7 @@ impl SubDomainTT {
     /// # Errors
     ///
     /// Returns an error when the norm cannot be evaluated (a materialization or
-    /// /// backend failure).
+    /// backend failure).
     ///
     pub fn norm_squared(&self) -> Result<f64> {
         self.data
@@ -433,7 +433,7 @@ impl SubDomainTT {
     /// # Errors
     ///
     /// Returns an error when the subdomains are incompatible (a shape mismatch)
-    /// /// or the inner product fails (a backend failure).
+    /// or the inner product fails (a backend failure).
     ///
     pub fn inner(&self, other: &Self) -> Result<AnyScalar> {
         self.data

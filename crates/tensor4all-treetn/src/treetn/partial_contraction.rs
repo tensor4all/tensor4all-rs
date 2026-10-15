@@ -828,8 +828,8 @@ where
 /// # Errors
 ///
 /// Returns an error when the contraction specification is invalid (an
-/// /// invalid-spec failure) or the contraction fails (a shape or index
-/// /// mismatch, or a backend failure).
+/// invalid-spec failure) or the contraction fails (a shape or index
+/// mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -940,8 +940,8 @@ where
 /// # Errors
 ///
 /// Returns an error when the contraction specification is invalid (an
-/// /// invalid-spec failure) or the contraction fails (a shape or index
-/// /// mismatch, or a backend failure).
+/// invalid-spec failure) or the contraction fails (a shape or index
+/// mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -1056,7 +1056,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the index spaces are incompatible (a shape or index
-/// /// mismatch) or the contraction fails (a backend failure).
+/// mismatch) or the contraction fails (a backend failure).
 ///
 /// # Examples
 /// ```
@@ -1120,7 +1120,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the index spaces are incompatible (a shape or index
-/// /// mismatch) or the weighted sum fails (a backend failure).
+/// mismatch) or the weighted sum fails (a backend failure).
 ///
 /// # Examples
 /// ```
@@ -1197,7 +1197,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the contraction or operation fails (a shape or
-/// /// index mismatch, or a backend failure).
+/// index mismatch, or a backend failure).
 ///
 /// # Examples
 /// ```

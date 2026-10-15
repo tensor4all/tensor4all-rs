@@ -218,7 +218,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the region or graph is invalid (an invalid-topology
-/// /// failure).
+/// failure).
 ///
 pub fn get_boundary_edges<T, V>(
     treetn: &TreeTN<T, V>,
@@ -285,7 +285,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     fn before_step(
         &mut self,
@@ -312,7 +312,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     fn update(
         &mut self,
@@ -331,7 +331,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     fn after_step(
         &mut self,
@@ -367,12 +367,12 @@ where
 /// # Errors
 ///
 /// Returns an error when a local update in the sweep fails (a shape or index
-/// /// mismatch, a non-convergence failure, or a backend failure).
+/// mismatch, a non-convergence failure, or a backend failure).
 ///
 /// # Errors
 ///
 /// Returns an error when a local update in the sweep fails (a shape or index
-/// /// mismatch, a non-convergence failure, or a backend failure).
+/// mismatch, a non-convergence failure, or a backend failure).
 ///
 pub fn apply_local_update_sweep<T, V, U>(
     treetn: &mut TreeTN<T, V>,
@@ -544,7 +544,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     fn update(
         &mut self,
@@ -677,7 +677,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     pub fn extract_subtree(
         &self,
@@ -848,7 +848,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     pub fn replace_subtree(
         &mut self,

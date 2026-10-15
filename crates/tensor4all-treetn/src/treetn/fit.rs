@@ -335,7 +335,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the cached fit value cannot be computed (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     pub fn get_or_compute(
         &mut self,
@@ -465,7 +465,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the fitted structure is inconsistent (a graph
-    /// /// consistency failure).
+    /// consistency failure).
     ///
     pub fn verify_structural_consistency(
         &self,
@@ -1670,7 +1670,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the fit contraction fails (a shape or index
-/// /// mismatch, or a backend failure).
+/// mismatch, or a backend failure).
 ///
 pub fn contract_fit<T, V>(
     tn_a: &TreeTN<T, V>,

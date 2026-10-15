@@ -24,7 +24,7 @@ use crate::common::{
 /// # Errors
 ///
 /// Returns an error when the operator construction fails (an overflow or
-/// /// invalid-configuration failure, or a shape mismatch).
+/// invalid-configuration failure, or a shape mismatch).
 ///
 pub fn difference_kernel_mpo(
     f: &SimpleTensorTrain<Complex64>,
@@ -131,7 +131,7 @@ fn checked_difference_tensor_dims(
 /// # Errors
 ///
 /// Returns an error when the operator construction fails (an overflow or
-/// /// invalid-configuration failure, or a shape mismatch).
+/// invalid-configuration failure, or a shape mismatch).
 ///
 pub fn difference_kernel_operator(
     f: &SimpleTensorTrain<Complex64>,

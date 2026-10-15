@@ -1303,7 +1303,7 @@ fn require_host_linalg_tensor<T: TensorScalar>(
 /// # Errors
 ///
 /// Returns an error when the SVD fails (a backend or non-convergence
-/// /// failure).
+/// failure).
 ///
 pub fn svd_backend<T>(a: &TypedTensor<T>) -> std::result::Result<SvdResult<T>, BackendLinalgError>
 where
@@ -1349,7 +1349,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the QR fails (a backend or non-convergence
-/// /// failure).
+/// failure).
 ///
 pub fn qr_backend<T>(
     a: TypedTensor<T>,
@@ -1427,7 +1427,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the solve fails (a backend, singular, or shape
-/// /// mismatch failure).
+/// mismatch failure).
 ///
 pub fn triangular_solve_backend<T>(
     a: &TypedTensor<T>,
@@ -1474,8 +1474,8 @@ where
 /// # Errors
 ///
 /// Returns an error when the input shapes or scalar dtype are invalid (a
-/// /// shape or dtype mismatch) or the solve fails (a backend or singular
-/// /// failure).
+/// shape or dtype mismatch) or the solve fails (a backend or singular
+/// failure).
 ///
 /// # Examples
 /// ```
@@ -1503,8 +1503,8 @@ where
 /// # Errors
 ///
 /// Returns an error when the input shapes or scalar dtype are invalid (a
-/// /// shape or dtype mismatch) or the solve fails (a backend or singular
-/// /// failure).
+/// shape or dtype mismatch) or the solve fails (a backend or singular
+/// failure).
 ///
 /// # Examples
 /// ```
@@ -1532,9 +1532,9 @@ where
 /// # Errors
 ///
 /// Returns an error when the input shapes or scalar dtype are invalid (a
-/// /// shape or dtype mismatch), the triangular flags are invalid (an
-/// /// invalid-configuration failure), or the solve fails (a backend or singular
-/// /// failure).
+/// shape or dtype mismatch), the triangular flags are invalid (an
+/// invalid-configuration failure), or the solve fails (a backend or singular
+/// failure).
 ///
 /// # Examples
 /// ```
@@ -1567,9 +1567,9 @@ where
 /// # Errors
 ///
 /// Returns an error when the input shapes or scalar dtype are invalid (a
-/// /// shape or dtype mismatch), the triangular flags are invalid (an
-/// /// invalid-configuration failure), or the solve fails (a backend or singular
-/// /// failure).
+/// shape or dtype mismatch), the triangular flags are invalid (an
+/// invalid-configuration failure), or the solve fails (a backend or singular
+/// failure).
 ///
 /// # Examples
 /// ```
@@ -1630,7 +1630,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the LU factorization fails (a backend or
-/// /// non-convergence failure).
+/// non-convergence failure).
 ///
 pub fn full_piv_lu_backend<T>(
     a: &TypedTensor<T>,
@@ -1680,8 +1680,8 @@ where
 /// # Errors
 ///
 /// Returns an error when the backend does not support the input dtype (a
-/// /// dtype mismatch) or the factorization fails (a backend or
-/// /// non-convergence failure).
+/// dtype mismatch) or the factorization fails (a backend or
+/// non-convergence failure).
 ///
 /// # Examples
 /// ```

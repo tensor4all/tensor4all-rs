@@ -68,7 +68,7 @@ impl std::error::Error for ReplaceIndsError {}
 /// # Errors
 ///
 /// Returns an error when the operation fails (a shape or index mismatch, or
-/// /// a backend failure).
+/// a backend failure).
 ///
 /// # Example
 /// ```

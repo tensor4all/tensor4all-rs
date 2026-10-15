@@ -175,8 +175,8 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when a tensor's site dimensions are incompatible with
-    /// /// its neighbors (a shape mismatch) or the chain is structurally
-    /// /// inconsistent (an invalid-state failure).
+    /// its neighbors (a shape mismatch) or the chain is structurally
+    /// inconsistent (an invalid-state failure).
     ///
     pub fn new(tensors: Vec<IdxTensor>) -> Result<Self> {
         if tensors.is_empty() {
@@ -370,7 +370,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the orthogonality center is out of range (an
-    /// /// out of bounds failure) or orthogonalization fails.
+    /// out of bounds failure) or orthogonalization fails.
     ///
     pub fn with_ortho(
         tensors: Vec<IdxTensor>,
@@ -429,7 +429,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the input TreeTN is not a linear chain (an
-    /// /// invalid-topology failure) or a site conversion fails.
+    /// invalid-topology failure) or a site conversion fails.
     ///
     /// # Examples
     ///
@@ -725,7 +725,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     pub fn tensors_mut(&mut self) -> Result<Vec<&mut IdxTensor>> {
         self.tensors_mut_checked()
@@ -736,7 +736,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     /// # Examples
     ///
@@ -820,7 +820,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the link-index relabeling fails (an invalid-index
-    /// /// failure).
+    /// failure).
     ///
     pub fn sim_link_indices(&self) -> Result<Self> {
         if self.len() <= 1 {
@@ -1047,7 +1047,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when `site` is out of range (an out of bounds failure) or
-    /// /// the new tensor has incompatible dimensions (a shape mismatch).
+    /// the new tensor has incompatible dimensions (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1077,7 +1077,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when `site` is out of range (an out of bounds failure) or
-    /// /// the new tensor has incompatible dimensions (a shape mismatch).
+    /// the new tensor has incompatible dimensions (a shape mismatch).
     ///
     /// # Examples
     ///
@@ -1164,7 +1164,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when `site` is out of range (an out of bounds failure) or
-    /// /// orthogonalization fails (a backend or non-convergence failure).
+    /// orthogonalization fails (a backend or non-convergence failure).
     ///
     pub fn orthogonalize_with(&mut self, site: usize, form: CanonicalForm) -> Result<()> {
         if self.is_empty() {
@@ -1274,7 +1274,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the two tensor trains have incompatible site spaces
-    /// /// (a shape mismatch) or the contraction fails (a backend failure).
+    /// (a shape mismatch) or the contraction fails (a backend failure).
     ///
     /// # Examples
     ///
@@ -1843,7 +1843,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the dense materialization fails (a materialization
-    /// /// or backend failure).
+    /// or backend failure).
     ///
     /// # Example
     /// ```
@@ -1895,7 +1895,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the dense materialization fails (a materialization
-    /// /// or backend failure).
+    /// or backend failure).
     ///
     /// # Examples
     ///
@@ -1932,7 +1932,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the two tensor trains have incompatible site spaces
-    /// /// (a shape mismatch) or the direct-sum construction fails.
+    /// (a shape mismatch) or the direct-sum construction fails.
     ///
     pub fn add(&self, other: &Self) -> Result<Self> {
         if self.is_empty() && other.is_empty() {
@@ -1989,7 +1989,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the two tensor trains have incompatible site spaces
-    /// /// (a shape mismatch) or the reindexed addition fails.
+    /// (a shape mismatch) or the reindexed addition fails.
     ///
     /// # Examples
     ///
@@ -2062,7 +2062,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the scaling fails (a dtype mismatch or backend
-    /// /// failure).
+    /// failure).
     ///
     /// # Example
     /// ```
@@ -2124,7 +2124,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the two tensor trains have incompatible site spaces
-    /// /// (a shape mismatch) or the axpby computation fails (a backend failure).
+    /// (a shape mismatch) or the axpby computation fails (a backend failure).
     ///
     pub fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
         let scaled_self = self.scale(a)?;

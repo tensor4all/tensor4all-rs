@@ -16,7 +16,7 @@ use crate::TreeTN;
 /// # Errors
 ///
 /// Returns an error when the tensor train cannot be converted to a TreeTN
-/// /// (a shape or index mismatch, or a backend failure).
+/// (a shape or index mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -54,7 +54,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the tensor train cannot be converted to a TreeTN
-/// /// (a shape or index mismatch, or a backend failure).
+/// (a shape or index mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -93,7 +93,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the tensor train cannot be converted to a TreeTN
-/// /// (a shape or index mismatch, or a backend failure).
+/// (a shape or index mismatch, or a backend failure).
 ///
 /// # Examples
 ///
@@ -308,7 +308,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the insertion fails (a shape or index mismatch, or
-/// /// a missing-index failure).
+/// a missing-index failure).
 ///
 /// # Examples
 ///
@@ -412,7 +412,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the removal fails (a shape or index mismatch, or a
-/// /// missing-index failure).
+/// missing-index failure).
 ///
 /// # Examples
 ///
@@ -498,7 +498,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the removal fails (a shape or index mismatch, or a
-/// /// missing-index failure).
+/// missing-index failure).
 ///
 /// # Examples
 ///

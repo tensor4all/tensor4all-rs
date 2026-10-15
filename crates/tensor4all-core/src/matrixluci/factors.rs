@@ -64,7 +64,7 @@ impl<T: MatrixLuciScalar> CrossFactors<T> {
     /// # Errors
     ///
     /// Returns an error when the matrix source is invalid (a shape mismatch) or
-    /// /// the factor construction fails.
+    /// the factor construction fails.
     ///
     pub fn from_source<S: CandidateMatrixSource<T>>(
         source: &S,
@@ -83,7 +83,7 @@ impl<T: MatrixLuciScalar> CrossFactors<T> {
     /// # Errors
     ///
     /// Returns an error when the pivot solve fails (a singular or backend
-    /// /// failure).
+    /// failure).
     ///
     pub fn cols_solve_pivot(&self) -> Result<Matrix<T>> {
         let pivot_t = transpose(&self.pivot);
@@ -100,7 +100,7 @@ impl<T: MatrixLuciScalar> CrossFactors<T> {
     /// # Errors
     ///
     /// Returns an error when the pivot solve fails (a singular or backend
-    /// /// failure).
+    /// failure).
     ///
     pub fn solve_pivot_rows(&self) -> Result<Matrix<T>> {
         solve_matrix(&self.pivot, &self.pivot_rows).map_err(|err| {

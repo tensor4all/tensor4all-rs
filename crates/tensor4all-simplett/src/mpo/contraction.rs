@@ -68,7 +68,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the two MPOs differ in length (a shape mismatch)
-    /// /// or the contraction setup fails.
+    /// or the contraction setup fails.
     ///
     pub fn new(mpo_a: MPO<T>, mpo_b: MPO<T>) -> Result<Self> {
         if mpo_a.len() != mpo_b.len() {
@@ -113,7 +113,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the two MPOs differ in length (a shape mismatch)
-    /// /// or the contraction setup fails.
+    /// or the contraction setup fails.
     ///
     pub fn with_transform<F>(mpo_a: MPO<T>, mpo_b: MPO<T>, f: F) -> Result<Self>
     where
@@ -182,7 +182,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the contraction evaluation fails (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure).
     ///
     pub fn evaluate(&mut self, indices: &[(usize, usize)]) -> Result<T> {
         if indices.len() != self.len() {
@@ -265,7 +265,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the left evaluation fails (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure).
     ///
     pub fn evaluate_left(&mut self, n: usize, indices: &[(usize, usize)]) -> Result<Matrix2<T>> {
         if n > self.len() {
@@ -327,7 +327,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the right evaluation fails (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure).
     ///
     pub fn evaluate_right(&mut self, n: usize, indices: &[(usize, usize)]) -> Result<Matrix2<T>> {
         let len = self.len();

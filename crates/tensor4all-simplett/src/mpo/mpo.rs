@@ -30,7 +30,7 @@ impl<T: TTScalar> MPO<T> {
     /// # Errors
     ///
     /// Returns an error when the MPO dimensions are invalid (a shape mismatch) or
-    /// /// the construction fails.
+    /// the construction fails.
     ///
     pub fn new(tensors: Vec<Tensor4<T>>) -> Result<Self> {
         // Validate dimensions
@@ -140,7 +140,7 @@ impl<T: TTScalar> MPO<T> {
     /// # Errors
     ///
     /// Returns an error when the identity MPO construction fails (a shape
-    /// /// mismatch or backend failure).
+    /// mismatch or backend failure).
     ///
     pub fn identity(site_dims: &[usize]) -> Result<Self> {
         if site_dims.is_empty() {
@@ -240,7 +240,7 @@ impl<T: TTScalar> MPO<T> {
     /// # Errors
     ///
     /// Returns an error when the MPO evaluation fails (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// mismatch, or a backend failure).
     ///
     pub fn evaluate(&self, indices: &[LocalIndex]) -> Result<T>
     where

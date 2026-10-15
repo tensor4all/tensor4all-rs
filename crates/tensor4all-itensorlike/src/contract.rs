@@ -32,7 +32,7 @@ use crate::tensortrain::TensorTrain;
 /// # Errors
 ///
 /// Returns an error when the contraction or operation fails (a shape or
-/// /// index mismatch, or a backend failure).
+/// index mismatch, or a backend failure).
 ///
 /// Shared entry validation for every contraction route. Both [`contract`] and
 /// [`contract_in`] run exactly this, in this order, so the routes cannot drift
@@ -291,7 +291,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the contraction or operation fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     pub fn contract(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
         contract(self, other, options)
@@ -306,7 +306,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error when the pair is incompatible (a shape or index mismatch)
-    /// /// or the contraction fails (a backend failure).
+    /// or the contraction fails (a backend failure).
     ///
     pub fn contract_pair(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
         self.contract(other, options)

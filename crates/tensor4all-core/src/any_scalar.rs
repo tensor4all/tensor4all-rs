@@ -564,7 +564,7 @@ impl AnyScalar {
     /// # Errors
     ///
     /// Returns an error when the scalar is not a tracked leaf (a missing-graph
-    /// /// failure).
+    /// failure).
     ///
     /// # Examples
     ///
@@ -634,7 +634,7 @@ impl AnyScalar {
     /// # Errors
     ///
     /// Returns an error when the scalar is not a tracked leaf or the gradient is
-    /// /// unavailable (a missing-graph or dtype mismatch failure).
+    /// unavailable (a missing-graph or dtype mismatch failure).
     ///
     /// # Examples
     ///
@@ -665,7 +665,7 @@ impl AnyScalar {
     /// # Errors
     ///
     /// Returns an error when the scalar is not a tracked leaf (a missing-graph
-    /// /// failure).
+    /// failure).
     ///
     /// # Examples
     ///
@@ -696,7 +696,7 @@ impl AnyScalar {
     /// # Errors
     ///
     /// Returns an error when the scalar is not a scalar-valued leaf or the reverse
-    /// /// pass fails (a graph failure).
+    /// pass fails (a graph failure).
     ///
     /// # Examples
     ///
@@ -726,7 +726,7 @@ impl AnyScalar {
     /// # Errors
     ///
     /// Returns an error when the scalar is not a tracked leaf (a missing-graph
-    /// /// failure).
+    /// failure).
     ///
     /// # Examples
     ///
@@ -912,7 +912,7 @@ impl AnyScalar {
     /// # Errors
     ///
     /// Returns an error when the conjugation fails (a dtype mismatch or backend
-    /// /// failure).
+    /// failure).
     ///
     /// # Examples
     ///

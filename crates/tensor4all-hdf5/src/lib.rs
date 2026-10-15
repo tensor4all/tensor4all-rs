@@ -246,7 +246,7 @@ pub fn save_itensor(
 /// # Errors
 ///
 /// Returns an error when the operation fails (a shape or index mismatch, or
-/// /// a backend failure).
+/// a backend failure).
 ///
 /// # Examples
 ///
@@ -409,7 +409,7 @@ pub fn save_mps(
 /// # Errors
 ///
 /// Returns an error when the operation fails (a shape or index mismatch, or
-/// /// a backend failure).
+/// a backend failure).
 ///
 /// # Examples
 ///

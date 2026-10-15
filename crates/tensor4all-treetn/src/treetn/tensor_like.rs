@@ -258,7 +258,7 @@ where
     /// # Errors
     ///
     /// Returns an error when a numbered tag is ambiguous or missing (a
-    /// /// missing-index failure).
+    /// missing-index failure).
     ///
     /// # Examples
     /// ```
@@ -324,7 +324,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the old site index is not present (a missing-index
-    /// /// failure) or the new indices are incompatible (a shape mismatch).
+    /// failure) or the new indices are incompatible (a shape mismatch).
     ///
     /// # Examples
     /// ```

@@ -137,7 +137,7 @@ impl FourierOptions {
     /// # Errors
     ///
     /// Returns an error when the forward transform fails (a shape mismatch or
-    /// /// backend failure).
+    /// backend failure).
     ///
     pub fn forward() -> Self {
         Self::default()
@@ -221,7 +221,7 @@ impl FTCore {
     /// # Errors
     ///
     /// Returns an error when the inverse transform fails (a shape mismatch or
-    /// /// backend failure).
+    /// backend failure).
     ///
     pub fn backward(&self) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
         let inverse_options = FourierOptions {

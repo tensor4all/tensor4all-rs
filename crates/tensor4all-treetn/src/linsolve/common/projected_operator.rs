@@ -225,7 +225,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the contraction or operation fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     pub fn apply<NT: NetworkTopology<V>>(
         &mut self,

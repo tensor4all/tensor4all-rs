@@ -28,7 +28,7 @@ use crate::common::{
 /// # Errors
 ///
 /// Returns an error when the operator construction fails (an overflow or
-/// /// invalid-configuration failure, or a shape mismatch).
+/// invalid-configuration failure, or a shape mismatch).
 ///
 /// # Examples
 ///
@@ -75,7 +75,7 @@ pub fn flip_operator(
 /// # Errors
 ///
 /// Returns an error when the operator construction fails (an overflow or
-/// /// invalid-configuration failure, or a shape mismatch).
+/// invalid-configuration failure, or a shape mismatch).
 ///
 /// # Examples
 ///

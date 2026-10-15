@@ -92,7 +92,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// index mismatch, or a backend failure).
     ///
     /// # Examples
     ///
@@ -244,7 +244,7 @@ where
     /// # Errors
     ///
     /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// a backend failure).
     ///
     /// # Examples
     ///

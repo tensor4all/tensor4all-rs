@@ -53,7 +53,7 @@ pub fn exact_integral(config: &IntervalTutorialConfig) -> f64 {
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_interval_grid(
     config: &IntervalTutorialConfig,
@@ -69,7 +69,7 @@ pub fn build_interval_grid(
 /// # Errors
 ///
 /// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// mismatch or backend failure).
 ///
 pub fn build_interval_qtt<F>(
     grid: &DiscretizedGrid,
