@@ -85,47 +85,49 @@ Each per-node call in the component example also clones the network metadata and
 transfer includes native duplication, a session entry and eager wrapping; the per-node figure is therefore an
 upper bound on the data movement, not a measurement of it alone.
 
-### Device-to-host wait and overlap, measured
+### Wait and overlap, measured with both routes warmed and doing the same work
 
-The device-to-host side now has a pending route, so a copy's *submission* and its *completion* can be measured
-separately, and two copies can be in flight at once:
-
-```bash
-cargo test -p tensor4all-treetn --features tenferro-cuda --test cuda_async_download
-```
-
-On the same machine, two 8 MiB copies with the pinned allocations included and uploads excluded:
-
-| shape | time |
-| --- | ---: |
-| submit, wait, submit, wait | 89.552 ms |
-| submit both, then wait for both | 11.425 ms |
-
-So **overlap is real on this route** - roughly eight times faster here - and the difference between the two rows is
-exactly the wait that a synchronous transfer hides. `CudaExecutionContext::download_pending` takes the pinned
-revision's ownership contract literally: it consumes the device tensor (the pinned API has no way to copy one) and
-hands it back from `wait`, and a rejected submission keeps only its diagnostic because the rejected package is
-neither `Send` nor `Sync`.
-
-**The host-to-device side is measurable too, and now measured.** `CudaExecutionContext::upload_pending` takes a
-pinned source buffer and a device destination and returns a `PendingCudaUpload` whose submission and completion
-are separable, exactly like the download route; the pinned revision's pending entry consumes the destination, so
-the device tensor comes back from `PendingCudaUpload::wait` together with the source buffer, and a caller that
-wants to keep its tensor should not use this route. The upload figure above stays what it was - a *synchronised*
-upload latency through `upload_cuda`, which is the route the tree-contraction tutorial uses - but it is no longer
-the only thing that can be said about uploads:
+The pending routes make a copy's *submission* and its *completion* separable, so two copies can be in flight at
+once, and the three tests below print a serial figure (submit, wait, submit, wait) against a batched one (submit
+both, then wait for both). Each test warms up with one throwaway transfer first and keeps both regions doing the
+same work inside the timer, so neither region pays a first-use cost, and neither pays a destruction the other
+does not. The figures are printed, not asserted: a ratio on a shared machine is not a correctness property.
 
 ```bash
-cargo test -p tensor4all-tensorbackend --features tenferro-cuda --test cuda_async_upload
+# Two whole networks (4 nodes each), end-to-end including both host reconstructions:
+cargo test -p tensor4all-treetn --features tenferro-cuda --test integration cuda_pending_download -- --nocapture
+
+# Two 8 MiB device-to-host copies, pinned allocations and decodes included, uploads excluded:
+cargo test -p tensor4all-tensorbackend --features tenferro-cuda --test cuda_async_download -- --nocapture
+
+# Two 8 MiB host-to-device copies, staging and pinned allocations included, destinations excluded:
+cargo test -p tensor4all-tensorbackend --features tenferro-cuda --test cuda_async_upload -- --nocapture
 ```
 
-On the same machine, two 8 MiB copies: `serial_two_uploads=59.840ms`, `batched_two_uploads=30.729ms`, with the
-pinned allocations, the caller's staging, placement validation, the runtime's allocation/event work, readiness
-polling and the wait's cleanup inside each figure, the destinations excluded, and the returned values dropped
-after the timer in both regions. **Those figures are printed, not asserted, and they are not a controlled
-overlap comparison**: the serial region runs first, so it also carries first-use effects. What the test
-demonstrates is the ordering - two uploads are submitted and outstanding before either is waited on - and that
-is what the route makes measurable; a controlled comparison would need the first-use effects separated.
+Measured on one local A100 80GB PCIe (driver 580.126.09), one run each. The absolute figures move with the
+machine and with what else is running: repeating these three tests on the same machine moved them by tens of
+percent between runs, which is the main reason they are printed by the test rather than promised here.
+
+| workload | serial | batched | ratio |
+| --- | ---: | ---: | ---: |
+| two 4-node networks (TreeTN pending download) | 6.988 ms | 4.530 ms | 1.54x |
+| two 8 MiB copies (tensor pending download) | 32.619 ms | 36.720 ms | 0.89x |
+| two 8 MiB copies (tensor pending upload) | 26.867 ms | 28.089 ms | 0.96x |
+
+**What the figures are.** These are three end-to-end observations on one machine, with the timer contents named
+above; the tests print them rather than asserting them, and nothing here is a promise about another workload or
+another machine. Two of the three batched rows came out faster than their serial row and one came out slower, so
+this table does not establish that overlap pays in general: it shows that the route makes submission and
+completion separable, and that whether a caller sees a gain depends on its own transfers, which it has to
+measure itself. The tests also cannot separate how much of each figure is staging, allocation, submission,
+polling or the wait.
+
+Two details of the contract that the figures do not show: `CudaExecutionContext::download_pending` consumes the
+device tensor (the pinned API has no way to copy one) and hands it back from `wait`, and a rejected submission
+keeps only its diagnostic, because the rejected package is neither `Send` nor `Sync`. The upload route mirrors
+that: `upload_pending` takes a pinned source buffer and a device destination and returns a `PendingCudaUpload`
+whose `wait` hands back the written device tensor together with the source buffer, and a caller that wants to keep
+its tensor should not use the route.
 
 The SRC route has its own separated breakdown (setup, upload, warm-up, steady, download, CPU) in
 `cuda_src_timing_breakdown` under `crates/tensor4all-treetn/tests/cuda_src_contraction.rs`, where its upload figure

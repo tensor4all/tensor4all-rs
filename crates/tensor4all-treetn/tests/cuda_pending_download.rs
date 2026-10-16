@@ -117,12 +117,26 @@ fn two_networks_are_submitted_before_either_is_waited_on() {
     let first_device = host.upload_cuda(&context).expect("upload first");
     let second_device = host.upload_cuda(&context).expect("upload second");
 
-    // Serial: submit, wait, submit, wait.
+    // Warm-up: one throwaway download of the same shape, so neither timed region pays the first transfer's
+    // initialization. The warm-up is not what makes the comparison controlled - what does is that both regions
+    // below do the same work (two submissions, readiness polling, both waits, both host reconstructions), so
+    // neither pays a first-use cost and neither pays a destruction the other does not.
+    {
+        let mut pending = first_device
+            .download_pending(&context)
+            .expect("warm-up submit");
+        wait_ready(&mut pending);
+        let _ = pending.wait().expect("warm-up wait");
+    }
+
+    // Serial: submit, wait, submit, wait. Both results are kept alive past the timer, so neither region pays a
+    // destruction the other does not.
+    let mut serial_hosts = Vec::new();
     let started = Instant::now();
     for device in [&first_device, &second_device] {
         let mut pending = device.download_pending(&context).expect("submit");
         wait_ready(&mut pending);
-        let _ = pending.wait().expect("wait");
+        serial_hosts.push(pending.wait().expect("wait"));
     }
     let serial = started.elapsed();
 
@@ -140,16 +154,22 @@ fn two_networks_are_submitted_before_either_is_waited_on() {
     let second_host = second.wait().expect("wait second");
     let batched = started.elapsed();
 
-    assert_eq!(structure(&first_host), structure(&host));
-    assert_eq!(structure(&second_host), structure(&host));
+    // Correctness outside both timers: the two routes must produce the same host networks.
+    for network in serial_hosts.iter().chain([&first_host, &second_host]) {
+        assert_eq!(structure(network), structure(&host));
+    }
 
+    // Each figure is the end-to-end time of *two* network reconstructions, so the ratio is an end-to-end ratio:
+    // warming both regions removes the first-use asymmetry, and both do the same work, so the difference is where
+    // the waits sit relative to the submissions. Not a statement about a single transfer's latency.
     println!(
-        "cuda_pending_download: nodes=4 serial_two_networks={:.3}ms batched_two_networks={:.3}ms \
-         (figures only; the serial region also carries first-use effects, so this is not a controlled overlap \
-         comparison. Each figure includes submission, readiness polling, the wait and the host reconstruction \
-         of every node)",
+        "cuda_pending_download: nodes={} serial_two_networks={:.3}ms batched_two_networks={:.3}ms ratio={:.2}x \
+         (both regions warmed and doing the same work: two submissions, readiness polling, both waits and both \
+         host reconstructions; printed, not asserted)",
+        host.node_names().len(),
         serial.as_secs_f64() * 1e3,
-        batched.as_secs_f64() * 1e3
+        batched.as_secs_f64() * 1e3,
+        serial.as_secs_f64() / batched.as_secs_f64()
     );
 }
 

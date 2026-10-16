@@ -7,10 +7,10 @@
 //! submission and its completion can be measured. These tests assert correctness and print the figures; the
 //! assertions are the correctness ones, because a timing assertion on a shared machine would be a flake.
 //!
-//! The printed figures are **not** a controlled overlap comparison. The serial region runs first, so it also
-//! carries first-use effects that the overlapped region does not, and both regions include placement validation,
-//! the runtime's allocation and event work, readiness polling and the wait's cleanup. What the batched test
-//! demonstrates is the *ordering*: two uploads are submitted and outstanding before either is waited on.
+//! The printed figures are end-to-end: both regions warm up with one throwaway transfer and then do the same
+//! work inside their timer (stage a pinned buffer, submit, poll, wait, keep the returned pair alive), so neither
+//! pays a first-use cost and neither pays a destruction the other does not. What the figures cannot separate is
+//! how much of each is staging, allocation, submission, polling or the wait itself.
 //!
 //! The pinned revision consumes a pending transfer's destination, so a caller that wants to keep its tensor
 //! should not use this route - the value comes back from `PendingCudaUpload::wait`.
@@ -98,16 +98,30 @@ fn two_pending_uploads_are_submitted_before_either_is_waited_on() {
     let host = host_tensor(elements);
     let values = staged_values(elements);
 
-    // Four independent destinations, created before anything is timed: `upload_pending` consumes its
+    // Five independent destinations, created before anything is timed (one is the warm-up): `upload_pending`
+    // consumes its
     // destination and hands it back from `wait`, so a destination can only carry one submission at a time.
-    let destinations: Vec<Tensor> = (0..4)
+    let destinations: Vec<Tensor> = (0..5)
         .map(|_| context.upload_cuda(&host).expect("destination"))
         .collect();
+    let mut queue = destinations.into_iter();
+
+    // Warm-up: one throwaway upload of the same shape, so neither timed region pays the first transfer's
+    // initialization. What makes the comparison controlled is that both regions then do the same work: stage a
+    // pinned buffer, submit, poll, wait, and keep the returned pair alive.
+    {
+        let mut buffer = context.allocate_pinned(bytes).expect("buffer");
+        encode_f64(&mut buffer, &values);
+        let mut pending = context
+            .upload_pending(buffer, queue.next().expect("warm-up destination"))
+            .expect("warm-up submit");
+        wait_ready(&mut pending);
+        let _ = pending.wait().expect("warm-up wait");
+    }
 
     // Serial: stage, submit, wait, stage, submit, wait. The results are kept alive past the timer so that the
     // two regions have the same resource lifetime: destroying a returned buffer inside one region and not the
     // other would compare a transfer against a transfer plus a destruction.
-    let mut queue = destinations.into_iter();
     let mut serial_results = Vec::new();
     let started = Instant::now();
     for _ in 0..2 {
@@ -145,13 +159,14 @@ fn two_pending_uploads_are_submitted_before_either_is_waited_on() {
     }
 
     println!(
-        "cuda_async_upload: bytes={bytes} serial_two_uploads={:.3}ms batched_two_uploads={:.3}ms \
-         (figures only; the serial region also carries first-use effects, so this is not a controlled overlap \
-         comparison. Each figure includes two pinned allocations, the caller's staging, placement validation, \
-         the runtime's allocation/event work, readiness polling and the wait's cleanup; destinations are \
-         excluded, and the returned values are dropped after the timer in both regions)",
+        "cuda_async_upload: bytes={bytes} serial_two_uploads={:.3}ms batched_two_uploads={:.3}ms ratio={:.2}x \
+         (both regions warmed and doing the same work: two pinned allocations, the caller's staging, placement \
+         validation, the runtime's allocation/event work, readiness polling and the wait, with the returned values \
+         kept past the timer; destinations are excluded. Each figure is the end-to-end time of two copies, so the \
+         ratio is an end-to-end ratio, not a single transfer's latency. Printed, not asserted)",
         serial.as_secs_f64() * 1e3,
-        overlapped.as_secs_f64() * 1e3
+        overlapped.as_secs_f64() * 1e3,
+        serial.as_secs_f64() / overlapped.as_secs_f64()
     );
 }
 
