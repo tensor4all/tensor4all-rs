@@ -10,6 +10,7 @@ mod bug_fit_elementwise;
 mod bug_norm_oom_large_tt;
 mod bug_zipup_inflated_bonds;
 mod contract_context;
+mod fit_adaptive_initializer;
 mod fit_bond_capping;
 mod linsolve_mpo;
 mod panic_paths;

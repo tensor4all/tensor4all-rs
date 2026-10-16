@@ -8,6 +8,7 @@ mod basic;
 mod bug_swap_values;
 mod cached_evaluator_determinism;
 mod cuda_component_transfer;
+mod cuda_pending_download;
 mod cuda_src_contraction;
 mod cuda_tree_contraction;
 mod deterministic_order;
