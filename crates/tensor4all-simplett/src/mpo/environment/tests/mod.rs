@@ -148,6 +148,42 @@ fn test_environment_reports_length_and_dimension_errors() {
 }
 
 #[test]
+fn test_environment_rejects_empty_mpo() {
+    let empty = MPO::<f64>::new(Vec::new()).unwrap();
+
+    let mut cache = Vec::new();
+    let err = left_environment(&empty, &empty, 0, &mut cache).unwrap_err();
+    assert!(matches!(err, MPOError::Empty), "{err:?}");
+
+    let mut cache = Vec::new();
+    let err = right_environment(&empty, &empty, 0, &mut cache).unwrap_err();
+    assert!(matches!(err, MPOError::Empty), "{err:?}");
+}
+
+#[test]
+fn test_environment_rejects_site_out_of_range() {
+    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+
+    for site in [2, 5] {
+        let mut cache = Vec::new();
+        let err = left_environment(&mpo, &mpo, site, &mut cache).unwrap_err();
+        assert!(
+            matches!(err, MPOError::IndexOutOfBounds { site: s, index, max: 1 } if s == site && index == site),
+            "{err:?}"
+        );
+        assert!(cache.is_empty());
+
+        let mut cache = Vec::new();
+        let err = right_environment(&mpo, &mpo, site, &mut cache).unwrap_err();
+        assert!(
+            matches!(err, MPOError::IndexOutOfBounds { site: s, index, max: 1 } if s == site && index == site),
+            "{err:?}"
+        );
+        assert!(cache.is_empty());
+    }
+}
+
+#[test]
 fn test_mpo_helper_error_formats_context() {
     let err = mpo_helper_error("while building environment", "invalid rank");
     let message = err.to_string();
