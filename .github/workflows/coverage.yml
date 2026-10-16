@@ -34,9 +34,13 @@ jobs:
       - name: Install HDF5
         run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
 
+      # Pinned: the per-file thresholds are measured percentages, and an
+      # unpinned `stable` moving (1.99.0 -> 1.99.1) shifted them without any
+      # code change (#960). Bump this in a dedicated PR and re-measure there.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.99.1
           components: llvm-tools-preview
 
       - uses: taiki-e/install-action@v2

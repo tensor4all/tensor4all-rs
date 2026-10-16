@@ -103,7 +103,8 @@ publication approvals are not weakened by choosing focused local checks.
 Hosted CI remains required and authoritative for comprehensive tests, coverage,
 documentation and feature/backend checks. Coverage and its per-file thresholds
 run nightly in `.github/workflows/coverage.yml`, not on pull requests; a failing
-night files a `ci-nightly` issue. Consult `.github/workflows/CI_rs.yml`
+night files a `ci-nightly` issue. That workflow pins its Rust toolchain because the
+thresholds are measured percentages; bump it in a dedicated PR and re-measure there. Consult `.github/workflows/CI_rs.yml`
 for the current commands and platform setup. The following commands are useful
 when broader local validation is needed, not as a checklist for every push.
 They require `cargo-nextest`, mdBook 0.5.2, the HDF5 development library, and
