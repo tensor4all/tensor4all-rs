@@ -21,7 +21,7 @@ use tenferro_ad::{extension::adopt_untracked_eager_value, EagerRuntime, EagerTen
 use tenferro_einsum::{EagerSessionEinsumExt, EinsumSubscripts};
 use tenferro_linalg::{EagerSessionLinalgExt, RankRevealingQrOptions};
 use tensor4all_tensorbackend::{
-    contract_native_tensor, default_eager_ctx, dense_native_tensor_from_col_major,
+    default_eager_ctx, dense_native_tensor_from_col_major,
     dense_native_tensor_from_col_major_owned, diag_native_tensor_from_col_major,
     native_tensor_primal_to_diag, storage_payload_native_read_input, storage_to_native_tensor,
     ExecutionContext, NativeTensorReadInput, TensorElement,
@@ -1962,10 +1962,36 @@ impl IdxTensor {
             .all(|dtype| matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64)))
         {
             return Err(anyhow::anyhow!(
-                "structured contraction supports only f32, f64, c32, and c64 operands"
+                "eager operations support only f32, f64, c32, and c64 operands"
             ));
         };
         Ok(target)
+    }
+
+    /// Promote two materialized eager operands to their common dtype inside the
+    /// owner runtime.
+    ///
+    /// Mixed-dtype eager operations must not duplicate their operands into
+    /// context-free native tensors: that drops the caller's execution context
+    /// and any AD metadata. Casting the narrower operand through its own
+    /// runtime's session is the same mechanism the same-dtype paths use, so the
+    /// context and the graph survive. At most one operand is cast; the other is
+    /// returned unchanged.
+    fn promote_eager_operands(
+        lhs: &EagerTensor,
+        rhs: &EagerTensor,
+    ) -> Result<(EagerTensor, EagerTensor)> {
+        let target = Self::common_eager_dtype(&[lhs.dtype(), rhs.dtype()])?;
+        let cast = |eager: &EagerTensor| -> Result<EagerTensor> {
+            if eager.dtype() == target {
+                Ok(eager.clone())
+            } else {
+                Ok(eager
+                    .runtime()
+                    .with_eager_session(|session| session.cast(eager, target))?)
+            }
+        };
+        Ok((cast(lhs)?, cast(rhs)?))
     }
 
     fn should_use_structured_payload_contract(&self, other: &Self) -> bool {
@@ -3872,46 +3898,43 @@ impl IdxTensor {
             });
         }
 
-        let self_dtype = self.try_materialized_inner()?.dtype();
-        let other_dtype = other.try_materialized_inner()?.dtype();
-        if self_dtype != other_dtype {
-            if options.has_conj() {
-                let lhs = if options.lhs_conj {
-                    self.conj()
-                } else {
-                    self.clone()
-                };
-                let rhs = if options.rhs_conj {
-                    other.conj()
-                } else {
-                    other.clone()
-                };
-                return lhs.try_contract_pairwise_default(&rhs);
-            }
-            let self_native = self.try_materialized_inner()?.duplicate_value()?;
-            let other_native = other.try_materialized_inner()?.duplicate_value()?;
-            let result_native = profile_pairwise_contract_section("native_contract", || {
-                contract_native_tensor(&self_native, &spec.axes_a, &other_native, &spec.axes_b)
-            })?;
-            return profile_pairwise_contract_section("from_native", || {
-                Self::from_untracked_native_with_axis_classes(
-                    spec.result_indices,
-                    result_native,
-                    result_axis_classes,
-                )
-            });
+        let self_inner = self.try_materialized_inner()?;
+        let other_inner = other.try_materialized_inner()?;
+        let self_dtype = self_inner.dtype();
+        let other_dtype = other_inner.dtype();
+        if self_dtype != other_dtype && options.has_conj() {
+            let lhs = if options.lhs_conj {
+                self.conj()
+            } else {
+                self.clone()
+            };
+            let rhs = if options.rhs_conj {
+                other.conj()
+            } else {
+                other.clone()
+            };
+            return lhs.try_contract_pairwise_default(&rhs);
         }
+        // Mixed dtypes are promoted inside the operands' own runtimes so the
+        // caller's execution context and AD metadata survive; the promoted
+        // pair then runs the same eager dot_general as the same-dtype path.
+        let promoted_lhs;
+        let promoted_rhs;
+        let (lhs, rhs): (&EagerTensor, &EagerTensor) = if self_dtype != other_dtype {
+            let (lhs, rhs) = profile_pairwise_contract_section("promote_mixed_dtype", || {
+                Self::promote_eager_operands(self_inner, other_inner)
+            })?;
+            promoted_lhs = lhs;
+            promoted_rhs = rhs;
+            (&promoted_lhs, &promoted_rhs)
+        } else {
+            (self_inner, other_inner)
+        };
 
         let config = profile_pairwise_contract_section("build_dot_general_config", || {
             Self::binary_dot_general_config(&spec.axes_a, &spec.axes_b)
         })?;
         let result = profile_pairwise_contract_section("dot_general_with_conj", || {
-            let lhs = profile_pairwise_contract_section("lhs_try_materialized_inner", || {
-                self.try_materialized_inner()
-            })?;
-            let rhs = profile_pairwise_contract_section("rhs_try_materialized_inner", || {
-                other.try_materialized_inner()
-            })?;
             profile_pairwise_contract_section("dot_general_execute", || {
                 lhs.runtime().with_eager_session(|session| {
                     session.dot_general_with_conj(
@@ -4149,19 +4172,23 @@ impl IdxTensor {
             return Self::from_inner(spec.result_indices, result);
         }
 
-        let self_dtype = self.try_materialized_inner()?.dtype();
-        let other_dtype = other.try_materialized_inner()?.dtype();
-        if self_dtype != other_dtype {
-            let self_native = self.try_materialized_inner()?.duplicate_value()?;
-            let other_native = other.try_materialized_inner()?.duplicate_value()?;
-            let result_native =
-                contract_native_tensor(&self_native, &spec.axes_a, &other_native, &spec.axes_b)?;
-            return Self::from_untracked_native_with_axis_classes(
-                spec.result_indices,
-                result_native,
-                result_axis_classes,
-            );
-        }
+        let self_inner = self.try_materialized_inner()?;
+        let other_inner = other.try_materialized_inner()?;
+        let self_dtype = self_inner.dtype();
+        let other_dtype = other_inner.dtype();
+        // Mixed dtypes are promoted inside the operands' own runtimes so the
+        // caller's execution context and AD metadata survive; the promoted
+        // pair then runs the same eager einsum as the same-dtype path.
+        let promoted_lhs;
+        let promoted_rhs;
+        let (lhs, rhs): (&EagerTensor, &EagerTensor) = if self_dtype != other_dtype {
+            let (lhs, rhs) = Self::promote_eager_operands(self_inner, other_inner)?;
+            promoted_lhs = lhs;
+            promoted_rhs = rhs;
+            (&promoted_lhs, &promoted_rhs)
+        } else {
+            (self_inner, other_inner)
+        };
 
         let subscripts = Self::build_binary_einsum_subscripts(
             self.indices.len(),
@@ -4169,8 +4196,6 @@ impl IdxTensor {
             other.indices.len(),
             &spec.axes_b,
         )?;
-        let lhs = self.try_materialized_inner()?;
-        let rhs = other.try_materialized_inner()?;
         let result = lhs
             .runtime()
             .with_eager_session(|session| session.einsum_subscripts(&[lhs, rhs], &subscripts))
@@ -4209,18 +4234,23 @@ impl IdxTensor {
         if self.should_use_structured_payload_contract(other) {
             return self.contract_structured_payloads(other, result_indices, &[], &[]);
         }
-        let self_dtype = self.try_materialized_inner()?.dtype();
-        let other_dtype = other.try_materialized_inner()?.dtype();
-        if self_dtype != other_dtype {
-            let self_native = self.try_materialized_inner()?.duplicate_value()?;
-            let other_native = other.try_materialized_inner()?.duplicate_value()?;
-            let result_native = contract_native_tensor(&self_native, &[], &other_native, &[])?;
-            return Self::from_untracked_native_with_axis_classes(
-                result_indices,
-                result_native,
-                result_axis_classes,
-            );
-        }
+        let self_inner = self.try_materialized_inner()?;
+        let other_inner = other.try_materialized_inner()?;
+        let self_dtype = self_inner.dtype();
+        let other_dtype = other_inner.dtype();
+        // Mixed dtypes are promoted inside the operands' own runtimes so the
+        // caller's execution context and AD metadata survive; the promoted
+        // pair then runs the same eager einsum as the same-dtype path.
+        let promoted_lhs;
+        let promoted_rhs;
+        let (lhs, rhs): (&EagerTensor, &EagerTensor) = if self_dtype != other_dtype {
+            let (lhs, rhs) = Self::promote_eager_operands(self_inner, other_inner)?;
+            promoted_lhs = lhs;
+            promoted_rhs = rhs;
+            (&promoted_lhs, &promoted_rhs)
+        } else {
+            (self_inner, other_inner)
+        };
 
         let subscripts = Self::build_binary_einsum_subscripts(
             self.indices.len(),
@@ -4228,8 +4258,6 @@ impl IdxTensor {
             other.indices.len(),
             &[],
         )?;
-        let lhs = self.try_materialized_inner()?;
-        let rhs = other.try_materialized_inner()?;
         let result = lhs
             .runtime()
             .with_eager_session(|session| session.einsum_subscripts(&[lhs, rhs], &subscripts))

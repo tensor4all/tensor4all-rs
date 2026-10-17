@@ -461,3 +461,40 @@ fn factorize_probe_batch_incremental_matches_the_column_based_path() {
         max_diff
     );
 }
+
+/// #988: promoting mixed-dtype operands must cast through the owner runtime
+/// (not a context-free native tensor) and must keep the autodiff graph, so a
+/// gradient reaches the real leaf through the promotion.
+#[test]
+fn promote_eager_operands_casts_in_the_owner_runtime_and_keeps_grad() {
+    let runtime = default_eager_ctx().unwrap();
+    let real_leaf = EagerTensor::requires_grad_in(
+        NativeTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+        runtime.clone(),
+    )
+    .unwrap();
+    let complex_leaf = EagerTensor::requires_grad_in(
+        NativeTensor::from_vec_col_major(
+            vec![2],
+            vec![Complex64::new(3.0, 0.0), Complex64::new(4.0, 0.0)],
+        )
+        .unwrap(),
+        runtime.clone(),
+    )
+    .unwrap();
+
+    let (real_cast, complex_cast) =
+        IdxTensor::promote_eager_operands(&real_leaf, &complex_leaf).unwrap();
+
+    assert_eq!(real_cast.dtype(), tenferro::DType::C64);
+    assert_eq!(complex_cast.dtype(), tenferro::DType::C64);
+    assert_eq!(real_cast.ctx_id(), runtime.id());
+    assert!(real_cast.tracks_grad());
+    assert!(complex_cast.tracks_grad());
+
+    // A reduction of the promoted value must back-propagate through the cast to
+    // the original real leaf.
+    let promoted = IdxTensor::from_inner(vec![DynIndex::new_dyn(2)], real_cast).unwrap();
+    promoted.sum().unwrap().backward().unwrap();
+    assert!(real_leaf.grad().unwrap().is_some());
+}
