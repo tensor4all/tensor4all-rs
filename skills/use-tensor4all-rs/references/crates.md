@@ -72,7 +72,7 @@ Shared interpolation plumbing includes `CachedFunction`, `MultiIndex`, packed as
 - `index_key::IndexKey::owned_heap_bytes()` reports the key's owned heap payload, including spare dynamic-limb capacity; excludes its inline struct and allocator metadata. Use this when estimating a cache containing packed assignment keys.
 - `floating_zone_walk_with_initial_error` reuses a previously evaluated starting residual, then follows the same scan order and stopping rule as `floating_zone_walk`. Its typed `FloatingZoneError` distinguishes invalid dimensions, starts, residuals, or stopping tolerances from callback failures. This avoids evaluating a batched guard start a second time.
 
-Do **not** depend on `tensor4all-tensorbackend` — it is internal (storage + linalg wrappers); use the public crates and never instantiate `CpuBackend` directly.
+`tensor4all-tensorbackend` is low-level infrastructure (`Matrix`, execution contexts, storage + linalg wrappers); prefer the higher-level crates and depend on it directly only for those building blocks.
 
 ## tensor4all-treeaci — native tree elementwise approximation
 

@@ -1,13 +1,17 @@
 # Architecture & Crate Guide
 
 This page describes how tensor4all-rs is organised, what each crate does, how to
-choose the right crate for your use case, and the two-stack design that keeps
-the public API predictable.
+choose the right crate for your use case, and how the workspace is converging
+on a single TreeTN-based interface.
 
-## Two stacks, no facade
+## Two stacks today, one interface intended
 
-The workspace is organised as **two independent stacks**. Each stack owns its
-tensor-train representation and its algorithm crates. There is **no facade
+The workspace currently contains **two stacks**, each owning its tensor-train
+representation and its algorithm crates. The intended direction is a single
+interface: **`TreeTN` is the unified tensor-network type**, and the positional
+`SimpleTensorTrain` stack is being retired. That migration is not finished:
+TCI, quantics TCI and quantics transforms still produce or consume
+`SimpleTensorTrain` today. There is **no facade
 crate** that wraps everything: `tensor4all-capi` is a C FFI layer, not a Rust
 facade, and each crate can be used on its own.
 
@@ -34,10 +38,11 @@ facade, and each crate can be used on its own.
    tensor4all-hdf5  (MPS serialization, ITensors.jl-compatible)
 ```
 
-### The sanctioned crossing: `treetn::simplett_bridge`
+### The migration bridge: `treetn::simplett_bridge`
 
-The only sanctioned place where the two stacks convert into each other is
-`treetn::simplett_bridge`:
+While both stacks exist, the only sanctioned place where they convert into each
+other is `treetn::simplett_bridge`, a migration aid rather than a permanent
+layer:
 
 - `tensor_train_to_treetn` / `tensor_train_to_treetn_with_names` /
   `tensor_train_to_treetn_with_names_and_site_indices`: simplett
@@ -99,6 +104,8 @@ operation names are unified across crates:
   tolerances use `SvdTruncationPolicy` (`rtol`/`cutoff`); sweep counts use
   `nfullsweeps`/`nsweeps` (TreeTN) or `nhalfsweeps` (itensorlike) as documented
   in the skills guide.
+  This is the target vocabulary; some older entry points still use other
+  option names, and unifying them is tracked in #915.
 
 ## `TensorTrain` naming resolution
 
@@ -127,8 +134,8 @@ The corresponding errors follow the representation names:
 | `tensor4all_simplett::SimpleTensorTrainError` | `SimpleTensorTrain` | positional shapes, flat indices, and MatrixCI failures |
 | `tensor4all_itensorlike::TensorTrainError` | itensorlike `TensorTrain` | named indices, TreeTN structure, orthogonality, and factorization |
 
-They are deliberately separate because combining them would couple the two
-independent stacks. The distinct names prevent ambiguous imports.
+They stay separate while both stacks exist; the distinct names prevent
+ambiguous imports.
 
 ## Scalar capability boundaries
 
@@ -153,12 +160,12 @@ requirements onto unrelated generic code.
 
 ## Layer descriptions
 
-### Foundation (internal)
+### Foundation
 
 | Crate | Description |
 |-------|-------------|
-| **tensorbackend** | *Internal.* Compact `f64`/`Complex64` storage, four-dtype eager tensor bridges, and tenferro-backed primitives. Users do not need to depend on this crate directly. |
-| **core** | Foundation for everything else. Provides the `Index` system, dynamic-rank `Tensor`, contraction, and SVD/QR/LU factorizations. |
+| **tensorbackend** | Public low-level infrastructure: the dense `Matrix` container, execution contexts (`CpuBackend`, `CpuExecutionContext`), compact `f64`/`Complex64` storage, and tenferro-backed primitives. Most users reach it through the higher-level crates; depend on it directly when you need these building blocks. Not every `pub` item is a stability promise. |
+| **core** | Foundation for everything else. Owns the shared abstractions (`Index` system, dynamic-rank `Tensor`, contraction, SVD/QR/LU factorizations) and the matrix-CI substrate (rrLU/LUCI, `CachedFunction`, `MultiIndex`). |
 
 ### Network stack
 
@@ -230,10 +237,11 @@ documented. Recurring cases avoid opaque string payloads. `cargo clippy` is
 configured with `-D clippy::missing_errors_doc -D clippy::missing_panics_doc`
 so every fallible or panicking public function documents its failure modes.
 
-## Internal crates
+## Low-level crates
 
-`tensor4all-tensorbackend` is an implementation detail. The former
+`tensor4all-tensorbackend` is public low-level infrastructure; its `Matrix`
+container and execution contexts are meant to be used across crates, but
+lower-level items may change while the API settles. The former
 `tensor4all-tcicore` crate was dissolved into `tensor4all-core` (#639): the
 matrix CI / LUCI / rrLU algorithms, `CachedFunction`, and `MultiIndex` now
-live in core. These are still not part of the application-facing public API
-surface and their interfaces may change without notice.
+live in core. These interfaces may still change without notice.

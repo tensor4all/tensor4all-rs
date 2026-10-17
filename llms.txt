@@ -10,7 +10,7 @@ transforms (`tensor4all-quanticstransform`), and a C FFI layer
 
 ## Key documentation
 
-- [Architecture & crate guide](docs/book/src/architecture.md): two-stack layout (network stack vs simplett stack), the sanctioned `treetn::simplett_bridge` crossing, and the `TensorTrain` naming resolution.
+- [Architecture & crate guide](docs/book/src/architecture.md): TreeTN as the intended unified interface, the SimpleTT stack being retired, the `treetn::simplett_bridge` migration aid, and the `TensorTrain` naming resolution.
 - [Getting started](docs/book/src/getting-started.md): first steps.
 - [Tensor train guide](docs/book/src/guides/tensor-train.md): `SimpleTensorTrain` (simplett) and ITensor-like `TensorTrain` (itensorlike).
 - [Experimental RSI product guide](docs/book/src/guides/tree-rsi.md): `tensor4all-treersi` for existing TreeTN Hadamard products; local pivots do not certify output accuracy.
