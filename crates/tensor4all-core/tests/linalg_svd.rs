@@ -510,3 +510,27 @@ fn test_svd_reconstruction_with_multiple_unit_dims() {
         "SVD multi-unit-dim [i2,i4] vs [i1,i3] error: {err:.3e}"
     );
 }
+
+/// Regression for #836: a 1000×3 matrix whose third singular value has ratio
+/// `sigma_3 / sigma_1 = 1.2903e-12` must keep all 3 singular values at a
+/// `1e-12` per-value relative threshold. The default faer-backed SVD used to
+/// return rank 2 because its Householder QR skips nearly dependent columns.
+#[test]
+fn svd_with_keeps_singular_value_just_above_relative_threshold() {
+    let i = Index::new_dyn(1000);
+    let j = Index::new_dyn(3);
+    // Column-major `A = [a, a + 1e-10 e_0, a + 1e-6 e_1]`, `a = (1, ..., 1)`.
+    let mut a = vec![1.0_f64; 3000];
+    a[1000] += 1e-10;
+    a[2001] += 1e-6;
+    let tensor = dense_f64(vec![i.clone(), j], a);
+
+    let opts = SvdOptions::new().with_policy(SvdTruncationPolicy::new(1e-12));
+    let (_u, s, _v) = svd_with::<f64>(&tensor, std::slice::from_ref(&i), &opts).unwrap();
+
+    assert_eq!(
+        s.dims()[0],
+        3,
+        "sigma_3/sigma_1 = 1.2903e-12 exceeds the 1e-12 threshold, so rank 3 must be kept"
+    );
+}
