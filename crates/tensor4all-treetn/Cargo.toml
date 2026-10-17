@@ -52,6 +52,10 @@ criterion.workspace = true
 name = "cached_evaluator"
 harness = false
 
+[[bench]]
+name = "fit_environment"
+harness = false
+
 [[example]]
 name = "cuda_quickstart"
 required-features = ["tenferro-cuda", "tenferro-cpu-faer"]

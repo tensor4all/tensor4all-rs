@@ -282,6 +282,106 @@ fn test_fit_environment_verify_structural_consistency_detects_missing_child_env(
     assert!(err.contains("C"));
 }
 
+/// The cached neighbor order must match the uncached order exactly, on a
+/// branched tree whose degree-three hub has several neighbors.
+#[test]
+fn test_fit_environment_cached_neighbor_order_matches_direct_order() {
+    let (tn, _) = make_star_pair(3, 3, 3, 2, false);
+    let mut env = FitEnvironment::<IdxTensor, usize>::new();
+    for node in tn.node_names() {
+        let cached = env
+            .sorted_neighbors(&tn, &node, "test")
+            .expect("cached order");
+        let direct =
+            sorted_neighbors_by_node_index(&tn, &node, None, "test").expect("direct order");
+        assert_eq!(cached, direct, "neighbor order changed for node {node}");
+    }
+    // A second read is served from the cache and must keep the same order.
+    for node in tn.node_names() {
+        let cached = env
+            .sorted_neighbors(&tn, &node, "test")
+            .expect("cached order");
+        assert_eq!(
+            cached,
+            sorted_neighbors_by_node_index(&tn, &node, None, "test").unwrap()
+        );
+    }
+}
+
+/// Partial invalidation removes the invalidated directed edge and the edges
+/// reached by propagation towards the leaves, but not the reverse edges.
+#[test]
+fn test_fit_environment_partial_invalidation_keeps_other_direction() {
+    let mut env = FitEnvironment::<IdxTensor, String>::new();
+    let tn = make_three_node_treetn(); // A - B - C
+    let s = DynIndex::new_dyn(2);
+    let t = IdxTensor::from_dense(vec![s], vec![1.0, 2.0]).unwrap();
+    for (a, b) in [("A", "B"), ("B", "A"), ("B", "C"), ("C", "B")] {
+        env.insert(a.to_string(), b.to_string(), t.clone());
+    }
+
+    env.invalidate(&["A".to_string()], &tn);
+
+    assert!(!env.contains(&"A".to_string(), &"B".to_string()));
+    assert!(!env.contains(&"B".to_string(), &"C".to_string()));
+    assert!(env.contains(&"B".to_string(), &"A".to_string()));
+    assert!(env.contains(&"C".to_string(), &"B".to_string()));
+}
+
+/// After partial invalidation, recomputing an environment yields the same
+/// value as computing it into a fresh cache.
+#[test]
+fn test_fit_environment_recompute_after_invalidate_matches_fresh_cache() {
+    let (tn_a, tn_b) = make_contractible_two_node_pair_with_surviving_sites();
+    let tn_c = make_fit_initial_c(&tn_a, &tn_b, "A");
+    let leaves = crate::treetn::contraction::GlobalLeaves;
+    let from = "A".to_string();
+    let to = "B".to_string();
+
+    let mut env = FitEnvironment::<IdxTensor, String>::new();
+    let first = env
+        .get_or_compute(&from, &to, &tn_a, &tn_b, &tn_c, &leaves)
+        .unwrap();
+    env.invalidate(std::slice::from_ref(&from), &tn_c);
+    assert!(!env.contains(&from, &to));
+
+    let second = env
+        .get_or_compute(&from, &to, &tn_a, &tn_b, &tn_c, &leaves)
+        .unwrap();
+    let mut fresh = FitEnvironment::<IdxTensor, String>::new();
+    let reference = fresh
+        .get_or_compute(&from, &to, &tn_a, &tn_b, &tn_c, &leaves)
+        .unwrap();
+
+    assert_eq!(env.len(), 1);
+    assert!(first.distance(&second).unwrap() < 1e-12);
+    assert!(reference.distance(&second).unwrap() < 1e-12);
+}
+
+/// `fit_sum` drives `SumFitEnvironment` over several targets with the branchy
+/// center of the low-rank path; the cache restructure must leave the summed
+/// result bit-comparable to the dense sum.
+#[test]
+fn test_fit_sum_multi_target_matches_dense_sum() {
+    let x = make_two_node_treetn();
+    let expected = x.to_dense().unwrap().add(&x.to_dense().unwrap()).unwrap();
+
+    for center in ["A".to_string(), "B".to_string()] {
+        let fitted = fit_sum(
+            &[x.clone(), x.clone()],
+            &x,
+            &center,
+            FitContractionOptions::new(1),
+        )
+        .unwrap();
+        let difference = fitted.to_dense().unwrap().sub(&expected).unwrap();
+        assert!(
+            difference.maxabs().unwrap() < 1e-10,
+            "fit_sum center {center}: mismatch"
+        );
+    }
+}
+
 // ========================================================================
 // FitContractionOptions tests
 // ========================================================================

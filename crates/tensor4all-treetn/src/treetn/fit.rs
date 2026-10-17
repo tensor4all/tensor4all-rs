@@ -144,6 +144,30 @@ where
     Ok(neighbors.into_iter().map(|(_index, node)| node).collect())
 }
 
+/// Like [`sorted_neighbors_by_node_index`], but caches the sorted neighbor list
+/// of `node` in `cache` on first use.
+///
+/// The order depends only on the network topology, which is fixed for a whole
+/// fit run, so the per-node sort and `node_index` lookups happen once per
+/// (node, topology) instead of on every environment access.
+fn cached_sorted_neighbors<T, V>(
+    cache: &mut HashMap<V, Vec<V>>,
+    tn: &TreeTN<T, V>,
+    node: &V,
+    context: &str,
+) -> Result<Vec<V>>
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    if let Some(order) = cache.get(node) {
+        return Ok(order.clone());
+    }
+    let order = sorted_neighbors_by_node_index(tn, node, None, context)?;
+    cache.insert(node.clone(), order.clone());
+    Ok(order)
+}
+
 fn tensor_at_node<'a, T, V>(tn: &'a TreeTN<T, V>, node: &V, tree_name: &str) -> Result<&'a T>
 where
     T: TensorLike,
@@ -276,8 +300,10 @@ where
     T: TensorLike,
     V: Clone + Hash + Eq,
 {
-    /// Environment tensors: (from, to) -> tensor
-    envs: HashMap<(V, V), T>,
+    /// Environment tensors: from -> to -> tensor.
+    envs: HashMap<V, HashMap<V, T>>,
+    /// Sorted neighbor lists (by `TreeTN` node index), cached per node.
+    neighbor_order: HashMap<V, Vec<V>>,
 }
 
 impl<T, V> FitEnvironment<T, V>
@@ -290,29 +316,30 @@ where
     pub fn new() -> Self {
         Self {
             envs: HashMap::new(),
+            neighbor_order: HashMap::new(),
         }
     }
 
     /// Get the environment tensor for edge (from, to) if it exists.
     pub fn get(&self, from: &V, to: &V) -> Option<&T> {
-        self.envs.get(&(from.clone(), to.clone()))
+        self.envs.get(from).and_then(|to_envs| to_envs.get(to))
     }
 
     /// Insert an environment tensor for edge (from, to).
     /// This is mainly for testing; normally use `get_or_compute` for lazy evaluation.
     #[allow(dead_code)]
     pub(crate) fn insert(&mut self, from: V, to: V, env: T) {
-        self.envs.insert((from, to), env);
+        self.envs.entry(from).or_default().insert(to, env);
     }
 
     /// Check if environment exists for edge (from, to).
     pub fn contains(&self, from: &V, to: &V) -> bool {
-        self.envs.contains_key(&(from.clone(), to.clone()))
+        self.get(from, to).is_some()
     }
 
     /// Get the number of cached environments.
     pub fn len(&self) -> usize {
-        self.envs.len()
+        self.envs.values().map(HashMap::len).sum()
     }
 
     /// Check if the cache is empty.
@@ -323,6 +350,12 @@ where
     /// Clear all cached environments.
     pub fn clear(&mut self) {
         self.envs.clear();
+        self.neighbor_order.clear();
+    }
+
+    /// Sorted neighbors of `node`, computing and caching the order on first use.
+    fn sorted_neighbors(&mut self, tn: &TreeTN<T, V>, node: &V, context: &str) -> Result<Vec<V>> {
+        cached_sorted_neighbors(&mut self.neighbor_order, tn, node, context)
     }
 
     /// Get or compute the environment tensor for edge (from, to).
@@ -363,7 +396,7 @@ where
         });
 
         // If already cached, return a clone
-        if let Some(env) = self.envs.get(&(from.clone(), to.clone())) {
+        if let Some(env) = self.get(from, to) {
             if let Some(started) = started {
                 with_fit_profile(|profile| {
                     profile.env_hits += 1;
@@ -378,8 +411,9 @@ where
         });
 
         // Get neighbors of `from` excluding `to`
-        let child_neighbors =
-            sorted_neighbors_by_node_index(tn_c, from, Some(to), "FitEnvironment::get_or_compute")?;
+        let mut child_neighbors =
+            self.sorted_neighbors(tn_c, from, "FitEnvironment::get_or_compute")?;
+        child_neighbors.retain(|neighbor| neighbor != to);
 
         // Recursively get or compute child environments
         let child_envs: Vec<T> = child_neighbors
@@ -391,7 +425,7 @@ where
         let env = compute_single_node_environment(from, to, tn_a, tn_b, tn_c, &child_envs, leaves)?;
 
         // Cache and return
-        self.envs.insert((from.clone(), to.clone()), env.clone());
+        self.insert(from.clone(), to.clone(), env.clone());
         if let Some(started) = started {
             with_fit_profile(|profile| {
                 profile.env_get_time += started.elapsed();
@@ -426,8 +460,7 @@ where
     {
         for t in region {
             // Get all neighbors of t
-            let neighbors =
-                sorted_neighbors_by_node_index(tn_c, t, None, "FitEnvironment::invalidate")?;
+            let neighbors = self.sorted_neighbors(tn_c, t, "FitEnvironment::invalidate")?;
 
             // Remove all env[(t, *)] and propagate recursively
             for neighbor in neighbors {
@@ -442,14 +475,19 @@ where
     /// If env[(from, to)] exists, remove it and propagate to env[(to, x)] for all x ≠ from.
     fn invalidate_recursive(&mut self, from: &V, to: &V, tn_c: &TreeTN<T, V>) -> Result<()> {
         // Remove env[(from, to)] if it exists
-        if self.envs.remove(&(from.clone(), to.clone())).is_some() {
+        let removed = self
+            .envs
+            .get_mut(from)
+            .and_then(|to_envs| to_envs.remove(to))
+            .is_some();
+        if self.envs.get(from).is_some_and(HashMap::is_empty) {
+            self.envs.remove(from);
+        }
+        if removed {
             // Propagate to next generation: env[(to, x)] for all neighbors x of to, x ≠ from
-            let neighbors = sorted_neighbors_by_node_index(
-                tn_c,
-                to,
-                Some(from),
-                "FitEnvironment::invalidate_recursive",
-            )?;
+            let mut neighbors =
+                self.sorted_neighbors(tn_c, to, "FitEnvironment::invalidate_recursive")?;
+            neighbors.retain(|neighbor| neighbor != from);
 
             for neighbor in neighbors {
                 self.invalidate_recursive(to, &neighbor, tn_c)?;
@@ -480,22 +518,24 @@ where
     where
         V: Clone + Hash + Eq + std::fmt::Debug,
     {
-        for (from, to) in self.envs.keys() {
-            // Get neighbors of `from` excluding `to`
-            let child_neighbors = sorted_neighbors_by_node_index(
-                tn_c,
-                from,
-                Some(to),
-                "FitEnvironment::verify_structural_consistency",
-            )?;
+        for (from, to_envs) in self.envs.iter() {
+            for to in to_envs.keys() {
+                // Get neighbors of `from` excluding `to`
+                let child_neighbors = sorted_neighbors_by_node_index(
+                    tn_c,
+                    from,
+                    Some(to),
+                    "FitEnvironment::verify_structural_consistency",
+                )?;
 
-            // If `from` is not a leaf, all child environments must exist
-            for child in &child_neighbors {
-                if !self.envs.contains_key(&(child.clone(), from.clone())) {
-                    return Err(anyhow::anyhow!(
-                        "Structural inconsistency: env[({:?}, {:?})] exists but child env[({:?}, {:?})] is missing",
-                        from, to, child, from
-                    ).into());
+                // If `from` is not a leaf, all child environments must exist
+                for child in &child_neighbors {
+                    if self.get(child, from).is_none() {
+                        return Err(anyhow::anyhow!(
+                            "Structural inconsistency: env[({:?}, {:?})] exists but child env[({:?}, {:?})] is missing",
+                            from, to, child, from
+                        ).into());
+                    }
                 }
             }
         }
@@ -525,7 +565,8 @@ where
     T: TensorLike,
     V: Clone + Hash + Eq,
 {
-    envs: HashMap<(V, V), T>,
+    envs: HashMap<V, HashMap<V, T>>,
+    neighbor_order: HashMap<V, Vec<V>>,
 }
 
 impl<T, V> SumFitEnvironment<T, V>
@@ -537,7 +578,13 @@ where
     fn new() -> Self {
         Self {
             envs: HashMap::new(),
+            neighbor_order: HashMap::new(),
         }
+    }
+
+    /// Sorted neighbors of `node`, computing and caching the order on first use.
+    fn sorted_neighbors(&mut self, tn: &TreeTN<T, V>, node: &V, context: &str) -> Result<Vec<V>> {
+        cached_sorted_neighbors(&mut self.neighbor_order, tn, node, context)
     }
 
     fn get_or_compute(
@@ -548,16 +595,13 @@ where
         psi: &TreeTN<T, V>,
         leaves: &dyn LeafOps<T>,
     ) -> std::result::Result<T, TreeTNOperationError> {
-        if let Some(env) = self.envs.get(&(from.clone(), to.clone())) {
+        if let Some(env) = self.envs.get(from).and_then(|to_envs| to_envs.get(to)) {
             return Ok(env.clone());
         }
 
-        let child_neighbors = sorted_neighbors_by_node_index(
-            psi,
-            from,
-            Some(to),
-            "SumFitEnvironment::get_or_compute",
-        )?;
+        let mut child_neighbors =
+            self.sorted_neighbors(psi, from, "SumFitEnvironment::get_or_compute")?;
+        child_neighbors.retain(|neighbor| neighbor != to);
         let child_envs = child_neighbors
             .iter()
             .map(|child| self.get_or_compute(child, from, target, psi, leaves))
@@ -569,7 +613,10 @@ where
         tensor_refs.extend(child_envs.iter());
         let env = contract_fit_tensor_refs(&tensor_refs, leaves)
             .map_err(|e| anyhow::anyhow!("sum target environment contraction failed: {e}"))?;
-        self.envs.insert((from.clone(), to.clone()), env.clone());
+        self.envs
+            .entry(from.clone())
+            .or_default()
+            .insert(to.clone(), env.clone());
         Ok(env)
     }
 
@@ -594,8 +641,7 @@ where
         psi: &TreeTN<T, V>,
     ) -> std::result::Result<(), TreeTNOperationError> {
         for node in region {
-            let neighbors =
-                sorted_neighbors_by_node_index(psi, node, None, "SumFitEnvironment::invalidate")?;
+            let neighbors = self.sorted_neighbors(psi, node, "SumFitEnvironment::invalidate")?;
             for neighbor in neighbors {
                 self.invalidate_recursive(node, &neighbor, psi)?;
             }
@@ -609,13 +655,18 @@ where
         to: &V,
         psi: &TreeTN<T, V>,
     ) -> std::result::Result<(), TreeTNOperationError> {
-        if self.envs.remove(&(from.clone(), to.clone())).is_some() {
-            let neighbors = sorted_neighbors_by_node_index(
-                psi,
-                to,
-                Some(from),
-                "SumFitEnvironment::invalidate_recursive",
-            )?;
+        let removed = self
+            .envs
+            .get_mut(from)
+            .and_then(|to_envs| to_envs.remove(to))
+            .is_some();
+        if self.envs.get(from).is_some_and(HashMap::is_empty) {
+            self.envs.remove(from);
+        }
+        if removed {
+            let mut neighbors =
+                self.sorted_neighbors(psi, to, "SumFitEnvironment::invalidate_recursive")?;
+            neighbors.retain(|neighbor| neighbor != from);
             for neighbor in neighbors {
                 self.invalidate_recursive(to, &neighbor, psi)?;
             }
@@ -991,8 +1042,9 @@ where
         let b_v = tensor_at_node(&self.tn_b, node_v, "tn_b")?;
 
         let mut env_tensors = Vec::new();
-        let u_neighbors =
-            sorted_neighbors_by_node_index(full_treetn, node_u, None, "FitUpdater::update")?;
+        let u_neighbors = self
+            .envs
+            .sorted_neighbors(full_treetn, node_u, "FitUpdater::update")?;
         let mut left_bond_indices = Vec::new();
         for neighbor in &u_neighbors {
             if neighbor == node_v {
@@ -1023,8 +1075,9 @@ where
             )?);
         }
 
-        let v_neighbors =
-            sorted_neighbors_by_node_index(full_treetn, node_v, None, "FitUpdater::update")?;
+        let v_neighbors = self
+            .envs
+            .sorted_neighbors(full_treetn, node_v, "FitUpdater::update")?;
         for neighbor in &v_neighbors {
             if neighbor != node_u {
                 env_tensors.push(self.envs.get_or_compute(
@@ -1233,10 +1286,13 @@ where
             profile.step_count += 1;
         });
 
-        let u_neighbors =
-            sorted_neighbors_by_node_index(full_treetn, node_u, None, "fit_sum updater")?;
-        let v_neighbors =
-            sorted_neighbors_by_node_index(full_treetn, node_v, None, "fit_sum updater")?;
+        let (u_neighbors, v_neighbors) = match self.envs.first_mut() {
+            Some(env) => (
+                env.sorted_neighbors(full_treetn, node_u, "fit_sum updater")?,
+                env.sorted_neighbors(full_treetn, node_v, "fit_sum updater")?,
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
         let mut left_bond_indices = Vec::new();
         for neighbor in &u_neighbors {
             if neighbor == node_v {
