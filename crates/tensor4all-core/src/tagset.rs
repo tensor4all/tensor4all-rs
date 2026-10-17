@@ -434,8 +434,10 @@ impl DynamicTagSet {
     /// ASCII spaces are ignored, matching [`TagSetLike::from_str`].
     ///
     /// # Errors
-    /// Returns [`TagSetError::TagContainsComma`] when a parsed tag contains a
-    /// comma.
+    /// Currently always returns `Ok`: the string is split on commas first, so
+    /// no parsed tag can contain one and [`TagSetError::TagContainsComma`] is
+    /// never produced here. The `Result` keeps the [`TagSetLike::from_str`]
+    /// signature.
     ///
     /// # Examples
     ///

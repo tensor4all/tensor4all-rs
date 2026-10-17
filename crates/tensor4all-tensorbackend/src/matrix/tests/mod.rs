@@ -276,9 +276,10 @@ fn matrix_constructors_reject_shape_product_overflow() {
         )
     );
 
-    let zero = Matrix::<u8>::zeros(0, usize::MAX);
+    // The largest representable extent (tenferro stores extents as isize).
+    let zero = Matrix::<u8>::zeros(0, isize::MAX as usize);
     assert_eq!(zero.nrows(), 0);
-    assert_eq!(zero.ncols(), usize::MAX);
+    assert_eq!(zero.ncols(), isize::MAX as usize);
     assert!(zero.as_col_major_slice().is_empty());
 }
 
@@ -298,12 +299,12 @@ fn matrix_indexing_rejects_each_axis_before_linearization() {
 
 #[test]
 fn matrix_multiplication_rejects_output_shape_overflow_before_backend() {
-    // A zero-column matrix may legitimately have an arbitrary row count (the
-    // checked shape product is 0). Multiplying it by a 0 x 2 matrix would
-    // produce an overflowing usize::MAX x 2 output; the multiplication must
+    // A zero-column matrix may legitimately have any representable row count
+    // (the checked shape product is 0). Multiplying it by a 0 x 3 matrix would
+    // produce an overflowing isize::MAX x 3 output; the multiplication must
     // reject the output element count before any backend call.
-    let left = Matrix::<f64>::from_col_major_vec(usize::MAX, 0, Vec::new());
-    let right = Matrix::<f64>::from_col_major_vec(0, 2, Vec::new());
+    let left = Matrix::<f64>::from_col_major_vec(isize::MAX as usize, 0, Vec::new());
+    let right = Matrix::<f64>::from_col_major_vec(0, 3, Vec::new());
     let error = mat_mul(&left, &right).unwrap_err().to_string();
     assert!(error.contains("overflows"), "got: {error}");
 
@@ -951,4 +952,23 @@ fn grouped_gemm_shared_with_backend_uses_configured_thread_context() {
     .unwrap();
     assert_eq!(output, [12.0]);
     assert_eq!(backend.num_threads(), 1);
+}
+
+#[test]
+fn matrix_rejects_extents_beyond_isize_max() {
+    // An empty usize::MAX x 0 matrix has no element, but tenferro cannot store
+    // the extent, so the shape is rejected at construction instead of failing
+    // later inside an infallible conversion.
+    let huge = isize::MAX as usize + 1;
+    for (nrows, ncols) in [(huge, 0), (0, huge), (usize::MAX, 0)] {
+        assert!(matches!(
+            Matrix::<f64>::try_from_col_major_vec(nrows, ncols, Vec::new()),
+            Err(MatrixShapeError::ShapeOverflow { .. })
+        ));
+        assert!(matches!(
+            Matrix::<f64>::try_zeros(nrows, ncols),
+            Err(MatrixShapeError::ShapeOverflow { .. })
+        ));
+    }
+    assert!(Matrix::<f64>::try_from_col_major_vec(isize::MAX as usize, 0, Vec::new()).is_ok());
 }

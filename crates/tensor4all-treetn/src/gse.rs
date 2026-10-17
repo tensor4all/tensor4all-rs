@@ -855,15 +855,6 @@ where
             ),
         )
     });
-    let _old_bond = reference.bond_index(edge).cloned().unwrap_or_else(|| {
-        invariant_violated(
-            "GSE reference edge has no bond index during update",
-            format!(
-                "missing reference bond between {:?} and {:?}",
-                parent, child
-            ),
-        )
-    });
     let child_idx = reference.node_index(child).unwrap_or_else(|| {
         invariant_violated(
             "GSE node from the network's own traversal is missing",

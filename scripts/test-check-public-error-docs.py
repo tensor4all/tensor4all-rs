@@ -111,6 +111,46 @@ class PublicErrorDocsUnitTests(unittest.TestCase):
             findings = MODULE.audit(root)
             self.assertEqual([f.function for f in findings], ["alias_api"])
 
+    def test_result_use_alias_signature_is_audited(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lib.rs").write_text(
+                "use crate::error::{Result as TreeTciResult, TreeTciError};\n"
+                "/// Does work.\n"
+                "pub fn renamed_api() -> TreeTciResult<()> { Ok(()) }\n",
+                encoding="utf-8",
+            )
+            findings = MODULE.audit(root)
+            self.assertEqual([f.function for f in findings], ["renamed_api"])
+
+    def test_multiline_attribute_between_docs_and_signature(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lib.rs").write_text(
+                "/// Does work.\n"
+                "///\n"
+                "/// # Errors\n"
+                "///\n"
+                "/// Returns [`GseError::MissingCenter`] when `center` is not a node.\n"
+                "#[deprecated(\n"
+                "    note = \"use the batch API\"\n"
+                ")]\n"
+                "pub fn old_api() -> Result<()> { Ok(()) }\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(MODULE.audit(root), [])
+
+    def test_linked_delegation_counts_as_concrete(self) -> None:
+        section = "Returns the same errors as [`quanticscrossinterpolate_batch`]."
+        self.assertIsNotNone(MODULE.CONCRETE_ERROR_RE.search(section))
+        self.assertIsNone(MODULE.CONCRETE_ERROR_RE.search("Returns the same errors as the batch API."))
+
+    def test_unrelated_path_does_not_exempt_boilerplate(self) -> None:
+        sentence = "Returns an error when Tensor::from_elem fails (a shape mismatch)."
+        self.assertIsNotNone(MODULE.generated_boilerplate_sentence(sentence))
+        concrete = "Returns an error when the shape is invalid ([`GseError::InvalidOption`]: a shape mismatch)."
+        self.assertIsNone(MODULE.generated_boilerplate_sentence(concrete))
+
     def test_non_result_function_is_not_a_finding(self) -> None:
         findings = self.audit("/// Return a value.\npub fn value() -> usize { 1 }\n")
         self.assertEqual(findings, [])

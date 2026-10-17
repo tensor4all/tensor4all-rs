@@ -1564,6 +1564,49 @@ fn tokens_name_runtime_value(tokens: TokenStream) -> bool {
     })
 }
 
+/// The first `count` top-level comma-separated arguments of a macro.
+fn assertion_operands(tokens: TokenStream, count: usize) -> Vec<TokenStream> {
+    let mut operands = vec![TokenStream::new()];
+    for token in tokens {
+        if matches!(&token, TokenTree::Punct(punct) if punct.as_char() == ',') {
+            if operands.len() == count {
+                break;
+            }
+            operands.push(TokenStream::new());
+            continue;
+        }
+        if let Some(current) = operands.last_mut() {
+            current.extend(std::iter::once(token));
+        }
+    }
+    operands
+}
+
+/// Lines of every `name!` or `name(` occurrence in a token stream (including
+/// nested groups), where `bang` selects the macro form.
+fn token_occurrences(tokens: TokenStream, name: &str, bang: bool, lines: &mut Vec<usize>) {
+    let mut iter = tokens.into_iter().peekable();
+    while let Some(token) = iter.next() {
+        match token {
+            TokenTree::Ident(ident) if ident == name => {
+                let follows = match iter.peek() {
+                    Some(TokenTree::Punct(punct)) => bang && punct.as_char() == '!',
+                    Some(TokenTree::Group(group)) => {
+                        !bang && group.delimiter() == proc_macro2::Delimiter::Parenthesis
+                    }
+                    _ => false,
+                };
+                let line = ident.span().start().line;
+                if follows && line != 0 {
+                    lines.push(line);
+                }
+            }
+            TokenTree::Group(group) => token_occurrences(group.stream(), name, bang, lines),
+            _ => {}
+        }
+    }
+}
+
 /// The `Macro` of a statement that is a single assertion invocation, whether
 /// written with a trailing semicolon or as the block's tail expression.
 fn assertion_macro_statement(stmt: &Stmt) -> Option<&syn::Macro> {
@@ -1584,7 +1627,18 @@ fn assertion_only_helper(path: &str, block: &syn::Block) -> Option<Finding> {
     }
     let mac = assertion_macro_statement(&block.stmts[0])?;
     let kind = assertion_kind(&mac.path.segments.last()?.ident.to_string())?;
-    if !tokens_name_runtime_value(mac.tokens.clone()) {
+    // Only the condition decides whether the assertion can fail: the first
+    // argument of `assert!`, the first two of `assert_eq!`/`assert_ne!`.
+    // Format arguments after them never do.
+    let operands = if kind.ends_with("_eq") || kind.ends_with("_ne") {
+        2
+    } else {
+        1
+    };
+    if !assertion_operands(mac.tokens.clone(), operands)
+        .into_iter()
+        .any(tokens_name_runtime_value)
+    {
         return None;
     }
     let line = mac.span().start().line;
@@ -1766,9 +1820,12 @@ fn direct_panic_line(stmt: &Stmt) -> Option<usize> {
     (line != 0).then_some(line)
 }
 
+/// Every `panic!` occurrence (not distinct lines): parsed macro invocations
+/// plus `panic!` tokens hidden inside other macros' arguments, which `syn`
+/// does not parse.
 #[derive(Debug, Default)]
 struct PanicMacroVisitor {
-    lines: BTreeSet<usize>,
+    lines: Vec<usize>,
 }
 
 impl<'ast> Visit<'ast> for PanicMacroVisitor {
@@ -1776,9 +1833,10 @@ impl<'ast> Visit<'ast> for PanicMacroVisitor {
         if is_panic_macro(node) {
             let line = node.span().start().line;
             if line != 0 {
-                self.lines.insert(line);
+                self.lines.push(line);
             }
         }
+        token_occurrences(node.tokens.clone(), "panic", true, &mut self.lines);
         syn::visit::visit_macro(self, node);
     }
 }
@@ -1794,19 +1852,16 @@ fn sanctioned_invariant_panic(path: &str, items: &[Item]) -> Option<Finding> {
     })?;
     let mut visitor = PanicMacroVisitor::default();
     visitor.visit_block(&function.block);
-    if visitor.lines.len() != 1 {
-        return None;
-    }
     let direct = function
         .block
         .stmts
         .iter()
         .filter_map(direct_panic_line)
-        .collect::<BTreeSet<_>>();
-    if direct != visitor.lines {
+        .collect::<Vec<_>>();
+    if visitor.lines.len() != 1 || direct != visitor.lines {
         return None;
     }
-    let line = *visitor.lines.iter().next()?;
+    let line = visitor.lines[0];
     Some(Finding {
         path: path.to_owned(),
         line,
@@ -1853,6 +1908,33 @@ impl<'ast> Visit<'ast> for InvariantCallVisitor<'_> {
             return;
         }
         syn::visit::visit_arm(self, node);
+    }
+
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        // `syn` does not parse macro arguments, so find calls in their tokens.
+        let mut lines = Vec::new();
+        token_occurrences(
+            node.tokens.clone(),
+            SANCTIONED_INVARIANT_FUNCTION,
+            false,
+            &mut lines,
+        );
+        for line in lines {
+            self.calls.insert((self.path.to_owned(), line));
+        }
+        syn::visit::visit_macro(self, node);
+    }
+
+    fn visit_use_rename(&mut self, node: &'ast syn::UseRename) {
+        // A renamed import would hide call sites from this report.
+        if node.ident == SANCTIONED_INVARIANT_FUNCTION && self.error.is_none() {
+            self.error = Some(anyhow!(
+                "{}: `{}` must not be imported under another name",
+                self.path,
+                SANCTIONED_INVARIANT_FUNCTION
+            ));
+        }
+        syn::visit::visit_use_rename(self, node);
     }
 
     fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
@@ -2674,6 +2756,76 @@ pub fn nested_use() { assert!(true); }
             "pub fn invariant_violated(context: &str) -> ! {\n    let fail = || panic!(\"nested\");\n    fail();\n    panic!(\"{context}\")\n}\n",
         );
         assert!(sanctioned_invariant_panic(path, &nested.items).is_none());
+    }
+
+    #[test]
+    fn sanctioned_invariant_panic_counts_occurrences_not_lines() {
+        let parse = |source: &str| syn::parse_file(source).expect("parse source");
+        let path = SANCTIONED_INVARIANT_PATH;
+        // Two panics on the one allowlisted line must not both pass.
+        let same_line = parse(
+            "pub fn invariant_violated(c: &str) -> ! {\n    if c.is_empty() { panic!(\"e\") } panic!(\"{c}\")\n}\n",
+        );
+        assert!(sanctioned_invariant_panic(path, &same_line.items).is_none());
+        // A panic hidden in another macro's arguments counts too.
+        let in_macro = parse(
+            "pub fn invariant_violated(c: &str) -> ! {\n    let _v = vec![panic!(\"x\")];\n    panic!(\"{c}\")\n}\n",
+        );
+        assert!(sanctioned_invariant_panic(path, &in_macro.items).is_none());
+    }
+
+    #[test]
+    fn invariant_call_visitor_sees_macro_arguments_and_rejects_renames() {
+        let parse = |source: &str| syn::parse_file(source).expect("parse source");
+        let mut calls = BTreeSet::new();
+        let mut visitor = InvariantCallVisitor {
+            path: "crates/demo/src/lib.rs",
+            calls: &mut calls,
+            error: None,
+        };
+        visitor.visit_file(&parse(
+            "fn f(x: Option<u8>) -> u8 {\n    passthrough!(x.unwrap_or_else(|| invariant_violated(\"c\", \"e\")))\n}\n",
+        ));
+        assert!(visitor.error.is_none());
+        assert_eq!(
+            calls.into_iter().collect::<Vec<_>>(),
+            vec![("crates/demo/src/lib.rs".to_owned(), 2)]
+        );
+
+        let mut calls = BTreeSet::new();
+        let mut visitor = InvariantCallVisitor {
+            path: "crates/demo/src/lib.rs",
+            calls: &mut calls,
+            error: None,
+        };
+        visitor.visit_file(&parse(
+            "use tensor4all_tensorbackend::invariant_violated as iv;\n",
+        ));
+        assert!(visitor.error.is_some());
+    }
+
+    #[test]
+    fn assertion_only_helper_ignores_format_arguments() {
+        let block = |source: &str| match &syn::parse_file(source).expect("parse source").items[0] {
+            Item::Fn(function) => function.block.clone(),
+            _ => panic!("expected function"),
+        };
+        let path = "crates/demo/src/lib.rs";
+        assert!(assertion_only_helper(
+            path,
+            &block("fn check(v: u32) { assert!(true, \"{}\", v); }\n")
+        )
+        .is_none());
+        assert!(assertion_only_helper(
+            path,
+            &block("fn check(v: u32) { assert_eq!(1, 1, \"{}\", v); }\n")
+        )
+        .is_none());
+        assert!(assertion_only_helper(
+            path,
+            &block("fn check(v: u32) { assert_eq!(v, 1, \"{}\", v); }\n")
+        )
+        .is_some());
     }
 
     #[test]

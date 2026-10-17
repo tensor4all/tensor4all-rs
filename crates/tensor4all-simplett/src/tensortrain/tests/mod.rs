@@ -81,7 +81,7 @@ fn test_tensortrain_reverse_generic<T: TTScalar>() {
     t1.set3(0, 2, 0, T::from_f64(3.0));
 
     let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
-    let tt_rev = tt.reverse();
+    let tt_rev = tt.reverse().unwrap();
 
     assert_eq!(tt_rev.len(), 2);
     assert_eq!(tt_rev.site_dims(), vec![3, 2]);
@@ -622,4 +622,18 @@ fn test_svd_compression_tolerance_f64() {
 #[test]
 fn test_svd_compression_tolerance_c64() {
     test_svd_compression_tolerance_generic::<Complex64>();
+}
+
+#[test]
+fn reverse_of_unrepresentable_transposed_core_is_an_error() {
+    // The middle core (0, m, m) is valid, but its transpose (m, m, 0) has
+    // overflowing column-major strides: reverse reports it instead of panicking.
+    let m = 1usize << 32;
+    let cores = vec![
+        crate::types::tensor3_zeros::<f64>(1, 0, 0).unwrap(),
+        crate::types::tensor3_zeros::<f64>(0, m, m).unwrap(),
+        crate::types::tensor3_zeros::<f64>(m, 0, 1).unwrap(),
+    ];
+    let tt = SimpleTensorTrain::new(cores).unwrap();
+    assert!(tt.reverse().is_err());
 }

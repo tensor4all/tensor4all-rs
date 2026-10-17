@@ -570,9 +570,10 @@ def test_sanctioned_invariant_panic_is_allowlisted_and_call_sites_reported() -> 
         "crates/tensor4all-tensorbackend/src/lib.rs:2:panic" in result.stdout
     )
     assert "invariant_violated call sites: 1" in result.stdout
+    call_line = _line(lib, 'invariant_violated("bad")')
     assert (
         "invariant_violated call site: "
-        f"crates/tensor4all-tensorbackend/src/lib.rs:{_line(lib, 'invariant_violated("bad")')}"
+        f"crates/tensor4all-tensorbackend/src/lib.rs:{call_line}"
         in result.stdout
     )
 
@@ -608,14 +609,11 @@ def test_extra_panic_in_sanctioned_helper_is_not_allowlisted() -> None:
         result = _run_audit(fixture)
     assert result.returncode == 1, result.stderr
     assert "Sanctioned invariant panic:" not in result.stdout
-    assert (
-        f"crates/tensor4all-tensorbackend/src/lib.rs:{_line(lib, 'panic!("empty")')}:panic"
-        in result.stdout
-    )
-    assert (
-        f"crates/tensor4all-tensorbackend/src/lib.rs:{_line(lib, 'panic!("{context}")')}:panic"
-        in result.stdout
-    )
+    # Python 3.10 (CI) cannot nest the f-string's own quote kind: hoist.
+    empty_line = _line(lib, 'panic!("empty")')
+    context_line = _line(lib, 'panic!("{context}")')
+    assert f"crates/tensor4all-tensorbackend/src/lib.rs:{empty_line}:panic" in result.stdout
+    assert f"crates/tensor4all-tensorbackend/src/lib.rs:{context_line}:panic" in result.stdout
 
 
 def test_nested_same_name_function_is_not_sanctioned() -> None:

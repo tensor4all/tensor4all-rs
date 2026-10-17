@@ -1829,7 +1829,8 @@ impl Storage {
     ///
     /// Returns [`StorageError::ScalarKindMismatch`] if the storage is complex,
     /// and [`StorageError::InvalidStructuredStorage`] if `logical_dims` does
-    /// not match the stored logical dimensions.
+    /// not match the stored logical dimensions or the logical element count
+    /// overflows `usize`.
     ///
     /// # Examples
     ///
@@ -1866,7 +1867,8 @@ impl Storage {
     ///
     /// Returns [`StorageError::ScalarKindMismatch`] if the storage is real, and
     /// [`StorageError::InvalidStructuredStorage`] if `logical_dims` does not
-    /// match the stored logical dimensions.
+    /// match the stored logical dimensions or the logical element count
+    /// overflows `usize`.
     ///
     /// # Examples
     ///

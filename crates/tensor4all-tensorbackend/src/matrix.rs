@@ -51,7 +51,14 @@ pub struct Matrix<T> {
     ncols: usize,
 }
 
+/// Element count of an `nrows x ncols` matrix, or `None` when the shape cannot
+/// be represented: the product overflows `usize`, or an extent exceeds
+/// `isize::MAX` (tenferro stores extents and strides as `isize`).
 fn checked_matrix_len(nrows: usize, ncols: usize) -> Option<usize> {
+    let max_extent = isize::MAX as usize;
+    if nrows > max_extent || ncols > max_extent {
+        return None;
+    }
     nrows.checked_mul(ncols)
 }
 
@@ -123,8 +130,11 @@ pub enum MatrixShapeError {
         /// Actual number of entries in `row`.
         actual: usize,
     },
-    /// The matrix element count overflowed `usize`.
-    #[error("matrix shape {nrows}x{ncols} overflows usize")]
+    /// The matrix shape is not representable: the element count overflows
+    /// `usize` or an extent exceeds `isize::MAX`.
+    #[error(
+        "matrix shape {nrows}x{ncols} is not representable (overflows usize or exceeds isize::MAX)"
+    )]
     ShapeOverflow {
         /// Number of rows.
         nrows: usize,
@@ -991,16 +1001,15 @@ impl<T> Matrix<T> {
     /// Fallibly create a matrix from column-major data after checked shape validation.
     ///
     /// # Errors
-    /// Returns [`MatrixShapeError::ShapeOverflow`] when the shape exceeds
-    /// `usize`, or [`MatrixShapeError::DataLengthMismatch`] when the payload
+    /// Returns [`MatrixShapeError::ShapeOverflow`] when the shape overflows
+    /// `usize` or an extent exceeds `isize::MAX`, or [`MatrixShapeError::DataLengthMismatch`] when the payload
     /// length does not match the shape.
     pub fn try_from_col_major_vec(
         nrows: usize,
         ncols: usize,
         data: Vec<T>,
     ) -> std::result::Result<Self, MatrixShapeError> {
-        let expected = nrows
-            .checked_mul(ncols)
+        let expected = checked_matrix_len(nrows, ncols)
             .ok_or(MatrixShapeError::ShapeOverflow { nrows, ncols })?;
         if data.len() != expected {
             return Err(MatrixShapeError::DataLengthMismatch {
@@ -1132,6 +1141,12 @@ impl<T> Matrix<T> {
                 ncols: self.ncols(),
             },
         )?;
+        if checked_matrix_len(self.nrows(), new_ncols).is_none() {
+            return Err(MatrixShapeError::ShapeOverflow {
+                nrows: self.nrows(),
+                ncols: new_ncols,
+            });
+        }
         self.data.extend_from_slice(right.as_col_major_slice());
         self.ncols = new_ncols;
         Ok(())
@@ -1593,11 +1608,10 @@ impl<T: Clone + Zero> Matrix<T> {
     /// Fallibly create a zero-filled matrix after checked shape validation.
     ///
     /// # Errors
-    /// Returns [`MatrixShapeError::ShapeOverflow`] when the shape exceeds
-    /// `usize`.
+    /// Returns [`MatrixShapeError::ShapeOverflow`] when the shape overflows
+    /// `usize` or an extent exceeds `isize::MAX`.
     pub fn try_zeros(nrows: usize, ncols: usize) -> std::result::Result<Self, MatrixShapeError> {
-        let len = nrows
-            .checked_mul(ncols)
+        let len = checked_matrix_len(nrows, ncols)
             .ok_or(MatrixShapeError::ShapeOverflow { nrows, ncols })?;
         Self::try_from_col_major_vec(nrows, ncols, vec![T::zero(); len])
     }

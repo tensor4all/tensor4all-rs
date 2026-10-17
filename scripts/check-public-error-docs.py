@@ -38,6 +38,8 @@ RESULT_ALIAS_RE = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?type\s+([A-Za-z_]\w*)\s*(?:<[^=]*>)?\s*=\s*"
     r"(?:(?:std|core)::)?(?:result::)?Result\s*<"
 )
+# `use crate::error::Result as TreeTciResult;` (also inside a `{...}` list).
+RESULT_USE_ALIAS_RE = re.compile(r"\bResult\s+as\s+([A-Za-z_]\w*)")
 
 
 def result_type_re(paths: list[Path]) -> re.Pattern[str]:
@@ -49,6 +51,8 @@ def result_type_re(paths: list[Path]) -> re.Pattern[str]:
                 match = RESULT_ALIAS_RE.match(line)
                 if match:
                     aliases.add(match.group(1))
+                if line.lstrip().startswith(("use ", "pub use ", "pub(crate) use ")):
+                    aliases.update(RESULT_USE_ALIAS_RE.findall(line))
     if not aliases:
         return RESULT_RE
     names = "|".join(sorted(re.escape(alias) for alias in aliases))
@@ -74,6 +78,8 @@ DEFERRED_HINT_RE = re.compile(
 # prose spell-checker so boilerplate cannot satisfy the repository contract.
 CONCRETE_ERROR_RE = re.compile(
     r"(?:"
+    # Delegation to a linked API whose own section names the errors.
+    r"\b(?:same errors as|errors (?:of|from)) \[`[^`]+`\]|"
     r"\bInfallible\b|"
     r"\b(?:Error|ErrorKind)::(?!Validation\b)[A-Za-z0-9_]+\b|"
     r"\bValidationError::[A-Za-z0-9_]+\b|"
@@ -118,9 +124,10 @@ GENERATED_BOILERPLATE_TAIL_RE = re.compile(
     r"\b(?:failure|mismatch|replacement|split|value|state|coefficient|"
     r"overflow|underflow|dtype|operation|construction|bounds|gradient)$"
 )
-# Concrete variant path (``Error::Variant``) or a Rust type reference.
+# A concrete error type or variant (``GseError``, ``GseError::MissingCenter``);
+# an unrelated path such as ``Tensor::from_elem`` does not count.
 GENERATED_BOILERPLATE_VARIANT_RE = re.compile(
-    r"::|\b[A-Z][A-Za-z0-9]*Error\b"
+    r"\b[A-Z][A-Za-z0-9]*Error(?:Kind)?\b"
 )
 # Split at a real sentence boundary only, so ``i.e.``/``e.g.`` inside a label
 # does not hide a wrapped generated sentence.
@@ -188,6 +195,19 @@ def brace_delta(line: str) -> int:
     return code.count("{") - code.count("}")
 
 
+def multiline_attribute_start(lines: list[str], end: int) -> int | None:
+    """Index of the ``#[`` line opening a multi-line attribute ending at ``end``."""
+    cursor = end - 1
+    while cursor >= 0 and end - cursor <= 20:
+        stripped = lines[cursor].strip()
+        if DOC_RE.match(lines[cursor]) or stripped == "" or stripped.endswith(("{", "}", ";")):
+            return None
+        if ATTRIBUTE_RE.match(lines[cursor]):
+            return cursor
+        cursor -= 1
+    return None
+
+
 def preceding_docs(lines: list[str], index: int) -> tuple[str, bool, int]:
     docs: list[str] = []
     hidden = False
@@ -207,6 +227,13 @@ def preceding_docs(lines: list[str], index: int) -> tuple[str, bool, int]:
             docs.append(f"/// {ast.literal_eval(match.group(1))}")
         elif ATTRIBUTE_RE.match(lines[cursor]):
             hidden = hidden or "doc(hidden)" in stripped
+        elif stripped.endswith("]") and (start := multiline_attribute_start(lines, cursor)) is not None:
+            # A multi-line attribute such as `#[deprecated(\n note = ".."\n)]`
+            # sits between the docs and the signature: skip all of its lines.
+            hidden = hidden or any("doc(hidden)" in line for line in lines[start : cursor + 1])
+            first = start
+            cursor = start - 1
+            continue
         elif stripped == "" and docs:
             break
         else:

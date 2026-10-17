@@ -5,6 +5,10 @@ use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 use tensor4all_tensorbackend::invariant_violated;
 
+/// A `(1, d, 1)` core cannot overflow and its strides are representable; only
+/// out-of-memory remains, which std also treats as fatal.
+const UNIT_BOND_CORE: &str = "building a (1, d, 1) core";
+
 /// Tensor Train (Matrix Product State) representation.
 ///
 /// A tensor train decomposes a high-dimensional tensor `T[i0, i1, ..., i_{L-1}]`
@@ -142,7 +146,13 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// assert!((tt.sum().unwrap()).abs() < 1e-14);
     /// ```
     pub fn zeros(site_dims: &[usize]) -> Self {
-        let tensors: Vec<Tensor3<T>> = site_dims.iter().map(|&d| tensor3_zeros(1, d, 1).unwrap_or_else(|error| invariant_violated("a (1, d, 1) site tensor cannot overflow; only out-of-memory remains, which std also treats as fatal", error))).collect();
+        let tensors: Vec<Tensor3<T>> = site_dims
+            .iter()
+            .map(|&d| {
+                tensor3_zeros(1, d, 1)
+                    .unwrap_or_else(|error| invariant_violated(UNIT_BOND_CORE, error))
+            })
+            .collect();
         Self { tensors }
     }
 
@@ -175,7 +185,8 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         let mut tensors = Vec::with_capacity(n);
 
         // First tensor: all ones
-        let mut first = tensor3_zeros(1, site_dims[0], 1).unwrap_or_else(|error| invariant_violated("a (1, d, 1) site tensor cannot overflow; only out-of-memory remains, which std also treats as fatal", error));
+        let mut first = tensor3_zeros(1, site_dims[0], 1)
+            .unwrap_or_else(|error| invariant_violated(UNIT_BOND_CORE, error));
         for s in 0..site_dims[0] {
             first.set3(0, s, 0, T::one());
         }
@@ -184,7 +195,8 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         // Middle tensors: all ones (only if n > 2)
         if n > 2 {
             for &d in &site_dims[1..n - 1] {
-                let mut tensor = tensor3_zeros(1, d, 1).unwrap_or_else(|error| invariant_violated("a (1, d, 1) site tensor cannot overflow; only out-of-memory remains, which std also treats as fatal", error));
+                let mut tensor = tensor3_zeros(1, d, 1)
+                    .unwrap_or_else(|error| invariant_violated(UNIT_BOND_CORE, error));
                 for s in 0..d {
                     tensor.set3(0, s, 0, T::one());
                 }
@@ -194,7 +206,8 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
 
         // Last tensor: multiply by value
         if n > 1 {
-            let mut last = tensor3_zeros(1, site_dims[n - 1], 1).unwrap_or_else(|error| invariant_violated("a (1, d, 1) site tensor cannot overflow; only out-of-memory remains, which std also treats as fatal", error));
+            let mut last = tensor3_zeros(1, site_dims[n - 1], 1)
+                .unwrap_or_else(|error| invariant_violated(UNIT_BOND_CORE, error));
             for s in 0..site_dims[n - 1] {
                 last.set3(0, s, 0, value);
             }
@@ -304,6 +317,12 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// The reversed TT satisfies `reversed.evaluate(&[i_{L-1}, ..., i_0]) ==
     /// original.evaluate(&[i_0, ..., i_{L-1}])`.
     ///
+    /// # Errors
+    ///
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when a transposed
+    /// core shape cannot be represented (its column-major strides overflow,
+    /// e.g. an empty core of shape `(0, m, m)` with a huge `m`) or allocated.
+    ///
     /// # Examples
     ///
     /// ```
@@ -318,31 +337,33 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// t1.set3(0, 2, 0, 30.0);
     /// let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
     ///
-    /// let rev = tt.reverse();
+    /// let rev = tt.reverse().unwrap();
     /// assert_eq!(rev.site_dims(), vec![3, 2]);
     /// // T[0, 1] = 1.0 * 10.0 = 10.0, reversed: T_rev[0, 1] should also be 10.0 (site 0->10, site 1->2)
     /// // Original: T[1, 0] = 2.0 * 10.0 = 20.0
     /// // Reversed: T_rev[0, 1] = 20.0
     /// assert!((rev.evaluate(&[0, 1]).unwrap() - tt.evaluate(&[1, 0]).unwrap()).abs() < 1e-12);
     /// ```
-    pub fn reverse(&self) -> Self {
+    pub fn reverse(&self) -> Result<Self> {
         let mut new_tensors = Vec::with_capacity(self.tensors.len());
         for tensor in self.tensors.iter().rev() {
             // Swap left and right dimensions
             let mut new_tensor =
-                tensor3_zeros(tensor.right_dim(), tensor.site_dim(), tensor.left_dim()).unwrap_or_else(|error| invariant_violated("the transposed shape of an existing tensor cannot overflow; only out-of-memory remains", error));
-            for l in 0..tensor.left_dim() {
+                tensor3_zeros(tensor.right_dim(), tensor.site_dim(), tensor.left_dim())?;
+            // Column-major order (left index fastest); an empty extent ends
+            // the loop before the other extents are walked.
+            for r in 0..tensor.right_dim() {
                 for s in 0..tensor.site_dim() {
-                    for r in 0..tensor.right_dim() {
+                    for l in 0..tensor.left_dim() {
                         new_tensor.set3(r, s, l, *tensor.get3(l, s, r));
                     }
                 }
             }
             new_tensors.push(new_tensor);
         }
-        Self {
+        Ok(Self {
             tensors: new_tensors,
-        }
+        })
     }
 }
 
