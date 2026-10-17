@@ -131,3 +131,57 @@ fn test_clone_allows_index_mut() {
     assert_eq!(original[[1, 0]], 2.0);
     assert_eq!(cloned[[1, 0]], 99.0);
 }
+
+#[test]
+fn test_partial_eq_compares_dims_then_values() {
+    let column_major: Tensor2<f64> = Tensor2::from_fn([2, 3], |[i, j]| (i + 2 * j) as f64).unwrap();
+    let same: Tensor2<f64> = Tensor2::from_fn([2, 3], |[i, j]| (i + 2 * j) as f64).unwrap();
+    let other_values: Tensor2<f64> = Tensor2::from_fn([2, 3], |[i, j]| (i * 3 + j) as f64).unwrap();
+    // Same element count, different shape: equality must not be value-only.
+    let other_shape: Tensor2<f64> = Tensor2::from_fn([3, 2], |[i, j]| (i + 2 * j) as f64).unwrap();
+
+    assert_eq!(column_major, same);
+    assert_ne!(column_major, other_values);
+    assert_ne!(column_major, other_shape);
+}
+
+#[test]
+fn test_is_empty_tracks_zero_element_shapes() {
+    let empty: Tensor2<f64> = Tensor2::from_elem([0, 3], 1.0).unwrap();
+    assert_eq!(empty.len(), 0);
+    assert!(empty.is_empty());
+    assert_eq!(empty.to_col_major_vec(), Vec::<f64>::new());
+    assert_eq!(empty.iter().count(), 0);
+
+    let single: Tensor2<f64> = Tensor2::from_elem([1, 1], 7.0).unwrap();
+    assert_eq!(single.len(), 1);
+    assert!(!single.is_empty());
+}
+
+#[test]
+fn test_iter_mut_writes_every_element_once_in_column_major_order() {
+    let mut tensor: Tensor2<f64> = Tensor2::from_elem([2, 3], 0.0).unwrap();
+
+    {
+        let iter = tensor.iter_mut();
+        assert_eq!(iter.size_hint(), (6, Some(6)));
+        assert_eq!(iter.len(), 6);
+        for (linear, value) in iter.enumerate() {
+            assert_eq!(*value, 0.0);
+            *value = (linear + 1) as f64;
+        }
+    }
+
+    assert_eq!(
+        tensor.to_col_major_vec(),
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+    // [i, j] = 1 + i + 2 * j in column-major order.
+    assert_eq!(tensor[[0, 0]], 1.0);
+    assert_eq!(tensor[[1, 2]], 6.0);
+
+    let mut empty: Tensor3<f64> = Tensor3::from_elem([0, 2, 2], 0.0).unwrap();
+    let mut iter = empty.iter_mut();
+    assert_eq!(iter.size_hint(), (0, Some(0)));
+    assert!(iter.next().is_none());
+}

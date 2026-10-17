@@ -64,6 +64,8 @@ pub mod mpo;
 pub mod site_mpo;
 #[cfg(test)]
 pub(crate) mod test_support;
+#[cfg(test)]
+mod tests;
 pub mod tt_contraction;
 pub mod types;
 pub mod vidal_mpo;
