@@ -13,8 +13,16 @@
 //! transcribers are likewise scanned only for those literal assertion calls;
 //! no semantic macro resolver is attempted. The public-path assertion scanner
 //! covers public free functions, public inherent methods, trait defaults, and
-//! trait-implementation methods; assertions in private helpers are classified
-//! as outside that surface.
+//! trait-implementation methods. Assertions in other private helpers are
+//! outside that surface, with one exception: a private free function or
+//! private inherent method whose entire body is a single `assert!`-family call
+//! on a runtime value is recorded, because that helper is the laundering route
+//! for a panic the public-path scan cannot see. The single sanctioned
+//! `panic!` inside `tensor4all_tensorbackend::invariant_violated` is
+//! allowlisted by exact normalized path and top-level function name only while
+//! that body holds exactly one direct `panic!`; every call to that helper is
+//! printed for review. Any additional or nested panic in that file or function
+//! remains a finding.
 
 use anyhow::{anyhow, bail, Context, Result};
 use proc_macro2::{TokenStream, TokenTree};
@@ -46,6 +54,10 @@ const ASSERTION_KINDS: [&str; 6] = [
     "debug_assert_eq",
     "debug_assert_ne",
 ];
+/// Exact normalized path of the one sanctioned invariant-panic helper.
+const SANCTIONED_INVARIANT_PATH: &str = "crates/tensor4all-tensorbackend/src/lib.rs";
+/// Top-level function whose single direct `panic!` is allowlisted.
+const SANCTIONED_INVARIANT_FUNCTION: &str = "invariant_violated";
 const PRODUCTION_KINDS: [&str; 7] = [
     "lib",
     "rlib",
@@ -78,12 +90,17 @@ pub(crate) struct AuditReport {
     unbaselined: Vec<Finding>,
     stale: Vec<Finding>,
     forbidden_baseline: Vec<Finding>,
+    sanctioned: Vec<Finding>,
+    invariant_calls: Vec<(String, usize)>,
 }
 
 impl AuditReport {
     pub(crate) fn exit_code_and_print(&self) -> i32 {
         for finding in &self.matched {
             println!("Baseline matched: {}", finding.entry());
+        }
+        for finding in &self.sanctioned {
+            println!("Sanctioned invariant panic: {}", finding.entry());
         }
         for finding in &self.unbaselined {
             println!("{}", finding.entry());
@@ -96,6 +113,14 @@ impl AuditReport {
                 "Baseline contains forbidden raw panic-style entry: {}",
                 finding.entry()
             );
+        }
+
+        println!(
+            "invariant_violated call sites: {}",
+            self.invariant_calls.len()
+        );
+        for (path, line) in &self.invariant_calls {
+            println!("invariant_violated call site: {path}:{line}");
         }
 
         if !self.unbaselined.is_empty()
@@ -1528,6 +1553,63 @@ struct PublicAssertionVisitor<'a> {
     error: Option<anyhow::Error>,
 }
 
+/// Does a token stream mention an identifier other than the boolean literals
+/// `true`/`false`? Only such a helper can launder a runtime invariant through
+/// an assertion.
+fn tokens_name_runtime_value(tokens: TokenStream) -> bool {
+    tokens.into_iter().any(|token| match token {
+        TokenTree::Ident(ident) => !matches!(ident.to_string().as_str(), "true" | "false"),
+        TokenTree::Group(group) => tokens_name_runtime_value(group.stream()),
+        TokenTree::Punct(_) | TokenTree::Literal(_) => false,
+    })
+}
+
+/// The `Macro` of a statement that is a single assertion invocation, whether
+/// written with a trailing semicolon or as the block's tail expression.
+fn assertion_macro_statement(stmt: &Stmt) -> Option<&syn::Macro> {
+    match stmt {
+        Stmt::Expr(Expr::Macro(expr_macro), _) => Some(&expr_macro.mac),
+        Stmt::Macro(stmt_macro) => Some(&stmt_macro.mac),
+        _ => None,
+    }
+}
+
+/// A private helper whose entire body is one assertion on a runtime value is
+/// the laundering route for an invisible panic, so record that assertion.
+/// Literal-only helpers and helpers with any other statement are left to the
+/// public-path scanner.
+fn assertion_only_helper(path: &str, block: &syn::Block) -> Option<Finding> {
+    if block.stmts.len() != 1 {
+        return None;
+    }
+    let mac = assertion_macro_statement(&block.stmts[0])?;
+    let kind = assertion_kind(&mac.path.segments.last()?.ident.to_string())?;
+    if !tokens_name_runtime_value(mac.tokens.clone()) {
+        return None;
+    }
+    let line = mac.span().start().line;
+    if line == 0 {
+        return None;
+    }
+    Some(Finding {
+        path: path.to_owned(),
+        line,
+        kind: kind.to_owned(),
+    })
+}
+
+fn skip_test_only_attrs(attrs: &[Attribute], error: &mut Option<anyhow::Error>) -> bool {
+    match definitely_test_only(attrs) {
+        Ok(skip) => skip,
+        Err(err) => {
+            if error.is_none() {
+                *error = Some(err);
+            }
+            true
+        }
+    }
+}
+
 impl PublicAssertionVisitor<'_> {
     fn scan_items(&mut self, items: &[Item]) -> Result<()> {
         for item in items {
@@ -1537,6 +1619,11 @@ impl PublicAssertionVisitor<'_> {
             match item {
                 Item::Fn(function) if is_public(&function.vis) => {
                     self.scan_block(&function.block)?;
+                }
+                Item::Fn(function) => {
+                    if let Some(finding) = assertion_only_helper(self.path, &function.block) {
+                        self.findings.insert(finding);
+                    }
                 }
                 Item::Trait(trait_item) if is_public(&trait_item.vis) => {
                     for trait_item in &trait_item.items {
@@ -1559,6 +1646,10 @@ impl PublicAssertionVisitor<'_> {
                         if let ImplItem::Fn(function) = impl_item {
                             if trait_impl || is_public(&function.vis) {
                                 self.scan_block(&function.block)?;
+                            } else if let Some(finding) =
+                                assertion_only_helper(self.path, &function.block)
+                            {
+                                self.findings.insert(finding);
                             }
                         }
                     }
@@ -1589,15 +1680,7 @@ impl PublicAssertionVisitor<'_> {
     }
 
     fn skip_attrs(&mut self, attrs: &[Attribute]) -> bool {
-        match definitely_test_only(attrs) {
-            Ok(skip) => skip,
-            Err(error) => {
-                if self.error.is_none() {
-                    self.error = Some(error);
-                }
-                true
-            }
-        }
+        skip_test_only_attrs(attrs, &mut self.error)
     }
 }
 
@@ -1653,8 +1736,145 @@ impl<'ast> Visit<'ast> for PublicAssertionVisitor<'_> {
     }
 }
 
-fn scan_assertions(root: &Path, source_files: &BTreeSet<PathBuf>) -> Result<BTreeSet<Finding>> {
-    let mut findings = BTreeSet::new();
+/// Collects the assertion findings, the sanctioned invariant panic, and every
+/// `invariant_violated` call site found while parsing the production sources.
+#[derive(Debug, Default)]
+struct SourceScan {
+    assertions: BTreeSet<Finding>,
+    sanctioned_invariant_panics: BTreeSet<Finding>,
+    invariant_calls: BTreeSet<(String, usize)>,
+}
+
+fn is_panic_macro(mac: &syn::Macro) -> bool {
+    mac.path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "panic")
+}
+
+/// The line of a `panic!` statement written directly in a block.
+fn direct_panic_line(stmt: &Stmt) -> Option<usize> {
+    let mac = match stmt {
+        Stmt::Expr(Expr::Macro(expr_macro), _) => &expr_macro.mac,
+        Stmt::Macro(stmt_macro) => &stmt_macro.mac,
+        _ => return None,
+    };
+    if !is_panic_macro(mac) {
+        return None;
+    }
+    let line = mac.span().start().line;
+    (line != 0).then_some(line)
+}
+
+#[derive(Debug, Default)]
+struct PanicMacroVisitor {
+    lines: BTreeSet<usize>,
+}
+
+impl<'ast> Visit<'ast> for PanicMacroVisitor {
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        if is_panic_macro(node) {
+            let line = node.span().start().line;
+            if line != 0 {
+                self.lines.insert(line);
+            }
+        }
+        syn::visit::visit_macro(self, node);
+    }
+}
+
+/// The single direct `panic!` of the sanctioned invariant helper, if the body
+/// still holds exactly one panic and it is a direct statement. An extra direct
+/// panic or a panic nested in a closure, block, or nested item makes the
+/// function unsanctioned, so every panic it contains stays a finding.
+fn sanctioned_invariant_panic(path: &str, items: &[Item]) -> Option<Finding> {
+    let function = items.iter().find_map(|item| match item {
+        Item::Fn(function) if function.sig.ident == SANCTIONED_INVARIANT_FUNCTION => Some(function),
+        _ => None,
+    })?;
+    let mut visitor = PanicMacroVisitor::default();
+    visitor.visit_block(&function.block);
+    if visitor.lines.len() != 1 {
+        return None;
+    }
+    let direct = function
+        .block
+        .stmts
+        .iter()
+        .filter_map(direct_panic_line)
+        .collect::<BTreeSet<_>>();
+    if direct != visitor.lines {
+        return None;
+    }
+    let line = *visitor.lines.iter().next()?;
+    Some(Finding {
+        path: path.to_owned(),
+        line,
+        kind: "panic".to_owned(),
+    })
+}
+
+struct InvariantCallVisitor<'a> {
+    path: &'a str,
+    calls: &'a mut BTreeSet<(String, usize)>,
+    error: Option<anyhow::Error>,
+}
+
+impl<'ast> Visit<'ast> for InvariantCallVisitor<'_> {
+    fn visit_item(&mut self, node: &'ast Item) {
+        if skip_test_only_attrs(item_attrs(node), &mut self.error) {
+            return;
+        }
+        syn::visit::visit_item(self, node);
+    }
+
+    fn visit_stmt(&mut self, node: &'ast Stmt) {
+        let attrs = match node {
+            Stmt::Local(local) => &local.attrs,
+            Stmt::Item(item) => item_attrs(item),
+            Stmt::Expr(expr, _) => expr_attrs(expr),
+            Stmt::Macro(mac) => &mac.attrs,
+        };
+        if skip_test_only_attrs(attrs, &mut self.error) {
+            return;
+        }
+        syn::visit::visit_stmt(self, node);
+    }
+
+    fn visit_expr(&mut self, node: &'ast Expr) {
+        if skip_test_only_attrs(expr_attrs(node), &mut self.error) {
+            return;
+        }
+        syn::visit::visit_expr(self, node);
+    }
+
+    fn visit_arm(&mut self, node: &'ast Arm) {
+        if skip_test_only_attrs(&node.attrs, &mut self.error) {
+            return;
+        }
+        syn::visit::visit_arm(self, node);
+    }
+
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let Expr::Path(function) = &*node.func {
+            if function
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == SANCTIONED_INVARIANT_FUNCTION)
+            {
+                let line = node.span().start().line;
+                if line != 0 {
+                    self.calls.insert((self.path.to_owned(), line));
+                }
+            }
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+}
+
+fn scan_sources(root: &Path, source_files: &BTreeSet<PathBuf>) -> Result<SourceScan> {
+    let mut scan = SourceScan::default();
     for path in source_files {
         let bytes = fs::read(path)
             .with_context(|| format!("failed to read production source {}", path.display()))?;
@@ -1672,11 +1892,27 @@ fn scan_assertions(root: &Path, source_files: &BTreeSet<PathBuf>) -> Result<BTre
                 }
                 let mut visitor = PublicAssertionVisitor {
                     path: &relative,
-                    findings: &mut findings,
+                    findings: &mut scan.assertions,
                     in_public_context: false,
                     error: None,
                 };
                 visitor.scan_items(&file.items)?;
+                {
+                    let mut call_visitor = InvariantCallVisitor {
+                        path: &relative,
+                        calls: &mut scan.invariant_calls,
+                        error: None,
+                    };
+                    call_visitor.visit_file(&file);
+                    if let Some(error) = call_visitor.error.take() {
+                        return Err(error);
+                    }
+                }
+                if relative == SANCTIONED_INVARIANT_PATH {
+                    if let Some(finding) = sanctioned_invariant_panic(&relative, &file.items) {
+                        scan.sanctioned_invariant_panics.insert(finding);
+                    }
+                }
             }
             Err(_) => {
                 // Dep-info includes include! fragments and .rs data files in
@@ -1685,14 +1921,14 @@ fn scan_assertions(root: &Path, source_files: &BTreeSet<PathBuf>) -> Result<BTre
                 // Scan tokens when possible and fall back to a string/comment
                 // aware lexical check for incomplete fragments.
                 if let Ok(tokens) = source.parse::<TokenStream>() {
-                    scan_assertion_tokens(&relative, tokens, &mut findings);
+                    scan_assertion_tokens(&relative, tokens, &mut scan.assertions);
                 } else {
-                    scan_literal_assertions_text(&source, &relative, &mut findings);
+                    scan_literal_assertions_text(&source, &relative, &mut scan.assertions);
                 }
             }
         }
     }
-    Ok(findings)
+    Ok(scan)
 }
 
 fn expr_attrs(expr: &Expr) -> &[Attribute] {
@@ -1842,10 +2078,19 @@ fn load_baseline(path: &Path) -> Result<BTreeSet<Finding>> {
     Ok(baseline)
 }
 
-fn build_report(actual: &BTreeSet<Finding>, baseline: &BTreeSet<Finding>) -> AuditReport {
-    let matched = baseline.intersection(actual).cloned().collect::<Vec<_>>();
+fn build_report(
+    actual: &BTreeSet<Finding>,
+    baseline: &BTreeSet<Finding>,
+    sanctioned: &BTreeSet<Finding>,
+    invariant_calls: BTreeSet<(String, usize)>,
+) -> AuditReport {
+    let actual = actual
+        .difference(sanctioned)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let matched = baseline.intersection(&actual).cloned().collect::<Vec<_>>();
     let unbaselined = actual.difference(baseline).cloned().collect::<Vec<_>>();
-    let stale = baseline.difference(actual).cloned().collect::<Vec<_>>();
+    let stale = baseline.difference(&actual).cloned().collect::<Vec<_>>();
     let forbidden_baseline = baseline
         .iter()
         .filter(|finding| RAW_KINDS.contains(&finding.kind.as_str()))
@@ -1856,6 +2101,8 @@ fn build_report(actual: &BTreeSet<Finding>, baseline: &BTreeSet<Finding>) -> Aud
         unbaselined,
         stale,
         forbidden_baseline,
+        sanctioned: sanctioned.iter().cloned().collect(),
+        invariant_calls: invariant_calls.into_iter().collect(),
     }
 }
 
@@ -1876,8 +2123,14 @@ pub(crate) fn audit(root_arg: &Path, baseline_path: &Path) -> Result<AuditReport
         source_files.extend(all_feature_sources);
         actual.extend(all_feature_findings);
     }
-    actual.extend(scan_assertions(&selection.root, &source_files)?);
-    Ok(build_report(&actual, &baseline))
+    let scan = scan_sources(&selection.root, &source_files)?;
+    actual.extend(scan.assertions);
+    Ok(build_report(
+        &actual,
+        &baseline,
+        &scan.sanctioned_invariant_panics,
+        scan.invariant_calls,
+    ))
 }
 
 #[cfg(test)]
@@ -2345,7 +2598,9 @@ pub fn nested_use() { assert!(true); }
             fs::canonicalize(parsed).unwrap(),
             fs::canonicalize(fragment).unwrap(),
         ]);
-        let findings = scan_assertions(&root.path, &sources).expect("scan selected sources");
+        let findings = scan_sources(&root.path, &sources)
+            .expect("scan selected sources")
+            .assertions;
         let parsed_findings = findings
             .iter()
             .filter(|finding| finding.path.ends_with("lib.rs"))
@@ -2395,11 +2650,158 @@ pub fn nested_use() { assert!(true); }
     }
 
     #[test]
+    fn sanctioned_invariant_panic_requires_one_direct_panic() {
+        let parse = |source: &str| syn::parse_file(source).expect("parse source");
+        let path = SANCTIONED_INVARIANT_PATH;
+        let tail = parse(
+            "pub fn invariant_violated(context: &str) -> ! {\n    panic!(\"{context}\")\n}\n",
+        );
+        assert_eq!(
+            sanctioned_invariant_panic(path, &tail.items)
+                .expect("sanctioned")
+                .entry(),
+            "crates/tensor4all-tensorbackend/src/lib.rs:2:panic"
+        );
+        let semicolon = parse(
+            "pub fn invariant_violated(context: &str) -> ! {\n    panic!(\"{context}\");\n}\n",
+        );
+        assert!(sanctioned_invariant_panic(path, &semicolon.items).is_some());
+        let extra = parse(
+            "pub fn invariant_violated(context: &str) -> ! {\n    if context.is_empty() { panic!(\"empty\"); }\n    panic!(\"{context}\")\n}\n",
+        );
+        assert!(sanctioned_invariant_panic(path, &extra.items).is_none());
+        let nested = parse(
+            "pub fn invariant_violated(context: &str) -> ! {\n    let fail = || panic!(\"nested\");\n    fail();\n    panic!(\"{context}\")\n}\n",
+        );
+        assert!(sanctioned_invariant_panic(path, &nested.items).is_none());
+    }
+
+    #[test]
+    fn sanctioned_invariant_panic_ignores_nested_same_name_function() {
+        let parse = |source: &str| syn::parse_file(source).expect("parse source");
+        let nested = parse(
+            "mod inner {\n    pub fn invariant_violated() -> ! {\n        panic!(\"nested\")\n    }\n}\n",
+        );
+        assert!(sanctioned_invariant_panic(SANCTIONED_INVARIANT_PATH, &nested.items).is_none());
+        let unrelated = parse("pub fn other() { panic!(\"other\"); }\n");
+        assert!(sanctioned_invariant_panic(SANCTIONED_INVARIANT_PATH, &unrelated.items).is_none());
+    }
+
+    #[test]
+    fn assertion_only_helper_flags_only_single_runtime_assertions() {
+        let parse = |source: &str| syn::parse_file(source).expect("parse source");
+        let block = |source: &str| match &parse(source).items[0] {
+            Item::Fn(function) => function.block.clone(),
+            _ => panic!("expected function"),
+        };
+        let path = "crates/demo/src/lib.rs";
+        // Tail-expression and semicolon forms with a runtime operand are flagged.
+        assert_eq!(
+            assertion_only_helper(path, &block("fn check(ok: bool) { assert!(ok) }\n"))
+                .expect("tail expression flagged")
+                .entry(),
+            "crates/demo/src/lib.rs:1:assert"
+        );
+        assert_eq!(
+            assertion_only_helper(path, &block("fn check(ok: bool) { debug_assert!(ok); }\n"))
+                .expect("semicolon flagged")
+                .kind,
+            "debug_assert"
+        );
+        assert!(assertion_only_helper(
+            path,
+            &block("fn check(a: i32, b: i32) { assert_eq!(a, b); }\n")
+        )
+        .is_some());
+        // Literal-only assertions cannot launder a runtime invariant.
+        assert!(assertion_only_helper(path, &block("fn check() { assert!(true); }\n")).is_none());
+        assert!(
+            assertion_only_helper(path, &block("fn check() { assert_eq!(1, 1); }\n")).is_none()
+        );
+        // Any other statement, or a second assertion, leaves the helper out of scope.
+        assert!(assertion_only_helper(
+            path,
+            &block("fn check(ok: bool) { assert!(ok); assert!(ok); }\n")
+        )
+        .is_none());
+        assert!(assertion_only_helper(
+            path,
+            &block("fn check(ok: bool) { let _ = ok; assert!(ok); }\n")
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn scan_sources_sanctions_the_helper_and_reports_production_call_sites() {
+        let root = TempRoot::new();
+        let helper = root.path.join("crates/tensor4all-tensorbackend/src/lib.rs");
+        fs::create_dir_all(helper.parent().expect("helper parent")).expect("create helper dir");
+        let source = "pub fn invariant_violated(context: &str) -> ! {\n    panic!(\"{context}\")\n}\n\npub fn caller(flag: bool) -> u32 {\n    if flag {\n        1\n    } else {\n        invariant_violated(\"bad\")\n    }\n}\n\n#[cfg(test)]\nmod tests {\n    fn test_only() {\n        invariant_violated(\"test\");\n    }\n}\n";
+        fs::write(&helper, source).expect("write helper source");
+        let sources = BTreeSet::from([fs::canonicalize(helper).expect("canonical helper")]);
+        let scanned = scan_sources(&root.path, &sources).expect("scan");
+        assert_eq!(
+            scanned.sanctioned_invariant_panics.len(),
+            1,
+            "the one direct panic is sanctioned"
+        );
+        assert_eq!(
+            scanned.invariant_calls.into_iter().collect::<Vec<_>>(),
+            vec![("crates/tensor4all-tensorbackend/src/lib.rs".to_owned(), 9)],
+            "only the production call site is reported"
+        );
+        assert!(scanned.assertions.is_empty());
+    }
+
+    #[test]
+    fn report_removes_sanctioned_panics_before_baselining() {
+        let sanctioned = parse_entry("crates/tensor4all-tensorbackend/src/lib.rs:150:panic")
+            .expect("sanctioned");
+        let extra =
+            parse_entry("crates/tensor4all-tensorbackend/src/lib.rs:151:panic").expect("extra");
+        let actual = [sanctioned.clone(), extra.clone()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let report = build_report(
+            &actual,
+            &BTreeSet::new(),
+            &BTreeSet::from([sanctioned.clone()]),
+            BTreeSet::new(),
+        );
+        assert_eq!(report.sanctioned, vec![sanctioned]);
+        assert_eq!(report.unbaselined, vec![extra]);
+    }
+
+    #[test]
     fn baseline_lines_reject_noncanonical_numbers() {
         assert!(parse_entry("crates/demo/src/lib.rs:01:assert").is_err());
         assert!(parse_entry("crates/demo/src/lib.rs:0:assert").is_err());
         assert!(parse_entry("crates/demo/src/lib.rs:1:unknown").is_err());
         assert!(parse_entry("demo/src/lib.rs:1:assert").is_err());
+    }
+
+    #[test]
+    fn report_prints_sanctioned_and_call_sites_without_failing() {
+        let sanctioned =
+            parse_entry("crates/tensor4all-tensorbackend/src/lib.rs:150:panic").expect("panic");
+        let passing = AuditReport {
+            matched: Vec::new(),
+            unbaselined: Vec::new(),
+            stale: Vec::new(),
+            forbidden_baseline: Vec::new(),
+            sanctioned: vec![sanctioned],
+            invariant_calls: vec![("crates/demo/src/lib.rs".to_owned(), 9)],
+        };
+        assert_eq!(passing.exit_code_and_print(), 0);
+        let failing = AuditReport {
+            matched: Vec::new(),
+            unbaselined: vec![parse_entry("crates/demo/src/lib.rs:1:assert").expect("new")],
+            stale: Vec::new(),
+            forbidden_baseline: Vec::new(),
+            sanctioned: Vec::new(),
+            invariant_calls: Vec::new(),
+        };
+        assert_eq!(failing.exit_code_and_print(), 1);
     }
 
     #[test]
@@ -2410,7 +2812,7 @@ pub fn nested_use() { assert!(true); }
         let new = parse_entry("crates/demo/src/lib.rs:4:unwrap").expect("new");
         let actual = [matched.clone(), new].into_iter().collect::<BTreeSet<_>>();
         let baseline = [matched, stale, raw].into_iter().collect::<BTreeSet<_>>();
-        let report = build_report(&actual, &baseline);
+        let report = build_report(&actual, &baseline, &BTreeSet::new(), BTreeSet::new());
         assert_eq!(
             report.matched,
             vec![parse_entry("crates/demo/src/lib.rs:1:assert").unwrap()]

@@ -24,6 +24,14 @@
   `unwrap`, `expect`, unchecked indexing, poisoned-lock unwraps, or debug-only
   assertions. Return a crate-local typed error or a C API status with preserved
   diagnostic context.
+- Internal invariants that no public input can reach, and the documented
+  `# Panics` precondition of an infallible standard-trait implementation
+  (`Index`/`IndexMut`, `Clone`, ...), use
+  `tensor4all_tensorbackend::invariant_violated` only. It is the single
+  sanctioned `panic!`; the library panic audit allowlists exactly that helper
+  and reports every call site. Do not launder an internal invariant through a
+  private-helper `assert!`, and do not add typed-error plumbing for a state that
+  is unreachable by construction.
 - Fast paths and zero-size returns get the same scrutiny as the main path: a
   shortcut must not skip rank, index identity, scalar kind, topology, or layout
   checks the full path would apply.
