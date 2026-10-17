@@ -177,7 +177,7 @@ where
 ///
 /// Returns the error of `outer_product` when the tensors share nothing, or
 /// the error of `contract` when they do.
-fn contract_or_outer_product<T>(lhs: &T, rhs: &T) -> Result<T>
+pub(crate) fn contract_or_outer_product<T>(lhs: &T, rhs: &T) -> Result<T>
 where
     T: TensorLike,
 {

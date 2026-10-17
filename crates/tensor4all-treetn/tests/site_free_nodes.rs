@@ -13,10 +13,11 @@ use num_complex::Complex64;
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TagSet, TensorContractionLike, TensorIndex};
 use tensor4all_treetn::contraction::{contract, ContractionOptions};
 use tensor4all_treetn::{
-    dmrg, factorize_tensor_to_treetn, fit_sum, global_subspace_expand_with_references, tdvp,
-    CanonicalForm, CanonicalizationOptions, DmrgError, DmrgOptions, FitOptions, GseError,
-    GseOptions, IndexMapping, LinearOperator, SiteIndexNetwork, SplitOptions, SwapOptions,
-    TdvpError, TdvpOptions, TreeTN, TreeTopology, TruncationOptions,
+    dmrg, factorize_tensor_to_treetn, fit_sum, global_subspace_expand_with_references,
+    square_linsolve, tdvp, CanonicalForm, CanonicalizationOptions, DmrgError, DmrgOptions,
+    FitOptions, GseError, GseOptions, IndexMapping, LinearOperator, LinsolveOptions,
+    SiteIndexNetwork, SplitOptions, SwapOptions, TdvpError, TdvpOptions, TreeTN, TreeTopology,
+    TruncationOptions,
 };
 
 type Network = TreeTN<IdxTensor, String>;
@@ -927,5 +928,213 @@ fn split_to_rejects_site_free_current_node() {
     assert!(
         err.to_string().contains('e'),
         "split_to must name the site-free node it cannot place: {err}"
+    );
+}
+
+// ============================================================================
+// Square linsolve on states with a site-free node (#987)
+// ============================================================================
+
+/// Column-major identity data for a `phys x phys` operator leg ordered
+/// `[out, in]`.
+fn identity_data(phys: usize) -> Vec<f64> {
+    let mut data = vec![0.0; phys * phys];
+    for i in 0..phys {
+        data[i + phys * i] = 1.0;
+    }
+    data
+}
+
+type LinsolveMappings = (
+    HashMap<String, IndexMapping<DynIndex>>,
+    HashMap<String, IndexMapping<DynIndex>>,
+);
+
+/// `e - a - b` with the site-free leaf `e` inserted first, plus an identity
+/// operator whose `e` node is a site-free spectator carrying only MPO bonds.
+fn site_free_leaf_linsolve_system() -> (Network, Network, LinsolveMappings) {
+    let (site_a, site_b) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let (bond_ea, bond_ab) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let state = TreeTN::from_tensors(
+        vec![
+            dense(vec![bond_ea.clone()], &[1.0, 1.0], None),
+            dense(
+                vec![bond_ea, site_a.clone(), bond_ab.clone()],
+                &sample_values(8, 0.5),
+                None,
+            ),
+            dense(vec![bond_ab, site_b.clone()], &sample_values(4, 0.9), None),
+        ],
+        names(&["e", "a", "b"]),
+    )
+    .unwrap();
+
+    // The MPO bonds are independent of the state bonds and kept at dim one.
+    let (m_ea, m_ab) = (DynIndex::new_dyn(1), DynIndex::new_dyn(1));
+    let (s_a_in, s_b_in) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let (s_a_out, s_b_out) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let ident = identity_data(2);
+    let operator = TreeTN::from_tensors(
+        vec![
+            dense(vec![m_ea.clone()], &[1.0], None),
+            dense(
+                vec![m_ea, s_a_out.clone(), s_a_in.clone(), m_ab.clone()],
+                &ident,
+                None,
+            ),
+            dense(vec![m_ab, s_b_out.clone(), s_b_in.clone()], &ident, None),
+        ],
+        names(&["e", "a", "b"]),
+    )
+    .unwrap();
+
+    let mut input = HashMap::new();
+    let mut output = HashMap::new();
+    input.insert(
+        "a".to_string(),
+        IndexMapping {
+            true_index: site_a.clone(),
+            internal_index: s_a_in,
+        },
+    );
+    input.insert(
+        "b".to_string(),
+        IndexMapping {
+            true_index: site_b.clone(),
+            internal_index: s_b_in,
+        },
+    );
+    output.insert(
+        "a".to_string(),
+        IndexMapping {
+            true_index: site_a,
+            internal_index: s_a_out,
+        },
+    );
+    output.insert(
+        "b".to_string(),
+        IndexMapping {
+            true_index: site_b,
+            internal_index: s_b_out,
+        },
+    );
+    (state, operator, (input, output))
+}
+
+/// `a - m - b` with the site-free internal node `m`, plus an identity operator
+/// whose `m` node is a site-free spectator carrying only MPO bonds.
+fn site_free_internal_linsolve_system() -> (Network, Network, LinsolveMappings) {
+    let (site_a, site_b) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3));
+    let (bond_am, bond_mb) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let state = TreeTN::from_tensors(
+        vec![
+            dense(
+                vec![site_a.clone(), bond_am.clone()],
+                &sample_values(4, 0.5),
+                None,
+            ),
+            dense(vec![bond_am, bond_mb.clone()], &sample_values(4, 0.7), None),
+            dense(vec![bond_mb, site_b.clone()], &sample_values(6, 0.9), None),
+        ],
+        names(&["a", "m", "b"]),
+    )
+    .unwrap();
+
+    let (m_am, m_mb) = (DynIndex::new_dyn(1), DynIndex::new_dyn(1));
+    let (s_a_in, s_b_in) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3));
+    let (s_a_out, s_b_out) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3));
+    let operator = TreeTN::from_tensors(
+        vec![
+            dense(
+                vec![m_am.clone(), s_a_out.clone(), s_a_in.clone()],
+                &identity_data(2),
+                None,
+            ),
+            dense(vec![m_am, m_mb.clone()], &[1.0], None),
+            dense(
+                vec![m_mb, s_b_out.clone(), s_b_in.clone()],
+                &identity_data(3),
+                None,
+            ),
+        ],
+        names(&["a", "m", "b"]),
+    )
+    .unwrap();
+
+    let mut input = HashMap::new();
+    let mut output = HashMap::new();
+    input.insert(
+        "a".to_string(),
+        IndexMapping {
+            true_index: site_a.clone(),
+            internal_index: s_a_in,
+        },
+    );
+    input.insert(
+        "b".to_string(),
+        IndexMapping {
+            true_index: site_b.clone(),
+            internal_index: s_b_in,
+        },
+    );
+    output.insert(
+        "a".to_string(),
+        IndexMapping {
+            true_index: site_a,
+            internal_index: s_a_out,
+        },
+    );
+    output.insert(
+        "b".to_string(),
+        IndexMapping {
+            true_index: site_b,
+            internal_index: s_b_out,
+        },
+    );
+    (state, operator, (input, output))
+}
+
+fn assert_square_linsolve_identity(
+    system: (Network, Network, LinsolveMappings),
+    center: &str,
+    label: &str,
+) {
+    let (state, operator, (input_mapping, output_mapping)) = system;
+    let expected = state.to_dense().unwrap();
+    let options = LinsolveOptions::default()
+        .with_nfullsweeps(3)
+        .with_gmres_tol(1e-11)
+        .with_gmres_restart_dim(20)
+        .with_gmres_max_restarts(50)
+        .with_max_bond_dim(16);
+    let result = square_linsolve(
+        &operator,
+        &state,
+        state.clone(),
+        &center.to_string(),
+        options,
+        Some(input_mapping),
+        Some(output_mapping),
+    )
+    .unwrap();
+    result.solution.verify_internal_consistency().unwrap();
+    assert_values(&result.solution, &expected, label);
+}
+
+#[test]
+fn square_linsolve_with_site_free_leaf_state_matches_dense_solve() {
+    assert_square_linsolve_identity(
+        site_free_leaf_linsolve_system(),
+        "a",
+        "square linsolve with a site-free leaf",
+    );
+}
+
+#[test]
+fn square_linsolve_with_site_free_internal_state_matches_dense_solve() {
+    assert_square_linsolve_identity(
+        site_free_internal_linsolve_system(),
+        "a",
+        "square linsolve with a site-free internal node",
     );
 }
