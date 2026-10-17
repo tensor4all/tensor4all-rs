@@ -2195,9 +2195,10 @@ impl IdxTensor {
 
         let output_len = checked_product(&output_payload_dims)?;
         let mut output_payload = Vec::with_capacity(output_len);
+        let mut output_payload_index = Vec::with_capacity(output_payload_dims.len());
+        let mut input_payload_index = vec![0usize; payload_rank];
         for linear in 0..output_len {
-            let output_payload_index = decode_col_major_linear(linear, &output_payload_dims)?;
-            let mut input_payload_index = vec![0usize; payload_rank];
+            decode_col_major_linear_into(linear, &output_payload_dims, &mut output_payload_index);
             for class_id in 0..payload_rank {
                 input_payload_index[class_id] =
                     if let Some(position) = selected_class_positions[class_id] {
@@ -2238,10 +2239,13 @@ impl IdxTensor {
         let axis_classes = self.storage.axis_classes();
         let output_len = checked_product(&kept_dims)?;
         let mut output = Vec::with_capacity(output_len);
+        let mut kept_position = Vec::with_capacity(kept_dims.len());
+        let mut input_payload_index = vec![None; payload_dims.len()];
+        let mut dense_positions = Vec::with_capacity(payload_dims.len());
 
         for linear in 0..output_len {
-            let kept_position = decode_col_major_linear(linear, &kept_dims)?;
-            let mut input_payload_index = selected_class_positions.to_vec();
+            decode_col_major_linear_into(linear, &kept_dims, &mut kept_position);
+            input_payload_index.copy_from_slice(selected_class_positions);
             let mut is_structural_zero = false;
 
             for (&axis, &position) in kept_axes.iter().zip(kept_position.iter()) {
@@ -2261,18 +2265,18 @@ impl IdxTensor {
                 continue;
             }
 
-            let input_payload_index = input_payload_index
-                .into_iter()
-                .enumerate()
-                .map(|(class_id, position)| {
-                    position.ok_or_else(|| {
-                        anyhow::anyhow!(
+            dense_positions.clear();
+            for (class_id, position) in input_payload_index.iter().enumerate() {
+                match position {
+                    Some(position) => dense_positions.push(*position),
+                    None => {
+                        return Err(anyhow::anyhow!(
                             "structured payload class {class_id} is neither selected nor kept"
-                        )
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let input_linear = encode_col_major_linear(&input_payload_index, payload_dims)?;
+                        ))
+                    }
+                }
+            }
+            let input_linear = encode_col_major_linear(&dense_positions, payload_dims)?;
             output.push(payload[input_linear]);
         }
 
@@ -8424,22 +8428,21 @@ fn map_payload_support_coordinate(
     target_seen.iter().all(|&seen| seen)
 }
 
-fn decode_col_major_linear(linear: usize, dims: &[usize]) -> Result<Vec<usize>> {
-    let total = checked_product(dims)?;
-    if !(linear < total) {
-        return Err(anyhow::anyhow!(
-            "linear offset {} out of bounds for dims {:?}",
-            linear,
-            dims
-        ));
-    };
+/// Write the column-major multi-index of `linear` into `out`, reusing the
+/// caller's buffer.
+///
+/// Unlike a checked decoder, this skips re-deriving `product(dims)`: the two
+/// structured-selection loops already computed `linear < product(dims)` from
+/// the same `dims`, which also makes every `dim` non-zero, so the `% dim`
+/// below cannot divide by zero. Hoisting the buffer and the bound derivation
+/// out of these tensor-sized loops removes the per-element allocation.
+fn decode_col_major_linear_into(linear: usize, dims: &[usize], out: &mut Vec<usize>) {
+    out.clear();
     let mut remaining = linear;
-    let mut out = Vec::with_capacity(dims.len());
     for &dim in dims {
         out.push(remaining % dim);
         remaining /= dim;
     }
-    Ok(out)
 }
 
 fn encode_col_major_linear(indices: &[usize], dims: &[usize]) -> Result<usize> {

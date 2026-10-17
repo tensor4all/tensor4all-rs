@@ -1163,3 +1163,141 @@ fn test_as_slice_error_on_wrong_type() {
     assert!(tensor_c64.to_vec::<f64>().is_err());
     assert!(tensor_c64.to_vec::<f64>().is_err());
 }
+
+/// Differential regression for #737: both structured `select_indices` paths
+/// must return exactly the dense `select_indices` result after the per-element
+/// scratch buffers were hoisted out of their loops.
+///
+/// The reference is a plain dense tensor holding the same materialized values,
+/// which selects through the independent runtime slice/reshape path.
+fn assert_structured_select_matches_dense<T>(
+    structured: IdxTensor,
+    selections: &[(Vec<DynIndex>, Vec<usize>)],
+) where
+    T: TensorElement + PartialEq + std::fmt::Debug,
+{
+    let dense = IdxTensor::from_dense(
+        structured.indices().to_vec(),
+        structured.to_vec::<T>().unwrap(),
+    )
+    .unwrap();
+
+    for (selected, positions) in selections {
+        let optimized = structured.select_indices(selected, positions).unwrap();
+        let reference = dense.select_indices(selected, positions).unwrap();
+        assert_eq!(
+            optimized.to_vec::<T>().unwrap(),
+            reference.to_vec::<T>().unwrap(),
+            "structured select_indices diverged from the dense reference for \
+             selected={selected:?} positions={positions:?}"
+        );
+    }
+}
+
+/// Copy-class structured tensor with axis classes `[0, 1, 0]` and payload
+/// `[2, 3]`, matching the existing structured-selection fixtures.
+fn copy_class_structured_f64(i: &DynIndex, j: &DynIndex, k: &DynIndex) -> IdxTensor {
+    let storage = Storage::new_structured(
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+        vec![2, 3],
+        vec![1, 2],
+        vec![0, 1, 0],
+    )
+    .unwrap();
+    IdxTensor::from_storage(vec![i.clone(), j.clone(), k.clone()], Arc::new(storage)).unwrap()
+}
+
+#[test]
+fn structured_select_indices_matches_dense_reference_f64() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(2);
+    let structured = copy_class_structured_f64(&i, &j, &k);
+    let selections = vec![
+        (vec![j.clone()], vec![1]),
+        (vec![k.clone()], vec![1]),
+        (vec![i.clone(), k.clone()], vec![1, 1]),
+        (vec![i.clone(), k.clone()], vec![0, 1]),
+        (vec![i.clone(), j.clone(), k.clone()], vec![1, 1, 1]),
+        (vec![i.clone(), j.clone()], vec![1, 1]),
+    ];
+    assert_structured_select_matches_dense::<f64>(structured, &selections);
+}
+
+#[test]
+fn structured_select_indices_matches_dense_reference_c64() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(2);
+    let storage = Storage::new_structured(
+        vec![
+            Complex64::new(1.0, -1.0),
+            Complex64::new(2.0, 0.5),
+            Complex64::new(3.0, 2.0),
+            Complex64::new(4.0, -0.5),
+            Complex64::new(5.0, 1.5),
+            Complex64::new(6.0, 0.0),
+        ],
+        vec![2, 3],
+        vec![1, 2],
+        vec![0, 1, 0],
+    )
+    .unwrap();
+    let structured =
+        IdxTensor::from_storage(vec![i.clone(), j.clone(), k.clone()], Arc::new(storage)).unwrap();
+    let selections = vec![
+        (vec![j.clone()], vec![2]),
+        (vec![k.clone()], vec![0]),
+        (vec![i.clone(), k.clone()], vec![1, 1]),
+        (vec![i.clone(), k.clone()], vec![0, 1]),
+        (vec![i.clone(), j.clone(), k.clone()], vec![0, 0, 0]),
+    ];
+    assert_structured_select_matches_dense::<Complex64>(structured, &selections);
+}
+
+#[test]
+fn structured_select_indices_matches_dense_reference_f32() {
+    let left = Index::new_dyn(2);
+    let site = Index::new_dyn(3);
+    let right = Index::new_dyn(2);
+    // Copy selector: payload is `2` at `site == 1` on the left/right diagonal.
+    let structured =
+        IdxTensor::from_copy_selector(left.clone(), site.clone(), right.clone(), 1, 2.0_f32)
+            .unwrap();
+    let selections = vec![
+        (vec![site.clone()], vec![1]),
+        (vec![right.clone()], vec![1]),
+        (vec![left.clone(), right.clone()], vec![0, 1]),
+        (
+            vec![left.clone(), site.clone(), right.clone()],
+            vec![1, 1, 1],
+        ),
+        (vec![left.clone(), site.clone()], vec![1, 0]),
+    ];
+    assert_structured_select_matches_dense::<f32>(structured, &selections);
+}
+
+#[test]
+fn structured_select_indices_matches_dense_reference_c32() {
+    let left = Index::new_dyn(2);
+    let site = Index::new_dyn(3);
+    let right = Index::new_dyn(2);
+    let structured = IdxTensor::from_copy_selector(
+        left.clone(),
+        site.clone(),
+        right.clone(),
+        2,
+        Complex32::new(1.0, -2.0),
+    )
+    .unwrap();
+    let selections = vec![
+        (vec![site.clone()], vec![2]),
+        (vec![right.clone()], vec![0]),
+        (vec![left.clone(), right.clone()], vec![1, 0]),
+        (
+            vec![left.clone(), site.clone(), right.clone()],
+            vec![0, 2, 1],
+        ),
+    ];
+    assert_structured_select_matches_dense::<Complex32>(structured, &selections);
+}

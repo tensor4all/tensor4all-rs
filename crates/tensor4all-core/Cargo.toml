@@ -97,6 +97,10 @@ harness = false
 name = "lazy_block_rook"
 harness = false
 
+[[bench]]
+name = "structured_select"
+harness = false
+
 [[test]]
 name = "integration"
 path = "tests/main.rs"
