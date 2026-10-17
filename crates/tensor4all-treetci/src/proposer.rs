@@ -124,8 +124,9 @@ pub struct DefaultProposer;
 impl PivotCandidateProposer for DefaultProposer {
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`crate::TreeTciError::Operation`] for an edge absent from the
+    /// graph, a missing or malformed pivot set, or a candidate-count `usize`
+    /// overflow.
     ///
     fn candidates_with_rng<T, R: Rng + ?Sized>(
         &self,
@@ -210,8 +211,9 @@ impl PivotCandidateProposer for SimpleProposer {
 
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`crate::TreeTciError::Operation`] for an edge absent from the
+    /// graph, a missing or malformed pivot set, or a candidate-count `usize`
+    /// overflow.
     ///
     fn candidates_with_rng<T, R: Rng + ?Sized>(
         &self,
@@ -315,8 +317,9 @@ impl PivotCandidateProposer for TruncatedDefaultProposer {
 
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`crate::TreeTciError::Operation`] for an edge absent from the
+    /// graph, a missing or malformed pivot set, or a candidate-count `usize`
+    /// overflow.
     ///
     fn candidates_with_rng<T, R: Rng + ?Sized>(
         &self,

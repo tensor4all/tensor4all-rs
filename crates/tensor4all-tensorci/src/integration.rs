@@ -507,9 +507,11 @@ fn gk_nodes_weights(gk_order: usize) -> Result<(&'static [f64], &'static [f64])>
 ///
 /// # Errors
 ///
-/// Returns [`TCIError::InvalidConfiguration`] for invalid TCI2 options. It
-/// also returns an error when the contraction or operation fails (a shape or
-/// index mismatch, or a backend failure).
+/// Returns [`TCIError::InvalidConfiguration`] for invalid TCI2 options,
+/// [`TCIError::DimensionMismatch`] when `a` and `b` differ in length,
+/// [`TCIError::InvalidOperation`] for an unsupported Gauss-Kronrod order,
+/// [`TCIError::SimpleTensorTrain`] when the result cannot be converted to a
+/// tensor train or summed, and the errors of [`crossinterpolate2`] otherwise.
 ///
 /// # Examples
 ///

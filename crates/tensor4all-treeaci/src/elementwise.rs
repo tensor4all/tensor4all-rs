@@ -35,8 +35,15 @@ use crate::{
 ///
 /// # Errors
 ///
-/// Returns [`crate::TreeAciError`] for invalid inputs/options, callback failure,
-/// resource exhaustion, scalar mismatch, or a numerical/tree operation error.
+/// Returns [`crate::TreeAciError::NoInputs`] or [`crate::TreeAciError::EmptyTree`]
+/// for an empty input list or tree, [`crate::TreeAciError::TopologyMismatch`] or
+/// [`crate::TreeAciError::PhysicalIndexMismatch`] for incompatible inputs,
+/// [`crate::TreeAciError::InvalidOption`] or
+/// [`crate::TreeAciError::InvalidInitialGuess`] for a bad option or initial
+/// guess, [`crate::TreeAciError::Callback`] when the operator returns an error,
+/// [`crate::TreeAciError::NonFiniteValue`] or [`crate::TreeAciError::Numerical`]
+/// on a non-finite value or failed factorization, and the resource, size,
+/// scalar, batch, and [`crate::TreeAciError::TreeTN`] errors of preparation.
 ///
 /// # Panics
 ///
@@ -120,8 +127,16 @@ where
 /// per pass, so the caller can reproduce or advance the whole run.
 ///
 /// # Errors
-/// Returns [`crate::TreeAciError`] for invalid inputs/options, callback failure,
-/// resource exhaustion, scalar mismatch, or a numerical/tree operation error.
+///
+/// Returns [`crate::TreeAciError::NoInputs`] or [`crate::TreeAciError::EmptyTree`]
+/// for an empty input list or tree, [`crate::TreeAciError::TopologyMismatch`] or
+/// [`crate::TreeAciError::PhysicalIndexMismatch`] for incompatible inputs,
+/// [`crate::TreeAciError::InvalidOption`] or
+/// [`crate::TreeAciError::InvalidInitialGuess`] for a bad option or initial
+/// guess, [`crate::TreeAciError::Callback`] when the operator returns an error,
+/// [`crate::TreeAciError::NonFiniteValue`] or [`crate::TreeAciError::Numerical`]
+/// on a non-finite value or failed factorization, and the resource, size,
+/// scalar, batch, and [`crate::TreeAciError::TreeTN`] errors of preparation.
 pub fn tree_elementwise_batched_with_rng<T, V, F, R>(
     operator: F,
     inputs: &[TreeTN<IdxTensor, V>],

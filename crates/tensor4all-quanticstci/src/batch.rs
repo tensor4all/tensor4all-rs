@@ -43,8 +43,9 @@ impl<'a, T: Copy> QuanticsBatch<'a, T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when `data.len()` is not `n_dims * n_points` or when
-    /// `n_dims` is zero (a shape mismatch).
+    /// Returns [`QuanticsTCIError::InvalidConfiguration`] when `n_dims` is
+    /// zero with a nonzero `n_points`, when `n_dims * n_points` overflows
+    /// `usize`, or when `data.len()` differs from that product.
     pub fn new(data: &'a [T], n_dims: usize, n_points: usize) -> QtciResult<Self> {
         if n_dims == 0 && n_points != 0 {
             return Err(QuanticsTCIError::InvalidConfiguration {

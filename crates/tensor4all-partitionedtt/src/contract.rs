@@ -18,8 +18,9 @@ use tensor4all_itensorlike::ContractOptions;
 ///
 /// # Errors
 ///
-/// Returns an error when the contraction or operation fails (a shape or
-/// index mismatch, or a backend failure).
+/// Returns the same [`PartitionedTTError`] variants as
+/// [`SubDomainTT::contract`] (projector, storage, construction, and
+/// tensor-train errors); `Ok(None)` means the projectors are incompatible.
 ///
 /// # Examples
 ///
@@ -53,8 +54,11 @@ pub fn contract(
 ///
 /// # Errors
 ///
-/// Returns an error when the contraction or operation fails (a shape or
-/// index mismatch, or a backend failure).
+/// Returns [`PartitionedTTError::ProjectorIndexNotFound`] when the projector
+/// mentions an index absent from both inputs, and the projection and
+/// contraction errors of [`SubDomainTT::project`] and
+/// [`SubDomainTT::contract`] otherwise; `Ok(None)` means a projection or the
+/// contraction has no compatible subdomain.
 ///
 /// # Examples
 ///

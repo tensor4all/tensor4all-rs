@@ -1518,7 +1518,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     ///
     /// # Errors
     ///
-    /// Propagates every failure of the selected kernel.
+    /// Same errors as [`Self::candidate_frames_for_edge`].
     pub(crate) fn candidate_frames_for_edge_rows<V: TreeAciNode>(
         &self,
         inputs: &[TreeTN<IdxTensor, V>],

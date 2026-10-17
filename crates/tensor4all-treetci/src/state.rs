@@ -89,8 +89,9 @@ impl<T> TreeTCI2<T> {
     /// Create a new TreeTCI state from local dimensions and a tree graph.
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`crate::TreeTciError::Operation`] when `local_dims` has fewer
+    /// than two entries, its length differs from the graph's site count, or an
+    /// entry is zero.
     ///
     pub fn new(local_dims: Vec<usize>, graph: TreeTciGraph) -> TreeTciResult<Self> {
         if !(local_dims.len() > 1) {
@@ -136,8 +137,10 @@ impl<T> TreeTCI2<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`crate::TreeTciError::Operation`] when a pivot has fewer or
+    /// more entries than there are sites or holds an out-of-range value, when
+    /// an edge is absent from the graph, or when a pivot column cannot be
+    /// appended.
     pub fn add_global_pivots(&mut self, pivots: &[MultiIndex]) -> TreeTciResult<()> {
         let n_sites = self.local_dims.len();
         if !(pivots.iter().all(|pivot| pivot.len() == n_sites)) {

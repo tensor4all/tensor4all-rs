@@ -69,14 +69,11 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 ///
 /// # Errors
 ///
-/// Returns an error when the current state cannot be materialized as a
-/// `TreeTN` (a rank mismatch or a singular pivot matrix), when the batch
-/// evaluator returns a wrong number of values (a batch length mismatch),
-/// when `abs_tol` or `tol_margin` is not finite and nonnegative (an
-/// invalid configuration), when the candidate index array shape is
-/// malformed (a shape mismatch), or when reading the materialized
-/// approximation at the candidates fails (a contraction failure), or a
-/// sampled interpolation residual is non-finite.
+/// Returns [`crate::TreeTciError::Operation`] when `abs_tol` or `tol_margin`
+/// is negative or non-finite, when the state cannot be materialized as a
+/// `TreeTN`, when the evaluator or the approximation readout returns the
+/// wrong number of values or a non-finite residual, or when building the
+/// candidate index array fails.
 ///
 /// # Examples
 ///
@@ -143,14 +140,12 @@ where
 /// `rand_chacha::ChaCha8Rng` when a deterministic algorithm is required.
 ///
 /// # Errors
-/// Returns an error when the current state cannot be materialized as a
-/// `TreeTN` (a rank mismatch or a singular pivot matrix), when the batch
-/// evaluator returns a wrong number of values (a batch length mismatch),
-/// when `abs_tol` or `tol_margin` is not finite and nonnegative (an
-/// invalid configuration), when the candidate index array shape is
-/// malformed (a shape mismatch), or when reading the materialized
-/// approximation at the candidates fails (a contraction failure), or a
-/// sampled interpolation residual is non-finite.
+///
+/// Returns [`crate::TreeTciError::Operation`] when `abs_tol` or `tol_margin`
+/// is negative or non-finite, when the state cannot be materialized as a
+/// `TreeTN`, when the evaluator or the approximation readout returns the
+/// wrong number of values or a non-finite residual, or when building the
+/// candidate index array fails.
 pub fn find_global_pivots_with_rng<T, F, R>(
     state: &TreeTCI2<T>,
     evaluate: F,

@@ -445,8 +445,8 @@ where
     /// Create a new empty TensorCI2
     /// # Errors
     ///
-    /// Returns an error when the options or input dimensions are invalid (an
-    /// invalid-configuration failure).
+    /// Returns [`TCIError::DimensionMismatch`] when `local_dims` has fewer than
+    /// two entries, and [`TCIError::InvalidConfiguration`] when an entry is zero.
     ///
     pub fn new(local_dims: Vec<usize>) -> Result<Self> {
         if local_dims.len() < 2 {
@@ -728,8 +728,8 @@ where
     /// Convert to SimpleTensorTrain
     /// # Errors
     ///
-    /// Returns an error when the conversion fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`TCIError::SimpleTensorTrain`] when the site tensors do not
+    /// form a valid tensor train.
     ///
     pub fn to_tensor_train(&self) -> Result<SimpleTensorTrain<T>> {
         let tensors = self.site_tensors.clone();
@@ -739,8 +739,9 @@ where
     /// Add global pivots to the TCI
     /// # Errors
     ///
-    /// Returns an error when a pivot is invalid (an invalid-index or
-    /// out-of-bounds failure).
+    /// Returns [`TCIError::DimensionMismatch`] when a pivot's length differs
+    /// from the number of sites, and [`TCIError::IndexOutOfBounds`] when a
+    /// pivot value is out of range for its site.
     ///
     pub fn add_global_pivots(&mut self, pivots: &[MultiIndex]) -> Result<()> {
         // Validate the complete batch before mutating any index set.
@@ -823,8 +824,8 @@ where
     /// # Errors
     ///
     /// Returns [`TCIError::InvalidConfiguration`] for invalid tolerances, iteration/history limits, or an
-    /// invalid optional bond dimension. It also returns an error for a shape or index mismatch, a non-convergence
-    /// failure, or a backend failure.
+    /// invalid optional bond dimension, and [`TCIError::InvalidOperation`], [`TCIError::MatrixCIError`], or
+    /// [`TCIError::SimpleTensorTrain`] when a candidate matrix, site layout, factorization, or solve fails.
     pub fn sweep2site<F, B>(
         &mut self,
         f: &F,
@@ -846,9 +847,10 @@ where
     /// # Errors
     ///
     /// Returns [`TCIError::InvalidConfiguration`] for invalid tolerances,
-    /// iteration/history limits, or an invalid optional bond dimension. It
-    /// also returns an error for a shape or index mismatch, a non-convergence
-    /// failure, or a backend failure.
+    /// iteration/history limits, or an invalid optional bond dimension, and
+    /// [`TCIError::InvalidOperation`], [`TCIError::MatrixCIError`], or
+    /// [`TCIError::SimpleTensorTrain`] when a candidate matrix, site layout,
+    /// factorization, or solve fails.
     ///
     fn sweep2site_on_session<F, B>(
         &mut self,
@@ -970,8 +972,8 @@ where
     /// # Errors
     ///
     /// Returns [`TCIError::InvalidConfiguration`] for negative or non-finite tolerances or a zero bond
-    /// dimension. It also returns an error when the one-site sweep fails (a shape or index mismatch, a
-    /// non-convergence failure, or a backend failure).
+    /// dimension, and [`TCIError::InvalidOperation`], [`TCIError::MatrixCIError`], or
+    /// [`TCIError::SimpleTensorTrain`] when a candidate matrix, site layout, factorization, or solve fails.
     pub fn sweep1site<F>(
         &mut self,
         f: &F,
@@ -1004,9 +1006,9 @@ where
     /// # Errors
     ///
     /// Returns [`TCIError::InvalidConfiguration`] for negative or non-finite
-    /// tolerances or a zero bond dimension. It also returns an error when the
-    /// one-site sweep fails (a shape or index mismatch, a non-convergence
-    /// failure, or a backend failure).
+    /// tolerances or a zero bond dimension, and [`TCIError::InvalidOperation`],
+    /// [`TCIError::MatrixCIError`], or [`TCIError::SimpleTensorTrain`] when a
+    /// candidate matrix, site layout, factorization, or solve fails.
     ///
     // INVARIANT: the parameter list is the sweep's boundary (evaluator, direction, tolerance pair, bond cap,
     // tensor-update flag) plus the optional execution route; grouping them would only add a layer.
@@ -1207,8 +1209,10 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the site tensors cannot be built (a shape or index mismatch, or a backend
-    /// failure).
+    /// Returns [`TCIError::InvalidOperation`] when a candidate or pivot matrix
+    /// cannot be built, a site-layout offset overflows, or the one-site solve
+    /// fails, and [`TCIError::SimpleTensorTrain`] when a site core cannot be
+    /// constructed.
     pub fn fill_site_tensors<F>(&mut self, f: &F) -> Result<()>
     where
         F: Fn(&MultiIndex) -> T,
@@ -1226,8 +1230,10 @@ where
     /// Port of Julia's `fillsitetensors!` / `setsitetensor!`.
     /// # Errors
     ///
-    /// Returns an error when the site tensors cannot be built (a shape or index
-    /// mismatch, or a backend failure).
+    /// Returns [`TCIError::InvalidOperation`] when a candidate or pivot matrix
+    /// cannot be built, a site-layout offset overflows, or the one-site solve
+    /// fails, and [`TCIError::SimpleTensorTrain`] when a site core cannot be
+    /// constructed.
     ///
     fn fill_site_tensors_on_session<F>(
         &mut self,
@@ -1366,8 +1372,8 @@ where
     /// # Errors
     ///
     /// Returns [`TCIError::InvalidConfiguration`] for negative or non-finite tolerances or a zero bond
-    /// dimension. It also returns an error when the canonicalization fails (a shape or index mismatch or a
-    /// backend failure).
+    /// dimension, and [`TCIError::InvalidOperation`], [`TCIError::MatrixCIError`], or
+    /// [`TCIError::SimpleTensorTrain`] when a canonicalization sweep fails.
     pub fn make_canonical<F>(
         &mut self,
         f: &F,
@@ -1391,8 +1397,9 @@ where
     /// # Errors
     ///
     /// Returns [`TCIError::InvalidConfiguration`] for negative or non-finite
-    /// tolerances or a zero bond dimension. It also returns an error when the
-    /// canonicalization fails (a shape or index mismatch or a backend failure).
+    /// tolerances or a zero bond dimension, and [`TCIError::InvalidOperation`],
+    /// [`TCIError::MatrixCIError`], or [`TCIError::SimpleTensorTrain`] when a
+    /// canonicalization sweep fails.
     ///
     fn make_canonical_on_session<F>(
         &mut self,

@@ -315,9 +315,9 @@ where
 ///
 /// # Errors
 /// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
-/// for invalid options. It
-/// also returns an error when the operation fails (a shape or index mismatch,
-/// or a backend failure).
+/// for invalid options, and [`TreeTciError::Operation`](crate::TreeTciError::Operation)
+/// for dimension mismatches, invalid initial pivots, an all-zero initial
+/// sample, callback failures, and materialization/backend failures.
 ///
 /// # Examples
 ///

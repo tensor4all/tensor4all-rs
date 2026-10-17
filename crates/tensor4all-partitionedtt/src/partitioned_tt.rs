@@ -259,8 +259,8 @@ impl PartitionedTT {
     ///
     /// # Errors
     ///
-    /// Returns an error when the norm cannot be evaluated (a materialization or
-    /// backend failure).
+    /// Returns [`PartitionedTTError::TensorTrain`] when evaluating a
+    /// subdomain's squared norm fails.
     ///
     /// # Examples
     ///
@@ -299,8 +299,10 @@ impl PartitionedTT {
     /// Performs pairwise contraction of compatible SubDomainTTs and combines results.
     /// # Errors
     ///
-    /// Returns an error when the contraction fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns the projector, storage, construction, and tensor-train errors of
+    /// [`SubDomainTT::contract`], and [`PartitionedTTError::TensorTrain`] or
+    /// [`PartitionedTTError::OverlappingProjectors`] when combining the results
+    /// fails.
     ///
     pub fn contract(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
         let mut result = Self::new();
@@ -350,8 +352,12 @@ impl PartitionedTT {
     ///
     /// # Errors
     ///
-    /// Returns an error when the partitions are incompatible (a shape mismatch)
-    /// or the addition fails.
+    /// Returns [`PartitionedTTError::IncompatibleProjectors`] when the union of
+    /// patch projectors is not pairwise disjoint, [`PartitionedTTError::TensorTrain`]
+    /// when adding or truncating a patch fails, and the projector and
+    /// [`PartitionedTTError::OverlappingProjectors`] errors of
+    /// [`PartitionedTT::insert`] or [`SubDomainTT::new`] for an invalid combined
+    /// patch.
     ///
     pub fn add(&self, other: &Self, options: &TruncateOptions) -> Result<Self> {
         // Collect unique projectors from both (union)
@@ -454,8 +460,9 @@ impl PartitionedTT {
     ///
     /// # Errors
     ///
-    /// Returns an error when the conversion fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`PartitionedTTError::Empty`] when the partition has no
+    /// subdomains, and [`PartitionedTTError::TensorTrain`] when summing a
+    /// subdomain fails.
     ///
     pub fn to_tensor_train(&self) -> Result<TensorTrain> {
         if self.is_empty() {

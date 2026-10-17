@@ -435,8 +435,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the grid coordinate conversion fails (an
-    /// grid shape mismatch failure) or the evaluation fails.
+    /// Returns [`QuanticsTCIError::Operation`] when the grid-index-to-quantics
+    /// conversion fails (for example, no grid is available or an index is out
+    /// of range) or when the tensor-train evaluation fails.
     ///
     /// # Examples
     ///
@@ -472,6 +473,8 @@ where
     ///
     /// # Errors
     ///
+    /// Returns [`QuanticsTCIError::Operation`] when summing the underlying
+    /// tensor train fails.
     ///
     /// # Examples
     ///
@@ -510,8 +513,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the underlying summation reports a failure (a
-    /// [`QuanticsTCIError::Operation`]).
+    /// Returns [`QuanticsTCIError::Operation`] when the underlying
+    /// [`sum`](Self::sum) fails.
     ///
     /// # Examples
     ///

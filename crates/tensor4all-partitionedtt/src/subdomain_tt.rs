@@ -301,8 +301,8 @@ impl SubDomainTT {
     ///
     /// # Errors
     ///
-    /// Returns an error when the norm cannot be evaluated (a materialization or
-    /// backend failure).
+    /// Returns [`PartitionedTTError::TensorTrain`] when the underlying
+    /// tensor-train norm fails (for example, a backend evaluation failure).
     ///
     pub fn norm(&self) -> Result<f64> {
         self.data
@@ -314,8 +314,8 @@ impl SubDomainTT {
     ///
     /// # Errors
     ///
-    /// Returns an error when the norm cannot be evaluated (a materialization or
-    /// backend failure).
+    /// Returns [`PartitionedTTError::TensorTrain`] when the underlying
+    /// tensor-train squared norm fails.
     ///
     pub fn norm_squared(&self) -> Result<f64> {
         self.data
@@ -326,7 +326,8 @@ impl SubDomainTT {
     /// Truncate the tensor train.
     /// # Errors
     ///
-    /// Returns an error when the truncation fails (a backend or SVD failure).
+    /// Returns [`PartitionedTTError::TensorTrain`] when the tensor-train
+    /// truncation (SVD or backend) fails.
     ///
     pub fn truncate(&mut self, options: &TruncateOptions) -> Result<()> {
         self.data
@@ -432,8 +433,8 @@ impl SubDomainTT {
     /// Inner product with another SubDomainTT.
     /// # Errors
     ///
-    /// Returns an error when the subdomains are incompatible (a shape mismatch)
-    /// or the inner product fails (a backend failure).
+    /// Returns [`PartitionedTTError::TensorTrain`] when the underlying
+    /// tensor-train inner product fails.
     ///
     pub fn inner(&self, other: &Self) -> Result<AnyScalar> {
         self.data

@@ -298,11 +298,17 @@ where
 ///
 /// # Errors
 ///
-/// Returns the typed validation errors from partition contraction, including
-/// invalid options, empty operands, topology, site assignment, dtype, and
-/// center errors. It also returns the checked volume or logical-count overflow
-/// errors and typed TreeTN/backend failures from output retruncation. Neither
-/// input is mutated.
+/// Returns [`PartitionedTreeTNError::InvalidOptions`] for invalid contraction
+/// or patching options or a forbidden contraction method,
+/// [`PartitionedTreeTNError::TopologyMismatch`] or
+/// [`PartitionedTreeTNError::SiteIndexMismatch`] for incompatible patches,
+/// [`PartitionedTreeTNError::DTypeMismatch`] for mixed dtypes,
+/// [`PartitionedTreeTNError::InvalidCenter`] when `center` is absent,
+/// [`PartitionedTreeTNError::OverlappingProjectors`] when output patches
+/// overlap, and [`PartitionedTreeTNError::TreeTN`],
+/// [`PartitionedTreeTNError::VolumeOverflow`], or
+/// [`PartitionedTreeTNError::NonFiniteAdaptiveValue`] from contraction or
+/// output truncation. Neither input is mutated.
 ///
 /// # Examples
 ///

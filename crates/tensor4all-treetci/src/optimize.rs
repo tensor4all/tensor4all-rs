@@ -294,9 +294,9 @@ impl Default for TreeTciOptions {
 /// # Errors
 ///
 /// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
-/// for invalid options. It
-/// also returns an error when the operation fails (a shape or index mismatch,
-/// or a backend failure).
+/// for invalid options, and [`TreeTciError::Operation`](crate::TreeTciError::Operation)
+/// when the evaluator fails, a pivot set is missing or malformed, or
+/// materialization fails.
 ///
 /// # Examples
 ///
@@ -374,9 +374,9 @@ where
 /// # Errors
 ///
 /// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
-/// for invalid options. It
-/// also returns an error when the operation fails (a shape or index mismatch,
-/// or a backend failure).
+/// for invalid options, and [`TreeTciError::Operation`](crate::TreeTciError::Operation)
+/// when the evaluator fails, a pivot set is missing or malformed, or
+/// materialization fails.
 ///
 /// # Examples
 ///
@@ -513,9 +513,9 @@ where
 ///
 /// # Errors
 /// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
-/// for invalid options. It
-/// also returns an error when the operation fails (a shape or index mismatch,
-/// or a backend failure).
+/// for invalid options, and [`TreeTciError::Operation`](crate::TreeTciError::Operation)
+/// when the evaluator fails, a pivot set is missing or malformed, or
+/// materialization fails.
 /// # Examples
 ///
 /// ```

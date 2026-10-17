@@ -28,8 +28,10 @@ use tensor4all_treetn::TreeTN;
 /// This function is called internally by [`crossinterpolate2`](crate::crossinterpolate2).
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape or index mismatch, or
-/// a backend failure).
+/// Returns [`TreeTciError::IndexOutOfBounds`] when `center_site` is out of
+/// range, and [`TreeTciError::Operation`] when the evaluator fails, a pivot
+/// set is missing or malformed, a bond rank disagrees across an edge, or a
+/// pivot matrix is singular in a way the solve cannot handle.
 ///
 pub fn to_treetn<T, F>(
     state: &TreeTCI2<T>,
@@ -52,9 +54,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`crate::TreeTciError::InvalidGraph`] for a malformed topology,
-/// [`crate::TreeTciError::IndexOutOfBounds`] for an out-of-range index, and [`crate::TreeTciError::Operation`]
-/// when the evaluator fails, a pivot matrix is singular in a way the solve cannot handle, or the caller's context
+/// Returns [`crate::TreeTciError::IndexOutOfBounds`] when `center_site` is out of
+/// range, and [`crate::TreeTciError::Operation`] when the evaluator fails, a pivot
+/// set is missing or malformed, a bond rank disagrees across an edge, a pivot
+/// matrix is singular in a way the solve cannot handle, or the caller's context
 /// refuses a solve.
 pub fn to_treetn_in<T, F>(
     state: &TreeTCI2<T>,

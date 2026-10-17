@@ -554,7 +554,11 @@ where
     ///
     /// # Errors
     ///
-    /// Returns a dtype mismatch, site-space mismatch, TreeTN, or backend error.
+    /// Returns [`PartitionedTreeTNError::TopologyMismatch`] or
+    /// [`PartitionedTreeTNError::SiteIndexMismatch`] when the stored trees
+    /// differ, [`PartitionedTreeTNError::DTypeMismatch`] for mixed scalar
+    /// dtypes, and [`PartitionedTreeTNError::TreeTN`] when the TreeTN inner
+    /// product fails.
     ///
     /// # Examples
     ///

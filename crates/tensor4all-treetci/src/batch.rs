@@ -129,8 +129,8 @@ impl<'a> GlobalIndexBatch<'a> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`crate::TreeTciError::Operation`] when `n_sites * n_points`
+    /// overflows `usize` or `data.len()` differs from that product.
     ///
     /// # Examples
     ///

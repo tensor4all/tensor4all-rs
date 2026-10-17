@@ -115,8 +115,11 @@ impl Default for PatchingOptions {
 ///
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape or index mismatch, or
-/// a backend failure).
+/// Returns [`PartitionedTTError::InvalidOptions`] for invalid patching
+/// options or a partition-volume overflow, and the
+/// [`PartitionedTTError::TensorTrain`], [`PartitionedTTError::Empty`],
+/// [`PartitionedTTError::OverlappingProjectors`], and projector errors of the
+/// split, truncation, and partition-construction steps.
 ///
 /// # Examples
 ///
@@ -222,8 +225,11 @@ pub fn add_with_patching(
 ///
 /// # Errors
 ///
-/// Returns an error when the contraction or operation fails (a shape or
-/// index mismatch, or a backend failure).
+/// Returns [`PartitionedTTError::InvalidOptions`] for invalid patching
+/// options, the projector, storage, construction, and
+/// [`PartitionedTTError::TensorTrain`] errors of the patch contractions and
+/// truncation, and [`PartitionedTTError::OverlappingProjectors`] when the
+/// output patches are not disjoint.
 ///
 /// # Examples
 ///

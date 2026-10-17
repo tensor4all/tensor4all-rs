@@ -72,7 +72,9 @@ pub struct TreeTciGraph {
 impl TreeTciGraph {
     /// Construct a tree graph from the site count and edge list.
     /// # Errors
-    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    /// Returns [`TreeTciError::InvalidGraph`] when `n_sites` is zero, an edge
+    /// is a self-loop or has an out-of-bounds endpoint, an edge is repeated,
+    /// or the edges are not a connected tree with `n_sites - 1` edges.
     ///
     pub fn new(n_sites: usize, edges: &[TreeTciEdge]) -> TreeTciResult<Self> {
         if n_sites == 0 {
@@ -130,7 +132,7 @@ impl TreeTciGraph {
 
     /// Return the canonicalized edge if present in the graph.
     /// # Errors
-    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    /// Returns [`TreeTciError::Operation`] when `edge` is not in the graph.
     ///
     pub fn separate_vertices(&self, edge: TreeTciEdge) -> TreeTciResult<(usize, usize)> {
         if self.has_edge(edge) {
@@ -142,7 +144,9 @@ impl TreeTciGraph {
 
     /// Return the sorted subtree sites when traversing away from `parent`.
     /// # Errors
-    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    /// Returns [`TreeTciError::IndexOutOfBounds`] when `parent` or a `child`
+    /// is out of range, and [`TreeTciError::Operation`] when `parent` and a
+    /// `child` are not adjacent.
     ///
     pub fn subtree_vertices(&self, parent: usize, children: &[usize]) -> TreeTciResult<SubtreeKey> {
         if parent >= self.n_sites {
@@ -177,7 +181,7 @@ impl TreeTciGraph {
     /// `u` side and right contains the subtree on the `v` side.
     ///
     /// # Errors
-    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    /// Returns [`TreeTciError::Operation`] when `edge` is not part of the graph.
     /// # Examples
     ///
     /// ```
@@ -241,7 +245,7 @@ impl TreeTciGraph {
 
     /// Return the candidate edges adjacent to either endpoint of `edge`, excluding `edge`.
     /// # Errors
-    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    /// Returns [`TreeTciError::Operation`] when `edge` is not in the graph.
     ///
     pub fn candidate_edges(&self, edge: TreeTciEdge) -> TreeTciResult<Vec<TreeTciEdge>> {
         let (u, v) = self.separate_vertices(edge)?;
@@ -255,7 +259,7 @@ impl TreeTciGraph {
 
     /// Return graph distances from `edge` to every edge in the tree.
     /// # Errors
-    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    /// Returns [`TreeTciError::Operation`] when `edge` is not in the graph.
     ///
     pub fn distance_edges(&self, edge: TreeTciEdge) -> TreeTciResult<BTreeMap<TreeTciEdge, usize>> {
         let (u, v) = self.separate_vertices(edge)?;
@@ -284,7 +288,7 @@ impl TreeTciGraph {
 
     /// Return the neighbors of a site in ascending order.
     /// # Errors
-    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    /// Returns [`TreeTciError::IndexOutOfBounds`] when `site` is out of range.
     ///
     pub fn neighbors(&self, site: usize) -> TreeTciResult<Vec<usize>> {
         if site >= self.n_sites {
@@ -304,7 +308,7 @@ impl TreeTciGraph {
     /// Return the canonical edge between two adjacent sites.
     ///
     /// # Errors
-    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    /// Returns [`TreeTciError::Operation`] when the two sites are not adjacent.
     /// # Examples
     ///
     /// ```
@@ -329,7 +333,7 @@ impl TreeTciGraph {
     /// `distances[i]` is the graph distance from `root` to node `i`.
     ///
     /// # Errors
-    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    /// Returns [`TreeTciError::IndexOutOfBounds`] when `root` is out of range.
     /// # Examples
     ///
     /// ```
@@ -371,7 +375,9 @@ impl TreeTciGraph {
 
     /// Return subtree keys for the incoming direction at `site` from the given edges.
     /// # Errors
-    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    /// Returns [`TreeTciError::IndexOutOfBounds`] when `site` is out of range,
+    /// and [`TreeTciError::Operation`] when an edge is absent from the graph or
+    /// is not incident to `site`.
     ///
     pub fn edge_in_ij_keys(
         &self,
@@ -433,7 +439,7 @@ impl TreeTciGraph {
     /// This is a convenience constructor for the most common topology.
     ///
     /// # Errors
-    /// Returns an error when the graph is invalid (an invalid-topology failure).
+    /// Returns [`TreeTciError::InvalidGraph`] when `n_sites` is zero.
     /// # Examples
     ///
     /// ```
