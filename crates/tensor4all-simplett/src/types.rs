@@ -23,7 +23,7 @@ pub type MultiIndex = Vec<LocalIndex>;
 /// ```
 /// use tensor4all_simplett::{Tensor3Ops, tensor3_zeros};
 ///
-/// let mut t = tensor3_zeros::<f64>(2, 3, 4);
+/// let mut t = tensor3_zeros::<f64>(2, 3, 4).unwrap();
 /// assert_eq!(t.left_dim(), 2);
 /// assert_eq!(t.site_dim(), 3);
 /// assert_eq!(t.right_dim(), 4);
@@ -261,51 +261,27 @@ impl<T: Clone + Default + TensorScalar> Tensor3Ops<T> for Tensor3<T> {
 
 /// Create a zero-filled rank-3 tensor with shape `(left_dim, site_dim, right_dim)`.
 ///
-/// # Panics
-///
-/// Panics when the shape overflows `usize` or allocation fails. Use
-/// [`try_tensor3_zeros`] when dimensions come from external or untrusted input.
-///
-/// # Examples
-///
-/// ```
-/// use tensor4all_simplett::{tensor3_zeros, Tensor3Ops};
-///
-/// let t = tensor3_zeros::<f64>(2, 3, 4);
-/// assert_eq!(t.left_dim(), 2);
-/// assert_eq!(t.site_dim(), 3);
-/// assert_eq!(t.right_dim(), 4);
-/// assert_eq!(*t.get3(0, 0, 0), 0.0);
-/// ```
-pub fn tensor3_zeros<T: Clone + Default + TensorScalar>(
-    left_dim: usize,
-    site_dim: usize,
-    right_dim: usize,
-) -> Tensor3<T> {
-    Tensor::from_elem([left_dim, site_dim, right_dim], T::default())
-}
-
-/// Fallibly create a zero-filled rank-3 tensor.
-///
 /// # Errors
 ///
 /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the shape product
 /// overflows `usize`, allocation fails, or the backend rejects the shape.
 ///
 /// # Examples
-/// ```
-/// use tensor4all_simplett::{try_tensor3_zeros, Tensor3Ops};
 ///
-/// let t = try_tensor3_zeros::<f64>(2, 3, 4)?;
+/// ```
+/// use tensor4all_simplett::{tensor3_zeros, Tensor3Ops};
+///
+/// let t = tensor3_zeros::<f64>(2, 3, 4)?;
 /// assert_eq!((t.left_dim(), t.site_dim(), t.right_dim()), (2, 3, 4));
+/// assert_eq!(*t.get3(0, 0, 0), 0.0);
 /// # Ok::<(), tensor4all_simplett::SimpleTensorTrainError>(())
 /// ```
-pub fn try_tensor3_zeros<T: Clone + Default + TensorScalar>(
+pub fn tensor3_zeros<T: Clone + Default + TensorScalar>(
     left_dim: usize,
     site_dim: usize,
     right_dim: usize,
 ) -> Result<Tensor3<T>> {
-    Tensor::try_from_elem([left_dim, site_dim, right_dim], T::default())
+    Tensor::from_elem([left_dim, site_dim, right_dim], T::default())
 }
 
 /// Create a rank-3 tensor from flat data in **column-major** order.

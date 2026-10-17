@@ -79,7 +79,7 @@ fn message_cache_wall_time_on_realistic_floating_zone_walk() {
         for site in 0..N_SITES {
             let left_dim = if site == 0 { 1 } else { BOND_DIM };
             let right_dim = if site == N_SITES - 1 { 1 } else { BOND_DIM };
-            let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim);
+            let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim).unwrap();
             for l in 0..left_dim {
                 for s in 0..LOCAL_DIM {
                     for r in 0..right_dim {
@@ -230,7 +230,7 @@ fn message_cache_phase_breakdown_on_realistic_floating_zone_walk() {
     for site in 0..N_SITES {
         let left_dim = if site == 0 { 1 } else { BOND_DIM };
         let right_dim = if site == N_SITES - 1 { 1 } else { BOND_DIM };
-        let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim);
+        let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim).unwrap();
         for l in 0..left_dim {
             for s in 0..LOCAL_DIM {
                 for r in 0..right_dim {
@@ -531,7 +531,7 @@ fn diagnostic_chain_vs_comb_wall_time_on_realistic_floating_zone_walk() {
         for site in 0..N_SITES {
             let left_dim = if site == 0 { 1 } else { BOND_DIM };
             let right_dim = if site == N_SITES - 1 { 1 } else { BOND_DIM };
-            let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim);
+            let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim).unwrap();
             for l in 0..left_dim {
                 for s in 0..LOCAL_DIM {
                     for r in 0..right_dim {

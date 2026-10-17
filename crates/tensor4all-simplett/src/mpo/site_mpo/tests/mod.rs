@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn test_site_mpo_creation() {
-    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
     let site_mpo = SiteMPO::from_mpo(mpo, 0).unwrap();
 
     assert_eq!(site_mpo.len(), 2);
@@ -11,7 +11,7 @@ fn test_site_mpo_creation() {
 
 #[test]
 fn test_site_mpo_move_center() {
-    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2), (2, 2)], 1.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2), (2, 2)], 1.0).unwrap();
     let mut site_mpo = SiteMPO::from_mpo(mpo, 0).unwrap();
 
     site_mpo.set_center(2).unwrap();
@@ -23,14 +23,14 @@ fn test_site_mpo_move_center() {
 
 #[test]
 fn test_site_mpo_invalid_center() {
-    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
     let result = SiteMPO::from_mpo(mpo, 5);
     assert!(result.is_err());
 }
 
 #[test]
 fn test_from_mpo_empty() {
-    let mpo = MPO::<f64>::constant(&[], 1.0);
+    let mpo = MPO::<f64>::constant(&[], 1.0).unwrap();
     let result = SiteMPO::from_mpo(mpo, 0);
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), MPOError::Empty));
@@ -38,7 +38,7 @@ fn test_from_mpo_empty() {
 
 #[test]
 fn test_move_center_left_from_zero() {
-    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
     let mut site_mpo = SiteMPO::from_mpo(mpo, 0).unwrap();
 
     let result = site_mpo.move_center_left();
@@ -47,7 +47,7 @@ fn test_move_center_left_from_zero() {
 
 #[test]
 fn test_move_center_right_from_last() {
-    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
     let mut site_mpo = SiteMPO::from_mpo(mpo, 1).unwrap();
 
     let result = site_mpo.move_center_right();
@@ -56,7 +56,7 @@ fn test_move_center_right_from_last() {
 
 #[test]
 fn test_set_center_out_of_bounds() {
-    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
     let mut site_mpo = SiteMPO::from_mpo(mpo, 0).unwrap();
 
     let result = site_mpo.set_center(5);
@@ -69,7 +69,7 @@ fn test_set_center_out_of_bounds() {
 
 #[test]
 fn test_into_mpo_round_trip() {
-    let mpo = MPO::<f64>::constant(&[(2, 2), (3, 3)], 5.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2), (3, 3)], 5.0).unwrap();
     let original_sum = mpo.sum().unwrap();
     let original_dims = mpo.site_dims();
 
@@ -82,7 +82,7 @@ fn test_into_mpo_round_trip() {
 
 #[test]
 fn test_link_dims_and_rank() {
-    let mpo = MPO::<f64>::constant(&[(2, 2), (3, 3), (2, 2)], 1.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2), (3, 3), (2, 2)], 1.0).unwrap();
     let site_mpo = SiteMPO::from_mpo(mpo, 0).unwrap();
 
     let lds = site_mpo.link_dims();
@@ -95,7 +95,7 @@ fn test_link_dims_and_rank() {
 
 #[test]
 fn test_link_dims_single_site() {
-    let mpo = MPO::<f64>::constant(&[(2, 2)], 1.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2)], 1.0).unwrap();
     let site_mpo = SiteMPO::from_mpo(mpo, 0).unwrap();
 
     assert!(site_mpo.link_dims().is_empty());
@@ -104,7 +104,7 @@ fn test_link_dims_single_site() {
 
 #[test]
 fn test_site_dims() {
-    let mpo = MPO::<f64>::constant(&[(2, 3), (4, 5)], 1.0);
+    let mpo = MPO::<f64>::constant(&[(2, 3), (4, 5)], 1.0).unwrap();
     let site_mpo = SiteMPO::from_mpo(mpo, 0).unwrap();
 
     assert_eq!(site_mpo.site_dims(), vec![(2, 3), (4, 5)]);
@@ -112,7 +112,7 @@ fn test_site_dims() {
 
 #[test]
 fn test_site_tensor_accessors() {
-    let mpo = MPO::<f64>::constant(&[(2, 2), (3, 3)], 1.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2), (3, 3)], 1.0).unwrap();
     let site_mpo = SiteMPO::from_mpo(mpo, 0).unwrap();
 
     let t0 = site_mpo.site_tensor(0);
@@ -128,7 +128,7 @@ fn test_site_tensor_accessors() {
 
 #[test]
 fn test_site_tensor_mut_accessors() {
-    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
     let mut site_mpo = SiteMPO::from_mpo(mpo, 0).unwrap();
 
     let t = site_mpo.site_tensor_mut(0);
@@ -142,7 +142,7 @@ fn test_site_tensor_mut_accessors() {
 
 #[test]
 fn test_is_empty() {
-    let mpo = MPO::<f64>::constant(&[(2, 2)], 1.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2)], 1.0).unwrap();
     let site_mpo = SiteMPO::from_mpo(mpo, 0).unwrap();
     assert!(!site_mpo.is_empty());
 }

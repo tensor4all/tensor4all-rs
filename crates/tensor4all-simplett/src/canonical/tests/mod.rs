@@ -90,13 +90,13 @@ fn test_center_canonicalize_function_generic<T: TTScalar + Scalar + Default>() {
 }
 
 fn test_evaluate_matches_original_generic<T: TTScalar + Scalar + Default>() {
-    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2);
+    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2).unwrap();
     t0.set3(0, 0, 0, T::from_f64(1.0));
     t0.set3(0, 0, 1, T::from_f64(0.5));
     t0.set3(0, 1, 0, T::from_f64(2.0));
     t0.set3(0, 1, 1, T::from_f64(1.0));
 
-    let mut t1: Tensor3<T> = tensor3_zeros(2, 3, 1);
+    let mut t1: Tensor3<T> = tensor3_zeros(2, 3, 1).unwrap();
     for l in 0..2 {
         for s in 0..3 {
             t1.set3(l, s, 0, T::from_f64((l + s + 1) as f64));
@@ -123,10 +123,10 @@ fn test_evaluate_matches_original_generic<T: TTScalar + Scalar + Default>() {
 
 #[test]
 fn test_site_tensor_train_from_tensor_train_reports_qr_failure() {
-    let mut left = tensor3_zeros(1, 2, 1);
+    let mut left = tensor3_zeros(1, 2, 1).unwrap();
     left.set3(0, 0, 0, f64::NAN);
     left.set3(0, 1, 0, 1.0);
-    let right = tensor3_zeros(1, 2, 1);
+    let right = tensor3_zeros(1, 2, 1).unwrap();
     let tt = SimpleTensorTrain::new(vec![left, right]).unwrap();
 
     let err = SiteTensorTrain::from_tensor_train(&tt, 1).unwrap_err();
@@ -136,10 +136,10 @@ fn test_site_tensor_train_from_tensor_train_reports_qr_failure() {
 
 #[test]
 fn test_center_canonicalize_reports_qr_failure() {
-    let mut left = tensor3_zeros(1, 2, 1);
+    let mut left = tensor3_zeros(1, 2, 1).unwrap();
     left.set3(0, 0, 0, f64::NAN);
     left.set3(0, 1, 0, 1.0);
-    let right = tensor3_zeros(1, 2, 1);
+    let right = tensor3_zeros(1, 2, 1).unwrap();
     let mut tensors = vec![left, right];
 
     let err = center_canonicalize(&mut tensors, 1).unwrap_err();
@@ -223,7 +223,7 @@ fn test_evaluate_matches_original_c64() {
 fn test_site_tensor_train_set_two_site_tensors_rejects_one_site_train() {
     // `new` accepts n == 1 and `canonicalize` returns `Ok` for it, so the
     // rejection message must not compute `len() - 2` on a one-site train.
-    let t: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+    let t: Tensor3<f64> = tensor3_zeros(1, 2, 1).unwrap();
     let mut stt = SiteTensorTrain::<f64>::new(vec![t.clone()], 0).unwrap();
     assert!(matches!(
         stt.set_two_site_tensors(0, t.clone(), t),

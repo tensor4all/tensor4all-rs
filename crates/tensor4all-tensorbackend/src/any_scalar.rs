@@ -189,10 +189,9 @@ trait ScalarTensorElement: TensorElement {
 }
 
 fn scalar_native<T: TensorScalar>(value: T) -> NativeTensor {
-    crate::require_invariant(
-        NativeTensor::from_vec_col_major(vec![], vec![value]),
-        "rank-0 scalar construction failed",
-    )
+    NativeTensor::from_vec_col_major(vec![], vec![value]).unwrap_or_else(|error| {
+        crate::invariant_violated("rank-0 scalar construction failed", error)
+    })
 }
 
 impl ScalarTensorElement for f32 {

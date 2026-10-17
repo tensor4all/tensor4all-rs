@@ -342,7 +342,7 @@ pub fn interpolation_tensor(basis: &LagrangePolynomials) -> Result<Tensor3<f64>>
         }
     }
 
-    Ok(Tensor3::try_from_fn([n, 2, n], |[alpha, sigma, beta]| {
+    Ok(Tensor3::from_fn([n, 2, n], |[alpha, sigma, beta]| {
         data[(alpha * 2 + sigma) * n + beta]
     })?)
 }
@@ -363,8 +363,8 @@ pub fn interpolation_tensor(basis: &LagrangePolynomials) -> Result<Tensor3<f64>>
 /// ```
 /// use tensor4all_interpolativeqtt::direct_product_core_tensors;
 /// use tensor4all_simplett::{Tensor3, Tensor3Ops};
-/// let a = Tensor3::from_fn([2, 2, 1], |[l, s, _]| (l + s) as f64);
-/// let b = Tensor3::from_fn([3, 2, 1], |[l, s, _]| (10 + l + s) as f64);
+/// let a = Tensor3::from_fn([2, 2, 1], |[l, s, _]| (l + s) as f64).unwrap();
+/// let b = Tensor3::from_fn([3, 2, 1], |[l, s, _]| (10 + l + s) as f64).unwrap();
 /// let fused = direct_product_core_tensors(&[a, b]).unwrap();
 /// assert_eq!(fused.left_dim(), 6);
 /// assert_eq!(fused.site_dim(), 4);
@@ -398,7 +398,7 @@ fn direct_product_two(a: &Tensor3<f64>, b: &Tensor3<f64>) -> Result<Tensor3<f64>
     let site_dim = checked_fused_dim(site_a, site_b, "site")?;
     let right_dim = checked_fused_dim(right_a, right_b, "right")?;
 
-    Ok(Tensor3::try_from_fn(
+    Ok(Tensor3::from_fn(
         [left_dim, site_dim, right_dim],
         |[left, site, right]| {
             let left_0 = left % left_a;
@@ -429,7 +429,7 @@ pub(crate) fn angular_local_lagrange(
     let core_dim = degree
         .checked_add(1)
         .ok_or_else(|| invalid_argument("angular interpolation core dimension overflows usize"))?;
-    Ok(Tensor3::try_from_fn(
+    Ok(Tensor3::from_fn(
         [core_dim, 2, core_dim],
         |[alpha, sigma, beta]| {
             let x = (sigma as f64 + basis.grid[beta]) / 2.0;

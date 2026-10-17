@@ -47,7 +47,9 @@ pub struct FullPivLuResult<T: TensorScalar> {
 }
 
 fn clone_linalg_tensor<T: TensorScalar>(tensor: &TypedTensor<T>) -> TypedTensor<T> {
-    crate::require_invariant(tensor.duplicate(), "linalg result duplication failed")
+    tensor.duplicate().unwrap_or_else(|error| {
+        crate::invariant_violated("linalg result duplication failed", error)
+    })
 }
 
 impl<T: TensorScalar> SvdResult<T> {
@@ -1273,13 +1275,13 @@ fn matrix_to_typed_tensor<T>(matrix: &Matrix<T>) -> TypedTensor<T>
 where
     T: TensorScalar + Copy,
 {
-    crate::require_invariant(
-        TypedTensor::from_vec_col_major(
-            vec![matrix.nrows(), matrix.ncols()],
-            matrix.as_col_major_slice().to_vec(),
-        ),
-        "validated matrix rejected by tenferro",
+    TypedTensor::from_vec_col_major(
+        vec![matrix.nrows(), matrix.ncols()],
+        matrix.as_col_major_slice().to_vec(),
     )
+    .unwrap_or_else(|error| {
+        crate::invariant_violated("validated matrix rejected by tenferro", error)
+    })
 }
 
 fn typed_tensor_to_matrix<T>(op: &'static str, tensor: TypedTensor<T>) -> Result<Matrix<T>>

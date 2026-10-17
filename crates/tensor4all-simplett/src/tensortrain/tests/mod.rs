@@ -41,12 +41,12 @@ fn test_tensortrain_evaluate_generic<T: TTScalar>() {
     let _site_dims = [2, 3];
 
     // First tensor: values are 1 for index 0, 2 for index 1
-    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 1);
+    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 1).unwrap();
     t0.set3(0, 0, 0, T::from_f64(1.0));
     t0.set3(0, 1, 0, T::from_f64(2.0));
 
     // Second tensor: values are 1, 2, 3 for indices 0, 1, 2
-    let mut t1: Tensor3<T> = tensor3_zeros(1, 3, 1);
+    let mut t1: Tensor3<T> = tensor3_zeros(1, 3, 1).unwrap();
     t1.set3(0, 0, 0, T::from_f64(1.0));
     t1.set3(0, 1, 0, T::from_f64(2.0));
     t1.set3(0, 2, 0, T::from_f64(3.0));
@@ -71,11 +71,11 @@ fn test_tensortrain_scale_generic<T: TTScalar>() {
 }
 
 fn test_tensortrain_reverse_generic<T: TTScalar>() {
-    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 1);
+    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 1).unwrap();
     t0.set3(0, 0, 0, T::from_f64(1.0));
     t0.set3(0, 1, 0, T::from_f64(2.0));
 
-    let mut t1: Tensor3<T> = tensor3_zeros(1, 3, 1);
+    let mut t1: Tensor3<T> = tensor3_zeros(1, 3, 1).unwrap();
     t1.set3(0, 0, 0, T::from_f64(1.0));
     t1.set3(0, 1, 0, T::from_f64(2.0));
     t1.set3(0, 2, 0, T::from_f64(3.0));
@@ -105,11 +105,11 @@ fn test_full_tensor_generic<T: TTScalar>() {
 }
 
 fn test_full_tensor_matches_evaluate_generic<T: TTScalar>() {
-    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 1);
+    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 1).unwrap();
     t0.set3(0, 0, 0, T::from_f64(1.0));
     t0.set3(0, 1, 0, T::from_f64(2.0));
 
-    let mut t1: Tensor3<T> = tensor3_zeros(1, 3, 1);
+    let mut t1: Tensor3<T> = tensor3_zeros(1, 3, 1).unwrap();
     t1.set3(0, 0, 0, T::from_f64(1.0));
     t1.set3(0, 1, 0, T::from_f64(2.0));
     t1.set3(0, 2, 0, T::from_f64(3.0));
@@ -146,13 +146,13 @@ fn test_log_norm_matches_norm_generic<T: TTScalar>() {
 }
 
 fn test_log_norm_with_varied_values_generic<T: TTScalar>() {
-    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2);
+    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2).unwrap();
     t0.set3(0, 0, 0, T::from_f64(1.0));
     t0.set3(0, 0, 1, T::from_f64(0.5));
     t0.set3(0, 1, 0, T::from_f64(2.0));
     t0.set3(0, 1, 1, T::from_f64(1.0));
 
-    let mut t1: Tensor3<T> = tensor3_zeros(2, 2, 1);
+    let mut t1: Tensor3<T> = tensor3_zeros(2, 2, 1).unwrap();
     t1.set3(0, 0, 0, T::from_f64(1.0));
     t1.set3(0, 1, 0, T::from_f64(2.0));
     t1.set3(1, 0, 0, T::from_f64(0.5));
@@ -337,15 +337,15 @@ fn test_partial_sum_single_dim_generic<
 >() {
     // f(i,j,k) = (1+i) * (1+j) * (1+k), site_dims = [3, 4, 2]
     // Build TT via rank-1 product structure
-    let mut t0 = tensor3_zeros::<T>(1, 3, 1);
+    let mut t0 = tensor3_zeros::<T>(1, 3, 1).unwrap();
     for s in 0..3 {
         t0.set3(0, s, 0, T::from_f64((1 + s) as f64));
     }
-    let mut t1 = tensor3_zeros::<T>(1, 4, 1);
+    let mut t1 = tensor3_zeros::<T>(1, 4, 1).unwrap();
     for s in 0..4 {
         t1.set3(0, s, 0, T::from_f64((1 + s) as f64));
     }
-    let mut t2 = tensor3_zeros::<T>(1, 2, 1);
+    let mut t2 = tensor3_zeros::<T>(1, 2, 1).unwrap();
     for s in 0..2 {
         t2.set3(0, s, 0, T::from_f64((1 + s) as f64));
     }
@@ -372,15 +372,15 @@ fn test_partial_sum_multiple_dims_generic<
     T: TTScalar + tensor4all_core::Scalar + Default + std::fmt::Debug,
 >() {
     // Same rank-1 TT: f(i,j,k) = (1+i)*(1+j)*(1+k)
-    let mut t0 = tensor3_zeros::<T>(1, 3, 1);
+    let mut t0 = tensor3_zeros::<T>(1, 3, 1).unwrap();
     for s in 0..3 {
         t0.set3(0, s, 0, T::from_f64((1 + s) as f64));
     }
-    let mut t1 = tensor3_zeros::<T>(1, 4, 1);
+    let mut t1 = tensor3_zeros::<T>(1, 4, 1).unwrap();
     for s in 0..4 {
         t1.set3(0, s, 0, T::from_f64((1 + s) as f64));
     }
-    let mut t2 = tensor3_zeros::<T>(1, 2, 1);
+    let mut t2 = tensor3_zeros::<T>(1, 2, 1).unwrap();
     for s in 0..2 {
         t2.set3(0, s, 0, T::from_f64((1 + s) as f64));
     }
@@ -440,9 +440,9 @@ fn test_partial_sum_multiple_dims_c64() {
 
 fn test_tt_addition_generic<T: TTScalar + tensor4all_core::Scalar + Default + std::fmt::Debug>() {
     // Build two rank-1 TTs: f(i,j,k) = (1+i), g(i,j,k) = (1+j)
-    let mut t0_a = tensor3_zeros::<T>(1, 3, 1);
-    let mut t1_a = tensor3_zeros::<T>(1, 3, 1);
-    let mut t2_a = tensor3_zeros::<T>(1, 2, 1);
+    let mut t0_a = tensor3_zeros::<T>(1, 3, 1).unwrap();
+    let mut t1_a = tensor3_zeros::<T>(1, 3, 1).unwrap();
+    let mut t2_a = tensor3_zeros::<T>(1, 2, 1).unwrap();
     for s in 0..3 {
         t0_a.set3(0, s, 0, T::from_f64((1 + s) as f64));
     }
@@ -454,9 +454,9 @@ fn test_tt_addition_generic<T: TTScalar + tensor4all_core::Scalar + Default + st
     }
     let tt_a = SimpleTensorTrain::new(vec![t0_a, t1_a, t2_a]).unwrap();
 
-    let mut t0_b = tensor3_zeros::<T>(1, 3, 1);
-    let mut t1_b = tensor3_zeros::<T>(1, 3, 1);
-    let mut t2_b = tensor3_zeros::<T>(1, 2, 1);
+    let mut t0_b = tensor3_zeros::<T>(1, 3, 1).unwrap();
+    let mut t1_b = tensor3_zeros::<T>(1, 3, 1).unwrap();
+    let mut t2_b = tensor3_zeros::<T>(1, 2, 1).unwrap();
     for s in 0..3 {
         t0_b.set3(0, s, 0, T::from_f64(1.0));
     }
@@ -537,9 +537,9 @@ where
     // Build a random-ish TT with known structure: sum of two rank-1 terms
     // f(i,j,k) = (1+i)*(1+j)*(1+k) + (2+i)*(3+j)*(4+k)
     let build_tt = || -> SimpleTensorTrain<T> {
-        let mut t0 = tensor3_zeros::<T>(1, 4, 2);
-        let mut t1 = tensor3_zeros::<T>(2, 4, 2);
-        let mut t2 = tensor3_zeros::<T>(2, 4, 1);
+        let mut t0 = tensor3_zeros::<T>(1, 4, 2).unwrap();
+        let mut t1 = tensor3_zeros::<T>(2, 4, 2).unwrap();
+        let mut t2 = tensor3_zeros::<T>(2, 4, 1).unwrap();
         for s in 0..4 {
             t0.set3(
                 0,

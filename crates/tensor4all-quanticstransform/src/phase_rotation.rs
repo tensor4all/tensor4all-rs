@@ -165,7 +165,7 @@ fn phase_rotation_mpo(r: usize, theta: f64) -> Result<SimpleTensorTrain<Complex6
 
         // Diagonal MPO tensor: out_bit == in_bit
         // Shape: (1, 4, 1) where 4 = 2*2 for (out, in)
-        let mut t = tensor3_zeros(1, 4, 1);
+        let mut t = tensor3_zeros(1, 4, 1)?;
 
         // s = out_bit * 2 + in_bit
         // Diagonal entries: out_bit == in_bit

@@ -94,7 +94,7 @@ fn right_canonicalize_reduces_oversized_bonds_to_the_exact_rank() {
 
 #[test]
 fn right_canonicalize_is_a_noop_for_short_mpos() {
-    let mut mpo = MPO::<f64>::constant(&[(2, 2)], 3.0);
+    let mut mpo = MPO::<f64>::constant(&[(2, 2)], 3.0).unwrap();
     let before = mpo.clone();
     right_canonicalize(&mut mpo).unwrap();
     assert_same_operator(&before, &mpo, 1e-12);

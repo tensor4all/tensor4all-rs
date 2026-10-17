@@ -130,7 +130,8 @@ pub fn real_qtt_to_complex(
     let mut tensors = Vec::with_capacity(tt.len());
     for site in 0..tt.len() {
         let core = tt.site_tensor(site);
-        let mut complex_core = tensor3_zeros(core.left_dim(), core.site_dim(), core.right_dim());
+        let mut complex_core =
+            tensor3_zeros(core.left_dim(), core.site_dim(), core.right_dim()).unwrap();
         for left in 0..core.left_dim() {
             for local in 0..core.site_dim() {
                 for right in 0..core.right_dim() {

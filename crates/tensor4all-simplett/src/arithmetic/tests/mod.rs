@@ -71,21 +71,21 @@ fn test_add_operator() {
 #[test]
 fn test_add_preserves_evaluation() {
     // Create two simple tensor trains
-    let mut t0_a: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+    let mut t0_a: Tensor3<f64> = tensor3_zeros(1, 2, 1).unwrap();
     t0_a.set3(0, 0, 0, 1.0);
     t0_a.set3(0, 1, 0, 2.0);
 
-    let mut t1_a: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+    let mut t1_a: Tensor3<f64> = tensor3_zeros(1, 2, 1).unwrap();
     t1_a.set3(0, 0, 0, 3.0);
     t1_a.set3(0, 1, 0, 4.0);
 
     let tt_a = SimpleTensorTrain::new(vec![t0_a, t1_a]).unwrap();
 
-    let mut t0_b: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+    let mut t0_b: Tensor3<f64> = tensor3_zeros(1, 2, 1).unwrap();
     t0_b.set3(0, 0, 0, 0.5);
     t0_b.set3(0, 1, 0, 1.5);
 
-    let mut t1_b: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+    let mut t1_b: Tensor3<f64> = tensor3_zeros(1, 2, 1).unwrap();
     t1_b.set3(0, 0, 0, 2.5);
     t1_b.set3(0, 1, 0, 3.5);
 

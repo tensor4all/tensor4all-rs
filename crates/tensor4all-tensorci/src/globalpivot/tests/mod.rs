@@ -8,8 +8,8 @@ fn test_default_global_pivot_finder() {
 
     // Build a deliberately bad TT (constant 0) to ensure large errors
     let tensors = vec![
-        tensor4all_simplett::tensor3_zeros(1, 4, 1),
-        tensor4all_simplett::tensor3_zeros(1, 4, 1),
+        tensor4all_simplett::tensor3_zeros(1, 4, 1).unwrap(),
+        tensor4all_simplett::tensor3_zeros(1, 4, 1).unwrap(),
     ];
     let tt = SimpleTensorTrain::new(tensors).unwrap();
 
@@ -61,8 +61,8 @@ fn test_custom_global_pivot_finder() {
     let finder = FixedPivotFinder;
     let f = |_: &MultiIndex| 1.0f64;
     let tensors = vec![
-        tensor4all_simplett::tensor3_zeros(1, 3, 1),
-        tensor4all_simplett::tensor3_zeros(1, 3, 1),
+        tensor4all_simplett::tensor3_zeros(1, 3, 1).unwrap(),
+        tensor4all_simplett::tensor3_zeros(1, 3, 1).unwrap(),
     ];
     let tt = SimpleTensorTrain::new(tensors).unwrap();
 

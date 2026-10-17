@@ -35,8 +35,8 @@ fn test_contract_dispatch_fit_is_unsupported() {
 fn test_contract_algorithms_consistent() {
     // All algorithms should give the same result for simple case
     // constant takes &[(s1, s2)] - tuple per site
-    let mpo_a = MPO::<f64>::constant(&[(2, 2)], 2.0);
-    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 3.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 2)], 2.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 3.0).unwrap();
     let options = ContractionOptions::default();
 
     let result_naive = contract(&mpo_a, &mpo_b, ContractionAlgorithm::Naive, &options).unwrap();

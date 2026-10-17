@@ -104,7 +104,7 @@ pub type QuanticsOperator = LinearOperator<IdxTensor, usize>;
 /// use num_complex::Complex64;
 /// use tensor4all_quanticstransform::tensortrain_to_linear_operator;
 /// use tensor4all_simplett::{tensor3_zeros, AbstractTensorTrain, Tensor3Ops, SimpleTensorTrain};
-/// let mut tensor = tensor3_zeros(1, 4, 1);
+/// let mut tensor = tensor3_zeros(1, 4, 1).unwrap();
 /// tensor.set3(0, 0, 0, Complex64::new(1.0, 0.0));
 /// tensor.set3(0, 3, 0, Complex64::new(1.0, 0.0));
 /// let mpo = SimpleTensorTrain::new(vec![tensor]).unwrap();
@@ -314,7 +314,7 @@ pub fn tensortrain_to_linear_operator(
 /// use num_complex::Complex64;
 /// use tensor4all_quanticstransform::tensortrain_to_linear_operator_asymmetric;
 /// use tensor4all_simplett::{tensor3_zeros, AbstractTensorTrain, Tensor3Ops, SimpleTensorTrain};
-/// let mut tensor = tensor3_zeros(1, 6, 1);
+/// let mut tensor = tensor3_zeros(1, 6, 1).unwrap();
 /// tensor.set3(0, 0, 0, Complex64::new(1.0, 0.0));
 /// tensor.set3(0, 5, 0, Complex64::new(1.0, 0.0));
 /// let mpo = SimpleTensorTrain::new(vec![tensor]).unwrap();
@@ -686,7 +686,7 @@ pub fn identity_mpo(
     for _ in 0..r {
         // Identity tensor: delta_{s_out, s_in}
         // Shape: (1, 4, 1) where 4 = 2*2 for (s_out, s_in)
-        let mut t = tensor3_zeros(1, 4, 1);
+        let mut t = tensor3_zeros(1, 4, 1).map_err(anyhow::Error::from)?;
         // s = s_out * 2 + s_in
         // Identity: s_out == s_in
         t.set3(0, 0, 0, Complex64::one()); // (0, 0)

@@ -66,7 +66,7 @@ let n = 1usize << r; // 8
 // |0> = |0> x |0> x ... x |0>  (all bits zero)
 let mut tensors = Vec::new();
 for _ in 0..r {
-    let mut t = tensor3_zeros(1, 2, 1);
+    let mut t = tensor3_zeros(1, 2, 1).unwrap();
     t.set3(0, 0, 0, Complex64::one()); // bit = 0
     tensors.push(t);
 }

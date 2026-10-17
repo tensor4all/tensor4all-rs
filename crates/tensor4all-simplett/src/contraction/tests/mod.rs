@@ -19,14 +19,14 @@ fn test_dot_constant() {
 
 #[test]
 fn test_dot_different_tensors() {
-    let mut t0_a: Tensor3<f64> = tensor3_zeros(1, 3, 2);
+    let mut t0_a: Tensor3<f64> = tensor3_zeros(1, 3, 2).unwrap();
     for s in 0..3 {
         for r in 0..2 {
             t0_a.set3(0, s, r, (s + r + 1) as f64);
         }
     }
 
-    let mut t1_a: Tensor3<f64> = tensor3_zeros(2, 2, 1);
+    let mut t1_a: Tensor3<f64> = tensor3_zeros(2, 2, 1).unwrap();
     for l in 0..2 {
         for s in 0..2 {
             t1_a.set3(l, s, 0, (l + s + 1) as f64);
@@ -35,12 +35,12 @@ fn test_dot_different_tensors() {
 
     let tt_a = SimpleTensorTrain::new(vec![t0_a.clone(), t1_a.clone()]).unwrap();
 
-    let mut t0_b: Tensor3<f64> = tensor3_zeros(1, 3, 1);
+    let mut t0_b: Tensor3<f64> = tensor3_zeros(1, 3, 1).unwrap();
     for s in 0..3 {
         t0_b.set3(0, s, 0, (s + 1) as f64 * 0.5);
     }
 
-    let mut t1_b: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+    let mut t1_b: Tensor3<f64> = tensor3_zeros(1, 2, 1).unwrap();
     for s in 0..2 {
         t1_b.set3(0, s, 0, (s + 2) as f64 * 0.3);
     }
@@ -90,15 +90,15 @@ fn test_dot_site_dim_mismatch() {
 #[test]
 fn test_dot_site_dim_mismatch_middle() {
     // Mismatch at site 1 (not site 0) to cover the inner loop error path
-    let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+    let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 1).unwrap();
     t0.set3(0, 0, 0, 1.0);
     t0.set3(0, 1, 0, 1.0);
 
-    let mut t1_a: Tensor3<f64> = tensor3_zeros(1, 3, 1);
+    let mut t1_a: Tensor3<f64> = tensor3_zeros(1, 3, 1).unwrap();
     for s in 0..3 {
         t1_a.set3(0, s, 0, 1.0);
     }
-    let mut t1_b: Tensor3<f64> = tensor3_zeros(1, 4, 1);
+    let mut t1_b: Tensor3<f64> = tensor3_zeros(1, 4, 1).unwrap();
     for s in 0..4 {
         t1_b.set3(0, s, 0, 1.0);
     }
@@ -343,7 +343,7 @@ fn asymmetric_train_f64(
         .map(|(site, &site_dim)| {
             let left = bonds[site];
             let right = bonds[site + 1];
-            let mut tensor = tensor3_zeros(left, site_dim, right);
+            let mut tensor = tensor3_zeros(left, site_dim, right).unwrap();
             for l in 0..left {
                 for s in 0..site_dim {
                     for r in 0..right {
@@ -402,10 +402,10 @@ fn one_site_complex_product_is_bilinear_and_not_hermitian() {
     use num_complex::Complex64;
 
     let context = session_context();
-    let mut a_site: Tensor3<Complex64> = tensor3_zeros(1, 2, 1);
+    let mut a_site: Tensor3<Complex64> = tensor3_zeros(1, 2, 1).unwrap();
     a_site.set3(0, 0, 0, Complex64::new(1.0, 1.0));
     a_site.set3(0, 1, 0, Complex64::new(2.0, -1.0));
-    let mut b_site: Tensor3<Complex64> = tensor3_zeros(1, 2, 1);
+    let mut b_site: Tensor3<Complex64> = tensor3_zeros(1, 2, 1).unwrap();
     b_site.set3(0, 0, 0, Complex64::new(3.0, 2.0));
     b_site.set3(0, 1, 0, Complex64::new(-1.0, 1.0));
 
@@ -485,7 +485,7 @@ fn single_precision_and_refusals_survive_the_session_route() {
 /// A two-site train over `Complex64` with genuinely non-zero imaginary parts in every core.
 fn complex_two_site(offset: f64) -> SimpleTensorTrain<num_complex::Complex64> {
     use num_complex::Complex64;
-    let mut first: Tensor3<Complex64> = tensor3_zeros(1, 3, 2);
+    let mut first: Tensor3<Complex64> = tensor3_zeros(1, 3, 2).unwrap();
     for s in 0..3 {
         for r in 0..2 {
             first.set3(
@@ -499,7 +499,7 @@ fn complex_two_site(offset: f64) -> SimpleTensorTrain<num_complex::Complex64> {
             );
         }
     }
-    let mut second: Tensor3<Complex64> = tensor3_zeros(2, 2, 1);
+    let mut second: Tensor3<Complex64> = tensor3_zeros(2, 2, 1).unwrap();
     for l in 0..2 {
         for s in 0..2 {
             second.set3(
@@ -552,7 +552,8 @@ fn single_precision_agrees_with_the_compatibility_route() {
             .map(|site| {
                 let source = a.site_tensor(site);
                 let mut target =
-                    tensor3_zeros(source.left_dim(), source.site_dim(), source.right_dim());
+                    tensor3_zeros(source.left_dim(), source.site_dim(), source.right_dim())
+                        .unwrap();
                 for l in 0..source.left_dim() {
                     for s in 0..source.site_dim() {
                         for r in 0..source.right_dim() {
@@ -570,7 +571,8 @@ fn single_precision_agrees_with_the_compatibility_route() {
             .map(|site| {
                 let source = b.site_tensor(site);
                 let mut target =
-                    tensor3_zeros(source.left_dim(), source.site_dim(), source.right_dim());
+                    tensor3_zeros(source.left_dim(), source.site_dim(), source.right_dim())
+                        .unwrap();
                 for l in 0..source.left_dim() {
                     for s in 0..source.site_dim() {
                         for r in 0..source.right_dim() {
@@ -600,11 +602,11 @@ fn complex32_is_served() {
     use num_complex::Complex32;
 
     let context = session_context();
-    let mut site: Tensor3<Complex32> = tensor3_zeros(1, 2, 1);
+    let mut site: Tensor3<Complex32> = tensor3_zeros(1, 2, 1).unwrap();
     site.set3(0, 0, 0, Complex32::new(1.5, -0.5));
     site.set3(0, 1, 0, Complex32::new(2.0, 1.0));
     let a = SimpleTensorTrain::new(vec![site.clone()]).expect("Complex32 train");
-    let mut other: Tensor3<Complex32> = tensor3_zeros(1, 2, 1);
+    let mut other: Tensor3<Complex32> = tensor3_zeros(1, 2, 1).unwrap();
     other.set3(0, 0, 0, Complex32::new(0.5, 0.25));
     other.set3(0, 1, 0, Complex32::new(-1.0, 2.0));
     let b = SimpleTensorTrain::new(vec![other]).expect("Complex32 train");
@@ -674,7 +676,7 @@ fn a_malformed_final_environment_is_refused_instead_of_silently_differing() {
     // A core replaced through the mutable accessor can leave a two-element environment. The compatibility
     // route selects its first element; this method refuses rather than answering something different.
     let mut a = asymmetric_train_f64(&[2], &[1, 1], 0.0);
-    let mut wide: Tensor3<f64> = tensor3_zeros(1, 2, 2);
+    let mut wide: Tensor3<f64> = tensor3_zeros(1, 2, 2).unwrap();
     for s in 0..2 {
         wide.set3(0, s, 0, 1.0);
         wide.set3(0, s, 1, 2.0);
@@ -692,7 +694,7 @@ fn a_malformed_final_environment_is_refused_instead_of_silently_differing() {
     // A core whose left bond no longer matches the running environment is a backend shape failure, and the
     // held session stays usable afterwards.
     let mut broken = asymmetric_train_f64(&[2, 3], &[1, 2, 1], 0.0);
-    let mut mismatched_bond: Tensor3<f64> = tensor3_zeros(3, 3, 1);
+    let mut mismatched_bond: Tensor3<f64> = tensor3_zeros(3, 3, 1).unwrap();
     for l in 0..3 {
         for s in 0..3 {
             mismatched_bond.set3(l, s, 0, 1.0);

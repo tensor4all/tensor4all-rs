@@ -17,13 +17,13 @@ fn test_ttcache_evaluate() {
 
 #[test]
 fn test_ttcache_caching() {
-    let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 2);
+    let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 2).unwrap();
     t0.set3(0, 0, 0, 1.0);
     t0.set3(0, 0, 1, 0.5);
     t0.set3(0, 1, 0, 2.0);
     t0.set3(0, 1, 1, 1.0);
 
-    let mut t1: Tensor3<f64> = tensor3_zeros(2, 3, 1);
+    let mut t1: Tensor3<f64> = tensor3_zeros(2, 3, 1).unwrap();
     for l in 0..2 {
         for s in 0..3 {
             t1.set3(l, s, 0, (l + s + 1) as f64);
@@ -78,13 +78,13 @@ fn test_ttcache_evaluate_many() {
 #[test]
 fn test_ttcache_evaluate_many_matches_single() {
     // Create a non-trivial TT
-    let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 2);
+    let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 2).unwrap();
     t0.set3(0, 0, 0, 1.0);
     t0.set3(0, 0, 1, 0.5);
     t0.set3(0, 1, 0, 2.0);
     t0.set3(0, 1, 1, 1.0);
 
-    let mut t1: Tensor3<f64> = tensor3_zeros(2, 3, 2);
+    let mut t1: Tensor3<f64> = tensor3_zeros(2, 3, 2).unwrap();
     for l in 0..2 {
         for s in 0..3 {
             for r in 0..2 {
@@ -93,7 +93,7 @@ fn test_ttcache_evaluate_many_matches_single() {
         }
     }
 
-    let mut t2: Tensor3<f64> = tensor3_zeros(2, 2, 1);
+    let mut t2: Tensor3<f64> = tensor3_zeros(2, 2, 1).unwrap();
     for l in 0..2 {
         for s in 0..2 {
             t2.set3(l, s, 0, (l + s + 1) as f64);

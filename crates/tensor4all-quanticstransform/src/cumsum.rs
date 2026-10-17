@@ -156,7 +156,7 @@ fn cumsum_mpo(r: usize) -> Result<SimpleTensorTrain<Complex64>> {
         if n == 0 {
             // First tensor: start in state 0 (no comparison yet)
             // Contract with [1, 0] on left link to select state 0
-            let mut t = tensor3_zeros(1, 4, 2);
+            let mut t = tensor3_zeros(1, 4, 2)?;
             for cout in 0..2 {
                 for y_bit in 0..2 {
                     for x_bit in 0..2 {
@@ -171,7 +171,7 @@ fn cumsum_mpo(r: usize) -> Result<SimpleTensorTrain<Complex64>> {
             // Last tensor: select entries where state is 1 (y > x)
             // The output is 1 only if comparison was made (state 1)
             // For the strict lower triangle, the diagonal is excluded
-            let mut t = tensor3_zeros(2, 4, 1);
+            let mut t = tensor3_zeros(2, 4, 1)?;
             for cin in 0..2 {
                 for y_bit in 0..2 {
                     for x_bit in 0..2 {
@@ -192,7 +192,7 @@ fn cumsum_mpo(r: usize) -> Result<SimpleTensorTrain<Complex64>> {
             tensors.push(t);
         } else {
             // Middle tensors: full tensor
-            let mut t = tensor3_zeros(2, 4, 2);
+            let mut t = tensor3_zeros(2, 4, 2)?;
             for cin in 0..2 {
                 for cout in 0..2 {
                     for y_bit in 0..2 {
@@ -235,7 +235,7 @@ fn triangle_mpo(r: usize, triangle: TriangleType) -> Result<SimpleTensorTrain<Co
 
     for n in 0..r {
         if n == 0 {
-            let mut t = tensor3_zeros(1, 4, 2);
+            let mut t = tensor3_zeros(1, 4, 2)?;
             for cout in 0..2 {
                 for y_bit in 0..2 {
                     for x_bit in 0..2 {
@@ -247,7 +247,7 @@ fn triangle_mpo(r: usize, triangle: TriangleType) -> Result<SimpleTensorTrain<Co
             }
             tensors.push(t);
         } else if n == r - 1 {
-            let mut t = tensor3_zeros(2, 4, 1);
+            let mut t = tensor3_zeros(2, 4, 1)?;
             for cin in 0..2 {
                 for y_bit in 0..2 {
                     for x_bit in 0..2 {
@@ -265,7 +265,7 @@ fn triangle_mpo(r: usize, triangle: TriangleType) -> Result<SimpleTensorTrain<Co
             }
             tensors.push(t);
         } else {
-            let mut t = tensor3_zeros(2, 4, 2);
+            let mut t = tensor3_zeros(2, 4, 2)?;
             for cin in 0..2 {
                 for cout in 0..2 {
                     for y_bit in 0..2 {

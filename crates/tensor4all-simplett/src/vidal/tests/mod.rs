@@ -66,11 +66,11 @@ fn test_vidal_singular_values_positive() {
 }
 
 fn two_site_matrix_tt() -> SimpleTensorTrain<f64> {
-    let mut left = tensor3_zeros(1, 2, 2);
+    let mut left = tensor3_zeros(1, 2, 2).unwrap();
     left.set3(0, 0, 0, 1.0);
     left.set3(0, 1, 1, 1.0);
 
-    let mut right = tensor3_zeros(2, 2, 1);
+    let mut right = tensor3_zeros(2, 2, 1).unwrap();
     right.set3(0, 0, 0, 2.0);
     right.set3(1, 0, 0, 1.0);
     right.set3(0, 1, 0, 1.0);
@@ -119,7 +119,7 @@ fn test_vidal_empty() {
 
 #[test]
 fn test_vidal_new_wrong_sv_count() {
-    let t: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+    let t: Tensor3<f64> = tensor3_zeros(1, 2, 1).unwrap();
     // 2 tensors need 1 singular value vector, but we give 0
     let err = VidalTensorTrain::new(vec![t.clone(), t.clone()], Vec::new());
     assert!(err.is_err());
@@ -140,10 +140,10 @@ fn test_vidal_partition_exceeds_length() {
 
 #[test]
 fn test_vidal_from_tensor_train_reports_qr_failure() {
-    let mut left = tensor3_zeros(1, 2, 1);
+    let mut left = tensor3_zeros(1, 2, 1).unwrap();
     left.set3(0, 0, 0, f64::NAN);
     left.set3(0, 1, 0, 1.0);
-    let right = tensor3_zeros(1, 2, 1);
+    let right = tensor3_zeros(1, 2, 1).unwrap();
     let tt = SimpleTensorTrain::new(vec![left, right]).unwrap();
 
     let err = VidalTensorTrain::from_tensor_train(&tt).unwrap_err();
@@ -154,13 +154,13 @@ fn test_vidal_from_tensor_train_reports_qr_failure() {
 #[test]
 fn test_vidal_round_trip_evaluations() {
     // Test that Vidal round-trip preserves individual element values
-    let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 2);
+    let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 2).unwrap();
     t0.set3(0, 0, 0, 1.0);
     t0.set3(0, 0, 1, 0.5);
     t0.set3(0, 1, 0, 0.3);
     t0.set3(0, 1, 1, 0.7);
 
-    let mut t1: Tensor3<f64> = tensor3_zeros(2, 3, 2);
+    let mut t1: Tensor3<f64> = tensor3_zeros(2, 3, 2).unwrap();
     for l in 0..2 {
         for s in 0..3 {
             for r in 0..2 {
@@ -169,7 +169,7 @@ fn test_vidal_round_trip_evaluations() {
         }
     }
 
-    let mut t2: Tensor3<f64> = tensor3_zeros(2, 2, 1);
+    let mut t2: Tensor3<f64> = tensor3_zeros(2, 2, 1).unwrap();
     t2.set3(0, 0, 0, 1.0);
     t2.set3(0, 1, 0, 2.0);
     t2.set3(1, 0, 0, 3.0);
@@ -227,13 +227,13 @@ fn test_inverse_empty() {
 
 #[test]
 fn test_inverse_round_trip_evaluations() {
-    let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 2);
+    let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 2).unwrap();
     t0.set3(0, 0, 0, 1.0);
     t0.set3(0, 0, 1, 0.5);
     t0.set3(0, 1, 0, 0.3);
     t0.set3(0, 1, 1, 0.7);
 
-    let mut t1: Tensor3<f64> = tensor3_zeros(2, 3, 2);
+    let mut t1: Tensor3<f64> = tensor3_zeros(2, 3, 2).unwrap();
     for l in 0..2 {
         for s in 0..3 {
             for r in 0..2 {
@@ -242,7 +242,7 @@ fn test_inverse_round_trip_evaluations() {
         }
     }
 
-    let mut t2: Tensor3<f64> = tensor3_zeros(2, 2, 1);
+    let mut t2: Tensor3<f64> = tensor3_zeros(2, 2, 1).unwrap();
     t2.set3(0, 0, 0, 1.0);
     t2.set3(0, 1, 0, 2.0);
     t2.set3(1, 0, 0, 3.0);
@@ -276,8 +276,8 @@ fn test_inverse_set_two_site_tensors() {
     let tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let mut inv = InverseTensorTrain::from_tensor_train(&tt).unwrap();
 
-    let t0: Tensor3<f64> = tensor3_zeros(1, 2, 3);
-    let t1: Tensor3<f64> = tensor3_zeros(3, 2, 1);
+    let t0: Tensor3<f64> = tensor3_zeros(1, 2, 3).unwrap();
+    let t1: Tensor3<f64> = tensor3_zeros(3, 2, 1).unwrap();
     let inv_sv = vec![1.0, 1.0, 1.0];
 
     inv.set_two_site_tensors(0, t0, inv_sv, t1).unwrap();
@@ -290,8 +290,8 @@ fn test_inverse_set_two_site_tensors_out_of_bounds() {
     let tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let mut inv = InverseTensorTrain::from_tensor_train(&tt).unwrap();
 
-    let t0: Tensor3<f64> = tensor3_zeros(1, 2, 1);
-    let t1: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+    let t0: Tensor3<f64> = tensor3_zeros(1, 2, 1).unwrap();
+    let t1: Tensor3<f64> = tensor3_zeros(1, 2, 1).unwrap();
 
     // site 2 is the last site (len=3), so i=2 should fail (i >= len-1)
     let err = inv.set_two_site_tensors(2, t0, vec![1.0], t1);
@@ -300,7 +300,7 @@ fn test_inverse_set_two_site_tensors_out_of_bounds() {
 
 #[test]
 fn test_inverse_set_two_site_tensors_rejects_degenerate_train() {
-    let t: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+    let t: Tensor3<f64> = tensor3_zeros(1, 2, 1).unwrap();
 
     // Empty train: `new` and `from_vidal` both return `Ok` for it, so the
     // guard must not compute `len() - 1` before rejecting.

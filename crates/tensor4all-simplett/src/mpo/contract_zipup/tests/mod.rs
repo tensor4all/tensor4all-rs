@@ -25,8 +25,8 @@ fn test_contract_zipup_identity() {
 
 #[test]
 fn test_contract_zipup_constant() {
-    let mpo_a = MPO::<f64>::constant(&[(2, 2)], 2.0);
-    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 3.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 2)], 2.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 3.0).unwrap();
 
     let options = ContractionOptions::default();
 
@@ -41,8 +41,8 @@ fn test_contract_zipup_constant() {
 #[test]
 fn test_contract_zipup_compresses() {
     // Create MPOs with higher bond dimensions
-    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
 
     let options = ContractionOptions {
         tolerance: 1e-12,
@@ -96,8 +96,8 @@ fn test_contract_zipup_untruncated_matches_naive() {
 
 #[test]
 fn test_contract_zipup_length_mismatch() {
-    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 1.0).unwrap();
 
     let err = contract_zipup(&mpo_a, &mpo_b, &ContractionOptions::default()).unwrap_err();
     assert!(
@@ -116,8 +116,8 @@ fn test_contract_zipup_length_mismatch() {
 fn test_contract_zipup_shared_dimension_mismatch() {
     // A's second site index is 3 but B's first site index is 2, so the shared
     // index does not line up at site 0.
-    let mpo_a = MPO::<f64>::constant(&[(2, 3)], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 3)], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 1.0).unwrap();
 
     let err = contract_zipup(&mpo_a, &mpo_b, &ContractionOptions::default()).unwrap_err();
     assert!(

@@ -752,7 +752,7 @@ where
 {
     let ndims = lower.len();
     let basis_len = basis.len();
-    Ok(Tensor3::try_from_fn(
+    Ok(Tensor3::from_fn(
         [1, site_dim, basis_dim],
         |[_, site, beta_flat]| {
             let sigmas = decode_index(site, 2, ndims);
@@ -779,10 +779,9 @@ fn right_core_1d(basis: &LagrangePolynomials) -> Result<Tensor3<f64>> {
             data.push(basis.evaluate(alpha, sigma as f64 / 2.0)?);
         }
     }
-    Ok(Tensor3::try_from_fn(
-        [basis_len, 2, 1],
-        |[alpha, sigma, _]| data[alpha * 2 + sigma],
-    )?)
+    Ok(Tensor3::from_fn([basis_len, 2, 1], |[alpha, sigma, _]| {
+        data[alpha * 2 + sigma]
+    })?)
 }
 
 fn compress_train(
@@ -874,7 +873,7 @@ where
         first_unsafe.len(),
         "first refined core right dimension",
     )?;
-    let mut first = Tensor3::try_from_elem([1, site_dim, first_right_dim], 0.0)?;
+    let mut first = Tensor3::from_elem([1, site_dim, first_right_dim], 0.0)?;
     for (site, values) in first_safe_values {
         for (beta, value) in values.into_iter().enumerate() {
             first[[0, site, beta]] = value;
@@ -910,7 +909,7 @@ where
             next_intervals.len(),
             "refined core right dimension",
         )?;
-        let mut core = Tensor3::try_from_elem([core_left_dim, site_dim, core_right_dim], 0.0)?;
+        let mut core = Tensor3::from_elem([core_left_dim, site_dim, core_right_dim], 0.0)?;
         copy_core(&center, &mut core, 0, 0);
 
         for (interval_index, site, values) in safe_values {
@@ -976,7 +975,7 @@ where
     let right_1d = right_core_1d(basis)?;
     let right = direct_product_core_tensors(&vec![right_1d; ndims])?;
     let last_left_dim = checked_dim_add(basis_dim, intervals.len(), "last core left dimension")?;
-    let mut last = Tensor3::try_from_elem([last_left_dim, site_dim, 1], 0.0)?;
+    let mut last = Tensor3::from_elem([last_left_dim, site_dim, 1], 0.0)?;
     copy_core(&right, &mut last, 0, 0);
 
     for (interval_index, interval) in intervals.iter().enumerate() {

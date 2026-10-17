@@ -4,8 +4,8 @@ use crate::mpo::types::tensor4_zeros;
 #[test]
 fn test_contract_site_tensors() {
     // Create two simple 4D tensors
-    let mut a: Tensor4<f64> = tensor4_zeros(1, 2, 3, 1);
-    let mut b: Tensor4<f64> = tensor4_zeros(1, 3, 2, 1);
+    let mut a: Tensor4<f64> = tensor4_zeros(1, 2, 3, 1).unwrap();
+    let mut b: Tensor4<f64> = tensor4_zeros(1, 3, 2, 1).unwrap();
 
     // Fill with some values
     for s1 in 0..2 {
@@ -30,8 +30,8 @@ fn test_contract_site_tensors() {
 
 #[test]
 fn test_contract_site_tensors_rejects_shared_dimension_mismatch() {
-    let a: Tensor4<f64> = tensor4_zeros(1, 2, 3, 1);
-    let b: Tensor4<f64> = tensor4_zeros(1, 4, 2, 1);
+    let a: Tensor4<f64> = tensor4_zeros(1, 2, 3, 1).unwrap();
+    let b: Tensor4<f64> = tensor4_zeros(1, 4, 2, 1).unwrap();
 
     let err = contract_site_tensors(&a, &b).unwrap_err();
     assert!(err.to_string().contains("Shared shape mismatch"));
@@ -41,8 +41,8 @@ fn test_contract_site_tensors_rejects_shared_dimension_mismatch() {
 
 #[test]
 fn test_contract_site_tensors_preserves_combined_bond_order() {
-    let mut a: Tensor4<f64> = tensor4_zeros(2, 1, 2, 2);
-    let mut b: Tensor4<f64> = tensor4_zeros(2, 2, 1, 2);
+    let mut a: Tensor4<f64> = tensor4_zeros(2, 1, 2, 2).unwrap();
+    let mut b: Tensor4<f64> = tensor4_zeros(2, 2, 1, 2).unwrap();
 
     for la in 0..2 {
         for k in 0..2 {
@@ -85,8 +85,8 @@ fn test_contract_site_tensors_preserves_combined_bond_order() {
 
 #[test]
 fn test_left_environment() {
-    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
 
     let mut cache = Vec::new();
 
@@ -105,8 +105,8 @@ fn test_left_environment() {
 
 #[test]
 fn test_right_environment() {
-    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
 
     let mut cache = Vec::new();
 
@@ -125,8 +125,8 @@ fn test_right_environment() {
 
 #[test]
 fn test_environment_reports_length_and_dimension_errors() {
-    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
-    let mpo_short = MPO::<f64>::constant(&[(2, 2)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
+    let mpo_short = MPO::<f64>::constant(&[(2, 2)], 1.0).unwrap();
     let mut cache = Vec::new();
 
     let err = left_environment(&mpo_a, &mpo_short, 1, &mut cache).unwrap_err();
@@ -136,12 +136,12 @@ fn test_environment_reports_length_and_dimension_errors() {
     let err = right_environment(&mpo_a, &mpo_short, 0, &mut cache).unwrap_err();
     assert!(err.to_string().contains("length mismatch"));
 
-    let mpo_mismatch = MPO::<f64>::constant(&[(2, 3), (2, 2)], 1.0);
+    let mpo_mismatch = MPO::<f64>::constant(&[(2, 3), (2, 2)], 1.0).unwrap();
     let mut cache = Vec::new();
     let err = left_environment(&mpo_a, &mpo_mismatch, 1, &mut cache).unwrap_err();
     assert!(err.to_string().contains("Shared shape mismatch"));
 
-    let mpo_mismatch_right = MPO::<f64>::constant(&[(2, 2), (2, 3)], 1.0);
+    let mpo_mismatch_right = MPO::<f64>::constant(&[(2, 2), (2, 3)], 1.0).unwrap();
     let mut cache = Vec::new();
     let err = right_environment(&mpo_a, &mpo_mismatch_right, 0, &mut cache).unwrap_err();
     assert!(err.to_string().contains("Shared shape mismatch"));
@@ -162,7 +162,7 @@ fn test_environment_rejects_empty_mpo() {
 
 #[test]
 fn test_environment_rejects_site_out_of_range() {
-    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
 
     for site in [2, 5] {
         let mut cache = Vec::new();

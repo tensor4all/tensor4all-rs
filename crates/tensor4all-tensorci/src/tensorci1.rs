@@ -7,7 +7,7 @@ use tensor4all_core::{
     AbstractMatrixCI, IndexSet, MatrixACA, MatrixLuciScalar, MultiIndex, Scalar,
 };
 use tensor4all_simplett::{
-    tensor3_zeros, try_tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops,
+    tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops,
 };
 use tensor4all_tensorbackend::{solve_matrix, transpose, Matrix, MatrixSolveScalar};
 
@@ -282,7 +282,7 @@ where
             t_tensors: local_dims
                 .iter()
                 .map(|&dim| tensor3_zeros(0, dim, 0))
-                .collect(),
+                .collect::<std::result::Result<_, _>>()?,
             pivot_matrices: (0..n).map(|_| Matrix::zeros(0, 0)).collect(),
             aca: (0..n).map(|_| MatrixACA::new(0, 0)).collect(),
             pi: (0..n.saturating_sub(1))
@@ -835,7 +835,7 @@ where
                 .ok_or_else(|| TCIError::InvalidOperation {
                     message: "TensorCI1 site column count overflowed usize".to_string(),
                 })?;
-        let mut tensor = try_tensor3_zeros(left_dim, site_dim, right_dim).map_err(|error| {
+        let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim).map_err(|error| {
             TCIError::InvalidOperation {
                 message: format!("TensorCI1 site tensor construction failed: {error}"),
             }
@@ -1211,7 +1211,7 @@ where
             ),
         });
     }
-    let mut tensor = try_tensor3_zeros(left_dim, site_dim, right_dim).map_err(|error| {
+    let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim).map_err(|error| {
         TCIError::InvalidOperation {
             message: format!("TensorCI1 site tensor construction failed: {error}"),
         }

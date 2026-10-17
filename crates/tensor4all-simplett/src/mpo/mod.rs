@@ -22,12 +22,13 @@
 //! ```
 //! use tensor4all_simplett::mpo::{MPO, contract_naive, ContractionOptions};
 //!
-//! let mpo_a = MPO::constant(&[(2, 2), (2, 2)], 1.0_f64);
-//! let mpo_b = MPO::constant(&[(2, 2), (2, 2)], 2.0_f64);
+//! let mpo_a = MPO::constant(&[(2, 2), (2, 2)], 1.0_f64)?;
+//! let mpo_b = MPO::constant(&[(2, 2), (2, 2)], 2.0_f64)?;
 //! let result = contract_naive(&mpo_a, &mpo_b, Some(ContractionOptions::default())).unwrap();
 //!
 //! assert_eq!(result.len(), 2);
 //! assert_eq!(result.site_dims(), vec![(2, 2), (2, 2)]);
+//! # Ok::<(), tensor4all_simplett::mpo::MPOError>(())
 //! ```
 
 /// Type alias for 2D matrix.
@@ -40,8 +41,12 @@ pub type Matrix2<T> = crate::tensor::Tensor2<T>;
 pub(crate) fn matrix2_zeros<T: crate::traits::TTScalar + Default>(
     rows: usize,
     cols: usize,
-) -> Matrix2<T> {
-    crate::tensor::Tensor::from_elem([rows, cols], T::default())
+) -> Result<Matrix2<T>> {
+    crate::tensor::Tensor::from_elem([rows, cols], T::default()).map_err(|error| {
+        MPOError::InvalidOperation {
+            message: error.to_string(),
+        }
+    })
 }
 
 pub(crate) mod canonical;

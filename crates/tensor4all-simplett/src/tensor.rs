@@ -7,6 +7,7 @@ use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 
 use tenferro_tensor::{TensorScalar, TypedTensor as TfTensor};
+use tensor4all_tensorbackend::invariant_violated;
 
 use crate::error::{Result, SimpleTensorTrainError};
 
@@ -43,23 +44,6 @@ pub type Tensor3<T> = Tensor<T, 3>;
 /// 4D tensor.
 pub type Tensor4<T> = Tensor<T, 4>;
 
-// Extract a result whose error branch means the host-backed wrapper invariant failed.
-fn require_invariant<T, E: std::fmt::Display>(
-    result: std::result::Result<T, E>,
-    context: &str,
-) -> T {
-    let valid = result.is_ok();
-    if let Err(error) = &result {
-        assert!(valid, "{context}: {error}");
-    }
-    match result {
-        Ok(value) => value,
-        Err(_) => loop {
-            std::hint::spin_loop();
-        },
-    }
-}
-
 fn col_major_index_from_linear<const N: usize>(mut linear: usize, dims: &[usize; N]) -> [usize; N] {
     let mut idx = [0usize; N];
     for axis in 0..N {
@@ -90,10 +74,9 @@ impl<T: TensorScalar, const N: usize> Clone for Tensor<T, N> {
         // INVARIANT: constructors validate host accessibility, and mutable inner
         // access documents that callers must preserve this wrapper invariant.
         Self {
-            inner: require_invariant(
-                self.inner.duplicate(),
-                "host-backed tensor duplication failed",
-            ),
+            inner: self.inner.duplicate().unwrap_or_else(|error| {
+                invariant_violated("host-backed tensor duplication failed", error)
+            }),
             dims: self.dims,
         }
     }
@@ -117,10 +100,11 @@ impl<'a, T: TensorScalar, const N: usize> Iterator for TensorIter<'a, T, N> {
 
         let idx = col_major_index_from_linear(self.next, &self.dims);
         self.next += 1;
-        Some(require_invariant(
-            self.tensor.get(&idx[..]),
-            "tensor index failed",
-        ))
+        Some(
+            self.tensor
+                .get(&idx[..])
+                .unwrap_or_else(|error| invariant_violated("tensor index failed", error)),
+        )
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -145,7 +129,9 @@ impl<'a, T: TensorScalar, const N: usize> Iterator for TensorIterMut<'a, T, N> {
         // Safety: each logical index is visited at most once, so returned
         // mutable references never alias each other.
         let tensor = unsafe { &mut *self.tensor };
-        let elem = require_invariant(tensor.get_mut(&idx[..]), "tensor index failed");
+        let elem = tensor
+            .get_mut(&idx[..])
+            .unwrap_or_else(|error| invariant_violated("tensor index failed", error));
         let ptr = elem as *mut T;
         Some(unsafe { &mut *ptr })
     }
@@ -211,11 +197,12 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
         // INVARIANT: public and crate-private constructors validate that a
         // simplett tensor is host-backed, and `as_inner_mut` requires callers
         // to preserve that invariant.
-        require_invariant(
-            self.inner.host_data(),
-            "host-backed tensor data is unavailable",
-        )
-        .to_vec()
+        self.inner
+            .host_data()
+            .unwrap_or_else(|error| {
+                invariant_violated("host-backed tensor data is unavailable", error)
+            })
+            .to_vec()
     }
 
     /// Iterate over all elements in column-major order.
@@ -321,7 +308,7 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
         })
     }
 
-    /// Try to create a tensor by applying `f` to each multi-index in column-major order.
+    /// Create a tensor by applying `f` to each multi-index in column-major order.
     ///
     /// # Errors
     ///
@@ -334,11 +321,11 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     /// ```
     /// use tensor4all_simplett::tensor::Tensor2;
     ///
-    /// let tensor = Tensor2::try_from_fn([2, 2], |[i, j]| (i + 2 * j) as f64)?;
+    /// let tensor = Tensor2::from_fn([2, 2], |[i, j]| (i + 2 * j) as f64)?;
     /// assert_eq!(tensor.to_col_major_vec(), vec![0.0, 1.0, 2.0, 3.0]);
     /// # Ok::<(), tensor4all_simplett::SimpleTensorTrainError>(())
     /// ```
-    pub fn try_from_fn(dims: [usize; N], mut f: impl FnMut([usize; N]) -> T) -> Result<Self> {
+    pub fn from_fn(dims: [usize; N], mut f: impl FnMut([usize; N]) -> T) -> Result<Self> {
         let total = dims
             .iter()
             .try_fold(1usize, |total, &dim| total.checked_mul(dim))
@@ -358,21 +345,10 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
 
         col_major_data_to_tensor(dims, data)
     }
-
-    /// Create a tensor by applying `f` to each multi-index in column-major order.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the shape product overflows, allocation fails, or tenferro
-    /// rejects the shape/data pair. Use [`Self::try_from_fn`] when dimensions
-    /// are not already validated.
-    pub fn from_fn(dims: [usize; N], f: impl FnMut([usize; N]) -> T) -> Self {
-        require_invariant(Self::try_from_fn(dims, f), "invalid tensor shape")
-    }
 }
 
 impl<T: TensorScalar, const N: usize> Tensor<T, N> {
-    /// Try to create a tensor filled with `value`.
+    /// Create a tensor filled with `value`.
     ///
     /// # Errors
     ///
@@ -385,11 +361,11 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
     /// ```
     /// use tensor4all_simplett::tensor::Tensor2;
     ///
-    /// let tensor = Tensor2::try_from_elem([2, 3], 4.0_f64)?;
+    /// let tensor = Tensor2::from_elem([2, 3], 4.0_f64)?;
     /// assert_eq!(tensor.to_col_major_vec(), vec![4.0; 6]);
     /// # Ok::<(), tensor4all_simplett::SimpleTensorTrainError>(())
     /// ```
-    pub fn try_from_elem(dims: [usize; N], value: T) -> Result<Self> {
+    pub fn from_elem(dims: [usize; N], value: T) -> Result<Self> {
         let total = dims
             .iter()
             .try_fold(1usize, |total, &dim| total.checked_mul(dim))
@@ -405,30 +381,31 @@ impl<T: TensorScalar, const N: usize> Tensor<T, N> {
         data.resize(total, value);
         col_major_data_to_tensor(dims, data)
     }
-
-    /// Create a tensor filled with `value`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the shape product overflows, allocation fails, or tenferro
-    /// rejects the shape/data pair. Use [`Self::try_from_elem`] when dimensions
-    /// are not already validated.
-    pub fn from_elem(dims: [usize; N], value: T) -> Self {
-        require_invariant(Self::try_from_elem(dims, value), "invalid tensor shape")
-    }
 }
 
 impl<T: TensorScalar, const N: usize> Index<[usize; N]> for Tensor<T, N> {
     type Output = T;
 
+    /// # Panics
+    ///
+    /// Panics if any element of `idx` is out of bounds, following the standard
+    /// [`Index`] contract of `Vec` and other collections.
     fn index(&self, idx: [usize; N]) -> &T {
-        require_invariant(self.inner.get(&idx[..]), "tensor index failed")
+        self.inner
+            .get(&idx[..])
+            .unwrap_or_else(|error| invariant_violated("tensor index failed", error))
     }
 }
 
 impl<T: TensorScalar, const N: usize> IndexMut<[usize; N]> for Tensor<T, N> {
+    /// # Panics
+    ///
+    /// Panics if any element of `idx` is out of bounds, following the standard
+    /// [`IndexMut`] contract of `Vec` and other collections.
     fn index_mut(&mut self, idx: [usize; N]) -> &mut T {
-        require_invariant(self.inner.get_mut(&idx[..]), "tensor index failed")
+        self.inner
+            .get_mut(&idx[..])
+            .unwrap_or_else(|error| invariant_violated("tensor index failed", error))
     }
 }
 

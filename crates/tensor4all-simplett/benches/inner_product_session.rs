@@ -41,7 +41,7 @@ fn train(sites: usize, bond: usize, offset: usize) -> SimpleTensorTrain<f64> {
         .map(|site| {
             let left = if site == 0 { 1 } else { bond };
             let right = if site + 1 == sites { 1 } else { bond };
-            let mut tensor = tensor3_zeros(left, 4, right);
+            let mut tensor = tensor3_zeros(left, 4, right).unwrap();
             for l in 0..left {
                 for s in 0..4 {
                     for r in 0..right {

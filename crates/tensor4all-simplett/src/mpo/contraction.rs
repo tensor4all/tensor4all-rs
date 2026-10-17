@@ -203,7 +203,7 @@ where
         let (i0, j0) = indices[0];
 
         // Sum over shared index k
-        let mut current: Matrix2<T> = matrix2_zeros(first_a.right_dim(), first_b.right_dim());
+        let mut current: Matrix2<T> = matrix2_zeros(first_a.right_dim(), first_b.right_dim())?;
         for k in 0..first_a.site_dim_2() {
             for ra in 0..first_a.right_dim() {
                 for rb in 0..first_b.right_dim() {
@@ -220,7 +220,7 @@ where
             let b = self.mpo_b.site_tensor(site);
             let (i_k, j_k) = indices[site];
 
-            let mut new_current: Matrix2<T> = matrix2_zeros(a.right_dim(), b.right_dim());
+            let mut new_current: Matrix2<T> = matrix2_zeros(a.right_dim(), b.right_dim())?;
 
             for la in 0..a.left_dim() {
                 for lb in 0..b.left_dim() {
@@ -275,7 +275,7 @@ where
         }
 
         if n == 0 {
-            let mut env: Matrix2<T> = matrix2_zeros(1, 1);
+            let mut env: Matrix2<T> = matrix2_zeros(1, 1)?;
             env[[0, 0]] = T::one();
             return Ok(env);
         }
@@ -299,7 +299,7 @@ where
         let b = self.mpo_b.site_tensor(n - 1);
         let (i_k, j_k) = indices[n - 1];
 
-        let mut new_env: Matrix2<T> = matrix2_zeros(a.right_dim(), b.right_dim());
+        let mut new_env: Matrix2<T> = matrix2_zeros(a.right_dim(), b.right_dim())?;
 
         for la in 0..a.left_dim() {
             for lb in 0..b.left_dim() {
@@ -338,7 +338,7 @@ where
         }
 
         if n == len {
-            let mut env: Matrix2<T> = matrix2_zeros(1, 1);
+            let mut env: Matrix2<T> = matrix2_zeros(1, 1)?;
             env[[0, 0]] = T::one();
             return Ok(env);
         }
@@ -368,7 +368,7 @@ where
         let b = self.mpo_b.site_tensor(n);
         let (i_k, j_k) = indices[n];
 
-        let mut new_env: Matrix2<T> = matrix2_zeros(a.left_dim(), b.left_dim());
+        let mut new_env: Matrix2<T> = matrix2_zeros(a.left_dim(), b.left_dim())?;
 
         for ra in 0..a.right_dim() {
             for rb in 0..b.right_dim() {

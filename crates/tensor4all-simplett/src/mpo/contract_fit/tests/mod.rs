@@ -12,8 +12,8 @@ fn test_fit_options_default_values() {
 
 #[test]
 fn test_contract_fit_empty_returns_unsupported() {
-    let mpo_a = MPO::<f64>::constant(&[], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[], 2.0);
+    let mpo_a = MPO::<f64>::constant(&[], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[], 2.0).unwrap();
 
     let err = contract_fit(&mpo_a, &mpo_b, &FitOptions::default(), None).unwrap_err();
     assert!(matches!(err, MPOError::Unsupported { .. }));
@@ -22,8 +22,8 @@ fn test_contract_fit_empty_returns_unsupported() {
 
 #[test]
 fn test_contract_fit_valid_input_returns_unsupported() {
-    let mpo_a = MPO::<f64>::constant(&[(2, 2)], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 2)], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 1.0).unwrap();
 
     let err = contract_fit(&mpo_a, &mpo_b, &FitOptions::default(), None).unwrap_err();
     assert!(matches!(err, MPOError::Unsupported { .. }));
@@ -31,8 +31,8 @@ fn test_contract_fit_valid_input_returns_unsupported() {
 
 #[test]
 fn test_contract_fit_length_mismatch_errors() {
-    let mpo_a = MPO::<f64>::constant(&[(2, 2)], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 2)], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
 
     assert!(matches!(
         contract_fit(&mpo_a, &mpo_b, &FitOptions::default(), None),
@@ -45,8 +45,8 @@ fn test_contract_fit_length_mismatch_errors() {
 
 #[test]
 fn test_contract_fit_shared_dimension_mismatch_errors() {
-    let mpo_a = MPO::<f64>::constant(&[(2, 3)], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[(4, 2)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 3)], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(4, 2)], 1.0).unwrap();
 
     assert!(matches!(
         contract_fit(&mpo_a, &mpo_b, &FitOptions::default(), None),

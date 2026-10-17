@@ -70,7 +70,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
 
             if i == 0 && i == n - 1 {
                 // Single-site TTs must keep both bond dimensions at 1.
-                let mut new_tensor = tensor3_zeros(1, site_dim, 1);
+                let mut new_tensor = tensor3_zeros(1, site_dim, 1)?;
                 for s in 0..site_dim {
                     new_tensor.set3(0, s, 0, *a.get3(0, s, 0) + *b.get3(0, s, 0));
                 }
@@ -78,7 +78,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
             } else if i == 0 {
                 // First tensor: [A | B] horizontally
                 let new_right_dim = a.right_dim() + b.right_dim();
-                let mut new_tensor = tensor3_zeros(1, site_dim, new_right_dim);
+                let mut new_tensor = tensor3_zeros(1, site_dim, new_right_dim)?;
 
                 for s in 0..site_dim {
                     for r in 0..a.right_dim() {
@@ -92,7 +92,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
             } else if i == n - 1 {
                 // Last tensor: [A; B] vertically
                 let new_left_dim = a.left_dim() + b.left_dim();
-                let mut new_tensor = tensor3_zeros(new_left_dim, site_dim, 1);
+                let mut new_tensor = tensor3_zeros(new_left_dim, site_dim, 1)?;
 
                 for l in 0..a.left_dim() {
                     for s in 0..site_dim {
@@ -109,7 +109,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
                 // Middle tensors: block diagonal [A 0; 0 B]
                 let new_left_dim = a.left_dim() + b.left_dim();
                 let new_right_dim = a.right_dim() + b.right_dim();
-                let mut new_tensor = tensor3_zeros(new_left_dim, site_dim, new_right_dim);
+                let mut new_tensor = tensor3_zeros(new_left_dim, site_dim, new_right_dim)?;
 
                 // Copy A block
                 for l in 0..a.left_dim() {

@@ -129,7 +129,7 @@ where
 
     // Base case: left of site 0 is just [[1]]
     if site == 0 {
-        let mut env: Matrix2<T> = matrix2_zeros(1, 1);
+        let mut env: Matrix2<T> = matrix2_zeros(1, 1)?;
         env[[0, 0]] = T::one();
         return Ok(env);
     }
@@ -214,7 +214,7 @@ where
 
     // Base case: right of last site is just [[1]]
     if site == n - 1 {
-        let mut env: Matrix2<T> = matrix2_zeros(1, 1);
+        let mut env: Matrix2<T> = matrix2_zeros(1, 1)?;
         env[[0, 0]] = T::one();
         return Ok(env);
     }

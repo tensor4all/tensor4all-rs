@@ -178,7 +178,7 @@ pub(crate) fn shift_mpo(
 
         if r == 1 {
             // Single site case: no carry propagation needed
-            let mut t = tensor3_zeros(1, 4, 1);
+            let mut t = tensor3_zeros(1, 4, 1)?;
             for x_bit in 0..2 {
                 let sum = x_bit + y_bit;
                 let out_bit = sum % 2;
@@ -212,7 +212,7 @@ pub(crate) fn shift_mpo(
                 BoundaryCondition::Open => Complex64::zero(),
             };
 
-            let mut t = tensor3_zeros(1, 4, 2);
+            let mut t = tensor3_zeros(1, 4, 2)?;
             for carry_in in 0..2 {
                 for x_bit in 0..2 {
                     let sum = x_bit + y_bit + carry_in;
@@ -234,7 +234,7 @@ pub(crate) fn shift_mpo(
         } else if n == r - 1 {
             // Last tensor (LSB): initial carry = 0, send carry_out to left
             // Shape (2, 4, 1): left=2 (carry_out to site R-2), site=4, right=1 (no input)
-            let mut t = tensor3_zeros(2, 4, 1);
+            let mut t = tensor3_zeros(2, 4, 1)?;
             for x_bit in 0..2 {
                 let sum = x_bit + y_bit; // carry_in = 0 at start
                 let out_bit = sum % 2;
@@ -246,7 +246,7 @@ pub(crate) fn shift_mpo(
         } else {
             // Middle tensors: receive carry from right, send carry to left
             // Shape (2, 4, 2): left=2 (carry_out), site=4, right=2 (carry_in)
-            let mut t = tensor3_zeros(2, 4, 2);
+            let mut t = tensor3_zeros(2, 4, 2)?;
             for carry_in in 0..2 {
                 for x_bit in 0..2 {
                     let sum = x_bit + y_bit + carry_in;
@@ -300,7 +300,7 @@ fn transpose_binary_operator_mpo(
     for site in 0..mpo.len() {
         let tensor = mpo.site_tensor(site);
         let mut new_tensor =
-            tensor3_zeros(tensor.left_dim(), tensor.site_dim(), tensor.right_dim());
+            tensor3_zeros(tensor.left_dim(), tensor.site_dim(), tensor.right_dim())?;
         for left in 0..tensor.left_dim() {
             for right in 0..tensor.right_dim() {
                 for out_bit in 0..2 {

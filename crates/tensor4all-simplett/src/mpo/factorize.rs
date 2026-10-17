@@ -257,8 +257,8 @@ fn factorize_svd<T: SVDScalar>(
     };
 
     // Build result matrices
-    let mut left: Matrix2<T> = matrix2_zeros(m, rank);
-    let mut right: Matrix2<T> = matrix2_zeros(rank, n);
+    let mut left: Matrix2<T> = matrix2_zeros(m, rank)?;
+    let mut right: Matrix2<T> = matrix2_zeros(rank, n)?;
 
     if options.left_orthogonal {
         // Left = U[:, :rank], Right = diag(S[:rank]) * Vt[:rank, :]
@@ -361,7 +361,7 @@ where
     // Convert back to Matrix2
     let left_m = left_ci.nrows();
     let left_n = left_ci.ncols();
-    let mut left: Matrix2<T> = matrix2_zeros(left_m, left_n);
+    let mut left: Matrix2<T> = matrix2_zeros(left_m, left_n)?;
     for i in 0..left_m {
         for j in 0..left_n {
             left[[i, j]] = left_ci[[i, j]];
@@ -370,7 +370,7 @@ where
 
     let right_m = right_ci.nrows();
     let right_n = right_ci.ncols();
-    let mut right: Matrix2<T> = matrix2_zeros(right_m, right_n);
+    let mut right: Matrix2<T> = matrix2_zeros(right_m, right_n)?;
     for i in 0..right_m {
         for j in 0..right_n {
             right[[i, j]] = right_ci[[i, j]];

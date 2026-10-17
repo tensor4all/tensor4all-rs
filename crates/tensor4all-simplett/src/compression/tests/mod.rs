@@ -27,13 +27,13 @@ where
     f64: From<<T as TensorScalar>::Real>,
 {
     // Create a simple tensor train
-    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2);
+    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2).unwrap();
     t0.set3(0, 0, 0, <T as Scalar>::from_f64(1.0));
     t0.set3(0, 0, 1, <T as Scalar>::from_f64(0.5));
     t0.set3(0, 1, 0, <T as Scalar>::from_f64(0.0));
     t0.set3(0, 1, 1, <T as Scalar>::from_f64(1.0));
 
-    let mut t1: Tensor3<T> = tensor3_zeros(2, 3, 2);
+    let mut t1: Tensor3<T> = tensor3_zeros(2, 3, 2).unwrap();
     for l in 0..2 {
         for s in 0..3 {
             for r in 0..2 {
@@ -47,7 +47,7 @@ where
         }
     }
 
-    let mut t2: Tensor3<T> = tensor3_zeros(2, 2, 1);
+    let mut t2: Tensor3<T> = tensor3_zeros(2, 2, 1).unwrap();
     t2.set3(0, 0, 0, <T as Scalar>::from_f64(1.0));
     t2.set3(0, 1, 0, <T as Scalar>::from_f64(0.5));
     t2.set3(1, 0, 0, <T as Scalar>::from_f64(0.5));
@@ -71,14 +71,14 @@ where
     f64: From<<T as TensorScalar>::Real>,
 {
     // Create a tensor train with higher bond dimension
-    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 3);
+    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 3).unwrap();
     for s in 0..2 {
         for r in 0..3 {
             t0.set3(0, s, r, <T as Scalar>::from_f64((s + r + 1) as f64));
         }
     }
 
-    let mut t1: Tensor3<T> = tensor3_zeros(3, 2, 1);
+    let mut t1: Tensor3<T> = tensor3_zeros(3, 2, 1).unwrap();
     for l in 0..3 {
         for s in 0..2 {
             t1.set3(l, s, 0, <T as Scalar>::from_f64((l + s + 1) as f64));
@@ -159,13 +159,13 @@ where
     f64: From<<T as TensorScalar>::Real>,
 {
     // Create a rank-3 TT and compress with SVD to max_bond_dim=2
-    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 3);
+    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 3).unwrap();
     for s in 0..2 {
         for r in 0..3 {
             t0.set3(0, s, r, <T as Scalar>::from_f64((s + r + 1) as f64));
         }
     }
-    let mut t1: Tensor3<T> = tensor3_zeros(3, 2, 1);
+    let mut t1: Tensor3<T> = tensor3_zeros(3, 2, 1).unwrap();
     for l in 0..3 {
         for s in 0..2 {
             t1.set3(l, s, 0, <T as Scalar>::from_f64((l + s + 1) as f64));
@@ -219,8 +219,8 @@ where
     let right_vectors = [[half, half], [half, -half]];
     let coefficients = [1.0e6, 1.0e-3];
 
-    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2);
-    let mut t1: Tensor3<T> = tensor3_zeros(2, 2, 1);
+    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2).unwrap();
+    let mut t1: Tensor3<T> = tensor3_zeros(2, 2, 1).unwrap();
     for (component, &coefficient) in coefficients.iter().enumerate() {
         for site in 0..2 {
             t0.set3(

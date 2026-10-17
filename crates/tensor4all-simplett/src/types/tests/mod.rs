@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn test_tensor3_zeros() {
-    let t: Tensor3<f64> = tensor3_zeros(2, 3, 4);
+    let t: Tensor3<f64> = tensor3_zeros(2, 3, 4).unwrap();
     assert_eq!(t.left_dim(), 2);
     assert_eq!(t.site_dim(), 3);
     assert_eq!(t.right_dim(), 4);
@@ -17,8 +17,8 @@ fn test_tensor3_zeros() {
 }
 
 #[test]
-fn test_try_tensor3_zeros_rejects_shape_overflow() {
-    let error = try_tensor3_zeros::<f64>(usize::MAX, 2, 1).unwrap_err();
+fn test_tensor3_zeros_rejects_shape_overflow() {
+    let error = tensor3_zeros::<f64>(usize::MAX, 2, 1).unwrap_err();
     assert!(error.to_string().contains("overflows usize"));
 }
 
@@ -49,7 +49,7 @@ fn tensor3_from_data_rejects_length_mismatch() {
 
 #[test]
 fn test_get3_set3_get3_mut() {
-    let mut t: Tensor3<f64> = tensor3_zeros(2, 3, 4);
+    let mut t: Tensor3<f64> = tensor3_zeros(2, 3, 4).unwrap();
 
     t.set3(1, 2, 3, 42.0);
     assert_eq!(*t.get3(1, 2, 3), 42.0);
@@ -61,7 +61,7 @@ fn test_get3_set3_get3_mut() {
 
 #[test]
 fn test_slice_site() {
-    let mut t: Tensor3<f64> = tensor3_zeros(2, 3, 4);
+    let mut t: Tensor3<f64> = tensor3_zeros(2, 3, 4).unwrap();
     for l in 0..2 {
         for r in 0..4 {
             t.set3(l, 1, r, (l * 4 + r) as f64);

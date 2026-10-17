@@ -16,6 +16,7 @@ use num_traits::ToPrimitive;
 use tenferro_tensor::{TensorScalar, TypedTensor};
 use tensor4all_core::Scalar;
 use tensor4all_core::{rrlu, RrLUOptions};
+use tensor4all_tensorbackend::invariant_violated;
 use tensor4all_tensorbackend::{mat_mul, svd_backend, BackendLinalgScalar, Matrix};
 
 /// Compute QR decomposition
@@ -270,7 +271,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             let new_bond_dim = q.ncols();
 
             // Update current tensor with Q
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim)?;
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for b in 0..new_bond_dim {
@@ -293,7 +294,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
                     message: format!("Vidal left sweep matrix multiply failed: {err}"),
                 })?;
 
-            let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim);
+            let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim)?;
             for l in 0..new_bond_dim {
                 for s in 0..next_site_dim {
                     for r_idx in 0..next_right_dim {
@@ -322,7 +323,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             singular_values[i - 1] = sv;
 
             // Update current tensor with V^H (right-orthogonal)
-            let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim)?;
             for l in 0..new_bond_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
@@ -345,7 +346,8 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
                     }
                 })?;
 
-                let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim);
+                let mut new_prev_tensor =
+                    tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim)?;
                 for l in 0..prev_left_dim {
                     for s in 0..prev_site_dim {
                         for r in 0..new_bond_dim {
@@ -375,7 +377,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             let right_dim = tensors[i].right_dim();
             let left_dim = tensors[i].left_dim();
 
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim).unwrap_or_else(|error| invariant_violated("the shape of an existing tensor cannot overflow; only out-of-memory remains", error));
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
@@ -473,7 +475,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             let right_dim = tensor.right_dim();
 
             // Multiply by singular values on the right
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim).unwrap_or_else(|error| invariant_violated("the shape of an existing tensor cannot overflow; only out-of-memory remains", error));
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
@@ -572,7 +574,7 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
             let site_dim = tensor.site_dim();
             let right_dim = tensor.right_dim();
 
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim).unwrap_or_else(|error| invariant_violated("the shape of an existing tensor cannot overflow; only out-of-memory remains", error));
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
@@ -598,7 +600,7 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
             let site_dim = tensor.site_dim();
             let right_dim = tensor.right_dim();
 
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim).unwrap_or_else(|error| invariant_violated("the shape of an existing tensor cannot overflow; only out-of-memory remains", error));
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
@@ -632,7 +634,7 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
             let site_dim = tensor.site_dim();
             let right_dim = tensor.right_dim();
 
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim).unwrap_or_else(|error| invariant_violated("the shape of an existing tensor cannot overflow; only out-of-memory remains", error));
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
@@ -750,7 +752,7 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
             let site_dim = tensor.site_dim();
             let right_dim = tensor.right_dim();
 
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim).unwrap_or_else(|error| invariant_violated("the shape of an existing tensor cannot overflow; only out-of-memory remains", error));
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {

@@ -111,22 +111,43 @@ pub use tenferro_bridge::{
 #[cfg(feature = "global-defaults")]
 pub use tensor_element::TensorElement;
 
-/// Extract a result whose error branch means validated internal state is inconsistent.
-#[cfg(feature = "global-defaults")]
-pub(crate) fn require_invariant<T, E: std::fmt::Display>(
-    result: std::result::Result<T, E>,
-    context: &str,
-) -> T {
-    let valid = result.is_ok();
-    if let Err(error) = &result {
-        assert!(valid, "{context}: {error}");
-    }
-    match result {
-        Ok(value) => value,
-        Err(_) => loop {
-            std::hint::spin_loop();
-        },
-    }
+/// Report a violated internal invariant that no public input can reach.
+///
+/// This is the only sanctioned `panic!` in production code. Use it only for
+/// (a) an internal invariant — a state no public input can reach — or (b) the
+/// documented `# Panics` precondition of an infallible standard-trait
+/// implementation that cannot return `Result`, such as an out-of-range
+/// [`Index`](std::ops::Index)/[`IndexMut`](std::ops::IndexMut). Never use it
+/// for user-reachable invalid input of a function that can return `Result`;
+/// return a crate-local typed error instead.
+///
+/// `context` names the invariant and `error` carries the underlying
+/// diagnostic, so the panic message is `"{context}: {error}"`. The library
+/// panic audit allowlists this single `panic!` and reports every call site, so
+/// invariant panics stay visible.
+///
+/// # Panics
+///
+/// Always panics and never returns.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::invariant_violated;
+///
+/// let payload = std::panic::catch_unwind(|| {
+///     invariant_violated("rank mismatch", "expected 2 rows");
+/// })
+/// .unwrap_err();
+/// let message = payload
+///     .downcast_ref::<String>()
+///     .expect("panic payload is a formatted string");
+/// assert_eq!(message, "rank mismatch: expected 2 rows");
+/// ```
+#[doc(hidden)]
+#[track_caller]
+pub fn invariant_violated(context: &str, error: impl std::fmt::Display) -> ! {
+    panic!("{context}: {error}")
 }
 
 #[cfg(all(test, feature = "global-defaults"))]

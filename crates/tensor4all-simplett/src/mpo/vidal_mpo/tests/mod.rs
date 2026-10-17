@@ -36,7 +36,7 @@ fn test_vidal_mpo_rank_for_single_site_is_one_and_mutation_works() {
 #[test]
 fn test_vidal_mpo_placeholder() {
     // Placeholder test - actual tests will be added when implementation is complete
-    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
     let result = VidalMPO::from_mpo(mpo);
     // Currently returns error as not implemented
     assert!(result.is_err());

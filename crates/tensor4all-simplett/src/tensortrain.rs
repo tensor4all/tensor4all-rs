@@ -3,6 +3,7 @@
 use crate::error::{Result, SimpleTensorTrainError};
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
+use tensor4all_tensorbackend::invariant_violated;
 
 /// Tensor Train (Matrix Product State) representation.
 ///
@@ -78,11 +79,11 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, Tensor3Ops, tensor3_zeros};
     ///
     /// // Build a 2-site TT with bond dimension 1 and site dimensions [2, 3]
-    /// let mut t0 = tensor3_zeros::<f64>(1, 2, 1);
+    /// let mut t0 = tensor3_zeros::<f64>(1, 2, 1).unwrap();
     /// t0.set3(0, 0, 0, 1.0);
     /// t0.set3(0, 1, 0, 2.0);
     ///
-    /// let mut t1 = tensor3_zeros::<f64>(1, 3, 1);
+    /// let mut t1 = tensor3_zeros::<f64>(1, 3, 1).unwrap();
     /// t1.set3(0, 0, 0, 10.0);
     /// t1.set3(0, 1, 0, 20.0);
     /// t1.set3(0, 2, 0, 30.0);
@@ -141,7 +142,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// assert!((tt.sum().unwrap()).abs() < 1e-14);
     /// ```
     pub fn zeros(site_dims: &[usize]) -> Self {
-        let tensors: Vec<Tensor3<T>> = site_dims.iter().map(|&d| tensor3_zeros(1, d, 1)).collect();
+        let tensors: Vec<Tensor3<T>> = site_dims.iter().map(|&d| tensor3_zeros(1, d, 1).unwrap_or_else(|error| invariant_violated("a (1, d, 1) site tensor cannot overflow; only out-of-memory remains, which std also treats as fatal", error))).collect();
         Self { tensors }
     }
 
@@ -174,7 +175,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         let mut tensors = Vec::with_capacity(n);
 
         // First tensor: all ones
-        let mut first = tensor3_zeros(1, site_dims[0], 1);
+        let mut first = tensor3_zeros(1, site_dims[0], 1).unwrap_or_else(|error| invariant_violated("a (1, d, 1) site tensor cannot overflow; only out-of-memory remains, which std also treats as fatal", error));
         for s in 0..site_dims[0] {
             first.set3(0, s, 0, T::one());
         }
@@ -183,7 +184,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         // Middle tensors: all ones (only if n > 2)
         if n > 2 {
             for &d in &site_dims[1..n - 1] {
-                let mut tensor = tensor3_zeros(1, d, 1);
+                let mut tensor = tensor3_zeros(1, d, 1).unwrap_or_else(|error| invariant_violated("a (1, d, 1) site tensor cannot overflow; only out-of-memory remains, which std also treats as fatal", error));
                 for s in 0..d {
                     tensor.set3(0, s, 0, T::one());
                 }
@@ -193,7 +194,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
 
         // Last tensor: multiply by value
         if n > 1 {
-            let mut last = tensor3_zeros(1, site_dims[n - 1], 1);
+            let mut last = tensor3_zeros(1, site_dims[n - 1], 1).unwrap_or_else(|error| invariant_violated("a (1, d, 1) site tensor cannot overflow; only out-of-memory remains, which std also treats as fatal", error));
             for s in 0..site_dims[n - 1] {
                 last.set3(0, s, 0, value);
             }
@@ -308,10 +309,10 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// ```
     /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, Tensor3Ops, tensor3_zeros};
     ///
-    /// let mut t0 = tensor3_zeros::<f64>(1, 2, 1);
+    /// let mut t0 = tensor3_zeros::<f64>(1, 2, 1).unwrap();
     /// t0.set3(0, 0, 0, 1.0);
     /// t0.set3(0, 1, 0, 2.0);
-    /// let mut t1 = tensor3_zeros::<f64>(1, 3, 1);
+    /// let mut t1 = tensor3_zeros::<f64>(1, 3, 1).unwrap();
     /// t1.set3(0, 0, 0, 10.0);
     /// t1.set3(0, 1, 0, 20.0);
     /// t1.set3(0, 2, 0, 30.0);
@@ -329,7 +330,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         for tensor in self.tensors.iter().rev() {
             // Swap left and right dimensions
             let mut new_tensor =
-                tensor3_zeros(tensor.right_dim(), tensor.site_dim(), tensor.left_dim());
+                tensor3_zeros(tensor.right_dim(), tensor.site_dim(), tensor.left_dim()).unwrap_or_else(|error| invariant_violated("the transposed shape of an existing tensor cannot overflow; only out-of-memory remains", error));
             for l in 0..tensor.left_dim() {
                 for s in 0..tensor.site_dim() {
                     for r in 0..tensor.right_dim() {
@@ -516,7 +517,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
 
                 // Reshape product (tprod_rows, site_dim * right_dim)
                 // into tensor (tprod_rows, site_dim, right_dim)
-                let mut new_tensor = tensor3_zeros(tprod_rows, site_dim, right_dim);
+                let mut new_tensor = tensor3_zeros(tprod_rows, site_dim, right_dim)?;
                 for l in 0..tprod_rows {
                     for s in 0..site_dim {
                         for r in 0..right_dim {
@@ -546,7 +547,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
                 });
             }
             let scalar = tprod[[0, 0]];
-            let mut t = tensor3_zeros(1, 1, 1);
+            let mut t = tensor3_zeros(1, 1, 1)?;
             t.set3(0, 0, 0, scalar);
             return SimpleTensorTrain::new(vec![t]);
         }
@@ -575,7 +576,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
             })?;
 
         // Reshape back to tensor (last_left, last_site, tprod_cols)
-        let mut new_last = tensor3_zeros(last_left, last_site, tprod_cols);
+        let mut new_last = tensor3_zeros(last_left, last_site, tprod_cols)?;
         for l in 0..last_left {
             for s in 0..last_site {
                 for r in 0..tprod_cols {

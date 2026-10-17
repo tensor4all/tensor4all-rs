@@ -156,7 +156,7 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<SimpleTensorTrain<Complex
             };
 
             // Shape (1, 4, 2): left=1 (BC applied), site=4, right=2 (cin from site 1)
-            let mut t = tensor3_zeros(1, 4, 2);
+            let mut t = tensor3_zeros(1, 4, 2)?;
             for cin in 0..2 {
                 for a in 0..2 {
                     for b in 0..2 {
@@ -175,7 +175,7 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<SimpleTensorTrain<Complex
         } else if n == r - 1 {
             // Last tensor (LSB): select initial carry state cin=1 (carry=0), send cout to left
             // Shape (2, 4, 1): left=2 (cout to site R-2), site=4, right=1 (initial cin)
-            let mut t = tensor3_zeros(2, 4, 1);
+            let mut t = tensor3_zeros(2, 4, 1)?;
             for cout in 0..2 {
                 for a in 0..2 {
                     for b in 0..2 {
@@ -189,7 +189,7 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<SimpleTensorTrain<Complex
         } else {
             // Middle tensors: receive cin from right, send cout to left
             // Shape (2, 4, 2): left=2 (cout to left), site=4, right=2 (cin from right)
-            let mut t = tensor3_zeros(2, 4, 2);
+            let mut t = tensor3_zeros(2, 4, 2)?;
             for cin in 0..2 {
                 for cout in 0..2 {
                     for a in 0..2 {

@@ -371,7 +371,8 @@ where
     } else {
         tt.site_tensor(position - 1).right_dim()
     };
-    let mut inserted = tensor3_zeros::<T>(bond_dim, site_index.dim(), bond_dim);
+    let mut inserted =
+        tensor3_zeros::<T>(bond_dim, site_index.dim(), bond_dim).map_err(anyhow::Error::from)?;
     for bond in 0..bond_dim {
         inserted.set3(bond, value, bond, T::one());
     }
@@ -627,7 +628,7 @@ where
             tensors.push(absorb_reduced_site_into_left(
                 tt.site_tensor(site),
                 reduced_site,
-            ));
+            )?);
         } else {
             tensors.push(tt.site_tensor(site).clone());
         }
@@ -638,7 +639,7 @@ where
             reduced_site,
             tt.site_tensor(position),
             tt.site_tensor(position + 1),
-        ));
+        )?);
         for site in position + 2..tt.len() {
             tensors.push(tt.site_tensor(site).clone());
         }
@@ -654,13 +655,13 @@ fn absorb_reduced_site_into_right<T>(
     reduced_site: &[T],
     removed: &tensor4all_simplett::Tensor3<T>,
     right: &tensor4all_simplett::Tensor3<T>,
-) -> tensor4all_simplett::Tensor3<T>
+) -> Result<tensor4all_simplett::Tensor3<T>>
 where
     T: TTScalar + Clone + Default,
 {
     let left_dim = removed.left_dim();
     let removed_right_dim = removed.right_dim();
-    let mut tensor = tensor3_zeros::<T>(left_dim, right.site_dim(), right.right_dim());
+    let mut tensor = tensor3_zeros::<T>(left_dim, right.site_dim(), right.right_dim())?;
 
     for l in 0..left_dim {
         for s in 0..right.site_dim() {
@@ -673,17 +674,17 @@ where
             }
         }
     }
-    tensor
+    Ok(tensor)
 }
 
 fn absorb_reduced_site_into_left<T>(
     left: &tensor4all_simplett::Tensor3<T>,
     reduced_site: &[T],
-) -> tensor4all_simplett::Tensor3<T>
+) -> Result<tensor4all_simplett::Tensor3<T>>
 where
     T: TTScalar + Clone + Default,
 {
-    let mut tensor = tensor3_zeros::<T>(left.left_dim(), left.site_dim(), 1);
+    let mut tensor = tensor3_zeros::<T>(left.left_dim(), left.site_dim(), 1)?;
 
     for l in 0..left.left_dim() {
         for s in 0..left.site_dim() {
@@ -694,7 +695,7 @@ where
             tensor.set3(l, s, 0, value);
         }
     }
-    tensor
+    Ok(tensor)
 }
 
 struct ChainSiteMetadata {

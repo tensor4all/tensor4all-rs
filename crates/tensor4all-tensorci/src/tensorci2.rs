@@ -14,9 +14,8 @@ use tensor4all_core::{
     matrix_luci_factors_from_matrix_owned_on_session, MatrixLuciFactors, MatrixLuciScalar,
     MultiIndex, RrLUOptions, Scalar,
 };
-use tensor4all_simplett::{
-    tensor3_zeros, try_tensor3_zeros, SimpleTensorTrain, TTScalar, Tensor3, Tensor3Ops,
-};
+use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, TTScalar, Tensor3, Tensor3Ops};
+use tensor4all_tensorbackend::invariant_violated;
 use tensor4all_tensorbackend::{
     explicit::Session, solve_matrix, transpose, BackendLinalgError, Matrix, MatrixSolveScalar,
 };
@@ -466,7 +465,10 @@ where
             i_set: (0..n).map(|_| Vec::new()).collect(),
             j_set: (0..n).map(|_| Vec::new()).collect(),
             local_dims: local_dims.clone(),
-            site_tensors: local_dims.iter().map(|&d| tensor3_zeros(0, d, 0)).collect(),
+            site_tensors: local_dims
+                .iter()
+                .map(|&d| tensor3_zeros(0, d, 0))
+                .collect::<std::result::Result<_, _>>()?,
             pivot_errors: Vec::new(),
             bond_errors: vec![0.0; n.saturating_sub(1)],
             max_sample_value: 0.0,
@@ -642,7 +644,10 @@ where
             i_set,
             j_set,
             local_dims: local_dims.clone(),
-            site_tensors: local_dims.iter().map(|&d| tensor3_zeros(0, d, 0)).collect(),
+            site_tensors: local_dims
+                .iter()
+                .map(|&d| tensor3_zeros(0, d, 0))
+                .collect::<std::result::Result<_, _>>()?,
             pivot_errors: Vec::new(),
             bond_errors: vec![0.0; n - 1],
             max_sample_value,
@@ -795,7 +800,13 @@ where
     /// Invalidate all site tensors
     pub fn invalidate_site_tensors(&mut self) {
         for p in 0..self.len() {
-            self.site_tensors[p] = tensor3_zeros(0, self.local_dims[p], 0);
+            self.site_tensors[p] =
+                tensor3_zeros(0, self.local_dims[p], 0).unwrap_or_else(|error| {
+                    invariant_violated(
+                        "a zero-size site tensor allocates nothing and cannot fail",
+                        error,
+                    )
+                });
         }
     }
 
@@ -926,7 +937,7 @@ where
         let ni = i_indices.len();
         let nj = j_indices.len();
         let mut tensor =
-            try_tensor3_zeros(ni, local_dim, nj).map_err(|error| TCIError::InvalidOperation {
+            tensor3_zeros(ni, local_dim, nj).map_err(|error| TCIError::InvalidOperation {
                 message: format!("TensorCI2 site tensor construction failed: {error}"),
             })?;
         for (ii, i_multi) in i_indices.iter().enumerate() {
@@ -1132,7 +1143,7 @@ where
             if forward {
                 let left_dim = if b == 0 { 1 } else { self.i_set[b].len() };
                 let right_dim = factors.rank.max(1);
-                let mut tensor = try_tensor3_zeros(left_dim, local_dim, right_dim)?;
+                let mut tensor = tensor3_zeros(left_dim, local_dim, right_dim)?;
                 for l in 0..left_dim {
                     for s in 0..local_dim {
                         for r in 0..right_dim {
@@ -1157,7 +1168,7 @@ where
                 } else {
                     self.j_set[b].len()
                 };
-                let mut tensor = try_tensor3_zeros(left_dim, local_dim, right_dim)?;
+                let mut tensor = tensor3_zeros(left_dim, local_dim, right_dim)?;
                 for l in 0..left_dim {
                     for s in 0..local_dim {
                         for r in 0..right_dim {
@@ -1247,7 +1258,7 @@ where
                 } else {
                     self.i_set[b + 1].len().max(1)
                 };
-                self.site_tensors[b] = try_tensor3_zeros(left_dim, self.local_dims[b], right_dim)?;
+                self.site_tensors[b] = tensor3_zeros(left_dim, self.local_dims[b], right_dim)?;
                 continue;
             }
 
@@ -1271,7 +1282,7 @@ where
                 let left_dim = if b == 0 { 1 } else { self.i_set[b].len() };
                 let site_dim = self.local_dims[b];
                 let right_dim = 1; // last site
-                let mut tensor = try_tensor3_zeros(left_dim, site_dim, right_dim)?;
+                let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim)?;
                 for l in 0..left_dim {
                     for s in 0..site_dim {
                         let row = l
@@ -1312,7 +1323,7 @@ where
                 // core with the same bond shape. Small nonzero values must
                 // still be interpolated, regardless of their absolute scale.
                 if (0..np).all(|i| (0..nj).all(|j| p_mat[[i, j]].is_zero())) {
-                    self.site_tensors[b] = try_tensor3_zeros(left_dim, site_dim, right_dim)?;
+                    self.site_tensors[b] = tensor3_zeros(left_dim, site_dim, right_dim)?;
                     continue;
                 }
 
@@ -1326,7 +1337,7 @@ where
                     })?;
 
                 // X = X_t^T → shape (ni, np) = (|I_b|*d_b, |I_{b+1}|)
-                let mut tensor = try_tensor3_zeros(left_dim, site_dim, right_dim)?;
+                let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim)?;
                 for l in 0..left_dim {
                     for s in 0..site_dim {
                         for r in 0..right_dim {
@@ -2307,7 +2318,7 @@ where
     let site_dim_b = tci.local_dims[b];
     let new_bond_dim = factors.rank.max(1);
 
-    let mut tensor_b = try_tensor3_zeros(left_dim, site_dim_b, new_bond_dim)?;
+    let mut tensor_b = tensor3_zeros(left_dim, site_dim_b, new_bond_dim)?;
     for l in 0..left_dim {
         for s in 0..site_dim_b {
             for r in 0..new_bond_dim {
@@ -2333,7 +2344,7 @@ where
         tci.j_set[b + 1].len()
     };
 
-    let mut tensor_bp1 = try_tensor3_zeros(new_bond_dim, site_dim_bp1, right_dim)?;
+    let mut tensor_bp1 = tensor3_zeros(new_bond_dim, site_dim_bp1, right_dim)?;
     for l in 0..new_bond_dim {
         for s in 0..site_dim_bp1 {
             for r in 0..right_dim {

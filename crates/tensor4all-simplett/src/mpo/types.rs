@@ -170,14 +170,35 @@ impl<T: Clone + Default + TensorScalar> Tensor4Ops<T> for Tensor4<T> {
     }
 }
 
-/// Create a zero-filled Tensor4
+/// Create a zero-filled rank-4 tensor with shape
+/// `(left_dim, site_dim_1, site_dim_2, right_dim)`.
+///
+/// # Errors
+///
+/// Returns [`MPOError::InvalidOperation`] when the shape product overflows
+/// `usize`, allocation fails, or the backend rejects the shape.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::mpo::{tensor4_zeros, Tensor4Ops};
+///
+/// let t = tensor4_zeros::<f64>(2, 3, 3, 4)?;
+/// assert_eq!(t.left_dim(), 2);
+/// assert_eq!(t.right_dim(), 4);
+/// # Ok::<(), tensor4all_simplett::mpo::MPOError>(())
+/// ```
 pub fn tensor4_zeros<T: Clone + Default + TensorScalar>(
     left_dim: usize,
     site_dim_1: usize,
     site_dim_2: usize,
     right_dim: usize,
-) -> Tensor4<T> {
-    Tensor::from_elem([left_dim, site_dim_1, site_dim_2, right_dim], T::default())
+) -> Result<Tensor4<T>> {
+    Tensor::from_elem([left_dim, site_dim_1, site_dim_2, right_dim], T::default()).map_err(
+        |error| MPOError::InvalidOperation {
+            message: error.to_string(),
+        },
+    )
 }
 
 /// Create a Tensor4 from flat data (column-major order)

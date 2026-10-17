@@ -204,7 +204,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
         let new_bond_dim = q.ncols();
 
         // Update current tensor with Q
-        let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim);
+        let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim)?;
         for l in 0..left_dim {
             for s in 0..site_dim {
                 for b in 0..new_bond_dim {
@@ -229,7 +229,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
             })?;
 
         // Update next tensor
-        let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim);
+        let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim)?;
         for l in 0..new_bond_dim {
             for s in 0..next_site_dim {
                 for r_idx in 0..next_right_dim {
@@ -257,7 +257,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
         let new_bond_dim = q.nrows();
 
         // Update current tensor with Q
-        let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim);
+        let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim)?;
         for l in 0..new_bond_dim {
             for s in 0..site_dim {
                 for r in 0..right_dim {
@@ -279,7 +279,7 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
             })?;
 
         // Update previous tensor
-        let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim);
+        let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim)?;
         for l in 0..prev_left_dim {
             for s in 0..prev_site_dim {
                 for r in 0..new_bond_dim {
@@ -460,7 +460,7 @@ pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
         let new_bond_dim = q.ncols();
 
         // Update current tensor
-        let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim);
+        let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim)?;
         for l in 0..left_dim {
             for s in 0..site_dim {
                 for b in 0..new_bond_dim {
@@ -484,7 +484,7 @@ pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
                     message: format!("left sweep matrix multiply failed: {err}"),
                 })?;
 
-            let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim);
+            let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim)?;
             for l in 0..new_bond_dim {
                 for s in 0..next_site_dim {
                     for r_idx in 0..next_right_dim {
@@ -512,7 +512,7 @@ pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
         let new_bond_dim = q.nrows();
 
         // Update current tensor
-        let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim);
+        let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim)?;
         for l in 0..new_bond_dim {
             for s in 0..site_dim {
                 for r in 0..right_dim {
@@ -534,7 +534,7 @@ pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
                 }
             })?;
 
-            let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim);
+            let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim)?;
             for l in 0..prev_left_dim {
                 for s in 0..prev_site_dim {
                     for r in 0..new_bond_dim {

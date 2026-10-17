@@ -30,7 +30,7 @@ fn tensor_train_with_link_dims(site_dims: &[usize], link_dims: &[usize]) -> Simp
         .map(|(site, &site_dim)| {
             let left_dim = if site == 0 { 1 } else { link_dims[site - 1] };
             let right_dim = link_dims.get(site).copied().unwrap_or(1);
-            tensor3_zeros(left_dim, site_dim, right_dim)
+            tensor3_zeros(left_dim, site_dim, right_dim).unwrap()
         })
         .collect();
     SimpleTensorTrain::new(cores).unwrap()

@@ -23,7 +23,7 @@ fn with_a_broken_final_bond() -> SimpleTensorTrain<f64> {
     let mut site = SiteTensorTrain::from_tensor_train(&valid(), 0).expect("site tensor train");
     let cores = site.site_tensors_mut();
     let last = cores.len() - 1;
-    let mut core = tensor3_zeros::<f64>(1, 2, 2);
+    let mut core = tensor3_zeros::<f64>(1, 2, 2).unwrap();
     for physical in 0..2 {
         core.set3(0, physical, 0, 1.0);
         core.set3(0, physical, 1, 2.0);

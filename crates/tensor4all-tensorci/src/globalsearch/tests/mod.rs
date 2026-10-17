@@ -5,8 +5,8 @@ fn test_floating_zone_finds_error() {
     use tensor4all_simplett::Tensor3Ops;
 
     // Build a rank-1 TT approximation of constant 1.0
-    let mut t0 = tensor4all_simplett::tensor3_zeros(1, 4, 1);
-    let mut t1 = tensor4all_simplett::tensor3_zeros(1, 4, 1);
+    let mut t0 = tensor4all_simplett::tensor3_zeros(1, 4, 1).unwrap();
+    let mut t1 = tensor4all_simplett::tensor3_zeros(1, 4, 1).unwrap();
     for s in 0..4 {
         t0.set3(0, s, 0, 1.0);
         t1.set3(0, s, 0, 1.0);
@@ -39,8 +39,8 @@ fn test_floating_zone_finds_error() {
 #[test]
 fn test_estimate_true_error_sorted() {
     // Build a constant TT (all 0)
-    let t0 = tensor4all_simplett::tensor3_zeros(1, 4, 1);
-    let t1 = tensor4all_simplett::tensor3_zeros(1, 4, 1);
+    let t0 = tensor4all_simplett::tensor3_zeros(1, 4, 1).unwrap();
+    let t1 = tensor4all_simplett::tensor3_zeros(1, 4, 1).unwrap();
     let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
 
     let f = |idx: &MultiIndex| (idx[0] + idx[1]) as f64;

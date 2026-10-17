@@ -248,8 +248,9 @@ fn ninterval_split_matches_julia_order() {
 #[test]
 fn direct_product_core_tensors_two_tensors() {
     let chi = 3;
-    let c1 = Tensor3::from_fn([chi, 2, chi], |[i, s, k]| (100 * i + 10 * s + k) as f64);
-    let c2 = Tensor3::from_fn([chi, 2, chi], |[i, s, k]| (1 + 100 * i + 10 * s + k) as f64);
+    let c1 = Tensor3::from_fn([chi, 2, chi], |[i, s, k]| (100 * i + 10 * s + k) as f64).unwrap();
+    let c2 =
+        Tensor3::from_fn([chi, 2, chi], |[i, s, k]| (1 + 100 * i + 10 * s + k) as f64).unwrap();
     let fused = direct_product_core_tensors(&[c1.clone(), c2.clone()]).unwrap();
 
     assert_eq!(fused.left_dim(), chi * chi);
@@ -277,9 +278,11 @@ fn direct_product_core_tensors_two_tensors() {
 #[test]
 fn direct_product_core_tensors_three_tensors() {
     let chi = 3;
-    let c1 = Tensor3::from_fn([chi, 2, chi], |[i, s, k]| (100 * i + 10 * s + k) as f64);
-    let c2 = Tensor3::from_fn([chi, 2, chi], |[i, s, k]| (1 + 100 * i + 10 * s + k) as f64);
-    let c3 = Tensor3::from_fn([chi, 2, chi], |[i, s, k]| (2 + 100 * i + 10 * s + k) as f64);
+    let c1 = Tensor3::from_fn([chi, 2, chi], |[i, s, k]| (100 * i + 10 * s + k) as f64).unwrap();
+    let c2 =
+        Tensor3::from_fn([chi, 2, chi], |[i, s, k]| (1 + 100 * i + 10 * s + k) as f64).unwrap();
+    let c3 =
+        Tensor3::from_fn([chi, 2, chi], |[i, s, k]| (2 + 100 * i + 10 * s + k) as f64).unwrap();
     let fused = direct_product_core_tensors(&[c1.clone(), c2.clone(), c3.clone()]).unwrap();
 
     assert_eq!(fused.left_dim(), chi * chi * chi);

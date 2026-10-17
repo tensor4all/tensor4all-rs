@@ -1160,10 +1160,10 @@ impl<T> Matrix<T> {
     where
         T: TensorScalar,
     {
-        crate::require_invariant(
-            TypedTensor::from_vec_col_major(vec![self.nrows, self.ncols], self.data.clone()),
-            "validated matrix rejected by tenferro",
-        )
+        TypedTensor::from_vec_col_major(vec![self.nrows, self.ncols], self.data.clone())
+            .unwrap_or_else(|error| {
+                crate::invariant_violated("validated matrix rejected by tenferro", error)
+            })
     }
 
     /// Consume this matrix as a tenferro [`TypedTensor`] without cloning.
@@ -1188,9 +1188,8 @@ impl<T> Matrix<T> {
     where
         T: TensorScalar,
     {
-        crate::require_invariant(
-            TypedTensor::from_vec_col_major(vec![self.nrows, self.ncols], self.data),
-            "validated matrix rejected by tenferro",
+        TypedTensor::from_vec_col_major(vec![self.nrows, self.ncols], self.data).unwrap_or_else(
+            |error| crate::invariant_violated("validated matrix rejected by tenferro", error),
         )
     }
 

@@ -19,7 +19,7 @@ fn allocation_fixture_chain(
     for site in 0..n_sites {
         let left_dim = if site == 0 { 1 } else { bond_dim };
         let right_dim = if site == n_sites - 1 { 1 } else { bond_dim };
-        let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim);
+        let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim).unwrap();
         for left in 0..left_dim {
             for local in 0..LOCAL_DIM {
                 for right in 0..right_dim {

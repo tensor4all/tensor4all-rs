@@ -64,8 +64,8 @@ fn test_contraction_length_mismatch() {
 #[test]
 fn test_contraction_shared_dimension_mismatch() {
     // A has site_dim (2, 3), B has site_dim (2, 2) => s2_a=3 != s1_b=2
-    let mpo_a = MPO::<f64>::constant(&[(2, 3)], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 3)], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 1.0).unwrap();
 
     let result = Contraction::new(mpo_a, mpo_b);
     assert!(result.is_err());
@@ -91,8 +91,8 @@ fn test_contraction_is_empty() {
 #[test]
 fn test_contraction_result_site_dims() {
     // A: site_dim (2, 3), B: site_dim (3, 4)
-    let mpo_a = MPO::<f64>::constant(&[(2, 3)], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[(3, 4)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 3)], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(3, 4)], 1.0).unwrap();
 
     let contraction = Contraction::new(mpo_a, mpo_b).unwrap();
     assert_eq!(contraction.result_site_dims(), vec![(2, 4)]);
@@ -214,8 +214,8 @@ fn test_contraction_constant_two_sites() {
     // Constant(2,2) * Constant(2,2) at each site
     // A[i,k] = 1 for all i,k; B[k,j] = 1 for all k,j
     // C[i,j] = sum_k A[i,k]*B[k,j] = sum_k 1 = 2 (shared dim is 2)
-    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
 
     let mut contraction = Contraction::new(mpo_a, mpo_b).unwrap();
 
@@ -234,8 +234,8 @@ fn test_contraction_constant_two_sites() {
 fn test_contraction_evaluate_rejects_out_of_range_values() {
     // Asymmetric physical dims: mpo_a sites are (2, 3), mpo_b sites are (3, 4)
     // -> i_k must be < 2, j_k must be < 4.
-    let mpo_a = MPO::<f64>::constant(&[(2, 3)], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[(3, 4)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 3)], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(3, 4)], 1.0).unwrap();
     let mut contraction = Contraction::new(mpo_a, mpo_b).unwrap();
 
     // Valid pair still works.
@@ -272,8 +272,8 @@ fn test_contraction_evaluate_rejects_out_of_range_values() {
 
 #[test]
 fn test_contraction_evaluate_left_rejects_short_slice() {
-    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
     let mut contraction = Contraction::new(mpo_a, mpo_b).unwrap();
 
     // indices[..2] on a 1-element slice used to panic.
@@ -300,8 +300,8 @@ fn test_contraction_evaluate_left_rejects_short_slice() {
 
 #[test]
 fn test_contraction_evaluate_right_rejects_short_slice() {
-    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
     let mut contraction = Contraction::new(mpo_a, mpo_b).unwrap();
 
     // Right evaluation reads indices[n] .. indices[len-1]; a short slice that

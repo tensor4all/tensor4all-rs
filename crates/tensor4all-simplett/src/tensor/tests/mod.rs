@@ -4,7 +4,7 @@ use crate::einsum_helper::{tensor_to_col_major_vec, typed_tensor_from_col_major_
 
 #[test]
 fn test_tensor2_from_elem() {
-    let t: Tensor2<f64> = Tensor2::from_elem([3, 4], 0.0);
+    let t: Tensor2<f64> = Tensor2::from_elem([3, 4], 0.0).unwrap();
     assert_eq!(t.len(), 12);
     assert_eq!(t.dim(0), 3);
     assert_eq!(t.dim(1), 4);
@@ -14,16 +14,16 @@ fn test_tensor2_from_elem() {
 #[test]
 fn fallible_constructors_reject_invalid_capacity_before_evaluating_elements() {
     let mut called = false;
-    let overflow_fn = Tensor2::<f64>::try_from_fn([usize::MAX, 2], |_| {
+    let overflow_fn = Tensor2::<f64>::from_fn([usize::MAX, 2], |_| {
         called = true;
         0.0
     });
-    let overflow_elem = Tensor2::try_from_elem([usize::MAX, 2], 0.0_f64);
-    let capacity_fn = Tensor2::<f64>::try_from_fn([usize::MAX, 1], |_| {
+    let overflow_elem = Tensor2::from_elem([usize::MAX, 2], 0.0_f64);
+    let capacity_fn = Tensor2::<f64>::from_fn([usize::MAX, 1], |_| {
         called = true;
         0.0
     });
-    let capacity_elem = Tensor2::try_from_elem([usize::MAX, 1], 0.0_f64);
+    let capacity_elem = Tensor2::from_elem([usize::MAX, 1], 0.0_f64);
 
     assert!(overflow_fn.is_err());
     assert!(overflow_elem.is_err());
@@ -34,7 +34,7 @@ fn fallible_constructors_reject_invalid_capacity_before_evaluating_elements() {
 
 #[test]
 fn test_tensor2_indexing() {
-    let mut t: Tensor2<f64> = Tensor2::from_elem([2, 3], 0.0);
+    let mut t: Tensor2<f64> = Tensor2::from_elem([2, 3], 0.0).unwrap();
     t[[0, 0]] = 1.0;
     t[[0, 1]] = 2.0;
     t[[0, 2]] = 3.0;
@@ -48,7 +48,8 @@ fn test_tensor2_indexing() {
 
 #[test]
 fn test_tensor3_from_fn() {
-    let t: Tensor3<f64> = Tensor3::from_fn([2, 3, 4], |[i, j, k]| (i * 100 + j * 10 + k) as f64);
+    let t: Tensor3<f64> =
+        Tensor3::from_fn([2, 3, 4], |[i, j, k]| (i * 100 + j * 10 + k) as f64).unwrap();
     assert_eq!(t[[0, 0, 0]], 0.0);
     assert_eq!(t[[1, 2, 3]], 123.0);
     assert_eq!(t[[0, 1, 2]], 12.0);
@@ -62,7 +63,8 @@ fn test_tensor3_from_fn() {
 fn test_tensor4_from_fn() {
     let t: Tensor4<f64> = Tensor4::from_fn([2, 3, 4, 5], |[i, j, k, l]| {
         (i * 1000 + j * 100 + k * 10 + l) as f64
-    });
+    })
+    .unwrap();
     assert_eq!(t[[1, 2, 3, 4]], 1234.0);
     assert_eq!(t.dim(0), 2);
     assert_eq!(t.dim(1), 3);
@@ -73,14 +75,14 @@ fn test_tensor4_from_fn() {
 
 #[test]
 fn test_iter() {
-    let t: Tensor2<f64> = Tensor2::from_fn([2, 3], |[i, j]| (i * 3 + j) as f64);
+    let t: Tensor2<f64> = Tensor2::from_fn([2, 3], |[i, j]| (i * 3 + j) as f64).unwrap();
     let collected: Vec<f64> = t.iter().copied().collect();
     assert_eq!(collected, vec![0.0, 3.0, 1.0, 4.0, 2.0, 5.0]);
 }
 
 #[test]
 fn test_dims() {
-    let t: Tensor3<f64> = Tensor3::from_elem([2, 3, 4], 1.0);
+    let t: Tensor3<f64> = Tensor3::from_elem([2, 3, 4], 1.0).unwrap();
     assert_eq!(t.dims(), &[2, 3, 4]);
 }
 
@@ -122,7 +124,7 @@ fn test_try_from_tenferro_rank_mismatch_errors() {
 
 #[test]
 fn test_clone_allows_index_mut() {
-    let original: Tensor2<f64> = Tensor2::from_fn([2, 2], |[i, j]| (i * 2 + j) as f64);
+    let original: Tensor2<f64> = Tensor2::from_fn([2, 2], |[i, j]| (i * 2 + j) as f64).unwrap();
     let mut cloned = original.clone();
     cloned[[1, 0]] = 99.0;
 
