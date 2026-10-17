@@ -74,8 +74,8 @@ impl TagSet {
     #[allow(clippy::should_implement_trait)]
     /// # Errors
     ///
-    /// Returns an error when the string cannot be parsed as an index (an
-    /// invalid-input failure).
+    /// Returns [`TagSetError::InvalidTag`] when a parsed tag cannot be stored, or
+    /// [`TagSetError::TooManyTags`] when the parsed list exceeds the capacity.
     ///
     pub fn from_str(s: &str) -> Result<Self, TagSetError> {
         Ok(Self(Arc::new(InlineTagSet::from_str(s)?)))
@@ -87,8 +87,8 @@ impl TagSet {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tag string is invalid (an invalid-input
-    /// failure).
+    /// Returns [`TagSetError::TagContainsComma`] when a tag contains a comma, or
+    /// another [`TagSetError`] when adding a tag fails.
     ///
     /// # Example
     /// ```
@@ -345,7 +345,8 @@ impl Index<DynId, TagSet> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tag is invalid (an invalid-input failure).
+    /// Returns a [`TagSetError`] when `tag` is rejected by [`TagSet::from_str`]
+    /// (an invalid tag or an over-capacity set).
     ///
     /// # Examples
     ///
@@ -372,8 +373,8 @@ impl Index<DynId, TagSet> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tag construction fails (an invalid-input
-    /// failure). No dimension validation is performed.
+    /// Returns a [`TagSetError`] when the literal `"Link"` tag is rejected by
+    /// [`TagSet::from_str`]; no dimension validation is performed.
     ///
     /// # Examples
     ///
@@ -554,7 +555,8 @@ impl DynIndex {
     ///
     /// # Errors
     ///
-    /// Returns an error when the bond dimension is invalid (a shape mismatch).
+    /// Returns a [`TagSetError`] when the literal `"Link"` tag is rejected by
+    /// [`TagSet::from_str`]; no dimension validation is performed.
     ///
     /// # Examples
     ///

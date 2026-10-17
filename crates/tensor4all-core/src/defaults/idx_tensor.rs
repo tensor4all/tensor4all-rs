@@ -267,9 +267,9 @@ impl RandomScalar for Complex64 {
 /// A `Vec<usize>` representing the permutation: `perm[i]` is the position in
 /// `original_indices` of the index that should be at position `i` in `new_indices`.
 /// # Errors
-/// Returns an error when `new_order` contains indices not present in
-/// `original` (a missing-index failure) or the two lists differ in length
-/// (a length mismatch).
+/// Returns an [`IdxTensorError`] when `new_indices` has a different length
+/// than `original_indices`, when `new_indices` contains an index absent from
+/// `original_indices`, or when it repeats an index.
 /// # Example
 /// ```
 /// use tensor4all_core::tensor::compute_permutation_from_indices;
@@ -2505,9 +2505,10 @@ impl IdxTensor {
     /// still be represented by axis classes.
     ///
     /// # Errors
-    /// Returns an error when a selected coordinate is out of range for its index
-    /// (an out of bounds failure) or when `selected_indices` and `positions`
-    /// differ in length (a length mismatch).
+    /// Returns an [`IdxTensorError`] when `selected_indices` and `positions`
+    /// differ in length, when a selected index is absent from the tensor or
+    /// repeated, when a coordinate is outside its index dimension, or when the
+    /// backing storage cannot be sliced.
     /// # Examples
     ///
     /// ```
@@ -2714,9 +2715,9 @@ impl IdxTensor {
     /// cotangents through tenferro's scatter-add gather transpose.
     ///
     /// # Errors
-    /// Returns an error when a selected position is out of range for the source
-    /// index (an out of bounds failure) or when the source and target index
-    /// dimensions are incompatible (a shape mismatch).
+    /// Returns an [`IdxTensorError`] when `target_index.dim()` differs from
+    /// `positions.len()`, when `source_index` is absent, when a position is
+    /// outside the source dimension, or when the backend gather fails.
     /// # Examples
     ///
     /// ```
@@ -2778,9 +2779,8 @@ impl IdxTensor {
     /// Create a new tensor with dynamic rank.
     ///
     /// # Errors
-    /// Returns an error when the storage logical dimension does not match the
-    /// index dimension product (a shape mismatch) or when duplicate
-    /// indices are provided.
+    /// Returns an [`IdxTensorError`] when the indices are not unique or when
+    /// the storage layout is incompatible with the index space.
     /// # Examples
     ///
     /// ```
@@ -2805,9 +2805,8 @@ impl IdxTensor {
     /// This is a convenience constructor that extracts dimensions from indices using `IndexLike::dim()`.
     ///
     /// # Errors
-    /// Returns an error when the storage logical dimension does not match the
-    /// index dimension product (a shape mismatch) or when duplicate
-    /// indices are provided.
+    /// Returns an [`IdxTensorError`] when the indices are not unique or when
+    /// the storage layout is incompatible with the index space.
     /// # Examples
     ///
     /// ```
@@ -2830,9 +2829,9 @@ impl IdxTensor {
     /// Create a tensor from explicit compact storage.
     ///
     /// # Errors
-    /// Returns an error when the storage scalar kind is incompatible with the
-    /// requested operations (a scalar-kind mismatch) or the storage cannot
-    /// represent the given index space (a shape mismatch).
+    /// Returns an [`IdxTensorError`] when the indices are not unique, when the
+    /// storage logical dimension differs from the index-dimension product, or
+    /// when the storage kind cannot represent the index space.
     /// # Examples
     ///
     /// ```
@@ -2865,8 +2864,8 @@ impl IdxTensor {
     /// emphasizes that compact structured metadata is preserved.
     ///
     /// # Errors
-    /// Returns an error when the structured storage is invalid (an invalid-storage
-    /// failure) or the index space is incompatible (a shape mismatch).
+    /// Returns an [`IdxTensorError`] when the structured storage is invalid or
+    /// its layout is incompatible with the index space.
     /// # Examples
     ///
     /// ```
@@ -3080,9 +3079,10 @@ impl IdxTensor {
     /// as `1e-12` for numerically Hermitian inputs.
     ///
     /// # Errors
-    /// Returns an error when the tensor is not rank-2, when the two indices have
-    /// unequal dimensions (a shape or shape mismatch), or when the
-    /// eigensolver fails to converge (a non-convergence failure).
+    /// Returns an [`IdxTensorError`] when the tensor is not a non-empty square
+    /// rank-2 matrix, when `hermitian_tol` is negative or non-finite, when the
+    /// eigensolver fails, or when a returned eigenvalue has an imaginary part
+    /// above `hermitian_tol`.
     /// # Examples
     ///
     /// ```
@@ -3345,8 +3345,9 @@ impl IdxTensor {
 
     /// Enable reverse-mode AD tracking on this tensor by creating a tracked leaf.
     /// # Errors
-    /// Returns an error when the tensor is not a scalar (a rank mismatch) or the
-    /// AD backend cannot track the tensor's dtype.
+    /// Returns an [`IdxTensorError`] when a deferred operation failed earlier,
+    /// when the eager payload cannot be duplicated, when compact storage cannot
+    /// be materialized, or when the AD backend cannot track the tensor's dtype.
     ///
     pub fn enable_grad(self) -> std::result::Result<Self, IdxTensorError> {
         self.ensure_storage_ready()?;
@@ -3401,8 +3402,9 @@ impl IdxTensor {
 
     /// Return the accumulated gradient, if one has been stored.
     /// # Errors
-    /// Returns an error when the tensor is not a tracked leaf or the gradient is
-    /// unavailable for the tensor's dtype (an unavailable-gradient failure).
+    /// Returns an [`IdxTensorError`] when the AD backend cannot read or
+    /// materialize the accumulated gradient; a tensor with no recorded gradient
+    /// returns `Ok(None)`.
     ///
     pub fn grad(&self) -> std::result::Result<Option<Self>, IdxTensorError> {
         if let Some(value) = self.tracked_compact_payload_value() {
@@ -3447,8 +3449,8 @@ impl IdxTensor {
 
     /// Clear the accumulated gradient stored for this tensor.
     /// # Errors
-    /// Returns an error when the tensor is not a tracked leaf (a missing-graph
-    /// failure).
+    /// Returns an [`IdxTensorError`] when a deferred operation failed earlier or
+    /// when the AD backend cannot clear the stored gradient.
     ///
     pub fn clear_grad(&self) -> std::result::Result<(), IdxTensorError> {
         self.ensure_storage_ready()?;
@@ -3466,8 +3468,8 @@ impl IdxTensor {
 
     /// Run reverse-mode autodiff from this scalar tensor.
     /// # Errors
-    /// Returns an error when the tensor is not a scalar (a rank mismatch) or the
-    /// reverse pass fails (a graph failure).
+    /// Returns an [`IdxTensorError`] when the reverse pass fails; a non-scalar
+    /// tensor is rejected by the AD backend.
     ///
     pub fn backward(&self) -> std::result::Result<(), IdxTensorError> {
         if let Some(value) = self.tracked_compact_payload_value() {
@@ -3483,8 +3485,8 @@ impl IdxTensor {
 
     /// Detach this tensor from the reverse graph.
     /// # Errors
-    /// Returns an error when the tensor is not a tracked leaf (a missing-graph
-    /// failure).
+    /// Returns an [`IdxTensorError`] when the eager payload cannot be
+    /// materialized or when the detached tensor cannot be rebuilt.
     ///
     pub fn detach(&self) -> std::result::Result<Self, IdxTensorError> {
         Self::from_inner_with_axis_classes(
@@ -3517,8 +3519,10 @@ impl IdxTensor {
     /// Materializes and returns a compact storage snapshot.
     ///
     /// # Errors
-    /// Returns an error when the compact storage cannot be materialized (a
-    /// backend failure).
+    /// Returns [`TensorStorageError::Materialization`] when the eager payload
+    /// cannot be converted to compact storage, [`TensorStorageError::UnsupportedDtype`]
+    /// for an `f32`/`c32` payload compact storage cannot hold, or
+    /// [`TensorStorageError::Conjugation`] when a deferred conjugation failed.
     /// # Examples
     ///
     /// ```
@@ -3594,8 +3598,8 @@ impl IdxTensor {
     /// Sum all elements, returning `AnyScalar`.
     ///
     /// # Errors
-    /// Returns an error when the reduction fails (a backend or scalar-extraction
-    /// failure).
+    /// Returns an [`IdxTensorError`] when a deferred operation failed earlier,
+    /// or when the storage sum or scalar extraction fails.
     /// # Examples
     ///
     /// ```
@@ -3627,8 +3631,8 @@ impl IdxTensor {
     /// This is similar to Julia's `only()` function.
     ///
     /// # Errors
-    /// Returns an error when the tensor is not rank-0 and does not contain exactly
-    /// one element (a rank mismatch).
+    /// Returns an [`IdxTensorError`] when the dimension product overflows, or
+    /// when the tensor is neither rank-0 nor a single-element tensor.
     /// # Panics
     ///
     /// Panics if the tensor has more than one element.
@@ -3672,8 +3676,8 @@ impl IdxTensor {
     ///   of `self.indices` (matched by full index identity).
     ///
     /// # Errors
-    /// Returns an error when `new_order` does not contain exactly the tensor's
-    /// indices (an index-set mismatch or a missing-index failure).
+    /// Returns an [`IdxTensorError`] when `new_indices` is not a permutation of
+    /// the tensor's indices, or when the backend transpose fails.
     /// # Panics
     /// Panics if `new_indices.len() != self.indices.len()`, if any full index
     /// identity doesn't match, or if there are duplicate indices.
@@ -3726,8 +3730,8 @@ impl IdxTensor {
     /// * `perm` - The permutation: `perm[i]` is the old axis index for new axis `i`
     ///
     /// # Errors
-    /// Returns an error when `new_order` does not contain exactly the tensor's
-    /// indices (an index-set mismatch or a missing-index failure).
+    /// Returns an [`IdxTensorError`] when `perm` is not a valid permutation of
+    /// the tensor's axes, or when the backend transpose fails.
     /// # Panics
     /// Panics if `perm.len() != self.indices.len()` or if the permutation is invalid.
     ///
@@ -4260,8 +4264,8 @@ impl IdxTensor {
     /// * `indices` - The indices for the tensor
     ///
     /// # Errors
-    /// Returns an error when the dimension product overflows (an overflow failure)
-    /// or the backend cannot generate the requested scalar type.
+    /// Returns an [`IdxTensorError`] when the index-dimension product overflows
+    /// `usize` or when dense construction of the generated payload fails.
     ///
     /// # Returns
     /// A tensor filled from the supplied RNG stream in column-major order.
@@ -4311,8 +4315,9 @@ impl IdxTensor {
     /// - Storage types are incompatible
     ///
     /// # Errors
-    /// Returns an error when the two tensors have different index sets (an
-    /// index-set mismatch) or the arithmetic reports a failure.
+    /// Returns an [`IdxTensorError`] when the operands have different index counts,
+    /// different index sets, or mismatched dimensions after alignment, or when
+    /// the element-wise arithmetic fails.
     /// # Example
     /// ```
     /// use tensor4all_core::IdxTensor;
@@ -4396,8 +4401,9 @@ impl IdxTensor {
     /// to match `self`.
     ///
     /// # Errors
-    /// Returns an error when the tensors have different index sets (an index-set
-    /// mismatch) or the arithmetic reports a failure.
+    /// Returns an [`IdxTensorError`] when the operands have different index counts,
+    /// different index sets, or mismatched dimensions after alignment, or when
+    /// the linear-combination arithmetic fails.
     /// # Examples
     ///
     /// ```
@@ -4604,8 +4610,8 @@ impl IdxTensor {
     /// Computes `⟨self, other⟩ = Σ conj(self)_i * other_i`.
     ///
     /// # Errors
-    /// Returns an error when the tensors have different index sets (an index-set
-    /// mismatch) or the contraction reports a failure.
+    /// Returns an [`IdxTensorError`] when the operands have different index sets or
+    /// when the contraction or final scalar sum fails.
     /// # Examples
     ///
     /// ```
@@ -4665,8 +4671,8 @@ impl IdxTensor {
     /// returns a clone of the original tensor.
     ///
     /// # Errors
-    /// Returns an error when the new index has an incompatible dimension
-    /// (a shape mismatch: the replacement dimension must equal the original).
+    /// Returns [`IdxTensorError::ShapeMismatch`] when `new_index` has a different
+    /// dimension than `old_index`.
     /// # Example
     /// ```
     /// use tensor4all_core::IdxTensor;
@@ -4732,10 +4738,9 @@ impl IdxTensor {
     /// are kept unchanged.
     ///
     /// # Errors
-    /// Returns an error when `old_indices` and `new_indices` differ in length
-    /// (a shape mismatch), or when any replacement index has an incompatible
-    /// dimension (a shape mismatch: the replacement dimension must equal the
-    /// original).
+    /// Returns [`IdxTensorError::ShapeMismatch`] when `old_indices` and
+    /// `new_indices` differ in length or when a replacement index has a
+    /// different dimension than the index it replaces.
     /// # Example
     /// ```
     /// use tensor4all_core::IdxTensor;
@@ -5277,8 +5282,8 @@ impl IdxTensor {
     /// [`TensorVectorSpace`].
     ///
     /// # Errors
-    /// Returns an error when the tensors have different index sets (an index-set
-    /// mismatch) or the arithmetic reports a failure.
+    /// Returns an [`IdxTensorError`] when the operands have different index sets
+    /// or when the arithmetic fails.
     ///
     pub fn sub(&self, other: &Self) -> std::result::Result<Self, IdxTensorError> {
         self.axpby(AnyScalar::new_real(1.0), other, AnyScalar::new_real(-1.0))
@@ -5287,8 +5292,8 @@ impl IdxTensor {
     /// Negate all elements.
     ///
     /// # Errors
-    /// Returns an error when scalar multiplication fails for the tensor storage
-    /// (a dtype mismatch) or the backend reports a failure.
+    /// Returns an [`IdxTensorError`] when scaling the storage by `-1` fails in
+    /// the eager or compact backend.
     ///
     pub fn neg(&self) -> std::result::Result<Self, IdxTensorError> {
         self.scale(AnyScalar::new_real(-1.0))
@@ -5484,8 +5489,8 @@ impl IdxTensor {
     /// Create a diagonal Kronecker-delta tensor for one input/output index pair.
     ///
     /// # Errors
-    /// Returns an error when the two indices have different dimensions (an
-    /// index shape mismatch).
+    /// Returns an [`IdxTensorError`] when `input_index` and `output_index` have
+    /// different dimensions or when the diagonal construction fails.
     ///
     pub fn diagonal(
         input_index: &DynIndex,
@@ -5509,8 +5514,8 @@ impl IdxTensor {
     /// Create a scalar tensor equal to one.
     ///
     /// # Errors
-    /// Returns an error when dense scalar construction fails for the element type
-    /// (an invalid scalar dtype or a construction failure).
+    /// Returns an [`IdxTensorError`] when the rank-0 dense scalar tensor cannot
+    /// be constructed.
     ///
     pub fn scalar_one() -> std::result::Result<Self, IdxTensorError> {
         <Self as TensorConstructionLike>::scalar_one()
@@ -5519,8 +5524,8 @@ impl IdxTensor {
     /// Create a tensor filled with ones over the given indices.
     ///
     /// # Errors
-    /// Returns an error when the tensor size overflows (an overflow failure) or
-    /// dense construction fails.
+    /// Returns an [`IdxTensorError`] when the total element count overflows
+    /// `usize` or when the dense tensor cannot be constructed.
     ///
     pub fn ones(indices: &[DynIndex]) -> std::result::Result<Self, IdxTensorError> {
         <Self as TensorConstructionLike>::ones(indices)
@@ -5529,8 +5534,8 @@ impl IdxTensor {
     /// Create a one-hot tensor with value one at the specified index positions.
     ///
     /// # Errors
-    /// Returns an error when any coordinate is outside its index dimension (an
-    /// out of bounds failure).
+    /// Returns an [`IdxTensorError`] when a coordinate is not less than its index
+    /// dimension, when the element count overflows, or when construction fails.
     ///
     pub fn onehot(index_vals: &[(DynIndex, usize)]) -> std::result::Result<Self, IdxTensorError> {
         <Self as TensorConstructionLike>::onehot(index_vals)
@@ -5553,8 +5558,8 @@ impl IdxTensor {
     ///   zero.
     ///
     /// # Errors
-    /// Returns an error when the coordinate is outside the index dimension (an
-    /// out of bounds failure) or the mask construction fails.
+    /// Returns an [`IdxTensorError`] when `index` is absent, when `position` is
+    /// outside the index dimension, or when the mask tensor construction fails.
     /// # Examples
     ///
     /// ```
@@ -5713,8 +5718,8 @@ impl std::fmt::Debug for IdxTensor {
 /// representation.
 ///
 /// # Errors
-/// Returns an error when the index dimensions are unequal (a dimension
-/// mismatch) or the diagonal construction fails.
+/// Returns an [`IdxTensorError`] when the index dimensions are not all equal or
+/// when the diagonal construction fails.
 /// # Panics
 /// Panics if indices have different dimensions, or if diag_data length doesn't match.
 /// # Examples
@@ -5759,11 +5764,9 @@ pub(crate) type UnfoldSplitInnerResult = (
 /// - `right_indices` is the vector of right indices (cloned)
 /// # Errors
 ///
-/// Returns an error when the tensor rank is less than 2 (a rank mismatch),
-/// when `left_inds` is empty or contains all indices (an invalid split), when
-/// `left_inds` contains indices not present in the tensor (a missing-index
-/// failure) or duplicates, or when the native reshape fails (a backend
-/// failure).
+/// Returns an [`IdxTensorError`] when the tensor rank is below 2, when
+/// `left_inds` is empty, covers all indices, contains an absent index, or
+/// repeats an index, or when the native reshape fails.
 /// # Examples
 /// ```
 /// use tensor4all_core::{DynIndex, IdxTensor, unfold_split};
@@ -7170,8 +7173,8 @@ impl IdxTensor {
     /// * `data` - Tensor data in column-major order
     ///
     /// # Errors
-    /// Returns an error when the data length does not match the index dimension
-    /// product (a shape mismatch).
+    /// Returns an [`IdxTensorError`] when the indices are not unique or when
+    /// `data.len()` does not equal the index-dimension product.
     /// # Example
     /// ```
     /// use tensor4all_core::IdxTensor;
@@ -7200,8 +7203,8 @@ impl IdxTensor {
     /// type at runtime.
     ///
     /// # Errors
-    /// Returns an error when the payload length does not match the index dimension
-    /// product (a shape mismatch) or a scalar conversion fails.
+    /// Returns an [`IdxTensorError`] when the payload length does not match the
+    /// index-dimension product or when an `AnyScalar` value cannot be converted.
     /// # Examples
     /// ```
     /// use tensor4all_core::{AnyScalar, IdxTensor};
@@ -7245,8 +7248,9 @@ impl IdxTensor {
     /// never promoted into compact `f64`/`Complex64` storage.
     ///
     /// # Errors
-    /// Returns an error when the index dimensions are unequal or the payload
-    /// length does not match the diagonal dimension (a shape mismatch).
+    /// Returns an [`IdxTensorError`] when the indices are not unique, when their
+    /// dimensions are not all equal, or when `data.len()` differs from that
+    /// dimension.
     /// # Examples
     ///
     /// ```
@@ -7283,9 +7287,9 @@ impl IdxTensor {
     /// type at runtime.
     ///
     /// # Errors
-    /// Returns an error when the index dimensions are unequal or the payload
-    /// length does not match (a shape mismatch), or a scalar conversion
-    /// fails.
+    /// Returns an [`IdxTensorError`] when the index dimensions are not all equal,
+    /// when the payload length differs from the diagonal dimension, or when an
+    /// `AnyScalar` value cannot be converted.
     /// # Examples
     /// ```
     /// use tensor4all_core::{AnyScalar, IdxTensor};
@@ -7318,8 +7322,8 @@ impl IdxTensor {
     /// `T[i, j, k] = value` when `i = j = k`, and zero otherwise.
     ///
     /// # Errors
-    /// Returns an error when the index dimensions are unequal (a dimension
-    /// mismatch) or the construction fails.
+    /// Returns an [`IdxTensorError`] when the indices have unequal dimensions or
+    /// when the diagonal construction fails.
     /// # Examples
     /// ```
     /// use tensor4all_core::{AnyScalar, IdxTensor};
@@ -7507,8 +7511,9 @@ impl IdxTensor {
     /// the new indices via `order`.
     ///
     /// # Errors
-    /// Returns an error when the fused dimension does not equal the product of
-    /// the new index dimensions (a shape mismatch).
+    /// Returns an [`IdxTensorError`] when `new_indices` is empty, when
+    /// `old_index` is absent, when the replacement dimensions' product overflows
+    /// or differs from the fused dimension, or when the reshape fails.
     /// # Examples
     /// ```
     /// use tensor4all_core::{DynIndex, LinearizationOrder, IdxTensor};
@@ -7599,8 +7604,8 @@ impl IdxTensor {
     /// Create a scalar (0-dimensional) tensor from a supported element value.
     ///
     /// # Errors
-    /// Returns an error when the element type is not supported (an
-    /// unsupported-dtype failure).
+    /// Returns an [`IdxTensorError`] when the element type is not one of the
+    /// supported scalar dtypes or when scalar construction fails.
     /// # Example
     /// ```
     /// use tensor4all_core::IdxTensor;
@@ -7616,8 +7621,8 @@ impl IdxTensor {
     /// Create a tensor filled with zeros of a supported element type.
     ///
     /// # Errors
-    /// Returns an error when the dimension product overflows (an overflow failure)
-    /// or the element type is unsupported.
+    /// Returns an [`IdxTensorError`] when the index-dimension product overflows or
+    /// when dense construction fails for the element type.
     /// # Example
     /// ```
     /// use tensor4all_core::IdxTensor;
@@ -7653,8 +7658,8 @@ impl IdxTensor {
     /// A vector of the tensor data in column-major order.
     ///
     /// # Errors
-    /// Returns an error when the tensor dtype does not match the requested element
-    /// type (a scalar-kind mismatch) or materialization fails.
+    /// Returns an [`IdxTensorError`] when the tensor dtype does not match `T` or
+    /// when the payload cannot be materialized.
     /// # Example
     /// ```
     /// use tensor4all_core::IdxTensor;
@@ -7749,8 +7754,8 @@ impl IdxTensor {
     /// The tensor's original indices and dense column-major flat data.
     ///
     /// # Errors
-    /// Returns an error when the tensor dtype does not match the requested element
-    /// type (a scalar-kind mismatch) or materialization fails.
+    /// Returns an [`IdxTensorError`] when the tensor dtype does not match `T` or
+    /// when the payload cannot be materialized.
     /// # Examples
     /// ```
     /// use tensor4all_core::{DynIndex, IdxTensor};

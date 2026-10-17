@@ -66,8 +66,8 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the block count does not match the shape (a shape
-    /// mismatch).
+    /// Returns [`TensorVectorSpaceError`] when `rows * cols` overflows `usize`
+    /// or when `blocks.len()` differs from `rows * cols`.
     ///
     /// # Examples
     ///
@@ -117,8 +117,8 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the block count does not match the shape (a shape
-    /// mismatch).
+    /// Returns [`TensorVectorSpaceError`] when `rows * cols` overflows `usize`
+    /// or when `blocks.len()` differs from `rows * cols`.
     ///
     /// # Examples
     ///
@@ -274,8 +274,9 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the blocks have inconsistent indices (a shape or
-    /// index mismatch).
+    /// Returns [`TensorVectorSpaceError`] when blocks disagree on their number
+    /// of external indices, or when blocks in a common row or column share no
+    /// index.
     ///
     /// # Examples
     ///

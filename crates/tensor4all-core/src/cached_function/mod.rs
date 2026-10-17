@@ -442,8 +442,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the cache dimensions are invalid (a shape mismatch)
-    /// or the construction fails.
+    /// Returns [`error::CacheKeyError::Overflow`] when the index space requires
+    /// more than the automatic 1024-bit key width.
     ///
     /// # Examples
     ///
@@ -475,8 +475,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the batch configuration is invalid (an
-    /// invalid-configuration failure).
+    /// Returns [`error::CacheKeyError::Overflow`] when the index space requires
+    /// more than the automatic 1024-bit key width.
     ///
     /// # Examples
     ///
@@ -516,8 +516,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the key type configuration is invalid (an
-    /// invalid-configuration failure).
+    /// Returns [`error::CacheKeyError::Overflow`] when the index space requires
+    /// more bits than `K` supports.
     ///
     /// # Example
     ///
@@ -579,8 +579,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the configuration is invalid (an
-    /// invalid-configuration failure).
+    /// Returns [`error::CacheKeyError::Overflow`] when the index space requires
+    /// more bits than `K` supports.
     ///
     /// # Examples
     ///

@@ -98,8 +98,9 @@ impl<'a, T> ColMajorArrayRef<'a, T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`ColMajorArrayError::ShapeOverflow`] when the product of `shape`
+    /// overflows `usize`, or [`ColMajorArrayError::ShapeMismatch`] when
+    /// `data.len()` does not equal that product.
     ///
     pub fn new(data: &'a [T], shape: &'a [usize]) -> Result<Self, ColMajorArrayError> {
         let expected =
@@ -165,8 +166,9 @@ impl<'a, T> ColMajorArrayMut<'a, T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`ColMajorArrayError::ShapeOverflow`] when the product of `shape`
+    /// overflows `usize`, or [`ColMajorArrayError::ShapeMismatch`] when
+    /// `data.len()` does not equal that product.
     ///
     pub fn new(data: &'a mut [T], shape: &'a [usize]) -> Result<Self, ColMajorArrayError> {
         let expected =
@@ -246,8 +248,9 @@ impl<T> ColMajorArray<T> {
     /// shape dimensions.
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`ColMajorArrayError::ShapeOverflow`] when the product of `shape`
+    /// overflows `usize`, or [`ColMajorArrayError::ShapeMismatch`] when
+    /// `data.len()` does not equal that product.
     ///
     pub fn new(data: Vec<T>, shape: Vec<usize>) -> Result<Self, ColMajorArrayError> {
         let expected =
@@ -373,8 +376,10 @@ impl<T> ColMajorArray<T> {
     /// not match `nrows()`.
     /// # Errors
     ///
-    /// Returns an error when the column length does not match the row count (a
-    /// shape mismatch).
+    /// Returns [`ColMajorArrayError::Not2D`] when the array is not 2D,
+    /// [`ColMajorArrayError::ColumnLengthMismatch`] when `col.len()` differs
+    /// from the row count, and [`ColMajorArrayError::ColumnCountOverflow`] when
+    /// appending the column would overflow the column count.
     ///
     pub fn push_column(&mut self, col: &[T]) -> Result<(), ColMajorArrayError>
     where
@@ -406,8 +411,8 @@ impl<T: Clone> ColMajorArray<T> {
     /// Returns an error if the product of shape dimensions overflows `usize`.
     /// # Errors
     ///
-    /// Returns an error when the dimensions are invalid (a shape mismatch) or the
-    /// fill fails.
+    /// Returns [`ColMajorArrayError::ShapeOverflow`] when the product of `shape`
+    /// overflows `usize`.
     ///
     pub fn filled(shape: Vec<usize>, value: T) -> Result<Self, ColMajorArrayError> {
         let n = checked_shape_numel(&shape).ok_or_else(|| ColMajorArrayError::ShapeOverflow {
@@ -427,7 +432,8 @@ impl<T: Default + Clone> ColMajorArray<T> {
     /// Returns an error if the product of shape dimensions overflows `usize`.
     /// # Errors
     ///
-    /// Returns an error when the dimensions are invalid (a shape mismatch).
+    /// Returns [`ColMajorArrayError::ShapeOverflow`] when the product of `shape`
+    /// overflows `usize`.
     ///
     pub fn zeros(shape: Vec<usize>) -> Result<Self, ColMajorArrayError> {
         let n = checked_shape_numel(&shape).ok_or_else(|| ColMajorArrayError::ShapeOverflow {

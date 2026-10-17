@@ -513,9 +513,8 @@ impl PairwiseContractionOptions {
 /// components is intentional.
 /// # Errors
 ///
-/// Returns an error when the network is disconnected (a disconnected-network
-/// failure), when indices are incompatible (a shape or index mismatch), or
-/// when the contraction reports a failure (a backend failure).
+/// Returns [`IdxTensorError::Operation`] when the network is disconnected,
+/// when indices do not match, or when the backend contraction fails.
 ///
 pub fn contract(tensors: &[&IdxTensor]) -> std::result::Result<IdxTensor, IdxTensorError> {
     contract_with_options(tensors, ContractionOptions::new())
@@ -524,9 +523,8 @@ pub fn contract(tensors: &[&IdxTensor]) -> std::result::Result<IdxTensor, IdxTen
 /// Contract a connected tensor network with advanced options.
 /// # Errors
 ///
-/// Returns an error when the network is disconnected (a disconnected-network
-/// failure), when indices are incompatible (a shape or index mismatch), or
-/// when the contraction reports a failure (a backend failure).
+/// Returns [`IdxTensorError::Operation`] when the network is disconnected,
+/// when indices do not match, or when the backend contraction fails.
 ///
 pub fn contract_with_options(
     tensors: &[&IdxTensor],
@@ -538,9 +536,8 @@ pub fn contract_with_options(
 /// Contract owned tensors with the default connected-network semantics.
 /// # Errors
 ///
-/// Returns an error when the network is disconnected (a disconnected-network
-/// failure), when indices are incompatible (a shape or index mismatch), or
-/// when the contraction reports a failure (a backend failure).
+/// Returns [`IdxTensorError::Operation`] when the network is disconnected,
+/// when indices do not match, or when the backend contraction fails.
 ///
 pub fn contract_owned(tensors: Vec<IdxTensor>) -> std::result::Result<IdxTensor, IdxTensorError> {
     contract_owned_with_options(tensors, ContractionOptions::new())
@@ -549,9 +546,8 @@ pub fn contract_owned(tensors: Vec<IdxTensor>) -> std::result::Result<IdxTensor,
 /// Contract owned tensors with advanced connected-network options.
 /// # Errors
 ///
-/// Returns an error when the network is disconnected (a disconnected-network
-/// failure), when indices are incompatible (a shape or index mismatch), or
-/// when the contraction reports a failure (a backend failure).
+/// Returns [`IdxTensorError::Operation`] when the network is disconnected,
+/// when indices do not match, or when the backend contraction fails.
 ///
 pub fn contract_owned_with_options(
     tensors: Vec<IdxTensor>,
@@ -576,9 +572,8 @@ pub fn contract_owned_with_options(
 /// paths used by [`crate::TensorContractionLike::contract_pair`].
 /// # Errors
 ///
-/// Returns an error when the pair is disconnected or has incompatible indices
-/// (a shape or index mismatch), or when the contraction reports a failure (a
-/// backend failure).
+/// Returns [`IdxTensorError::Operation`] when the pair has incompatible
+/// indices or when the backend contraction fails.
 ///
 pub fn contract_pair(
     lhs: &IdxTensor,
@@ -597,9 +592,8 @@ pub fn contract_pair(
 ///
 /// # Errors
 ///
-/// Returns an error when the pair is disconnected or has incompatible indices
-/// (a shape or index mismatch), or when the contraction reports a failure (a
-/// backend failure).
+/// Returns [`IdxTensorError::Operation`] when the pair has incompatible
+/// indices or when the backend contraction fails.
 ///
 /// # Examples
 ///
@@ -641,9 +635,8 @@ pub fn contract_pair_with_operand_options(
 /// Contract two tensors with explicit contraction options.
 /// # Errors
 ///
-/// Returns an error when the pair is disconnected or has incompatible indices
-/// (a shape or index mismatch), or when the contraction reports a failure (a
-/// backend failure).
+/// Returns [`IdxTensorError::Operation`] when the pair has incompatible
+/// indices or when the backend contraction fails.
 ///
 pub fn contract_pair_with_options(
     lhs: &IdxTensor,
@@ -656,8 +649,8 @@ pub fn contract_pair_with_options(
 /// Contract two tensors along explicitly specified index pairs.
 /// # Errors
 ///
-/// Returns an error when the contracted indices are incompatible (a shape or
-/// index mismatch) or the contraction reports a failure (a backend failure).
+/// Returns [`IdxTensorError::Operation`] when the contracted indices do not
+/// match or when the backend contraction fails.
 ///
 pub fn tensordot(
     lhs: &IdxTensor,
@@ -674,9 +667,8 @@ pub fn tensordot(
 /// structured storage is preserved when the operand layouts allow it.
 /// # Errors
 ///
-/// Returns an error when the two tensors share contractable indices (a
-/// shared-index mismatch) or the construction reports a failure (a backend
-/// failure).
+/// Returns [`IdxTensorError::Operation`] when the two tensors share a
+/// contractable index or when the backend construction fails.
 ///
 pub fn outer_product(
     lhs: &IdxTensor,

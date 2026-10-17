@@ -399,8 +399,9 @@ fn svd_truncated_inner_scoped(
 ///
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape or index mismatch, or
-/// a backend failure).
+/// Returns [`SvdError::ComputationError`] when `left_inds` is not a non-empty
+/// proper subset of the tensor's indices, when the input is CUDA-resident (use
+/// [`svd_with_in`]), or when the backend SVD fails.
 ///
 /// # Examples
 ///
@@ -436,8 +437,11 @@ pub fn svd<T>(
 ///
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape or index mismatch, or
-/// a backend failure).
+/// Returns [`SvdError::InvalidMaxBondDim`] when `options.max_bond_dim` is
+/// `Some(0)`, [`SvdError::InvalidThreshold`] when the truncation threshold is
+/// negative or non-finite, and [`SvdError::ComputationError`] when `left_inds`
+/// is not a non-empty proper subset of the tensor's indices, when the input is
+/// CUDA-resident, or when the backend SVD fails.
 ///
 /// # Examples
 ///

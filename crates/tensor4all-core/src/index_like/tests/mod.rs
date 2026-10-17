@@ -65,8 +65,8 @@ impl IndexLike for TestIndex {
 
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// Returns an error when `indices` is empty or when the product of their
+    /// dimensions overflows `usize`.
     ///
     fn product_link(indices: &[Self]) -> anyhow::Result<Self> {
         anyhow::ensure!(

@@ -36,8 +36,10 @@ use crate::tensortrain::TensorTrain;
 ///
 /// # Errors
 ///
-/// Returns an error when the contraction or operation fails (a shape or
-/// index mismatch, or a backend failure).
+/// Returns [`TensorTrainError::InvalidStructure`] when either train is empty
+/// or when their lengths differ, and [`TensorTrainError::OperationError`] when
+/// the SVD truncation policy is invalid or the Fit sweep count is not a
+/// multiple of two.
 ///
 /// Shared entry validation for every contraction route. Both [`contract`] and
 /// [`contract_in`] run exactly this, in this order, so the routes cannot drift
@@ -163,8 +165,10 @@ fn contract_dispatch(
 ///
 /// # Errors
 ///
-/// Returns an error when the contraction or operation fails (a shape or
-/// index mismatch, or a backend failure).
+/// Returns [`TensorTrainError::InvalidStructure`] when either train is empty,
+/// when their lengths differ, or when the underlying TreeTN contraction fails;
+/// returns [`TensorTrainError::OperationError`] when the SVD truncation policy
+/// is invalid or the Fit sweep count is not a multiple of two.
 pub fn contract(
     a: &TensorTrain,
     b: &TensorTrain,
@@ -223,12 +227,10 @@ fn to_treetn_options(options: &ContractOptions) -> TreeTNContractionOptions {
 ///
 /// # Errors
 ///
-/// Returns the same errors as [`contract`], plus a structural error when the
-/// caller-owned context refuses a Zip-up contraction (including a provenance
-/// or factorization refusal), and a typed
-/// [`TensorTrainError::OperationError`] for the Fit and Naive methods (the
-/// caller-owned route cannot honor the supplied context for those methods
-/// yet).
+/// Returns the same errors as [`contract`], plus
+/// [`TensorTrainError::InvalidStructure`] when the caller-owned context
+/// refuses the contraction (for example a provenance, placement, or
+/// factorization refusal).
 pub fn contract_in(
     a: &TensorTrain,
     b: &TensorTrain,
@@ -334,8 +336,11 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when the contraction or operation fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`TensorTrainError::InvalidStructure`] when either train is
+    /// empty, when their lengths differ, or when the underlying TreeTN
+    /// contraction fails; returns [`TensorTrainError::OperationError`] when the
+    /// SVD truncation policy is invalid or the Fit sweep count is not a
+    /// multiple of two.
     ///
     pub fn contract(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
         contract(self, other, options)
@@ -349,8 +354,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when the pair is incompatible (a shape or index mismatch)
-    /// or the contraction fails (a backend failure).
+    /// Returns the same [`TensorTrainError`] variants as
+    /// [`TensorTrain::contract`].
     ///
     pub fn contract_pair(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
         self.contract(other, options)
@@ -373,9 +378,10 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when the pair is incompatible (a shape or index
-    /// mismatch), the contraction fails (a backend failure), or the
-    /// caller-owned context refuses the SRC projection.
+    /// Returns the same errors as [`TensorTrain::contract`], plus
+    /// [`TensorTrainError::InvalidStructure`] when the caller-owned context
+    /// refuses the contraction (for example a provenance, placement, or
+    /// factorization refusal).
     pub fn contract_in(
         &self,
         other: &Self,

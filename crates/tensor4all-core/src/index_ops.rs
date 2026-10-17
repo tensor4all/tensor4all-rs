@@ -67,8 +67,8 @@ impl std::error::Error for ReplaceIndsError {}
 ///
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape or index mismatch, or
-/// a backend failure).
+/// Returns [`ReplaceIndsError::DuplicateIndices`] when two entries are equal,
+/// naming the first and duplicate positions.
 ///
 /// # Example
 /// ```

@@ -174,9 +174,9 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when a tensor's site dimensions are incompatible with
-    /// its neighbors (a shape mismatch) or the chain is structurally
-    /// inconsistent (an invalid-state failure).
+    /// Returns [`TensorTrainError::InvalidStructure`] when adjacent tensors do
+    /// not share exactly one link index or when the underlying TreeTN
+    /// construction fails.
     ///
     pub fn new(tensors: Vec<IdxTensor>) -> Result<Self> {
         if tensors.is_empty() {
@@ -369,8 +369,8 @@ impl TensorTrain {
     /// * `canonical_form` - The method used for canonicalization (if any)
     /// # Errors
     ///
-    /// Returns an error when the orthogonality center is out of range (an
-    /// out of bounds failure) or orthogonalization fails.
+    /// Returns [`TensorTrainError::InvalidStructure`] when [`TensorTrain::new`]
+    /// rejects the tensors or when the deduced canonical region cannot be set.
     ///
     pub fn with_ortho(
         tensors: Vec<IdxTensor>,
@@ -428,8 +428,9 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when the input TreeTN is not a linear chain (an
-    /// invalid-topology failure) or a site conversion fails.
+    /// Returns [`TensorTrainError::InvalidStructure`] when the input TreeTN is
+    /// not a linear chain or when its nodes cannot be renumbered to sites
+    /// `0..len`.
     ///
     /// # Examples
     ///
@@ -618,7 +619,7 @@ impl TensorTrain {
     #[inline]
     /// # Errors
     ///
-    /// Returns an error when `site` is out of range (an out of bounds failure).
+    /// Returns [`TensorTrainError::SiteOutOfBounds`] when `site >= self.len()`.
     ///
     pub fn tensor(&self, site: usize) -> Result<&IdxTensor> {
         self.tensor_checked(site)
@@ -628,7 +629,7 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when `site` is out of range (an out of bounds failure).
+    /// Returns [`TensorTrainError::SiteOutOfBounds`] when `site >= self.len()`.
     ///
     pub fn tensor_checked(&self, site: usize) -> Result<&IdxTensor> {
         if site >= self.len() {
@@ -657,7 +658,9 @@ impl TensorTrain {
     #[inline]
     /// # Errors
     ///
-    /// Returns an error when `site` is out of range (an out of bounds failure).
+    /// Returns [`TensorTrainError::SiteOutOfBounds`] when `site >= self.len()`,
+    /// and [`TensorTrainError::InvalidStructure`] when the mapped node has no
+    /// tensor.
     ///
     pub fn tensor_mut(&mut self, site: usize) -> Result<&mut IdxTensor> {
         self.tensor_mut_checked(site)
@@ -667,7 +670,9 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when `site` is out of range (an out of bounds failure).
+    /// Returns [`TensorTrainError::SiteOutOfBounds`] when `site >= self.len()`,
+    /// and [`TensorTrainError::InvalidStructure`] when the mapped node has no
+    /// tensor.
     ///
     /// # Examples
     ///
@@ -719,14 +724,10 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when the internal site-to-node mapping is inconsistent (a
-    /// graph consistency failure).
+    /// Returns [`TensorTrainError::SiteOutOfBounds`] when a site in `0..len`
+    /// has no mapped node, and [`TensorTrainError::InvalidStructure`] when a
+    /// mapped node has no tensor.
     #[inline]
-    /// # Errors
-    ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
-    ///
     pub fn tensors_mut(&mut self) -> Result<Vec<&mut IdxTensor>> {
         self.tensors_mut_checked()
     }
@@ -735,8 +736,9 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`TensorTrainError::SiteOutOfBounds`] when a site in `0..len`
+    /// has no mapped node, and [`TensorTrainError::InvalidStructure`] when a
+    /// mapped node has no tensor.
     ///
     /// # Examples
     ///
@@ -819,8 +821,9 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when the link-index relabeling fails (an invalid-index
-    /// failure).
+    /// Returns [`TensorTrainError::OperationErrorSource`] when replacing a link
+    /// index fails, and [`TensorTrainError::InvalidStructure`] when the rebuilt
+    /// train is not a valid chain.
     ///
     pub fn sim_link_indices(&self) -> Result<Self> {
         if self.len() <= 1 {
@@ -1046,8 +1049,9 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when `site` is out of range (an out of bounds failure) or
-    /// the new tensor has incompatible dimensions (a shape mismatch).
+    /// Returns [`TensorTrainError::SiteOutOfBounds`] when `site >= self.len()`,
+    /// and [`TensorTrainError::InvalidStructure`] when the tensor cannot be
+    /// replaced or the canonical region cannot be cleared.
     ///
     /// # Examples
     ///
@@ -1076,8 +1080,9 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when `site` is out of range (an out of bounds failure) or
-    /// the new tensor has incompatible dimensions (a shape mismatch).
+    /// Returns [`TensorTrainError::SiteOutOfBounds`] when `site >= self.len()`,
+    /// and [`TensorTrainError::InvalidStructure`] when the tensor cannot be
+    /// replaced or the canonical region cannot be cleared.
     ///
     /// # Examples
     ///
@@ -1163,8 +1168,9 @@ impl TensorTrain {
     ///   - `CI`: Uses Cross Interpolation
     /// # Errors
     ///
-    /// Returns an error when `site` is out of range (an out of bounds failure) or
-    /// orthogonalization fails (a backend or non-convergence failure).
+    /// Returns [`TensorTrainError::Empty`] when the train has no sites,
+    /// [`TensorTrainError::SiteOutOfBounds`] when `site >= self.len()`, and
+    /// [`TensorTrainError::InvalidStructure`] when canonicalization fails.
     ///
     pub fn orthogonalize_with(&mut self, site: usize, form: CanonicalForm) -> Result<()> {
         if self.is_empty() {
@@ -1273,8 +1279,11 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when the two tensor trains have incompatible site spaces
-    /// (a shape mismatch) or the contraction fails (a backend failure).
+    /// Returns [`TensorTrainError::InvalidStructure`] when the trains have
+    /// different lengths, when a site or tensor cannot be resolved, or when the
+    /// contraction does not reduce to a scalar; returns
+    /// [`TensorTrainError::OperationErrorSource`] when a pairwise contraction
+    /// or the final sum fails.
     ///
     /// # Examples
     ///
@@ -1842,8 +1851,9 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when the dense materialization fails (a materialization
-    /// or backend failure).
+    /// Returns [`TensorTrainError::InvalidStructure`] when the train is empty,
+    /// and [`TensorTrainError::OperationErrorSource`] when contracting the
+    /// tensors fails.
     ///
     /// # Example
     /// ```
@@ -1894,8 +1904,8 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when the dense materialization fails (a materialization
-    /// or backend failure).
+    /// Returns the same errors as [`TensorTrain::to_dense`], plus
+    /// [`TensorTrainError::IdxTensor`] when the dense tensor's `maxabs` fails.
     ///
     /// # Examples
     ///
@@ -1931,8 +1941,11 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when the two tensor trains have incompatible site spaces
-    /// (a shape mismatch) or the direct-sum construction fails.
+    /// Returns [`TensorTrainError::InvalidStructure`] when the trains have
+    /// different lengths, when the direct-sum construction fails, or when
+    /// parallel links cannot be fused into a single unit link; returns
+    /// [`TensorTrainError::OperationErrorSource`] when fusing or attaching a
+    /// unit link fails.
     ///
     pub fn add(&self, other: &Self) -> Result<Self> {
         if self.is_empty() && other.is_empty() {
@@ -1988,8 +2001,11 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when the two tensor trains have incompatible site spaces
-    /// (a shape mismatch) or the reindexed addition fails.
+    /// Returns [`TensorTrainError::InvalidStructure`] when the trains have
+    /// different lengths, when their site spaces cannot be aligned, or when the
+    /// underlying reindexed addition fails; also propagates
+    /// [`TensorTrainError::OperationErrorSource`] from explicit-unit-link
+    /// repair.
     ///
     /// # Examples
     ///
@@ -2061,8 +2077,9 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when the scaling fails (a dtype mismatch or backend
-    /// failure).
+    /// Returns [`TensorTrainError::OperationErrorSource`] when scaling the
+    /// first tensor fails, or [`TensorTrainError::InvalidStructure`] when the
+    /// rebuilt chain is invalid.
     ///
     /// # Example
     /// ```
@@ -2123,8 +2140,9 @@ impl TensorTrain {
     /// of the two input tensor trains (before any truncation).
     /// # Errors
     ///
-    /// Returns an error when the two tensor trains have incompatible site spaces
-    /// (a shape mismatch) or the axpby computation fails (a backend failure).
+    /// Returns [`TensorTrainError::InvalidStructure`] when the two trains have
+    /// incompatible lengths or site spaces, and
+    /// [`TensorTrainError::OperationErrorSource`] when scaling a train fails.
     ///
     pub fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
         let scaled_self = self.scale(a)?;

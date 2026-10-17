@@ -563,8 +563,8 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when the scalar is not a tracked leaf (a missing-graph
-    /// failure).
+    /// Returns an [`AnyScalarError`] when this scalar's eager backend tensor
+    /// could not be created, or when the AD backend cannot detach it.
     ///
     /// # Examples
     ///
@@ -633,8 +633,10 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when the scalar is not a tracked leaf or the gradient is
-    /// unavailable (a missing-graph or dtype mismatch failure).
+    /// Returns an [`AnyScalarError`] when this scalar's eager backend tensor
+    /// could not be created, or when the AD backend cannot read the stored
+    /// gradient. A scalar with no recorded gradient returns `Ok(None)` rather
+    /// than an error.
     ///
     /// # Examples
     ///
@@ -664,8 +666,9 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when the scalar is not a tracked leaf (a missing-graph
-    /// failure).
+    /// Returns an [`AnyScalarError`] when this scalar's eager backend tensor
+    /// could not be created, or when the AD backend cannot clear the stored
+    /// gradient.
     ///
     /// # Examples
     ///
@@ -695,8 +698,9 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when the scalar is not a scalar-valued leaf or the reverse
-    /// pass fails (a graph failure).
+    /// Returns an [`AnyScalarError`] when this scalar's eager backend tensor
+    /// could not be created, when it is not a scalar-valued tracked leaf, or
+    /// when the reverse pass fails.
     ///
     /// # Examples
     ///
@@ -725,8 +729,8 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when the scalar is not a tracked leaf (a missing-graph
-    /// failure).
+    /// Returns an [`AnyScalarError`] when this scalar's eager backend tensor
+    /// could not be created, or when the AD backend cannot detach it.
     ///
     /// # Examples
     ///
@@ -911,8 +915,10 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when the conjugation fails (a dtype mismatch or backend
-    /// failure).
+    /// Returns an [`AnyScalarError`] when this scalar's eager backend tensor
+    /// could not be created, or when the AD backend's conjugation fails (for
+    /// example for a dtype it cannot track). Real-valued scalars are returned
+    /// unchanged.
     ///
     /// # Examples
     ///
@@ -1003,8 +1009,9 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when the components cannot be composed (a dtype mismatch
-    /// or a backend failure).
+    /// Returns an [`AnyScalarError`] when either input is not real-valued, or
+    /// when the multiplication by the imaginary unit or the addition fails in
+    /// the eager backend.
     ///
     /// # Examples
     ///

@@ -120,8 +120,8 @@ impl<T: Scalar> MatrixACA<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the matrix dimensions are invalid (a shape mismatch)
-    /// or the initial pivot is out of range (an out of bounds failure).
+    /// Returns [`MatrixCIError::IndexOutOfBounds`] when `first_pivot` is outside
+    /// `a`, or [`MatrixCIError::SingularMatrix`] when its value is near-zero.
     ///
     /// # Examples
     ///
@@ -301,8 +301,10 @@ impl<T: Scalar> MatrixACA<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the pivot column is out of range (an out of bounds
-    /// failure) or the ACA update fails.
+    /// Returns [`MatrixCIError::DimensionMismatch`] when `a` differs from this
+    /// approximation's shape, [`MatrixCIError::IndexOutOfBounds`] when
+    /// `col_index` is outside the column count, or
+    /// [`MatrixCIError::SingularMatrix`] when the update hits a zero pivot.
     ///
     /// # Examples
     ///
@@ -344,8 +346,10 @@ impl<T: Scalar> MatrixACA<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the pivot row is out of range (an out of bounds
-    /// failure) or the ACA update fails.
+    /// Returns [`MatrixCIError::DimensionMismatch`] when `a` differs from this
+    /// approximation's shape, [`MatrixCIError::IndexOutOfBounds`] when
+    /// `row_index` is outside the row count, or
+    /// [`MatrixCIError::SingularMatrix`] when the update hits a zero pivot.
     ///
     /// # Examples
     ///
@@ -398,8 +402,9 @@ impl<T: Scalar> MatrixACA<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the pivot is out of range (an out of bounds failure)
-    /// or the ACA update fails.
+    /// Returns the same [`MatrixCIError`] variants as
+    /// [`MatrixACA::add_pivot_col`] and [`MatrixACA::add_pivot_row`], and leaves
+    /// this approximation unchanged on failure.
     ///
     /// # Examples
     ///
@@ -430,8 +435,10 @@ impl<T: Scalar> MatrixACA<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when no valid pivot exists (a singular failure) or the
-    /// ACA update fails.
+    /// Returns [`MatrixCIError::DimensionMismatch`] when `a` differs from this
+    /// approximation's shape, [`MatrixCIError::FullRank`] when no available row
+    /// or column remains, or [`MatrixCIError::SingularMatrix`] when the update
+    /// hits a zero pivot.
     ///
     /// # Examples
     ///

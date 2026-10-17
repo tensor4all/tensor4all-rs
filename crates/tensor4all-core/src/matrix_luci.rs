@@ -820,8 +820,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`MatrixCIError`] when `a` is not a valid matrix for LU cross
+    /// interpolation or when the factor construction fails.
     ///
     /// # Examples
     ///

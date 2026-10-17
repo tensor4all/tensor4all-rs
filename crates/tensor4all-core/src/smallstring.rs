@@ -118,8 +118,9 @@ impl<const MAX_LEN: usize, C: SmallChar> SmallString<MAX_LEN, C> {
     #[allow(clippy::should_implement_trait)]
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`SmallStringError::TooLong`] when `s` exceeds `MAX_LEN`
+    /// characters, or [`SmallStringError::InvalidChar`] when a character cannot
+    /// be represented in `C`.
     ///
     pub fn from_str(s: &str) -> Result<Self, SmallStringError> {
         let mut data = [C::ZERO; MAX_LEN];

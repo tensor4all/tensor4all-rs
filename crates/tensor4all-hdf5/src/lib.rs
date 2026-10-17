@@ -23,7 +23,7 @@
 //! should set it themselves.
 //!
 //! New public functions that touch HDF5 MUST wrap their body in
-//! [`backend::hdf5_sync`] — the public boundary is the crate's single
+//! `backend::hdf5_sync` — the public boundary is the crate's single
 //! thread-safety choke point; internal helpers never lock on their own, they
 //! run under the caller's lock. Direct use of the re-exported low-level
 //! hdf5-rt passthroughs (`hdf5_init`, ...) bypasses the lock and is outside
@@ -35,7 +35,7 @@
 //! |-----------|-------------|------------------|
 //! | [`IdxTensor`] | `ITensor` | `ITensors.ITensor` |
 //! | [`TensorTrain`] | `MPS` | `ITensorMPS.MPS` |
-//! | [`TreeTN`](tensor4all_treetn::TreeTN) | `TreeTN` (tensor4all-rs schema) | — (no ITensorNetworks.jl equivalent) |
+//! | [`TreeTN`] | `TreeTN` (tensor4all-rs schema) | — (no ITensorNetworks.jl equivalent) |
 //!
 //! Both `f64` and `Complex64` element types are supported for dense storage.
 //!
@@ -245,8 +245,10 @@ pub fn save_itensor(
 ///
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape or index mismatch, or
-/// a backend failure).
+/// Returns [`Hdf5Error`] when the file cannot be opened or created, when a
+/// group named `name` already exists, or when writing the tensor fails (for
+/// example an unsupported storage type; only `f64` and `Complex64` are
+/// supported).
 ///
 /// # Examples
 ///
@@ -408,8 +410,10 @@ pub fn save_mps(
 ///
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape or index mismatch, or
-/// a backend failure).
+/// Returns [`Hdf5Error`] when the file cannot be opened or created, when a
+/// group named `name` already exists, or when writing an MPS site tensor
+/// fails (for example an unsupported storage type; only `f64` and `Complex64`
+/// are supported).
 ///
 /// # Examples
 ///
@@ -580,8 +584,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape or index mismatch, or
-/// a backend failure).
+/// Returns [`Hdf5Error`] when the file cannot be opened or created, when a
+/// group named `name` already exists, or when writing a node tensor or the
+/// tree structure fails (for example an unsupported storage type; only `f64`
+/// and `Complex64` are supported).
 pub fn append_treetn<V>(
     filepath: &str,
     name: &str,

@@ -322,8 +322,10 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`crate::MatrixCIError::FullRank`] when the approximation has
+    /// reached the smaller matrix dimension, or
+    /// [`crate::MatrixCIError::EmptyIndexSet`] when the available row or column
+    /// set is empty.
     ///
     /// # Examples
     ///
@@ -356,8 +358,9 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`crate::MatrixCIError::FullRank`] when the approximation has
+    /// reached the smaller matrix dimension, or
+    /// [`crate::MatrixCIError::EmptyIndexSet`] when `rows` or `cols` is empty.
     ///
     /// # Examples
     ///

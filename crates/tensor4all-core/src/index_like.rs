@@ -264,8 +264,8 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns an error when `indices` is empty or when the product of their
+    /// dimensions would overflow `usize`.
     ///
     /// # Examples
     ///

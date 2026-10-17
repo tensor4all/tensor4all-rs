@@ -28,8 +28,10 @@ use crate::tensortrain::TensorTrain;
 ///
 /// # Errors
 ///
-/// Returns an error when the solve or sweep fails (a shape or index
-/// mismatch, a non-convergence failure, or a backend failure).
+/// Returns [`TensorTrainError::InvalidStructure`] when any input train is
+/// empty or when their lengths differ, and [`TensorTrainError::OperationError`]
+/// when an option is invalid, when the operator and initial guess cannot be
+/// index-mapped, or when the underlying TreeTN solve fails.
 ///
 pub fn linsolve(
     operator: &TensorTrain,
@@ -276,8 +278,11 @@ impl TensorTrain {
     /// See [`linsolve`] for details.
     /// # Errors
     ///
-    /// Returns an error when the solve or sweep fails (a shape or index
-    /// mismatch, a non-convergence failure, or a backend failure).
+    /// Returns [`TensorTrainError::InvalidStructure`] when any input train is
+    /// empty or when their lengths differ, and
+    /// [`TensorTrainError::OperationError`] when an option is invalid, when the
+    /// operator and initial guess cannot be index-mapped, or when the
+    /// underlying TreeTN solve fails.
     ///
     pub fn linsolve(&self, rhs: &Self, init: Self, options: &LinsolveOptions) -> Result<Self> {
         linsolve(self, rhs, init, options)

@@ -36,8 +36,9 @@ use tensor4all_tensorbackend::TensorElement;
 ///
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape or index mismatch, or
-/// a backend failure).
+/// Returns [`IdxTensorError::Operation`] when `pairs` is empty, when a paired
+/// or common index does not match between the operands, when the operands have
+/// different dense scalar types, or when the backend construction fails.
 ///
 /// # Example
 ///
