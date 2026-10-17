@@ -112,7 +112,7 @@ pub fn contract_pair_on_session(
         .contraction(&lhs_value, &spec.axes_a, &rhs_value, &spec.axes_b)
         .map_err(|error| session_error(OP, error))?;
 
-    IdxTensor::publish_dense_session_result(spec.result_indices.into_vec(), &value)
+    IdxTensor::publish_dense_session_result(spec.result_indices, &value)
 }
 
 /// Compute the inner product of two dense host tensors on a caller-held explicit session.

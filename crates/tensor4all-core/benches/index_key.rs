@@ -122,6 +122,24 @@ fn bench_hash(c: &mut Criterion) {
     group.finish();
 }
 
+/// Isolated clone cost, the metadata-copy operation #990 migrated to
+/// `tinyvec`. The limb arm (`width >= 513`) is the case that used to pay a
+/// per-element `SmallVec::clone`.
+fn bench_clone(c: &mut Criterion) {
+    let mut group = c.benchmark_group("index_key/clone");
+    for width in WIDTHS {
+        for (label, dims) in profiles(width) {
+            let indexer = FlatIndexer::try_new(&dims).unwrap();
+            let idx: Vec<usize> = dims.iter().map(|d| d - 1).collect();
+            let key = indexer.encode(&idx).unwrap();
+            group.bench_with_input(BenchmarkId::new(label, width), &key, |b, key| {
+                b.iter(|| black_box(key).clone())
+            });
+        }
+    }
+    group.finish();
+}
+
 fn bench_map(c: &mut Criterion) {
     for (op, present) in [("hit", true), ("miss", false)] {
         let mut group = c.benchmark_group(format!("index_key/map_{op}"));
@@ -178,6 +196,7 @@ criterion_group!(
     bench_encode,
     bench_compose,
     bench_hash,
+    bench_clone,
     bench_map
 );
 criterion_main!(benches);

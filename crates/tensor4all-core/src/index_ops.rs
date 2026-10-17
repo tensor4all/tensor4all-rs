@@ -1,16 +1,22 @@
 use crate::IndexLike;
-use smallvec::SmallVec;
+use tinyvec::TinyVec;
 
 const SMALL_CONTRACTION_INLINE: usize = 8;
 const LINEAR_CONTRACTION_SCAN_LIMIT: usize = 64;
 
 /// Small axis list used by contraction preparation.
-pub(crate) type AxisVec = SmallVec<[usize; SMALL_CONTRACTION_INLINE]>;
-/// Small index list used by contraction preparation.
-pub(crate) type IndexVec<I> = SmallVec<[I; SMALL_CONTRACTION_INLINE]>;
+pub(crate) type AxisVec = TinyVec<[usize; SMALL_CONTRACTION_INLINE]>;
+/// Index list used by contraction preparation.
+///
+/// `tinyvec`'s inline storage requires `I: Default`, which `IndexLike`
+/// deliberately does not require (`DynIndex` and the test index types have no
+/// cheap default). A plain `Vec` keeps the abstraction available to every
+/// `IndexLike`; the rank-bounded inline win is not reachable for a generic
+/// index type.
+pub(crate) type IndexVec<I> = Vec<I>;
 
-type AxisPairVec = SmallVec<[(usize, usize); SMALL_CONTRACTION_INLINE]>;
-type BoolVec = SmallVec<[bool; SMALL_CONTRACTION_INLINE]>;
+type AxisPairVec = TinyVec<[(usize, usize); SMALL_CONTRACTION_INLINE]>;
+type BoolVec = TinyVec<[bool; SMALL_CONTRACTION_INLINE]>;
 
 /// Error type for index replacement operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -549,7 +555,7 @@ fn common_ind_positions_hashed<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -
     // `conj(a) == b`, even when conj changes the id). Keying by Id, or by
     // bare value with a same-value probe, would silently drop directed pairs
     // whose conj partner carries a different id (#615).
-    let mut positions_by_value: HashMap<I, SmallVec<[usize; 2]>> =
+    let mut positions_by_value: HashMap<I, TinyVec<[usize; 2]>> =
         HashMap::with_capacity(indices_b.len());
     for (pos_b, idx_b) in indices_b.iter().enumerate() {
         positions_by_value

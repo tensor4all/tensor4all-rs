@@ -123,7 +123,7 @@ fn owned_heap_bytes_accounts_for_every_storage_arm() {
             Repr::U256(_) => 32,
             Repr::U512(_) => 64,
             Repr::Limbs(limbs) => {
-                assert!(limbs.spilled());
+                assert!(limbs.is_heap());
                 assert!(limbs.capacity() >= bits.div_ceil(64));
                 limbs.capacity() * std::mem::size_of::<u64>()
             }
@@ -164,7 +164,7 @@ fn owned_heap_bytes_uses_key_capacity_instead_of_builder_capacity() {
 
     // Inline limb storage is part of its owner, never a heap payload.
     let inline = dynamic::zeroed(64).unwrap();
-    assert!(!inline.spilled());
+    assert!(!inline.is_heap());
     assert_eq!(dynamic::owned_heap_bytes(&inline), 0);
     let mut spilled = dynamic::zeroed(700).unwrap();
     spilled.reserve(20);
@@ -197,7 +197,7 @@ fn owned_heap_bytes_uses_key_capacity_instead_of_builder_capacity() {
 /// The bound still checks what it is meant to check — an inlined `U512` would
 /// make `Repr` 64 bytes on its own, and boxing the wide arms is what keeps a
 /// `u64` key from paying for them. Measured, not predicted: the
-/// `SmallVec<[u64; 2]>` limb arm fits inside the space `u128`'s alignment
+/// `TinyVec<[u64; 2]>` limb arm fits inside the space `u128`'s alignment
 /// already reserved, so it did not move this bound. If a future arm does move
 /// it, box that arm rather than raising the number.
 #[test]

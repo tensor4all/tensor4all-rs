@@ -3413,7 +3413,7 @@ dependencies = [
  "combine",
  "downcast-rs",
  "dyn-clone",
- "hashbrown 0.15.5",
+ "hashbrown 0.17.1",
  "hi_sparse_bitset 0.10.0",
  "indexmap",
  "inventory",
@@ -3426,7 +3426,7 @@ dependencies = [
  "rustc_apfloat",
  "slotmap",
  "smallvec",
- "spin 0.10.1",
+ "spin",
  "thiserror 2.0.20",
  "utf8-chars",
 ]
@@ -3665,7 +3665,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -4359,15 +4359,6 @@ checksum = "c4fdfe13e1c42e45f497416afb8dc4e783bf0e25b7be9077c1c77c5fb14cb998"
 
 [[package]]
 name = "spin"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "023a211cb3138dbc438680b32560ad89f699977624c9f8dbb95a47d5b4c07dd3"
-dependencies = [
- "lock_api",
-]
-
-[[package]]
-name = "spin"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0134f9043ed38b087ac4f7d4af44c79e2c9e5094421fe3164f435ce585953b10"
@@ -4644,7 +4635,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde",
- "spin 0.12.3",
+ "spin",
  "t4a-cubecl-environment",
  "tynm",
  "xxhash-rust",
@@ -4716,7 +4707,7 @@ dependencies = [
  "libc",
  "log",
  "pliron",
- "spin 0.12.3",
+ "spin",
  "sysinfo",
  "t4a-cubecl-common",
  "t4a-cubecl-core",
@@ -4776,7 +4767,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
- "spin 0.12.3",
+ "spin",
  "toml 1.1.6+spec-1.1.0",
  "turso",
  "wasm-bindgen",
@@ -4831,7 +4822,7 @@ dependencies = [
  "rustc_apfloat",
  "serde",
  "smallvec",
- "spin 0.12.3",
+ "spin",
  "t4a-cubecl-common",
  "t4a-cubecl-environment",
  "t4a-cubecl-macros-internal",
@@ -5046,7 +5037,7 @@ dependencies = [
  "num-traits",
  "paste",
  "serde",
- "spin 0.12.3",
+ "spin",
  "t4a-cubecl-common",
  "t4a-cubecl-core",
  "t4a-cubecl-environment",
@@ -5485,7 +5476,6 @@ dependencies = [
  "rand 0.9.5",
  "rand_chacha 0.9.0",
  "rand_distr",
- "smallvec",
  "tenferro-ad",
  "tenferro-cpu",
  "tenferro-einsum",
@@ -5494,6 +5484,7 @@ dependencies = [
  "tenferro-tensor",
  "tensor4all-tensorbackend",
  "thiserror 2.0.20",
+ "tinyvec",
 ]
 
 [[package]]
@@ -5883,6 +5874,12 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "tinyvec"
+version = "1.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tlinalg"
@@ -6331,7 +6328,7 @@ version = "2.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
 dependencies = [
- "rand 0.9.5",
+ "rand 0.10.2",
 ]
 
 [[package]]

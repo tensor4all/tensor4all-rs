@@ -3834,7 +3834,7 @@ impl IdxTensor {
             return profile_pairwise_contract_section("structured_payload_contract", || {
                 self.contract_structured_payloads(
                     other,
-                    spec.result_indices.into_vec(),
+                    spec.result_indices,
                     &spec.axes_a,
                     &spec.axes_b,
                 )
@@ -3864,7 +3864,7 @@ impl IdxTensor {
                 )
             })?;
             return profile_pairwise_contract_section("from_inner", || {
-                Self::from_inner(spec.result_indices.into_vec(), result)
+                Self::from_inner(spec.result_indices, result)
             });
         }
 
@@ -3891,7 +3891,7 @@ impl IdxTensor {
             })?;
             return profile_pairwise_contract_section("from_native", || {
                 Self::from_untracked_native_with_axis_classes(
-                    spec.result_indices.into_vec(),
+                    spec.result_indices,
                     result_native,
                     result_axis_classes,
                 )
@@ -3926,11 +3926,7 @@ impl IdxTensor {
             tensor_profile_bytes(result.dtype(), result.shape())?,
         );
         profile_pairwise_contract_section("from_inner_axis_classes", || {
-            Self::from_inner_with_axis_classes(
-                spec.result_indices.into_vec(),
-                result,
-                result_axis_classes,
-            )
+            Self::from_inner_with_axis_classes(spec.result_indices, result, result_axis_classes)
         })
     }
 
@@ -4133,7 +4129,7 @@ impl IdxTensor {
         if self.should_use_structured_payload_contract(other) {
             return self.contract_structured_payloads(
                 other,
-                spec.result_indices.into_vec(),
+                spec.result_indices,
                 &spec.axes_a,
                 &spec.axes_b,
             );
@@ -4146,7 +4142,7 @@ impl IdxTensor {
                 .runtime()
                 .with_eager_session(|session| session.mul(lhs, rhs))
                 .map_err(|e| anyhow::anyhow!("tensordot scalar multiply failed: {e}"))?;
-            return Self::from_inner(spec.result_indices.into_vec(), result);
+            return Self::from_inner(spec.result_indices, result);
         }
 
         let self_dtype = self.try_materialized_inner()?.dtype();
@@ -4157,7 +4153,7 @@ impl IdxTensor {
             let result_native =
                 contract_native_tensor(&self_native, &spec.axes_a, &other_native, &spec.axes_b)?;
             return Self::from_untracked_native_with_axis_classes(
-                spec.result_indices.into_vec(),
+                spec.result_indices,
                 result_native,
                 result_axis_classes,
             );
@@ -4175,11 +4171,7 @@ impl IdxTensor {
             .runtime()
             .with_eager_session(|session| session.einsum_subscripts(&[lhs, rhs], &subscripts))
             .map_err(|e| anyhow::anyhow!("tensordot failed: {e}"))?;
-        Self::from_inner_with_axis_classes(
-            spec.result_indices.into_vec(),
-            result,
-            result_axis_classes,
-        )
+        Self::from_inner_with_axis_classes(spec.result_indices, result, result_axis_classes)
     }
 
     pub(crate) fn try_outer_product_pairwise(&self, other: &Self) -> Result<Self> {
