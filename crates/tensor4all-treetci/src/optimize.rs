@@ -2,11 +2,12 @@ use crate::error::Result as TreeTciResult;
 use crate::{
     globalpivot::{find_global_pivots_erased, ScalarParts},
     update::update_edge,
-    AllEdges, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer, TreeTCI2,
+    AllEdges, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer, TreeTCI2, TreeTciEdge,
 };
 use anyhow::Result;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
+use std::collections::HashSet;
 use tensor4all_core::CommonScalar;
 use tensor4all_core::{MatrixLuciScalar as Scalar, RrLUOptions};
 use tensor4all_tensorbackend::FullPivLuScalar;
@@ -342,17 +343,31 @@ where
     F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     options.validate()?;
-    optimize_with_proposer(state, evaluate, options, &crate::DefaultProposer)
+    optimize_with_proposer(state, evaluate, options, &crate::DefaultProposer, &AllEdges)
 }
 
-/// Optimize a TreeTCI state with `AllEdges` visitation and a caller-supplied
-/// pivot candidate proposer.
+/// Optimize a TreeTCI state with a caller-supplied pivot candidate proposer
+/// and edge visitor.
 ///
 /// Returns [`TreeTciOptimizationResult`] with per-iteration ranks, errors,
 /// and the stopping reason defined by [`TreeTciTermination`].
 ///
 /// Use this when you need a custom proposer (e.g., [`SimpleProposer`](crate::SimpleProposer)
-/// or [`TruncatedDefaultProposer`](crate::TruncatedDefaultProposer)).
+/// or [`TruncatedDefaultProposer`](crate::TruncatedDefaultProposer)) or a
+/// custom edge visit order. Pass [`AllEdges`] to keep the default order.
+///
+/// # Edge visit order
+///
+/// `visitor` decides which edge is updated and when. It is called once per
+/// inner pass, and its result must be a permutation of the graph's edges:
+/// every edge exactly once, with no missing, duplicated, or unknown edge. That
+/// contract is checked before the pass updates any state, so an invalid order
+/// cannot leave a stale bond error on an edge or let the convergence window
+/// pass with unswept edges. A contract violation returns
+/// [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration).
+/// Different valid orders generally reach different approximations; the
+/// documented sequence is exactly the order returned by the visitor's
+/// [`EdgeVisitor::visit_order`] on each pass.
 ///
 /// The evaluator may be called several times per edge update; see
 /// [`GlobalIndexBatch`](crate::GlobalIndexBatch#batch-sizes) for the batch
@@ -374,7 +389,8 @@ where
 /// # Errors
 ///
 /// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
-/// for invalid options, and [`TreeTciError::Operation`](crate::TreeTciError::Operation)
+/// for invalid options or a visitor order that is not a permutation of the
+/// graph's edges, and [`TreeTciError::Operation`](crate::TreeTciError::Operation)
 /// when the evaluator fails, a pivot set is missing or malformed, or
 /// materialization fails.
 ///
@@ -382,7 +398,7 @@ where
 ///
 /// ```
 /// use tensor4all_treetci::{
-///     optimize_with_proposer, GlobalIndexBatch, SimpleProposer,
+///     optimize_with_proposer, AllEdges, GlobalIndexBatch, SimpleProposer,
 ///     TreeTCI2, TreeTciEdge, TreeTciGraph, TreeTciOptions,
 /// };
 /// use anyhow::Result;
@@ -405,7 +421,7 @@ where
 /// let proposer = SimpleProposer::seeded(42);
 /// let options = TreeTciOptions { tolerance: 1e-10, max_iter: 3, ..Default::default() };
 /// let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } = optimize_with_proposer(
-///     &mut state, evaluate, &options, &proposer,
+///     &mut state, evaluate, &options, &proposer, &AllEdges,
 /// ).unwrap();
 ///
 /// // One entry per sweep actually run; the loop stops early once converged,
@@ -413,16 +429,18 @@ where
 /// assert_eq!(ranks, vec![2; 3]);
 /// assert_eq!(ranks.len(), errors.len());
 /// ```
-pub fn optimize_with_proposer<T, F, P>(
+pub fn optimize_with_proposer<T, F, P, V>(
     state: &mut TreeTCI2<T>,
     evaluate: F,
     options: &TreeTciOptions,
     proposer: &P,
+    visitor: &V,
 ) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
     F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
+    V: EdgeVisitor,
 {
     options.validate()?;
     // The public optimizer keeps the legacy route: no caller-owned context.
@@ -437,6 +455,7 @@ where
             |batch| evaluator.call(batch),
             options,
             proposer,
+            visitor,
             streams,
             None,
         )?;
@@ -449,7 +468,7 @@ where
 ///
 /// The same algorithm, options, stopping rule and diagnostics as [`optimize_with_proposer`]; what differs is the
 /// resource the stage's session-bound work runs in. Without a context it goes through the process-global CPU
-/// context; with one, the factor assembly and the materialization solve run on `context`, as
+/// context; with one, the pivot search's materialization solve runs on `context`, as
 /// [`crossinterpolate2_in`](crate::crossinterpolate2_in) does for a whole run.
 ///
 /// The caller's evaluator and the pivot search's readout are unchanged and still use their existing routes, so this
@@ -460,8 +479,8 @@ where
 /// Returns [`crate::TreeTciError::InvalidConfiguration`] for invalid options,
 /// [`crate::TreeTciError::InvalidGraph`] for a malformed topology,
 /// [`crate::TreeTciError::IndexOutOfBounds`] for an out-of-range candidate, and
-/// [`crate::TreeTciError::Operation`] when the evaluator, the pivot search, a factorization the caller's context
-/// refuses, or the materialization solve fails. A failing evaluator can leave a partially updated state.
+/// [`crate::TreeTciError::Operation`] when the evaluator or the pivot search's materialization solve fails.
+/// A failing evaluator can leave a partially updated state.
 pub fn optimize_with_proposer_in<T, F, P>(
     state: &mut TreeTCI2<T>,
     evaluate: F,
@@ -486,6 +505,7 @@ where
             |batch| evaluator.call(batch),
             options,
             proposer,
+            &AllEdges,
             streams,
             Some(context),
         )?;
@@ -577,6 +597,7 @@ where
         |batch| evaluator.call(batch),
         options,
         proposer,
+        &AllEdges,
         &mut streams,
         None,
     )?;
@@ -629,11 +650,46 @@ impl RandomStreams<'_> {
     }
 }
 
-pub(crate) fn optimize_with_streams<T, F, P>(
+/// Check that `order` is a permutation of the tree's edges.
+///
+/// The truncated proposer relies on each edge's kept pivots matching a
+/// start-of-pass snapshot, so an order that omits, duplicates or invents an
+/// edge would leave stale bond errors and could satisfy convergence falsely.
+fn validate_edge_order<T>(state: &TreeTCI2<T>, order: &[TreeTciEdge]) -> TreeTciResult<()> {
+    let expected = state.graph.edges();
+    let expected_set: HashSet<TreeTciEdge> = expected.iter().copied().collect();
+    let mut seen = HashSet::with_capacity(order.len());
+    for &edge in order {
+        if !expected_set.contains(&edge) {
+            return Err(crate::TreeTciError::InvalidConfiguration {
+                message: format!(
+                    "edge visitor returned unknown edge {edge:?}; the tree has {} edges",
+                    expected.len()
+                ),
+            });
+        }
+        if !seen.insert(edge) {
+            return Err(crate::TreeTciError::InvalidConfiguration {
+                message: format!("edge visitor returned edge {edge:?} more than once per pass"),
+            });
+        }
+    }
+    if let Some(missing) = expected.iter().find(|edge| !seen.contains(edge)) {
+        return Err(crate::TreeTciError::InvalidConfiguration {
+            message: format!(
+                "edge visitor omitted edge {missing:?}; each edge must be visited exactly once per pass"
+            ),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn optimize_with_streams<T, F, P, V>(
     state: &mut TreeTCI2<T>,
     evaluate: F,
     options: &TreeTciOptions,
     proposer: &P,
+    visitor: &V,
     streams: &mut RandomStreams<'_>,
     context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> TreeTciResult<TreeTciOptimizationResult>
@@ -641,6 +697,7 @@ where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
+    V: EdgeVisitor,
 {
     options.validate()?;
 
@@ -648,7 +705,6 @@ where
     let mut errors = Vec::new();
     let mut nglobal_pivots_history: Vec<usize> = Vec::new();
     let mut termination = TreeTciTermination::MaxIterations;
-    let visitor = AllEdges;
     const INNER_EDGE_PASSES: usize = 2;
     // Mirrors `tensor4all-tensorci`'s `TensorCI2Options::ncheck_history` default
     // (see `convergence_criterion` in tensorci2.rs, itself a port of Julia's
@@ -673,12 +729,17 @@ where
                 left_orthogonal: true,
             };
 
-            // INVARIANT: AllEdges visits each edge once in this pass. Its
-            // two subtree keys are not changed by updates of other edges;
-            // proposers can retain its current pivots without a full snapshot.
+            // The visitor must return a permutation of the tree's edges for
+            // this pass. Validate before any update mutates state: an omitted
+            // edge would keep its previous bond error and could satisfy
+            // convergence falsely. The two subtree keys of an edge are not
+            // changed by updates of other edges, so proposers can retain the
+            // edge's current pivots without a full snapshot.
+            let order = visitor.visit_order(state);
+            validate_edge_order(state, &order)?;
             state.flush_pivot_errors();
 
-            for edge in visitor.visit_order(state) {
+            for edge in order {
                 update_edge(
                     state,
                     edge,

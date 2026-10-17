@@ -3,7 +3,8 @@ use num_complex::{Complex32, Complex64};
 use tensor4all_core::{CommonScalar, IdxTensor, MatrixLuciScalar, Scalar, TensorElement};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetci::{
-    crossinterpolate2, DefaultProposer, GlobalIndexBatch, TreeTciEdge, TreeTciGraph, TreeTciOptions,
+    crossinterpolate2, AllEdges, DefaultProposer, GlobalIndexBatch, TreeTciEdge, TreeTciGraph,
+    TreeTciOptions,
 };
 
 fn memo_parity<T>()
@@ -209,7 +210,7 @@ fn continued_optimization_and_caller_rng_each_own_a_fresh_cache() {
             Ok(vec![2.0; batch.n_points()])
         };
         let result = if seeded {
-            optimize_with_proposer(&mut state, evaluate, &options, &DefaultProposer)
+            optimize_with_proposer(&mut state, evaluate, &options, &DefaultProposer, &AllEdges)
         } else {
             optimize_with_proposer_with_rng(
                 &mut state,

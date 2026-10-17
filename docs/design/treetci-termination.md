@@ -42,6 +42,10 @@ refreshed during subsequent passes. Each pass visits each edge once; its pivot
 sets remain unchanged until its own update, since other edges use distinct
 canonical subtree keys. Proposers retain those current pivots directly. No
 historical full pivot maps are copied or retained; `ijset_history` is removed.
+A caller-supplied `EdgeVisitor`
+must return a permutation of the graph's edges on every pass; the loop rejects a
+missing, duplicated, or unknown edge before that pass updates any state, so the
+stale-bond-error and false-convergence cases cannot arise from an invalid order.
 
 Each call starts fresh ranks/errors/global-pivot diagnostics, a new convergence
 window and an independent iteration budget. The final-iteration global-search

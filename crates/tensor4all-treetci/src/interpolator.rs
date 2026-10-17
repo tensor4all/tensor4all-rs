@@ -25,9 +25,9 @@ use crate::error::Result as TreeTciResult;
 use crate::globalpivot::ScalarParts;
 use crate::materialize::to_named_treetn;
 use crate::{
-    column_2d, ncols_2d, optimize_with_proposer, optimize_with_proposer_in, DefaultProposer,
-    GlobalIndexBatch, MultiIndex, TreeTCI2, TreeTciEdge, TreeTciError, TreeTciGraph,
-    TreeTciOptions, TreeTciTermination,
+    column_2d, ncols_2d, optimize_with_proposer, optimize_with_proposer_in, AllEdges,
+    DefaultProposer, GlobalIndexBatch, MultiIndex, TreeTCI2, TreeTciEdge, TreeTciError,
+    TreeTciGraph, TreeTciOptions, TreeTciTermination,
 };
 
 /// Tree interpolation engine backed by TreeTCI.
@@ -276,9 +276,14 @@ where
         state.add_global_pivots(&vertex_pivots).map_err(engine)?;
         state.max_sample_value = max_initial;
 
-        let report =
-            optimize_with_proposer(&mut state, vertex_evaluate, &options, &DefaultProposer)
-                .map_err(classify)?;
+        let report = optimize_with_proposer(
+            &mut state,
+            vertex_evaluate,
+            &options,
+            &DefaultProposer,
+            &AllEdges,
+        )
+        .map_err(classify)?;
         let network = to_named_treetn(
             &state,
             vertex_evaluate,

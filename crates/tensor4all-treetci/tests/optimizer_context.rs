@@ -10,8 +10,8 @@ use std::time::Instant;
 use tenferro_cpu::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 use tensor4all_treetci::{
-    optimize_with_proposer, optimize_with_proposer_in, DefaultProposer, GlobalIndexBatch, TreeTCI2,
-    TreeTciGraph, TreeTciOptions,
+    optimize_with_proposer, optimize_with_proposer_in, AllEdges, DefaultProposer, GlobalIndexBatch,
+    TreeTCI2, TreeTciGraph, TreeTciOptions,
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -55,7 +55,9 @@ fn run(context: Option<&CpuExecutionContext>) -> TestResult<(Vec<usize>, Vec<f64
         Some(context) => {
             optimize_with_proposer_in(&mut state, evaluate, &options, &DefaultProposer, context)?
         }
-        None => optimize_with_proposer(&mut state, evaluate, &options, &DefaultProposer)?,
+        None => {
+            optimize_with_proposer(&mut state, evaluate, &options, &DefaultProposer, &AllEdges)?
+        }
     };
     Ok((result.ranks, result.errors))
 }

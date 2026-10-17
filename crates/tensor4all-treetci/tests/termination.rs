@@ -8,7 +8,7 @@ use tensor4all_core::{CommonScalar, IdxTensor, MatrixLuciScalar, TensorElement};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetci::{
     crossinterpolate2, crossinterpolate2_with_rng, globalpivot::ScalarParts, optimize_default,
-    optimize_with_proposer, optimize_with_proposer_with_rng, to_treetn, DefaultProposer,
+    optimize_with_proposer, optimize_with_proposer_with_rng, to_treetn, AllEdges, DefaultProposer,
     GlobalIndexBatch, TreeTCI2, TreeTciGraph, TreeTciOptions, TreeTciRunResult, TreeTciTermination,
 };
 
@@ -95,9 +95,13 @@ where
             state.max_sample_value = CommonScalar::abs_val(scale);
             let result = match entry {
                 EntryPoint::Default => optimize_default(&mut state, evaluate, &options),
-                EntryPoint::Proposer => {
-                    optimize_with_proposer(&mut state, evaluate, &options, &DefaultProposer)
-                }
+                EntryPoint::Proposer => optimize_with_proposer(
+                    &mut state,
+                    evaluate,
+                    &options,
+                    &DefaultProposer,
+                    &AllEdges,
+                ),
                 EntryPoint::ProposerWithRng => optimize_with_proposer_with_rng(
                     &mut state,
                     evaluate,

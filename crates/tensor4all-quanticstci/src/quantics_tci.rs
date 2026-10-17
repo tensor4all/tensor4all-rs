@@ -17,8 +17,8 @@ use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetci::materialize::{to_treetn, to_treetn_in};
 use tensor4all_treetci::{
-    optimize_with_proposer, optimize_with_proposer_in, DefaultProposer, GlobalIndexBatch, TreeTCI2,
-    TreeTciGraph,
+    optimize_with_proposer, optimize_with_proposer_in, AllEdges, DefaultProposer, GlobalIndexBatch,
+    TreeTCI2, TreeTciGraph,
 };
 use tensor4all_treetn::treetn_to_tensor_train as bridge_treetn_to_tensor_train;
 
@@ -205,14 +205,15 @@ where
     }
 
     let tree_opts = options.to_treetci_options();
-    // Both session-bound parts of the run carry the context: the optimizer (factor assembly and the search's
-    // materialization solves) and the final materialization below. The caller's function and the readout are
-    // unchanged.
+    // Both session-bound parts of the run carry the context: the optimizer (the search's materialization
+    // solves) and the final materialization below. The caller's function and the readout are unchanged.
     let result = match context {
         Some(context) => {
             optimize_with_proposer_in(&mut tci, &evaluate, &tree_opts, &DefaultProposer, context)?
         }
-        None => optimize_with_proposer(&mut tci, &evaluate, &tree_opts, &DefaultProposer)?,
+        None => {
+            optimize_with_proposer(&mut tci, &evaluate, &tree_opts, &DefaultProposer, &AllEdges)?
+        }
     };
     let treetn = match context {
         Some(context) => to_treetn_in(&tci, &evaluate, Some(0), context)?,
@@ -844,7 +845,7 @@ where
 ///
 /// The same algorithm, options, stopping rule and diagnostics as [`quanticscrossinterpolate_batch`]; what differs
 /// is the resource the stage's session-bound work runs in. Without a context it goes through the process-global CPU
-/// context; with one, both session-bound parts of the run - the optimizer's factor assembly and materializations,
+/// context; with one, both session-bound parts of the run - the optimizer's global-pivot work and materializations,
 /// and the final materialization of the returned tensor train - go through `context`.
 ///
 /// The caller's own function and the pivot search's readout are unchanged and still use their existing routes, so
@@ -853,7 +854,7 @@ where
 /// # Errors
 ///
 /// Returns the same errors as [`quanticscrossinterpolate_batch`], plus a [`QuanticsTCIError::Operation`] when the
-/// caller's context refuses a factorization or a solve.
+/// caller's context refuses a session-bound operation.
 pub fn quanticscrossinterpolate_batch_in<V, F>(
     grid: &DiscretizedGrid,
     f: F,
@@ -1277,8 +1278,8 @@ where
 ///
 /// The same algorithm, options, stopping rule and diagnostics as
 /// [`quanticscrossinterpolate_discrete_batch`]; what differs is the resource the stage's session-bound work runs
-/// in. Without a context it goes through the process-global CPU context; with one, the factor assembly and the
-/// materialization solve inside the run go through `context`.
+/// in. Without a context it goes through the process-global CPU context; with one, the optimizer's global-pivot
+/// work and the materialization solve inside the run go through `context`.
 ///
 /// The caller's own function and the pivot search's readout are unchanged and still use their existing routes, so
 /// this is a caller-owned budget for the stage's session-bound work, not for everything the run touches.
@@ -1286,7 +1287,7 @@ where
 /// # Errors
 ///
 /// Returns the same errors as [`quanticscrossinterpolate_discrete_batch`], plus a
-/// [`QuanticsTCIError::Operation`] when the caller's context refuses a factorization.
+/// [`QuanticsTCIError::Operation`] when the caller's context refuses a session-bound operation.
 pub fn quanticscrossinterpolate_discrete_batch_in<V, F>(
     size: &[usize],
     f: F,

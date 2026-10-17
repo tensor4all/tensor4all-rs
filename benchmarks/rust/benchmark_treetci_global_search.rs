@@ -21,7 +21,7 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 use tensor4all_treetci::{
-    optimize_with_proposer, to_treetn, DefaultProposer, GlobalIndexBatch, SubtreeKey,
+    optimize_with_proposer, to_treetn, AllEdges, DefaultProposer, GlobalIndexBatch, SubtreeKey,
     TreeTCI2, TreeTciEdge, TreeTciGraph, TreeTciOptions,
 };
 use tensor4all_treetn::{CachedEvaluatorOptions, TreeTNCachedEvaluator};
@@ -162,7 +162,7 @@ fn run_case(case: &Case, samples: &[usize], exact: &[f64]) -> Result<RunResult> 
     state.add_global_pivots(std::slice::from_ref(&initial))?;
     state.max_sample_value = f(&initial).abs();
     let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } =
-        optimize_with_proposer(&mut state, evaluate, &options, &DefaultProposer)?;
+        optimize_with_proposer(&mut state, evaluate, &options, &DefaultProposer, &AllEdges)?;
     let treetn = to_treetn(&state, evaluate, None)?;
     let seconds = started.elapsed().as_secs_f64();
 

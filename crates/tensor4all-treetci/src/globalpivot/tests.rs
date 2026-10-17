@@ -2,8 +2,8 @@ use super::{
     cached_walk_readout, find_global_pivots, search_with_readout, ScalarParts, SearchParams,
 };
 use crate::{
-    materialize::to_treetn, optimize_with_proposer, DefaultProposer, GlobalIndexBatch, TreeTCI2,
-    TreeTciEdge, TreeTciGraph, TreeTciOptions,
+    materialize::to_treetn, optimize_with_proposer, AllEdges, DefaultProposer, GlobalIndexBatch,
+    TreeTCI2, TreeTciEdge, TreeTciGraph, TreeTciOptions,
 };
 use anyhow::Result;
 use num_complex::{Complex32, Complex64};
@@ -99,7 +99,8 @@ fn tree_value(tree: &TreeTN<IdxTensor, usize>, index: &[usize]) -> f64 {
 fn run(enable_global_pivots: bool) -> (Vec<usize>, Vec<f64>, f64, f64) {
     let mut tci = seeded_state();
     let opts = options(enable_global_pivots);
-    let report = optimize_with_proposer(&mut tci, evaluate, &opts, &DefaultProposer).unwrap();
+    let report =
+        optimize_with_proposer(&mut tci, evaluate, &opts, &DefaultProposer, &AllEdges).unwrap();
     let tree = to_treetn(&tci, evaluate, None).unwrap();
     (
         report.ranks,
@@ -389,7 +390,7 @@ impl Fixture {
             enable_global_pivots: false,
             ..TreeTciOptions::default()
         };
-        optimize_with_proposer(&mut tci, &evaluate, &options, &DefaultProposer).unwrap();
+        optimize_with_proposer(&mut tci, &evaluate, &options, &DefaultProposer, &AllEdges).unwrap();
         tci
     }
 
@@ -405,8 +406,14 @@ impl Fixture {
             seed: Some(1),
             ..TreeTciOptions::default()
         };
-        let report =
-            optimize_with_proposer(&mut tci, self.evaluate(), &options, &DefaultProposer).unwrap();
+        let report = optimize_with_proposer(
+            &mut tci,
+            self.evaluate(),
+            &options,
+            &DefaultProposer,
+            &AllEdges,
+        )
+        .unwrap();
         (report.ranks, report.errors, tci)
     }
 }

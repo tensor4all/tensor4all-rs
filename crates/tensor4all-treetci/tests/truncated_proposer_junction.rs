@@ -13,8 +13,8 @@
 use anyhow::Result;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetci::{
-    optimize_with_proposer, to_treetn, GlobalIndexBatch, TreeTCI2, TreeTciEdge, TreeTciGraph,
-    TreeTciOptimizationResult, TreeTciOptions, TruncatedDefaultProposer,
+    optimize_with_proposer, to_treetn, AllEdges, GlobalIndexBatch, TreeTCI2, TreeTciEdge,
+    TreeTciGraph, TreeTciOptimizationResult, TreeTciOptions, TruncatedDefaultProposer,
 };
 use tensor4all_treetn::TreeTN;
 
@@ -147,6 +147,7 @@ fn assert_truncated_proposer_converges(tree: &JunctionTree) {
         evaluate,
         &options,
         &TruncatedDefaultProposer::seeded(3),
+        &AllEdges,
     )
     .unwrap();
 

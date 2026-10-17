@@ -2,8 +2,8 @@ use crate::batch::{checked_batch_len, EVALUATION_CHUNK_POINTS};
 use crate::error::Result as TreeTciResult;
 use crate::optimize::{with_seeded_streams, RandomStreams};
 use crate::{
-    materialize::to_treetn_chunked, optimize::optimize_with_streams, GlobalIndexBatch, MultiIndex,
-    PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciOptions, TreeTciTermination,
+    materialize::to_treetn_chunked, optimize::optimize_with_streams, AllEdges, GlobalIndexBatch,
+    MultiIndex, PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciOptions, TreeTciTermination,
 };
 use anyhow::Result;
 use tensor4all_core::CommonScalar;
@@ -160,9 +160,8 @@ where
 ///
 /// The same algorithm, options, stopping rule and streaming as [`crossinterpolate2`]; what differs is the
 /// resource the session-bound stages run in. Without a context they go through the process-global CPU context;
-/// with one, both the per-edge MatrixLUCI factor assembly and the two materializations - the one the global
-/// pivot search performs and the final one - run on the caller's context, through entries that consult no
-/// process-global context.
+/// with one, the two materializations - the one the global pivot search performs and the final one - run on
+/// the caller's context, through entries that consult no process-global context.
 ///
 /// **What is not covered, so that this is a budget for part of the stage and not the whole run:** the caller's
 /// own evaluator, the pivot search's readout (which for a homogeneous single-index tree takes raw message
@@ -178,8 +177,8 @@ where
 /// Returns [`crate::TreeTciError::InvalidConfiguration`] for invalid options, and
 /// [`crate::TreeTciError::Operation`] for the dimension mismatches, invalid initial pivots, callback failures
 /// and backend failures [`crossinterpolate2`] reports - including the concrete-session entry refusal when a
-/// Rayon worker calls this entry point, because neither the factor assembly nor the materialization solve can
-/// enter the caller's context there.
+/// Rayon worker calls this entry point, because neither the optimizer's global-pivot work nor the
+/// materialization solve can enter the caller's context there.
 ///
 /// # Examples
 ///
@@ -236,9 +235,9 @@ where
 /// Interpolate a tree tensor network on a caller-owned random stream and execution context.
 ///
 /// The caller-stream counterpart of [`crossinterpolate2_in`]: the supplied stream drives every global pivot
-/// search, and the factor assembly and the materialization solve run in `context`. The two are independent, so
-/// a caller can advance its own randomness across runs while keeping those stages' budget to itself. Physical
-/// tensor publication still adopts into the process-global eager runtime.
+/// search, and the optimizer's global-pivot work and the materialization solve run in `context`. The two are
+/// independent, so a caller can advance its own randomness across runs while keeping those stages' budget to
+/// itself. Physical tensor publication still adopts into the process-global eager runtime.
 ///
 /// # Errors
 ///
@@ -453,7 +452,9 @@ where
         return Err(anyhow::anyhow!("initial pivots must not all evaluate to zero").into());
     }
 
-    let result = optimize_with_streams(&mut tci, evaluate, options, proposer, streams, context)?;
+    let result = optimize_with_streams(
+        &mut tci, evaluate, options, proposer, &AllEdges, streams, context,
+    )?;
     let treetn = to_treetn_chunked(
         &tci,
         &evaluate,
