@@ -137,31 +137,19 @@ struct NativeEinsumProfileEntry {
     total_time: Duration,
 }
 
-/// Maximum number of concrete einsum plans retained per thread.
-///
-/// Chosen from the issue #891 trace: a 256-entry clear-on-full cache dropped to
-/// zero hits once a call set cycled through 257 distinct signatures, while the
-/// measured churn working set (hundreds to a few thousand distinct shapes) fits
-/// below this bound.
+/// Entries kept before the cache is cleared. Real workloads cycle through
+/// hundreds to a few thousand distinct contraction signatures (#891: a
+/// 400-shape QTT cycle re-prepared every plan at 256), so the bound sits above
+/// that working set while still capping the per-thread cache.
 const CONCRETE_EINSUM_PLAN_CACHE_CAPACITY: usize = 4096;
-/// Estimated retained-byte budget for the per-thread concrete plan cache.
-const CONCRETE_EINSUM_PLAN_CACHE_BYTE_BUDGET: usize = 16 * 1024 * 1024;
-/// Resident entries sampled per eviction.
-const CONCRETE_EINSUM_PLAN_CACHE_EVICTION_SAMPLES: usize = 4;
-/// Conservative estimate of one prepared plan's retained payload (contraction
-/// tree, input specs, and one numerical plan), which this crate cannot
-/// introspect because `ConcreteEinsumPlan`'s fields are private upstream.
-const CONCRETE_EINSUM_PLAN_ENTRY_BYTES: usize = 512;
-/// Non-zero xorshift64 seed for the eviction sampler.
-const CONCRETE_EINSUM_PLAN_CACHE_EVICTION_SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 
 thread_local! {
     static NATIVE_EINSUM_PROFILE_STATE: RefCell<HashMap<NativeEinsumSignature, NativeEinsumProfileEntry>> =
         RefCell::new(HashMap::new());
     static NATIVE_EINSUM_TRACE_STATE: RefCell<HashSet<NativeEinsumSignature>> =
         RefCell::new(HashSet::new());
-    static CONCRETE_EINSUM_PLAN_CACHE: RefCell<ConcreteEinsumPlanCache> =
-        RefCell::new(ConcreteEinsumPlanCache::with_default_limits());
+    static CONCRETE_EINSUM_PLAN_CACHE: RefCell<HashMap<NativeEinsumSignature, Arc<ConcreteEinsumPlan>>> =
+        RefCell::new(HashMap::new());
 }
 
 #[cfg(test)]
@@ -274,214 +262,14 @@ fn concrete_einsum_signature(
     }
 }
 
-/// Estimated retained bytes of one einsum signature's owned metadata.
-fn native_einsum_signature_retained_bytes(signature: &NativeEinsumSignature) -> usize {
-    let operand_metadata = signature
-        .operands
-        .iter()
-        .map(|operand| {
-            operand.shape.capacity() * std::mem::size_of::<usize>()
-                + operand.ids.capacity() * std::mem::size_of::<u32>()
-        })
-        .sum::<usize>();
-    std::mem::size_of::<NativeEinsumSignature>()
-        + signature.operands.capacity() * std::mem::size_of::<NativeOperandSignature>()
-        + operand_metadata
-        + signature.output_ids.capacity() * std::mem::size_of::<u32>()
-}
-
-/// Test-observable counters for the per-thread concrete plan cache.
-#[cfg(test)]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ConcreteEinsumPlanCacheStats {
-    pub(crate) hits: usize,
-    pub(crate) misses: usize,
-    pub(crate) evictions: usize,
-}
-
-struct ConcreteEinsumPlanCacheEntry {
-    plan: Arc<ConcreteEinsumPlan>,
-    last_used: u64,
-    retained_bytes: usize,
-}
-
-/// Per-thread bounded cache of prepared concrete einsum plans.
-///
-/// Eviction samples a few resident entries and retires the least recently used
-/// of the sample. A plain LRU evicts exactly the entry that a working set one
-/// larger than the capacity is about to request again, so a cyclic scan of
-/// `capacity + 1` distinct signatures yields zero LRU hits; sampling keeps a hot
-/// set resident without the clear-on-full cliff the previous cache had, and
-/// never needs the capacity to exceed the whole working set.
-struct ConcreteEinsumPlanCache {
-    capacity: usize,
-    byte_budget: usize,
-    entries: HashMap<NativeEinsumSignature, ConcreteEinsumPlanCacheEntry>,
-    /// Resident keys in insertion order; sampled for a victim, not ordered by
-    /// recency, so eviction never has to walk the whole map.
-    resident_keys: Vec<NativeEinsumSignature>,
-    retained_bytes: usize,
-    clock: u64,
-    rng_state: u64,
-    #[cfg(test)]
-    stats: ConcreteEinsumPlanCacheStats,
-}
-
-impl ConcreteEinsumPlanCache {
-    fn with_limits(capacity: usize, byte_budget: usize) -> Self {
-        Self {
-            capacity: capacity.max(1),
-            byte_budget: byte_budget.max(1),
-            entries: HashMap::new(),
-            resident_keys: Vec::new(),
-            retained_bytes: 0,
-            clock: 0,
-            rng_state: CONCRETE_EINSUM_PLAN_CACHE_EVICTION_SEED,
-            #[cfg(test)]
-            stats: ConcreteEinsumPlanCacheStats::default(),
-        }
-    }
-
-    fn with_default_limits() -> Self {
-        Self::with_limits(
-            CONCRETE_EINSUM_PLAN_CACHE_CAPACITY,
-            CONCRETE_EINSUM_PLAN_CACHE_BYTE_BUDGET,
-        )
-    }
-
-    fn next_clock(&mut self) -> u64 {
-        let clock = self.clock;
-        self.clock = self.clock.wrapping_add(1);
-        clock
-    }
-
-    /// Advance the eviction sampler's xorshift64 state.
-    ///
-    /// The sampler only needs to avoid a deterministic LRU victim, not
-    /// cryptographic randomness, so a dependency-free generator is enough.
-    fn next_random(&mut self) -> u64 {
-        let mut state = self.rng_state;
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        self.rng_state = state;
-        state
-    }
-
-    fn get(&mut self, key: &NativeEinsumSignature) -> Option<Arc<ConcreteEinsumPlan>> {
-        let last_used = self.next_clock();
-        match self.entries.get_mut(key) {
-            Some(entry) => {
-                entry.last_used = last_used;
-                #[cfg(test)]
-                {
-                    self.stats.hits += 1;
-                }
-                Some(Arc::clone(&entry.plan))
-            }
-            None => {
-                #[cfg(test)]
-                {
-                    self.stats.misses += 1;
-                }
-                None
-            }
-        }
-    }
-
-    fn insert(&mut self, key: NativeEinsumSignature, plan: Arc<ConcreteEinsumPlan>) {
-        // The resident key lives twice: in the map and in the eviction sampler's
-        // vector. Charge both, plus the plan estimate.
-        let bytes =
-            2 * native_einsum_signature_retained_bytes(&key) + CONCRETE_EINSUM_PLAN_ENTRY_BYTES;
-        if let Some(previous) = self.entries.remove(&key) {
-            self.retained_bytes = self.retained_bytes.saturating_sub(previous.retained_bytes);
-            if let Some(position) = self
-                .resident_keys
-                .iter()
-                .position(|resident| resident == &key)
-            {
-                self.resident_keys.swap_remove(position);
-            }
-        }
-        let last_used = self.next_clock();
-        self.entries.insert(
-            key.clone(),
-            ConcreteEinsumPlanCacheEntry {
-                plan,
-                last_used,
-                retained_bytes: bytes,
-            },
-        );
-        self.resident_keys.push(key);
-        self.retained_bytes = self.retained_bytes.saturating_add(bytes);
-        self.evict_to_bounds();
-    }
-
-    fn evict_to_bounds(&mut self) {
-        while self.entries.len() > self.capacity || self.retained_bytes > self.byte_budget {
-            if self.resident_keys.is_empty() {
-                break;
-            }
-            self.evict_one();
-        }
-    }
-
-    fn evict_one(&mut self) {
-        let resident = self.resident_keys.len();
-        if resident == 0 {
-            return;
-        }
-        let samples = CONCRETE_EINSUM_PLAN_CACHE_EVICTION_SAMPLES.min(resident);
-        let mut victim_index = 0;
-        let mut victim_last_used = u64::MAX;
-        for _ in 0..samples {
-            let index = (self.next_random() % resident as u64) as usize;
-            if let Some(entry) = self.entries.get(&self.resident_keys[index])
-                && entry.last_used < victim_last_used
-            {
-                victim_last_used = entry.last_used;
-                victim_index = index;
-            }
-        }
-        let victim = self.resident_keys.swap_remove(victim_index);
-        if let Some(entry) = self.entries.remove(&victim) {
-            self.retained_bytes = self.retained_bytes.saturating_sub(entry.retained_bytes);
-        }
-        #[cfg(test)]
-        {
-            self.stats.evictions += 1;
-        }
-    }
-
-    #[cfg(test)]
-    fn clear(&mut self) {
-        self.entries.clear();
-        self.resident_keys.clear();
-        self.retained_bytes = 0;
-        self.clock = 0;
-        self.rng_state = CONCRETE_EINSUM_PLAN_CACHE_EVICTION_SEED;
-        self.stats = ConcreteEinsumPlanCacheStats::default();
-    }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    #[cfg(test)]
-    fn retained_bytes(&self) -> usize {
-        self.retained_bytes
-    }
-}
-
 fn cached_concrete_einsum_plan(
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
     einsum_subscripts: &EinsumSubscripts,
 ) -> Result<Arc<ConcreteEinsumPlan>> {
     let signature = concrete_einsum_signature(inputs, subscripts);
-    if let Some(plan) = CONCRETE_EINSUM_PLAN_CACHE.with(|cache| cache.borrow_mut().get(&signature))
+    if let Some(plan) =
+        CONCRETE_EINSUM_PLAN_CACHE.with(|cache| cache.borrow().get(&signature).cloned())
     {
         return Ok(plan);
     }
@@ -491,44 +279,24 @@ fn cached_concrete_einsum_plan(
             .map_err(|error| anyhow!("native einsum session plan preparation failed: {error}"))?,
     );
     CONCRETE_EINSUM_PLAN_CACHE.with(|cache| {
-        cache.borrow_mut().insert(signature, Arc::clone(&plan));
+        let mut cache = cache.borrow_mut();
+        // ponytail: bounded clear-on-full cache; use an LRU only if shape churn is measured.
+        if cache.len() >= CONCRETE_EINSUM_PLAN_CACHE_CAPACITY {
+            cache.clear();
+        }
+        cache.insert(signature, Arc::clone(&plan));
     });
     Ok(plan)
 }
 
 #[cfg(test)]
 fn reset_concrete_einsum_plan_cache() {
-    CONCRETE_EINSUM_PLAN_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        cache.clear();
-        cache.capacity = CONCRETE_EINSUM_PLAN_CACHE_CAPACITY.max(1);
-        cache.byte_budget = CONCRETE_EINSUM_PLAN_CACHE_BYTE_BUDGET.max(1);
-    });
+    CONCRETE_EINSUM_PLAN_CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
 #[cfg(test)]
 fn concrete_einsum_plan_cache_len() -> usize {
     CONCRETE_EINSUM_PLAN_CACHE.with(|cache| cache.borrow().len())
-}
-
-#[cfg(test)]
-fn concrete_einsum_plan_cache_retained_bytes() -> usize {
-    CONCRETE_EINSUM_PLAN_CACHE.with(|cache| cache.borrow().retained_bytes())
-}
-
-#[cfg(test)]
-fn concrete_einsum_plan_cache_stats() -> ConcreteEinsumPlanCacheStats {
-    CONCRETE_EINSUM_PLAN_CACHE.with(|cache| cache.borrow().stats)
-}
-
-#[cfg(test)]
-fn set_concrete_einsum_plan_cache_limits_for_tests(capacity: usize, byte_budget: usize) {
-    CONCRETE_EINSUM_PLAN_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        cache.clear();
-        cache.capacity = capacity.max(1);
-        cache.byte_budget = byte_budget.max(1);
-    });
 }
 
 fn record_native_einsum_profile(

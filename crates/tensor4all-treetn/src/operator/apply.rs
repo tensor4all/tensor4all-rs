@@ -108,7 +108,7 @@ use crate::treetn::TreeTN;
 /// - `nfullsweeps`: `1` (only used by Fit method)
 /// - `convergence_tol`: `None` (only used by Fit method)
 /// - `src_options`: [`SrcOptions::default`] (only used by SRC method)
-/// - `center`: `None` (uses [`TreeTN::preferred_contraction_center`])
+/// - `center`: `None` (the smaller-named chain endpoint on a chain, otherwise the smallest node name)
 ///
 /// # Examples
 ///
@@ -165,7 +165,7 @@ pub struct ApplyOptions<V> {
     pub src_options: SrcOptions,
     /// Node whose canonical region the contraction is centred on.
     ///
-    /// `None` keeps [`TreeTN::preferred_contraction_center`]: the smaller-named
+    /// `None` keeps the default centre: the smaller-named
     /// chain endpoint on a chain, otherwise the smallest node name. Set it to an
     /// interior node (for example the one with the largest bonds) to keep the
     /// result canonical there and to start zip-up from that side. A centre that

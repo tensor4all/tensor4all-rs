@@ -145,7 +145,7 @@ let qft = quantics_fourier_operator(r, FourierOptions::forward())?;
 assert_eq!(qft.mpo().node_count(), r);
 
 // Apply to a TreeTN state. zipUp is the default; naive grows bonds, fit compresses.
-let opts = ApplyOptions::zipup()
+let opts = ApplyOptions::<usize>::zipup()
     .with_max_bond_dim(64)
     .with_svd_policy(SvdTruncationPolicy::new(1e-10));
 // let result = apply_linear_operator(&qft, &state, opts)?;

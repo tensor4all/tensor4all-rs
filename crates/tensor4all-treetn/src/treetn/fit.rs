@@ -326,8 +326,7 @@ where
     }
 
     /// Insert an environment tensor for edge (from, to).
-    /// This is mainly for testing; normally use `get_or_compute` for lazy evaluation.
-    #[allow(dead_code)]
+    /// Used by `get_or_compute`; tests may also seed it directly.
     pub(crate) fn insert(&mut self, from: V, to: V, env: T) {
         self.envs.entry(from).or_default().insert(to, env);
     }

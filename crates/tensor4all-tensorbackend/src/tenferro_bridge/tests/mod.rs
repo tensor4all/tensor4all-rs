@@ -537,24 +537,14 @@ fn same_integer_dtype_retains_graph_promotion() {
     assert_eq!(concrete_einsum_plan_cache_len(), 0);
 }
 
-/// Build a complex dtype tensor with deterministic values for cache tests.
-fn complex_test_tensor(shape: &[usize], seed: usize) -> NativeTensor {
-    let len: usize = shape.iter().product();
-    let values = (0..len)
-        .map(|index| Complex64::new(((index + seed) % 13) as f64 * 0.1, 0.0))
-        .collect::<Vec<_>>();
-    NativeTensor::from_vec_col_major(shape.to_vec(), values).expect("valid complex test tensor")
-}
-
 #[test]
-fn concrete_einsum_plan_cache_evicts_one_entry_at_a_time() {
+fn concrete_einsum_plan_cache_clears_at_its_bound() {
     reset_concrete_einsum_plan_cache();
-    set_concrete_einsum_plan_cache_limits_for_tests(8, usize::MAX);
     let tensor = NativeTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
         .expect("valid bounded-cache tensor");
     let input = NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&tensor));
 
-    for label in 0..16usize {
+    for label in 0..=CONCRETE_EINSUM_PLAN_CACHE_CAPACITY {
         let output = einsum_native_tensor_reads(&[(&input, &[label])], &[label])
             .expect("single-input session plan should execute");
         assert_eq!(
@@ -563,107 +553,7 @@ fn concrete_einsum_plan_cache_evicts_one_entry_at_a_time() {
         );
     }
 
-    assert_eq!(concrete_einsum_plan_cache_len(), 8);
-    assert_eq!(concrete_einsum_plan_cache_stats().evictions, 8);
-    reset_concrete_einsum_plan_cache();
-}
-
-#[test]
-fn concrete_einsum_plan_cache_keeps_issue_891_working_set_resident() {
-    reset_concrete_einsum_plan_cache();
-    // 400 distinct A[i,j] B[j,k] C[k,l] complex shapes: the exact churn cycle
-    // from issue #891, where clear-on-full thrashed to zero hits.
-    const SIGNATURES: usize = 400;
-    let tensors = (0..SIGNATURES)
-        .map(|k| {
-            let shape = [
-                2 + k % 7,
-                2 + (k / 7) % 7,
-                2 + (k / 49) % 7,
-                2 + (k / 343) % 7,
-            ];
-            [
-                complex_test_tensor(&[shape[0], shape[1]], 0),
-                complex_test_tensor(&[shape[1], shape[2]], 1),
-                complex_test_tensor(&[shape[2], shape[3]], 2),
-            ]
-        })
-        .collect::<Vec<_>>();
-
-    for _ in 0..2 {
-        for t in &tensors {
-            let reads = [
-                NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&t[0])),
-                NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&t[1])),
-                NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&t[2])),
-            ];
-            einsum_native_tensor_reads(
-                &[
-                    (&reads[0], &[0, 1]),
-                    (&reads[1], &[1, 2]),
-                    (&reads[2], &[2, 3]),
-                ],
-                &[0, 3],
-            )
-            .expect("working-set contraction should succeed");
-        }
-    }
-
-    let stats = concrete_einsum_plan_cache_stats();
-    assert_eq!(stats.misses, SIGNATURES);
-    assert_eq!(stats.hits, SIGNATURES);
-    assert_eq!(stats.evictions, 0);
-    assert_eq!(concrete_einsum_plan_cache_len(), SIGNATURES);
-    assert!(concrete_einsum_plan_cache_retained_bytes() <= CONCRETE_EINSUM_PLAN_CACHE_BYTE_BUDGET);
-}
-
-#[test]
-fn concrete_einsum_plan_cache_survives_a_cyclic_scan() {
-    reset_concrete_einsum_plan_cache();
-    // A working set one larger than the capacity is the LRU worst case, where a
-    // plain LRU evicts exactly the entry the next call needs; sampled eviction
-    // must still hit part of the cycle instead of thrashing to zero hits.
-    set_concrete_einsum_plan_cache_limits_for_tests(8, usize::MAX);
-    const SIGNATURES: usize = 9;
-    let tensors = (0..SIGNATURES)
-        .map(|k| complex_test_tensor(&[2 + k % 3, 3 + k / 3], k))
-        .collect::<Vec<_>>();
-
-    for _ in 0..8 {
-        for t in &tensors {
-            let read = NativeTensorReadInput::Borrowed(TensorRead::from_tensor(t));
-            einsum_native_tensor_reads(&[(&read, &[0, 1])], &[0, 1])
-                .expect("cyclic scan contraction should succeed");
-        }
-    }
-
-    let stats = concrete_einsum_plan_cache_stats();
-    assert!(
-        stats.hits > 0,
-        "sampled eviction should hit the cyclic working set: {stats:?}"
-    );
-    assert!(stats.evictions > 0);
-    reset_concrete_einsum_plan_cache();
-}
-
-#[test]
-fn concrete_einsum_plan_cache_respects_its_byte_budget() {
-    reset_concrete_einsum_plan_cache();
-    const BYTE_BUDGET: usize = 2048;
-    set_concrete_einsum_plan_cache_limits_for_tests(usize::MAX, BYTE_BUDGET);
-    let tensors = (0..16)
-        .map(|k| complex_test_tensor(&[2 + k % 4, 3 + k / 4], k))
-        .collect::<Vec<_>>();
-
-    for t in &tensors {
-        let read = NativeTensorReadInput::Borrowed(TensorRead::from_tensor(t));
-        einsum_native_tensor_reads(&[(&read, &[0, 1])], &[0, 1])
-            .expect("byte-budget contraction should succeed");
-    }
-
-    assert!(concrete_einsum_plan_cache_len() >= 1);
-    assert!(concrete_einsum_plan_cache_retained_bytes() <= BYTE_BUDGET);
-    reset_concrete_einsum_plan_cache();
+    assert_eq!(concrete_einsum_plan_cache_len(), 1);
 }
 
 #[test]
@@ -1112,4 +1002,55 @@ fn build_binary_einsum_ids_rejects_duplicate_axis() {
     let result = build_binary_einsum_ids(3, &[0, 0], 3, &[0, 1]);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("duplicate"));
+}
+
+#[test]
+fn concrete_einsum_plan_cache_keeps_issue_891_working_set_resident() {
+    reset_concrete_einsum_plan_cache();
+    // 400 distinct A[i,j] B[j,k] C[k,l] complex shapes: the churn cycle from
+    // issue #891, which the old 256-entry clear-on-full bound re-prepared on
+    // every call. Two passes must keep all 400 plans resident.
+    const SIGNATURES: usize = 400;
+    let tensors = (0..SIGNATURES)
+        .map(|k| {
+            let shape = [
+                2 + k % 7,
+                2 + (k / 7) % 7,
+                2 + (k / 49) % 7,
+                2 + (k / 343) % 7,
+            ];
+            [
+                complex_test_tensor(&[shape[0], shape[1]], 0),
+                complex_test_tensor(&[shape[1], shape[2]], 1),
+                complex_test_tensor(&[shape[2], shape[3]], 2),
+            ]
+        })
+        .collect::<Vec<_>>();
+    for _ in 0..2 {
+        for t in &tensors {
+            let reads = [
+                NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&t[0])),
+                NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&t[1])),
+                NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&t[2])),
+            ];
+            einsum_native_tensor_reads(
+                &[
+                    (&reads[0], &[0, 1]),
+                    (&reads[1], &[1, 2]),
+                    (&reads[2], &[2, 3]),
+                ],
+                &[0, 3],
+            )
+            .expect("working-set contraction should succeed");
+        }
+    }
+    assert_eq!(concrete_einsum_plan_cache_len(), SIGNATURES);
+}
+
+fn complex_test_tensor(shape: &[usize], seed: usize) -> NativeTensor {
+    let len: usize = shape.iter().product();
+    let values = (0..len)
+        .map(|index| Complex64::new(((index + seed) % 13) as f64 * 0.1, 0.0))
+        .collect::<Vec<_>>();
+    NativeTensor::from_vec_col_major(shape.to_vec(), values).expect("valid complex test tensor")
 }
