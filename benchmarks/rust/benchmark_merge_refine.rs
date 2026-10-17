@@ -182,7 +182,7 @@ impl Case {
     fn approximate_row(
         &self,
         label: &str,
-        options: &MergeRefineOptions,
+        options: &MergeRefineOptions<usize>,
         reference: &(Vec<DynIndex>, Vec<Complex64>),
     ) -> Result<Value> {
         let (elapsed, result) = median_time(REPEATS, || {

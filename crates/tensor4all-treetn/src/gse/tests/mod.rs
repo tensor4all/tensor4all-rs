@@ -47,7 +47,7 @@ fn product_chain3_state(tail_bond_dim: usize) -> TreeTN<IdxTensor, &'static str>
 #[test]
 fn gse_option_builders_set_reference_knobs() {
     let policy = SvdTruncationPolicy::new(1.0e-8);
-    let options = GseOptions::default()
+    let options = GseOptions::<usize>::default()
         .with_reference_max_bond_dim(7)
         .with_reference_svd_policy(policy)
         .with_normalize_references(false)

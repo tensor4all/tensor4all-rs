@@ -1480,7 +1480,7 @@ fn schedule_with_application(
     operator: &LinearOperator<IdxTensor, usize>,
     selection: &[DynIndex],
     rtol: f64,
-    apply_options: ApplyOptions,
+    apply_options: ApplyOptions<usize>,
 ) -> Result<MergeRefineResult<usize>, PartitionedTreeTNError> {
     let leaves = 1usize << selection.len();
     schedule_merge_refine(

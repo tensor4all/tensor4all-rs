@@ -31,7 +31,7 @@ use crate::{CanonicalizationOptions, TdvpError, TdvpOptions, TdvpResult, TreeTN}
 
 /// Options controlling TreeTN global subspace expansion.
 #[derive(Debug, Clone)]
-pub struct GseOptions {
+pub struct GseOptions<V> {
     /// Number of Krylov reference states to build as `H psi`, `H^2 psi`, ...
     ///
     /// This field is used by [`global_subspace_expand`] and [`gse_tdvp`]. It is
@@ -39,7 +39,7 @@ pub struct GseOptions {
     /// are supplied directly.
     pub krylov_dim: usize,
     /// Options used when applying the operator to build each reference state.
-    pub reference_apply: ApplyOptions,
+    pub reference_apply: ApplyOptions<V>,
     /// Optional maximum bond dimension for generated reference states.
     ///
     /// When this is `None`, generated references use `maxlinkdim(state) + 1`,
@@ -57,7 +57,7 @@ pub struct GseOptions {
     pub expand_before_first_sweep: bool,
 }
 
-impl Default for GseOptions {
+impl<V> Default for GseOptions<V> {
     fn default() -> Self {
         Self {
             krylov_dim: 0,
@@ -72,7 +72,7 @@ impl Default for GseOptions {
     }
 }
 
-impl GseOptions {
+impl<V> GseOptions<V> {
     /// Set the number of generated Krylov reference states.
     pub fn with_krylov_dim(mut self, krylov_dim: usize) -> Self {
         self.krylov_dim = krylov_dim;
@@ -135,12 +135,21 @@ where
 }
 
 /// Options for [`gse_tdvp`].
-#[derive(Debug, Clone, Default)]
-pub struct GseTdvpOptions {
+#[derive(Debug, Clone)]
+pub struct GseTdvpOptions<V> {
     /// Global subspace expansion options.
-    pub gse: GseOptions,
+    pub gse: GseOptions<V>,
     /// Existing TreeTN TDVP options.
     pub tdvp: TdvpOptions,
+}
+
+impl<V> Default for GseTdvpOptions<V> {
+    fn default() -> Self {
+        Self {
+            gse: GseOptions::<V>::default(),
+            tdvp: TdvpOptions::default(),
+        }
+    }
 }
 
 /// Result returned by [`gse_tdvp`].
@@ -287,7 +296,7 @@ pub fn global_subspace_expand<V>(
     operator: &LinearOperator<IdxTensor, V>,
     init: TreeTN<IdxTensor, V>,
     center: &V,
-    options: GseOptions,
+    options: GseOptions<V>,
 ) -> std::result::Result<GseResult<V>, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
@@ -327,7 +336,7 @@ pub fn global_subspace_expand_with_references<V>(
     init: TreeTN<IdxTensor, V>,
     references: Vec<TreeTN<IdxTensor, V>>,
     center: &V,
-    options: GseOptions,
+    options: GseOptions<V>,
 ) -> std::result::Result<GseResult<V>, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
@@ -396,7 +405,7 @@ pub fn gse_tdvp<V>(
     operator: &LinearOperator<IdxTensor, V>,
     init: TreeTN<IdxTensor, V>,
     center: &V,
-    options: GseTdvpOptions,
+    options: GseTdvpOptions<V>,
 ) -> std::result::Result<GseTdvpResult<V>, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
@@ -444,7 +453,7 @@ where
     })
 }
 
-fn validate_options(options: &GseOptions) -> Result<(), GseError> {
+fn validate_options<V>(options: &GseOptions<V>) -> Result<(), GseError> {
     if !options.density_weight_cutoff.is_finite() || options.density_weight_cutoff < 0.0 {
         return Err(GseError::InvalidOption {
             option: "density_weight_cutoff",
@@ -472,7 +481,7 @@ fn build_references<V>(
     operator: &LinearOperator<IdxTensor, V>,
     init: &TreeTN<IdxTensor, V>,
     center: &V,
-    options: &GseOptions,
+    options: &GseOptions<V>,
 ) -> Result<Vec<TreeTN<IdxTensor, V>>, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
@@ -570,7 +579,7 @@ fn expand_edges<V>(
     state: &mut TreeTN<IdxTensor, V>,
     references: &mut [TreeTN<IdxTensor, V>],
     center: &V,
-    options: &GseOptions,
+    options: &GseOptions<V>,
 ) -> Result<EdgeExpansionStats, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
@@ -624,7 +633,7 @@ fn expand_one_edge<V>(
     references: &mut [TreeTN<IdxTensor, V>],
     parent: &V,
     child: &V,
-    options: &GseOptions,
+    options: &GseOptions<V>,
 ) -> Result<usize, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,

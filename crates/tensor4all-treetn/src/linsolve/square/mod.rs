@@ -497,7 +497,7 @@ pub fn relative_linear_system_residual<T, V, A0, A1>(
     rhs: &TreeTN<T, V>,
     a0: A0,
     a1: A1,
-    apply_options: ApplyOptions,
+    apply_options: ApplyOptions<V>,
 ) -> std::result::Result<f64, TreeTNOperationError>
 where
     T: TensorLike,

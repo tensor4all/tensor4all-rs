@@ -69,7 +69,7 @@ use crate::{
 ///
 /// ```
 /// use tensor4all_partitionedtreetn::reconstruction::{CoverageContract, MergeRefineOptions};
-/// let options = MergeRefineOptions::default();
+/// let options = MergeRefineOptions::<usize>::default();
 /// assert_eq!(options.output_depth, None);
 /// assert_eq!(options.max_work_items, 4096);
 /// assert_eq!(options.max_terms, 1 << 20);
@@ -78,7 +78,7 @@ use crate::{
 /// assert!(options.apply_options.is_none());
 /// ```
 #[derive(Debug, Clone)]
-pub struct MergeRefineOptions {
+pub struct MergeRefineOptions<V> {
     /// Number of most significant output bits to fix, at most the number of
     /// selected indices. `None` (the default) refines every selected bit and
     /// returns a strict partition of single-output-coordinate regions. A smaller
@@ -136,7 +136,7 @@ pub struct MergeRefineOptions {
     /// as the reference, so requesting this costs a second application per input
     /// leaf, and a measured application error above the global allowance is
     /// rejected.
-    pub apply_options: Option<ApplyOptions>,
+    pub apply_options: Option<ApplyOptions<V>>,
 }
 
 /// How much of the dyadic input tree the preimage must cover.
@@ -164,7 +164,7 @@ pub enum CoverageContract {
     ZeroForMissingLeaves,
 }
 
-impl Default for MergeRefineOptions {
+impl<V> Default for MergeRefineOptions<V> {
     fn default() -> Self {
         Self {
             output_depth: None,
@@ -1154,7 +1154,7 @@ pub fn schedule_merge_refine<V>(
     selection: &[DynIndex],
     subset: &SubsetOperatorOptions,
     tolerance: ReconstructionTolerance,
-    options: &MergeRefineOptions,
+    options: &MergeRefineOptions<V>,
 ) -> Result<MergeRefineResult<V>>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
@@ -1437,7 +1437,7 @@ where
 {
     geometry: &'a ScheduleGeometry,
     center: &'a V,
-    options: &'a MergeRefineOptions,
+    options: &'a MergeRefineOptions<V>,
     share: f64,
 }
 

@@ -1908,6 +1908,7 @@ pub extern "C" fn t4a_treetn_apply_operator_chain(
                 nfullsweeps: fit_nfullsweeps,
                 convergence_tol: resolve_convergence_tol(convergence_tol),
                 src_options: Default::default(),
+                center: None,
             },
         )
         .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;

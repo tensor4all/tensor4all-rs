@@ -108,6 +108,7 @@ use crate::treetn::TreeTN;
 /// - `nfullsweeps`: `1` (only used by Fit method)
 /// - `convergence_tol`: `None` (only used by Fit method)
 /// - `src_options`: [`SrcOptions::default`] (only used by SRC method)
+/// - `center`: `None` (uses [`TreeTN::preferred_contraction_center`])
 ///
 /// # Examples
 ///
@@ -116,26 +117,36 @@ use crate::treetn::TreeTN;
 /// use tensor4all_core::SvdTruncationPolicy;
 ///
 /// // Default: Zipup with no truncation
-/// let opts = ApplyOptions::default();
+/// let opts = ApplyOptions::<String>::default();
 /// assert_eq!(opts.max_bond_dim, None);
+/// assert_eq!(opts.center, None);
 ///
 /// // Zipup with rank and tolerance limits
-/// let opts = ApplyOptions::zipup()
+/// let opts = ApplyOptions::<String>::zipup()
 ///     .with_max_bond_dim(50)
 ///     .with_svd_policy(SvdTruncationPolicy::new(1e-8));
 /// assert_eq!(opts.max_bond_dim, Some(50));
 /// assert_eq!(opts.svd_policy, Some(SvdTruncationPolicy::new(1e-8)));
 ///
 /// // Fit method with sweep control
-/// let opts = ApplyOptions::fit().with_nfullsweeps(3).with_max_bond_dim(20);
+/// let opts = ApplyOptions::<String>::fit()
+///     .with_nfullsweeps(3)
+///     .with_max_bond_dim(20);
 /// assert_eq!(opts.nfullsweeps, 3);
 ///
 /// // Local exact naive apply: no truncation and no full dense tensor.
-/// let opts = ApplyOptions::naive();
+/// let opts = ApplyOptions::<String>::naive();
 /// assert_eq!(opts.max_bond_dim, None);
+///
+/// // Pin the contraction centre explicitly; the node names are caller-chosen.
+/// let opts = ApplyOptions {
+///     center: Some("hub".to_string()),
+///     ..ApplyOptions::zipup()
+/// };
+/// assert_eq!(opts.center.as_deref(), Some("hub"));
 /// ```
 #[derive(Debug, Clone)]
-pub struct ApplyOptions {
+pub struct ApplyOptions<V> {
     /// Contraction method to use.
     pub method: ContractionMethod,
     /// Maximum bond dimension for truncation.
@@ -152,9 +163,17 @@ pub struct ApplyOptions {
     pub convergence_tol: Option<f64>,
     /// SRC-specific rank, tolerance, probe, and finalization controls.
     pub src_options: SrcOptions,
+    /// Node whose canonical region the contraction is centred on.
+    ///
+    /// `None` keeps [`TreeTN::preferred_contraction_center`]: the smaller-named
+    /// chain endpoint on a chain, otherwise the smallest node name. Set it to an
+    /// interior node (for example the one with the largest bonds) to keep the
+    /// result canonical there and to start zip-up from that side. A centre that
+    /// is not a node of the state is rejected before any contraction work.
+    pub center: Option<V>,
 }
 
-impl Default for ApplyOptions {
+impl<V> Default for ApplyOptions<V> {
     fn default() -> Self {
         Self {
             method: ContractionMethod::Zipup,
@@ -164,11 +183,12 @@ impl Default for ApplyOptions {
             nfullsweeps: 1,
             convergence_tol: None,
             src_options: SrcOptions::default(),
+            center: None,
         }
     }
 }
 
-impl ApplyOptions {
+impl<V> ApplyOptions<V> {
     /// Create options with ZipUp method (default).
     pub fn zipup() -> Self {
         Self::default()
@@ -204,7 +224,7 @@ impl ApplyOptions {
     /// use tensor4all_treetn::{ApplyOptions, SrcOptions};
     /// use tensor4all_treetn::contraction::ContractionMethod;
     ///
-    /// let options = ApplyOptions::src().with_max_bond_dim(16);
+    /// let options = ApplyOptions::<usize>::src().with_max_bond_dim(16);
     /// assert_eq!(options.method, ContractionMethod::Src);
     /// ```
     pub fn src() -> Self {
@@ -245,7 +265,7 @@ impl ApplyOptions {
     /// ```
     /// use tensor4all_treetn::{ApplyOptions, SrcOptions};
     ///
-    /// let options = ApplyOptions::src()
+    /// let options = ApplyOptions::<usize>::src()
     ///     .with_max_bond_dim(16)
     ///     .with_src_options(SrcOptions::adaptive(1.0e-8, 16));
     /// assert_eq!(options.src_options.rtol, Some(1.0e-8));
@@ -347,7 +367,7 @@ impl ApplyOptions {
 pub fn apply_linear_operator<T, V>(
     operator: &LinearOperator<T, V>,
     state: &TreeTN<T, V>,
-    options: ApplyOptions,
+    options: ApplyOptions<V>,
 ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
@@ -355,6 +375,26 @@ where
     <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
+    // Choose a center node first so that an invalid caller center is rejected
+    // before any operator embedding, index transformation or contraction work.
+    // An explicit center wins; otherwise use an actual chain endpoint when the
+    // topology is chain-shaped (so SRC's fast chain path stays eligible),
+    // falling back to the smallest node name. See
+    // `TreeTN::preferred_contraction_center`'s doc comment.
+    let center: V = match options.center.as_ref() {
+        Some(center) => {
+            if state.node_index(center).is_none() {
+                return Err(TreeTNOperationError::from(anyhow::anyhow!(
+                    "apply_linear_operator: contraction center {center:?} is not a node of the state"
+                )));
+            }
+            center.clone()
+        }
+        None => state.preferred_contraction_center().ok_or_else(|| {
+            TreeTNOperationError::from(anyhow::anyhow!("apply_linear_operator: empty state"))
+        })?,
+    };
+
     // 1. Check if operator covers all state nodes
     let state_nodes: HashSet<V> = state.node_names().into_iter().collect();
     let op_nodes: HashSet<V> = operator.node_names();
@@ -382,13 +422,6 @@ where
     let transformed_state = transform_state_to_input(&full_operator, state)?;
 
     // 3. Contract state with operator MPO
-    // Choose a center node: an actual chain endpoint when the topology is
-    // chain-shaped (so SRC's fast chain path stays eligible), falling back
-    // to the smallest node name otherwise. See
-    // `TreeTN::preferred_contraction_center`'s doc comment.
-    let center = &state
-        .preferred_contraction_center()
-        .ok_or_else(|| anyhow::anyhow!("Empty state"))?;
 
     let contraction_options = ContractionOptions {
         method: options.method,
@@ -402,13 +435,13 @@ where
     };
 
     let contracted = if options.method == ContractionMethod::Naive {
-        apply_linear_operator_naive_local(&full_operator, &transformed_state, center)
+        apply_linear_operator_naive_local(&full_operator, &transformed_state, &center)
             .context("Failed to locally apply state with operator")?
     } else {
         contract(
             &transformed_state,
             full_operator.mpo(),
-            center,
+            &center,
             contraction_options,
         )
         .context("Failed to contract state with operator")?
@@ -558,7 +591,7 @@ pub fn apply_linear_operator_to_indices<T, V>(
     state: &TreeTN<T, V>,
     input_pairs: &[(T::Index, T::Index)],
     output_pairs: &[(T::Index, T::Index)],
-    options: ApplyOptions,
+    options: ApplyOptions<V>,
 ) -> std::result::Result<TreeTN<T, V>, LinearOperatorIndexApplyError>
 where
     T: TensorLike,
@@ -672,7 +705,7 @@ pub fn apply_linear_operator_to_numbered_tags<V>(
     state: &TreeTN<IdxTensor, V>,
     tag_prefix: &str,
     start_index: usize,
-    options: ApplyOptions,
+    options: ApplyOptions<V>,
 ) -> std::result::Result<TreeTN<IdxTensor, V>, LinearOperatorTaggedApplyError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,

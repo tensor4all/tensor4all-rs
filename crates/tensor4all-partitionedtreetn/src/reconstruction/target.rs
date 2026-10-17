@@ -384,7 +384,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         operator: &LinearOperator<IdxTensor, V>,
         selection: &[DynIndex],
         options: &SubsetOperatorOptions,
-        apply: Option<&ApplyOptions>,
+        apply: Option<&ApplyOptions<V>>,
     ) -> Result<PreparedImages<V>> {
         let mut operator_nodes = operator.mpo().node_names();
         operator_nodes.sort();
@@ -492,7 +492,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         // becomes a silent error that the report would mis-attribute.
         let mut images = Vec::with_capacity(preimage.patches.len());
         for term in preimage.materialize_terms(center)? {
-            let apply_exact = |options: ApplyOptions| -> Result<TreeTN<IdxTensor, V>> {
+            let apply_exact = |options: ApplyOptions<V>| -> Result<TreeTN<IdxTensor, V>> {
                 apply_linear_operator_to_indices(
                     &operator,
                     term.data(),

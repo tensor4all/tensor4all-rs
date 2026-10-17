@@ -1022,7 +1022,7 @@ fn test_apply_options_builder() {
     let policy = SvdTruncationPolicy::new(1e-10)
         .with_squared_values()
         .with_discarded_tail_sum();
-    let opts = ApplyOptions::zipup()
+    let opts = ApplyOptions::<usize>::zipup()
         .with_max_bond_dim(50)
         .with_svd_policy(policy);
     assert_eq!(opts.method, ContractionMethod::Zipup);
@@ -1030,12 +1030,75 @@ fn test_apply_options_builder() {
     assert_eq!(opts.svd_policy, Some(policy));
     assert_eq!(opts.qr_rtol, None);
 
-    let fit = ApplyOptions::fit().with_nfullsweeps(3);
+    let fit = ApplyOptions::<usize>::fit().with_nfullsweeps(3);
     assert_eq!(fit.method, ContractionMethod::Fit);
     assert_eq!(fit.nfullsweeps, 3);
 
-    let naive = ApplyOptions::naive();
+    let naive = ApplyOptions::<usize>::naive();
     assert_eq!(naive.method, ContractionMethod::Naive);
+}
+
+#[test]
+fn apply_options_explicit_center_is_honored_on_a_chain() {
+    // Non-`usize` String node names, and both the naive-local and contraction
+    // dispatch paths, must canonicalize the result at the requested centre.
+    use crate::operator::apply_linear_operator;
+
+    let (state, sites) = build_chain_state();
+    let operator = build_identity_operator(&[sites[0].clone(), sites[2].clone()]);
+    for (label, method) in [
+        ("naive", ApplyOptions::naive()),
+        ("zipup", ApplyOptions::zipup()),
+    ] {
+        let options = ApplyOptions {
+            center: Some("site1".to_string()),
+            ..method
+        };
+        let result = apply_linear_operator(&operator, &state, options).unwrap();
+        assert!(
+            result.canonical_region().contains("site1"),
+            "{label}: expected the result centred on site1, got {:?}",
+            result.canonical_region()
+        );
+        let distance = result
+            .to_dense()
+            .unwrap()
+            .distance(&state.to_dense().unwrap())
+            .unwrap();
+        assert!(distance < 1.0e-10, "{label}: identity distance {distance}");
+    }
+}
+
+#[test]
+fn apply_options_default_center_matches_preferred_center() {
+    use crate::operator::apply_linear_operator;
+
+    let (state, sites) = build_chain_state();
+    let operator = build_identity_operator(&[sites[0].clone(), sites[2].clone()]);
+    let preferred = state
+        .preferred_contraction_center()
+        .expect("chain has a preferred centre");
+    assert_eq!(preferred, "site0".to_string());
+
+    let result = apply_linear_operator(&operator, &state, ApplyOptions::default()).unwrap();
+    assert!(result.canonical_region().contains(&preferred));
+}
+
+#[test]
+fn apply_options_rejects_a_center_that_is_not_a_state_node() {
+    use crate::operator::apply_linear_operator;
+
+    let (state, sites) = build_chain_state();
+    let operator = build_identity_operator(&[sites[0].clone(), sites[2].clone()]);
+    let options = ApplyOptions {
+        center: Some("missing".to_string()),
+        ..ApplyOptions::default()
+    };
+    let err = apply_linear_operator(&operator, &state, options).unwrap_err();
+    assert!(
+        err.to_string().contains("is not a node of the state"),
+        "{err}"
+    );
 }
 
 #[test]

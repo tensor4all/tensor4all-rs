@@ -159,23 +159,23 @@ use tensor4all_treetn::{ApplyOptions, SrcOptions};
 // Naive: local exact apply with no truncation or full dense materialization.
 // Use for small exact/debug cases; output bond dimensions can grow as
 // state/operator bond products.
-let opts = ApplyOptions::naive();
+let opts = ApplyOptions::<usize>::naive();
 assert_eq!(opts.max_bond_dim, None);
 
 // ZipUp (default): single-pass, controllable truncation.
-let opts = ApplyOptions::zipup()
+let opts = ApplyOptions::<usize>::zipup()
     .with_max_bond_dim(64)
     .with_svd_policy(SvdTruncationPolicy::new(1e-10));
 assert_eq!(opts.max_bond_dim, Some(64));
 
 // Fit: iterative sweeps for best compression.
-let opts = ApplyOptions::fit()
+let opts = ApplyOptions::<usize>::fit()
     .with_max_bond_dim(32)
     .with_nfullsweeps(3);
 assert_eq!(opts.nfullsweeps, 3);
 
 // SRC: randomized range finding with a deterministic probe stream.
-let opts = ApplyOptions::src()
+let opts = ApplyOptions::<usize>::src()
     .with_max_bond_dim(32)
     .with_src_options(SrcOptions::fixed().with_seed(7));
 assert_eq!(opts.max_bond_dim, Some(32));
