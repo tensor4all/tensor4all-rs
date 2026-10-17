@@ -121,8 +121,11 @@ pub fn transformed_reference(x: usize, y: usize, bits: usize, mode: AffineBounda
 /// Build the source QTT for the periodic analytic function.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns
+/// [`tensor4all_quanticstci::QuanticsTCIError::InvalidConfiguration`] when the
+/// grid sizes or TCI options are invalid, and
+/// [`tensor4all_quanticstci::QuanticsTCIError::Operation`] when an initial pivot
+/// is out of bounds or the backend interpolation fails.
 ///
 pub fn build_source_qtt(config: &AffineTutorialConfig) -> Result<AffineQttOutput, Box<dyn Error>> {
     let n = point_count(config.bits);
@@ -171,8 +174,12 @@ fn boundary_conditions(mode: AffineBoundaryMode) -> Vec<BoundaryCondition> {
 /// Build the affine operator and transpose it to obtain the passive pullback.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns
+/// [`tensor4all_quanticstransform::QuanticsTransformError::InvalidConfiguration`]
+/// when the affine coefficients, variable counts, or boundary conditions are
+/// invalid, and
+/// [`tensor4all_quanticstransform::QuanticsTransformError::Operation`] when the
+/// operator construction or backend conversion fails.
 ///
 pub fn build_affine_operator(
     config: &AffineTutorialConfig,
@@ -185,8 +192,9 @@ pub fn build_affine_operator(
 /// Evaluate a TreeTN at one set of site values and return the complex scalar.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns [`tensor4all_treetn::TreeTNOperationError`] when the number of
+/// `site_values` differs from `site_indices`, a site index is missing from the
+/// network, or the backend evaluation fails.
 ///
 pub fn evaluate_tree_point(
     tn: &TreeTN<IdxTensor, usize>,
@@ -200,8 +208,9 @@ pub fn evaluate_tree_point(
 /// Apply the affine operator to the source QTT.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns [`tensor4all_treetn::TreeTNOperationError`] when the source train
+/// cannot be converted to a `TreeTN`, the operator cannot be aligned to the
+/// state's site indices, or the backend contraction fails.
 ///
 pub fn apply_affine_operator(
     source: &QuanticsTensorCI2<f64>,
@@ -223,8 +232,9 @@ pub fn apply_affine_operator(
 #[allow(clippy::too_many_arguments)]
 /// # Errors
 ///
-/// Returns an error when the collection fails (a shape mismatch or
-/// backend failure).
+/// Returns a `quanticsgrids::QuanticsGridError` when a grid index is out of
+/// bounds and [`tensor4all_treetn::TreeTNOperationError`] when a TreeTN
+/// evaluation fails.
 ///
 pub fn collect_samples(
     periodic: &TreeTN<IdxTensor, usize>,
@@ -328,8 +338,8 @@ fn write_optional_usize(value: Option<usize>) -> String {
 /// Write dense samples to CSV.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_samples_csv(path: &Path, samples: &[AffineSamplePoint]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
@@ -368,8 +378,8 @@ pub fn write_samples_csv(path: &Path, samples: &[AffineSamplePoint]) -> Result<(
 /// Write bond-dimension rows to CSV.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_bond_dims_csv(path: &Path, rows: &[AffineBondDimRow]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
@@ -397,8 +407,8 @@ pub fn write_bond_dims_csv(path: &Path, rows: &[AffineBondDimRow]) -> Result<(),
 /// Write affine operator bond dimensions to CSV.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_operator_bond_dims_csv(
     path: &Path,

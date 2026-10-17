@@ -101,8 +101,11 @@ pub fn interpolation_options(config: &InterpolativeQttTutorialConfig) -> Interpo
 /// Build the smooth one-dimensional single-scale QTT.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns [`tensor4all_interpolativeqtt::InterpolativeQttError::InvalidArgument`]
+/// when the interpolation configuration is invalid (for example non-finite bounds
+/// or a zero polynomial degree), and
+/// [`tensor4all_interpolativeqtt::InterpolativeQttError::SimpleTensorTrain`] when
+/// the tensor-train construction or SVD compression fails.
 ///
 pub fn build_single_scale_smooth_qtt(
     config: &InterpolativeQttTutorialConfig,
@@ -121,8 +124,11 @@ pub fn build_single_scale_smooth_qtt(
 /// Build the one-dimensional multiscale inverse-square QTT.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns [`tensor4all_interpolativeqtt::InterpolativeQttError::InvalidArgument`]
+/// when the interpolation configuration is invalid (for example non-finite bounds
+/// or a zero polynomial degree), and
+/// [`tensor4all_interpolativeqtt::InterpolativeQttError::SimpleTensorTrain`] when
+/// the tensor-train construction or SVD compression fails.
 ///
 pub fn build_multi_scale_inverse_square_1d_qtt(
     config: &InterpolativeQttTutorialConfig,
@@ -143,8 +149,11 @@ pub fn build_multi_scale_inverse_square_1d_qtt(
 /// Build the two-dimensional multiscale radial inverse-square QTT.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns [`tensor4all_interpolativeqtt::InterpolativeQttError::InvalidArgument`]
+/// when the interpolation configuration is invalid (for example non-finite bounds
+/// or a zero polynomial degree), and
+/// [`tensor4all_interpolativeqtt::InterpolativeQttError::SimpleTensorTrain`] when
+/// the tensor-train construction or SVD compression fails.
 ///
 pub fn build_multi_scale_inverse_square_2d_qtt(
     config: &InterpolativeQttTutorialConfig,
@@ -190,8 +199,10 @@ fn quantics_to_tt_indices(quantics: &[usize]) -> Result<Vec<usize>, Box<dyn Erro
 /// Collect full one-dimensional grid samples for plotting and verification.
 /// # Errors
 ///
-/// Returns an error when the collection fails (a shape mismatch or
-/// backend failure).
+/// Returns a `quanticsgrids::QuanticsGridError` when the grid bounds or bit
+/// depth are invalid, a grid index is out of bounds, or a conversion has the
+/// wrong length, and [`tensor4all_simplett::SimpleTensorTrainError`] when the
+/// quantics point does not match the tensor-train site dimensions.
 ///
 pub fn collect_1d_samples<F>(
     case_name: &'static str,
@@ -233,8 +244,11 @@ where
 /// Collect full two-dimensional grid samples for plotting and verification.
 /// # Errors
 ///
-/// Returns an error when the collection fails (a shape mismatch or
-/// backend failure).
+/// Returns a `quanticsgrids::QuanticsGridError` when the grid bounds or bit
+/// depth are invalid or a grid index is out of bounds, [`std::io::Error`] when
+/// `lower` or `upper` does not have length 2, and
+/// [`tensor4all_simplett::SimpleTensorTrainError`] when the quantics point does
+/// not match the tensor-train site dimensions.
 ///
 pub fn collect_2d_samples<F>(
     tt: &SimpleTensorTrain<f64>,
@@ -321,8 +335,8 @@ pub fn max_abs_error_2d(samples: &[InterpolativeQtt2dSample]) -> f64 {
 /// Write one-dimensional samples to CSV.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_1d_samples_csv(
     path: &Path,
@@ -346,8 +360,8 @@ pub fn write_1d_samples_csv(
 /// Write two-dimensional samples to CSV.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_2d_samples_csv(
     path: &Path,
@@ -377,8 +391,8 @@ pub fn write_2d_samples_csv(
 /// Write bond dimensions to CSV.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_bond_dims_csv(
     path: &Path,

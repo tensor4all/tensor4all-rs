@@ -26,8 +26,9 @@ pub struct SamplePoint {
 /// Evaluate the QTT at every grid point and compare it with the analytic target.
 /// # Errors
 ///
-/// Returns an error when the collection fails (a shape mismatch or
-/// backend failure).
+/// Returns a `quanticsgrids::QuanticsGridError` when the grid dimension is out
+/// of bounds and [`tensor4all_quanticstci::QuanticsTCIError`] when the QTT
+/// evaluation fails (for example the point index is out of bounds).
 ///
 pub fn collect_samples<F>(
     qtci: &QuanticsTensorCI2<f64>,
@@ -146,8 +147,8 @@ pub fn print_summary(
 /// Write the point-wise comparison table used by Julia for plotting.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box<dyn Error>> {
     // Plain CSV output: one row per grid point so Julia can recreate the figure.
@@ -169,8 +170,8 @@ pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box
 /// Write the bond-dimension profile used by the Julia line plot.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_bond_dims_csv(path: &Path, bond_dims: &[usize]) -> Result<(), Box<dyn Error>> {
     // Plain CSV output: one row per bond in the QTT.

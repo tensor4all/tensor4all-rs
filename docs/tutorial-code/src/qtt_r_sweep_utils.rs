@@ -41,8 +41,8 @@ pub fn discrete_index_to_unit_interval(index: i64, npoints: usize) -> f64 {
 /// analytic target function.
 /// # Errors
 ///
-/// Returns an error when the collection fails (a shape mismatch or
-/// backend failure).
+/// Returns [`tensor4all_quanticstci::QuanticsTCIError`] when the QTT evaluation
+/// fails, for example because the point index is out of bounds.
 ///
 pub fn collect_samples<F>(
     r: usize,
@@ -151,8 +151,8 @@ fn preview_f64(values: &[f64], n: usize) -> String {
 /// Write the sample table to CSV.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_samples_csv(path: &Path, samples: &[SweepSample]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
@@ -180,8 +180,8 @@ pub fn write_samples_csv(path: &Path, samples: &[SweepSample]) -> Result<(), Box
 /// Write the per-R summary table to CSV.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_stats_csv(path: &Path, stats: &[SweepStats]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;

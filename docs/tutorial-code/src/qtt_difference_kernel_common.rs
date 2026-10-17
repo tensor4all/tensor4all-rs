@@ -84,8 +84,11 @@ pub fn periodic_difference(x: usize, xprime: usize, n: usize) -> usize {
 /// Build the one-dimensional kernel QTT.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns
+/// [`tensor4all_quanticstci::QuanticsTCIError::InvalidConfiguration`] when the
+/// grid sizes or TCI options are invalid, and
+/// [`tensor4all_quanticstci::QuanticsTCIError::Operation`] when an initial pivot
+/// is out of bounds or the backend interpolation fails.
 ///
 pub fn build_kernel_qtt(
     config: &DifferenceKernelTutorialConfig,
@@ -121,8 +124,9 @@ pub fn build_kernel_qtt(
 /// Convert a real QTT to the complex-valued QTT expected by quantics transforms.
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape mismatch or backend
-/// failure).
+/// Returns [`tensor4all_simplett::SimpleTensorTrainError`] when
+/// [`SimpleTensorTrain::new`] rejects the converted cores, for example when an
+/// adjacent bond dimension mismatches.
 ///
 pub fn real_qtt_to_complex(
     tt: &SimpleTensorTrain<f64>,
@@ -153,8 +157,11 @@ pub fn real_qtt_to_complex(
 /// Build `A[x, x'] = f((x - x') mod 2^R)` as a periodic difference-kernel MPO.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns [`tensor4all_simplett::SimpleTensorTrainError`] when the complex
+/// conversion fails and
+/// [`tensor4all_quanticstransform::QuanticsTransformError`] when the periodic
+/// kernel MPO construction fails (for example an invalid boundary condition or a
+/// backend failure).
 ///
 pub fn build_periodic_difference_kernel_mpo(
     kernel_tt: &SimpleTensorTrain<f64>,
@@ -174,8 +181,8 @@ pub fn integer_to_quantics_sites(value: usize, bits: usize) -> Vec<usize> {
 /// Evaluate the fused-site MPO at a matrix entry `(x, x')`.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns [`tensor4all_simplett::SimpleTensorTrainError`] when the fused
+/// `(x, x')` point does not match the MPO site dimensions.
 ///
 pub fn evaluate_difference_kernel_mpo(
     mpo: &SimpleTensorTrain<Complex64>,
@@ -196,8 +203,9 @@ pub fn evaluate_difference_kernel_mpo(
 /// Collect dense matrix samples against the analytic periodic reference.
 /// # Errors
 ///
-/// Returns an error when the collection fails (a shape mismatch or
-/// backend failure).
+/// Returns [`tensor4all_quanticstci::QuanticsTCIError`] when the kernel QTT
+/// evaluation fails and [`tensor4all_simplett::SimpleTensorTrainError`] when a
+/// kernel MPO evaluation fails.
 ///
 pub fn collect_samples(
     kernel: &QuanticsTensorCI2<f64>,
@@ -256,8 +264,8 @@ fn write_optional_usize(value: Option<usize>) -> String {
 /// Write dense matrix samples to CSV.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_samples_csv(
     path: &Path,
@@ -294,8 +302,8 @@ pub fn write_samples_csv(
 /// Write bond dimensions to CSV.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_bond_dims_csv(
     path: &Path,

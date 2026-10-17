@@ -105,8 +105,11 @@ pub fn physical_frequency_bounds(config: &FourierTutorialConfig) -> (f64, f64) {
 /// Build the QTT approximation of the input Gaussian.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns
+/// [`tensor4all_quanticstci::QuanticsTCIError::InvalidConfiguration`] when the
+/// grid sizes or TCI options are invalid, and
+/// [`tensor4all_quanticstci::QuanticsTCIError::Operation`] when an initial pivot
+/// is out of bounds or the backend interpolation fails.
 ///
 pub fn build_gaussian_qtt(
     grid: &DiscretizedGrid,
@@ -135,8 +138,11 @@ pub fn build_gaussian_qtt(
 /// Build the quantics Fourier operator.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns
+/// [`tensor4all_quanticstransform::QuanticsTransformError::InvalidConfiguration`]
+/// when the number of bits or Fourier options are invalid, and
+/// [`tensor4all_quanticstransform::QuanticsTransformError::Operation`] when the
+/// operator construction fails.
 ///
 pub fn build_fourier_operator(
     config: &FourierTutorialConfig,
@@ -163,8 +169,9 @@ pub fn global_index_to_quantics_sites(index: usize, bits: usize) -> Vec<usize> {
 /// Apply the Fourier operator to the Gaussian QTT.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns [`tensor4all_treetn::TreeTNOperationError`] when the Gaussian train
+/// cannot be converted to a `TreeTN`, the operator cannot be aligned to the
+/// state's site indices, or the backend contraction fails.
 ///
 pub fn transform_gaussian(
     qtci: &QuanticsTensorCI2<f64>,
@@ -183,8 +190,9 @@ pub fn transform_gaussian(
 /// Evaluate a TreeTN at one set of site values and return the complex scalar.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns [`tensor4all_treetn::TreeTNOperationError`] when the number of
+/// `site_values` differs from `site_indices`, a site index is missing from the
+/// network, or the backend evaluation fails.
 ///
 pub fn evaluate_tree_point(
     tn: &TreeTN<IdxTensor, usize>,
@@ -198,8 +206,9 @@ pub fn evaluate_tree_point(
 /// Evaluate the transformed Gaussian on the frequency grid and collect a sample table.
 /// # Errors
 ///
-/// Returns an error when the collection fails (a shape mismatch or
-/// backend failure).
+/// Returns a `quanticsgrids::QuanticsGridError` when an input or frequency grid
+/// coordinate is out of bounds and [`tensor4all_treetn::TreeTNOperationError`]
+/// when a TreeTN evaluation fails.
 ///
 pub fn collect_samples(
     transformed: &TreeTN<IdxTensor, usize>,
@@ -287,8 +296,8 @@ pub fn print_summary(
 /// Write the Fourier sample table used by Julia plotting.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
@@ -319,8 +328,8 @@ pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box
 /// Write the Fourier bond-dimension table used by Julia plotting.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_bond_dims_csv(
     path: &Path,
@@ -340,8 +349,8 @@ pub fn write_bond_dims_csv(
 /// Write the Fourier MPO bond-dimension table used by Julia plotting.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_fourier_operator_bond_dims_csv(
     path: &Path,

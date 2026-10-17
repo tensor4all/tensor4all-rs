@@ -52,8 +52,9 @@ pub fn exact_integral(config: &IntervalTutorialConfig) -> f64 {
 /// Build the one-dimensional physical grid used by the interval tutorials.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns a `quanticsgrids::QuanticsGridError` when the bit depth, bounds,
+/// variable names, or endpoint configuration are invalid, no resolution is given,
+/// or the resolution overflows.
 ///
 pub fn build_interval_grid(
     config: &IntervalTutorialConfig,
@@ -68,8 +69,11 @@ pub fn build_interval_grid(
 /// Build the QTT for a scalar function on the fixed interval grid.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns
+/// [`tensor4all_quanticstci::QuanticsTCIError::InvalidConfiguration`] when the
+/// grid sizes or TCI options are invalid, and
+/// [`tensor4all_quanticstci::QuanticsTCIError::Operation`] when an initial pivot
+/// is out of bounds or the backend interpolation fails.
 ///
 pub fn build_interval_qtt<F>(
     grid: &DiscretizedGrid,

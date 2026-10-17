@@ -49,8 +49,9 @@ pub fn point_count(config: &MultivariateTutorialConfig) -> usize {
 /// Build the two-dimensional discretized grid used by the tutorial.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns a `quanticsgrids::QuanticsGridError` when the bit depth, bounds,
+/// variable names, or endpoint configuration are invalid, no resolution is given,
+/// or the resolution overflows.
 ///
 pub fn build_multivariate_grid(
     config: &MultivariateTutorialConfig,
@@ -67,8 +68,11 @@ pub fn build_multivariate_grid(
 /// Build a QTT approximation for the provided 2D `target_fn`.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns
+/// [`tensor4all_quanticstci::QuanticsTCIError::InvalidConfiguration`] when the
+/// grid sizes or TCI options are invalid, and
+/// [`tensor4all_quanticstci::QuanticsTCIError::Operation`] when an initial pivot
+/// is out of bounds or the backend interpolation fails.
 ///
 pub fn build_multivariate_qtt<F>(
     grid: &DiscretizedGrid,
@@ -194,8 +198,11 @@ fn evaluate_dense_qtt(qtt: &QuanticsTensorCI2<f64>) -> Result<Vec<f64>, Box<dyn 
 /// Collect dense samples for both layouts on the full cartesian grid.
 /// # Errors
 ///
-/// Returns an error when the collection fails (a shape mismatch or
-/// backend failure).
+/// Returns [`std::io::Error`] when the QTT has no discretized grid, the grid
+/// is not two-dimensional, or the dense evaluation returns the wrong number of
+/// samples, a `quanticsgrids::QuanticsGridError` when a grid coordinate or index
+/// is out of bounds, and [`tensor4all_simplett::SimpleTensorTrainError`] when a
+/// batched tensor-train evaluation fails.
 ///
 pub fn collect_samples<F>(
     interleaved: &QuanticsTensorCI2<f64>,
@@ -259,8 +266,8 @@ pub fn collect_bond_dims(interleaved: &[usize], grouped: &[usize]) -> Vec<BondDi
 /// Write dense samples to CSV.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_samples_csv(
     path: &Path,
@@ -295,8 +302,8 @@ pub fn write_samples_csv(
 /// Write bond-dimension rows to CSV.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_bond_dims_csv(path: &Path, rows: &[BondDimRow]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;

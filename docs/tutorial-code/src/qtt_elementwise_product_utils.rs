@@ -141,8 +141,8 @@ fn preview_f64(values: &[f64], n: usize) -> String {
 /// This is a pure reporting helper around the TreeTN library object.
 /// # Errors
 ///
-/// Returns an error when the collection fails (a shape mismatch or
-/// backend failure).
+/// Returns [`tensor4all_treetn::TreeTNOperationError`] when a node has no site
+/// space.
 ///
 pub fn print_treetn_summary(
     label: &str,
@@ -180,8 +180,9 @@ fn evaluate_tree_point(
 #[allow(clippy::too_many_arguments)]
 /// # Errors
 ///
-/// Returns an error when the collection fails (a shape mismatch or
-/// backend failure).
+/// Returns [`tensor4all_quanticstci::QuanticsTCIError`] when a factor QTT
+/// evaluation fails and [`tensor4all_treetn::TreeTNOperationError`] when a
+/// product TreeTN evaluation fails.
 ///
 pub fn collect_samples<F, G>(
     cosh_qtci: &QuanticsTensorCI2<f64>,
@@ -239,8 +240,8 @@ where
 /// The product lives as TreeTN, so we use `TreeTN::link_dims()` for those rows.
 /// # Errors
 ///
-/// Returns an error when the collection fails (a shape mismatch or
-/// backend failure).
+/// This function is infallible: it always returns `Ok` and never constructs a
+/// [`tensor4all_treetn::TreeTNOperationError`].
 ///
 pub fn collect_bond_profile(
     cosh_tt: &SimpleTensorTrain<f64>,
@@ -283,8 +284,8 @@ pub fn collect_bond_profile(
 /// by the time this function is called.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
@@ -321,8 +322,8 @@ pub fn write_samples_csv(path: &Path, samples: &[SamplePoint]) -> Result<(), Box
 /// Another output-only helper so the binary stays focused on the tensor logic.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_bond_dims_csv(path: &Path, rows: &[BondProfileRow]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;

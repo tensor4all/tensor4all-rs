@@ -129,8 +129,9 @@ pub fn interleaved_site_values(
 
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns a `quanticsgrids::QuanticsGridError` when the bit depth, bounds,
+/// variable names, or endpoint configuration are invalid, no resolution is given,
+/// or the resolution overflows.
 ///
 pub fn build_input_grid(
     config: &PartialFourier2dConfig,
@@ -146,8 +147,9 @@ pub fn build_input_grid(
 
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns a `quanticsgrids::QuanticsGridError` when the bit depth, bounds,
+/// variable names, or endpoint configuration are invalid, no resolution is given,
+/// or the resolution overflows.
 ///
 pub fn build_frequency_grid(
     config: &PartialFourier2dConfig,
@@ -172,8 +174,11 @@ fn k_t_names() -> Vec<&'static str> {
 
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns
+/// [`tensor4all_quanticstci::QuanticsTCIError::InvalidConfiguration`] when the
+/// grid sizes or TCI options are invalid, and
+/// [`tensor4all_quanticstci::QuanticsTCIError::Operation`] when an initial pivot
+/// is out of bounds or the backend interpolation fails.
 ///
 pub fn build_source_qtt(
     grid: &DiscretizedGrid,
@@ -217,8 +222,10 @@ pub fn build_source_qtt(
 }
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns [`tensor4all_quanticstransform::QuanticsTransformError`] when the
+/// Fourier operator configuration is invalid or its construction fails, and
+/// [`tensor4all_treetn::TreeTNOperationError`] when renaming the x-sites fails
+/// (for example an unknown or duplicate node).
 ///
 pub fn build_partial_fourier_operator(
     config: &PartialFourier2dConfig,
@@ -255,8 +262,10 @@ fn single_site_index_from_state(
 
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns [`tensor4all_treetn::TreeTNOperationError`] when the train conversion,
+/// operator alignment, or backend contraction fails, and an error when a
+/// transformed node has no single site index (missing, more than one, or an empty
+/// site space).
 ///
 pub fn transform_x_dimension(
     qtci: &QuanticsTensorCI2<f64>,
@@ -276,8 +285,9 @@ pub fn transform_x_dimension(
 
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// mismatch or backend failure).
+/// Returns [`tensor4all_treetn::TreeTNOperationError`] when the number of
+/// `site_values` differs from `site_indices`, a site index is missing from the
+/// network, or the backend evaluation fails.
 ///
 pub fn evaluate_tree_point(
     tn: &TreeTN<IdxTensor, usize>,
@@ -289,8 +299,10 @@ pub fn evaluate_tree_point(
 }
 /// # Errors
 ///
-/// Returns an error when the collection fails (a shape mismatch or
-/// backend failure).
+/// Returns an error when the number of `site_indices` does not match
+/// `2 * config.bits`, a `quanticsgrids::QuanticsGridError` when a grid dimension
+/// or index is out of bounds, and [`tensor4all_treetn::TreeTNOperationError`]
+/// when a TreeTN evaluation fails.
 ///
 pub fn collect_samples(
     transformed: &TreeTN<IdxTensor, usize>,
@@ -368,8 +380,8 @@ fn write_optional_usize(value: Option<usize>) -> String {
 
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_samples_csv(
     path: &Path,
@@ -404,8 +416,8 @@ pub fn write_samples_csv(
 
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_bond_dims_csv(
     path: &Path,
@@ -430,8 +442,8 @@ pub fn write_bond_dims_csv(
 
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_operator_bond_dims_csv(
     path: &Path,
