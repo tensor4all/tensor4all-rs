@@ -31,6 +31,28 @@ PUBLIC_FN_RE = re.compile(
 )
 TRAIT_FN_RE = re.compile(r"^\s*(?:(?:async|unsafe)\s+)*fn\b")
 RESULT_RE = re.compile(r"\b(?:[A-Za-z_][\w:]*::)?Result\s*<")
+# `type StorageResult<T> = std::result::Result<T, StorageError>;` declares an
+# alias whose signatures `RESULT_RE` would miss. Struct names that merely end
+# in `Result` (e.g. `FactorizeResult<T>`) are not aliases and stay excluded.
+RESULT_ALIAS_RE = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?type\s+([A-Za-z_]\w*)\s*(?:<[^=]*>)?\s*=\s*"
+    r"(?:(?:std|core)::)?(?:result::)?Result\s*<"
+)
+
+
+def result_type_re(paths: list[Path]) -> re.Pattern[str]:
+    """Match `Result<` plus every `Result` alias declared in ``paths``."""
+    aliases: set[str] = set()
+    for path in paths:
+        if path.is_file():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                match = RESULT_ALIAS_RE.match(line)
+                if match:
+                    aliases.add(match.group(1))
+    if not aliases:
+        return RESULT_RE
+    names = "|".join(sorted(re.escape(alias) for alias in aliases))
+    return re.compile(r"\b(?:[A-Za-z_][\w:]*::)?(?:Result|" + names + r")\s*<")
 TRAIT_RE = re.compile(r"^\s*pub\s+(?:unsafe\s+)?trait\b")
 DOC_RE = re.compile(r"^\s*///")
 DOC_ATTRIBUTE_RE = re.compile(r'^\s*#\[doc\s*=\s*("(?:\\.|[^"\\])*")\s*\]\s*$')
@@ -241,7 +263,11 @@ def deferred_section(doc: str) -> str | None:
     return doc_section(doc, DEFERRED_HEADING_RE)
 
 
-def audit_file(path: Path, changed_lines: set[int] | None = None) -> list[Finding]:
+def audit_file(
+    path: Path,
+    changed_lines: set[int] | None = None,
+    result_re: re.Pattern[str] = RESULT_RE,
+) -> list[Finding]:
     lines = path.read_text(encoding="utf-8").splitlines()
     findings: list[Finding] = []
     trait_depth: int | None = None
@@ -279,7 +305,7 @@ def audit_file(path: Path, changed_lines: set[int] | None = None) -> list[Findin
                         trait_depth = None
                     continue
             signature = " ".join(signature_lines)
-            if RESULT_RE.search(signature):
+            if result_re.search(signature):
                 if not hidden:
                     section = error_section(docs)
                     if section is None:
@@ -332,11 +358,13 @@ def audit(
     changed_lines: dict[Path, set[int]] | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
-    for path in paths if paths is not None else rust_files(root):
+    selected = paths if paths is not None else list(rust_files(root))
+    result_re = result_type_re(list(rust_files(root)))
+    for path in selected:
         if not path.is_file():
             continue
         lines = changed_lines.get(path) if changed_lines is not None else None
-        findings.extend(audit_file(path, lines))
+        findings.extend(audit_file(path, lines, result_re))
     return findings
 
 

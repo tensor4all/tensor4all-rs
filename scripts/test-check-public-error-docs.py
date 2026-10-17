@@ -96,6 +96,21 @@ class PublicErrorDocsUnitTests(unittest.TestCase):
         )
         self.assertEqual(findings, [])
 
+    def test_result_alias_signature_is_audited(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "lib.rs"
+            path.write_text(
+                "pub type StorageResult<T> = std::result::Result<T, StorageError>;\n"
+                "/// Does work.\n"
+                "pub fn alias_api() -> StorageResult<()> { Ok(()) }\n"
+                "/// A struct whose name ends in Result is not an alias.\n"
+                "pub fn struct_api() -> FactorizeResult<f64> { todo!() }\n",
+                encoding="utf-8",
+            )
+            findings = MODULE.audit(root)
+            self.assertEqual([f.function for f in findings], ["alias_api"])
+
     def test_non_result_function_is_not_a_finding(self) -> None:
         findings = self.audit("/// Return a value.\npub fn value() -> usize { 1 }\n")
         self.assertEqual(findings, [])

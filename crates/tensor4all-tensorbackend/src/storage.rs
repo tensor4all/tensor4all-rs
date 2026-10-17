@@ -740,7 +740,8 @@ impl<T: Copy + Default> StructuredStorage<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the logical dimension product overflows `usize`.
+    /// Returns [`StorageError::InvalidStructuredStorage`] if the logical
+    /// dimension product overflows `usize`.
     ///
     /// # Examples
     ///
@@ -1264,9 +1265,6 @@ impl Storage {
         required_storage_len(payload_dims, strides)
     }
 
-    /// Create dense f64 storage from column-major logical values.
-    ///
-    /// # Errors
     /// Create diagonal f64 storage from column-major diagonal payload values.
     ///
     /// # Errors
@@ -1509,7 +1507,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if the storage scalar type is not `f64`.
+    /// Returns [`StorageError::ScalarKindMismatch`] if the storage scalar type
+    /// is not `f64`.
     ///
     /// # Examples
     ///
@@ -1555,7 +1554,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if the storage scalar type is not `Complex64`.
+    /// Returns [`StorageError::ScalarKindMismatch`] if the storage scalar type
+    /// is not `Complex64`.
     ///
     /// # Examples
     ///
@@ -1827,8 +1827,9 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if the storage is complex or `logical_dims` does not
-    /// match the stored logical dimensions.
+    /// Returns [`StorageError::ScalarKindMismatch`] if the storage is complex,
+    /// and [`StorageError::InvalidStructuredStorage`] if `logical_dims` does
+    /// not match the stored logical dimensions.
     ///
     /// # Examples
     ///
@@ -1863,7 +1864,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if the storage is real or `logical_dims` does not
+    /// Returns [`StorageError::ScalarKindMismatch`] if the storage is real, and
+    /// [`StorageError::InvalidStructuredStorage`] if `logical_dims` does not
     /// match the stored logical dimensions.
     ///
     /// # Examples
@@ -1907,8 +1909,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if `dims` does not match the stored logical dimensions
-    /// or if dense storage construction fails.
+    /// Returns [`StorageError::InvalidStructuredStorage`] if `dims` does not
+    /// match the stored logical dimensions or the dense storage cannot be built.
     ///
     /// # Examples
     ///
@@ -2120,7 +2122,10 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if storage types or lengths don't match.
+    /// Returns [`StorageError::LengthMismatch`] if the lengths differ,
+    /// [`StorageError::OperationNotSupported`] if the scalar types differ, and
+    /// [`StorageError::InvalidStructuredStorage`] if the result layout cannot be
+    /// built.
     ///
     /// # Examples
     ///
@@ -2194,7 +2199,10 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if the storages have different types or lengths.
+    /// Returns [`StorageError::LengthMismatch`] if the lengths differ,
+    /// [`StorageError::OperationNotSupported`] if the scalar types differ, and
+    /// [`StorageError::InvalidStructuredStorage`] if the result layout cannot be
+    /// built.
     ///
     /// # Examples
     ///
@@ -2285,8 +2293,9 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error if the storages have different types or lengths.
-    /// If any scalar is complex, the result is promoted to complex.
+    /// Returns [`StorageError::LengthMismatch`] if the lengths differ, and
+    /// [`StorageError::InvalidStructuredStorage`] if the result layout cannot be
+    /// built. Mixed scalar types are promoted to complex rather than rejected.
     ///
     /// # Examples
     ///
@@ -2481,7 +2490,8 @@ pub fn min_dim(dims: &[usize]) -> usize {
 ///
 /// # Errors
 ///
-/// Returns an error if axes are invalid, contracted dimensions do not match, or
+/// Returns [`StorageError::InvalidStructuredStorage`] if the axis lists differ
+/// in length, an axis is out of range, contracted dimensions do not match, or
 /// the native backend rejects the contraction.
 ///
 /// # Examples
