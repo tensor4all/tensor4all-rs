@@ -156,6 +156,102 @@ class PublicErrorDocsUnitTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertIn("missing # Errors", findings[0].reason)
 
+    def test_generated_boilerplate_is_rejected(self) -> None:
+        findings = self.audit(
+            "/// Compute a value.\n"
+            "///\n"
+            "/// # Errors\n"
+            "///\n"
+            "/// Returns an error when the operation fails (a shape or index mismatch, or a backend failure).\n"
+            "pub fn compute() -> Result<(), MyError> { Ok(()) }\n"
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(
+            findings[0].reason,
+            "# Errors uses generated boilerplate; name the concrete variants or conditions",
+        )
+
+    def test_generated_boilerplate_wrapped_across_doc_lines_is_rejected(self) -> None:
+        findings = self.audit(
+            "/// Compute a value.\n"
+            "///\n"
+            "/// # Errors\n"
+            "///\n"
+            "/// Returns an error when the operation fails (a shape or index\n"
+            "/// mismatch, or a backend failure).\n"
+            "pub fn compute() -> Result<(), MyError> { Ok(()) }\n"
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(
+            findings[0].reason,
+            "# Errors uses generated boilerplate; name the concrete variants or conditions",
+        )
+
+    def test_generated_boilerplate_with_appended_concrete_prose_is_rejected(self) -> None:
+        # The generated sentence itself must go even when a concrete sentence
+        # follows it in the same section.
+        findings = self.audit(
+            "/// Compute a value.\n"
+            "///\n"
+            "/// # Errors\n"
+            "///\n"
+            "/// Returns an error when the operation fails (a shape or index mismatch, or a backend failure).\n"
+            "/// `MyError::Singular` is returned when the matrix is singular.\n"
+            "pub fn compute() -> Result<(), MyError> { Ok(()) }\n"
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(
+            findings[0].reason,
+            "# Errors uses generated boilerplate; name the concrete variants or conditions",
+        )
+
+    def test_legitimate_error_prose_is_accepted(self) -> None:
+        # Real, condition-specific wording already present in the corpus must
+        # not be caught by the boilerplate check.
+        examples = {
+            "concrete variants": (
+                "Returns an error when the operator and vectors have incompatible "
+                "shapes (a shape mismatch), when the affine coefficients are all zero "
+                "(a [`KrylovError::NoAffineCoefficient`] for affine solves), or when an "
+                "underlying tensor or backend operation fails (a [`KrylovError::Operation`])."
+            ),
+            "explained mismatch": (
+                "Returns an error when the new index has an incompatible dimension "
+                "(a shape mismatch: the replacement dimension must equal the original)."
+            ),
+            "linked variant": (
+                "Returns [`GseError::MissingCenter`] when `center` is not a node of `init`."
+            ),
+            "associated error": (
+                "Returns `Self::Error` when the operands have incompatible index spaces "
+                "(an index-space mismatch) or the underlying arithmetic or backend "
+                "computation reports a failure."
+            ),
+        }
+        for name, section in examples.items():
+            with self.subTest(name=name):
+                self.assertEqual(
+                    self.audit(
+                        "/// Compute a value.\n"
+                        "///\n"
+                        "/// # Errors\n"
+                        "///\n"
+                        f"/// {section}\n"
+                        "pub fn compute() -> Result<(), MyError> { Ok(()) }\n"
+                    ),
+                    [],
+                )
+
+    def test_boilerplate_pattern_ignores_condition_specific_prose(self) -> None:
+        # A bare condition that merely mentions an error word is not the
+        # generated category-list template.
+        for section in (
+            "Returns an error when `rtol` is negative or NaN.",
+            "Returns an error when `left_inds` contains duplicate indices.",
+        ):
+            with self.subTest(section=section):
+                self.assertIsNone(MODULE.generated_boilerplate_sentence(section))
+
 
 class PublicErrorDocsChangedModeTests(unittest.TestCase):
     def _write(self, root: Path, name: str, body: str) -> None:
@@ -259,6 +355,70 @@ class PublicErrorDocsChangedModeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("missing # Errors", result.stderr)
         self.assertIn("legacy", result.stderr)
+
+    def test_doc_only_change_introducing_boilerplate_is_audited(self) -> None:
+        root = _git_repo("error-docs-doconly-")
+        self._write(root, "sample.rs", "pub fn legacy() -> Result<(), Error> { Ok(()) }\n")
+        _git(root, "add", "sample.rs")
+        _git(root, "commit", "-m", "base")
+        base = _git(root, "rev-parse", "HEAD")
+
+        # The signature is untouched; only the preceding doc block is added.
+        # The generated sentence must still be caught.
+        self._write(
+            root,
+            "sample.rs",
+            "/// Compute.\n"
+            "///\n"
+            "/// # Errors\n"
+            "///\n"
+            "/// Returns an error when the operation fails (a shape or index "
+            "mismatch, or a backend failure).\n"
+            "pub fn legacy() -> Result<(), Error> { Ok(()) }\n",
+        )
+        _git(root, "add", "sample.rs")
+        _git(root, "commit", "-m", "generated doc")
+        result = _run(root, "--changed-from", base)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("generated boilerplate", result.stderr)
+        self.assertIn("legacy", result.stderr)
+
+    def test_unchanged_pre_existing_boilerplate_is_ignored_in_changed_mode(self) -> None:
+        root = _git_repo("error-docs-unchangedboiler-")
+        self._write(
+            root,
+            "sample.rs",
+            "/// Compute.\n"
+            "///\n"
+            "/// # Errors\n"
+            "///\n"
+            "/// Returns an error when the operation fails (a shape or index "
+            "mismatch, or a backend failure).\n"
+            "pub fn legacy() -> Result<(), Error> { Ok(()) }\n",
+        )
+        _git(root, "add", "sample.rs")
+        _git(root, "commit", "-m", "base")
+        base = _git(root, "rev-parse", "HEAD")
+
+        # A non-doc line above the block changes; the pre-existing boilerplate
+        # doc is outside the diff and must not be reported.
+        self._write(
+            root,
+            "sample.rs",
+            "// unrelated change\n"
+            "/// Compute.\n"
+            "///\n"
+            "/// # Errors\n"
+            "///\n"
+            "/// Returns an error when the operation fails (a shape or index "
+            "mismatch, or a backend failure).\n"
+            "pub fn legacy() -> Result<(), Error> { Ok(()) }\n",
+        )
+        _git(root, "add", "sample.rs")
+        _git(root, "commit", "-m", "unrelated")
+        result = _run(root, "--changed-from", base)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("public-error-docs-ok", result.stdout)
 
     def test_deleted_files_do_not_trigger_whole_repo_fallback(self) -> None:
         root = _git_repo("error-docs-delete-")

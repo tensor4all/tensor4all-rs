@@ -75,6 +75,62 @@ CONCRETE_ERROR_RE = re.compile(
     r"unsupported[- ](?:operation|dtype|conversion|backend|extension|rule))\b"
     r")",
 )
+# PR #593 generated ``# Errors`` bodies from one template::
+#
+#     Returns an error when <subject> (<category list>).
+#
+# The parenthetical only names an error *class* (``a backend failure``,
+# ``a shape or index mismatch``, ``an invalid-configuration failure``, ...),
+# never the concrete variant a caller can match on. Such a sentence is still
+# accepted by ``CONCRETE_ERROR_RE`` because it mentions ``mismatch`` or
+# ``failure``; this pattern rejects it instead so a regeneration pass cannot
+# reintroduce the boilerplate. A sentence that names a concrete variant
+# (``GseError::MissingCenter``) is actionable even when it also carries a
+# class label, so it is exempt.
+GENERATED_BOILERPLATE_START_RE = re.compile(r"^(?:It also )?[Rr]eturns an error when\b")
+GENERATED_BOILERPLATE_PAREN_RE = re.compile(r"\(([^()]*)\)")
+# Category labels use only words, spaces, commas, dots, slashes and hyphens; a
+# colon, bracket or backtick marks an explanation or a concrete variant.
+GENERATED_BOILERPLATE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ,./\-]*$")
+GENERATED_BOILERPLATE_TAIL_RE = re.compile(
+    r"\b(?:failure|mismatch|replacement|split|value|state|coefficient|"
+    r"overflow|underflow|dtype|operation|construction|bounds|gradient)$"
+)
+# Concrete variant path (``Error::Variant``) or a Rust type reference.
+GENERATED_BOILERPLATE_VARIANT_RE = re.compile(
+    r"::|\b[A-Z][A-Za-z0-9]*Error\b"
+)
+# Split at a real sentence boundary only, so ``i.e.``/``e.g.`` inside a label
+# does not hide a wrapped generated sentence.
+GENERATED_BOILERPLATE_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z`\[])")
+
+
+def is_category_label(content: str) -> bool:
+    """Return whether a parenthetical is a bare error-category list."""
+    label = content.strip()
+    if not GENERATED_BOILERPLATE_LABEL_RE.fullmatch(label):
+        return False
+    return GENERATED_BOILERPLATE_TAIL_RE.search(label) is not None
+
+
+def generated_boilerplate_sentence(section: str) -> str | None:
+    """Return the first generated ``# Errors`` sentence in ``section``.
+
+    Matching is done on the whitespace-normalized section text so a sentence
+    wrapped across ``///`` lines is still recognized.
+    """
+    normalized = re.sub(r"\s+", " ", section)
+    for sentence in GENERATED_BOILERPLATE_SENTENCE_RE.split(normalized):
+        if not GENERATED_BOILERPLATE_START_RE.match(sentence):
+            continue
+        if GENERATED_BOILERPLATE_VARIANT_RE.search(sentence):
+            continue
+        if any(
+            is_category_label(match.group(1))
+            for match in GENERATED_BOILERPLATE_PAREN_RE.finditer(sentence)
+        ):
+            return sentence
+    return None
 
 
 @dataclass(frozen=True)
@@ -110,9 +166,12 @@ def brace_delta(line: str) -> int:
     return code.count("{") - code.count("}")
 
 
-def preceding_docs(lines: list[str], index: int) -> tuple[str, bool]:
+def preceding_docs(lines: list[str], index: int) -> tuple[str, bool, int]:
     docs: list[str] = []
     hidden = False
+    # 0-based index of the first line consumed as part of the doc block; stays
+    # at ``index`` when the declaration has no preceding docs.
+    first = index
     cursor = index - 1
     while cursor >= 0:
         stripped = lines[cursor].strip()
@@ -130,8 +189,9 @@ def preceding_docs(lines: list[str], index: int) -> tuple[str, bool]:
             break
         else:
             break
+        first = cursor
         cursor -= 1
-    return "\n".join(reversed(docs)), hidden
+    return "\n".join(reversed(docs)), hidden, first
 
 
 def function_signature_lines(lines: list[str], index: int) -> list[str]:
@@ -203,21 +263,38 @@ def audit_file(path: Path, changed_lines: set[int] | None = None) -> list[Findin
         is_trait_method = trait_depth is not None and bool(TRAIT_FN_RE.match(line))
         if is_public or is_trait_method:
             signature_lines = function_signature_lines(lines, index)
-            if changed_lines is not None and not any(
-                number in changed_lines for number in range(index + 1, index + 1 + len(signature_lines))
-            ):
-                depth += brace_delta(line)
-                if trait_depth is not None and depth < trait_depth:
-                    trait_depth = None
-                continue
+            docs, hidden, doc_start = preceding_docs(lines, index)
+            if changed_lines is not None:
+                # Audit the declaration when its signature changed, but also
+                # when any line of its preceding doc block changed: a doc-only
+                # edit can reintroduce boilerplate without touching the
+                # signature.
+                signature_lines_changed = set(
+                    range(index + 1, index + 1 + len(signature_lines))
+                )
+                doc_lines_changed = set(range(doc_start + 1, index + 1))
+                if not (signature_lines_changed | doc_lines_changed) & changed_lines:
+                    depth += brace_delta(line)
+                    if trait_depth is not None and depth < trait_depth:
+                        trait_depth = None
+                    continue
             signature = " ".join(signature_lines)
             if RESULT_RE.search(signature):
-                docs, hidden = preceding_docs(lines, index)
                 if not hidden:
                     section = error_section(docs)
                     if section is None:
                         findings.append(
                             Finding(path, index + 1, function_name(signature), "missing # Errors")
+                        )
+                    elif generated_boilerplate_sentence(section) is not None:
+                        findings.append(
+                            Finding(
+                                path,
+                                index + 1,
+                                function_name(signature),
+                                "# Errors uses generated boilerplate; name the concrete "
+                                "variants or conditions",
+                            )
                         )
                     elif not CONCRETE_ERROR_RE.search(re.sub(r"\s+", " ", section)):
                         findings.append(
