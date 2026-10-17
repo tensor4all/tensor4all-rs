@@ -616,22 +616,35 @@ impl TensorTrain {
 
     /// Get a reference to the tensor at the given site.
     ///
+    /// This is the single fallible site accessor; there is no separate
+    /// `*_checked` alias. Use [`Self::tensors`] for an infallible iteration
+    /// over the sites that resolve.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TensorTrainError::SiteOutOfBounds`] when `site >= self.len()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynId, Index, IdxTensor};
+    /// use tensor4all_itensorlike::{TensorTrain, TensorTrainError};
+    ///
+    /// let s0 = Index::new_with_size(DynId(0), 2);
+    /// let link = Index::new_with_size(DynId(1), 3);
+    /// let s1 = Index::new_with_size(DynId(2), 2);
+    /// let t0 = IdxTensor::from_dense(vec![s0.clone(), link.clone()], vec![1.0; 6]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![link, s1], vec![2.0; 6]).unwrap();
+    /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    ///
+    /// assert_eq!(tt.tensor(0).unwrap().indices()[0], s0);
+    /// assert!(matches!(
+    ///     tt.tensor(2),
+    ///     Err(TensorTrainError::SiteOutOfBounds { site: 2, length: 2 })
+    /// ));
+    /// ```
     #[inline]
-    /// # Errors
-    ///
-    /// Returns [`TensorTrainError::SiteOutOfBounds`] when `site >= self.len()`.
-    ///
     pub fn tensor(&self, site: usize) -> Result<&IdxTensor> {
-        self.tensor_checked(site)
-    }
-
-    /// Get a reference to the tensor at the given site.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TensorTrainError::SiteOutOfBounds`] when `site >= self.len()`.
-    ///
-    pub fn tensor_checked(&self, site: usize) -> Result<&IdxTensor> {
         if site >= self.len() {
             return Err(TensorTrainError::SiteOutOfBounds {
                 site,
@@ -655,18 +668,8 @@ impl TensorTrain {
 
     /// Get a mutable reference to the tensor at the given site.
     ///
-    #[inline]
-    /// # Errors
-    ///
-    /// Returns [`TensorTrainError::SiteOutOfBounds`] when `site >= self.len()`,
-    /// and [`TensorTrainError::InvalidStructure`] when the mapped node has no
-    /// tensor.
-    ///
-    pub fn tensor_mut(&mut self, site: usize) -> Result<&mut IdxTensor> {
-        self.tensor_mut_checked(site)
-    }
-
-    /// Get a mutable reference to the tensor at the given site.
+    /// This is the single fallible mutable site accessor; there is no separate
+    /// `*_checked` alias.
     ///
     /// # Errors
     ///
@@ -687,10 +690,11 @@ impl TensorTrain {
     /// let t1 = IdxTensor::from_dense(vec![link, s1], vec![2.0; 6]).unwrap();
     /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
     ///
-    /// assert_eq!(tt.tensor_mut_checked(0).unwrap().indices()[0], s0);
-    /// assert!(tt.tensor_mut_checked(2).is_err());
+    /// assert_eq!(tt.tensor_mut(0).unwrap().indices()[0], s0);
+    /// assert!(tt.tensor_mut(2).is_err());
     /// ```
-    pub fn tensor_mut_checked(&mut self, site: usize) -> Result<&mut IdxTensor> {
+    #[inline]
+    pub fn tensor_mut(&mut self, site: usize) -> Result<&mut IdxTensor> {
         if site >= self.len() {
             return Err(TensorTrainError::SiteOutOfBounds {
                 site,
@@ -722,17 +726,8 @@ impl TensorTrain {
 
     /// Get a mutable reference to all tensors.
     ///
-    /// # Errors
-    ///
-    /// Returns [`TensorTrainError::SiteOutOfBounds`] when a site in `0..len`
-    /// has no mapped node, and [`TensorTrainError::InvalidStructure`] when a
-    /// mapped node has no tensor.
-    #[inline]
-    pub fn tensors_mut(&mut self) -> Result<Vec<&mut IdxTensor>> {
-        self.tensors_mut_checked()
-    }
-
-    /// Get mutable references to all tensors.
+    /// This is the single fallible whole-train mutable accessor; there is no
+    /// separate `*_checked` alias.
     ///
     /// # Errors
     ///
@@ -753,12 +748,13 @@ impl TensorTrain {
     /// let t1 = IdxTensor::from_dense(vec![link, s1], vec![2.0; 6]).unwrap();
     /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
     ///
-    /// let tensors = tt.tensors_mut_checked().unwrap();
+    /// let tensors = tt.tensors_mut().unwrap();
     /// assert_eq!(tensors.len(), 2);
     /// assert_eq!(tensors[0].indices().len(), 2);
     /// assert_eq!(tensors[1].indices().len(), 2);
     /// ```
-    pub fn tensors_mut_checked(&mut self) -> Result<Vec<&mut IdxTensor>> {
+    #[inline]
+    pub fn tensors_mut(&mut self) -> Result<Vec<&mut IdxTensor>> {
         let length = self.len();
         let node_indices: Vec<_> = (0..length)
             .map(|site| {
@@ -842,7 +838,7 @@ impl TensorTrain {
         // Replace link indices in each tensor and rebuild
         let mut new_tensors = Vec::with_capacity(self.len());
         for site in 0..self.len() {
-            let tensor = self.tensor_checked(site)?;
+            let tensor = self.tensor(site)?;
             let mut new_tensor = tensor.clone();
             for (old_idx, new_idx) in &replacements {
                 new_tensor = new_tensor.replaceind(old_idx, new_idx).map_err(|err| {
@@ -864,8 +860,8 @@ impl TensorTrain {
         }
 
         for site in 0..self.len() - 1 {
-            let left = self.tensor_checked(site)?;
-            let right = self.tensor_checked(site + 1)?;
+            let left = self.tensor(site)?;
+            let right = self.tensor(site + 1)?;
             if common_inds(left.indices(), right.indices()).len() > 1 {
                 return Ok(false);
             }
@@ -879,7 +875,7 @@ impl TensorTrain {
         }
 
         let mut tensors = (0..self.len())
-            .map(|site| self.tensor_checked(site).cloned())
+            .map(|site| self.tensor(site).cloned())
             .collect::<Result<Vec<_>>>()?;
         for site in 0..tensors.len() - 1 {
             let common = common_inds(tensors[site].indices(), tensors[site + 1].indices());
@@ -960,7 +956,7 @@ impl TensorTrain {
         let mut result = Vec::with_capacity(self.len());
 
         for i in 0..self.len() {
-            let Ok(tensor) = self.tensor_checked(i) else {
+            let Ok(tensor) = self.tensor(i) else {
                 return Vec::new();
             };
             let mut site_inds: Vec<DynIndex> = tensor.indices().to_vec();
@@ -1047,36 +1043,8 @@ impl TensorTrain {
     ///
     /// This invalidates orthogonality tracking.
     ///
-    /// # Errors
-    ///
-    /// Returns [`TensorTrainError::SiteOutOfBounds`] when `site >= self.len()`,
-    /// and [`TensorTrainError::InvalidStructure`] when the tensor cannot be
-    /// replaced or the canonical region cannot be cleared.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_core::{DynId, Index, IdxTensor};
-    /// use tensor4all_itensorlike::TensorTrain;
-    ///
-    /// let s0 = Index::new_with_size(DynId(0), 2);
-    /// let link = Index::new_with_size(DynId(1), 3);
-    /// let s1 = Index::new_with_size(DynId(2), 2);
-    /// let t0 = IdxTensor::from_dense(vec![s0.clone(), link.clone()], vec![1.0; 6]).unwrap();
-    /// let t1 = IdxTensor::from_dense(vec![link.clone(), s1], vec![2.0; 6]).unwrap();
-    /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
-    ///
-    /// let replacement = IdxTensor::from_dense(vec![s0, link], vec![3.0; 6]).unwrap();
-    /// tt.set_tensor(0, replacement).unwrap();
-    /// assert_eq!(tt.tensor(0).unwrap().to_vec::<f64>().unwrap(), vec![3.0; 6]);
-    /// ```
-    pub fn set_tensor(&mut self, site: usize, tensor: IdxTensor) -> Result<()> {
-        self.set_tensor_checked(site, tensor)
-    }
-
-    /// Replace the tensor at the given site.
-    ///
-    /// This invalidates orthogonality tracking.
+    /// This is the single fallible setter; there is no separate `*_checked`
+    /// alias.
     ///
     /// # Errors
     ///
@@ -1098,10 +1066,10 @@ impl TensorTrain {
     /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
     ///
     /// let replacement = IdxTensor::from_dense(vec![s0, link], vec![4.0; 6]).unwrap();
-    /// tt.set_tensor_checked(0, replacement).unwrap();
-    /// assert!(tt.set_tensor_checked(2, tt.tensor(0).unwrap().clone()).is_err());
+    /// tt.set_tensor(0, replacement).unwrap();
+    /// assert!(tt.set_tensor(2, tt.tensor(0).unwrap().clone()).is_err());
     /// ```
-    pub fn set_tensor_checked(&mut self, site: usize, tensor: IdxTensor) -> Result<()> {
+    pub fn set_tensor(&mut self, site: usize, tensor: IdxTensor) -> Result<()> {
         self.set_tensor_raw(site, tensor)?;
         // Invalidate orthogonality
         self.treetn
@@ -1341,7 +1309,7 @@ impl TensorTrain {
         // Start with leftmost tensors - contract over site indices only
         let mut env = {
             let a0 = profile_tt_inner_section(profile_enabled, &mut profile.node_lookup, || {
-                self.tensor_checked(0)
+                self.tensor(0)
             })?;
             let b0_node =
                 profile_tt_inner_section(profile_enabled, &mut profile.node_lookup, || {
@@ -1377,7 +1345,7 @@ impl TensorTrain {
         // Sweep through remaining sites
         for i in 1..self.len() {
             let ai = profile_tt_inner_section(profile_enabled, &mut profile.node_lookup, || {
-                self.tensor_checked(i)
+                self.tensor(i)
             })?;
             let bi_node =
                 profile_tt_inner_section(profile_enabled, &mut profile.node_lookup, || {
@@ -1559,7 +1527,7 @@ impl TensorTrain {
         let mut sites = Vec::with_capacity(tt.len());
 
         for site in 0..tt.len() {
-            let tensor = tt.tensor_checked(site)?;
+            let tensor = tt.tensor(site)?;
             let left_dim = if site == 0 {
                 1
             } else {
@@ -2108,7 +2076,7 @@ impl TensorTrain {
 
         let mut tensors = Vec::with_capacity(self.len());
         for site in 0..self.len() {
-            let tensor = self.tensor_checked(site)?;
+            let tensor = self.tensor(site)?;
             if site == 0 {
                 // Scale only the first tensor
                 let scaled = tensor.scale(scalar.clone()).map_err(|e| {
@@ -2252,7 +2220,7 @@ impl TensorContractionLike for TensorTrain {
 
     fn conj(&self) -> Self {
         let mut result = self.clone();
-        if let Ok(tensors) = result.tensors_mut_checked() {
+        if let Ok(tensors) = result.tensors_mut() {
             for tensor in tensors {
                 let conjugated = tensor.conj();
                 *tensor = conjugated;
