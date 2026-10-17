@@ -4,7 +4,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tenferro_linalg::TensorLinalgExt;
 use tenferro_tensor::{BackendSessionHost, Tensor};
-use tensor4all_core::{rrlu_mut, RrLUOptions};
+use tensor4all_core::{matrix_luci_factors_from_matrix_owned, rrlu_mut, rrlu_pivots, RrLUOptions};
 use tensor4all_tensorbackend::{from_vec2d, with_default_backend, Matrix};
 
 /// Generate a random f64 backend matrix.
@@ -70,5 +70,48 @@ fn bench_rrlu(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_rrlu);
+/// Pin the LUCI update case from #803: the full LUCI factorization that
+/// treetci used before versus the selection-only rrLU entry point. Sizes around
+/// the degree-3 junction fixtures and a full-rank tolerance so the pivot search
+/// dominates.
+fn bench_rrlu_pivot_selection(c: &mut Criterion) {
+    let mut group = c.benchmark_group("rrlu_pivot_selection");
+
+    for &size in &[64, 128, 256] {
+        let options = RrLUOptions {
+            max_bond_dim: size,
+            rel_tol: 0.0,
+            abs_tol: 0.0,
+            ..Default::default()
+        };
+
+        group.bench_with_input(
+            BenchmarkId::new("full_luci_factors", size),
+            &size,
+            |b, &n| {
+                b.iter_batched(
+                    || random_matrix(n, n, 42),
+                    |m| {
+                        matrix_luci_factors_from_matrix_owned(m, Some(options.clone())).unwrap();
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+
+        group.bench_with_input(BenchmarkId::new("selection_only", size), &size, |b, &n| {
+            b.iter_batched(
+                || random_matrix(n, n, 42),
+                |m| {
+                    rrlu_pivots(m, Some(options.clone())).unwrap();
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+    }
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_rrlu, bench_rrlu_pivot_selection);
 criterion_main!(benches);

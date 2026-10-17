@@ -4,10 +4,7 @@ use crate::{
     PivotCandidateProposer, TreeTCI2, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
-use tensor4all_core::{
-    matrix_luci_factors_from_matrix, matrix_luci_factors_from_matrix_owned_in, MatrixLuciFactors,
-    MatrixLuciScalar as Scalar, RrLUOptions,
-};
+use tensor4all_core::{rrlu_pivots, MatrixLuciScalar as Scalar, RrLUOptions, RrLUPivots};
 use tensor4all_core::{ColMajorArray, CommonScalar};
 use tensor4all_tensorbackend::Matrix;
 
@@ -17,8 +14,8 @@ use crate::DefaultProposer;
 /// Update one edge bipartition using a batch evaluator and a pivot-candidate proposer.
 ///
 /// Evaluates the function at candidate pivot points for one edge bipartition,
-/// then selects pivots via LU decomposition. The selected pivots are stored
-/// back into `state.ijset`.
+/// then selects pivots via a selection-only rank-revealing LU decomposition.
+/// The selected pivots are stored back into `state.ijset`.
 ///
 /// This is a low-level building block; prefer [`optimize_default`](crate::optimize_default)
 /// or [`crossinterpolate2`](crate::crossinterpolate2) for typical usage.
@@ -29,8 +26,7 @@ pub(crate) fn update_edge<T, F, P, R>(
     options: &RrLUOptions,
     proposer: &P,
     rng: &mut R,
-    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
-) -> Result<MatrixLuciFactors<T>>
+) -> Result<RrLUPivots>
 where
     T: Scalar + CommonScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
@@ -60,17 +56,11 @@ where
     }
 
     // `evaluate_candidate_matrix` already returns column-major data with
-    // `left_candidates.len()` rows, so this hands over the buffer as-is.
+    // `left_candidates.len()` rows, so this hands over the buffer as-is. The
+    // selection-only path consumes it and never assembles L/U factors; pivot
+    // selection needs no execution context.
     let matrix = Matrix::from_col_major_vec(left_candidates.len(), right_candidates.len(), values);
-    // A caller-owned context sends the factor assembly through the context-scoped core entry, which consults
-    // no process-global context and may consume the matrix; without one the legacy borrowed route is kept
-    // exactly as it was.
-    let selection = match context {
-        Some(context) => {
-            matrix_luci_factors_from_matrix_owned_in(matrix, Some(options.clone()), context)?
-        }
-        None => matrix_luci_factors_from_matrix(&matrix, Some(options.clone()))?,
-    };
+    let selection = rrlu_pivots(matrix, Some(options.clone()))?;
 
     // The LU can select zero pivots when the sampled submatrix is numerically
     // zero (the function underflows in a subdomain). Keep at least one index
@@ -135,22 +125,14 @@ pub(crate) fn update_edge_default<T, F>(
     edge: TreeTciEdge,
     evaluate: F,
     options: &RrLUOptions,
-) -> Result<MatrixLuciFactors<T>>
+) -> Result<RrLUPivots>
 where
     T: Scalar + CommonScalar,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     use rand::SeedableRng;
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
-    update_edge(
-        state,
-        edge,
-        evaluate,
-        options,
-        &DefaultProposer,
-        &mut rng,
-        None,
-    )
+    update_edge(state, edge, evaluate, options, &DefaultProposer, &mut rng)
 }
 
 /// Evaluate the function on the full `I x J` candidate matrix for one edge.

@@ -686,7 +686,6 @@ where
                     &kernel_options,
                     proposer,
                     streams.candidates(),
-                    context,
                 )?;
             }
         }

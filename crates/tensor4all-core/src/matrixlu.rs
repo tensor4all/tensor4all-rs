@@ -452,6 +452,39 @@ pub(crate) fn validate_col_major_matrix_len(
     Ok(())
 }
 
+/// Validate a column-major matrix and its [`RrLUOptions`] before a factorization.
+///
+/// Shared by the full-factor and selection-only entry points so both reject the
+/// same inputs with the same error: negative or non-finite tolerances and
+/// infinite input magnitudes return [`MatrixCIError::InvalidArgument`]; NaN
+/// input returns [`MatrixCIError::NaNEncountered`].
+pub(crate) fn validate_owned_luci_input<T: Scalar>(
+    a: &Matrix<T>,
+    options: &RrLUOptions,
+) -> Result<()> {
+    for (name, value) in [("rel_tol", options.rel_tol), ("abs_tol", options.abs_tol)] {
+        if !value.is_finite() || value < 0.0 {
+            return Err(MatrixCIError::InvalidArgument {
+                message: format!("{name} must be finite and nonnegative"),
+            });
+        }
+    }
+    if a.as_col_major_slice().iter().any(|&value| value.is_nan()) {
+        return Err(MatrixCIError::NaNEncountered {
+            matrix: "input".into(),
+        });
+    }
+    if a.as_col_major_slice()
+        .iter()
+        .any(|&value| !value.abs_val().is_finite())
+    {
+        return Err(MatrixCIError::InvalidArgument {
+            message: "input matrix magnitudes must be finite".into(),
+        });
+    }
+    Ok(())
+}
+
 #[inline]
 fn col_major_offset(nrows: usize, row: usize, col: usize) -> usize {
     row + nrows * col
@@ -894,6 +927,45 @@ fn factorize_mut_in_place<T: Scalar>(
     })
 }
 
+/// Pivot magnitudes and the final residual diagnostic of a factorization.
+///
+/// The trailing entry is `state.error` unless the search stopped exactly at a
+/// rank cap below `min(nrows, ncols)`, in which case it is the maximum
+/// magnitude of the remaining Schur complement. A zero cap therefore reports
+/// the whole matrix. Shared with [`rrlu_mut`] so the selection-only path cannot
+/// drift from the full-factor error history.
+fn pivot_errors_from_factorization<T: Scalar>(
+    a: &Matrix<T>,
+    state: &RrLUFactorization,
+    rank_cap: usize,
+) -> Result<Vec<f64>> {
+    let nrows = a.nrows();
+    let ncols = a.ncols();
+    let data = a.as_col_major_slice();
+    let mut errors = (0..state.n_pivot)
+        .map(|i| data[col_major_offset(nrows, i, i)].abs_val())
+        .collect::<Vec<_>>();
+
+    let max_bond_dim = rank_cap.min(nrows).min(ncols);
+    let mut error = state.error;
+    if state.n_pivot < nrows.min(ncols) && state.n_pivot == max_bond_dim {
+        error = 0.0;
+        for col in state.n_pivot..ncols {
+            for row in state.n_pivot..nrows {
+                let residual = col_major_get(data, nrows, row, col).abs_val();
+                if !residual.is_finite() {
+                    return Err(MatrixCIError::NaNEncountered {
+                        matrix: "residual".to_string(),
+                    });
+                }
+                error = error.max(residual);
+            }
+        }
+    }
+    errors.push(error);
+    Ok(errors)
+}
+
 pub(crate) fn rrlu_left_mut<T: Scalar>(
     a: &mut Matrix<T>,
     options: Option<RrLUOptions>,
@@ -987,25 +1059,11 @@ pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> R
         left_orthogonal,
     )?;
 
-    // A rank ceiling exits before the next pivot scan. Report the remaining
-    // Schur complement, not the magnitude of the last accepted pivot.
-    let mut error = state.error;
-    let max_bond_dim = rank_cap.min(nrows).min(ncols);
-    if state.n_pivot < nrows.min(ncols) && state.n_pivot == max_bond_dim {
-        let data = a.as_col_major_slice();
-        error = 0.0;
-        for col in state.n_pivot..ncols {
-            for row in state.n_pivot..nrows {
-                let residual = col_major_get(data, nrows, row, col).abs_val();
-                if !residual.is_finite() {
-                    return Err(MatrixCIError::NaNEncountered {
-                        matrix: "residual".to_string(),
-                    });
-                }
-                error = error.max(residual);
-            }
-        }
-    }
+    // A rank ceiling exits before the next pivot scan. The shared extraction
+    // reports the remaining Schur complement, not the magnitude of the last
+    // accepted pivot.
+    let mut error = pivot_errors_from_factorization(a, &state, rank_cap)?;
+    let error = error.pop().unwrap_or(0.0);
 
     Ok(RrLU {
         row_permutation: state.row_permutation,
@@ -1015,6 +1073,92 @@ pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> R
         left_orthogonal,
         n_pivot: state.n_pivot,
         error,
+    })
+}
+
+/// Pivot indices and error diagnostics from a rank-revealing LU selection.
+///
+/// This is the selection-only counterpart of [`RrLU`]: the same pivot search
+/// and rank decision as [`rrlu`]/[`rrlu_mut`], but without assembling the `L`
+/// and `U` factors. Use it when only the selected pivots and the pivot error
+/// history are needed and the factors would be discarded.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::matrixlu::rrlu_pivots;
+/// use tensor4all_tensorbackend::from_vec2d;
+///
+/// let a = from_vec2d(vec![
+///     vec![1.0_f64, 2.0],
+///     vec![2.0, 4.0],
+/// ]);
+/// let pivots = rrlu_pivots(a, None).unwrap();
+/// assert_eq!(pivots.rank, 1);
+/// assert_eq!(pivots.row_indices.len(), pivots.rank);
+/// assert_eq!(pivots.col_indices.len(), pivots.rank);
+/// // One accepted pivot plus the final residual.
+/// assert_eq!(pivots.pivot_errors.len(), pivots.rank + 1);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct RrLUPivots {
+    /// Selected row indices, in pivot order.
+    pub row_indices: Vec<usize>,
+    /// Selected column indices, in pivot order.
+    pub col_indices: Vec<usize>,
+    /// Accepted pivot magnitudes followed by the final residual estimate.
+    pub pivot_errors: Vec<f64>,
+    /// Number of selected pivots.
+    pub rank: usize,
+}
+
+/// Select rrLU pivots without constructing the triangular factors.
+///
+/// Consumes the column-major matrix `a` (its storage is reused for the in-place
+/// elimination) and returns the selected row and column indices plus the pivot
+/// error history, using the same rank and tolerance rules as [`rrlu_mut`]. The
+/// trailing `pivot_errors` entry is the maximum remaining residual after a rank
+/// cap, so the sequence matches [`rrlu_mut`]'s `pivot_errors` exactly.
+///
+/// # Errors
+///
+/// Returns [`MatrixCIError::InvalidArgument`] if the matrix shape product
+/// overflows `usize`, its backing storage length does not match the shape, a
+/// tolerance is negative or non-finite, or an input entry is infinite. Returns
+/// [`MatrixCIError::NaNEncountered`] if an input entry or the remaining
+/// residual is NaN.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{matrixlu::rrlu_pivots, RrLUOptions};
+/// use tensor4all_tensorbackend::from_vec2d;
+///
+/// let a = from_vec2d(vec![
+///     vec![1.0_f64, 0.0],
+///     vec![0.0, 2.0],
+/// ]);
+/// // The first pivot is the largest-magnitude entry, at (1, 1).
+/// let pivots = rrlu_pivots(a, Some(RrLUOptions::default())).unwrap();
+/// assert_eq!(pivots.rank, 2);
+/// assert_eq!(pivots.row_indices, vec![1, 0]);
+/// assert_eq!(pivots.col_indices, vec![1, 0]);
+/// assert_eq!(pivots.pivot_errors, vec![2.0, 1.0, 0.0]);
+/// ```
+pub fn rrlu_pivots<T: Scalar>(
+    mut a: Matrix<T>,
+    options: Option<RrLUOptions>,
+) -> Result<RrLUPivots> {
+    let opts = options.unwrap_or_default();
+    let rank_cap = opts.max_bond_dim;
+    validate_owned_luci_input(&a, &opts)?;
+    let state = factorize_mut_in_place(&mut a, opts)?;
+    let pivot_errors = pivot_errors_from_factorization(&a, &state, rank_cap)?;
+    Ok(RrLUPivots {
+        row_indices: state.row_permutation[..state.n_pivot].to_vec(),
+        col_indices: state.col_permutation[..state.n_pivot].to_vec(),
+        pivot_errors,
+        rank: state.n_pivot,
     })
 }
 

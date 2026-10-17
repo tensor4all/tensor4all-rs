@@ -471,3 +471,69 @@ fn factor_extraction_rejects_non_finite_factors() {
         );
     }
 }
+
+/// The selection-only path must reproduce the full factorization's pivots and
+/// error history exactly, including the rank-cap residual and a zero cap.
+#[test]
+fn rrlu_pivots_matches_the_full_factorization() {
+    fn check<T: Scalar>() {
+        // (column-major entries, nrows, ncols, base options)
+        let cases: [(Vec<f64>, usize, usize, RrLUOptions); 4] = [
+            // Rank-deficient square matrix.
+            (
+                vec![1.0, 2.0, 3.0, 2.0, 4.0, 6.0, 3.0, 6.0, 9.0],
+                3,
+                3,
+                RrLUOptions::default(),
+            ),
+            // Cap below the exact rank: the trailing entry is the residual.
+            (
+                vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0],
+                3,
+                3,
+                RrLUOptions {
+                    max_bond_dim: 2,
+                    ..Default::default()
+                },
+            ),
+            // Zero cap reports the whole-matrix residual.
+            (
+                vec![1.0, 2.0, 3.0, 4.0],
+                2,
+                2,
+                RrLUOptions {
+                    max_bond_dim: 0,
+                    ..Default::default()
+                },
+            ),
+            // Rectangular rank-deficient matrix.
+            (
+                vec![1.0, 2.0, 2.0, 4.0, 3.0, 6.0],
+                3,
+                2,
+                RrLUOptions::default(),
+            ),
+        ];
+        for (entries, nrows, ncols, base) in cases {
+            for left_orthogonal in [false, true] {
+                let opts = RrLUOptions {
+                    left_orthogonal,
+                    ..base.clone()
+                };
+                let data: Vec<T> = entries.iter().map(|&value| T::from_f64(value)).collect();
+                let matrix = Matrix::from_col_major_vec(nrows, ncols, data);
+
+                let full = rrlu(&matrix, Some(opts.clone())).unwrap();
+                let pivots = rrlu_pivots(matrix, Some(opts)).unwrap();
+
+                assert_eq!(pivots.rank, full.npivots());
+                assert_eq!(pivots.row_indices, full.row_indices());
+                assert_eq!(pivots.col_indices, full.col_indices());
+                assert_eq!(pivots.pivot_errors, full.pivot_errors());
+            }
+        }
+    }
+    check::<f64>();
+    check::<f32>();
+    check::<Complex64>();
+}

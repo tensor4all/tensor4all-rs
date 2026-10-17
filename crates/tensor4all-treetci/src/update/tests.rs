@@ -260,17 +260,16 @@ fn evaluate_candidate_matrix_is_independent_of_chunk_size() {
     }
 }
 
-/// The caller's context is the one the factorization runs in.
+/// Pivot selection is local and never enters the process-global backend.
 ///
-/// Holding the process-global backend for the whole call is the discriminating part: the legacy path resolves
-/// its factor assembly through that backend and cannot run here, while the context path can - so this fails if
-/// the context parameter is ignored. The fixture is rank-deficient and rectangular (`i == j` on a 3x2 grid),
-/// which forces the backend factor assembly rather than the rank-zero shortcut.
+/// Holding the process-global backend for the whole call is the discriminating part: the former route built
+/// LU factors through a backend solve and would block here. The selection-only path reuses the in-place
+/// elimination, so it must complete and still match the default route. The fixture is rank-deficient and
+/// rectangular (`i == j` on a 3x2 grid), which exercises a non-full pivot set.
 #[test]
-fn update_edge_with_a_context_ignores_the_process_global_backend() {
+fn update_edge_selection_does_not_enter_the_process_global_backend() {
     use rand::SeedableRng;
-    use tenferro_cpu::CpuBackend;
-    use tensor4all_tensorbackend::{with_default_backend, CpuExecutionContext};
+    use tensor4all_tensorbackend::with_default_backend;
 
     let mut tci = TreeTCI2::<f64>::new(vec![3, 2], two_site_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0]]).unwrap();
@@ -286,15 +285,13 @@ fn update_edge_with_a_context_ignores_the_process_global_backend() {
         Ok(values)
     };
 
-    let backend = CpuBackend::with_threads(1).expect("1T CPU backend");
-    let context = CpuExecutionContext::from_backend(backend);
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
 
     let selection = with_default_backend(|_global| {
-        // The context entry must complete while the process-global backend is held by this scope: a route
-        // that resolved its factor assembly through the global backend would block here, which is the
-        // dispatch evidence. (The legacy entry cannot be asserted to *fail* inside the scope, because
-        // entering the global session while its backend is held blocks rather than erroring.)
+        // The selection must complete while the process-global backend is held by this scope: a route that
+        // resolved a factor assembly through the global backend would block here, which is the dispatch
+        // evidence. (A global entry cannot be asserted to *fail* inside the scope, because entering the
+        // global session while its backend is held blocks rather than erroring.)
         super::update_edge(
             &mut tci,
             TreeTciEdge::new(0, 1),
@@ -302,12 +299,11 @@ fn update_edge_with_a_context_ignores_the_process_global_backend() {
             &no_truncation_options(),
             &crate::DefaultProposer,
             &mut rng,
-            Some(&context),
         )
-        .expect("the context entry does not need the process-global backend")
+        .expect("pivot selection does not need the process-global backend")
     });
 
-    // The same pivots and errors the legacy route produces outside the held scope.
+    // The same pivots and errors the default route produces outside the held scope.
     let mut reference = TreeTCI2::<f64>::new(vec![3, 2], two_site_graph()).unwrap();
     reference.add_global_pivots(&[vec![0, 0]]).unwrap();
     reference.flush_pivot_errors();

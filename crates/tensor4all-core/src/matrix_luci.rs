@@ -5,7 +5,9 @@
 //! via LU cross interpolation and implements [`AbstractMatrixCI`].
 
 use crate::error::{MatrixCIError, Result};
-use crate::matrixlu::{rrlu, rrlu_left_mut, rrlu_mut, RrLU, RrLUOptions};
+use crate::matrixlu::{
+    rrlu, rrlu_left_mut, rrlu_mut, validate_owned_luci_input, RrLU, RrLUOptions,
+};
 use crate::matrixluci::block_rook::LazyBlockRookKernel;
 use crate::matrixluci::factors::CrossFactors;
 use crate::matrixluci::source::LazyMatrixSource;
@@ -232,31 +234,9 @@ where
     })
 }
 
-// Validation for the new owned/context facades; do not rely on extracting an
-// unused complementary factor to discover invalid input.
-fn validate_owned_luci_input<T: Scalar>(a: &Matrix<T>, options: &RrLUOptions) -> Result<()> {
-    for (name, value) in [("rel_tol", options.rel_tol), ("abs_tol", options.abs_tol)] {
-        if !value.is_finite() || value < 0.0 {
-            return Err(MatrixCIError::InvalidArgument {
-                message: format!("{name} must be finite and nonnegative"),
-            });
-        }
-    }
-    if a.as_col_major_slice().iter().any(|&value| value.is_nan()) {
-        return Err(MatrixCIError::NaNEncountered {
-            matrix: "input".into(),
-        });
-    }
-    if a.as_col_major_slice()
-        .iter()
-        .any(|&value| !value.abs_val().is_finite())
-    {
-        return Err(MatrixCIError::InvalidArgument {
-            message: "input matrix magnitudes must be finite".into(),
-        });
-    }
-    Ok(())
-}
+// Validation for the new owned/context facades lives with the rrLU entry
+// points (`matrixlu::validate_owned_luci_input`) so the selection-only path
+// checks inputs and tolerances identically.
 
 pub(crate) fn map_backend_error(err: crate::matrixluci::MatrixLuciError) -> MatrixCIError {
     match err {

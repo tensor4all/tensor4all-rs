@@ -79,7 +79,7 @@ pub use matrix_luci::{
     MatrixLuciRowInterpolation,
 };
 pub use matrixaca::MatrixACA;
-pub use matrixlu::{rrlu, rrlu_mut, RrLU, RrLUOptions};
+pub use matrixlu::{rrlu, rrlu_mut, rrlu_pivots, RrLU, RrLUOptions, RrLUPivots};
 pub use scalar::Scalar;
 pub use traits::AbstractMatrixCI;
 
