@@ -20,19 +20,19 @@ facade, and each crate can be used on its own.
                                       |
               +-----------------------+------------------------+
               |                                                |
-   NETWORK STACK (tree-based)                     SIMPLETT STACK (positional)
+   NETWORK STACK (TreeTN, intended interface)     SIMPLETT STACK (positional, being retired)
               |                                                |
    tensor4all-treetn  (TreeTN)                    tensor4all-simplett (SimpleTensorTrain)
-              |                                                |
-   tensor4all-itensorlike (TensorTrain)           tensor4all-tensorci (TCI1/TCI2)
-              |                                                |
-   tensor4all-partitionedtreetn (TreeTN patches)    tensor4all-quanticstci
-              |                                                |
-   tensor4all-partitionedtt (deprecated)            tensor4all-quanticstransform
-              |
-   tensor4all-treetci
+     |-- tensor4all-itensorlike (TensorTrain)                  |
+     |-- tensor4all-treetci (tree TCI)            tensor4all-tensorci (TCI1/TCI2)
+     |-- tensor4all-treeaci (tree ACI)            tensor4all-aci (chain ACI)
+     |-- tensor4all-partitionedtreetn (TreeTN patches)
+     |-- tensor4all-treersi (experimental RSI products)
+     `-- tensor4all-partitionedtt (deprecated; also uses simplett/tensorci)
 
-   tensor4all-treersi -> tensor4all-treetn (experimental RSI products)
+   Crates that still use both stacks (crossing through treetn::simplett_bridge):
+   tensor4all-quanticstci        (treetci + treetn + simplett)
+   tensor4all-quanticstransform  (treetn + simplett)
 
    tensor4all-capi  (C FFI for language bindings; depends on both stacks)
    tensor4all-hdf5  (MPS serialization, ITensors.jl-compatible)
@@ -74,16 +74,16 @@ transform layer, and MPS conversion belongs in the bridge.
 
 ### Which stack does a new feature crate target?
 
-- **Application-level features** (operators, evolution, DMRG, TDVP, algorithm
-  composition on a known topology) target the **network stack** by default
-  (`tensor4all-treetn`, or `tensor4all-itensorlike` when ITensors.jl-style
-  semantics are wanted).
-- **Numerical-core features** (cross interpolation, factorizations, quantics
-  kernels) target the **simplett stack** by default
-  (`tensor4all-simplett`, `tensor4all-tensorci`; the former
-  `tensor4all-tcicore` was dissolved into `tensor4all-core`, #639).
-- A feature that must serve both stacks is implemented in the target stack
-  and exposed through `treetn::simplett_bridge`; it is not duplicated in both.
+- **New features target `TreeTN`**, chains included: operators, evolution,
+  DMRG/TDVP, cross interpolation and quantics kernels build on
+  `tensor4all-treetn` (or `tensor4all-itensorlike` when ITensors.jl-style
+  semantics are wanted). Shared numerical substrate (factorizations, matrix
+  CI, `CachedFunction`) lives in `tensor4all-core`.
+- **The simplett stack is maintained, not extended**: existing
+  `tensor4all-simplett` / `tensor4all-tensorci` functionality stays available
+  until its TreeTN replacement lands, but new capabilities are not added there.
+- While a feature still needs both stacks, it crosses through
+  `treetn::simplett_bridge`; it is not duplicated in both.
 
 ## Vocabulary conventions
 
@@ -164,7 +164,7 @@ requirements onto unrelated generic code.
 
 | Crate | Description |
 |-------|-------------|
-| **tensorbackend** | Public low-level infrastructure: the dense `Matrix` container, execution contexts (`CpuBackend`, `CpuExecutionContext`), compact `f64`/`Complex64` storage, and tenferro-backed primitives. Most users reach it through the higher-level crates; depend on it directly when you need these building blocks. Not every `pub` item is a stability promise. |
+| **tensorbackend** | Public low-level infrastructure: the dense `Matrix` container, the `CpuExecutionContext` execution context (built from a caller-configured `tenferro_cpu::CpuBackend`), compact `f64`/`Complex64` storage, and tenferro-backed primitives. Most users reach it through the higher-level crates; depend on it directly when you need these building blocks. Not every `pub` item is a stability promise. |
 | **core** | Foundation for everything else. Owns the shared abstractions (`Index` system, dynamic-rank `Tensor`, contraction, SVD/QR/LU factorizations) and the matrix-CI substrate (rrLU/LUCI, `CachedFunction`, `MultiIndex`). |
 
 ### Network stack
@@ -176,6 +176,7 @@ requirements onto unrelated generic code.
 | **partitionedtreetn** | TreeTN-native eagerly masked subdomains, strict partition algebra, volume-budgeted adaptive patching, sequential adaptive patched interpolation through any `TreeInterpolator` engine, reconstruction against a fixed global L2 tolerance, and level-coupled merge-refine QFT scheduling. |
 | **partitionedtt** | **Deprecated** partitioned tensor trains for subdomain decomposition. Builds on itensorlike and crosses to simplett via `simplett_bridge`; it remains buildable during migration. |
 | **treersi** | Experimental CPU Hadamard products on TreeTN via recursive sketched interpolation; requires independent accuracy checks. |
+| **treeaci** | Experimental Alternating Cross Interpolation directly on `TreeTN` with any validated tree topology (no path-order requirement, unlike `tensor4all-aci`). |
 | **treetci** | Tree TCI: cross interpolation on tree-structured tensor networks; `TreeTciInterpolator` implements the `TreeInterpolator` engine trait. |
 
 ### Simplett stack
@@ -198,8 +199,6 @@ requirements onto unrelated generic code.
 | Crate | Description |
 |-------|-------------|
 | **aci** | Alternating Cross Interpolation (ACI) for elementwise tensor-train operations. |
-
-### I/O & bindings
 
 ### I/O & bindings
 
@@ -227,7 +226,7 @@ requirements onto unrelated generic code.
 | Quantics transform operators | `tensor4all-quanticstransform` |
 | HDF5 I/O compatible with Julia | `tensor4all-hdf5` |
 | Interpolative QTT on a coarse grid | `tensor4all-interpolativeqtt` |
-| Elementwise TT ops via ACI | `tensor4all-aci` |
+| Elementwise TT ops via ACI | `tensor4all-aci` (chains) or `tensor4all-treeaci` (any TreeTN) |
 
 ## Error remedies
 

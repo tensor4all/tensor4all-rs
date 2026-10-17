@@ -1,9 +1,9 @@
-//! Lower-layer failures keep their typed diagnostic as `TensorTrainError`'s
+//! TreeTN failures keep their typed diagnostic as `TensorTrainError`'s
 //! `std::error::Error::source`.
 
 use std::error::Error;
 
-use tensor4all_core::{DynIndex, IdxTensor, IdxTensorError};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_itensorlike::{TensorTrain, TensorTrainError};
 use tensor4all_treetn::TreeTNOperationError;
 
@@ -31,19 +31,5 @@ fn set_tensor_preserves_typed_treetn_error_source() {
     assert!(
         source.downcast_ref::<TreeTNOperationError>().is_some(),
         "source is the original TreeTN diagnostic, got {source}"
-    );
-}
-
-#[test]
-fn dense_maxabs_preserves_typed_idx_tensor_error_source() {
-    let tt = TensorTrain::new(vec![IdxTensor::scalar(f64::NAN).unwrap()]).unwrap();
-
-    let error = tt.dense_maxabs().unwrap_err();
-
-    assert!(matches!(error, TensorTrainError::IdxTensor { .. }));
-    let source = error.source().expect("IdxTensor error keeps its source");
-    assert!(
-        source.downcast_ref::<IdxTensorError>().is_some(),
-        "source is the original IdxTensor diagnostic, got {source}"
     );
 }

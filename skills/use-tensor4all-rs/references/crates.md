@@ -26,7 +26,7 @@ Indices, dynamic-rank tensors, contraction, factorization. Most other crates re-
 
 ## tensor4all-simplett — lightweight TT/MPS
 
-Plain generic tensor train (`f32`, `f64`, `Complex32`, or `Complex64` where the selected operations support the dtype); no named indices needed. The go-to for numerics.
+Plain generic tensor train (`f32`, `f64`, `Complex32`, or `Complex64` where the selected operations support the dtype); no named indices needed. Being retired in favour of `TreeTN`: use it where an API still produces or requires it (TCI, quantics TCI/transforms), not for new code.
 
 - `SimpleTensorTrain::<f64>` / `::<Complex64>` — chain of 3-leg cores.
   - `SimpleTensorTrain::constant(&[dims], val)`, `::zeros(&[dims])`.
@@ -72,7 +72,7 @@ Shared interpolation plumbing includes `CachedFunction`, `MultiIndex`, packed as
 - `index_key::IndexKey::owned_heap_bytes()` reports the key's owned heap payload, including spare dynamic-limb capacity; excludes its inline struct and allocator metadata. Use this when estimating a cache containing packed assignment keys.
 - `floating_zone_walk_with_initial_error` reuses a previously evaluated starting residual, then follows the same scan order and stopping rule as `floating_zone_walk`. Its typed `FloatingZoneError` distinguishes invalid dimensions, starts, residuals, or stopping tolerances from callback failures. This avoids evaluating a batched guard start a second time.
 
-`tensor4all-tensorbackend` is low-level infrastructure (`Matrix`, execution contexts, storage + linalg wrappers); prefer the higher-level crates and depend on it directly only for those building blocks.
+`tensor4all-tensorbackend` is low-level infrastructure (`Matrix`, `CpuExecutionContext`, storage + linalg wrappers); prefer the higher-level crates and depend on it directly only for those building blocks.
 
 ## tensor4all-treeaci — native tree elementwise approximation
 

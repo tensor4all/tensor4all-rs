@@ -367,9 +367,10 @@ impl TensorTrain {
     /// * `canonical_form` - The method used for canonicalization (if any)
     /// # Errors
     ///
-    /// Returns [`TensorTrainError::InvalidStructure`] when [`TensorTrain::new`]
-    /// rejects the tensors, and [`TensorTrainError::TreeTn`] when the deduced
-    /// canonical region cannot be set.
+    /// Propagates the [`TensorTrainError::InvalidStructure`] and
+    /// [`TensorTrainError::TreeTn`] errors of [`TensorTrain::new`], and returns
+    /// [`TensorTrainError::TreeTn`] when the deduced canonical region cannot be
+    /// set.
     ///
     pub fn with_ortho(
         tensors: Vec<IdxTensor>,
@@ -431,9 +432,9 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns [`TensorTrainError::InvalidStructure`] when the input TreeTN is
-    /// not a linear chain or when its nodes cannot be renumbered to sites
-    /// `0..len`.
+    /// Returns [`TensorTrainError::TreeTn`] when the input TreeTN is not a
+    /// linear chain, and [`TensorTrainError::InvalidStructure`] when its nodes
+    /// cannot be renumbered to sites `0..len`.
     ///
     /// # Examples
     ///
@@ -463,11 +464,9 @@ impl TensorTrain {
     /// # }
     /// ```
     pub fn from_treetn(treetn: TreeTN<IdxTensor, usize>) -> Result<Self> {
-        treetn
-            .validate_linear_chain()
-            .map_err(|error| TensorTrainError::InvalidStructure {
-                message: format!("TensorTrain requires a linear-chain TreeTN: {error}"),
-            })?;
+        treetn.validate_linear_chain().map_err(|source| {
+            TensorTrainError::tree_tn("TensorTrain requires a linear-chain TreeTN", source)
+        })?;
         Self::from_inner(treetn, None)
     }
 
@@ -619,9 +618,8 @@ impl TensorTrain {
 
     /// Get a reference to the tensor at the given site.
     ///
-    /// This is the single fallible site accessor; there is no separate
-    /// `*_checked` alias. Use [`Self::tensors`] for an infallible iteration
-    /// over the sites that resolve.
+    /// Use [`Self::tensors`] for an infallible iteration over the sites that
+    /// resolve.
     ///
     /// # Errors
     ///
@@ -670,9 +668,6 @@ impl TensorTrain {
     }
 
     /// Get a mutable reference to the tensor at the given site.
-    ///
-    /// This is the single fallible mutable site accessor; there is no separate
-    /// `*_checked` alias.
     ///
     /// # Errors
     ///
@@ -728,9 +723,6 @@ impl TensorTrain {
     }
 
     /// Get a mutable reference to all tensors.
-    ///
-    /// This is the single fallible whole-train mutable accessor; there is no
-    /// separate `*_checked` alias.
     ///
     /// # Errors
     ///
@@ -1049,9 +1041,6 @@ impl TensorTrain {
     /// Replace the tensor at the given site.
     ///
     /// This invalidates orthogonality tracking.
-    ///
-    /// This is the single fallible setter; there is no separate `*_checked`
-    /// alias.
     ///
     /// # Errors
     ///

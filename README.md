@@ -50,7 +50,7 @@ validated in CI. Longer runnable examples live in the
 | Crate | Description |
 |-------|-------------|
 | [tensor4all-core](crates/tensor4all-core/) | Core types: Index, Tensor, contraction, SVD, QR |
-| [tensor4all-simplett](crates/tensor4all-simplett/) | Simple TT/MPS with compression |
+| [tensor4all-simplett](crates/tensor4all-simplett/) | Simple TT/MPS with compression (being retired; new code targets TreeTN) |
 | [tensor4all-aci](crates/tensor4all-aci/) | Alternating Cross Interpolation for elementwise tensor train operations |
 | [tensor4all-treeaci](crates/tensor4all-treeaci/) | Experimental native TreeTN ACI and simultaneous n-way Hadamard products |
 | [tensor4all-treersi](crates/tensor4all-treersi/) | Experimental CPU RSI Hadamard products on TreeTN; validate actual output error |
