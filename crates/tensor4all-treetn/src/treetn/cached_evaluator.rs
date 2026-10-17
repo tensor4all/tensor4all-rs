@@ -7,75 +7,6 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
-/// Temporary phase-timing counters for root-cause investigation into why the
-/// message cache does not deliver a net speedup despite a high hit rate. Not
-/// on the hot path in non-test builds.
-#[cfg(test)]
-mod phase_timing {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    pub static KEY_AND_LOOKUP_NS: AtomicU64 = AtomicU64::new(0);
-    pub static CONTRACT_NS: AtomicU64 = AtomicU64::new(0);
-    pub static TENSOR_VALUES_NS: AtomicU64 = AtomicU64::new(0);
-    pub static RECONSTRUCT_NS: AtomicU64 = AtomicU64::new(0);
-    pub static INSERT_NS: AtomicU64 = AtomicU64::new(0);
-    pub static BUILD_ENV_NS: AtomicU64 = AtomicU64::new(0);
-    pub static CENTER_NS: AtomicU64 = AtomicU64::new(0);
-    // [AI Supplied] Diagnostic-only split of immutable-capability checks and
-    // per-call assignment rebuilding inside `build_environment_cache`.
-    pub static RAW_CAPABILITY_NS: AtomicU64 = AtomicU64::new(0);
-    pub static ASSIGNMENT_BATCH_NS: AtomicU64 = AtomicU64::new(0);
-    pub static MESSAGE_LOOP_NS: AtomicU64 = AtomicU64::new(0);
-    pub static COMPONENT_ASSEMBLY_NS: AtomicU64 = AtomicU64::new(0);
-    // [AI Supplied] Diagnostic-only accounting for the per-center rooted
-    // metadata retained while Guard moves its evaluation hint across sites.
-    pub static PLAN_BUILD_NS: AtomicU64 = AtomicU64::new(0);
-    pub static LAYOUT_BUILD_NS: AtomicU64 = AtomicU64::new(0);
-    pub static PLAN_COUNT: AtomicU64 = AtomicU64::new(0);
-    // [AI Supplied] Diagnostic-only value counts for distinguishing all-hit
-    // descendant reconstruction from the messages that reach the center.
-    pub static RECONSTRUCT_VALUES: AtomicU64 = AtomicU64::new(0);
-    pub static FINAL_ENV_VALUES: AtomicU64 = AtomicU64::new(0);
-    // [AI Supplied] Diagnostic-only split of the raw internal-center path.
-    pub static RAW_CENTER_PREP_NS: AtomicU64 = AtomicU64::new(0);
-    pub static RAW_CENTER_CONTRACT_NS: AtomicU64 = AtomicU64::new(0);
-    pub static RAW_CENTER_DISPATCH_NS: AtomicU64 = AtomicU64::new(0);
-    pub static RAW_CENTER_PRELUDE_NS: AtomicU64 = AtomicU64::new(0);
-    pub static RAW_CENTER_RESULT_NS: AtomicU64 = AtomicU64::new(0);
-    pub static RAW_CENTER_VALUES_COPIED: AtomicU64 = AtomicU64::new(0);
-    pub static RAW_CENTER_ASSIGNMENTS_COPIED: AtomicU64 = AtomicU64::new(0);
-
-    pub fn add(counter: &AtomicU64, elapsed: std::time::Duration) {
-        counter.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
-    }
-
-    pub fn reset_all() {
-        KEY_AND_LOOKUP_NS.store(0, Ordering::Relaxed);
-        CONTRACT_NS.store(0, Ordering::Relaxed);
-        TENSOR_VALUES_NS.store(0, Ordering::Relaxed);
-        RECONSTRUCT_NS.store(0, Ordering::Relaxed);
-        INSERT_NS.store(0, Ordering::Relaxed);
-        BUILD_ENV_NS.store(0, Ordering::Relaxed);
-        CENTER_NS.store(0, Ordering::Relaxed);
-        RAW_CAPABILITY_NS.store(0, Ordering::Relaxed);
-        ASSIGNMENT_BATCH_NS.store(0, Ordering::Relaxed);
-        MESSAGE_LOOP_NS.store(0, Ordering::Relaxed);
-        COMPONENT_ASSEMBLY_NS.store(0, Ordering::Relaxed);
-        PLAN_BUILD_NS.store(0, Ordering::Relaxed);
-        LAYOUT_BUILD_NS.store(0, Ordering::Relaxed);
-        PLAN_COUNT.store(0, Ordering::Relaxed);
-        RECONSTRUCT_VALUES.store(0, Ordering::Relaxed);
-        FINAL_ENV_VALUES.store(0, Ordering::Relaxed);
-        RAW_CENTER_PREP_NS.store(0, Ordering::Relaxed);
-        RAW_CENTER_CONTRACT_NS.store(0, Ordering::Relaxed);
-        RAW_CENTER_DISPATCH_NS.store(0, Ordering::Relaxed);
-        RAW_CENTER_PRELUDE_NS.store(0, Ordering::Relaxed);
-        RAW_CENTER_RESULT_NS.store(0, Ordering::Relaxed);
-        RAW_CENTER_VALUES_COPIED.store(0, Ordering::Relaxed);
-        RAW_CENTER_ASSIGNMENTS_COPIED.store(0, Ordering::Relaxed);
-    }
-}
-
 /// Temporary counters for issue #671's root-cause investigation: whether the
 /// branch contraction kernel's per-physical-value BLAS setup (building the
 /// `left` intermediate in [`TreeTNCachedEvaluator::grouped_branch_message_contraction`])
@@ -1389,15 +1320,8 @@ where
         tree: &TreeTN<IdxTensor, V>,
         indices: &[DynIndex],
     ) -> std::result::Result<Self, TreeTNOperationError> {
-        #[cfg(test)]
-        let layout_build_started = std::time::Instant::now();
         let layout = build_layout(tree, indices)?;
         let directed_component_layouts = build_directed_component_layouts(tree, &layout)?;
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::LAYOUT_BUILD_NS,
-            layout_build_started.elapsed(),
-        );
         let neighbors = sorted_neighbors(tree);
         let mut sorted_node_names = tree.node_names();
         sorted_node_names.sort();
@@ -1535,18 +1459,10 @@ where
         if let Some(plan) = rooted_plans.get(center) {
             return Ok(Arc::clone(plan));
         }
-        #[cfg(test)]
-        let plan_build_started = std::time::Instant::now();
         let plan = Arc::new(RootedMessagePlan::from_neighbors(
             &self.inner.neighbors,
             center,
         )?);
-        #[cfg(test)]
-        {
-            use std::sync::atomic::Ordering;
-            phase_timing::add(&phase_timing::PLAN_BUILD_NS, plan_build_started.elapsed());
-            phase_timing::PLAN_COUNT.fetch_add(1, Ordering::Relaxed);
-        }
         rooted_plans.insert(center.clone(), Arc::clone(&plan));
         Ok(plan)
     }
@@ -2130,22 +2046,13 @@ where
                 return Ok(result);
             }
         }
-        #[cfg(test)]
-        let environment_started = std::time::Instant::now();
-        let environment_result = self.build_environment_cache(center, values);
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::BUILD_ENV_NS, environment_started.elapsed());
-        let (component_batches, environment_cache) = environment_result?;
-        #[cfg(test)]
-        let center_started = std::time::Instant::now();
-        let result = if hinted_center {
+        let (component_batches, environment_cache) =
+            self.build_environment_cache(center, values)?;
+        let results = if hinted_center {
             self.contract_edge_cut_or_center(center, values, &component_batches, &environment_cache)
         } else {
             self.contract_center_for_points(center, values, &component_batches, &environment_cache)
-        };
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::CENTER_NS, center_started.elapsed());
-        let results = result?;
+        }?;
         self.last_stats.batched_center_contract_count = 1;
         Ok(results)
     }
@@ -2236,25 +2143,9 @@ where
     ) -> Result<CacheBuildResult<V>> {
         self.last_stats = CachedEvaluationStats::default();
         let plan = self.rooted_plan_for_center(center)?;
-        #[cfg(test)]
-        let raw_capability_started = std::time::Instant::now();
         self.raw_messages = self.can_use_raw_messages(center)?;
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::RAW_CAPABILITY_NS,
-            raw_capability_started.elapsed(),
-        );
-        #[cfg(test)]
-        let assignment_batch_started = std::time::Instant::now();
         let assignment_batches = self.build_message_assignment_batches(&plan, values)?;
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::ASSIGNMENT_BATCH_NS,
-            assignment_batch_started.elapsed(),
-        );
 
-        #[cfg(test)]
-        let message_loop_started = std::time::Instant::now();
         let mut messages = HashMap::<V, StackedMessage>::new();
         for neighbor in plan.children.get(center).cloned().unwrap_or_default() {
             let node_message = self.get_or_compute_node_message(
@@ -2266,14 +2157,7 @@ where
             )?;
             messages.insert(neighbor, node_message);
         }
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::MESSAGE_LOOP_NS,
-            message_loop_started.elapsed(),
-        );
 
-        #[cfg(test)]
-        let component_assembly_started = std::time::Instant::now();
         let mut component_batches = Vec::new();
         let mut cache = HashMap::new();
         let mut subtree_environment_count = 0usize;
@@ -2290,12 +2174,6 @@ where
                     neighbor
                 )
             })?;
-            #[cfg(test)]
-            if let Some(raw_values) = environment.raw_values.as_ref() {
-                use std::sync::atomic::Ordering;
-                phase_timing::FINAL_ENV_VALUES
-                    .fetch_add(raw_values.len() as u64, Ordering::Relaxed);
-            }
             subtree_environment_count += assignment_batch.first_points.len();
             cache.insert(neighbor.clone(), environment);
             component_batches.push(ComponentBatch {
@@ -2303,11 +2181,6 @@ where
                 point_to_assignment: assignment_batch.point_to_assignment.clone(),
             });
         }
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::COMPONENT_ASSEMBLY_NS,
-            component_assembly_started.elapsed(),
-        );
         self.last_stats.subtree_environment_count = subtree_environment_count;
         #[cfg(test)]
         self.update_cache_storage_stats();
@@ -4491,8 +4364,6 @@ where
         })?;
         self.last_stats.directed_message_count += assignment_batch.first_points.len();
         self.last_stats.batched_message_contract_count += 1;
-        #[cfg(test)]
-        let phase_start = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
         let diag_start = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
@@ -4560,19 +4431,9 @@ where
                 .entry(directed_edge.clone())
                 .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_max_bytes));
             if let Some(positions) = cache.get_all_cached(&keys) {
-                #[cfg(test)]
-                phase_timing::add(&phase_timing::KEY_AND_LOOKUP_NS, phase_start.elapsed());
-                #[cfg(test)]
-                let reconstruct_start = std::time::Instant::now();
                 let mut data = Vec::with_capacity(bond_dim * keys.len());
                 for position in positions {
                     data.extend_from_slice(cache.column(position));
-                }
-                #[cfg(test)]
-                {
-                    use std::sync::atomic::Ordering;
-                    phase_timing::RECONSTRUCT_VALUES
-                        .fetch_add(data.len() as u64, Ordering::Relaxed);
                 }
                 let (tensor, raw_values) = if self.raw_messages {
                     (None, Some(data))
@@ -4585,8 +4446,6 @@ where
                         None,
                     )
                 };
-                #[cfg(test)]
-                phase_timing::add(&phase_timing::RECONSTRUCT_NS, reconstruct_start.elapsed());
                 self.last_stats.message_cache_hits += keys.len();
                 #[cfg(feature = "diagnostics")]
                 diagnostics::record_guard(
@@ -4616,8 +4475,6 @@ where
             }
             (hit_keys, missing_indices)
         };
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::KEY_AND_LOOKUP_NS, phase_start.elapsed());
         self.last_stats.message_cache_hits += hit_keys.len();
         self.last_stats.message_cache_misses += missing_indices.len();
         #[cfg(feature = "diagnostics")]
@@ -4669,8 +4526,6 @@ where
             .iter()
             .map(|&i| keys[i].clone())
             .collect::<Vec<_>>();
-        #[cfg(test)]
-        let contract_start = std::time::Instant::now();
         let tensor_kind = tensor_scalar_kind(tensor_for_node(self.tree, node)?)?;
         let missing_values: Vec<CachedScalar> = match tensor_kind {
             ScalarKind::C64 => {
@@ -4793,11 +4648,7 @@ where
                 messages,
             )?,
         };
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::CONTRACT_NS, contract_start.elapsed());
 
-        #[cfg(test)]
-        let insert_start = std::time::Instant::now();
         // Same reasoning as the `get_all_cached` call above: the entry for
         // `node` was inserted at the top of this function and nothing
         // between there and here removes it, so `entry().or_insert_with()`
@@ -4819,11 +4670,7 @@ where
                 })
                 .collect::<Result<Vec<_>>>()
         })?;
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::INSERT_NS, insert_start.elapsed());
 
-        #[cfg(test)]
-        let reconstruct_start = std::time::Instant::now();
         // Merge cached and uncached columns in the original point order. A
         // finite budget may return `CacheSlot::Uncached`; those values are
         // still valid for this call and must not be looked up again.
@@ -4866,11 +4713,6 @@ where
             missing_slot_iter.next().is_none(),
             "TreeTNCachedEvaluator::evaluate_batched: extra cache slots after merge"
         );
-        #[cfg(test)]
-        {
-            use std::sync::atomic::Ordering;
-            phase_timing::RECONSTRUCT_VALUES.fetch_add(data.len() as u64, Ordering::Relaxed);
-        }
         let (tensor, raw_values) = if self.raw_messages {
             (None, Some(data))
         } else {
@@ -4882,8 +4724,6 @@ where
                 None,
             )
         };
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::RECONSTRUCT_NS, reconstruct_start.elapsed());
         #[cfg(feature = "diagnostics")]
         diagnostics::record_guard(
             &diag_node,
@@ -5286,8 +5126,6 @@ where
         component_batches: &[ComponentBatch<V>],
         environment_cache: &EnvironmentCache<V>,
     ) -> Result<Option<Vec<CachedScalar>>> {
-        #[cfg(test)]
-        let prelude_started = std::time::Instant::now();
         if component_batches.len() < 2 {
             return Ok(None);
         }
@@ -5321,18 +5159,11 @@ where
                 )
             })
             .collect::<Result<Vec<_>>>()?;
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::RAW_CENTER_PRELUDE_NS,
-            prelude_started.elapsed(),
-        );
 
         match tensor_scalar_kind(center_tensor)? {
             ScalarKind::F32 | ScalarKind::C32 => return Ok(None),
             ScalarKind::F64 => {}
             ScalarKind::C64 => {
-                #[cfg(test)]
-                let prep_started = std::time::Instant::now();
                 let Some(components) = self.raw_center_components::<Complex64>(
                     center,
                     component_batches,
@@ -5345,10 +5176,6 @@ where
                 else {
                     return Ok(None);
                 };
-                #[cfg(test)]
-                phase_timing::add(&phase_timing::RAW_CENTER_PREP_NS, prep_started.elapsed());
-                #[cfg(test)]
-                let contract_started = std::time::Instant::now();
                 let result = center_tensor.with_dense_slice::<Complex64, _>(|core| {
                     contract_raw_center(
                         core,
@@ -5358,25 +5185,10 @@ where
                         &components,
                     )
                 })??;
-                #[cfg(test)]
-                phase_timing::add(
-                    &phase_timing::RAW_CENTER_CONTRACT_NS,
-                    contract_started.elapsed(),
-                );
-                #[cfg(test)]
-                let result_started = std::time::Instant::now();
-                let result = result.into_iter().map(CachedScalar::C64).collect();
-                #[cfg(test)]
-                phase_timing::add(
-                    &phase_timing::RAW_CENTER_RESULT_NS,
-                    result_started.elapsed(),
-                );
-                return Ok(Some(result));
+                return Ok(Some(result.into_iter().map(CachedScalar::C64).collect()));
             }
         }
 
-        #[cfg(test)]
-        let prep_started = std::time::Instant::now();
         let Some(components) = self.raw_center_components::<f64>(
             center,
             component_batches,
@@ -5389,10 +5201,6 @@ where
         else {
             return Ok(None);
         };
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::RAW_CENTER_PREP_NS, prep_started.elapsed());
-        #[cfg(test)]
-        let contract_started = std::time::Instant::now();
         let result = center_tensor.with_dense_slice::<f64, _>(|core| {
             contract_raw_center(
                 core,
@@ -5402,20 +5210,7 @@ where
                 &components,
             )
         })??;
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::RAW_CENTER_CONTRACT_NS,
-            contract_started.elapsed(),
-        );
-        #[cfg(test)]
-        let result_started = std::time::Instant::now();
-        let result = result.into_iter().map(CachedScalar::F64).collect();
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::RAW_CENTER_RESULT_NS,
-            result_started.elapsed(),
-        );
-        Ok(Some(result))
+        Ok(Some(result.into_iter().map(CachedScalar::F64).collect()))
     }
 
     fn raw_center_components<T>(
@@ -5462,14 +5257,6 @@ where
             let Some(values) = raw_values.iter().map(&convert).collect::<Option<Vec<_>>>() else {
                 return Ok(None);
             };
-            #[cfg(test)]
-            {
-                use std::sync::atomic::Ordering;
-                phase_timing::RAW_CENTER_VALUES_COPIED
-                    .fetch_add(values.len() as u64, Ordering::Relaxed);
-                phase_timing::RAW_CENTER_ASSIGNMENTS_COPIED
-                    .fetch_add(batch.point_to_assignment.len() as u64, Ordering::Relaxed);
-            }
             ensure!(
                 dim > 0 && values.len() % dim == 0,
                 "raw center environment length {} is incompatible with bond dimension {dim}",
@@ -5717,18 +5504,11 @@ where
         {
             return Ok(result);
         }
-        #[cfg(test)]
-        let raw_dispatch_started = std::time::Instant::now();
         let raw_internal_result = self.try_contract_internal_center_raw(
             center,
             values,
             component_batches,
             environment_cache,
-        );
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::RAW_CENTER_DISPATCH_NS,
-            raw_dispatch_started.elapsed(),
         );
         if let Some(result) = raw_internal_result? {
             return Ok(result);
@@ -5840,17 +5620,6 @@ where
     #[cfg(test)]
     fn stats_for_test(&self) -> CachedEvaluationStats {
         self.last_stats.clone()
-    }
-
-    /// Number of rooted traversal plans memoized in the shared plan.
-    #[cfg(test)]
-    fn rooted_plan_count_for_test(&self) -> usize {
-        self.plan
-            .inner
-            .rooted_plans
-            .lock()
-            .map(|plans| plans.len())
-            .unwrap_or_default()
     }
 }
 
