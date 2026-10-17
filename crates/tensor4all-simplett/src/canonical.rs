@@ -113,8 +113,11 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
     /// Create a new SiteTensorTrain from tensors with specified center
     /// # Errors
     ///
-    /// Returns an error when the tensor train is empty or structurally invalid (an
-    /// invalid-state or shape mismatch failure).
+    /// Returns [`SimpleTensorTrainError::Empty`] for an empty tensor list,
+    /// [`SimpleTensorTrainError::InvalidOperation`] when `center` is out of
+    /// range or a canonicalization step fails, or
+    /// [`SimpleTensorTrainError::DimensionMismatch`] when adjacent bonds do
+    /// not agree.
     ///
     pub fn new(tensors: Vec<Tensor3<T>>, center: usize) -> Result<Self> {
         let n = tensors.len();
@@ -146,8 +149,10 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
     /// Create from SimpleTensorTrain with specified center
     /// # Errors
     ///
-    /// Returns an error when the tensor train is structurally invalid (an
-    /// invalid-state or shape mismatch failure).
+    /// Returns the same errors as [`SiteTensorTrain::new`]:
+    /// [`SimpleTensorTrainError::Empty`],
+    /// [`SimpleTensorTrainError::InvalidOperation`], or
+    /// [`SimpleTensorTrainError::DimensionMismatch`].
     ///
     pub fn from_tensor_train(tt: &SimpleTensorTrain<T>, center: usize) -> Result<Self> {
         let tensors = tt.site_tensors().to_vec();
@@ -294,8 +299,8 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
     /// Move the center one position to the right
     /// # Errors
     ///
-    /// Returns an error when the center cannot be moved (a shape or index mismatch,
-    /// or a backend failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the center is
+    /// already rightmost or the left-orthogonalization step fails.
     ///
     pub fn move_center_right(&mut self) -> Result<()> {
         if self.center >= self.len() - 1 {
@@ -312,8 +317,8 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
     /// Move the center one position to the left
     /// # Errors
     ///
-    /// Returns an error when the center cannot be moved (a shape or index mismatch,
-    /// or a backend failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the center is
+    /// already leftmost or the right-orthogonalization step fails.
     ///
     pub fn move_center_left(&mut self) -> Result<()> {
         if self.center == 0 {
@@ -330,8 +335,8 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
     /// Move the center to a specific position
     /// # Errors
     ///
-    /// Returns an error when the site is out of bounds or the center cannot be
-    /// set (a shape or index mismatch failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when `new_center`
+    /// is out of range or an intermediate center move fails.
     ///
     pub fn set_center(&mut self, new_center: usize) -> Result<()> {
         if new_center >= self.len() {
@@ -368,8 +373,8 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
     /// Set two adjacent site tensors (useful for TEBD-like algorithms)
     /// # Errors
     ///
-    /// Returns an error when the two-site tensors are incompatible (a shape
-    /// mismatch) or the merge fails (a backend failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the train has
+    /// fewer than two sites or `i` is not the first index of an adjacent pair.
     ///
     pub fn set_two_site_tensors(
         &mut self,
@@ -437,8 +442,9 @@ impl<T: TTScalar + Scalar + Default> AbstractTensorTrain<T> for SiteTensorTrain<
 ///
 /// # Errors
 ///
-/// Returns an error when the canonicalization fails (a shape or index
-/// mismatch, or a backend failure).
+/// Returns [`SimpleTensorTrainError::InvalidOperation`] when a QR/LQ
+/// decomposition, matrix multiply, or tensor allocation fails. An empty or
+/// single-site slice, or an out-of-range `center`, succeeds unchanged.
 ///
 pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
     tensors: &mut [Tensor3<T>],

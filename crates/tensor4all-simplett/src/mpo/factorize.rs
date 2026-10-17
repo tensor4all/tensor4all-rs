@@ -120,8 +120,8 @@ impl SVDScalar for Complex64 {
 /// traits and should use `factorize_lu` directly.
 /// # Errors
 ///
-/// Returns an error when the factorization fails (a non-convergence, singular,
-/// or backend failure).
+/// Returns [`MPOError::FactorizationError`] when the SVD computation fails,
+/// when an empty matrix is factorized, or when an output cannot be read.
 ///
 pub fn factorize<T: SVDScalar>(
     matrix: &Matrix2<T>,
@@ -322,8 +322,9 @@ fn factorize_rsvd<T: SVDScalar>(
 /// matching the SVD path.
 /// # Errors
 ///
-/// Returns an error when the LU factorization fails (a singular or backend
-/// failure).
+/// Returns [`MPOError::MatrixCI`] when the LU/CI factorization fails (for
+/// example a singular matrix), or [`MPOError::InvalidOperation`] when a factor
+/// matrix cannot be allocated.
 ///
 pub fn factorize_lu<T>(
     matrix: &Matrix2<T>,
@@ -391,8 +392,8 @@ where
 /// Use this directly when you need CI-based factorization.
 /// # Errors
 ///
-/// Returns an error when the cross-interpolation factorization fails (a
-/// non-convergence or backend failure).
+/// Returns the same errors as [`factorize_lu`]: [`MPOError::MatrixCI`] or
+/// [`MPOError::InvalidOperation`].
 ///
 pub fn factorize_ci<T>(
     matrix: &Matrix2<T>,

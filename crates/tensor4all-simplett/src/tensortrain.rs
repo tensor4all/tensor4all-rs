@@ -428,8 +428,9 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the contraction or operation fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when a site index in
+    /// `dims` is out of range or an intermediate matrix multiply / tensor
+    /// allocation fails.
     ///
     /// # Examples
     ///

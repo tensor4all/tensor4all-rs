@@ -23,8 +23,9 @@ use crate::common::{
 ///
 /// # Errors
 ///
-/// Returns an error when the operator construction fails (an overflow or
-/// invalid-configuration failure, or a shape mismatch).
+/// Returns [`QuanticsTransformError::Operation`] when `f` is empty, when
+/// `boundary` is [`BoundaryCondition::Open`], when a core is not
+/// two-dimensional, or when the affine or MPO construction fails.
 ///
 pub fn difference_kernel_mpo(
     f: &SimpleTensorTrain<Complex64>,
@@ -130,8 +131,8 @@ fn checked_difference_tensor_dims(
 ///
 /// # Errors
 ///
-/// Returns an error when the operator construction fails (an overflow or
-/// invalid-configuration failure, or a shape mismatch).
+/// Returns [`QuanticsTransformError::Operation`] under the same conditions as
+/// [`difference_kernel_mpo`], or when the operator conversion fails.
 ///
 pub fn difference_kernel_operator(
     f: &SimpleTensorTrain<Complex64>,

@@ -352,8 +352,10 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, an
-    /// SVD or non-convergence failure, or a backend failure).
+    /// Returns [`SimpleTensorTrainError::MatrixCI`] when the LU/CI
+    /// factorization fails, or
+    /// [`SimpleTensorTrainError::InvalidOperation`] when the SVD factorization,
+    /// a matrix multiply, or a tensor allocation fails.
     ///
     /// # Examples
     ///
@@ -506,8 +508,10 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, an
-    /// SVD or non-convergence failure, or a backend failure).
+    /// Returns [`SimpleTensorTrainError::MatrixCI`] when the LU/CI
+    /// factorization fails, or
+    /// [`SimpleTensorTrainError::InvalidOperation`] when the SVD factorization,
+    /// a matrix multiply, or a tensor allocation fails.
     ///
     /// # Examples
     ///

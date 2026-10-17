@@ -24,8 +24,9 @@ impl<T: TTScalar> SiteMPO<T> {
     /// Create a SiteMPO from an MPO, placing the center at the given position
     /// # Errors
     ///
-    /// Returns an error when the MPO cannot be converted (a shape or index
-    /// mismatch, or a backend failure).
+    /// Returns [`MPOError::Empty`] for an empty MPO,
+    /// [`MPOError::InvalidCenter`] when `center` is out of range, or
+    /// [`MPOError::InvalidOperation`] when moving the center fails.
     ///
     pub fn from_mpo(mpo: MPO<T>, center: usize) -> Result<Self> {
         if mpo.is_empty() {
@@ -119,8 +120,8 @@ impl<T: TTScalar> SiteMPO<T> {
     /// Move the orthogonality center one position to the left
     /// # Errors
     ///
-    /// Returns an error when the center cannot be moved (a shape or index
-    /// mismatch, or a backend failure).
+    /// Returns [`MPOError::InvalidOperation`] when the center is already at
+    /// position 0.
     ///
     pub fn move_center_left(&mut self) -> Result<()> {
         if self.center == 0 {
@@ -138,8 +139,8 @@ impl<T: TTScalar> SiteMPO<T> {
     /// Move the orthogonality center one position to the right
     /// # Errors
     ///
-    /// Returns an error when the center cannot be moved (a shape or index
-    /// mismatch, or a backend failure).
+    /// Returns [`MPOError::InvalidOperation`] when the center is already at the
+    /// last position.
     ///
     pub fn move_center_right(&mut self) -> Result<()> {
         if self.center >= self.len() - 1 {
@@ -157,8 +158,8 @@ impl<T: TTScalar> SiteMPO<T> {
     /// Move the orthogonality center to the specified position
     /// # Errors
     ///
-    /// Returns an error when the site is out of bounds or the center cannot be
-    /// set (a shape or index mismatch failure).
+    /// Returns [`MPOError::InvalidCenter`] when `target` is out of range, or
+    /// [`MPOError::InvalidOperation`] when an intermediate center move fails.
     ///
     pub fn set_center(&mut self, target: usize) -> Result<()> {
         if target >= self.len() {

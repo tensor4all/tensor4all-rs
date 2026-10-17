@@ -35,8 +35,11 @@ use crate::einsum_helper::{einsum_tensors, typed_tensor_reshape, EinsumScalar};
 /// - bond dimensions: product of input bond dimensions (before compression)
 /// # Errors
 ///
-/// Returns an error when the contraction or operation fails (a shape or
-/// index mismatch, or a backend failure).
+/// Returns [`MPOError::LengthMismatch`] when the two MPOs have different
+/// lengths, [`MPOError::SharedDimensionMismatch`] when a shared physical
+/// dimension disagrees, or [`MPOError::InvalidOperation`] /
+/// [`MPOError::FactorizationError`] when a site contraction or the optional
+/// compression fails.
 ///
 pub fn contract_naive<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,

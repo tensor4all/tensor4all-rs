@@ -134,11 +134,6 @@ impl FourierOptions {
     }
 
     /// Create options for forward Fourier transform.
-    /// # Errors
-    ///
-    /// Returns an error when the forward transform fails (a shape mismatch or
-    /// backend failure).
-    ///
     pub fn forward() -> Self {
         Self::default()
     }
@@ -206,9 +201,9 @@ impl FTCore {
     /// Get the forward Fourier transform operator.
     ///
     /// # Errors
-    /// Returns an error when converting the cached Fourier MPO to a linear
-    /// operator fails (a shape mismatch or backend failure) or a required
-    /// site-dimension allocation fails (an overflow failure).
+    /// Returns [`QuanticsTransformError::Operation`] when the site-dimension
+    /// allocation fails or when the cached MPO cannot be converted to a linear
+    /// operator.
     pub fn forward(&self) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
         let mut site_dims =
             try_vec_with_capacity::<usize>("Fourier forward site dimensions", self.r)?;
@@ -220,8 +215,9 @@ impl FTCore {
     ///
     /// # Errors
     ///
-    /// Returns an error when the inverse transform fails (a shape mismatch or
-    /// backend failure).
+    /// Returns [`QuanticsTransformError::Operation`] when the Fourier MPO
+    /// construction, the site-dimension allocation, or the operator conversion
+    /// fails.
     ///
     pub fn backward(&self) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
         let inverse_options = FourierOptions {

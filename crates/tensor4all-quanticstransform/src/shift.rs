@@ -76,8 +76,9 @@ pub fn shift_operator(
 ///
 /// # Errors
 ///
-/// Returns an error when the operator construction fails (an overflow or
-/// invalid-configuration failure, or a shape mismatch).
+/// Returns [`QuanticsTransformError::Operation`] when `r` is zero, when
+/// `nvariables` or `target_var` is invalid, or when the MPO construction or
+/// operator conversion fails.
 ///
 /// # Examples
 ///

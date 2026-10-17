@@ -288,8 +288,10 @@ pub fn tensor3_zeros<T: Clone + Default + TensorScalar>(
 ///
 /// # Errors
 ///
-/// Returns an error when the construction or conversion fails (a shape or
-/// index mismatch, or a backend failure).
+/// Returns [`SimpleTensorTrainError::InvalidOperation`] when the shape product
+/// overflows `usize` or the backend rejects the tensor, or
+/// [`SimpleTensorTrainError::DataLengthMismatch`] when `data.len()` differs
+/// from the shape product.
 ///
 /// # Examples
 ///

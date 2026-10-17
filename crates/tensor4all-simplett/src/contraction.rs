@@ -64,8 +64,9 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the contraction or operation fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the two trains
+    /// differ in length or site dimensions, or when an intermediate environment
+    /// contraction cannot be read.
     ///
     /// # Examples
     ///
@@ -312,8 +313,8 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
 ///
 /// # Errors
 ///
-/// Returns an error when the contraction or operation fails (a shape or
-/// index mismatch, or a backend failure).
+/// Returns [`SimpleTensorTrainError::InvalidOperation`], the same error as
+/// [`SimpleTensorTrain::inner_product`].
 ///
 /// # Examples
 ///

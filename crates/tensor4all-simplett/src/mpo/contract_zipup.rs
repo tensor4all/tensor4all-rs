@@ -39,8 +39,11 @@ use tenferro_tensor::TypedTensor;
 /// The contracted and compressed MPO C
 /// # Errors
 ///
-/// Returns an error when the contraction or operation fails (a shape or
-/// index mismatch, or a backend failure).
+/// Returns [`MPOError::LengthMismatch`] when the two MPOs have different
+/// lengths, [`MPOError::SharedDimensionMismatch`] when a shared physical
+/// dimension disagrees, or [`MPOError::InvalidOperation`] /
+/// [`MPOError::FactorizationError`] when a site contraction or factorization
+/// fails.
 ///
 pub fn contract_zipup<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,

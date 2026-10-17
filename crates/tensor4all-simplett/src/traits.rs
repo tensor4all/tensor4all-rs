@@ -126,8 +126,12 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`SimpleTensorTrainError::IndexLengthMismatch`] when `indices`
+    /// does not have one entry per site, [`SimpleTensorTrainError::Empty`] for
+    /// an empty train, [`SimpleTensorTrainError::IndexOutOfBounds`] when an
+    /// index exceeds its site dimension, or
+    /// [`SimpleTensorTrainError::InvalidOperation`] when the final contraction
+    /// is not scalar.
     ///
     /// # Examples
     ///

@@ -35,8 +35,11 @@ impl LagrangePolynomials {
     /// basis can be evaluated with [`LagrangePolynomials::evaluate`].
     ///
     /// # Errors
-    /// Returns an error when the basis data is invalid (an invalid-configuration
-    /// failure).
+    ///
+    /// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when
+    /// `grid` has fewer than two points, contains a non-finite value, or has
+    /// insufficiently distinct values to form finite non-zero barycentric
+    /// weights.
     /// # Examples
     ///
     /// ```
@@ -231,7 +234,9 @@ impl LagrangePolynomials {
 /// `degree` is the local polynomial degree and must be at least one. The
 /// returned basis has `degree + 1` nodes.
 /// # Errors
-/// Returns an error when `degree` is zero (an invalid-configuration failure).
+///
+/// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when
+/// `degree` is zero.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::get_chebyshev_grid;
@@ -314,8 +319,11 @@ fn chebyshev_lobatto_barycentric_weights(degree: usize) -> Vec<f64> {
 /// index is the binary refinement digit `sigma`, and the value is
 /// `P_alpha((sigma + grid_beta) / 2)`.
 /// # Errors
-/// Returns an error when a basis evaluation fails (a non-convergence or
-/// backend failure).
+///
+/// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when the
+/// core size overflows `usize` or a basis evaluation fails, or
+/// [`crate::error::InterpolativeQttError::SimpleTensorTrain`] when the tensor
+/// construction fails.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::{get_chebyshev_grid, interpolation_tensor};

@@ -28,22 +28,26 @@ pub trait StorageScalar: Clone + Send + Sync + 'static {
     /// Build a dense [`Storage`] from column-major data.
     /// # Errors
     ///
-    /// Returns an error when the data length does not match the logical dimension
-    /// product (a shape mismatch).
+    /// Returns an error when the shape product would overflow `usize` or
+    /// `data.len()` does not match the expected shape.
     ///
     fn build_dense_storage(data: Vec<Self>, logical_dims: &[usize]) -> Result<Storage>;
     /// Build a diagonal [`Storage`] from diagonal payload data.
     /// # Errors
     ///
-    /// Returns an error when the diagonal payload is incompatible with the logical
-    /// rank (a shape mismatch).
+    /// Returns an error when the diagonal payload length does not match the
+    /// length required for `logical_rank` or a stride product would overflow
+    /// `usize`.
     ///
     fn build_diag_storage(diag_data: Vec<Self>, logical_rank: usize) -> Result<Storage>;
     /// Build a structured [`Storage`] from explicit payload metadata.
     /// # Errors
     ///
-    /// Returns an error when the structured metadata is inconsistent (an
-    /// invalid-storage failure).
+    /// Returns an error when `axis_classes` is not in canonical
+    /// first-appearance order, when the `payload_dims` or `strides` ranks do
+    /// not match `axis_classes`, when a stride is negative, when a size
+    /// product would overflow `usize`, or when `data.len()` does not match the
+    /// required payload length.
     ///
     fn build_structured_storage(
         data: Vec<Self>,
@@ -303,8 +307,8 @@ impl<T> StructuredStorage<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the data length does not match the logical dimension
-    /// product (a shape mismatch).
+    /// Returns [`StorageError::Operation`] when a column-major stride overflows
+    /// `usize` or when the payload length does not match `logical_dims`.
     ///
     /// # Examples
     ///
@@ -329,8 +333,9 @@ impl<T> StructuredStorage<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the diagonal payload is incompatible with the logical
-    /// rank (a shape mismatch).
+    /// Returns [`StorageError::Operation`] when a stride product overflows
+    /// `usize` or when the required payload length does not match
+    /// `diag_data.len()`.
     ///
     /// # Examples
     ///
@@ -605,8 +610,8 @@ impl<T: Clone> StructuredStorage<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the permutation is not a valid reordering of the axes
-    /// (an invalid-index failure).
+    /// Returns [`StorageError::Operation`] when `perm` is not a permutation of
+    /// the logical axes.
     ///
     /// # Examples
     ///
@@ -1081,8 +1086,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error when the data length does not match the logical dimension
-    /// product (a shape mismatch).
+    /// Returns an error when the shape product would overflow `usize` or
+    /// `data.len()` does not match the expected shape.
     ///
     /// # Examples
     ///
@@ -1109,8 +1114,9 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error when the diagonal payload is incompatible with the logical
-    /// rank (a shape mismatch).
+    /// Returns an error when the diagonal payload length does not match the
+    /// length required for `logical_rank` or a stride product would overflow
+    /// `usize`.
     ///
     /// # Examples
     ///
@@ -1144,8 +1150,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns `StorageError` when the dimension is invalid (a shape
-    /// mismatch).
+    /// Returns [`StorageError::Operation`] when the dense storage construction
+    /// or allocation fails.
     pub fn new_dense<T: StorageScalar + Default>(size: usize) -> StorageResult<Self> {
         Self::from_dense_col_major(vec![T::default(); size], &[size])
             .map_err(Self::invalid_storage_error)
@@ -1174,8 +1180,11 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error when the structured metadata is inconsistent (an
-    /// invalid-storage failure).
+    /// Returns an error when `axis_classes` is not in canonical
+    /// first-appearance order, when the `payload_dims` or `strides` ranks do
+    /// not match `axis_classes`, when a stride is negative, when a size
+    /// product would overflow `usize`, or when `data.len()` does not match the
+    /// required payload length.
     ///
     /// # Examples
     ///
@@ -1262,8 +1271,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error when the diagonal payload is incompatible with the logical
-    /// rank (a shape mismatch).
+    /// Returns [`StorageError::Operation`] when the diagonal payload is
+    /// incompatible with `logical_rank` or a stride product overflows `usize`.
     ///
     /// # Examples
     ///
@@ -1287,8 +1296,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns an error when the diagonal payload is incompatible with the logical
-    /// rank (a shape mismatch).
+    /// Returns [`StorageError::Operation`] when the diagonal payload is
+    /// incompatible with `logical_rank` or a stride product overflows `usize`.
     ///
     /// # Examples
     ///
@@ -1939,8 +1948,8 @@ impl Storage {
     ///
     /// # Errors
     ///
-    /// Returns `StorageError` when the permutation is invalid (an
-    /// invalid-index failure).
+    /// Returns [`StorageError::Operation`] when `perm` is not a permutation of
+    /// the logical axes.
     pub fn permute_storage(&self, _dims: &[usize], perm: &[usize]) -> StorageResult<Storage> {
         match &self.0 {
             StorageRepr::F64(v) => Ok(Storage::from_repr(StorageRepr::F64(

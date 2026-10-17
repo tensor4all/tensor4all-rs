@@ -204,8 +204,10 @@ pub fn tensor4_zeros<T: Clone + Default + TensorScalar>(
 /// Create a Tensor4 from flat data (column-major order)
 /// # Errors
 ///
-/// Returns an error when the construction or conversion fails (a shape or
-/// index mismatch, or a backend failure).
+/// Returns [`MPOError::InvalidOperation`] when the shape product overflows
+/// `usize` or the backend rejects the tensor, or
+/// [`MPOError::DataLengthMismatch`] when `data.len()` differs from the shape
+/// product.
 ///
 pub fn tensor4_from_data<T: TensorScalar>(
     data: Vec<T>,

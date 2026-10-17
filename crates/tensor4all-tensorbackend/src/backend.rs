@@ -1304,8 +1304,8 @@ fn require_host_linalg_tensor<T: TensorScalar>(
 /// Compute a thin/economy SVD on a typed tensor.
 /// # Errors
 ///
-/// Returns an error when the SVD fails (a backend or non-convergence
-/// failure).
+/// Returns a [`BackendLinalgError`] when `a` is not host-backed, when the
+/// backend session is unavailable, or when the backend SVD fails.
 ///
 pub fn svd_backend<T>(a: &TypedTensor<T>) -> std::result::Result<SvdResult<T>, BackendLinalgError>
 where
@@ -1350,8 +1350,8 @@ where
 /// column-major storage can be transferred to the backend without copying.
 /// # Errors
 ///
-/// Returns an error when the QR fails (a backend or non-convergence
-/// failure).
+/// Returns a [`BackendLinalgError`] when `a` is not host-backed, when the
+/// backend session is unavailable, or when the backend QR fails.
 ///
 pub fn qr_backend<T>(
     a: TypedTensor<T>,
@@ -1393,9 +1393,9 @@ where
 
 /// Solve `A X = B` with the configured tenferro backend.
 /// # Errors
-/// Returns an error when the input shapes or scalar dtype are invalid (a
-/// shape or dtype mismatch) or the coefficient matrix is singular (a singular
-/// failure).
+/// Returns a [`BackendLinalgError`] when `a` or `b` is not host-backed, when
+/// the backend session is unavailable, or when the solve fails (for example a
+/// singular `a`).
 pub fn solve_backend<T>(
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
@@ -1428,8 +1428,9 @@ where
 /// a transpose to `A`, and `unit_diagonal` treats the diagonal of `A` as ones.
 /// # Errors
 ///
-/// Returns an error when the solve fails (a backend, singular, or shape
-/// mismatch failure).
+/// Returns a [`BackendLinalgError`] when `a` or `b` is not host-backed, when
+/// the backend session is unavailable, or when the triangular solve fails
+/// (for example a singular `a` or inconsistent triangular flags).
 ///
 pub fn triangular_solve_backend<T>(
     a: &TypedTensor<T>,
@@ -1475,9 +1476,8 @@ where
 /// matrix-to-tensor conversion centralized in `tensor4all-tensorbackend`.
 /// # Errors
 ///
-/// Returns an error when the input shapes or scalar dtype are invalid (a
-/// shape or dtype mismatch) or the solve fails (a backend or singular
-/// failure).
+/// Returns a [`BackendLinalgError`] when the backend session is unavailable
+/// or the solve fails (for example a singular `a`).
 ///
 /// # Examples
 /// ```
@@ -1504,9 +1504,8 @@ where
 /// scalar types.
 /// # Errors
 ///
-/// Returns an error when the input shapes or scalar dtype are invalid (a
-/// shape or dtype mismatch) or the solve fails (a backend or singular
-/// failure).
+/// Returns a [`BackendLinalgError`] when the backend session is unavailable
+/// or the solve fails (for example a singular `a`).
 ///
 /// # Examples
 /// ```
@@ -1533,10 +1532,9 @@ where
 /// a transpose to `A`, and `unit_diagonal` treats the diagonal of `A` as ones.
 /// # Errors
 ///
-/// Returns an error when the input shapes or scalar dtype are invalid (a
-/// shape or dtype mismatch), the triangular flags are invalid (an
-/// invalid-configuration failure), or the solve fails (a backend or singular
-/// failure).
+/// Returns a [`BackendLinalgError`] when the backend session is unavailable
+/// or the triangular solve fails (for example a singular `a` or inconsistent
+/// triangular flags).
 ///
 /// # Examples
 /// ```
@@ -1568,10 +1566,9 @@ where
 /// a transpose to `A`, and `unit_diagonal` treats the diagonal of `A` as ones.
 /// # Errors
 ///
-/// Returns an error when the input shapes or scalar dtype are invalid (a
-/// shape or dtype mismatch), the triangular flags are invalid (an
-/// invalid-configuration failure), or the solve fails (a backend or singular
-/// failure).
+/// Returns a [`BackendLinalgError`] when the backend session is unavailable
+/// or the triangular solve fails (for example a singular `a` or inconsistent
+/// triangular flags).
 ///
 /// # Examples
 /// ```
@@ -1631,8 +1628,8 @@ where
 /// Compute complete-pivoting LU with the configured tenferro backend.
 /// # Errors
 ///
-/// Returns an error when the LU factorization fails (a backend or
-/// non-convergence failure).
+/// Returns a [`BackendLinalgError`] when `a` is not host-backed, when the
+/// backend session is unavailable, or when the factorization fails.
 ///
 pub fn full_piv_lu_backend<T>(
     a: &TypedTensor<T>,
@@ -1681,9 +1678,8 @@ where
 /// use [`Matrix`] as their dense boundary type.
 /// # Errors
 ///
-/// Returns an error when the backend does not support the input dtype (a
-/// dtype mismatch) or the factorization fails (a backend or
-/// non-convergence failure).
+/// Returns a [`BackendLinalgError`] when the backend session is unavailable
+/// or the full-pivoting LU factorization fails.
 ///
 /// # Examples
 /// ```

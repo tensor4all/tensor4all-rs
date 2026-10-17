@@ -723,8 +723,8 @@ impl BackendScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when either input is not a real scalar (a dtype
-    /// mismatch failure).
+    /// Returns an error when `real` or `imag` is complex rather than a real
+    /// scalar (an invalid input).
     ///
     /// # Examples
     ///

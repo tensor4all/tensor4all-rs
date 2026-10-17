@@ -870,7 +870,9 @@ fn cached_einsum_native_reads(
 /// Build a dense native tensor from column-major data.
 /// # Errors
 ///
-/// Returns an error when the data length does not match the logical dimension product (a shape mismatch) or the backend conversion fails.
+/// Returns an error when the shape product would overflow `usize`,
+/// when `data.len()` does not match the expected shape, or when the backend
+/// rejects the tensor.
 pub fn dense_native_tensor_from_col_major<T: TensorElement>(
     data: &[T],
     logical_dims: &[usize],
@@ -892,8 +894,9 @@ pub fn dense_native_tensor_from_col_major<T: TensorElement>(
 ///
 /// # Errors
 ///
-/// Returns an error when the data length does not match the logical dimension
-/// product (a shape mismatch) or the backend conversion fails.
+/// Returns an error when the shape product would overflow `usize`,
+/// when `data.len()` does not match the expected shape, or when the backend
+/// rejects the tensor.
 pub fn dense_native_tensor_from_col_major_owned<T: TensorElement>(
     data: Vec<T>,
     logical_dims: &[usize],
@@ -904,7 +907,9 @@ pub fn dense_native_tensor_from_col_major_owned<T: TensorElement>(
 /// Build a dense native tensor whose logical values are diagonal.
 /// # Errors
 ///
-/// Returns an error when the diagonal payload is incompatible with the logical rank (a shape mismatch) or the backend conversion fails.
+/// Returns an error when `logical_rank` is zero, when expanding the diagonal
+/// would overflow `usize`, or when the backend rejects the resulting dense
+/// tensor.
 pub fn diag_native_tensor_from_col_major<T: TensorElement>(
     data: &[T],
     logical_rank: usize,
@@ -915,7 +920,9 @@ pub fn diag_native_tensor_from_col_major<T: TensorElement>(
 /// Convert storage to a dense native tensor.
 /// # Errors
 ///
-/// Returns an error when the storage cannot be converted to a native tensor (a scalar-kind mismatch or backend failure).
+/// Returns a [`BridgeError`] when materializing `storage` to the requested
+/// dense shape fails (for example a scalar-kind or shape mismatch) or when the
+/// dense-to-native conversion fails.
 pub fn storage_to_native_tensor(
     storage: &Storage,
     logical_dims: &[usize],
@@ -945,7 +952,9 @@ pub fn storage_to_native_tensor(
 /// are materialized into an owned native tensor.
 /// # Errors
 ///
-/// Returns an error when the storage payload cannot be read into a native buffer (a scalar-kind mismatch or backend failure).
+/// Returns a [`BridgeError`] when the storage is neither `f64` nor `c64`, when
+/// the contiguous payload view cannot be built, or when the payload cannot be
+/// read into a native tensor.
 pub fn storage_payload_native_read_input(
     storage: &Storage,
 ) -> std::result::Result<NativeTensorReadInput<'_>, BridgeError> {
@@ -991,7 +1000,9 @@ pub fn storage_payload_native_read_input(
 /// Materialize a native tensor into dense storage.
 /// # Errors
 ///
-/// Returns an error when the native tensor cannot be converted to storage (a scalar-kind mismatch or backend failure).
+/// Returns a [`BridgeError`] when the tensor has an external scalar kind, when
+/// reading its host slice fails, or when the dense storage materialization
+/// fails.
 pub fn native_tensor_primal_to_storage(
     tensor: &NativeTensor,
 ) -> std::result::Result<Storage, BridgeError> {
@@ -1086,8 +1097,8 @@ pub fn native_tensor_primal_to_storage(
 /// Materialize dense column-major values from a native tensor.
 /// # Errors
 ///
-/// Returns an error when the native tensor cannot be materialized as a dense
-/// column-major buffer (a dtype mismatch or backend failure).
+/// Returns a [`BridgeError`] when `tensor`'s dtype does not match `T` or when
+/// its host data cannot be read.
 pub fn native_tensor_primal_to_dense_col_major<T: TensorElement>(
     tensor: &NativeTensor,
 ) -> std::result::Result<Vec<T>, BridgeError> {
@@ -1119,8 +1130,9 @@ pub fn native_tensor_primal_to_dense_col_major<T: TensorElement>(
 /// scalar type `T` selects the promoted target.
 /// # Errors
 ///
-/// Returns an error when the native tensor is not compatible with the scalar
-/// target (a dtype mismatch) or the materialization fails.
+/// Returns a [`BridgeError`] when the tensor's real/complex kind does not
+/// match `T`, when conversion to `T` fails, or when the tensor is not
+/// diagonal-compatible (rank 0 or unequal dimensions).
 ///
 /// # Examples
 /// ```
@@ -1160,7 +1172,9 @@ pub fn native_tensor_primal_to_diag<T: TensorElement>(
 /// Reshape a native tensor without changing its column-major linearization.
 /// # Errors
 ///
-/// Returns an error when the native tensor cannot be reshaped to the requested dimensions (a shape mismatch) or the backend fails.
+/// Returns an error when the backend session is unavailable or when
+/// `logical_dims` has a different element count than `tensor` or is otherwise
+/// rejected by the backend reshape.
 pub fn reshape_col_major_native_tensor(
     tensor: &NativeTensor,
     logical_dims: &[usize],
@@ -1172,7 +1186,8 @@ pub fn reshape_col_major_native_tensor(
 /// Compute a QR decomposition on a native tensor.
 /// # Errors
 ///
-/// Returns an error when the QR factorization fails (a backend or non-convergence failure).
+/// Returns a [`BridgeError`] when the backend session is unavailable or when
+/// the QR factorization fails.
 pub fn qr_native_tensor(
     tensor: &NativeTensor,
 ) -> std::result::Result<(NativeTensor, NativeTensor), BridgeError> {
@@ -1184,7 +1199,8 @@ pub fn qr_native_tensor(
 /// Compute an SVD on a native tensor.
 /// # Errors
 ///
-/// Returns an error when the SVD factorization fails (a backend or non-convergence failure).
+/// Returns an error when the backend session is unavailable or when the SVD
+/// fails.
 pub fn svd_native_tensor(
     tensor: &NativeTensor,
 ) -> Result<(NativeTensor, NativeTensor, NativeTensor)> {
@@ -1196,7 +1212,9 @@ pub fn svd_native_tensor(
 /// Sum all elements of a native tensor, returning a dynamic scalar.
 /// # Errors
 ///
-/// Returns an error when the native reduction fails (a backend or dtype mismatch failure).
+/// Returns a [`BridgeError`] when the backend reduction fails, when the
+/// reduced result cannot read back its host slice, or when the scalar cannot
+/// be wrapped as a [`BackendScalar`].
 pub fn sum_native_tensor(tensor: &NativeTensor) -> std::result::Result<BackendScalar, BridgeError> {
     let reduced = if tensor.shape().is_empty() {
         tensor
@@ -1221,7 +1239,9 @@ pub fn tangent_native_tensor(_tensor: &NativeTensor) -> Option<NativeTensor> {
 /// Multiply a native tensor by a dynamic scalar.
 /// # Errors
 ///
-/// Returns an error when the native scaling fails (a backend or dtype mismatch failure).
+/// Returns a [`BridgeError`] when `tensor` or `scalar` cannot be promoted to a
+/// common dtype, when the dtype is integer, bool, or external, or when the
+/// backend rejects the scaled tensor.
 pub fn scale_native_tensor(
     tensor: &NativeTensor,
     scalar: &BackendScalar,
@@ -1290,7 +1310,9 @@ pub fn scale_native_tensor(
 /// Compute `a * lhs + b * rhs`.
 /// # Errors
 ///
-/// Returns an error when the native axpby fails (a shape or dtype mismatch, or a backend failure).
+/// Returns a [`BridgeError`] when `lhs` and `rhs` have different shapes, when
+/// the operands cannot be promoted to a common dtype, when the dtype is
+/// integer, bool, or external, or when the backend rejects the result.
 pub fn axpby_native_tensor(
     lhs: &NativeTensor,
     a: &BackendScalar,
@@ -1601,7 +1623,9 @@ pub fn einsum_native_tensors(
 /// non-contiguous operands remain borrowed until runtime execution.
 /// # Errors
 ///
-/// Returns an error when the native einsum fails (a shape or dtype mismatch, or a backend failure).
+/// Returns an error when `operands` is empty, when a tensor rank does not
+/// match its id list length, when a label is out of bounds for the supported
+/// range, or when the backend einsum fails.
 pub fn einsum_native_tensor_reads(
     operands: &[(&NativeTensorReadInput<'_>, &[usize])],
     output_ids: &[usize],
@@ -1636,7 +1660,8 @@ pub fn einsum_native_tensor_reads(
 /// Permute axes of a native tensor.
 /// # Errors
 ///
-/// Returns an error when the native permutation fails (a shape or index mismatch, or a backend failure).
+/// Returns a [`BridgeError`] when `perm` is not a permutation of `tensor`'s
+/// axes or when the backend transpose fails.
 pub fn permute_native_tensor(
     tensor: &NativeTensor,
     perm: &[usize],
@@ -1649,7 +1674,9 @@ pub fn permute_native_tensor(
 /// Contract two native tensors along matching axes.
 /// # Errors
 ///
-/// Returns an error when the native contraction fails (a shape or index mismatch, or a backend failure).
+/// Returns an error when `axes_a`/`axes_b` are out of bounds or have differing
+/// lengths, when the contracted dimensions do not match, or when the backend
+/// einsum fails.
 pub fn contract_native_tensor(
     lhs: &NativeTensor,
     axes_a: &[usize],
@@ -1671,7 +1698,7 @@ pub fn contract_native_tensor(
 /// Compute the outer product of two native tensors.
 /// # Errors
 ///
-/// Returns an error when the native outer product fails (a shared-index or shape mismatch, or a backend failure).
+/// Returns a [`BridgeError`] when the underlying einsum contraction fails.
 pub fn outer_product_native_tensor(
     lhs: &NativeTensor,
     rhs: &NativeTensor,
@@ -1682,7 +1709,9 @@ pub fn outer_product_native_tensor(
 /// Conjugate a native tensor.
 /// # Errors
 ///
-/// Returns an error when the native conjugation fails (a dtype mismatch or backend failure).
+/// Returns a [`BridgeError`] when the dtype is external, when duplicating a
+/// real tensor fails, or when the host slice of a complex tensor cannot be
+/// read.
 pub fn conj_native_tensor(tensor: &NativeTensor) -> std::result::Result<NativeTensor, BridgeError> {
     match tensor.dtype() {
         DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => tensor
@@ -1715,7 +1744,8 @@ pub fn conj_native_tensor(tensor: &NativeTensor) -> std::result::Result<NativeTe
 /// Permute storage by round-tripping through native tensors.
 /// # Errors
 ///
-/// Returns an error when the native storage permutation fails (a shape or index mismatch, or a backend failure).
+/// Returns a [`BridgeError`] when the storage-to-native conversion, the
+/// permutation, or the native-to-storage conversion fails.
 pub fn permute_storage_native(
     storage: &Storage,
     logical_dims: &[usize],
@@ -1729,7 +1759,8 @@ pub fn permute_storage_native(
 /// Contract storages via native tensors.
 /// # Errors
 ///
-/// Returns an error when the native storage contraction fails (a shape or index mismatch, or a backend failure).
+/// Returns a [`BridgeError`] when either storage-to-native conversion, the
+/// contraction, or the native-to-storage conversion fails.
 pub fn contract_storage_native(
     storage_a: &Storage,
     dims_a: &[usize],
@@ -1748,7 +1779,8 @@ pub fn contract_storage_native(
 /// Outer-product storages via native tensors.
 /// # Errors
 ///
-/// Returns an error when the native storage outer product fails (a shared-index or shape mismatch, or a backend failure).
+/// Returns a [`BridgeError`] when either storage-to-native conversion, the
+/// outer product, or the native-to-storage conversion fails.
 pub fn outer_product_storage_native(
     lhs: &Storage,
     lhs_dims: &[usize],
@@ -1765,7 +1797,8 @@ pub fn outer_product_storage_native(
 /// Scale storage by a scalar via native tensors.
 /// # Errors
 ///
-/// Returns an error when the native storage scaling fails (a dtype mismatch or backend failure).
+/// Returns a [`BridgeError`] when the storage-to-native conversion, the
+/// scaling, or the native-to-storage conversion fails.
 pub fn scale_storage_native(
     storage: &Storage,
     logical_dims: &[usize],
@@ -1779,7 +1812,8 @@ pub fn scale_storage_native(
 /// Compute `a * lhs + b * rhs` over storages via native tensors.
 /// # Errors
 ///
-/// Returns an error when the native storage axpby fails (a shape or dtype mismatch, or a backend failure).
+/// Returns a [`BridgeError`] when either storage-to-native conversion, the
+/// axpby, or the native-to-storage conversion fails.
 pub fn axpby_storage_native(
     lhs: &Storage,
     lhs_dims: &[usize],

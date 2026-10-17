@@ -46,8 +46,9 @@ fn validate_environment_site(len: usize, site: usize) -> Result<()> {
 /// This is the Rust equivalent of `_contractsitetensors` from Julia.
 /// # Errors
 ///
-/// Returns an error when the site tensors are incompatible (a shape or index
-/// mismatch) or the contraction fails (a backend failure).
+/// Returns [`MPOError::SharedDimensionMismatch`] when the shared physical
+/// dimensions disagree, or [`MPOError::InvalidOperation`] when the einsum
+/// contraction or reshape fails.
 ///
 pub fn contract_site_tensors<T: SVDScalar + EinsumScalar>(
     a: &Tensor4<T>,

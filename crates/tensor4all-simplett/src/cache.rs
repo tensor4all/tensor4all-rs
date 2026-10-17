@@ -276,8 +276,10 @@ impl<T: TTScalar> TTCache<T> {
     /// This allows treating a single tensor site as multiple logical indices.
     /// # Errors
     ///
-    /// Returns an error when the site dimensions are invalid (a shape mismatch)
-    /// or the cache cannot be configured.
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when `site_dims` has
+    /// a different length than the train, when an entry is empty, when a
+    /// dimension product overflows `usize`, or when a product does not match
+    /// the corresponding site dimension.
     ///
     pub fn with_site_dims<TT: AbstractTensorTrain<T>>(
         tt: &TT,
@@ -536,8 +538,12 @@ impl<T: TTScalar> TTCache<T> {
     /// Evaluate the tensor train at a given index set using cache
     /// # Errors
     ///
-    /// Returns an error when the cached evaluation fails (a missing-index or
-    /// invalid-state failure).
+    /// Returns [`SimpleTensorTrainError::IndexLengthMismatch`] when `indices`
+    /// does not have one entry per site, [`SimpleTensorTrainError::Empty`] for
+    /// an empty train, [`SimpleTensorTrainError::IndexOutOfBounds`] when an
+    /// index exceeds a site dimension, or
+    /// [`SimpleTensorTrainError::InvalidOperation`] when an environment
+    /// contraction fails.
     ///
     pub fn evaluate(&mut self, indices: &[LocalIndex]) -> Result<T> {
         let n = self.len();
@@ -590,8 +596,12 @@ impl<T: TTScalar> TTCache<T> {
     ///   to avoid the search overhead.
     /// # Errors
     ///
-    /// Returns an error when a cached evaluation fails (a missing-index or
-    /// invalid-state failure).
+    /// Returns [`SimpleTensorTrainError::IndexLengthMismatch`] when any index
+    /// set does not have one entry per site, [`SimpleTensorTrainError::Empty`]
+    /// for an empty train, [`SimpleTensorTrainError::IndexOutOfBounds`] when an
+    /// index exceeds a site dimension, or
+    /// [`SimpleTensorTrainError::InvalidOperation`] when `split` is invalid or
+    /// an environment contraction fails.
     ///
     pub fn evaluate_many(
         &mut self,

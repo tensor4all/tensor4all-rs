@@ -214,8 +214,8 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     /// Create a VidalTensorTrain from a regular SimpleTensorTrain
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the underlying
+    /// [`VidalTensorTrain::from_tensor_train_with_partition`] conversion fails.
     ///
     pub fn from_tensor_train(tt: &SimpleTensorTrain<T>) -> Result<Self>
     where
@@ -228,8 +228,9 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     /// Create a VidalTensorTrain with a specific partition
     /// # Errors
     ///
-    /// Returns an error when the tensor train cannot be converted (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when
+    /// `partition.end` exceeds the train length, or when an intermediate QR,
+    /// SVD, matrix multiply, or tensor allocation fails.
     ///
     pub fn from_tensor_train_with_partition(
         tt: &SimpleTensorTrain<T>,
@@ -404,8 +405,8 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     /// Create a VidalTensorTrain with given tensors and singular values
     /// # Errors
     ///
-    /// Returns an error when the dimensions are invalid (a shape mismatch) or the
-    /// construction fails.
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when
+    /// `singular_values` does not have exactly `tensors.len() - 1` entries.
     ///
     pub fn new(tensors: Vec<Tensor3<T>>, singular_values: Vec<DiagMatrix>) -> Result<Self> {
         let n = tensors.len();
@@ -552,8 +553,8 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
     /// Create an InverseTensorTrain from a VidalTensorTrain
     /// # Errors
     ///
-    /// Returns an error when the Vidal representation is invalid (a shape or
-    /// index mismatch, or a backend failure).
+    /// Never fails: it only constructs `Ok` values, so no
+    /// [`SimpleTensorTrainError`] is produced despite the `Result` return type.
     ///
     pub fn from_vidal(vidal: &VidalTensorTrain<T>) -> Result<Self> {
         let n = vidal.len();
@@ -672,8 +673,8 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
     /// Create an InverseTensorTrain from a regular SimpleTensorTrain
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the underlying
+    /// [`VidalTensorTrain::from_tensor_train`] conversion fails.
     ///
     pub fn from_tensor_train(tt: &SimpleTensorTrain<T>) -> Result<Self>
     where
@@ -707,8 +708,8 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
     /// Set two adjacent site tensors along with their inverse singular values
     /// # Errors
     ///
-    /// Returns an error when the two-site tensors are incompatible (a shape
-    /// mismatch) or the merge fails (a backend failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the train has
+    /// fewer than two sites or `i` is not the first index of an adjacent pair.
     ///
     pub fn set_two_site_tensors(
         &mut self,

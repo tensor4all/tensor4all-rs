@@ -27,8 +27,8 @@ use crate::common::{
 ///
 /// # Errors
 ///
-/// Returns an error when the operator construction fails (an overflow or
-/// invalid-configuration failure, or a shape mismatch).
+/// Returns [`QuanticsTransformError::Operation`] when `r` is 0 or 1, or when
+/// the MPO construction or operator conversion fails.
 ///
 /// # Examples
 ///
@@ -74,8 +74,9 @@ pub fn flip_operator(
 ///
 /// # Errors
 ///
-/// Returns an error when the operator construction fails (an overflow or
-/// invalid-configuration failure, or a shape mismatch).
+/// Returns [`QuanticsTransformError::Operation`] when `r` is 0 or 1, when
+/// `nvariables` or `target_var` is invalid, or when the MPO construction or
+/// operator conversion fails.
 ///
 /// # Examples
 ///

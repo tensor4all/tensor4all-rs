@@ -58,8 +58,9 @@ pub enum TriangleType {
 ///
 /// # Errors
 ///
-/// Returns an error when the operator construction fails (an overflow,
-/// invalid-configuration failure, or shape mismatch).
+/// Returns [`QuanticsTransformError::InvalidConfiguration`] when `r < 2`, or
+/// [`QuanticsTransformError::Operation`] when the MPO construction or operator
+/// conversion fails.
 ///
 /// # Examples
 ///
@@ -97,8 +98,9 @@ pub fn cumsum_operator(r: usize) -> std::result::Result<QuanticsOperator, Quanti
 ///
 /// # Errors
 ///
-/// Returns an error when the operator construction fails (an overflow,
-/// invalid-configuration failure, or shape mismatch).
+/// Returns [`QuanticsTransformError::InvalidConfiguration`] when `r < 2`, or
+/// [`QuanticsTransformError::Operation`] when the MPO construction or operator
+/// conversion fails.
 ///
 /// # Examples
 ///

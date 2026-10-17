@@ -21,8 +21,9 @@ pub trait TensorElement: TensorScalar + Copy + Send + Sync + 'static {
     /// Build a dense native tensor from column-major data.
     /// # Errors
     ///
-    /// Returns an error when the data length does not match the dimensions (a
-    /// shape mismatch) or the backend conversion fails.
+    /// Returns an error when the shape product would overflow `usize`, when
+    /// `data.len()` does not match the expected shape, or when the backend
+    /// rejects the tensor.
     ///
     fn dense_native_tensor_from_col_major(data: &[Self], dims: &[usize]) -> Result<NativeTensor>;
 
@@ -68,8 +69,9 @@ pub trait TensorElement: TensorScalar + Copy + Send + Sync + 'static {
     /// Build a diagonal native tensor from column-major diagonal payload data.
     /// # Errors
     ///
-    /// Returns an error when the diagonal payload is incompatible (a shape
-    /// mismatch) or the backend conversion fails.
+    /// Returns an error when `logical_rank` is zero, when expanding the
+    /// diagonal would overflow `usize`, or when the backend rejects the
+    /// resulting dense tensor.
     ///
     fn diag_native_tensor_from_col_major(
         data: &[Self],
@@ -79,24 +81,23 @@ pub trait TensorElement: TensorScalar + Copy + Send + Sync + 'static {
     /// Build a rank-0 native tensor.
     /// # Errors
     ///
-    /// Returns an error when the scalar cannot be converted (a dtype mismatch or
-    /// backend failure).
+    /// Returns an error when the backend rejects the rank-0 tensor as invalid
+    /// input.
     ///
     fn scalar_native_tensor(value: Self) -> Result<NativeTensor>;
 
     /// Materialize dense column-major values from a native tensor.
     /// # Errors
     ///
-    /// Returns an error when the native tensor cannot be materialized (a dtype
-    /// mismatch or backend failure).
+    /// Returns an error when `tensor`'s dtype does not match `Self`.
     ///
     fn dense_values_from_native_col_major(tensor: &NativeTensor) -> Result<Vec<Self>>;
 
     /// Materialize diagonal values from a dense native tensor.
     /// # Errors
     ///
-    /// Returns an error when the native tensor cannot be materialized (a dtype
-    /// mismatch or backend failure).
+    /// Returns an error when `tensor` is rank 0, when its dimensions are not
+    /// all equal, or when its dtype does not match `Self`.
     ///
     fn diag_values_from_native_temp(tensor: &NativeTensor) -> Result<Vec<Self>>;
 }

@@ -121,9 +121,6 @@ impl LinearConstraintRow {
     /// positive scaling. If all coefficients and `rhs` are zero, the zero row
     /// is returned unchanged.
     ///
-    /// # Errors
-    /// Returns an error when the integer coefficient cannot be represented (an
-    /// overflow failure) or the operator construction fails.
     /// # Examples
     ///
     /// ```
@@ -177,9 +174,9 @@ impl LinearConstraintRow {
     /// general affine map `y = A*x + b`.
     ///
     /// # Errors
-    /// Returns an error when the rational coefficient cannot be represented (an
-    /// invalid-coefficient failure, i.e. a zero denominator or an overflow
-    /// failure) or the operator construction fails.
+    /// Returns [`QuanticsTransformError::Operation`] when a coefficient or the
+    /// right-hand side has a zero denominator, when a normalized value exceeds
+    /// `i64`, or when an allocation fails.
     /// # Examples
     ///
     /// ```
@@ -312,8 +309,9 @@ impl AffineParams {
     /// * `n` - Number of input dimensions
     ///
     /// # Errors
-    /// Returns an error when the operator dimensions overflow (an overflow failure)
-    /// or the construction is invalid (an invalid-configuration failure).
+    /// Returns [`QuanticsTransformError::Operation`] when `a` or `b` has a zero
+    /// denominator, when `m * n` or the site dimensions overflow `usize`, when
+    /// `a.len() != m * n` or `b.len() != m`, or when an allocation fails.
     /// # Examples
     ///
     /// ```
@@ -455,8 +453,8 @@ impl AffineParams {
     /// Convenience method that converts integer values to rationals.
     ///
     /// # Errors
-    /// Returns an error when the integer coefficient cannot be represented (an
-    /// overflow failure) or the operator construction fails (a backend failure).
+    /// Returns [`QuanticsTransformError::Operation`] when an allocation fails,
+    /// or when [`AffineParams::new`] rejects `a`, `b`, `m`, or `n`.
     /// # Examples
     ///
     /// ```
@@ -644,8 +642,10 @@ fn remap_affine_site_indices(
 ///   `Periodic` wraps output coordinates modulo `2^r`; `Open` zeroes the
 ///   out-of-range contributions.
 /// # Errors
-/// Returns an error when the operator dimensions overflow (an overflow failure)
-/// or a variable count is invalid (an invalid-configuration failure).
+/// Returns [`QuanticsTransformError::Operation`] when `r` is zero, when `bc`
+/// has a different length than `params.m()`, when `params` is invalid (a zero
+/// denominator, an `m * n` overflow, or mismatched `a`/`b` lengths), or when
+/// an intermediate MPO construction fails.
 /// # Examples
 /// ```
 /// use tensor4all_quanticstransform::{affine_operator, AffineParams, BoundaryCondition};
@@ -717,17 +717,18 @@ pub fn affine_operator(
 /// `2^M` and `2^N`. The mapping order at each node is
 /// `(y0, y1, ..., yM-1)` for outputs and `(x0, x1, ..., xN-1)` for inputs.
 /// Use this form when the state stores variables as separate interleaved QTT
-/// site indices and should bind them through [`LinearOperator::new_multi`].
+/// site indices and should bind them through [`LinearOperator::new_multi`](tensor4all_treetn::LinearOperator::new_multi).
 /// # Arguments
 /// * `r` - Bits per variable. Node `0` is the most significant bit.
 /// * `params` - Rational affine map `y = A*x + b`.
 /// * `bc` - Boundary condition for each output variable.
 /// # Returns
-/// A [`LinearOperator`] whose node `i` has `params.n()` input mappings and
+/// A [`LinearOperator`](tensor4all_treetn::LinearOperator) whose node `i` has `params.n()` input mappings and
 /// `params.m()` output mappings, all with binary dimension.
 /// # Errors
-/// Returns an error when the operator dimensions overflow (an overflow failure)
-/// or a variable count is invalid (an invalid-configuration failure).
+/// Returns [`QuanticsTransformError::Operation`] under the same conditions as
+/// [`affine_operator`], or when a per-site mapping is missing or a vector
+/// allocation fails.
 /// # Examples
 /// ```
 /// use tensor4all_quanticstransform::{
@@ -801,8 +802,9 @@ pub fn affine_operator_interleaved(
 /// This is only practical for small R due to exponential size.
 /// Use for testing/verification only.
 /// # Errors
-/// Returns an error when the operator dimensions overflow (an overflow failure)
-/// or the matrix construction fails.
+/// Returns [`QuanticsTransformError::Operation`] when `r` is zero, when `bc`
+/// has a different length than `params.m()`, when `params` is invalid, or when
+/// an intermediate size overflows `usize` or an allocation fails.
 /// # Examples
 /// ```
 /// use tensor4all_quanticstransform::{
@@ -963,8 +965,9 @@ fn affine_transform_mpo(
 /// # Returns
 /// Vector of R tensors with unfused physical indices.
 /// # Errors
-/// Returns an error when the operator dimensions overflow (an overflow failure)
-/// or the tensor construction fails.
+/// Returns [`QuanticsTransformError::Operation`] when `r` is zero, when `bc`
+/// has a different length than `params.m()`, when `params` is invalid, or when
+/// an intermediate tensor construction fails.
 /// # Examples
 /// ```
 /// use tensor4all_quanticstransform::{
@@ -1131,8 +1134,9 @@ impl UnfusedTensorInfo {
     /// Create checked metadata for the given affine parameters.
     ///
     /// # Errors
-    /// Returns an error when the variable count is invalid (an
-    /// invalid-configuration failure) or the operator construction fails.
+    /// Returns [`QuanticsTransformError::Operation`] when the variable count is
+    /// invalid (an `m + n` or site-dimension overflow) or the operator
+    /// construction fails.
     /// # Examples
     ///
     /// ```
@@ -1239,7 +1243,8 @@ impl UnfusedTensorInfo {
     /// ```
     ///
     /// # Errors
-    /// Returns an error when the shape cannot be represented (an overflow failure).
+    /// Returns [`QuanticsTransformError::Operation`] when the shape rank
+    /// overflows `usize` or the shape allocation fails.
     ///
     pub fn unfused_shape(
         &self,
@@ -1260,8 +1265,9 @@ impl UnfusedTensorInfo {
     /// Decode a fused site index to individual variable bits.
     ///
     /// # Errors
-    /// Returns an error when the index is out of range for the fused shape (an
-    /// out of bounds failure).
+    /// Returns [`QuanticsTransformError::Operation`] when `fused_idx` is not
+    /// smaller than the site dimension, when `m` is too large to exponentiate,
+    /// or when a decoded-bit allocation fails.
     /// # Examples
     ///
     /// ```
@@ -1304,8 +1310,9 @@ impl UnfusedTensorInfo {
     /// * `x_bits` - Bits for input variables (length N), each either 0 or 1.
     ///
     /// # Errors
-    /// Returns an error when the coordinate is out of range for the fused shape (an
-    /// out of bounds failure).
+    /// Returns [`QuanticsTransformError::Operation`] when the bit lengths do
+    /// not match `m`/`n`, when a bit is not 0 or 1, when a shift overflows
+    /// `usize`, or when the encoded index is outside the site dimension.
     /// # Examples
     ///
     /// ```

@@ -29,8 +29,9 @@ impl<T: TTScalar> MPO<T> {
     /// where the right_bond of tensor i equals the left_bond of tensor i+1.
     /// # Errors
     ///
-    /// Returns an error when the MPO dimensions are invalid (a shape mismatch) or
-    /// the construction fails.
+    /// Returns [`MPOError::BondDimensionMismatch`] when adjacent bond
+    /// dimensions disagree, or [`MPOError::InvalidBoundary`] when the first or
+    /// last tensor does not have a unit boundary bond.
     ///
     pub fn new(tensors: Vec<Tensor4<T>>) -> Result<Self> {
         // Validate dimensions
@@ -149,8 +150,8 @@ impl<T: TTScalar> MPO<T> {
     /// The identity operator: O[i1, j1, ...] = delta(i1, j1) * delta(i2, j2) * ...
     /// # Errors
     ///
-    /// Returns an error when the identity MPO construction fails (a shape
-    /// mismatch or backend failure).
+    /// Returns [`MPOError::InvalidOperation`] when a site tensor shape product
+    /// overflows `usize`, allocation fails, or the backend rejects the shape.
     ///
     pub fn identity(site_dims: &[usize]) -> Result<Self> {
         if site_dims.is_empty() {
@@ -249,8 +250,10 @@ impl<T: TTScalar> MPO<T> {
     /// [i1, j1, i2, j2, ..., iL, jL]
     /// # Errors
     ///
-    /// Returns an error when the MPO evaluation fails (a shape or index
-    /// mismatch, or a backend failure).
+    /// Returns [`MPOError::InvalidOperation`] when `indices` does not have two
+    /// entries per site, when an intermediate contraction fails, or when the
+    /// final contraction is not scalar; [`MPOError::Empty`] for an empty MPO;
+    /// and [`MPOError::IndexOutOfBounds`] for an out-of-range physical index.
     ///
     pub fn evaluate(&self, indices: &[LocalIndex]) -> Result<T>
     where
@@ -328,9 +331,8 @@ impl<T: TTScalar> MPO<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tenferro-backed contraction fails (a backend
-    /// failure) or an internally constructed MPO has inconsistent bond
-    /// dimensions (a shape mismatch).
+    /// Returns [`MPOError::InvalidOperation`] when a tenferro-backed reduction
+    /// or read fails, or when an internally constructed MPO is inconsistent.
     ///
     /// # Examples
     ///
@@ -342,12 +344,6 @@ impl<T: TTScalar> MPO<T> {
     /// assert!((sum - 12.0).abs() < 1e-10);
     /// ```
     #[allow(clippy::needless_range_loop)]
-    /// # Errors
-    ///
-    /// Returns an error when the tenferro-backed contraction fails (a backend
-    ///     /// failure) or an internally constructed MPO is inconsistent (an
-    ///     /// invalid-state failure).
-    ///
     pub fn sum(&self) -> Result<T>
     where
         T: EinsumScalar,

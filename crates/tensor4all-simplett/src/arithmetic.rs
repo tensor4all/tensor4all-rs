@@ -14,8 +14,9 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`crate::SimpleTensorTrainError::InvalidOperation`] when the two
+    /// trains differ in length or site dimensions, or when a site tensor
+    /// allocation fails.
     ///
     /// # Examples
     ///
@@ -145,8 +146,8 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`crate::SimpleTensorTrainError::InvalidOperation`] under the
+    /// same conditions as [`SimpleTensorTrain::add`].
     ///
     /// # Examples
     ///
@@ -184,8 +185,9 @@ impl<T: TTScalar> std::ops::Add for SimpleTensorTrain<T> {
 
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`crate::SimpleTensorTrainError::InvalidOperation`] when the two
+    /// trains differ in length or site dimensions, or when a site tensor
+    /// allocation fails.
     ///
     fn add(self, other: Self) -> Self::Output {
         SimpleTensorTrain::add(&self, &other)
@@ -197,8 +199,9 @@ impl<T: TTScalar> std::ops::Add for &SimpleTensorTrain<T> {
 
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`crate::SimpleTensorTrainError::InvalidOperation`] when the two
+    /// trains differ in length or site dimensions, or when a site tensor
+    /// allocation fails.
     ///
     fn add(self, other: Self) -> Self::Output {
         SimpleTensorTrain::add(self, other)
@@ -210,8 +213,8 @@ impl<T: TTScalar> std::ops::Sub for SimpleTensorTrain<T> {
 
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`crate::SimpleTensorTrainError::InvalidOperation`] under the
+    /// same conditions as [`SimpleTensorTrain::add`].
     ///
     fn sub(self, other: Self) -> Self::Output {
         SimpleTensorTrain::sub(&self, &other)
@@ -223,8 +226,8 @@ impl<T: TTScalar> std::ops::Sub for &SimpleTensorTrain<T> {
 
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`crate::SimpleTensorTrainError::InvalidOperation`] under the
+    /// same conditions as [`SimpleTensorTrain::add`].
     ///
     fn sub(self, other: Self) -> Self::Output {
         SimpleTensorTrain::sub(self, other)

@@ -20,8 +20,10 @@ use crate::options::InterpolativeQttOptions;
 /// controls the local interpolation order. The result is a binary
 /// `SimpleTensorTrain<f64>` whose site indices are zero-based quantics digits.
 /// # Errors
-/// Returns an error when the grid or ranks are invalid (an invalid-configuration
-/// failure) or interpolation fails to converge (a non-convergence failure).
+/// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when the
+/// domain bounds, `num_bits`, `polynomial_degree`, or `options` are invalid,
+/// and [`crate::error::InterpolativeQttError::SimpleTensorTrain`] when a core
+/// construction or the compression fails.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::{
@@ -64,8 +66,10 @@ where
 /// at the same bit level, so a `D`-dimensional interpolant has site dimension
 /// `2^D` and `num_bits` sites.
 /// # Errors
-/// Returns an error when the grid or ranks are invalid (an invalid-configuration
-/// failure) or interpolation fails to converge (a non-convergence failure).
+/// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when the
+/// domain bounds, `num_bits`, `polynomial_degree`, or `options` are invalid,
+/// and [`crate::error::InterpolativeQttError::SimpleTensorTrain`] when a core
+/// construction or the compression fails.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::{
@@ -122,8 +126,11 @@ where
 /// instead of being locally interpolated too early. This is useful for known
 /// nonsmooth points such as absolute-value cusps or removable singularities.
 /// # Errors
-/// Returns an error when the grid or ranks are invalid (an invalid-configuration
-/// failure) or interpolation fails to converge (a non-convergence failure).
+/// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when the
+/// domain bounds, `num_bits`, `polynomial_degree`, `options`, or a cusp
+/// location are invalid, and
+/// [`crate::error::InterpolativeQttError::SimpleTensorTrain`] when a core
+/// construction or the compression fails.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::{
@@ -169,8 +176,11 @@ where
 /// `cusp_locations` contains points in the original coordinate box. Any
 /// interval containing one of these points is refined until the final level.
 /// # Errors
-/// Returns an error when the grid or ranks are invalid (an invalid-configuration
-/// failure) or interpolation fails to converge (a non-convergence failure).
+/// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when the
+/// domain bounds, `num_bits`, `polynomial_degree`, `options`, or a cusp
+/// location are invalid, and
+/// [`crate::error::InterpolativeQttError::SimpleTensorTrain`] when a core
+/// construction or the compression fails.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::{
@@ -220,7 +230,11 @@ where
 /// exceeds `adaptive_tolerance`. Known singularities can be supplied to seed a
 /// refinement path and avoid evaluating the function at those points.
 /// # Errors
-/// Returns an error when the inputs are invalid (an invalid-configuration failure) or the tensor train compression fails (a non-convergence failure).
+/// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when the
+/// domain bounds, `num_bits`, `polynomial_degree`, `options`, adaptive
+/// tolerance, or a singularity is invalid, and
+/// [`crate::error::InterpolativeQttError::SimpleTensorTrain`] when a core
+/// construction or the compression fails.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::{
@@ -239,10 +253,6 @@ where
 /// assert_eq!(tt.len(), 4);
 /// ```
 #[allow(clippy::too_many_arguments)]
-/// # Errors
-/// Returns an error when the grid or ranks are invalid (an invalid-configuration
-/// failure) or interpolation fails to converge (a non-convergence failure).
-///
 pub fn interpolate_adaptive<F>(
     f: F,
     a: f64,
@@ -274,9 +284,11 @@ where
 /// `adaptive_tolerance`, then builds a multiscale QTT using those marked
 /// boxes.
 /// # Errors
-/// Returns an error if the inputs are invalid (an invalid-configuration
-/// failure), the singularity dimensions do not match (a shape mismatch), or
-/// the compression fails (a non-convergence failure).
+/// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when the
+/// domain bounds, `num_bits`, `polynomial_degree`, `options`, adaptive
+/// tolerance, or a singularity is invalid, and
+/// [`crate::error::InterpolativeQttError::SimpleTensorTrain`] when a core
+/// construction or the compression fails.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::{
@@ -295,11 +307,6 @@ where
 /// assert_eq!(tt.len(), 3);
 /// ```
 #[allow(clippy::too_many_arguments)]
-/// # Errors
-/// Returns an error if the inputs are invalid (an invalid-configuration
-/// failure), the singularity dimensions do not match (a shape mismatch), or
-/// the compression fails (a non-convergence failure).
-///
 pub fn interpolate_adaptive_nd<F>(
     f: F,
     lower: &[f64],
@@ -354,8 +361,11 @@ where
 /// The sparse variant replaces the dense interpolation core by an angular
 /// local Lagrange core with radius `window_radius`.
 /// # Errors
-/// Returns an error when the grid or ranks are invalid (an invalid-configuration
-/// failure) or interpolation fails to converge (a non-convergence failure).
+/// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when the
+/// domain bounds, `num_bits`, `polynomial_degree`, `window_radius`, or
+/// `options` are invalid, and
+/// [`crate::error::InterpolativeQttError::SimpleTensorTrain`] when a core
+/// construction or the compression fails.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::{
@@ -399,8 +409,11 @@ where
 /// This is the multidimensional version of [`interpolate_single_scale_sparse`]
 /// with fused local site dimensions.
 /// # Errors
-/// Returns an error when the grid or ranks are invalid (an invalid-configuration
-/// failure) or interpolation fails to converge (a non-convergence failure).
+/// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when the
+/// domain bounds, `num_bits`, `polynomial_degree`, `window_radius`, or
+/// `options` are invalid, and
+/// [`crate::error::InterpolativeQttError::SimpleTensorTrain`] when a core
+/// construction or the compression fails.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::{
@@ -458,8 +471,9 @@ where
 /// `2^k` rows and `basis.len()` columns, where each row corresponds to one
 /// subinterval and each column to one local Chebyshev-Lobatto node.
 /// # Errors
-/// Returns an error when the QTT is not invertible (a singular failure) or the
-/// inversion fails (a backend failure).
+/// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when `q` is
+/// not in `1..tt.len()`, when the sites are not binary, when the decode matrix
+/// shapes disagree, or when the decode multiply fails.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::{
@@ -515,8 +529,9 @@ pub fn invert_qtt(
 /// on a denser Chebyshev-Lobatto grid. The return value is a maximum absolute
 /// error estimate.
 /// # Errors
-/// Returns an error when the reference and interpolated functions have
-/// incompatible grids (a shape mismatch) or the estimation fails.
+/// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when an
+/// interval endpoint is not finite, when a test-point count overflows `usize`,
+/// or when a basis evaluation fails.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::{
