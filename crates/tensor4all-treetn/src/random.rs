@@ -95,8 +95,8 @@ pub type DefaultIndex = Index<DynId, TagSet>;
 ///
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape or index mismatch, or
-/// a backend failure).
+/// Returns [`TreeTNOperationError`] when `link_space` has no dimension for an edge, when a
+/// random tensor cannot be created, or when building the [`TreeTN`] fails.
 ///
 /// # Returns
 /// A network whose node tensors are filled in node order, with column-major

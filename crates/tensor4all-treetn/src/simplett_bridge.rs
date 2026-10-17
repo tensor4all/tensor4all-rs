@@ -15,8 +15,8 @@ use crate::TreeTN;
 ///
 /// # Errors
 ///
-/// Returns an error when the tensor train cannot be converted to a TreeTN
-/// (a shape or index mismatch, or a backend failure).
+/// Returns [`TreeTNOperationError`] when a fresh bond index cannot be allocated, or when
+/// [`TreeTN::from_tensors`] rejects the generated node names.
 ///
 /// # Examples
 ///
@@ -53,8 +53,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the tensor train cannot be converted to a TreeTN
-/// (a shape or index mismatch, or a backend failure).
+/// Returns [`TreeTNOperationError`] when `node_names` has a different length than the train,
+/// when a fresh bond index cannot be allocated, or when
+/// [`TreeTN::from_tensors`] rejects the names.
 ///
 /// # Examples
 ///
@@ -92,8 +93,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the tensor train cannot be converted to a TreeTN
-/// (a shape or index mismatch, or a backend failure).
+/// Returns an error when `node_names` or `site_indices` has a different length
+/// than the train, when a provided site index dimension does not match the
+/// corresponding train site, when a fresh bond index cannot be allocated, or
+/// when [`TreeTN::from_tensors`] rejects the names.
 ///
 /// # Examples
 ///
@@ -307,8 +310,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the insertion fails (a shape or index mismatch, or
-/// a missing-index failure).
+/// Returns [`TreeTNOperationError`] when the chain is not named `0..n` with exactly one site
+/// index per node, when `position` is greater than the site count, when `value`
+/// is outside the inserted site's dimension, or when a conversion to or from
+/// [`SimpleTensorTrain`] fails.
 ///
 /// # Examples
 ///
@@ -412,8 +417,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the removal fails (a shape or index mismatch, or a
-/// missing-index failure).
+/// Returns [`TreeTNOperationError`] when the chain is not named `0..n` with exactly one site
+/// index per node, when `position` is out of range, when removing the site
+/// would leave a zero-site chain, when `value` is outside the site's dimension,
+/// or when a conversion to or from [`SimpleTensorTrain`] fails.
 ///
 /// # Examples
 ///
@@ -498,8 +505,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the removal fails (a shape or index mismatch, or a
-/// missing-index failure).
+/// Returns [`TreeTNOperationError`] when the chain is not named `0..n` with exactly one site
+/// index per node, when `position` is out of range, when removing the site
+/// would leave a zero-site chain, when `weights` does not match the site's
+/// dimension, or when a conversion to or from [`SimpleTensorTrain`] fails.
 ///
 /// # Examples
 ///

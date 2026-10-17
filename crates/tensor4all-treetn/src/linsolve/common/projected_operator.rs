@@ -224,8 +224,9 @@ where
     /// The result of applying H to v: `H|v⟩`, with same index set and order as `v`.
     /// # Errors
     ///
-    /// Returns an error when the contraction or operation fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`TreeTNOperationError`] when environment preparation fails, when a region node's
+    /// operator mappings are missing or inconsistent, or when replacing indices
+    /// or contracting the local tensors fails.
     ///
     pub fn apply<NT: NetworkTopology<V>>(
         &mut self,

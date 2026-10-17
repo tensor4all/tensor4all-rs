@@ -217,8 +217,9 @@ where
 /// Vector of boundary edges, each containing the node in region, neighbor outside, and bond index.
 /// # Errors
 ///
-/// Returns an error when the region or graph is invalid (an invalid-topology
-/// failure).
+/// This function is currently infallible: it always returns `Ok` and never
+/// constructs a [`TreeTNOperationError`]. A region node or neighbor whose edge
+/// or bond index is missing is silently skipped.
 ///
 pub fn get_boundary_edges<T, V>(
     treetn: &TreeTN<T, V>,
@@ -284,8 +285,9 @@ where
     /// Implementors can use it to validate assumptions or prefetch/update caches.
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// The default implementation is infallible and returns `Ok(())`;
+    /// implementors may return a [`TreeTNOperationError`] when their validation
+    /// or cache prefetch fails.
     ///
     fn before_step(
         &mut self,
@@ -311,8 +313,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Implementations return a [`TreeTNOperationError`] when the local update
+    /// fails, for example a contraction, factorization, or shape mismatch.
     ///
     fn update(
         &mut self,
@@ -330,8 +332,9 @@ where
     /// Implementors can use this to update caches that must see the post-update state.
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// The default implementation is infallible and returns `Ok(())`;
+    /// implementors may return a [`TreeTNOperationError`] when their cache
+    /// update fails.
     ///
     fn after_step(
         &mut self,
@@ -366,13 +369,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when a local update in the sweep fails (a shape or index
-/// mismatch, a non-convergence failure, or a backend failure).
-///
-/// # Errors
-///
-/// Returns an error when a local update in the sweep fails (a shape or index
-/// mismatch, a non-convergence failure, or a backend failure).
+/// Returns [`TreeTNOperationError`] when the staged network is not canonicalized to a single
+/// center, when that center is not within the current step's nodes, or when a
+/// hook, subtree extraction/replacement, or canonical-region update fails.
 ///
 pub fn apply_local_update_sweep<T, V, U>(
     treetn: &mut TreeTN<T, V>,
@@ -543,8 +542,10 @@ where
 {
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns an error when the step does not have exactly two nodes, when a
+    /// node, edge, bond, or tensor is missing, when the factorization options are
+    /// invalid, or when contracting, factorizing, or replacing the updated
+    /// tensors fails.
     ///
     fn update(
         &mut self,
@@ -676,8 +677,9 @@ where
     /// - canonical_region is intersected with the extracted nodes
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`TreeTNOperationError`] when `node_names` is empty, when a name is unknown, when
+    /// the nodes are not connected, or when copying a tensor or edge into the
+    /// subtree fails.
     ///
     pub fn extract_subtree(
         &self,
@@ -847,8 +849,9 @@ where
     /// - The original TreeTN is modified in-place
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`TreeTNOperationError`] when the current subtree cannot be extracted, when
+    /// `replacement` has a different topology, or when a bond or tensor cannot be
+    /// updated to the replacement value.
     ///
     pub fn replace_subtree(
         &mut self,

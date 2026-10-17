@@ -82,8 +82,9 @@ where
     /// * `topology` - The network topology
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`TreeTNOperationError`] when detecting link collisions, relabeling reference
+    /// links, preparing environments, resolving a local RHS tensor, or
+    /// contracting the local tensors fails.
     ///
     pub fn local_constant_term<NT: NetworkTopology<V>>(
         &mut self,

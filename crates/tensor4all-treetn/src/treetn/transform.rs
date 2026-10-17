@@ -137,8 +137,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, an
-    /// SVD or non-convergence failure, or a backend failure).
+    /// Returns [`TreeTNOperationError`] when a target node has no site space or site indices not
+    /// present in `self`, when a current node maps to multiple target nodes or to
+    /// none, or when contracting a node group fails.
     ///
     /// # Example
     /// ```text
@@ -475,8 +476,10 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, an
-    /// SVD or non-convergence failure, or a backend failure).
+    /// Returns [`TreeTNOperationError`] when a current or target node has no site space, when a
+    /// target index is absent from the current network, when a target node spans
+    /// multiple current nodes, when a current site index has no target node, or
+    /// when a node split fails.
     ///
     /// # Example
     /// ```text

@@ -57,8 +57,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the site spaces are incompatible (a shape mismatch)
-    /// or the reindexing fails.
+    /// Returns [`TreeTNOperationError`] when `self` and `template` have different topologies,
+    /// when a node's site-index count differs, when paired site indices have
+    /// different dimensions, or when rewriting the indices in the tensors fails.
     ///
     /// # Examples
     /// ```
@@ -150,8 +151,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the site spaces are incompatible (a shape mismatch)
-    /// or the addition fails.
+    /// Returns [`TreeTNOperationError`] when reindexing `other` (see
+    /// [`Self::reindex_site_space_like`]) or the following [`Self::add`] fails.
     ///
     /// # Examples
     /// ```
@@ -198,16 +199,10 @@ where
     /// A HashMap mapping edge keys (node_name_pair in canonical order) to MergedBondInfo.
     ///
     /// # Errors
-    /// Returns an error when the networks have incompatible topologies (a shape
-    /// or index mismatch) or a bond index cannot be found (a missing-index
-    /// failure).
+    /// Returns [`TreeTNOperationError`] when an edge or bond index cannot be resolved in either
+    /// network, or when `other` has no node or edge corresponding to one in
+    /// `self`. Dimensions are only recorded, not compared.
     #[allow(clippy::type_complexity)]
-    /// # Errors
-    ///
-    /// Returns an error when the networks have incompatible topologies (a shape
-    ///     /// or index mismatch) or a bond index cannot be found (a missing-index
-    ///     /// failure).
-    ///
     pub fn compute_merged_bond_indices(
         &self,
         other: &Self,
@@ -304,8 +299,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the networks are incompatible (a shape or index
-    /// mismatch) or the addition fails (a backend failure).
+    /// Returns [`TreeTNOperationError`] when the two networks have different topologies or
+    /// non-matching site spaces, or when the direct-sum construction of a node
+    /// tensor or the resulting [`TreeTN`] fails.
     ///
     /// # Examples
     ///
@@ -466,8 +462,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the networks are incompatible (a shape or index
-    /// mismatch) or the axpby fails (a backend failure).
+    /// Returns [`TreeTNOperationError`] when scaling either operand (see [`Self::scale`]) or the
+    /// subsequent [`Self::add`] fails.
     ///
     /// # Examples
     /// ```

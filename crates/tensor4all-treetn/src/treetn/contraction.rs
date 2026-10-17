@@ -426,8 +426,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the dense contraction fails (a shape or index
-    /// mismatch, or a backend failure).
+    /// Returns [`TreeTNOperationError`] when the network is empty, when it does not form a
+    /// tree, when a node tensor is missing, when an edge contraction fails, or
+    /// when the final index permutation fails.
     ///
     /// # Examples
     ///
@@ -638,10 +639,9 @@ where
     /// The contracted TreeTN result, or an error if topologies don't match or contraction fails.
     /// # Errors
     ///
-    /// Returns an error when the zip-up contraction fails (a shape or index
-    /// mismatch, or a backend failure). Invalid SVD policies and zero bond caps
-    /// are rejected before topology checks and single-node shortcuts, retaining
-    /// [`tensor4all_core::FactorizeError::InvalidOptions`] as the source.
+    /// Returns [`TreeTNOperationError`] when `max_bond_dim` is zero, when the two networks have
+    /// different topologies, when `center` is not a node, or when a contraction
+    /// or factorization step fails.
     ///
     /// # Examples
     /// ```
@@ -697,10 +697,9 @@ where
     /// The contracted TreeTN result, or an error if topologies don't match or contraction fails.
     /// # Errors
     ///
-    /// Returns an error when the zip-up contraction fails (a shape or index
-    /// mismatch, or a backend failure). Invalid policies, zero bond caps, and
-    /// SVD policies with LU/CI are rejected before topology checks and shortcuts,
-    /// retaining [`tensor4all_core::FactorizeError::InvalidOptions`] as the source.
+    /// Returns [`TreeTNOperationError`] when `max_bond_dim` is zero, when an SVD policy is given
+    /// with `LU`/`CI`, when the two networks have different topologies, when
+    /// `center` is not a node, or when a contraction or factorization step fails.
     ///
     /// # Examples
     /// ```
@@ -1534,8 +1533,8 @@ where
     /// Use `contract_zipup` for efficient contraction of large networks.
     /// # Errors
     ///
-    /// Returns an error when the naive contraction fails (a shape or index
-    /// mismatch, or a backend failure).
+    /// Returns [`TreeTNOperationError`] when the two networks have different topologies, or when
+    /// materializing either network or contracting the two dense tensors fails.
     ///
     pub fn contract_naive(&self, other: &Self) -> std::result::Result<T, TreeTNOperationError>
     where
@@ -1597,8 +1596,10 @@ where
     ///   - Edges entirely inside the center region may have `ortho_towards == None`
     /// # Errors
     ///
-    /// Returns an error when the orthogonality structure is inconsistent (an
-    /// graph consistency failure).
+    /// Returns [`TreeTNOperationError`] when `ortho_towards` is non-empty while
+    /// `canonical_region` is empty, when a region node does not exist, when the
+    /// region is not connected, or when an edge direction disagrees with the
+    /// expected direction towards the region.
     ///
     pub fn validate_ortho_consistency(&self) -> std::result::Result<(), TreeTNOperationError> {
         // If not canonicalized, require no ortho_towards at all
@@ -1760,10 +1761,10 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the zip-up contraction fails (a shape or index
-    /// mismatch, a backend failure), when the caller-owned context refuses a
-    /// contraction or factorization, or when `form` is `LU`/`CI` (no
-    /// context-scoped factorization path for those forms).
+    /// Returns [`TreeTNOperationError`] when `form` is not [`CanonicalForm::Unitary`], when
+    /// `max_bond_dim` is zero, when the networks have different topologies, when
+    /// `center` is not a node, or when a contraction or factorization step fails
+    /// in `context`.
     ///
     /// # Examples
     /// ```
@@ -2540,8 +2541,9 @@ where
 /// appropriate algorithm based on the options.
 /// # Errors
 ///
-/// Returns an error when the contraction fails (a shape or index mismatch,
-/// or a backend failure).
+/// Returns [`TreeTNOperationError`] when `options` fails validation (for example a zero bond cap
+/// or an invalid SRC configuration), or when the selected method's context
+/// validation, contraction, or factorization fails.
 ///
 pub fn contract<T, V>(
     tn_a: &TreeTN<T, V>,
@@ -2808,9 +2810,9 @@ where
 #[allow(clippy::too_many_arguments)]
 /// # Errors
 ///
-/// Returns an error when the contraction fails (a shape or index mismatch, or
-/// a backend failure), when the truncation options are invalid, or when
-/// `qr_rtol` is set.
+/// Returns [`TreeTNOperationError`] when `qr_rtol` is set, when `max_bond_dim` or `svd_policy`
+/// fail validation, when the naive dense contraction fails, or when decomposing
+/// the contracted tensor back to a [`TreeTN`] fails.
 ///
 pub fn contract_naive_to_treetn<T, V>(
     tn_a: &TreeTN<T, V>,

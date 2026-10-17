@@ -314,9 +314,10 @@ where
     /// - Connection fails (e.g., shape mismatch)
     ///
     /// # Errors
-    /// Returns an error when `tensors` and `node_names` differ in length (a
-    /// shape mismatch) or a tensor structure is invalid (an invalid-state
-    /// failure).
+    /// Returns [`TreeTNOperationError`] when `tensors` and `node_names` differ in length, when a
+    /// node name is duplicated or an index appears in other than exactly two
+    /// tensors, when connection fails, or when the reconstructed network fails
+    /// its internal consistency check.
     /// # Examples
     ///
     /// ```
@@ -458,9 +459,7 @@ where
     /// Also updates the site_index_network with the physical indices (all indices initially,
     /// as no connections exist yet).
     /// # Errors
-    /// Returns an error when the tensor's site dimensions are incompatible with
-    /// its neighbors (a shape mismatch) or the node name is already in use
-    /// (a duplicate operation failure).
+    /// Returns [`TreeTNOperationError`] when `node_name` is already in use.
     ///
     pub fn add_tensor(
         &mut self,
@@ -480,8 +479,8 @@ where
     /// Returns the NodeIndex for the newly added tensor.
     ///
     /// # Errors
-    /// Returns an error when the tensor's site dimensions are incompatible with
-    /// its neighbors (a shape mismatch).
+    /// Returns [`TreeTNOperationError`] when the internally generated node name is already in
+    /// use.
     /// # Examples
     ///
     /// ```
@@ -530,9 +529,9 @@ where
     /// # Returns
     /// The EdgeIndex of the new connection, or an error if validation fails.
     /// # Errors
-    /// Returns an error when the indices do not belong to the two nodes (a
-    /// missing-index failure) or their dimensions differ (a dimension
-    /// mismatch).
+    /// Returns [`TreeTNOperationError`] when `index_a` and `index_b` are not the same full index,
+    /// when `node_a` or `node_b` does not exist, or when the index is not a leg
+    /// of the corresponding node's tensor.
     ///
     pub fn connect(
         &mut self,
@@ -921,8 +920,9 @@ where
     ///
     /// Returns the old tensor if the node exists and validation passes.
     /// # Errors
-    /// Returns an error when `node` is out of range (an out of bounds failure) or
-    /// the new tensor has incompatible dimensions (a shape mismatch).
+    /// Returns [`TreeTNOperationError`] when the new tensor is missing one or more connection
+    /// indices. An unknown `node` returns `Ok(None)` rather than an error, and
+    /// index dimensions are not compared.
     ///
     pub fn replace_tensor(
         &mut self,
@@ -1014,8 +1014,9 @@ where
     /// Also updates site_index_network: the old bond index becomes physical again,
     /// and the new bond index is removed from physical indices.
     /// # Errors
-    /// Returns an error when the edge is not found (a missing-edge failure) or
-    /// the new bond has an incompatible dimension (a shape mismatch).
+    /// Returns [`TreeTNOperationError`] when `edge` does not exist, when its bond or endpoint
+    /// names cannot be resolved, or when the old bond index is not registered
+    /// on `edge`; the new bond dimension is not validated.
     ///
     pub fn replace_edge_bond(
         &mut self,
@@ -1091,8 +1092,9 @@ where
     /// - This keeps dimensions and conjugate states, but changes identities.
     /// - This updates both endpoint tensors and internal bookkeeping.
     /// # Errors
-    /// Returns an error when the link-index relabeling fails (an invalid-index
-    /// failure).
+    /// Returns [`TreeTNOperationError`] when an edge has no bond index or endpoint tensor, when
+    /// replacing the index in a tensor fails, or when the new bond cannot be
+    /// registered.
     ///
     pub fn sim_link_indices(&self) -> std::result::Result<Self, TreeTNOperationError>
     where
@@ -1107,8 +1109,8 @@ where
     ///
     /// See [`Self::sim_link_indices`] for details.
     /// # Errors
-    /// Returns an error when the link-index relabeling fails (an invalid-index
-    /// failure).
+    /// Returns [`TreeTNOperationError`] under the same conditions as
+    /// [`Self::sim_link_indices`].
     ///
     pub fn sim_link_indices_mut(&mut self) -> std::result::Result<(), TreeTNOperationError>
     where
@@ -1202,7 +1204,8 @@ where
     /// The direction is specified as a node name (or None to clear).
     /// The node must be one of the edge's endpoints.
     /// # Errors
-    /// Returns an error when the edge is not found (a missing-index failure).
+    /// Returns [`TreeTNOperationError`] when `edge` does not exist, or when `dir` names a node
+    /// that is not one of the edge's endpoints.
     ///
     pub fn set_edge_ortho_towards(
         &mut self,
@@ -1266,8 +1269,8 @@ where
     /// - The graph is connected (all nodes reachable from the first node)
     /// - For each connected component: edges = nodes - 1 (tree condition)
     /// # Errors
-    /// Returns an error when the graph is not a tree (an invalid-topology
-    /// failure) or an internal invariant is violated (an invalid-state failure).
+    /// Returns [`TreeTNOperationError`] when the graph is disconnected, or when its edge count
+    /// is not `node_count - 1`.
     ///
     pub fn validate_tree(&self) -> std::result::Result<(), TreeTNOperationError> {
         let g = self.graph.graph();
@@ -1337,8 +1340,8 @@ where
     /// Rename an existing node while preserving topology, site space, and
     /// orthogonality metadata.
     /// # Errors
-    /// Returns an error when `old_name` is not found (a missing-index failure) or
-    /// `new_name` is already in use (a duplicate operation failure).
+    /// Returns [`TreeTNOperationError`] when `new_name` is already in use, or when `old_name`
+    /// is not present.
     ///
     pub fn rename_node(
         &mut self,
@@ -1492,7 +1495,7 @@ where
     ///
     /// Validates that all specified nodes exist in the graph.
     /// # Errors
-    /// Returns an error when a region node is not found (a missing-index failure).
+    /// Returns [`TreeTNOperationError`] when any node in `region` does not exist in the graph.
     ///
     pub fn set_canonical_region(
         &mut self,
@@ -1533,7 +1536,7 @@ where
     ///
     /// Validates that the node exists in the graph.
     /// # Errors
-    /// Returns an error when the node is not found (a missing-index failure).
+    /// Returns [`TreeTNOperationError`] when `node_name` does not exist in the graph.
     ///
     pub fn add_to_canonical_region(
         &mut self,
@@ -1971,8 +1974,9 @@ where
     /// * `options` - Truncation options for each SVD (default: no truncation, exact).
     ///
     /// # Errors
-    /// Returns an error when the index permutation is invalid (an invalid-index
-    /// or shape mismatch failure).
+    /// Returns [`TreeTNOperationError`] when the network is empty, when the target assignment
+    /// cannot produce a valid schedule (for example an unknown target index),
+    /// or when canonicalization, transport, or the per-edge swap fails.
     ///
     pub fn swap_site_indices(
         &mut self,
@@ -2074,8 +2078,8 @@ where
     /// Alias for [`swap_site_indices`](Self::swap_site_indices).
     ///
     /// # Errors
-    /// Returns an error when a target index is not found (a missing-index
-    /// failure) or the permutation is invalid.
+    /// Returns [`TreeTNOperationError`] under the same conditions as
+    /// [`Self::swap_site_indices`].
     /// # Examples
     ///
     /// ```
@@ -2149,8 +2153,9 @@ where
     /// # Returns
     /// `Ok(())` if the internal data is consistent, or `Err` with details about the inconsistency.
     /// # Errors
-    /// Returns an error when an internal invariant is violated (a graph
-    /// consistency failure).
+    /// Returns [`TreeTNOperationError`] when the graph is disconnected, when non-adjacent nodes
+    /// share an index, or when reconstricting the network from its tensors does
+    /// not reproduce the current topology, site spaces, or tensor data.
     ///
     pub fn verify_internal_consistency(&self) -> std::result::Result<(), TreeTNOperationError>
     where

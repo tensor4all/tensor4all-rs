@@ -743,8 +743,8 @@ where
 {
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns an error when `build_layout` rejects `tree`/`indices`, or when
+    /// `values` fails the shape or per-entry value checks.
     ///
     fn new(
         tree: &TreeTN<IdxTensor, V>,
@@ -971,8 +971,7 @@ where
 {
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns an error when `center` is not a node of `tree`.
     ///
     fn new(tree: &TreeTN<IdxTensor, V>, center: &V) -> Result<Self> {
         Self::from_neighbors(&sorted_neighbors(tree), center)
@@ -1949,8 +1948,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`TreeTNOperationError`] under the same conditions as
+    /// [`Self::evaluate_batched_with_hint`].
     ///
     /// # Examples
     ///
@@ -1997,9 +1996,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when `values` has the wrong shape for this evaluator's
-    /// index list (a shape mismatch), when the hinted node is not in the tree
-    /// (a missing-node failure), or when a contraction fails.
+    /// Returns [`TreeTNOperationError`] when `values` does not have shape
+    /// `[indices.len(), n_points]`, when the hinted node is not in the tree, or
+    /// when the cached message contractions fail.
     ///
     /// # Examples
     ///

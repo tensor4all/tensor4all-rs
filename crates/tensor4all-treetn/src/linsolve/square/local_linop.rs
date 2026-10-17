@@ -119,8 +119,9 @@ where
     /// Apply the projected local operator: `y = H * x`.
     /// # Errors
     ///
-    /// Returns an error when the contraction or operation fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns an error when the projected-operator lock is poisoned, or when
+    /// applying the projected operator to `x` fails, for example on an index
+    /// mismatch or a contraction failure.
     ///
     pub fn apply_projected(&self, x: &T) -> std::result::Result<T, TreeTNOperationError> {
         let mut proj_op = self

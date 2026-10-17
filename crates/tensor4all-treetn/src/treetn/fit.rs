@@ -339,8 +339,9 @@ where
     /// * `tn_c` - Current approximation TreeTN
     /// # Errors
     ///
-    /// Returns an error when the cached fit value cannot be computed (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns an error when `from` is not a node of `tn_c`, or when a node
+    /// environment cannot be computed because a contraction fails or an index
+    /// does not match.
     ///
     pub fn get_or_compute(
         &mut self,
@@ -469,8 +470,8 @@ where
     /// `Ok(())` if consistent, or an error describing the inconsistency.
     /// # Errors
     ///
-    /// Returns an error when the fitted structure is inconsistent (a graph
-    /// consistency failure).
+    /// Returns [`TreeTNOperationError`] when a cached environment's node is not in `tn_c`, or when
+    /// a required child environment is missing.
     ///
     pub fn verify_structural_consistency(
         &self,
@@ -1674,8 +1675,9 @@ where
 /// A new TreeTN representing the contracted result.
 /// # Errors
 ///
-/// Returns an error when the fit contraction fails (a shape or index
-/// mismatch, or a backend failure).
+/// Returns [`TreeTNOperationError`] when the two inputs have different topologies, when the
+/// initial zip-up contraction fails, when a canonical center cannot be set, or
+/// when creating the sweep plan or running the variational sweeps fails.
 ///
 pub fn contract_fit<T, V>(
     tn_a: &TreeTN<T, V>,
@@ -1912,8 +1914,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the topologies differ (the inputs, or the inputs and `tn_c`), or when the fit
-/// contraction itself fails (a shape or index mismatch, or a backend failure).
+/// Returns [`TreeTNOperationError`] when `tn_a`, `tn_b`, and `tn_c` do not share the same
+/// topology, or when setting the canonical center or running the variational
+/// sweeps fails.
 ///
 /// # Examples
 ///

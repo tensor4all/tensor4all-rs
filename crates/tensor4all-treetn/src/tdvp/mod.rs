@@ -1223,8 +1223,12 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the solve or sweep fails (a shape or index
-/// mismatch, a non-convergence failure, or a backend failure).
+/// Returns [`TdvpError::Algorithm`] when building the [`LinearOperator`] fails,
+/// and otherwise propagates [`tdvp`]'s errors:
+/// [`TdvpError::UnsupportedNsite`], [`TdvpError::UnsupportedOrder`],
+/// [`TdvpError::InvalidOption`], [`TdvpError::MissingCenter`],
+/// [`TdvpError::EmptyTwoSiteSweep`], [`TdvpError::TopologyMismatch`], the
+/// site-mapping errors, and lower-level numerical failures.
 ///
 /// # Examples
 /// ```

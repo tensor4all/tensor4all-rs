@@ -100,8 +100,8 @@ where
     /// Ok if successful, Err if old_index was not registered or edge mismatch.
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    ///  a backend failure).
+    /// Returns [`TreeTNOperationError`] when `old_index` is not registered, or is registered on
+    /// an edge other than `edge`.
     ///
     pub fn replace_index(
         &mut self,

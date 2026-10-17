@@ -29,8 +29,9 @@ use tensor4all_core::{DynIndex, IdxTensor, TensorConstructionLike};
 ///
 /// # Errors
 ///
-/// Returns an error when the operator construction fails (an overflow or
-/// invalid-configuration failure, or a shape mismatch).
+/// Returns [`TreeTNOperationError`] when `site_indices` and `output_site_indices` differ in
+/// length, when a paired index dimension differs, or when building the
+/// delta/scalar tensor fails.
 ///
 /// # Example
 ///

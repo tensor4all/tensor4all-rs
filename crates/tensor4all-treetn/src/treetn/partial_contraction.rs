@@ -827,9 +827,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the contraction specification is invalid (an
-/// invalid-spec failure) or the contraction fails (a shape or index
-/// mismatch, or a backend failure).
+/// Returns [`TreeTNOperationError`] when `spec` is invalid (for example a selected index is not
+/// external to its operand or appears more than once), or when applying
+/// diagonal pairs, aligning contract pairs, contracting, restoring indices, or
+/// ordering the output fails.
 ///
 /// # Examples
 ///
@@ -939,9 +940,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the contraction specification is invalid (an
-/// invalid-spec failure) or the contraction fails (a shape or index
-/// mismatch, or a backend failure).
+/// Returns [`TreeTNOperationError`] when `spec.output_order` is set instead of `None`, or when
+/// [`partial_contract`] or the [`TreeTN::restructure_to`] step fails.
 ///
 /// # Examples
 ///
@@ -1055,8 +1055,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the index spaces are incompatible (a shape or index
-/// mismatch) or the contraction fails (a backend failure).
+/// Returns [`SelectedIndexContractionError::PartialContractFailed`] when the
+/// underlying [`partial_contract`] fails, for example when a pair's left index
+/// is not external to `left`, a pair's right index is not external to `right`,
+/// or a paired dimension differs.
 ///
 /// # Examples
 /// ```
@@ -1119,8 +1121,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the index spaces are incompatible (a shape or index
-/// mismatch) or the weighted sum fails (a backend failure).
+/// Returns [`SelectedIndexContractionError::PartialContractFailed`] when the
+/// underlying [`partial_contract`] fails, for example when a state index is not
+/// external to `state` or a paired dimension differs.
 ///
 /// # Examples
 /// ```
@@ -1196,8 +1199,15 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the contraction or operation fails (a shape or
-/// index mismatch, or a backend failure).
+/// Returns [`SelectedIndexContractionError::DuplicateIndex`] for a repeated
+/// entry in `sum_indices`, [`SelectedIndexContractionError::IndexNotFound`] for
+/// an index absent from `state`,
+/// [`SelectedIndexContractionError::IndexInMultipleSiteSpaces`] for one in
+/// several site spaces, [`SelectedIndexContractionError::BuildOnesTensor`] or
+/// [`SelectedIndexContractionError::BuildWeightsTree`] when the unit-weight
+/// network cannot be built, and
+/// [`SelectedIndexContractionError::PartialContractFailed`] when the weighted
+/// sum fails.
 ///
 /// # Examples
 /// ```

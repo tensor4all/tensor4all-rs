@@ -149,16 +149,12 @@ where
 /// # Returns
 /// A LinearOperator representing the composed operator on the full target space.
 /// # Errors
-/// Returns an error when the operators overlap (an invalid-configuration
-/// failure), an operator node is missing (a missing-index failure), or the
-/// gap node site indices are not provided (a missing-index failure).
+///
+/// Returns [`TreeTNOperationError`] when `operators` are not exclusive (they overlap or do not
+/// form connected subtrees), when a target node has no operator and
+/// `gap_site_indices` does not provide it, when an identity/ones tensor or an
+/// outer product fails, or when building the composed [`TreeTN`] fails.
 #[allow(clippy::type_complexity)]
-/// # Errors
-///
-/// Returns an error when the operators overlap (an invalid-configuration
-///     /// failure), a node is missing (a missing-index failure), or the
-///     /// composition fails (a backend failure).
-///
 pub fn compose_exclusive_linear_operators<T, V>(
     target: &SiteIndexNetwork<V, T::Index>,
     operators: &[&LinearOperator<T, V>],

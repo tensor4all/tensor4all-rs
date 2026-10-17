@@ -42,8 +42,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, an
-    /// SVD or non-convergence failure, or a backend failure).
+    /// Returns [`TreeTNOperationError`] when `max_bond_dim` is zero or the SVD policy is invalid,
+    /// when more than one center node is given, or when the
+    /// pre-canonicalization, sweep plan, or truncation sweep fails.
     ///
     /// # Examples
     ///
@@ -102,8 +103,7 @@ where
     /// This is the `&mut self` version of [`Self::truncate`].
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, an
-    /// SVD or non-convergence failure, or a backend failure).
+    /// Returns [`TreeTNOperationError`] under the same conditions as [`Self::truncate`].
     ///
     pub fn truncate_mut(
         &mut self,

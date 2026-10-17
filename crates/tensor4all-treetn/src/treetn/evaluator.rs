@@ -91,8 +91,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns [`TreeTNOperationError`] when `tree` is empty, when `indices` does not have one
+    /// entry per registered site index or repeats one, when an index is not
+    /// registered on any node, or when a node's tensor cannot be resolved.
     ///
     /// # Examples
     ///
@@ -243,8 +244,10 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`TreeTNOperationError`] when `values` is not a 2D array with
+    /// [`input_count`](Self::input_count) rows, when a coordinate is missing or
+    /// exceeds its site dimension, or when building the one-hot tensors,
+    /// contracting them, or extracting the scalar fails.
     ///
     /// # Examples
     ///

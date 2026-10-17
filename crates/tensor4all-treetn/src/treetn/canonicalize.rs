@@ -45,8 +45,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, an
-    /// SVD or non-convergence failure, or a backend failure). The network is
+    /// Returns [`TreeTNOperationError`] when `options` is not forced and the
+    /// network is already canonical in a different form, when a swept tensor has
+    /// a shape or index mismatch, or when a factorization fails. The network is
     /// left unchanged when an error is returned.
     ///
     /// Under [`CanonicalForm::LU`] and [`CanonicalForm::CI`], canonicalization
@@ -148,10 +149,9 @@ where
     /// Returns a [`TreeTNOperationError`] in the same cases as
     /// [`Self::canonicalize`]: a form mismatch when the network is already
     /// canonical in a different form and `options` is not forced, a shape or
-    /// index mismatch, an SVD or non-convergence failure, a backend failure,
-    /// and, under [`CanonicalForm::LU`] and [`CanonicalForm::CI`], a zero tensor
-    /// that has to be factorized. The network is left unchanged when an error
-    /// is returned.
+    /// index mismatch, a factorization failure, and, under
+    /// [`CanonicalForm::LU`] and [`CanonicalForm::CI`], a zero tensor that has to
+    /// be factorized. The network is left unchanged when an error is returned.
     pub fn canonicalize_mut(
         &mut self,
         canonical_region: impl IntoIterator<Item = V>,

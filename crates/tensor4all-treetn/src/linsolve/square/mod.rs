@@ -126,8 +126,11 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the solve or sweep fails (a shape or index
-/// mismatch, a non-convergence failure, or a backend failure).
+/// Returns [`TreeTNOperationError`] when only one of `input_mapping` and `output_mapping` is
+/// provided, when the initial guess cannot be canonicalized, when the sweep plan
+/// cannot be built, or when an update or residual evaluation fails. Reaching the
+/// sweep limit without meeting `convergence_tol` returns `converged = false`,
+/// not an error.
 ///
 /// # Example
 ///
@@ -451,8 +454,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the solve or sweep fails (a shape or index
-/// mismatch, a non-convergence failure, or a backend failure).
+/// Returns [`TreeTNOperationError`] when scaling `solution` or `rhs`, applying `operator`,
+/// combining the two terms, or evaluating the residual and RHS norms fails.
 ///
 /// # Examples
 /// ```

@@ -732,8 +732,12 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the solve or sweep fails (a shape or index
-/// mismatch, a non-convergence failure, or a backend failure).
+/// Returns [`DmrgError::Algorithm`] when building the [`LinearOperator`] from
+/// `operator` and `init` fails, and otherwise propagates [`dmrg`]'s errors:
+/// [`DmrgError::UnsupportedNsite`], [`DmrgError::InvalidOption`],
+/// [`DmrgError::MissingCenter`], [`DmrgError::EmptyTwoSiteSweep`],
+/// [`DmrgError::TopologyMismatch`], the site-mapping errors, and the numerical
+/// failures.
 ///
 /// # Examples
 /// ```

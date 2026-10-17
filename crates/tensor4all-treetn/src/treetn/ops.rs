@@ -112,9 +112,9 @@ where
     /// The natural logarithm of the Frobenius norm.
     ///
     /// # Errors
-    /// Returns an error when the network is empty, when canonicalization fails,
-    /// or when the center norm cannot be evaluated (a non-finite value or a
-    /// backend failure).
+    /// Returns [`TreeTNOperationError`] when the network is empty, when
+    /// canonicalization to a single center fails, when the center node or tensor
+    /// is missing, or when the center's squared norm cannot be computed.
     /// # Examples
     ///
     /// ```
@@ -210,8 +210,8 @@ where
     /// This method is mutable because it may need to canonicalize the network.
     ///
     /// # Errors
-    /// Returns an error when the norm cannot be evaluated (a materialization or
-    /// backend failure).
+    /// Returns [`TreeTNOperationError`] under the same conditions as
+    /// [`Self::log_norm`].
     /// # Examples
     ///
     /// ```
@@ -250,8 +250,8 @@ where
     /// This method is mutable because it may need to canonicalize the network.
     ///
     /// # Errors
-    /// Returns an error when the norm cannot be evaluated (a materialization or
-    /// backend failure).
+    /// Returns [`TreeTNOperationError`] under the same conditions as
+    /// [`Self::norm`].
     /// # Examples
     ///
     /// ```
@@ -290,8 +290,9 @@ where
     /// `Ok(())` after the selected node tensor has been updated in place
     ///
     /// # Errors
-    /// Returns an error when the scaling fails (a dtype mismatch or backend
-    /// failure).
+    /// Returns [`TreeTNOperationError`] when the network is empty, when the
+    /// minimum-named node or its tensor is missing, when scaling that tensor
+    /// fails, or when the scaled tensor cannot be stored back.
     /// # Examples
     ///
     /// ```
@@ -355,8 +356,8 @@ where
     /// `Ok(Self)` with every entry multiplied by `scalar`.
     ///
     /// # Errors
-    /// Returns an error when the scaling fails (a dtype mismatch or backend
-    /// failure).
+    /// Returns [`TreeTNOperationError`] when `scalar` cannot be applied (see
+    /// [`Self::scale_mut`]).
     /// # Examples
     ///
     /// ```
@@ -398,8 +399,10 @@ where
     /// `conj(self) * other` into a scalar.
     ///
     /// # Errors
-    /// Returns an error when the two tensor trains have incompatible site spaces
-    /// (a shape mismatch) or the contraction fails (a backend failure).
+    /// Returns [`TreeTNOperationError`] when the two networks do not share an
+    /// equivalent site index network, when only one of them is empty, or when a
+    /// tensor lookup or contraction, the environment sweep, or scalar extraction
+    /// fails.
     /// # Examples
     ///
     /// ```
@@ -545,8 +548,8 @@ where
     /// as the result size grows exponentially with the number of sites.
     ///
     /// # Errors
-    /// Returns an error when the dense materialization fails (a materialization or
-    /// backend failure).
+    /// Returns [`TreeTNOperationError`] when contracting the network to a dense
+    /// tensor fails (see [`Self::contract_to_tensor`]).
     /// # Examples
     ///
     /// ```
@@ -601,8 +604,9 @@ where
     /// A reusable evaluator bound to this TreeTN.
     ///
     /// # Errors
-    /// Returns an error when the evaluator cannot be constructed (an
-    /// invalid-configuration failure).
+    /// Returns [`TreeTNOperationError`] when `indices` does not enumerate each
+    /// site index exactly once, or when building the evaluator's contraction plan
+    /// fails.
     /// # Examples
     ///
     /// ```
@@ -790,8 +794,8 @@ where
     /// the same order as [`TensorIndex::external_indices`](tensor4all_core::TensorIndex::external_indices).
     ///
     /// # Errors
-    /// Returns an error if a node's site space cannot be found (a missing-index
-    /// failure).
+    /// Returns [`TreeTNOperationError`] when the site space of a node in
+    /// [`Self::node_names`](Self::node_names) cannot be found.
     ///
     /// # Examples
     /// ```
@@ -818,10 +822,6 @@ where
     /// assert!(indices.contains(&s1));
     /// ```
     #[allow(clippy::type_complexity)]
-    /// # Errors
-    /// Returns an error when a node's site space cannot be found (a
-    /// missing-index failure).
-    ///
     pub fn all_site_indices(
         &self,
     ) -> std::result::Result<(Vec<T::Index>, Vec<V>), TreeTNOperationError>

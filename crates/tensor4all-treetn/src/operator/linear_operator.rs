@@ -218,8 +218,10 @@ where
     /// A LinearOperator with proper index mappings, or an error if structure is incompatible.
     /// # Errors
     ///
-    /// Returns an error when the MPO and state are incompatible (a shape or index
-    /// mismatch) or the binding fails.
+    /// Returns an error when a node has mismatched site-space presence between
+    /// `state` and `mpo`, when a mapped node does not have exactly one state
+    /// site index and two MPO site indices, or when exactly two MPO indices do
+    /// not match the state site dimension.
     ///
     pub fn from_mpo_and_state(
         mpo: TreeTN<T, V>,
@@ -323,8 +325,9 @@ where
     /// The result of applying the operator to the local tensor.
     /// # Errors
     ///
-    /// Returns an error when the local application fails (a shape or index
-    /// mismatch, or a backend failure).
+    /// Returns [`TreeTNOperationError`] when an index replacement fails, when a region node is
+    /// absent from the MPO, when `region` is empty, or when tensors cannot be
+    /// contracted.
     ///
     pub fn apply_local(
         &self,
@@ -455,8 +458,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when a node is not found (a missing-index failure) or the
-    /// new name is a duplicate (a duplicate operation failure).
+    /// Returns [`TreeTNOperationError`] when `mapping` contains a repeated old node, names an
+    /// unknown node, or would produce a duplicate node name, or when rebuilding
+    /// the internal MPO fails.
     ///
     /// # Examples
     ///
@@ -633,8 +637,10 @@ where
     /// This only rewrites the external mapping. The internal MPO indices are unchanged.
     /// # Errors
     ///
-    /// Returns an error when the state site space is incompatible (a shape
-    /// mismatch) or the binding fails.
+    /// Returns [`TreeTNOperationError`] when a mapped node has no state site space or does not
+    /// have exactly one state site index, when the node has more than one input
+    /// mapping, or when the internal input dimension differs from the state site
+    /// dimension.
     ///
     pub fn set_input_space_from_state(
         &mut self,
@@ -675,8 +681,10 @@ where
     /// This only rewrites the external mapping. The internal MPO indices are unchanged.
     /// # Errors
     ///
-    /// Returns an error when the state site space is incompatible (a shape
-    /// mismatch) or the binding fails.
+    /// Returns [`TreeTNOperationError`] when a mapped node has no state site space or does not
+    /// have exactly one state site index, when the node has more than one output
+    /// mapping, or when the internal output dimension differs from the state site
+    /// dimension.
     ///
     pub fn set_output_space_from_state(
         &mut self,
@@ -869,8 +877,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the restructure is incompatible (a shape or index
-    /// mismatch) or the rebuild fails (a backend failure).
+    /// Returns an error when restructuring the internal MPO fails (see
+    /// [`TreeTN::restructure_to`]), or when an input/output mapping's internal
+    /// index is missing from `target`.
     ///
     /// # Examples
     ///

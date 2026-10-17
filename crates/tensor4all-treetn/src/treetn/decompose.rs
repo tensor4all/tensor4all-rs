@@ -44,8 +44,9 @@ impl<V: Clone + Hash + Eq, I: Clone + Eq> TreeTopology<V, I> {
     /// Validate that this topology describes a tree.
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`TreeTNOperationError`] when `self` has no nodes, when its edge count is not
+    /// `node_count - 1` (for networks with more than one node), or when an edge
+    /// references an unknown node.
     ///
     pub fn validate(&self) -> std::result::Result<(), TreeTNOperationError> {
         let n = self.nodes.len();

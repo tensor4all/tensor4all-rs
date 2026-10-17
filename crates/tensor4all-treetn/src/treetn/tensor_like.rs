@@ -257,8 +257,12 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when a numbered tag is ambiguous or missing (a
-    /// missing-index failure).
+    /// Returns [`NumberedTagSelectionError::InvalidPrefix`] when `tag_prefix`
+    /// contains `=`, [`NumberedTagSelectionError::RangeOverflow`] when a
+    /// requested numeric tag overflows `usize`,
+    /// [`NumberedTagSelectionError::MissingTag`] when a tag is absent, and
+    /// [`NumberedTagSelectionError::AmbiguousTag`] when a tag matches more than
+    /// one external index.
     ///
     /// # Examples
     /// ```
@@ -323,8 +327,10 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the old site index is not present (a missing-index
-    /// failure) or the new indices are incompatible (a shape mismatch).
+    /// Returns [`TreeTNOperationError`] when `old_index` is not a site index of the network,
+    /// when its node or tensor cannot be resolved, or when `unfuse_index` fails,
+    /// including a dimension-product mismatch, or the subsequent tensor
+    /// replacement fails.
     ///
     /// # Examples
     /// ```

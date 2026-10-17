@@ -229,8 +229,8 @@ where
     /// Returns a detailed report of any inconsistencies found.
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns an error only when the `projected_operator` read lock is poisoned.
+    /// Structural inconsistencies are collected in the returned report instead.
     ///
     pub fn verify(
         &self,

@@ -1280,8 +1280,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, an
-    /// SVD or non-convergence failure, or a backend failure).
+    /// Returns [`TreeTNOperationError`] when the target site grouping cannot be planned (for
+    /// example an incompatible or unsupported regrouping), or when executing the
+    /// split, transport, swap, fuse, or final truncation phases fails.
     ///
     /// # Examples
     ///

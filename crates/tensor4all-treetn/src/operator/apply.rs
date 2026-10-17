@@ -280,8 +280,10 @@ impl ApplyOptions {
 ///
 /// # Errors
 ///
-/// Returns an error when the operator and state are incompatible (a shape or
-/// index mismatch) or the application fails (a backend failure).
+/// Returns [`TreeTNOperationError`] when the operator's node names are not a subset of the
+/// state's, when the state is empty, or when extending/embedding the operator,
+/// transforming the state's site indices, contracting the two networks, or
+/// transforming the output indices fails.
 ///
 /// # Example
 ///
@@ -434,8 +436,11 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the index binding fails (a shape or index mismatch,
-/// or a missing-index failure).
+/// Returns [`LinearOperatorIndexBindingError::DimensionMismatch`] when a pair
+/// changes an index dimension, [`LinearOperatorIndexBindingError::DuplicateSourceIndex`]
+/// when a source index is repeated or matches more than one mapping, and
+/// [`LinearOperatorIndexBindingError::MissingSourceIndex`] when a source index
+/// is absent from the input or output mappings.
 ///
 /// # Examples
 /// ```
@@ -506,8 +511,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the operator and state are incompatible (a shape or
-/// index mismatch) or a mapped index is missing (a missing-index failure).
+/// Returns [`LinearOperatorIndexApplyError::BindIndices`] when rebinding the
+/// true indices fails (see [`bind_linear_operator_indices`]), and
+/// [`LinearOperatorIndexApplyError::ApplyFailed`] when the rebound operator
+/// cannot be applied to `state`.
 ///
 /// # Examples
 /// ```
