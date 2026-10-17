@@ -8,11 +8,14 @@
 
 use std::fmt::Debug;
 use std::hash::Hash;
+use tensor4all_tensorbackend::invariant_violated;
 
 use tensor4all_core::{IndexLike, TensorLike};
 
 use super::TreeTN;
 use crate::error::TreeTNOperationError;
+
+const INVARIANT: &str = "fix_and_remove_site: TreeTN structure";
 
 /// Fix the site at `node` to `value` and remove `node` from the tree.
 ///
@@ -89,11 +92,12 @@ where
         ))
     })?;
 
-    let site_space = treetn.site_space(node).ok_or_else(|| {
-        TreeTNOperationError::from(anyhow::anyhow!(
-            "fix_and_remove_site: node {node:?} has no site space"
-        ))
-    })?;
+    // From here on every lookup reads the structure `node_index` just found:
+    // a TreeTN registers each node's site space, graph node and tensor
+    // together (`add_tensor_internal`), so these are internal invariants.
+    let site_space = treetn
+        .site_space(node)
+        .unwrap_or_else(|| invariant_violated(INVARIANT, format!("no site space for {node:?}")));
     if site_space.len() != 1 {
         return Err(TreeTNOperationError::from(anyhow::anyhow!(
             "fix_and_remove_site: node {node:?} must carry exactly one site index, got {}",
@@ -103,11 +107,7 @@ where
     let site_index = site_space
         .iter()
         .next()
-        .ok_or_else(|| {
-            TreeTNOperationError::from(anyhow::anyhow!(
-                "fix_and_remove_site: node {node:?} has no site index"
-            ))
-        })?
+        .unwrap_or_else(|| invariant_violated(INVARIANT, "a one-element site space is empty"))
         .clone();
     if value >= site_index.dim() {
         return Err(TreeTNOperationError::from(anyhow::anyhow!(
@@ -130,31 +130,23 @@ where
         .iter()
         .min_by_key(|neighbor| treetn.node_index(neighbor).map(|index| index.index()))
         .cloned()
-        .ok_or_else(|| {
-            TreeTNOperationError::from(anyhow::anyhow!(
-                "fix_and_remove_site: node {node:?} has no neighbour to absorb it"
-            ))
-        })?;
+        .unwrap_or_else(|| {
+            invariant_violated(INVARIANT, "a non-empty neighbour list has no minimum")
+        });
 
-    let node_tensor = treetn.tensor(node_index).ok_or_else(|| {
-        TreeTNOperationError::from(anyhow::anyhow!(
-            "fix_and_remove_site: tensor for node {node:?} is missing"
-        ))
-    })?;
+    let node_tensor = treetn
+        .tensor(node_index)
+        .unwrap_or_else(|| invariant_violated(INVARIANT, format!("no tensor for {node:?}")));
     let sliced = node_tensor
         .select_indices(std::slice::from_ref(&site_index), &[value])
         .map_err(|error| TreeTNOperationError::from(anyhow::Error::new(error)))?;
 
-    let parent_index = treetn.node_index(&parent).ok_or_else(|| {
-        TreeTNOperationError::from(anyhow::anyhow!(
-            "fix_and_remove_site: neighbour {parent:?} is missing from the TreeTN"
-        ))
-    })?;
-    let parent_tensor = treetn.tensor(parent_index).ok_or_else(|| {
-        TreeTNOperationError::from(anyhow::anyhow!(
-            "fix_and_remove_site: tensor for neighbour {parent:?} is missing"
-        ))
-    })?;
+    let parent_index = treetn
+        .node_index(&parent)
+        .unwrap_or_else(|| invariant_violated(INVARIANT, format!("no node for {parent:?}")));
+    let parent_tensor = treetn
+        .tensor(parent_index)
+        .unwrap_or_else(|| invariant_violated(INVARIANT, format!("no tensor for {parent:?}")));
     let merged = T::contract(&[parent_tensor, &sliced])
         .map_err(|error| TreeTNOperationError::from(anyhow::Error::new(error)))?;
 
@@ -170,18 +162,12 @@ where
         let tensor = if name == parent {
             merged.clone()
         } else {
-            let index = treetn.node_index(&name).ok_or_else(|| {
-                TreeTNOperationError::from(anyhow::anyhow!(
-                    "fix_and_remove_site: node {name:?} is missing from the TreeTN"
-                ))
-            })?;
+            let index = treetn
+                .node_index(&name)
+                .unwrap_or_else(|| invariant_violated(INVARIANT, format!("no node for {name:?}")));
             treetn
                 .tensor(index)
-                .ok_or_else(|| {
-                    TreeTNOperationError::from(anyhow::anyhow!(
-                        "fix_and_remove_site: tensor for node {name:?} is missing"
-                    ))
-                })?
+                .unwrap_or_else(|| invariant_violated(INVARIANT, format!("no tensor for {name:?}")))
                 .clone()
         };
         tensors.push(tensor);
