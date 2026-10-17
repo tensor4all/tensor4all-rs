@@ -498,3 +498,287 @@ fn promote_eager_operands_casts_in_the_owner_runtime_and_keeps_grad() {
     promoted.sum().unwrap().backward().unwrap();
     assert!(real_leaf.grad().unwrap().is_some());
 }
+
+// ============================================================================
+// #988: numerical gradients through the public mixed-dtype eager operations
+// ============================================================================
+
+use crate::index_like::IndexLike;
+
+/// Fresh, caller-scoped CPU eager runtime for the mixed-dtype gradient checks.
+fn scoped_eager_runtime() -> Arc<EagerRuntime> {
+    tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+        tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend"),
+    )
+    .eager_runtime()
+    .expect("scoped eager runtime")
+}
+
+fn dims_of(indices: &[DynIndex]) -> Vec<usize> {
+    indices.iter().map(|index| index.dim()).collect()
+}
+
+fn tracked_real_leaf(runtime: &Arc<EagerRuntime>, indices: &[DynIndex], data: &[f64]) -> IdxTensor {
+    let inner = EagerTensor::requires_grad_in(
+        NativeTensor::from_vec_col_major(dims_of(indices), data.to_vec()).unwrap(),
+        Arc::clone(runtime),
+    )
+    .unwrap();
+    IdxTensor::from_inner(indices.to_vec(), inner).unwrap()
+}
+
+fn tracked_complex_leaf(
+    runtime: &Arc<EagerRuntime>,
+    indices: &[DynIndex],
+    data: &[Complex64],
+) -> IdxTensor {
+    let inner = EagerTensor::requires_grad_in(
+        NativeTensor::from_vec_col_major(dims_of(indices), data.to_vec()).unwrap(),
+        Arc::clone(runtime),
+    )
+    .unwrap();
+    IdxTensor::from_inner(indices.to_vec(), inner).unwrap()
+}
+
+fn untracked_real_leaf(
+    runtime: &Arc<EagerRuntime>,
+    indices: &[DynIndex],
+    data: &[f64],
+) -> IdxTensor {
+    let inner = EagerTensor::from_tensor_in(
+        NativeTensor::from_vec_col_major(dims_of(indices), data.to_vec()).unwrap(),
+        Arc::clone(runtime),
+    )
+    .unwrap();
+    IdxTensor::from_inner(indices.to_vec(), inner).unwrap()
+}
+
+fn untracked_complex_leaf(
+    runtime: &Arc<EagerRuntime>,
+    indices: &[DynIndex],
+    data: &[Complex64],
+) -> IdxTensor {
+    let inner = EagerTensor::from_tensor_in(
+        NativeTensor::from_vec_col_major(dims_of(indices), data.to_vec()).unwrap(),
+        Arc::clone(runtime),
+    )
+    .unwrap();
+    IdxTensor::from_inner(indices.to_vec(), inner).unwrap()
+}
+
+/// Deterministic complex weight used to reduce an operation result to the real
+/// scalar `L = Re(sum_k W_k result_k)`.
+fn gradient_weight(len: usize) -> Vec<Complex64> {
+    (0..len)
+        .map(|k| Complex64::new(k as f64 - 2.5, 0.5 * k as f64 - 1.0))
+        .collect()
+}
+
+fn weighted_real_loss(result: &IdxTensor, weight: &[Complex64]) -> f64 {
+    result
+        .to_vec::<Complex64>()
+        .unwrap()
+        .iter()
+        .zip(weight)
+        .map(|(value, weight)| (weight * value).re)
+        .sum::<f64>()
+}
+
+/// Check reverse-mode gradients through one public mixed-dtype operation
+/// against central finite differences of the real loss
+/// `L = Re(sum_k W_k result_k)`.
+///
+/// `real_first` selects the operand order. The tracked leaves live in a fresh
+/// scoped CPU runtime, and the result must stay in that runtime.
+fn check_mixed_dtype_gradient(
+    label: &str,
+    real_indices: &[DynIndex],
+    real_data: &[f64],
+    complex_indices: &[DynIndex],
+    complex_data: &[Complex64],
+    real_first: bool,
+    apply: &dyn Fn(&IdxTensor, &IdxTensor) -> IdxTensor,
+) {
+    let runtime = scoped_eager_runtime();
+    let real = tracked_real_leaf(&runtime, real_indices, real_data);
+    let complex = tracked_complex_leaf(&runtime, complex_indices, complex_data);
+
+    let result = if real_first {
+        apply(&real, &complex)
+    } else {
+        apply(&complex, &real)
+    };
+    assert_eq!(
+        result.try_materialized_inner().unwrap().runtime().id(),
+        runtime.id(),
+        "{label}: the mixed-dtype result left the scoped runtime"
+    );
+
+    let weight_data = gradient_weight(result.to_vec::<Complex64>().unwrap().len());
+    let weight = IdxTensor::from_inner(
+        result.indices().to_vec(),
+        EagerTensor::from_tensor_in(
+            NativeTensor::from_vec_col_major(dims_of(result.indices()), weight_data.clone())
+                .unwrap(),
+            Arc::clone(&runtime),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    crate::contract_pair(&result, &weight)
+        .unwrap()
+        .sum()
+        .unwrap()
+        .real_part()
+        .backward()
+        .unwrap();
+
+    let grad_real = real.grad().unwrap().unwrap().to_vec::<f64>().unwrap();
+    let grad_complex = complex
+        .grad()
+        .unwrap()
+        .unwrap()
+        .to_vec::<Complex64>()
+        .unwrap();
+
+    let forward = |real_data: &[f64], complex_data: &[Complex64]| -> f64 {
+        let real = untracked_real_leaf(&runtime, real_indices, real_data);
+        let complex = untracked_complex_leaf(&runtime, complex_indices, complex_data);
+        let result = if real_first {
+            apply(&real, &complex)
+        } else {
+            apply(&complex, &real)
+        };
+        weighted_real_loss(&result, &weight_data)
+    };
+
+    let step = 1.0e-6;
+    let tol = 1.0e-6;
+    for index in 0..real_data.len() {
+        let mut plus = real_data.to_vec();
+        let mut minus = real_data.to_vec();
+        plus[index] += step;
+        minus[index] -= step;
+        let expected =
+            (forward(&plus, complex_data) - forward(&minus, complex_data)) / (2.0 * step);
+        assert!(
+            (grad_real[index] - expected).abs() <= tol,
+            "{label}: d/d(real[{index}]) = {}, finite difference {expected}",
+            grad_real[index]
+        );
+    }
+
+    for index in 0..complex_data.len() {
+        let mut real_plus = complex_data.to_vec();
+        let mut real_minus = complex_data.to_vec();
+        real_plus[index].re += step;
+        real_minus[index].re -= step;
+        let expected_real =
+            (forward(real_data, &real_plus) - forward(real_data, &real_minus)) / (2.0 * step);
+
+        let mut imag_plus = complex_data.to_vec();
+        let mut imag_minus = complex_data.to_vec();
+        imag_plus[index].im += step;
+        imag_minus[index].im -= step;
+        let expected_imag =
+            (forward(real_data, &imag_plus) - forward(real_data, &imag_minus)) / (2.0 * step);
+
+        let actual = grad_complex[index];
+        assert!(
+            (actual.re - expected_real).abs() <= tol && (actual.im - expected_imag).abs() <= tol,
+            "{label}: d/d(complex[{index}]) = {actual}, finite difference \
+             {expected_real} + i {expected_imag}"
+        );
+    }
+}
+
+/// Run the gradient check for `f64 x c64` and `c64 x f64`.
+fn check_both_operand_orders(
+    label: &str,
+    real_indices: &[DynIndex],
+    real_data: &[f64],
+    complex_indices: &[DynIndex],
+    complex_data: &[Complex64],
+    apply: &dyn Fn(&IdxTensor, &IdxTensor) -> IdxTensor,
+) {
+    check_mixed_dtype_gradient(
+        &format!("{label}, f64 x c64"),
+        real_indices,
+        real_data,
+        complex_indices,
+        complex_data,
+        true,
+        apply,
+    );
+    check_mixed_dtype_gradient(
+        &format!("{label}, c64 x f64"),
+        real_indices,
+        real_data,
+        complex_indices,
+        complex_data,
+        false,
+        apply,
+    );
+}
+
+#[test]
+fn mixed_dtype_pairwise_contraction_gradients_match_finite_differences() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let real_data = vec![0.7_f64, -1.3, 0.9, 1.1, -0.4, 2.0];
+    let complex_data = vec![
+        Complex64::new(0.5, 1.5),
+        Complex64::new(-2.0, 0.25),
+        Complex64::new(1.0, -0.75),
+    ];
+    check_both_operand_orders(
+        "pairwise contraction",
+        &[i, j.clone()],
+        &real_data,
+        std::slice::from_ref(&j),
+        &complex_data,
+        &|lhs, rhs| crate::contract_pair(lhs, rhs).unwrap(),
+    );
+}
+
+#[test]
+fn mixed_dtype_tensordot_gradients_match_finite_differences() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let real_data = vec![0.7_f64, -1.3, 0.9, 1.1, -0.4, 2.0];
+    let complex_data = vec![
+        Complex64::new(0.5, 1.5),
+        Complex64::new(-2.0, 0.25),
+        Complex64::new(1.0, -0.75),
+    ];
+    let pairs = [(j.clone(), j.clone())];
+    check_both_operand_orders(
+        "tensordot",
+        &[i, j.clone()],
+        &real_data,
+        std::slice::from_ref(&j),
+        &complex_data,
+        &|lhs, rhs| crate::tensordot(lhs, rhs, &pairs).unwrap(),
+    );
+}
+
+#[test]
+fn mixed_dtype_outer_product_gradients_match_finite_differences() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let real_data = vec![0.7_f64, -1.3];
+    let complex_data = vec![
+        Complex64::new(0.5, 1.5),
+        Complex64::new(-2.0, 0.25),
+        Complex64::new(1.0, -0.75),
+    ];
+    check_both_operand_orders(
+        "outer product",
+        std::slice::from_ref(&i),
+        &real_data,
+        std::slice::from_ref(&j),
+        &complex_data,
+        &|lhs, rhs| crate::outer_product(lhs, rhs).unwrap(),
+    );
+}
