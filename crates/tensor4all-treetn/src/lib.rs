@@ -81,8 +81,7 @@ pub use options::{CanonicalizationOptions, RestructureOptions, SplitOptions, Tru
 pub use random::{random_treetn, LinkSpace};
 #[cfg(feature = "simplett-bridge")]
 pub use simplett_bridge::{
-    fix_and_remove_site_from_treetn_chain, insert_onehot_site_in_treetn_chain,
-    tensor_train_to_treetn, tensor_train_to_treetn_with_names,
+    insert_onehot_site_in_treetn_chain, tensor_train_to_treetn, tensor_train_to_treetn_with_names,
     tensor_train_to_treetn_with_names_and_site_indices, treetn_to_tensor_train,
     weighted_remove_site_from_treetn_chain,
 };
@@ -100,6 +99,7 @@ pub use treetn::{
     factorize_tensor_to_treetn,
     factorize_tensor_to_treetn_with,
     fit_sum,
+    fix_and_remove_site,
     get_boundary_edges,
     hadamard,
     low_rank_initializer_tree_tn,

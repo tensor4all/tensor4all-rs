@@ -44,9 +44,11 @@ The only sanctioned place where the two stacks convert into each other is
   `SimpleTensorTrain` -> network `TreeTN`;
 - `treetn_to_tensor_train`: network `TreeTN` (linear chain) -> simplett
   `SimpleTensorTrain`;
-- `fix_and_remove_site_from_treetn_chain`,
-  `insert_onehot_site_in_treetn_chain`,
+- `insert_onehot_site_in_treetn_chain`,
   `weighted_remove_site_from_treetn_chain`: chain-topology helpers.
+
+General-tree, name-addressed site fixing lives on `treetn::fix_and_remove_site`
+and is not part of the simplett bridge.
 
 Crates that need to cross stacks must route through this bridge. New ad hoc
 bridges (hand-rolled conversion logic inside another crate) are rejected.

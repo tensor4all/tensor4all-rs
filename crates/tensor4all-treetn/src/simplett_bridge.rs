@@ -394,94 +394,6 @@ where
     tensor_train_to_treetn_with_names_and_site_indices(&tt, (0..tt.len()).collect(), site_indices)
 }
 
-/// Fix a site in a linear-chain `TreeTN<IdxTensor, usize>` and remove it.
-///
-/// `position` selects the chain site to remove, and `value` selects the local
-/// coordinate kept at that site. The returned chain has one fewer site, node
-/// names `0..n-2`, and all remaining site indices preserved in their original
-/// order.
-///
-/// # Arguments
-///
-/// - `treetn`: a linear-chain `TreeTN` whose node names are exactly `0..n`.
-///
-///   Each node must carry exactly one site index.
-/// - `position`: chain site to fix and remove, in `0..n`.
-/// - `value`: local coordinate retained at the removed site.
-///
-/// # Returns
-///
-/// A new linear-chain `TreeTN` representing the original tensor restricted to
-/// `site[position] == value`, with that site removed from the external index
-/// list.
-///
-/// # Errors
-///
-/// Returns [`TreeTNOperationError`] when the chain is not named `0..n` with exactly one site
-/// index per node, when `position` is out of range, when removing the site
-/// would leave a zero-site chain, when `value` is outside the site's dimension,
-/// or when a conversion to or from [`SimpleTensorTrain`] fails.
-///
-/// # Examples
-///
-/// ```
-/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
-/// use tensor4all_treetn::{
-///     fix_and_remove_site_from_treetn_chain, tensor_train_to_treetn, treetn_to_tensor_train,
-/// };
-///
-/// # fn main() -> anyhow::Result<()> {
-/// let tt = SimpleTensorTrain::new(vec![
-///     tensor3_from_data(vec![1.0_f64, 2.0], 1, 2, 1)?,
-///     tensor3_from_data(vec![10.0_f64, 20.0], 1, 2, 1)?,
-/// ])?;
-/// let (tree, _) = tensor_train_to_treetn(&tt)?;
-///
-/// let reduced = fix_and_remove_site_from_treetn_chain::<f64>(tree, 0, 1)?;
-/// let roundtrip = treetn_to_tensor_train::<f64>(reduced)?;
-///
-/// assert_eq!(roundtrip.site_dims(), vec![2]);
-/// assert!((roundtrip.evaluate(&[0])? - 20.0).abs() < 1.0e-12);
-/// assert!((roundtrip.evaluate(&[1])? - 40.0).abs() < 1.0e-12);
-/// # Ok(())
-/// # }
-/// ```
-pub fn fix_and_remove_site_from_treetn_chain<T>(
-    treetn: TreeTN<IdxTensor, usize>,
-    position: usize,
-    value: usize,
-) -> std::result::Result<TreeTN<IdxTensor, usize>, TreeTNOperationError>
-where
-    T: TTScalar + TensorElement + Clone + Default,
-{
-    let site_indices = chain_site_indices(&treetn, "fix_and_remove_site_from_treetn_chain")?;
-    if !(position < site_indices.len()) {
-        return Err(anyhow::anyhow!(
-            "fix_and_remove_site_from_treetn_chain: position {} is out of range 0..{}",
-            position,
-            site_indices.len()
-        )
-        .into());
-    };
-    if !(site_indices.len() > 1) {
-        return Err(anyhow::anyhow!("fix_and_remove_site_from_treetn_chain: cannot remove the only site because scalar zero-site TreeTN chains are not supported").into());
-    };
-
-    let tt = treetn_to_tensor_train::<T>(treetn)?;
-    if !(value < tt.site_dim(position)) {
-        return Err(anyhow::anyhow!(
-            "fix_and_remove_site_from_treetn_chain: fixed value {} exceeds site dimension {}",
-            value,
-            tt.site_dim(position)
-        )
-        .into());
-    };
-
-    let reduced_site = fixed_site_matrix(tt.site_tensor(position), value);
-    remove_site_with_reduced_matrix(tt, site_indices, position, &reduced_site)
-        .map_err(TreeTNOperationError::from)
-}
-
 /// Contract a site of a linear-chain `TreeTN<IdxTensor, usize>` with weights and remove it.
 ///
 /// The removed site is summed as `sum_s weights[s] * tensor[..., s, ...]`.
@@ -597,13 +509,6 @@ fn chain_site_indices(treetn: &TreeTN<IdxTensor, usize>, context: &str) -> Resul
         site_indices.push(site_index.clone());
     }
     Ok(site_indices)
-}
-
-fn fixed_site_matrix<T>(tensor: &tensor4all_simplett::Tensor3<T>, value: usize) -> Vec<T>
-where
-    T: TTScalar + Clone + Default,
-{
-    tensor.slice_site(value)
 }
 
 fn weighted_site_matrix<T>(tensor: &tensor4all_simplett::Tensor3<T>, weights: &[T]) -> Vec<T>

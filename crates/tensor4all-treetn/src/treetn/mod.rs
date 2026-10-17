@@ -20,6 +20,7 @@ mod operator_impl;
 mod ops;
 pub mod partial_contraction;
 mod restructure;
+mod site_ops;
 mod swap;
 mod tensor_like;
 mod transform;
@@ -72,6 +73,9 @@ pub use partial_contraction::{
 
 // Re-export swap types
 pub use swap::{ScheduledSwapStep, SwapOptions, SwapSchedule};
+
+// Re-export general-tree site-fixing operations
+pub use site_ops::fix_and_remove_site;
 
 /// Legs grouped by full index, in first-occurrence order: each entry is an
 /// index and the `(node, leg)` pairs that carry it (used by `from_tensors`).
