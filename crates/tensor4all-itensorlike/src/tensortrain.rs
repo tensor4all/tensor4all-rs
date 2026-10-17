@@ -175,8 +175,8 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns [`TensorTrainError::InvalidStructure`] when adjacent tensors do
-    /// not share exactly one link index or when the underlying TreeTN
-    /// construction fails.
+    /// not share exactly one link index, and [`TensorTrainError::TreeTn`] when
+    /// the underlying TreeTN construction fails.
     ///
     pub fn new(tensors: Vec<IdxTensor>) -> Result<Self> {
         if tensors.is_empty() {
@@ -220,10 +220,8 @@ impl TensorTrain {
 
         // Create TreeTN with from_tensors (auto-connects by shared index IDs)
         let treetn =
-            TreeTN::<IdxTensor, usize>::from_tensors(tensors, node_names).map_err(|e| {
-                TensorTrainError::InvalidStructure {
-                    message: format!("Failed to create TreeTN: {}", e),
-                }
+            TreeTN::<IdxTensor, usize>::from_tensors(tensors, node_names).map_err(|source| {
+                TensorTrainError::tree_tn("failed to build the underlying TreeTN chain", source)
             })?;
 
         let tt = Self {
@@ -370,7 +368,8 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns [`TensorTrainError::InvalidStructure`] when [`TensorTrain::new`]
-    /// rejects the tensors or when the deduced canonical region cannot be set.
+    /// rejects the tensors, and [`TensorTrainError::TreeTn`] when the deduced
+    /// canonical region cannot be set.
     ///
     pub fn with_ortho(
         tensors: Vec<IdxTensor>,
@@ -384,11 +383,14 @@ impl TensorTrain {
         // When llim + 2 == rlim, ortho center is at llim + 1
         if llim + 2 == rlim && llim >= -1 && (llim + 1) < tt.len() as i32 {
             let center = (llim + 1) as usize;
-            tt.treetn.set_canonical_region(vec![center]).map_err(|e| {
-                TensorTrainError::InvalidStructure {
-                    message: format!("Failed to set ortho region: {}", e),
-                }
-            })?;
+            tt.treetn
+                .set_canonical_region(vec![center])
+                .map_err(|source| {
+                    TensorTrainError::tree_tn(
+                        format!("failed to set the canonical region to site {center}"),
+                        source,
+                    )
+                })?;
         }
 
         tt.canonical_form = canonical_form;
@@ -410,10 +412,11 @@ impl TensorTrain {
         };
         for (site, old_name) in node_names.into_iter().enumerate() {
             if old_name != site {
-                tt.treetn.rename_node(&old_name, site).map_err(|e| {
-                    TensorTrainError::InvalidStructure {
-                        message: format!("Failed to renumber TensorTrain sites: {}", e),
-                    }
+                tt.treetn.rename_node(&old_name, site).map_err(|source| {
+                    TensorTrainError::tree_tn(
+                        format!("failed to renumber TreeTN site {old_name} to {site}"),
+                        source,
+                    )
                 })?;
             }
         }
@@ -818,8 +821,9 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns [`TensorTrainError::OperationErrorSource`] when replacing a link
-    /// index fails, and [`TensorTrainError::InvalidStructure`] when the rebuilt
-    /// train is not a valid chain.
+    /// index fails, [`TensorTrainError::InvalidStructure`] when the rebuilt
+    /// train is not a valid chain, and [`TensorTrainError::TreeTn`] when the
+    /// rebuilt chain's TreeTN construction fails.
     ///
     pub fn sim_link_indices(&self) -> Result<Self> {
         if self.len() <= 1 {
@@ -1031,11 +1035,14 @@ impl TensorTrain {
                     site,
                     length: self.len(),
                 })?;
-        self.treetn.replace_tensor(node_idx, tensor).map_err(|e| {
-            TensorTrainError::InvalidStructure {
-                message: format!("Failed to replace tensor at site {}: {}", site, e),
-            }
-        })?;
+        self.treetn
+            .replace_tensor(node_idx, tensor)
+            .map_err(|source| {
+                TensorTrainError::tree_tn(
+                    format!("failed to replace the tensor at site {site}"),
+                    source,
+                )
+            })?;
         Ok(())
     }
 
@@ -1049,8 +1056,8 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns [`TensorTrainError::SiteOutOfBounds`] when `site >= self.len()`,
-    /// and [`TensorTrainError::InvalidStructure`] when the tensor cannot be
-    /// replaced or the canonical region cannot be cleared.
+    /// and [`TensorTrainError::TreeTn`] when the tensor cannot be replaced or
+    /// the canonical region cannot be cleared.
     ///
     /// # Examples
     ///
@@ -1074,8 +1081,11 @@ impl TensorTrain {
         // Invalidate orthogonality
         self.treetn
             .set_canonical_region(Vec::<usize>::new())
-            .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("Failed to clear canonical region: {}", e),
+            .map_err(|source| {
+                TensorTrainError::tree_tn(
+                    "failed to invalidate the canonical region after replacing a site tensor",
+                    source,
+                )
             })?;
         Ok(())
     }
@@ -1138,7 +1148,7 @@ impl TensorTrain {
     ///
     /// Returns [`TensorTrainError::Empty`] when the train has no sites,
     /// [`TensorTrainError::SiteOutOfBounds`] when `site >= self.len()`, and
-    /// [`TensorTrainError::InvalidStructure`] when canonicalization fails.
+    /// [`TensorTrainError::TreeTn`] when canonicalization fails.
     ///
     pub fn orthogonalize_with(&mut self, site: usize, form: CanonicalForm) -> Result<()> {
         if self.is_empty() {
@@ -1156,8 +1166,11 @@ impl TensorTrain {
         let options = CanonicalizationOptions::forced().with_form(form);
         self.treetn = std::mem::take(&mut self.treetn)
             .canonicalize(vec![site], options)
-            .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("Canonicalize failed: {}", e),
+            .map_err(|source| {
+                TensorTrainError::tree_tn(
+                    format!("failed to canonicalize towards site {site}"),
+                    source,
+                )
             })?;
 
         self.canonical_form = Some(form);
@@ -1173,8 +1186,7 @@ impl TensorTrain {
     ///
     /// Returns an error when `options` has a zero `max_bond_dim` or an invalid
     /// SVD policy (rejected before any work), and
-    /// [`TensorTrainError::InvalidStructure`] when the underlying TreeTN
-    /// truncation fails.
+    /// [`TensorTrainError::TreeTn`] when the underlying TreeTN truncation fails.
     ///
     /// # Examples
     ///
@@ -1232,8 +1244,11 @@ impl TensorTrain {
 
         self.treetn
             .truncate_mut([center], treetn_options)
-            .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("TreeTN truncation failed: {}", e),
+            .map_err(|source| {
+                TensorTrainError::tree_tn(
+                    format!("failed to truncate towards site {center}"),
+                    source,
+                )
             })?;
 
         self.canonical_form = Some(CanonicalForm::Unitary);
@@ -1600,12 +1615,7 @@ impl TensorTrain {
             } else {
                 tensor
                     .permuteinds(&desired)
-                    .map_err(|e| TensorTrainError::InvalidStructure {
-                        message: format!(
-                            "Failed to normalize site tensor index order at site {}: {}",
-                            site, e
-                        ),
-                    })?
+                    .map_err(TensorTrainError::from)?
                     .to_vec::<T>()
                     .map_err(TensorTrainError::from)?
             };
@@ -1823,8 +1833,7 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns [`TensorTrainError::InvalidStructure`] when the train is empty,
-    /// and [`TensorTrainError::OperationErrorSource`] when contracting the
-    /// tensors fails.
+    /// and [`TensorTrainError::TreeTn`] when contracting the tensors fails.
     ///
     /// # Example
     /// ```
@@ -1854,9 +1863,9 @@ impl TensorTrain {
         }
 
         self.treetn.contract_to_tensor().map_err(|source| {
-            TensorTrainError::operation_source(
-                "Failed to contract to dense",
-                anyhow::Error::new(source),
+            TensorTrainError::tree_tn(
+                "failed to contract the tensor train to a dense tensor",
+                source,
             )
         })
     }
@@ -1913,10 +1922,10 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns [`TensorTrainError::InvalidStructure`] when the trains have
-    /// different lengths, when the direct-sum construction fails, or when
-    /// parallel links cannot be fused into a single unit link; returns
-    /// [`TensorTrainError::OperationErrorSource`] when fusing or attaching a
-    /// unit link fails.
+    /// different lengths or when parallel links cannot be fused into a single
+    /// unit link; returns [`TensorTrainError::TreeTn`] when the direct-sum
+    /// construction fails, and [`TensorTrainError::OperationErrorSource`] when
+    /// fusing or attaching a unit link fails.
     ///
     pub fn add(&self, other: &Self) -> Result<Self> {
         if self.is_empty() && other.is_empty() {
@@ -1941,12 +1950,9 @@ impl TensorTrain {
             });
         }
 
-        let result_inner =
-            self.treetn
-                .add(&other.treetn)
-                .map_err(|e| TensorTrainError::InvalidStructure {
-                    message: format!("TT addition failed: {}", e),
-                })?;
+        let result_inner = self.treetn.add(&other.treetn).map_err(|source| {
+            TensorTrainError::tree_tn("failed to add the two tensor trains", source)
+        })?;
 
         Self::from_inner(result_inner, None)?.with_explicit_unit_links()
     }
@@ -1973,8 +1979,8 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns [`TensorTrainError::InvalidStructure`] when the trains have
-    /// different lengths, when their site spaces cannot be aligned, or when the
-    /// underlying reindexed addition fails; also propagates
+    /// different lengths, [`TensorTrainError::TreeTn`] when their site spaces
+    /// cannot be aligned or the underlying reindexed addition fails, and
     /// [`TensorTrainError::OperationErrorSource`] from explicit-unit-link
     /// repair.
     ///
@@ -2027,8 +2033,11 @@ impl TensorTrain {
         let result_inner = lhs
             .treetn
             .add_reindexed_like_self(&rhs.treetn)
-            .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("TT reindexed addition failed: {}", e),
+            .map_err(|source| {
+                TensorTrainError::tree_tn(
+                    "failed to add the two tensor trains after reindexing site spaces",
+                    source,
+                )
             })?;
 
         Self::from_inner(result_inner, None)
@@ -2049,8 +2058,8 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns [`TensorTrainError::OperationErrorSource`] when scaling the
-    /// first tensor fails, or [`TensorTrainError::InvalidStructure`] when the
-    /// rebuilt chain is invalid.
+    /// first tensor fails, and [`TensorTrainError::TreeTn`] when the rebuilt
+    /// chain's TreeTN construction fails.
     ///
     /// # Example
     /// ```
@@ -2112,8 +2121,10 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns [`TensorTrainError::InvalidStructure`] when the two trains have
-    /// incompatible lengths or site spaces, and
-    /// [`TensorTrainError::OperationErrorSource`] when scaling a train fails.
+    /// incompatible lengths, [`TensorTrainError::TreeTn`] when their site
+    /// spaces cannot be aligned or when scaling or rebuilding a chain fails,
+    /// and [`TensorTrainError::OperationErrorSource`] when scaling a tensor
+    /// fails.
     ///
     pub fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
         let scaled_self = self.scale(a)?;

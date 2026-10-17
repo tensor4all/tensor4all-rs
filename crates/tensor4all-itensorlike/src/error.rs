@@ -8,6 +8,7 @@ use thiserror::Error;
 pub type Result<T> = std::result::Result<T, TensorTrainError>;
 
 use tensor4all_core::IdxTensorError;
+use tensor4all_treetn::TreeTNOperationError;
 
 /// Errors that can occur in [`TensorTrain`](crate::TensorTrain) operations.
 #[derive(Debug, Error)]
@@ -64,6 +65,16 @@ pub enum TensorTrainError {
         source: tensor4all_core::IdxTensorError,
     },
 
+    /// A TreeTN operation failed while building or updating this tensor train.
+    #[error("{context}: {source}")]
+    TreeTn {
+        /// Context describing the TensorTrain operation that failed.
+        context: String,
+        /// Original TreeTN diagnostic, preserved as the error source.
+        #[source]
+        source: TreeTNOperationError,
+    },
+
     /// General operation error.
     #[error("Operation error: {message}")]
     OperationError {
@@ -95,6 +106,14 @@ impl From<IdxTensorError> for TensorTrainError {
 }
 
 impl TensorTrainError {
+    /// Wrap a TreeTN diagnostic with TensorTrain-level context.
+    pub(crate) fn tree_tn(context: impl Into<String>, source: TreeTNOperationError) -> Self {
+        Self::TreeTn {
+            context: context.into(),
+            source,
+        }
+    }
+
     pub(crate) fn operation_source(message: impl Into<String>, source: anyhow::Error) -> Self {
         Self::OperationErrorSource {
             message: message.into(),

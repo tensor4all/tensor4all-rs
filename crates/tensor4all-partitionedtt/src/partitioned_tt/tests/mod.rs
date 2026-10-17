@@ -415,7 +415,8 @@ fn test_partitioned_tt_add_preserves_tensor_train_error_variant() {
         .unwrap_err();
     match error {
         PartitionedTTError::TensorTrain { source } => {
-            assert!(matches!(source, TensorTrainError::InvalidStructure { .. }));
+            assert!(matches!(source, TensorTrainError::TreeTn { .. }));
+            assert!(std::error::Error::source(&source).is_some());
         }
         other => panic!("expected preserved tensor-train error, got {other:?}"),
     }

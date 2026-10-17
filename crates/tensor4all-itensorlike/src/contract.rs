@@ -97,9 +97,7 @@ fn contract_dispatch(
                 options.svd_policy(),
                 options.max_bond_dim(),
             )
-            .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("Zip-up contraction failed: {}", e),
-            })?
+            .map_err(|source| TensorTrainError::tree_tn("Zip-up contraction failed", source))?
     } else if matches!(options.method(), ContractMethod::Fit) {
         // The initializer decides how `C₀` is built. Zip-up is the compatibility path and delegates to treetn's own
         // Fit entry, so a caller that never asks for an initializer gets exactly what it got before; the small-rank
@@ -124,8 +122,11 @@ fn contract_dispatch(
                 let seed = seed.unwrap_or(DEFAULT_FIT_INITIALIZER_SEED);
                 let initial =
                     low_rank_initializer_tree_tn(a.as_treetn(), b.as_treetn(), bond_dim, seed)
-                        .map_err(|e| TensorTrainError::InvalidStructure {
-                            message: format!("Fit low-rank initializer construction failed: {}", e),
+                        .map_err(|source| {
+                            TensorTrainError::tree_tn(
+                                "Fit low-rank initializer construction failed",
+                                source,
+                            )
                         })?;
                 contract_fit_from_initial(
                     a.as_treetn(),
@@ -136,15 +137,10 @@ fn contract_dispatch(
                 )
             }
         }
-        .map_err(|e| TensorTrainError::InvalidStructure {
-            message: format!("TreeTN fit contraction failed: {}", e),
-        })?
+        .map_err(|source| TensorTrainError::tree_tn("TreeTN fit contraction failed", source))?
     } else {
-        treetn_contract(a.as_treetn(), b.as_treetn(), &center, treetn_options).map_err(|e| {
-            TensorTrainError::InvalidStructure {
-                message: format!("TreeTN contraction failed: {}", e),
-            }
-        })?
+        treetn_contract(a.as_treetn(), b.as_treetn(), &center, treetn_options)
+            .map_err(|source| TensorTrainError::tree_tn("TreeTN contraction failed", source))?
     };
 
     TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary))
@@ -165,10 +161,11 @@ fn contract_dispatch(
 ///
 /// # Errors
 ///
-/// Returns [`TensorTrainError::InvalidStructure`] when either train is empty,
-/// when their lengths differ, or when the underlying TreeTN contraction fails;
-/// returns [`TensorTrainError::OperationError`] when the SVD truncation policy
-/// is invalid or the Fit sweep count is not a multiple of two.
+/// Returns [`TensorTrainError::InvalidStructure`] when either train is empty
+/// or when their lengths differ, [`TensorTrainError::TreeTn`] when the
+/// underlying TreeTN contraction fails, and
+/// [`TensorTrainError::OperationError`] when the SVD truncation policy is
+/// invalid or the Fit sweep count is not a multiple of two.
 pub fn contract(
     a: &TensorTrain,
     b: &TensorTrain,
@@ -226,10 +223,10 @@ fn to_treetn_options(options: &ContractOptions) -> TreeTNContractionOptions {
 ///
 /// # Errors
 ///
-/// Returns the same errors as [`contract`], plus
-/// [`TensorTrainError::InvalidStructure`] when the caller-owned context
-/// refuses the contraction (for example a provenance, placement, or
-/// factorization refusal).
+/// Returns the same errors as [`contract`], including
+/// [`TensorTrainError::TreeTn`] when the caller-owned context refuses the
+/// contraction (for example a provenance, placement, or factorization
+/// refusal).
 pub fn contract_in(
     a: &TensorTrain,
     b: &TensorTrain,
@@ -256,9 +253,7 @@ pub fn contract_in(
                 options.max_bond_dim(),
                 context,
             )
-            .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("Zip-up contraction failed: {}", e),
-            })?;
+            .map_err(|source| TensorTrainError::tree_tn("Zip-up contraction failed", source))?;
         return TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary));
     }
 
@@ -276,9 +271,7 @@ pub fn contract_in(
             to_treetn_options(options),
             context,
         )
-        .map_err(|e| TensorTrainError::InvalidStructure {
-            message: format!("TreeTN Fit contraction failed: {e}"),
-        })?;
+        .map_err(|source| TensorTrainError::tree_tn("TreeTN Fit contraction failed", source))?;
         return TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary));
     }
 
@@ -296,9 +289,7 @@ pub fn contract_in(
             to_treetn_options(options),
             context,
         )
-        .map_err(|e| TensorTrainError::InvalidStructure {
-            message: format!("TreeTN Naive contraction failed: {}", e),
-        })?;
+        .map_err(|source| TensorTrainError::tree_tn("TreeTN Naive contraction failed", source))?;
         return TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary));
     }
 
@@ -314,9 +305,7 @@ pub fn contract_in(
         &mut rng,
         context,
     )
-    .map_err(|e| TensorTrainError::InvalidStructure {
-        message: format!("TreeTN SRC contraction failed: {}", e),
-    })?;
+    .map_err(|source| TensorTrainError::tree_tn("TreeTN SRC contraction failed", source))?;
     TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary))
 }
 
@@ -336,10 +325,10 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns [`TensorTrainError::InvalidStructure`] when either train is
-    /// empty, when their lengths differ, or when the underlying TreeTN
-    /// contraction fails; returns [`TensorTrainError::OperationError`] when the
-    /// SVD truncation policy is invalid or the Fit sweep count is not a
-    /// multiple of two.
+    /// empty or when their lengths differ, [`TensorTrainError::TreeTn`] when
+    /// the underlying TreeTN contraction fails, and
+    /// [`TensorTrainError::OperationError`] when the SVD truncation policy is
+    /// invalid or the Fit sweep count is not a multiple of two.
     ///
     pub fn contract(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
         contract(self, other, options)
@@ -376,10 +365,10 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns the same errors as [`TensorTrain::contract`], plus
-    /// [`TensorTrainError::InvalidStructure`] when the caller-owned context
-    /// refuses the contraction (for example a provenance, placement, or
-    /// factorization refusal).
+    /// Returns the same errors as [`TensorTrain::contract`], including
+    /// [`TensorTrainError::TreeTn`] when the caller-owned context refuses the
+    /// contraction (for example a provenance, placement, or factorization
+    /// refusal).
     pub fn contract_in(
         &self,
         other: &Self,

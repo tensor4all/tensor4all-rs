@@ -29,9 +29,10 @@ use crate::tensortrain::TensorTrain;
 /// # Errors
 ///
 /// Returns [`TensorTrainError::InvalidStructure`] when any input train is
-/// empty or when their lengths differ, and [`TensorTrainError::OperationError`]
-/// when an option is invalid, when the operator and initial guess cannot be
-/// index-mapped, or when the underlying TreeTN solve fails.
+/// empty or when their lengths differ, [`TensorTrainError::OperationError`]
+/// when an option is invalid or when the operator and initial guess cannot be
+/// index-mapped, and [`TensorTrainError::TreeTn`] when the underlying TreeTN
+/// solve fails.
 ///
 pub fn linsolve(
     operator: &TensorTrain,
@@ -143,9 +144,7 @@ pub fn linsolve(
         input_mapping,
         output_mapping,
     )
-    .map_err(|e| TensorTrainError::OperationError {
-        message: format!("Linsolve failed: {}", e),
-    })?;
+    .map_err(|source| TensorTrainError::tree_tn("Linsolve failed", source))?;
 
     TensorTrain::from_inner(result.solution, Some(CanonicalForm::Unitary))
 }
@@ -279,10 +278,10 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns [`TensorTrainError::InvalidStructure`] when any input train is
-    /// empty or when their lengths differ, and
-    /// [`TensorTrainError::OperationError`] when an option is invalid, when the
-    /// operator and initial guess cannot be index-mapped, or when the
-    /// underlying TreeTN solve fails.
+    /// empty or when their lengths differ, [`TensorTrainError::OperationError`]
+    /// when an option is invalid or when the operator and initial guess cannot
+    /// be index-mapped, and [`TensorTrainError::TreeTn`] when the underlying
+    /// TreeTN solve fails.
     ///
     pub fn linsolve(&self, rhs: &Self, init: Self, options: &LinsolveOptions) -> Result<Self> {
         linsolve(self, rhs, init, options)
