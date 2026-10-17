@@ -65,10 +65,13 @@ fn warm_internal_edge_cut_skips_unused_center_components() {
 
 /// [AI Supplied] #671: already retained columns may take arithmetic
 /// proportional to the bond, but must not be copied into transient heaps.
-/// The allocator observes requested bytes independently of evaluator stats.
+/// The byte measurement itself lives with the counting allocator in
+/// `tests/allocation.rs`, because a process-wide `#[global_allocator]` must
+/// not be shared with unrelated unit tests; this unit test keeps the cache
+/// accounting the allocator cannot observe from outside the crate.
 #[test]
-fn warm_edge_cut_requested_bytes_are_independent_of_bond_dimension() {
-    fn requested_bytes(bond: usize) -> usize {
+fn warm_edge_cut_has_no_cache_misses_at_any_bond_dimension() {
+    for bond in [2usize, 32] {
         let (tree, indices) =
             typed_tree_from_edges::<f64>(&[(0, 1), (1, 2), (2, 3), (3, 4)], &[bond; 4]);
         let values = (0..64)
@@ -80,20 +83,12 @@ fn warm_edge_cut_requested_bytes_are_independent_of_bond_dimension() {
         let cold = evaluator
             .evaluate_batched_typed::<f64>(points, EvaluationHint::around(2))
             .unwrap();
-        let (warm, bytes) = allocation_counter::measure_requested_bytes(|| {
-            evaluator
-                .evaluate_batched_typed::<f64>(points, EvaluationHint::around(2))
-                .unwrap()
-        });
+        let warm = evaluator
+            .evaluate_batched_typed::<f64>(points, EvaluationHint::around(2))
+            .unwrap();
         assert_eq!(warm, cold);
         assert_eq!(evaluator.stats_for_test().message_cache_misses, 0);
-        bytes
     }
-    assert_eq!(
-        requested_bytes(2),
-        requested_bytes(32),
-        "warm queries must borrow packed columns instead of copying bond-sized payloads"
-    );
 }
 
 /// [AI Supplied] Borrowing preserves the legacy ordered edge-cut values

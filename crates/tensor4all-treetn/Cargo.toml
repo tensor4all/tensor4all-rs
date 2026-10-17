@@ -72,6 +72,12 @@ required-features = ["tenferro-cuda", "tenferro-cpu-faer"]
 name = "integration"
 path = "tests/main.rs"
 
+# Installs a process-global counting allocator: must not share a test binary
+# with tests that measure anything else.
+[[test]]
+name = "allocation"
+path = "tests/allocation.rs"
+
 [[test]]
 name = "tdvp_profile"
 path = "tests/tdvp_profile.rs"

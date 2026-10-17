@@ -7,7 +7,6 @@ use super::*;
 use num_complex::{Complex32, Complex64};
 use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, TensorElement};
 
-mod allocation;
 mod chunking;
 mod components;
 mod edge_cut;
