@@ -137,8 +137,9 @@ fn test_partial_eq_compares_dims_then_values() {
     let column_major: Tensor2<f64> = Tensor2::from_fn([2, 3], |[i, j]| (i + 2 * j) as f64).unwrap();
     let same: Tensor2<f64> = Tensor2::from_fn([2, 3], |[i, j]| (i + 2 * j) as f64).unwrap();
     let other_values: Tensor2<f64> = Tensor2::from_fn([2, 3], |[i, j]| (i * 3 + j) as f64).unwrap();
-    // Same element count, different shape: equality must not be value-only.
-    let other_shape: Tensor2<f64> = Tensor2::from_fn([3, 2], |[i, j]| (i + 2 * j) as f64).unwrap();
+    // Same element count and identical column-major flat values, different
+    // shape: equality must compare dims, not only values.
+    let other_shape: Tensor2<f64> = Tensor2::from_fn([3, 2], |[i, j]| (i + 3 * j) as f64).unwrap();
 
     assert_eq!(column_major, same);
     assert_ne!(column_major, other_values);

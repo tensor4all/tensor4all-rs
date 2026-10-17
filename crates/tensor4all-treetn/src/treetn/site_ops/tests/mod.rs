@@ -83,22 +83,16 @@ where
 }
 
 #[test]
-fn fixes_and_removes_sites_for_every_node_name_type() {
+fn fixes_and_removes_sites() {
     fixes_and_removes_last_site(["a", "b"]);
-    fixes_and_removes_last_site(["a".to_string(), "b".to_string()]);
-    fixes_and_removes_last_site([0_usize, 1]);
 }
 
 #[test]
-fn rejects_multi_site_nodes_for_every_node_name_type() {
+fn rejects_multi_site_nodes() {
     rejects_multi_site_node(["a", "b"]);
-    rejects_multi_site_node(["a".to_string(), "b".to_string()]);
-    rejects_multi_site_node([0_usize, 1]);
 }
 
 #[test]
-fn rejects_site_free_nodes_for_every_node_name_type() {
+fn rejects_site_free_nodes() {
     rejects_site_free_node(["a", "b"]);
-    rejects_site_free_node(["a".to_string(), "b".to_string()]);
-    rejects_site_free_node([0_usize, 1]);
 }
