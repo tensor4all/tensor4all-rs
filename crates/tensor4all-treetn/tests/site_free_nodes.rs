@@ -14,10 +14,10 @@ use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TagSet, TensorContractionL
 use tensor4all_treetn::contraction::{contract, ContractionOptions};
 use tensor4all_treetn::{
     dmrg, factorize_tensor_to_treetn, fit_sum, global_subspace_expand_with_references,
-    square_linsolve, tdvp, CanonicalForm, CanonicalizationOptions, DmrgError, DmrgOptions,
-    FitOptions, GseError, GseOptions, IndexMapping, LinearOperator, LinsolveOptions,
-    SiteIndexNetwork, SplitOptions, SwapOptions, TdvpError, TdvpOptions, TreeTN, TreeTopology,
-    TruncationOptions,
+    relative_linear_system_residual, square_linsolve, tdvp, ApplyOptions, CanonicalForm,
+    CanonicalizationOptions, DmrgError, DmrgOptions, FitOptions, GseError, GseOptions,
+    IndexMapping, LinearOperator, LinsolveOptions, SiteIndexNetwork, SplitOptions, SwapOptions,
+    TdvpError, TdvpOptions, TreeTN, TreeTopology, TruncationOptions,
 };
 
 type Network = TreeTN<IdxTensor, String>;
@@ -935,110 +935,214 @@ fn split_to_rejects_site_free_current_node() {
 // Square linsolve on states with a site-free node (#987)
 // ============================================================================
 
-/// Column-major identity data for a `phys x phys` operator leg ordered
-/// `[out, in]`.
-fn identity_data(phys: usize) -> Vec<f64> {
+/// Column-major site-diagonal operator data for a `phys x phys` leg ordered
+/// `[out, in]`: `data[i + phys * i] = diag[i]`.
+fn diagonal_data(diag: &[f64]) -> Vec<f64> {
+    let phys = diag.len();
     let mut data = vec![0.0; phys * phys];
-    for i in 0..phys {
-        data[i + phys * i] = 1.0;
+    for (i, value) in diag.iter().enumerate() {
+        data[i + phys * i] = *value;
     }
     data
 }
 
-type LinsolveMappings = (
-    HashMap<String, IndexMapping<DynIndex>>,
-    HashMap<String, IndexMapping<DynIndex>>,
-);
+/// One site-free linsolve fixture: a right-hand side, a starting guess that is
+/// not a solution, the product operator, its index mappings, and the site
+/// diagonals of the operator.
+struct LinsolveFixture {
+    rhs: Network,
+    init: Network,
+    operator: Network,
+    input_mapping: HashMap<String, IndexMapping<DynIndex>>,
+    output_mapping: HashMap<String, IndexMapping<DynIndex>>,
+    site_a: DynIndex,
+    diag_a: Vec<f64>,
+    site_b: DynIndex,
+    diag_b: Vec<f64>,
+}
 
-/// `e - a - b` with the site-free leaf `e` inserted first, plus an identity
-/// operator whose `e` node is a site-free spectator carrying only MPO bonds.
-fn site_free_leaf_linsolve_system() -> (Network, Network, LinsolveMappings) {
+/// Dense `A^{-1} b` for the site-diagonal product operator
+/// `A = diag_a[site_a] * diag_b[site_b]`.
+///
+/// The fixtures use bond-dimension-one product operators, so the exact solution
+/// is the elementwise inverse scaling of the dense right-hand side along its two
+/// physical axes.
+fn inverse_diagonal_solution(
+    rhs: &IdxTensor,
+    site_a: &DynIndex,
+    diag_a: &[f64],
+    site_b: &DynIndex,
+    diag_b: &[f64],
+) -> IdxTensor {
+    let indices = rhs.indices().to_vec();
+    let dims: Vec<usize> = indices.iter().map(DynIndex::dim).collect();
+    let mut data = rhs.to_vec::<f64>().unwrap();
+    for (flat, value) in data.iter_mut().enumerate() {
+        let mut remaining = flat;
+        let (mut value_a, mut value_b) = (0usize, 0usize);
+        for (axis, &dim) in dims.iter().enumerate() {
+            let coordinate = remaining % dim;
+            remaining /= dim;
+            if indices[axis] == *site_a {
+                value_a = coordinate;
+            } else if indices[axis] == *site_b {
+                value_b = coordinate;
+            }
+        }
+        *value /= diag_a[value_a] * diag_b[value_b];
+    }
+    IdxTensor::from_dense(indices, data).unwrap()
+}
+
+/// `e - a - b` with the site-free leaf `e` inserted first, plus a non-identity
+/// site-diagonal product operator whose `e` node is a site-free spectator
+/// carrying only MPO bonds. The initial guess is a different nonzero state with
+/// the same topology, so the solver cannot take the zero-residual shortcut.
+fn site_free_leaf_linsolve_system() -> LinsolveFixture {
     let (site_a, site_b) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
     let (bond_ea, bond_ab) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
-    let state = TreeTN::from_tensors(
+    let rhs = TreeTN::from_tensors(
         vec![
             dense(vec![bond_ea.clone()], &[1.0, 1.0], None),
             dense(
-                vec![bond_ea, site_a.clone(), bond_ab.clone()],
+                vec![bond_ea.clone(), site_a.clone(), bond_ab.clone()],
                 &sample_values(8, 0.5),
                 None,
             ),
-            dense(vec![bond_ab, site_b.clone()], &sample_values(4, 0.9), None),
+            dense(
+                vec![bond_ab.clone(), site_b.clone()],
+                &sample_values(4, 0.9),
+                None,
+            ),
         ],
         names(&["e", "a", "b"]),
     )
     .unwrap();
+    let init = TreeTN::from_tensors(
+        vec![
+            dense(vec![bond_ea.clone()], &[1.0, 1.0], None),
+            dense(
+                vec![bond_ea, site_a.clone(), bond_ab.clone()],
+                &sample_values(8, 1.7),
+                None,
+            ),
+            dense(vec![bond_ab, site_b.clone()], &sample_values(4, 2.3), None),
+        ],
+        names(&["e", "a", "b"]),
+    )
+    .unwrap();
+
+    let (diag_a, diag_b) = ([2.0, 3.0], [1.5, -0.5]);
 
     // The MPO bonds are independent of the state bonds and kept at dim one.
     let (m_ea, m_ab) = (DynIndex::new_dyn(1), DynIndex::new_dyn(1));
     let (s_a_in, s_b_in) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
     let (s_a_out, s_b_out) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
-    let ident = identity_data(2);
     let operator = TreeTN::from_tensors(
         vec![
             dense(vec![m_ea.clone()], &[1.0], None),
             dense(
                 vec![m_ea, s_a_out.clone(), s_a_in.clone(), m_ab.clone()],
-                &ident,
+                &diagonal_data(&diag_a),
                 None,
             ),
-            dense(vec![m_ab, s_b_out.clone(), s_b_in.clone()], &ident, None),
+            dense(
+                vec![m_ab, s_b_out.clone(), s_b_in.clone()],
+                &diagonal_data(&diag_b),
+                None,
+            ),
         ],
         names(&["e", "a", "b"]),
     )
     .unwrap();
 
-    let mut input = HashMap::new();
-    let mut output = HashMap::new();
-    input.insert(
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+    input_mapping.insert(
         "a".to_string(),
         IndexMapping {
             true_index: site_a.clone(),
             internal_index: s_a_in,
         },
     );
-    input.insert(
+    input_mapping.insert(
         "b".to_string(),
         IndexMapping {
             true_index: site_b.clone(),
             internal_index: s_b_in,
         },
     );
-    output.insert(
+    output_mapping.insert(
         "a".to_string(),
         IndexMapping {
-            true_index: site_a,
+            true_index: site_a.clone(),
             internal_index: s_a_out,
         },
     );
-    output.insert(
+    output_mapping.insert(
         "b".to_string(),
         IndexMapping {
-            true_index: site_b,
+            true_index: site_b.clone(),
             internal_index: s_b_out,
         },
     );
-    (state, operator, (input, output))
+    LinsolveFixture {
+        rhs,
+        init,
+        operator,
+        input_mapping,
+        output_mapping,
+        site_a,
+        diag_a: diag_a.to_vec(),
+        site_b,
+        diag_b: diag_b.to_vec(),
+    }
 }
 
-/// `a - m - b` with the site-free internal node `m`, plus an identity operator
-/// whose `m` node is a site-free spectator carrying only MPO bonds.
-fn site_free_internal_linsolve_system() -> (Network, Network, LinsolveMappings) {
+/// `a - m - b` with the site-free internal node `m`, plus a non-identity
+/// site-diagonal product operator whose `m` node is a site-free spectator
+/// carrying only MPO bonds. As for the leaf fixture the initial guess is a
+/// different nonzero state with the same topology.
+fn site_free_internal_linsolve_system() -> LinsolveFixture {
     let (site_a, site_b) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3));
     let (bond_am, bond_mb) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
-    let state = TreeTN::from_tensors(
+    let rhs = TreeTN::from_tensors(
         vec![
             dense(
                 vec![site_a.clone(), bond_am.clone()],
                 &sample_values(4, 0.5),
                 None,
             ),
-            dense(vec![bond_am, bond_mb.clone()], &sample_values(4, 0.7), None),
-            dense(vec![bond_mb, site_b.clone()], &sample_values(6, 0.9), None),
+            dense(
+                vec![bond_am.clone(), bond_mb.clone()],
+                &sample_values(4, 0.7),
+                None,
+            ),
+            dense(
+                vec![bond_mb.clone(), site_b.clone()],
+                &sample_values(6, 0.9),
+                None,
+            ),
         ],
         names(&["a", "m", "b"]),
     )
     .unwrap();
+    let init = TreeTN::from_tensors(
+        vec![
+            dense(
+                vec![site_a.clone(), bond_am.clone()],
+                &sample_values(4, 1.5),
+                None,
+            ),
+            dense(vec![bond_am, bond_mb.clone()], &sample_values(4, 2.1), None),
+            dense(vec![bond_mb, site_b.clone()], &sample_values(6, 0.3), None),
+        ],
+        names(&["a", "m", "b"]),
+    )
+    .unwrap();
+
+    let diag_a = [2.0, 3.0];
+    let diag_b = [1.0, -0.5, 0.25];
 
     let (m_am, m_mb) = (DynIndex::new_dyn(1), DynIndex::new_dyn(1));
     let (s_a_in, s_b_in) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3));
@@ -1047,13 +1151,13 @@ fn site_free_internal_linsolve_system() -> (Network, Network, LinsolveMappings) 
         vec![
             dense(
                 vec![m_am.clone(), s_a_out.clone(), s_a_in.clone()],
-                &identity_data(2),
+                &diagonal_data(&diag_a),
                 None,
             ),
             dense(vec![m_am, m_mb.clone()], &[1.0], None),
             dense(
                 vec![m_mb, s_b_out.clone(), s_b_in.clone()],
-                &identity_data(3),
+                &diagonal_data(&diag_b),
                 None,
             ),
         ],
@@ -1061,56 +1165,101 @@ fn site_free_internal_linsolve_system() -> (Network, Network, LinsolveMappings) 
     )
     .unwrap();
 
-    let mut input = HashMap::new();
-    let mut output = HashMap::new();
-    input.insert(
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+    input_mapping.insert(
         "a".to_string(),
         IndexMapping {
             true_index: site_a.clone(),
             internal_index: s_a_in,
         },
     );
-    input.insert(
+    input_mapping.insert(
         "b".to_string(),
         IndexMapping {
             true_index: site_b.clone(),
             internal_index: s_b_in,
         },
     );
-    output.insert(
+    output_mapping.insert(
         "a".to_string(),
         IndexMapping {
-            true_index: site_a,
+            true_index: site_a.clone(),
             internal_index: s_a_out,
         },
     );
-    output.insert(
+    output_mapping.insert(
         "b".to_string(),
         IndexMapping {
-            true_index: site_b,
+            true_index: site_b.clone(),
             internal_index: s_b_out,
         },
     );
-    (state, operator, (input, output))
+    LinsolveFixture {
+        rhs,
+        init,
+        operator,
+        input_mapping,
+        output_mapping,
+        site_a,
+        diag_a: diag_a.to_vec(),
+        site_b,
+        diag_b: diag_b.to_vec(),
+    }
 }
 
-fn assert_square_linsolve_identity(
-    system: (Network, Network, LinsolveMappings),
-    center: &str,
-    label: &str,
-) {
-    let (state, operator, (input_mapping, output_mapping)) = system;
-    let expected = state.to_dense().unwrap();
+/// Solve a site-free fixture and check, against a dense reference, that the
+/// initial guess is not already a solution and that the solver drives the
+/// relative residual and the solution values down.
+fn assert_square_linsolve_system(fixture: LinsolveFixture, center: &str, label: &str) {
+    let LinsolveFixture {
+        rhs,
+        init,
+        operator,
+        input_mapping,
+        output_mapping,
+        site_a,
+        diag_a,
+        site_b,
+        diag_b,
+    } = fixture;
+
+    // Exact solution of the site-diagonal product operator.
+    let expected =
+        inverse_diagonal_solution(&rhs.to_dense().unwrap(), &site_a, &diag_a, &site_b, &diag_b);
+
     let options = LinsolveOptions::default()
-        .with_nfullsweeps(3)
-        .with_gmres_tol(1e-11)
-        .with_gmres_restart_dim(20)
-        .with_gmres_max_restarts(50)
+        .with_nfullsweeps(5)
+        .with_gmres_tol(1e-12)
+        .with_gmres_restart_dim(30)
+        .with_gmres_max_restarts(100)
         .with_max_bond_dim(16);
+
+    // The initial residual must be nonzero: otherwise the solve could pass
+    // through the initial-residual shortcut without a GMRES correction.
+    let residual_operator = LinearOperator::new(
+        operator.clone(),
+        input_mapping.clone(),
+        output_mapping.clone(),
+    );
+    let initial_residual = relative_linear_system_residual(
+        &residual_operator,
+        &init,
+        &rhs,
+        options.a0.clone(),
+        options.a1.clone(),
+        ApplyOptions::naive(),
+    )
+    .unwrap();
+    assert!(
+        initial_residual > 1.0e-3,
+        "{label}: initial guess already near a solution, relative residual {initial_residual}"
+    );
+
     let result = square_linsolve(
         &operator,
-        &state,
-        state.clone(),
+        &rhs,
+        init,
         &center.to_string(),
         options,
         Some(input_mapping),
@@ -1118,12 +1267,27 @@ fn assert_square_linsolve_identity(
     )
     .unwrap();
     result.solution.verify_internal_consistency().unwrap();
-    assert_values(&result.solution, &expected, label);
+
+    // `SquareLinsolveResult` exposes no per-solve GMRES iteration count, so the
+    // nonzero initial residual above together with this small final residual
+    // show the correction actually ran.
+    assert!(result.sweeps > 0, "{label}: no sweeps performed");
+    let final_residual = result.residual.expect("residual is computed by default");
+    assert!(
+        final_residual < EXACT_TOL,
+        "{label}: final relative residual {final_residual} is too large"
+    );
+
+    let difference = relative_maxabs_difference(&result.solution.to_dense().unwrap(), &expected);
+    assert!(
+        difference < EXACT_TOL,
+        "{label}: dense solution mismatch, relative maxabs difference {difference}"
+    );
 }
 
 #[test]
 fn square_linsolve_with_site_free_leaf_state_matches_dense_solve() {
-    assert_square_linsolve_identity(
+    assert_square_linsolve_system(
         site_free_leaf_linsolve_system(),
         "a",
         "square linsolve with a site-free leaf",
@@ -1132,7 +1296,7 @@ fn square_linsolve_with_site_free_leaf_state_matches_dense_solve() {
 
 #[test]
 fn square_linsolve_with_site_free_internal_state_matches_dense_solve() {
-    assert_square_linsolve_identity(
+    assert_square_linsolve_system(
         site_free_internal_linsolve_system(),
         "a",
         "square linsolve with a site-free internal node",
