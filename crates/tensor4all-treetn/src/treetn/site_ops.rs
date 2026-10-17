@@ -190,3 +190,6 @@ where
 
     TreeTN::from_tensors(tensors, names)
 }
+
+#[cfg(test)]
+mod tests;
