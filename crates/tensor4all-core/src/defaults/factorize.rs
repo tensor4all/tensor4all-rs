@@ -111,9 +111,9 @@ pub fn factorize(
     } else if options.alg == FactorizeAlg::CI && t.is_c32() {
         factorize_ci::<Complex32>(t, left_inds, options)
     } else if t.is_f64() {
-        factorize_impl_f64(t, left_inds, options)
+        factorize_impl::<f64>(t, left_inds, options)
     } else if t.is_c64() {
-        factorize_impl_c64(t, left_inds, options)
+        factorize_impl::<Complex64>(t, left_inds, options)
     } else {
         Err(FactorizeError::UnsupportedStorage(
             "factorize requires f64/Complex64, or f32/Complex32 with CI",
@@ -431,9 +431,9 @@ pub fn factorize_full_rank(
     } else if alg == FactorizeAlg::CI && t.is_c32() {
         factorize_ci_full_rank::<Complex32>(t, left_inds, canonical)
     } else if t.is_f64() {
-        factorize_impl_f64_full_rank(t, left_inds, alg, canonical)
+        factorize_impl_full_rank::<f64>(t, left_inds, alg, canonical)
     } else if t.is_c64() {
-        factorize_impl_c64_full_rank(t, left_inds, alg, canonical)
+        factorize_impl_full_rank::<Complex64>(t, left_inds, alg, canonical)
     } else {
         Err(FactorizeError::UnsupportedStorage(
             "factorize requires f64/Complex64, or f32/Complex32 with CI",
@@ -661,57 +661,50 @@ fn factorize_qr_with_eager_options_in(
     Ok(FactorizeResult::new(q, r, bond_index, None, rank))
 }
 
-fn factorize_impl_f64(
+fn factorize_impl<T>(
     t: &IdxTensor,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError>
+where
+    T: TensorElement
+        + ComplexFloat
+        + Default
+        + From<<T as ComplexFloat>::Real>
+        + MatrixScalar
+        + crate::MatrixLuciScalar
+        + 'static,
+    <T as ComplexFloat>::Real: Into<f64> + 'static,
+{
     match options.alg {
         FactorizeAlg::SVD => factorize_svd(t, left_inds, options),
         FactorizeAlg::QR => factorize_qr(t, left_inds, options),
-        FactorizeAlg::LU => factorize_lu::<f64>(t, left_inds, options),
-        FactorizeAlg::CI => factorize_ci::<f64>(t, left_inds, options),
+        FactorizeAlg::LU => factorize_lu::<T>(t, left_inds, options),
+        FactorizeAlg::CI => factorize_ci::<T>(t, left_inds, options),
     }
 }
 
-fn factorize_impl_f64_full_rank(
+fn factorize_impl_full_rank<T>(
     t: &IdxTensor,
     left_inds: &[DynIndex],
     alg: FactorizeAlg,
     canonical: Canonical,
-) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError>
+where
+    T: TensorElement
+        + ComplexFloat
+        + Default
+        + From<<T as ComplexFloat>::Real>
+        + MatrixScalar
+        + crate::MatrixLuciScalar
+        + 'static,
+    <T as ComplexFloat>::Real: Into<f64> + 'static,
+{
     match alg {
         FactorizeAlg::SVD => factorize_svd_full_rank(t, left_inds, canonical),
         FactorizeAlg::QR => factorize_qr_full_rank(t, left_inds, canonical),
-        FactorizeAlg::LU => factorize_lu_full_rank::<f64>(t, left_inds, canonical),
-        FactorizeAlg::CI => factorize_ci_full_rank::<f64>(t, left_inds, canonical),
-    }
-}
-
-fn factorize_impl_c64(
-    t: &IdxTensor,
-    left_inds: &[DynIndex],
-    options: &FactorizeOptions,
-) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
-    match options.alg {
-        FactorizeAlg::SVD => factorize_svd(t, left_inds, options),
-        FactorizeAlg::QR => factorize_qr(t, left_inds, options),
-        FactorizeAlg::LU => factorize_lu::<Complex64>(t, left_inds, options),
-        FactorizeAlg::CI => factorize_ci::<Complex64>(t, left_inds, options),
-    }
-}
-
-fn factorize_impl_c64_full_rank(
-    t: &IdxTensor,
-    left_inds: &[DynIndex],
-    alg: FactorizeAlg,
-    canonical: Canonical,
-) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
-    match alg {
-        FactorizeAlg::SVD => factorize_svd_full_rank(t, left_inds, canonical),
-        FactorizeAlg::QR => factorize_qr_full_rank(t, left_inds, canonical),
-        FactorizeAlg::LU => factorize_lu_full_rank::<Complex64>(t, left_inds, canonical),
-        FactorizeAlg::CI => factorize_ci_full_rank::<Complex64>(t, left_inds, canonical),
+        FactorizeAlg::LU => factorize_lu_full_rank::<T>(t, left_inds, canonical),
+        FactorizeAlg::CI => factorize_ci_full_rank::<T>(t, left_inds, canonical),
     }
 }
 

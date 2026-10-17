@@ -672,7 +672,6 @@ pub(crate) fn embed_single_var_mpo(
 /// assert_eq!(mpo.site_dims(), vec![4, 4]);
 /// assert!(identity_mpo(0).is_err());
 /// ```
-#[allow(dead_code)]
 pub fn identity_mpo(
     r: usize,
 ) -> std::result::Result<SimpleTensorTrain<Complex64>, QuanticsTransformError> {
@@ -698,21 +697,6 @@ pub fn identity_mpo(
     SimpleTensorTrain::new(tensors)
         .map_err(|e| anyhow::anyhow!("Failed to create identity MPO: {e}"))
         .map_err(QuanticsTransformError::from)
-}
-
-/// Create a scalar MPO (constant times identity).
-#[allow(dead_code)]
-/// # Errors
-/// Returns [`QuanticsTransformError::Operation`] under the same conditions as
-/// [`identity_mpo`].
-///
-pub fn scalar_mpo(
-    r: usize,
-    value: Complex64,
-) -> std::result::Result<SimpleTensorTrain<Complex64>, QuanticsTransformError> {
-    let mut mpo = identity_mpo(r)?;
-    mpo.scale_mut(value);
-    Ok(mpo)
 }
 
 #[cfg(test)]
