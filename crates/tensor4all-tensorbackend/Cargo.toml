@@ -89,6 +89,11 @@ name = "grouped_gemm"
 harness = false
 required-features = ["global-defaults"]
 
+[[bench]]
+name = "concrete_einsum_plan_cache"
+harness = false
+required-features = ["global-defaults"]
+
 [[test]]
 name = "bench_einsum_native"
 required-features = ["global-defaults"]
