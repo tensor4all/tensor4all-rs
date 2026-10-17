@@ -3633,9 +3633,6 @@ impl IdxTensor {
     /// # Errors
     /// Returns an [`IdxTensorError`] when the dimension product overflows, or
     /// when the tensor is neither rank-0 nor a single-element tensor.
-    /// # Panics
-    ///
-    /// Panics if the tensor has more than one element.
     ///
     /// # Example
     ///
@@ -4508,9 +4505,10 @@ impl IdxTensor {
     /// Multiplies every element by `scalar`.
     ///
     /// # Errors
-    /// Returns an error when the scalar coefficient is invalid for the tensor's
-    /// scalar type (an invalid scalar dtype) or the backend reports a
-    /// failure.
+    /// Returns [`IdxTensorError`] when the storage cannot be materialized, when
+    /// `scalar` cannot be converted to a tensor of the element type, or when
+    /// the backend scaling fails.
+    ///
     /// # Examples
     ///
     /// ```

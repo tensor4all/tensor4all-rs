@@ -1203,7 +1203,10 @@ impl TensorTrain {
     ///
     /// # Errors
     ///
-    /// Returns an error when truncation fails (a backend or SVD failure).
+    /// Returns an error when `options` has a zero `max_bond_dim` or an invalid
+    /// SVD policy (rejected before any work), and
+    /// [`TensorTrainError::InvalidStructure`] when the underlying TreeTN
+    /// truncation fails.
     ///
     /// # Examples
     ///

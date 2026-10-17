@@ -17,8 +17,8 @@
 //! - Zip-up: the same caller-owned route through treetn's
 //!   `contract_zipup_with_in`, agreeing with the plain route to tight
 //!   tolerance, and
-//! - refusal: Fit and Naive are refused with a typed error naming the method
-//!   (the F7 inventory records the treetn-side twins they need).
+//! - Fit and Naive: the same caller-owned route through treetn's
+//!   `contract_in` dispatch, agreeing with the plain route.
 
 use tenferro_cpu::CpuBackend;
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};

@@ -210,11 +210,10 @@ fn to_treetn_options(options: &ContractOptions) -> TreeTNContractionOptions {
 /// The same algorithm, options and validation as [`contract`]; what differs is
 /// the resource the method's numerical work runs in. With a context, SRC runs
 /// through treetn's `contract_src_with_rng_in` and Zip-up through treetn's
-/// `contract_zipup_with_in` (both context-scoped). Fit and Naive are refused
-/// with a typed error rather than silently run on the process-global context:
-/// treetn has no session-taking twin for their sweep / dense-reference paths
-/// yet, which is recorded in the F7 inventory
-/// (`docs/design/859-f7-consumer-inventory.md`).
+/// `contract_zipup_with_in`, and Fit and Naive through treetn's `contract_in`
+/// dispatch (`contract_fit_in` and the context-scoped dense reference). Every
+/// method therefore runs in the supplied context, never on the process-global
+/// one.
 ///
 /// # Arguments
 /// * `a` - The first tensor train
@@ -364,9 +363,8 @@ impl TensorTrain {
     /// Contract two tensor trains, running the SRC method in a caller-owned
     /// execution context.
     ///
-    /// Same contract as [`crate::contract_in`]: SRC and Zip-up run in the
-    /// caller-owned context; Fit and Naive are refused with a typed error. See
-    /// that function for the inventory record.
+    /// Same contract as [`crate::contract_in`]: every method (SRC, Zip-up, Fit
+    /// and Naive) runs in the caller-owned context.
     ///
     /// # Arguments
     /// * `other` - The other tensor train to contract with

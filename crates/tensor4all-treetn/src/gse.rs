@@ -22,6 +22,7 @@ use tensor4all_core::{
     IndexLike, LinearizationOrder, PairwiseContractionOptions, SvdTruncationPolicy,
     TensorContractionLike, TensorFactorizationLike, TensorIndex,
 };
+use tensor4all_tensorbackend::invariant_violated;
 use thiserror::Error;
 
 use crate::local_update_support::{single_site_square_mappings, SquareSiteMappingError};
@@ -387,8 +388,9 @@ where
 /// Run GSE before selected TDVP sweeps and delegate each sweep to existing TDVP.
 /// # Errors
 ///
-/// Returns an error when the global-subspace TDVP fails (a shape or index
-/// mismatch, a non-convergence failure, or a backend failure).
+/// Returns [`GseError::InvalidOption`] for invalid GSE options, the errors of
+/// [`global_subspace_expand`] for each expansion, and [`GseError::Tdvp`] when a
+/// TDVP sweep fails.
 ///
 pub fn gse_tdvp<V>(
     operator: &LinearOperator<IdxTensor, V>,
@@ -627,43 +629,44 @@ fn expand_one_edge<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
 {
-    let edge = state
-        .edge_between(parent, child)
-        .ok_or_else(|| GseError::Algorithm {
-            context: "GSE target edge is missing",
-            source: anyhow::anyhow!("missing edge between {:?} and {:?}", parent, child),
-        })?;
-    let old_bond = state
-        .bond_index(edge)
-        .cloned()
-        .ok_or_else(|| GseError::Algorithm {
-            context: "GSE target edge has no bond index",
-            source: anyhow::anyhow!("missing bond between {:?} and {:?}", parent, child),
-        })?;
-    let child_idx = state
-        .node_index(child)
-        .ok_or_else(|| GseError::MissingCenter {
-            center: format!("{child:?}"),
-        })?;
-    let parent_idx = state
-        .node_index(parent)
-        .ok_or_else(|| GseError::MissingCenter {
-            center: format!("{parent:?}"),
-        })?;
-    let child_tensor = state
-        .tensor(child_idx)
-        .cloned()
-        .ok_or_else(|| GseError::Algorithm {
-            context: "GSE child tensor is missing",
-            source: anyhow::anyhow!("missing tensor at {:?}", child),
-        })?;
-    let parent_tensor = state
-        .tensor(parent_idx)
-        .cloned()
-        .ok_or_else(|| GseError::Algorithm {
-            context: "GSE parent tensor is missing",
-            source: anyhow::anyhow!("missing tensor at {:?}", parent),
-        })?;
+    // `parent`/`child` come from `state`'s own canonicalization edge order
+    // (`expand_edges`), so these lookups are internal invariants.
+    let edge = state.edge_between(parent, child).unwrap_or_else(|| {
+        invariant_violated(
+            "GSE target edge is missing",
+            format!("missing edge between {:?} and {:?}", parent, child),
+        )
+    });
+    let old_bond = state.bond_index(edge).cloned().unwrap_or_else(|| {
+        invariant_violated(
+            "GSE target edge has no bond index",
+            format!("missing bond between {:?} and {:?}", parent, child),
+        )
+    });
+    let child_idx = state.node_index(child).unwrap_or_else(|| {
+        invariant_violated(
+            "GSE node from the network's own traversal is missing",
+            format!("{child:?}"),
+        )
+    });
+    let parent_idx = state.node_index(parent).unwrap_or_else(|| {
+        invariant_violated(
+            "GSE node from the network's own traversal is missing",
+            format!("{parent:?}"),
+        )
+    });
+    let child_tensor = state.tensor(child_idx).cloned().unwrap_or_else(|| {
+        invariant_violated(
+            "GSE child tensor is missing",
+            format!("missing tensor at {:?}", child),
+        )
+    });
+    let parent_tensor = state.tensor(parent_idx).cloned().unwrap_or_else(|| {
+        invariant_violated(
+            "GSE parent tensor is missing",
+            format!("missing tensor at {:?}", parent),
+        )
+    });
     let q_indices = child_tensor
         .external_indices()
         .into_iter()
@@ -840,52 +843,51 @@ fn update_reference_edge<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    let edge = reference
-        .edge_between(parent, child)
-        .ok_or_else(|| GseError::Algorithm {
-            context: "GSE reference edge is missing during update",
-            source: anyhow::anyhow!(
+    // `reference` was checked against the target with `same_topology`
+    // (`validate_reference`) and `parent`/`child` come from the target's edge
+    // order, so these lookups are internal invariants.
+    let edge = reference.edge_between(parent, child).unwrap_or_else(|| {
+        invariant_violated(
+            "GSE reference edge is missing during update",
+            format!(
                 "missing reference edge between {:?} and {:?}",
-                parent,
-                child
+                parent, child
             ),
-        })?;
-    let _old_bond = reference
-        .bond_index(edge)
-        .cloned()
-        .ok_or_else(|| GseError::Algorithm {
-            context: "GSE reference edge has no bond index during update",
-            source: anyhow::anyhow!(
+        )
+    });
+    let _old_bond = reference.bond_index(edge).cloned().unwrap_or_else(|| {
+        invariant_violated(
+            "GSE reference edge has no bond index during update",
+            format!(
                 "missing reference bond between {:?} and {:?}",
-                parent,
-                child
+                parent, child
             ),
-        })?;
-    let child_idx = reference
-        .node_index(child)
-        .ok_or_else(|| GseError::MissingCenter {
-            center: format!("{child:?}"),
-        })?;
-    let parent_idx = reference
-        .node_index(parent)
-        .ok_or_else(|| GseError::MissingCenter {
-            center: format!("{parent:?}"),
-        })?;
-    let child_tensor = reference
-        .tensor(child_idx)
-        .cloned()
-        .ok_or_else(|| GseError::Algorithm {
-            context: "GSE reference child tensor is missing during update",
-            source: anyhow::anyhow!("missing reference tensor at {:?}", child),
-        })?;
-    let parent_tensor =
-        reference
-            .tensor(parent_idx)
-            .cloned()
-            .ok_or_else(|| GseError::Algorithm {
-                context: "GSE reference parent tensor is missing during update",
-                source: anyhow::anyhow!("missing reference tensor at {:?}", parent),
-            })?;
+        )
+    });
+    let child_idx = reference.node_index(child).unwrap_or_else(|| {
+        invariant_violated(
+            "GSE node from the network's own traversal is missing",
+            format!("{child:?}"),
+        )
+    });
+    let parent_idx = reference.node_index(parent).unwrap_or_else(|| {
+        invariant_violated(
+            "GSE node from the network's own traversal is missing",
+            format!("{parent:?}"),
+        )
+    });
+    let child_tensor = reference.tensor(child_idx).cloned().unwrap_or_else(|| {
+        invariant_violated(
+            "GSE reference child tensor is missing during update",
+            format!("missing reference tensor at {:?}", child),
+        )
+    });
+    let parent_tensor = reference.tensor(parent_idx).cloned().unwrap_or_else(|| {
+        invariant_violated(
+            "GSE reference parent tensor is missing during update",
+            format!("missing reference tensor at {:?}", parent),
+        )
+    });
     let ref_q_indices = map_q_indices(target, reference, child, parent, target_q_indices)?;
     let new_bond =
         DynIndex::new_bond(target_new_bond.dim()).map_err(|source| GseError::Algorithm {
