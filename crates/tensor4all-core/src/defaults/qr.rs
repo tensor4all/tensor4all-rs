@@ -106,18 +106,18 @@ pub fn set_default_qr_rtol(rtol: f64) -> Result<(), QrError> {
         .map_err(|e| QrError::InvalidRtol(e.0))
 }
 
-fn compute_retained_rank_qr_from_dense<T>(
+fn compute_retained_rows_qr_from_dense<T>(
     r_full: &[T],
     k: usize,
     n: usize,
     rtol: f64,
-) -> Result<usize, QrError>
+) -> Result<Vec<usize>, QrError>
 where
     T: ComplexFloat,
     <T as ComplexFloat>::Real: Into<f64>,
 {
     if k == 0 || n == 0 {
-        return Ok(1);
+        return Ok(vec![0]);
     }
 
     let max_diag = k.min(n);
@@ -127,7 +127,9 @@ where
     // compute_retained_rank_qr. The previous implementation compared diagonal
     // elements absolutely and broke at the first small value, which is incorrect
     // for non-pivoted QR where diagonal elements are not necessarily in
-    // decreasing order.
+    // decreasing order. Neither are the row norms: a non-pivoted QR of a
+    // rank-deficient matrix can leave a negligible row before a large one, so
+    // the retained rows are selected individually, never as a prefix.
     let row_norms: Vec<f64> = (0..max_diag)
         .map(|i| {
             let mut norm_sq: f64 = 0.0;
@@ -139,22 +141,31 @@ where
         })
         .collect();
 
-    Ok(retained_rank_from_row_norms(&row_norms, rtol))
+    Ok(retained_rows_from_row_norms(&row_norms, rtol))
 }
 
-/// Select the retained QR rank from per-row norms of the upper-triangular factor.
+/// Select the retained rows of the upper-triangular QR factor from its row norms.
+///
+/// Returns the increasing indices of the rows whose norm is at least
+/// `rtol * max_row_norm`; at least one row (row 0 for an all-zero factor) is kept.
+/// Dropping row `i` of `R` together with column `i` of `Q` changes `Q R` by at most
+/// that row's norm, wherever the row sits.
 ///
 /// Shared by the host dense path and the device path (which reduces the norms
 /// on-device and reads back only this `k`-element decision vector).
-fn retained_rank_from_row_norms(row_norms: &[f64], rtol: f64) -> usize {
+fn retained_rows_from_row_norms(row_norms: &[f64], rtol: f64) -> Vec<usize> {
     let max_row_norm = row_norms.iter().cloned().fold(0.0_f64, f64::max);
     if max_row_norm == 0.0 {
-        return 1;
+        return vec![0];
     }
 
     let threshold = rtol * max_row_norm;
-    let r = row_norms.iter().filter(|&&norm| norm >= threshold).count();
-    r.max(1)
+    row_norms
+        .iter()
+        .enumerate()
+        .filter(|&(_, &norm)| norm >= threshold)
+        .map(|(row, _)| row)
+        .collect()
 }
 
 /// Read the `k` upper-triangular row norms of a resident `R` factor.
@@ -308,8 +319,8 @@ pub fn qr_with<T>(
         .with_eager_session(|session| session.qr(&matrix_inner))
         .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
 
-    let r = qr_retained_rank(&r_inner, k, n, options, None)?;
-    qr_assemble(q_inner, r_inner, k, r, left_indices, right_indices)
+    let keep = qr_retained_rows(&r_inner, k, n, options, None)?;
+    qr_assemble(q_inner, r_inner, k, keep, left_indices, right_indices)
 }
 
 /// Compute QR decomposition in a caller-owned execution context.
@@ -380,21 +391,21 @@ pub fn qr_with_in<T>(
         .with_eager_session(|session| session.qr(&matrix_inner))
         .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
 
-    let r = qr_retained_rank(&r_inner, k, n, options, Some(context))?;
-    qr_assemble(q_inner, r_inner, k, r, left_indices, right_indices)
+    let keep = qr_retained_rows(&r_inner, k, n, options, Some(context))?;
+    qr_assemble(q_inner, r_inner, k, keep, left_indices, right_indices)
 }
 
-/// Select the retained QR rank, reading the decision payload through `context`
+/// Select the retained rows of `R`, reading the decision payload through `context`
 /// for device-resident factors and directly from host memory otherwise.
-fn qr_retained_rank(
+fn qr_retained_rows(
     r_inner: &EagerTensor,
     k: usize,
     n: usize,
     options: &QrOptions,
     context: Option<&ExecutionContext>,
-) -> Result<usize, QrError> {
+) -> Result<Vec<usize>, QrError> {
     if !options.truncate {
-        return Ok(k);
+        return Ok((0..k).collect());
     }
     // Determine rtol to use
     let rtol = options.rtol.unwrap_or(default_qr_rtol());
@@ -406,7 +417,7 @@ fn qr_retained_rank(
     if let Some(context) = context {
         if matches!(context, ExecutionContext::Cuda(_)) {
             let row_norms = resident_row_norms(r_inner, k, context)?;
-            return Ok(retained_rank_from_row_norms(&row_norms, rtol));
+            return Ok(retained_rows_from_row_norms(&row_norms, rtol));
         }
     }
     #[cfg(not(feature = "tenferro-cuda"))]
@@ -420,13 +431,13 @@ fn qr_retained_rank(
             let values = value
                 .as_slice::<f64>()
                 .map_err(|source| QrError::ComputationError(anyhow::Error::new(source)))?;
-            compute_retained_rank_qr_from_dense(values, k, n, rtol)
+            compute_retained_rows_qr_from_dense(values, k, n, rtol)
         }
         DType::C64 => {
             let values = value
                 .as_slice::<Complex64>()
                 .map_err(|source| QrError::ComputationError(anyhow::Error::new(source)))?;
-            compute_retained_rank_qr_from_dense(values, k, n, rtol)
+            compute_retained_rows_qr_from_dense(values, k, n, rtol)
         }
         other => Err(QrError::ComputationError(anyhow::anyhow!(
             "native QR returned unsupported scalar type {other:?}"
@@ -434,17 +445,18 @@ fn qr_retained_rank(
     }
 }
 
-/// Slice the thin factors to the retained rank and wrap them as [`IdxTensor`]s.
+/// Slice the thin factors to the retained rows of `R` (and the matching columns
+/// of `Q`) and wrap them as [`IdxTensor`]s.
 fn qr_assemble(
     mut q_inner: EagerTensor,
     mut r_inner: EagerTensor,
     k: usize,
-    r: usize,
+    keep: Vec<usize>,
     left_indices: Vec<DynIndex>,
     right_indices: Vec<DynIndex>,
 ) -> Result<(IdxTensor, IdxTensor), QrError> {
+    let r = keep.len();
     if r < k {
-        let keep: Vec<usize> = (0..r).collect();
         q_inner = q_inner
             .runtime()
             .with_eager_session(|session| session.take_axis(&q_inner, 1, &keep))

@@ -5,25 +5,25 @@ use num_complex::Complex64;
 use tensor4all_tensorbackend::native_tensor_primal_to_dense_col_major;
 
 #[test]
-fn compute_retained_rank_qr_from_dense_truncates_and_keeps_one() {
+fn compute_retained_rows_qr_from_dense_truncates_and_keeps_one() {
     let retained =
-        compute_retained_rank_qr_from_dense(&[3.0, 0.0, 1.0, 1.0e-14], 2, 2, 1.0e-10).unwrap();
-    assert_eq!(retained, 1);
+        compute_retained_rows_qr_from_dense(&[3.0, 0.0, 1.0, 1.0e-14], 2, 2, 1.0e-10).unwrap();
+    assert_eq!(retained, vec![0]);
 
     let retained_zero =
-        compute_retained_rank_qr_from_dense(&[0.0, 0.0, 0.0, 0.0], 2, 2, 1.0).unwrap();
-    assert_eq!(retained_zero, 1);
+        compute_retained_rows_qr_from_dense(&[0.0, 0.0, 0.0, 0.0], 2, 2, 1.0).unwrap();
+    assert_eq!(retained_zero, vec![0]);
 }
 
 #[test]
-fn compute_retained_rank_qr_from_dense_handles_empty_and_complex_dense() {
+fn compute_retained_rows_qr_from_dense_handles_empty_and_complex_dense() {
     assert_eq!(
-        compute_retained_rank_qr_from_dense::<Complex64>(&[], 0, 2, 1.0e-12).unwrap(),
-        1
+        compute_retained_rows_qr_from_dense::<Complex64>(&[], 0, 2, 1.0e-12).unwrap(),
+        vec![0]
     );
 
     assert_eq!(
-        compute_retained_rank_qr_from_dense(
+        compute_retained_rows_qr_from_dense(
             &[
                 Complex64::new(2.0, 0.0),
                 Complex64::new(0.0, 0.0),
@@ -35,7 +35,7 @@ fn compute_retained_rank_qr_from_dense_handles_empty_and_complex_dense() {
             1.0e-10,
         )
         .unwrap(),
-        1
+        vec![0]
     );
 }
 
@@ -147,13 +147,15 @@ fn make_upper_triangular(nrows: usize, ncols: usize, entries: &[(usize, usize, f
 }
 
 fn retained_rank_from_f64(data: Vec<f64>, k: usize, n: usize, rtol: f64) -> usize {
-    compute_retained_rank_qr_from_dense(&data, k, n, rtol)
+    compute_retained_rows_qr_from_dense(&data, k, n, rtol)
         .expect("row-norm retained-rank helper should accept dense column-major f64 buffers")
+        .len()
 }
 
 fn retained_rank_from_c64(data: Vec<Complex64>, k: usize, n: usize, rtol: f64) -> usize {
-    compute_retained_rank_qr_from_dense(&data, k, n, rtol)
+    compute_retained_rows_qr_from_dense(&data, k, n, rtol)
         .expect("row-norm retained-rank helper should accept dense column-major c64 buffers")
+        .len()
 }
 
 #[test]
@@ -240,4 +242,15 @@ fn test_retained_rank_complex() {
     ];
     // Row 1 has zero diagonal but norm = 5.0, should NOT be truncated
     assert_eq!(retained_rank_from_c64(r, 2, 3, 1e-15), 2);
+}
+
+#[test]
+fn retained_rows_skip_a_negligible_row_between_large_ones() {
+    // Row norms of the #995 fixture's untruncated R: row 3 is negligible, row 4 is not.
+    let norms = [13.88, 0.672, 2.633, 1.17e-15, 2.449, 5.1e-16, 0.0, 0.0];
+    assert_eq!(
+        retained_rows_from_row_norms(&norms, 1.0e-15),
+        vec![0, 1, 2, 4]
+    );
+    assert_eq!(retained_rows_from_row_norms(&[0.0, 0.0], 1.0e-15), vec![0]);
 }
