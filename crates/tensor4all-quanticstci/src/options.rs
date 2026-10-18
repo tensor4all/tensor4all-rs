@@ -17,7 +17,7 @@ use tensor4all_treetci::TreeTciOptions;
 /// | `max_iter` | `200` | `20` .. `500` | Maximum half-sweep iterations |
 /// | `n_random_init_pivot` | `5` | `3` .. `20` | Random initial pivots added |
 /// | `unfolding_scheme` | `Interleaved` | — | How quantics bits are arranged |
-/// | `normalize_error` | `true` | — | Normalize error by max sample value |
+/// | `scale_tolerance` | `true` | — | Scale convergence tolerance by running max \|f\| |
 /// | `verbosity` | `0` | `0` .. `2` | Logging verbosity |
 ///
 /// # Examples
@@ -32,7 +32,7 @@ use tensor4all_treetci::TreeTciOptions;
 /// assert_eq!(opts.max_iter, 200);
 /// assert_eq!(opts.n_random_init_pivot, 5);
 /// assert_eq!(opts.verbosity, 0);
-/// assert!(opts.normalize_error);
+/// assert!(opts.scale_tolerance);
 ///
 /// // Builder-style customization
 /// let custom = QtciOptions::default()
@@ -53,7 +53,7 @@ pub struct QtciOptions {
     /// Relative convergence tolerance.
     ///
     /// The algorithm stops when the bond error falls below this threshold
-    /// for several consecutive iterations. When `normalize_error` is `true`
+    /// for several consecutive iterations. When `scale_tolerance` is `true`
     /// (the default), the error is divided by the maximum sampled value,
     /// making this a relative tolerance.
     ///
@@ -112,14 +112,16 @@ pub struct QtciOptions {
     #[doc(alias = "unfoldingscheme")]
     pub unfolding_scheme: UnfoldingScheme,
 
-    /// Whether to normalize the convergence error by the maximum
-    /// sampled function value.
+    /// Whether to scale the convergence tolerance by the running maximum
+    /// sampled magnitude.
     ///
-    /// When `true`, `tolerance` acts as a relative threshold. Set to
+    /// When `true` (the default), the bond error is divided by the largest
+    /// sampled value seen so far before comparison with `tolerance`, so the
+    /// convergence threshold scales with the running sample magnitude. Set to
     /// `false` for an absolute tolerance.
     ///
     /// Default: `true`.
-    pub normalize_error: bool,
+    pub scale_tolerance: bool,
 
     /// Verbosity level. `0` = silent, `1` = progress summary,
     /// `2` = per-sweep details.
@@ -137,7 +139,7 @@ impl Default for QtciOptions {
             n_random_init_pivot: 5,
             rng_seed: None,
             unfolding_scheme: UnfoldingScheme::Interleaved,
-            normalize_error: true,
+            scale_tolerance: true,
             verbosity: 0,
         }
     }
@@ -268,7 +270,7 @@ impl QtciOptions {
             tolerance: self.tolerance,
             max_iter: self.max_iter,
             max_bond_dim: self.max_bond_dim,
-            normalize_error: self.normalize_error,
+            scale_tolerance: self.scale_tolerance,
             enable_global_pivots: false,
             nsearch: 0,
             max_nglobal_pivot: 0,

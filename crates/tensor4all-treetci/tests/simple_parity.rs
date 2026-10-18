@@ -61,7 +61,7 @@ fn simple_tree_parity_matches_reference_points() {
             tolerance: 1e-8,
             max_iter: 10,
             max_bond_dim: Some(5),
-            normalize_error: true,
+            scale_tolerance: true,
             ..Default::default()
         },
         Some(0),
@@ -123,7 +123,7 @@ fn simple_tree_product_function_is_exact_on_branching_tree() {
             tolerance: 1e-12,
             max_iter: 8,
             max_bond_dim: Some(2),
-            normalize_error: true,
+            scale_tolerance: true,
             ..Default::default()
         },
         Some(0),
@@ -188,7 +188,7 @@ fn simple_tree_complex_product_function_is_exact_on_branching_tree() {
             tolerance: 1e-12,
             max_iter: 8,
             max_bond_dim: Some(2),
-            normalize_error: true,
+            scale_tolerance: true,
             ..Default::default()
         },
         Some(0),
@@ -261,7 +261,7 @@ fn simple_tree_complex_product_function_is_exact_on_two_site_tree() {
             tolerance: 1e-12,
             max_iter: 8,
             max_bond_dim: Some(2),
-            normalize_error: true,
+            scale_tolerance: true,
             ..Default::default()
         },
         Some(0),

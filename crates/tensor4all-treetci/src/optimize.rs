@@ -34,7 +34,8 @@ pub enum TreeTciTermination {
     /// final maximum rank equal to the minimum rank in that window, and
     /// no newly accepted global pivots.
     ///
-    /// Errors are normalized only when `normalize_error` is enabled.
+    /// Errors use the running maximum sample magnitude as their scale only
+    /// when `scale_tolerance` is enabled.
     /// Disabled searches and the search skipped on the final iteration
     /// contribute zero pivots; this reason does not certify an exhaustive
     /// residual check or a global search after that final iteration.
@@ -100,7 +101,7 @@ pub struct TreeTciOptimizationResult {
 /// | `tolerance`               | `1e-8`        | Relative stopping tolerance on normalized bond error |
 /// | `max_iter`                | `20`          | Maximum number of edge-order iterations              |
 /// | `max_bond_dim`            | `None`        | Maximum bond dimension (no cap by default)           |
-/// | `normalize_error`         | `true`        | Normalize error by maximum sample magnitude          |
+/// | `scale_tolerance`         | `true`        | Scale tolerance by running max sample magnitude      |
 /// | `enable_global_pivots`    | `true`        | Run automatic global pivot search after each sweep   |
 /// | `nsearch`                 | `5`           | Random starting points for the global pivot search   |
 /// | `max_nglobal_pivot`       | `5`           | Global pivots added per iteration                    |
@@ -117,7 +118,7 @@ pub struct TreeTciOptimizationResult {
 /// assert!((opts.tolerance - 1e-8).abs() < 1e-15);
 /// assert_eq!(opts.max_iter, 20);
 /// assert_eq!(opts.max_bond_dim, None);
-/// assert!(opts.normalize_error);
+/// assert!(opts.scale_tolerance);
 /// assert!(opts.enable_global_pivots);
 ///
 /// // Custom options for high-precision work
@@ -125,7 +126,7 @@ pub struct TreeTciOptimizationResult {
 ///     tolerance: 1e-12,
 ///     max_iter: 50,
 ///     max_bond_dim: Some(100),
-///     normalize_error: true,
+///     scale_tolerance: true,
 ///     enable_global_pivots: true,
 ///     nsearch: 20,
 ///     max_nglobal_pivot: 10,
@@ -144,8 +145,9 @@ pub struct TreeTciOptions {
     /// Relative stopping tolerance on the normalized bond error.
     ///
     /// The optimization loop monitors the maximum bond error across all edges.
-    /// When `normalize_error` is true, this error is divided by the maximum
-    /// observed sample magnitude. Recommended range: `1e-6` to `1e-12`.
+    /// When `scale_tolerance` is true, this error is divided by the running
+    /// maximum observed sample magnitude, so the stopping threshold is
+    /// `tolerance * max_sample_value`. Recommended range: `1e-6` to `1e-12`.
     /// Default: `1e-8`.
     pub tolerance: f64,
 
@@ -166,12 +168,14 @@ pub struct TreeTciOptions {
     /// Default: `None` (no cap).
     pub max_bond_dim: Option<usize>,
 
-    /// Whether to normalize the bond error by the maximum observed sample magnitude.
+    /// Whether to scale the convergence tolerance by the running maximum
+    /// observed sample magnitude.
     ///
     /// When `true`, the stopping criterion uses relative error
-    /// `max_bond_error / max_sample_value`. When `false`, the raw absolute
-    /// bond error is used. Default: `true`.
-    pub normalize_error: bool,
+    /// `max_bond_error / max_sample_value`, so `tolerance` is scaled by the
+    /// largest sample seen so far. When `false`, the raw absolute bond error is
+    /// compared with `tolerance`. Default: `true`.
+    pub scale_tolerance: bool,
 
     /// Whether to run an automatic global pivot search after each sweep.
     ///
@@ -204,7 +208,7 @@ pub struct TreeTciOptions {
     /// A candidate pivot is accepted when its interpolation error exceeds
     /// `abs_tol * tol_margin_global_search`, where `abs_tol` is the sweep's
     /// absolute tolerance (`tolerance * max_sample_value` when
-    /// `normalize_error` is enabled). The value is always validated (it must
+    /// `scale_tolerance` is enabled). The value is always validated (it must
     /// be finite and nonnegative) but only consulted when `enable_global_pivots`
     /// is `true`. Default: `10.0`.
     pub tol_margin_global_search: f64,
@@ -261,7 +265,7 @@ impl Default for TreeTciOptions {
             tolerance: 1e-8,
             max_iter: 20,
             max_bond_dim: None,
-            normalize_error: true,
+            scale_tolerance: true,
             enable_global_pivots: true,
             nsearch: 5,
             max_nglobal_pivot: 5,
@@ -717,7 +721,7 @@ where
 
     for _iter in 0..options.max_iter {
         for _pass in 0..INNER_EDGE_PASSES {
-            let error_scale = if options.normalize_error && state.max_sample_value > 0.0 {
+            let error_scale = if options.scale_tolerance && state.max_sample_value > 0.0 {
                 state.max_sample_value
             } else {
                 1.0
@@ -752,7 +756,7 @@ where
         }
 
         ranks.push(state.max_bond_dim());
-        let normalized_error = if options.normalize_error && state.max_sample_value > 0.0 {
+        let normalized_error = if options.scale_tolerance && state.max_sample_value > 0.0 {
             state.max_bond_error() / state.max_sample_value
         } else {
             state.max_bond_error()
@@ -794,7 +798,7 @@ where
         // and termination reason would not reflect it, and the unswept state
         // would not be materializable (see above).
         if options.enable_global_pivots && _iter + 1 < options.max_iter {
-            let error_scale = if options.normalize_error && state.max_sample_value > 0.0 {
+            let error_scale = if options.scale_tolerance && state.max_sample_value > 0.0 {
                 state.max_sample_value
             } else {
                 1.0

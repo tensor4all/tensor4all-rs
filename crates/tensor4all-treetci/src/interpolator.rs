@@ -47,7 +47,7 @@ use crate::{
 ///
 /// - `tolerance` (set to the problem's absolute tolerance),
 /// - `max_bond_dim` (the problem's cap),
-/// - `normalize_error` (always `false`: the tolerance is absolute), and
+/// - `scale_tolerance` (always `false`: the tolerance is absolute), and
 /// - `seed` (the problem's seed, the only source of randomness).
 ///
 /// The remaining options (`max_iter`, the global pivot search settings, and
@@ -105,7 +105,7 @@ impl TreeTciInterpolator {
 
     /// Build an engine from TreeTCI options.
     ///
-    /// `tolerance`, `max_bond_dim`, `normalize_error`, and `seed` are replaced
+    /// `tolerance`, `max_bond_dim`, `scale_tolerance`, and `seed` are replaced
     /// by the problem on every run (see the type documentation); the other
     /// fields configure the run.
     ///
@@ -157,7 +157,7 @@ impl TreeTciInterpolator {
     }
 
     /// The options of one run: the engine's options with the problem's
-    /// tolerance, cap, and seed, and `normalize_error` disabled.
+    /// tolerance, cap, and seed, and `scale_tolerance` disabled.
     fn run_options(
         &self,
         absolute_tolerance: f64,
@@ -167,7 +167,7 @@ impl TreeTciInterpolator {
         TreeTciOptions {
             tolerance: absolute_tolerance,
             max_bond_dim: cap.map(NonZeroUsize::get),
-            normalize_error: false,
+            scale_tolerance: false,
             seed: Some(seed),
             ..self.options.clone()
         }

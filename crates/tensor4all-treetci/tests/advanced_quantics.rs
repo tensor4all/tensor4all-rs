@@ -93,7 +93,7 @@ fn quantics_grid_polynomial_matches_all_points_on_branching_tree() {
             tolerance: 1e-10,
             max_iter: 12,
             max_bond_dim: Some(8),
-            normalize_error: true,
+            scale_tolerance: true,
             ..Default::default()
         },
         Some(1),
@@ -146,7 +146,7 @@ fn quantics_grid_batch_evaluator_matches_point_evaluator() {
         tolerance: 1e-10,
         max_iter: 12,
         max_bond_dim: Some(8),
-        normalize_error: true,
+        scale_tolerance: true,
         ..Default::default()
     };
 

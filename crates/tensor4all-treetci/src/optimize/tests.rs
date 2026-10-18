@@ -192,7 +192,7 @@ fn optimize_default_converges_on_two_site_identity() {
             tolerance: 1e-12,
             max_iter: 4,
             max_bond_dim: None,
-            normalize_error: true,
+            scale_tolerance: true,
             ..Default::default()
         },
     )
@@ -239,7 +239,7 @@ fn optimize_default_stops_early_once_converged() {
             tolerance: 1e-12,
             max_iter: 4,
             max_bond_dim: None,
-            normalize_error: true,
+            scale_tolerance: true,
             ..Default::default()
         },
     )
@@ -286,7 +286,7 @@ fn optimize_default_stops_early_when_bond_dim_saturated() {
             tolerance: 1e-12,
             max_iter: 10,
             max_bond_dim: Some(1),
-            normalize_error: true,
+            scale_tolerance: true,
             ..Default::default()
         },
     )

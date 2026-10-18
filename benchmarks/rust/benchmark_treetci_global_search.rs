@@ -146,7 +146,7 @@ fn run_case(case: &Case, samples: &[usize], exact: &[f64]) -> Result<RunResult> 
     };
     let options = TreeTciOptions {
         tolerance: 1e-8,
-        normalize_error: true,
+        scale_tolerance: true,
         seed: Some(1),
         ..Default::default()
     };

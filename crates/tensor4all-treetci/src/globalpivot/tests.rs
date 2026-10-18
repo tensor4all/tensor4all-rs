@@ -64,7 +64,7 @@ fn options(enable_global_pivots: bool) -> TreeTciOptions {
         tolerance: 1e-8,
         max_iter: 30,
         max_bond_dim: None,
-        normalize_error: true,
+        scale_tolerance: true,
         enable_global_pivots,
         nsearch: 10,
         max_nglobal_pivot: 5,

@@ -89,7 +89,7 @@ checked against the `cargo run -p xtask --release -- api-dump` inventory
 - **What the engine estimate is.** TreeTCI reports the maximum over edges of
   the last LU pivot error of each edge update
   (`crates/tensor4all-treetci/src/state.rs:193`, `update.rs:107-108`); the
-  M1 engine runs with `normalize_error = false`, so the raw value is compared
+  M1 engine runs with `scale_tolerance = false`, so the raw value is compared
   with the absolute tolerance. Its global pivot search looks for large
   `|f(x) - tt(x)|` from random starts with local coordinate optimization
   (`globalpivot.rs`, module header). Both are max-type quantities on points

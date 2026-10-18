@@ -79,7 +79,7 @@ fn main() {
         tolerance: 1e-8,
         max_iter: STATE_WARMUP_ITERATIONS,
         max_bond_dim: Some(16),
-        normalize_error: true,
+        scale_tolerance: true,
         enable_global_pivots: true,
         ..TreeTciOptions::default()
     };
@@ -90,7 +90,7 @@ fn main() {
         tolerance: 1e-8,
         max_iter: 30,
         max_bond_dim: Some(16),
-        normalize_error: true,
+        scale_tolerance: true,
         enable_global_pivots: true,
         ..TreeTciOptions::default()
     };
@@ -189,7 +189,7 @@ fn main() {
                 tolerance: 1e-8,
                 max_iter: 30,
                 max_bond_dim: Some(16),
-                normalize_error: true,
+                scale_tolerance: true,
                 enable_global_pivots: global_pivots,
                 ..TreeTciOptions::default()
             };

@@ -40,7 +40,7 @@ fn to_treetn_preserves_two_site_identity_evaluations() {
             tolerance: 1e-12,
             max_iter: 4,
             max_bond_dim: None,
-            normalize_error: true,
+            scale_tolerance: true,
             ..Default::default()
         },
     )

@@ -42,7 +42,7 @@ fn options() -> TreeTciOptions {
         tolerance: 1e-10,
         max_iter: 4,
         max_bond_dim: Some(8),
-        normalize_error: true,
+        scale_tolerance: true,
         enable_global_pivots: true,
         ..TreeTciOptions::default()
     }

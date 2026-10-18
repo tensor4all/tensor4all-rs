@@ -23,7 +23,7 @@ fn options() -> TreeTciOptions {
         tolerance: 1e-8,
         max_iter: 8,
         max_bond_dim: Some(6),
-        normalize_error: true,
+        scale_tolerance: true,
         enable_global_pivots: true,
         nsearch: 2,
         max_nglobal_pivot: 2,

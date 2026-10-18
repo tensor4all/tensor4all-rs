@@ -24,7 +24,7 @@ fn options(max_bond_dim: Option<usize>) -> TreeTciOptions {
         tolerance: 1e-8,
         max_iter: 10,
         max_bond_dim,
-        normalize_error: true,
+        scale_tolerance: true,
         enable_global_pivots: true,
         ..TreeTciOptions::default()
     }
