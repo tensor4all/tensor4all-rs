@@ -15,6 +15,12 @@ tenferro-cpu-faer = [
     "tensor4all-treetn/tenferro-cpu-faer",
     "tensor4all-tensorbackend/tenferro-cpu-faer",
 ]
+tenferro-system-blas = [
+    "tensor4all-core/tenferro-system-blas",
+    "tensor4all-quanticstransform/tenferro-system-blas",
+    "tensor4all-treetn/tenferro-system-blas",
+    "tensor4all-tensorbackend/tenferro-system-blas",
+]
 tenferro-provider-inject = [
     "tensor4all-core/tenferro-provider-inject",
     "tensor4all-quanticstransform/tenferro-provider-inject",
