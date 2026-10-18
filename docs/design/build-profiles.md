@@ -92,6 +92,64 @@ records. Integration tests exercise the ordinary library through its public
 boundary; unit tests also cover private validation and error paths. Hosted
 workspace coverage and the unchanged per-file thresholds remain authoritative.
 
+## Backend provider features
+
+Numerical backends are selected per crate through provider features. The CPU
+choices are mutually exclusive because tenferro rejects more than one CPU
+provider in a build, so `--all-features` is not a supported configuration.
+
+| feature | meaning |
+| --- | --- |
+| `tenferro-cpu-faer` | pure-Rust faer CPU kernels; the default for every compute crate |
+| `tenferro-system-blas` | system BLAS/LAPACK (OpenBLAS, MKL, Apple Accelerate) |
+| `tenferro-provider-inject` | caller-provided provider on the BLAS-linked tenferro surface |
+| `tenferro-cuda` | CUDA where exposed (currently `tensor4all-core` and `tensor4all-treetn`); implies `tenferro-cpu-faer` for host work |
+
+Convention:
+
+- Every compute crate exposes the CPU provider features together. A crate that
+exposes `tenferro-cpu-faer` and `tenferro-provider-inject` must also expose
+`tenferro-system-blas`.
+- Each provider feature forwards to the same provider feature on every
+tensor4all dependency that exposes it. Optional dependencies use weak
+forwarding (`tensor4all-simplett?/tenferro-system-blas`), so the feature does
+not switch the optional dependency on by itself.
+- Where a crate's existing CPU provider features forward a route feature (for
+example `tensor4all-core/backend-tenferro`), the new `tenferro-system-blas`
+feature forwards it identically. Provider selection does not change route
+selection.
+- A downstream user chooses exactly one CPU provider with
+`default-features = false` and enables that provider on every directly imported
+compute crate. Enabling two CPU providers in one build is not supported.
+`tenferro-cuda` is not combined with `tenferro-system-blas` or
+`tenferro-provider-inject`.
+- `tenferro-system-blas` selects the BLAS/LAPACK-linked tenferro kernels but
+does not bundle a BLAS library. The final link must resolve those symbols, for
+example with `RUSTFLAGS="-L native=<prefix>/lib -l dylib=openblas"` (the
+benchmark commands in `benchmarks/README.md` show the macOS form) or through
+the embedding target's own link flags.
+- `tensor4all-hdf5` also needs one of its I/O features (`link` or
+`runtime-loading`), so its complete configurations are
+`link,tenferro-system-blas`, `link,tenferro-provider-inject` and
+`runtime-loading,tenferro-cpu-faer`. Its integration tests use the
+link-time `hdf5-metno` API and therefore run only in a `link` build.
+
+Supported configurations and where they are verified:
+
+| configuration | verification |
+| --- | --- |
+| default features (`tenferro-cpu-faer`, plus route/I/O defaults) | hosted CI and the ordinary local gate |
+| `--no-default-features --features tenferro-system-blas` | local `cargo check --all-targets` for every compute crate (add the non-provider defaults the test targets need: `simplett-bridge` for `tensor4all-treetn`, `global-defaults` for `tensor4all-treersi`); the `tensor4all-simplett` test suite also links and runs the system BLAS |
+| `--no-default-features --features tenferro-provider-inject` | local `cargo check --all-targets` for every compute crate, with the same non-provider defaults as above |
+| `tenferro-cuda` (where exposed) | explicit CUDA checks/tutorials; not part of the default CI job |
+| `explicit-context,tenferro-cpu-faer` on `tensor4all-tensorbackend` | hosted CI |
+
+The hosted CI workflow is authoritative for which configurations it currently
+builds; the remaining rows above are the supported matrix that must be checked
+locally when changing a provider feature or a feature-forwarding dependency.
+The per-crate feature inventory, including which crates expose which route
+features, is in [859-f7-consumer-inventory.md](./859-f7-consumer-inventory.md).
+
 ## CI artifact reuse and guide verification
 
 The workspace lockfile and `--locked` keep dependency resolution stable across

@@ -16,7 +16,7 @@
 | [context-scoped-src-contraction.md](./context-scoped-src-contraction.md) | Issue #720 caller-owned context construction, factorization, adaptive decisions, and CUDA-resident SRC |
 | [torch_backend.md](./torch_backend.md) | PyTorch backend design exploration |
 | [tenferro_ad_scalar_operator_extension_note.md](./tenferro_ad_scalar_operator_extension_note.md) | Tenferro AD scalar operator extension notes |
-| [build-profiles.md](./build-profiles.md) | Debug-free ordinary Cargo profiles and the opt-in full-debug release profile |
+| [build-profiles.md](./build-profiles.md) | Debug-free ordinary Cargo profiles, the opt-in full-debug release profile, and the backend-provider feature convention and supported configurations |
 
 ## Tensor Networks
 
