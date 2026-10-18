@@ -1,0 +1,162 @@
+name: Feature matrix
+
+# Builds and audits the declared non-default Cargo feature configurations
+# (issue #915 D6). The CPU backend features are mutually exclusive
+# (tenferro-rs #2004), so `--all-features` is not a buildable target and PR CI
+# only builds each crate's default features plus the explicit-context Lint step.
+#
+# This workflow owns the rest, nightly, one job per configuration. Each matrix
+# entry lists its own packages explicitly: `--workspace --no-default-features`
+# is never used, because docs/book-tests, docs/tutorial-code, and the benchmark
+# packages are documented and built with their defaults. There is no default
+# row on purpose; PR CI and heavy-tests.yml already build the defaults.
+#
+# Adding a feature to a compute crate means adding it here and in
+# CONTRIBUTING.md, "Supported feature configurations".
+
+on:
+  schedule:
+    # 20:00 UTC = 05:00 JST, after heavy-tests.yml (18:00) and coverage.yml
+    # (19:00); the nightly jobs do not contend for the same runner minutes.
+    - cron: "0 20 * * *"
+  workflow_dispatch:
+
+# A scheduled run and a manual dispatch would otherwise race between "no open
+# issue" and "create one".
+concurrency:
+  group: feature-matrix
+  cancel-in-progress: false
+
+jobs:
+  feature-configuration:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-22.04
+    # One configuration is one `cargo check --all-targets` plus, where marked,
+    # one panic-audit Clippy pass. This is the workflow's own bound; it is not
+    # part of the PR pipeline budget.
+    timeout-minutes: 60
+    strategy:
+      # One failing configuration must not hide the others.
+      fail-fast: false
+      matrix:
+        include:
+          # System BLAS: the alternate CPU backend. HDF5 needs `link` named
+          # explicitly once default features are off.
+          - name: system-blas
+            apt: libopenblas-dev
+            audit: true
+            check: |
+              -p tensor4all-core -p tensor4all-tensorbackend -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-partitionedtt -p tensor4all-capi --no-default-features --features tenferro-system-blas
+              -p tensor4all-hdf5 --no-default-features --features link,tenferro-system-blas
+          # Provider injection: the caller supplies the execution provider.
+          # Check-only is enough: compiling tests does not run them, so no
+          # provider has to be registered.
+          - name: provider-inject
+            apt: ""
+            audit: true
+            check: |
+              -p tensor4all-core -p tensor4all-tensorbackend -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-partitionedtt -p tensor4all-capi --no-default-features --features tenferro-provider-inject
+              -p tensor4all-hdf5 --no-default-features --features link,tenferro-provider-inject
+          # MPI: `adaptive-hataori-mpi` already implies `adaptive-hataori-rayon`,
+          # so there is no separate rayon row.
+          - name: mpi
+            apt: libopenmpi-dev openmpi-bin
+            audit: true
+            check: >
+              -p tensor4all-partitionedtt --features adaptive-hataori-mpi
+          # Diagnostics instrumentation stays additive to the default features.
+          - name: diagnostics
+            apt: ""
+            audit: true
+            check: >
+              -p tensor4all-treetn -p tensor4all-treeaci --features diagnostics
+          # HDF5 runtime loading (dlopen) instead of link-time binding.
+          - name: hdf5-runtime-loading
+            apt: ""
+            audit: true
+            check: >
+              -p tensor4all-hdf5 --no-default-features
+              --features runtime-loading,tenferro-cpu-faer
+          # CUDA: compile-only. The ubuntu-22.04 runner image ships the CUDA
+          # toolkit and `cargo check` links nothing, so no GPU is required.
+          # CUDA *execution* is verified locally on a GPU only.
+          - name: cuda
+            apt: ""
+            audit: false
+            check: >
+              -p tensor4all-core -p tensor4all-treetn --features tenferro-cuda
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system packages
+        if: matrix.apt != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.apt }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check the configuration
+        env:
+          SELECTIONS: ${{ matrix.check }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r selection; do
+            [ -n "$selection" ] || continue
+            echo "cargo check --locked --all-targets $selection"
+            cargo check --locked --all-targets $selection
+          done <<< "$SELECTIONS"
+
+      - name: Audit panic paths for the configuration
+        # A configuration selects a subset of the workspace, so the audit keeps
+        # the reviewed default baseline as an allowlist and does not report
+        # unmatched entries as stale (scripts/audit-library-panics.py).
+        if: matrix.audit
+        timeout-minutes: 40
+        env:
+          SELECTIONS: ${{ matrix.check }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r selection; do
+            [ -n "$selection" ] || continue
+            echo "panic audit: $selection"
+            python3 scripts/audit-library-panics.py \
+              --config-name "${{ matrix.name }}" $selection
+          done <<< "$SELECTIONS"
+
+  # A separate job, so a run that dies before its last step still reports. One
+  # rolling issue per failure kind, as coverage.yml and heavy-tests.yml do.
+  report:
+    name: Report a failing night
+    needs: feature-configuration
+    if: ${{ always() && (needs.feature-configuration.result == 'failure' || needs.feature-configuration.result == 'cancelled') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: File or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          label=ci-nightly
+          title="Scheduled feature-matrix is failing"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          printf -v body '%s\n\n%s\n\n%s\n' \
+            "The scheduled feature-configuration matrix failed in [run ${GITHUB_RUN_ID}](${run_url}) on \`${GITHUB_SHA:0:8}\`." \
+            "Reproduce locally with the failing row's \`cargo check --locked --all-targets ...\` and \`python3 scripts/audit-library-panics.py --config-name <name> ...\`; see CONTRIBUTING.md, \"Supported feature configurations\"." \
+            "This matrix owns the non-default feature configurations that PR CI cannot build: CPU backends are mutually exclusive, so there is no \`--all-features\` pass."
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$label" --state open \
+            --search "in:title \"$title\"" --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --label "$label" --title "$title" --body "$body"
+          fi

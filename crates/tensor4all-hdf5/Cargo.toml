@@ -44,3 +44,11 @@ ndarray = { workspace = true }
 [dev-dependencies]
 approx = { workspace = true }
 tempfile = "3"
+
+[[test]]
+# The integration test drives the link-time `hdf5-metno` API directly, so it
+# cannot compile when only the `runtime-loading` backend is selected. PR CI and
+# the default nightly rows enable `link` and still run it.
+name = "test_hdf5"
+path = "tests/test_hdf5.rs"
+required-features = ["link"]
