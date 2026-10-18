@@ -11,7 +11,9 @@ use tensor4all_tensorbackend::Matrix;
 use tensor4all_treetn::TreeTN;
 
 use crate::{
-    problem::{enforce_limit, DirectedEdgeId, LocalPhysicalPlan, PreparedTreeProblem},
+    problem::{
+        checked_product, enforce_limit, DirectedEdgeId, LocalPhysicalPlan, PreparedTreeProblem,
+    },
     samples::{CandidateSets, ComponentSample, SampleArena, SampleId},
     Result, TreeAciError, TreeAciNode, TreeAciScalar,
 };
@@ -47,14 +49,6 @@ impl Drop for FrameKernelTimer {
             ..Default::default()
         });
     }
-}
-
-fn checked_product(factors: &[usize], context: &'static str) -> Result<usize> {
-    factors.iter().try_fold(1usize, |product, &factor| {
-        product
-            .checked_mul(factor)
-            .ok_or(TreeAciError::SizeOverflow { context })
-    })
 }
 
 type OrientedCoreCache<T> = Rc<RefCell<HashMap<DirectedEdgeId, Rc<Matrix<T>>>>>;
@@ -105,17 +99,17 @@ fn multi_incoming_scratch_elements(
     let mut terms = Vec::with_capacity(2 * degree + 2);
     for (dim, count) in incoming_dims.iter().zip(counts) {
         terms.push(checked_product(
-            &[*dim, *count],
+            [*dim, *count],
             "incoming batch frame matrix",
         )?);
     }
     if degree > 0 {
         terms.push(checked_product(
-            &[outgoing_dim, incoming_dims[0]],
+            [outgoing_dim, incoming_dims[0]],
             "incoming batch core matrix",
         )?);
         terms.push(checked_product(
-            &[outgoing_dim, counts[0]],
+            [outgoing_dim, counts[0]],
             "incoming batch stage slice",
         )?);
     }
@@ -124,7 +118,7 @@ fn multi_incoming_scratch_elements(
         factors.push(outgoing_dim);
         factors.extend_from_slice(&counts[..=step]);
         factors.extend_from_slice(&incoming_dims[step + 1..]);
-        terms.push(checked_product(&factors, "incoming batch stage matrix")?);
+        terms.push(checked_product(factors, "incoming batch stage matrix")?);
     }
     checked_sum(&terms, "incoming batch scratch elements")
 }
@@ -177,7 +171,10 @@ fn grouped_gemm_descriptor_bytes(incoming_dims: &[usize]) -> Result<usize> {
     if incoming_dims.len() < 3 {
         return Ok(0);
     }
-    let blocks = checked_product(&incoming_dims[1..], "incoming batch grouped-GEMM blocks")?;
+    let blocks = checked_product(
+        incoming_dims[1..].iter().copied(),
+        "incoming batch grouped-GEMM blocks",
+    )?;
     blocks
         .checked_mul(2 * size_of::<tensor4all_tensorbackend::GroupedGemmJob>())
         .ok_or(TreeAciError::SizeOverflow {
@@ -1325,15 +1322,15 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 checked_sum(
                     &[
                         checked_product(
-                            &[outgoing_dim, problem.physical[node].local_dim, incoming_dim],
+                            [outgoing_dim, problem.physical[node].local_dim, incoming_dim],
                             "single-incoming candidate core matrix",
                         )?,
                         checked_product(
-                            &[incoming_dim, count],
+                            [incoming_dim, count],
                             "single-incoming candidate frame matrix",
                         )?,
                         checked_product(
-                            &[outgoing_dim, problem.physical[node].local_dim, count],
+                            [outgoing_dim, problem.physical[node].local_dim, count],
                             "single-incoming candidate output matrix",
                         )?,
                     ],
@@ -1702,22 +1699,22 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             let scratch = checked_sum(
                 &[
                     checked_product(
-                        &[outgoing_dim, physical.local_dim, incoming_dim],
+                        [outgoing_dim, physical.local_dim, incoming_dim],
                         "single-incoming candidate core matrix",
                     )?,
                     checked_product(
-                        &[incoming_dim, incoming_ids.len()],
+                        [incoming_dim, incoming_ids.len()],
                         "single-incoming candidate frame matrix",
                     )?,
                     checked_product(
-                        &[outgoing_dim, physical.local_dim, incoming_ids.len()],
+                        [outgoing_dim, physical.local_dim, incoming_ids.len()],
                         "single-incoming candidate output matrix",
                     )?,
                 ],
                 "single-incoming candidate scratch elements",
             )?;
             let physical_offset_bytes = checked_product(
-                &[physical.local_dim, size_of::<usize>()],
+                [physical.local_dim, size_of::<usize>()],
                 "single-incoming candidate physical-offset bytes",
             )?;
             enforce_frame_working_elements_with_extra_bytes::<T, V>(
@@ -1979,7 +1976,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 }
             }
             let counts = ids.iter().map(Vec::len).collect::<Vec<_>>();
-            let cross = checked_product(&counts, "multi-incoming candidate cross")?;
+            let cross = checked_product(counts.iter().copied(), "multi-incoming candidate cross")?;
             let scratch = multi_incoming_scratch_elements(outgoing_dim, &incoming_dims, &counts)?;
             let descriptor_bytes = grouped_gemm_descriptor_bytes(&incoming_dims)?;
             let batched = cross <= indices.len()
@@ -2654,22 +2651,22 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
         let scratch = checked_sum(
             &[
                 checked_product(
-                    &[outgoing_dim, physical.local_dim, incoming_dim],
+                    [outgoing_dim, physical.local_dim, incoming_dim],
                     "single-incoming frame core matrix",
                 )?,
                 checked_product(
-                    &[incoming_dim, incoming_ids.len()],
+                    [incoming_dim, incoming_ids.len()],
                     "single-incoming frame input matrix",
                 )?,
                 checked_product(
-                    &[outgoing_dim, physical.local_dim, incoming_ids.len()],
+                    [outgoing_dim, physical.local_dim, incoming_ids.len()],
                     "single-incoming frame output matrix",
                 )?,
             ],
             "single-incoming frame scratch elements",
         )?;
         let physical_offset_bytes = checked_product(
-            &[physical.local_dim, size_of::<usize>()],
+            [physical.local_dim, size_of::<usize>()],
             "single-incoming physical-offset bytes",
         )?;
         enforce_frame_working_elements_with_extra_bytes::<T, V>(
@@ -3564,10 +3561,13 @@ fn generalized_incoming_batch<T: TreeAciScalar>(
     frame_matrices: &[Matrix<T>],
 ) -> Result<Vec<T>> {
     let degree = incoming_axes.len();
-    let mut remaining = checked_product(&incoming_dims[1..], "incoming batch stage-one blocks")?;
-    let mut rows = checked_product(&[outgoing_dim, counts[0]], "incoming batch stage-one rows")?;
+    let mut remaining = checked_product(
+        incoming_dims[1..].iter().copied(),
+        "incoming batch stage-one blocks",
+    )?;
+    let mut rows = checked_product([outgoing_dim, counts[0]], "incoming batch stage-one rows")?;
     let mut stage = Vec::with_capacity(checked_product(
-        &[rows, remaining],
+        [rows, remaining],
         "incoming batch stage-one elements",
     )?);
     for block in 0..remaining {

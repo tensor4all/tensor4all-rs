@@ -7,7 +7,7 @@ use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
 
 use crate::{
-    problem::{enforce_limit, PreparedTreeProblem},
+    problem::{checked_product, enforce_limit, PreparedTreeProblem},
     samples::{CandidateSets, ComponentProjectionScratch, PivotPairs, SampleArena},
     Result, TreeAciError, TreeAciNode, TreeAciOptions, TreeAciScalar,
 };
@@ -412,17 +412,6 @@ fn trim_bootstrap_axes<V: TreeAciNode>(
         })
         .count();
     nodes.truncate(keep);
-}
-
-fn checked_product(
-    values: impl IntoIterator<Item = usize>,
-    context: &'static str,
-) -> Result<usize> {
-    values.into_iter().try_fold(1usize, |product, value| {
-        product
-            .checked_mul(value)
-            .ok_or(TreeAciError::SizeOverflow { context })
-    })
 }
 
 #[cfg(test)]

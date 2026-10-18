@@ -392,7 +392,11 @@ pub(crate) fn enforce_limit(resource: &'static str, requested: usize, limit: usi
     Ok(())
 }
 
-fn checked_product(
+/// Multiplies shape factors, reporting the caller's context on overflow.
+///
+/// Shared so every element-count estimate uses the same checked arithmetic and
+/// the same `SizeOverflow` shape.
+pub(crate) fn checked_product(
     values: impl IntoIterator<Item = usize>,
     context: &'static str,
 ) -> Result<usize> {
