@@ -774,6 +774,19 @@ fn test_treetn_split_to_splits_fused_vertex() {
 }
 
 #[test]
+fn build_swap_options_maps_rtol_to_relative_per_value_policy() {
+    let exact = build_swap_options(0, 0.0);
+    assert_eq!(exact.max_bond_dim, None);
+    assert_eq!(exact.svd_policy, None);
+    assert_eq!(build_swap_options(0, -1.0).svd_policy, None);
+    assert_eq!(build_swap_options(0, f64::NAN).svd_policy, None);
+
+    let truncated = build_swap_options(7, 1e-9);
+    assert_eq!(truncated.max_bond_dim, Some(7));
+    assert_eq!(truncated.svd_policy, Some(SvdTruncationPolicy::new(1e-9)));
+}
+
+#[test]
 fn test_treetn_swap_site_indices_returns_reordered_copy() {
     let (tt, tensors, indices) = make_two_site_treetn();
     let assignment = flat_assignment(&[
