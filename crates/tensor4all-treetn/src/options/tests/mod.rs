@@ -122,7 +122,7 @@ fn test_restructure_options_default_and_builder() {
     assert_eq!(opts.split.form, CanonicalForm::Unitary);
     assert!(!opts.split.final_sweep);
     assert_eq!(opts.swap.max_bond_dim, None);
-    assert_eq!(opts.swap.rtol, None);
+    assert_eq!(opts.swap.svd_policy, None);
     assert!(opts.final_truncation.is_none());
 
     let final_policy = SvdTruncationPolicy::new(1e-10).with_discarded_tail_sum();
@@ -134,13 +134,13 @@ fn test_restructure_options_default_and_builder() {
         )
         .with_swap(SwapOptions {
             max_bond_dim: Some(8),
-            rtol: Some(1e-9),
+            svd_policy: Some(SvdTruncationPolicy::new(1e-9)),
         })
         .with_final_truncation(TruncationOptions::new().with_svd_policy(final_policy));
     assert_eq!(opts.split.max_bond_dim(), Some(16));
     assert!(opts.split.final_sweep);
     assert_eq!(opts.swap.max_bond_dim, Some(8));
-    assert_eq!(opts.swap.rtol, Some(1e-9));
+    assert_eq!(opts.swap.svd_policy, Some(SvdTruncationPolicy::new(1e-9)));
     assert_eq!(
         opts.final_truncation
             .as_ref()

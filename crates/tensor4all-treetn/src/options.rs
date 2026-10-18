@@ -264,7 +264,7 @@ impl SplitOptions {
 ///     .with_split(SplitOptions::new().with_max_bond_dim(32))
 ///     .with_swap(SwapOptions {
 ///         max_bond_dim: Some(16),
-///         rtol: Some(1e-10),
+///         svd_policy: Some(SvdTruncationPolicy::new(1e-10)),
 ///     })
 ///     .with_final_truncation(
 ///         TruncationOptions::new().with_svd_policy(SvdTruncationPolicy::new(1e-12)),
@@ -273,7 +273,7 @@ impl SplitOptions {
 /// assert_eq!(options.split.max_bond_dim(), Some(32));
 /// assert!(!options.split.final_sweep);
 /// assert_eq!(options.swap.max_bond_dim, Some(16));
-/// assert_eq!(options.swap.rtol, Some(1e-10));
+/// assert_eq!(options.swap.svd_policy, Some(SvdTruncationPolicy::new(1e-10)));
 /// assert_eq!(
 ///     options
 ///         .final_truncation
@@ -297,7 +297,7 @@ pub struct RestructureOptions {
     ///
     /// This phase only moves already planned fragments across existing edges.
     /// Leaving both fields unset keeps swaps exact. Setting `max_bond_dim` or
-    /// `rtol` can control intermediate rank growth, but may introduce
+    /// `svd_policy` can control intermediate rank growth, but may introduce
     /// approximation earlier than the optional final truncation sweep.
     pub swap: SwapOptions,
     /// Optional final truncation sweep on the fully restructured network.
@@ -323,7 +323,7 @@ impl RestructureOptions {
     ///
     /// assert!(!options.split.final_sweep);
     /// assert_eq!(options.swap.max_bond_dim, None);
-    /// assert_eq!(options.swap.rtol, None);
+    /// assert_eq!(options.swap.svd_policy, None);
     /// assert!(options.final_truncation.is_none());
     /// ```
     pub fn new() -> Self {
@@ -365,15 +365,16 @@ impl RestructureOptions {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_core::SvdTruncationPolicy;
     /// use tensor4all_treetn::{RestructureOptions, SwapOptions};
     ///
     /// let options = RestructureOptions::new().with_swap(SwapOptions {
     ///     max_bond_dim: Some(12),
-    ///     rtol: Some(1e-8),
+    ///     svd_policy: Some(SvdTruncationPolicy::new(1e-8)),
     /// });
     ///
     /// assert_eq!(options.swap.max_bond_dim, Some(12));
-    /// assert_eq!(options.swap.rtol, Some(1e-8));
+    /// assert_eq!(options.swap.svd_policy, Some(SvdTruncationPolicy::new(1e-8)));
     /// ```
     pub fn with_swap(mut self, swap: SwapOptions) -> Self {
         self.swap = swap;

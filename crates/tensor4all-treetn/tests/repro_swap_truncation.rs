@@ -4,10 +4,11 @@
 //! Two independent paths used to fall back to the process-global
 //! `DEFAULT_SVD_TRUNCATION_POLICY` (per-value rtol 1e-12):
 //!
-//! 1. `rtol: None` set no SVD policy on the swap factorization, so the global
-//!    default applied instead of an exact decomposition.
+//! 1. An absent `svd_policy` set no SVD policy on the swap factorization, so
+//!    the global default applied instead of an exact decomposition.
 //! 2. The canonical-center transport sweep never received `SwapOptions` at all,
-//!    so even `rtol: Some(0.0)` could not make the operation exact.
+//!    so even an explicit zero-threshold policy could not make the operation
+//!    exact.
 //!
 //! The singular value 1e-13 is chosen to sit well below the global default 1e-12
 //! and well above f64 roundoff 1e-16, so any fallback to the global policy
@@ -15,7 +16,7 @@
 
 use std::collections::HashMap;
 
-use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorIndex};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy, TensorIndex};
 use tensor4all_treetn::{SwapOptions, TreeTN};
 
 /// Orthogonal 4x4 Hadamard/2, column-major flat.
@@ -119,12 +120,12 @@ fn swap_with_transport_must_not_truncate() {
     target.insert(s3, "2".to_string());
 
     for (label, opts) in [
-        ("rtol: None", SwapOptions::default()),
+        ("svd_policy: None", SwapOptions::default()),
         (
-            "rtol: Some(0.0)",
+            "svd_policy: zero threshold",
             SwapOptions {
                 max_bond_dim: None,
-                rtol: Some(0.0),
+                svd_policy: Some(SvdTruncationPolicy::new(0.0)),
             },
         ),
     ] {
@@ -138,8 +139,9 @@ fn swap_with_transport_must_not_truncate() {
     }
 }
 
-/// A swap step with no transport at all must not truncate with `rtol: None`:
-/// this isolates the "`None` used to mean global default, not exact" cause.
+/// A swap step with no transport at all must not truncate with an absent
+/// policy: this isolates the "`None` used to mean global default, not exact"
+/// cause.
 #[test]
 fn swap_without_transport_must_not_truncate() {
     // 2-node network A--B with M = H2 * diag(1, 1e-13) * H2^T on the single bond.
@@ -180,6 +182,9 @@ fn swap_without_transport_must_not_truncate() {
     let after = tn.contract_to_tensor().unwrap();
     let err = before.sub(&after).unwrap().maxabs().unwrap();
     let dim = bond_dim_at(&tn, "A", &[&sb]);
-    assert_eq!(dim, 2, "rtol: None must not drop the 1e-13 singular value");
-    assert!(err < 1e-15, "rtol: None must be exact, err={err:e}");
+    assert_eq!(
+        dim, 2,
+        "an absent policy must not drop the 1e-13 singular value"
+    );
+    assert!(err < 1e-15, "an absent policy must be exact, err={err:e}");
 }

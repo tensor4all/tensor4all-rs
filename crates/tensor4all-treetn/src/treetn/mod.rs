@@ -2054,14 +2054,16 @@ where
         )
         .context("swap_site_indices: canonicalize")?;
 
-        // `rtol: None` must mean "no truncation", so always set an explicit
-        // policy: falling back to the process-global SVD default would silently
-        // drop singular values the caller never asked to drop.
+        // An absent policy must mean "no truncation", so always set an
+        // explicit policy: falling back to the process-global SVD default
+        // would silently drop singular values the caller never asked to drop.
         let mut swap_factorize_options = FactorizeOptions::svd()
             .with_canonical(Canonical::Left)
-            .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(
-                options.rtol.unwrap_or(0.0),
-            ));
+            .with_svd_policy(
+                options
+                    .svd_policy
+                    .unwrap_or(tensor4all_core::SvdTruncationPolicy::new(0.0)),
+            );
         if let Some(mr) = options.max_bond_dim {
             swap_factorize_options = swap_factorize_options.with_max_bond_dim(mr);
         }
