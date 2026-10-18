@@ -11,7 +11,7 @@ use std::hash::Hash;
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use super::contraction::{contract, ContractionOptions};
+use super::contraction::{contract, dense_contract_output_indices, ContractionOptions};
 use super::decompose::{factorize_tensor_to_treetn_with, TreeTopology};
 use super::swap::SwapOptions;
 use super::TreeTN;
@@ -365,25 +365,6 @@ fn dense_element_count(indices: &[DynIndex]) -> Result<usize> {
             )
         })
     })
-}
-
-fn dense_contract_output_indices(a_indices: &[DynIndex], b_indices: &[DynIndex]) -> Vec<DynIndex> {
-    let mut b_remaining = b_indices.to_vec();
-    let mut output = Vec::new();
-
-    for idx_a in a_indices {
-        if let Some(position) = b_remaining
-            .iter()
-            .position(|idx_b| idx_a.is_contractable(idx_b))
-        {
-            b_remaining.remove(position);
-        } else {
-            output.push(idx_a.clone());
-        }
-    }
-
-    output.extend(b_remaining);
-    output
 }
 
 fn ensure_dense_reference_limit(

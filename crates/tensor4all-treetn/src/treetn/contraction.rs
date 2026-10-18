@@ -2368,7 +2368,10 @@ fn dense_element_count<I: IndexLike>(indices: &[I], context: &str) -> Result<usi
     })
 }
 
-fn dense_contract_output_indices<I: IndexLike>(a_indices: &[I], b_indices: &[I]) -> Vec<I> {
+pub(super) fn dense_contract_output_indices<I: IndexLike>(
+    a_indices: &[I],
+    b_indices: &[I],
+) -> Vec<I> {
     let mut b_remaining = b_indices.to_vec();
     let mut output = Vec::new();
 
