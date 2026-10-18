@@ -348,7 +348,7 @@ where
     }
 }
 
-fn value_at(
+pub(super) fn value_at(
     values: ColMajorArrayRef<'_, usize>,
     input_position: usize,
     point: usize,

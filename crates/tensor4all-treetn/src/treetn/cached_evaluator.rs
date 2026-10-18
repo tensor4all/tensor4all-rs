@@ -188,6 +188,7 @@ use tensor4all_tensorbackend::{mat_mul, mat_mul_owned, BlasMul, Matrix, TensorEl
 
 #[cfg(feature = "diagnostics")]
 use super::diagnostics;
+use super::evaluator::value_at;
 use super::TreeTN;
 
 type KeyId = usize;
@@ -6625,25 +6626,6 @@ fn validate_values_shape(
         n_indices
     );
     Ok(())
-}
-
-fn value_at(
-    values: ColMajorArrayRef<'_, usize>,
-    input_position: usize,
-    point: usize,
-    context: &str,
-) -> Result<usize> {
-    values
-        .get(&[input_position, point])
-        .copied()
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "{context}: missing coordinate at row {} point {} for shape {:?}",
-                input_position,
-                point,
-                values.shape()
-            )
-        })
 }
 
 /// Bounds-checks one point's local coordinates against its node's physical
