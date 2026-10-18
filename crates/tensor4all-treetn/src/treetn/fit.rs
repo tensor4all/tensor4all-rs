@@ -939,10 +939,6 @@ where
     /// * `max_bond_dim` - Maximum bond dimension for truncation
     /// * `svd_policy` - Explicit SVD truncation policy; `None` leaves the SVD
     ///   factorization at its default behavior unless a bond cap applies.
-    ///
-    /// Note: sim_internal_inds() should be called on tn_a and tn_b before passing
-    /// if index collision is a concern. This is not done here because contraction
-    /// module (which provides sim_internal_inds) is currently disabled.
     pub(crate) fn with_leaves(mut self, leaves: Box<dyn LeafOps<T>>) -> Self {
         self.leaves = leaves;
         self

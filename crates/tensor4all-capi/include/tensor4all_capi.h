@@ -1325,9 +1325,11 @@ enum t4a_status_code t4a_treetn_split_to(const struct t4a_treetn *treetn,
 /**
  * Reassign site indices to target vertices using scheduled swap transport.
  *
- * `rtol` is the only truncation control this C entry exposes: a positive
+ * `rtol` is the only singular-value threshold this C entry exposes: a positive
  * value selects a relative, per-singular-value threshold; zero, negative, or
- * NaN `rtol` requests an exact swap with no truncation. The absolute scale,
+ * NaN `rtol` disables threshold-based truncation. A positive `maxdim` still
+ * caps the bond rank, so a swap is exact only with `maxdim = 0` and a
+ * nonpositive `rtol`. The absolute scale,
  * squared-value measure, and discarded-tail-sum rule of
  * [`SvdTruncationPolicy`] are not reachable through the C ABI; use the Rust
  * API when those settings are required.
