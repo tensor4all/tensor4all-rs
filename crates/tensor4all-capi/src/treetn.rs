@@ -6,13 +6,12 @@ use crate::types::{
     InternalTreeTN, InternalTreeTNEvaluatorHandle,
 };
 use crate::{
-    capi_error, clone_opaque, is_assigned_opaque, panic_message, release_opaque, run_catching,
-    set_last_error, t4a_status_code, CapiResult, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR,
-    T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
+    capi_error, clone_opaque, is_assigned_opaque, release_opaque, run_catching, run_status,
+    set_last_error, t4a_status_code, CapiResult, T4A_BUFFER_TOO_SMALL, T4A_INVALID_ARGUMENT,
+    T4A_NULL_POINTER,
 };
 use num_complex::Complex64;
 use std::collections::{HashMap, HashSet};
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike, SvdTruncationPolicy};
 use tensor4all_treetn::contraction::{self, ContractionMethod, ContractionOptions};
 use tensor4all_treetn::{
@@ -104,24 +103,6 @@ fn orthogonalize_error_message(force: libc::c_int, err: impl std::fmt::Display) 
         }
     }
     msg
-}
-
-fn run_status<F>(f: F) -> t4a_status_code
-where
-    F: FnOnce() -> CapiResult<()>,
-{
-    match catch_unwind(AssertUnwindSafe(f)) {
-        Ok(Ok(())) => T4A_SUCCESS,
-        Ok(Err((code, msg))) => {
-            set_last_error(&msg);
-            code
-        }
-        Err(panic) => {
-            let msg = panic_message(&*panic);
-            set_last_error(&msg);
-            T4A_INTERNAL_ERROR
-        }
-    }
 }
 
 fn require_tree<'a>(ptr: *const t4a_treetn) -> CapiResult<&'a t4a_treetn> {

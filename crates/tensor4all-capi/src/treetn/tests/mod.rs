@@ -5,6 +5,7 @@ use crate::tensor::{
     t4a_tensor_release,
 };
 use crate::types::{t4a_singular_value_measure, t4a_threshold_scale, t4a_truncation_rule};
+use crate::T4A_SUCCESS;
 
 fn last_error() -> String {
     let mut len = 0usize;

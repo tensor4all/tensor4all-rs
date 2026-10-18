@@ -171,6 +171,25 @@ where
     }
 }
 
+/// Run a status-only closure, storing any error or panic message.
+pub(crate) fn run_status<F>(f: F) -> t4a_status_code
+where
+    F: FnOnce() -> CapiResult<()>,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(Ok(())) => T4A_SUCCESS,
+        Ok(Err((code, msg))) => {
+            set_last_error(&msg);
+            code
+        }
+        Err(panic) => {
+            let msg = panic_message(&*panic);
+            set_last_error(&msg);
+            T4A_INTERNAL_ERROR
+        }
+    }
+}
+
 /// Clone an opaque wrapper through the constructor-style `out` pattern.
 pub(crate) fn clone_opaque<T: Clone>(src: *const T, out: *mut *mut T) -> t4a_status_code {
     if src.is_null() {
