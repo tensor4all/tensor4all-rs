@@ -329,18 +329,24 @@ def _finding_sort_key(entry: str) -> tuple[str, int, str]:
     return path, int(line), kind
 
 
-def _run_audit(root: Path, baseline: list[str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run_audit(
+    root: Path,
+    baseline: list[str] | None = None,
+    configuration: list[str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     baseline_path = root / "baseline.json"
     baseline_path.write_text(json.dumps(baseline or []), encoding="utf-8")
+    command = [
+        sys.executable,
+        str(SCRIPT),
+        "--root",
+        str(root),
+        "--baseline",
+        str(baseline_path),
+    ]
+    command.extend(configuration or [])
     return subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPT),
-            "--root",
-            str(root),
-            "--baseline",
-            str(baseline_path),
-        ],
+        command,
         text=True,
         capture_output=True,
         check=False,
@@ -364,13 +370,12 @@ def test_dep_info_selects_each_production_source_once() -> None:
             f"crates/demo/src/shared.rs:{_line(FIXTURE_SHARED, 'assert!(true);')}:assert",
             f"crates/demo/src/shared/nested.rs:{_line(FIXTURE_LIB_NESTED, 'assert!(true);')}:assert",
             f"crates/demo/src/selected.rs:{_line(FIXTURE_SELECTED, 'assert!(true);')}:assert",
-            f"crates/demo/src/feature_selected.rs:{_line(FIXTURE_FEATURE_SELECTED, 'assert!(true);')}:assert",
         ]
         result = _run_audit(fixture, baseline)
 
     assert result.returncode == 1, result.stderr
     assert result.stderr.splitlines() == [
-        "Audit failed: 15 unbaselined findings, 0 stale baseline entries."
+        "Audit failed: 14 unbaselined findings, 0 stale baseline entries."
     ]
     findings = result.stdout.splitlines()
     assert findings[: len(baseline)] == [
@@ -382,9 +387,8 @@ def test_dep_info_selects_each_production_source_once() -> None:
     expect_line = _line(FIXTURE_LIB, '    let _ = option.expect("production expect");')
     aliased_panic_line = _line(FIXTURE_LIB, '    fail!("aliased panic");')
     macro_argument_line = _line(FIXTURE_LIB, '    passthrough!(panic!("invoked macro argument"));')
-    all_features_line = _line(FIXTURE_LIB, '    panic!("all-features production");')
     bin_panic_line = _line(FIXTURE_SHARED, '    std::panic!("production binary");')
-    assert findings[len(baseline) :][:15] == [
+    assert findings[len(baseline) :][:14] == [
         f"crates/demo/src/lib.rs:{allow_panic_line}:panic",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    let _ = option.unwrap();', 1)}:unwrap",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    let _ = option.unwrap();', 2)}:unwrap",
@@ -394,7 +398,6 @@ def test_dep_info_selects_each_production_source_once() -> None:
         f"crates/demo/src/lib.rs:{aliased_panic_line}:panic",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    passthrough!(option.unwrap());')}:unwrap",
         f"crates/demo/src/lib.rs:{macro_argument_line}:panic",
-        f"crates/demo/src/lib.rs:{all_features_line}:panic",
         f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '        assert!(true);')}:assert",
         f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '    passthrough_assertion!(assert!(true));')}:assert",
         f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '            (_unused:expr) => { assert!(true); };')}:assert",
@@ -402,8 +405,8 @@ def test_dep_info_selects_each_production_source_once() -> None:
         f"crates/demo/src/shared.rs:{bin_panic_line}:panic",
     ]
     # The call-site report is informational and prints even when empty.
-    assert findings[len(baseline) :][15:] == ["invariant_violated call sites: 0"]
-    assert {finding.rsplit(':', 1)[-1] for finding in findings[len(baseline) :][:15]} >= {
+    assert findings[len(baseline) :][14:] == ["invariant_violated call sites: 0"]
+    assert {finding.rsplit(':', 1)[-1] for finding in findings[len(baseline) :][:14]} >= {
         "panic",
         "unreachable",
         "unwrap",
@@ -412,6 +415,61 @@ def test_dep_info_selects_each_production_source_once() -> None:
     assert all("ignored" not in finding for finding in findings)
     assert all("test_only" not in finding for finding in findings)
     assert all("file_level" not in finding for finding in findings)
+
+
+def test_configuration_selection_audits_its_feature_selection() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_fixture(fixture)
+        # This entry cannot match the selected configuration. A configuration
+        # audits a subset of the workspace, so unmatched baseline entries are
+        # not stale; only newly uncovered findings fail the pass.
+        result = _run_audit(
+            fixture,
+            ["crates/demo/src/lib.rs:999999:assert"],
+            [
+                "--config-name",
+                "production",
+                "--package",
+                "demo",
+                "--no-default-features",
+                "--features",
+                "production",
+            ],
+        )
+    assert result.returncode == 1, result.stderr
+    assert "Audit configuration: `production`" in result.stdout
+    assert "Stale baseline:" not in result.stdout
+    # Feature-gated production paths are visible only in this configuration.
+    assert (
+        f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    panic!("all-features production");')}:panic"
+        in result.stdout
+    )
+    # `cfg_attr` swaps the `selected` module for its feature-selected path.
+    assert (
+        f"crates/demo/src/feature_selected.rs:{_line(FIXTURE_FEATURE_SELECTED, 'assert!(true);')}:assert"
+        in result.stdout
+    )
+
+
+def test_configuration_selection_requires_a_name_and_known_packages() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_fixture(fixture)
+        missing_name = _run_audit(fixture, configuration=["--features", "production"])
+        assert missing_name.returncode == 2
+        assert "require --config-name" in missing_name.stderr
+
+        no_package = _run_audit(fixture, configuration=["--config-name", "production"])
+        assert no_package.returncode == 2
+        assert "requires at least one --package" in no_package.stderr
+
+        unknown_package = _run_audit(
+            fixture,
+            configuration=["--config-name", "production", "--package", "absent"],
+        )
+        assert unknown_package.returncode == 2
+        assert "without production targets under crates/" in unknown_package.stderr
 
 
 def test_macro_assertion_arguments_and_transcribers_are_reported() -> None:
@@ -809,6 +867,8 @@ def main() -> int:
     _build_tool_once()
     tests = [
         test_dep_info_selects_each_production_source_once,
+        test_configuration_selection_audits_its_feature_selection,
+        test_configuration_selection_requires_a_name_and_known_packages,
         test_unknown_cfg_assertion_is_included_conservatively,
         test_comment_and_rustdoc_assertion_text_is_excluded,
         test_private_literal_only_helper_assertions_are_outside_the_surface,

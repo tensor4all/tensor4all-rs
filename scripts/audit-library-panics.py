@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """Run the compiler-backed production library panic audit.
 
-Set ``T4A_PANIC_AUDIT_SKIP_ALL_FEATURES=1`` when the workspace has no single
-buildable all-features configuration; only the default-feature Clippy pass runs.
+Without a configuration selection the wrapper runs the default pass: every
+workspace production target with its default features, compared against the
+reviewed baseline.
 
-Set ``T4A_PANIC_AUDIT_EXCLUDED_FEATURES`` to a comma- or semicolon-separated
-list of workspace features to leave out of the ``--all-features`` pass, when the
-workspace cannot enable all of its features at once (for example mutually
-exclusive CPU backend features). Every other workspace feature is still enabled,
-so crates that need a non-default feature to build stay covered.
+Pass ``--config-name`` together with ``--package``/``-p``,
+``--no-default-features``, and ``--features`` to audit one explicit feature
+configuration instead. The workspace's CPU backend features are mutually
+exclusive, so there is no single buildable ``--all-features`` selection; a
+configuration names the packages and Cargo feature selection worth auditing
+(for example ``--config-name system-blas -p tensor4all-core ...
+--no-default-features --features tenferro-system-blas``). Because a
+configuration selects a subset of the workspace, unmatched baseline entries are
+not reported as stale; only newly uncovered findings fail the pass. The
+nightly ``.github/workflows/feature-matrix.yml`` runs these passes.
 
 This wrapper keeps the historical ``--root``/``--baseline`` interface and
 ``T4A_PANIC_AUDIT_BIN`` override. The Rust tool asks Cargo/Clippy to compile
@@ -32,8 +38,9 @@ from pathlib import Path
 TOOL_ENV = "T4A_PANIC_AUDIT_BIN"
 TOOL_PACKAGE = "library-panic-audit"
 # Each Rust Clippy pass has a 10-minute timeout. The Rust tool gets 25
-# minutes for both passes; the wrapper gets 10 minutes to build plus 25
-# minutes to audit, and CI allows 40 minutes for startup/teardown.
+# minutes for one pass plus source scanning; the wrapper gets 10 minutes to
+# build plus 25 minutes to audit, and CI allows 40 minutes for
+# startup/teardown.
 BUILD_TIMEOUT_SECONDS = 600
 AUDIT_TIMEOUT_SECONDS = 1500
 KNOWN_CARGO_REASONS = {
@@ -150,20 +157,54 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path)
     parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--config-name")
+    parser.add_argument("--package", "-p", action="append", default=[])
+    parser.add_argument("--no-default-features", action="store_true")
+    parser.add_argument("--features")
     args = parser.parse_args(argv)
+
+    configuration_flags = bool(
+        args.package or args.no_default_features or args.features is not None
+    )
+    if configuration_flags and not args.config_name:
+        print(
+            "library panic audit configuration error: "
+            "--package, --no-default-features, and --features require --config-name",
+            file=sys.stderr,
+        )
+        return 2
 
     root = (args.root or Path(__file__).resolve().parents[1]).resolve()
     baseline = (args.baseline or root / "scripts" / "library-panics-baseline.json").resolve()
     try:
         tool = _tool_path(Path(__file__).resolve().parents[1])
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        print(f"library panic audit configuration error: {error}", file=sys.stderr)
+        return 2
+    command = [
+        str(tool),
+        "--root",
+        str(root),
+        "--baseline",
+        str(baseline),
+    ]
+    if args.config_name:
+        command += ["--config-name", args.config_name]
+    for package in args.package:
+        command += ["--package", package]
+    if args.no_default_features:
+        command.append("--no-default-features")
+    if args.features is not None:
+        command += ["--features", args.features]
+    try:
         result = subprocess.run(
-            [str(tool), "--root", str(root), "--baseline", str(baseline)],
+            command,
             cwd=Path(__file__).resolve().parents[1],
             text=True,
             check=False,
             timeout=AUDIT_TIMEOUT_SECONDS,
         )
-    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+    except (OSError, subprocess.TimeoutExpired) as error:
         print(f"library panic audit configuration error: {error}", file=sys.stderr)
         return 2
     return result.returncode

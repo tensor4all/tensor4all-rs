@@ -86,6 +86,7 @@ impl Finding {
 
 #[derive(Debug)]
 pub(crate) struct AuditReport {
+    configuration: Option<String>,
     matched: Vec<Finding>,
     unbaselined: Vec<Finding>,
     stale: Vec<Finding>,
@@ -96,6 +97,9 @@ pub(crate) struct AuditReport {
 
 impl AuditReport {
     pub(crate) fn exit_code_and_print(&self) -> i32 {
+        if let Some(configuration) = &self.configuration {
+            println!("Audit configuration: `{configuration}`");
+        }
         for finding in &self.matched {
             println!("Baseline matched: {}", finding.entry());
         }
@@ -140,7 +144,10 @@ impl AuditReport {
             );
             1
         } else {
-            println!("Audit passed: 0 unbaselined findings, 0 stale baseline entries");
+            println!(
+                "Audit passed: 0 unbaselined findings, {} stale baseline entries",
+                self.stale.len()
+            );
             0
         }
     }
@@ -192,17 +199,83 @@ struct CompilerArtifact {
 type CompilerArtifacts = Vec<CompilerArtifact>;
 type ClippyParse = (HashSet<TargetKey>, CompilerArtifacts, BTreeSet<Finding>);
 
+/// One Cargo feature configuration selected by the caller.
+///
+/// The default pass audits every workspace production target with its default
+/// features. A configuration pass instead audits exactly the listed packages
+/// with one explicit Cargo feature selection, because this workspace's CPU
+/// backend features are mutually exclusive and no single all-features build
+/// exists (issue #915 D6).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Configuration {
+    pub(crate) name: String,
+    pub(crate) packages: Vec<String>,
+    pub(crate) no_default_features: bool,
+    pub(crate) features: Option<String>,
+}
+
+impl Configuration {
+    /// Build one named feature configuration from parsed command-line values.
+    pub(crate) fn new(
+        name: String,
+        packages: Vec<String>,
+        no_default_features: bool,
+        features: Option<String>,
+    ) -> Result<Self> {
+        let name = name.trim().to_owned();
+        if name.is_empty() {
+            bail!("--config-name must not be empty");
+        }
+        if packages.is_empty() {
+            bail!("--config-name {name} requires at least one --package");
+        }
+        let packages = packages
+            .into_iter()
+            .map(|package| package.trim().to_owned())
+            .collect::<Vec<_>>();
+        if packages.iter().any(String::is_empty) {
+            bail!("--package must not be empty");
+        }
+        let features = match features {
+            Some(features) => {
+                let features = features.trim().to_owned();
+                if features.is_empty() {
+                    bail!("--features must list at least one feature");
+                }
+                Some(features)
+            }
+            None => None,
+        };
+        Ok(Self {
+            name,
+            packages,
+            no_default_features,
+            features,
+        })
+    }
+
+    fn label(&self) -> String {
+        let mut selection = format!("configuration `{}`", self.name);
+        if self.no_default_features {
+            selection.push_str(" --no-default-features");
+        }
+        if let Some(features) = &self.features {
+            selection.push_str(&format!(" --features {features}"));
+        }
+        selection.push_str(&format!(" -p {}", self.packages.join(" -p ")));
+        selection
+    }
+}
+
 #[derive(Debug)]
 struct ProductionSelection {
     root: PathBuf,
     targets: Vec<ProductionTarget>,
     excluded_packages: Vec<String>,
-    all_features: bool,
-    feature_names: Vec<String>,
 }
 
 impl ProductionSelection {
-    fn load(root: &Path) -> Result<Self> {
+    fn load(root: &Path, configuration: Option<&Configuration>) -> Result<Self> {
         let root = canonical_root(root)?;
         let output = Command::new("cargo")
             .args(["metadata", "--format-version", "1", "--no-deps"])
@@ -236,10 +309,15 @@ impl ProductionSelection {
             .ok_or_else(|| anyhow!("cargo metadata omitted packages"))?;
 
         let crates_root = root.join("crates");
+        let requested_packages = configuration.map(|configuration| {
+            configuration
+                .packages
+                .iter()
+                .map(|package| package.trim().to_owned())
+                .collect::<BTreeSet<_>>()
+        });
         let mut targets = Vec::new();
         let mut all_workspace_packages = Vec::new();
-        let mut all_features = false;
-        let mut feature_names = BTreeSet::new();
         for package in packages {
             let package_id = package
                 .get("id")
@@ -253,20 +331,11 @@ impl ProductionSelection {
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("cargo metadata package omitted name"))?;
             all_workspace_packages.push(package_name.to_owned());
-            let feature_map = package
-                .get("features")
-                .and_then(Value::as_object)
-                .ok_or_else(|| anyhow!("cargo metadata package omitted features"))?;
-            let package_has_nondefault_features = feature_map.keys().any(|name| name != "default");
-            // Cargo's `--features` accepts a union of names that exist in any
-            // selected package, so the workspace union is what the all-features
-            // pass enables apart from the excluded names.
-            feature_names.extend(
-                feature_map
-                    .keys()
-                    .filter(|name| name.as_str() != "default")
-                    .cloned(),
-            );
+            if let Some(requested) = &requested_packages {
+                if !requested.contains(package_name) {
+                    continue;
+                }
+            }
             let manifest = package
                 .get("manifest_path")
                 .and_then(Value::as_str)
@@ -291,7 +360,6 @@ impl ProductionSelection {
                     .get("name")
                     .and_then(Value::as_str)
                     .ok_or_else(|| anyhow!("cargo metadata target omitted name"))?;
-                all_features |= package_has_nondefault_features;
                 targets.push(ProductionTarget {
                     package_id: package_id.to_owned(),
                     package_name: package_name.to_owned(),
@@ -301,6 +369,24 @@ impl ProductionSelection {
             }
         }
 
+        if let (Some(configuration), Some(requested)) = (configuration, &requested_packages) {
+            let selected_package_names = targets
+                .iter()
+                .map(|target| target.package_name.as_str())
+                .collect::<HashSet<_>>();
+            let missing = requested
+                .iter()
+                .filter(|name| !selected_package_names.contains(name.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                bail!(
+                    "configuration `{}` names packages without production targets under crates/: {}",
+                    configuration.name,
+                    missing.join(", ")
+                );
+            }
+        }
         if targets.is_empty() {
             bail!("cargo metadata selected no production Cargo targets under crates/");
         }
@@ -317,8 +403,6 @@ impl ProductionSelection {
             root,
             targets,
             excluded_packages,
-            all_features,
-            feature_names: feature_names.into_iter().collect(),
         })
     }
 
@@ -378,105 +462,33 @@ fn command_detail(stdout: &[u8], stderr: &[u8]) -> String {
     String::from_utf8_lossy(stdout).trim().to_string()
 }
 
-/// Which Cargo feature selection one Clippy pass audits.
-#[derive(Clone, Copy, Debug)]
-enum FeaturePass<'a> {
-    /// The workspace's default features.
-    Default,
-    /// Every workspace feature, or every feature except the excluded names.
-    All(Option<&'a str>),
-}
-
-impl FeaturePass<'_> {
-    fn label(self) -> String {
-        match self {
-            Self::Default => "(default features)".to_owned(),
-            Self::All(None) => "(--all-features)".to_owned(),
-            Self::All(Some(features)) => format!("(--features {features})"),
-        }
-    }
-}
-
-/// Skip the second Clippy pass entirely.
-///
-/// Set to `1` when the workspace has no single buildable "all features"
-/// configuration, so only the default-feature pass runs. Record why in the
-/// repository that sets it; the audit no longer covers feature-gated code.
-const SKIP_ALL_FEATURES_ENV: &str = "T4A_PANIC_AUDIT_SKIP_ALL_FEATURES";
-
-fn skip_all_features() -> bool {
-    std::env::var(SKIP_ALL_FEATURES_ENV).is_ok_and(|value| value == "1")
-}
-
-/// Comma- or semicolon-separated workspace feature names to leave out of the
-/// `--all-features` pass.
-///
-/// A workspace whose features cannot all be enabled at once (for example
-/// mutually exclusive CPU backend features) lists the features that would make
-/// the single pass fail; every other workspace feature is still enabled, so a
-/// crate that needs a non-default feature to build keeps it.
-const EXCLUDED_FEATURES_ENV: &str = "T4A_PANIC_AUDIT_EXCLUDED_FEATURES";
-
-fn configured_excluded_features() -> Result<BTreeSet<String>> {
-    let Ok(raw) = std::env::var(EXCLUDED_FEATURES_ENV) else {
-        return Ok(BTreeSet::new());
-    };
-    let excluded = raw
-        .split([';', ','])
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-    if excluded.is_empty() {
-        bail!("{EXCLUDED_FEATURES_ENV} is set but lists no feature name");
-    }
-    Ok(excluded)
-}
-
-/// Every workspace feature except the excluded names, as one `--features` list.
-fn enabled_features(available: &[String], excluded: &BTreeSet<String>) -> Result<String> {
-    let unknown = excluded
-        .iter()
-        .filter(|name| !available.iter().any(|feature| feature == *name))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !unknown.is_empty() {
-        bail!(
-            "{EXCLUDED_FEATURES_ENV} names features this workspace does not define: {}",
-            unknown.join(", ")
-        );
-    }
-    let enabled = available
-        .iter()
-        .filter(|name| !excluded.contains(*name))
-        .cloned()
-        .collect::<Vec<_>>();
-    if enabled.is_empty() {
-        bail!("every workspace feature is excluded; nothing left to audit");
-    }
-    Ok(enabled.join(","))
-}
-
 fn run_clippy(
     selection: &ProductionSelection,
-    pass: FeaturePass<'_>,
+    configuration: Option<&Configuration>,
 ) -> Result<(BTreeSet<PathBuf>, BTreeSet<Finding>)> {
     let mut command = Command::new("cargo");
-    command.args(["clippy", "--workspace"]);
-    for package in &selection.excluded_packages {
-        command.args(["--exclude", package]);
+    command.arg("clippy");
+    match configuration {
+        Some(configuration) => {
+            for package in &configuration.packages {
+                command.args(["--package", package.trim()]);
+            }
+        }
+        None => {
+            command.arg("--workspace");
+            for package in &selection.excluded_packages {
+                command.args(["--exclude", package]);
+            }
+        }
     }
     command.args(["--lib", "--bins", "--message-format=json"]);
-    match pass {
-        FeaturePass::Default => {}
-        FeaturePass::All(features) => match features {
-            None => {
-                command.arg("--all-features");
-            }
-            Some(features) => {
-                command.args(["--features", features]);
-            }
-        },
+    if let Some(configuration) = configuration {
+        if configuration.no_default_features {
+            command.arg("--no-default-features");
+        }
+        if let Some(features) = &configuration.features {
+            command.args(["--features", features]);
+        }
     }
     command.args(["--"]);
     command.args(["-A", "clippy::all", "--cap-lints", "warn"]);
@@ -490,9 +502,10 @@ fn run_clippy(
     let output = command_output_with_timeout(&mut command, CLIPPY_TIMEOUT)
         .context("failed to execute cargo clippy")?;
     if !output.status.success() {
+        let label =
+            configuration.map_or_else(|| "(default features)".to_owned(), Configuration::label);
         bail!(
-            "cargo clippy {} failed: {}",
-            pass.label(),
+            "cargo clippy {label} failed: {}",
             command_detail(&output.stdout, &output.stderr)
         );
     }
@@ -2165,6 +2178,7 @@ fn build_report(
     baseline: &BTreeSet<Finding>,
     sanctioned: &BTreeSet<Finding>,
     invariant_calls: BTreeSet<(String, usize)>,
+    configuration: Option<&Configuration>,
 ) -> AuditReport {
     let actual = actual
         .difference(sanctioned)
@@ -2172,13 +2186,21 @@ fn build_report(
         .collect::<BTreeSet<_>>();
     let matched = baseline.intersection(&actual).cloned().collect::<Vec<_>>();
     let unbaselined = actual.difference(baseline).cloned().collect::<Vec<_>>();
-    let stale = baseline.difference(&actual).cloned().collect::<Vec<_>>();
+    // A configuration selects a subset of the workspace, so baseline entries
+    // outside that selection are expected to stay unmatched; only the default
+    // pass owns the completeness of the baseline.
+    let stale = if configuration.is_some() {
+        Vec::new()
+    } else {
+        baseline.difference(&actual).cloned().collect::<Vec<_>>()
+    };
     let forbidden_baseline = baseline
         .iter()
         .filter(|finding| RAW_KINDS.contains(&finding.kind.as_str()))
         .cloned()
         .collect::<Vec<_>>();
     AuditReport {
+        configuration: configuration.map(|configuration| configuration.name.clone()),
         matched,
         unbaselined,
         stale,
@@ -2188,23 +2210,14 @@ fn build_report(
     }
 }
 
-pub(crate) fn audit(root_arg: &Path, baseline_path: &Path) -> Result<AuditReport> {
-    let selection = ProductionSelection::load(root_arg)?;
+pub(crate) fn audit(
+    root_arg: &Path,
+    baseline_path: &Path,
+    configuration: Option<&Configuration>,
+) -> Result<AuditReport> {
+    let selection = ProductionSelection::load(root_arg, configuration)?;
     let baseline = load_baseline(baseline_path)?;
-    let (default_sources, mut actual) = run_clippy(&selection, FeaturePass::Default)?;
-    let mut source_files = default_sources;
-    if selection.all_features && !skip_all_features() {
-        let excluded = configured_excluded_features()?;
-        let features = if excluded.is_empty() {
-            None
-        } else {
-            Some(enabled_features(&selection.feature_names, &excluded)?)
-        };
-        let (all_feature_sources, all_feature_findings) =
-            run_clippy(&selection, FeaturePass::All(features.as_deref()))?;
-        source_files.extend(all_feature_sources);
-        actual.extend(all_feature_findings);
-    }
+    let (source_files, mut actual) = run_clippy(&selection, configuration)?;
     let scan = scan_sources(&selection.root, &source_files)?;
     actual.extend(scan.assertions);
     Ok(build_report(
@@ -2212,6 +2225,7 @@ pub(crate) fn audit(root_arg: &Path, baseline_path: &Path) -> Result<AuditReport
         &baseline,
         &scan.sanctioned_invariant_panics,
         scan.invariant_calls,
+        configuration,
     ))
 }
 
@@ -2220,29 +2234,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn enabled_features_drops_only_the_excluded_names() {
-        let available = ["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()];
-        let excluded = BTreeSet::from(["beta".to_owned()]);
-        assert_eq!(
-            enabled_features(&available, &excluded).unwrap(),
-            "alpha,gamma"
-        );
-        assert!(enabled_features(&available, &BTreeSet::new()).is_ok());
+    fn configuration_requires_a_name_and_a_package() {
+        let error = Configuration::new(String::new(), vec!["demo".to_owned()], false, None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("--config-name must not be empty"), "{error}");
+        let error = Configuration::new("system-blas".to_owned(), Vec::new(), false, None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("requires at least one --package"), "{error}");
+        let error = Configuration::new("system-blas".to_owned(), vec![" ".to_owned()], false, None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("--package must not be empty"), "{error}");
     }
 
     #[test]
-    fn enabled_features_rejects_unknown_or_complete_exclusions() {
-        let available = ["alpha".to_owned()];
-        let unknown = BTreeSet::from(["nope".to_owned()]);
-        let error = enabled_features(&available, &unknown)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("does not define"), "{error}");
-        let everything = BTreeSet::from(["alpha".to_owned()]);
-        let error = enabled_features(&available, &everything)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("nothing left"), "{error}");
+    fn configuration_rejects_empty_features_and_keeps_explicit_selection() {
+        let error = Configuration::new(
+            "diagnostics".to_owned(),
+            vec!["tensor4all-treetn".to_owned()],
+            true,
+            Some(" ".to_owned()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("--features must list"), "{error}");
+
+        let configuration = Configuration::new(
+            "system-blas".to_owned(),
+            vec!["tensor4all-core".to_owned(), "tensor4all-treetn".to_owned()],
+            true,
+            Some("tenferro-system-blas".to_owned()),
+        )
+        .unwrap();
+        assert_eq!(
+            configuration.label(),
+            "configuration `system-blas` --no-default-features \
+             --features tenferro-system-blas -p tensor4all-core -p tensor4all-treetn"
+        );
     }
     use serde_json::json;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2919,6 +2949,7 @@ pub fn nested_use() { assert!(true); }
             &BTreeSet::new(),
             &BTreeSet::from([sanctioned.clone()]),
             BTreeSet::new(),
+            None,
         );
         assert_eq!(report.sanctioned, vec![sanctioned]);
         assert_eq!(report.unbaselined, vec![extra]);
@@ -2937,6 +2968,7 @@ pub fn nested_use() { assert!(true); }
         let sanctioned =
             parse_entry("crates/tensor4all-tensorbackend/src/lib.rs:150:panic").expect("panic");
         let passing = AuditReport {
+            configuration: None,
             matched: Vec::new(),
             unbaselined: Vec::new(),
             stale: Vec::new(),
@@ -2946,6 +2978,7 @@ pub fn nested_use() { assert!(true); }
         };
         assert_eq!(passing.exit_code_and_print(), 0);
         let failing = AuditReport {
+            configuration: None,
             matched: Vec::new(),
             unbaselined: vec![parse_entry("crates/demo/src/lib.rs:1:assert").expect("new")],
             stale: Vec::new(),
@@ -2964,7 +2997,7 @@ pub fn nested_use() { assert!(true); }
         let new = parse_entry("crates/demo/src/lib.rs:4:unwrap").expect("new");
         let actual = [matched.clone(), new].into_iter().collect::<BTreeSet<_>>();
         let baseline = [matched, stale, raw].into_iter().collect::<BTreeSet<_>>();
-        let report = build_report(&actual, &baseline, &BTreeSet::new(), BTreeSet::new());
+        let report = build_report(&actual, &baseline, &BTreeSet::new(), BTreeSet::new(), None);
         assert_eq!(
             report.matched,
             vec![parse_entry("crates/demo/src/lib.rs:1:assert").unwrap()]
@@ -2984,5 +3017,31 @@ pub fn nested_use() { assert!(true); }
             report.forbidden_baseline,
             vec![parse_entry("crates/demo/src/lib.rs:3:panic").unwrap()]
         );
+    }
+
+    #[test]
+    fn configuration_selection_does_not_report_unmatched_baseline_entries() {
+        let matched = parse_entry("crates/demo/src/lib.rs:1:assert").expect("matched");
+        let out_of_selection = parse_entry("crates/demo/src/lib.rs:2:assert").expect("outside");
+        let actual = [matched.clone()].into_iter().collect::<BTreeSet<_>>();
+        let baseline = [matched, out_of_selection]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let configuration = Configuration::new(
+            "diagnostics".to_owned(),
+            vec!["tensor4all-treetn".to_owned()],
+            false,
+            Some("diagnostics".to_owned()),
+        )
+        .unwrap();
+        let report = build_report(
+            &actual,
+            &baseline,
+            &BTreeSet::new(),
+            BTreeSet::new(),
+            Some(&configuration),
+        );
+        assert!(report.stale.is_empty());
+        assert_eq!(report.configuration.as_deref(), Some("diagnostics"));
     }
 }
