@@ -274,7 +274,7 @@ alone establishes a correctness bug or resolves the real SGW workload.
 
 ```bash
 cd crates/tensor4all-itensorlike
-cargo run --release --example benchmark_contract
+cargo run --release -p tensor4all-itensorlike --example benchmark_contract
 ```
 
 Projected local-operator apply:
