@@ -16,8 +16,8 @@ name: Feature matrix
 
 on:
   schedule:
-    # 20:00 UTC = 05:00 JST, after heavy-tests.yml (18:00) and coverage.yml
-    # (19:00); the nightly jobs do not contend for the same runner minutes.
+    # 20:00 UTC = 05:00 JST, staggered after heavy-tests.yml (18:00) and
+    # coverage.yml (19:00).
     - cron: "0 20 * * *"
   workflow_dispatch:
 
@@ -43,7 +43,7 @@ jobs:
           # System BLAS: the alternate CPU backend. HDF5 needs `link` named
           # explicitly once default features are off.
           - name: system-blas
-            apt: libopenblas-dev
+            apt: libopenblas-dev libhdf5-dev
             audit: true
             check: |
               -p tensor4all-core -p tensor4all-tensorbackend -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-partitionedtt -p tensor4all-capi --no-default-features --features tenferro-system-blas,tensor4all-treetn/simplett-bridge,tensor4all-treersi/global-defaults
@@ -52,7 +52,7 @@ jobs:
           # Check-only is enough: compiling tests does not run them, so no
           # provider has to be registered.
           - name: provider-inject
-            apt: ""
+            apt: libhdf5-dev
             audit: true
             check: |
               -p tensor4all-core -p tensor4all-tensorbackend -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-partitionedtt -p tensor4all-capi --no-default-features --features tenferro-provider-inject,tensor4all-treetn/simplett-bridge,tensor4all-treersi/global-defaults
@@ -77,9 +77,9 @@ jobs:
             check: >
               -p tensor4all-hdf5 --no-default-features
               --features runtime-loading,tenferro-cpu-faer
-          # CUDA: compile-only. The ubuntu-22.04 runner image ships the CUDA
-          # toolkit and `cargo check` links nothing, so no GPU is required.
-          # CUDA *execution* is verified locally on a GPU only.
+          # CUDA: compile-only (tenferro loads CUDA dynamically, so no GPU or
+          # toolkit is needed to check). CUDA *execution* is verified locally
+          # on a GPU only.
           - name: cuda
             apt: ""
             audit: false

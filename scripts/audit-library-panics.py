@@ -160,11 +160,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config-name")
     parser.add_argument("--package", "-p", action="append", default=[])
     parser.add_argument("--no-default-features", action="store_true")
-    parser.add_argument("--features")
+    parser.add_argument("--features", action="append")
     args = parser.parse_args(argv)
 
     configuration_flags = bool(
-        args.package or args.no_default_features or args.features is not None
+        args.package or args.no_default_features or args.features
     )
     if configuration_flags and not args.config_name:
         print(
@@ -194,8 +194,9 @@ def main(argv: list[str] | None = None) -> int:
         command += ["--package", package]
     if args.no_default_features:
         command.append("--no-default-features")
-    if args.features is not None:
-        command += ["--features", args.features]
+    if args.features:
+        # Cargo combines repeated --features; pass one combined selection.
+        command += ["--features", ",".join(args.features)]
     try:
         result = subprocess.run(
             command,

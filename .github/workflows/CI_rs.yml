@@ -248,8 +248,8 @@ jobs:
         # baseline. tenferro-rs #2004 made the CPU backend features mutually
         # exclusive, so there is no buildable `--all-features` pass; the
         # supported non-default configurations (system BLAS, provider injection,
-        # MPI, diagnostics, HDF5 runtime loading, CUDA) are checked and audited
-        # nightly by .github/workflows/feature-matrix.yml (CONTRIBUTING.md,
+        # MPI, diagnostics, HDF5 runtime loading) are checked and audited, and
+        # CUDA compile-checked, nightly by .github/workflows/feature-matrix.yml (CONTRIBUTING.md,
         # "Supported feature configurations").
         timeout-minutes: 40
         run: python3 scripts/audit-library-panics.py

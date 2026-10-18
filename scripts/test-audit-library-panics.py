@@ -40,6 +40,7 @@ path = "src/shared.rs"
 [features]
 default = []
 production = []
+unrelated = []
 """
 
 FIXTURE_LIB = r'''#![allow(dead_code)]
@@ -441,15 +442,37 @@ def test_configuration_selection_audits_its_feature_selection() -> None:
     assert "Audit configuration: `production`" in result.stdout
     assert "Stale baseline:" not in result.stdout
     # Feature-gated production paths are visible only in this configuration.
-    assert (
-        f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    panic!("all-features production");')}:panic"
-        in result.stdout
-    )
+    production_line = _line(FIXTURE_LIB, '    panic!("all-features production");')
+    assert f"crates/demo/src/lib.rs:{production_line}:panic" in result.stdout
     # `cfg_attr` swaps the `selected` module for its feature-selected path.
     assert (
         f"crates/demo/src/feature_selected.rs:{_line(FIXTURE_FEATURE_SELECTED, 'assert!(true);')}:assert"
         in result.stdout
     )
+
+
+def test_configuration_selection_combines_repeated_features() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_fixture(fixture)
+        # Cargo combines repeated --features; the wrapper must not keep only
+        # the last one, or `production` would silently go unaudited here.
+        result = _run_audit(
+            fixture,
+            configuration=[
+                "--config-name",
+                "production",
+                "--package",
+                "demo",
+                "--features",
+                "production",
+                "--features",
+                "unrelated",
+            ],
+        )
+    assert result.returncode == 1, result.stderr
+    production_line = _line(FIXTURE_LIB, '    panic!("all-features production");')
+    assert f"crates/demo/src/lib.rs:{production_line}:panic" in result.stdout
 
 
 def test_configuration_selection_requires_a_name_and_known_packages() -> None:
@@ -868,6 +891,7 @@ def main() -> int:
     tests = [
         test_dep_info_selects_each_production_source_once,
         test_configuration_selection_audits_its_feature_selection,
+        test_configuration_selection_combines_repeated_features,
         test_configuration_selection_requires_a_name_and_known_packages,
         test_unknown_cfg_assertion_is_included_conservatively,
         test_comment_and_rustdoc_assertion_text_is_excluded,
