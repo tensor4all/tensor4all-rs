@@ -25,7 +25,7 @@ type SplitBoundaryIndices<V, TargetV, I> = HashMap<V, HashMap<TargetV, HashSet<I
 ///
 /// For tree graphs, the Steiner tree is the union of unique shortest paths
 /// from one terminal node to every other terminal node.
-fn steiner_tree_indices<T: TensorLike>(
+pub(super) fn steiner_tree_indices<T: TensorLike>(
     graph: &StableGraph<T, T::Index, petgraph::Undirected>,
     terminals: &HashSet<NodeIndex>,
 ) -> HashSet<NodeIndex> {
@@ -46,7 +46,10 @@ fn steiner_tree_indices<T: TensorLike>(
     result
 }
 
-fn canonical_node_pair<NodeName>(left: &NodeName, right: &NodeName) -> (NodeName, NodeName)
+pub(super) fn canonical_node_pair<NodeName>(
+    left: &NodeName,
+    right: &NodeName,
+) -> (NodeName, NodeName)
 where
     NodeName: Clone + Ord,
 {
@@ -57,7 +60,7 @@ where
     }
 }
 
-fn choose_site_free_absorption_target<NodeName>(
+pub(super) fn choose_site_free_absorption_target<NodeName>(
     neighbor_targets: &HashSet<NodeName>,
     target_edges: &HashSet<(NodeName, NodeName)>,
 ) -> Option<NodeName>

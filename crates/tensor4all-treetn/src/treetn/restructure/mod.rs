@@ -22,6 +22,9 @@ use anyhow::{bail, Context, Result};
 use petgraph::stable_graph::NodeIndex;
 use tensor4all_core::{IndexLike, TensorLike};
 
+use super::transform::{
+    canonical_node_pair, choose_site_free_absorption_target, steiner_tree_indices,
+};
 use super::TreeTN;
 use crate::error::TreeTNOperationError;
 use crate::{RestructureOptions, SiteIndexNetwork};
@@ -830,66 +833,6 @@ where
     Ok(Some(assignment))
 }
 
-fn steiner_tree_indices<T, V>(
-    graph: &NamedGraph<V, T, T::Index>,
-    terminals: &HashSet<NodeIndex>,
-) -> HashSet<NodeIndex>
-where
-    T: TensorLike,
-    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
-{
-    if terminals.len() <= 1 {
-        return terminals.clone();
-    }
-
-    let terms: Vec<_> = terminals.iter().copied().collect();
-    let root = terms[0];
-    let mut result = HashSet::from([root]);
-    for &term in &terms[1..] {
-        if let Some((_, path)) = petgraph::algo::astar(
-            graph.graph(),
-            root,
-            |node| node == term,
-            |_| 1usize,
-            |_| 0usize,
-        ) {
-            result.extend(path);
-        }
-    }
-    result
-}
-
-fn canonical_node_pair<NodeName>(left: &NodeName, right: &NodeName) -> (NodeName, NodeName)
-where
-    NodeName: Clone + Ord,
-{
-    if left <= right {
-        (left.clone(), right.clone())
-    } else {
-        (right.clone(), left.clone())
-    }
-}
-
-fn choose_site_free_absorption_target<NodeName>(
-    neighbor_targets: &HashSet<NodeName>,
-    target_edges: &HashSet<(NodeName, NodeName)>,
-) -> Option<NodeName>
-where
-    NodeName: Clone + Hash + Eq + Ord,
-{
-    if neighbor_targets.is_empty() {
-        return None;
-    }
-
-    let mut candidates = neighbor_targets.iter().cloned().collect::<Vec<_>>();
-    candidates.sort();
-    candidates.into_iter().find(|candidate| {
-        neighbor_targets.iter().all(|other| {
-            candidate == other || target_edges.contains(&canonical_node_pair(candidate, other))
-        })
-    })
-}
-
 fn target_quotient_matches_topology<T, CurrentV, TargetV>(
     current: &SiteIndexNetwork<CurrentV, T::Index>,
     target: &SiteIndexNetwork<TargetV, T::Index>,
@@ -948,7 +891,7 @@ where
         if seed_indices.len() <= 1 {
             continue;
         }
-        for idx in steiner_tree_indices(full_graph, &seed_indices) {
+        for idx in steiner_tree_indices(full_graph.graph(), &seed_indices) {
             let Some(name) = full_graph.node_name(idx) else {
                 continue;
             };
