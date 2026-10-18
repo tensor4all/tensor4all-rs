@@ -134,19 +134,9 @@ the embedding target's own link flags.
 `runtime-loading,tenferro-cpu-faer`. Its integration tests use the
 link-time `hdf5-metno` API and therefore run only in a `link` build.
 
-Supported configurations and where they are verified:
-
-| configuration | verification |
-| --- | --- |
-| default features (`tenferro-cpu-faer`, plus route/I/O defaults) | hosted CI and the ordinary local gate |
-| `--no-default-features --features tenferro-system-blas` | local `cargo check --all-targets` for every compute crate (add the non-provider defaults the test targets need: `simplett-bridge` for `tensor4all-treetn`, `global-defaults` for `tensor4all-treersi`); the `tensor4all-simplett` test suite also links and runs the system BLAS |
-| `--no-default-features --features tenferro-provider-inject` | local `cargo check --all-targets` for every compute crate, with the same non-provider defaults as above |
-| `tenferro-cuda` (where exposed) | explicit CUDA checks/tutorials; not part of the default CI job |
-| `explicit-context,tenferro-cpu-faer` on `tensor4all-tensorbackend` | hosted CI |
-
-The hosted CI workflow is authoritative for which configurations it currently
-builds; the remaining rows above are the supported matrix that must be checked
-locally when changing a provider feature or a feature-forwarding dependency.
+The supported configurations, their exact Cargo selections, and where each is
+verified (PR CI, the nightly feature matrix, or locally) are declared in
+[CONTRIBUTING.md, "Supported feature configurations"](../../CONTRIBUTING.md#supported-feature-configurations).
 The per-crate feature inventory, including which crates expose which route
 features, is in [859-f7-consumer-inventory.md](./859-f7-consumer-inventory.md).
 

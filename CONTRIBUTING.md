@@ -153,8 +153,8 @@ with their default features.
 |---|---|---|
 | default | Each crate's default features | PR CI Test, Doctests, and Lint (`cargo clippy --workspace --all-targets`); PR CI panic audit; nightly heavy-tests |
 | explicit-context | `-p tensor4all-tensorbackend --no-default-features --features explicit-context,tenferro-cpu-faer` | PR CI Lint (`Check explicit-context-only build`) |
-| system-blas | Every compute crate with `--no-default-features --features tenferro-system-blas`; HDF5 with `link,tenferro-system-blas` | Nightly `.github/workflows/feature-matrix.yml`, including a panic audit |
-| provider-inject | Every compute crate with `--no-default-features --features tenferro-provider-inject`; HDF5 with `link,tenferro-provider-inject` | Nightly feature matrix, including a panic audit |
+| system-blas | Every compute crate with `--no-default-features --features tenferro-system-blas` (plus `tensor4all-treetn/simplett-bridge` and `tensor4all-treersi/global-defaults`, which their test targets need); HDF5 with `link,tenferro-system-blas` | Nightly `.github/workflows/feature-matrix.yml`, including a panic audit |
+| provider-inject | Every compute crate with `--no-default-features --features tenferro-provider-inject` (plus `tensor4all-treetn/simplett-bridge` and `tensor4all-treersi/global-defaults`, which their test targets need); HDF5 with `link,tenferro-provider-inject` | Nightly feature matrix, including a panic audit |
 | mpi | `-p tensor4all-partitionedtt --features adaptive-hataori-mpi` (it implies the rayon path) | Nightly feature matrix, including a panic audit |
 | diagnostics | `-p tensor4all-treetn -p tensor4all-treeaci --features diagnostics` | Nightly feature matrix, including a panic audit |
 | hdf5-runtime-loading | `-p tensor4all-hdf5 --no-default-features --features runtime-loading,tenferro-cpu-faer` | Nightly feature matrix, including a panic audit |
