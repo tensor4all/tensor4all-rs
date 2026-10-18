@@ -42,6 +42,13 @@ heavy test:
   files nightly (`-E 'test(/^heavy_/)' --run-ignored ignored-only`), builds every
   target for the compile check, and opens or updates a `ci-nightly` issue when it fails.
 
+Non-default feature configurations (system BLAS, provider injection, MPI,
+diagnostics, HDF5 runtime loading, CUDA) cannot share the default build, so they
+run in [`.github/workflows/feature-matrix.yml`](.github/workflows/feature-matrix.yml)
+nightly, also outside this budget and with its own bound per configuration. See
+[Supported feature configurations](#supported-feature-configurations) for the
+declared matrix.
+
 Run the heavy suite locally with:
 
 ```bash
@@ -131,6 +138,41 @@ python3 scripts/audit-library-panics.py
 python3 scripts/check-public-error-docs.py
 python3 scripts/check-crate-boundaries.py
 ```
+
+### Supported feature configurations
+
+Cargo features here are not additive: `tenferro-cpu-faer` and
+`tenferro-system-blas` are mutually exclusive CPU backends (tenferro-rs #2004),
+so `--all-features` is not a valid build target. The repository declares the
+configurations below and builds or audits exactly these. A configuration selects
+its packages explicitly; `--workspace --no-default-features` is never used,
+because the guide, tutorial, and benchmark packages are documented and built
+with their default features.
+
+| Configuration | Cargo selection | Verified by |
+|---|---|---|
+| default | Each crate's default features | PR CI Test, Doctests, and Lint (`cargo clippy --workspace --all-targets`); PR CI panic audit; nightly heavy-tests |
+| explicit-context | `-p tensor4all-tensorbackend --no-default-features --features explicit-context,tenferro-cpu-faer` | PR CI Lint (`Check explicit-context-only build`) |
+| system-blas | Every compute crate with `--no-default-features --features tenferro-system-blas`; HDF5 with `link,tenferro-system-blas` | Nightly `.github/workflows/feature-matrix.yml`, including a panic audit |
+| provider-inject | Every compute crate with `--no-default-features --features tenferro-provider-inject`; HDF5 with `link,tenferro-provider-inject` | Nightly feature matrix, including a panic audit |
+| mpi | `-p tensor4all-partitionedtt --features adaptive-hataori-mpi` (it implies the rayon path) | Nightly feature matrix, including a panic audit |
+| diagnostics | `-p tensor4all-treetn -p tensor4all-treeaci --features diagnostics` | Nightly feature matrix, including a panic audit |
+| hdf5-runtime-loading | `-p tensor4all-hdf5 --no-default-features --features runtime-loading,tenferro-cpu-faer` | Nightly feature matrix, including a panic audit |
+| cuda | `-p tensor4all-core -p tensor4all-treetn --features tenferro-cuda` | Nightly feature matrix, compile only; CUDA execution is verified locally on a GPU only |
+
+The PR CI panic audit compares the default configuration against
+`scripts/library-panics-baseline.json`. A non-default configuration reuses that
+baseline as an allowlist and does not report unmatched entries as stale, because
+it selects a subset of the workspace; pass `--config-name NAME --package ...`
+with the Cargo selection flags to audit one configuration:
+
+```bash
+python3 scripts/audit-library-panics.py --config-name diagnostics \
+  -p tensor4all-treetn -p tensor4all-treeaci --features diagnostics
+```
+
+Adding a supported feature configuration means adding it to the matrix in
+`.github/workflows/feature-matrix.yml` and to this table.
 
 ### Build artifacts
 
