@@ -42,8 +42,6 @@ rand_chacha.workspace = true
 criterion.workspace = true
 rand_chacha.workspace = true
 approx.workspace = true
-tenferro.workspace = true
-tenferro-ad.workspace = true
 tenferro-cpu.workspace = true
 
 [[bench]]

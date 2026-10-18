@@ -5446,6 +5446,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "tensor4all-benchmarks"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "num-complex 0.4.6",
+ "rand 0.9.5",
+ "rand_chacha 0.9.0",
+ "serde_json",
+ "tenferro-ad",
+ "tenferro-cpu",
+ "tenferro-runtime",
+ "tensor4all-core",
+ "tensor4all-hdf5",
+ "tensor4all-itensorlike",
+ "tensor4all-partitionedtreetn",
+ "tensor4all-partitionedtt",
+ "tensor4all-quanticstransform",
+ "tensor4all-simplett",
+ "tensor4all-tensorbackend",
+ "tensor4all-tensorci",
+ "tensor4all-treeaci",
+ "tensor4all-treetci",
+ "tensor4all-treetn",
+]
+
+[[package]]
 name = "tensor4all-capi"
 version = "0.2.0"
 dependencies = [
@@ -5528,9 +5554,7 @@ dependencies = [
  "petgraph",
  "rand 0.9.5",
  "rand_chacha 0.9.0",
- "tenferro-ad",
  "tenferro-cpu",
- "tenferro-runtime",
  "tensor4all-core",
  "tensor4all-tensorbackend",
  "tensor4all-treetn",

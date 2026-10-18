@@ -1,7 +1,7 @@
 // Adaptive PartitionedTT patching benchmark.
 //
 // Run:
-//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-partitionedtt --example benchmark_patching --release
+//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_patching --release
 //
 // Optional args:
 //   --x N
@@ -17,8 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_partitionedtt::{
-    add_with_patching, PartitionedTT, PatchSplitStrategy, PatchingOptions, SubDomainTT,
-    TensorTrain,
+    add_with_patching, PartitionedTT, PatchSplitStrategy, PatchingOptions, SubDomainTT, TensorTrain,
 };
 
 #[derive(Debug, Clone)]
@@ -90,7 +89,12 @@ fn main() -> Result<()> {
         &[input.x_index.clone(), input.y_index.clone()],
     );
 
-    run_case("sequential_xy", &input, &sequential_options, options.repeats)?;
+    run_case(
+        "sequential_xy",
+        &input,
+        &sequential_options,
+        options.repeats,
+    )?;
     run_case("exact_gain", &input, &exact_gain_options, options.repeats)?;
 
     Ok(())
@@ -187,8 +191,7 @@ fn run_case(
     let mut best: Option<BenchmarkResult> = None;
     for _ in 0..repeats {
         let started = Instant::now();
-        let patched =
-            add_with_patching(vec![SubDomainTT::from_tt(input.tt.clone())], options)?;
+        let patched = add_with_patching(vec![SubDomainTT::from_tt(input.tt.clone())], options)?;
         let elapsed = started.elapsed();
         let result = summarize_result(strategy_name, input, black_box(&patched), elapsed)?;
         if best

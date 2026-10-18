@@ -1,7 +1,7 @@
 // Merge-refine schedule and greedy-reconstruction comparison for issue #752.
 //
-// The body is included by
-// `crates/tensor4all-partitionedtreetn/examples/benchmark_merge_refine.rs`.
+// The harness is the `benchmark_merge_refine` example of the
+// `tensor4all-benchmarks` package.
 // Protocol notes are in `benchmarks/README.md`.
 use std::error::Error;
 use std::hint::black_box;
@@ -14,9 +14,7 @@ use tensor4all_partitionedtreetn::{
     reconstruction::*, PartitionedTreeTN, Projector, SubDomainTreeTN, TreeTN,
 };
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
-use tensor4all_treetn::{
-    apply_linear_operator_to_indices, ApplyOptions, LinearOperator,
-};
+use tensor4all_treetn::{apply_linear_operator_to_indices, ApplyOptions, LinearOperator};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 /// Operator true-index to state-index bindings for one side of the operator.
@@ -101,10 +99,7 @@ impl Case {
 
     /// Apply the complete transform to the whole input at once: the baseline the
     /// schedule avoids, since it materializes the global output rank.
-    fn sum_then_transform(
-        &self,
-        reference: &(Vec<DynIndex>, Vec<Complex64>),
-    ) -> Result<Value> {
+    fn sum_then_transform(&self, reference: &(Vec<DynIndex>, Vec<Complex64>)) -> Result<Value> {
         let (inputs, outputs) = self.mappings();
         let (elapsed, applied) = median_time(REPEATS, || {
             let applied = apply_linear_operator_to_indices(
@@ -192,7 +187,10 @@ impl Case {
                 &self.operator,
                 &self.sites,
                 &SubsetOperatorOptions { unitary: true },
-                ReconstructionTolerance { rtol: RTOL, atol: 0.0 },
+                ReconstructionTolerance {
+                    rtol: RTOL,
+                    atol: 0.0,
+                },
                 options,
             )?;
             Ok(result)
@@ -214,7 +212,10 @@ impl Case {
             let result = reconstruct(
                 &target,
                 &0,
-                ReconstructionTolerance { rtol: RTOL, atol: 0.0 },
+                ReconstructionTolerance {
+                    rtol: RTOL,
+                    atol: 0.0,
+                },
                 &ReconstructionOptions {
                     target_bond_dim: Some(GOAL),
                     ..Default::default()
@@ -379,9 +380,10 @@ fn dyadic_input_leaves(
     let full = SubDomainTreeTN::from_treetn(tree.clone())?;
     let mut leaves = Vec::with_capacity(1usize << sites.len());
     for leaf in 0..1usize << sites.len() {
-        let pairs = sites.iter().enumerate().map(|(position, site)| {
-            (site.clone(), (leaf >> (sites.len() - 1 - position)) & 1)
-        });
+        let pairs = sites
+            .iter()
+            .enumerate()
+            .map(|(position, site)| (site.clone(), (leaf >> (sites.len() - 1 - position)) & 1));
         let projector = Projector::from_pairs(pairs)?;
         leaves.push(full.project(&projector)?.ok_or("zero input leaf")?);
     }

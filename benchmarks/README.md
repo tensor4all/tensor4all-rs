@@ -4,8 +4,12 @@ This directory contains benchmark code for comparing Rust and Julia implementati
 
 ## Structure
 
-- `rust/`: shared Rust benchmark bodies. Prefer putting reusable benchmark
-  source here, then include it from a thin crate example.
+- `rust/`: the `tensor4all-benchmarks` package. Every Rust performance
+  harness is an `[[example]]` target of that package; add new harnesses there
+  as examples instead of including them from a library crate's `examples/`.
+  Two features are opt-in: `diagnostics` (TreeACI branch counters, used by
+  `benchmark_branch_cost`) and `hdf5` (`inspect_mps_inputs`). Every other
+  harness runs with the default feature set.
 - `julia/`: Julia benchmark code using `ITensors.jl`, `ITensorMPS.jl`, or
   `AlternatingCrossInterpolation.jl`.
 - `results/`: saved benchmark commands and representative local outputs.
@@ -28,12 +32,11 @@ complete transform to the whole input at once. It records the schedule's structu
 counters (applications, additions, projections, compressions, per-level items,
 refinement stops), the retained and transient ranks, stored parameters, elapsed
 time, the measured bound, and the deviation from the dense exact trajectory. The
-body lives in `rust/benchmark_merge_refine.rs` and is included by
-`crates/tensor4all-partitionedtreetn/examples/benchmark_merge_refine.rs`.
+body lives in `rust/benchmark_merge_refine.rs`.
 
 ```bash
 T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
-  cargo build --release -p tensor4all-partitionedtreetn --example benchmark_merge_refine
+  cargo build --release -p tensor4all-benchmarks --example benchmark_merge_refine
 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_merge_refine
 ```
@@ -55,15 +58,16 @@ physical dimensions and are excluded from the hub fit.
 
 Build release binaries at the baseline and candidate revisions with the same
 benchmark source and lockfile. The benchmark lives in
-`rust/benchmark_treeaci_branch_cost.rs`, included by the TreeACI example. Add
-the workspace `serde_json` dev-dependency when using a baseline predating this
-example. Supply each revision via `T4A_BENCH_GIT_COMMIT` at build time, and keep
+`rust/benchmark_treeaci_branch_cost.rs`; the `diagnostics` feature of
+`tensor4all-benchmarks` enables the TreeACI branch counters, so a baseline
+predating the counters builds without it. Supply each revision via
+`T4A_BENCH_GIT_COMMIT` at build time, and keep
 each executable in a distinct path. First measure noise by passing the same
 feature-disabled baseline binary as both sides:
 
 ```bash
 T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
-  cargo build --release -p tensor4all-treeaci --example benchmark_branch_cost
+  cargo build --release -p tensor4all-benchmarks --example benchmark_branch_cost
 python3 scripts/run-treeaci-branch-cost.py \
   --baseline /path/to/baseline --candidate /path/to/baseline \
   --baseline-commit BASELINE_HASH --candidate-commit BASELINE_HASH \
@@ -127,8 +131,7 @@ spectral function `eta / ((e - mu)^2 + eta^2)` of a three-dimensional
 tight-binding band `e = -2 (cos 2 pi x + cos 2 pi y + cos 2 pi z)` on `bits`
 quantics bits per variable, on an interleaved chain (`chain`) or on a tree whose
 site-free root of degree three carries one arm per variable (`tree`). The
-shared body is in `rust/benchmark_tree_patch_representation.rs` and the crate
-example is a thin include. Modes:
+body is `rust/benchmark_tree_patch_representation.rs`. Modes:
 
 - `calibrate <chain|tree> <bits> <eta> <cap>`: one monolithic TreeTCI run, to
   find parameters whose unpatched rank is realistic;
@@ -154,7 +157,7 @@ agree; and the results of `truncate` and `add` are compared the same way.
 
 ```bash
 T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
-  cargo build --release -p tensor4all-partitionedtreetn \
+  cargo build --release -p tensor4all-benchmarks \
     --example benchmark_tree_patch_representation
 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 MKL_NUM_THREADS=1 BLAS_NUM_THREADS=1 \
@@ -174,11 +177,10 @@ runner has been committed yet (M4 is deferred; see the roadmap).
 chosen order and runs one uncapped TreeTCI per resulting patch, on chains and
 branched trees. It is an exploratory study, not a run of the adaptive pQTCI
 driver and not a comparison of split selectors. The source lives in
-`rust/benchmark_m5_fixed_depth_partition.rs`, included by the
-PartitionedTreeTN example of the same name.
+`rust/benchmark_m5_fixed_depth_partition.rs`.
 
 ```bash
-cargo run --release -p tensor4all-partitionedtreetn \
+cargo run --release -p tensor4all-benchmarks \
   --example benchmark_m5_fixed_depth_partition -- \
   ridge tree 8 0.03 0,1,2,3,4,5,6 msb 16 20
 ```
@@ -197,7 +199,7 @@ the quantities that must be identical between two builds for the timings to be
 compared at matched accuracy: function evaluations, rank and error histories
 (error bit patterns), a fingerprint of every pivot set of the run, and the
 sampled error of the result on 2000 `ChaCha8Rng` points. The body lives in
-`rust/benchmark_treetci_global_search.rs`, included by the TreeTCI example.
+`rust/benchmark_treetci_global_search.rs`.
 Build it at the baseline and candidate revisions and keep the binaries apart:
 
 For correctness repairs that change the search algorithm, trajectories may
@@ -208,7 +210,7 @@ uses this protocol; it does not attribute timing differences solely to readout.
 
 ```bash
 T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
-  cargo build --release -p tensor4all-treetci --example benchmark_global_search
+  cargo build --release -p tensor4all-benchmarks --example benchmark_global_search
 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_global_search [case]
 ```
@@ -230,10 +232,13 @@ materialization and cache drop. See the
 correctness checks, confidence intervals and acceptance gates.
 
 ```bash
-cargo build --release -p tensor4all-treetci --features tensor4all-core/default --example benchmark_memo
+cargo build --release -p tensor4all-benchmarks --example benchmark_memo
 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_memo memo
 ```
+
+The benchmark package depends on `tensor4all-core` with its default features, so
+the former `--features tensor4all-core/default` is implied by every target here.
 
 The [2026-10-09 scalar frame-builder report](results/2026-10-09-scalar-frame-batch-layout.md)
 uses the same 120-case protocol for batch-local axis metadata reuse (#686).
@@ -275,13 +280,13 @@ cargo run --release --example benchmark_contract
 Projected local-operator apply:
 
 ```bash
-RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_projected_apply --release -- 38 32 32 3 0
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_projected_apply --release -- 38 32 32 3 0
 ```
 
 Prepared local linsolve:
 
 ```bash
-RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_local_linsolve --release -- 38 32 32 1 10 30 0
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_local_linsolve --release -- 38 32 32 1 10 30 0
 ```
 
 ### SRC performance gates
@@ -337,7 +342,7 @@ when converting an `OpSum` to a TTN. The Rust benchmark runs all requested
 sweeps, without sweep-to-sweep energy early stopping:
 
 ```bash
-RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_dmrg --release -- 8 4 3
+RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_dmrg --release -- 8 4 3
 ```
 
 Two-site TreeTN TDVP against the same Pauli Heisenberg Hamiltonian on chain and
@@ -350,7 +355,7 @@ control mechanisms. It performs one untimed TDVP warm-up per topology and
 reports runtime plus L2 error against a small dense exact evolution reference:
 
 ```bash
-RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_tdvp --release -- 8 4 3 0.02
+RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tdvp --release -- 8 4 3 0.02
 ```
 
 Append `all`, `chain`, or `star` to the Rust command to run both topologies or
@@ -359,13 +364,13 @@ only one topology in a fresh process.
 Non-AD local tensor operations:
 
 ```bash
-RAYON_NUM_THREADS=1 cargo run -p tensor4all-core --example benchmark_tensor_ops --release -- 20000 6 2 2 6
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tensor_ops --release -- 20000 6 2 2 6
 ```
 
 TensorTrain-level operations against ITensorMPS:
 
 ```bash
-RAYON_NUM_THREADS=1 cargo run -p tensor4all-itensorlike --example benchmark_tt_ops --release -- --L 32 --zipup-L 10 --chis 4,8,16,32,64
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tt_ops --release -- --L 32 --zipup-L 10 --chis 4,8,16,32,64
 ```
 
 PartitionedTT adaptive patching on a deterministic sum of randomly placed
@@ -375,7 +380,7 @@ against the exact child-parameter-gain ordering at the same global `rtol` and
 bond dimension, dense-reference relative error, and best elapsed time:
 
 ```bash
-RAYON_NUM_THREADS=1 cargo run -p tensor4all-partitionedtt --example benchmark_patching --release -- --x 24 --y 16 --components 10 --max-bond-dim 3 --rtol 1e-8 --repeats 3
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_patching --release -- --x 24 --y 16 --components 10 --max-bond-dim 3 --rtol 1e-8 --repeats 3
 ```
 
 ACI elementwise TT chi scaling:
@@ -448,7 +453,7 @@ env \
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 T4A_MATRIX_LU_REPEATS=20 T4A_MATRIX_LU_SIZES=16,32,64,128 \
-cargo run --release -p tensor4all-core --example benchmark_matrix_lu
+cargo run --release -p tensor4all-benchmarks --example benchmark_matrix_lu
 ```
 
 MatrixLU itself does not call BLAS, so no system-BLAS feature is required for
@@ -457,7 +462,7 @@ this standalone runner.
 Inspect Julia-dumped local linsolve inputs:
 
 ```bash
-cargo run -p tensor4all-hdf5 --example inspect_mps_inputs --release -- benchmarks/results/local_linsolve_inputs_N38_b32_o32.h5
+cargo run -p tensor4all-benchmarks --features hdf5 --example inspect_mps_inputs --release -- benchmarks/results/local_linsolve_inputs_N38_b32_o32.h5
 ```
 
 ### Julia
@@ -574,8 +579,8 @@ Both benchmarks perform MPO-MPO contraction using zip-up algorithm:
 
 The projected local-operator apply benchmarks isolate the local matvec hot path
 used by two-site TreeTN/ITensor-style local solves. The Rust source of truth is
-`benchmarks/rust/benchmark_projected_apply.rs`, included by the cargo example
-target under `tensor4all-treetn`; the Julia counterpart is
+`benchmarks/rust/benchmark_projected_apply.rs` (the `tensor4all-benchmarks`
+example of the same name); the Julia counterpart is
 `benchmarks/julia/benchmark_projected_apply.jl`.
 
 The prepared local linsolve benchmarks construct the operator, right-hand side,
@@ -595,8 +600,8 @@ The TensorTrain-level operation benchmarks compare tensor4all's
 contraction against ITensorMPS.jl. They use deterministic Complex64 fixtures and
 print CSV-style rows with sample counts, min/median/mean/max milliseconds,
 result max bond dimension, and a checksum. The Rust source of truth is
-`benchmarks/rust/benchmark_tt_ops.rs`, included by
-`tensor4all-itensorlike/examples/benchmark_tt_ops.rs`; the Julia counterpart is
+`benchmarks/rust/benchmark_tt_ops.rs`, the `tensor4all-benchmarks` example of
+the same name; the Julia counterpart is
 `benchmarks/julia/benchmark_tt_ops.jl`.
 
 The ACI elementwise benchmarks compare `tensor4all_aci::elementwise_batched`
@@ -620,8 +625,8 @@ test runs by using the ignored Rust test and the standalone Julia script.
 
 The MatrixLU standalone Hilbert benchmarks isolate `rrlu_mut` and `rrlu`
 without MatrixLUCI factor wrappers. The Rust source of truth is
-`benchmarks/rust/benchmark_matrix_lu.rs`, included by
-`tensor4all-core/examples/benchmark_matrix_lu.rs`; the Julia counterpart is
+`benchmarks/rust/benchmark_matrix_lu.rs`, the `tensor4all-benchmarks` example
+of the same name; the Julia counterpart is
 `benchmarks/julia/benchmark_matrix_lu.jl`.
 
 `dump_local_linsolve_inputs.jl` writes the prepared local operator as

@@ -1,10 +1,10 @@
 // Benchmark isolated `ProjectedOperator::apply` calls for mapped MPO local solves.
 //
 // Run:
-//   cargo run -p tensor4all-treetn --example benchmark_projected_apply --release
+//   cargo run -p tensor4all-benchmarks --example benchmark_projected_apply --release
 //
 // Optional args:
-//   cargo run -p tensor4all-treetn --example benchmark_projected_apply --release -- <N> <state_bond_dim> <operator_bond_dim> <repeats> <step_index>
+//   cargo run -p tensor4all-benchmarks --example benchmark_projected_apply --release -- <N> <state_bond_dim> <operator_bond_dim> <repeats> <step_index>
 
 use std::collections::{HashMap, HashSet};
 use std::hint::black_box;
@@ -14,8 +14,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tensor4all_core::{
     index::{DynId, Index},
-    print_and_reset_contract_profile, reset_contract_profile,
-    DynIndex, IdxTensor, TensorIndex,
+    print_and_reset_contract_profile, reset_contract_profile, DynIndex, IdxTensor, TensorIndex,
 };
 use tensor4all_treetn::{IndexMapping, LocalUpdateSweepPlan, ProjectedOperator, TreeTN};
 

@@ -1,7 +1,7 @@
 // Inspect Julia-dumped local linsolve inputs stored in ITensorMPS-compatible HDF5.
 //
 // Run:
-//   cargo run -p tensor4all-hdf5 --example inspect_mps_inputs --release -- benchmarks/results/local_linsolve_inputs_N8_b4_o4.h5
+//   cargo run -p tensor4all-benchmarks --features hdf5 --example inspect_mps_inputs --release -- benchmarks/results/local_linsolve_inputs_N8_b4_o4.h5
 
 use std::env;
 
@@ -13,7 +13,10 @@ fn summarize(name: &str, tt: &TensorTrain) {
     let tensors = tt.tensors();
     let site_indices = tt.site_indices();
     let tensor_dims: Vec<_> = tensors.iter().map(|tensor| tensor.dims()).collect();
-    let tensor_index_counts: Vec<_> = tensors.iter().map(|tensor| tensor.indices().len()).collect();
+    let tensor_index_counts: Vec<_> = tensors
+        .iter()
+        .map(|tensor| tensor.indices().len())
+        .collect();
     let site_index_counts: Vec<_> = site_indices.iter().map(Vec::len).collect();
 
     println!("{name}.length = {}", tt.len());

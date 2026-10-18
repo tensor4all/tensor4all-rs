@@ -1,7 +1,7 @@
 // End-to-end TreeTCI runs dominated by the global pivot search (issue #792).
 //
-// The body is included by
-// `crates/tensor4all-treetci/examples/benchmark_global_search.rs`.
+// The harness is the `benchmark_global_search` example of the
+// `tensor4all-benchmarks` package.
 // Protocol notes are in `benchmarks/README.md`.
 //
 // Every case runs the default TreeTCI loop (`DefaultProposer`, global pivot
@@ -142,11 +142,7 @@ fn run_case(case: &Case, samples: &[usize], exact: &[f64]) -> Result<RunResult> 
     let f = &case.f;
     let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
         evaluations.set(evaluations.get() + batch.n_points() as u64);
-        Ok(batch
-            .data()
-            .chunks(batch.n_sites())
-            .map(f)
-            .collect())
+        Ok(batch.data().chunks(batch.n_sites()).map(f).collect())
     };
     let options = TreeTciOptions {
         tolerance: 1e-8,
@@ -211,11 +207,15 @@ fn run_case(case: &Case, samples: &[usize], exact: &[f64]) -> Result<RunResult> 
 
 fn main() -> Result<()> {
     let commit = option_env!("T4A_BENCH_GIT_COMMIT").unwrap_or("unknown");
-    let threads = ["RAYON_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS"]
-        .iter()
-        .map(|name| format!("{name}={}", std::env::var(name).unwrap_or_default()))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let threads = [
+        "RAYON_NUM_THREADS",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+    ]
+    .iter()
+    .map(|name| format!("{name}={}", std::env::var(name).unwrap_or_default()))
+    .collect::<Vec<_>>()
+    .join(" ");
     println!("build commit={commit} {threads} repeats={REPEATS}");
 
     let filter = std::env::args().nth(1);

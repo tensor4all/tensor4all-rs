@@ -1,17 +1,17 @@
 // Two-site TreeTN DMRG benchmark.
 //
 // Run:
-//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_dmrg --release
+//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_dmrg --release
 //
 // Optional args:
-//   cargo run -p tensor4all-treetn --example benchmark_dmrg --release -- <n_sites> <nsweeps> <repeats>
+//   cargo run -p tensor4all-benchmarks --example benchmark_dmrg --release -- <n_sites> <nsweeps> <repeats>
 
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use tensor4all_core::krylov::HermitianLanczosOptions;
-use tensor4all_core::{DynIndex, IndexLike, SvdTruncationPolicy, IdxTensor};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy};
 use tensor4all_tensorbackend::{lowest_hermitian_eigenpair, Matrix};
 use tensor4all_treetn::{
     compose_exclusive_linear_operators, dmrg, DmrgOptions, IndexMapping, LinearOperator, TreeTN,
@@ -114,7 +114,12 @@ fn make_initial_state(
         graph_nodes.push(state.add_tensor(node_name(i), tensor)?);
     }
     for (edge_id, &(a, b)) in edges.iter().enumerate() {
-        state.connect(graph_nodes[a], &bonds[edge_id], graph_nodes[b], &bonds[edge_id])?;
+        state.connect(
+            graph_nodes[a],
+            &bonds[edge_id],
+            graph_nodes[b],
+            &bonds[edge_id],
+        )?;
     }
     Ok((state, sites))
 }
@@ -174,8 +179,12 @@ fn make_edge_heisenberg_operator(
         ]),
         vec![(left_name.clone(), right_name.clone())],
     );
-    let mpo =
-        tensor4all_treetn::factorize_tensor_to_treetn_with(&local, &topology, Default::default(), &left_name)?;
+    let mpo = tensor4all_treetn::factorize_tensor_to_treetn_with(
+        &local,
+        &topology,
+        Default::default(),
+        &left_name,
+    )?;
     let input_mapping = HashMap::from([
         (
             left_name.clone(),
@@ -222,7 +231,12 @@ fn make_heisenberg_operator(
     let op_outputs: Vec<_> = (0..n_sites).map(|_| DynIndex::new_dyn(2)).collect();
 
     let gap_site_indices: HashMap<_, _> = (0..n_sites)
-        .map(|i| (node_name(i), vec![(op_inputs[i].clone(), op_outputs[i].clone())]))
+        .map(|i| {
+            (
+                node_name(i),
+                vec![(op_inputs[i].clone(), op_outputs[i].clone())],
+            )
+        })
         .collect();
     let mut term_mpos = Vec::with_capacity(edges.len());
     for &(left, right) in &edges {
@@ -238,7 +252,10 @@ fn make_heisenberg_operator(
 
     let mpo = term_mpos
         .into_iter()
-        .reduce(|acc, term| acc.add(&term).expect("matching Heisenberg MPO term topology"))
+        .reduce(|acc, term| {
+            acc.add(&term)
+                .expect("matching Heisenberg MPO term topology")
+        })
         .ok_or_else(|| anyhow::anyhow!("Heisenberg operator requires at least one edge"))?;
     let mpo = mpo.truncate(
         [node_name(0)],
@@ -281,20 +298,14 @@ fn dense_heisenberg_exact(topology: Topology, n_sites: usize) -> anyhow::Result<
     let dim = 1usize << n_sites;
     let mut data = vec![0.0; dim * dim];
     for input_state in 0..dim {
-        let bits: Vec<_> = (0..n_sites)
-            .map(|site| (input_state >> site) & 1)
-            .collect();
+        let bits: Vec<_> = (0..n_sites).map(|site| (input_state >> site) & 1).collect();
         for &(left, right) in &edges {
             let z_left = if bits[left] == 0 { 1.0 } else { -1.0 };
             let z_right = if bits[right] == 0 { 1.0 } else { -1.0 };
             data[input_state + dim * input_state] += z_left * z_right;
 
             let flipped = input_state ^ (1usize << left) ^ (1usize << right);
-            let yy_coeff = if bits[left] == bits[right] {
-                -1.0
-            } else {
-                1.0
-            };
+            let yy_coeff = if bits[left] == bits[right] { -1.0 } else { 1.0 };
             data[flipped + dim * input_state] += 1.0 + yy_coeff;
         }
     }
@@ -310,7 +321,12 @@ fn summarize(times: &[Duration]) -> (f64, f64, f64) {
     (mean, min, max)
 }
 
-fn run_case(topology: Topology, n_sites: usize, nsweeps: usize, repeats: usize) -> anyhow::Result<()> {
+fn run_case(
+    topology: Topology,
+    n_sites: usize,
+    nsweeps: usize,
+    repeats: usize,
+) -> anyhow::Result<()> {
     let (state, sites) = make_initial_state(topology, n_sites)?;
     let operator = make_heisenberg_operator(topology, &state, &sites)?;
     let exact_energy = dense_heisenberg_exact(topology, n_sites)?;

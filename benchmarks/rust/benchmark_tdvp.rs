@@ -1,10 +1,10 @@
 // Two-site TreeTN TDVP benchmark.
 //
 // Run:
-//   RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_tdvp --release
+//   RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tdvp --release
 //
 // Optional args:
-//   cargo run -p tensor4all-treetn --example benchmark_tdvp --release -- <n_sites> <time_steps> <repeats> <dt> [all|chain|star]
+//   cargo run -p tensor4all-benchmarks --example benchmark_tdvp --release -- <n_sites> <time_steps> <repeats> <dt> [all|chain|star]
 
 use std::collections::HashMap;
 use std::hint::black_box;
@@ -13,8 +13,7 @@ use std::time::{Duration, Instant};
 use num_complex::Complex64;
 use tensor4all_core::krylov::HermitianKrylovExpmOptions;
 use tensor4all_core::{
-    DynIndex, FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorContractionLike,
-    IdxTensor,
+    DynIndex, FactorizeOptions, IdxTensor, IndexLike, SvdTruncationPolicy, TensorContractionLike,
 };
 use tensor4all_tensorbackend::{hermitian_eigendecomposition, Matrix};
 use tensor4all_treetn::{
@@ -110,10 +109,7 @@ fn initial_bit(site: usize) -> usize {
     site % 2
 }
 
-fn make_initial_state(
-    topology: Topology,
-    n_sites: usize,
-) -> anyhow::Result<BenchmarkState> {
+fn make_initial_state(topology: Topology, n_sites: usize) -> anyhow::Result<BenchmarkState> {
     let edges = edges_for(topology, n_sites);
     let sites: Vec<_> = (0..n_sites).map(|_| DynIndex::new_dyn(2)).collect();
     let bonds: Vec<_> = (0..edges.len()).map(|_| DynIndex::new_dyn(1)).collect();
@@ -137,7 +133,12 @@ fn make_initial_state(
         graph_nodes.push(state.add_tensor(node_name(i), tensor)?);
     }
     for (edge_id, &(a, b)) in edges.iter().enumerate() {
-        state.connect(graph_nodes[a], &bonds[edge_id], graph_nodes[b], &bonds[edge_id])?;
+        state.connect(
+            graph_nodes[a],
+            &bonds[edge_id],
+            graph_nodes[b],
+            &bonds[edge_id],
+        )?;
     }
 
     let dim = 1usize << n_sites;
@@ -257,7 +258,12 @@ fn make_heisenberg_operator(
     let op_outputs: Vec<_> = (0..n_sites).map(|_| DynIndex::new_dyn(2)).collect();
 
     let gap_site_indices: HashMap<_, _> = (0..n_sites)
-        .map(|i| (node_name(i), vec![(op_inputs[i].clone(), op_outputs[i].clone())]))
+        .map(|i| {
+            (
+                node_name(i),
+                vec![(op_inputs[i].clone(), op_outputs[i].clone())],
+            )
+        })
         .collect();
     let mut term_mpos = Vec::with_capacity(edges.len());
     for &(left, right) in &edges {
@@ -310,7 +316,10 @@ fn make_heisenberg_operator(
     Ok(LinearOperator::new(mpo, input_mapping, output_mapping))
 }
 
-fn dense_heisenberg_matrix(topology: Topology, n_sites: usize) -> anyhow::Result<Matrix<Complex64>> {
+fn dense_heisenberg_matrix(
+    topology: Topology,
+    n_sites: usize,
+) -> anyhow::Result<Matrix<Complex64>> {
     anyhow::ensure!(
         n_sites <= 10,
         "dense exact benchmark reference is capped at n_sites <= 10"
@@ -319,20 +328,14 @@ fn dense_heisenberg_matrix(topology: Topology, n_sites: usize) -> anyhow::Result
     let dim = 1usize << n_sites;
     let mut data = vec![Complex64::new(0.0, 0.0); dim * dim];
     for input_state in 0..dim {
-        let bits: Vec<_> = (0..n_sites)
-            .map(|site| (input_state >> site) & 1)
-            .collect();
+        let bits: Vec<_> = (0..n_sites).map(|site| (input_state >> site) & 1).collect();
         for &(left, right) in &edges {
             let z_left = if bits[left] == 0 { 1.0 } else { -1.0 };
             let z_right = if bits[right] == 0 { 1.0 } else { -1.0 };
             data[input_state + dim * input_state] += Complex64::new(z_left * z_right, 0.0);
 
             let flipped = input_state ^ (1usize << left) ^ (1usize << right);
-            let yy_coeff = if bits[left] == bits[right] {
-                -1.0
-            } else {
-                1.0
-            };
+            let yy_coeff = if bits[left] == bits[right] { -1.0 } else { 1.0 };
             data[flipped + dim * input_state] += Complex64::new(1.0 + yy_coeff, 0.0);
         }
     }

@@ -1,0 +1,116 @@
+[package]
+name = "tensor4all-benchmarks"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+# Benchmark harnesses are examples, not binaries: their dependencies are
+# harness-only, so the tenferro crates stay in `[dev-dependencies]` and never
+# become a runtime route for a library crate.
+[features]
+default = []
+# `tensor4all-treeaci::branch_diagnostics` counters (benchmark_branch_cost).
+diagnostics = ["tensor4all-treeaci/diagnostics"]
+# HDF5 is optional so a default build of this package does not need libhdf5.
+hdf5 = ["dep:tensor4all-hdf5"]
+
+[dependencies]
+anyhow.workspace = true
+num-complex.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+serde_json.workspace = true
+tensor4all-core = { path = "../../crates/tensor4all-core" }
+tensor4all-hdf5 = { path = "../../crates/tensor4all-hdf5", optional = true }
+tensor4all-itensorlike = { path = "../../crates/tensor4all-itensorlike" }
+tensor4all-partitionedtreetn = { path = "../../crates/tensor4all-partitionedtreetn" }
+tensor4all-partitionedtt = { path = "../../crates/tensor4all-partitionedtt" }
+tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform" }
+tensor4all-simplett = { path = "../../crates/tensor4all-simplett" }
+tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend" }
+tensor4all-tensorci = { path = "../../crates/tensor4all-tensorci" }
+tensor4all-treeaci = { path = "../../crates/tensor4all-treeaci" }
+tensor4all-treetci = { path = "../../crates/tensor4all-treetci" }
+tensor4all-treetn = { path = "../../crates/tensor4all-treetn" }
+
+[dev-dependencies]
+tenferro.workspace = true
+tenferro-ad.workspace = true
+tenferro-cpu.workspace = true
+
+[[example]]
+name = "benchmark_cached_batch_memory"
+path = "benchmark_cached_batch_memory.rs"
+
+[[example]]
+name = "benchmark_dmrg"
+path = "benchmark_dmrg.rs"
+
+[[example]]
+name = "benchmark_local_linsolve"
+path = "benchmark_local_linsolve.rs"
+
+[[example]]
+name = "benchmark_projected_apply"
+path = "benchmark_projected_apply.rs"
+
+[[example]]
+name = "benchmark_tdvp"
+path = "benchmark_tdvp.rs"
+
+[[example]]
+name = "issue566_perf_candidates"
+path = "issue566_perf_candidates.rs"
+
+[[example]]
+name = "benchmark_m5_fixed_depth_partition"
+path = "benchmark_m5_fixed_depth_partition.rs"
+
+[[example]]
+name = "benchmark_merge_refine"
+path = "benchmark_merge_refine.rs"
+
+[[example]]
+name = "benchmark_tree_patch_representation"
+path = "benchmark_tree_patch_representation.rs"
+
+[[example]]
+name = "benchmark_patching"
+path = "benchmark_partitionedtt_patching.rs"
+
+[[example]]
+name = "issue566_perf_candidates2"
+path = "issue566_perf_candidates2.rs"
+
+[[example]]
+name = "benchmark_branch_cost"
+path = "benchmark_treeaci_branch_cost.rs"
+
+[[example]]
+name = "benchmark_global_search"
+path = "benchmark_treetci_global_search.rs"
+
+[[example]]
+name = "benchmark_memo"
+path = "benchmark_treetci_memo.rs"
+
+[[example]]
+name = "benchmark_tt_ops"
+path = "benchmark_tt_ops.rs"
+
+[[example]]
+name = "benchmark_matrix_lu"
+path = "benchmark_matrix_lu.rs"
+
+[[example]]
+name = "benchmark_matrix_transpose"
+path = "benchmark_matrix_transpose.rs"
+
+[[example]]
+name = "benchmark_tensor_ops"
+path = "benchmark_tensor_ops.rs"
+
+[[example]]
+name = "inspect_mps_inputs"
+path = "inspect_hdf5_mps_inputs.rs"
+required-features = ["hdf5"]

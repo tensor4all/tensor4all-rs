@@ -447,12 +447,12 @@ impl DenseNet {
             let a = order[q];
             q += 1;
             for b in 0..nn {
-                if !seen[b] {
-                    if let Some(bond) = shares(a, b) {
-                        seen[b] = true;
-                        parent[b] = Some((a, bond));
-                        order.push(b);
-                    }
+                if !seen[b]
+                    && let Some(bond) = shares(a, b)
+                {
+                    seen[b] = true;
+                    parent[b] = Some((a, bond));
+                    order.push(b);
                 }
             }
         }
@@ -620,12 +620,8 @@ fn run() -> Result<()> {
                 .map(|s| w.sites.iter().position(|t| t == s).unwrap_or(usize::MAX))
                 .collect();
             // initial pivots: compatible feature points (up to 8) + random to 5
-            let compatible = |pt: &Vec<usize>| {
-                fixed
-                    .iter()
-                    .zip(pt)
-                    .all(|(f, &v)| f.is_none_or(|x| x == v))
-            };
+            let compatible =
+                |pt: &Vec<usize>| fixed.iter().zip(pt).all(|(f, &v)| f.is_none_or(|x| x == v));
             let mut init: Vec<Vec<usize>> = Vec::new();
             let mut seen = HashSet::new();
             for fp in feature_pts.iter().filter(|q| compatible(q)) {

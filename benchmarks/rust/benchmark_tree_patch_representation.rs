@@ -1,6 +1,6 @@
 // M4 eager-versus-compact patch representation comparison at realistic bond
-// dimensions. The body is included by
-// `crates/tensor4all-partitionedtreetn/examples/benchmark_tree_patch_representation.rs`.
+// dimensions. The harness is the `benchmark_tree_patch_representation` example
+// of the `tensor4all-benchmarks` package.
 //
 // Usage (all modes print one JSON object per line):
 //
@@ -955,7 +955,7 @@ fn outside_max_abs(workload: &Workload, patch: &PatchPair, rng: &mut ChaCha8Rng)
 fn median(values: &mut [u128]) -> u128 {
     values.sort_unstable();
     let middle = values.len() / 2;
-    if values.len() % 2 == 0 {
+    if values.len().is_multiple_of(2) {
         (values[middle - 1] + values[middle]) / 2
     } else {
         values[middle]
@@ -965,7 +965,7 @@ fn median(values: &mut [u128]) -> u128 {
 fn median_f64(values: &mut [f64]) -> f64 {
     values.sort_by(f64::total_cmp);
     let middle = values.len() / 2;
-    if values.len() % 2 == 0 {
+    if values.len().is_multiple_of(2) {
         0.5 * (values[middle - 1] + values[middle])
     } else {
         values[middle]
