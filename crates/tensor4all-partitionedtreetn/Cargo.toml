@@ -43,12 +43,14 @@ tenferro-cpu.workspace = true
 num-complex.workspace = true
 serde_json.workspace = true
 # Path-only cross-layer dev-dependency (stripped from published manifests) so
-# the QFT integration tests can exercise a real Fourier operator.
-tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-faer"] }
+# the QFT integration tests can exercise a real Fourier operator. Its backend
+# provider is inherited from this crate's selected provider feature.
+tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform", default-features = false }
 # Path-only cross-layer dev-dependency (stripped from published manifests) so
 # the adaptive interpolation tests and examples can run a real engine; the
-# library itself depends only on the engine trait in tensor4all-treetn.
-tensor4all-treetci = { path = "../tensor4all-treetci", default-features = false, features = ["tenferro-cpu-faer"] }
+# library itself depends only on the engine trait in tensor4all-treetn. Its
+# backend provider is inherited from this crate's selected provider feature.
+tensor4all-treetci = { path = "../tensor4all-treetci", default-features = false }
 rand.workspace = true
 rand_chacha.workspace = true
 

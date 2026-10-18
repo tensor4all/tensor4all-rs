@@ -50,7 +50,9 @@ rand.workspace = true
 [dev-dependencies]
 approx.workspace = true
 tenferro-cpu.workspace = true
-tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-faer"] }
+# Path-only dev-dependency so the QFT test can apply a real operator. Its
+# backend provider is inherited from this crate's selected provider feature.
+tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform", default-features = false }
 
 [[test]]
 name = "integration"
