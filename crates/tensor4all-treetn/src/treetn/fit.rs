@@ -913,8 +913,6 @@ where
     pub envs: FitEnvironment<T, V>,
     /// Maximum bond dimension
     pub max_bond_dim: Option<usize>,
-    /// Legacy relative tolerance retained for same-crate tests and call chains.
-    pub(crate) rtol: Option<f64>,
     /// Explicit SVD truncation policy
     pub svd_policy: Option<SvdTruncationPolicy>,
     /// QR-specific relative tolerance
@@ -939,17 +937,12 @@ where
     /// * `tn_a` - First input TreeTN
     /// * `tn_b` - Second input TreeTN
     /// * `max_bond_dim` - Maximum bond dimension for truncation
-    /// * `svd_policy` - Explicit SVD truncation policy
-    /// * `qr_rtol` - QR-specific relative tolerance
+    /// * `svd_policy` - Explicit SVD truncation policy; `None` leaves the SVD
+    ///   factorization at its default behavior unless a bond cap applies.
     ///
     /// Note: sim_internal_inds() should be called on tn_a and tn_b before passing
     /// if index collision is a concern. This is not done here because contraction
     /// module (which provides sim_internal_inds) is currently disabled.
-    /// Install a leaf execution strategy (issue #859 F7).
-    ///
-    /// Used by the caller-owned context entry (`contract_fit_in`) to route the
-    /// updater's contractions and factorizations through a context-scoped
-    /// strategy instead of the process-global route.
     pub(crate) fn with_leaves(mut self, leaves: Box<dyn LeafOps<T>>) -> Self {
         self.leaves = leaves;
         self
@@ -959,15 +952,14 @@ where
         tn_a: TreeTN<T, V>,
         tn_b: TreeTN<T, V>,
         max_bond_dim: Option<usize>,
-        rtol: Option<f64>,
+        svd_policy: Option<SvdTruncationPolicy>,
     ) -> Self {
         Self {
             tn_a,
             tn_b,
             envs: FitEnvironment::new(),
             max_bond_dim,
-            rtol,
-            svd_policy: rtol.map(SvdTruncationPolicy::new),
+            svd_policy,
             qr_rtol: None,
             factorize_alg: FactorizeAlg::SVD,
             leaves: Box::new(GlobalLeaves),
@@ -977,13 +969,6 @@ where
     /// Set the factorization algorithm.
     pub fn with_factorize_alg(mut self, alg: FactorizeAlg) -> Self {
         self.factorize_alg = alg;
-        self
-    }
-
-    /// Set the SVD truncation policy used by fit sweeps.
-    pub(crate) fn with_svd_policy(mut self, policy: Option<SvdTruncationPolicy>) -> Self {
-        self.rtol = policy.map(|value| value.threshold);
-        self.svd_policy = policy;
         self
     }
 
@@ -1438,8 +1423,6 @@ pub struct FitContractionOptions {
     /// Optional maximum output bond dimension. `None` preserves the existing
     /// bond-space cap when no truncation policy overrides it; `Some(0)` is invalid.
     pub max_bond_dim: Option<usize>,
-    /// Legacy relative tolerance retained for same-crate tests and call chains.
-    pub(crate) rtol: Option<f64>,
     /// Explicit SVD truncation policy. Its settings are validated before fitting,
     /// including when `nfullsweeps == 0`.
     pub svd_policy: Option<SvdTruncationPolicy>,
@@ -1460,7 +1443,6 @@ impl Default for FitContractionOptions {
         Self {
             nfullsweeps: 1,
             max_bond_dim: None,
-            rtol: None,
             svd_policy: None,
             qr_rtol: None,
             factorize_alg: FactorizeAlg::SVD,
@@ -1486,7 +1468,6 @@ impl FitContractionOptions {
 
     /// Set the SVD truncation policy.
     pub fn with_svd_policy(mut self, policy: SvdTruncationPolicy) -> Self {
-        self.rtol = Some(policy.threshold);
         self.svd_policy = Some(policy);
         self
     }
@@ -1495,16 +1476,6 @@ impl FitContractionOptions {
     pub fn with_qr_rtol(mut self, rtol: f64) -> Self {
         self.qr_rtol = Some(rtol);
         self
-    }
-
-    /// Set relative tolerance as a per-value relative SVD policy.
-    pub(crate) fn with_rtol(self, rtol: f64) -> Self {
-        self.with_svd_policy(SvdTruncationPolicy::new(rtol))
-    }
-
-    /// Get the legacy SVD threshold value when represented as an rtol.
-    pub(crate) fn rtol(&self) -> Option<f64> {
-        self.svd_policy.map(|policy| policy.threshold)
     }
 
     /// Set factorization algorithm.
@@ -1927,11 +1898,15 @@ where
     }
 
     // Create FitUpdater (environments are computed lazily)
-    let mut updater = FitUpdater::new(tn_a.clone(), tn_b.clone(), options.max_bond_dim, None)
-        .with_leaves(leaves)
-        .with_svd_policy(options.svd_policy)
-        .with_qr_rtol(options.qr_rtol)
-        .with_factorize_alg(options.factorize_alg);
+    let mut updater = FitUpdater::new(
+        tn_a.clone(),
+        tn_b.clone(),
+        options.max_bond_dim,
+        options.svd_policy,
+    )
+    .with_leaves(leaves)
+    .with_qr_rtol(options.qr_rtol)
+    .with_factorize_alg(options.factorize_alg);
 
     // Create sweep plan
     let plan = LocalUpdateSweepPlan::from_treetn(&tn_c, center, 2)

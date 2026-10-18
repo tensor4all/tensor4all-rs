@@ -391,7 +391,7 @@ fn test_fit_contraction_options_default() {
     let opts = FitContractionOptions::default();
     assert_eq!(opts.nfullsweeps, 1);
     assert!(opts.max_bond_dim.is_none());
-    assert!(opts.rtol.is_none());
+    assert!(opts.svd_policy.is_none());
     assert_eq!(opts.factorize_alg, FactorizeAlg::SVD);
     assert!(opts.convergence_tol.is_none());
 }
@@ -406,13 +406,13 @@ fn test_fit_contraction_options_new() {
 fn test_fit_contraction_options_builders() {
     let opts = FitContractionOptions::new(2)
         .with_max_bond_dim(10)
-        .with_rtol(1e-8)
+        .with_svd_policy(SvdTruncationPolicy::new(1e-8))
         .with_factorize_alg(FactorizeAlg::LU)
         .with_convergence_tol(1e-6);
 
     assert_eq!(opts.nfullsweeps, 2);
     assert_eq!(opts.max_bond_dim, Some(10));
-    assert_eq!(opts.rtol, Some(1e-8));
+    assert_eq!(opts.svd_policy, Some(SvdTruncationPolicy::new(1e-8)));
     assert_eq!(opts.factorize_alg, FactorizeAlg::LU);
     assert_eq!(opts.convergence_tol, Some(1e-6));
 }
@@ -426,9 +426,9 @@ fn test_fit_updater_new() {
     let tn_a = make_two_node_treetn();
     let tn_b = make_two_node_treetn();
 
-    let updater = FitUpdater::new(tn_a, tn_b, Some(5), Some(1e-8));
+    let updater = FitUpdater::new(tn_a, tn_b, Some(5), Some(SvdTruncationPolicy::new(1e-8)));
     assert_eq!(updater.max_bond_dim, Some(5));
-    assert_eq!(updater.rtol, Some(1e-8));
+    assert_eq!(updater.svd_policy, Some(SvdTruncationPolicy::new(1e-8)));
     assert_eq!(updater.factorize_alg, FactorizeAlg::SVD);
     assert!(updater.envs.is_empty());
 }
