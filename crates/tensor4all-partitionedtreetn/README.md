@@ -131,8 +131,8 @@ limitation: corner-localized misses" in
   evaluation retains the distinct planner limitation above.
 
 The patch queue and pivot recycling derive from TCIAlgorithms.jl (MIT) through
-the deprecated `tensor4all-partitionedtt`; this crate carries
-`LICENSE-TCIALGORITHMS-MIT`.
+the chain driver of the retired `tensor4all-partitionedtt` crate (removed in
+#915 D3, settling #825); this crate carries `LICENSE-TCIALGORITHMS-MIT`.
 
 ## Truncation convention
 
@@ -282,6 +282,6 @@ requires an explicit existing TreeTN node name as its center.
 - [Migration design](../../docs/design/partitioned-treetn.md)
 - [Provenance and citation policy](../../docs/PROVENANCE_AND_CITATION_POLICY.md)
 
-The deprecated `tensor4all-partitionedtt` crate remains buildable during the
-migration window. It is limited to correctness and security fixes; no removal
-date has been set.
+The `tensor4all-partitionedtt` crate this one replaced was removed in #915 D3
+(settling #825); the [Partitioned TreeTN guide](https://tensor4all.org/tensor4all-rs/guides/partitioned-treetn.html)
+maps its entry points onto this crate's.

@@ -46,7 +46,7 @@ jobs:
             apt: libopenblas-dev libhdf5-dev
             audit: true
             check: |
-              -p tensor4all-core -p tensor4all-tensorbackend -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-partitionedtt -p tensor4all-capi --no-default-features --features tenferro-system-blas,tensor4all-treetn/simplett-bridge,tensor4all-treersi/global-defaults
+              -p tensor4all-core -p tensor4all-tensorbackend -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-capi --no-default-features --features tenferro-system-blas,tensor4all-treetn/simplett-bridge,tensor4all-treersi/global-defaults
               -p tensor4all-hdf5 --no-default-features --features link,tenferro-system-blas
           # Provider injection: the caller supplies the execution provider.
           # Check-only is enough: compiling tests does not run them, so no
@@ -55,15 +55,16 @@ jobs:
             apt: libhdf5-dev
             audit: true
             check: |
-              -p tensor4all-core -p tensor4all-tensorbackend -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-partitionedtt -p tensor4all-capi --no-default-features --features tenferro-provider-inject,tensor4all-treetn/simplett-bridge,tensor4all-treersi/global-defaults
+              -p tensor4all-core -p tensor4all-tensorbackend -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-capi --no-default-features --features tenferro-provider-inject,tensor4all-treetn/simplett-bridge,tensor4all-treersi/global-defaults
               -p tensor4all-hdf5 --no-default-features --features link,tenferro-provider-inject
-          # MPI: `adaptive-hataori-mpi` already implies `adaptive-hataori-rayon`,
-          # so there is no separate rayon row.
+          # MPI: the system-MPI backend of the adaptive patch driver. hataori's
+          # `mpi` and `rsmpi-rt` backends are mutually exclusive; the runtime
+          # backend is covered by scripts/check-mpi-smoke.sh.
           - name: mpi
             apt: libopenmpi-dev openmpi-bin
             audit: true
             check: >
-              -p tensor4all-partitionedtt --features adaptive-hataori-mpi
+              -p tensor4all-partitionedtreetn --features hataori-mpi
           # Diagnostics instrumentation stays additive to the default features.
           - name: diagnostics
             apt: ""

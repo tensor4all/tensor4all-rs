@@ -1,4 +1,16 @@
-// Adaptive PartitionedTT patching benchmark.
+// Adaptive patching benchmark on the tree driver.
+//
+// This is the port of the former `benchmark_partitionedtt_patching` case: the
+// removed `tensor4all-partitionedtt` crate's `add_with_patching` lives on in
+// `tensor4all-partitionedtreetn::add_with_patching`, which takes the same
+// workload as a two-node chain `TreeTN` (`x -- component -- y`). The workload
+// and the reported columns are unchanged, so the static sequential split order
+// and the exact child-parameter-gain order stay comparable.
+//
+// The tolerance keeps the removed crate's meaning: its per-patch budget
+// `rtol^2 ||F||^2 volume_p / total_volume` is the tree crate's
+// `PatchingOptions::cutoff` under the default `BudgetAllocation::Volume`, so
+// `cutoff = rtol^2` (the ITensorMPS convention, `rtol = sqrt(cutoff)`).
 //
 // Run:
 //   RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_patching --release
@@ -16,9 +28,13 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use tensor4all_core::{DynIndex, IdxTensor};
-use tensor4all_partitionedtt::{
-    add_with_patching, PartitionedTT, PatchSplitStrategy, PatchingOptions, SubDomainTT, TensorTrain,
+use tensor4all_partitionedtreetn::{
+    add_with_patching, PartitionedTreeTN, PatchSplitStrategy, PatchingOptions, SubDomainTreeTN,
 };
+use tensor4all_treetn::TreeTN;
+
+/// Node names of the two-node chain and the truncation center.
+const CENTER: usize = 0;
 
 #[derive(Debug, Clone)]
 struct Options {
@@ -45,10 +61,10 @@ impl Default for Options {
 
 #[derive(Debug, Clone)]
 struct BenchmarkInput {
-    tt: TensorTrain,
+    tree: TreeTN<IdxTensor, usize>,
     x_index: DynIndex,
     y_index: DynIndex,
-    reference: Vec<f64>,
+    reference: IdxTensor,
     reference_norm: f64,
 }
 
@@ -66,7 +82,7 @@ fn main() -> Result<()> {
     let options = parse_args()?;
     let input = make_anisotropic_gaussian_input(&options)?;
 
-    println!("tensor4all PartitionedTT adaptive patching benchmark");
+    println!("tensor4all partitioned-tree patching benchmark");
     println!(
         "config,x_dim={},y_dim={},components={},max_bond_dim={},rtol={:.3e},repeats={}",
         options.x_dim,
@@ -175,10 +191,13 @@ fn patching_options(
     patch_order: &[DynIndex],
 ) -> PatchingOptions {
     PatchingOptions {
-        rtol: options.rtol,
+        // `rtol = sqrt(cutoff)`: the tree crate's budget is the ITensorMPS
+        // discarded-weight cutoff under the default volume allocation.
+        cutoff: options.rtol * options.rtol,
         max_bond_dim: Some(options.max_bond_dim),
         patch_order: patch_order.to_vec(),
         split_strategy,
+        ..PatchingOptions::default()
     }
 }
 
@@ -191,7 +210,11 @@ fn run_case(
     let mut best: Option<BenchmarkResult> = None;
     for _ in 0..repeats {
         let started = Instant::now();
-        let patched = add_with_patching(vec![SubDomainTT::from_tt(input.tt.clone())], options)?;
+        let patched = add_with_patching(
+            vec![SubDomainTreeTN::from_treetn(input.tree.clone())?],
+            &CENTER,
+            options,
+        )?;
         let elapsed = started.elapsed();
         let result = summarize_result(strategy_name, input, black_box(&patched), elapsed)?;
         if best
@@ -219,7 +242,7 @@ fn run_case(
 fn summarize_result(
     strategy_name: &'static str,
     input: &BenchmarkInput,
-    partitioned: &PartitionedTT,
+    partitioned: &PartitionedTreeTN<usize>,
     elapsed: Duration,
 ) -> Result<BenchmarkResult> {
     let total_parameters = partitioned_parameter_count(partitioned)?;
@@ -273,15 +296,15 @@ fn make_anisotropic_gaussian_input(options: &Options) -> Result<BenchmarkInput> 
 
     let t0 = IdxTensor::from_dense(vec![x_index.clone(), component_index.clone()], left)?;
     let t1 = IdxTensor::from_dense(vec![component_index, y_index.clone()], right)?;
-    let tt = TensorTrain::new(vec![t0, t1])?;
-    let dense = tt.to_dense()?.to_vec::<f64>()?;
-    let reference_norm = dense.iter().map(|value| value * value).sum::<f64>().sqrt();
+    let tree = TreeTN::from_tensors(vec![t0, t1], vec![0usize, 1])?;
+    let reference = tree.contract_to_tensor()?;
+    let reference_norm = reference.norm()?;
 
     Ok(BenchmarkInput {
-        tt,
+        tree,
         x_index,
         y_index,
-        reference: dense,
+        reference,
         reference_norm,
     })
 }
@@ -299,24 +322,14 @@ fn gaussian(x: f64, center: f64, sigma: f64) -> f64 {
     (-0.5 * z * z).exp()
 }
 
-fn dense_relative_error(input: &BenchmarkInput, partitioned: &PartitionedTT) -> Result<f64> {
-    let dense = partitioned.to_tensor_train()?.to_dense()?.to_vec::<f64>()?;
-    if dense.len() != input.reference.len() {
-        bail!(
-            "dense result length mismatch: got {}, expected {}",
-            dense.len(),
-            input.reference.len()
-        );
-    }
-    let diff_norm = dense
-        .iter()
-        .zip(&input.reference)
-        .map(|(actual, expected)| {
-            let diff = actual - expected;
-            diff * diff
-        })
-        .sum::<f64>()
-        .sqrt();
+fn dense_relative_error(
+    input: &BenchmarkInput,
+    partitioned: &PartitionedTreeTN<usize>,
+) -> Result<f64> {
+    // `IdxTensor::sub` aligns the indices by identity, so the assembled
+    // partition is compared with the reference without an axis permutation.
+    let dense = partitioned.to_treetn()?.contract_to_tensor()?;
+    let diff_norm = dense.sub(&input.reference)?.norm()?;
     if input.reference_norm == 0.0 {
         Ok(diff_norm)
     } else {
@@ -324,23 +337,28 @@ fn dense_relative_error(input: &BenchmarkInput, partitioned: &PartitionedTT) -> 
     }
 }
 
-fn partitioned_parameter_count(partitioned: &PartitionedTT) -> Result<usize> {
+fn partitioned_parameter_count(partitioned: &PartitionedTreeTN<usize>) -> Result<usize> {
     partitioned.values().try_fold(0usize, |total, subdomain| {
-        let patch_count = tensor_train_parameter_count(subdomain.data())?;
+        let patch_count = tree_parameter_count(subdomain.data())?;
         total
             .checked_add(patch_count)
             .context("partitioned parameter count overflowed usize")
     })
 }
 
-fn tensor_train_parameter_count(tt: &TensorTrain) -> Result<usize> {
-    tt.tensors().into_iter().try_fold(0usize, |total, tensor| {
-        let tensor_count = tensor.dims().into_iter().try_fold(1usize, |acc, dim| {
-            acc.checked_mul(dim)
-                .context("tensor parameter count overflowed usize")
-        })?;
-        total
-            .checked_add(tensor_count)
-            .context("tensor train parameter count overflowed usize")
-    })
+fn tree_parameter_count(tree: &TreeTN<IdxTensor, usize>) -> Result<usize> {
+    tree.node_indices()
+        .into_iter()
+        .try_fold(0usize, |total, node| {
+            let tensor = tree
+                .tensor(node)
+                .context("node index of the same tree is absent")?;
+            let tensor_count = tensor.dims().into_iter().try_fold(1usize, |acc, dim| {
+                acc.checked_mul(dim)
+                    .context("tensor parameter count overflowed usize")
+            })?;
+            total
+                .checked_add(tensor_count)
+                .context("tree parameter count overflowed usize")
+        })
 }

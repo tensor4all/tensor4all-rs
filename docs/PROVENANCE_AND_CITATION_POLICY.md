@@ -108,10 +108,8 @@ relationship; the role is stated only on the first row.
 | `tensor4all-interpolativeqtt` | Interpolative QTT construction | [InterpolativeQTT.jl](https://github.com/tensor4all/InterpolativeQTT.jl) | Port |
 | `tensor4all-quanticstransform` | Quantics operators (shift, flip, QFT, affine) | [Quantics.jl](https://github.com/tensor4all/Quantics.jl) | Port (validated against v0.4.7) |
 | `tensor4all-aci` | Alternating cross interpolation elementwise ops | [AlternatingCrossInterpolation.jl](https://github.com/tensor4all/AlternatingCrossInterpolation.jl) | Port |
-| `tensor4all-partitionedtt` | Partitioned TT over subdomains | [PartitionedMPSs.jl](https://github.com/tensor4all/PartitionedMPSs.jl) | Port |
-| `tensor4all-partitionedtt` | | [TCIAlgorithms.jl](https://github.com/tensor4all/TCIAlgorithms.jl) | Derived (MIT): adaptive TCI interpolation |
 | `tensor4all-partitionedtreetn` | Eagerly masked partitioned TreeTN representation and adaptive patching | [PartitionedMPSs.jl](https://github.com/tensor4all/PartitionedMPSs.jl) | Inspired (independent TreeTN implementation) |
-| `tensor4all-partitionedtreetn` | | [TCIAlgorithms.jl](https://github.com/tensor4all/TCIAlgorithms.jl) | Derived (MIT): adaptive interpolation patch queue, accept-or-split flow, and pivot recycling (`src/adaptive_interpolation.rs`), through `tensor4all-partitionedtt` |
+| `tensor4all-partitionedtreetn` | | [TCIAlgorithms.jl](https://github.com/tensor4all/TCIAlgorithms.jl) | Derived (MIT): adaptive interpolation patch queue, accept-or-split flow, and pivot recycling (`src/adaptive_interpolation.rs`), through the retired `tensor4all-partitionedtt` chain driver |
 | `tensor4all-hdf5` | HDF5 serialization | [ITensors.jl](https://github.com/ITensor/ITensors.jl) / ITensorMPS.jl file formats | Compatible (round-trip validated) |
 | `tensor4all-capi` | C FFI surface for language bindings | — | Original (consumed by [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl)) |
 
@@ -137,17 +135,17 @@ list is best-effort; corrections and additions are welcome.
 | Quantum Fourier transform as low-rank MPO | `quanticstransform` | J. Chen and M. Lindsey, "Direct interpolative construction of the discrete Fourier transform as a matrix product operator", Appl. Comput. Harmon. Anal. (2025), [arXiv:2404.03182](https://arxiv.org/abs/2404.03182) |
 | Interpolative QTT construction | `interpolativeqtt` | M. Lindsey, [arXiv:2311.12554](https://arxiv.org/abs/2311.12554) |
 | Alternating cross interpolation (ACI) | `aci` | M. K. Ritter et al., [arXiv:2604.00037](https://arxiv.org/abs/2604.00037) |
-| Partitioned tensor trains / adaptive patching | `partitionedtt`, `partitionedtreetn` | G. Grosso, M. K. Ritter, S. Rohshap, S. Badr, A. Kauch, M. Wallerberger, J. von Delft, H. Shinaoka, "Adaptive Patching for Tensor Train Computations", [arXiv:2602.22372](https://arxiv.org/abs/2602.22372) |
+| Partitioned tensor trains / adaptive patching | `partitionedtreetn` | G. Grosso, M. K. Ritter, S. Rohshap, S. Badr, A. Kauch, M. Wallerberger, J. von Delft, H. Shinaoka, "Adaptive Patching for Tensor Train Computations", [arXiv:2602.22372](https://arxiv.org/abs/2602.22372) |
 
 The TreeTN-native partitioned crate contains a tree adaptive interpolation
 driver whose patch queue, accept-or-split flow, and pivot recycling derive from
-TCIAlgorithms.jl through the legacy crate's chain driver; it carries the
-derivation notice in `src/adaptive_interpolation.rs` and
+TCIAlgorithms.jl through the chain driver of the retired
+`tensor4all-partitionedtt` crate (removed in #915 D3, settling #825); it carries
+the derivation notice in `src/adaptive_interpolation.rs` and
 `LICENSE-TCIALGORITHMS-MIT`. Its partition representation and patch algebra
-remain an independent TreeTN implementation. The legacy crate retains its
-existing TCIAlgorithms derivation notice and license.
+remain an independent TreeTN implementation.
 
 License-bearing derivations are declared in the affected crate
 (`tensor4all-treetn`: `LICENSE-APACHE`, SPDX `MIT AND Apache-2.0`;
-`tensor4all-partitionedtt` and `tensor4all-partitionedtreetn`:
-`LICENSE-TCIALGORITHMS-MIT`, crates remain MIT).
+`tensor4all-partitionedtreetn`: `LICENSE-TCIALGORITHMS-MIT`, crate remains
+MIT).

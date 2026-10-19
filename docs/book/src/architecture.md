@@ -27,8 +27,7 @@ facade, and each crate can be used on its own.
      |-- tensor4all-treetci (tree TCI)            tensor4all-tensorci (TCI1/TCI2)
      |-- tensor4all-treeaci (tree ACI)            tensor4all-aci (chain ACI)
      |-- tensor4all-partitionedtreetn (TreeTN patches)
-     |-- tensor4all-treersi (experimental RSI products)
-     `-- tensor4all-partitionedtt (deprecated; also uses simplett/tensorci)
+     `-- tensor4all-treersi (experimental RSI products)
 
    Crates that still use both stacks (crossing through treetn::simplett_bridge):
    tensor4all-quanticstci        (treetci + treetn + simplett)
@@ -57,8 +56,7 @@ and is not part of the simplett bridge.
 
 Crates that need to cross stacks must route through this bridge. New ad hoc
 bridges (hand-rolled conversion logic inside another crate) are rejected.
-`tensor4all-partitionedtt` consumes simplett output (TCI2 results) only via
-`tensor_train_to_treetn`; the TreeTN-native `tensor4all-partitionedtreetn`
+The TreeTN-native `tensor4all-partitionedtreetn`
 operates directly on named `TreeTN<IdxTensor, V>` values and does not depend on
 simplett, itensorlike, or TCI crates. Its adaptive interpolation driver sees
 interpolation engines only through the `TreeInterpolator` trait in
@@ -174,7 +172,6 @@ requirements onto unrelated generic code.
 | **treetn** | Tree tensor networks with arbitrary graph topology. Supports canonicalization, truncation, contraction, DMRG/TDVP, and hosts the sanctioned `simplett_bridge`. |
 | **itensorlike** | ITensors.jl-inspired `TensorTrain` (tree-based) with orthogonality tracking and multiple canonical forms. |
 | **partitionedtreetn** | TreeTN-native eagerly masked subdomains, strict partition algebra, volume-budgeted adaptive patching, sequential adaptive patched interpolation through any `TreeInterpolator` engine, reconstruction against a fixed global L2 tolerance, and level-coupled merge-refine QFT scheduling. |
-| **partitionedtt** | **Deprecated** partitioned tensor trains for subdomain decomposition. Builds on itensorlike and crosses to simplett via `simplett_bridge`; it remains buildable during migration. |
 | **treersi** | Experimental CPU Hadamard products on TreeTN via recursive sketched interpolation; requires independent accuracy checks. |
 | **treeaci** | Experimental Alternating Cross Interpolation directly on `TreeTN` with any validated tree topology (no path-order requirement, unlike `tensor4all-aci`). |
 | **treetci** | Tree TCI: cross interpolation on tree-structured tensor networks; `TreeTciInterpolator` implements the `TreeInterpolator` engine trait. |
@@ -222,7 +219,6 @@ requirements onto unrelated generic code.
 | Subdomain decomposition on named TreeTNs | `tensor4all-partitionedtreetn` |
 | Adaptive patched interpolation of a function on a named tree | `tensor4all-partitionedtreetn::adaptive_interpolation` with an engine such as `tensor4all-treetci::TreeTciInterpolator` |
 | Reconstruct orthogonal patches or tensor products with a global L2 tolerance | `tensor4all-partitionedtreetn::reconstruction` |
-| Legacy simple TT subdomain decomposition or adaptive TCI | `tensor4all-partitionedtt` (deprecated during migration) |
 | Quantics transform operators | `tensor4all-quanticstransform` |
 | HDF5 I/O compatible with Julia | `tensor4all-hdf5` |
 | Interpolative QTT on a coarse grid | `tensor4all-interpolativeqtt` |

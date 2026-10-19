@@ -42,8 +42,8 @@ rtol = sqrt(cutoff)
 > volume as an absolute local threshold (`BudgetAllocation::Volume`, default)
 > or applies it as a per-SVD relative cutoff (`BudgetAllocation::Norm`). The
 > final whole-network error is best effort and is not bounded by `cutoff`;
-> `max_bond_dim` is the hard cap. The deprecated `tensor4all-partitionedtt`
-> crate keeps the `rtol` convention documented above.
+> `max_bond_dim` is the hard cap. Convert a caller's `rtol` with
+> `cutoff = rtol²` when handing it to this surface.
 
 ## Bond-Dimension Cap
 

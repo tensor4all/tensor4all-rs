@@ -24,7 +24,6 @@ tensor4all-core = { path = "../../crates/tensor4all-core" }
 tensor4all-hdf5 = { path = "../../crates/tensor4all-hdf5", optional = true }
 tensor4all-itensorlike = { path = "../../crates/tensor4all-itensorlike" }
 tensor4all-partitionedtreetn = { path = "../../crates/tensor4all-partitionedtreetn" }
-tensor4all-partitionedtt = { path = "../../crates/tensor4all-partitionedtt" }
 tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform" }
 tensor4all-simplett = { path = "../../crates/tensor4all-simplett" }
 tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend" }
@@ -77,7 +76,7 @@ path = "benchmark_tree_patch_representation.rs"
 
 [[example]]
 name = "benchmark_patching"
-path = "benchmark_partitionedtt_patching.rs"
+path = "benchmark_patching.rs"
 
 [[example]]
 name = "issue566_perf_candidates2"

@@ -1,9 +1,9 @@
 //! Projectors that fix selected TreeTN site indices to coordinates.
 //!
-//! The implementation follows the corrected `Projector` in
-//! `tensor4all-partitionedtt/src/projector.rs` after issue #634. In particular,
-//! equality, hashing, and deterministic ordering use the same full index
-//! identity: ID, canonical tags, and prime level.
+//! The implementation follows the corrected `Projector` of the retired
+//! `tensor4all-partitionedtt` crate after issue #634 (that crate was removed in
+//! #915 D3). In particular, equality, hashing, and deterministic ordering use
+//! the same full index identity: ID, canonical tags, and prime level.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;

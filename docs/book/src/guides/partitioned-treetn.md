@@ -1,9 +1,8 @@
 # Partitioned TreeTNs
 
 `tensor4all-partitionedtreetn` stores TreeTN subdomains as eagerly masked
-patches. It is the TreeTN-native successor to the deprecated
-`tensor4all-partitionedtt` crate and supports named chains, branched trees, and
-multiple site indices on one node.
+patches. It replaces the retired `tensor4all-partitionedtt` crate and supports
+named chains, branched trees, and multiple site indices on one node.
 
 This crate provides partition algebra, TreeTN-general adaptive patching, and
 adaptive patched interpolation of a function through any tree interpolation
@@ -548,8 +547,21 @@ with a central named node and three named leaves is a valid partition input.
 See the [Tree Tensor Networks guide](tree-tn.md) for constructing branched
 networks and selecting contraction/truncation options.
 
-## Migration
+## Migration from `tensor4all-partitionedtt`
 
-Use this crate for new named TreeTN partition work. The old
-`tensor4all-partitionedtt` crate remains buildable during migration and receives
-correctness and security fixes only; no removal date has been set.
+The retired `tensor4all-partitionedtt` crate (removed in #915 D3, settling
+#825) worked on the positional `SimpleTensorTrain` representation. This crate
+carries the same partition algebra on named `TreeTN` values:
+
+| `tensor4all-partitionedtt` | `tensor4all-partitionedtreetn` |
+|---|---|
+| `PartitionedTT` | `PartitionedTreeTN` |
+| `SubDomainTT::from_tt` | `SubDomainTreeTN::from_treetn` |
+| `PatchingOptions { rtol, .. }` | `PatchingOptions { cutoff = rtol², .. }` |
+| `add_with_patching(subdomains, &options)` | `add_with_patching(subdomains, &center, &options)` |
+| `truncate_adaptive(&tt, rtol, cap)` | `truncate_adaptive(&partition, &center, cutoff, allocation, cap)` |
+| `adaptiveinterpolate(...)` | `adaptive_interpolation::patched_interpolate(...)` |
+
+The adaptive interpolation driver needs an engine that implements
+`TreeInterpolator`; `tensor4all-treetci::TreeTciInterpolator` is the TreeTCI
+one. `benchmarks/rust/benchmark_patching.rs` is the ported patching benchmark.

@@ -5494,7 +5494,6 @@ dependencies = [
  "tensor4all-hdf5",
  "tensor4all-itensorlike",
  "tensor4all-partitionedtreetn",
- "tensor4all-partitionedtt",
  "tensor4all-quanticstransform",
  "tensor4all-simplett",
  "tensor4all-tensorbackend",
@@ -5615,30 +5614,6 @@ dependencies = [
  "tensor4all-quanticstransform",
  "tensor4all-tensorbackend",
  "tensor4all-treetci",
- "tensor4all-treetn",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "tensor4all-partitionedtt"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "approx 0.5.1",
- "hataori",
- "mpi 0.8.1",
- "num-complex 0.4.6",
- "num-traits",
- "rand 0.9.5",
- "rand_chacha 0.9.0",
- "rayon",
- "serde",
- "tenferro-cpu",
- "tensor4all-core",
- "tensor4all-itensorlike",
- "tensor4all-simplett",
- "tensor4all-tensorbackend",
- "tensor4all-tensorci",
  "tensor4all-treetn",
  "thiserror 2.0.20",
 ]

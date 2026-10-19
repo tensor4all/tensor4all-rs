@@ -65,7 +65,7 @@
 //! [TCIAlgorithms.jl](https://github.com/tensor4all/TCIAlgorithms.jl) at
 //! commit e501032278c9dd41b46c5851d8238169c8d178c5 (MIT license; Copyright
 //! 2023 Ritter.Marc and contributors), through the chain driver of the
-//! deprecated `tensor4all-partitionedtt` crate. See
+//! retired `tensor4all-partitionedtt` crate (removed in #915 D3). See
 //! `LICENSE-TCIALGORITHMS-MIT` in this crate. The intermediate Rust chain
 //! driver was introduced by Samuel Badr (@SamuelBadr) in
 //! [tensor4all-rs commit 69a24e7e](https://github.com/tensor4all/tensor4all-rs/commit/69a24e7e).

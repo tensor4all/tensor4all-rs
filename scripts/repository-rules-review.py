@@ -204,7 +204,7 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
     ),
     (
         re.compile(
-            r"tensor4all-(?:treetn|simplett|itensorlike|partitionedtt)"
+            r"tensor4all-(?:treetn|simplett|itensorlike)"
             r"|tensortrain|treetn|/tt\b|mps|mpo"
         ),
         frozenset(
@@ -231,7 +231,7 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
     (
         re.compile(
             r"tensor4all-(?:tensorci|treetci|quanticstci|aci|treeaci|simplett"
-            r"|treetn|partitionedtt|partitionedtreetn)|evaluat|cache|contract"
+            r"|treetn|partitionedtreetn)|evaluat|cache|contract"
             r"|benchmarks/"
         ),
         frozenset(PERFORMANCE_SECTIONS),

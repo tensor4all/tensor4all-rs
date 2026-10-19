@@ -29,9 +29,10 @@
 //! The representation follows the partitioned tensor-network approach used by
 //! [PartitionedMPSs.jl](https://github.com/tensor4all/PartitionedMPSs.jl) and
 //! the adaptive patching literature. The patch queue of the adaptive
-//! interpolation driver derives from TCIAlgorithms.jl (MIT) through
-//! `tensor4all-partitionedtt`; see the notice in
-//! [`adaptive_interpolation`] and `LICENSE-TCIALGORITHMS-MIT`.
+//! interpolation driver derives from TCIAlgorithms.jl (MIT) through the chain
+//! driver of the retired `tensor4all-partitionedtt` crate (removed in #915 D3);
+//! see the notice in [`adaptive_interpolation`] and
+//! `LICENSE-TCIALGORITHMS-MIT`.
 
 pub mod adaptive_interpolation;
 mod error;

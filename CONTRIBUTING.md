@@ -155,7 +155,7 @@ with their default features.
 | explicit-context | `-p tensor4all-tensorbackend --no-default-features --features explicit-context,tenferro-cpu-faer` | PR CI Lint (`Check explicit-context-only build`) |
 | system-blas | Every compute crate with `--no-default-features --features tenferro-system-blas` (plus `tensor4all-treetn/simplett-bridge` and `tensor4all-treersi/global-defaults`, which their test targets need); HDF5 with `link,tenferro-system-blas` | Nightly `.github/workflows/feature-matrix.yml`, including a panic audit |
 | provider-inject | Every compute crate with `--no-default-features --features tenferro-provider-inject` (plus `tensor4all-treetn/simplett-bridge` and `tensor4all-treersi/global-defaults`, which their test targets need); HDF5 with `link,tenferro-provider-inject` | Nightly feature matrix, including a panic audit |
-| mpi | `-p tensor4all-partitionedtt --features adaptive-hataori-mpi` (it implies the rayon path) | Nightly feature matrix, including a panic audit |
+| mpi | `-p tensor4all-partitionedtreetn --features hataori-mpi` (the system-MPI backend of the adaptive patch driver; the `hataori-mpi-rsmpi-rt` runtime backend is covered by `scripts/check-mpi-smoke.sh`) | Nightly feature matrix, including a panic audit |
 | diagnostics | `-p tensor4all-treetn -p tensor4all-treeaci --features diagnostics` | Nightly feature matrix, including a panic audit |
 | hdf5-runtime-loading | `-p tensor4all-hdf5 --no-default-features --features runtime-loading,tenferro-cpu-faer` | Nightly feature matrix, including a panic audit |
 | cuda | `-p tensor4all-core -p tensor4all-treetn --features tenferro-cuda` | Nightly feature matrix, compile only; CUDA execution is verified locally on a GPU only |

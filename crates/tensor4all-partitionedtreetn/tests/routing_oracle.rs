@@ -1,8 +1,8 @@
 //! Routing oracle: the patched tree driver runs inside held-session phase
 //! lanes while another thread holds the process-global backend.
 //!
-//! This is the tree counterpart of
-//! `tensor4all-partitionedtt/tests/phase_execution.rs`'s
+//! This is the tree counterpart of the removed `tensor4all-partitionedtt`
+//! crate's `phase_execution` test
 //! `the_phase_entry_completes_while_the_process_global_backend_is_held`. The
 //! hataori scheduler arrives in a later slice; here the test drives the
 //! driver's work items directly on `HeldSession::phase` lanes, one patch

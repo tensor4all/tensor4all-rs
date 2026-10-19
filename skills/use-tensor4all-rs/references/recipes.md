@@ -266,42 +266,96 @@ assert!(*result.errors.last().unwrap() < 1e-10);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-## Adaptive TCI over subdomain patches (partitionedtt, 0-indexed)
+## Adaptive patched interpolation of a function (partitionedtreetn, 0-indexed)
 
-`adaptiveinterpolate` runs TCI2 per patch and subdivides patches that miss the
-tolerance. Pivots are full-domain and **0-indexed** (tensorci territory, not
-quanticstci). The result contains a `PartitionedTT` and one sample cache per
-accepted patch; `partitioned_tt().to_tensor_train()` recombines the patches.
+`patched_interpolate` runs any `TreeInterpolator` engine (here TreeTCI) patch by
+patch and splits the patches that miss the tolerance. Pivots and the evaluator's
+points are full-domain and **0-indexed**. Numerics run on the session the caller
+holds in the `EvalContext`; the result carries the partition and a per-patch
+report.
 
 ```rust
-use tensor4all_core::contract;
-use tensor4all_partitionedtt::{
-    adaptiveinterpolate, AdaptiveInterpolateOptions, DynIndex, MultiIndex,
+use std::collections::BTreeMap;
+use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+use tensor4all_partitionedtreetn::adaptive_interpolation::{
+    patched_interpolate, GlobalL2Error, PatchedInterpolationOptions,
+};
+use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
+use tensor4all_tensorbackend::{
+    explicit::{HeldSession, Session},
+    CpuExecutionContext,
+};
+use tensor4all_treetci::TreeTciInterpolator;
+use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+use tensor4all_treetn::NodeNameNetwork;
+use tenferro_cpu::CpuBackend;
+
+// One binary site per node of a three-node chain; x = b0 + 2 b1 + 4 b2.
+let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+let mut topology = NodeNameNetwork::new();
+for node in 0..3usize {
+    topology.add_node(node)?;
+}
+topology.add_edge(&0, &1)?;
+topology.add_edge(&1, &2)?;
+let node_sites: BTreeMap<usize, Vec<DynIndex>> =
+    (0..3).map(|node| (node, vec![sites[node].clone()])).collect();
+
+// Full-domain, 0-indexed evaluator over a column-major [n_sites, n_points] batch.
+let f = |point: &[usize]| 1.0 / (1.0 + (point[0] + 2 * point[1] + 4 * point[2]) as f64);
+let evaluate = |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
+    Ok(batch.data().chunks(3).map(f).collect())
 };
 
-let sites = vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
-// full-domain, 0-indexed evaluator
-let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
-let result = adaptiveinterpolate::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
-    f,
-    None,                                  // batched_f: None when batching unavailable
-    sites,
-    vec![vec![1, 1]],                      // initial pivots where |f| is large
-    AdaptiveInterpolateOptions::default(), // tci_options tol 1e-8, n_initial_pivots 5
-)?;
-assert_eq!(result.partitioned_tt().len(), 1); // one patch covered the whole domain
-assert_eq!(result.patch_caches().len(), 1);
+let norm = (0..8).map(|x| { let v = f(&[x & 1, (x >> 1) & 1, (x >> 2) & 1]); v * v }).sum::<f64>().sqrt();
+let options = PatchedInterpolationOptions::new(2) // bond cap per patch
+    .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
+    .with_tolerance(ErrorTolerance { rtol: 1e-12, atol: 0.0 })
+    .with_patch_order(vec![sites[0].clone(), sites[1].clone()])
+    .with_recycle_pivots(true)
+    .with_seed(0);
+let pivots = ColMajorArray::new(vec![0, 0, 0], vec![3, 1])?; // one initial pivot
 
-let tt = result.partitioned_tt().to_tensor_train()?;
-let dense = contract(&[tt.tensor(0)?, tt.tensor(1)?])?;
-assert_eq!(dense.to_vec::<f64>()?, vec![1.0, 2.0, 2.0, 4.0]); // column-major
+let result = {
+    let context =
+        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let mut held = HeldSession::open(&backend).expect("held session");
+    let outcome = held.with_session(|view| {
+        let mut ctx = EvalContext::new(
+            Session::from_backend_session(view.backend()),
+            Parallelism::Serial,
+        );
+        patched_interpolate(
+            &TreeTciInterpolator::default(),
+            topology,
+            node_sites,
+            pivots,
+            &mut ctx,
+            evaluate,
+            &options,
+        )
+    });
+    held.close().expect("affinity restores");
+    outcome
+}?;
+assert_eq!(result.report.splits, 3); // the cap of 2 forced three splits
+assert_eq!(result.partition.len(), 4); // every patch is exact on one active site
+let error = result.report.norm.l2_error().unwrap();
+assert!(matches!(error.global, GlobalL2Error::Certified { .. }));
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-For a function low-rank only after fixing an index, raise `n_initial_pivots`
-(10–20 for multi-feature/high-dim), set `recycle_pivots(true)` to seed children
-from a rejected parent, and supply known-nonzero pivots for sparse functions
-(patches whose candidates all sample below `1e-30` are stored as zero).
+Fan-out entries run the same driver: `patched_interpolate_on_lanes(&mut lanes,
+...)` takes a `hataori_tenferro::TenferroLanes` and an `Fn + Sync` evaluator,
+and `patched_interpolate_mpi(&world, &mut lanes, root, ...)` (features
+`hataori-mpi` / `hataori-mpi-rsmpi-rt`) distributes waves over ranks and returns
+`Option<result>` (`Some` on the root only). Under the L2 norm give a known
+reference norm (`ErrorNorm::l2(L2Reference::Given(..))`, an L2 norm, not
+`max |f|`) or use `rtol = 0` with `atol`; `ErrorNorm::sampled_max()` keeps the
+engine's max-norm criterion. The audit cannot see a feature that enters a patch
+only through a corner or an edge, so only `GlobalL2Error::Certified` bounds the
+error.
 
 ## Elementwise op on TTs (ACI)
 

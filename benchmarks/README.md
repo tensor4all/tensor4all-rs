@@ -373,10 +373,14 @@ TensorTrain-level operations against ITensorMPS:
 RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tt_ops --release -- --L 32 --zipup-L 10 --chis 4,8,16,32,64
 ```
 
-PartitionedTT adaptive patching on a deterministic sum of randomly placed
-anisotropic Gaussians. The benchmark compares the static sequential split order
-against the exact child-parameter-gain ordering at the same global `rtol` and
-`max_bond_dim`, and reports patch count, total TT core parameters, max patch
+TreeTN-aware adaptive patching on a deterministic sum of randomly placed
+anisotropic Gaussians, stored as a two-node chain `TreeTN` and patched with
+`tensor4all-partitionedtreetn::add_with_patching` (the port of the removed
+`tensor4all-partitionedtt` case). The benchmark compares the static sequential
+split order against the exact child-parameter-gain ordering at the same global
+relative tolerance and `max_bond_dim`; the CLI keeps the old `--rtol` meaning
+through the ITensorMPS convention `cutoff = rtol^2` under the default volume
+allocation. It reports patch count, total TreeTN parameter count, max patch
 bond dimension, dense-reference relative error, and best elapsed time:
 
 ```bash
