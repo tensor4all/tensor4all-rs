@@ -12,6 +12,7 @@ mod adaptive_l2;
 mod adaptive_l2_corner_miss;
 mod adaptive_l2_diagnostics;
 mod adaptive_l2_treetci;
+mod adaptive_lanes;
 mod adaptive_m2_golden;
 mod adaptive_patch_size;
 mod adaptive_rounding_calibration;

@@ -18,6 +18,8 @@ use std::hash::{BuildHasherDefault, Hash, Hasher};
 use tensor4all_core::{ColMajorArrayRef, CommonScalar, TensorElement};
 use tensor4all_treetn::interpolation::EvalContext;
 
+use super::Evaluate;
+
 /// The `width` low bits set; `width` is in `1..=64`.
 fn low_bits(width: u32) -> u64 {
     u64::MAX >> (u64::BITS - width)
@@ -570,6 +572,102 @@ impl<T: Copy> PatchCache<T> {
     }
 }
 
+/// The packing of a cache as it crosses a wire: the slot table, the slot
+/// dimensions, and the word count.
+///
+/// A split keeps the parent's words and clears the bits of the split slot, so
+/// the word count can exceed what a compact layout of the remaining slots
+/// needs; a cache therefore travels with its layout instead of being re-encoded
+/// from its active dimensions.
+#[cfg(any(feature = "hataori-mpi", feature = "hataori-mpi-rsmpi-rt"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CacheLayout {
+    pub(super) dims: Vec<usize>,
+    /// `(word, shift, width)` of every active slot.
+    pub(super) slots: Vec<(usize, u32, u32)>,
+    pub(super) n_words: usize,
+}
+
+#[cfg(any(feature = "hataori-mpi", feature = "hataori-mpi-rsmpi-rt"))]
+impl<T: Copy> PatchCache<T> {
+    /// The layout of this cache, split holes included.
+    pub(super) fn layout_description(&self) -> CacheLayout {
+        CacheLayout {
+            dims: self.layout.dims.clone(),
+            slots: self.layout.slots.clone(),
+            n_words: self.layout.n_words,
+        }
+    }
+
+    /// The entries with their key words, split holes included.
+    pub(super) fn into_entries(self) -> Vec<(Vec<u64>, T)> {
+        let mut entries = Vec::with_capacity(self.entries.len());
+        self.entries
+            .drain_words(|words, value| entries.push((words.to_vec(), value)));
+        entries
+    }
+
+    /// Rebuild a cache from a layout description and its entries.
+    ///
+    /// The description is validated: slot dimensions are positive, every slot
+    /// lies in the declared words, every entry has that many words, and every
+    /// entry decodes to coordinates inside the slot dimensions (the layout
+    /// cannot be inferred, so a malformed description must not misread values).
+    pub(super) fn from_entries(
+        layout: CacheLayout,
+        entries: Vec<(Vec<u64>, T)>,
+    ) -> Result<Self, String> {
+        if layout.dims.contains(&0) {
+            return Err("a cache slot has dimension zero".to_string());
+        }
+        if layout.slots.len() != layout.dims.len() {
+            return Err(format!(
+                "the cache layout has {} slots for {} dimensions",
+                layout.slots.len(),
+                layout.dims.len()
+            ));
+        }
+        for &(word, shift, width) in &layout.slots {
+            if word >= layout.n_words {
+                return Err(format!(
+                    "a cache slot uses word {word} of a {} word key",
+                    layout.n_words
+                ));
+            }
+            if width > u64::BITS || shift + width > u64::BITS {
+                return Err(format!("a cache slot spans {width} bits at shift {shift}"));
+            }
+        }
+        let mut cache = Self::with_layout(
+            KeyLayout {
+                dims: layout.dims,
+                slots: layout.slots,
+                n_words: layout.n_words,
+            },
+            entries.len(),
+        );
+        for (words, value) in entries {
+            if words.len() != cache.layout.n_words {
+                return Err(format!(
+                    "a cache entry has {} words, the layout has {}",
+                    words.len(),
+                    cache.layout.n_words
+                ));
+            }
+            let coords = cache.layout.decode(&words);
+            for (&coord, &dim) in coords.iter().zip(&cache.layout.dims) {
+                if coord >= dim {
+                    return Err(format!(
+                        "a cache entry has coordinate {coord} outside dimension {dim}"
+                    ));
+                }
+            }
+            cache.entries.insert_words(&words, value);
+        }
+        Ok(cache)
+    }
+}
+
 /// A cached point ranked for [`PatchCache::largest_points`]: an entry is
 /// less (better) when its magnitude is larger, then when its coordinates are
 /// lexicographically smaller, so a max-heap keeps the worst kept entry on top.
@@ -622,18 +720,17 @@ enum Slot<T> {
 }
 
 /// Samples one patch through its cache.
-pub(super) struct PatchSampler<'a, T, F> {
-    pub(super) evaluate: &'a RefCell<F>,
+pub(super) struct PatchSampler<'a, T> {
+    pub(super) evaluate: &'a dyn Evaluate<T>,
     pub(super) fixed: &'a [Option<usize>],
     pub(super) n_active: usize,
     pub(super) counters: &'a Counters,
     pub(super) cache: RefCell<PatchCache<T>>,
 }
 
-impl<T, F> PatchSampler<'_, T, F>
+impl<T> PatchSampler<'_, T>
 where
     T: CommonScalar + TensorElement,
-    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
     /// Values at a column-major `[n_active, n_points]` batch of active
     /// coordinates. Only points absent from the cache reach the evaluator,
@@ -710,8 +807,9 @@ where
             let n_sites = self.fixed.len();
             let n_missing = pending.len();
             let full_shape = [n_sites, n_missing];
-            let mut evaluate = self.evaluate.borrow_mut();
-            fresh = (*evaluate)(ColMajorArrayRef::new(&missing_points, &full_shape)?, ctx)?;
+            fresh = self
+                .evaluate
+                .evaluate(ColMajorArrayRef::new(&missing_points, &full_shape)?, ctx)?;
             anyhow::ensure!(
                 fresh.len() == n_missing,
                 "the evaluator returned {} values for {n_missing} points",

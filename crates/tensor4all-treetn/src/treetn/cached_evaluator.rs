@@ -1951,63 +1951,6 @@ where
         self.evaluate_batched_with_hint(values, EvaluationHint::default())
     }
 
-    /// Evaluates all batch points on a caller-held explicit session.
-    ///
-    /// The session counterpart of [`Self::evaluate_batched`]: the same evaluator
-    /// body, message caches and centre selection, while every numerical leaf
-    /// (grouped GEMMs, retained-index contractions, selection, stacking,
-    /// gathering and permutation) runs through `session` and publishes compact
-    /// host storage. Nothing here enters the process-global backend or an eager
-    /// runtime, so a caller that already owns a held session can evaluate
-    /// directly.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TreeTNOperationError`] under the same conditions as
-    /// [`Self::evaluate_batched`], and when the supplied session rejects a leaf.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
-    /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
-    /// use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
-    /// use tenferro_cpu::CpuBackend;
-    ///
-    /// let s = DynIndex::new_dyn(2);
-    /// let tree = TreeTN::<_, usize>::from_tensors(
-    ///     vec![IdxTensor::from_dense(vec![s.clone()], vec![4.0_f64, 6.0])?],
-    ///     vec![0],
-    /// )?;
-    /// let values = [0usize, 1usize];
-    /// let points = ColMajorArrayRef::new(&values, &[1, 2])?;
-    ///
-    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-    /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    /// let mut held = HeldSession::open(&backend)?;
-    /// let result = held.with_session(|view| {
-    ///     let mut session = Session::from_backend_session(view.backend());
-    ///     let mut evaluator = TreeTNCachedEvaluator::new(
-    ///         &tree,
-    ///         &[s.clone()],
-    ///         CachedEvaluatorOptions::<usize>::default(),
-    ///     )?;
-    ///     evaluator.evaluate_batched_on_session(&mut session, points)
-    /// })?;
-    /// held.close()?;
-    /// assert_eq!(result.len(), 2);
-    /// assert_eq!(result[0].real(), 4.0);
-    /// assert_eq!(result[1].real(), 6.0);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn evaluate_batched_on_session(
-        &mut self,
-        session: &mut Session<'_>,
-        values: ColMajorArrayRef<'_, usize>,
-    ) -> std::result::Result<Vec<AnyScalar>, TreeTNOperationError> {
-        self.evaluate_batched_with_hint_on_session(session, values, EvaluationHint::default())
-    }
-
     /// Evaluates a batch, optionally naming the node this batch varies around.
     ///
     /// A caller that scans one site while holding the rest fixed knows which
@@ -2066,31 +2009,6 @@ where
     ) -> std::result::Result<Vec<AnyScalar>, TreeTNOperationError> {
         Ok(self
             .evaluate_batched_cached(values, hint)?
-            .into_iter()
-            .map(CachedScalar::into_any)
-            .collect())
-    }
-
-    /// Evaluates a hinted batch on a caller-held explicit session.
-    ///
-    /// The session counterpart of [`Self::evaluate_batched_with_hint`], with the
-    /// same hint semantics and caches; see [`Self::evaluate_batched_on_session`]
-    /// for the route contract.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TreeTNOperationError`] under the same conditions as
-    /// [`Self::evaluate_batched_with_hint`], and when the supplied session
-    /// rejects a leaf.
-    pub fn evaluate_batched_with_hint_on_session(
-        &mut self,
-        session: &mut Session<'_>,
-        values: ColMajorArrayRef<'_, usize>,
-        hint: EvaluationHint<V>,
-    ) -> std::result::Result<Vec<AnyScalar>, TreeTNOperationError> {
-        let mut route = CachedEvaluationRoute::on_session(session);
-        Ok(self
-            .evaluate_batched_cached_with_route(values, hint, &mut route)?
             .into_iter()
             .map(CachedScalar::into_any)
             .collect())
@@ -2179,8 +2097,12 @@ where
     /// Evaluates a hinted batch and returns typed scalars on a caller-held explicit session.
     ///
     /// The session counterpart of [`Self::evaluate_batched_typed`], with the same
-    /// precision conversion rules; see [`Self::evaluate_batched_on_session`] for
-    /// the route contract.
+    /// precision conversion rules. Every numerical leaf (grouped GEMMs,
+    /// retained-index contractions, selection, stacking, gathering and
+    /// permutation) runs through `session` and publishes compact host storage,
+    /// so nothing enters the process-global backend or an eager runtime. This is
+    /// the only session batch wrapper: its results are typed scalars, because an
+    /// `AnyScalar` result would adopt a rank-zero eager tensor.
     ///
     /// # Errors
     ///

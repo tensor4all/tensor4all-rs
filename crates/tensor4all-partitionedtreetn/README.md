@@ -25,6 +25,25 @@ session such as a scheduler lane and needs no process-global warm-up. The
 returned partition and report are published as compact host storage and stay
 usable after the session closes.
 
+### Entries
+
+Three entries run the same driver: one wave loop over the BFS generations of
+the patch queue. A wave is dispatched, merged in canonical path order, and its
+splits form the next one.
+
+| Entry | Where a patch runs | Evaluator |
+|---|---|---|
+| `patched_interpolate` | the caller's `EvalContext`, one patch after another | `FnMut` |
+| `patched_interpolate_on_lanes` | the child session of the `hataori_tenferro::TenferroLanes` lane that pulled it; the root wave and waves smaller than the lane count run one patch at a time | `Fn + Sync` |
+| `patched_interpolate_mpi` (features `hataori-mpi` / `hataori-mpi-rsmpi-rt`) | the lane of the rank that `hataori::pmap_lanes` assigns the patch to; the root orchestrates waves and owns the result | `Fn + Sync` |
+
+The schedule never changes the result contract: random sub-seeds come from the
+seed and the patch path, counters are per patch and summed, references are
+pinned while the single root patch runs, and `max_patches` is checked before a
+wave is dispatched. A lanes run reproduces the serial report at one and two
+lanes on the fixtures of `tests/adaptive_lanes.rs`; the rounding caveat of the
+generic cached-evaluator path is unchanged.
+
 The accuracy requirement is `PatchedInterpolationOptions::error_norm` with
 `tolerance: ErrorTolerance { rtol, atol }`:
 

@@ -8,14 +8,14 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use tensor4all_core::{ColMajorArrayRef, CommonScalar, TensorElement};
+use tensor4all_core::{CommonScalar, TensorElement};
 use tensor4all_treetn::interpolation::{EvalContext, InterpolationTermination, TreeInterpolator};
 
-use super::cache::{Counters, PatchSampler};
+use super::cache::PatchSampler;
 use super::options::{CappedPatches, PatchedInterpolationOptions};
 use super::report::PatchStatus;
 use super::verify::MeasureTarget;
-use super::{accepted, internal, Driver, PatchContext, PatchedInterpolationError, Unaccepted};
+use super::{accepted, internal, PatchContext, PatchedInterpolationError, Plan, Tally, Unaccepted};
 use super::{Projector, Verdict};
 
 /// The size bounds of a run, in generalized bits.
@@ -73,23 +73,24 @@ pub(super) fn validate_bounds(options: &PatchedInterpolationOptions) -> Result<(
     }
 }
 
-impl<T, V, E, F> Driver<'_, T, V, E, F>
+impl<T, V, E> Plan<'_, T, V, E>
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
     E: TreeInterpolator<T>,
-    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
     /// Retain a patch whose split the minimum blocked, with its last engine
     /// run. A run judged already keeps its verdict (no second measurement);
     /// an unjudged one (not converged, not capped-eligible) is checked like
     /// a capped run and judged once: measured on the stream of its attempt
     /// under L2, by its engine estimate under `SampledMax`.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn retain_blocked(
         &self,
         context: &PatchContext<'_>,
         last: Unaccepted<V>,
-        sampler: &PatchSampler<'_, T, F>,
+        sampler: &PatchSampler<'_, T>,
+        tally: &Tally,
         projector: &Projector,
         ctx: &mut EvalContext<'_>,
     ) -> Result<Verdict<T, V>, PatchedInterpolationError> {
@@ -121,15 +122,17 @@ where
                     .measurement
             } else {
                 let plan = self.plan(context.patch_count, context.seeds.verify(attempt));
-                let measured = self.measure(sampler, &target, plan, false, projector, ctx)?;
+                let measured =
+                    self.measure(tally, sampler, &target, plan, false, projector, ctx)?;
                 if measured.measurement.rms > context.tolerance {
-                    Counters::add(&self.verification_failures, 1);
+                    Tally::add(&tally.verification_failures, 1);
                 }
                 measured.measurement
             };
             // The audit removes the upward bias of a sample kept because it
             // failed, like that of any sampled contribution.
             record.audit = self.audit(
+                tally,
                 sampler,
                 &target,
                 &measurement,

@@ -129,6 +129,20 @@ stay usable after the session closes. Each patch caches its
 samples and hands them to its children, so no point is evaluated twice, and a
 patch with at most one unfixed site is evaluated exactly without the engine.
 
+The driver has three entries that share one wave loop over the BFS
+generations of the patch queue. `patched_interpolate` runs every patch on the
+caller's session, one after another.
+`adaptive_interpolation::patched_interpolate_on_lanes` fans each wave out over
+the lanes of a caller-owned `hataori_tenferro::TenferroLanes`, so every patch
+runs in the child session of the lane that pulled it; the root wave and waves
+smaller than the lane count run one patch at a time, so a single item keeps
+the backend's whole team.
+`adaptive_interpolation::patched_interpolate_mpi` (feature `hataori-mpi` or
+`hataori-mpi-rsmpi-rt`) distributes each wave over MPI ranks through
+`hataori::pmap_lanes`, with the root owning the queue and the result. The
+schedule does not change the report: seeds come from the seed and the patch
+path, counters are per patch, and the wave merge is in canonical path order.
+
 The accuracy requirement is an `ErrorNorm` with an
 `ErrorTolerance { rtol, atol }`. The default, `ErrorNorm::L2`, bounds the L2
 error over the whole domain by `delta = max(atol, rtol * S)`, where `S` is an

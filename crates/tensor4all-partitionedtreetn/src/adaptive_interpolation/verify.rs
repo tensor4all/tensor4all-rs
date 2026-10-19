@@ -166,15 +166,14 @@ where
 
 /// Measure `f - f~` on the points of `plan`. Values of `f` come through the
 /// patch cache; values of the network from [`network_values`].
-pub(super) fn measure<T, F, V>(
-    sampler: &PatchSampler<'_, T, F>,
+pub(super) fn measure<T, V>(
+    sampler: &PatchSampler<'_, T>,
     target: &MeasureTarget<'_, V>,
     plan: PointPlan,
     ctx: &mut EvalContext<'_>,
 ) -> Result<Measured, MeasureError>
 where
     T: CommonScalar + TensorElement,
-    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
 {
     let n_active = target.active_dims.len();
@@ -482,15 +481,15 @@ fn classify(
 }
 
 /// `||f~|| / sqrt(|X|)` from the log-norms of the accepted patches, combined
-/// in the given order; `None` when some log-norm is not finite (`-inf`, a
-/// zero patch, contributes zero).
+/// in the given order; `None` when some log-norm was not measured or is not
+/// finite (`-inf`, a zero patch, contributes zero).
 pub(super) fn approximation_rms(
-    patches: impl Iterator<Item = (Result<f64, TreeTNOperationError>, f64)>,
+    patches: impl Iterator<Item = (Option<f64>, f64)>,
     domain_points: f64,
 ) -> Option<f64> {
     let mut sum = ScaledSquares::default();
     for (log_norm, patch_points) in patches {
-        let log_norm = log_norm.ok()?;
+        let log_norm = log_norm?;
         if log_norm == f64::NEG_INFINITY {
             continue;
         }

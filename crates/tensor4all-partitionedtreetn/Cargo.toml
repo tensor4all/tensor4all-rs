@@ -26,12 +26,36 @@ tenferro-provider-inject = [
     "tensor4all-core/tenferro-provider-inject",
     "tensor4all-treetn/tenferro-provider-inject",
 ]
+# MPI fan-out of the adaptive patch driver, on hataori's upstream `mpi` backend.
+hataori-mpi = ["hataori-mpi-core", "hataori/mpi", "dep:mpi"]
+# The same entry on hataori's runtime (`rsmpi-rt`) backend. hataori's two MPI
+# backends are mutually exclusive, so this feature and `hataori-mpi` cannot be
+# enabled together.
+hataori-mpi-rsmpi-rt = ["hataori-mpi-core", "hataori/rsmpi-rt", "dep:mpi-rt"]
+# What both MPI backends share: the wire format and hataori's scheduler features.
+hataori-mpi-core = [
+    "dep:serde",
+    "dep:num-complex",
+    "num-complex/serde",
+    "hataori/rayon",
+]
 
 [package.metadata.docs.rs]
 features = ["tenferro-cpu-faer"]
 
 [dependencies]
 anyhow.workspace = true
+# The lane fan-out of the adaptive patch driver: hataori schedules, tenferro owns
+# the pool and one child session per lane.
+hataori.workspace = true
+hataori-tenferro.workspace = true
+# Wire types of the MPI fan-out (`hataori-mpi*` features).
+serde = { workspace = true, optional = true }
+num-complex = { workspace = true, optional = true }
+# The MPI communicator of the `hataori-mpi` backend; `mpi-rt` is the same crate
+# built by hataori's runtime backend (`hataori-mpi-rsmpi-rt`).
+mpi = { workspace = true, optional = true }
+mpi-rt = { package = "mpi", git = "https://github.com/tensor4all/rsmpi-rt", rev = "6db6a2d6f96115b17c9a925e53ce719797c15dbb", default-features = false, features = ["mpi-rt-sys-backend"], optional = true }
 thiserror.workspace = true
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
@@ -57,6 +81,16 @@ rand_chacha.workspace = true
 [[bench]]
 name = "f7_engine_context_overhead"
 harness = false
+
+[[example]]
+name = "adaptive_mpi_smoke"
+required-features = ["hataori-mpi-rsmpi-rt"]
+
+# Its own binary because it initializes MPI before any other thread uses it.
+[[test]]
+name = "adaptive_mpi"
+path = "tests/adaptive_mpi.rs"
+required-features = ["hataori-mpi-rsmpi-rt"]
 
 [[test]]
 name = "integration"

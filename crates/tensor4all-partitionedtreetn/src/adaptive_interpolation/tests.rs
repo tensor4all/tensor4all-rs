@@ -20,7 +20,7 @@ use super::sampling::{
     all_points, build_candidates, mix64, patch_candidates, patch_seeds, point_list_capacity,
     uniform_points, PatchDomain, SplitMix64,
 };
-use super::{active_pivots, added_pivots, complete_points, PatchedInterpolationOptions};
+use super::{active_pivots, added_pivots, complete_points, Exclusive, PatchedInterpolationOptions};
 use crate::{PartitionedTreeTN, PartitionedTreeTNError, Projector, SubDomainTreeTN};
 
 /// Run `body` on one held session, the execution capability of the production
@@ -688,13 +688,14 @@ type BoxedEvaluator =
 /// fixed to 1; return its result with the evaluation and cache-hit counts.
 fn with_sampler<R>(
     evaluate: BoxedEvaluator,
-    body: impl FnOnce(&PatchSampler<'_, f64, BoxedEvaluator>, &mut EvalContext<'_>) -> R,
+    body: impl FnOnce(&PatchSampler<'_, f64>, &mut EvalContext<'_>) -> R,
 ) -> (R, usize, usize) {
     let counters = Counters::default();
     let fixed = [None, Some(1), None];
     let evaluate = RefCell::new(evaluate);
+    let access = Exclusive(&evaluate);
     let sampler = PatchSampler {
-        evaluate: &evaluate,
+        evaluate: &access,
         fixed: &fixed,
         n_active: 2,
         counters: &counters,
@@ -710,7 +711,7 @@ fn with_sampler<R>(
 }
 
 fn batch_values(
-    sampler: &PatchSampler<'_, f64, BoxedEvaluator>,
+    sampler: &PatchSampler<'_, f64>,
     data: &[usize],
     ctx: &mut EvalContext<'_>,
 ) -> anyhow::Result<Vec<f64>> {
@@ -841,8 +842,9 @@ fn sampler_gives_the_same_values_and_counts_for_every_key_type() {
                 .collect())
         });
         let evaluate = RefCell::new(evaluate);
+        let access = Exclusive(&evaluate);
         let sampler = PatchSampler {
-            evaluate: &evaluate,
+            evaluate: &access,
             fixed: &fixed,
             n_active,
             counters: &counters,
@@ -877,7 +879,7 @@ fn sampler_gives_the_same_values_and_counts_for_every_key_type() {
         let mut child_fixed = fixed.clone();
         child_fixed[1] = Some(p1[0]);
         let child_sampler = PatchSampler {
-            evaluate: &evaluate,
+            evaluate: &access,
             fixed: &child_fixed,
             n_active: n_active - 1,
             counters: &counters,

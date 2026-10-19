@@ -190,7 +190,14 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   sequential tree pQTCI. `ctx` is the run's `EvalContext` over a session the
   caller entered (`tensor4all_treetn::interpolation::EvalContext::new`); every
   numerical stage runs on that session, and the result is published as compact
-  host storage. `evaluate` receives a column-major `[n_sites, n_points]`
+  host storage. Two fan-out entries run the same driver:
+  `patched_interpolate_on_lanes(&mut lanes, ...)` takes a
+  `hataori_tenferro::TenferroLanes` and an `Fn + Sync` evaluator (each patch runs
+  in the lane's child session; the root wave and waves smaller than the lane
+  count run one patch at a time), and `patched_interpolate_mpi(&world, &mut
+  lanes, root, ...)` (features `hataori-mpi` / `hataori-mpi-rsmpi-rt`)
+  distributes waves over ranks through `hataori::pmap_lanes`, returning
+  `Option<result>` (`Some` on the root only). `evaluate` receives a column-major `[n_sites, n_points]`
   batch of 0-based full-domain points in the derived site order (nodes
   ascending, each node's sites in order) and the same context. An unaccepted patch splits at the next site of the
   (partial) `patch_order`. `PatchedInterpolationOptions::new(max_bond_dim)`

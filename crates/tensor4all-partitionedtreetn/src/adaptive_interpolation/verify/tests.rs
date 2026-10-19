@@ -813,18 +813,20 @@ fn unmet_contributions_keep_the_m3_classification_as_basis() {
 fn approximation_rms_combines_log_norms_and_reports_overflow() {
     // Patches of norms 3 and 4 on a domain of 8 points: ||f~|| = 5.
     let rms = approximation_rms(
-        [(Ok(3.0_f64.ln()), 2.0), (Ok(4.0_f64.ln()), 6.0)].into_iter(),
+        [(Some(3.0_f64.ln()), 2.0), (Some(4.0_f64.ln()), 6.0)].into_iter(),
         8.0,
     )
     .unwrap();
     assert!(close(rms, 5.0 / 8.0_f64.sqrt()));
     // A zero patch contributes nothing; an overflowing one gives None.
-    let zero = approximation_rms([(Ok(f64::NEG_INFINITY), 2.0)].into_iter(), 8.0);
+    let zero = approximation_rms([(Some(f64::NEG_INFINITY), 2.0)].into_iter(), 8.0);
     assert_eq!(zero, Some(0.0));
     assert_eq!(
-        approximation_rms([(Ok(f64::INFINITY), 2.0)].into_iter(), 8.0),
+        approximation_rms([(Some(f64::INFINITY), 2.0)].into_iter(), 8.0),
         None
     );
+    // A patch whose log-norm was not measured makes the norm unavailable.
+    assert_eq!(approximation_rms([(None, 2.0)].into_iter(), 8.0), None);
 }
 
 // ---------------------------------------------------------------------------
