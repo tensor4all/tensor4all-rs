@@ -233,22 +233,22 @@ impl RawEagerInnerConfigs {
     fn new() -> Self {
         Self {
             first_site: DotGeneralConfig {
-                lhs_contracting_dims: vec![0].into(),
-                rhs_contracting_dims: vec![0].into(),
-                lhs_batch_dims: Vec::new().into(),
-                rhs_batch_dims: Vec::new().into(),
+                lhs_contracting_dims: [0].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
             env_bra: DotGeneralConfig {
-                lhs_contracting_dims: vec![0].into(),
-                rhs_contracting_dims: vec![0].into(),
-                lhs_batch_dims: Vec::new().into(),
-                rhs_batch_dims: Vec::new().into(),
+                lhs_contracting_dims: [0].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
             tmp_ket: DotGeneralConfig {
-                lhs_contracting_dims: vec![0, 1].into(),
-                rhs_contracting_dims: vec![0, 1].into(),
-                lhs_batch_dims: Vec::new().into(),
-                rhs_batch_dims: Vec::new().into(),
+                lhs_contracting_dims: [0, 1].as_slice().into(),
+                rhs_contracting_dims: [0, 1].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
         }
     }

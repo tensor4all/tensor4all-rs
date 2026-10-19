@@ -1311,10 +1311,10 @@ impl IdxTensor {
             ));
         };
         Ok(DotGeneralConfig {
-            lhs_contracting_dims: axes_a.to_vec().into(),
-            rhs_contracting_dims: axes_b.to_vec().into(),
-            lhs_batch_dims: Vec::new().into(),
-            rhs_batch_dims: Vec::new().into(),
+            lhs_contracting_dims: axes_a.into(),
+            rhs_contracting_dims: axes_b.into(),
+            lhs_batch_dims: [].as_slice().into(),
+            rhs_batch_dims: [].as_slice().into(),
         })
     }
 
@@ -4287,10 +4287,20 @@ impl IdxTensor {
         }
 
         let config = DotGeneralConfig {
-            lhs_contracting_dims: contracting_a.clone().into(),
-            rhs_contracting_dims: contracting_b.clone().into(),
-            lhs_batch_dims: retained_pairs.iter().map(|&(pos_a, _)| pos_a).collect(),
-            rhs_batch_dims: retained_pairs.iter().map(|&(_, pos_b)| pos_b).collect(),
+            lhs_contracting_dims: contracting_a.as_slice().into(),
+            rhs_contracting_dims: contracting_b.as_slice().into(),
+            lhs_batch_dims: retained_pairs
+                .iter()
+                .map(|&(pos_a, _)| pos_a)
+                .collect::<Vec<_>>()
+                .as_slice()
+                .into(),
+            rhs_batch_dims: retained_pairs
+                .iter()
+                .map(|&(_, pos_b)| pos_b)
+                .collect::<Vec<_>>()
+                .as_slice()
+                .into(),
         };
         let lhs = self.try_materialized_inner()?;
         let rhs = other.try_materialized_inner()?;
