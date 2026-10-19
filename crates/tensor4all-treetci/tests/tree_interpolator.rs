@@ -11,8 +11,8 @@ use std::num::NonZeroUsize;
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tensor4all_core::{
-    ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor, Index, IndexLike, TagSet,
-    TensorElement,
+    ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, FactorizeOptions, IdxTensor, Index,
+    IndexLike, TagSet, TensorElement,
 };
 use tensor4all_tensorbackend::{
     explicit::{HeldSession, Session},
@@ -23,7 +23,9 @@ use tensor4all_treetn::interpolation::{
     EvalContext, InterpolationError, InterpolationOutcome, InterpolationProblem,
     InterpolationTermination, Parallelism, TreeInterpolator,
 };
-use tensor4all_treetn::{factorize_tensor_to_treetn, NodeNameNetwork, TreeTopology};
+use tensor4all_treetn::{
+    factorize_tensor_to_treetn_with_on_session, NodeNameNetwork, TreeTopology,
+};
 
 type Name = String;
 
@@ -422,8 +424,14 @@ where
             .keys()
             .next()
             .ok_or_else(|| engine(anyhow::anyhow!("empty problem")))?;
-        let network = factorize_tensor_to_treetn(&dense, &TreeTopology::new(nodes, edges), root)
-            .map_err(|e| engine(e.into()))?;
+        let network = factorize_tensor_to_treetn_with_on_session(
+            &dense,
+            &TreeTopology::new(nodes, edges),
+            FactorizeOptions::qr(),
+            root,
+            ctx.session(),
+        )
+        .map_err(|e| engine(e.into()))?;
         Ok(InterpolationOutcome {
             network,
             termination: InterpolationTermination::Converged,
@@ -436,12 +444,10 @@ where
 
 /// A second engine over the same contract.
 ///
-/// The mock factorizes its dense tensor with `factorize_tensor_to_treetn`, whose QR runs
-/// on the process-global route. A supplied session makes that route refuse nested entry,
-/// so this check stays ignored until C2 threads the factorization through the context
-/// (`#915 D3` C2). Re-enabling it is the acceptance test for that step.
+/// The mock factorizes its dense tensor with the explicit-session entry, so the
+/// whole run stays on the supplied session even though another runtime exists in
+/// the process. It is the acceptance test for that step (`#915 D3` C2).
 #[test]
-#[ignore = "#915 D3 C2: the mock engine's QR factorization still uses the process-global route"]
 fn mock_engine_runs_through_the_same_helper() {
     let chain = run_and_check(
         &DenseMockEngine,

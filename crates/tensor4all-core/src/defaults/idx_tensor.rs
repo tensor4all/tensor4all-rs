@@ -2035,30 +2035,177 @@ impl IdxTensor {
                 .payload_f64_col_major_vec()
                 .map_err(anyhow::Error::new)?;
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions)?;
-            Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
+            Self::from_host_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.is_c64() {
             let storage = self.storage.materialize(self.indices.len())?;
             let payload = storage
                 .payload_c64_col_major_vec()
                 .map_err(anyhow::Error::new)?;
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions)?;
-            Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
+            Self::from_host_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.dtype() == Some(DType::F32) {
             let storage = self.storage.materialize(self.indices.len())?;
             let payload = storage
                 .payload_f32_col_major_vec()
                 .map_err(anyhow::Error::new)?;
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions)?;
-            Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
+            Self::from_host_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.dtype() == Some(DType::C32) {
             let storage = self.storage.materialize(self.indices.len())?;
             let payload = storage
                 .payload_c32_col_major_vec()
                 .map_err(anyhow::Error::new)?;
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions)?;
-            Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
+            Self::from_host_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else {
             Err(anyhow::anyhow!("unsupported diagonal storage scalar type"))
+        }
+    }
+
+    /// Runtime-free dense selection from this tensor's own host payload.
+    ///
+    /// Only dense column-major source layout is handled here; diagonal and
+    /// structured payloads keep their compact selection paths. No runtime is
+    /// entered, so this is the route taken when the operand is compact storage.
+    fn select_dense_host<T: tensor4all_tensorbackend::StorageScalar>(
+        &self,
+        kept_axes: &[usize],
+        kept_indices: Vec<DynIndex>,
+        kept_dims: &[usize],
+        selected_axes: &[usize],
+        positions: &[usize],
+    ) -> Result<Self> {
+        let dims = self.dims();
+        let data = self.host_dense_values::<T>()?;
+        let strides = Self::col_major_strides(&dims)?;
+        let kept_len = checked_product(kept_dims)?;
+        let mut output = Vec::with_capacity(kept_len);
+        for linear in 0..kept_len {
+            let kept_coordinates = Self::col_major_coordinates(linear, kept_dims);
+            let mut source_coordinates = vec![0usize; dims.len()];
+            for (position, &axis) in kept_axes.iter().enumerate() {
+                source_coordinates[axis] = kept_coordinates[position];
+            }
+            for (&axis, &position) in selected_axes.iter().zip(positions.iter()) {
+                source_coordinates[axis] = position;
+            }
+            let offset = Self::col_major_offset(&source_coordinates, &strides)?;
+            output.push(*data.get(offset).ok_or_else(|| {
+                anyhow::anyhow!("column-major selection read offset {offset} is out of bounds")
+            })?);
+        }
+        Self::from_host_dense(kept_indices, output).map_err(anyhow::Error::from)
+    }
+
+    fn select_dense_host_dispatch(
+        &self,
+        kept_axes: &[usize],
+        kept_indices: Vec<DynIndex>,
+        kept_dims: &[usize],
+        selected_axes: &[usize],
+        positions: &[usize],
+    ) -> Result<Self> {
+        match self.storage.dtype() {
+            Some(DType::F64) => self.select_dense_host::<f64>(
+                kept_axes,
+                kept_indices,
+                kept_dims,
+                selected_axes,
+                positions,
+            ),
+            Some(DType::F32) => self.select_dense_host::<f32>(
+                kept_axes,
+                kept_indices,
+                kept_dims,
+                selected_axes,
+                positions,
+            ),
+            Some(DType::C64) => self.select_dense_host::<Complex64>(
+                kept_axes,
+                kept_indices,
+                kept_dims,
+                selected_axes,
+                positions,
+            ),
+            Some(DType::C32) => self.select_dense_host::<Complex32>(
+                kept_axes,
+                kept_indices,
+                kept_dims,
+                selected_axes,
+                positions,
+            ),
+            _ => Err(anyhow::anyhow!("unsupported dense storage scalar type")),
+        }
+    }
+
+    /// Runtime-free stacking of compact host payloads along a new axis.
+    ///
+    /// Diagonal and structured inputs are materialized to their logical dense
+    /// values here: the stacked result mixes an independent batch axis with the
+    /// existing axis classes, and a dense result is the one representation every
+    /// storage kind can express. ponytail: a class-preserving stacked
+    /// representation needs the batch class merged into the existing axis
+    /// classes; no caller needs that yet, so the payload is densified instead.
+    fn stack_host<T: tensor4all_tensorbackend::StorageScalar>(
+        tensors: &[&Self],
+        base_dims: &[usize],
+        insert_axis: usize,
+        result_indices: Vec<DynIndex>,
+    ) -> Result<Self> {
+        let base_rank = base_dims.len();
+        let base_len = checked_product(base_dims)?;
+        let mut result_dims = base_dims.to_vec();
+        result_dims.insert(insert_axis, tensors.len());
+        let result_len = checked_product(&result_dims)?;
+        let strides = Self::col_major_strides(&result_dims)?;
+        let mut output = vec![T::default(); result_len];
+        for (batch, tensor) in tensors.iter().enumerate() {
+            let data = tensor.host_dense_values::<T>()?;
+            if data.len() != base_len {
+                return Err(anyhow::anyhow!(
+                    "stack input payload length {} does not match {} base elements",
+                    data.len(),
+                    base_len
+                ));
+            }
+            for (linear, &value) in data.iter().enumerate().take(base_len) {
+                let base_coordinates = Self::col_major_coordinates(linear, base_dims);
+                let mut result_coordinates = Vec::with_capacity(result_dims.len());
+                for axis in 0..=base_rank {
+                    if axis == insert_axis {
+                        result_coordinates.push(batch);
+                    } else {
+                        let base_axis = if axis < insert_axis { axis } else { axis - 1 };
+                        result_coordinates.push(base_coordinates[base_axis]);
+                    }
+                }
+                let offset = Self::col_major_offset(&result_coordinates, &strides)?;
+                let slot = output.get_mut(offset).ok_or_else(|| {
+                    anyhow::anyhow!("stack write offset {offset} is out of bounds")
+                })?;
+                *slot = value;
+            }
+        }
+        Self::from_host_dense(result_indices, output).map_err(anyhow::Error::from)
+    }
+
+    fn stack_host_dispatch(
+        tensors: &[&Self],
+        base_dims: &[usize],
+        insert_axis: usize,
+        result_indices: Vec<DynIndex>,
+        dtype: DType,
+    ) -> Result<Self> {
+        match dtype {
+            DType::F64 => Self::stack_host::<f64>(tensors, base_dims, insert_axis, result_indices),
+            DType::F32 => Self::stack_host::<f32>(tensors, base_dims, insert_axis, result_indices),
+            DType::C64 => {
+                Self::stack_host::<Complex64>(tensors, base_dims, insert_axis, result_indices)
+            }
+            DType::C32 => {
+                Self::stack_host::<Complex32>(tensors, base_dims, insert_axis, result_indices)
+            }
+            _ => Err(anyhow::anyhow!("unsupported dense storage scalar type")),
         }
     }
 
@@ -2074,6 +2221,104 @@ impl IdxTensor {
                 .ok_or_else(|| anyhow::anyhow!("column-major stride overflow"))?;
         }
         Ok(strides)
+    }
+
+    /// Decompose a column-major linear offset into per-axis coordinates.
+    fn col_major_coordinates(linear: usize, dims: &[usize]) -> Vec<usize> {
+        let mut remaining = linear;
+        dims.iter()
+            .map(|&dim| {
+                if dim == 0 {
+                    0
+                } else {
+                    let coordinate = remaining % dim;
+                    remaining /= dim;
+                    coordinate
+                }
+            })
+            .collect()
+    }
+
+    /// Column-major offset of `coordinates` under `strides`.
+    fn col_major_offset(coordinates: &[usize], strides: &[isize]) -> Result<usize> {
+        coordinates
+            .iter()
+            .zip(strides.iter())
+            .try_fold(0usize, |offset, (&coordinate, &stride)| {
+                let stride = usize::try_from(stride)
+                    .map_err(|_| anyhow::anyhow!("negative column-major stride {stride}"))?;
+                let term = coordinate
+                    .checked_mul(stride)
+                    .ok_or_else(|| anyhow::anyhow!("column-major offset overflow"))?;
+                offset
+                    .checked_add(term)
+                    .ok_or_else(|| anyhow::anyhow!("column-major offset overflow"))
+            })
+    }
+
+    /// Reorder a column-major dense host buffer under `perm[new_axis] = old_axis`.
+    fn permute_host_col_major<T: Copy>(
+        data: &[T],
+        dims: &[usize],
+        perm: &[usize],
+    ) -> Result<Vec<T>> {
+        let new_dims: Vec<usize> = perm.iter().map(|&axis| dims[axis]).collect();
+        let len = checked_product(&new_dims)?;
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        let strides = Self::col_major_strides(dims)?;
+        let mut output = Vec::with_capacity(len);
+        for linear in 0..len {
+            let coordinates = Self::col_major_coordinates(linear, &new_dims);
+            let mut source_coordinates = vec![0usize; dims.len()];
+            for (new_axis, &old_axis) in perm.iter().enumerate() {
+                source_coordinates[old_axis] = coordinates[new_axis];
+            }
+            let offset = Self::col_major_offset(&source_coordinates, &strides)?;
+            output.push(*data.get(offset).ok_or_else(|| {
+                anyhow::anyhow!("column-major permutation read offset {offset} is out of bounds")
+            })?);
+        }
+        Ok(output)
+    }
+
+    /// Read the logical dense values of this tensor without entering a runtime.
+    ///
+    /// Compact [`IdxTensorStorage::Materialized`] storage is read from its own
+    /// payload, so this works on a thread that already owns an explicit session.
+    /// An eager or structured payload is read through its stored host value; the
+    /// session routes that call this refuse tracked operands first.
+    pub(crate) fn host_dense_values<T: tensor4all_tensorbackend::StorageScalar>(
+        &self,
+    ) -> std::result::Result<Vec<T>, IdxTensorError> {
+        if let IdxTensorStorage::Materialized(storage) = &self.storage {
+            return T::dense_values(storage, &self.dims())
+                .map_err(|error| IdxTensorError::materialization(anyhow::Error::new(error)));
+        }
+        self.with_dense_slice::<T, _>(|values| values.to_vec())
+    }
+
+    /// Logical dense host values under `new_indices`, without entering a runtime.
+    ///
+    /// Returns the dimensions in the requested order together with the reordered
+    /// column-major values. This is the runtime-free counterpart of
+    /// `permute_indices(..)` followed by `to_vec(..)`, used by the explicit-session
+    /// factorization routes.
+    pub(crate) fn host_dense_permuted<T: tensor4all_tensorbackend::StorageScalar>(
+        &self,
+        new_indices: &[DynIndex],
+    ) -> std::result::Result<(Vec<usize>, Vec<T>), IdxTensorError> {
+        let perm = compute_permutation_from_indices(&self.indices, new_indices)?;
+        let dims = self.dims();
+        let data = self.host_dense_values::<T>()?;
+        if perm.iter().copied().eq(0..perm.len()) {
+            return Ok((dims, data));
+        }
+        let permuted = Self::permute_host_col_major(&data, &dims, &perm)
+            .map_err(|error| IdxTensorError::operation("host dense permutation", error))?;
+        let new_dims = new_indices.iter().map(|index| index.dim()).collect();
+        Ok((new_dims, permuted))
     }
 
     fn zero_structured_selection<T>(
@@ -2117,7 +2362,7 @@ impl IdxTensor {
         make_output: F,
     ) -> Result<Self>
     where
-        T: TensorElement + Zero,
+        T: TensorElement + Zero + tensor4all_tensorbackend::StorageScalar,
         F: FnOnce(Vec<T>, Vec<usize>, Vec<isize>, Vec<usize>) -> Result<Self>,
     {
         let (selected_axes, positions) = selected;
@@ -2203,7 +2448,7 @@ impl IdxTensor {
         selected_class_positions: &[Option<usize>],
     ) -> Result<Self>
     where
-        T: TensorElement + Zero,
+        T: TensorElement + Zero + tensor4all_tensorbackend::StorageScalar,
     {
         let payload_dims = self.storage.payload_dims();
         let axis_classes = self.storage.axis_classes();
@@ -2250,7 +2495,7 @@ impl IdxTensor {
             output.push(payload[input_linear]);
         }
 
-        Self::from_dense(kept_indices, output).map_err(anyhow::Error::from)
+        Self::from_host_dense(kept_indices, output).map_err(anyhow::Error::from)
     }
 
     fn select_structured_indices(
@@ -2309,10 +2554,10 @@ impl IdxTensor {
                 kept_indices,
                 kept_dims,
                 (selected_axes, positions),
-                move |payload, dims, _strides, classes| {
-                    let native = dense_native_tensor_from_col_major(&payload, &dims)?;
-                    let inner = IdxTensor::untracked_inner(native, default_eager_ctx()?)?;
-                    Self::from_structured_payload_inner(output_indices, inner, dims, classes)
+                move |payload, dims, strides, classes| {
+                    let storage = Storage::new_structured(payload, dims, strides, classes)?;
+                    Self::from_storage(output_indices, Arc::new(storage))
+                        .map_err(anyhow::Error::from)
                 },
             )
         } else if self.storage.dtype() == Some(DType::C32) {
@@ -2327,10 +2572,10 @@ impl IdxTensor {
                 kept_indices,
                 kept_dims,
                 (selected_axes, positions),
-                move |payload, dims, _strides, classes| {
-                    let native = dense_native_tensor_from_col_major(&payload, &dims)?;
-                    let inner = IdxTensor::untracked_inner(native, default_eager_ctx()?)?;
-                    Self::from_structured_payload_inner(output_indices, inner, dims, classes)
+                move |payload, dims, strides, classes| {
+                    let storage = Storage::new_structured(payload, dims, strides, classes)?;
+                    Self::from_storage(output_indices, Arc::new(storage))
+                        .map_err(anyhow::Error::from)
                 },
             )
         } else {
@@ -2474,7 +2719,10 @@ impl IdxTensor {
     /// scalar tensor. Diagonal and structured tensors are sliced from their
     /// compact payload without materializing the original full tensor; the
     /// result keeps structured storage when the remaining logical axes can
-    /// still be represented by axis classes.
+    /// still be represented by axis classes. Compact host storage is sliced
+    /// from its own payload without entering any runtime, so this works while
+    /// the caller already owns a session; an eager payload keeps the eager
+    /// route.
     ///
     /// # Errors
     /// Returns an [`IdxTensorError`] when `selected_indices` and `positions`
@@ -2549,6 +2797,22 @@ impl IdxTensor {
             .map(|&axis| self.indices[axis].dim())
             .collect::<Vec<_>>();
 
+        // Compact host storage is sliced from its own payload: no runtime is
+        // entered, so this works on a thread that already owns a session.
+        if matches!(&self.storage, IdxTensorStorage::Materialized(_))
+            && self.storage.storage_kind() == StorageKind::Dense
+        {
+            return self
+                .select_dense_host_dispatch(
+                    &kept_axes,
+                    kept_indices,
+                    &kept_dims,
+                    &selected_axes,
+                    positions,
+                )
+                .map_err(IdxTensorError::from);
+        }
+
         if matches!(
             self.storage.storage_kind(),
             StorageKind::Diagonal | StorageKind::Structured
@@ -2615,6 +2879,10 @@ impl IdxTensor {
     /// structured-AD tensor uses compact storage that would need dense
     /// materialization.
     ///
+    /// Compact host inputs are stacked on the host without entering any
+    /// runtime, so the boundary axes added by `factorize_allowing_empty_side`
+    /// stay on a caller-held session; eager inputs keep the eager route.
+    ///
     /// # Examples
     ///
     /// ```
@@ -2663,6 +2931,46 @@ impl IdxTensor {
 
         let insert_axis =
             Self::normalize_insert_axis("stack_along_new_index", axis, base_indices.len())?;
+        let base_dims = first.dims();
+        let all_compact = tensors
+            .iter()
+            .all(|tensor| matches!(&tensor.storage, IdxTensorStorage::Materialized(_)));
+        // Compact host storage is stacked on the host: the boundary axes added by
+        // `factorize_allowing_empty_side` stay runtime-free on a held session.
+        // A diagonal or structured input is materialized to its logical dense
+        // values, which is the one representation a stacked result can keep.
+        if all_compact {
+            let dtype = first.storage.dtype().ok_or_else(|| {
+                anyhow::anyhow!("stack_along_new_index: unable to determine the payload dtype")
+            })?;
+            for tensor in tensors.iter().copied() {
+                if tensor.storage.dtype() != Some(dtype) {
+                    return Err(anyhow::anyhow!(
+                        "stack_along_new_index: input tensors must have the same scalar type"
+                    )
+                    .into());
+                }
+                if tensor.dims() != base_dims {
+                    return Err(anyhow::anyhow!(
+                        "stack_along_new_index: input tensor dims {:?} do not match {:?}",
+                        tensor.dims(),
+                        base_dims
+                    )
+                    .into());
+                }
+            }
+            let mut result_indices = base_indices;
+            result_indices.insert(insert_axis, new_index);
+            return Self::stack_host_dispatch(
+                tensors,
+                &base_dims,
+                insert_axis,
+                result_indices,
+                dtype,
+            )
+            .map_err(IdxTensorError::from);
+        }
+
         let mut result_indices = base_indices;
         result_indices.insert(insert_axis, new_index);
 

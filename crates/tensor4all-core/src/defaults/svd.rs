@@ -660,19 +660,17 @@ where
         unfold_index_sets(t, left_inds).map_err(|error| {
             SvdError::ComputationError(anyhow::anyhow!("Failed to unfold tensor: {error}"))
         })?;
-    let unfolded = t
-        .permute_indices(&order)
+    // Read and reorder the operand's own host payload: entering the eager
+    // runtime for a transpose would be a second session entry on this thread.
+    let (dims, data) = t
+        .host_dense_permuted::<T>(&order)
         .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))?;
-    let dims = unfolded.dims();
     let left_len = left_indices.len();
     let m = crate::defaults::idx_tensor::checked_product(&dims[..left_len])
         .map_err(SvdError::ComputationError)?;
     let n = crate::defaults::idx_tensor::checked_product(&dims[left_len..])
         .map_err(SvdError::ComputationError)?;
     let k = m.min(n);
-    let data = unfolded
-        .to_vec::<T>()
-        .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))?;
     let matrix = tenferro::Tensor::from_vec_col_major(vec![m, n], data)
         .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))?;
     let (u_value, s_value, vt_value) = session

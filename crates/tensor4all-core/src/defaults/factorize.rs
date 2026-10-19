@@ -764,6 +764,148 @@ pub fn factorize_on_session(
     }
 }
 
+/// Full-rank factorization on a caller-held explicit session.
+///
+/// The runtime-free counterpart of [`factorize_full_rank`]: the split
+/// bookkeeping and factor assembly are shared with the eager route, while the
+/// decomposition runs on `session` and the factors are published as plain
+/// host-storage [`IdxTensor`]s. Nothing here enters another session or the
+/// eager runtime, so a caller that already owns a held session (TreeTN
+/// canonicalization, for example) can call it directly.
+///
+/// QR and SVD are served. LU and CI have no session route.
+///
+/// # Errors
+///
+/// Returns [`FactorizeError`] for a diagonal, structured or tracked operand, a
+/// `Right` canonical QR request, an LU/CI request, or a rejection by the
+/// supplied session.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{
+///     factorize_full_rank_on_session, Canonical, DynIndex, FactorizeAlg, IdxTensor,
+///     TensorContractionLike,
+/// };
+/// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+/// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+/// let mut held = HeldSession::open(&backend)?;
+/// let result = held.with_session(|view| {
+///     let mut session = Session::from_backend_session(view.backend());
+///     factorize_full_rank_on_session(
+///         &mut session,
+///         &tensor,
+///         std::slice::from_ref(&i),
+///         FactorizeAlg::QR,
+///         Canonical::Left,
+///     )
+/// })?;
+/// held.close()?;
+/// assert_eq!(result.rank, 2);
+/// let reconstructed = result.left.contract_pair(&result.right)?;
+/// assert!(tensor.sub(&reconstructed)?.maxabs()? < 1e-12);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn factorize_full_rank_on_session(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    alg: FactorizeAlg,
+    canonical: Canonical,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    if t.is_diag() {
+        return Err(FactorizeError::UnsupportedStorage(
+            "Diagonal storage not supported for factorize",
+        ));
+    }
+    if t.tracks_grad() {
+        return Err(FactorizeError::UnsupportedStorage(
+            "a tracked value cannot enter the plain explicit-session route; detach it explicitly before the region",
+        ));
+    }
+    match alg {
+        FactorizeAlg::SVD => {
+            let options = SvdOptions::full_rank();
+            let result = if t.is_f32() {
+                svd_for_factorize_on_session::<f32>(session, t, left_inds, &options)
+            } else if t.is_f64() {
+                svd_for_factorize_on_session::<f64>(session, t, left_inds, &options)
+            } else if t.is_c32() {
+                svd_for_factorize_on_session::<Complex32>(session, t, left_inds, &options)
+            } else if t.is_c64() {
+                svd_for_factorize_on_session::<Complex64>(session, t, left_inds, &options)
+            } else {
+                Err(crate::svd::SvdError::ComputationError(anyhow::anyhow!(
+                    "the explicit-session SVD route serves floating-point tensors"
+                )))
+            }
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+            let mut contract = |lhs: &IdxTensor, rhs: &IdxTensor| {
+                crate::contract_pair_on_session(
+                    session,
+                    lhs,
+                    rhs,
+                    crate::PairwiseContractionOptions::new(),
+                )
+                .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))
+            };
+            assemble_svd_factors(result, canonical, &mut contract)
+        }
+        FactorizeAlg::QR => {
+            if canonical == Canonical::Right {
+                return Err(FactorizeError::UnsupportedCanonical(
+                    "QR only supports Canonical::Left (would need LQ for right)",
+                ));
+            }
+            factorize_qr_full_rank_on_session(session, t, left_inds)
+        }
+        FactorizeAlg::LU | FactorizeAlg::CI => Err(FactorizeError::UnsupportedStorage(
+            "LU and CI factorization have no explicit-session path",
+        )),
+    }
+}
+
+fn factorize_qr_full_rank_on_session(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    let options = QrOptions::full_rank();
+    let (q, r) = if t.is_f32() {
+        crate::qr::qr_with_on_session::<f32>(session, t, left_inds, &options)
+    } else if t.is_f64() {
+        crate::qr::qr_with_on_session::<f64>(session, t, left_inds, &options)
+    } else if t.is_c32() {
+        crate::qr::qr_with_on_session::<Complex32>(session, t, left_inds, &options)
+    } else if t.is_c64() {
+        crate::qr::qr_with_on_session::<Complex64>(session, t, left_inds, &options)
+    } else {
+        Err(crate::qr::QrError::ComputationError(anyhow::anyhow!(
+            "the explicit-session QR route serves floating-point tensors"
+        )))
+    }
+    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+
+    let bond_index = q
+        .indices
+        .last()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("QR factorization returned a rank-0 Q tensor"))?;
+    let rank = *q
+        .dims()
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("QR factorization returned Q with no dimensions"))?;
+    Ok(FactorizeResult::new(q, r, bond_index, None, rank))
+}
+
 /// Thin QR factors on the caller's session, in the tensor's own scalar type.
 ///
 /// The session route keeps the operand dtype instead of narrowing the

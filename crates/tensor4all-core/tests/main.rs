@@ -27,6 +27,7 @@ mod linalg_qr;
 mod prepared_contraction;
 mod random_rng_stream;
 mod resident_rrqr;
+mod runtime_free_indexed_ops;
 mod send_sync;
 mod small_pivots;
 mod tensor_any_scalar;

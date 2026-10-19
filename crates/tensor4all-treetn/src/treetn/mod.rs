@@ -797,6 +797,53 @@ where
         context_name: &str,
         context: Option<&tensor4all_tensorbackend::ExecutionContext>,
     ) -> Result<()> {
+        match context {
+            Some(execution) => self.sweep_edge_full_rank_with(
+                src,
+                dst,
+                alg,
+                context_name,
+                |tensor, left| {
+                    tensor
+                        .factorize_full_rank_in(left, alg, canonical, execution)
+                        .map_err(anyhow::Error::from)
+                },
+                |lhs, rhs| T::contract(&[lhs, rhs]).map_err(anyhow::Error::from),
+            ),
+            None => self.sweep_edge_full_rank_with(
+                src,
+                dst,
+                alg,
+                context_name,
+                |tensor, left| {
+                    tensor
+                        .factorize_full_rank(left, alg, canonical)
+                        .map_err(anyhow::Error::from)
+                },
+                |lhs, rhs| T::contract(&[lhs, rhs]).map_err(anyhow::Error::from),
+            ),
+        }
+    }
+
+    /// Process one edge with caller-supplied factorization and absorption.
+    ///
+    /// The single body behind the process-global, execution-context and
+    /// explicit-session full-rank sweeps: only where the factorization and the
+    /// dst absorption run differs, so a site-free node and the exactness
+    /// contract stay identical on every route.
+    fn sweep_edge_full_rank_with<Factorize, Contract>(
+        &mut self,
+        src: NodeIndex,
+        dst: NodeIndex,
+        alg: FactorizeAlg,
+        context_name: &str,
+        factorize: Factorize,
+        contract: Contract,
+    ) -> Result<()>
+    where
+        Factorize: FnOnce(&T, &[T::Index]) -> Result<tensor4all_core::FactorizeResult<T>>,
+        Contract: FnOnce(&T, &T) -> Result<T>,
+    {
         // Find edge between src and dst
         let edge = {
             let g = self.graph.graph();
@@ -847,13 +894,8 @@ where
         // dimension.
         let factorize_result =
             factorize_allowing_empty_side(tensor_src, &left_inds, |tensor, left| {
-                match context {
-                    Some(execution) => {
-                        tensor.factorize_full_rank_in(left, alg, canonical, execution)
-                    }
-                    None => tensor.factorize_full_rank(left, alg, canonical),
-                }
-                .with_context(|| format!("{alg:?} full-rank factorization failed"))
+                factorize(tensor, left)
+                    .with_context(|| format!("{alg:?} full-rank factorization failed"))
             })
             .map_err(|error| {
                 // Keep the whole chain as the source, and name its root cause
@@ -873,7 +915,7 @@ where
             .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
             .with_context(|| format!("{}: dst tensor not found", context_name))?;
 
-        let updated_dst_tensor = T::contract(&[tensor_dst, &right_tensor]).with_context(|| {
+        let updated_dst_tensor = contract(tensor_dst, &right_tensor).with_context(|| {
             format!(
                 "{}: failed to absorb right factor into dst tensor",
                 context_name

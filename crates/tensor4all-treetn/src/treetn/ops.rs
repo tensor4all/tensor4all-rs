@@ -847,3 +847,178 @@ where
 
 #[cfg(test)]
 mod tests;
+
+impl<V> TreeTN<tensor4all_core::IdxTensor, V>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    /// Compute `log(||TreeTN||_F)` on a caller-held explicit session.
+    ///
+    /// The runtime-free counterpart of [`TreeTN::log_norm`]: the same single
+    /// center selection and the same center-norm computation, while any
+    /// canonicalization sweep runs on `session` and publishes plain host-storage
+    /// tensors. Nothing here enters another session or the process-global eager
+    /// runtime, so a caller that already owns a held session can call it
+    /// directly.
+    ///
+    /// The overflow and underflow limits of [`TreeTN::log_norm`] apply
+    /// unchanged: the center norm is squared before the logarithm.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeTNOperationError`] when the network is empty, when
+    /// session canonicalization fails, when the center node or tensor is
+    /// missing, or when the center's squared norm cannot be computed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
+    /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
+    /// use tensor4all_treetn::TreeTN;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let tensor = IdxTensor::from_dense(vec![site], vec![3.0_f64, 4.0])?;
+    /// let mut tree = TreeTN::<_, usize>::from_tensors(vec![tensor], vec![0])?;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    /// let mut held = HeldSession::open(&backend)?;
+    /// let log_norm = held.with_session(|view| {
+    ///     let mut session = Session::from_backend_session(view.backend());
+    ///     tree.log_norm_on_session(&mut session)
+    /// })?;
+    /// held.close()?;
+    /// assert!((log_norm - 5.0_f64.ln()).abs() < 1e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn log_norm_on_session(
+        &mut self,
+        session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    ) -> std::result::Result<f64, TreeTNOperationError> {
+        let n = self.node_count();
+        if n == 0 {
+            return Err(TreeTNOperationError::from(
+                anyhow::anyhow!("Cannot compute log_norm of empty TreeTN")
+                    .context("log_norm_on_session: network must have at least one node"),
+            ));
+        }
+
+        let center_name: V =
+            if self.is_canonicalized() && self.canonical_form() == Some(CanonicalForm::Unitary) {
+                if self.canonical_region.len() == 1 {
+                    self.canonical_region
+                        .iter()
+                        .next()
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("Canonical region is empty"))
+                        .context("log_norm_on_session: canonical region must contain one center")?
+                } else {
+                    let min_center = self
+                        .canonical_region
+                        .iter()
+                        .min()
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("Canonical region is empty"))
+                        .context("log_norm_on_session: canonical region must contain centers")?;
+                    self.canonicalize_mut_on_session(
+                        std::iter::once(min_center.clone()),
+                        CanonicalizationOptions::default(),
+                        session,
+                    )
+                    .context("log_norm_on_session: failed to canonicalize to single site")?;
+                    min_center
+                }
+            } else {
+                let min_node_name = self
+                    .node_names()
+                    .into_iter()
+                    .min()
+                    .ok_or_else(|| anyhow::anyhow!("No nodes in TreeTN"))
+                    .context("log_norm_on_session: network must have nodes")?;
+                self.canonicalize_mut_on_session(
+                    std::iter::once(min_node_name.clone()),
+                    CanonicalizationOptions::default(),
+                    session,
+                )
+                .context("log_norm_on_session: failed to canonicalize")?;
+                min_node_name
+            };
+
+        let center_node = self
+            .node_index(&center_name)
+            .ok_or_else(|| anyhow::anyhow!("Center node not found"))
+            .context("log_norm_on_session: center node must exist")?;
+        let center_tensor = self
+            .tensor(center_node)
+            .ok_or_else(|| anyhow::anyhow!("Center tensor not found"))
+            .context("log_norm_on_session: center tensor must exist")?;
+
+        let norm_sq = center_tensor
+            .norm_squared()
+            .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
+        Ok(norm_sq.sqrt().ln())
+    }
+
+    /// Compute the Frobenius norm of the TreeTN on a caller-held explicit session.
+    ///
+    /// `norm = exp(log_norm_on_session)`, with the same overflow limit and the
+    /// same canonicalization side effects as [`TreeTN::norm`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeTNOperationError`] under the same conditions as
+    /// [`Self::log_norm_on_session`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
+    /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
+    /// use tensor4all_treetn::TreeTN;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let tensor = IdxTensor::from_dense(vec![site], vec![3.0_f64, 4.0])?;
+    /// let mut tree = TreeTN::<_, usize>::from_tensors(vec![tensor], vec![0])?;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    /// let mut held = HeldSession::open(&backend)?;
+    /// let norm = held.with_session(|view| {
+    ///     let mut session = Session::from_backend_session(view.backend());
+    ///     tree.norm_on_session(&mut session)
+    /// })?;
+    /// held.close()?;
+    /// assert!((norm - 5.0).abs() < 1e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn norm_on_session(
+        &mut self,
+        session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    ) -> std::result::Result<f64, TreeTNOperationError> {
+        let log_n = self
+            .log_norm_on_session(session)
+            .context("norm_on_session: failed to compute log_norm_on_session")?;
+        Ok(log_n.exp())
+    }
+
+    /// Compute the squared Frobenius norm on a caller-held explicit session.
+    ///
+    /// Returns `||self||^2 = norm_on_session()^2`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeTNOperationError`] under the same conditions as
+    /// [`Self::norm_on_session`].
+    pub fn norm_squared_on_session(
+        &mut self,
+        session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    ) -> std::result::Result<f64, TreeTNOperationError> {
+        let n = self
+            .norm_on_session(session)
+            .context("norm_squared_on_session: failed to compute norm_on_session")?;
+        Ok(n * n)
+    }
+}
