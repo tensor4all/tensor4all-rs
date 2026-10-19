@@ -452,16 +452,11 @@ pub(crate) fn validate_col_major_matrix_len(
     Ok(())
 }
 
-/// Validate a column-major matrix and its [`RrLUOptions`] before a factorization.
+/// Validate [`RrLUOptions`] before a factorization.
 ///
-/// Shared by the full-factor and selection-only entry points so both reject the
-/// same inputs with the same error: negative or non-finite tolerances and
-/// infinite input magnitudes return [`MatrixCIError::InvalidArgument`]; NaN
-/// input returns [`MatrixCIError::NaNEncountered`].
-pub(crate) fn validate_owned_luci_input<T: Scalar>(
-    a: &Matrix<T>,
-    options: &RrLUOptions,
-) -> Result<()> {
+/// Negative or non-finite tolerances return [`MatrixCIError::InvalidArgument`].
+/// Shared by the dense, lazy, and selection-only entry points.
+pub(crate) fn validate_luci_options(options: &RrLUOptions) -> Result<()> {
     for (name, value) in [("rel_tol", options.rel_tol), ("abs_tol", options.abs_tol)] {
         if !value.is_finite() || value < 0.0 {
             return Err(MatrixCIError::InvalidArgument {
@@ -469,6 +464,14 @@ pub(crate) fn validate_owned_luci_input<T: Scalar>(
             });
         }
     }
+    Ok(())
+}
+
+/// Validate the entries of a column-major matrix before a factorization.
+///
+/// NaN input returns [`MatrixCIError::NaNEncountered`]; infinite input
+/// magnitudes return [`MatrixCIError::InvalidArgument`].
+pub(crate) fn validate_luci_matrix<T: Scalar>(a: &Matrix<T>) -> Result<()> {
     if a.as_col_major_slice().iter().any(|&value| value.is_nan()) {
         return Err(MatrixCIError::NaNEncountered {
             matrix: "input".into(),
@@ -483,6 +486,20 @@ pub(crate) fn validate_owned_luci_input<T: Scalar>(
         });
     }
     Ok(())
+}
+
+/// Validate a column-major matrix and its [`RrLUOptions`] before a factorization.
+///
+/// Shared by the full-factor and selection-only entry points so both reject the
+/// same inputs with the same error: negative or non-finite tolerances and
+/// infinite input magnitudes return [`MatrixCIError::InvalidArgument`]; NaN
+/// input returns [`MatrixCIError::NaNEncountered`].
+pub(crate) fn validate_owned_luci_input<T: Scalar>(
+    a: &Matrix<T>,
+    options: &RrLUOptions,
+) -> Result<()> {
+    validate_luci_options(options)?;
+    validate_luci_matrix(a)
 }
 
 #[inline]

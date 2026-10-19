@@ -6,7 +6,8 @@
 
 use crate::error::{MatrixCIError, Result};
 use crate::matrixlu::{
-    rrlu, rrlu_left_mut, rrlu_mut, validate_owned_luci_input, RrLU, RrLUOptions,
+    rrlu, rrlu_left_mut, rrlu_mut, validate_luci_options, validate_owned_luci_input, RrLU,
+    RrLUOptions,
 };
 use crate::matrixluci::block_rook::LazyBlockRookKernel;
 use crate::matrixluci::factors::CrossFactors;
@@ -456,6 +457,7 @@ pub(crate) fn dense_matrix_luci_factors_from_matrix<T>(
 where
     T: Scalar + crate::MatrixLuciScalar,
 {
+    validate_owned_luci_input(a, &options)?;
     let lu = rrlu(a, Some(options))?;
     factors_from_rrlu(&lu, &mut Linalg::Global)
 }
@@ -483,6 +485,7 @@ where
     F: Fn(&[usize], &[usize], &mut [T]),
     LazyBlockRookKernel: PivotKernel<T>,
 {
+    validate_luci_options(&options)?;
     let source = LazyMatrixSource::new(nrows, ncols, fill_block);
     let kernel_options = PivotKernelOptions {
         max_bond_dim: options.max_bond_dim,
@@ -517,8 +520,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns a [`MatrixCIError`] if the factorization fails, for example if the
-/// pivot block is singular or the backend rejects the input.
+/// Returns [`MatrixCIError::InvalidArgument`] for negative or non-finite
+/// tolerances, infinite input magnitudes, or backend failures; returns
+/// [`MatrixCIError::NaNEncountered`] for NaN input or non-finite factors.
 ///
 /// # Examples
 ///
@@ -754,8 +758,9 @@ pub fn matrix_luci_factors_working_bytes<T: Scalar>(
 ///
 /// # Errors
 ///
-/// Returns a [`MatrixCIError`] if the lazy factorization fails or if the
-/// block callback is inconsistent.
+/// Returns [`MatrixCIError::InvalidArgument`] for negative or non-finite
+/// tolerances; returns a [`MatrixCIError`] if the lazy factorization fails or
+/// if the block callback is inconsistent.
 ///
 /// # Examples
 ///

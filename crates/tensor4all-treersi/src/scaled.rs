@@ -38,6 +38,10 @@ impl<T: TreeRsiScalar> Scaled<T> {
         let exponent = maximum.log2().floor() as i64;
         for x in &mut self.array.data {
             let y = scale(*x, -exponent);
+            // `loses_component` only rejects underflow to zero; a component
+            // scaled into the subnormal range may still round to a different
+            // nonzero value. The block-scale contract is exact only while
+            // every scaled component stays normal.
             if loses_component(*x, y) {
                 return Err(TreeRsiError::DynamicRange {
                     stage: "block normalization",

@@ -212,8 +212,11 @@ fn probes<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
 
 /// Product-state contraction with one shared probe label, performed by
 /// backend GEMM/batched GEMM. A single scale per block preserves the original
-/// sketch's relative column weights; independent per-column renormalization
-/// would define a different sketch and pivot selection policy.
+/// sketch's relative column weights exactly as long as every scaled component
+/// stays in the normal range; a component the shared scale moves into the
+/// subnormal range (whether it started subnormal or normal) may round, so its
+/// relative weight is only approximate. Independent per-column renormalization would
+/// define a different sketch and pivot selection policy.
 fn sketch<T: TreeRsiScalar>(
     cpu: &CpuExecutionContext,
     core: &Scaled<T>,

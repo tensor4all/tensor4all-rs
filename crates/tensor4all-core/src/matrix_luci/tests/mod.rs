@@ -610,3 +610,87 @@ fn row_only_interpolation_rejects_nonfinite_residuals_at_the_rank_cap() {
     check::<Complex64>(f64::MAX);
     check::<Complex32>(f64::from(f32::MAX));
 }
+
+#[test]
+fn borrowed_facades_reject_invalid_options_and_entries() {
+    fn check<T: Scalar + crate::MatrixLuciScalar>() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+            for absolute in [false, true] {
+                let mut options = RrLUOptions::default();
+                if absolute {
+                    options.abs_tol = value;
+                } else {
+                    options.rel_tol = value;
+                }
+                let a = Matrix::<T>::zeros(0, 2);
+                assert!(matches!(
+                    matrix_luci_factors_from_matrix(&a, Some(options.clone())),
+                    Err(MatrixCIError::InvalidArgument { .. })
+                ));
+                assert!(matches!(
+                    <T as crate::MatrixLuciScalar>::matrix_luci_factors_from_matrix(&a, options),
+                    Err(MatrixCIError::InvalidArgument { .. })
+                ));
+            }
+        }
+        let nan = Matrix::from_col_major_vec(1, 2, vec![T::one(), T::from_f64(f64::NAN)]);
+        assert!(matches!(
+            matrix_luci_factors_from_matrix(&nan, None),
+            Err(MatrixCIError::NaNEncountered { .. })
+        ));
+        assert!(matches!(
+            <T as crate::MatrixLuciScalar>::matrix_luci_factors_from_matrix(
+                &nan,
+                RrLUOptions::default()
+            ),
+            Err(MatrixCIError::NaNEncountered { .. })
+        ));
+        let inf = Matrix::from_col_major_vec(1, 2, vec![T::one(), T::from_f64(f64::INFINITY)]);
+        assert!(matches!(
+            matrix_luci_factors_from_matrix(&inf, None),
+            Err(MatrixCIError::InvalidArgument { .. })
+        ));
+        assert!(matches!(
+            <T as crate::MatrixLuciScalar>::matrix_luci_factors_from_matrix(
+                &inf,
+                RrLUOptions::default()
+            ),
+            Err(MatrixCIError::InvalidArgument { .. })
+        ));
+    }
+    check::<f64>();
+    check::<f32>();
+    check::<Complex64>();
+    check::<Complex32>();
+}
+
+#[test]
+fn lazy_facades_reject_invalid_options() {
+    fn check<T: Scalar + crate::MatrixLuciScalar>() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+            for absolute in [false, true] {
+                let mut options = RrLUOptions::default();
+                if absolute {
+                    options.abs_tol = value;
+                } else {
+                    options.rel_tol = value;
+                }
+                let fill = |_: &[usize], _: &[usize], out: &mut [T]| out.fill(T::zero());
+                assert!(matches!(
+                    matrix_luci_factors_from_blocks(2, 2, fill, options.clone()),
+                    Err(MatrixCIError::InvalidArgument { .. })
+                ));
+                assert!(matches!(
+                    <T as crate::MatrixLuciScalar>::matrix_luci_factors_from_blocks(
+                        2, 2, fill, options
+                    ),
+                    Err(MatrixCIError::InvalidArgument { .. })
+                ));
+            }
+        }
+    }
+    check::<f64>();
+    check::<f32>();
+    check::<Complex64>();
+    check::<Complex32>();
+}

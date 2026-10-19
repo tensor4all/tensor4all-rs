@@ -87,3 +87,31 @@ fn complex_scaling_reports_loss_of_either_component() {
     check!(num_complex::Complex32, f32);
     check!(num_complex::Complex64, f64);
 }
+
+#[test]
+fn subnormal_components_may_round_under_the_shared_block_scale() {
+    // The normal maximum 2.0 sets exponent 1. Halving 3 ulp of the smallest
+    // subnormal rounds (ties to even) to 2 ulp, and scaling back doubles it
+    // to 4 ulp. The shared-scale contract is exact only while every scaled
+    // component stays in the normal range.
+    let three_ulp = f64::from_bits(3);
+    let scaled = block(vec![2.0, three_ulp], 0).unwrap();
+    assert_eq!(scaled.exponent, 1);
+    assert_eq!(scaled.array.data, vec![1.0, f64::from_bits(2)]);
+    assert_eq!(scaled.into_values().unwrap(), vec![2.0, f64::from_bits(4)]);
+}
+
+#[test]
+fn normal_components_scaled_into_the_subnormal_range_may_round() {
+    // Both inputs are normal, but the 2^1023 maximum scales 3 * 2^-52 to
+    // 1.5 ulp of the smallest subnormal, which rounds to 2 ulp; scaling back
+    // gives 2^-50 instead of 3 * 2^-52.
+    let small = 3.0 * 2f64.powi(-52);
+    let scaled = block(vec![2f64.powi(1023), small], 0).unwrap();
+    assert_eq!(scaled.exponent, 1023);
+    assert_eq!(scaled.array.data, vec![1.0, f64::from_bits(2)]);
+    assert_eq!(
+        scaled.into_values().unwrap(),
+        vec![2f64.powi(1023), 2f64.powi(-50)]
+    );
+}
