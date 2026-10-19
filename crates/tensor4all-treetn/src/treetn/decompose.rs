@@ -178,6 +178,82 @@ where
     .map_err(TreeTNOperationError::from)
 }
 
+/// Factorize a dense [`IdxTensor`] into a `TreeTN` on a caller-held explicit session.
+///
+/// The runtime-free counterpart of [`factorize_tensor_to_treetn_with`]: the topology validation, the
+/// traversal, the factorization placement and the network construction are the same code paths, while
+/// every leaf contraction and factorization runs on `session`. Nothing here enters a session or the
+/// process-global eager runtime, so a scheduler-owned lane can call it directly.
+///
+/// # Arguments
+///
+/// * `tensor` - The dense tensor to decompose. It must be a plain host-storage [`IdxTensor`].
+/// * `topology` - Tree topology specifying nodes, edges, and physical index assignments.
+/// * `options` - Factorization options; validated exactly as the eager entry validates them.
+/// * `root` - Name of the requested canonical center, which must exist in the topology.
+/// * `session` - The caller's session; every numerical leaf reborrows it.
+///
+/// # Errors
+///
+/// Returns an error for the same topology, index and option failures as
+/// [`factorize_tensor_to_treetn_with`], and when a leaf or the session rejects an operation.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, FactorizeOptions, IdxTensor};
+/// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
+/// use tensor4all_treetn::{factorize_tensor_to_treetn_with_on_session, TreeTopology};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let left = DynIndex::new_dyn(2);
+/// let right = DynIndex::new_dyn(2);
+/// let tensor = IdxTensor::from_dense(
+///     vec![left.clone(), right.clone()],
+///     vec![1.0_f64, 2.0, 3.0, 4.0],
+/// )?;
+/// let topology = TreeTopology::new(
+///     [(0usize, vec![left]), (1usize, vec![right])].into(),
+///     vec![(0, 1)],
+/// );
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+/// let mut held = HeldSession::open(&backend)?;
+/// let tree = held.with_session(|view| {
+///     let mut session = Session::from_backend_session(view.backend());
+///     factorize_tensor_to_treetn_with_on_session(
+///         &tensor,
+///         &topology,
+///         FactorizeOptions::svd(),
+///         &0usize,
+///         &mut session,
+///     )
+/// })?;
+/// held.close()?;
+/// let dense = tree.contract_to_tensor()?;
+/// assert!(dense.sub(&tensor)?.maxabs()? < 1.0e-12);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn factorize_tensor_to_treetn_with_on_session<V>(
+    tensor: &tensor4all_core::IdxTensor,
+    topology: &TreeTopology<V, tensor4all_core::DynIndex>,
+    options: FactorizeOptions,
+    root: &V,
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+) -> std::result::Result<TreeTN<tensor4all_core::IdxTensor, V>, TreeTNOperationError>
+where
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+{
+    factorize_tensor_to_treetn_with_leaves(
+        tensor,
+        topology,
+        options,
+        root,
+        &crate::treetn::contraction::SessionViewLeaves::new(session),
+    )
+}
+
 /// The same decomposition with an explicit leaf strategy (issue #859 F7).
 pub(crate) fn factorize_tensor_to_treetn_with_leaves<T, V>(
     tensor: &T,

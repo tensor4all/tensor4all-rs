@@ -92,6 +92,12 @@ pub enum MeasurementMethod {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{
+///     explicit::{HeldSession, Session},
+///     CpuExecutionContext,
+/// };
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+/// use tenferro_cpu::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -103,16 +109,31 @@ pub enum MeasurementMethod {
 /// // One node with one site: the root is built exactly from its four values.
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node(0usize)?;
-/// let result = patched_interpolate(
+/// let result = {
+///     let context = CpuExecutionContext::from_backend(
+///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+///     );
+///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+///     let mut held = HeldSession::open(&backend).expect("held session");
+///     let outcome = held.with_session(|view| {
+///         let mut ctx = EvalContext::new(
+///             Session::from_backend_session(view.backend()),
+///             Parallelism::Serial,
+///         );
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(4)])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
 ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| 1.0 + x as f64).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
-/// )?;
+/// )
+///     });
+///     held.close().expect("affinity restores");
+///     outcome
+/// }?;
 /// let measurement = result.report.accepted[0].acceptance.as_ref().unwrap();
 /// assert_eq!(measurement.method, MeasurementMethod::Exact);
 /// assert_eq!((measurement.points, measurement.patch_points), (4, 4.0));
@@ -149,6 +170,12 @@ impl L2Measurement {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{
+    ///     explicit::{HeldSession, Session},
+    ///     CpuExecutionContext,
+    /// };
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+    /// use tenferro_cpu::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -170,16 +197,31 @@ impl L2Measurement {
     ///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(18.0_f64.sqrt())))
     ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
     ///     .with_min_patch_bits(2);
-    /// let result = patched_interpolate(
+    /// let result = {
+    ///     let context = CpuExecutionContext::from_backend(
+    ///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+    ///     );
+    ///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    ///     let mut held = HeldSession::open(&backend).expect("held session");
+    ///     let outcome = held.with_session(|view| {
+    ///         let mut ctx = EvalContext::new(
+    ///             Session::from_backend_session(view.backend()),
+    ///             Parallelism::Serial,
+    ///         );
+    ///         patched_interpolate(
     ///     &TreeTciInterpolator::default(),
     ///     topology,
     ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
-    ///     ColMajorArray::new(vec![0, 0], vec![2, 1])?,
+    ///     ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap(), &mut ctx,
     ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
     ///         Ok(batch.data().chunks(2).map(f).collect())
     ///     },
     ///     &options,
-    /// )?;
+    /// )
+    ///     });
+    ///     held.close().expect("affinity restores");
+    ///     outcome
+    /// }?;
     /// let measurement = result.report.accepted[0].acceptance.as_ref().unwrap();
     /// // All nine points of the patch were measured, and the error exceeds tau.
     /// assert_eq!(measurement.patch_points, 9.0);
@@ -206,6 +248,12 @@ impl L2Measurement {
 /// allowance.
 ///
 /// ```
+/// use tensor4all_tensorbackend::{
+///     explicit::{HeldSession, Session},
+///     CpuExecutionContext,
+/// };
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+/// use tenferro_cpu::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -217,16 +265,31 @@ impl L2Measurement {
 /// // An exactly evaluated root meets its allowance.
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node(0usize)?;
-/// let result = patched_interpolate(
+/// let result = {
+///     let context = CpuExecutionContext::from_backend(
+///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+///     );
+///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+///     let mut held = HeldSession::open(&backend).expect("held session");
+///     let outcome = held.with_session(|view| {
+///         let mut ctx = EvalContext::new(
+///             Session::from_backend_session(view.backend()),
+///             Parallelism::Serial,
+///         );
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(3)])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
 ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| 1.0 + x as f64).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
-/// )?;
+/// )
+///     });
+///     held.close().expect("affinity restores");
+///     outcome
+/// }?;
 /// assert_eq!(result.report.accepted[0].status, PatchStatus::WithinTolerance);
 /// assert!(result.report.tolerance_met());
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -248,6 +311,12 @@ pub enum PatchStatus {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{
+///     explicit::{HeldSession, Session},
+///     CpuExecutionContext,
+/// };
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+/// use tenferro_cpu::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -262,16 +331,31 @@ pub enum PatchStatus {
 /// let site = DynIndex::new_dyn(4);
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node(0usize)?;
-/// let result = patched_interpolate(
+/// let result = {
+///     let context = CpuExecutionContext::from_backend(
+///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+///     );
+///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+///     let mut held = HeldSession::open(&backend).expect("held session");
+///     let outcome = held.with_session(|view| {
+///         let mut ctx = EvalContext::new(
+///             Session::from_backend_session(view.backend()),
+///             Parallelism::Serial,
+///         );
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![site])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
 ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| x as f64 - 1.0).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2).with_error_norm(ErrorNorm::sampled_max()),
-/// )?;
+/// )
+///     });
+///     held.close().expect("affinity restores");
+///     outcome
+/// }?;
 /// let record = &result.report.accepted[0];
 /// assert!(record.projector.is_empty());
 /// assert_eq!(record.termination, InterpolationTermination::Converged);
@@ -324,6 +408,12 @@ pub struct PatchRecord {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{
+///     explicit::{HeldSession, Session},
+///     CpuExecutionContext,
+/// };
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+/// use tenferro_cpu::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -335,16 +425,31 @@ pub struct PatchRecord {
 /// // f vanishes everywhere: the exact root is a zero patch.
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node(0usize)?;
-/// let result = patched_interpolate(
+/// let result = {
+///     let context = CpuExecutionContext::from_backend(
+///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+///     );
+///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+///     let mut held = HeldSession::open(&backend).expect("held session");
+///     let outcome = held.with_session(|view| {
+///         let mut ctx = EvalContext::new(
+///             Session::from_backend_session(view.backend()),
+///             Parallelism::Serial,
+///         );
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(3)])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
 ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(vec![0.0; batch.shape()[1]])
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
-/// )?;
+/// )
+///     });
+///     held.close().expect("affinity restores");
+///     outcome
+/// }?;
 /// let zero = &result.report.zero_patches[0];
 /// assert!(zero.projector.is_empty());
 /// assert_eq!(zero.acceptance.as_ref().unwrap().method, MeasurementMethod::Exact);
@@ -435,6 +540,12 @@ pub enum MaxReferenceSource {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{
+///     explicit::{HeldSession, Session},
+///     CpuExecutionContext,
+/// };
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+/// use tenferro_cpu::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -446,16 +557,31 @@ pub enum MaxReferenceSource {
 /// // An exactly evaluated root with values (3, 4), so ||f|| = 5.
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node(0usize)?;
-/// let result = patched_interpolate(
+/// let result = {
+///     let context = CpuExecutionContext::from_backend(
+///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+///     );
+///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+///     let mut held = HeldSession::open(&backend).expect("held session");
+///     let outcome = held.with_session(|view| {
+///         let mut ctx = EvalContext::new(
+///             Session::from_backend_session(view.backend()),
+///             Parallelism::Serial,
+///         );
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
 ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
-/// )?;
+/// )
+///     });
+///     held.close().expect("affinity restores");
+///     outcome
+/// }?;
 /// let error = result.report.norm.l2_error().unwrap();
 /// let approximation_rms = error.approximation_rms.unwrap();
 /// let GlobalL2Error::Certified {
@@ -561,6 +687,12 @@ pub enum GlobalL2Error {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{
+///     explicit::{HeldSession, Session},
+///     CpuExecutionContext,
+/// };
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+/// use tenferro_cpu::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -588,16 +720,31 @@ pub enum GlobalL2Error {
 ///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
 ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
 ///     .with_min_patch_bits(2);
-/// let result = patched_interpolate(
+/// let result = {
+///     let context = CpuExecutionContext::from_backend(
+///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+///     );
+///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+///     let mut held = HeldSession::open(&backend).expect("held session");
+///     let outcome = held.with_session(|view| {
+///         let mut ctx = EvalContext::new(
+///             Session::from_backend_session(view.backend()),
+///             Parallelism::Serial,
+///         );
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     node_sites,
-///     ColMajorArray::new(vec![0, 0], vec![2, 1])?,
+///     ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap(), &mut ctx,
 ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().chunks(2).map(f).collect())
 ///     },
 ///     &options,
-/// )?;
+/// )
+///     });
+///     held.close().expect("affinity restores");
+///     outcome
+/// }?;
 /// let record = &result.report.accepted[0];
 /// assert_eq!(record.status, PatchStatus::ToleranceNotMet);
 /// assert_eq!(record.termination, InterpolationTermination::BondCapReached);
@@ -658,6 +805,12 @@ impl GlobalL2Error {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{
+    ///     explicit::{HeldSession, Session},
+    ///     CpuExecutionContext,
+    /// };
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+    /// use tenferro_cpu::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -679,16 +832,31 @@ impl GlobalL2Error {
     ///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(18.0_f64.sqrt())))
     ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
     ///     .with_min_patch_bits(2);
-    /// let result = patched_interpolate(
+    /// let result = {
+    ///     let context = CpuExecutionContext::from_backend(
+    ///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+    ///     );
+    ///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    ///     let mut held = HeldSession::open(&backend).expect("held session");
+    ///     let outcome = held.with_session(|view| {
+    ///         let mut ctx = EvalContext::new(
+    ///             Session::from_backend_session(view.backend()),
+    ///             Parallelism::Serial,
+    ///         );
+    ///         patched_interpolate(
     ///     &TreeTciInterpolator::default(),
     ///     topology,
     ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
-    ///     ColMajorArray::new(vec![0, 0], vec![2, 1])?,
+    ///     ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap(), &mut ctx,
     ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
     ///         Ok(batch.data().chunks(2).map(f).collect())
     ///     },
     ///     &options,
-    /// )?;
+    /// )
+    ///     });
+    ///     held.close().expect("affinity restores");
+    ///     outcome
+    /// }?;
     /// let global = &result.report.norm.l2_error().unwrap().global;
     /// let GlobalL2Error::ToleranceNotMet { measured_rms, .. } = global else {
     ///     panic!("the retained patch misses its allowance");
@@ -718,6 +886,12 @@ impl GlobalL2Error {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{
+///     explicit::{HeldSession, Session},
+///     CpuExecutionContext,
+/// };
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+/// use tenferro_cpu::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -729,16 +903,31 @@ impl GlobalL2Error {
 /// // An exact root: certified with zero error and a zero relative bound.
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node(0usize)?;
-/// let result = patched_interpolate(
+/// let result = {
+///     let context = CpuExecutionContext::from_backend(
+///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+///     );
+///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+///     let mut held = HeldSession::open(&backend).expect("held session");
+///     let outcome = held.with_session(|view| {
+///         let mut ctx = EvalContext::new(
+///             Session::from_backend_session(view.backend()),
+///             Parallelism::Serial,
+///         );
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
 ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
-/// )?;
+/// )
+///     });
+///     held.close().expect("affinity restores");
+///     outcome
+/// }?;
 /// let error = result.report.norm.l2_error().unwrap();
 /// assert_eq!(error.domain_points, 2.0);
 /// assert_eq!(error.certified_fraction, 1.0);
@@ -781,6 +970,12 @@ impl L2ErrorReport {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{
+    ///     explicit::{HeldSession, Session},
+    ///     CpuExecutionContext,
+    /// };
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+    /// use tenferro_cpu::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -802,16 +997,31 @@ impl L2ErrorReport {
     ///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(18.0_f64.sqrt())))
     ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
     ///     .with_min_patch_bits(2);
-    /// let result = patched_interpolate(
+    /// let result = {
+    ///     let context = CpuExecutionContext::from_backend(
+    ///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+    ///     );
+    ///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    ///     let mut held = HeldSession::open(&backend).expect("held session");
+    ///     let outcome = held.with_session(|view| {
+    ///         let mut ctx = EvalContext::new(
+    ///             Session::from_backend_session(view.backend()),
+    ///             Parallelism::Serial,
+    ///         );
+    ///         patched_interpolate(
     ///     &TreeTciInterpolator::default(),
     ///     topology,
     ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
-    ///     ColMajorArray::new(vec![0, 0], vec![2, 1])?,
+    ///     ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap(), &mut ctx,
     ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
     ///         Ok(batch.data().chunks(2).map(f).collect())
     ///     },
     ///     &options,
-    /// )?;
+    /// )
+    ///     });
+    ///     held.close().expect("affinity restores");
+    ///     outcome
+    /// }?;
     /// let error = result.report.norm.l2_error().unwrap();
     /// assert_eq!(error.domain_points, 9.0);
     /// assert_eq!(error.error_norm(), Some(3.0 * error.global.rms_value()));
@@ -829,6 +1039,12 @@ impl L2ErrorReport {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{
+    ///     explicit::{HeldSession, Session},
+    ///     CpuExecutionContext,
+    /// };
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+    /// use tenferro_cpu::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -840,16 +1056,31 @@ impl L2ErrorReport {
     /// // An exactly evaluated root with values (3, 4), so ||f|| = 5.
     /// let mut topology = NodeNameNetwork::new();
     /// topology.add_node(0usize)?;
-    /// let result = patched_interpolate(
+    /// let result = {
+    ///     let context = CpuExecutionContext::from_backend(
+    ///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+    ///     );
+    ///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    ///     let mut held = HeldSession::open(&backend).expect("held session");
+    ///     let outcome = held.with_session(|view| {
+    ///         let mut ctx = EvalContext::new(
+    ///             Session::from_backend_session(view.backend()),
+    ///             Parallelism::Serial,
+    ///         );
+    ///         patched_interpolate(
     ///     &TreeTciInterpolator::default(),
     ///     topology,
     ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-    ///     ColMajorArray::new(vec![], vec![1, 0])?,
+    ///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
     ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
     ///         Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
     ///     },
     ///     &PatchedInterpolationOptions::new(2),
-    /// )?;
+    /// )
+    ///     });
+    ///     held.close().expect("affinity restores");
+    ///     outcome
+    /// }?;
     /// let error = result.report.norm.l2_error().unwrap();
     /// let norm = error.approximation_norm().unwrap();
     /// assert!((norm - 5.0).abs() < 1e-12);
@@ -867,6 +1098,12 @@ impl L2ErrorReport {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{
+///     explicit::{HeldSession, Session},
+///     CpuExecutionContext,
+/// };
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+/// use tenferro_cpu::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -881,16 +1118,31 @@ impl L2ErrorReport {
 /// topology.add_node(0usize)?;
 /// let options = PatchedInterpolationOptions::new(2)
 ///     .with_tolerance(ErrorTolerance { rtol: 1e-3, atol: 0.0 });
-/// let result = patched_interpolate(
+/// let result = {
+///     let context = CpuExecutionContext::from_backend(
+///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+///     );
+///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+///     let mut held = HeldSession::open(&backend).expect("held session");
+///     let outcome = held.with_session(|view| {
+///         let mut ctx = EvalContext::new(
+///             Session::from_backend_session(view.backend()),
+///             Parallelism::Serial,
+///         );
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
 ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
 ///     },
 ///     &options,
-/// )?;
+/// )
+///     });
+///     held.close().expect("affinity restores");
+///     outcome
+/// }?;
 /// let norm = &result.report.norm;
 /// assert!(matches!(norm, NormReport::L2 { source: L2ReferenceSource::ExactRoot, .. }));
 /// assert!((norm.reference_norm().unwrap() - 5.0).abs() < 1e-12);
@@ -933,6 +1185,12 @@ impl NormReport {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{
+    ///     explicit::{HeldSession, Session},
+    ///     CpuExecutionContext,
+    /// };
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+    /// use tenferro_cpu::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -946,16 +1204,31 @@ impl NormReport {
     /// let run = |options: &PatchedInterpolationOptions| {
     ///     let mut topology = NodeNameNetwork::new();
     ///     topology.add_node(0usize)?;
-    ///     patched_interpolate(
+    ///     {
+    ///     let context = CpuExecutionContext::from_backend(
+    ///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+    ///     );
+    ///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    ///     let mut held = HeldSession::open(&backend).expect("held session");
+    ///     let outcome = held.with_session(|view| {
+    ///         let mut ctx = EvalContext::new(
+    ///             Session::from_backend_session(view.backend()),
+    ///             Parallelism::Serial,
+    ///         );
+    ///         patched_interpolate(
     ///         &TreeTciInterpolator::default(),
     ///         topology,
     ///         BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-    ///         ColMajorArray::new(vec![], vec![1, 0])?,
+    ///         ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
     ///         |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
     ///             Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
     ///         },
     ///         options,
     ///     )
+    ///     });
+    ///     held.close().expect("affinity restores");
+    ///     outcome
+    /// }
     ///     .map_err(Box::<dyn std::error::Error>::from)
     /// };
     /// let l2 = PatchedInterpolationOptions::new(2)
@@ -981,6 +1254,12 @@ impl NormReport {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{
+    ///     explicit::{HeldSession, Session},
+    ///     CpuExecutionContext,
+    /// };
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+    /// use tenferro_cpu::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -994,16 +1273,31 @@ impl NormReport {
     /// let run = |options: &PatchedInterpolationOptions| {
     ///     let mut topology = NodeNameNetwork::new();
     ///     topology.add_node(0usize)?;
-    ///     patched_interpolate(
+    ///     {
+    ///     let context = CpuExecutionContext::from_backend(
+    ///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+    ///     );
+    ///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    ///     let mut held = HeldSession::open(&backend).expect("held session");
+    ///     let outcome = held.with_session(|view| {
+    ///         let mut ctx = EvalContext::new(
+    ///             Session::from_backend_session(view.backend()),
+    ///             Parallelism::Serial,
+    ///         );
+    ///         patched_interpolate(
     ///         &TreeTciInterpolator::default(),
     ///         topology,
     ///         BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-    ///         ColMajorArray::new(vec![], vec![1, 0])?,
+    ///         ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
     ///         |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
     ///             Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
     ///         },
     ///         options,
     ///     )
+    ///     });
+    ///     held.close().expect("affinity restores");
+    ///     outcome
+    /// }
     ///     .map_err(Box::<dyn std::error::Error>::from)
     /// };
     /// let l2 = PatchedInterpolationOptions::new(2)
@@ -1028,6 +1322,12 @@ impl NormReport {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{
+    ///     explicit::{HeldSession, Session},
+    ///     CpuExecutionContext,
+    /// };
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+    /// use tenferro_cpu::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1041,16 +1341,31 @@ impl NormReport {
     /// let run = |options: &PatchedInterpolationOptions| {
     ///     let mut topology = NodeNameNetwork::new();
     ///     topology.add_node(0usize)?;
-    ///     patched_interpolate(
+    ///     {
+    ///     let context = CpuExecutionContext::from_backend(
+    ///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+    ///     );
+    ///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    ///     let mut held = HeldSession::open(&backend).expect("held session");
+    ///     let outcome = held.with_session(|view| {
+    ///         let mut ctx = EvalContext::new(
+    ///             Session::from_backend_session(view.backend()),
+    ///             Parallelism::Serial,
+    ///         );
+    ///         patched_interpolate(
     ///         &TreeTciInterpolator::default(),
     ///         topology,
     ///         BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-    ///         ColMajorArray::new(vec![], vec![1, 0])?,
+    ///         ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
     ///         |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
     ///             Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
     ///         },
     ///         options,
     ///     )
+    ///     });
+    ///     held.close().expect("affinity restores");
+    ///     outcome
+    /// }
     ///     .map_err(Box::<dyn std::error::Error>::from)
     /// };
     /// let l2 = PatchedInterpolationOptions::new(2)
@@ -1085,6 +1400,12 @@ impl NormReport {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{
+///     explicit::{HeldSession, Session},
+///     CpuExecutionContext,
+/// };
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+/// use tenferro_cpu::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1103,17 +1424,32 @@ impl NormReport {
 /// topology.add_edge(&0, &1)?;
 /// let node_sites = BTreeMap::from([(0usize, vec![a.clone()]), (1, vec![b.clone()])]);
 /// let f = |p: &[usize]| if p[0] == 1 { 1.0 + p[1] as f64 } else { (p[1] * p[1]) as f64 };
-/// let result = patched_interpolate(
+/// let result = {
+///     let context = CpuExecutionContext::from_backend(
+///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+///     );
+///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+///     let mut held = HeldSession::open(&backend).expect("held session");
+///     let outcome = held.with_session(|view| {
+///         let mut ctx = EvalContext::new(
+///             Session::from_backend_session(view.backend()),
+///             Parallelism::Serial,
+///         );
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     node_sites,
-///     ColMajorArray::new(vec![1, 2], vec![2, 1])?,
+///     ColMajorArray::new(vec![1, 2], vec![2, 1]).unwrap(), &mut ctx,
 ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().chunks(2).map(f).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2)
 ///         .with_error_norm(ErrorNorm::sampled_max_with_reference(4.0)),
-/// )?;
+/// )
+///     });
+///     held.close().expect("affinity restores");
+///     outcome
+/// }?;
 /// let report = &result.report;
 /// assert!(matches!(report.norm, NormReport::SampledMax { max_reference, .. } if max_reference == 4.0));
 /// assert_eq!(report.splits, 1);
@@ -1169,6 +1505,12 @@ impl PatchedInterpolationReport {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{
+    ///     explicit::{HeldSession, Session},
+    ///     CpuExecutionContext,
+    /// };
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+    /// use tenferro_cpu::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1190,16 +1532,31 @@ impl PatchedInterpolationReport {
     ///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(18.0_f64.sqrt())))
     ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
     ///     .with_min_patch_bits(2);
-    /// let result = patched_interpolate(
+    /// let result = {
+    ///     let context = CpuExecutionContext::from_backend(
+    ///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+    ///     );
+    ///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    ///     let mut held = HeldSession::open(&backend).expect("held session");
+    ///     let outcome = held.with_session(|view| {
+    ///         let mut ctx = EvalContext::new(
+    ///             Session::from_backend_session(view.backend()),
+    ///             Parallelism::Serial,
+    ///         );
+    ///         patched_interpolate(
     ///     &TreeTciInterpolator::default(),
     ///     topology,
     ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
-    ///     ColMajorArray::new(vec![0, 0], vec![2, 1])?,
+    ///     ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap(), &mut ctx,
     ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
     ///         Ok(batch.data().chunks(2).map(f).collect())
     ///     },
     ///     &options,
-    /// )?;
+    /// )
+    ///     });
+    ///     held.close().expect("affinity restores");
+    ///     outcome
+    /// }?;
     /// assert_eq!(result.report.accepted[0].status, PatchStatus::ToleranceNotMet);
     /// assert!(!result.report.tolerance_met());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -1216,6 +1573,12 @@ impl PatchedInterpolationReport {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{
+///     explicit::{HeldSession, Session},
+///     CpuExecutionContext,
+/// };
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+/// use tenferro_cpu::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1228,16 +1591,31 @@ impl PatchedInterpolationReport {
 /// let site = DynIndex::new_dyn(3);
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node(0usize)?;
-/// let result = patched_interpolate(
+/// let result = {
+///     let context = CpuExecutionContext::from_backend(
+///         CpuBackend::with_threads(1).expect("1T CPU backend"),
+///     );
+///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+///     let mut held = HeldSession::open(&backend).expect("held session");
+///     let outcome = held.with_session(|view| {
+///         let mut ctx = EvalContext::new(
+///             Session::from_backend_session(view.backend()),
+///             Parallelism::Serial,
+///         );
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![site])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
 ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(vec![0.0; batch.shape()[1]])
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
-/// )?;
+/// )
+///     });
+///     held.close().expect("affinity restores");
+///     outcome
+/// }?;
 /// assert!(result.partition.is_empty());
 /// assert_eq!(result.report.zero_patches.len(), 1);
 /// # Ok::<(), Box<dyn std::error::Error>>(())

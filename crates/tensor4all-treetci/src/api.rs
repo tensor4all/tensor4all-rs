@@ -1,5 +1,6 @@
 use crate::batch::{checked_batch_len, EVALUATION_CHUNK_POINTS};
 use crate::error::Result as TreeTciResult;
+use crate::evaluation::{BatchExecution, CachedExecution, Compatibility, Explicit};
 use crate::optimize::{with_seeded_streams, RandomStreams};
 use crate::{
     materialize::to_treetn_chunked, optimize::optimize_with_streams, AllEdges, GlobalIndexBatch,
@@ -8,6 +9,7 @@ use crate::{
 use anyhow::Result;
 use tensor4all_core::CommonScalar;
 use tensor4all_tensorbackend::FullPivLuScalar;
+use tensor4all_treetn::interpolation::EvalContext;
 use tensor4all_treetn::TreeTN;
 
 /// A materialized tree tensor network with iteration diagnostics and stopping reason.
@@ -141,9 +143,11 @@ where
     P: PivotCandidateProposer,
 {
     options.validate()?;
+    let mut evaluate = evaluate;
+    let mut execution = Compatibility::new(&mut evaluate);
     with_seeded_streams(&options, proposer, |streams| {
         crossinterpolate2_with_streams(
-            evaluate,
+            &mut execution,
             local_dims,
             graph,
             initial_pivots,
@@ -151,7 +155,6 @@ where
             center_site,
             proposer,
             streams,
-            None,
         )
     })
 }
@@ -217,19 +220,27 @@ where
     P: PivotCandidateProposer,
 {
     options.validate()?;
-    with_seeded_streams(&options, proposer, |streams| {
-        crossinterpolate2_with_streams(
-            evaluate,
-            local_dims,
-            graph,
-            initial_pivots,
-            &options,
-            center_site,
-            proposer,
-            streams,
-            Some(context),
-        )
-    })
+    let mut evaluate = evaluate;
+    context
+        .with_concrete_session(|session| {
+            let mut contextual =
+                |batch: GlobalIndexBatch<'_>, _ctx: &mut EvalContext<'_>| evaluate(batch);
+            let mut context = crate::evaluation::serial_context(session);
+            let mut execution = Explicit::new(&mut context, &mut contextual);
+            with_seeded_streams(&options, proposer, |streams| {
+                crossinterpolate2_with_streams(
+                    &mut execution,
+                    local_dims,
+                    graph,
+                    initial_pivots,
+                    &options,
+                    center_site,
+                    proposer,
+                    streams,
+                )
+            })
+        })
+        .map_err(|error| crate::TreeTciError::from(anyhow::Error::new(error)))?
 }
 
 /// Interpolate a tree tensor network on a caller-owned random stream and execution context.
@@ -288,17 +299,25 @@ where
 {
     let mut stream: &mut R = rng;
     let mut streams = RandomStreams::Shared(&mut stream);
-    crossinterpolate2_with_streams(
-        evaluate,
-        local_dims,
-        graph,
-        initial_pivots,
-        &options,
-        center_site,
-        proposer,
-        &mut streams,
-        Some(context),
-    )
+    let mut evaluate = evaluate;
+    context
+        .with_concrete_session(|session| {
+            let mut contextual =
+                |batch: GlobalIndexBatch<'_>, _ctx: &mut EvalContext<'_>| evaluate(batch);
+            let mut context = crate::evaluation::serial_context(session);
+            let mut execution = Explicit::new(&mut context, &mut contextual);
+            crossinterpolate2_with_streams(
+                &mut execution,
+                local_dims,
+                graph,
+                initial_pivots,
+                &options,
+                center_site,
+                proposer,
+                &mut streams,
+            )
+        })
+        .map_err(|error| crate::TreeTciError::from(anyhow::Error::new(error)))?
 }
 
 /// Interpolate a tree tensor network on a caller-owned random stream.
@@ -362,8 +381,10 @@ where
 {
     let mut stream: &mut R = rng;
     let mut streams = RandomStreams::Shared(&mut stream);
+    let mut evaluate = evaluate;
+    let mut execution = Compatibility::new(&mut evaluate);
     crossinterpolate2_with_streams(
-        evaluate,
+        &mut execution,
         local_dims,
         graph,
         initial_pivots,
@@ -371,15 +392,14 @@ where
         center_site,
         proposer,
         &mut streams,
-        None,
     )
 }
 
 // INVARIANT: This shared run boundary preserves the eight explicit parameters
 // of the public caller-stream entry point without bundling unrelated options.
 #[allow(clippy::too_many_arguments)]
-fn crossinterpolate2_with_streams<T, F, P>(
-    evaluate: F,
+fn crossinterpolate2_with_streams<T, P>(
+    execution: &mut dyn BatchExecution<T>,
     local_dims: Vec<usize>,
     graph: TreeTciGraph,
     initial_pivots: Vec<MultiIndex>,
@@ -387,7 +407,6 @@ fn crossinterpolate2_with_streams<T, F, P>(
     center_site: Option<usize>,
     proposer: &P,
     streams: &mut RandomStreams<'_>,
-    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> TreeTciResult<TreeTciRunResult>
 where
     T: FullPivLuScalar
@@ -395,7 +414,6 @@ where
         + tensor4all_core::MatrixLuciScalar
         + tensor4all_core::TensorElement
         + crate::globalpivot::ScalarParts,
-    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
     options.validate()?;
@@ -417,12 +435,11 @@ where
     let mut tci = TreeTCI2::<T>::new(local_dims, graph)?;
     tci.add_global_pivots(&pivots)?;
 
-    let evaluator = crate::evaluation::RunEvaluator::new(
-        evaluate,
+    let mut evaluator = CachedExecution::new(
+        execution,
         &tci.local_dims,
         options.evaluation_cache_bytes,
     )?;
-    let evaluate = |batch: GlobalIndexBatch<'_>| evaluator.call(batch);
 
     // Initialize max_sample_value via batch evaluate
     let n_sites = tci.local_dims.len();
@@ -432,7 +449,7 @@ where
         flat.extend_from_slice(pivot);
     }
     let batch = GlobalIndexBatch::new(&flat, n_sites, pivots.len())?;
-    let init_vals = evaluate(batch)?;
+    let init_vals = evaluator.call(batch)?;
     if init_vals.len() != pivots.len() {
         return Err(anyhow::anyhow!(
             "initial evaluator returned {} values for {} pivots",
@@ -453,14 +470,18 @@ where
     }
 
     let result = optimize_with_streams(
-        &mut tci, evaluate, options, proposer, &AllEdges, streams, context,
+        &mut tci,
+        &mut evaluator,
+        options,
+        proposer,
+        &AllEdges,
+        streams,
     )?;
     let treetn = to_treetn_chunked(
         &tci,
-        &evaluate,
+        &mut evaluator,
         center_site,
         EVALUATION_CHUNK_POINTS,
-        context,
     )?;
 
     Ok(TreeTciRunResult {

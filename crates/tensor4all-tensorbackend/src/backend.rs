@@ -216,6 +216,31 @@ pub trait FullPivLuScalar: BackendLinalgScalar {
         pivot_rows: usize,
         pivot_cols: usize,
     ) -> std::result::Result<Vec<Self>, BackendLinalgError>;
+
+    /// Same solve, on a tenferro session the caller has already entered.
+    ///
+    /// This is the entry a scheduler-owned worker uses: the phase that owns the
+    /// worker enters the session, so neither this method nor the backend enters
+    /// another one, and nothing consults the process-global session. The shapes
+    /// and values are interpreted exactly as in
+    /// [`Self::solve_right_full_piv_lu`], and they are validated before the
+    /// session is used.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`BackendLinalgError`] when the pivot matrix is not square
+    /// (a shape mismatch), when the shapes are incompatible (`lhs_cols !=
+    /// pivot_rows`, a shape mismatch), or when the backend full-pivot LU solve
+    /// fails on the supplied session (a backend failure).
+    fn solve_right_full_piv_lu_on_session(
+        session: &mut dyn tenferro_tensor::BackendSession,
+        lhs_values: &[Self],
+        lhs_rows: usize,
+        lhs_cols: usize,
+        pivot_values: &[Self],
+        pivot_rows: usize,
+        pivot_cols: usize,
+    ) -> std::result::Result<Vec<Self>, BackendLinalgError>;
 }
 
 macro_rules! impl_full_piv_lu_scalar {
@@ -263,7 +288,9 @@ macro_rules! impl_full_piv_lu_scalar {
                 )?;
                 // A rejected entry keeps its own error as the source: the
                 // caller asked for its context, so a worker refusal must stay
-                // visible as a refusal rather than as text.
+                // visible as a refusal rather than as text. Validation stays
+                // before the entry: a malformed operand must fail without
+                // waiting for the caller's session.
                 let solved_t = context
                     .with_concrete_session(|session| inputs.solve(session.backend()))
                     .map_err(|error| BackendLinalgError::from(anyhow::Error::new(error)))?
@@ -272,6 +299,29 @@ macro_rules! impl_full_piv_lu_scalar {
                             "full_piv_lu_solve failed: {error}"
                         ))
                     })?;
+                inputs.finish::<Self>(solved_t)
+            }
+
+            fn solve_right_full_piv_lu_on_session(
+                session: &mut dyn tenferro_tensor::BackendSession,
+                lhs_values: &[Self],
+                lhs_rows: usize,
+                lhs_cols: usize,
+                pivot_values: &[Self],
+                pivot_rows: usize,
+                pivot_cols: usize,
+            ) -> std::result::Result<Vec<Self>, BackendLinalgError> {
+                let inputs = FullPivLuSolveInputs::new(
+                    lhs_values,
+                    lhs_rows,
+                    lhs_cols,
+                    pivot_values,
+                    pivot_rows,
+                    pivot_cols,
+                )?;
+                let solved_t = inputs.solve(session).map_err(|error| {
+                    BackendLinalgError::from(anyhow::anyhow!("full_piv_lu_solve failed: {error}"))
+                })?;
                 inputs.finish::<Self>(solved_t)
             }
         }

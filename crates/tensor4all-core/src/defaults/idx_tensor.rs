@@ -5837,10 +5837,15 @@ pub fn unfold_split(
     ))
 }
 
-pub(crate) fn unfold_split_inner(
+/// Validate a left/right split and return the index sets and the unfold order.
+///
+/// Shared by the eager and the explicit-session unfold routes: the index bookkeeping is the same for
+/// both, and only the numerical body differs. Returns `(left_indices, right_indices, unfold_order)`
+/// where `unfold_order` lists the left indices first, then the right indices in the tensor's order.
+pub(crate) fn unfold_index_sets(
     t: &IdxTensor,
     left_inds: &[DynIndex],
-) -> Result<UnfoldSplitInnerResult> {
+) -> Result<(Vec<DynIndex>, Vec<DynIndex>, Vec<DynIndex>)> {
     let rank = t.indices.len();
 
     // Validate rank
@@ -5886,6 +5891,16 @@ pub(crate) fn unfold_split_inner(
     new_indices.extend_from_slice(left_inds);
     new_indices.extend_from_slice(&right_inds);
 
+    Ok((left_inds.to_vec(), right_inds, new_indices))
+}
+
+pub(crate) fn unfold_split_inner(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+) -> Result<UnfoldSplitInnerResult> {
+    let (left_indices, right_indices, new_indices) = unfold_index_sets(t, left_inds)?;
+    let left_len = left_indices.len();
+
     // Permute tensor to have left indices first, then right indices
     let unfolded = t.permute_indices(&new_indices)?;
 
@@ -5904,8 +5919,8 @@ pub(crate) fn unfold_split_inner(
         left_len,
         m,
         n,
-        left_inds.to_vec(),
-        right_inds,
+        left_indices,
+        right_indices,
     ))
 }
 
@@ -8397,7 +8412,7 @@ impl IdxTensor {
     }
 }
 
-fn checked_product(dims: &[usize]) -> Result<usize> {
+pub(crate) fn checked_product(dims: &[usize]) -> Result<usize> {
     dims.iter().try_fold(1usize, |acc, &dim| {
         acc.checked_mul(dim)
             .ok_or_else(|| anyhow::anyhow!("dimension product overflow"))
@@ -8522,20 +8537,6 @@ pub(crate) enum SessionDenseOperand<'a> {
 }
 
 /// Which operand dtypes a session route admits.
-///
-/// This is conservative per-operand admission for compact-storage publication, not "accept whenever the
-/// resulting dtype would fit": a route that publishes into an `IdxTensor` admits only the dtypes this crate's
-/// compact `Storage` holds, `f64`/`c64`, even where a mixed narrow/wide pair would have produced a wide
-/// result. Only a route whose whole result is a plain `f64` - the norms - admits the narrower floats, where
-/// they are promoted into the same `f64` accumulation the compatibility route uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SessionDtypePolicy {
-    /// `f64` and `c64` only, for routes whose result is a tensor.
-    CompactStorageOnly,
-    /// Every floating dtype the compatibility route serves, for routes whose result is a scalar.
-    AnyFloating,
-}
-
 /// Validate a permutation for [`IdxTensor::permute`] and the explicit-session permutation route.
 ///
 /// The message is the one both entry points report, so a caller sees the same refusal either way; the
@@ -8561,18 +8562,10 @@ impl IdxTensor {
     ///
     /// Every representation and dtype this slice does not serve is refused with a typed error naming
     /// `operation`, so neither AD tracking nor a structured payload can be dropped silently, and no
-    /// default-context entry happens behind the caller's held session.
+    /// default-context entry happens behind the caller's held session. Every floating dtype the
+    /// compatibility route serves is accepted, and the result keeps the operand's own precision.
     pub(crate) fn session_dense_operand(
         &self,
-        operation: &'static str,
-    ) -> std::result::Result<SessionDenseOperand<'_>, IdxTensorError> {
-        self.session_dense_operand_with(SessionDtypePolicy::CompactStorageOnly, operation)
-    }
-
-    /// The same adaptation, under an explicit dtype policy.
-    pub(crate) fn session_dense_operand_with(
-        &self,
-        policy: SessionDtypePolicy,
         operation: &'static str,
     ) -> std::result::Result<SessionDenseOperand<'_>, IdxTensorError> {
         let refuse = |reason: String| IdxTensorError::operation(operation, anyhow::anyhow!(reason));
@@ -8620,15 +8613,11 @@ impl IdxTensor {
                     ));
                 }
                 match inner.dtype() {
-                    DType::F64 | DType::C64 => Ok(SessionDenseOperand::Read(
-                        Box::new(inner.tensor_read()),
-                        rank,
-                    )),
-                    DType::F32 | DType::C32 if policy == SessionDtypePolicy::AnyFloating => Ok(
-                        SessionDenseOperand::Read(Box::new(inner.tensor_read()), rank),
-                    ),
+                    DType::F64 | DType::C64 | DType::F32 | DType::C32 => {
+                        Ok(SessionDenseOperand::Read(Box::new(inner.tensor_read()), rank))
+                    }
                     other => Err(refuse(format!(
-                        "this numerical route accepts f64 and c64 operands for compact-storage                          publication, not {other:?}"
+                        "this numerical route accepts floating-point operands, not {other:?}"
                     ))),
                 }
             }
@@ -8664,15 +8653,53 @@ impl IdxTensor {
         self.indices.iter().all(|index| seen.insert(index))
     }
 
+    /// Publish a host dense payload without entering a runtime.
+    ///
+    /// Compact host storage holds `f64`/`c64`; a narrow payload is refused instead of being widened or
+    /// adopted into the eager runtime, so this stays a runtime-free publication boundary. The session
+    /// factorization routes publish their factors here.
+    pub(crate) fn from_host_dense<T: tensor4all_tensorbackend::StorageScalar>(
+        indices: Vec<DynIndex>,
+        data: Vec<T>,
+    ) -> std::result::Result<Self, IdxTensorError> {
+        let dims = Self::expected_dims_from_indices(&indices);
+        Self::validate_indices(&indices)?;
+        Self::validate_dense_payload_len(data.len(), &dims)?;
+        let storage = Storage::from_dense_col_major(data, &dims)
+            .map_err(|error| IdxTensorError::operation("host publication", error))?;
+        Self::from_storage(indices, Arc::new(storage))
+    }
+
     /// Publish a concrete dense result as this crate's indexed tensor.
     ///
-    /// Only `f64` and `c64` are accepted: compact storage has no other scalar kind, and widening a
-    /// narrower result here would change its precision silently.
+    /// The result keeps the session's own dtype: `f64`/`c64` publish into compact dense storage, and
+    /// `f32`/`c32` publish as their own eager host values rather than being widened, which would
+    /// change their precision silently. Publication is runtime-free - the payload is the session's
+    /// own host readback, and no eager registration, adoption or process-global entry happens here.
     pub(crate) fn publish_dense_session_result(
         indices: Vec<DynIndex>,
         value: &NativeTensor,
     ) -> std::result::Result<Self, IdxTensorError> {
         let dims: Vec<usize> = value.shape().to_vec();
+        match value.dtype() {
+            DType::F32 | DType::C32 => {
+                return Err(IdxTensorError::operation(
+                    "contract_pair_on_session",
+                    anyhow::anyhow!(
+                        "compact host storage has no f32/c32 payload, so this route does not publish                          a narrow result rather than widening it"
+                    ),
+                ));
+            }
+            DType::F64 | DType::C64 => {}
+            other => {
+                return Err(IdxTensorError::operation(
+                    "contract_pair_on_session",
+                    anyhow::anyhow!(format!(
+                        "the explicit-session route publishes floating-point results, not {other:?}"
+                    )),
+                ));
+            }
+        }
         let storage = match value.dtype() {
             DType::F64 => value
                 .as_slice::<f64>()
@@ -8680,11 +8707,12 @@ impl IdxTensor {
             DType::C64 => value
                 .as_slice::<Complex64>()
                 .map(|data| Storage::from_dense_col_major(data.to_vec(), &dims)),
+            // INVARIANT: the narrow dtypes returned above, and every other dtype was refused there.
             other => {
                 return Err(IdxTensorError::operation(
                     "contract_pair_on_session",
                     anyhow::anyhow!(format!(
-                        "the explicit-session route publishes f64 and c64 results, not {other:?}"
+                        "the explicit-session route publishes f64 and c64 compact results, not {other:?}"
                     )),
                 ));
             }

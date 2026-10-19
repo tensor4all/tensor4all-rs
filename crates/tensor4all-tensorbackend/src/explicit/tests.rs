@@ -775,6 +775,38 @@ fn held_session_spans_a_stage_and_matches_the_scoped_entry() {
     assert!(context.with_concrete_session(|_| ()).is_ok());
 }
 
+/// A borrowed tenferro session view wrapped by the bridge is the same session the
+/// scoped entry hands out, and it never opens an entry of its own.
+#[test]
+fn the_borrowed_session_bridge_wraps_a_held_view() {
+    use tenferro_cpu::CpuBackend;
+
+    let context = context(1);
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let a = matrix();
+
+    let mut held = HeldSession::open(&backend).expect("held session");
+    let bridged = held.with_session(|view| {
+        let mut bridged = Session::from_backend_session(view.backend());
+        let transposed = bridged.permute(&a, &[1, 0]).expect("bridged permute");
+        bridged.sum(&transposed).expect("bridged sum")
+    });
+    held.close().expect("affinity restores");
+
+    let scoped = context
+        .with_concrete_session(|view| {
+            let transposed = view.permute(&a, &[1, 0])?;
+            view.sum(&transposed)
+        })
+        .expect("session entry")
+        .expect("scoped sum");
+    assert_eq!(
+        bridged.as_slice::<f64>().expect("f64 payload"),
+        scoped.as_slice::<f64>().expect("f64 payload")
+    );
+    assert_eq!(bridged.as_slice::<f64>().expect("f64 payload"), &[10.0]);
+}
+
 /// A held session is `!Send + !Sync`, and it borrows its backend handle rather than
 /// owning one.
 #[test]

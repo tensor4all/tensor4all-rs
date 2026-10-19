@@ -642,6 +642,117 @@ fn the_context_solve_keeps_the_shape_validation_and_its_precedence() {
 }
 
 #[test]
+fn the_session_solve_agrees_with_the_legacy_solve_on_one_entered_session() {
+    let context = one_worker_context();
+    let (pi1, pivot) = rectangular_operands::<f64>(|value| value);
+    let legacy = f64::solve_right_full_piv_lu(&pi1, 3, 2, &pivot, 2, 2).expect("legacy solve");
+
+    // One session the caller entered serves every scalar kind; the method itself
+    // never enters another one.
+    let scoped = context
+        .with_concrete_session(|session| {
+            let f64_values = f64::solve_right_full_piv_lu_on_session(
+                session.backend(),
+                &pi1,
+                3,
+                2,
+                &pivot,
+                2,
+                2,
+            )?;
+            let f32_inputs = rectangular_operands::<f32>(|value| value as f32);
+            let f32_values = f32::solve_right_full_piv_lu_on_session(
+                session.backend(),
+                &f32_inputs.0,
+                3,
+                2,
+                &f32_inputs.1,
+                2,
+                2,
+            )?;
+            Ok::<_, crate::BackendLinalgError>((f64_values, f32_values))
+        })
+        .expect("session entry")
+        .expect("session solve");
+
+    assert_eq!(legacy, scoped.0);
+    let (f32_pi1, f32_pivot) = rectangular_operands::<f32>(|value| value as f32);
+    let f32_legacy =
+        f32::solve_right_full_piv_lu(&f32_pi1, 3, 2, &f32_pivot, 2, 2).expect("legacy solve");
+    assert_eq!(f32_legacy, scoped.1);
+}
+
+/// The session-taking solve is the entry a scheduler-owned lane uses: it runs on the
+/// lane's own session view and opens no other session.
+#[test]
+fn the_session_solve_runs_on_a_lane_session() {
+    use std::sync::Mutex;
+
+    // One worker keeps the fixture independent of the suite's parallel test threads,
+    // which observe the process CPU mask that a wider session narrows.
+    let backend = tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend");
+    let (pi1, pivot) = rectangular_operands::<f64>(|value| value);
+    let legacy = f64::solve_right_full_piv_lu(&pi1, 3, 2, &pivot, 2, 2).expect("legacy solve");
+    let lane_solutions = Mutex::new(Vec::new());
+
+    let mut held = crate::explicit::HeldSession::open(&backend).expect("held session");
+    held.phase(|_index, lane| {
+        let mut view = lane.session();
+        let solution = f64::solve_right_full_piv_lu_on_session(
+            view.backend(),
+            &pi1,
+            3,
+            2,
+            &pivot,
+            2,
+            2,
+        )
+        .map_err(|error| tenferro_tensor::Error::runtime_state_source("lane solve", error))?;
+        lane_solutions.lock().expect("lane solutions").push(solution);
+        Ok::<(), tenferro_tensor::Error>(())
+    })
+    .expect("phase");
+    held.close().expect("affinity restores");
+
+    let solutions = lane_solutions.into_inner().expect("lane solutions");
+    assert!(!solutions.is_empty(), "every lane solved on its own view");
+    for solution in solutions {
+        assert_eq!(solution, legacy);
+    }
+}
+
+#[test]
+fn the_session_solve_keeps_the_shape_validation_and_its_precedence() {
+    let context = one_worker_context();
+    let pivot = vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let pi1 = vec![1.0_f64, 2.0, 3.0, 4.0];
+
+    let scoped = context
+        .with_concrete_session(|session| {
+            f64::solve_right_full_piv_lu_on_session(session.backend(), &pi1, 2, 2, &pivot, 2, 3)
+        })
+        .expect("session entry")
+        .expect_err("a non-square pivot must be refused");
+    assert!(scoped.source.to_string().contains("square pivot matrix"));
+
+    let scoped = context
+        .with_concrete_session(|session| {
+            f64::solve_right_full_piv_lu_on_session(
+                session.backend(),
+                &pi1,
+                2,
+                3,
+                &[1.0, 0.0, 0.0, 1.0],
+                2,
+                3,
+            )
+        })
+        .expect("session entry")
+        .expect_err("both shape errors must be refused");
+    assert!(scoped.source.to_string().contains("square pivot matrix"));
+}
+
+#[test]
 fn a_context_solve_from_a_rayon_worker_is_refused_typed() {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(1)

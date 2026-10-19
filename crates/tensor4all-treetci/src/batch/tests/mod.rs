@@ -12,7 +12,7 @@ fn encode(batch: GlobalIndexBatch<'_>) -> anyhow::Result<Vec<u64>> {
 
 fn run_chunked(n_points: usize, chunk_points: usize) -> (Vec<u64>, Vec<usize>) {
     let calls = RefCell::new(Vec::new());
-    let evaluate = |batch: GlobalIndexBatch<'_>| {
+    let mut evaluate = |batch: GlobalIndexBatch<'_>| {
         calls.borrow_mut().push(batch.n_points());
         encode(batch)
     };
@@ -25,7 +25,7 @@ fn run_chunked(n_points: usize, chunk_points: usize) -> (Vec<u64>, Vec<usize>) {
             point.copy_from_slice(&[next % 7, next / 7, 42]);
             next += 1;
         },
-        &evaluate,
+        &mut evaluate,
         "test points",
     )
     .unwrap();
@@ -57,18 +57,18 @@ fn evaluate_points_chunked_matches_single_call_for_every_chunk_size() {
 
 #[test]
 fn evaluate_points_chunked_rejects_invalid_input() {
-    let evaluate = |batch: GlobalIndexBatch<'_>| encode(batch);
-    assert!(evaluate_points_chunked(2, 3, 0, |_| {}, &evaluate, "p").is_err());
-    assert!(evaluate_points_chunked(0, 3, 2, |_| {}, &evaluate, "p").is_err());
-    assert!(evaluate_points_chunked(2, 0, 2, |_| {}, &evaluate, "p").is_err());
+    let mut evaluate = |batch: GlobalIndexBatch<'_>| encode(batch);
+    assert!(evaluate_points_chunked(2, 3, 0, |_| {}, &mut evaluate, "p").is_err());
+    assert!(evaluate_points_chunked(0, 3, 2, |_| {}, &mut evaluate, "p").is_err());
+    assert!(evaluate_points_chunked(2, 0, 2, |_| {}, &mut evaluate, "p").is_err());
 
     // A wrong value count in a later chunk is reported with its size.
-    let short = |batch: GlobalIndexBatch<'_>| -> anyhow::Result<Vec<u64>> {
+    let mut short = |batch: GlobalIndexBatch<'_>| -> anyhow::Result<Vec<u64>> {
         let n = batch.n_points();
         Ok(vec![0; if n == 3 { n } else { n - 1 }])
     };
     let error =
-        evaluate_points_chunked(1, 5, 3, |point| point[0] = 0, &short, "test points").unwrap_err();
+        evaluate_points_chunked(1, 5, 3, |point| point[0] = 0, &mut short, "test points").unwrap_err();
     assert_eq!(
         error.to_string(),
         "batch evaluator returned 1 values for 2 test points (points 3..5 of 5)"

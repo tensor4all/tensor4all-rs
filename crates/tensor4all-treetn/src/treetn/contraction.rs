@@ -48,9 +48,10 @@ use anyhow::{Context, Result};
 
 use crate::algorithm::CanonicalForm;
 use tensor4all_core::{
-    contract_pair_on_session, factorize_in, validate_svd_truncation_options, Canonical,
-    FactorizeAlg, FactorizeOptions, IndexLike, PairwiseContractionOptions, SvdTruncationPolicy,
-    TensorContractionLike, TensorFactorizationLike, TensorIndex, TensorLike,
+    contract_pair_on_session, factorize_in, factorize_on_session,
+    validate_svd_truncation_options, Canonical, FactorizeAlg, FactorizeOptions, IndexLike,
+    PairwiseContractionOptions, SvdTruncationPolicy, TensorContractionLike, TensorFactorizationLike,
+    TensorIndex, TensorLike,
 };
 use tensor4all_tensorbackend::{default_cpu_execution_context, ExecutionContext};
 
@@ -107,7 +108,7 @@ fn zipup_factorize_options(
 /// uses - with a typed error for anything else rather than a silent global
 /// run. The public context entries select the session strategy statically for
 /// `IdxTensor` networks.
-pub(crate) trait LeafOps<T>: Send + Sync
+pub(crate) trait LeafOps<T>
 where
     T: TensorLike,
 {
@@ -248,6 +249,116 @@ impl SessionLeaves {
                 "context adoption supports f64 and Complex64 tensors only"
             ))
         }
+    }
+}
+
+/// The explicit-session route: the same leaves as [`SessionLeaves`], executed on a session the
+/// caller has already entered instead of one this crate opens.
+///
+/// This is the route a scheduler-owned lane uses: the caller's session is reborrowed per leaf, no
+/// context is entered, and the results are published as runtime-free dense host tensors. The leaves
+/// share every algorithm with the other routes; only the execution differs.
+pub(crate) struct SessionViewLeaves<'a, 'session> {
+    session: std::cell::RefCell<&'a mut tensor4all_tensorbackend::explicit::Session<'session>>,
+}
+
+impl<'a, 'session> SessionViewLeaves<'a, 'session> {
+    pub(crate) fn new(
+        session: &'a mut tensor4all_tensorbackend::explicit::Session<'session>,
+    ) -> Self {
+        Self {
+            session: std::cell::RefCell::new(session),
+        }
+    }
+
+    fn with_session<R>(
+        &self,
+        f: impl FnOnce(
+            &mut tensor4all_tensorbackend::explicit::Session<'_>,
+        ) -> Result<R>,
+    ) -> Result<R> {
+        let mut session = self.session.borrow_mut();
+        f(&mut session)
+    }
+
+    fn contract(
+        &self,
+        lhs: &tensor4all_core::IdxTensor,
+        rhs: &tensor4all_core::IdxTensor,
+    ) -> Result<tensor4all_core::IdxTensor> {
+        self.with_session(|session| {
+            contract_pair_on_session(session, lhs, rhs, PairwiseContractionOptions::new())
+                .map_err(anyhow::Error::from)
+        })
+    }
+}
+
+impl LeafOps<tensor4all_core::IdxTensor> for SessionViewLeaves<'_, '_> {
+    fn contract_pair(
+        &self,
+        lhs: &tensor4all_core::IdxTensor,
+        rhs: &tensor4all_core::IdxTensor,
+    ) -> Result<tensor4all_core::IdxTensor> {
+        self.contract(lhs, rhs)
+    }
+
+    fn contract_list(
+        &self,
+        tensors: &[tensor4all_core::IdxTensor],
+    ) -> Result<tensor4all_core::IdxTensor> {
+        if tensors.len() == 1 {
+            return Ok(tensors[0].clone());
+        }
+        let mut acc = self.contract(&tensors[0], &tensors[1])?;
+        for tensor in &tensors[2..] {
+            acc = self.contract(&acc, tensor)?;
+        }
+        Ok(acc)
+    }
+
+    fn contract_refs(
+        &self,
+        tensors: &[&tensor4all_core::IdxTensor],
+    ) -> Result<tensor4all_core::IdxTensor> {
+        if tensors.len() == 1 {
+            return Ok(tensors[0].clone());
+        }
+        let mut acc = self.contract(tensors[0], tensors[1])?;
+        for tensor in &tensors[2..] {
+            acc = self.contract(&acc, tensor)?;
+        }
+        Ok(acc)
+    }
+
+    fn outer_product(
+        &self,
+        lhs: &tensor4all_core::IdxTensor,
+        rhs: &tensor4all_core::IdxTensor,
+    ) -> Result<tensor4all_core::IdxTensor> {
+        self.contract(lhs, rhs)
+    }
+
+    fn factorize(
+        &self,
+        tensor: &tensor4all_core::IdxTensor,
+        left_inds: &[tensor4all_core::DynIndex],
+        options: &FactorizeOptions,
+    ) -> Result<tensor4all_core::FactorizeResult<tensor4all_core::IdxTensor>> {
+        self.with_session(|session| {
+            factorize_on_session(session, tensor, left_inds, options)
+                .map_err(|error| anyhow::anyhow!("session factorization failed: {error}"))
+        })
+    }
+
+    /// The Gram shortcut has no session twin, so the session route factorizes directly with the
+    /// same options.
+    fn factorize_auto(
+        &self,
+        tensor: &tensor4all_core::IdxTensor,
+        left_inds: &[tensor4all_core::DynIndex],
+        options: &FactorizeOptions,
+    ) -> Result<tensor4all_core::FactorizeResult<tensor4all_core::IdxTensor>> {
+        self.factorize(tensor, left_inds, options)
     }
 }
 

@@ -112,7 +112,7 @@ pub use error::{Result as TreeTciResult, TreeTciError};
 pub use evaluation::TreeTciEvaluationStats;
 pub use globalpivot::{find_global_pivots, find_global_pivots_with_rng};
 pub use graph::{TreeTciEdge, TreeTciGraph};
-pub use interpolator::{TreeTciInterpolator, TreeTciInterpolatorIn};
+pub use interpolator::TreeTciInterpolator;
 pub use key::SubtreeKey;
 pub use materialize::{to_treetn, to_treetn_in};
 pub use optimize::{

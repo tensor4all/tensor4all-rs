@@ -12,6 +12,7 @@
 //! run that stops at `max_iter` or through the bond-dimension saturation stop.
 
 use crate::error::Result as TreeTciResult;
+use crate::evaluation::{BatchExecution, Compatibility};
 use crate::{
     batch::EVALUATION_CHUNK_POINTS, materialize::to_treetn_chunked, GlobalIndexBatch, MultiIndex,
     TreeTCI2,
@@ -21,7 +22,7 @@ use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::MatrixLuciScalar as Scalar;
 use tensor4all_core::{floating_zone_walk, AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor};
-use tensor4all_tensorbackend::{CpuExecutionContext, FullPivLuScalar};
+use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator};
 
 /// Search for multi-indices where the current approximation error is large.
@@ -163,15 +164,16 @@ where
     // Erase the caller's RNG type once, so the search body below is
     // instantiated once per scalar type instead of once per (scalar, RNG) pair.
     let mut stream: &mut R = rng;
+    let mut evaluate = evaluate;
+    let mut execution = Compatibility::new(&mut evaluate);
     find_global_pivots_erased(
         state,
-        evaluate,
+        &mut execution,
         nsearch,
         max_nglobal_pivot,
         tol_margin,
         abs_tol,
         &mut stream,
-        None,
     )
 }
 
@@ -179,23 +181,21 @@ where
 ///
 /// Callers inside the crate use this so the search is instantiated once per
 /// scalar type.
-// INVARIANT: the parameter list is the search's boundary (state, evaluator,
-// search limits, tolerance, stream) plus the optional caller context; grouping
-// them into a struct would only move the same values through one more layer.
+// INVARIANT: the parameter list is the search's boundary (state, execution owner,
+// search limits, tolerance, stream); grouping them into a struct would only move
+// the same values through one more layer.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn find_global_pivots_erased<T, F>(
+pub(crate) fn find_global_pivots_erased<T>(
     state: &TreeTCI2<T>,
-    evaluate: F,
+    execution: &mut dyn BatchExecution<T>,
     nsearch: usize,
     max_nglobal_pivot: usize,
     tol_margin: f64,
     abs_tol: f64,
     rng: &mut dyn RngCore,
-    context: Option<&CpuExecutionContext>,
 ) -> TreeTciResult<Vec<MultiIndex>>
 where
     T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     let params = SearchParams {
         nsearch,
@@ -203,7 +203,7 @@ where
         tol_margin,
         abs_tol,
     };
-    search_with_readout(state, evaluate, params, rng, cached_walk_readout, context)
+    search_with_readout(state, execution, params, rng, cached_walk_readout)
 }
 
 /// Scalar parameters of one global pivot search, as passed to
@@ -235,17 +235,15 @@ fn cached_walk_readout(
 /// caller. Production passes [`cached_walk_readout`]; tests also pass the
 /// pointwise [`TreeTN::evaluate`] to check that the readout does not change
 /// the selected pivots.
-fn search_with_readout<T, F, R>(
+fn search_with_readout<T, R>(
     state: &TreeTCI2<T>,
-    evaluate: F,
+    execution: &mut dyn BatchExecution<T>,
     params: SearchParams,
     rng: &mut dyn RngCore,
     mut readout: R,
-    context: Option<&CpuExecutionContext>,
 ) -> TreeTciResult<Vec<MultiIndex>>
 where
     T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     R: FnMut(
         &mut TreeTNCachedEvaluator<'_, usize>,
         &TreeTN<IdxTensor, usize>,
@@ -282,7 +280,7 @@ where
     // Materialize the current approximation once per search. A degenerate or
     // inconsistent pivot state is a real error; propagate it rather than
     // silently skipping the search.
-    let treetn = to_treetn_chunked(state, &evaluate, None, EVALUATION_CHUNK_POINTS, context)?;
+    let treetn = to_treetn_chunked(state, execution, None, EVALUATION_CHUNK_POINTS)?;
     let mut site_indices = Vec::with_capacity(n_sites);
     for site in 0..n_sites {
         let node = treetn
@@ -331,7 +329,8 @@ where
                 for point in points {
                     flat.extend_from_slice(point);
                 }
-                let f_values = evaluate(GlobalIndexBatch::new(&flat, n_sites, points.len())?)?;
+                let f_values =
+                    execution.call(GlobalIndexBatch::new(&flat, n_sites, points.len())?)?;
                 if f_values.len() != points.len() {
                     return Err(anyhow::anyhow!(
                         "batch evaluator returned {} values for {} global-pivot candidates",

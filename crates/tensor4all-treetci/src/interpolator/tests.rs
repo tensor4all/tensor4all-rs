@@ -1,6 +1,29 @@
 use super::*;
 use std::collections::BTreeMap;
+use tensor4all_tensorbackend::{
+    explicit::{HeldSession, Session},
+    CpuExecutionContext,
+};
+use tensor4all_treetn::interpolation::Parallelism;
 use tensor4all_treetn::NodeNameNetwork;
+use tenferro_cpu::CpuBackend;
+
+/// Run `f` with an execution context over one held session, so unit tests of
+/// evaluator handling use the same explicit capability production runs use.
+fn with_context<R>(f: impl FnOnce(&mut EvalContext<'_>) -> R) -> R {
+    let context =
+        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let mut held = HeldSession::open(&backend).expect("held session");
+    let result = held.with_session(|view| {
+        f(&mut EvalContext::new(
+            Session::from_backend_session(view.backend()),
+            Parallelism::Serial,
+        ))
+    });
+    held.close().expect("affinity restores");
+    result
+}
 
 #[test]
 fn map_termination_applies_the_cap_precedence() {
@@ -284,45 +307,59 @@ fn layout_with_a_fused_vertex_takes_the_general_path() {
 
 #[test]
 fn call_evaluator_marks_errors_and_wrong_lengths() {
-    let data = [0usize, 1, 1, 0];
-    let short = |_: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> { Ok(vec![1.0]) };
-    let error = call_evaluator(&short, &data, 2).unwrap_err();
-    assert!(has_evaluator_failure(error.as_ref()));
-    assert!(format!("{error:#}").contains("returned 1 values for 2 points"));
+    with_context(|ctx| {
+        let data = [0usize, 1, 1, 0];
+        let mut short =
+            |_: ColMajorArrayRef<'_, usize>, _: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
+                Ok(vec![1.0])
+            };
+        let error = call_evaluator(&mut short, &data, 2, ctx).unwrap_err();
+        assert!(has_evaluator_failure(error.as_ref()));
+        assert!(format!("{error:#}").contains("returned 1 values for 2 points"));
 
-    let failing =
-        |_: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> { anyhow::bail!("nope") };
-    let error = call_evaluator(&failing, &data, 2).unwrap_err();
-    assert!(has_evaluator_failure(error.as_ref()));
+        let mut failing =
+            |_: ColMajorArrayRef<'_, usize>, _: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
+                anyhow::bail!("nope")
+            };
+        let error = call_evaluator(&mut failing, &data, 2, ctx).unwrap_err();
+        assert!(has_evaluator_failure(error.as_ref()));
 
-    let echo = |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
-        assert_eq!(batch.shape(), &[2, 2]);
-        Ok(batch
-            .data()
-            .chunks(2)
-            .map(|p| (p[0] * 10 + p[1]) as f64)
-            .collect())
-    };
-    assert_eq!(call_evaluator(&echo, &data, 2).unwrap(), vec![1.0, 10.0]);
+        let mut echo =
+            |batch: ColMajorArrayRef<'_, usize>, _: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
+                assert_eq!(batch.shape(), &[2, 2]);
+                Ok(batch
+                    .data()
+                    .chunks(2)
+                    .map(|p| (p[0] * 10 + p[1]) as f64)
+                    .collect())
+            };
+        assert_eq!(
+            call_evaluator(&mut echo, &data, 2, ctx).unwrap(),
+            vec![1.0, 10.0]
+        );
+    });
 }
 
 #[test]
 fn call_evaluator_rejects_non_finite_complex_components_and_magnitudes() {
     use num_complex::Complex64;
-    for bad in [
-        Complex64::new(f64::NAN, 1.0),
-        Complex64::new(1.0, f64::INFINITY),
-        Complex64::new(f64::MAX, f64::MAX),
-    ] {
-        let evaluate = |_: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<Complex64>> {
-            Ok(vec![Complex64::new(1.0, 0.0), bad])
-        };
-        let error = call_evaluator(&evaluate, &[0, 1], 1).unwrap_err();
-        assert!(has_evaluator_failure(error.as_ref()));
-        let message = format!("{error:#}");
-        assert!(
-            message.contains("batch point 1, coordinates [1]"),
-            "{message}"
-        );
-    }
+    with_context(|ctx| {
+        for bad in [
+            Complex64::new(f64::NAN, 1.0),
+            Complex64::new(1.0, f64::INFINITY),
+            Complex64::new(f64::MAX, f64::MAX),
+        ] {
+            let mut evaluate =
+                |_: ColMajorArrayRef<'_, usize>, _: &mut EvalContext<'_>| -> anyhow::Result<Vec<Complex64>> {
+                    Ok(vec![Complex64::new(1.0, 0.0), bad])
+                };
+            let error = call_evaluator(&mut evaluate, &[0, 1], 1, ctx).unwrap_err();
+            assert!(has_evaluator_failure(error.as_ref()));
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("batch point 1, coordinates [1]"),
+                "{message}"
+            );
+        }
+    });
 }

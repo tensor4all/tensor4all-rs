@@ -574,10 +574,7 @@ pub fn norm_squared_on_session(
     tensor: &IdxTensor,
 ) -> Result<f64, IdxTensorError> {
     const OP: &str = "norm_squared_on_session";
-    let operand = tensor.session_dense_operand_with(
-        crate::defaults::idx_tensor::SessionDtypePolicy::AnyFloating,
-        OP,
-    )?;
+    let operand = tensor.session_dense_operand(OP)?;
     let value = materialize_on_session(OP, session, operand)?;
     let squared =
         match value.dtype() {

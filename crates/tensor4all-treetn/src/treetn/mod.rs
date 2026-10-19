@@ -43,7 +43,10 @@ use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
 
 // Re-export the decomposition functions and types
-pub use decompose::{factorize_tensor_to_treetn, factorize_tensor_to_treetn_with, TreeTopology};
+pub use decompose::{
+    factorize_tensor_to_treetn, factorize_tensor_to_treetn_with,
+    factorize_tensor_to_treetn_with_on_session, TreeTopology,
+};
 
 // Re-export cached evaluator types
 pub use cached_evaluator::{

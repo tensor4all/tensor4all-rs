@@ -16,6 +16,16 @@
 //! topology and sites with [`validate_layout`], the same checks
 //! [`InterpolationProblem::new`] performs.
 //!
+//! # Execution
+//!
+//! Every run takes its execution capability explicitly through an
+//! [`EvalContext`]: the session the numerical work runs on and the parallelism
+//! budget the caller's own code may use. Nothing is installed and no ambient
+//! pool or thread-local selector chooses where the work runs
+//! ([`EvalContext::parallelism`]). A caller that owns a lane session - a
+//! scheduler worker, for example - passes it directly; a caller that runs on
+//! its own thread passes its held session.
+//!
 //! # Site order
 //!
 //! Batches passed to the evaluator and pivots use one site order, derived
@@ -56,8 +66,130 @@ use std::hash::Hash;
 use std::num::NonZeroUsize;
 
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
+use tensor4all_tensorbackend::explicit::Session;
 
 use crate::{NodeNameNetwork, TreeTN};
+
+/// The parallelism budget of the application's own code inside an [`EvalContext`].
+///
+/// This describes what the *application's* code may do, not what the backend does:
+/// operations issued through [`EvalContext::session`] follow the backend's own lane
+/// policy, so a lane's child session still selects the backend's inner parallelism
+/// with the full domain budget. `parallelism` only bounds the caller's own fan-out
+/// (an evaluator that parallelizes its host work, for example), and it never
+/// installs a pool or reroutes work.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetn::interpolation::Parallelism;
+///
+/// fn workers(parallelism: Parallelism<'_>) -> usize {
+///     match parallelism {
+///         Parallelism::Serial => 1,
+///         Parallelism::Pool { budget, .. } => budget,
+///     }
+/// }
+/// assert_eq!(workers(Parallelism::Serial), 1);
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub enum Parallelism<'a> {
+    /// The application's code stays on the thread that owns the session and must
+    /// not fan out. This is what a scheduler lane hands out: parallelism is across
+    /// work items, and the item's own thread keeps the backend's session.
+    Serial,
+    /// The application's code may parallelize on `pool` with at most `budget`
+    /// workers. This is what a full-budget held session hands out, so a single item
+    /// can use the whole team for its own host work.
+    Pool {
+        /// The pool the application's own code may use.
+        pool: &'a rayon::ThreadPool,
+        /// Maximum number of workers the application's own code may use. Never
+        /// larger than the pool's thread count.
+        budget: usize,
+    },
+}
+
+/// The explicit execution capability of one interpolation run.
+///
+/// An `EvalContext` owns exactly one mutable access to an already-entered session
+/// and the parallelism budget of the caller's own code. Engines take it as an
+/// argument and reborrow [`EvalContext::session`] between their own operations and
+/// their evaluator calls, so the session has one mutable owner throughout the run
+/// and is never captured by a callback.
+///
+/// Nothing here selects an execution context: the session is the one the caller
+/// opened (a held session, or the session of a scheduler-owned lane), and no route
+/// consults a process-global or thread-local default.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+/// use tenferro::Tensor;
+/// use tenferro_cpu::CpuBackend;
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+/// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
+///
+/// let mut held = HeldSession::open(&backend)?;
+/// let total = held.with_session(|view| {
+///     let mut ctx = EvalContext::new(
+///         Session::from_backend_session(view.backend()),
+///         Parallelism::Serial,
+///     );
+///     assert!(matches!(ctx.parallelism(), Parallelism::Serial));
+///     let sum = ctx.session().sum(&x)?;
+///     sum.as_slice::<f64>().map(<[f64]>::to_vec)
+/// })?;
+/// held.close()?;
+/// assert_eq!(total, vec![4.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub struct EvalContext<'a> {
+    session: Session<'a>,
+    parallelism: Parallelism<'a>,
+}
+
+impl<'a> EvalContext<'a> {
+    /// Build the execution capability of one run from an already-entered session.
+    ///
+    /// # Arguments
+    ///
+    /// * `session` - The session every numerical operation of the run uses. It is
+    ///   borrowed, never entered or replaced here; the caller has already entered
+    ///   it (a held session, or a scheduler-owned lane's session).
+    /// * `parallelism` - The budget of the application's own code. Pass
+    ///   [`Parallelism::Serial`] inside a lane, where parallelism is across work
+    ///   items, and a full-budget [`Parallelism::Pool`] when one item may use the
+    ///   whole team.
+    pub fn new(session: Session<'a>, parallelism: Parallelism<'a>) -> Self {
+        Self {
+            session,
+            parallelism,
+        }
+    }
+
+    /// Reborrow the session of this run.
+    ///
+    /// Every numerical stage of an engine issues its backend work through this
+    /// accessor, and the engine reborrows it between its own operations and its
+    /// evaluator calls. The returned reference borrows `self`, so one mutable owner
+    /// stays explicit and no callback captures the session.
+    pub fn session(&mut self) -> &mut Session<'a> {
+        &mut self.session
+    }
+
+    /// The parallelism budget of the application's own code.
+    ///
+    /// This never describes the backend's execution: operations issued through
+    /// [`Self::session`] follow the backend's own lane policy.
+    pub fn parallelism(&self) -> Parallelism<'_> {
+        self.parallelism
+    }
+}
 
 /// One tree interpolation problem, validated on construction.
 ///
@@ -727,18 +859,21 @@ pub enum InterpolationError {
 /// # Examples
 ///
 /// A toy engine that handles only single-node problems by evaluating every
-/// point:
+/// point. The engine has no numerics of its own, so it forwards the context to
+/// the evaluator and keeps the one mutable owner explicit:
 ///
 /// ```
 /// use std::collections::BTreeMap;
-/// use std::hash::Hash;
 /// use std::fmt::Debug;
+/// use std::hash::Hash;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
+/// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
 /// use tensor4all_treetn::interpolation::{
-///     InterpolationError, InterpolationOutcome, InterpolationProblem,
-///     InterpolationTermination, TreeInterpolator,
+///     EvalContext, InterpolationError, InterpolationOutcome, InterpolationProblem,
+///     InterpolationTermination, Parallelism, TreeInterpolator,
 /// };
 /// use tensor4all_treetn::{NodeNameNetwork, TreeTN};
+/// use tenferro_cpu::CpuBackend;
 ///
 /// struct DenseSingleNode;
 ///
@@ -746,11 +881,12 @@ pub enum InterpolationError {
 ///     fn interpolate<V, F>(
 ///         &self,
 ///         problem: &InterpolationProblem<V>,
-///         evaluate: F,
+///         ctx: &mut EvalContext<'_>,
+///         mut evaluate: F,
 ///     ) -> Result<InterpolationOutcome<V>, InterpolationError>
 ///     where
 ///         V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-///         F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>>,
+///         F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>>,
 ///     {
 ///         let (node, sites) = match problem.node_sites().iter().next() {
 ///             Some(entry) if problem.node_sites().len() == 1 => entry,
@@ -773,7 +909,8 @@ pub enum InterpolationError {
 ///         let shape = [dims.len(), n_points];
 ///         let batch = ColMajorArrayRef::new(&points, &shape)
 ///             .map_err(|e| InterpolationError::Engine { source: e.into() })?;
-///         let values = evaluate(batch).map_err(|source| InterpolationError::Evaluator { source })?;
+///         let values = evaluate(batch, ctx)
+///             .map_err(|source| InterpolationError::Evaluator { source })?;
 ///         let max = values.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
 ///         if max == 0.0 {
 ///             return Err(InterpolationError::AllSamplesZero);
@@ -792,6 +929,17 @@ pub enum InterpolationError {
 ///     }
 /// }
 ///
+/// // f(x, y) = x + 10 y
+/// fn f(batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>> {
+///     let n = batch.shape()[1];
+///     Ok((0..n)
+///         .map(|p| {
+///             let row = |site: usize| batch.get(&[site, p]).expect("in-range row");
+///             (row(0) + 10 * row(1)) as f64
+///         })
+///         .collect())
+/// }
+///
 /// let (x, y) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3));
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node("only".to_string())?;
@@ -799,13 +947,17 @@ pub enum InterpolationError {
 /// let pivots = ColMajorArray::new(vec![1, 2], vec![2, 1])?;
 /// let problem = InterpolationProblem::new(topology, node_sites, pivots, 1e-12, None, 0)?;
 ///
-/// // f(x, y) = x + 10 y
-/// let outcome = DenseSingleNode.interpolate(&problem, |batch: ColMajorArrayRef<'_, usize>| {
-///     let n = batch.shape()[1];
-///     Ok((0..n)
-///         .map(|p| (batch.get(&[0, p]).unwrap() + 10 * batch.get(&[1, p]).unwrap()) as f64)
-///         .collect())
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+/// let mut held = HeldSession::open(&backend)?;
+/// let outcome = held.with_session(|view| {
+///     let mut ctx = EvalContext::new(
+///         Session::from_backend_session(view.backend()),
+///         Parallelism::Serial,
+///     );
+///     DenseSingleNode.interpolate(&problem, &mut ctx, f)
 /// })?;
+/// held.close()?;
 /// assert_eq!(outcome.termination, InterpolationTermination::Converged);
 /// assert_eq!(outcome.max_sample_magnitude, 21.0);
 /// assert_eq!(outcome.network.evaluate_point(&[x, y], &[1, 2])?.real(), 21.0);
@@ -818,9 +970,17 @@ pub trait TreeInterpolator<T> {
     ///
     /// * `problem` - Validated problem: topology, active sites, initial
     ///   pivots, tolerance, bond cap, and seed.
+    /// * `ctx` - The run's explicit execution capability. Every numerical stage
+    ///   of the engine issues its backend work through [`EvalContext::session`],
+    ///   and the engine reborrows that session between its own operations and
+    ///   its evaluator calls; the session has one mutable owner and is never
+    ///   captured by the callback. [`EvalContext::parallelism`] bounds only the
+    ///   application's own code.
     /// * `evaluate` - Batch evaluator. It receives a column-major
-    ///   `[n_active_sites, n_points]` array in site order and returns one
-    ///   value per point.
+    ///   `[n_active_sites, n_points]` array in site order and the same context,
+    ///   and returns one value per point. An evaluator that needs numerical work
+    ///   of its own issues it through the context's session; an evaluator that
+    ///   only computes host values ignores the context.
     ///
     /// # Returns
     ///
@@ -837,7 +997,8 @@ pub trait TreeInterpolator<T> {
     ///   value at an initial pivot.
     /// - [`InterpolationError::AllSamplesZero`] when every initial pivot
     ///   evaluates to exactly zero.
-    /// - [`InterpolationError::Engine`] for any other engine failure.
+    /// - [`InterpolationError::Engine`] for any other engine failure, including
+    ///   a rejection by the supplied session.
     ///
     /// # Examples
     ///
@@ -861,11 +1022,12 @@ pub trait TreeInterpolator<T> {
     fn interpolate<V, F>(
         &self,
         problem: &InterpolationProblem<V>,
+        ctx: &mut EvalContext<'_>,
         evaluate: F,
     ) -> Result<InterpolationOutcome<V>, InterpolationError>
     where
         V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-        F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>;
+        F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>;
 }
 
 #[cfg(test)]

@@ -16,18 +16,19 @@ use tensor4all_core::{
 };
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::interpolation::{
-    InterpolationError, InterpolationOutcome, InterpolationProblem, InterpolationTermination,
-    TreeInterpolator,
+    EvalContext, InterpolationError, InterpolationOutcome, InterpolationProblem,
+    InterpolationTermination, TreeInterpolator,
 };
 use tensor4all_treetn::TreeTN;
 
 use crate::error::Result as TreeTciResult;
+use crate::evaluation::{CachedExecution, Explicit};
 use crate::globalpivot::ScalarParts;
-use crate::materialize::to_named_treetn;
+use crate::materialize::to_named_treetn_chunked;
+use crate::optimize::{optimize_with_streams, with_seeded_streams};
 use crate::{
-    column_2d, ncols_2d, optimize_with_proposer, optimize_with_proposer_in, AllEdges,
-    DefaultProposer, GlobalIndexBatch, MultiIndex, TreeTCI2, TreeTciEdge, TreeTciError,
-    TreeTciGraph, TreeTciOptions, TreeTciTermination,
+    column_2d, ncols_2d, AllEdges, DefaultProposer, GlobalIndexBatch, MultiIndex, TreeTCI2,
+    TreeTciEdge, TreeTciError, TreeTciGraph, TreeTciOptions, TreeTciTermination,
 };
 
 /// Tree interpolation engine backed by TreeTCI.
@@ -61,11 +62,16 @@ use crate::{
 /// ```
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+/// use tensor4all_tensorbackend::{
+///     explicit::{HeldSession, Session},
+///     CpuExecutionContext,
+/// };
 /// use tensor4all_treetci::TreeTciInterpolator;
 /// use tensor4all_treetn::interpolation::{
-///     InterpolationProblem, InterpolationTermination, TreeInterpolator,
+///     EvalContext, InterpolationProblem, InterpolationTermination, Parallelism, TreeInterpolator,
 /// };
 /// use tensor4all_treetn::NodeNameNetwork;
+/// use tenferro_cpu::CpuBackend;
 ///
 /// // Node "x" carries two sites (fused into one vertex), node "y" one site.
 /// let (x0, x1, y) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2), DynIndex::new_dyn(3));
@@ -82,10 +88,22 @@ use crate::{
 ///
 /// // f(x0, x1, y) = (1 + x0 + 2 x1) * (1 + y), rank one across the edge.
 /// let f = |p: &[usize]| ((1 + p[0] + 2 * p[1]) * (1 + p[2])) as f64;
-/// let evaluate = |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+/// let evaluate = |batch: ColMajorArrayRef<'_, usize>,
+///                 _ctx: &mut EvalContext<'_>|
+///  -> anyhow::Result<Vec<f64>> {
 ///     Ok(batch.data().chunks(batch.shape()[0]).map(f).collect())
 /// };
-/// let outcome = TreeTciInterpolator::default().interpolate(&problem, evaluate)?;
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+/// let mut held = HeldSession::open(&backend)?;
+/// let outcome = held.with_session(|view| {
+///     let mut ctx = EvalContext::new(
+///         Session::from_backend_session(view.backend()),
+///         Parallelism::Serial,
+///     );
+///     TreeTciInterpolator::default().interpolate(&problem, &mut ctx, evaluate)
+/// })?;
+/// held.close()?;
 ///
 /// assert_eq!(outcome.termination, InterpolationTermination::Converged);
 /// assert!(outcome.error_estimate <= 1e-12);
@@ -230,32 +248,58 @@ where
     /// let pivots = ColMajorArray::new(vec![0, 0], vec![2, 1])?;
     /// let problem = InterpolationProblem::new(topology, node_sites, pivots, 1e-10, None, 0)?;
     ///
-    /// let failing = |_: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    /// use tensor4all_tensorbackend::{
+    ///     explicit::{HeldSession, Session},
+    ///     CpuExecutionContext,
+    /// };
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let failing = |_: ColMajorArrayRef<'_, usize>, _: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///     anyhow::bail!("out of domain")
     /// };
-    /// let error = TreeTciInterpolator::default().interpolate(&problem, failing).unwrap_err();
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    /// let mut held = HeldSession::open(&backend)?;
+    /// let error = held
+    ///     .with_session(|view| {
+    ///         TreeTciInterpolator::default().interpolate(
+    ///             &problem,
+    ///             &mut EvalContext::new(
+    ///                 Session::from_backend_session(view.backend()),
+    ///                 Parallelism::Serial,
+    ///             ),
+    ///             failing,
+    ///         )
+    ///     })
+    ///     .unwrap_err();
+    /// held.close()?;
     /// assert!(matches!(error, InterpolationError::Evaluator { .. }));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn interpolate<V, F>(
         &self,
         problem: &InterpolationProblem<V>,
-        evaluate: F,
+        ctx: &mut EvalContext<'_>,
+        mut evaluate: F,
     ) -> Result<InterpolationOutcome<V>, InterpolationError>
     where
         V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-        F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
+        F: FnMut(
+            ColMajorArrayRef<'_, usize>,
+            &mut EvalContext<'_>,
+        ) -> anyhow::Result<Vec<T>>,
     {
         let layout = VertexLayout::new(problem)?;
 
         // Zero-patch rule, applied before any topology-specific path.
         let initial = problem.initial_pivots();
-        let initial_values =
-            call_evaluator(&evaluate, initial.data(), layout.n_sites()).map_err(classify_anyhow)?;
+        let initial_values = call_evaluator(&mut evaluate, initial.data(), layout.n_sites(), ctx)
+            .map_err(classify_anyhow)?;
         let max_initial = initial_sample_scale(&initial_values)?;
 
         if layout.vertex_count() == 1 {
-            return interpolate_single_node(&layout, &evaluate);
+            return interpolate_single_node(&layout, &mut evaluate, ctx);
         }
 
         let options = self.run_options(
@@ -263,10 +307,15 @@ where
             problem.max_bond_dim(),
             problem.seed(),
         );
-        let vertex_evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<T>> {
-            let sites = layout.vertex_batch_to_sites(batch)?;
-            call_evaluator(&evaluate, &sites, layout.n_sites())
-        };
+        // The one mutable owner of the run: the caller's context plus the vertex-order
+        // adapter around the caller's evaluator. Every numerical step the engine reaches
+        // through this owner reborrows the same session.
+        let vertex_evaluate =
+            |batch: GlobalIndexBatch<'_>, ctx: &mut EvalContext<'_>| -> Result<Vec<T>> {
+                let sites = layout.vertex_batch_to_sites(batch)?;
+                call_evaluator(&mut evaluate, &sites, layout.n_sites(), ctx)
+            };
+        let mut execution = Explicit::new(ctx, vertex_evaluate);
 
         let graph = TreeTciGraph::new(layout.vertex_count(), &layout.edges).map_err(engine)?;
         let mut state = TreeTCI2::<T>::new(layout.local_dims.clone(), graph).map_err(engine)?;
@@ -276,171 +325,29 @@ where
         state.add_global_pivots(&vertex_pivots).map_err(engine)?;
         state.max_sample_value = max_initial;
 
-        let report = optimize_with_proposer(
-            &mut state,
-            vertex_evaluate,
-            &options,
-            &DefaultProposer,
-            &AllEdges,
-        )
-        .map_err(classify)?;
-        let network = to_named_treetn(
-            &state,
-            vertex_evaluate,
-            None,
-            &layout.node_names,
-            &layout.vertex_sites,
-        )
-        .map_err(classify)?;
-        let pivots = joined_pivots(&state, &layout)
-            .map_err(|source| InterpolationError::Engine { source })?;
-
-        let (Some(&final_rank), Some(&error_estimate)) =
-            (report.ranks.last(), report.errors.last())
-        else {
-            return Err(InterpolationError::Engine {
-                source: anyhow::anyhow!("TreeTCI finished without running a sweep"),
-            });
-        };
-        Ok(InterpolationOutcome {
-            network,
-            termination: map_termination(report.termination, final_rank, problem.max_bond_dim()),
-            error_estimate,
-            max_sample_magnitude: state.max_sample_value,
-            pivots: Some(pivots),
+        let report = with_seeded_streams(&options, &DefaultProposer, |streams| {
+            let mut cached = CachedExecution::new(
+                &mut execution,
+                &state.local_dims,
+                options.evaluation_cache_bytes,
+            )?;
+            optimize_with_streams(
+                &mut state,
+                &mut cached,
+                &options,
+                &DefaultProposer,
+                &AllEdges,
+                streams,
+            )
         })
-    }
-}
-
-/// A [`TreeInterpolator`] engine whose run-time numerics run in a caller-owned
-/// CPU execution context (issue #859 F7).
-///
-/// Same options, validation, stopping rule and diagnostics as
-/// [`TreeTciInterpolator`]; what differs is the resource the optimizer and the
-/// final materialization run in. Both go through their caller-owned twins
-/// (`optimize_with_proposer_in`, `to_treetn_chunked` with a context) instead
-/// of the process-global CPU context. Callers that drive a patched or
-/// per-patch driver over a tree interpolation engine pass this type as the
-/// engine; the driver needs no change.
-#[derive(Clone, Debug)]
-pub struct TreeTciInterpolatorIn {
-    inner: TreeTciInterpolator,
-    context: std::sync::Arc<tensor4all_tensorbackend::CpuExecutionContext>,
-}
-
-impl TreeTciInterpolatorIn {
-    /// Build a context-carrying engine from TreeTCI options.
-    ///
-    /// The same configuration checks as [`TreeTciInterpolator::new`]; the
-    /// engine holds the given context and routes every run through it.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TreeTciError::InvalidConfiguration`] when the options fail
-    /// the checks of [`optimize_with_proposer`] or when `max_iter` is below
-    /// [`TreeTciInterpolator::MIN_MAX_ITER`].
-    pub fn new(
-        options: TreeTciOptions,
-        context: std::sync::Arc<tensor4all_tensorbackend::CpuExecutionContext>,
-    ) -> TreeTciResult<Self> {
-        Ok(Self {
-            inner: TreeTciInterpolator::new(options)?,
-            context,
-        })
-    }
-
-    /// Borrow the engine's options as given to [`Self::new`].
-    pub fn options(&self) -> &TreeTciOptions {
-        self.inner.options()
-    }
-
-    /// Borrow the caller-owned context this engine runs in.
-    pub fn context(&self) -> &tensor4all_tensorbackend::CpuExecutionContext {
-        &self.context
-    }
-}
-
-impl<T> TreeInterpolator<T> for TreeTciInterpolatorIn
-where
-    T: FullPivLuScalar
-        + CommonScalar
-        + tensor4all_core::MatrixLuciScalar
-        + tensor4all_core::TensorElement
-        + ScalarParts,
-{
-    /// Run TreeTCI on `problem` in the caller-owned context.
-    ///
-    /// The same errors as [`TreeTciInterpolator`]'s implementation, plus
-    /// [`InterpolationError::Engine`] when the caller-owned context refuses an
-    /// optimizer or materialization step.
-    ///
-    /// # Errors
-    ///
-    /// - [`InterpolationError::InvalidProblem`] when the product of a node's
-    ///   site dimensions (or the full index set of a single-node problem)
-    ///   overflows `usize`, or a single-node point list cannot be reserved.
-    /// - [`InterpolationError::Evaluator`] when `evaluate` returns an error or
-    ///   a number of values other than the number of points, at any stage, or
-    ///   a non-finite scalar component or magnitude in any batch.
-    /// - [`InterpolationError::AllSamplesZero`] when every initial pivot
-    ///   evaluates to exactly zero.
-    /// - [`InterpolationError::Engine`] when TreeTCI fails for any other
-    ///   reason (graph construction, pivot bookkeeping, a singular solve, or
-    ///   materialization), including a refusal by the caller-owned context.
-    fn interpolate<V, F>(
-        &self,
-        problem: &InterpolationProblem<V>,
-        evaluate: F,
-    ) -> Result<InterpolationOutcome<V>, InterpolationError>
-    where
-        V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-        F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
-    {
-        let layout = VertexLayout::new(problem)?;
-
-        let initial = problem.initial_pivots();
-        let initial_values =
-            call_evaluator(&evaluate, initial.data(), layout.n_sites()).map_err(classify_anyhow)?;
-        let max_initial = initial_sample_scale(&initial_values)?;
-
-        if layout.vertex_count() == 1 {
-            return interpolate_single_node(&layout, &evaluate);
-        }
-
-        let options = self.inner.run_options(
-            problem.absolute_tolerance(),
-            problem.max_bond_dim(),
-            problem.seed(),
-        );
-        let vertex_evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<T>> {
-            let sites = layout.vertex_batch_to_sites(batch)?;
-            call_evaluator(&evaluate, &sites, layout.n_sites())
-        };
-
-        let graph = TreeTciGraph::new(layout.vertex_count(), &layout.edges).map_err(engine)?;
-        let mut state = TreeTCI2::<T>::new(layout.local_dims.clone(), graph).map_err(engine)?;
-        let vertex_pivots = layout
-            .site_columns_to_vertices(initial)
-            .map_err(|source| InterpolationError::Engine { source })?;
-        state.add_global_pivots(&vertex_pivots).map_err(engine)?;
-        state.max_sample_value = max_initial;
-
-        let report = optimize_with_proposer_in(
-            &mut state,
-            vertex_evaluate,
-            &options,
-            &DefaultProposer,
-            &self.context,
-        )
         .map_err(classify)?;
-        let network = crate::materialize::to_named_treetn_chunked(
+        let network = to_named_treetn_chunked(
             &state,
-            &vertex_evaluate,
+            &mut execution,
             None,
             &layout.node_names,
             &layout.vertex_sites,
             crate::batch::EVALUATION_CHUNK_POINTS,
-            Some(&self.context),
         )
         .map_err(classify)?;
         let pivots = joined_pivots(&state, &layout)
@@ -499,17 +406,22 @@ struct EvaluatorFailure {
 /// Call the caller's evaluator on a column-major `[n_sites, n_points]` batch
 /// and check that it returns one finite value with finite magnitude per
 /// point. Evaluator failures are wrapped in [`EvaluatorFailure`].
-fn call_evaluator<T, F>(evaluate: &F, data: &[usize], n_sites: usize) -> Result<Vec<T>>
+fn call_evaluator<T, F>(
+    evaluate: &mut F,
+    data: &[usize],
+    n_sites: usize,
+    ctx: &mut EvalContext<'_>,
+) -> Result<Vec<T>>
 where
     T: CommonScalar,
-    F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
+    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
     // INVARIANT: `n_sites >= 1` because `InterpolationProblem::new` requires
     // at least one active site, so the division is defined.
     let n_points = data.len() / n_sites;
     let shape = [n_sites, n_points];
     let batch = ColMajorArrayRef::new(data, &shape)?;
-    let values = evaluate(batch).map_err(|source| EvaluatorFailure { source })?;
+    let values = evaluate(batch, ctx).map_err(|source| EvaluatorFailure { source })?;
     if values.len() != n_points {
         return Err(EvaluatorFailure {
             source: anyhow::anyhow!(
@@ -863,12 +775,13 @@ where
 /// sites and store the values as the node's tensor.
 fn interpolate_single_node<T, V, F>(
     layout: &VertexLayout<V>,
-    evaluate: &F,
+    evaluate: &mut F,
+    ctx: &mut EvalContext<'_>,
 ) -> Result<InterpolationOutcome<V>, InterpolationError>
 where
     T: tensor4all_core::TensorElement + CommonScalar,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
+    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
     let n_sites = layout.n_sites();
     let n_points = layout.local_dims[0];
@@ -893,7 +806,7 @@ where
             .map_err(|source| InterpolationError::Engine { source })?;
         points.extend_from_slice(&out);
     }
-    let values = call_evaluator(evaluate, &points, n_sites).map_err(classify_anyhow)?;
+    let values = call_evaluator(evaluate, &points, n_sites, ctx).map_err(classify_anyhow)?;
     let max_sample_magnitude = max_magnitude(&values);
     let tensor =
         IdxTensor::from_dense(layout.vertex_sites[0].clone(), values).map_err(|error| {

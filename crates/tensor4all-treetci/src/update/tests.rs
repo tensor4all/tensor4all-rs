@@ -93,7 +93,7 @@ fn evaluate_candidate_matrix_writes_points_in_column_major_order() {
 
     // Encode each point's site values into a scalar so order and values are
     // both asserted in one shot: right candidates vary slowest (column-major).
-    let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+    let mut evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
         let mut out = Vec::with_capacity(batch.n_points());
         for p in 0..batch.n_points() {
             let code = (0..n_sites)
@@ -111,7 +111,7 @@ fn evaluate_candidate_matrix_writes_points_in_column_major_order() {
         &right_key,
         &right_candidates,
         &local_dims,
-        &evaluate,
+        &mut crate::evaluation::Compatibility::new(&mut evaluate),
         EVALUATION_CHUNK_POINTS,
     )
     .unwrap();
@@ -134,7 +134,7 @@ fn evaluate_candidate_matrix_rejects_malformed_candidate_length() {
     let right_candidates = vec![vec![1, 0, 1]];
 
     let malformed_left = vec![vec![0, 0, 1]]; // len 3 == right key len
-    let evaluate = |_batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![1.0]) };
+    let mut evaluate = |_batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![1.0]) };
     let result = evaluate_candidate_matrix(
         n_sites,
         &left_key,
@@ -142,7 +142,7 @@ fn evaluate_candidate_matrix_rejects_malformed_candidate_length() {
         &right_key,
         &right_candidates,
         &local_dims,
-        &evaluate,
+        &mut crate::evaluation::Compatibility::new(&mut evaluate),
         EVALUATION_CHUNK_POINTS,
     );
     assert!(result.is_err());
@@ -156,11 +156,14 @@ fn evaluate_candidate_matrix_rejects_malformed_candidate_length() {
         &right_key,
         &right_candidates,
         &local_dims,
-        &|batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        &mut crate::evaluation::Compatibility::new(&mut |batch: GlobalIndexBatch<
+            '_,
+        >|
+              -> Result<Vec<f64>> {
             Ok(vec![
                 (batch.get(0, 0).unwrap() + batch.get(4, 0).unwrap()) as f64,
             ])
-        },
+        }),
         EVALUATION_CHUNK_POINTS,
     );
     assert_eq!(result.unwrap(), vec![1.0]);
@@ -173,7 +176,7 @@ fn evaluate_candidate_matrix_rejects_out_of_range_coordinates() {
     let left_key = SubtreeKey::new(vec![0, 1]);
     let right_key = SubtreeKey::new(vec![2, 3]);
     let right_candidates = vec![vec![0, 1]];
-    let evaluate = |_batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![1.0]) };
+    let mut evaluate = |_batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![1.0]) };
 
     // Value 2 is out of range for a 2-state site.
     let bad_left = vec![vec![0, 2]];
@@ -184,7 +187,7 @@ fn evaluate_candidate_matrix_rejects_out_of_range_coordinates() {
         &right_key,
         &right_candidates,
         &local_dims,
-        &evaluate,
+        &mut crate::evaluation::Compatibility::new(&mut evaluate),
         EVALUATION_CHUNK_POINTS,
     );
     assert!(result.is_err());
@@ -211,7 +214,7 @@ fn evaluate_candidate_matrix_is_independent_of_chunk_size() {
     let calls = RefCell::new(Vec::new());
     // Non-separable values, so any reordering or misassembled point changes
     // the result.
-    let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+    let mut evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
         calls.borrow_mut().push(batch.n_points());
         Ok(batch
             .data()
@@ -222,7 +225,7 @@ fn evaluate_candidate_matrix_is_independent_of_chunk_size() {
             })
             .collect())
     };
-    let run = |chunk_points: usize| {
+    let mut run = |chunk_points: usize| {
         calls.borrow_mut().clear();
         let values = evaluate_candidate_matrix(
             n_sites,
@@ -231,7 +234,7 @@ fn evaluate_candidate_matrix_is_independent_of_chunk_size() {
             &right_key,
             &right_candidates,
             &local_dims,
-            &evaluate,
+            &mut crate::evaluation::Compatibility::new(&mut evaluate),
             chunk_points,
         )
         .unwrap();
@@ -275,7 +278,7 @@ fn update_edge_selection_does_not_enter_the_process_global_backend() {
     tci.add_global_pivots(&[vec![0, 0]]).unwrap();
     tci.flush_pivot_errors();
 
-    let batch_eval = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+    let mut batch_eval = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
         let mut values = Vec::with_capacity(batch.n_points());
         for point in 0..batch.n_points() {
             let i = batch.get(0, point).unwrap();
@@ -292,10 +295,11 @@ fn update_edge_selection_does_not_enter_the_process_global_backend() {
         // resolved a factor assembly through the global backend would block here, which is the dispatch
         // evidence. (A global entry cannot be asserted to *fail* inside the scope, because entering the
         // global session while its backend is held blocks rather than erroring.)
+        let mut execution = crate::evaluation::Compatibility::new(&mut batch_eval);
         super::update_edge(
             &mut tci,
             TreeTciEdge::new(0, 1),
-            batch_eval,
+            &mut execution,
             &no_truncation_options(),
             &crate::DefaultProposer,
             &mut rng,

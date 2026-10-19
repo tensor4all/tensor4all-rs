@@ -1,12 +1,13 @@
+use crate::evaluation::BatchExecution;
 use crate::{
     assemble::MultiIndex,
-    batch::{evaluate_points_chunked, GlobalIndexBatch, EVALUATION_CHUNK_POINTS},
+    batch::{evaluate_points_chunked, EVALUATION_CHUNK_POINTS},
     PivotCandidateProposer, TreeTCI2, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
 use tensor4all_core::{rrlu_pivots, MatrixLuciScalar as Scalar, RrLUOptions, RrLUPivots};
 use tensor4all_core::{ColMajorArray, CommonScalar};
-use tensor4all_tensorbackend::Matrix;
+use tensor4all_tensorbackend::{FullPivLuScalar, Matrix};
 
 #[cfg(test)]
 use crate::DefaultProposer;
@@ -19,17 +20,16 @@ use crate::DefaultProposer;
 ///
 /// This is a low-level building block; prefer [`optimize_default`](crate::optimize_default)
 /// or [`crossinterpolate2`](crate::crossinterpolate2) for typical usage.
-pub(crate) fn update_edge<T, F, P, R>(
+pub(crate) fn update_edge<T, P, R>(
     state: &mut TreeTCI2<T>,
     edge: TreeTciEdge,
-    evaluate: F,
+    execution: &mut dyn BatchExecution<T>,
     options: &RrLUOptions,
     proposer: &P,
     rng: &mut R,
 ) -> Result<RrLUPivots>
 where
-    T: Scalar + CommonScalar,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    T: Scalar + CommonScalar + FullPivLuScalar,
     P: PivotCandidateProposer,
     R: rand::Rng + ?Sized,
 {
@@ -47,7 +47,7 @@ where
         &right_key,
         &right_candidates,
         &state.local_dims,
-        &evaluate,
+        execution,
         EVALUATION_CHUNK_POINTS,
     )?;
 
@@ -123,16 +123,18 @@ where
 pub(crate) fn update_edge_default<T, F>(
     state: &mut TreeTCI2<T>,
     edge: TreeTciEdge,
-    evaluate: F,
+    mut evaluate: F,
     options: &RrLUOptions,
 ) -> Result<RrLUPivots>
 where
-    T: Scalar + CommonScalar,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    T: Scalar + CommonScalar + FullPivLuScalar,
+    F: FnMut(crate::GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
+    use crate::evaluation::Compatibility;
     use rand::SeedableRng;
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
-    update_edge(state, edge, evaluate, options, &DefaultProposer, &mut rng)
+    let mut execution = Compatibility::new(&mut evaluate);
+    update_edge(state, edge, &mut execution, options, &DefaultProposer, &mut rng)
 }
 
 /// Evaluate the function on the full `I x J` candidate matrix for one edge.
@@ -152,19 +154,18 @@ where
 /// rather than `n_sites * n_left * n_right` (gigabytes at a branching vertex).
 /// The values, and their order, do not depend on `chunk_points`.
 #[allow(clippy::too_many_arguments)]
-fn evaluate_candidate_matrix<T, F>(
+fn evaluate_candidate_matrix<T>(
     n_sites: usize,
     left_key: &crate::SubtreeKey,
     left_candidates: &[MultiIndex],
     right_key: &crate::SubtreeKey,
     right_candidates: &[MultiIndex],
     local_dims: &[usize],
-    evaluate: &F,
+    execution: &mut dyn BatchExecution<T>,
     chunk_points: usize,
 ) -> Result<Vec<T>>
 where
-    T: Scalar + CommonScalar,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    T: Scalar + CommonScalar + FullPivLuScalar,
 {
     let left_sites = left_key.as_slice();
     let right_sites = right_key.as_slice();
@@ -242,7 +243,7 @@ where
                 right_index += 1;
             }
         },
-        evaluate,
+        &mut |batch| execution.call(batch),
         "candidate-matrix entries",
     )
 }

@@ -17,6 +17,32 @@ use tensor4all_core::{
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
 
+
+/// Run the production readout search over a context-free evaluator: the test-side
+/// wrapper around the execution owner the context-free entries build themselves.
+#[allow(clippy::type_complexity)]
+fn run_search<T, E, R>(
+    state: &TreeTCI2<T>,
+    mut evaluate: E,
+    params: SearchParams,
+    rng: &mut dyn rand::RngCore,
+    readout: R,
+) -> crate::error::Result<Vec<crate::MultiIndex>>
+where
+    T: FullPivLuScalar + Scalar + TensorElement + ScalarParts,
+    E: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    R: FnMut(
+        &mut TreeTNCachedEvaluator<'_, usize>,
+        &TreeTN<IdxTensor, usize>,
+        &[DynIndex],
+        ColMajorArrayRef<'_, usize>,
+        Option<usize>,
+    ) -> Result<Vec<AnyScalar>>,
+{
+    let mut execution = crate::evaluation::Compatibility::new(&mut evaluate);
+    search_with_readout(state, &mut execution, params, rng, readout)
+}
+
 /// Batch evaluator for a two-peak function on a 10-site chain.
 ///
 /// f(idx) = 3 * exp(-beta * d2(idx, A)) + 2 * exp(-beta * d2(idx, B)) with
@@ -649,7 +675,7 @@ where
     .unwrap();
     let mut rng = seeded_rng(3);
     let pointwise =
-        search_with_readout(&state, evaluate, params, &mut rng, pointwise_readout, None).unwrap();
+        run_search(&state, evaluate, params, &mut rng, pointwise_readout).unwrap();
     assert!(
         !cached.is_empty(),
         "the swept 32-bit state must leave errors above the threshold"
@@ -743,13 +769,12 @@ fn global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree() {
             )
             .unwrap();
             let mut rng = seeded_rng(seed);
-            let pointwise = search_with_readout(
+            let pointwise = run_search(
                 &state,
                 fixture.evaluate(),
                 params,
                 &mut rng,
                 pointwise_readout,
-                None,
             )
             .unwrap();
             // Same pivots, in the same order, as the pointwise readout and
@@ -873,7 +898,7 @@ fn equal_errors_keep_generation_order_and_duplicates_collapse() {
             abs_tol: 0.5,
         };
         let mut rng = seeded_rng(5);
-        search_with_readout(&state, constant, params, &mut rng, leveled_readout, None).unwrap()
+        run_search(&state, constant, params, &mut rng, leveled_readout).unwrap()
     };
     let pivots = search(nsearch);
     let candidates = seen.borrow().clone();
@@ -920,7 +945,7 @@ fn search_rejects_failing_or_short_readouts() {
                    _: Option<usize>|
      -> Result<Vec<AnyScalar>> { Err(anyhow::anyhow!("readout failed")) };
     let mut rng = seeded_rng(3);
-    let error = search_with_readout(&state, fixture.evaluate(), params, &mut rng, failing, None)
+    let error = run_search(&state, fixture.evaluate(), params, &mut rng, failing)
         .unwrap_err();
     assert!(error.to_string().contains("readout failed"), "{error}");
 
@@ -932,7 +957,7 @@ fn search_rejects_failing_or_short_readouts() {
      -> Result<Vec<AnyScalar>> { Ok(Vec::new()) };
     let mut rng = seeded_rng(3);
     let error =
-        search_with_readout(&state, fixture.evaluate(), params, &mut rng, short, None).unwrap_err();
+        run_search(&state, fixture.evaluate(), params, &mut rng, short).unwrap_err();
     assert!(
         error
             .to_string()
@@ -973,7 +998,7 @@ fn coordinate_scans_propagate_evaluator_and_readout_failures() {
             cached_walk_readout(cache, tree, indices, points, site)
         };
         let error =
-            search_with_readout(&state, evaluate, params, &mut seeded_rng(1), readout, None)
+            run_search(&state, evaluate, params, &mut seeded_rng(1), readout)
                 .unwrap_err();
         let message = if wrong_length {
             "batch evaluator returned 3 values for 2"
@@ -991,13 +1016,12 @@ fn coordinate_scans_propagate_evaluator_and_readout_failures() {
             let value = if site.is_some() { value } else { 1.0 };
             Ok(vec![AnyScalar::new_real(value); points.shape()[1]])
         };
-        let error = search_with_readout(
+        let error = run_search(
             &state,
             fixture.evaluate(),
             params,
             &mut seeded_rng(1),
             readout,
-            None,
         )
         .unwrap_err();
         assert!(
@@ -1018,13 +1042,12 @@ fn coordinate_scans_propagate_evaluator_and_readout_failures() {
             vec![AnyScalar::new_real(1.0); points.shape()[1]]
         })
     };
-    let error = search_with_readout(
+    let error = run_search(
         &state,
         fixture.evaluate(),
         params,
         &mut seeded_rng(1),
         short,
-        None,
     )
     .unwrap_err();
     assert!(
@@ -1064,13 +1087,12 @@ fn coordinate_walk_honors_early_stop_and_sweep_bound() {
             tol_margin: 1.0,
             abs_tol: threshold,
         };
-        let pivots = search_with_readout(
+        let pivots = run_search(
             &state,
             fixture.evaluate(),
             params,
             &mut seeded_rng(1),
             readout,
-            None,
         )
         .unwrap();
         assert_eq!(calls, expected_calls);

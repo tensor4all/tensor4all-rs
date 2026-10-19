@@ -33,11 +33,11 @@ pub(crate) fn evaluate_points_chunked<T, F, G>(
     n_points: usize,
     chunk_points: usize,
     mut fill_point: G,
-    evaluate: &F,
+    evaluate: &mut F,
     what: &str,
 ) -> anyhow::Result<Vec<T>>
 where
-    F: Fn(GlobalIndexBatch<'_>) -> anyhow::Result<Vec<T>>,
+    F: FnMut(GlobalIndexBatch<'_>) -> anyhow::Result<Vec<T>>,
     G: FnMut(&mut [usize]),
 {
     anyhow::ensure!(chunk_points > 0, "evaluation chunk size must be positive");

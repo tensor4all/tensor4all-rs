@@ -7,15 +7,15 @@
 //!
 //! This module works with concrete types (`DynIndex`, `IdxTensor`) only.
 
-use crate::defaults::idx_tensor::unfold_split_inner;
+use crate::defaults::idx_tensor::{unfold_index_sets, unfold_split_inner};
 use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
 use crate::truncation::{
     validate_svd_truncation_options, validate_svd_truncation_policy, SingularValueMeasure,
     SvdTruncationOptionsError, SvdTruncationPolicy, ThresholdScale, TruncationRule,
 };
-use crate::{ExecutionContext, IdxTensor};
-use num_complex::Complex64;
+use crate::{ExecutionContext, IdxTensor, TensorElement};
+use num_complex::{Complex64, ComplexFloat};
 use std::sync::Mutex;
 use tenferro::DType;
 use tenferro_ad::EagerTensor;
@@ -339,29 +339,7 @@ fn svd_truncated_inner_scoped(
         let _ = context;
         singular_values_from_eager(&s_inner)?
     };
-    let mut r = if options.truncate {
-        // Shared root guard: reject `max_bond_dim == Some(0)` and invalid
-        // explicit policies before any truncation, so the caller cannot
-        // silently clamp every factorization to rank one.
-        validate_svd_truncation_options(options.max_bond_dim, options.policy).map_err(|error| {
-            match error {
-                SvdTruncationOptionsError::ZeroMaxBondDim => SvdError::InvalidMaxBondDim,
-                SvdTruncationOptionsError::InvalidThreshold(threshold) => {
-                    SvdError::InvalidThreshold(threshold)
-                }
-            }
-        })?;
-        let policy = options.policy.unwrap_or_else(default_svd_truncation_policy);
-        validate_svd_truncation_policy(policy).map_err(|e| SvdError::InvalidThreshold(e.0))?;
-
-        let mut retained = compute_retained_rank(&s_full, &policy);
-        if let Some(max_bond_dim) = options.max_bond_dim {
-            retained = retained.min(max_bond_dim);
-        }
-        retained.max(1)
-    } else {
-        k.max(1)
-    };
+    let mut r = retained_svd_rank(&s_full, k, options)?;
     r = r.min(s_full.len());
     if r < k {
         let keep: Vec<usize> = (0..r).collect();
@@ -606,6 +584,156 @@ pub(crate) struct SvdFactorizeResult {
     pub bond_index: DynIndex,
     pub singular_values: Vec<f64>,
     pub rank: usize,
+}
+
+/// The retained rank of one SVD, from its singular values.
+///
+/// This is the one place the SVD truncation policy is applied: the eager, context-scoped and
+/// explicit-session routes all funnel their singular values through it, so a policy change cannot
+/// diverge between the frontends.
+fn retained_svd_rank(
+    singular_values: &[f64],
+    k: usize,
+    options: &SvdOptions,
+) -> Result<usize, SvdError> {
+    if !options.truncate {
+        return Ok(k.max(1));
+    }
+    // Shared root guard: reject `max_bond_dim == Some(0)` and invalid
+    // explicit policies before any truncation, so the caller cannot
+    // silently clamp every factorization to rank one.
+    validate_svd_truncation_options(options.max_bond_dim, options.policy).map_err(|error| {
+        match error {
+            SvdTruncationOptionsError::ZeroMaxBondDim => SvdError::InvalidMaxBondDim,
+            SvdTruncationOptionsError::InvalidThreshold(threshold) => {
+                SvdError::InvalidThreshold(threshold)
+            }
+        }
+    })?;
+    let policy = options.policy.unwrap_or_else(default_svd_truncation_policy);
+    validate_svd_truncation_policy(policy).map_err(|e| SvdError::InvalidThreshold(e.0))?;
+    let mut retained = compute_retained_rank(singular_values, &policy);
+    if let Some(max_bond_dim) = options.max_bond_dim {
+        retained = retained.min(max_bond_dim);
+    }
+    Ok(retained.max(1).min(k))
+}
+
+/// Truncated SVD for factorization on a caller-held explicit session.
+///
+/// The runtime-free counterpart of [`svd_for_factorize`]: the index bookkeeping, the truncation
+/// policy and the factor layout are shared with the eager route, while the decomposition runs on
+/// `session` and the factors are published as plain host-storage [`IdxTensor`]s. No session or eager
+/// runtime is entered here.
+pub(crate) fn svd_for_factorize_on_session<T>(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &SvdOptions,
+) -> Result<SvdFactorizeResult, SvdError>
+where
+    T: TensorElement + ComplexFloat + tensor4all_tensorbackend::StorageScalar,
+    <T as ComplexFloat>::Real: Into<f64>,
+    T: num_traits::NumCast,
+{
+    let (left_indices, right_indices, order) = unfold_index_sets(t, left_inds)
+        .map_err(|error| SvdError::ComputationError(anyhow::anyhow!("Failed to unfold tensor: {error}")))?;
+    let unfolded = t
+        .permute_indices(&order)
+        .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))?;
+    let dims = unfolded.dims();
+    let left_len = left_indices.len();
+    let m = crate::defaults::idx_tensor::checked_product(&dims[..left_len])
+        .map_err(SvdError::ComputationError)?;
+    let n = crate::defaults::idx_tensor::checked_product(&dims[left_len..])
+        .map_err(SvdError::ComputationError)?;
+    let k = m.min(n);
+    let data = unfolded
+        .to_vec::<T>()
+        .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))?;
+    let matrix = tenferro::Tensor::from_vec_col_major(vec![m, n], data)
+        .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))?;
+    let (u_value, s_value, vt_value) = session
+        .svd(&matrix)
+        .map_err(|error| SvdError::ComputationError(anyhow::anyhow!("{error}")))?;
+    let s_full = s_value
+        .as_slice::<f64>()
+        .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))?
+        .to_vec();
+    let rank = retained_svd_rank(&s_full, k, options)?;
+    let u_payload = u_value
+        .as_slice::<T>()
+        .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))?;
+    let vt_payload = vt_value
+        .as_slice::<T>()
+        .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))?;
+
+    // `U` is column-major `[m, k]`: kept columns are the bond axis of the left factor.
+    let mut u_data = Vec::with_capacity(m * rank);
+    for column in 0..rank {
+        let start = column
+            .checked_mul(m)
+            .ok_or_else(|| SvdError::ComputationError(anyhow::anyhow!("SVD U column offset overflows usize")))?;
+        let end = start
+            .checked_add(m)
+            .ok_or_else(|| SvdError::ComputationError(anyhow::anyhow!("SVD U column end overflows usize")))?;
+        u_data.extend_from_slice(u_payload.get(start..end).ok_or_else(|| {
+            SvdError::ComputationError(anyhow::anyhow!("SVD U column {column} is out of bounds"))
+        })?);
+    }
+    // `S` is real; it takes the factor dtype so the shared assembly keeps its fast contraction path.
+    let mut s_data = Vec::with_capacity(rank);
+    for &value in s_full.iter().take(rank) {
+        s_data.push(<T as num_traits::NumCast>::from(value).ok_or_else(|| {
+            SvdError::ComputationError(anyhow::anyhow!(
+                "singular value {value} does not fit the factor scalar type"
+            ))
+        })?);
+    }
+    // `V^H` is column-major `[k, n]`: kept rows are the bond axis of the right factor.
+    let mut vt_data = Vec::with_capacity(rank * n);
+    for column in 0..n {
+        let base = column
+            .checked_mul(k)
+            .ok_or_else(|| SvdError::ComputationError(anyhow::anyhow!("SVD V^H column offset overflows usize")))?;
+        for row in 0..rank {
+            let value = vt_payload.get(base + row).ok_or_else(|| {
+                SvdError::ComputationError(anyhow::anyhow!("SVD V^H row {row} is out of bounds"))
+            })?;
+            vt_data.push(*value);
+        }
+    }
+
+    let bond_index = DynIndex::new_bond(rank)
+        .map_err(|error| SvdError::ComputationError(anyhow::anyhow!("Failed to create Link index: {error:?}")))?;
+    let mut u_indices = left_indices;
+    u_indices.push(bond_index.clone());
+    let u = IdxTensor::from_host_dense(u_indices, u_data)
+        .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))?;
+    // The session route publishes S as a dense `[bond, sim]` diagonal matrix: the compact diagonal
+    // representation is an eager construction, and the session contraction route serves dense host
+    // operands only. The rank-squared payload is negligible next to the factors.
+    let mut s_dense = vec![<T as num_traits::Zero>::zero(); rank.checked_mul(rank).ok_or_else(|| {
+        SvdError::ComputationError(anyhow::anyhow!("SVD S payload size overflows usize"))
+    })?];
+    for (position, value) in s_data.iter().enumerate() {
+        s_dense[position * (rank + 1)] = *value;
+    }
+    let s = IdxTensor::from_host_dense(vec![bond_index.clone(), bond_index.sim()], s_dense)
+        .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))?;
+    let mut vh_indices = vec![bond_index.clone()];
+    vh_indices.extend(right_indices);
+    let vh = IdxTensor::from_host_dense(vh_indices, vt_data)
+        .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))?;
+
+    Ok(SvdFactorizeResult {
+        u,
+        s,
+        vh,
+        bond_index,
+        singular_values: s_full[..rank].to_vec(),
+        rank,
+    })
 }
 
 /// Compute truncated SVD for factorization, returning `V^H` instead of `V`.

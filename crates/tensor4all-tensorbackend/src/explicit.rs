@@ -567,6 +567,54 @@ impl<'session> Session<'session> {
         Self { session }
     }
 
+    /// Wrap a borrowed tenferro session view as this frontend's session.
+    ///
+    /// A scheduler that owns the execution hands out plain
+    /// [`tenferro_tensor::BackendSession`] views instead of this wrapper - a tenferro
+    /// phase lane's session, for example, or a held session's view obtained through
+    /// [`Session::backend`]. This bridge turns such a view into the same [`Session`]
+    /// the scoped and held entries hand out, so a per-item callback can run its
+    /// numerical work on the session it was given without opening another session,
+    /// rerouting the work, or consulting the process-global one.
+    ///
+    /// The view stays borrowed for the whole life of the returned session: this
+    /// constructor never enters, clones or replaces a session, and it does not
+    /// change which backend the work runs on.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Mutex;
+    /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
+    /// use tenferro::Tensor;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(2)?);
+    /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// let sums = Mutex::new(Vec::new());
+    ///
+    /// let mut held = HeldSession::open(&backend)?;
+    /// held.phase(|_index, lane| {
+    ///     // The lane's session view, wrapped by this bridge.
+    ///     let mut view = lane.session();
+    ///     let mut session = Session::from_backend_session(view.backend());
+    ///     let transposed = session.permute(&a, &[1, 0])?;
+    ///     let total = session.sum(&transposed)?;
+    ///     sums.lock().expect("lane sums").push(total.as_slice::<f64>()?[0]);
+    ///     Ok::<(), tenferro_tensor::Error>(())
+    /// })?;
+    /// held.close()?;
+    ///
+    /// let sums = sums.into_inner().expect("lane sums");
+    /// assert!(!sums.is_empty());
+    /// assert!(sums.iter().all(|&sum| sum == 10.0));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn from_backend_session(session: &'session mut dyn BackendSession) -> Self {
+        Self::new(session)
+    }
+
     /// The concrete session behind this explicit session.
     ///
     /// Exposed so a prepared plan can evaluate itself on the caller's session; it is

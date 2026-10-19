@@ -1,4 +1,5 @@
 use crate::error::Result as TreeTciResult;
+use crate::evaluation::{BatchExecution, CachedExecution, Compatibility, Explicit};
 use crate::{
     globalpivot::{find_global_pivots_erased, ScalarParts},
     update::update_edge,
@@ -11,6 +12,7 @@ use std::collections::HashSet;
 use tensor4all_core::CommonScalar;
 use tensor4all_core::{MatrixLuciScalar as Scalar, RrLUOptions};
 use tensor4all_tensorbackend::FullPivLuScalar;
+use tensor4all_treetn::interpolation::EvalContext;
 
 /// The stopping condition reached by a TreeTCI optimization call.
 ///
@@ -447,25 +449,51 @@ where
     V: EdgeVisitor,
 {
     options.validate()?;
-    // The public optimizer keeps the legacy route: no caller-owned context.
+    // The public optimizer keeps the process-global route: no caller-owned session.
+    let mut evaluate = evaluate;
+    let mut execution = Compatibility::new(&mut evaluate);
     with_seeded_streams(options, proposer, |streams| {
-        let evaluator = crate::evaluation::RunEvaluator::new(
-            evaluate,
-            &state.local_dims,
-            options.evaluation_cache_bytes,
-        )?;
-        let mut result = optimize_with_streams(
+        optimize_memoized(
             state,
-            |batch| evaluator.call(batch),
+            &mut execution,
             options,
             proposer,
             visitor,
             streams,
-            None,
-        )?;
-        result.evaluation = evaluator.stats();
-        Ok(result)
+        )
     })
+}
+
+/// The single optimization body for every frontend: one memoizing owner around the
+/// caller's execution route, then the sweep loop.
+pub(crate) fn optimize_memoized<T, P, V>(
+    state: &mut TreeTCI2<T>,
+    execution: &mut dyn BatchExecution<T>,
+    options: &TreeTciOptions,
+    proposer: &P,
+    visitor: &V,
+    streams: &mut RandomStreams<'_>,
+) -> TreeTciResult<TreeTciOptimizationResult>
+where
+    T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
+    P: PivotCandidateProposer,
+    V: EdgeVisitor,
+{
+    let mut cached = CachedExecution::new(
+        execution,
+        &state.local_dims,
+        options.evaluation_cache_bytes,
+    )?;
+    let mut result = optimize_with_streams(
+        state,
+        &mut cached,
+        options,
+        proposer,
+        visitor,
+        streams,
+    )?;
+    result.evaluation = cached.stats();
+    Ok(result)
 }
 
 /// Optimize with an explicit proposer whose run-time execution runs in a caller-owned CPU context.
@@ -498,24 +526,25 @@ where
     P: PivotCandidateProposer,
 {
     options.validate()?;
-    with_seeded_streams(options, proposer, |streams| {
-        let evaluator = crate::evaluation::RunEvaluator::new(
-            evaluate,
-            &state.local_dims,
-            options.evaluation_cache_bytes,
-        )?;
-        let mut result = optimize_with_streams(
-            state,
-            |batch| evaluator.call(batch),
-            options,
-            proposer,
-            &AllEdges,
-            streams,
-            Some(context),
-        )?;
-        result.evaluation = evaluator.stats();
-        Ok(result)
-    })
+    let mut evaluate = evaluate;
+    context
+        .with_concrete_session(|session| {
+            let mut contextual =
+                |batch: GlobalIndexBatch<'_>, _ctx: &mut EvalContext<'_>| evaluate(batch);
+            let mut context = crate::evaluation::serial_context(session);
+            let mut execution = Explicit::new(&mut context, &mut contextual);
+            with_seeded_streams(options, proposer, |streams| {
+                optimize_memoized(
+                    state,
+                    &mut execution,
+                    options,
+                    proposer,
+                    &AllEdges,
+                    streams,
+                )
+            })
+        })
+        .map_err(|error| crate::TreeTciError::from(anyhow::Error::new(error)))?
 }
 
 /// Optimize with a caller-owned random stream.
@@ -591,22 +620,16 @@ where
     options.validate()?;
     let mut stream: &mut R = rng;
     let mut streams = RandomStreams::Shared(&mut stream);
-    let evaluator = crate::evaluation::RunEvaluator::new(
-        evaluate,
-        &state.local_dims,
-        options.evaluation_cache_bytes,
-    )?;
-    let mut result = optimize_with_streams(
+    let mut evaluate = evaluate;
+    let mut execution = Compatibility::new(&mut evaluate);
+    optimize_memoized(
         state,
-        |batch| evaluator.call(batch),
+        &mut execution,
         options,
         proposer,
         &AllEdges,
         &mut streams,
-        None,
-    )?;
-    result.evaluation = evaluator.stats();
-    Ok(result)
+    )
 }
 
 /// Construct named seeded streams once at a high-level run boundary.
@@ -688,18 +711,16 @@ fn validate_edge_order<T>(state: &TreeTCI2<T>, order: &[TreeTciEdge]) -> TreeTci
     Ok(())
 }
 
-pub(crate) fn optimize_with_streams<T, F, P, V>(
+pub(crate) fn optimize_with_streams<T, P, V>(
     state: &mut TreeTCI2<T>,
-    evaluate: F,
+    execution: &mut dyn BatchExecution<T>,
     options: &TreeTciOptions,
     proposer: &P,
     visitor: &V,
     streams: &mut RandomStreams<'_>,
-    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
     V: EdgeVisitor,
 {
@@ -747,7 +768,7 @@ where
                 update_edge(
                     state,
                     edge,
-                    &evaluate,
+                    execution,
                     &kernel_options,
                     proposer,
                     streams.candidates(),
@@ -806,13 +827,12 @@ where
             let abs_tol = options.tolerance * error_scale;
             let pivots = find_global_pivots_erased(
                 state,
-                &evaluate,
+                execution,
                 options.nsearch,
                 options.max_nglobal_pivot,
                 options.tol_margin_global_search,
                 abs_tol,
                 streams.global(),
-                context,
             )?;
             state.add_global_pivots(&pivots)?;
             nglobal_pivots_history.push(pivots.len());

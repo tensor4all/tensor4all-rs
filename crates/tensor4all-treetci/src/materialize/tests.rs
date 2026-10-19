@@ -14,6 +14,41 @@ use std::cell::RefCell;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
+
+/// The context-free materialization route, with the evaluator wrapped as the run's
+/// execution owner.
+fn materialize_compat(
+    state: &TreeTCI2<f64>,
+    mut evaluate: impl FnMut(GlobalIndexBatch<'_>) -> Result<Vec<f64>>,
+    center: Option<usize>,
+    chunk_points: usize,
+) -> crate::TreeTciResult<TreeTN<IdxTensor, usize>> {
+    let mut execution = crate::evaluation::Compatibility::new(&mut evaluate);
+    to_treetn_chunked(state, &mut execution, center, chunk_points)
+}
+
+/// The same materialization on one concrete session of `context`.
+#[cfg(test)]
+fn materialize_in_context(
+    state: &TreeTCI2<f64>,
+    mut evaluate: impl FnMut(GlobalIndexBatch<'_>) -> Result<Vec<f64>>,
+    center: Option<usize>,
+    chunk_points: usize,
+    context: &tensor4all_tensorbackend::CpuExecutionContext,
+) -> crate::TreeTciResult<TreeTN<IdxTensor, usize>> {
+    context
+        .with_concrete_session(|session| {
+            let mut contextual =
+                |batch: GlobalIndexBatch<'_>, _ctx: &mut tensor4all_treetn::interpolation::EvalContext<'_>| {
+                    evaluate(batch)
+                };
+            let mut ctx = crate::evaluation::serial_context(session);
+            let mut execution = crate::evaluation::Explicit::new(&mut ctx, &mut contextual);
+            to_treetn_chunked(state, &mut execution, center, chunk_points)
+        })
+        .map_err(|error| crate::TreeTciError::from(anyhow::Error::new(error)))?
+}
+
 fn two_site_graph() -> TreeTciGraph {
     TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap()
 }
@@ -236,7 +271,7 @@ fn fill_tensor_values_matches_reference_point_order() {
             let reference = reference_fill_points(&state, &in_keys, &out_keys, &central);
             for chunk_points in [1, 7, EVALUATION_CHUNK_POINTS] {
                 let recorded = RefCell::new(Vec::new());
-                let record = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+                let mut record = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
                     recorded.borrow_mut().extend_from_slice(batch.data());
                     smooth_eval(batch)
                 };
@@ -245,7 +280,7 @@ fn fill_tensor_values_matches_reference_point_order() {
                     &in_keys,
                     &out_keys,
                     &central,
-                    &record,
+                    &mut crate::evaluation::Compatibility::new(&mut record),
                     chunk_points,
                 )
                 .unwrap();
@@ -266,7 +301,15 @@ fn fill_tensor_values_rejects_invalid_partitions() {
     let left = SubtreeKey::new(vec![0]);
     let right = SubtreeKey::new(vec![1]);
     let fill = |in_keys: &[SubtreeKey], out_keys: &[SubtreeKey], central: &[usize]| {
-        fill_tensor_values(&state, in_keys, out_keys, central, &smooth_eval, 4)
+        let mut evaluate = smooth_eval;
+        fill_tensor_values(
+            &state,
+            in_keys,
+            out_keys,
+            central,
+            &mut crate::evaluation::Compatibility::new(&mut evaluate),
+            4,
+        )
     };
 
     assert!(fill(&[left.clone(), right.clone()], &[], &[]).is_ok());
@@ -306,12 +349,13 @@ fn fill_tensor_values_rejects_invalid_partitions() {
         left.clone(),
         ColMajorArray::new(vec![0, 1], vec![2, 1]).unwrap(),
     );
+    let mut evaluate = smooth_eval;
     assert!(fill_tensor_values(
         &bad,
         std::slice::from_ref(&left),
         &[],
         &[1],
-        &smooth_eval,
+        &mut crate::evaluation::Compatibility::new(&mut evaluate),
         4
     )
     .unwrap_err()
@@ -321,7 +365,16 @@ fn fill_tensor_values_rejects_invalid_partitions() {
         left.clone(),
         ColMajorArray::new(vec![], vec![1, 0]).unwrap(),
     );
-    assert!(fill_tensor_values(&bad, &[left], &[], &[1], &smooth_eval, 4).is_err());
+    let mut evaluate = smooth_eval;
+    assert!(fill_tensor_values(
+        &bad,
+        &[left],
+        &[],
+        &[1],
+        &mut crate::evaluation::Compatibility::new(&mut evaluate),
+        4
+    )
+    .is_err());
 }
 
 /// Per-node dimensions and raw value bits, independent of bond index ids.
@@ -352,9 +405,8 @@ fn to_treetn_is_independent_of_chunk_size_on_chain_and_branched_tree() {
             let tn = to_treetn(&state, smooth_eval, Some(center)).unwrap();
             let reference_bits = tensor_bits(&tn, n_sites);
             for chunk_points in [1, 7] {
-                let chunked =
-                    to_treetn_chunked(&state, &smooth_eval, Some(center), chunk_points, None)
-                        .unwrap();
+                let chunked = materialize_compat(&state, smooth_eval, Some(center), chunk_points)
+                    .unwrap();
                 assert_eq!(
                     tensor_bits(&chunked, n_sites),
                     reference_bits,
@@ -706,18 +758,17 @@ mod materialization_context {
         // publication is a cached handle and takes no such lock.
         let warm_state = nonzero_state();
         let warm_context = one_worker_context();
-        let _ = to_treetn_chunked(
+        let _ = materialize_in_context(
             &warm_state,
-            &smooth,
+            smooth,
             Some(1),
             EVALUATION_CHUNK_POINTS,
-            Some(&warm_context),
+            &warm_context,
         )
         .expect("warm-up materialization");
 
-        let legacy =
-            to_treetn_chunked(&warm_state, &smooth, Some(1), EVALUATION_CHUNK_POINTS, None)
-                .expect("legacy materialization");
+        let legacy = materialize_compat(&warm_state, smooth, Some(1), EVALUATION_CHUNK_POINTS)
+            .expect("legacy materialization");
 
         // The scoped route must complete *while* the process-global backend is
         // held by this scope: a materialization that resolved its solve
@@ -729,12 +780,12 @@ mod materialization_context {
             let worker = std::thread::spawn(move || {
                 let state = nonzero_state();
                 let context = one_worker_context();
-                let result = to_treetn_chunked(
+                let result = materialize_in_context(
                     &state,
-                    &smooth,
+                    smooth,
                     Some(1),
                     EVALUATION_CHUNK_POINTS,
-                    Some(&context),
+                    &context,
                 );
                 let _ = done_tx.send(());
                 result
@@ -768,12 +819,12 @@ mod materialization_context {
     fn negative_control_legacy_route_blocks_while_the_global_backend_is_held() {
         let warm_state = nonzero_state();
         let warm_context = one_worker_context();
-        let _ = to_treetn_chunked(
+        let _ = materialize_in_context(
             &warm_state,
-            &smooth,
+            smooth,
             Some(1),
             EVALUATION_CHUNK_POINTS,
-            Some(&warm_context),
+            &warm_context,
         )
         .expect("warm-up materialization");
 
@@ -783,8 +834,7 @@ mod materialization_context {
             let worker = std::thread::spawn(move || {
                 let state = nonzero_state();
                 let _ = started_tx.send(());
-                let result =
-                    to_treetn_chunked(&state, &smooth, Some(1), EVALUATION_CHUNK_POINTS, None);
+                let result = materialize_compat(&state, smooth, Some(1), EVALUATION_CHUNK_POINTS);
                 let _ = done_tx.send(());
                 result
             });
@@ -810,10 +860,24 @@ mod materialization_context {
     }
 
     #[test]
-    fn a_zero_pivot_matrix_needs_no_session_on_the_context_route() {
-        // The zero-pivot early return sits above the solve, so a worker may
-        // take the context route even though entering the concrete session
-        // from a worker is refused.
+    fn a_zero_pivot_matrix_takes_the_early_return_without_a_solve() {
+        // The zero-pivot early return sits above the solve, so the context route emits a
+        // zero site tensor without a factorization.
+        let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+        state.add_global_pivots(&[vec![0, 0]]).unwrap();
+        let zero =
+            |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![0.0; batch.n_points()]) };
+        let context = one_worker_context();
+        let tn = crate::to_treetn_in(&state, zero, Some(0), &context)
+            .expect("a zero pivot matrix takes the early return");
+        assert_eq!(tn.to_dense().unwrap().maxabs().unwrap(), 0.0);
+    }
+
+    #[test]
+    fn a_worker_cannot_enter_the_context_route_even_for_zero_pivots() {
+        // The context-taking entry enters one session for the whole materialization, so
+        // the refusal happens up front instead of at the first nonzero solve: a worker is
+        // refused typed even when the zero-pivot shortcut would have avoided the solve.
         let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
         state.add_global_pivots(&[vec![0, 0]]).unwrap();
         let zero =
@@ -824,18 +888,13 @@ mod materialization_context {
             .build()
             .unwrap();
 
-        let tn = pool
-            .install(|| {
-                to_treetn_chunked(
-                    &state,
-                    &zero,
-                    Some(0),
-                    EVALUATION_CHUNK_POINTS,
-                    Some(&context),
-                )
-            })
-            .expect("a zero pivot matrix takes the early return");
-        assert_eq!(tn.to_dense().unwrap().maxabs().unwrap(), 0.0);
+        let error = pool
+            .install(|| crate::to_treetn_in(&state, zero, Some(0), &context))
+            .expect_err("a worker may not enter the caller's concrete session");
+        assert!(
+            format!("{error}").contains("explicit concrete session"),
+            "the refusal must stay visible: {error}"
+        );
     }
 
     #[test]
@@ -852,12 +911,12 @@ mod materialization_context {
 
         let error = pool
             .install(|| {
-                to_treetn_chunked(
+                materialize_in_context(
                     &state,
-                    &smooth,
+                    smooth,
                     Some(1),
                     EVALUATION_CHUNK_POINTS,
-                    Some(&context),
+                    &context,
                 )
             })
             .expect_err("a worker may not enter the caller's concrete session");

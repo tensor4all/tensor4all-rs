@@ -98,6 +98,7 @@ pub use treetn::{
     // Decomposition
     factorize_tensor_to_treetn,
     factorize_tensor_to_treetn_with,
+    factorize_tensor_to_treetn_with_on_session,
     fit_sum,
     fix_and_remove_site,
     get_boundary_edges,
