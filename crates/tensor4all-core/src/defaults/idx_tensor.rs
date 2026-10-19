@@ -2076,7 +2076,7 @@ impl IdxTensor {
         positions: &[usize],
     ) -> Result<Self> {
         let dims = self.dims();
-        let data = self.host_dense_values::<T>()?;
+        let data = self.dense_host_values::<T>()?;
         let strides = Self::col_major_strides(&dims)?;
         let kept_len = checked_product(kept_dims)?;
         let mut output = Vec::with_capacity(kept_len);
@@ -2160,7 +2160,7 @@ impl IdxTensor {
         let strides = Self::col_major_strides(&result_dims)?;
         let mut output = vec![T::default(); result_len];
         for (batch, tensor) in tensors.iter().enumerate() {
-            let data = tensor.host_dense_values::<T>()?;
+            let data = tensor.dense_host_values::<T>()?;
             if data.len() != base_len {
                 return Err(anyhow::anyhow!(
                     "stack input payload length {} does not match {} base elements",
@@ -2289,7 +2289,29 @@ impl IdxTensor {
     /// payload, so this works on a thread that already owns an explicit session.
     /// An eager or structured payload is read through its stored host value; the
     /// session routes that call this refuse tracked operands first.
-    pub(crate) fn host_dense_values<T: tensor4all_tensorbackend::StorageScalar>(
+    ///
+    /// This is the read counterpart of [`IdxTensor::from_dense_compact`]: a
+    /// session route can inspect an operand without materializing an eager
+    /// value or entering the process-global runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError::Materialization`] when the compact payload
+    /// cannot be read as `T`, and the same error when an eager payload is not
+    /// host-contiguous and cannot be materialized. A dtype mismatch is a
+    /// materialization failure rather than a conversion.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let tensor = IdxTensor::from_dense(vec![i], vec![1.0_f64, 2.0])?;
+    /// assert_eq!(tensor.dense_host_values::<f64>()?, vec![1.0, 2.0]);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn dense_host_values<T: tensor4all_tensorbackend::StorageScalar>(
         &self,
     ) -> std::result::Result<Vec<T>, IdxTensorError> {
         if let IdxTensorStorage::Materialized(storage) = &self.storage {
@@ -2311,7 +2333,7 @@ impl IdxTensor {
     ) -> std::result::Result<(Vec<usize>, Vec<T>), IdxTensorError> {
         let perm = compute_permutation_from_indices(&self.indices, new_indices)?;
         let dims = self.dims();
-        let data = self.host_dense_values::<T>()?;
+        let data = self.dense_host_values::<T>()?;
         if perm.iter().copied().eq(0..perm.len()) {
             return Ok((dims, data));
         }
@@ -8914,6 +8936,121 @@ impl IdxTensor {
         let storage = Storage::from_dense_col_major(data, &dims)
             .map_err(|error| IdxTensorError::operation("host publication", error))?;
         Self::from_storage(indices, Arc::new(storage))
+    }
+
+    /// Publish dense host values as compact storage without entering a runtime.
+    ///
+    /// This is the public publication boundary for session routes: the values
+    /// stay in their own floating dtype (`f32`, `f64`, `c32`, `c64`) and the
+    /// result is compact host storage, so later indexed operations on it remain
+    /// runtime-free. Use [`IdxTensor::dense_host_values`] for the read direction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError`] when the index list is not unique, when the
+    /// payload length does not match the index dimensions, or when the compact
+    /// storage cannot be built.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let tensor = IdxTensor::from_dense_compact(vec![i], vec![1.0_f32, 2.0])?;
+    /// assert!(tensor.is_f32());
+    /// assert_eq!(tensor.dense_host_values::<f32>()?, vec![1.0, 2.0]);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn from_dense_compact<T: tensor4all_tensorbackend::TensorElement>(
+        indices: Vec<DynIndex>,
+        data: Vec<T>,
+    ) -> std::result::Result<Self, IdxTensorError> {
+        let dims = Self::expected_dims_from_indices(&indices);
+        Self::validate_indices(&indices)?;
+        Self::validate_dense_payload_len(data.len(), &dims)?;
+        let native = T::dense_native_tensor_from_col_major_owned(data, &dims)
+            .map_err(|error| IdxTensorError::operation("host publication", error))?;
+        Self::publish_dense_session_result(indices, &native)
+    }
+
+    /// Gather positions along one axis on the host, keeping compact storage.
+    ///
+    /// The caller has already validated `axis`, `positions` and
+    /// `target_index`; this helper only moves values, so it enters no runtime.
+    pub(crate) fn gather_dense_host(
+        &self,
+        axis: usize,
+        positions: &[usize],
+        target_index: DynIndex,
+    ) -> std::result::Result<Self, IdxTensorError> {
+        let mut result_indices = self.indices.clone();
+        let target_dim = target_index.dim();
+        if let Some(slot) = result_indices.get_mut(axis) {
+            *slot = target_index;
+        }
+        let dims = self.dims();
+        let dtype = self.storage.dtype().ok_or_else(|| {
+            IdxTensorError::operation(
+                "index_select_on_session",
+                anyhow::anyhow!("unable to determine the source payload dtype"),
+            )
+        })?;
+        match dtype {
+            DType::F64 => {
+                let data = self.dense_host_values::<f64>()?;
+                let gathered = Self::gather_host(&data, &dims, axis, positions, target_dim)?;
+                Self::from_host_dense(result_indices, gathered)
+            }
+            DType::F32 => {
+                let data = self.dense_host_values::<f32>()?;
+                let gathered = Self::gather_host(&data, &dims, axis, positions, target_dim)?;
+                Self::from_host_dense(result_indices, gathered)
+            }
+            DType::C64 => {
+                let data = self.dense_host_values::<Complex64>()?;
+                let gathered = Self::gather_host(&data, &dims, axis, positions, target_dim)?;
+                Self::from_host_dense(result_indices, gathered)
+            }
+            DType::C32 => {
+                let data = self.dense_host_values::<Complex32>()?;
+                let gathered = Self::gather_host(&data, &dims, axis, positions, target_dim)?;
+                Self::from_host_dense(result_indices, gathered)
+            }
+            other => Err(IdxTensorError::operation(
+                "index_select_on_session",
+                anyhow::anyhow!("unsupported dense storage scalar type {other:?}"),
+            )),
+        }
+    }
+
+    fn gather_host<T: tensor4all_tensorbackend::StorageScalar>(
+        source: &[T],
+        dims: &[usize],
+        axis: usize,
+        positions: &[usize],
+        target_dim: usize,
+    ) -> Result<Vec<T>> {
+        let mut result_dims = dims.to_vec();
+        if let Some(slot) = result_dims.get_mut(axis) {
+            *slot = target_dim;
+        }
+        let len = checked_product(&result_dims)?;
+        let strides = Self::col_major_strides(dims)?;
+        let mut output = Vec::with_capacity(len);
+        for linear in 0..len {
+            let mut coordinates = Self::col_major_coordinates(linear, &result_dims);
+            let position = positions
+                .get(coordinates[axis])
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("gather position is out of bounds"))?;
+            coordinates[axis] = position;
+            let offset = Self::col_major_offset(&coordinates, &strides)?;
+            output.push(*source.get(offset).ok_or_else(|| {
+                anyhow::anyhow!("column-major gather read offset {offset} is out of bounds")
+            })?);
+        }
+        Ok(output)
     }
 
     /// Publish a concrete dense result as this crate's indexed tensor.

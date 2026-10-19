@@ -27,6 +27,7 @@ fn evaluate_batched_uncached(
             &plan,
             &assignment_batches,
             &messages,
+            &mut CachedEvaluationRoute::global(),
         )?;
         messages.insert(*node, node_message);
     }
@@ -41,7 +42,13 @@ fn evaluate_batched_uncached(
             point_to_assignment: assignment_batch.point_to_assignment.clone(),
         });
     }
-    evaluator.contract_center_for_points(center, values, &component_batches, &environment_cache)
+    evaluator.contract_center_for_points(
+        center,
+        values,
+        &component_batches,
+        &environment_cache,
+        &mut CachedEvaluationRoute::global(),
+    )
 }
 
 /// Measurement, not a regression test: how much does the persistent

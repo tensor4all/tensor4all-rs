@@ -114,9 +114,17 @@ fn borrowed_cached_cut_matches_owned_assembly_for_all_scalar_kinds() {
             evaluator
                 .evaluate_batched_with_hint(points, EvaluationHint::around(0))
                 .unwrap();
-            let (batches, environment) = evaluator.build_environment_cache(&0, points).unwrap();
+            let (batches, environment) = evaluator
+                .build_environment_cache(&0, points, &mut CachedEvaluationRoute::global())
+                .unwrap();
             let expected = evaluator
-                .contract_edge_cut_or_center(&0, points, &batches, &environment)
+                .contract_edge_cut_or_center(
+                    &0,
+                    points,
+                    &batches,
+                    &environment,
+                    &mut CachedEvaluationRoute::global(),
+                )
                 .unwrap()
                 .into_iter()
                 .map(CachedScalar::into_any)
@@ -187,9 +195,17 @@ fn borrowed_cut_partial_hits_keep_legacy_cache_accounting() {
         let actual = candidate
             .evaluate_batched_with_hint(points, EvaluationHint::around(2))
             .unwrap();
-        let (batches, environment) = reference.build_environment_cache(&2, points).unwrap();
+        let (batches, environment) = reference
+            .build_environment_cache(&2, points, &mut CachedEvaluationRoute::global())
+            .unwrap();
         let expected = reference
-            .contract_edge_cut_or_center(&2, points, &batches, &environment)
+            .contract_edge_cut_or_center(
+                &2,
+                points,
+                &batches,
+                &environment,
+                &mut CachedEvaluationRoute::global(),
+            )
             .unwrap()
             .into_iter()
             .map(CachedScalar::into_any)

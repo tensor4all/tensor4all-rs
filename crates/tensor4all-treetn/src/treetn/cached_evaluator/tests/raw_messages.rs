@@ -142,12 +142,18 @@ fn raw_leaf_message_matches_generic_contraction() {
             &plan,
             &assignment_batches,
             &HashMap::new(),
+            &mut CachedEvaluationRoute::global(),
         )
         .unwrap();
     let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
 
     let actual = evaluator
-        .try_compute_leaf_message_raw(&2, points, &leaf_points)
+        .try_compute_leaf_message_raw(
+            &2,
+            points,
+            &leaf_points,
+            &mut CachedEvaluationRoute::global(),
+        )
         .unwrap()
         .expect("leaf node with one physical index and a real tensor must be eligible");
 
@@ -192,12 +198,18 @@ fn raw_complex_leaf_message_matches_generic_contraction() {
             &plan,
             &assignment_batches,
             &HashMap::new(),
+            &mut CachedEvaluationRoute::global(),
         )
         .unwrap();
     let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
 
     let actual = evaluator
-        .try_compute_leaf_message_complex_raw(&2, points, &leaf_points)
+        .try_compute_leaf_message_complex_raw(
+            &2,
+            points,
+            &leaf_points,
+            &mut CachedEvaluationRoute::global(),
+        )
         .unwrap()
         .expect("complex leaf message should use the raw path");
 
@@ -240,6 +252,7 @@ fn raw_chain_message_matches_generic_contraction() {
             &plan,
             &assignment_batches,
             &HashMap::new(),
+            &mut CachedEvaluationRoute::global(),
         )
         .unwrap();
     let mut messages = HashMap::new();
@@ -254,6 +267,7 @@ fn raw_chain_message_matches_generic_contraction() {
             &plan,
             &assignment_batches,
             &messages,
+            &mut CachedEvaluationRoute::global(),
         )
         .unwrap();
     let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
@@ -266,6 +280,7 @@ fn raw_chain_message_matches_generic_contraction() {
             &plan,
             &assignment_batches,
             &messages,
+            &mut CachedEvaluationRoute::global(),
         )
         .unwrap()
         .expect("interior node with one child and one physical index must be eligible");
@@ -311,6 +326,7 @@ fn raw_complex_chain_message_matches_generic_contraction() {
             &plan,
             &assignment_batches,
             &HashMap::new(),
+            &mut CachedEvaluationRoute::global(),
         )
         .unwrap();
     let mut messages = HashMap::new();
@@ -325,6 +341,7 @@ fn raw_complex_chain_message_matches_generic_contraction() {
             &plan,
             &assignment_batches,
             &messages,
+            &mut CachedEvaluationRoute::global(),
         )
         .unwrap();
     let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
@@ -337,6 +354,7 @@ fn raw_complex_chain_message_matches_generic_contraction() {
             &plan,
             &assignment_batches,
             &messages,
+            &mut CachedEvaluationRoute::global(),
         )
         .unwrap()
         .expect("complex chain message should use the raw path");
@@ -383,6 +401,7 @@ fn raw_branch_message_matches_generic_contraction() {
                 &plan,
                 &assignment_batches,
                 &HashMap::new(),
+                &mut CachedEvaluationRoute::global(),
             )
             .unwrap();
         messages.insert(leaf, leaf_message);
@@ -397,6 +416,7 @@ fn raw_branch_message_matches_generic_contraction() {
             &plan,
             &assignment_batches,
             &messages,
+            &mut CachedEvaluationRoute::global(),
         )
         .unwrap();
     let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
@@ -409,6 +429,7 @@ fn raw_branch_message_matches_generic_contraction() {
             &plan,
             &assignment_batches,
             &messages,
+            &mut CachedEvaluationRoute::global(),
         )
         .unwrap()
         .expect("branch node with two children and one physical index must be eligible");
@@ -439,7 +460,9 @@ fn degree_three_hub_keeps_raw_messages_when_center_is_a_leaf() {
     let values = [0usize, 0, 0, 0, 1, 0, 1, 1];
     let points = ColMajorArrayRef::new(&values, &shape).unwrap();
 
-    let (_, environments) = evaluator.build_environment_cache(&1, points).unwrap();
+    let (_, environments) = evaluator
+        .build_environment_cache(&1, points, &mut CachedEvaluationRoute::global())
+        .unwrap();
     let hub_message = environments
         .get(&0)
         .expect("leaf-centered star must expose the hub environment");
@@ -474,7 +497,9 @@ fn build_environment_cache_records_guard_diagnostics_per_node_with_correct_coord
     let points = ColMajorArrayRef::new(&values, &shape).unwrap();
 
     diagnostics::reset();
-    let _ = evaluator.build_environment_cache(&1, points).unwrap();
+    let _ = evaluator
+        .build_environment_cache(&1, points, &mut CachedEvaluationRoute::global())
+        .unwrap();
 
     let snapshot = diagnostics::snapshot();
     let hub_record = snapshot
@@ -514,7 +539,9 @@ fn degree_four_hub_keeps_raw_messages_when_center_is_a_leaf() {
     let shape = [5usize, 1usize];
     let points = ColMajorArrayRef::new(&values, &shape).unwrap();
 
-    let (_, environments) = evaluator.build_environment_cache(&1, points).unwrap();
+    let (_, environments) = evaluator
+        .build_environment_cache(&1, points, &mut CachedEvaluationRoute::global())
+        .unwrap();
     let hub_message = environments
         .get(&0)
         .expect("leaf-centered star must expose the hub environment");
@@ -611,6 +638,7 @@ fn raw_complex_branch_message_matches_generic_contraction() {
                 &plan,
                 &assignment_batches,
                 &HashMap::new(),
+                &mut CachedEvaluationRoute::global(),
             )
             .unwrap();
         messages.insert(leaf, leaf_message);
@@ -625,6 +653,7 @@ fn raw_complex_branch_message_matches_generic_contraction() {
             &plan,
             &assignment_batches,
             &messages,
+            &mut CachedEvaluationRoute::global(),
         )
         .unwrap();
     let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
@@ -637,6 +666,7 @@ fn raw_complex_branch_message_matches_generic_contraction() {
             &plan,
             &assignment_batches,
             &messages,
+            &mut CachedEvaluationRoute::global(),
         )
         .unwrap()
         .expect("complex branch message should use the raw path");
@@ -688,6 +718,7 @@ fn raw_degree_three_center_matches_exact_complex_evaluation() {
 fn assert_multi_branch_matches_generic<T>(arms: usize, point_count: usize) -> (usize, usize)
 where
     T: CachedEvaluatorTestScalar
+        + tensor4all_tensorbackend::StorageScalar
         + BlasMul
         + Copy
         + Default
@@ -727,6 +758,7 @@ where
                 &plan,
                 &assignment_batches,
                 &HashMap::new(),
+                &mut CachedEvaluationRoute::global(),
             )
             .unwrap();
         messages.insert(leaf, leaf_message);
@@ -746,6 +778,7 @@ where
             &plan,
             &assignment_batches,
             &messages,
+            &mut CachedEvaluationRoute::global(),
         )
         .unwrap();
     let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
@@ -759,16 +792,17 @@ where
             &plan,
             &assignment_batches,
             &messages,
-            if T::IS_COMPLEX {
+            if <T as CachedEvaluatorTestScalar>::IS_COMPLEX {
                 ScalarKind::C64
             } else {
                 ScalarKind::F64
             },
-            |value| match (value, T::IS_COMPLEX) {
+            |value| match (value, <T as CachedEvaluatorTestScalar>::IS_COMPLEX) {
                 (CachedScalar::F64(value), false) => Some(T::from_parts(*value, 0.0)),
                 (CachedScalar::C64(value), true) => Some(T::from_parts(value.re, value.im)),
                 _ => None,
             },
+            &mut CachedEvaluationRoute::global(),
         )
         .unwrap()
         .unwrap_or_else(|| panic!("a hub with {} rooted children must be eligible", arms - 1));
@@ -861,9 +895,14 @@ fn multi_branch_grouped_and_flat_routes_agree() {
     let flat =
         scalar_multi_branch_message_contraction(&spec, &raw, &physical_values, &child_columns)
             .unwrap();
-    let grouped =
-        grouped_multi_branch_message_contraction(&spec, &raw, &physical_values, &child_columns)
-            .unwrap();
+    let grouped = grouped_multi_branch_message_contraction(
+        &mut CachedEvaluationRoute::global(),
+        &spec,
+        &raw,
+        &physical_values,
+        &child_columns,
+    )
+    .unwrap();
 
     assert_eq!(flat.len(), physical_values.len() * spec.parent_dim);
     assert_eq!(flat.len(), grouped.len());

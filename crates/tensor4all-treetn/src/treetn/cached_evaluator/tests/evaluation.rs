@@ -90,7 +90,7 @@ fn cached_evaluator_error_paths_and_unsupported_raw_dispatch_are_typed() {
     let actual = fallback.evaluate_batched(points).unwrap();
     assert_typed_results::<f64>(&actual, &expected);
     let hub = fallback
-        .build_environment_cache(&1, points)
+        .build_environment_cache(&1, points, &mut CachedEvaluationRoute::global())
         .unwrap()
         .1
         .remove(&0)

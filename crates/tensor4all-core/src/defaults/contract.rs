@@ -1201,14 +1201,43 @@ fn build_einsum_subscripts_from_usize_ids(
 
 /// A contraction plan with internal labels and result ordering.
 #[derive(Debug, Clone)]
-struct ContractionPlan {
-    input_ids: Vec<Vec<usize>>,
-    output_ids: Vec<usize>,
-    result_indices: Vec<DynIndex>,
-    result_axis_classes: Vec<usize>,
+pub(crate) struct ContractionPlan {
+    pub(crate) input_ids: Vec<Vec<usize>>,
+    pub(crate) output_ids: Vec<usize>,
+    pub(crate) result_indices: Vec<DynIndex>,
+    pub(crate) result_axis_classes: Vec<usize>,
 }
 
-fn build_contraction_plan(
+/// Plan an N-ary contraction for the explicit-session route.
+///
+/// Runs the compatibility route's own validation (retained-index existence,
+/// connectivity, empty input) and planning, so a session contraction has the
+/// same index semantics and refuses the same networks. A single operand needs
+/// no plan; the caller returns its clone exactly as the compatibility route
+/// does.
+pub(crate) fn session_contraction_plan(
+    tensors: &[&IdxTensor],
+    options: ContractionOptions<'_>,
+) -> Result<Option<ContractionPlan>> {
+    if tensors.is_empty() {
+        return Err(anyhow::anyhow!("No tensors to contract"));
+    }
+    validate_retained_indices_exist(tensors, options.retain_indices)?;
+    if tensors.len() == 1 {
+        return Ok(None);
+    }
+    let components =
+        find_tensor_connected_components_with_retained(tensors, options.retain_indices);
+    if components.len() > 1 {
+        return Err(anyhow::anyhow!(
+            "Disconnected tensor network: {} components found",
+            components.len()
+        ));
+    }
+    build_contraction_plan(tensors, options).map(Some)
+}
+
+pub(crate) fn build_contraction_plan(
     tensors: &[&IdxTensor],
     options: ContractionOptions<'_>,
 ) -> Result<ContractionPlan> {

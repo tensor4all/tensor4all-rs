@@ -267,7 +267,7 @@ fn assert_unequal_y_tree_matches<T: CachedEvaluatorTestScalar>() {
     assert_typed_results::<T>(&cold, &expected);
     assert_typed_results::<T>(&warm, &expected);
     let hub_message = evaluator
-        .build_environment_cache(&1, points)
+        .build_environment_cache(&1, points, &mut CachedEvaluationRoute::global())
         .unwrap()
         .1
         .remove(&0)

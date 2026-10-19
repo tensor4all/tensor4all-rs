@@ -26,6 +26,7 @@ fn grouped_chain_contraction_matches_scalar_reference_for_real_values() {
         child_dim: 2,
     };
     let actual = TreeTNCachedEvaluator::<usize>::grouped_chain_message_contraction(
+        &mut CachedEvaluationRoute::global(),
         spec,
         &raw,
         &physical_values,
@@ -75,6 +76,7 @@ fn grouped_chain_contraction_matches_scalar_reference_for_complex_values() {
         child_dim: 2,
     };
     let actual = TreeTNCachedEvaluator::<usize>::grouped_chain_message_contraction(
+        &mut CachedEvaluationRoute::global(),
         spec,
         &raw,
         &physical_values,
@@ -111,6 +113,7 @@ fn grouped_branch_contraction_matches_direct_reference_for_real_values() {
     let child2_columns = [1.0, 1.0, 0.5, 2.0, 1.5, 0.5];
 
     let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
+        &mut CachedEvaluationRoute::global(),
         spec,
         &raw,
         &physical_values,
@@ -157,6 +160,7 @@ fn grouped_chain_contraction_large_real_groups_match_scalar_reference() {
         .collect();
 
     let actual = TreeTNCachedEvaluator::<usize>::grouped_chain_message_contraction(
+        &mut CachedEvaluationRoute::global(),
         spec,
         &raw,
         &physical_values,
@@ -193,6 +197,7 @@ fn grouped_chain_contraction_large_complex_groups_match_scalar_reference() {
         .collect();
 
     let actual = TreeTNCachedEvaluator::<usize>::grouped_chain_message_contraction(
+        &mut CachedEvaluationRoute::global(),
         spec,
         &raw,
         &physical_values,
@@ -235,6 +240,7 @@ fn grouped_branch_contraction_large_real_groups_match_scalar_reference() {
         .collect();
 
     let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
+        &mut CachedEvaluationRoute::global(),
         spec,
         &raw,
         &physical_values,
@@ -283,6 +289,7 @@ fn grouped_branch_contraction_counts_one_blas_dispatch_per_physical_group() {
 
     diagnostics::reset();
     TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
+        &mut CachedEvaluationRoute::global(),
         spec,
         &raw,
         &physical_values,
@@ -312,6 +319,7 @@ fn grouped_branch_contraction_counts_one_blas_dispatch_per_physical_group() {
 
     diagnostics::reset();
     TreeTNCachedEvaluator::<usize>::grouped_chain_message_contraction(
+        &mut CachedEvaluationRoute::global(),
         chain_spec,
         &chain_raw,
         &physical_values,
@@ -367,6 +375,7 @@ fn grouped_branch_contraction_matches_scalar_reference_when_parent_axis_is_conti
         .collect();
 
     let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
+        &mut CachedEvaluationRoute::global(),
         spec,
         &raw,
         &physical_values,
@@ -432,6 +441,7 @@ fn grouped_branch_contraction_matches_scalar_reference_when_child_axis_2_is_cont
         .collect();
 
     let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
+        &mut CachedEvaluationRoute::global(),
         spec,
         &raw,
         &physical_values,
@@ -482,6 +492,7 @@ fn grouped_branch_contraction_large_complex_groups_match_scalar_reference() {
         .collect();
 
     let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
+        &mut CachedEvaluationRoute::global(),
         spec,
         &raw,
         &physical_values,
@@ -521,6 +532,7 @@ fn grouped_branch_contiguous_read_fast_paths_match_complex_reference() {
 
     let check = |spec, raw: Vec<Complex64>| {
         let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
+            &mut CachedEvaluationRoute::global(),
             spec,
             &raw,
             &physical_values,
@@ -608,6 +620,7 @@ fn prepared_branch_slice_cache_reuses_hits_and_returns_over_budget_fallbacks() {
     let mut cache = PreparedBranchSliceCache::new(slice_bytes);
 
     let first = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
+        &mut CachedEvaluationRoute::global(),
         &mut cache,
         &0,
         &1,
@@ -622,6 +635,7 @@ fn prepared_branch_slice_cache_reuses_hits_and_returns_over_budget_fallbacks() {
     )
     .unwrap();
     let second = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
+        &mut CachedEvaluationRoute::global(),
         &mut cache,
         &0,
         &1,
@@ -641,6 +655,7 @@ fn prepared_branch_slice_cache_reuses_hits_and_returns_over_budget_fallbacks() {
 
     let physical_values_with_new_slice = vec![1usize; 16];
     let third = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
+        &mut CachedEvaluationRoute::global(),
         &mut cache,
         &0,
         &1,
@@ -668,6 +683,7 @@ fn prepared_branch_slice_cache_reuses_hits_and_returns_over_budget_fallbacks() {
 
     let mut zero_budget_cache = PreparedBranchSliceCache::new(0);
     let zero_budget = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
+        &mut CachedEvaluationRoute::global(),
         &mut zero_budget_cache,
         &0,
         &1,
@@ -746,6 +762,7 @@ fn prepared_branch_slices_match_scalar_for_all_real_axis_orders_and_unequal_bond
                 let mut cache = PreparedBranchSliceCache::new(usize::MAX);
                 let actual =
                     TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
+                        &mut CachedEvaluationRoute::global(),
                         &mut cache,
                         &0,
                         &1,
@@ -830,6 +847,7 @@ fn prepared_branch_slices_match_scalar_for_all_complex_axis_orders_and_unequal_b
                 let mut cache = PreparedBranchSliceCache::new(usize::MAX);
                 let actual =
                     TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
+                        &mut CachedEvaluationRoute::global(),
                         &mut cache,
                         &0,
                         &1,
@@ -953,7 +971,9 @@ fn stack_tensors_adds_trailing_assignment_axis_in_column_major_order() {
     let a = IdxTensor::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
     let b = IdxTensor::from_dense(vec![i.clone()], vec![3.0_f64, 4.0]).unwrap();
 
-    let stacked = stack_tensors_with_assignment_index(&batch, &[a, b]).unwrap();
+    let stacked =
+        stack_tensors_with_assignment_index(&batch, &[a, b], &mut CachedEvaluationRoute::global())
+            .unwrap();
 
     assert_eq!(stacked.indices(), &[i, batch]);
     assert_eq!(stacked.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
@@ -970,8 +990,14 @@ fn gather_stacked_tensor_remaps_trailing_assignment_axis() {
     )
     .unwrap();
 
-    let gathered =
-        gather_stacked_tensor(&stacked, &source_batch, &target_batch, &[2, 0, 2, 1]).unwrap();
+    let gathered = gather_stacked_tensor(
+        &stacked,
+        &source_batch,
+        &target_batch,
+        &[2, 0, 2, 1],
+        &mut CachedEvaluationRoute::global(),
+    )
+    .unwrap();
 
     assert_eq!(gathered.indices(), &[i, target_batch]);
     assert_eq!(

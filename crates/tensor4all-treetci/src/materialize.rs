@@ -272,7 +272,11 @@ where
             );
         }
 
-        tensors.push(IdxTensor::from_dense(indices, data)?);
+        // Publish compact host storage instead of adopting an eager value from
+        // the process-global runtime: materialization may run while the caller
+        // owns an explicit session, and the compact representation keeps every
+        // later indexed operation runtime-free.
+        tensors.push(IdxTensor::from_dense_compact(indices, data)?);
         names.push(node_names[site].clone());
     }
 

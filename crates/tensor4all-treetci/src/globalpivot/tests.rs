@@ -1,5 +1,6 @@
 use super::{
-    cached_walk_readout, find_global_pivots, search_with_readout, ScalarParts, SearchParams,
+    cached_walk_readout, cached_walk_readout_on_session, find_global_pivots, search_with_readout,
+    ScalarParts, SearchParams,
 };
 use crate::{
     materialize::to_treetn, optimize_with_proposer, AllEdges, DefaultProposer, GlobalIndexBatch,
@@ -39,7 +40,14 @@ where
     ) -> Result<Vec<AnyScalar>>,
 {
     let mut execution = crate::evaluation::Compatibility::new(&mut evaluate);
-    search_with_readout(state, &mut execution, params, rng, readout)
+    search_with_readout(
+        state,
+        &mut execution,
+        params,
+        rng,
+        readout,
+        cached_walk_readout_on_session,
+    )
 }
 
 /// Batch evaluator for a two-peak function on a 10-site chain.

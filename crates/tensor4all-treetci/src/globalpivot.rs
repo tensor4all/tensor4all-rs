@@ -203,7 +203,14 @@ where
         tol_margin,
         abs_tol,
     };
-    search_with_readout(state, execution, params, rng, cached_walk_readout)
+    search_with_readout(
+        state,
+        execution,
+        params,
+        rng,
+        cached_walk_readout,
+        cached_walk_readout_on_session,
+    )
 }
 
 /// Scalar parameters of one global pivot search, as passed to
@@ -215,6 +222,16 @@ struct SearchParams {
     tol_margin: f64,
     abs_tol: f64,
 }
+
+/// A session-taking approximation readout for runs that own an [`EvalContext`].
+type SessionReadout = fn(
+    &mut TreeTNCachedEvaluator<'_, usize>,
+    &TreeTN<IdxTensor, usize>,
+    &[DynIndex],
+    ColMajorArrayRef<'_, usize>,
+    Option<usize>,
+    &mut tensor4all_tensorbackend::explicit::Session<'_>,
+) -> Result<Vec<AnyScalar>>;
 
 /// Read one scan through the cache owned by this search. A site hint also
 /// identifies single-candidate scans, whose varied site cannot be inferred.
@@ -231,6 +248,21 @@ fn cached_walk_readout(
         .map_err(anyhow::Error::from)
 }
 
+/// Session counterpart of [`cached_walk_readout`], used when the run owner has a session.
+fn cached_walk_readout_on_session(
+    evaluator: &mut TreeTNCachedEvaluator<'_, usize>,
+    _treetn: &TreeTN<IdxTensor, usize>,
+    _site_indices: &[DynIndex],
+    candidates: ColMajorArrayRef<'_, usize>,
+    scan_site: Option<usize>,
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+) -> Result<Vec<AnyScalar>> {
+    let hint = scan_site.map(EvaluationHint::around).unwrap_or_default();
+    evaluator
+        .evaluate_batched_with_hint_on_session(session, candidates, hint)
+        .map_err(anyhow::Error::from)
+}
+
 /// [`find_global_pivots`] with the approximation readout supplied by the
 /// caller. Production passes [`cached_walk_readout`]; tests also pass the
 /// pointwise [`TreeTN::evaluate`] to check that the readout does not change
@@ -241,6 +273,7 @@ fn search_with_readout<T, R>(
     params: SearchParams,
     rng: &mut dyn RngCore,
     mut readout: R,
+    readout_on_session: SessionReadout,
 ) -> TreeTciResult<Vec<MultiIndex>>
 where
     T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
@@ -342,7 +375,23 @@ where
                 let values = ColMajorArrayRef::new(&flat, &shape).map_err(|error| {
                     anyhow::anyhow!("failed to build candidate index array: {error}")
                 })?;
-                let tt_values = readout(&mut cache, &treetn, &site_indices, values, scan_site)?;
+                let tt_values = match execution.session() {
+                    Some(backend) => {
+                        let mut session =
+                            tensor4all_tensorbackend::explicit::Session::from_backend_session(
+                                backend,
+                            );
+                        readout_on_session(
+                            &mut cache,
+                            &treetn,
+                            &site_indices,
+                            values,
+                            scan_site,
+                            &mut session,
+                        )?
+                    }
+                    None => readout(&mut cache, &treetn, &site_indices, values, scan_site)?,
+                };
                 if tt_values.len() != points.len() {
                     return Err(anyhow::anyhow!(
                         "approximation readout returned {} values for {} global-pivot candidates",

@@ -72,6 +72,13 @@ pub(crate) trait BatchExecution<T: FullPivLuScalar> {
         pivot_rows: usize,
         pivot_cols: usize,
     ) -> std::result::Result<Vec<T>, BackendLinalgError>;
+
+    /// The concrete session this owner's numerical steps run on, when it has one.
+    ///
+    /// The compatibility route has no session and returns `None`; the explicit
+    /// route returns its caller-owned session so a readout reached from the same
+    /// run can evaluate on it instead of the process-global backend.
+    fn session(&mut self) -> Option<&mut dyn tenferro_tensor::BackendSession>;
 }
 
 /// The context-free route: a batch evaluator and the process-global solve.
@@ -113,6 +120,10 @@ impl<T: FullPivLuScalar> BatchExecution<T> for Compatibility<'_, T> {
             pivot_rows,
             pivot_cols,
         )
+    }
+
+    fn session(&mut self) -> Option<&mut dyn tenferro_tensor::BackendSession> {
+        None
     }
 }
 
@@ -176,6 +187,10 @@ where
             pivot_rows,
             pivot_cols,
         )
+    }
+
+    fn session(&mut self) -> Option<&mut dyn tenferro_tensor::BackendSession> {
+        Some(self.context.session().backend())
     }
 }
 
@@ -286,6 +301,10 @@ where
             pivot_rows,
             pivot_cols,
         )
+    }
+
+    fn session(&mut self) -> Option<&mut dyn tenferro_tensor::BackendSession> {
+        self.source.session()
     }
 }
 
