@@ -21,6 +21,15 @@ pub enum QrError {
     /// Invalid relative tolerance value (must be finite and non-negative).
     #[error("Invalid rtol value: {0}. rtol must be finite and non-negative.")]
     InvalidRtol(f64),
+    /// The operand storage cannot enter the runtime-free explicit-session route.
+    ///
+    /// The session routes publish plain host factors, so an AD-tracked operand would lose its graph;
+    /// they refuse it instead.
+    #[error("Unsupported storage type: {0}")]
+    UnsupportedStorage(
+        /// Description of the unsupported operand storage
+        &'static str,
+    ),
 }
 
 /// Options for QR decomposition with truncation control.
@@ -478,7 +487,9 @@ fn options_rtol_is_valid(rtol: f64) -> bool {
 /// # Errors
 ///
 /// Returns [`QrError`] when the split is invalid, when `options.rtol` is not finite and nonnegative,
-/// when the session rejects the decomposition, or when a factor cannot be published.
+/// when the operand is AD-tracked ([`QrError::UnsupportedStorage`] - this route publishes plain host
+/// factors and would silently sever the graph), when the session rejects the decomposition, or when a
+/// factor cannot be published.
 ///
 /// # Examples
 ///
@@ -516,6 +527,11 @@ where
     T: TensorElement + ComplexFloat + tensor4all_tensorbackend::StorageScalar,
     <T as ComplexFloat>::Real: Into<f64>,
 {
+    if t.tracks_grad() {
+        return Err(QrError::UnsupportedStorage(
+            crate::defaults::idx_tensor::TRACKED_SESSION_OPERAND_REFUSAL,
+        ));
+    }
     let (left_indices, right_indices, order) =
         unfold_index_sets(t, left_inds).map_err(|error| {
             QrError::ComputationError(anyhow::anyhow!("Failed to unfold tensor: {error}"))

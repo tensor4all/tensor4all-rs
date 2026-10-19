@@ -65,21 +65,6 @@ use super::{
     References, Shared, WaveControl, WavePins, Waves,
 };
 
-/// One failing patch, with its typed detail kept aside.
-///
-/// `hataori::map_in_lanes` reports the lowest failing input index and a
-/// message, so the callback stores the typed error under the index of the patch
-/// that produced it and returns this placeholder; the dispatcher then returns
-/// that patch's own error.
-#[derive(Debug)]
-struct ItemFailure(String);
-
-impl std::fmt::Display for ItemFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
 /// The lanes driver: one caller-owned lane executor runs every wave.
 struct LanesWaves<'a, 'lane, F> {
     lanes: &'a mut TenferroLanes<'lane>,
@@ -309,13 +294,16 @@ where
         match patch_outcome(plan, pins, &shared, patch, &mut ctx) {
             Ok(run) => Ok(run),
             Err(error) => {
+                // `hataori::map_in_lanes` reports the lowest failing input index and a message, so the
+                // callback stores the typed error under the index of the patch that produced it and
+                // returns the message; the dispatcher then returns that patch's own error.
                 let message = error.to_string();
                 if let Ok(mut slots) = errors.lock()
                     && let Some(slot) = slots.get_mut(index)
                 {
                     *slot = Some(error);
                 }
-                Err(ItemFailure(message))
+                Err(message)
             }
         }
     });

@@ -3147,39 +3147,19 @@ impl Mul<Complex64> for &Storage {
 
 /// Multiply storage by a dynamic [`BackendScalar`].
 ///
-/// The result dtype follows [`scale_target_dtype`]: the payload keeps its width
-/// and gains a complex component when the scalar is complex.
+/// A real scalar delegates to the real-scaling implementation, so a complex payload's components scale
+/// independently and IEEE values propagate as they always have (`inf * 1` stays `inf` instead of turning
+/// into `inf * 0 = NaN` through the complex product). A complex scalar goes through the complex path,
+/// which keeps the payload's width and gains a complex component on a real payload.
 impl Mul<BackendScalar> for &Storage {
     type Output = Storage;
 
     fn mul(self, scalar: BackendScalar) -> Self::Output {
-        let target = scale_target_dtype(self.dtype(), scalar_dtype(&scalar))
-            .unwrap_or_else(|error| crate::invariant_violated("dynamic scaling", error));
-        let (scale_re, scale_im) = (scalar.real(), scalar.imag());
-        storage_dtype_dispatch!(target, Result => {
-            let values: Vec<Result> = storage_payload_dispatch!(&self.0, Source => |payload| {
-                payload
-                    .data()
-                    .iter()
-                    .map(|value| {
-                        let (re, im) = <Source as StorageScalar>::widened_parts(*value);
-                        <Result as StorageScalar>::from_widened_parts(
-                            re * scale_re - im * scale_im,
-                            re * scale_im + im * scale_re,
-                        )
-                    })
-                    .collect()
-            });
-            rebuild_payload(
-                self.payload_dims(),
-                self.payload_strides(),
-                self.axis_classes(),
-                values,
-            )
-        }, else crate::invariant_violated(
-            "dynamic scaling",
-            anyhow!("unsupported storage dtype {:?}", self.dtype()),
-        ))
+        if scalar.is_complex() {
+            self * Complex64::from(scalar)
+        } else {
+            self * scalar.real()
+        }
     }
 }
 

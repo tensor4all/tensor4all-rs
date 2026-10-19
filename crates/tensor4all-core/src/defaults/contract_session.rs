@@ -29,12 +29,12 @@ const OP: &str = "contract_pair_on_session";
 ///
 /// # Errors
 ///
-/// Returns a typed [`IdxTensorError`] for an operand whose representation or dtype this slice does not
-/// serve - a tracked value, a device-resident operand, a diagonal, structured or compact payload, or an
-/// `f32`/`c32` or non-floating dtype, because this route's scalar carrier is a rank-zero `IdxTensor` whose
-/// compact storage holds only `f64` and `c64` - for an operand whose index list repeats an index, for incompatible
+/// Returns a typed [`IdxTensorError`] for an operand whose representation this slice does not serve - an
+/// AD-tracked value, a device-resident operand, or a diagonal, structured or compact payload - for a
+/// non-floating dtype, for an operand whose index list repeats an index, for incompatible
 /// index spaces (the planner's shape and dimension errors), when the session rejects the contraction, or
-/// when the result cannot be published. A deferred storage error is returned as
+/// when the result cannot be published. Every floating dtype (`f32`, `f64`, `c32`, `c64`) is served and the
+/// result keeps the session's dtype. A deferred storage error is returned as
 /// [`IdxTensorError::Storage`] with its original source.
 ///
 /// # Examples
@@ -342,8 +342,8 @@ pub fn sum_on_session(
     tensor: &IdxTensor,
 ) -> Result<crate::AnyScalar, IdxTensorError> {
     // The operand is adapted - and therefore refused - before any session work, as in the other slices. The
-    // scalar's carrier here is a rank-zero `IdxTensor`, whose compact storage holds `f64` and `c64`, so this
-    // route keeps the narrow policy even though its result is a scalar.
+    // result is published as a rank-zero `IdxTensor` whose compact storage keeps the reduced dtype, so a
+    // narrow `f32`/`c32` operand yields a narrow scalar rather than a widened one.
     let operand = tensor.session_dense_operand(SUM_OP)?;
     let value = materialize_on_session(SUM_OP, session, operand)?;
     // `Session::sum` reduces every axis and duplicates an already rank-zero value, so one call covers both.
@@ -391,14 +391,14 @@ pub fn sum_on_session(
 ///
 /// Returns a typed [`IdxTensorError`] for a permutation whose length does not match the rank, an axis out of
 /// range or repeated - with the shared validator's messages - and, **for a nonidentity permutation**, under
-/// the same conditions as [`contract_pair_on_session`] refuses an operand: a tracked value, a
-/// device-resident operand, a diagonal, structured or compact payload, a deferred storage error, or an
-/// `f32`/`c32` or non-floating dtype. It also returns one when the session rejects the permutation or the
+/// the same conditions as [`contract_pair_on_session`] refuses an operand: an AD-tracked value, a
+/// device-resident operand, a diagonal, structured or compact payload, a deferred storage error, or a
+/// non-floating dtype. It also returns one when the session rejects the permutation or the
 /// result cannot be published.
 ///
 /// **An identity permutation never reaches those refusals**: like the compatibility route it returns the
 /// tensor unchanged, whatever its representation or dtype, because it is metadata only. Execution - and
-/// therefore the `f64`/`c64` domain of this seam - applies to the nonidentity case.
+/// therefore the floating-dtype domain of this seam - applies to the nonidentity case.
 ///
 /// # Examples
 ///
@@ -464,7 +464,7 @@ pub fn permute_on_session(
 /// before a contraction. The index list must be a permutation of the tensor's own indices by full index
 /// equality, exactly as the compatibility route requires; the permutation is derived with the same helper,
 /// so the two routes refuse the same inputs with the same messages. Execution is
-/// [`permute_on_session`]'s, so this route serves the same dense `f64`/`c64` domain, and an identity
+/// [`permute_on_session`]'s, so this route serves the same dense floating-dtype domain, and an identity
 /// permutation is metadata only - it returns the same storage under the supplied index list, for any
 /// representation, without touching the session.
 ///
@@ -564,8 +564,7 @@ pub fn permute_indices_on_session(
 /// host-read failure while the operand is brought onto the caller's session.
 ///
 /// **`f32` and `c32` operands are served here**, because this route returns a scalar: they are promoted into
-/// the same `f64` accumulation the compatibility route uses for them. A route whose result is a dense tensor
-/// cannot serve them, because this crate's compact storage holds only `f64` and `c64`.
+/// the same `f64` accumulation the compatibility route uses for them.
 ///
 /// # Examples
 ///

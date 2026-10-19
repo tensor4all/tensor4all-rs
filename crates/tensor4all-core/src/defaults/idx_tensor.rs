@@ -8813,7 +8813,15 @@ pub(crate) enum SessionDenseOperand<'a> {
     Read(Box<TensorRead<'a>>, usize),
 }
 
-/// Which operand dtypes a session route admits.
+/// The refusal every runtime-free explicit-session route returns for an AD-tracked operand.
+///
+/// The session routes read host values and publish plain host factors, so a tracked operand's graph
+/// would be dropped silently. Every entry that reads an operand therefore refuses a tracked value with
+/// this message before it touches the payload; factorize, QR and SVD carry it in their own typed
+/// unsupported-storage variants.
+pub(crate) const TRACKED_SESSION_OPERAND_REFUSAL: &str =
+    "a tracked value cannot enter the plain explicit-session route; detach it explicitly before the region";
+
 /// Validate a permutation for [`IdxTensor::permute`] and the explicit-session permutation route.
 ///
 /// The message is the one both entry points report, so a caller sees the same refusal either way; the
@@ -8855,10 +8863,7 @@ impl IdxTensor {
             });
         }
         if self.tracks_grad() {
-            return Err(refuse(
-                "a tracked value cannot enter the plain explicit-session route; detach it explicitly before the region"
-                    .to_string(),
-            ));
+            return Err(refuse(TRACKED_SESSION_OPERAND_REFUSAL.to_string()));
         }
         if self.is_cuda_resident() {
             return Err(refuse(

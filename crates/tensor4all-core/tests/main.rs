@@ -29,6 +29,7 @@ mod random_rng_stream;
 mod resident_rrqr;
 mod runtime_free_indexed_ops;
 mod send_sync;
+mod session_tracked_refusals;
 mod small_pivots;
 mod tensor_any_scalar;
 mod tensor_api_correction;

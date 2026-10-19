@@ -673,3 +673,39 @@ fn scalar_trait_helpers_cover_ordering_and_conversions() {
     assert!(debug.contains("BackendScalar"));
     assert!(debug.contains("dtype"));
 }
+
+/// The storage reduction dispatches over the storage's own dtype. A former "f64, otherwise c64"
+/// dispatch turned an `f32` payload into a `c64` scalar and widened a `c32` payload, so the test checks
+/// the scalar's dtype as well as its value for all four payloads.
+#[test]
+fn sum_from_storage_keeps_every_storage_dtype() {
+    let f32_storage = Storage::from_dense_col_major(vec![1.0_f32, 2.5], &[2]).unwrap();
+    let f64_storage = Storage::from_dense_col_major(vec![1.0_f64, -0.25], &[2]).unwrap();
+    let c32_storage = Storage::from_dense_col_major(
+        vec![Complex32::new(1.0, 2.0), Complex32::new(3.0, -1.0)],
+        &[2],
+    )
+    .unwrap();
+    let c64_storage = Storage::from_dense_col_major(
+        vec![Complex64::new(-0.5, 0.25), Complex64::new(2.0, 1.0)],
+        &[2],
+    )
+    .unwrap();
+
+    let sum = BackendScalar::sum_from_storage(&f32_storage);
+    assert_eq!(sum.as_native().dtype(), DType::F32);
+    assert_eq!(sum.real(), 3.5);
+    assert!(!sum.is_complex());
+
+    let sum = BackendScalar::sum_from_storage(&f64_storage);
+    assert_eq!(sum.as_native().dtype(), DType::F64);
+    assert_eq!(sum.real(), 0.75);
+
+    let sum = BackendScalar::sum_from_storage(&c32_storage);
+    assert_eq!(sum.as_native().dtype(), DType::C32);
+    assert_eq!(sum.as_c64(), Some(Complex64::new(4.0, 1.0)));
+
+    let sum = BackendScalar::sum_from_storage(&c64_storage);
+    assert_eq!(sum.as_native().dtype(), DType::C64);
+    assert_eq!(sum.as_c64(), Some(Complex64::new(1.5, 1.25)));
+}

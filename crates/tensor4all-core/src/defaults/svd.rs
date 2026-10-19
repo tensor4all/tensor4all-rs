@@ -36,6 +36,15 @@ pub enum SvdError {
     /// `max_bond_dim` is set to zero.
     #[error("max_bond_dim must be at least 1 when set")]
     InvalidMaxBondDim,
+    /// The operand storage cannot enter the runtime-free explicit-session route.
+    ///
+    /// The session routes publish plain host factors, so an AD-tracked operand would lose its graph;
+    /// they refuse it instead.
+    #[error("Unsupported storage type: {0}")]
+    UnsupportedStorage(
+        /// Description of the unsupported operand storage
+        &'static str,
+    ),
 }
 
 /// Options for SVD decomposition with truncation control.
@@ -644,6 +653,13 @@ fn retained_svd_rank(
 /// policy and the factor layout are shared with the eager route, while the decomposition runs on
 /// `session` and the factors are published as plain host-storage [`IdxTensor`]s. No session or eager
 /// runtime is entered here.
+///
+/// # Errors
+///
+/// Returns [`SvdError::UnsupportedStorage`] for an AD-tracked operand (the plain host factors would
+/// drop its graph), [`SvdError::InvalidThreshold`]/[`SvdError::InvalidMaxBondDim`] for invalid
+/// truncation options, and [`SvdError::ComputationError`] when the split, the session decomposition or
+/// a factor's publication fails.
 pub(crate) fn svd_for_factorize_on_session<T>(
     session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
     t: &IdxTensor,
@@ -656,6 +672,11 @@ where
     <T as TensorScalar>::Real: Into<f64>,
     T: num_traits::NumCast,
 {
+    if t.tracks_grad() {
+        return Err(SvdError::UnsupportedStorage(
+            crate::defaults::idx_tensor::TRACKED_SESSION_OPERAND_REFUSAL,
+        ));
+    }
     let (left_indices, right_indices, order) =
         unfold_index_sets(t, left_inds).map_err(|error| {
             SvdError::ComputationError(anyhow::anyhow!("Failed to unfold tensor: {error}"))

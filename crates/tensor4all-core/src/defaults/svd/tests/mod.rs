@@ -280,3 +280,41 @@ fn factorize_svd_reconstructs_complex_input_in_both_canonical_forms() {
         );
     }
 }
+
+/// The session SVD body is also a direct entry inside the crate; it must refuse a tracked operand
+/// before reading its host payload, exactly as the public factorize session entry does.
+#[test]
+fn svd_for_factorize_on_session_refuses_a_tracked_operand() {
+    use tensor4all_tensorbackend::CpuExecutionContext;
+
+    let context = CpuExecutionContext::from_backend(
+        tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend"),
+    );
+    let (rows, cols) = (Index::new_dyn(2), Index::new_dyn(2));
+    let tracked = IdxTensor::from_dense(vec![rows.clone(), cols], vec![1.0_f64, 2.0, 3.0, 4.0])
+        .unwrap()
+        .enable_grad()
+        .expect("tracked operand");
+    let error = match context.with_concrete_session(|session| {
+        svd_for_factorize_on_session::<f64>(
+            session,
+            &tracked,
+            std::slice::from_ref(&rows),
+            &SvdOptions::new(),
+        )
+    }) {
+        Ok(Err(error)) => error,
+        Ok(Ok(_)) => panic!("a tracked operand must be refused"),
+        Err(error) => panic!("the session entry failed: {error:?}"),
+    };
+    match error {
+        SvdError::UnsupportedStorage(message) => {
+            assert!(message.contains("tracked"), "{message}");
+        }
+        other => panic!("expected an unsupported-storage refusal, got {other:?}"),
+    }
+    assert!(
+        tracked.tracks_grad(),
+        "the refusal must not detach the graph"
+    );
+}

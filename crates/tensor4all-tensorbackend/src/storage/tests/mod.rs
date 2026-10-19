@@ -1513,3 +1513,46 @@ fn scale_target_dtype_follows_the_promotion_lattice() {
     assert!(scale_target_dtype(DType::I32, DType::F64).is_err());
     assert!(scale_target_dtype(DType::F64, DType::I64).is_err());
 }
+
+/// A real dynamic scalar keeps the real-scaling semantics for a complex payload.
+///
+/// Scaling a complex payload through the complex product computes `re * s - im * 0` and
+/// `re * 0 + im * s`, so `(1, +inf) * 1` would turn its real part into `inf * 0 = NaN`. The dynamic
+/// multiplication delegates a real scalar to the real implementation instead, which scales each
+/// component independently and preserves IEEE values.
+#[test]
+fn a_real_dynamic_scalar_keeps_a_complex_payloads_ieee_values() {
+    let storage = Storage::from_dense_col_major(
+        vec![
+            Complex64::new(1.0, f64::INFINITY),
+            Complex64::new(-2.0, f64::NEG_INFINITY),
+        ],
+        &[2],
+    )
+    .unwrap();
+
+    let scaled = &storage * BackendScalar::new_real(1.0);
+    assert!(scaled.is_c64(), "the payload keeps its dtype");
+    assert_eq!(
+        scaled.to_dense_c64_col_major_vec(&[2]).unwrap(),
+        vec![
+            Complex64::new(1.0, f64::INFINITY),
+            Complex64::new(-2.0, f64::NEG_INFINITY),
+        ]
+    );
+
+    let scaled = &storage * BackendScalar::new_real(2.0);
+    assert_eq!(
+        scaled.to_dense_c64_col_major_vec(&[2]).unwrap(),
+        vec![
+            Complex64::new(2.0, f64::INFINITY),
+            Complex64::new(-4.0, f64::NEG_INFINITY),
+        ]
+    );
+
+    // A complex scalar keeps the complex product: `(1 + inf i) * i` has real part `1*0 - inf*1`.
+    let rotated = &storage * BackendScalar::new_complex(0.0, 1.0);
+    let values = rotated.to_dense_c64_col_major_vec(&[2]).unwrap();
+    assert_eq!(values[0].re, f64::NEG_INFINITY);
+    assert!(values[0].im.is_nan());
+}

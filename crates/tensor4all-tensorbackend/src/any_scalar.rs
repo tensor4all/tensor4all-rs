@@ -107,11 +107,22 @@ impl ScalarValue {
     }
 }
 
+/// Snapshot a compact storage reduction as the dynamic scalar kind it was stored as.
+///
+/// The dispatch follows the storage's own dtype instead of assuming `f64` for every real payload: a
+/// narrow `f32` storage yields an `f32` scalar and a `c32` storage a `c32` scalar, exactly as
+/// [`SumFromStorage`] defines them, so a reduction never changes the scalar kind.
 fn scalar_value_from_storage(storage: &Storage) -> ScalarValue {
-    if storage.is_f64() {
-        ScalarValue::F64(f64::sum_from_storage(storage))
-    } else {
-        ScalarValue::C64(Complex64::sum_from_storage(storage))
+    match storage.dtype() {
+        DType::F32 => ScalarValue::F32(f32::sum_from_storage(storage)),
+        DType::F64 => ScalarValue::F64(f64::sum_from_storage(storage)),
+        DType::C32 => ScalarValue::C32(Complex32::sum_from_storage(storage)),
+        DType::C64 => ScalarValue::C64(Complex64::sum_from_storage(storage)),
+        // `Storage` wraps exactly the four floating payloads above, so no other dtype can be stored.
+        other => crate::invariant_violated(
+            "compact storage reduction",
+            format!("compact storage carries no {other:?} payload"),
+        ),
     }
 }
 

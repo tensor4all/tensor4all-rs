@@ -30,6 +30,12 @@
 //!    (arithmetic only: every patch measured its own norm contribution on the
 //!    session that built it) and every other rank returns `None`.
 //!
+//! Root-only work converges before it returns. Decoding a wave's wire outcomes
+//! and assembling the final result happen only on the root, so their failure is
+//! broadcast as a failing control - exactly like the wave control - rather than
+//! returning early: a peer must not be left waiting in the next broadcast, and
+//! it must not report success for a run the root could not assemble.
+//!
 //! The root wave is one patch, so it is one `pmap_lanes` item: it runs on one
 //! rank's lane, and the references it pins travel back to the root in its
 //! outcome. Running it on the root's held session instead would need a session
@@ -702,7 +708,6 @@ where
     V: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
 {
     let mut bonds: BTreeMap<usize, DynIndex> = BTreeMap::new();
-    let mut indices = Vec::with_capacity(subdomain.nodes.len());
     let mut names = Vec::with_capacity(subdomain.nodes.len());
     let mut tensors = Vec::with_capacity(subdomain.nodes.len());
     for node in subdomain.nodes {
@@ -742,7 +747,6 @@ where
                 .map_err(PartitionedTreeTNError::from)?,
         );
         names.push(name.clone());
-        indices.push(node.node);
     }
     let data = tensor4all_treetn::TreeTN::from_tensors(tensors, names)
         .map_err(PartitionedTreeTNError::from)?;
@@ -863,16 +867,6 @@ where
 // The distributed driver
 // ---------------------------------------------------------------------------
 
-/// One failing patch, with its message; the typed detail stays on its rank.
-#[derive(Debug)]
-struct ItemFailure(String);
-
-impl std::fmt::Display for ItemFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
 /// The MPI driver: the root orchestrates waves, every rank runs its share.
 struct MpiWaves<'a, 'lane, 'world, C, F> {
     world: &'world C,
@@ -917,7 +911,7 @@ where
         };
         let shared = Shared(evaluate);
         let outcome = pmap_lanes(world, lanes, options, items, |wire: WirePatch<T>, lane| {
-            let patch = decode_patch(&plan.layout, wire).map_err(ItemFailure)?;
+            let patch = decode_patch(&plan.layout, wire).map_err(|error| error.to_string())?;
             let mut local = decode_references(&start);
             let pins = if root_wave {
                 Pins::Root(&mut local)
@@ -932,19 +926,25 @@ where
                 .and_then(|run| encode_outcome(plan, run))
             {
                 Ok(outcome) => Ok(outcome),
-                Err(error) => Err(ItemFailure(error.to_string())),
+                // The typed detail stays on the rank that produced it; the scheduler carries the message.
+                Err(error) => Err(error.to_string()),
             }
         });
         let outcomes = outcome.map_err(|error| PatchedInterpolationError::FanOut {
             message: format!("the MPI scheduler failed: {error}"),
         })?;
         match outcomes {
-            Some(outcomes) => outcomes
-                .into_iter()
-                .map(|outcome| decode_outcome(plan, outcome))
-                .collect(),
+            Some(outcomes) => {
+                let decoded: Result<Vec<_>, _> = outcomes
+                    .into_iter()
+                    .map(|outcome| decode_outcome(plan, outcome))
+                    .collect();
+                // Decoding is root-only work, so it converges with the wave control before returning:
+                // a peer must not enter `agree` while the root bails out here.
+                agree_on_root_outcome(world, root, rank, decoded)
+            }
             // Every rank but the root owns no patches and no outcome.
-            None => Ok(Vec::new()),
+            None => agree_on_root_outcome(world, root, rank, Ok(Vec::new())),
         }
     }
 
@@ -980,6 +980,50 @@ where
             WireControl::Fail(message) => WaveControl::Fail(message),
         };
         Ok((control, decode_references(&agreed_references)))
+    }
+}
+
+/// Converge a root-only result before the next collective step.
+///
+/// Only the root can decode the wire outcomes of a wave or assemble the final partition, so a failure it
+/// observes there must fail every rank: a peer that kept going would either enter the next broadcast
+/// without a partner (stranding the run) or report success while the root fails. The root's result is
+/// reduced to a control and broadcast exactly as the wave control is, and every rank reads the agreed
+/// control in [`converge_root_outcome`].
+fn agree_on_root_outcome<C, R>(
+    world: &C,
+    root: i32,
+    rank: i32,
+    local: Result<R, PatchedInterpolationError>,
+) -> Result<R, PatchedInterpolationError>
+where
+    C: Communicator,
+{
+    let control = (rank == root).then(|| match &local {
+        Ok(_) => WireControl::Continue,
+        Err(error) => WireControl::Fail(error.to_string()),
+    });
+    let control =
+        broadcast(world, root, control).map_err(|error| PatchedInterpolationError::FanOut {
+            message: format!("the MPI result broadcast failed: {error}"),
+        })?;
+    converge_root_outcome(local, control)
+}
+
+/// The rank-local reading of the agreed control for a root-only result.
+///
+/// `Continue` keeps the rank's own result - the root's decoded outcomes or assembled partition, and a
+/// peer's empty placeholder - while `Fail` fails every rank with the converged message.
+fn converge_root_outcome<R>(
+    local: Result<R, PatchedInterpolationError>,
+    control: WireControl,
+) -> Result<R, PatchedInterpolationError> {
+    match control {
+        WireControl::Continue => local,
+        WireControl::Fail(message) => Err(PatchedInterpolationError::FanOut { message }),
+        WireControl::Stop => Err(PatchedInterpolationError::FanOut {
+            message: "invalid stop control for a root-only result".to_string(),
+        }),
     }
 }
 
@@ -1116,11 +1160,14 @@ where
         },
     };
     let merged = run_waves(&plan, &mut waves)?;
-    if rank == root {
-        Ok(Some(assemble(&plan, merged)?))
+    // Assembly is root-only, so its failure converges like the wave control; a peer must not report
+    // success for a run the root could not assemble.
+    let assembled = if rank == root {
+        assemble(&plan, merged).map(Some)
     } else {
         Ok(None)
-    }
+    };
+    agree_on_root_outcome(world, root, rank, assembled)
 }
 
 #[cfg(test)]
@@ -1386,5 +1433,57 @@ mod tests {
             other => panic!("expected an accepted outcome, got {other:?}"),
         }
         assert_eq!(back.totals.evaluations, 9);
+    }
+
+    /// A root-only result converges through the agreed control: a failure the root alone observed fails
+    /// every rank - including peers whose own placeholder result is `Ok` - and a success keeps each rank's
+    /// own result.
+    #[test]
+    fn a_root_only_result_converges_through_the_agreed_control() {
+        // The root succeeded: the control keeps its decoded outcomes.
+        assert_eq!(
+            converge_root_outcome(Ok::<u8, _>(7), WireControl::Continue).ok(),
+            Some(7)
+        );
+        // A peer keeps its placeholder when the root succeeded.
+        assert_eq!(
+            converge_root_outcome(
+                Ok::<Option<u8>, PatchedInterpolationError>(None),
+                WireControl::Continue,
+            )
+            .ok(),
+            Some(None)
+        );
+        // A root-only decode or assembly failure reaches every rank as the converged message, whatever
+        // their local placeholder says.
+        for local in [
+            Ok::<u8, PatchedInterpolationError>(0),
+            Err(PatchedInterpolationError::FanOut {
+                message: "local placeholder".to_string(),
+            }),
+        ] {
+            match converge_root_outcome(local, WireControl::Fail("root decode failed".to_string()))
+            {
+                Err(PatchedInterpolationError::FanOut { message }) => {
+                    assert_eq!(message, "root decode failed");
+                }
+                other => panic!("expected the converged failure, got {other:?}"),
+            }
+        }
+        // A local failure is never masked by an agreeing control.
+        assert!(matches!(
+            converge_root_outcome(
+                Err::<u8, _>(PatchedInterpolationError::FanOut {
+                    message: "local".to_string(),
+                }),
+                WireControl::Continue,
+            ),
+            Err(PatchedInterpolationError::FanOut { .. })
+        ));
+        // `Stop` is not a result control.
+        assert!(matches!(
+            converge_root_outcome(Ok(0_u8), WireControl::Stop),
+            Err(PatchedInterpolationError::FanOut { .. })
+        ));
     }
 }

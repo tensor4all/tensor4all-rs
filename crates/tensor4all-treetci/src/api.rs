@@ -163,17 +163,19 @@ where
 ///
 /// The same algorithm, options, stopping rule and streaming as [`crossinterpolate2`]; what differs is the
 /// resource the session-bound stages run in. Without a context they go through the process-global CPU context;
-/// with one, the two materializations - the one the global pivot search performs and the final one - run on
-/// the caller's context, through entries that consult no process-global context.
+/// with one, every numerical stage of the run - both materializations, the global-pivot readout and factor
+/// solves - runs on the caller's context, through entries that consult no process-global context.
 ///
-/// **What is not covered, so that this is a budget for part of the stage and not the whole run:** the caller's
-/// own evaluator, the pivot search's readout (which for a homogeneous single-index tree takes raw message
-/// kernels and cached columns, and can still reach the global session for larger grouped messages, narrow
-/// scalars or generic layouts), and physical tensor publication, which adopts into the process-global eager
-/// runtime. **A caller on a Rayon worker cannot use this entry point**: the concrete session entry rejects
-/// worker threads rather than silently serializing or falling back to the global context, so the run fails
-/// typed once a nonzero solve is reached. Call it from a thread that owns its execution, as the scoped and held
-/// CPU session entries require.
+/// **What the context does and does not cover.** The global-pivot search reads its approximation back through
+/// the session's typed cached-evaluator entry, so it neither builds an [`AnyScalar`](tensor4all_core::AnyScalar)
+/// nor enters the eager runtime, for grouped messages, narrow scalars and generic layouts alike. Physical
+/// tensor publication writes compact host storage, so the returned network stays usable after the context
+/// closes and no stage adopts a value into the process-global eager runtime. The caller's own evaluator runs on
+/// the calling thread with the context's session available through its [`EvalContext`], and it is never moved
+/// onto the context's workers. **A caller on a Rayon worker cannot use this entry point**: the concrete session
+/// entry rejects worker threads rather than silently serializing or falling back to the global context, so the
+/// run fails typed once a nonzero solve is reached. Call it from a thread that owns its execution, as the scoped
+/// and held CPU session entries require.
 ///
 /// # Errors
 ///
@@ -246,9 +248,10 @@ where
 /// Interpolate a tree tensor network on a caller-owned random stream and execution context.
 ///
 /// The caller-stream counterpart of [`crossinterpolate2_in`]: the supplied stream drives every global pivot
-/// search, and the optimizer's global-pivot work and the materialization solve run in `context`. The two are
-/// independent, so a caller can advance its own randomness across runs while keeping those stages' budget to
-/// itself. Physical tensor publication still adopts into the process-global eager runtime.
+/// search, and the optimizer's global-pivot work, its readout and the materialization solve run in `context`.
+/// The two are independent, so a caller can advance its own randomness across runs while keeping those stages'
+/// budget to itself. Physical tensor publication writes compact host storage, so nothing is adopted into the
+/// process-global eager runtime.
 ///
 /// # Errors
 ///
