@@ -142,6 +142,15 @@ where
         Ok(self)
     }
 
+    /// Drop any inherited absolute budget metadata.
+    ///
+    /// Used when a stage truncates with a relative policy instead, so a later
+    /// consumer cannot mistake a stale absolute budget for the active rule.
+    pub(crate) fn without_budget_squared(mut self) -> Self {
+        self.budget_squared = None;
+        self
+    }
+
     pub(crate) fn scalar_kind(&self) -> Result<Option<ScalarKind>> {
         validate_data(&self.data)
     }

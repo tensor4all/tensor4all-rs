@@ -122,6 +122,7 @@ fn adaptive_add_projects_original_addends_before_retrying() {
     let contraction = ContractionOptions::default().with_max_bond_dim(1);
     let patching = PatchingOptions {
         cutoff: 0.0,
+        allocation: BudgetAllocation::Volume,
         max_bond_dim: Some(1),
         patch_order: vec![site0.clone()],
         split_strategy: PatchSplitStrategy::Sequential,
@@ -168,6 +169,7 @@ fn exact_parameter_gain_can_choose_a_later_candidate() {
         .unwrap();
     let options = PatchingOptions {
         cutoff: 1.0e-24,
+        allocation: BudgetAllocation::Volume,
         max_bond_dim: Some(1),
         patch_order: vec![site0.clone(), site1.clone()],
         split_strategy: PatchSplitStrategy::ExactParameterGain,
@@ -381,6 +383,7 @@ fn run_group(
         ContractionOptions::default().with_svd_policy(SvdTruncationPolicy::new(1.0e-12));
     let patching = PatchingOptions {
         cutoff: 0.0,
+        allocation: BudgetAllocation::Volume,
         max_bond_dim: Some(2),
         patch_order,
         split_strategy,
@@ -469,4 +472,51 @@ fn sequential_without_split_index_returns_the_group_sum() {
         let error = dense_error(result, &group.expected);
         assert!(error < 1.0e-12, "max abs error {error}");
     }
+}
+
+#[test]
+fn thresholds_select_the_documented_svd_policies() {
+    use tensor4all_core::{SingularValueMeasure, ThresholdScale, TruncationRule};
+
+    let absolute = PatchThreshold::AbsoluteSquared(0.25).policy();
+    assert_eq!(
+        absolute,
+        SvdTruncationPolicy::new(0.25)
+            .with_absolute()
+            .with_squared_values()
+            .with_discarded_tail_sum()
+    );
+    assert_eq!(absolute.threshold, 0.25);
+    assert_eq!(absolute.scale, ThresholdScale::Absolute);
+
+    let relative = PatchThreshold::RelativeSquared(0.25).policy();
+    assert_eq!(
+        relative,
+        SvdTruncationPolicy::new(0.25)
+            .with_relative()
+            .with_squared_values()
+            .with_discarded_tail_sum()
+    );
+    assert_eq!(relative.scale, ThresholdScale::Relative);
+    assert_eq!(relative.measure, SingularValueMeasure::SquaredValue);
+    assert_eq!(relative.rule, TruncationRule::DiscardedTailSum);
+}
+
+#[test]
+fn norm_truncation_clears_inherited_absolute_budgets() {
+    let site = DynIndex::new_dyn(2);
+    let tensor = IdxTensor::from_dense(vec![site.clone()], vec![1.0_f64, 10.0]).unwrap();
+    let tree = TreeTN::from_tensors(vec![tensor], vec![0usize]).unwrap();
+    let subdomain = SubDomainTreeTN::from_treetn(tree).unwrap();
+    let budgets = assign_volume_budgets(vec![subdomain], 0.1, 101.0, 2).unwrap();
+    let inherited = budgets[0].budget_squared().unwrap();
+    assert!((inherited - 10.1).abs() < 1.0e-12);
+
+    let partition = PartitionedTreeTN::from_subdomains(budgets).unwrap();
+    let norm = truncate_adaptive(&partition, &0, 0.1, BudgetAllocation::Norm, None).unwrap();
+    assert_eq!(norm.values().next().unwrap().budget_squared(), None);
+    assert_eq!(norm.len(), 1);
+
+    let volume = truncate_adaptive(&partition, &0, 0.1, BudgetAllocation::Volume, None).unwrap();
+    assert!(volume.values().next().unwrap().budget_squared().is_some());
 }

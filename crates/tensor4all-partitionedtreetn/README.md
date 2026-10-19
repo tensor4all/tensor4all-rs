@@ -108,12 +108,24 @@ the deprecated `tensor4all-partitionedtt`; this crate carries
 
 ## Truncation convention
 
-The scalar adaptive truncation parameter is `PatchingOptions::cutoff`, a local
-discarded-weight cutoff following the ITensorMPS convention. One absolute local
-threshold `cutoff * ||F||^2 * volume_p / total_volume` is derived per operation
-and applied whole at every local SVD. It is **best effort** for the final
-whole-network error; `max_bond_dim` is a hard cap and takes precedence. No API
-in the existing adaptive-patching API claims a global relative-error bound.
+The scalar adaptive truncation parameter is `PatchingOptions::cutoff`, a
+non-negative dimensionless discarded-weight budget following the ITensorMPS
+convention. It is a **cross-patch budget**, not an SVD truncation-policy knob,
+and `PatchingOptions::allocation` selects how it is spread over the patches:
+
+- `BudgetAllocation::Volume` (default, arXiv:2602.22372): one absolute local
+  threshold `cutoff * ||F||^2 * volume_p / total_volume` is derived per
+  operation and applied whole at every local SVD, and a patch whose squared
+  norm is at most its threshold is dropped. This gives approximately uniform
+  absolute accuracy over the domain.
+- `BudgetAllocation::Norm`: every local SVD applies the relative squared
+  tail-sum cutoff `cutoff` — the same rule as an ITensor-style relative cutoff
+  in `TreeTN::truncate` — so each patch is accurate relative to itself, no patch
+  is dropped, and no absolute budget is inherited by projected children.
+
+Both are **best effort** for the final whole-network error; `max_bond_dim` is a
+hard cap and takes precedence. No API in the existing adaptive-patching API
+claims a global relative-error bound.
 
 ## Reconstruction with a global L2 tolerance
 
@@ -221,6 +233,7 @@ let result = add_with_patching(
         max_bond_dim: Some(1),
         patch_order: vec![site0],
         split_strategy: PatchSplitStrategy::Sequential,
+        ..PatchingOptions::default()
     },
 )?;
 

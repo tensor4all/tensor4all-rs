@@ -46,7 +46,8 @@ pub use error::{PartitionedTreeTNError, Result};
 pub use error_norm::{ErrorNorm, ErrorTolerance, L2Reference};
 pub use partitioned_tree_tn::PartitionedTreeTN;
 pub use patching::{
-    add_with_patching, contract_adaptive, truncate_adaptive, PatchSplitStrategy, PatchingOptions,
+    add_with_patching, contract_adaptive, truncate_adaptive, BudgetAllocation, PatchSplitStrategy,
+    PatchingOptions,
 };
 pub use projector::Projector;
 pub use subdomain_tree_tn::SubDomainTreeTN;

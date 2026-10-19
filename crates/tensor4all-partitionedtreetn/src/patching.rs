@@ -2,10 +2,13 @@
 //!
 //! The partition representation follows the independent Rust successor's
 //! relationship to [PartitionedMPSs.jl](https://github.com/tensor4all/PartitionedMPSs.jl).
-//! The volume-proportional absolute squared-tail policy follows the published
-//! method “Adaptive Patching for Tensor Train Computations”
-//! ([arXiv:2602.22372](https://arxiv.org/abs/2602.22372)). This module does not
-//! implement adaptive interpolation or copy TCIAlgorithms.jl code.
+//! The default (volume-proportional, absolute squared-tail) policy follows the
+//! published method “Adaptive Patching for Tensor Train Computations”
+//! ([arXiv:2602.22372](https://arxiv.org/abs/2602.22372));
+//! [`BudgetAllocation::Norm`] instead applies the local relative squared-tail
+//! policy of [`TreeTN::truncate`](tensor4all_treetn::TreeTN::truncate). This
+//! module does not implement adaptive interpolation or copy TCIAlgorithms.jl
+//! code.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -58,44 +61,101 @@ pub enum PatchSplitStrategy {
     ExactParameterGain,
 }
 
-/// Options for TreeTN-general adaptive patching and volume-proportional truncation.
+/// How the dimensionless [`PatchingOptions::cutoff`] is allocated to patches.
 ///
-/// The scalar truncation surface follows the ITensorMPS `cutoff` convention: a
-/// dimensionless discarded-**weight** cutoff applied at every local SVD as an
-/// absolute squared-tail budget proportional to the patch's share of the total
-/// volume (`local_cutoff_p = cutoff * ||F||^2 * volume_p / total_volume`). It is
-/// best effort for the final whole-network error. `max_bond_dim` is the
-/// post-truncation hard cap; `None` leaves the bond dimension uncapped. An
-/// empty `patch_order` lets adaptive patching consider all unprojected site
-/// indices in deterministic full-index order. A nonempty order may be partial,
-/// but every entry must be an exact full site-index identity of the input
-/// TreeTN with a compatible dimension.
+/// Both rules distribute the same total weight, because patch supports are
+/// disjoint (`Σ V_p = V` and `Σ ||F_p||² = ||F||²`); only the distribution
+/// differs. `cutoff` is therefore a cross-patch budget under `Volume`, not an
+/// SVD truncation knob; use [`SvdTruncationPolicy`](tensor4all_core::SvdTruncationPolicy)
+/// or `TreeTN` options for the latter.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_partitionedtreetn::{PatchSplitStrategy, PatchingOptions};
+/// use tensor4all_partitionedtreetn::{BudgetAllocation, PatchingOptions};
+///
+/// assert_eq!(BudgetAllocation::default(), BudgetAllocation::Volume);
+/// assert_eq!(PatchingOptions::default().allocation, BudgetAllocation::Volume);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BudgetAllocation {
+    /// Uniform absolute accuracy over the domain: patch `p` gets the absolute
+    /// squared-weight budget `cutoff * ||F||² * V_p / V` and is dropped when
+    /// `||F_p||²` is at most that budget.
+    ///
+    /// This is the default and follows arXiv:2602.22372. Small-magnitude,
+    /// large-volume regions are truncated hard or dropped, while a sharp peak
+    /// keeps a high relative precision and drives splits around itself.
+    #[default]
+    Volume,
+    /// Uniform relative accuracy per patch: every patch is truncated with the
+    /// actual relative squared tail-sum policy (threshold `cutoff`) of
+    /// [`TreeTN::truncate`](tensor4all_treetn::TreeTN::truncate), evaluated
+    /// separately at each local SVD.
+    ///
+    /// No patch is dropped, and no absolute budget is inherited by children:
+    /// split candidates are truncated with the same relative policy. This is
+    /// best effort for the whole network, like `Volume`.
+    Norm,
+}
+
+/// Options for TreeTN-general adaptive patching and truncation.
+///
+/// The scalar truncation surface follows the ITensorMPS `cutoff` convention: a
+/// dimensionless, non-negative global **discarded-weight** budget shared by
+/// the patches of one operation. [`BudgetAllocation`] selects how that budget
+/// is spread over the patches. Under the default [`BudgetAllocation::Volume`]
+/// each patch receives the absolute squared-tail budget
+/// `local_cutoff_p = cutoff * ||F||² * volume_p / total_volume`; under
+/// [`BudgetAllocation::Norm`] every local SVD instead applies the relative
+/// squared tail-sum cutoff `cutoff` of `TreeTN::truncate`. Either way `cutoff`
+/// is a cross-patch budget, not an SVD truncation-policy knob, and is best
+/// effort for the final whole-network error.
+///
+/// `max_bond_dim` is the post-truncation hard cap; `None` leaves the bond
+/// dimension uncapped. An empty `patch_order` lets adaptive patching consider
+/// all unprojected site indices in deterministic full-index order. A nonempty
+/// order may be partial, but every entry must be an exact full site-index
+/// identity of the input TreeTN with a compatible dimension.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtreetn::{
+///     BudgetAllocation, PatchSplitStrategy, PatchingOptions,
+/// };
 ///
 /// let options = PatchingOptions::default();
 /// assert_eq!(options.cutoff, 1.0e-24);
+/// assert_eq!(options.allocation, BudgetAllocation::Volume);
 /// assert_eq!(options.max_bond_dim, Some(100));
 /// assert!(options.patch_order.is_empty());
 /// assert_eq!(options.split_strategy, PatchSplitStrategy::ExactParameterGain);
 /// ```
 #[derive(Debug, Clone)]
 pub struct PatchingOptions {
-    /// Dimensionless discarded-weight cutoff used to derive each patch's
-    /// absolute squared-weight budget.
+    /// Dimensionless, non-negative discarded-weight budget shared across the
+    /// patches of one operation.
     ///
-    /// One absolute local threshold
-    /// `cutoff * ||F||^2 * volume_p / total_volume` is derived per operation
-    /// from the operation's input norm `||F||`, and that whole threshold is
-    /// applied independently at every local SVD of the patch. Smaller values
-    /// retain more information. `cutoff = 0` disables threshold truncation,
-    /// leaving only the hard `max_bond_dim` cap. This is best effort for the
-    /// final whole-network error: reuse across several bonds or repeated
-    /// truncation stages does not provide a global error bound.
+    /// Under [`BudgetAllocation::Volume`] the whole local threshold
+    /// `cutoff * ||F||² * volume_p / total_volume` is derived per operation
+    /// from the operation's input norm `||F||` and applied independently at
+    /// every local SVD of the patch. Under [`BudgetAllocation::Norm`] each
+    /// local SVD uses the relative squared tail-sum cutoff `cutoff` instead.
+    /// Smaller values retain more information. `cutoff = 0` disables threshold
+    /// truncation, leaving only the hard `max_bond_dim` cap. This is best
+    /// effort for the final whole-network error: reuse across several bonds or
+    /// repeated truncation stages does not provide a global error bound.
     pub cutoff: f64,
+
+    /// Rule that allocates [`Self::cutoff`] to patches.
+    ///
+    /// Defaults to [`BudgetAllocation::Volume`], which preserves the published
+    /// volume-proportional numerics. Use [`BudgetAllocation::Norm`] for a
+    /// per-patch relative accuracy that matches `TreeTN::truncate`'s relative
+    /// cutoff locally.
+    pub allocation: BudgetAllocation,
 
     /// Optional maximum retained bond dimension. `Some(0)` is invalid.
     ///
@@ -120,6 +180,7 @@ impl Default for PatchingOptions {
             // Behavior-parity translation of the superseded global `rtol =
             // 1e-12` via `cutoff = old_rtol^2`; see the design record.
             cutoff: 1.0e-24,
+            allocation: BudgetAllocation::Volume,
             max_bond_dim: Some(100),
             patch_order: Vec::new(),
             split_strategy: PatchSplitStrategy::default(),
@@ -140,8 +201,8 @@ impl Default for PatchingOptions {
 ///
 /// * `subdomains` - Eagerly masked patches with mutually disjoint projectors.
 /// * `center` - Existing named TreeTN node used as every truncation center.
-/// * `options` - Discarded-weight cutoff, bond cap, split order, and split
-///   strategy.
+/// * `options` - Discarded-weight budget and its [`BudgetAllocation`], bond
+///   cap, split order, and split strategy.
 ///
 /// # Returns
 ///
@@ -194,6 +255,7 @@ impl Default for PatchingOptions {
 ///         max_bond_dim: Some(1),
 ///         patch_order: vec![site0],
 ///         split_strategy: PatchSplitStrategy::Sequential,
+///         ..PatchingOptions::default()
 ///     },
 /// )?;
 /// assert_eq!(result.len(), 2);
@@ -223,10 +285,18 @@ where
     validate_patch_order(template, options)?;
 
     // Pin the reference squared norm and total volume once from the combined
-    // input partition. Split and re-truncation stages reuse these values so
-    // `cutoff` keeps meaning "fraction of the original weight" throughout the
-    // operation; child patches inherit volume-proportional cutoffs.
-    let (_, total_volume, reference_norm_squared) = patch_stats_and_totals(&partitioned)?;
+    // input partition. Split and re-truncation stages reuse these two numbers so
+    // under the `Volume` allocation `cutoff` keeps meaning "fraction of the
+    // original weight" throughout the operation and child patches inherit
+    // volume-proportional cutoffs. `Norm` needs neither value: every stage
+    // uses the per-factorization relative policy instead.
+    let reference = match options.allocation {
+        BudgetAllocation::Volume => {
+            let (_, total_volume, reference_norm_squared) = patch_stats_and_totals(&partitioned)?;
+            Some((total_volume, reference_norm_squared))
+        }
+        BudgetAllocation::Norm => None,
+    };
 
     let mut working = partitioned
         .into_iter()
@@ -234,13 +304,15 @@ where
         .collect::<Vec<_>>();
 
     loop {
-        working = assign_volume_budgets(
-            working,
-            options.cutoff,
-            reference_norm_squared,
-            total_volume,
-        )?;
-        working = budget_truncate_for_split_decision(working, center)?;
+        if let Some((total_volume, reference_norm_squared)) = reference {
+            working = assign_volume_budgets(
+                working,
+                options.cutoff,
+                reference_norm_squared,
+                total_volume,
+            )?;
+        }
+        working = budget_truncate_for_split_decision(working, center, options)?;
         let over_cap = working.iter().any(|subdomain| {
             options
                 .max_bond_dim
@@ -248,7 +320,13 @@ where
         });
         if !over_cap {
             let partitioned = PartitionedTreeTN::from_subdomains(working)?;
-            return truncate_adaptive(&partitioned, center, options.cutoff, options.max_bond_dim);
+            return truncate_adaptive(
+                &partitioned,
+                center,
+                options.cutoff,
+                options.allocation,
+                options.max_bond_dim,
+            );
         }
 
         let mut next = Vec::new();
@@ -269,7 +347,13 @@ where
 
         if !split_any {
             let partitioned = PartitionedTreeTN::from_subdomains(next)?;
-            return truncate_adaptive(&partitioned, center, options.cutoff, options.max_bond_dim);
+            return truncate_adaptive(
+                &partitioned,
+                center,
+                options.cutoff,
+                options.allocation,
+                options.max_bond_dim,
+            );
         }
         working = next;
     }
@@ -288,13 +372,14 @@ where
 /// * `right` - Second validated partition.
 /// * `center` - Existing node used by contraction and adaptive truncation.
 /// * `contract_options` - Non-dense TreeTN contraction method and rank policy.
-/// * `patching_options` - Output discarded-weight cutoff and bond cap.
+/// * `patching_options` - Output discarded-weight budget and its allocation,
+///   and bond cap.
 ///
 /// # Returns
 ///
 /// A new partition containing compatible pairwise contractions and their
-/// volume-proportionally truncated output patches. The whole-network error is
-/// best effort and is not bounded by `patching_options.cutoff`.
+/// truncated output patches. The whole-network error is best effort and is not
+/// bounded by `patching_options.cutoff`.
 ///
 /// # Errors
 ///
@@ -393,6 +478,7 @@ where
         &contracted,
         center,
         patching_options.cutoff,
+        patching_options.allocation,
         patching_options.max_bond_dim,
     )
 }
@@ -465,22 +551,45 @@ where
     if !saturated {
         return Ok(vec![probe]);
     }
-    let probe_norm = probe.norm_squared()?;
-    let probe_volume = subdomain_volume(&probe)?;
-    let probe = assign_volume_budgets(
-        vec![probe],
-        patching_options.cutoff,
-        probe_norm,
-        probe_volume,
-    )?
-    .pop()
-    .ok_or(PartitionedTreeTNError::Empty)?;
+    let probe = with_split_budget(probe, patching_options.cutoff, patching_options.allocation)?;
     let Some(index) = choose_split_index(&probe, center, patching_options)? else {
         return Ok(vec![probe]);
     };
     #[cfg(test)]
     DISCARDED_GROUP_PROBES.with(|count| count.set(count.get() + 1));
     split_group_project_first(&pairs, &index, center, contract_options, patching_options)
+}
+
+/// Attach the inherited per-patch budget a split decision needs, if the
+/// allocation has one.
+///
+/// [`BudgetAllocation::Volume`] derives the absolute budget of a single
+/// standalone patch (`cutoff * ||F_p||^2`); [`BudgetAllocation::Norm`] needs no
+/// absolute budget because split decisions use the relative policy directly, so
+/// any inherited absolute budget is left untouched and unused.
+fn with_split_budget<V>(
+    subdomain: SubDomainTreeTN<V>,
+    cutoff: f64,
+    allocation: BudgetAllocation,
+) -> Result<SubDomainTreeTN<V>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    match allocation {
+        BudgetAllocation::Volume => {
+            let reference_norm_squared = subdomain.norm_squared()?;
+            let total_volume = subdomain_volume(&subdomain)?;
+            assign_volume_budgets(
+                vec![subdomain],
+                cutoff,
+                reference_norm_squared,
+                total_volume,
+            )?
+            .pop()
+            .ok_or(PartitionedTreeTNError::Empty)
+        }
+        BudgetAllocation::Norm => Ok(subdomain),
+    }
 }
 
 #[cfg(test)]
@@ -569,16 +678,7 @@ where
     if probe.max_bond_dim() < cap {
         return Ok(vec![probe]);
     }
-    let probe_norm = probe.norm_squared()?;
-    let probe_volume = subdomain_volume(&probe)?;
-    let probe = assign_volume_budgets(
-        vec![probe],
-        patching_options.cutoff,
-        probe_norm,
-        probe_volume,
-    )?
-    .pop()
-    .ok_or(PartitionedTreeTNError::Empty)?;
+    let probe = with_split_budget(probe, patching_options.cutoff, patching_options.allocation)?;
     let Some(index) = choose_split_index(&probe, center, patching_options)? else {
         return Ok(vec![probe]);
     };
@@ -644,15 +744,20 @@ fn truncation_options_from_contract(options: &ContractionOptions) -> TruncationO
     truncation
 }
 
-/// Truncate a partition with volume-proportional absolute discarded-weight cutoffs.
+/// Truncate a partition with the budgets of one [`BudgetAllocation`] rule.
 ///
-/// The reference squared norm `||F||^2` and total patch volume are measured
-/// once from the eager stored patches. A patch receives the absolute local
-/// threshold `local_cutoff_p = cutoff * ||F||^2 * volume_p / total_volume`;
-/// its unprojected site dimensions define `volume`, while projected dimensions
+/// The reference squared norm `||F||²` and total patch volume are measured
+/// once from the eager stored patches. Under [`BudgetAllocation::Volume`] a
+/// patch receives the absolute local threshold
+/// `local_cutoff_p = cutoff * ||F||² * volume_p / total_volume`; its
+/// unprojected site dimensions define `volume`, while projected dimensions
 /// contribute one. That whole threshold is applied independently at every
-/// local SVD truncation of the patch. Patches whose norm is at most their
-/// local cutoff are dropped.
+/// local SVD truncation of the patch, and patches whose norm is at most their
+/// local cutoff are dropped. Under [`BudgetAllocation::Norm`] every local SVD
+/// of a patch instead applies the relative squared tail-sum policy with
+/// threshold `cutoff` (the ITensor-style relative cutoff of
+/// [`TreeTN::truncate`](tensor4all_treetn::TreeTN::truncate)), and no patch is
+/// dropped.
 ///
 /// # Best effort, not a global bound
 ///
@@ -668,13 +773,16 @@ fn truncation_options_from_contract(options: &ContractionOptions) -> TruncationO
 /// * `center` - Existing TreeTN node used for every local truncation.
 /// * `cutoff` - Finite non-negative dimensionless discarded-weight cutoff;
 ///   `cutoff = 0` disables threshold truncation.
+/// * `allocation` - Rule that spreads `cutoff` over the patches.
 /// * `max_bond_dim` - Optional positive maximum retained bond dimension.
 ///
 /// # Returns
 ///
-/// A new partition with the retained patches and their assigned absolute
-/// squared-cutoff metadata. The input partition is unchanged, including when
-/// truncation fails.
+/// A new partition with the retained patches. Under
+/// [`BudgetAllocation::Volume`] the patches also carry their assigned absolute
+/// squared-cutoff metadata; under [`BudgetAllocation::Norm`] they carry none,
+/// because their truncation was relative. The input partition is unchanged,
+/// including when truncation fails.
 ///
 /// # Errors
 ///
@@ -691,7 +799,7 @@ fn truncation_options_from_contract(options: &ContractionOptions) -> TruncationO
 /// ```
 /// use tensor4all_core::{DynIndex, IdxTensor};
 /// use tensor4all_partitionedtreetn::{
-///     truncate_adaptive, PartitionedTreeTN, Projector, SubDomainTreeTN,
+///     truncate_adaptive, BudgetAllocation, PartitionedTreeTN, Projector, SubDomainTreeTN,
 /// };
 /// use tensor4all_treetn::TreeTN;
 ///
@@ -708,15 +816,32 @@ fn truncation_options_from_contract(options: &ContractionOptions) -> TruncationO
 ///     make(vec![10.0_f64, 1.0e12], 0)?,
 ///     make(vec![1.0e12, 0.01], 1)?,
 /// ])?;
-/// let result = truncate_adaptive(&partition, &0, 0.1, Some(2))?;
-/// assert_eq!(result.len(), 1);
-/// assert!(result.contains(&Projector::from_pairs([(site, 0)])?));
+/// // Volume drops the negligible patch because its norm is below the budget.
+/// let dropped = truncate_adaptive(
+///     &partition,
+///     &0,
+///     0.1,
+///     BudgetAllocation::Volume,
+///     Some(2),
+/// )?;
+/// assert_eq!(dropped.len(), 1);
+/// assert!(dropped.contains(&Projector::from_pairs([(site.clone(), 0)])?));
+/// // Norm never drops a nonzero patch and keeps both.
+/// let kept = truncate_adaptive(
+///     &partition,
+///     &0,
+///     0.1,
+///     BudgetAllocation::Norm,
+///     Some(2),
+/// )?;
+/// assert_eq!(kept.len(), 2);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn truncate_adaptive<V>(
     partitioned: &PartitionedTreeTN<V>,
     center: &V,
     cutoff: f64,
+    allocation: BudgetAllocation,
     max_bond_dim: Option<usize>,
 ) -> Result<PartitionedTreeTN<V>>
 where
@@ -734,6 +859,24 @@ where
         .ok_or(PartitionedTreeTNError::Empty)?;
     ensure_center(template.data(), center)?;
 
+    match allocation {
+        BudgetAllocation::Volume => {
+            truncate_adaptive_volume(partitioned, center, cutoff, max_bond_dim)
+        }
+        BudgetAllocation::Norm => truncate_adaptive_norm(partitioned, center, cutoff, max_bond_dim),
+    }
+}
+
+/// Volume allocation: absolute, volume-proportional squared-tail budgets.
+fn truncate_adaptive_volume<V>(
+    partitioned: &PartitionedTreeTN<V>,
+    center: &V,
+    cutoff: f64,
+    max_bond_dim: Option<usize>,
+) -> Result<PartitionedTreeTN<V>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
     let (stats, total_volume, total_norm_squared) = patch_stats_and_totals(partitioned)?;
     if total_volume == 0 {
         return Ok(PartitionedTreeTN::new());
@@ -756,8 +899,44 @@ where
         }
 
         let mut subdomain = stat.subdomain;
-        truncate_subdomain_with_cutoff(&mut subdomain, center, local_cutoff_squared, max_bond_dim)?;
+        truncate_subdomain_with_threshold(
+            &mut subdomain,
+            center,
+            PatchThreshold::AbsoluteSquared(local_cutoff_squared),
+            max_bond_dim,
+        )?;
         retained.push(subdomain.with_budget_squared(local_cutoff_squared)?);
+    }
+
+    PartitionedTreeTN::from_subdomains(retained)
+}
+
+/// Norm allocation: per-patch relative squared tail-sum cutoffs.
+///
+/// Each patch is truncated with the relative policy, so no patch is dropped
+/// and no accumulated absolute budget is read or attached.
+fn truncate_adaptive_norm<V>(
+    partitioned: &PartitionedTreeTN<V>,
+    center: &V,
+    cutoff: f64,
+    max_bond_dim: Option<usize>,
+) -> Result<PartitionedTreeTN<V>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let mut retained = Vec::with_capacity(partitioned.len());
+    for subdomain in partitioned.values() {
+        let mut subdomain = subdomain.clone();
+        if !subdomain.norm_squared()?.is_finite() {
+            return Err(PartitionedTreeTNError::NonFiniteAdaptiveValue);
+        }
+        truncate_subdomain_with_threshold(
+            &mut subdomain,
+            center,
+            PatchThreshold::RelativeSquared(cutoff),
+            max_bond_dim,
+        )?;
+        retained.push(subdomain.without_budget_squared());
     }
 
     PartitionedTreeTN::from_subdomains(retained)
@@ -889,26 +1068,43 @@ where
 fn budget_truncate_for_split_decision<V>(
     subdomains: Vec<SubDomainTreeTN<V>>,
     center: &V,
+    options: &PatchingOptions,
 ) -> Result<Vec<SubDomainTreeTN<V>>>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     let mut retained = Vec::new();
     for mut subdomain in subdomains {
-        let budget_squared =
-            subdomain
-                .budget_squared()
-                .ok_or(PartitionedTreeTNError::InvalidOptions {
-                    operation: "patching",
-                    reason: "adaptive split decisions require assigned patch budgets",
-                })?;
-        if subdomain.norm_squared()? <= budget_squared {
-            continue;
-        }
-        truncate_subdomain_with_cutoff(&mut subdomain, center, budget_squared, None)?;
+        let threshold = match options.allocation {
+            BudgetAllocation::Volume => {
+                let budget_squared = inherited_budget_squared(&subdomain)?;
+                if subdomain.norm_squared()? <= budget_squared {
+                    continue;
+                }
+                PatchThreshold::AbsoluteSquared(budget_squared)
+            }
+            BudgetAllocation::Norm => PatchThreshold::RelativeSquared(options.cutoff),
+        };
+        truncate_subdomain_with_threshold(&mut subdomain, center, threshold, None)?;
         retained.push(subdomain);
     }
     Ok(retained)
+}
+
+/// Inherited absolute budget of one patch under [`BudgetAllocation::Volume`].
+///
+/// Split decisions need the budget that the enclosing operation assigned, so a
+/// missing budget is an internal option error rather than a default.
+fn inherited_budget_squared<V>(subdomain: &SubDomainTreeTN<V>) -> Result<f64>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    subdomain
+        .budget_squared()
+        .ok_or(PartitionedTreeTNError::InvalidOptions {
+            operation: "patching",
+            reason: "adaptive split decisions require assigned patch budgets",
+        })
 }
 
 fn patch_stats<V>(partitioned: &PartitionedTreeTN<V>) -> Result<Vec<PatchStats<V>>>
@@ -992,22 +1188,56 @@ fn checked_finite_sum(values: impl IntoIterator<Item = f64>) -> Result<f64> {
     })
 }
 
-/// Truncate one subdomain with its whole absolute discarded-weight threshold.
+/// Squared discarded-weight threshold applied at each local SVD of a patch.
 ///
-/// The whole `local_cutoff_squared` is passed to every local SVD of the
-/// truncation sweep. Reuse across several bonds or repeated truncation stages
-/// is intentional and best effort; it provides no global error bound, so there
-/// is no per-edge division and no consumable remaining-budget bookkeeping.
-fn truncate_subdomain_with_cutoff<V>(
+/// `AbsoluteSquared` is the `Volume` allocation's per-patch budget;
+/// `RelativeSquared` is the `Norm` allocation's per-factorization relative
+/// cutoff. Both use the squared-value measure and the discarded-tail-sum rule.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PatchThreshold {
+    /// Drop a suffix while its cumulative squared weight stays below this
+    /// absolute threshold.
+    AbsoluteSquared(f64),
+    /// Drop a suffix while its cumulative squared weight stays below this
+    /// fraction of the factorization's own total squared weight.
+    RelativeSquared(f64),
+}
+
+impl PatchThreshold {
+    fn threshold(self) -> f64 {
+        match self {
+            Self::AbsoluteSquared(threshold) | Self::RelativeSquared(threshold) => threshold,
+        }
+    }
+
+    fn policy(self) -> SvdTruncationPolicy {
+        let policy = SvdTruncationPolicy::new(self.threshold())
+            .with_squared_values()
+            .with_discarded_tail_sum();
+        match self {
+            Self::AbsoluteSquared(_) => policy.with_absolute(),
+            Self::RelativeSquared(_) => policy.with_relative(),
+        }
+    }
+}
+
+/// Truncate one subdomain with its whole discarded-weight threshold.
+///
+/// The whole `threshold` is passed to every local SVD of the truncation sweep.
+/// Reuse across several bonds or repeated truncation stages is intentional and
+/// best effort; it provides no global error bound, so there is no per-edge
+/// division and no consumable remaining-budget bookkeeping.
+fn truncate_subdomain_with_threshold<V>(
     subdomain: &mut SubDomainTreeTN<V>,
     center: &V,
-    local_cutoff_squared: f64,
+    threshold: PatchThreshold,
     max_bond_dim: Option<usize>,
 ) -> Result<()>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    if !local_cutoff_squared.is_finite() || local_cutoff_squared < 0.0 {
+    let cutoff = threshold.threshold();
+    if !cutoff.is_finite() || cutoff < 0.0 {
         return Err(PartitionedTreeTNError::NonFiniteAdaptiveValue);
     }
     if max_bond_dim == Some(0) {
@@ -1017,14 +1247,10 @@ where
         });
     }
 
-    // Absolute discarded-tail-sum cutoff on squared singular values: the local
+    // Discarded-tail-sum cutoff on squared singular values: the local
     // factorization drops a suffix while its cumulative squared discarded
-    // weight stays below `local_cutoff_squared`.
-    let policy = SvdTruncationPolicy::new(local_cutoff_squared)
-        .with_absolute()
-        .with_squared_values()
-        .with_discarded_tail_sum();
-    let mut options = TruncationOptions::default().with_svd_policy(policy);
+    // weight stays below the (absolute or relative) threshold.
+    let mut options = TruncationOptions::default().with_svd_policy(threshold.policy());
     if let Some(max_bond_dim) = max_bond_dim {
         options = options.with_max_bond_dim(max_bond_dim);
     }
@@ -1040,7 +1266,7 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     choose_split_index(subdomain, center, options)?
-        .map(|index| split_subdomain(subdomain, &index))
+        .map(|index| split_subdomain(subdomain, &index, options.allocation))
         .transpose()
 }
 
@@ -1114,6 +1340,12 @@ where
     Ok(best.map(|(_, index)| index))
 }
 
+/// Count the logical parameters of the truncated children of one split.
+///
+/// The truncation of each projected child follows the active allocation:
+/// an inherited absolute budget under [`BudgetAllocation::Volume`] (children
+/// below it contribute nothing) and the relative policy under
+/// [`BudgetAllocation::Norm`] (no child is discarded).
 fn split_child_parameter_count<V>(
     subdomain: &SubDomainTreeTN<V>,
     center: &V,
@@ -1123,19 +1355,19 @@ fn split_child_parameter_count<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    let children = split_subdomain(subdomain, index)?;
+    let children = split_subdomain(subdomain, index, options.allocation)?;
     children.into_iter().try_fold(0usize, |total, mut child| {
-        let budget_squared =
-            child
-                .budget_squared()
-                .ok_or(PartitionedTreeTNError::InvalidOptions {
-                    operation: "patching",
-                    reason: "adaptive split decisions require assigned patch budgets",
-                })?;
-        if child.norm_squared()? <= budget_squared {
-            return Ok(total);
-        }
-        truncate_subdomain_with_cutoff(&mut child, center, budget_squared, options.max_bond_dim)?;
+        let threshold = match options.allocation {
+            BudgetAllocation::Volume => {
+                let budget_squared = inherited_budget_squared(&child)?;
+                if child.norm_squared()? <= budget_squared {
+                    return Ok(total);
+                }
+                PatchThreshold::AbsoluteSquared(budget_squared)
+            }
+            BudgetAllocation::Norm => PatchThreshold::RelativeSquared(options.cutoff),
+        };
+        truncate_subdomain_with_threshold(&mut child, center, threshold, options.max_bond_dim)?;
         let child_count = logical_parameter_count(&child)?;
         total
             .checked_add(child_count)
@@ -1167,9 +1399,16 @@ where
     Ok(total)
 }
 
+/// Split one patch along `index` into one child per coordinate.
+///
+/// Under [`BudgetAllocation::Volume`] each child inherits an equal share of the
+/// parent's assigned absolute budget. Under [`BudgetAllocation::Norm`] no
+/// absolute budget is inherited or carried: children are truncated with the
+/// relative policy when a split decision needs it.
 fn split_subdomain<V>(
     subdomain: &SubDomainTreeTN<V>,
     index: &tensor4all_core::DynIndex,
+    allocation: BudgetAllocation,
 ) -> Result<Vec<SubDomainTreeTN<V>>>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
@@ -1181,9 +1420,12 @@ where
         });
     }
 
-    let child_budget_squared = subdomain
-        .budget_squared()
-        .map(|budget_squared| budget_squared / index.dim as f64);
+    let child_budget_squared = match allocation {
+        BudgetAllocation::Volume => subdomain
+            .budget_squared()
+            .map(|budget_squared| budget_squared / index.dim as f64),
+        BudgetAllocation::Norm => None,
+    };
     let mut children = Vec::with_capacity(index.dim);
     for value in 0..index.dim {
         let projector = Projector::from_pairs([(index.clone(), value)])?;
@@ -1192,6 +1434,7 @@ where
             .ok_or(PartitionedTreeTNError::ProjectorConflict)?;
         children.push(match child_budget_squared {
             Some(budget_squared) => child.with_budget_squared(budget_squared)?,
+            None if allocation == BudgetAllocation::Norm => child.without_budget_squared(),
             None => child,
         });
     }

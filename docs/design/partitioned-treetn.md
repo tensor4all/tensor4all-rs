@@ -185,8 +185,13 @@ The public signatures are:
 ```text
 add_with_patching<V>(Vec<SubDomainTreeTN<V>>, &V, &PatchingOptions)
     -> Result<PartitionedTreeTN<V>>
-truncate_adaptive<V>(&PartitionedTreeTN<V>, &V, f64, Option<usize>)
-    -> Result<PartitionedTreeTN<V>>
+truncate_adaptive<V>(
+    &PartitionedTreeTN<V>,
+    &V,
+    f64,
+    BudgetAllocation,
+    Option<usize>,
+) -> Result<PartitionedTreeTN<V>>
 contract_adaptive<V>(
     &PartitionedTreeTN<V>,
     &PartitionedTreeTN<V>,
@@ -196,23 +201,35 @@ contract_adaptive<V>(
 ) -> Result<PartitionedTreeTN<V>>
 ```
 
-`PatchingOptions` contains `cutoff`, `max_bond_dim`, a partial full-index
-`patch_order`, and `split_strategy`. `PatchSplitStrategy::Sequential` follows
+`PatchingOptions` contains `cutoff`, `allocation`, `max_bond_dim`, a partial
+full-index `patch_order`, and `split_strategy`. `PatchSplitStrategy::Sequential` follows
 that order; `ExactParameterGain` evaluates all available candidates. Split
 candidates are full external indices and remain independent of tree traversal
 order. Multiple external indices on one node are supported.
 
-### Truncation convention: local discarded-weight `cutoff`
+### Truncation convention: cross-patch discarded-weight `cutoff`
 
 The scalar truncation surface follows the ITensorMPS convention: `cutoff`
 bounds the discarded singular-value **weight** (sum of squared singular
-values) at each local factorization. It is best effort for the final
-whole-network norm error; `max_bond_dim` is a hard cap and takes precedence
-over `cutoff`. No API claims a global relative-error bound.
+values). It is best effort for the final whole-network norm error;
+`max_bond_dim` is a hard cap and takes precedence over `cutoff`. No API claims
+a global relative-error bound.
 
 `cutoff` is a direct discarded-weight threshold, not a re-labelled relative
 tolerance. The default is `cutoff = 1e-24`, the exact square of the superseded
 global `rtol = 1e-12`, so existing callers see behavior-parity compression.
+
+`cutoff` is a **cross-patch budget**, not an SVD truncation-policy knob, and
+`BudgetAllocation` (default `Volume`) states how it is spread over the patches.
+`Volume` keeps the published absolute allocation: patch `p` gets
+`cutoff * ||F||² * volume_p / V` and is dropped when its squared norm is at most
+that value. `Norm` instead applies the relative squared tail-sum cutoff
+`cutoff` at each local SVD — the ITensor-style relative `SvdTruncationPolicy`
+of `TreeTN::truncate` — so each patch is truncated relative to its own weight,
+no patch is dropped, and projected children inherit no absolute budget. Both
+rules distribute the same total weight because patch supports are disjoint.
+Use `SvdTruncationPolicy` directly for public per-factorization SVD truncation;
+`cutoff` never selects scale, measure, or rank rule by itself.
 Core relative singular-value policies remain available as
 `SvdTruncationPolicy`; for the explicit absolute-squared policy used by
 adaptive patching below, callers translating the old root-relative

@@ -171,10 +171,17 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
 - `Projector` — maps full `DynIndex` identities to zero-based coordinates.
 - `SubDomainTreeTN<V>` — eagerly masked TreeTN plus its projector.
 - `PartitionedTreeTN<V>` — homogeneous, pairwise-disjoint patches.
-- `PatchingOptions { cutoff, max_bond_dim, patch_order, split_strategy }` —
-  `cutoff` is a local discarded-weight cutoff (ITensorMPS convention): each
-  patch gets absolute threshold `cutoff · ‖F‖² · volume_p/total_volume`,
-  applied whole per local SVD, best effort (no global error bound).
+- `PatchingOptions { cutoff, allocation, max_bond_dim, patch_order,
+  split_strategy }` — `cutoff` is a non-negative discarded-weight budget shared
+  across patches (ITensorMPS `cutoff` convention), not an SVD truncation-policy
+  knob, and best effort (no global error bound). `allocation:
+  BudgetAllocation` selects how it is spread: `Volume` (default) gives each
+  patch the absolute threshold `cutoff · ‖F‖² · volume_p/total_volume`, applied
+  whole per local SVD, and drops a patch whose squared norm is at most its
+  threshold; `Norm` applies the relative squared tail-sum cutoff `cutoff` at
+  every local SVD (the ITensor-style relative `TreeTN::truncate` rule), never
+  drops a nonzero patch, and inherits no absolute budget to projected children.
+  `BudgetAllocation` is `#[non_exhaustive]`.
 - `PatchSplitStrategy::{Sequential, ExactParameterGain}` — exact gain uses
   checked logical local tensor element counts after child truncation.
 - `add_with_patching(patches, &center, &options)` — split over-cap patches.
@@ -217,8 +224,10 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   (`UnsupportedNorm`). Zero patches are in `report.zero_patches` (absent from
   the partition); supply pivots in the support of sparse functions. Patches
   with at most one free site are exact; every point is evaluated at most once.
-- `truncate_adaptive(&partition, &center, cutoff, max_bond_dim)` — assign
-  volume-proportional absolute local cutoffs and drop patches at/below theirs.
+- `truncate_adaptive(&partition, &center, cutoff, allocation, max_bond_dim)` —
+  apply the selected allocation; `Volume` assigns volume-proportional absolute
+  local cutoffs and drops patches at/below theirs, `Norm` truncates every patch
+  relative to itself.
 - `contract_adaptive(&left, &right, &center, &contract_options, &patching_options)` —
   contract and retruncate against the corrected output norm.
 - `reconstruction::ReconstructionTarget::from_partition(&partition)` — immutable
