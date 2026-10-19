@@ -74,26 +74,10 @@ pub enum MPOError {
     #[error("Invalid boundary conditions: first tensor must have left_dim=1, last tensor must have right_dim=1")]
     InvalidBoundary,
 
-    /// Invalid orthogonality center
-    #[error("Invalid orthogonality center: {center} is out of range [0, {max})")]
-    InvalidCenter {
-        /// The invalid center value
-        center: usize,
-        /// The maximum allowed center value
-        max: usize,
-    },
-
     /// Factorization error
     #[error("Factorization failed: {message}")]
     FactorizationError {
         /// Description of the factorization failure
-        message: String,
-    },
-
-    /// Operation is not implemented by this backend.
-    #[error("Unsupported operation: {message}")]
-    Unsupported {
-        /// Description of the unsupported operation.
         message: String,
     },
 
@@ -107,13 +91,4 @@ pub enum MPOError {
     /// Matrix CI error
     #[error("Matrix CI error: {0}")]
     MatrixCI(#[from] tensor4all_core::MatrixCIError),
-
-    /// Convergence failure
-    #[error("Failed to converge after {sweeps} sweeps (final error: {error})")]
-    ConvergenceFailure {
-        /// The number of sweeps performed before failure
-        sweeps: usize,
-        /// The final error value achieved
-        error: f64,
-    },
 }
