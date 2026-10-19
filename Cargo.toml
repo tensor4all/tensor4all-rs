@@ -100,8 +100,8 @@ hdf5-metno = { version = "0.12", default-features = false }
 ndarray = "0.17"
 quanticsgrids = { git = "https://github.com/tensor4all/quanticsgrids-rs", rev = "8214b72" }
 hdf5-rt = { git = "https://github.com/tensor4all/hdf5-rt", default-features = false }
-hataori = { git = "https://github.com/tensor4all/hataori-rs.git", rev = "e105c490574ce1d8178969fb7a84a0b58fa2127d", default-features = false }
-hataori-tenferro = { git = "https://github.com/tensor4all/hataori-rs.git", rev = "e105c490574ce1d8178969fb7a84a0b58fa2127d" }
+hataori = { git = "https://github.com/tensor4all/hataori-rs.git", rev = "da3eb2e0206f051c97f41e4db2773b827cf45c59", default-features = false }
+hataori-tenferro = { git = "https://github.com/tensor4all/hataori-rs.git", rev = "da3eb2e0206f051c97f41e4db2773b827cf45c59" }
 tenferro = { package = "tenferro-runtime", git = "https://github.com/tensor4all/tenferro-rs.git", rev = "74aa7fac31490f7773978e6fc2b1e80391018b73", default-features = false }
 tenferro-ad = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "74aa7fac31490f7773978e6fc2b1e80391018b73", default-features = false }
 tenferro-cpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "74aa7fac31490f7773978e6fc2b1e80391018b73", default-features = false }
