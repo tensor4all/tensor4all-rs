@@ -6,7 +6,7 @@
   "crates/tensor4all-core/src/matrixluci/source.rs:108:assert_eq",
   "crates/tensor4all-core/src/matrixluci/source.rs:135:assert",
   "crates/tensor4all-core/src/matrixluci/source.rs:140:assert_eq",
-  "crates/tensor4all-partitionedtreetn/src/adaptive_interpolation/cache.rs:226:debug_assert",
+  "crates/tensor4all-partitionedtreetn/src/adaptive_interpolation/cache.rs:227:debug_assert",
   "crates/tensor4all-tensorbackend/src/matrix.rs:1042:assert",
   "crates/tensor4all-tensorbackend/src/matrix.rs:1047:assert_eq",
   "crates/tensor4all-tensorbackend/src/matrix.rs:1594:assert",

@@ -26,14 +26,34 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use serde_json::json;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+use tensor4all_tensorbackend::explicit::{HeldSession, Session};
+use tensor4all_tensorbackend::CpuExecutionContext;
 use tensor4all_treetci::{TreeTciInterpolator, TreeTciOptions};
 use tensor4all_treetn::interpolation::{
-    InterpolationError, InterpolationProblem, TreeInterpolator,
+    EvalContext, InterpolationError, InterpolationProblem, Parallelism, TreeInterpolator,
 };
 use tensor4all_treetn::{NodeNameNetwork, TreeTN};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 type Name = String;
+
+/// Run `body` with one explicit execution capability over a held session.
+fn with_eval_context<R>(body: impl FnOnce(&mut EvalContext<'_>) -> R) -> R {
+    let context = CpuExecutionContext::from_backend(
+        tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend"),
+    );
+    let backend: tenferro_cpu::CpuBackend = context.with_backend(|backend| backend.clone());
+    let mut held = HeldSession::open(&backend).expect("held session");
+    let result = held.with_session(|view| {
+        let mut ctx = EvalContext::new(
+            Session::from_backend_session(view.backend()),
+            Parallelism::Serial,
+        );
+        body(&mut ctx)
+    });
+    held.close().expect("affinity restores");
+    result
+}
 type Network = TreeTN<tensor4all_core::IdxTensor, Name>;
 
 const RTOL: f64 = 1.0e-4;
@@ -656,7 +676,9 @@ fn run() -> Result<()> {
             )?;
             let requested = AtomicUsize::new(0);
             let unique: Mutex<HashSet<u128>> = Mutex::new(HashSet::new());
-            let evaluate = |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+            let evaluate = |batch: ColMajorArrayRef<'_, usize>,
+                            _ctx: &mut EvalContext<'_>|
+             -> anyhow::Result<Vec<f64>> {
                 let n = batch.shape()[1];
                 requested.fetch_add(n, Ordering::Relaxed);
                 let mut out = Vec::with_capacity(n);
@@ -674,7 +696,7 @@ fn run() -> Result<()> {
             let rss_before = proc_status("VmRSS:");
             reset_hwm();
             let t0 = Instant::now();
-            let outcome = engine.interpolate(&problem, evaluate);
+            let outcome = with_eval_context(|ctx| engine.interpolate(&problem, ctx, evaluate));
             let secs = t0.elapsed().as_secs_f64();
             let hwm = proc_status("VmHWM:");
             peak_hwm = peak_hwm.max(hwm);

@@ -7,6 +7,23 @@
 //! splitting. The result is a [`PartitionedTreeTN`] with disjoint, eagerly
 //! masked patches, together with a [`PatchedInterpolationReport`].
 //!
+//! # Execution and publication
+//!
+//! Every numerical step of a run - the engine call, the re-embedding of fixed
+//! sites, the measurement of a stored patch and the readout of its norm - runs
+//! on the one session of the caller's [`EvalContext`]. The evaluator receives
+//! that same context, so a caller-owned execution capability reaches every
+//! stage and an evaluator that needs numerical work of its own can issue it on
+//! the session. No step enters the process-global session, an eager runtime or
+//! a thread-local default, so a run completes while another thread holds the
+//! process-global backend and needs no warm-up of it.
+//!
+//! The publication boundary is explicit: every patch network is published as
+//! compact dense host storage (`IdxTensor`) on the caller's session, never
+//! adopted into the process-global eager runtime. The returned
+//! [`PartitionedTreeTN`] and [`PatchedInterpolationReport`] are therefore
+//! usable after the session has closed.
+//!
 //! # Derivation notice
 //!
 //! The patch queue, the accept-or-split flow, and pivot recycling are derived
@@ -235,12 +252,13 @@
 //! let values: Vec<f64> = (0..8).map(|x| 1.0 / (1.0 + x as f64)).collect();
 //! let norm = values.iter().map(|v| v * v).sum::<f64>().sqrt();
 //! let f = |point: &[usize]| 1.0 / (1.0 + (point[0] + 2 * point[1] + 4 * point[2]) as f64);
-//! let evaluate = |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+//! let evaluate = |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 //!     Ok(batch.data().chunks(3).map(f).collect())
 //! };
 //! let options = PatchedInterpolationOptions::new(2)
 //!     .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
 //!     .with_tolerance(ErrorTolerance { rtol: 1e-12, atol: 0.0 });
+//! let pivots = ColMajorArray::new(vec![0, 0, 0], vec![3, 1])?;
 //! let result = {
 //!     let context = CpuExecutionContext::from_backend(
 //!         CpuBackend::with_threads(1).expect("1T CPU backend"),
@@ -256,7 +274,7 @@
 //!             &TreeTciInterpolator::default(),
 //!             topology,
 //!             node_sites,
-//!             ColMajorArray::new(vec![0, 0, 0], vec![3, 1])?,
+//!             pivots,
 //!             &mut ctx,
 //!             evaluate,
 //!             &options,
@@ -368,7 +386,7 @@ pub use report::{
 ///         topology,
 ///         BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
 ///         ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
-///         |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///         |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///             Ok(vec![1.0; batch.shape()[1]])
 ///         },
 ///         options,
@@ -506,14 +524,19 @@ impl From<PartitionedTreeTNError> for PatchedInterpolationError {
 ///   ([`EvalContext::new`]) for a serial run, or a scheduler lane's context once
 ///   the caller owns the lanes.
 /// * `evaluate` - Batch evaluator. It receives a column-major
-///   `[n_sites, n_points]` array of full-domain points in site order and
-///   returns one finite value per point, with a finite magnitude.
+///   `[n_sites, n_points]` array of full-domain points in site order and the
+///   run's context, and returns one finite value per point, with a finite
+///   magnitude. An evaluator that needs numerical work of its own issues it
+///   through the context's session; an evaluator that only computes host
+///   values can ignore the context.
 /// * `options` - See [`PatchedInterpolationOptions`].
 ///
 /// # Returns
 ///
 /// The partition of accepted patches (eagerly masked, every site index
-/// retained, one dtype `T`) and a [`PatchedInterpolationReport`].
+/// retained, one dtype `T`) and a [`PatchedInterpolationReport`]. Both are
+/// published as compact dense host storage on the caller's session, so they
+/// stay usable after the session closes.
 ///
 /// # Errors
 ///
@@ -625,7 +648,7 @@ impl From<PartitionedTreeTNError> for PatchedInterpolationError {
 ///     topology,
 ///     node_sites,
 ///     ColMajorArray::new(vec![1, 2, 2], vec![3, 1]).unwrap(), &mut ctx,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().chunks(3).map(f).collect())
 ///     },
 ///     &options,
@@ -659,7 +682,7 @@ where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
     E: TreeInterpolator<T> + Sync,
-    F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>> + Send + Sync,
+    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
     if matches!(
         options.error_norm,
@@ -672,7 +695,7 @@ where
     let layout = SiteLayout::validated(topology, node_sites, &initial_pivots, options)?;
     let driver = Driver {
         engine,
-        evaluate: &evaluate,
+        evaluate: RefCell::new(evaluate),
         layout,
         initial_pivots,
         options,
@@ -900,7 +923,9 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     engine: &'a E,
-    evaluate: &'a F,
+    /// The caller's evaluator. `FnMut` has one owner, and every stage that
+    /// samples the function borrows it briefly through this cell.
+    evaluate: RefCell<F>,
     layout: SiteLayout<V>,
     initial_pivots: ColMajorArray<usize>,
     options: &'a PatchedInterpolationOptions,
@@ -922,7 +947,7 @@ where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
     E: TreeInterpolator<T>,
-    F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
+    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
     fn is_l2(&self) -> bool {
         matches!(self.options.error_norm, ErrorNorm::L2 { .. })
@@ -1021,7 +1046,7 @@ where
         // Canonical order: lexicographic over the (position, coordinate) path.
         accepted.sort_by(|left, right| left.0.cmp(&right.0));
         zeros.sort_by(|left, right| left.0.cmp(&right.0));
-        let norm = self.norm_report(&accepted, &zeros)?;
+        let norm = self.norm_report(&accepted, &zeros, ctx)?;
         let mut records = Vec::with_capacity(accepted.len());
         let mut subdomains = Vec::with_capacity(accepted.len());
         for (_, entry) in accepted {
@@ -1054,6 +1079,7 @@ where
         &self,
         accepted: &[(Vec<(usize, usize)>, Accepted<V>)],
         zeros: &[(Vec<(usize, usize)>, ZeroPatchRecord, f64)],
+        ctx: &mut EvalContext<'_>,
     ) -> Result<NormReport, PatchedInterpolationError> {
         if !self.is_l2() {
             let (max_reference, source) = self
@@ -1098,15 +1124,11 @@ where
         let contributions: Vec<Contribution<'_>> =
             contributions.into_iter().map(|(_, c)| c).collect();
 
-        let approximation_rms = verify::approximation_rms(
-            accepted.iter().map(|(_, entry)| {
-                (
-                    entry.subdomain.data().clone().log_norm(),
-                    entry.patch_points,
-                )
-            }),
-            domain_points,
-        );
+        let approximations = accepted.iter().map(|(_, entry)| {
+            let mut data = entry.subdomain.data().clone();
+            (data.log_norm_on_session(ctx.session()), entry.patch_points)
+        });
+        let approximation_rms = verify::approximation_rms(approximations, domain_points);
         // The rounding model scales with the coarsest precision the patch
         // networks were evaluated in.
         let mut epsilon = f64::EPSILON;
@@ -1144,7 +1166,7 @@ where
         cache: PatchCache<T>,
     ) -> PatchSampler<'s, T, F> {
         PatchSampler {
-            evaluate: self.evaluate,
+            evaluate: &self.evaluate,
             fixed,
             n_active,
             counters: &self.counters,
@@ -1161,9 +1183,10 @@ where
         plan: PointPlan,
         audit: bool,
         projector: &Projector,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<Measured, PatchedInterpolationError> {
         let before = self.counters.evaluations.get();
-        let measured = verify::measure(sampler, target, plan);
+        let measured = verify::measure(sampler, target, plan, ctx);
         let added = self.counters.evaluations.get() - before;
         Counters::add(&self.measurement_evaluations, added);
         if audit {
@@ -1181,6 +1204,7 @@ where
         acceptance: &L2Measurement,
         seeds: &PatchSeeds,
         projector: &Projector,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<Option<L2Measurement>, PatchedInterpolationError> {
         if acceptance.method != MeasurementMethod::Sampled || !self.options.verification.audit {
             return Ok(None);
@@ -1189,7 +1213,7 @@ where
             count: self.options.verification.samples,
             seed: seeds.audit(),
         };
-        let audit = self.measure(sampler, target, plan, true, projector)?;
+        let audit = self.measure(sampler, target, plan, true, projector, ctx)?;
         Ok(Some(audit.measurement))
     }
 
@@ -1212,6 +1236,7 @@ where
         zero_target: &MeasureTarget<'_, V>,
         seeds: &PatchSeeds,
         projector: &Projector,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<(), PatchedInterpolationError> {
         let samples = self.options.verification.samples;
         let plan = PointPlan::Sampled {
@@ -1219,7 +1244,7 @@ where
             seed: seeds.scale(),
         };
         // The residual of the zero approximation is |f|.
-        let estimate = self.measure(sampler, zero_target, plan, false, projector)?;
+        let estimate = self.measure(sampler, zero_target, plan, false, projector, ctx)?;
         let reference_rms = estimate.measurement.rms;
         if reference_rms == 0.0 && self.options.tolerance.atol == 0.0 {
             return Err(invalid(format!(
@@ -1256,7 +1281,7 @@ where
             .filter(|&position| fixed[position].is_none())
             .collect();
         if active.len() <= 1 {
-            return self.exact_patch(&fixed, &active, cache, projector);
+            return self.exact_patch(&fixed, &active, cache, projector, ctx);
         }
         let active_dims: Vec<usize> = active.iter().map(|&p| layout.dims[p]).collect();
         let patch_points: f64 = active_dims.iter().map(|&dim| dim as f64).product();
@@ -1302,12 +1327,12 @@ where
             patch_points,
         };
         if self.is_l2() && self.l2.get().is_none() {
-            self.pin_monte_carlo(&sampler, &zero_target, &seeds, projector)?;
+            self.pin_monte_carlo(&sampler, &zero_target, &seeds, projector, ctx)?;
         }
         let shape = [active.len(), candidates.count];
         let batch = ColMajorArrayRef::new(&candidates.points, &shape).map_err(internal)?;
         let samples = sampler
-            .sample(batch)
+            .sample(batch, ctx)
             .map_err(|source| evaluator_error(projector, source))?;
         let largest = max_magnitude(&samples);
         let mut base: Vec<Vec<usize>> = candidates
@@ -1322,7 +1347,7 @@ where
             if largest == 0.0 {
                 // Zero screen: measure the zero approximation.
                 let plan = self.plan(patch_count, seeds.zero_screen());
-                let screen = self.measure(&sampler, &zero_target, plan, false, projector)?;
+                let screen = self.measure(&sampler, &zero_target, plan, false, projector, ctx)?;
                 if screen.measurement.rms <= tau {
                     let audit = self.audit(
                         &sampler,
@@ -1330,6 +1355,7 @@ where
                         &screen.measurement,
                         &seeds,
                         projector,
+                        ctx,
                     )?;
                     let record = ZeroPatchRecord {
                         projector: projector.clone(),
@@ -1396,7 +1422,7 @@ where
             .map_err(interpolation_error)?;
             let outcome = self
                 .engine
-                .interpolate(&problem, ctx, |batch, _ctx| sampler.sample(batch))
+                .interpolate(&problem, ctx, |batch, ctx| sampler.sample(batch, ctx))
                 .map_err(interpolation_error)?;
             let converged = outcome.termination == InterpolationTermination::Converged;
             if !converged
@@ -1406,7 +1432,7 @@ where
             {
                 break (outcome, None);
             }
-            let subdomain = self.checked_subdomain(&outcome, &fixed, projector)?;
+            let subdomain = self.checked_subdomain(&outcome, &fixed, projector, ctx)?;
             let mut record = self.record(projector, &outcome, &subdomain, attempt);
             if !self.is_l2() {
                 // A capped-eligible run is judged by the engine estimate.
@@ -1425,10 +1451,16 @@ where
                 patch_points,
             };
             let plan = self.plan(patch_count, seeds.verify(attempt));
-            let measured = self.measure(&sampler, &target, plan, false, projector)?;
+            let measured = self.measure(&sampler, &target, plan, false, projector, ctx)?;
             if measured.measurement.rms <= tolerance {
-                record.audit =
-                    self.audit(&sampler, &target, &measured.measurement, &seeds, projector)?;
+                record.audit = self.audit(
+                    &sampler,
+                    &target,
+                    &measured.measurement,
+                    &seeds,
+                    projector,
+                    ctx,
+                )?;
                 record.acceptance = Some(measured.measurement);
                 return Ok(accepted(record, subdomain, patch_points));
             }
@@ -1470,7 +1502,7 @@ where
             rejected,
             failure,
         };
-        self.resolve(context, last, sampler, projector)
+        self.resolve(context, last, sampler, projector, ctx)
     }
 
     /// The layout-checked, re-embedded network of an outcome the driver may
@@ -1481,10 +1513,11 @@ where
         outcome: &InterpolationOutcome<V>,
         fixed: &[Option<usize>],
         projector: &Projector,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<SubDomainTreeTN<V>, PatchedInterpolationError> {
         embed::check_outcome_layout(&outcome.network, &self.layout, fixed)
             .map_err(|message| engine_error(projector, message))?;
-        let subdomain = self.subdomain(&outcome.network, fixed, projector)?;
+        let subdomain = self.subdomain(&outcome.network, fixed, projector, ctx)?;
         let cap = self.options.max_bond_dim;
         let bond = subdomain.max_bond_dim();
         if outcome.termination == InterpolationTermination::Converged && bond >= cap {
@@ -1539,6 +1572,7 @@ where
         last: Unaccepted<V>,
         sampler: PatchSampler<'_, T, F>,
         projector: &Projector,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<Verdict<T, V>, PatchedInterpolationError> {
         let layout = &self.layout;
         let fixed = context.fixed;
@@ -1561,7 +1595,7 @@ where
             });
         };
         if self.policy.split_blocked(active.len()) {
-            return self.retain_blocked(&context, last, &sampler, projector);
+            return self.retain_blocked(&context, last, &sampler, projector, ctx);
         }
         let Unaccepted {
             outcome, failure, ..
@@ -1615,6 +1649,7 @@ where
         active: &[usize],
         cache: PatchCache<T>,
         projector: &Projector,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<Verdict<T, V>, PatchedInterpolationError> {
         // Every point of the patch: `0..d` for one active site of dimension
         // `d`, or the single empty point when no site is active.
@@ -1625,7 +1660,7 @@ where
         let sampler = self.sampler(fixed, active.len(), cache);
         let batch = ColMajorArrayRef::new(&points, &shape).map_err(internal)?;
         let values = sampler
-            .sample(batch)
+            .sample(batch, ctx)
             .map_err(|source| evaluator_error(projector, source))?;
         let largest = max_magnitude(&values);
         let patch_points = n_points as f64;
@@ -1661,7 +1696,7 @@ where
             return Ok(Verdict::Zero(record, patch_points));
         }
         let network = embed::exact_active_network(&self.layout, active, values)?;
-        let subdomain = self.subdomain(&network, fixed, projector)?;
+        let subdomain = self.subdomain(&network, fixed, projector, ctx)?;
         let record = PatchRecord {
             projector: projector.clone(),
             termination: InterpolationTermination::Converged,
@@ -1683,8 +1718,9 @@ where
         network: &TreeTN<IdxTensor, V>,
         fixed: &[Option<usize>],
         projector: &Projector,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<SubDomainTreeTN<V>, PatchedInterpolationError> {
-        let data = embed::embed_fixed_sites::<T, V>(network, &self.layout, fixed)?;
+        let data = embed::embed_fixed_sites::<T, V>(network, &self.layout, fixed, ctx.session())?;
         Ok(SubDomainTreeTN::from_masked_data(
             data,
             projector.clone(),

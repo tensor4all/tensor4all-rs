@@ -27,8 +27,8 @@ use tensor4all_partitionedtreetn::adaptive_interpolation::{
 use tensor4all_partitionedtreetn::{ErrorNorm, L2Reference};
 use tensor4all_treetci::TreeTciInterpolator;
 use tensor4all_treetn::interpolation::{
-    InterpolationError, InterpolationOutcome, InterpolationProblem, InterpolationTermination,
-    TreeInterpolator,
+    EvalContext, InterpolationError, InterpolationOutcome, InterpolationProblem,
+    InterpolationTermination, TreeInterpolator,
 };
 
 /// Bits per variable of the diagnostic tree.
@@ -270,20 +270,21 @@ impl TreeInterpolator<f64> for CapProbe {
     fn interpolate<V, F>(
         &self,
         problem: &InterpolationProblem<V>,
-        evaluate: F,
+        ctx: &mut EvalContext<'_>,
+        mut evaluate: F,
     ) -> Result<InterpolationOutcome<V>, InterpolationError>
     where
         V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-        F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>>,
+        F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>>,
     {
-        let outcome = self.inner.interpolate(problem, &evaluate)?;
+        let outcome = self.inner.interpolate(problem, ctx, &mut evaluate)?;
         if outcome.termination == InterpolationTermination::BondCapReached {
             let sites = problem.site_order().to_vec();
             let dims: Vec<usize> = sites.iter().map(IndexLike::dim).collect();
             let points = full_domain(&dims);
             let flat = points.concat();
             let shape = [dims.len(), points.len()];
-            let values = evaluate(ColMajorArrayRef::new(&flat, &shape).unwrap()).unwrap();
+            let values = evaluate(ColMajorArrayRef::new(&flat, &shape).unwrap(), ctx).unwrap();
             let reference = IdxTensor::from_dense(sites, values).unwrap();
             let dense = outcome.network.contract_to_tensor().unwrap();
             let diff = dense.sub(&reference).unwrap().norm().unwrap();

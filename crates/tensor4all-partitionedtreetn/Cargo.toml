@@ -34,11 +34,11 @@ features = ["tenferro-cpu-faer"]
 anyhow.workspace = true
 thiserror.workspace = true
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
+tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 
 [dev-dependencies]
 criterion.workspace = true
-tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 tenferro-cpu.workspace = true
 num-complex.workspace = true
 serde_json.workspace = true
@@ -61,3 +61,9 @@ harness = false
 [[test]]
 name = "integration"
 path = "tests/main.rs"
+
+# Its own binary so the process-global eager runtime is cold when the routing
+# oracle starts; see the module documentation.
+[[test]]
+name = "routing_oracle"
+path = "tests/routing_oracle.rs"

@@ -125,7 +125,7 @@ pub enum MeasurementMethod {
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(4)])]),
 ///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| 1.0 + x as f64).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
@@ -213,7 +213,7 @@ impl L2Measurement {
     ///     topology,
     ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
     ///     ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap(), &mut ctx,
-    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///         Ok(batch.data().chunks(2).map(f).collect())
     ///     },
     ///     &options,
@@ -281,7 +281,7 @@ impl L2Measurement {
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(3)])]),
 ///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| 1.0 + x as f64).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
@@ -347,7 +347,7 @@ pub enum PatchStatus {
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![site])]),
 ///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| x as f64 - 1.0).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2).with_error_norm(ErrorNorm::sampled_max()),
@@ -441,7 +441,7 @@ pub struct PatchRecord {
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(3)])]),
 ///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(vec![0.0; batch.shape()[1]])
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
@@ -573,7 +573,7 @@ pub enum MaxReferenceSource {
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
 ///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
@@ -736,7 +736,7 @@ pub enum GlobalL2Error {
 ///     topology,
 ///     node_sites,
 ///     ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap(), &mut ctx,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().chunks(2).map(f).collect())
 ///     },
 ///     &options,
@@ -848,7 +848,7 @@ impl GlobalL2Error {
     ///     topology,
     ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
     ///     ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap(), &mut ctx,
-    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///         Ok(batch.data().chunks(2).map(f).collect())
     ///     },
     ///     &options,
@@ -919,7 +919,7 @@ impl GlobalL2Error {
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
 ///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
@@ -1013,7 +1013,7 @@ impl L2ErrorReport {
     ///     topology,
     ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
     ///     ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap(), &mut ctx,
-    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///         Ok(batch.data().chunks(2).map(f).collect())
     ///     },
     ///     &options,
@@ -1072,7 +1072,7 @@ impl L2ErrorReport {
     ///     topology,
     ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
     ///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
-    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///         Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
     ///     },
     ///     &PatchedInterpolationOptions::new(2),
@@ -1134,7 +1134,7 @@ impl L2ErrorReport {
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
 ///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
 ///     },
 ///     &options,
@@ -1220,7 +1220,7 @@ impl NormReport {
     ///         topology,
     ///         BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
     ///         ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
-    ///         |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///         |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///             Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
     ///         },
     ///         options,
@@ -1289,7 +1289,7 @@ impl NormReport {
     ///         topology,
     ///         BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
     ///         ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
-    ///         |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///         |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///             Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
     ///         },
     ///         options,
@@ -1357,7 +1357,7 @@ impl NormReport {
     ///         topology,
     ///         BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
     ///         ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
-    ///         |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///         |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///             Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
     ///         },
     ///         options,
@@ -1440,7 +1440,7 @@ impl NormReport {
 ///     topology,
 ///     node_sites,
 ///     ColMajorArray::new(vec![1, 2], vec![2, 1]).unwrap(), &mut ctx,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().chunks(2).map(f).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2)
@@ -1548,7 +1548,7 @@ impl PatchedInterpolationReport {
     ///     topology,
     ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
     ///     ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap(), &mut ctx,
-    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///         Ok(batch.data().chunks(2).map(f).collect())
     ///     },
     ///     &options,
@@ -1607,7 +1607,7 @@ impl PatchedInterpolationReport {
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![site])]),
 ///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(vec![0.0; batch.shape()[1]])
 ///     },
 ///     &PatchedInterpolationOptions::new(2),

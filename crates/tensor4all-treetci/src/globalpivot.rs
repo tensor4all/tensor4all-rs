@@ -209,7 +209,7 @@ where
         params,
         rng,
         cached_walk_readout,
-        cached_walk_readout_on_session,
+        cached_walk_readout_on_session::<T>,
     )
 }
 
@@ -224,14 +224,19 @@ struct SearchParams {
 }
 
 /// A session-taking approximation readout for runs that own an [`EvalContext`].
-type SessionReadout = fn(
+///
+/// It returns typed values, not [`AnyScalar`]s: an `AnyScalar` carries an eager
+/// rank-zero tensor, and publishing one enters the process-global eager
+/// runtime, which is exactly what a caller-held session forbids while it is
+/// active.
+type SessionReadout<T> = fn(
     &mut TreeTNCachedEvaluator<'_, usize>,
     &TreeTN<IdxTensor, usize>,
     &[DynIndex],
     ColMajorArrayRef<'_, usize>,
     Option<usize>,
     &mut tensor4all_tensorbackend::explicit::Session<'_>,
-) -> Result<Vec<AnyScalar>>;
+) -> Result<Vec<T>>;
 
 /// Read one scan through the cache owned by this search. A site hint also
 /// identifies single-candidate scans, whose varied site cannot be inferred.
@@ -249,17 +254,21 @@ fn cached_walk_readout(
 }
 
 /// Session counterpart of [`cached_walk_readout`], used when the run owner has a session.
-fn cached_walk_readout_on_session(
+///
+/// The typed session entry point reads the cached values back as host scalars,
+/// so the readout never constructs an [`AnyScalar`] and never enters the
+/// process-global eager runtime.
+fn cached_walk_readout_on_session<T: tensor4all_core::TensorElement>(
     evaluator: &mut TreeTNCachedEvaluator<'_, usize>,
     _treetn: &TreeTN<IdxTensor, usize>,
     _site_indices: &[DynIndex],
     candidates: ColMajorArrayRef<'_, usize>,
     scan_site: Option<usize>,
     session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
-) -> Result<Vec<AnyScalar>> {
+) -> Result<Vec<T>> {
     let hint = scan_site.map(EvaluationHint::around).unwrap_or_default();
     evaluator
-        .evaluate_batched_with_hint_on_session(session, candidates, hint)
+        .evaluate_batched_typed_on_session::<T>(session, candidates, hint)
         .map_err(anyhow::Error::from)
 }
 
@@ -273,7 +282,7 @@ fn search_with_readout<T, R>(
     params: SearchParams,
     rng: &mut dyn RngCore,
     mut readout: R,
-    readout_on_session: SessionReadout,
+    readout_on_session: SessionReadout<T>,
 ) -> TreeTciResult<Vec<MultiIndex>>
 where
     T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
@@ -375,41 +384,56 @@ where
                 let values = ColMajorArrayRef::new(&flat, &shape).map_err(|error| {
                     anyhow::anyhow!("failed to build candidate index array: {error}")
                 })?;
-                let tt_values = match execution.session() {
+                let errors: Vec<f64> = match execution.session() {
                     Some(backend) => {
                         let mut session =
                             tensor4all_tensorbackend::explicit::Session::from_backend_session(
                                 backend,
                             );
-                        readout_on_session(
+                        let tt_values: Vec<T> = readout_on_session(
                             &mut cache,
                             &treetn,
                             &site_indices,
                             values,
                             scan_site,
                             &mut session,
-                        )?
-                    }
-                    None => readout(&mut cache, &treetn, &site_indices, values, scan_site)?,
-                };
-                if tt_values.len() != points.len() {
-                    return Err(anyhow::anyhow!(
-                        "approximation readout returned {} values for {} global-pivot candidates",
-                        tt_values.len(),
-                        points.len(),
-                    ));
-                }
-                f_values
-                    .into_iter()
-                    .zip(tt_values)
-                    .map(|(f, tt)| {
-                        let error = interp_error(f, tt);
-                        if !error.is_finite() {
-                            return Err(anyhow::anyhow!("non-finite global pivot residual"));
+                        )?;
+                        if tt_values.len() != points.len() {
+                            return Err(anyhow::anyhow!(
+                                "approximation readout returned {} values for {} global-pivot \
+                                 candidates",
+                                tt_values.len(),
+                                points.len(),
+                            ));
                         }
-                        Ok(error)
-                    })
-                    .collect()
+                        f_values
+                            .into_iter()
+                            .zip(tt_values)
+                            .map(|(f, tt)| typed_interp_error(f, tt))
+                            .collect()
+                    }
+                    None => {
+                        let tt_values =
+                            readout(&mut cache, &treetn, &site_indices, values, scan_site)?;
+                        if tt_values.len() != points.len() {
+                            return Err(anyhow::anyhow!(
+                                "approximation readout returned {} values for {} global-pivot \
+                                 candidates",
+                                tt_values.len(),
+                                points.len(),
+                            ));
+                        }
+                        f_values
+                            .into_iter()
+                            .zip(tt_values)
+                            .map(|(f, tt)| interp_error(f, tt))
+                            .collect()
+                    }
+                };
+                if errors.iter().any(|error| !error.is_finite()) {
+                    return Err(anyhow::anyhow!("non-finite global pivot residual"));
+                }
+                Ok(errors)
             },
         )?;
         if error > threshold {
@@ -487,6 +511,14 @@ impl ScalarParts for num_complex::Complex64 {
 fn interp_error<T: ScalarParts + Copy>(f_value: T, tt_value: AnyScalar) -> f64 {
     let re = f_value.real_part() - tt_value.real();
     let im = f_value.imag_part() - tt_value.imag();
+    (re * re + im * im).sqrt()
+}
+
+/// [`interp_error`] for a typed approximation value, with the same `f64`
+/// arithmetic after each part is widened by [`ScalarParts`].
+fn typed_interp_error<T: ScalarParts + Copy>(f_value: T, tt_value: T) -> f64 {
+    let re = f_value.real_part() - tt_value.real_part();
+    let im = f_value.imag_part() - tt_value.imag_part();
     (re * re + im * im).sqrt()
 }
 

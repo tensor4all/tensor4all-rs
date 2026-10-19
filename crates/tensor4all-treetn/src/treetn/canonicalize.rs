@@ -439,6 +439,24 @@ where
                     )
                     .map_err(anyhow::Error::from)
                 },
+                |tensor, index, axis| {
+                    tensor4all_core::stack_along_new_index_on_session(
+                        &mut session.borrow_mut(),
+                        &[tensor],
+                        index,
+                        axis,
+                    )
+                    .map_err(anyhow::Error::from)
+                },
+                |tensor, index, position| {
+                    tensor4all_core::select_indices_on_session(
+                        &mut session.borrow_mut(),
+                        tensor,
+                        std::slice::from_ref(index),
+                        &[position],
+                    )
+                    .map_err(anyhow::Error::from)
+                },
             )?;
         }
 

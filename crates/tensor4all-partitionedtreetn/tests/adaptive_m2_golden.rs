@@ -49,8 +49,8 @@ use tensor4all_partitionedtreetn::adaptive_interpolation::{
 use tensor4all_partitionedtreetn::ErrorNorm;
 use tensor4all_treetci::TreeTciInterpolator;
 use tensor4all_treetn::interpolation::{
-    InterpolationError, InterpolationOutcome, InterpolationProblem, InterpolationTermination,
-    TreeInterpolator,
+    EvalContext, InterpolationError, InterpolationOutcome, InterpolationProblem,
+    InterpolationTermination, TreeInterpolator,
 };
 
 /// Committed golden outputs.
@@ -319,13 +319,14 @@ impl TreeInterpolator<f64> for RecordingTreeTci {
     fn interpolate<V, F>(
         &self,
         problem: &InterpolationProblem<V>,
+        ctx: &mut EvalContext<'_>,
         evaluate: F,
     ) -> Result<InterpolationOutcome<V>, InterpolationError>
     where
         V: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
-        F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>>,
+        F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>>,
     {
-        let outcome = self.inner.interpolate(problem, evaluate)?;
+        let outcome = self.inner.interpolate(problem, ctx, evaluate)?;
         self.calls.lock().unwrap().push(EngineCall {
             tolerance: problem.absolute_tolerance(),
             termination: outcome.termination,

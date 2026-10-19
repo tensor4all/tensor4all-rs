@@ -2,9 +2,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use tenferro_cpu::CpuBackend;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
+use tensor4all_tensorbackend::explicit::{HeldSession, Session};
+use tensor4all_tensorbackend::CpuExecutionContext;
 use tensor4all_treetci::TreeTciInterpolator;
-use tensor4all_treetn::interpolation::InterpolationProblem;
+use tensor4all_treetn::interpolation::{EvalContext, InterpolationProblem, Parallelism};
 use tensor4all_treetn::{NodeNameNetwork, TreeTN};
 
 use super::{
@@ -18,6 +21,35 @@ use crate::adaptive_interpolation::{
 };
 use crate::{ErrorNorm, ErrorTolerance};
 use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTNCachedEvaluator};
+
+/// Run `body` on one held session, the execution capability of the production
+/// entries.
+fn with_test_session<R>(body: impl FnOnce(&mut Session<'_>) -> R) -> R {
+    let context =
+        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let mut held = HeldSession::open(&backend).expect("held session");
+    let result = held.with_session(|view| body(&mut Session::from_backend_session(view.backend())));
+    held.close().expect("affinity restores");
+    result
+}
+
+/// Run `body` with an explicit execution capability over a held session.
+fn with_eval_context<R>(body: impl FnOnce(&mut EvalContext<'_>) -> R) -> R {
+    let context =
+        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let mut held = HeldSession::open(&backend).expect("held session");
+    let result = held.with_session(|view| {
+        let mut ctx = EvalContext::new(
+            Session::from_backend_session(view.backend()),
+            Parallelism::Serial,
+        );
+        body(&mut ctx)
+    });
+    held.close().expect("affinity restores");
+    result
+}
 
 /// A named tree with its sites in the derived site order.
 struct Tree {
@@ -174,16 +206,19 @@ fn stored_patches(tree: &Tree, f: fn(&[usize]) -> f64) -> Vec<RawPatch> {
             atol: 0.0,
         })
         .with_seed(7);
-    let result = patched_interpolate(
-        &TreeTciInterpolator::default(),
-        tree.topology.clone(),
-        tree.node_sites.clone(),
-        ColMajorArray::new(vec![], vec![n_sites, 0]).unwrap(),
-        |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
-            Ok(batch.data().chunks(n_sites).map(f).collect())
-        },
-        &options,
-    )
+    let result = with_eval_context(|ctx| {
+        patched_interpolate(
+            &TreeTciInterpolator::default(),
+            tree.topology.clone(),
+            tree.node_sites.clone(),
+            ColMajorArray::new(vec![], vec![n_sites, 0]).unwrap(),
+            ctx,
+            |batch: ColMajorArrayRef<'_, usize>, _ctx| -> anyhow::Result<Vec<f64>> {
+                Ok(batch.data().chunks(n_sites).map(f).collect())
+            },
+            &options,
+        )
+    })
     .unwrap();
     assert!(result.report.splits >= 1, "the root must split");
     result
@@ -258,13 +293,16 @@ fn values_across_threads(
             let patches = std::sync::Arc::clone(patches);
             let sites = sites.to_vec();
             std::thread::spawn(move || {
-                patches
-                    .iter()
-                    .flat_map(|patch| {
-                        let network = rebuild(patch, &sites);
-                        network_values::<f64, String>(&network, &sites, &patch.points).unwrap()
-                    })
-                    .collect()
+                with_test_session(|session| {
+                    patches
+                        .iter()
+                        .flat_map(|patch| {
+                            let network = rebuild(patch, &sites);
+                            network_values::<f64, String>(&network, &sites, &patch.points, session)
+                                .unwrap()
+                        })
+                        .collect()
+                })
             })
             .join()
             .unwrap()
@@ -852,7 +890,9 @@ fn chunked_measurement_matches_a_single_batch_on_exact_data() {
     let n_points = points.len() / tree.sites.len();
     assert!(n_points > 2 * MEASUREMENT_CHUNK);
 
-    let chunked = network_values::<f64, String>(&network, &tree.sites, &points).unwrap();
+    let chunked = with_test_session(|session| {
+        network_values::<f64, String>(&network, &tree.sites, &points, session).unwrap()
+    });
     let center = network.node_names().into_iter().min();
     let options = CachedEvaluatorOptions {
         center,

@@ -3,7 +3,11 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
 
+use tenferro_cpu::CpuBackend;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
+use tensor4all_tensorbackend::explicit::{HeldSession, Session};
+use tensor4all_tensorbackend::CpuExecutionContext;
+use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 use tensor4all_treetn::{NodeNameNetwork, TreeTN};
 
 use super::cache::{
@@ -18,6 +22,35 @@ use super::sampling::{
 };
 use super::{active_pivots, added_pivots, complete_points, PatchedInterpolationOptions};
 use crate::{PartitionedTreeTN, PartitionedTreeTNError, Projector, SubDomainTreeTN};
+
+/// Run `body` on one held session, the execution capability of the production
+/// entries.
+fn with_test_session<R>(body: impl FnOnce(&mut Session<'_>) -> R) -> R {
+    let context =
+        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let mut held = HeldSession::open(&backend).expect("held session");
+    let result = held.with_session(|view| body(&mut Session::from_backend_session(view.backend())));
+    held.close().expect("affinity restores");
+    result
+}
+
+/// Run `body` with an explicit execution capability over a held session.
+fn with_eval_context<R>(body: impl FnOnce(&mut EvalContext<'_>) -> R) -> R {
+    let context =
+        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let mut held = HeldSession::open(&backend).expect("held session");
+    let result = held.with_session(|view| {
+        let mut ctx = EvalContext::new(
+            Session::from_backend_session(view.backend()),
+            Parallelism::Serial,
+        );
+        body(&mut ctx)
+    });
+    held.close().expect("affinity restores");
+    result
+}
 
 // ---------------------------------------------------------------------------
 // SplitMix64, Lemire, and seeds. The expected values were computed with an
@@ -648,16 +681,18 @@ fn cache_split_re_encodes_only_when_a_word_is_freed() {
 // The patch sampler.
 // ---------------------------------------------------------------------------
 
-type BoxedEvaluator = Box<dyn Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>>>;
+type BoxedEvaluator =
+    Box<dyn FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>>>;
 
 /// Run `body` with a sampler for a three-site patch whose middle site is
 /// fixed to 1; return its result with the evaluation and cache-hit counts.
 fn with_sampler<R>(
     evaluate: BoxedEvaluator,
-    body: impl FnOnce(&PatchSampler<'_, f64, BoxedEvaluator>) -> R,
+    body: impl FnOnce(&PatchSampler<'_, f64, BoxedEvaluator>, &mut EvalContext<'_>) -> R,
 ) -> (R, usize, usize) {
     let counters = Counters::default();
     let fixed = [None, Some(1), None];
+    let evaluate = RefCell::new(evaluate);
     let sampler = PatchSampler {
         evaluate: &evaluate,
         fixed: &fixed,
@@ -665,7 +700,7 @@ fn with_sampler<R>(
         counters: &counters,
         cache: RefCell::new(PatchCache::new(vec![2, 3])),
     };
-    let result = body(&sampler);
+    let result = with_eval_context(|ctx| body(&sampler, ctx));
     assert_eq!(sampler.cache.borrow().len(), counters.evaluations.get());
     (
         result,
@@ -677,16 +712,17 @@ fn with_sampler<R>(
 fn batch_values(
     sampler: &PatchSampler<'_, f64, BoxedEvaluator>,
     data: &[usize],
+    ctx: &mut EvalContext<'_>,
 ) -> anyhow::Result<Vec<f64>> {
     let shape = [2, data.len() / 2];
-    sampler.sample(ColMajorArrayRef::new(data, &shape)?)
+    sampler.sample(ColMajorArrayRef::new(data, &shape)?, ctx)
 }
 
 #[test]
 fn sampler_evaluates_each_new_point_once_with_fixed_coordinates() {
     let seen = std::rc::Rc::new(RefCell::new(Vec::new()));
     let log = seen.clone();
-    let evaluate: BoxedEvaluator = Box::new(move |batch| {
+    let evaluate: BoxedEvaluator = Box::new(move |batch, _ctx| {
         let points: Vec<Vec<usize>> = batch.data().chunks(3).map(<[usize]>::to_vec).collect();
         log.borrow_mut().extend(points.clone());
         Ok(points
@@ -694,9 +730,9 @@ fn sampler_evaluates_each_new_point_once_with_fixed_coordinates() {
             .map(|p| (100 * p[0] + 10 * p[1] + p[2]) as f64)
             .collect())
     });
-    let (values, evaluations, hits) = with_sampler(evaluate, |sampler| {
-        let first = batch_values(sampler, &[0, 0, 1, 2, 0, 0]).unwrap();
-        let second = batch_values(sampler, &[1, 2, 1, 1, 0, 0]).unwrap();
+    let (values, evaluations, hits) = with_sampler(evaluate, |sampler, ctx| {
+        let first = batch_values(sampler, &[0, 0, 1, 2, 0, 0], ctx).unwrap();
+        let second = batch_values(sampler, &[1, 2, 1, 1, 0, 0], ctx).unwrap();
         (first, second)
     });
     assert_eq!(values.0, [10.0, 112.0, 10.0]);
@@ -712,7 +748,8 @@ fn sampler_evaluates_each_new_point_once_with_fixed_coordinates() {
 
 #[test]
 fn sampler_rejects_invalid_batches_and_evaluator_results_without_caching() {
-    let constant: fn() -> BoxedEvaluator = || Box::new(|batch| Ok(vec![1.0; batch.shape()[1]]));
+    let constant: fn() -> BoxedEvaluator =
+        || Box::new(|batch, _ctx| Ok(vec![1.0; batch.shape()[1]]));
     let cases: Vec<(BoxedEvaluator, Vec<usize>, Vec<usize>, &str)> = vec![
         (
             constant(),
@@ -727,34 +764,34 @@ fn sampler_rejects_invalid_batches_and_evaluator_results_without_caching() {
             "out of range for dimension 3",
         ),
         (
-            Box::new(|_| Ok(vec![1.0])),
+            Box::new(|_, _ctx| Ok(vec![1.0])),
             vec![0, 0, 1, 1],
             vec![2, 2],
             "returned 1 values for 2 points",
         ),
         (
-            Box::new(|batch| Ok(vec![f64::NAN; batch.shape()[1]])),
+            Box::new(|batch, _ctx| Ok(vec![f64::NAN; batch.shape()[1]])),
             vec![1, 2],
             vec![2, 1],
             "non-finite value at the point [1, 1, 2]",
         ),
         (
-            Box::new(|batch| Ok(vec![f64::INFINITY; batch.shape()[1]])),
+            Box::new(|batch, _ctx| Ok(vec![f64::INFINITY; batch.shape()[1]])),
             vec![1, 2],
             vec![2, 1],
             "non-finite",
         ),
         (
-            Box::new(|_| Err(anyhow::anyhow!("user failure"))),
+            Box::new(|_, _ctx| Err(anyhow::anyhow!("user failure"))),
             vec![1, 2],
             vec![2, 1],
             "user failure",
         ),
     ];
     for (evaluate, data, shape, needle) in cases {
-        let (error, evaluations, _) = with_sampler(evaluate, |sampler| {
+        let (error, evaluations, _) = with_sampler(evaluate, |sampler, ctx| {
             sampler
-                .sample(ColMajorArrayRef::new(&data, &shape).unwrap())
+                .sample(ColMajorArrayRef::new(&data, &shape).unwrap(), ctx)
                 .unwrap_err()
         });
         assert!(error.to_string().contains(needle), "{error} lacks {needle}");
@@ -792,7 +829,7 @@ fn sampler_gives_the_same_values_and_counts_for_every_key_type() {
         let counters = Counters::default();
         let mut fixed = vec![Some(1)];
         fixed.extend(std::iter::repeat_n(None, n_active));
-        let evaluate: BoxedEvaluator = Box::new(move |batch| {
+        let evaluate: BoxedEvaluator = Box::new(move |batch, _ctx| {
             let rows = batch.shape()[0];
             Ok(batch
                 .data()
@@ -803,6 +840,7 @@ fn sampler_gives_the_same_values_and_counts_for_every_key_type() {
                 })
                 .collect())
         });
+        let evaluate = RefCell::new(evaluate);
         let sampler = PatchSampler {
             evaluate: &evaluate,
             fixed: &fixed,
@@ -811,21 +849,23 @@ fn sampler_gives_the_same_values_and_counts_for_every_key_type() {
             cache: RefCell::new(PatchCache::new(dims.clone())),
         };
         assert_eq!(key_kind(&sampler.cache.borrow()), kind);
-        let sample = |points: &[&Vec<usize>]| {
+        let sample = |points: &[&Vec<usize>], ctx: &mut EvalContext<'_>| {
             let data: Vec<usize> = points.iter().flat_map(|p| p.iter().copied()).collect();
             let shape = [n_active, points.len()];
             sampler
-                .sample(ColMajorArrayRef::new(&data, &shape).unwrap())
+                .sample(ColMajorArrayRef::new(&data, &shape).unwrap(), ctx)
                 .unwrap()
         };
-        assert_eq!(
-            sample(&[&p1, &p2, &p1, &p3]),
-            [value(&p1), value(&p2), value(&p1), value(&p3)]
-        );
-        assert_eq!(
-            sample(&[&p2, &p4, &p4]),
-            [value(&p2), value(&p4), value(&p4)]
-        );
+        with_eval_context(|ctx| {
+            assert_eq!(
+                sample(&[&p1, &p2, &p1, &p3], ctx),
+                [value(&p1), value(&p2), value(&p1), value(&p3)]
+            );
+            assert_eq!(
+                sample(&[&p2, &p4, &p4], ctx),
+                [value(&p2), value(&p4), value(&p4)]
+            );
+        });
         assert_eq!(counters.evaluations.get(), 4, "{dims:?}");
         assert_eq!(counters.cache_hits.get(), 3, "{dims:?}");
         assert_eq!(sampler.cache.borrow().len(), 4);
@@ -844,9 +884,14 @@ fn sampler_gives_the_same_values_and_counts_for_every_key_type() {
             cache: RefCell::new(child),
         };
         let rest = &p1[1..];
-        let values = child_sampler
-            .sample(ColMajorArrayRef::new(rest, &[n_active - 1, 1]).unwrap())
-            .unwrap();
+        let values = with_eval_context(|ctx| {
+            child_sampler
+                .sample(
+                    ColMajorArrayRef::new(rest, &[n_active - 1, 1]).unwrap(),
+                    ctx,
+                )
+                .unwrap()
+        });
         assert_eq!(values, [value(&p1)]);
         assert_eq!(counters.evaluations.get(), 4, "{dims:?}");
         assert_eq!(counters.cache_hits.get(), 4, "{dims:?}");
@@ -906,7 +951,9 @@ fn exact_network_without_active_site_sits_on_the_smallest_node() {
         network.tensor(node0).unwrap().to_vec::<f64>().unwrap(),
         [7.5]
     );
-    let embedded = embed_fixed_sites::<f64, usize>(&network, &layout, &fixed).unwrap();
+    let embedded = with_test_session(|session| {
+        embed_fixed_sites::<f64, usize>(&network, &layout, &fixed, session).unwrap()
+    });
     // Only (a, b, c) = (1, 2, 0) is nonzero: column-major position 1 + 2 * 2.
     let mut expected = vec![0.0; 12];
     expected[5] = 7.5;
@@ -934,7 +981,9 @@ where
     ] {
         let values = vec![value; if active.is_empty() { 1 } else { 2 }];
         let network = exact_active_network(&layout, &active, values).unwrap();
-        let embedded = embed_fixed_sites::<T, usize>(&network, &layout, &fixed).unwrap();
+        let embedded = with_test_session(|session| {
+            embed_fixed_sites::<T, usize>(&network, &layout, &fixed, session).unwrap()
+        });
         assert_eq!(embedded.node_count(), 3);
         for name in embedded.node_names() {
             let tensor = embedded

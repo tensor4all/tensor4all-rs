@@ -40,8 +40,12 @@ use tensor4all_partitionedtreetn::adaptive_interpolation::{
     patched_interpolate, PatchedInterpolationOptions, PatchedInterpolationResult,
 };
 use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, Projector};
+use tensor4all_tensorbackend::explicit::{HeldSession, Session};
+use tensor4all_tensorbackend::CpuExecutionContext;
 use tensor4all_treetci::TreeTciInterpolator;
-use tensor4all_treetn::interpolation::{InterpolationProblem, TreeInterpolator};
+use tensor4all_treetn::interpolation::{
+    EvalContext, InterpolationProblem, Parallelism, TreeInterpolator,
+};
 use tensor4all_treetn::{
     CachedEvaluatorOptions, EvaluationHint, NodeNameNetwork, TreeTN, TreeTNCachedEvaluator,
     TruncationOptions,
@@ -50,6 +54,24 @@ use tensor4all_treetn::{
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 type Name = String;
 type Network = TreeTN<IdxTensor, Name>;
+
+/// Run `body` with one explicit execution capability over a held session.
+fn with_eval_context<R>(body: impl FnOnce(&mut EvalContext<'_>) -> R) -> R {
+    let context = CpuExecutionContext::from_backend(
+        tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend"),
+    );
+    let backend: tenferro_cpu::CpuBackend = context.with_backend(|backend| backend.clone());
+    let mut held = HeldSession::open(&backend).expect("held session");
+    let result = held.with_session(|view| {
+        let mut ctx = EvalContext::new(
+            Session::from_backend_session(view.backend()),
+            Parallelism::Serial,
+        );
+        body(&mut ctx)
+    });
+    held.close().expect("affinity restores");
+    result
+}
 
 /// Relative tolerance of every interpolation (sampled max norm).
 const RTOL: f64 = 1.0e-4;
@@ -125,9 +147,12 @@ impl Workload {
     fn evaluator<'a>(
         &'a self,
         counter: &'a AtomicUsize,
-    ) -> impl Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>> + Send + Sync + 'a {
+    ) -> impl FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>>
+           + Send
+           + Sync
+           + 'a {
         let n_sites = self.sites.len();
-        move |batch| {
+        move |batch, _ctx| {
             counter.fetch_add(batch.shape()[1], Ordering::Relaxed);
             Ok(batch
                 .data()
@@ -334,8 +359,9 @@ fn calibrate(workload: &Workload, cap: usize) -> Result<()> {
     )?;
     let counter = AtomicUsize::new(0);
     let start = Instant::now();
-    let outcome =
-        TreeTciInterpolator::default().interpolate(&problem, workload.evaluator(&counter))?;
+    let outcome = with_eval_context(|ctx| {
+        TreeTciInterpolator::default().interpolate(&problem, ctx, workload.evaluator(&counter))
+    })?;
     let seconds = start.elapsed().as_secs_f64();
     let link_dims = outcome.network.link_dims();
     println!(
@@ -374,14 +400,17 @@ fn interpolate_patches(
         .with_seed(SEED);
     let counter = AtomicUsize::new(0);
     let start = Instant::now();
-    let result = patched_interpolate(
-        &TreeTciInterpolator::default(),
-        workload.topology.clone(),
-        workload.node_sites.clone(),
-        workload.initial_pivots()?,
-        workload.evaluator(&counter),
-        &options,
-    )?;
+    let result = with_eval_context(|ctx| {
+        patched_interpolate(
+            &TreeTciInterpolator::default(),
+            workload.topology.clone(),
+            workload.node_sites.clone(),
+            workload.initial_pivots().expect("initial pivots"),
+            ctx,
+            workload.evaluator(&counter),
+            &options,
+        )
+    })?;
     let seconds = start.elapsed().as_secs_f64();
     Ok((result, seconds, counter.load(Ordering::Relaxed)))
 }

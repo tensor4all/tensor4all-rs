@@ -7,11 +7,51 @@ use adaptive_common::*;
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
+use tensor4all_core::ColMajorArrayRef;
 use tensor4all_partitionedtreetn::adaptive_interpolation::{
     PatchedInterpolationOptions, PatchedInterpolationResult,
 };
 use tensor4all_partitionedtreetn::ErrorNorm;
-use tensor4all_treetci::{TreeTciInterpolator, TreeTciInterpolatorIn};
+use tensor4all_tensorbackend::explicit::{HeldSession, Session};
+use tensor4all_tensorbackend::{default_cpu_execution_context, CpuExecutionContext};
+use tensor4all_treetci::TreeTciInterpolator;
+use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+
+/// Run the driver on a held session over `context`, the canonical execution
+/// capability of one run.
+fn run_on(
+    context: &CpuExecutionContext,
+    problem: &Problem,
+    f: &dyn Fn(&[usize]) -> f64,
+    pivots: &[Vec<usize>],
+    options: &PatchedInterpolationOptions,
+) -> Result<
+    PatchedInterpolationResult<Name>,
+    tensor4all_partitionedtreetn::adaptive_interpolation::PatchedInterpolationError,
+> {
+    let backend: tenferro_cpu::CpuBackend = context.with_backend(|backend| backend.clone());
+    let mut held = HeldSession::open(&backend).expect("held session");
+    let n_sites = problem.sites.len();
+    let result = held.with_session(|view| {
+        let mut ctx = EvalContext::new(
+            Session::from_backend_session(view.backend()),
+            Parallelism::Serial,
+        );
+        tensor4all_partitionedtreetn::adaptive_interpolation::patched_interpolate(
+            &TreeTciInterpolator::default(),
+            problem.topology.clone(),
+            problem.node_sites.clone(),
+            problem.pivots(pivots),
+            &mut ctx,
+            |batch: ColMajorArrayRef<'_, usize>, _ctx| -> anyhow::Result<Vec<f64>> {
+                Ok(batch.data().chunks(n_sites).map(f).collect())
+            },
+            options,
+        )
+    });
+    held.close().expect("affinity restores");
+    result
+}
 
 // ---------------------------------------------------------------------------
 // TreeTCI end to end
@@ -129,11 +169,11 @@ fn the_cache_supports_domains_wider_than_128_bits() {
 // Caller-owned context engine (issue #859 F7)
 // ---------------------------------------------------------------------------
 
-/// `patched_interpolate` with the context-carrying TreeTCI engine produces the
-/// same result as with the plain engine: same seed, same patches, dense
-/// values equal up to tight tolerance, and the same accuracy contract. The
-/// engine is the pluggable numeric provider, so the patched driver needs no
-/// change - this pins that the caller-owned route is a drop-in engine.
+/// `patched_interpolate` gives the same result on a caller-owned CPU context
+/// and on the process-global backend: same seed, same patches, dense values
+/// equal up to tight tolerance, and the same accuracy contract. Both runs take
+/// the canonical execution capability; only the backend behind the held
+/// session differs.
 #[test]
 fn caller_owned_context_engine_matches_plain_engine_end_to_end() {
     let problem = chain("q", 7, 2);
@@ -147,21 +187,12 @@ fn caller_owned_context_engine_matches_plain_engine_end_to_end() {
         .with_error_norm(ErrorNorm::sampled_max_with_reference(max_abs(&problem, &f)));
     let pivots = [vec![0, 1, 0, 0, 1, 1, 0]];
 
-    let plain = run(
-        &TreeTciInterpolator::default(),
-        &problem,
-        &f,
-        &pivots,
-        &options,
-    )
-    .unwrap();
+    let plain_context = default_cpu_execution_context();
+    let plain = run_on(&plain_context, &problem, &f, &pivots, &options).unwrap();
 
-    let context = std::sync::Arc::new(tensor4all_tensorbackend::CpuExecutionContext::from_backend(
-        tenferro_cpu::CpuBackend::with_threads(1).unwrap(),
-    ));
-    let engine =
-        TreeTciInterpolatorIn::new(tensor4all_treetci::TreeTciOptions::default(), context).unwrap();
-    let contextual = run(&engine, &problem, &f, &pivots, &options).unwrap();
+    let caller_owned =
+        CpuExecutionContext::from_backend(tenferro_cpu::CpuBackend::with_threads(1).unwrap());
+    let contextual = run_on(&caller_owned, &problem, &f, &pivots, &options).unwrap();
 
     // Same patch structure on the same seed.
     assert_eq!(contextual.report.splits, plain.report.splits);

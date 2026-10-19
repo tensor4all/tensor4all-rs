@@ -10,12 +10,12 @@ use adaptive_common::*;
 use num_complex::{Complex32, Complex64};
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, CommonScalar, TensorElement};
 use tensor4all_partitionedtreetn::adaptive_interpolation::{
-    patched_interpolate, GlobalL2Error, L2ReferenceSource, MeasurementMethod, NormReport,
-    PatchedInterpolationError, PatchedInterpolationOptions, PatchedInterpolationReport,
-    VerificationOptions, GLOBAL_ROUNDING_MARGIN, MEASUREMENT_ROUNDING_FACTOR,
+    GlobalL2Error, L2ReferenceSource, MeasurementMethod, NormReport, PatchedInterpolationError,
+    PatchedInterpolationOptions, PatchedInterpolationReport, VerificationOptions,
+    GLOBAL_ROUNDING_MARGIN, MEASUREMENT_ROUNDING_FACTOR,
 };
 use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference, Projector};
-use tensor4all_treetn::interpolation::InterpolationError;
+use tensor4all_treetn::interpolation::{EvalContext, InterpolationError};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -950,7 +950,7 @@ fn an_exact_root_gives_the_reference_and_an_all_zero_exact_root_is_empty() {
 fn a_required_reference_fails_before_any_evaluation() {
     let problem = branched();
     let message = expect_invalid(
-        patched_interpolate(
+        run_raw(
             &DenseEngine::new(),
             problem.topology.clone(),
             problem.node_sites.clone(),
@@ -1026,7 +1026,7 @@ fn a_domain_too_large_for_f64_is_accepted_only_under_sampled_max() {
     assert_eq!(result.report.accepted.len(), 1);
 
     let message = expect_invalid(
-        patched_interpolate(
+        run_raw(
             &FiberEngine,
             problem.topology.clone(),
             problem.node_sites.clone(),
@@ -1116,7 +1116,7 @@ fn placeholder_norms_fail_before_every_other_check() {
             .with_error_norm(norm)
             .with_tolerance(tol(-1.0));
         let bad_pivots = ColMajorArray::new(vec![0], vec![1, 1]).unwrap();
-        match patched_interpolate(
+        match run_raw(
             &DenseEngine::new(),
             problem.topology.clone(),
             problem.node_sites.clone(),
@@ -1202,7 +1202,7 @@ fn new_invalid_inputs_are_rejected_before_any_evaluation() {
     ];
     for (options, needle) in cases {
         expect_invalid(
-            patched_interpolate(
+            run_raw(
                 &DenseEngine::new(),
                 problem.topology.clone(),
                 problem.node_sites.clone(),
@@ -1341,7 +1341,7 @@ fn unbounded_exhaustive_limits_never_measure_an_overflowing_patch_exhaustively()
     let options = l2_given(2, norm, 1e-6)
         .with_verification(VerificationOptions::new().with_samples(usize::MAX));
     expect_invalid(
-        patched_interpolate(
+        run_raw(
             &FiberEngine,
             problem.topology.clone(),
             problem.node_sites.clone(),
@@ -1371,12 +1371,14 @@ fn an_unreservable_measurement_point_list_is_invalid_input_after_evaluations() {
     let calls = std::sync::atomic::AtomicUsize::new(0);
     // f = 0: every candidate sample is zero, so the zero screen measures the
     // whole root exhaustively.
-    let zero = |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    let zero = |batch: ColMajorArrayRef<'_, usize>,
+                _ctx: &mut EvalContext<'_>|
+     -> anyhow::Result<Vec<f64>> {
         calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(vec![0.0; batch.shape()[1]])
     };
     let message = expect_invalid(
-        patched_interpolate(
+        run_raw(
             &FiberEngine,
             problem.topology.clone(),
             problem.node_sites.clone(),
@@ -1438,11 +1440,15 @@ impl tensor4all_treetn::interpolation::TreeInterpolator<f64> for WideLeafEngine 
     fn interpolate<V, F>(
         &self,
         problem: &tensor4all_treetn::interpolation::InterpolationProblem<V>,
+        _ctx: &mut tensor4all_treetn::interpolation::EvalContext<'_>,
         _evaluate: F,
     ) -> Result<tensor4all_treetn::interpolation::InterpolationOutcome<V>, InterpolationError>
     where
         V: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
-        F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>>,
+        F: FnMut(
+            ColMajorArrayRef<'_, usize>,
+            &mut tensor4all_treetn::interpolation::EvalContext<'_>,
+        ) -> anyhow::Result<Vec<f64>>,
     {
         use tensor4all_core::{DynIndex, IdxTensor};
         let sites: Vec<(V, Vec<DynIndex>)> = problem
@@ -1543,8 +1549,14 @@ fn failing_on(
     n_sites: usize,
     fail_on: usize,
     calls: &std::sync::atomic::AtomicUsize,
-) -> impl Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>> + Send + Sync + '_ {
-    move |batch| {
+) -> impl FnMut(
+    ColMajorArrayRef<'_, usize>,
+    &mut tensor4all_treetn::interpolation::EvalContext<'_>,
+) -> anyhow::Result<Vec<f64>>
+       + Send
+       + Sync
+       + '_ {
+    move |batch, _ctx: &mut EvalContext<'_>| {
         let call = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         anyhow::ensure!(call != fail_on, "user failure on call {call}");
         Ok(batch.data().chunks(n_sites).map(f).collect())
@@ -1675,4 +1687,41 @@ fn a_capped_rerun_after_a_failed_verification_keeps_no_split_index_left() {
     }
     let calls = engine.calls();
     assert_eq!(calls.len(), 4);
+}
+
+/// The session route of the same norm: the wide-bond, site-free leaf must
+/// canonicalize on the caller's session, including the singleton boundaries
+/// of the empty side, without entering the process-global eager runtime.
+#[test]
+fn treetn_log_norm_on_session_of_a_site_free_leaf_with_a_wide_bond() {
+    use tenferro_cpu::CpuBackend;
+    use tensor4all_core::{DynIndex, IdxTensor};
+    use tensor4all_tensorbackend::explicit::{HeldSession, Session};
+    use tensor4all_tensorbackend::CpuExecutionContext;
+    use tensor4all_treetn::TreeTN;
+    let (sa, sb) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let (ab, be) = (DynIndex::new_dyn(1), DynIndex::new_dyn(2));
+    let a = IdxTensor::from_dense(vec![sa, ab.clone()], vec![1.0, 0.0]).unwrap();
+    let b = IdxTensor::from_dense(vec![sb, ab, be.clone()], vec![3.0, 0.0, 0.0, 4.0]).unwrap();
+    let e = IdxTensor::from_dense(vec![be], vec![1.0, 1.0]).unwrap();
+    let mut network = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![a, b, e],
+        vec!["a".to_string(), "b".to_string(), "e".to_string()],
+    )
+    .unwrap();
+    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let mut held = HeldSession::open(&backend).unwrap();
+    let log_norm = held
+        .with_session(|view| {
+            let mut session = Session::from_backend_session(view.backend());
+            network.log_norm_on_session(&mut session)
+        })
+        .unwrap();
+    held.close().unwrap();
+    assert!(
+        (log_norm.exp() - 5.0).abs() < 1e-12,
+        "log_norm.exp() = {}",
+        log_norm.exp()
+    );
 }

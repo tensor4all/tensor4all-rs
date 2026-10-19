@@ -16,11 +16,11 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, Index, IndexLike, TagSet};
 use tensor4all_partitionedtreetn::adaptive_interpolation::{
-    patched_interpolate, PatchedInterpolationError, PatchedInterpolationResult,
+    PatchedInterpolationError, PatchedInterpolationResult,
 };
 use tensor4all_partitionedtreetn::{ErrorNorm, Projector};
 use tensor4all_treetn::interpolation::{
-    validate_layout, InterpolationError, InterpolationTermination,
+    validate_layout, EvalContext, InterpolationError, InterpolationTermination,
 };
 
 #[test]
@@ -679,9 +679,11 @@ type Failure = fn(usize) -> anyhow::Result<Vec<f64>>;
 fn faulty_evaluator(
     fail_on_call: usize,
     failure: Failure,
-) -> impl Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>> + Send + Sync {
+) -> impl FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>>
+       + Send
+       + Sync {
     let calls = AtomicUsize::new(0);
-    move |batch| {
+    move |batch, _ctx| {
         let n_points = batch.shape()[1];
         if calls.fetch_add(1, Ordering::SeqCst) == fail_on_call {
             failure(n_points)
@@ -694,7 +696,7 @@ fn faulty_evaluator(
 fn run_faulty(
     problem: &Problem,
     engine: &DenseEngine,
-    evaluate: impl Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>> + Send + Sync,
+    evaluate: impl FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>>,
 ) -> Result<PatchedInterpolationResult<Name>, PatchedInterpolationError> {
     let options = sampled_max(2).with_error_norm(ErrorNorm::sampled_max_with_reference(1.0));
     run_with(engine, problem, evaluate, &[], &options)
@@ -832,7 +834,7 @@ fn invalid_layouts_are_rejected_before_any_evaluation() {
         };
         let n_sites = node_sites.values().map(Vec::len).sum::<usize>();
         let message = expect_invalid(
-            patched_interpolate(
+            run_raw(
                 &DenseEngine::new(),
                 topology,
                 node_sites,
@@ -898,7 +900,7 @@ fn invalid_options_and_pivots_are_rejected_before_any_evaluation() {
     let valid_pivots = || ColMajorArray::new(vec![2], vec![1, 1]).unwrap();
     for (options, needle) in option_cases {
         expect_invalid(
-            patched_interpolate(
+            run_raw(
                 &DenseEngine::new(),
                 problem.topology.clone(),
                 problem.node_sites.clone(),
@@ -922,7 +924,7 @@ fn invalid_options_and_pivots_are_rejected_before_any_evaluation() {
     ];
     for (pivots, needle) in pivot_cases {
         expect_invalid(
-            patched_interpolate(
+            run_raw(
                 &DenseEngine::new(),
                 problem.topology.clone(),
                 problem.node_sites.clone(),

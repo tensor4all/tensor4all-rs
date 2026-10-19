@@ -16,6 +16,15 @@ implementing `tensor4all_treetn::interpolation::TreeInterpolator` (for example
 fixes the next site of `patch_order` and retries on every child. The crate
 depends on the engine trait only, not on `tensor4all-treetci`.
 
+The run takes the caller's `EvalContext` (a session the caller has already
+entered, together with the caller's parallelism budget), and the evaluator
+receives that same context. Every numerical stage - the engine call, the
+re-embedding of fixed sites, the measurement of a stored patch, and the norm
+readout - runs on that session, so a run completes inside a caller-held
+session such as a scheduler lane and needs no process-global warm-up. The
+returned partition and report are published as compact host storage and stay
+usable after the session closes.
+
 The accuracy requirement is `PatchedInterpolationOptions::error_norm` with
 `tolerance: ErrorTolerance { rtol, atol }`:
 

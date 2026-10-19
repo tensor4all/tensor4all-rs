@@ -186,10 +186,13 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   checked logical local tensor element counts after child truncation.
 - `add_with_patching(patches, &center, &options)` — split over-cap patches.
 - `adaptive_interpolation::patched_interpolate(&engine, topology, node_sites,
-  initial_pivots, evaluate, &PatchedInterpolationOptions)` — sequential tree
-  pQTCI. `evaluate` receives a column-major `[n_sites, n_points]` batch of
-  0-based full-domain points in the derived site order (nodes ascending, each
-  node's sites in order). An unaccepted patch splits at the next site of the
+  initial_pivots, &mut ctx, evaluate, &PatchedInterpolationOptions)` —
+  sequential tree pQTCI. `ctx` is the run's `EvalContext` over a session the
+  caller entered (`tensor4all_treetn::interpolation::EvalContext::new`); every
+  numerical stage runs on that session, and the result is published as compact
+  host storage. `evaluate` receives a column-major `[n_sites, n_points]`
+  batch of 0-based full-domain points in the derived site order (nodes
+  ascending, each node's sites in order) and the same context. An unaccepted patch splits at the next site of the
   (partial) `patch_order`. `PatchedInterpolationOptions::new(max_bond_dim)`
   (at least 2) plus `with_*` builders: `error_norm` (crate-root `ErrorNorm`;
   default `ErrorNorm::L2 { reference: L2Reference::Required }`), `tolerance`

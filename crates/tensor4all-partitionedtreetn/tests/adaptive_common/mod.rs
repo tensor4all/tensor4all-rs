@@ -17,6 +17,7 @@ use std::fmt::Debug;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+use tenferro_cpu::CpuBackend;
 use tensor4all_core::{
     ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor, IndexLike, TensorElement,
 };
@@ -26,8 +27,12 @@ use tensor4all_partitionedtreetn::adaptive_interpolation::{
     GLOBAL_ROUNDING_MARGIN,
 };
 use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference, Projector};
+use tensor4all_tensorbackend::{
+    explicit::{HeldSession, Session},
+    CpuExecutionContext,
+};
 use tensor4all_treetn::interpolation::{
-    InterpolationError, InterpolationProblem, TreeInterpolator,
+    EvalContext, InterpolationError, InterpolationProblem, Parallelism, TreeInterpolator,
 };
 use tensor4all_treetn::NodeNameNetwork;
 
@@ -418,8 +423,31 @@ pub(crate) fn tree_peak(p: &[usize]) -> f64 {
 // Evaluation bookkeeping and the generic run helper
 // ---------------------------------------------------------------------------
 
+/// Run `body` with one explicit execution capability over a held session.
+///
+/// Every test enters its runs the way the production entries do: one session
+/// the caller opened and serial application parallelism.
+pub(crate) fn with_eval_context<R>(body: impl FnOnce(&mut EvalContext<'_>) -> R) -> R {
+    let context =
+        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+    let mut held = HeldSession::open(&backend).expect("held session");
+    let result = held.with_session(|view| {
+        let mut ctx = EvalContext::new(
+            Session::from_backend_session(view.backend()),
+            Parallelism::Serial,
+        );
+        body(&mut ctx)
+    });
+    held.close().expect("affinity restores");
+    result
+}
+
 /// An evaluator that must never be called.
-pub(crate) fn never(batch: ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>> {
+pub(crate) fn never(
+    batch: ColMajorArrayRef<'_, usize>,
+    _ctx: &mut EvalContext<'_>,
+) -> anyhow::Result<Vec<f64>> {
     panic!("the evaluator was called with shape {:?}", batch.shape())
 }
 
@@ -440,8 +468,11 @@ pub(crate) fn recording_evaluator<'a, T>(
     f: &'a (dyn Fn(&[usize]) -> T + Sync),
     n_sites: usize,
     recorder: &'a Recorder,
-) -> impl Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>> + Send + Sync + 'a {
-    move |batch| {
+) -> impl FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>
+       + Send
+       + Sync
+       + 'a {
+    move |batch, _ctx| {
         assert_eq!(batch.shape()[0], n_sites, "batch rows");
         recorder.calls.fetch_add(1, Ordering::SeqCst);
         let mut seen = recorder.seen.lock().unwrap();
@@ -566,14 +597,14 @@ pub(crate) fn run_with<T, E, F>(
 where
     T: CommonScalar + TensorElement,
     E: TreeInterpolator<T> + Sync,
-    F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>> + Send + Sync,
+    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
     let initial = if pivots.is_empty() {
         ColMajorArray::new(vec![], vec![problem.sites.len(), 0]).unwrap()
     } else {
         problem.pivots(pivots)
     };
-    patched_interpolate(
+    run_raw(
         engine,
         problem.topology.clone(),
         problem.node_sites.clone(),
@@ -581,6 +612,27 @@ where
         evaluate,
         options,
     )
+}
+
+/// Run [`patched_interpolate`] on its own explicit execution capability.
+pub(crate) fn run_raw<T, E, F>(
+    engine: &E,
+    topology: NodeNameNetwork<Name>,
+    node_sites: BTreeMap<Name, Vec<DynIndex>>,
+    initial: ColMajorArray<usize>,
+    evaluate: F,
+    options: &PatchedInterpolationOptions,
+) -> Result<PatchedInterpolationResult<Name>, PatchedInterpolationError>
+where
+    T: CommonScalar + TensorElement,
+    E: TreeInterpolator<T> + Sync,
+    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
+{
+    with_eval_context(|ctx| {
+        patched_interpolate(
+            engine, topology, node_sites, initial, ctx, evaluate, options,
+        )
+    })
 }
 
 /// Run the driver with a recording evaluator. On success, check the

@@ -16,6 +16,7 @@ use std::collections::{BinaryHeap, HashMap};
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 
 use tensor4all_core::{ColMajorArrayRef, CommonScalar, TensorElement};
+use tensor4all_treetn::interpolation::EvalContext;
 
 /// The `width` low bits set; `width` is in `1..=64`.
 fn low_bits(width: u32) -> u64 {
@@ -622,7 +623,7 @@ enum Slot<T> {
 
 /// Samples one patch through its cache.
 pub(super) struct PatchSampler<'a, T, F> {
-    pub(super) evaluate: &'a F,
+    pub(super) evaluate: &'a RefCell<F>,
     pub(super) fixed: &'a [Option<usize>],
     pub(super) n_active: usize,
     pub(super) counters: &'a Counters,
@@ -632,14 +633,18 @@ pub(super) struct PatchSampler<'a, T, F> {
 impl<T, F> PatchSampler<'_, T, F>
 where
     T: CommonScalar + TensorElement,
-    F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
+    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
     /// Values at a column-major `[n_active, n_points]` batch of active
     /// coordinates. Only points absent from the cache reach the evaluator,
     /// each once, completed with the fixed coordinates. The values are checked
     /// for count and finiteness before they are cached; nothing is cached when
     /// the evaluator fails.
-    pub(super) fn sample(&self, batch: ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>> {
+    pub(super) fn sample(
+        &self,
+        batch: ColMajorArrayRef<'_, usize>,
+        ctx: &mut EvalContext<'_>,
+    ) -> anyhow::Result<Vec<T>> {
         let n_active = self.n_active;
         let shape = batch.shape();
         anyhow::ensure!(
@@ -651,7 +656,7 @@ where
         // sampler, so the cache stays borrowed for the whole call.
         let mut cache = self.cache.borrow_mut();
         let PatchCache { layout, entries } = &mut *cache;
-        with_map!(entries, map => self.sample_with(layout, map, batch.data(), n_points))
+        with_map!(entries, map => self.sample_with(layout, map, batch.data(), n_points, ctx))
     }
 
     /// [`Self::sample`] on the map of one key type.
@@ -661,6 +666,7 @@ where
         map: &mut WordMap<K, T>,
         data: &[usize],
         n_points: usize,
+        ctx: &mut EvalContext<'_>,
     ) -> anyhow::Result<Vec<T>> {
         let n_active = self.n_active;
         let mut words = vec![0u64; layout.n_words()];
@@ -704,7 +710,8 @@ where
             let n_sites = self.fixed.len();
             let n_missing = pending.len();
             let full_shape = [n_sites, n_missing];
-            fresh = (self.evaluate)(ColMajorArrayRef::new(&missing_points, &full_shape)?)?;
+            let mut evaluate = self.evaluate.borrow_mut();
+            fresh = (*evaluate)(ColMajorArrayRef::new(&missing_points, &full_shape)?, ctx)?;
             anyhow::ensure!(
                 fresh.len() == n_missing,
                 "the evaluator returned {} values for {n_missing} points",

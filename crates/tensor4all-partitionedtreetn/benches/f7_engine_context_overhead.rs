@@ -1,10 +1,10 @@
 //! Caller-owned-context overhead for the TreeTCI interpolation engine (issue #859 F7).
 //!
-//! [`TreeTciInterpolatorIn`] routes the optimizer and final materialization of
-//! one `TreeInterpolator::interpolate` run through a caller-owned CPU context
-//! instead of the process-global one. This benchmark compares the two engines
-//! on one explicit thread so the comparison is route-for-route, not a
-//! thread-count benchmark.
+//! `TreeTciInterpolator` routes the optimizer and final materialization of one
+//! `TreeInterpolator::interpolate` run through the [`EvalContext`] the caller
+//! passes. This benchmark compares a held session over a caller-owned CPU
+//! context with a held session over the process-global backend on one explicit
+//! thread, so the comparison is route-for-route, not a thread-count benchmark.
 //!
 //! # Thread environment
 //!
@@ -21,15 +21,16 @@
 //! ```
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Once};
+use std::sync::Once;
 use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tenferro_cpu::CpuBackend;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
-use tensor4all_tensorbackend::CpuExecutionContext;
-use tensor4all_treetci::{TreeTciInterpolator, TreeTciInterpolatorIn, TreeTciOptions};
-use tensor4all_treetn::interpolation::TreeInterpolator;
+use tensor4all_tensorbackend::explicit::{HeldSession, Session};
+use tensor4all_tensorbackend::{default_cpu_execution_context, CpuExecutionContext};
+use tensor4all_treetci::TreeTciInterpolator;
+use tensor4all_treetn::interpolation::{EvalContext, Parallelism, TreeInterpolator};
 use tensor4all_treetn::{interpolation::InterpolationProblem, NodeNameNetwork};
 
 static ONE_THREAD: Once = Once::new();
@@ -64,7 +65,10 @@ fn problem() -> InterpolationProblem<usize> {
     InterpolationProblem::new(topology, node_sites, pivots, 1e-10, None, 0).unwrap()
 }
 
-fn evaluate(batch: ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>> {
+fn evaluate(
+    batch: ColMajorArrayRef<'_, usize>,
+    _ctx: &mut EvalContext<'_>,
+) -> anyhow::Result<Vec<f64>> {
     // A smooth two-variable function; 16 points, cheap to sample. Column-major
     // data: for point `p`, row `r` sits at `data[p * rows + r]`.
     let rows = batch.shape()[0];
@@ -78,28 +82,44 @@ fn evaluate(batch: ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>> {
     Ok(out)
 }
 
+/// One engine run on a held session over `backend`.
+fn run_on(backend: &CpuBackend, problem: &InterpolationProblem<usize>) -> anyhow::Result<()> {
+    let mut held = HeldSession::open(backend)?;
+    let outcome = held.with_session(|view| {
+        let mut ctx = EvalContext::new(
+            Session::from_backend_session(view.backend()),
+            Parallelism::Serial,
+        );
+        TreeTciInterpolator::default()
+            .interpolate(problem, &mut ctx, evaluate)
+            .map_err(anyhow::Error::new)
+    });
+    held.close()?;
+    outcome.map(|_| ())
+}
+
 fn bench_plain(criterion: &mut Criterion) {
     pin_one_thread();
     let problem = problem();
-    let engine = TreeTciInterpolator::default();
+    let context = default_cpu_execution_context();
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
     let mut group = criterion.benchmark_group("f7/plain");
     group.measurement_time(Duration::from_millis(800));
     group.bench_function("one_thread_global_route", |bench| {
-        bench.iter(|| black_box(engine.interpolate(&problem, evaluate)))
+        bench.iter(|| black_box(run_on(&backend, &problem)))
     });
 }
 
 fn bench_context(criterion: &mut Criterion) {
     pin_one_thread();
     let problem = problem();
-    let context = Arc::new(CpuExecutionContext::from_backend(
-        CpuBackend::with_threads(1).expect("1T backend"),
-    ));
-    let engine = TreeTciInterpolatorIn::new(TreeTciOptions::default(), context).expect("engine");
+    let context =
+        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T backend"));
+    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
     let mut group = criterion.benchmark_group("f7/context");
     group.measurement_time(Duration::from_millis(800));
     group.bench_function("one_thread_caller_owned", |bench| {
-        bench.iter(|| black_box(engine.interpolate(&problem, evaluate)))
+        bench.iter(|| black_box(run_on(&backend, &problem)))
     });
 }
 

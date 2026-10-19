@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use tensor4all_core::{outer_product, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
+use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::interpolation::{
-    InterpolationError, InterpolationOutcome, InterpolationProblem, InterpolationTermination,
-    TreeInterpolator,
+    EvalContext, InterpolationError, InterpolationOutcome, InterpolationProblem,
+    InterpolationTermination, TreeInterpolator,
 };
 use tensor4all_treetn::TreeTN;
 
@@ -20,11 +20,12 @@ impl TreeInterpolator<f64> for FiberEngine {
     fn interpolate<V, F>(
         &self,
         problem: &InterpolationProblem<V>,
-        evaluate: F,
+        ctx: &mut EvalContext<'_>,
+        mut evaluate: F,
     ) -> Result<InterpolationOutcome<V>, InterpolationError>
     where
         V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-        F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>>,
+        F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>>,
     {
         let evaluator = |source: anyhow::Error| InterpolationError::Evaluator { source };
         let pivot = problem.initial_pivots().column(0).unwrap().to_vec();
@@ -40,7 +41,7 @@ impl TreeInterpolator<f64> for FiberEngine {
         }
         let shape = [n, fibers.len() / n];
         let values =
-            evaluate(ColMajorArrayRef::new(&fibers, &shape).unwrap()).map_err(evaluator)?;
+            evaluate(ColMajorArrayRef::new(&fibers, &shape).unwrap(), ctx).map_err(evaluator)?;
         let center = values[pivot[0]];
         let mut factors = Vec::new();
         let mut offset = 0;
@@ -70,16 +71,15 @@ impl TreeInterpolator<f64> for FiberEngine {
         let mut names = Vec::new();
         let mut tensors = Vec::new();
         for (node, sites) in problem.node_sites() {
-            let mut tensor =
-                IdxTensor::from_dense(links.remove(node).unwrap_or_default(), vec![1.0]).unwrap();
+            let mut indices = links.remove(node).unwrap_or_default();
+            let mut values = vec![1.0];
             for site in sites {
-                let factor =
-                    IdxTensor::from_dense(vec![site.clone()], factors[position].clone()).unwrap();
-                tensor = outer_product(&tensor, &factor).unwrap();
+                values = super::scripted_engine::host_outer(&values, &factors[position]);
+                indices.push(site.clone());
                 position += 1;
             }
             names.push(node.clone());
-            tensors.push(tensor);
+            tensors.push(IdxTensor::from_dense_compact(indices, values).unwrap());
         }
         Ok(InterpolationOutcome {
             network: TreeTN::from_tensors(tensors, names).unwrap(),
