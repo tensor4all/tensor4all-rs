@@ -134,7 +134,14 @@ where
     use rand::SeedableRng;
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
     let mut execution = Compatibility::new(&mut evaluate);
-    update_edge(state, edge, &mut execution, options, &DefaultProposer, &mut rng)
+    update_edge(
+        state,
+        edge,
+        &mut execution,
+        options,
+        &DefaultProposer,
+        &mut rng,
+    )
 }
 
 /// Evaluate the function on the full `I x J` candidate matrix for one edge.

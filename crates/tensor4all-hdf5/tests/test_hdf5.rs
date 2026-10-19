@@ -140,6 +140,40 @@ fn test_itensor_f64_storage_dataset_uses_column_major_linearization() {
 }
 
 #[test]
+fn test_itensor_narrow_floats_are_refused_instead_of_widened() {
+    // The ITensor schema stores f64/Complex64 only. A compact `f32`/`c32` payload must be refused
+    // rather than silently widened into the serialized dtype.
+    let path = temp_path("itensor_narrow_float_refusal");
+    let i = Index::new_dyn(2);
+    let f32_tensor = IdxTensor::from_dense(vec![i.clone()], vec![1.5_f32, -2.5]).unwrap();
+    let error = save_itensor(&path, "tensor", &f32_tensor).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Unsupported storage type for HDF5 serialization"),
+        "{error}"
+    );
+
+    let c32_tensor = IdxTensor::from_dense(
+        vec![i],
+        vec![
+            num_complex::Complex32::new(1.0, -1.0),
+            num_complex::Complex32::new(0.5, 0.0),
+        ],
+    )
+    .unwrap();
+    // A narrow complex payload takes the complex branch (as it did as an eager payload) and fails the
+    // strict Complex64 read instead of being converted.
+    let error = save_itensor(&path, "tensor", &c32_tensor).unwrap_err();
+    assert!(
+        error.to_string().contains("Failed to extract c64 data"),
+        "{error}"
+    );
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn test_itensor_c64_roundtrip() {
     let path = temp_path("itensor_c64");
     let tensor = make_test_tensor_c64();

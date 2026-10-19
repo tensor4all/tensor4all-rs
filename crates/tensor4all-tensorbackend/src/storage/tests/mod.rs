@@ -1181,3 +1181,335 @@ fn payload_nonfinite_flags_names_nan_and_infinity_per_component() {
         }
     );
 }
+
+// ===== Narrow (f32 / Complex32) compact payloads =====
+
+/// Every compact-payload operation must work for the narrow dtypes with the
+/// same machinery as `f64`/`Complex64`, keeping the payload's own dtype.
+#[test]
+fn narrow_dtypes_construct_dense_diag_and_structured_payloads() {
+    let dense = Storage::from_dense_col_major(vec![1.0_f32, -2.0, 3.5], &[3]).unwrap();
+    assert!(dense.is_f32());
+    assert!(!dense.is_f64());
+    assert!(!dense.is_complex());
+    assert_eq!(dense.dtype(), tenferro::DType::F32);
+    assert_eq!(dense.scalar_kind(), "f32");
+    assert_eq!(dense.logical_dims(), vec![3]);
+    assert_eq!(
+        dense.payload_f32_col_major_vec().unwrap(),
+        vec![1.0, -2.0, 3.5]
+    );
+    assert_eq!(
+        dense.to_dense_f32_col_major_vec(&[3]).unwrap(),
+        vec![1.0_f32, -2.0, 3.5]
+    );
+
+    let diag = Storage::from_diag_col_major(vec![1.0_f32, 2.0], 2).unwrap();
+    assert!(diag.is_diag());
+    assert_eq!(diag.axis_classes(), &[0, 0]);
+    assert_eq!(
+        diag.to_dense_f32_col_major_vec(&[2, 2]).unwrap(),
+        vec![1.0_f32, 0.0, 0.0, 2.0]
+    );
+    assert_eq!(diag.sum::<f32>(), 3.0_f32);
+
+    let complex = Storage::from_dense_col_major(
+        vec![Complex32::new(1.0, -1.0), Complex32::new(0.5, 2.0)],
+        &[2],
+    )
+    .unwrap();
+    assert!(complex.is_c32());
+    assert!(!complex.is_c64());
+    assert!(complex.is_complex());
+    assert_eq!(complex.dtype(), tenferro::DType::C32);
+    assert_eq!(complex.scalar_kind(), "Complex32");
+    assert_eq!(
+        complex.to_dense_c32_col_major_vec(&[2]).unwrap(),
+        vec![Complex32::new(1.0, -1.0), Complex32::new(0.5, 2.0)]
+    );
+
+    let structured = Storage::new_structured(
+        vec![1.0_f32, 2.0, 9.0, 3.0],
+        vec![2, 2],
+        vec![1, 2],
+        vec![0, 1],
+    )
+    .unwrap();
+    assert_eq!(structured.storage_kind(), StorageKind::Dense);
+    assert!(structured.is_f32());
+    assert_eq!(structured.payload_dims(), &[2, 2]);
+    assert_eq!(structured.payload_strides(), &[1, 2]);
+    assert_eq!(
+        structured.payload_f32_col_major_vec().unwrap(),
+        vec![1.0, 2.0, 9.0, 3.0]
+    );
+}
+
+#[test]
+fn narrow_dtypes_reject_the_wrong_typed_accessor() {
+    let f32_storage = Storage::from_dense_col_major(vec![1.0_f32], &[1]).unwrap();
+    // A strict accessor never widens or narrows silently.
+    assert!(matches!(
+        f32_storage.payload_f64_col_major_vec().unwrap_err(),
+        StorageError::ScalarKindMismatch {
+            expected: "f64",
+            actual: "f32",
+            ..
+        }
+    ));
+    assert!(matches!(
+        f32_storage.to_dense_f64_col_major_vec(&[1]).unwrap_err(),
+        StorageError::ScalarKindMismatch { .. }
+    ));
+    assert!(matches!(
+        f32_storage.to_dense_c32_col_major_vec(&[1]).unwrap_err(),
+        StorageError::ScalarKindMismatch { .. }
+    ));
+
+    let c32_storage = Storage::from_dense_col_major(vec![Complex32::new(1.0, 0.0)], &[1]).unwrap();
+    assert!(matches!(
+        c32_storage.payload_c64_col_major_vec().unwrap_err(),
+        StorageError::ScalarKindMismatch {
+            expected: "Complex64",
+            actual: "Complex32",
+            ..
+        }
+    ));
+    assert!(matches!(
+        c32_storage.to_dense_f32_col_major_vec(&[1]).unwrap_err(),
+        StorageError::ScalarKindMismatch { .. }
+    ));
+}
+
+#[test]
+fn narrow_dtypes_permute_conj_real_imag_and_complex_embedding() {
+    // Permutation keeps the narrow dtype and moves only axis metadata.
+    let diag = Storage::from_diag_col_major(vec![1.0_f32, 2.0], 2).unwrap();
+    let permuted = diag.permute_storage(&[2, 2], &[1, 0]).unwrap();
+    assert!(permuted.is_f32());
+    assert!(permuted.is_diag());
+    assert_eq!(
+        permuted.to_dense_f32_col_major_vec(&[2, 2]).unwrap(),
+        vec![1.0, 0.0, 0.0, 2.0]
+    );
+
+    let complex = Storage::from_dense_col_major(
+        vec![Complex32::new(1.0, -2.0), Complex32::new(3.0, 4.0)],
+        &[2],
+    )
+    .unwrap();
+    let conjugated = complex.conj();
+    assert!(conjugated.is_c32());
+    assert_eq!(
+        conjugated.to_dense_c32_col_major_vec(&[2]).unwrap(),
+        vec![Complex32::new(1.0, 2.0), Complex32::new(3.0, -4.0)]
+    );
+
+    // Real/imaginary extraction keeps the narrow width: c32 -> f32.
+    let real = complex.extract_real_part();
+    assert!(real.is_f32());
+    assert_eq!(
+        real.to_dense_f32_col_major_vec(&[2]).unwrap(),
+        vec![1.0, 3.0]
+    );
+    let imag = complex.extract_imag_part(&[2]);
+    assert!(imag.is_f32());
+    assert_eq!(
+        imag.to_dense_f32_col_major_vec(&[2]).unwrap(),
+        vec![-2.0, 4.0]
+    );
+
+    // A real payload has no imaginary part, of its own width.
+    let real_narrow = Storage::from_dense_col_major(vec![1.0_f32, 2.0], &[2]).unwrap();
+    let zero_imag = real_narrow.extract_imag_part(&[2]);
+    assert!(zero_imag.is_f32());
+    assert_eq!(
+        zero_imag.to_dense_f32_col_major_vec(&[2]).unwrap(),
+        vec![0.0, 0.0]
+    );
+    assert!(real_narrow.extract_real_part().is_f32());
+    assert!(real_narrow.conj().is_f32());
+
+    // Embedding stays in the narrow half of the lattice: f32 -> Complex32.
+    let embedded = real_narrow.to_complex_storage();
+    assert!(embedded.is_c32());
+    assert_eq!(
+        embedded.to_dense_c32_col_major_vec(&[2]).unwrap(),
+        vec![Complex32::new(1.0, 0.0), Complex32::new(2.0, 0.0)]
+    );
+    assert!(complex.to_complex_storage().is_c32());
+}
+
+#[test]
+fn narrow_dtypes_scan_nonfinite_values_and_read_single_scalars() {
+    let storage =
+        Storage::from_dense_col_major(vec![1.0_f32, f32::NAN, f32::INFINITY, -3.0], &[4]).unwrap();
+    assert_eq!(
+        storage.payload_nonfinite_flags(),
+        NonfiniteFlags {
+            has_nan: true,
+            has_infinity: true,
+        }
+    );
+    assert!(storage.max_abs().is_nan());
+
+    let finite = Storage::from_dense_col_major(vec![1.0_f32, -3.0], &[2]).unwrap();
+    assert_eq!(finite.max_abs(), 3.0);
+    assert_eq!(finite.scalar_at(&[1]).unwrap().as_f64(), Some(-3.0));
+
+    let complex = Storage::from_dense_col_major(vec![Complex32::new(3.0, 4.0)], &[1]).unwrap();
+    assert_eq!(complex.max_abs(), 5.0);
+    assert_eq!(
+        complex.scalar_at(&[0]).unwrap().as_c64(),
+        Some(Complex64::new(3.0, 4.0))
+    );
+    assert_eq!(complex.sum::<Complex32>(), Complex32::new(3.0, 4.0));
+    assert_eq!(complex.sum::<Complex64>(), Complex64::new(3.0, 4.0));
+    // A narrow payload sums into a wide accumulator without changing its dtype.
+    assert_eq!(finite.sum::<f64>(), -2.0_f64);
+    assert!(finite.is_f32());
+}
+
+#[test]
+fn narrow_dtypes_scale_and_combine_through_the_promotion_lattice() {
+    let narrow = Storage::from_dense_col_major(vec![1.0_f32, -2.0], &[2]).unwrap();
+    let wide = Storage::from_dense_col_major(vec![0.5_f64, 1.0], &[2]).unwrap();
+
+    // A real scalar keeps the payload width.
+    assert_eq!(
+        (&narrow * 2.0_f64)
+            .to_dense_f32_col_major_vec(&[2])
+            .unwrap(),
+        vec![2.0, -4.0]
+    );
+    // A complex scalar adds complexity at the payload's own width.
+    assert_eq!(
+        (&narrow * Complex64::new(0.0, 1.0))
+            .to_dense_c32_col_major_vec(&[2])
+            .unwrap(),
+        vec![Complex32::new(0.0, 1.0), Complex32::new(0.0, -2.0)]
+    );
+    assert_eq!(
+        (&narrow * BackendScalar::from(Complex32::new(1.0, 1.0))).dtype(),
+        tenferro::DType::C32
+    );
+
+    // `axpby` shares one promotion rule with `scale`: the payloads promote along the lattice and the
+    // scalars never widen the payload dtype.
+    // f32 + f32 with f64 scalars stays f32 (a scalar coefficient does not promote a tensor).
+    let narrow_result = narrow
+        .axpby(
+            &BackendScalar::from(1.0_f64),
+            &narrow,
+            &BackendScalar::from(2.0_f64),
+        )
+        .unwrap();
+    assert!(narrow_result.is_f32());
+    assert_eq!(
+        narrow_result.to_dense_f32_col_major_vec(&[2]).unwrap(),
+        vec![3.0, -6.0]
+    );
+
+    // f32 + f64 promotes to f64.
+    let promoted = narrow
+        .axpby(
+            &BackendScalar::from(1.0_f64),
+            &wide,
+            &BackendScalar::from(2.0_f64),
+        )
+        .unwrap();
+    assert!(promoted.is_f64());
+    assert_eq!(
+        promoted.to_dense_f64_col_major_vec(&[2]).unwrap(),
+        vec![2.0, 0.0]
+    );
+
+    // A complex scalar turns the f32 result into Complex32 instead of widening to Complex64.
+    let complex_scaled = narrow
+        .axpby(
+            &BackendScalar::new_complex(0.0, 1.0),
+            &narrow,
+            &BackendScalar::from(2.0_f64),
+        )
+        .unwrap();
+    assert!(complex_scaled.is_c32());
+    assert_eq!(
+        complex_scaled.to_dense_c32_col_major_vec(&[2]).unwrap(),
+        vec![Complex32::new(2.0, 1.0), Complex32::new(-4.0, -2.0)]
+    );
+    // A narrow complex scalar keeps the narrow width too.
+    let narrow_complex = narrow
+        .axpby(
+            &BackendScalar::from(Complex32::new(1.0, 0.0)),
+            &narrow,
+            &BackendScalar::from(Complex32::new(0.0, 1.0)),
+        )
+        .unwrap();
+    assert!(narrow_complex.is_c32());
+    assert_eq!(
+        narrow_complex.to_dense_c32_col_major_vec(&[2]).unwrap(),
+        vec![Complex32::new(1.0, 1.0), Complex32::new(-2.0, -2.0)]
+    );
+
+    // Same-dtype elementwise algebra keeps the narrow dtype; mixed kinds are refused.
+    let sum = narrow.try_add(&narrow).unwrap();
+    assert!(sum.is_f32());
+    assert_eq!(
+        sum.to_dense_f32_col_major_vec(&[2]).unwrap(),
+        vec![2.0, -4.0]
+    );
+    let difference = narrow.try_sub(&narrow).unwrap();
+    assert_eq!(
+        difference.to_dense_f32_col_major_vec(&[2]).unwrap(),
+        vec![0.0, 0.0]
+    );
+    assert!(matches!(
+        narrow.try_add(&wide).unwrap_err(),
+        StorageError::OperationNotSupported { .. }
+    ));
+
+    // Combining two narrow real payloads yields the narrow complex dtype.
+    let combined = Storage::combine_to_complex(&narrow, &narrow).unwrap();
+    assert!(combined.is_c32());
+    assert_eq!(
+        combined.to_dense_c32_col_major_vec(&[2]).unwrap(),
+        vec![Complex32::new(1.0, 1.0), Complex32::new(-2.0, -2.0)]
+    );
+    let combined_wide = Storage::combine_to_complex(&wide, &wide).unwrap();
+    assert!(combined_wide.is_c64());
+    assert!(matches!(
+        Storage::combine_to_complex(&narrow, &wide).unwrap_err(),
+        StorageError::OperationNotSupported { .. }
+    ));
+}
+
+#[test]
+fn scale_target_dtype_follows_the_promotion_lattice() {
+    use tenferro::DType;
+    assert_eq!(
+        scale_target_dtype(DType::F32, DType::F32).unwrap(),
+        DType::F32
+    );
+    assert_eq!(
+        scale_target_dtype(DType::F32, DType::F64).unwrap(),
+        DType::F32
+    );
+    assert_eq!(
+        scale_target_dtype(DType::F32, DType::C32).unwrap(),
+        DType::C32
+    );
+    assert_eq!(
+        scale_target_dtype(DType::C32, DType::F64).unwrap(),
+        DType::C32
+    );
+    assert_eq!(
+        scale_target_dtype(DType::F64, DType::C32).unwrap(),
+        DType::C64
+    );
+    assert_eq!(
+        scale_target_dtype(DType::C64, DType::F32).unwrap(),
+        DType::C64
+    );
+    assert!(scale_target_dtype(DType::I32, DType::F64).is_err());
+    assert!(scale_target_dtype(DType::F64, DType::I64).is_err());
+}

@@ -9,6 +9,7 @@ use std::hash::Hash;
 use std::num::NonZeroUsize;
 
 use num_complex::Complex64;
+use tenferro_cpu::CpuBackend;
 use tensor4all_core::{
     ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor, Index, IndexLike, TagSet,
     TensorElement,
@@ -23,7 +24,6 @@ use tensor4all_treetn::interpolation::{
     InterpolationTermination, Parallelism, TreeInterpolator,
 };
 use tensor4all_treetn::{factorize_tensor_to_treetn, NodeNameNetwork, TreeTopology};
-use tenferro_cpu::CpuBackend;
 
 type Name = String;
 
@@ -757,7 +757,12 @@ fn problem_seed_overrides_the_engine_seed() {
             ..Default::default()
         })
         .unwrap();
-        run_engine(&engine, problem, evaluator(&sparse_value, site_dims(problem))).unwrap()
+        run_engine(
+            &engine,
+            problem,
+            evaluator(&sparse_value, site_dims(problem)),
+        )
+        .unwrap()
     };
     let dense_difference = |a: &InterpolationOutcome<Name>, b: &InterpolationOutcome<Name>| {
         a.network
@@ -845,14 +850,22 @@ fn evaluator_failures_are_reported_as_evaluator_errors() {
         let n_sites = problem.site_order().len();
         let calls = Cell::new(0);
         expect_evaluator_error(
-            run_engine(&engine, problem, faulty_evaluator(&calls, fail_on, false, n_sites)),
+            run_engine(
+                &engine,
+                problem,
+                faulty_evaluator(&calls, fail_on, false, n_sites),
+            ),
             &format!("planned failure on call {fail_on}"),
         );
         assert_eq!(calls.get(), fail_on);
 
         let calls = Cell::new(0);
         expect_evaluator_error(
-            run_engine(&engine, problem, faulty_evaluator(&calls, fail_on, true, n_sites)),
+            run_engine(
+                &engine,
+                problem,
+                faulty_evaluator(&calls, fail_on, true, n_sites),
+            ),
             "values for",
         );
         assert_eq!(calls.get(), fail_on);
@@ -879,7 +892,7 @@ fn oversized_nodes_are_invalid_problems() {
     let engine = TreeTciInterpolator::default();
     let calls = Cell::new(0);
     let counting = |batch: ColMajorArrayRef<'_, usize>,
-                        _ctx: &mut EvalContext<'_>|
+                    _ctx: &mut EvalContext<'_>|
      -> anyhow::Result<Vec<f64>> {
         calls.set(calls.get() + 1);
         Ok(vec![1.0; batch.shape()[1]])
@@ -957,7 +970,11 @@ fn evaluator_failure_during_materialization_is_an_evaluator_error() {
     // materialization call.
     let calls = Cell::new(0);
     expect_evaluator_error(
-        run_engine(&engine, &problem, faulty_evaluator(&calls, total, false, n_sites)),
+        run_engine(
+            &engine,
+            &problem,
+            faulty_evaluator(&calls, total, false, n_sites),
+        ),
         &format!("planned failure on call {total}"),
     );
     assert_eq!(calls.get(), total);
@@ -1067,7 +1084,9 @@ fn non_finite_sweep_and_materialization_samples_are_evaluator_errors() {
         n_sites: usize,
     ) -> impl FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>> + '_
     {
-        move |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
+        move |batch: ColMajorArrayRef<'_, usize>,
+              _ctx: &mut EvalContext<'_>|
+              -> anyhow::Result<Vec<f64>> {
             calls.set(calls.get() + 1);
             Ok(batch
                 .data()

@@ -1,7 +1,7 @@
 //! F1 slice 3: `sum` on a caller-held explicit session.
 //!
-//! The reduction must agree with `IdxTensor::sum` for the dense host representations this slice serves, and
-//! must refuse what it does not serve instead of falling back.
+//! The reduction must agree with `IdxTensor::sum` for every dense host representation this slice serves -
+//! including the narrow `f32`/`c32` payloads - and must refuse what it does not serve instead of falling back.
 
 use std::sync::Arc;
 
@@ -95,8 +95,8 @@ fn the_dtype_domain_is_the_shared_one_and_its_refusals_are_typed() {
         c64_sum.imag()
     );
 
-    // f32 and c32 are refused by the shared operand adaptation, exactly as the contraction and inner
-    // product slices refuse them; widening that domain is a separate change with its own parity evidence.
+    // f32 and c32 carry their own compact payloads, so this route serves them and keeps their dtype
+    // instead of widening into the f64 accumulation.
     let f32_tensor =
         IdxTensor::from_dense(vec![i.clone(), k.clone()], vec![1.5_f32, 2.5, -1.0, 3.0]).unwrap();
     let c32_tensor = IdxTensor::from_dense(
@@ -109,26 +109,15 @@ fn the_dtype_domain_is_the_shared_one_and_its_refusals_are_typed() {
         ],
     )
     .unwrap();
-    let mut refused = Vec::new();
-    for tensor in [&f32_tensor, &c32_tensor] {
-        let error = context
+    for (label, tensor) in [("f32", &f32_tensor), ("c32", &c32_tensor)] {
+        let compatibility = tensor.sum().expect("compatibility sum");
+        let served = context
             .with_concrete_session(|session| sum_on_session(session, tensor))
             .expect("session entry")
-            .expect_err("an unserved dtype is refused");
-        match error {
-            tensor4all_core::IdxTensorError::Operation { operation, source } => {
-                assert_eq!(operation, "sum_on_session");
-                refused.push(source.to_string());
-            }
-            other => panic!("expected a typed operation refusal, got {other:?}"),
-        }
+            .expect("a narrow dtype is served");
+        assert_eq!(served.real(), compatibility.real(), "{label}");
+        assert_eq!(served.imag(), compatibility.imag(), "{label}");
     }
-    assert!(
-        refused
-            .iter()
-            .all(|message| message.contains("f64 and c64 operands")),
-        "the dtype refusal names the served domain: {refused:?}"
-    );
 }
 
 #[test]

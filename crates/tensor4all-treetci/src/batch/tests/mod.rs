@@ -67,8 +67,8 @@ fn evaluate_points_chunked_rejects_invalid_input() {
         let n = batch.n_points();
         Ok(vec![0; if n == 3 { n } else { n - 1 }])
     };
-    let error =
-        evaluate_points_chunked(1, 5, 3, |point| point[0] = 0, &mut short, "test points").unwrap_err();
+    let error = evaluate_points_chunked(1, 5, 3, |point| point[0] = 0, &mut short, "test points")
+        .unwrap_err();
     assert_eq!(
         error.to_string(),
         "batch evaluator returned 1 values for 2 test points (points 3..5 of 5)"

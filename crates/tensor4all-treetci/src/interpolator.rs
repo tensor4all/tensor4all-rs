@@ -285,10 +285,7 @@ where
     ) -> Result<InterpolationOutcome<V>, InterpolationError>
     where
         V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-        F: FnMut(
-            ColMajorArrayRef<'_, usize>,
-            &mut EvalContext<'_>,
-        ) -> anyhow::Result<Vec<T>>,
+        F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
     {
         let layout = VertexLayout::new(problem)?;
 

@@ -80,12 +80,7 @@ where
                 |batch: GlobalIndexBatch<'_>, _ctx: &mut EvalContext<'_>| evaluate(batch);
             let mut context = crate::evaluation::serial_context(session);
             let mut execution = Explicit::new(&mut context, &mut contextual);
-            to_treetn_chunked(
-                state,
-                &mut execution,
-                center_site,
-                EVALUATION_CHUNK_POINTS,
-            )
+            to_treetn_chunked(state, &mut execution, center_site, EVALUATION_CHUNK_POINTS)
         })
         .map_err(|error| TreeTciError::from(anyhow::Error::new(error)))?
 }
@@ -240,14 +235,7 @@ where
         let out_keys = state.graph.edge_in_ij_keys(site, &out_edges)?;
 
         let data = if out_edges.is_empty() {
-            fill_tensor_values(
-                state,
-                &in_keys,
-                &out_keys,
-                &[site],
-                execution,
-                chunk_points,
-            )?
+            fill_tensor_values(state, &in_keys, &out_keys, &[site], execution, chunk_points)?
         } else {
             site_tensor_with_parent(
                 state,
@@ -313,7 +301,8 @@ where
         ));
     };
 
-    let pi1_values = fill_tensor_values(state, in_keys, out_keys, &[site], execution, chunk_points)?;
+    let pi1_values =
+        fill_tensor_values(state, in_keys, out_keys, &[site], execution, chunk_points)?;
     let rows = state.local_dims[site]
         .checked_mul(product_pivot_dims(state, in_keys)?)
         .ok_or_else(|| anyhow::anyhow!("materialized site row count overflowed usize"))?;

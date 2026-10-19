@@ -1,9 +1,9 @@
-//! F1 slice 7: the norms serve `f32`/`c32`; every route that publishes into an `IdxTensor` refuses them.
+//! F1 slice 7: every session route serves `f32`/`c32`, and tensor publication keeps their dtype.
 //!
-//! The implemented rule is conservative *per-operand* admission for compact-storage publication: only a route
-//! whose whole result is a plain `f64` - the norms - admits the narrower floats, where they are promoted into
-//! the same `f64` accumulation the compatibility route uses. A mixed narrow/wide pair could in principle have
-//! produced a wide publishable result, and this slice deliberately does not admit it; the refusal says so.
+//! The original rule was conservative *per-operand* admission for compact-storage publication: only a route
+//! whose whole result is a plain `f64` - the norms - admitted the narrower floats. Compact storage now holds
+//! `f32`/`Complex32` payloads, so publication is dtype preserving instead of refusing, and the tensor-publishing
+//! routes serve the narrow floats in their own dtype rather than widening them into `f64`.
 
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
@@ -21,7 +21,7 @@ fn session_context() -> CpuExecutionContext {
 }
 
 #[test]
-fn sum_refuses_the_narrower_floats_because_its_carrier_cannot_hold_them() {
+fn sum_serves_the_narrower_floats_in_their_own_dtype() {
     let context = session_context();
     let i = Index::new_dyn(2);
     let k = Index::new_dyn(2);
@@ -40,18 +40,13 @@ fn sum_refuses_the_narrower_floats_because_its_carrier_cannot_hold_them() {
     .unwrap();
 
     for (label, tensor) in [("f32", &f32_tensor), ("c32", &c32_tensor)] {
-        // Compatibility serves these, so the refusal is this seam's own carrier limit and not the input's.
-        assert!(tensor.sum().is_ok(), "{label}");
-        let error = context
+        let compatibility = tensor.sum().expect("compatibility sum");
+        let served = context
             .with_concrete_session(|session| sum_on_session(session, tensor))
             .expect("session entry")
-            .expect_err("the scalar carrier cannot hold a narrower float");
-        match error {
-            tensor4all_core::IdxTensorError::Operation { operation, .. } => {
-                assert_eq!(operation, "sum_on_session", "{label}")
-            }
-            other => panic!("{label}: expected a typed operation refusal, got {other:?}"),
-        }
+            .expect("the scalar carrier holds the narrower floats too");
+        assert_eq!(served.real(), compatibility.real(), "{label}");
+        assert_eq!(served.imag(), compatibility.imag(), "{label}");
     }
 }
 
@@ -114,7 +109,7 @@ fn norms_promote_the_narrower_floats_like_the_compatibility_route() {
 }
 
 #[test]
-fn the_tensor_routes_still_refuse_the_narrower_floats() {
+fn the_tensor_routes_publish_the_narrower_floats_in_their_own_dtype() {
     let context = session_context();
     let i = Index::new_dyn(2);
     let k = Index::new_dyn(2);
@@ -130,69 +125,61 @@ fn the_tensor_routes_still_refuse_the_narrower_floats() {
         ],
     )
     .unwrap();
-    // Compatibility serves these, so the refusal is this seam's own dtype domain and not the input's.
-    assert!(f32_tensor.permute(&[1, 0]).is_ok());
+
+    // References are taken before the session scope: the compatibility route enters the eager runtime,
+    // which a held session does not allow.
+    let f32_permuted = f32_tensor.permute(&[1, 0]).expect("compatibility permute");
+    let c32_permuted = c32_tensor.permute(&[1, 0]).expect("compatibility permute");
+    let f32_aligned = f32_tensor
+        .permute_indices(&[k.clone(), i.clone()])
+        .expect("compatibility alignment");
 
     context
         .with_concrete_session(|session| {
-            for (label, tensor) in [("f32", &f32_tensor), ("c32", &c32_tensor)] {
-                let error = permute_on_session(session, tensor, &[1, 0])
-                    .expect_err("a tensor-publishing route refuses a narrower float");
-                match error {
-                    tensor4all_core::IdxTensorError::Operation { operation, source } => {
-                        assert_eq!(operation, "permute_on_session", "{label}");
-                        assert!(
-                            source.to_string().contains("f64 and c64 operands"),
-                            "{label}: {source}"
-                        );
-                    }
-                    other => panic!("{label}: expected a typed operation refusal, got {other:?}"),
-                }
-                let error = contract_pair_on_session(
+            for (label, tensor, permuted) in [
+                ("f32", &f32_tensor, &f32_permuted),
+                ("c32", &c32_tensor, &c32_permuted),
+            ] {
+                // Permutation publishes a narrow result without widening it.
+                let served = permute_on_session(session, tensor, &[1, 0]).expect("session permute");
+                assert_eq!(served.indices(), permuted.indices(), "{label}");
+                assert_eq!(served.dims(), permuted.dims(), "{label}");
+                assert_eq!(served.is_f32(), tensor.is_f32(), "{label}");
+                assert_eq!(served.is_c32(), tensor.is_c32(), "{label}");
+
+                // A nonidentity index alignment publishes the same narrow dtype.
+                let aligned = permute_indices_on_session(session, tensor, &[k.clone(), i.clone()])
+                    .expect("session alignment");
+                assert_eq!(aligned.is_f32(), tensor.is_f32(), "{label}");
+                assert_eq!(aligned.is_c32(), tensor.is_c32(), "{label}");
+
+                // The scalar contraction route serves a narrow pair.
+                contract_pair_on_session(
                     session,
                     tensor,
                     tensor,
                     PairwiseContractionOptions::new(),
                 )
-                .expect_err("contraction refuses it too");
-                assert!(matches!(
-                    error,
-                    tensor4all_core::IdxTensorError::Operation { .. }
-                ));
-            }
-            // The narrow operand is refused in either position of the inner product, and through a
-            // nonidentity index alignment.
-            let wide =
-                IdxTensor::from_dense(vec![i.clone(), k.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])
-                    .unwrap();
-            for (label, lhs, rhs) in [
-                ("narrow left", &f32_tensor, &wide),
-                ("narrow right", &wide, &f32_tensor),
-            ] {
-                let error = inner_product_on_session(session, lhs, rhs)
-                    .expect_err("the inner product refuses a narrow operand");
-                match error {
-                    tensor4all_core::IdxTensorError::Operation { operation, source } => {
-                        assert_eq!(operation, "contract_pair_on_session", "{label}");
-                        assert!(
-                            source.to_string().contains("f64 and c64 operands"),
-                            "{label}"
-                        );
-                    }
-                    other => panic!("{label}: expected a typed operation refusal, got {other:?}"),
+                .expect("narrow contraction");
+
+                // The inner product accepts the narrow operand in either position.
+                let wide =
+                    IdxTensor::from_dense(vec![i.clone(), k.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])
+                        .unwrap();
+                for (position, lhs, rhs) in [
+                    ("narrow left", tensor, &wide),
+                    ("narrow right", &wide, tensor),
+                ] {
+                    inner_product_on_session(session, lhs, rhs)
+                        .unwrap_or_else(|error| panic!("{label}/{position}: {error:?}"));
                 }
-            }
-            let error = permute_indices_on_session(session, &f32_tensor, &[k.clone(), i.clone()])
-                .expect_err("a nonidentity alignment refuses a narrow operand");
-            match error {
-                tensor4all_core::IdxTensorError::Operation { operation, source } => {
-                    assert_eq!(operation, "permute_on_session");
-                    assert!(source.to_string().contains("f64 and c64 operands"));
-                }
-                other => panic!("expected a typed operation refusal, got {other:?}"),
             }
 
-            // A route whose carrier holds `f64` still works after those refusals.
+            let aligned = permute_indices_on_session(session, &f32_tensor, &[k.clone(), i.clone()])
+                .expect("session alignment");
+            assert_eq!(aligned.indices(), f32_aligned.indices());
+
+            // A route whose carrier holds `f64` still works after the narrow ones.
             let wide =
                 IdxTensor::from_dense(vec![i.clone(), k.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])
                     .unwrap();
@@ -201,7 +188,7 @@ fn the_tensor_routes_still_refuse_the_narrower_floats() {
             Ok::<(), tensor4all_core::IdxTensorError>(())
         })
         .expect("session entry")
-        .expect("session work after refusals");
+        .expect("session work after the narrow routes");
 }
 
 #[test]

@@ -83,17 +83,13 @@ where
     assert_eq!(tensor.dims(), vec![3, 3]);
     assert!(tensor.is_diag());
     assert_eq!(tensor.storage_kind(), StorageKind::Diagonal);
-    if tensor.is_f32() || tensor.is_c32() {
-        assert!(matches!(
-            tensor.storage(),
-            Err(TensorStorageError::UnsupportedDtype { .. })
-        ));
-    } else {
-        assert_eq!(
-            tensor.storage().unwrap().storage_kind(),
-            StorageKind::Diagonal
-        );
-    }
+    // Every supported element type keeps its own scalar kind in compact storage.
+    let storage = tensor.storage().expect("compact storage snapshot");
+    assert_eq!(storage.storage_kind(), StorageKind::Diagonal);
+    // The snapshot keeps the element type: a strict typed read succeeds and the
+    // other width of the same real/complex kind is refused.
+    let dense = tensor.to_vec::<T>().expect("own-dtype read");
+    assert_eq!(dense.len(), 9);
 }
 
 #[test]

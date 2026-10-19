@@ -17,7 +17,6 @@ use tensor4all_core::{
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
 
-
 /// Run the production readout search over a context-free evaluator: the test-side
 /// wrapper around the execution owner the context-free entries build themselves.
 #[allow(clippy::type_complexity)]
@@ -674,8 +673,7 @@ where
     )
     .unwrap();
     let mut rng = seeded_rng(3);
-    let pointwise =
-        run_search(&state, evaluate, params, &mut rng, pointwise_readout).unwrap();
+    let pointwise = run_search(&state, evaluate, params, &mut rng, pointwise_readout).unwrap();
     assert!(
         !cached.is_empty(),
         "the swept 32-bit state must leave errors above the threshold"
@@ -945,8 +943,7 @@ fn search_rejects_failing_or_short_readouts() {
                    _: Option<usize>|
      -> Result<Vec<AnyScalar>> { Err(anyhow::anyhow!("readout failed")) };
     let mut rng = seeded_rng(3);
-    let error = run_search(&state, fixture.evaluate(), params, &mut rng, failing)
-        .unwrap_err();
+    let error = run_search(&state, fixture.evaluate(), params, &mut rng, failing).unwrap_err();
     assert!(error.to_string().contains("readout failed"), "{error}");
 
     let short = |_: &mut TreeTNCachedEvaluator<'_, usize>,
@@ -956,8 +953,7 @@ fn search_rejects_failing_or_short_readouts() {
                  _: Option<usize>|
      -> Result<Vec<AnyScalar>> { Ok(Vec::new()) };
     let mut rng = seeded_rng(3);
-    let error =
-        run_search(&state, fixture.evaluate(), params, &mut rng, short).unwrap_err();
+    let error = run_search(&state, fixture.evaluate(), params, &mut rng, short).unwrap_err();
     assert!(
         error
             .to_string()
@@ -997,9 +993,7 @@ fn coordinate_scans_propagate_evaluator_and_readout_failures() {
             started.set(true);
             cached_walk_readout(cache, tree, indices, points, site)
         };
-        let error =
-            run_search(&state, evaluate, params, &mut seeded_rng(1), readout)
-                .unwrap_err();
+        let error = run_search(&state, evaluate, params, &mut seeded_rng(1), readout).unwrap_err();
         let message = if wrong_length {
             "batch evaluator returned 3 values for 2"
         } else {

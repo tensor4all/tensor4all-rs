@@ -48,10 +48,9 @@ use anyhow::{Context, Result};
 
 use crate::algorithm::CanonicalForm;
 use tensor4all_core::{
-    contract_pair_on_session, factorize_in, factorize_on_session,
-    validate_svd_truncation_options, Canonical, FactorizeAlg, FactorizeOptions, IndexLike,
-    PairwiseContractionOptions, SvdTruncationPolicy, TensorContractionLike, TensorFactorizationLike,
-    TensorIndex, TensorLike,
+    contract_pair_on_session, factorize_in, factorize_on_session, validate_svd_truncation_options,
+    Canonical, FactorizeAlg, FactorizeOptions, IndexLike, PairwiseContractionOptions,
+    SvdTruncationPolicy, TensorContractionLike, TensorFactorizationLike, TensorIndex, TensorLike,
 };
 use tensor4all_tensorbackend::{default_cpu_execution_context, ExecutionContext};
 
@@ -273,9 +272,7 @@ impl<'a, 'session> SessionViewLeaves<'a, 'session> {
 
     fn with_session<R>(
         &self,
-        f: impl FnOnce(
-            &mut tensor4all_tensorbackend::explicit::Session<'_>,
-        ) -> Result<R>,
+        f: impl FnOnce(&mut tensor4all_tensorbackend::explicit::Session<'_>) -> Result<R>,
     ) -> Result<R> {
         let mut session = self.session.borrow_mut();
         f(&mut session)

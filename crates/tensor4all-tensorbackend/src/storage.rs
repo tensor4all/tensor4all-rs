@@ -1,7 +1,124 @@
+use crate::any_scalar::BackendScalar;
+use crate::tensor_element::TensorElement;
 use anyhow::{anyhow, ensure, Result};
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use std::ops::Mul;
 use std::sync::Arc;
+use tenferro::{DType, TensorScalar};
+
+/// Dispatch a compact-payload body once over every scalar type [`Storage`] holds.
+///
+/// The four erased arms live here and nowhere else; `$ty` names the payload
+/// scalar type inside `$body`, so dtype-agnostic storage methods are written
+/// exactly once. Do not name `$ty` after an enclosing generic parameter: the
+/// expansion introduces a local type alias with that name.
+macro_rules! storage_payload_dispatch {
+    ($repr:expr, $ty:ident => |$payload:ident| $body:expr) => {
+        match $repr {
+            StorageRepr::F32($payload) => {
+                #[allow(unused)] // the body names the payload type only when it needs it
+                type $ty = f32;
+                $body
+            }
+            StorageRepr::F64($payload) => {
+                #[allow(unused)] // the body names the payload type only when it needs it
+                type $ty = f64;
+                $body
+            }
+            StorageRepr::C32($payload) => {
+                #[allow(unused)] // the body names the payload type only when it needs it
+                type $ty = Complex32;
+                $body
+            }
+            StorageRepr::C64($payload) => {
+                #[allow(unused)] // the body names the payload type only when it needs it
+                type $ty = Complex64;
+                $body
+            }
+        }
+    };
+}
+
+/// Dispatch a two-operand body over payloads that share one scalar type.
+///
+/// Elementwise storage algebra is only defined for matching scalar kinds, so
+/// the four same-dtype arms are written once and every other combination falls
+/// through to `else <expr>`.
+macro_rules! storage_payload_same_dtype_dispatch {
+    ($left:expr, $right:expr, $ty:ident => |$a:ident, $b:ident| $body:expr, else $fallback:expr) => {
+        match ($left, $right) {
+            (StorageRepr::F32($a), StorageRepr::F32($b)) => {
+                #[allow(unused)] // the body names the payload type only when it needs it
+                type $ty = f32;
+                $body
+            }
+            (StorageRepr::F64($a), StorageRepr::F64($b)) => {
+                #[allow(unused)] // the body names the payload type only when it needs it
+                type $ty = f64;
+                $body
+            }
+            (StorageRepr::C32($a), StorageRepr::C32($b)) => {
+                #[allow(unused)] // the body names the payload type only when it needs it
+                type $ty = Complex32;
+                $body
+            }
+            (StorageRepr::C64($a), StorageRepr::C64($b)) => {
+                #[allow(unused)] // the body names the payload type only when it needs it
+                type $ty = Complex64;
+                $body
+            }
+            _ => $fallback,
+        }
+    };
+}
+
+/// Dispatch a two-payload body over every scalar-type pair.
+///
+/// The nesting is intentional: each payload keeps its own concrete scalar type,
+/// so cross-dtype algebra (mixed promotion) is written once instead of in
+/// sixteen hand-written arms.
+macro_rules! storage_payload_pair_dispatch {
+    ($left:expr, $right:expr, $left_ty:ident, $right_ty:ident => |$a:ident, $b:ident| $body:expr) => {
+        storage_payload_dispatch!($left, $left_ty => |$a| {
+            storage_payload_dispatch!($right, $right_ty => |$b| $body)
+        })
+    };
+}
+
+/// Dispatch a body over a computed result dtype, binding `$ty` to it.
+///
+/// Used where promotion decides the result scalar type before the payload can
+/// be built, so the arithmetic is written once and narrowed or widened by
+/// [`StorageScalar::from_widened_parts`].
+macro_rules! storage_dtype_dispatch {
+    ($dtype:expr, $ty:ident => $body:expr, else $fallback:expr) => {
+        match $dtype {
+            DType::F32 => {
+                #[allow(unused)] // the body names the payload type only when it needs it
+                type $ty = f32;
+                $body
+            }
+            DType::F64 => {
+                #[allow(unused)] // the body names the payload type only when it needs it
+                type $ty = f64;
+                $body
+            }
+            DType::C32 => {
+                #[allow(unused)] // the body names the payload type only when it needs it
+                type $ty = Complex32;
+                $body
+            }
+            DType::C64 => {
+                #[allow(unused)] // the body names the payload type only when it needs it
+                type $ty = Complex64;
+                $body
+            }
+            _ => $fallback,
+        }
+    };
+}
+
+pub(crate) use storage_dtype_dispatch;
 
 /// Named result of a non-finite scan over stored scalar values.
 ///
@@ -40,7 +157,15 @@ pub struct NonfiniteFlags {
 /// Trait for scalar types that can be stored in [`Storage`].
 ///
 /// This enables generic constructors such as [`Storage::from_dense_col_major`]
-/// and [`Storage::from_diag_col_major`]. Implemented for `f64` and `Complex64`.
+/// and [`Storage::from_diag_col_major`], and it is the single seam through
+/// which dtype-erased storage code reaches a concrete payload. Implemented for
+/// `f64`, `Complex64`, `f32`, and `Complex32`.
+///
+/// Compact storage never widens a payload: `f32` stays `f32` and `Complex32`
+/// stays `Complex32` in memory and on every accessor. The associated items
+/// describe the real/complex structure so that dtype-agnostic scans can be
+/// written once; explicit width promotion happens only in the storage algebra
+/// that documents it ([`Storage::axpby`], [`Storage::scale`]).
 ///
 /// # Examples
 ///
@@ -57,15 +182,83 @@ pub struct NonfiniteFlags {
 ///     &[2],
 /// ).unwrap();
 /// assert!(c.is_c64());
+///
+/// // Narrow payloads keep their dtype instead of widening.
+/// let narrow = Storage::from_dense_col_major(vec![1.0_f32, 2.0], &[2]).unwrap();
+/// assert!(narrow.is_f32());
+/// assert_eq!(f32::KIND, "f32");
+/// assert_eq!(Complex64::KIND, "Complex64");
 /// ```
-pub trait StorageScalar: Clone + Send + Sync + 'static {
+pub trait StorageScalar: TensorElement + Default + PartialEq + num_traits::Num {
+    /// Display name of this scalar type in diagnostics (`"f32"`, `"Complex64"`, ...).
+    const KIND: &'static str;
+    /// Whether values carry an imaginary component.
+    const IS_COMPLEX: bool;
+    /// The complex counterpart of this scalar type (`f32` -> `Complex32`).
+    type Complex: StorageScalar;
+
+    /// Widen this value to `(real, imaginary)` parts for dtype-agnostic scans.
+    fn widened_parts(self) -> (f64, f64);
+
+    /// Narrow widened parts back to this scalar type.
+    fn from_widened_parts(re: f64, im: f64) -> Self;
+
+    /// Real part as this scalar's real counterpart.
+    fn real_part(self) -> Self::Real;
+
+    /// Imaginary part as this scalar's real counterpart (`0` for real scalars).
+    fn imag_part(self) -> Self::Real;
+
+    /// Embed this value, including its imaginary part, in [`Self::Complex`].
+    fn into_complex(self) -> Self::Complex;
+
+    /// The complex conjugate (`self` for real scalars).
+    fn conjugate(self) -> Self;
+
+    /// Wrap a compact payload of this scalar type as a [`Storage`].
+    fn wrap_payload(payload: StructuredStorage<Self>) -> Storage;
+
+    /// Copy this value into a dynamic [`BackendScalar`].
+    fn to_backend_scalar(self) -> BackendScalar;
+
+    /// Copy the compact payload of this scalar type, rejecting other dtypes.
+    /// # Errors
+    ///
+    /// Returns [`StorageError::ScalarKindMismatch`] when `storage` holds a
+    /// different scalar type.
+    fn payload_vec(storage: &Storage) -> StorageResult<Vec<Self>>;
+
+    /// Borrow the compact payload of this scalar type when it is contiguous.
+    /// # Errors
+    ///
+    /// Returns [`StorageError::ScalarKindMismatch`] when `storage` holds a
+    /// different scalar type.
+    fn payload_view(storage: &Storage) -> StorageResult<Option<&[Self]>>;
+
+    /// Materialize the logical dense values of this scalar type.
+    /// # Errors
+    ///
+    /// Returns [`StorageError::ScalarKindMismatch`] when `storage` holds a
+    /// different scalar type, and
+    /// [`StorageError::InvalidStructuredStorage`] when `logical_dims` does not
+    /// match the stored logical dimensions or the logical element count
+    /// overflows `usize`.
+    fn dense_values(storage: &Storage, logical_dims: &[usize]) -> StorageResult<Vec<Self>>;
+
     /// Build a dense [`Storage`] from column-major data.
     /// # Errors
     ///
     /// Returns an error when the shape product would overflow `usize` or
     /// `data.len()` does not match the expected shape.
     ///
-    fn build_dense_storage(data: Vec<Self>, logical_dims: &[usize]) -> Result<Storage>;
+    fn build_dense_storage(data: Vec<Self>, logical_dims: &[usize]) -> Result<Storage> {
+        let label = format!("dense {} payload", Self::KIND);
+        Storage::validate_dense_len(&data, logical_dims, &label)?;
+        Ok(Self::wrap_payload(StructuredStorage::from_dense_col_major(
+            data,
+            logical_dims,
+        )?))
+    }
     /// Build a diagonal [`Storage`] from diagonal payload data.
     /// # Errors
     ///
@@ -73,7 +266,12 @@ pub trait StorageScalar: Clone + Send + Sync + 'static {
     /// length required for `logical_rank` or a stride product would overflow
     /// `usize`.
     ///
-    fn build_diag_storage(diag_data: Vec<Self>, logical_rank: usize) -> Result<Storage>;
+    fn build_diag_storage(diag_data: Vec<Self>, logical_rank: usize) -> Result<Storage> {
+        Ok(Self::wrap_payload(StructuredStorage::from_diag_col_major(
+            diag_data,
+            logical_rank,
+        )?))
+    }
     /// Build a structured [`Storage`] from explicit payload metadata.
     /// # Errors
     ///
@@ -88,56 +286,170 @@ pub trait StorageScalar: Clone + Send + Sync + 'static {
         payload_dims: Vec<usize>,
         strides: Vec<isize>,
         axis_classes: Vec<usize>,
-    ) -> Result<Storage>;
-}
-
-impl StorageScalar for f64 {
-    fn build_dense_storage(data: Vec<Self>, logical_dims: &[usize]) -> Result<Storage> {
-        Storage::validate_dense_len(&data, logical_dims, "dense f64 payload")?;
-        Ok(Storage::from_repr(StorageRepr::F64(
-            StructuredStorage::from_dense_col_major(data, logical_dims)?,
-        )))
-    }
-    fn build_diag_storage(diag_data: Vec<Self>, logical_rank: usize) -> Result<Storage> {
-        Ok(Storage::from_repr(StorageRepr::F64(
-            StructuredStorage::from_diag_col_major(diag_data, logical_rank)?,
-        )))
-    }
-    fn build_structured_storage(
-        data: Vec<Self>,
-        payload_dims: Vec<usize>,
-        strides: Vec<isize>,
-        axis_classes: Vec<usize>,
     ) -> Result<Storage> {
-        Ok(Storage::from_repr(StorageRepr::F64(
-            StructuredStorage::new(data, payload_dims, strides, axis_classes)?,
-        )))
+        Ok(Self::wrap_payload(StructuredStorage::new(
+            data,
+            payload_dims,
+            strides,
+            axis_classes,
+        )?))
     }
 }
 
-impl StorageScalar for Complex64 {
-    fn build_dense_storage(data: Vec<Self>, logical_dims: &[usize]) -> Result<Storage> {
-        Storage::validate_dense_len(&data, logical_dims, "dense c64 payload")?;
-        Ok(Storage::from_repr(StorageRepr::C64(
-            StructuredStorage::from_dense_col_major(data, logical_dims)?,
-        )))
-    }
-    fn build_diag_storage(diag_data: Vec<Self>, logical_rank: usize) -> Result<Storage> {
-        Ok(Storage::from_repr(StorageRepr::C64(
-            StructuredStorage::from_diag_col_major(diag_data, logical_rank)?,
-        )))
-    }
-    fn build_structured_storage(
-        data: Vec<Self>,
-        payload_dims: Vec<usize>,
-        strides: Vec<isize>,
-        axis_classes: Vec<usize>,
-    ) -> Result<Storage> {
-        Ok(Storage::from_repr(StorageRepr::C64(
-            StructuredStorage::new(data, payload_dims, strides, axis_classes)?,
-        )))
-    }
+/// Implement [`StorageScalar`] for one concrete scalar type.
+///
+/// Only the per-dtype algebra (real/imaginary extraction, complex embedding,
+/// conjugation, widening) is spelled per type; payload construction and
+/// dispatch are shared.
+macro_rules! impl_storage_scalar {
+    ($ty:ty, $variant:ident, $complex:ty, $kind:literal, $is_complex:literal,
+     copy_operation: $copy_operation:literal, view_operation: $view_operation:literal,
+     dense_operation: $dense_operation:literal,
+     widened: $widened:expr, from_widened: $from_widened:expr,
+     real: $real:expr, imag: $imag:expr, into_complex: $into_complex:expr,
+     conj: $conj:expr) => {
+        impl StorageScalar for $ty {
+            const KIND: &'static str = $kind;
+            const IS_COMPLEX: bool = $is_complex;
+            type Complex = $complex;
+
+            fn widened_parts(self) -> (f64, f64) {
+                ($widened)(self)
+            }
+
+            fn from_widened_parts(re: f64, im: f64) -> Self {
+                ($from_widened)(re, im)
+            }
+
+            fn real_part(self) -> Self::Real {
+                ($real)(self)
+            }
+
+            fn imag_part(self) -> Self::Real {
+                ($imag)(self)
+            }
+
+            fn into_complex(self) -> Self::Complex {
+                ($into_complex)(self)
+            }
+
+            fn conjugate(self) -> Self {
+                ($conj)(self)
+            }
+
+            fn wrap_payload(payload: StructuredStorage<Self>) -> Storage {
+                Storage(StorageRepr::$variant(payload))
+            }
+
+            fn to_backend_scalar(self) -> BackendScalar {
+                BackendScalar::from_value(self)
+            }
+
+            fn payload_vec(storage: &Storage) -> StorageResult<Vec<Self>> {
+                match &storage.0 {
+                    StorageRepr::$variant(payload) => Ok(payload.payload_col_major_vec()),
+                    _ => Err(StorageError::ScalarKindMismatch {
+                        expected: Self::KIND,
+                        actual: storage.scalar_kind(),
+                        operation: $copy_operation,
+                    }),
+                }
+            }
+
+            fn payload_view(storage: &Storage) -> StorageResult<Option<&[Self]>> {
+                match &storage.0 {
+                    StorageRepr::$variant(payload) => {
+                        Ok(payload.payload_col_major_view_if_contiguous())
+                    }
+                    _ => Err(StorageError::ScalarKindMismatch {
+                        expected: Self::KIND,
+                        actual: storage.scalar_kind(),
+                        operation: $view_operation,
+                    }),
+                }
+            }
+
+            fn dense_values(storage: &Storage, logical_dims: &[usize]) -> StorageResult<Vec<Self>> {
+                match &storage.0 {
+                    StorageRepr::$variant(payload) => checked_dense_payload(payload, logical_dims),
+                    _ => Err(StorageError::ScalarKindMismatch {
+                        expected: Self::KIND,
+                        actual: storage.scalar_kind(),
+                        operation: $dense_operation,
+                    }),
+                }
+            }
+        }
+    };
 }
+
+impl_storage_scalar!(
+    f32,
+    F32,
+    Complex32,
+    "f32",
+    false,
+    copy_operation: "copying f32 payload",
+    view_operation: "borrowing f32 payload",
+    dense_operation: "materializing dense f32 values",
+    widened: |value: f32| (f64::from(value), 0.0),
+    from_widened: |re: f64, _im: f64| re as f32,
+    real: |value: f32| value,
+    imag: |_value: f32| 0.0,
+    into_complex: |value: f32| Complex32::new(value, 0.0),
+    conj: |value: f32| value
+);
+
+impl_storage_scalar!(
+    f64,
+    F64,
+    Complex64,
+    "f64",
+    false,
+    copy_operation: "copying f64 payload",
+    view_operation: "borrowing f64 payload",
+    dense_operation: "materializing dense f64 values",
+    widened: |value: f64| (value, 0.0),
+    from_widened: |re: f64, _im: f64| re,
+    real: |value: f64| value,
+    imag: |_value: f64| 0.0,
+    into_complex: |value: f64| Complex64::new(value, 0.0),
+    conj: |value: f64| value
+);
+
+impl_storage_scalar!(
+    Complex32,
+    C32,
+    Complex32,
+    "Complex32",
+    true,
+    copy_operation: "copying c32 payload",
+    view_operation: "borrowing c32 payload",
+    dense_operation: "materializing dense c32 values",
+    widened: |value: Complex32| (f64::from(value.re), f64::from(value.im)),
+    from_widened: |re: f64, im: f64| Complex32::new(re as f32, im as f32),
+    real: |value: Complex32| value.re,
+    imag: |value: Complex32| value.im,
+    into_complex: |value: Complex32| value,
+    conj: |value: Complex32| value.conj()
+);
+
+impl_storage_scalar!(
+    Complex64,
+    C64,
+    Complex64,
+    "Complex64",
+    true,
+    copy_operation: "copying c64 payload",
+    view_operation: "borrowing c64 payload",
+    dense_operation: "materializing dense c64 values",
+    widened: |value: Complex64| (value.re, value.im),
+    from_widened: |re: f64, im: f64| Complex64::new(re, im),
+    real: |value: Complex64| value.re,
+    imag: |value: Complex64| value.im,
+    into_complex: |value: Complex64| value,
+    conj: |value: Complex64| value.conj()
+);
 
 pub(crate) fn col_major_strides(dims: &[usize]) -> Result<Vec<isize>> {
     let mut strides = Vec::with_capacity(dims.len());
@@ -696,6 +1008,29 @@ impl<T: Clone> StructuredStorage<T> {
 }
 
 impl<T: Copy> StructuredStorage<T> {
+    /// Wrap this payload as a compact [`Storage`] of the same scalar type.
+    ///
+    /// The payload keeps its dtype and metadata; nothing is widened or
+    /// re-ordered. This is the construction seam used by dtype-generic storage
+    /// algebra so each operation returns storage of its own scalar type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::StructuredStorage;
+    ///
+    /// let payload = StructuredStorage::from_dense_col_major(vec![1.0_f32, 2.0], &[2]).unwrap();
+    /// let storage = payload.into_storage();
+    /// assert!(storage.is_f32());
+    /// assert_eq!(storage.len(), 2);
+    /// ```
+    pub fn into_storage(self) -> Storage
+    where
+        T: StorageScalar,
+    {
+        T::wrap_payload(self)
+    }
+
     fn payload_scalar_at(&self, payload_coords: &[usize]) -> StorageResult<T> {
         if payload_coords.len() != self.payload_dims.len() {
             return Err(StorageError::InvalidStructuredStorage(format!(
@@ -997,16 +1332,6 @@ pub enum StorageError {
         /// Right-hand storage kind.
         right: &'static str,
     },
-    /// The requested operation requires real scalars but at least one scalar was complex.
-    #[error("expected real scalars in {operation} branch: a={a}, b={b}")]
-    RealScalarRequired {
-        /// Name of the operation being performed.
-        operation: &'static str,
-        /// Left scalar display string.
-        a: String,
-        /// Right scalar display string.
-        b: String,
-    },
     /// A storage operation failed with an internal diagnostic.
     #[error("storage operation failed: {source}")]
     Operation {
@@ -1027,23 +1352,37 @@ pub type StorageResult<T> = std::result::Result<T, StorageError>;
 
 #[derive(Debug, Clone)]
 pub(crate) enum StorageRepr {
+    /// Storage with f32 elements.
+    F32(StructuredStorage<f32>),
     /// Storage with f64 elements.
     F64(StructuredStorage<f64>),
+    /// Storage with Complex32 elements.
+    C32(StructuredStorage<Complex32>),
     /// Storage with Complex64 elements.
     C64(StructuredStorage<Complex64>),
 }
 
-fn storage_scalar_kind(repr: &StorageRepr) -> &'static str {
-    match repr {
-        StorageRepr::F64(_) => "f64",
-        StorageRepr::C64(_) => "Complex64",
+impl StorageRepr {
+    fn dtype(&self) -> DType {
+        storage_payload_dispatch!(self, Payload => |_payload| <Payload as TensorScalar>::dtype())
+    }
+
+    fn scalar_kind(&self) -> &'static str {
+        storage_payload_dispatch!(self, Payload => |_payload| <Payload as StorageScalar>::KIND)
+    }
+
+    fn is_complex(&self) -> bool {
+        storage_payload_dispatch!(self, Payload => |_payload| <Payload as StorageScalar>::IS_COMPLEX)
     }
 }
 
 /// Types that can be computed as the result of a reduction over `Storage`.
 ///
 /// This lets callers write `let s: T = tensor.sum();` without matching on
-/// the storage variant. Implemented for `f64` and `Complex64`.
+/// the storage variant. Implemented for `f64`, `Complex64`, `f32`, and
+/// `Complex32`; every reduction widens compact payload values to the requested
+/// accumulator, so a narrow payload can be summed without changing its stored
+/// dtype.
 ///
 /// # Examples
 ///
@@ -1053,6 +1392,10 @@ fn storage_scalar_kind(repr: &StorageRepr) -> &'static str {
 /// let s = Storage::from_dense_col_major(vec![1.0_f64, 2.0, 3.0], &[3]).unwrap();
 /// let total: f64 = f64::sum_from_storage(&s);
 /// assert!((total - 6.0).abs() < 1e-10);
+///
+/// let narrow = Storage::from_dense_col_major(vec![1.0_f32, 2.0], &[2]).unwrap();
+/// assert_eq!(f32::sum_from_storage(&narrow), 3.0_f32);
+/// assert_eq!(f64::sum_from_storage(&narrow), 3.0_f64);
 /// ```
 pub trait SumFromStorage: Sized {
     /// Compute the sum of all elements in the storage.
@@ -1061,11 +1404,8 @@ pub trait SumFromStorage: Sized {
 
 impl SumFromStorage for f64 {
     fn sum_from_storage(storage: &Storage) -> Self {
-        let mut sum = 0.0;
-        match &storage.0 {
-            StorageRepr::F64(v) => v.for_each_payload_value(|value| sum += value),
-            StorageRepr::C64(v) => v.for_each_payload_value(|value| sum += value.re),
-        }
+        let mut sum = 0.0_f64;
+        storage.for_each_payload_parts(|re, _im| sum += re);
         sum
     }
 }
@@ -1073,21 +1413,166 @@ impl SumFromStorage for f64 {
 impl SumFromStorage for Complex64 {
     fn sum_from_storage(storage: &Storage) -> Self {
         let mut sum = Complex64::new(0.0, 0.0);
-        match &storage.0 {
-            StorageRepr::F64(v) => {
-                v.for_each_payload_value(|value| sum += Complex64::new(value, 0.0))
-            }
-            StorageRepr::C64(v) => v.for_each_payload_value(|value| sum += value),
-        }
+        storage.for_each_payload_parts(|re, im| sum += Complex64::new(re, im));
         sum
     }
 }
 
-use crate::any_scalar::BackendScalar;
+impl SumFromStorage for f32 {
+    fn sum_from_storage(storage: &Storage) -> Self {
+        let mut sum = 0.0_f32;
+        storage.for_each_payload_parts(|re, _im| sum += re as f32);
+        sum
+    }
+}
+
+impl SumFromStorage for Complex32 {
+    fn sum_from_storage(storage: &Storage) -> Self {
+        let mut sum = Complex32::new(0.0, 0.0);
+        storage.for_each_payload_parts(|re, im| sum += Complex32::new(re as f32, im as f32));
+        sum
+    }
+}
+
+/// Lattice width of a floating dtype, or `None` for non-floating dtypes.
+fn float_lattice_width(dtype: DType) -> Option<u8> {
+    match dtype {
+        DType::F32 | DType::C32 => Some(32),
+        DType::F64 | DType::C64 => Some(64),
+        _ => None,
+    }
+}
+
+/// Least upper bound dtype of a set of floating dtypes.
+///
+/// The lattice is `f32 < f64`, `Complex32 < Complex64`, and real `<` complex, so
+/// the result takes the widest real component and the complex component as soon
+/// as any input is complex. Returns `None` when an input is not floating point.
+fn promote_float_dtypes(dtypes: impl IntoIterator<Item = DType>) -> Option<DType> {
+    let mut width = 0_u8;
+    let mut complex = false;
+    for dtype in dtypes {
+        width = width.max(float_lattice_width(dtype)?);
+        complex |= matches!(dtype, DType::C32 | DType::C64);
+    }
+    match (width, complex) {
+        (32, false) => Some(DType::F32),
+        (64, false) => Some(DType::F64),
+        (32, true) => Some(DType::C32),
+        (64, true) => Some(DType::C64),
+        _ => None,
+    }
+}
+
+/// Rebuild a compact payload from copied metadata and replacement values.
+///
+/// The metadata comes from an already validated payload, so this construction
+/// cannot introduce invalid strides or lengths; it is used by the infallible
+/// elementwise operators.
+fn rebuild_payload<T: StorageScalar>(
+    payload_dims: &[usize],
+    strides: &[isize],
+    axis_classes: &[usize],
+    data: Vec<T>,
+) -> Storage {
+    T::wrap_payload(StructuredStorage {
+        data,
+        payload_dims: payload_dims.to_vec(),
+        strides: strides.to_vec(),
+        axis_classes: axis_classes.to_vec(),
+    })
+}
+
+/// Zip two same-scalar payloads, preserving the left payload's metadata.
+fn zip_payloads<T, U>(
+    left: &StructuredStorage<T>,
+    right: &StructuredStorage<T>,
+    operation: &'static str,
+    mut combine: impl FnMut(T, T) -> U,
+) -> StorageResult<Storage>
+where
+    T: StorageScalar,
+    U: StorageScalar,
+{
+    if left.len() != right.len() {
+        return Err(StorageError::LengthMismatch {
+            operation,
+            left: left.len(),
+            right: right.len(),
+        });
+    }
+    let values: Vec<U> = left
+        .data()
+        .iter()
+        .copied()
+        .zip(right.data().iter().copied())
+        .map(|(x, y)| combine(x, y))
+        .collect();
+    StructuredStorage::new(
+        values,
+        left.payload_dims().to_vec(),
+        left.strides().to_vec(),
+        left.axis_classes().to_vec(),
+    )
+    .map(StructuredStorage::into_storage)
+    .map_err(StorageError::from)
+}
+
+/// Materialize the logical dense values of one payload, checking the shape.
+fn checked_dense_payload<T: StorageScalar>(
+    payload: &StructuredStorage<T>,
+    logical_dims: &[usize],
+) -> StorageResult<Vec<T>> {
+    let structured_dims = payload.logical_dims();
+    if structured_dims != logical_dims {
+        return Err(StorageError::InvalidStructuredStorage(format!(
+            "logical dims {:?} do not match stored logical dims {:?}",
+            logical_dims, structured_dims
+        )));
+    }
+    payload.logical_dense_col_major_vec()
+}
 
 impl Storage {
+    #[cfg(test)]
     pub(crate) fn from_repr(repr: StorageRepr) -> Self {
         Self(repr)
+    }
+
+    /// Visit every referenced compact payload value as widened `(real, imaginary)` parts.
+    ///
+    /// Stride gaps and padding in a structured backing buffer are not tensor
+    /// values and are excluded. This is the single dtype-agnostic payload scan:
+    /// reductions and elementwise algebra are written once against it.
+    fn for_each_payload_parts(&self, mut visit: impl FnMut(f64, f64)) {
+        storage_payload_dispatch!(&self.0, Payload => |payload| {
+            payload.for_each_payload_value(|value| {
+                let (re, im) = <Payload as StorageScalar>::widened_parts(value);
+                visit(re, im);
+            })
+        })
+    }
+
+    /// Visit every referenced compact payload entry's magnitude as `f64`.
+    ///
+    /// Real payloads visit `|x|`; complex payloads visit `hypot(re, im)`, and a
+    /// NaN component propagates as `NaN` rather than being masked by the other
+    /// component. Narrow payloads widen per value for the scan only.
+    fn for_each_payload_magnitude(&self, mut visit: impl FnMut(f64)) {
+        storage_payload_dispatch!(&self.0, Payload => |payload| {
+            payload.for_each_payload_value(|value| {
+                let (re, im) = <Payload as StorageScalar>::widened_parts(value);
+                visit(if <Payload as StorageScalar>::IS_COMPLEX {
+                    if re.is_nan() || im.is_nan() {
+                        f64::NAN
+                    } else {
+                        re.hypot(im)
+                    }
+                } else {
+                    re.abs()
+                });
+            })
+        })
     }
 
     fn invalid_storage_error(err: anyhow::Error) -> StorageError {
@@ -1299,58 +1784,6 @@ impl Storage {
         required_storage_len(payload_dims, strides)
     }
 
-    /// Create diagonal f64 storage from column-major diagonal payload values.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`StorageError::Operation`] when the diagonal payload is
-    /// incompatible with `logical_rank` or a stride product overflows `usize`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_tensorbackend::Storage;
-    ///
-    /// let s = Storage::from_diag_f64_col_major(vec![1.0, 2.0], 2).unwrap();
-    /// assert!(s.is_diag());
-    /// assert!(s.is_f64());
-    /// ```
-    pub fn from_diag_f64_col_major(
-        diag_data: Vec<f64>,
-        logical_rank: usize,
-    ) -> StorageResult<Self> {
-        Ok(Self::from_repr(StorageRepr::F64(
-            StructuredStorage::from_diag_col_major(diag_data, logical_rank)?,
-        )))
-    }
-
-    /// Create diagonal Complex64 storage from column-major diagonal payload values.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`StorageError::Operation`] when the diagonal payload is
-    /// incompatible with `logical_rank` or a stride product overflows `usize`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_tensorbackend::Storage;
-    /// use num_complex::Complex64;
-    ///
-    /// let data = vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0)];
-    /// let s = Storage::from_diag_c64_col_major(data, 2).unwrap();
-    /// assert!(s.is_diag());
-    /// assert!(s.is_c64());
-    /// ```
-    pub fn from_diag_c64_col_major(
-        diag_data: Vec<Complex64>,
-        logical_rank: usize,
-    ) -> StorageResult<Self> {
-        Ok(Self::from_repr(StorageRepr::C64(
-            StructuredStorage::from_diag_col_major(diag_data, logical_rank)?,
-        )))
-    }
-
     /// Check if this storage is logically dense.
     ///
     /// # Examples
@@ -1365,10 +1798,7 @@ impl Storage {
     /// assert!(!d.is_dense());
     /// ```
     pub fn is_dense(&self) -> bool {
-        match &self.0 {
-            StorageRepr::F64(value) => value.is_dense(),
-            StorageRepr::C64(value) => value.is_dense(),
-        }
+        storage_payload_dispatch!(&self.0, Payload => |value| value.is_dense())
     }
 
     /// Check if this storage is a Diag storage type.
@@ -1382,10 +1812,7 @@ impl Storage {
     /// assert!(d.is_diag());
     /// ```
     pub fn is_diag(&self) -> bool {
-        match &self.0 {
-            StorageRepr::F64(value) => value.is_diag(),
-            StorageRepr::C64(value) => value.is_diag(),
-        }
+        storage_payload_dispatch!(&self.0, Payload => |value| value.is_diag())
     }
 
     /// Returns the compact layout class for this storage.
@@ -1430,10 +1857,7 @@ impl Storage {
     /// assert_eq!(diag.logical_dims(), vec![2, 2]);
     /// ```
     pub fn logical_dims(&self) -> Vec<usize> {
-        match &self.0 {
-            StorageRepr::F64(value) => value.logical_dims(),
-            StorageRepr::C64(value) => value.logical_dims(),
-        }
+        storage_payload_dispatch!(&self.0, Payload => |value| value.logical_dims())
     }
 
     /// Returns the logical tensor rank represented by this storage.
@@ -1450,10 +1874,7 @@ impl Storage {
     /// assert_eq!(diag.payload_dims(), &[2]);
     /// ```
     pub fn logical_rank(&self) -> usize {
-        match &self.0 {
-            StorageRepr::F64(value) => value.logical_rank(),
-            StorageRepr::C64(value) => value.logical_rank(),
-        }
+        storage_payload_dispatch!(&self.0, Payload => |value| value.logical_rank())
     }
 
     /// Returns the compact payload dimensions.
@@ -1470,10 +1891,7 @@ impl Storage {
     /// assert_eq!(diag.payload_dims(), &[2]);
     /// ```
     pub fn payload_dims(&self) -> &[usize] {
-        match &self.0 {
-            StorageRepr::F64(value) => value.payload_dims(),
-            StorageRepr::C64(value) => value.payload_dims(),
-        }
+        storage_payload_dispatch!(&self.0, Payload => |value| value.payload_dims())
     }
 
     /// Returns the compact payload strides.
@@ -1490,10 +1908,7 @@ impl Storage {
     /// assert_eq!(dense.payload_strides(), &[1, 2]);
     /// ```
     pub fn payload_strides(&self) -> &[isize] {
-        match &self.0 {
-            StorageRepr::F64(value) => value.strides(),
-            StorageRepr::C64(value) => value.strides(),
-        }
+        storage_payload_dispatch!(&self.0, Payload => |value| value.strides())
     }
 
     /// Returns logical-axis equivalence classes for this storage.
@@ -1511,10 +1926,7 @@ impl Storage {
     /// assert_eq!(diag.axis_classes(), &[0, 0]);
     /// ```
     pub fn axis_classes(&self) -> &[usize] {
-        match &self.0 {
-            StorageRepr::F64(value) => value.axis_classes(),
-            StorageRepr::C64(value) => value.axis_classes(),
-        }
+        storage_payload_dispatch!(&self.0, Payload => |value| value.axis_classes())
     }
 
     /// Returns the number of stored compact payload elements.
@@ -1532,6 +1944,39 @@ impl Storage {
     /// ```
     pub fn payload_len(&self) -> usize {
         self.len()
+    }
+
+    /// Copies the compact `f32` payload in column-major payload order.
+    ///
+    /// This does not materialize logical dense values and never widens: a
+    /// narrow payload stays `f32`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::ScalarKindMismatch`] if the storage scalar type
+    /// is not `f32`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let diag = Storage::from_diag_col_major(vec![1.0_f32, 2.0], 2).unwrap();
+    /// assert_eq!(diag.payload_f32_col_major_vec().unwrap(), vec![1.0_f32, 2.0]);
+    /// ```
+    pub fn payload_f32_col_major_vec(&self) -> StorageResult<Vec<f32>> {
+        <f32 as StorageScalar>::payload_vec(self)
+    }
+
+    /// Borrows the compact `f32` payload when it is already contiguous in
+    /// column-major payload order.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::ScalarKindMismatch` when the storage is not
+    /// f32-backed (a dtype mismatch).
+    pub fn payload_f32_col_major_view_if_contiguous(&self) -> StorageResult<Option<&[f32]>> {
+        <f32 as StorageScalar>::payload_view(self)
     }
 
     /// Copies the compact `f64` payload in column-major payload order.
@@ -1553,14 +1998,7 @@ impl Storage {
     /// assert_eq!(diag.payload_f64_col_major_vec().unwrap(), vec![1.0, 2.0]);
     /// ```
     pub fn payload_f64_col_major_vec(&self) -> StorageResult<Vec<f64>> {
-        match &self.0 {
-            StorageRepr::F64(value) => Ok(value.payload_col_major_vec()),
-            StorageRepr::C64(_) => Err(StorageError::ScalarKindMismatch {
-                expected: "f64",
-                actual: storage_scalar_kind(&self.0),
-                operation: "copying f64 payload",
-            }),
-        }
+        <f64 as StorageScalar>::payload_vec(self)
     }
 
     /// Borrows the compact `f64` payload when it is already contiguous in
@@ -1571,14 +2009,39 @@ impl Storage {
     /// Returns `StorageError::ScalarKindMismatch` when the storage is not
     /// f64-backed (a dtype mismatch).
     pub fn payload_f64_col_major_view_if_contiguous(&self) -> StorageResult<Option<&[f64]>> {
-        match &self.0 {
-            StorageRepr::F64(value) => Ok(value.payload_col_major_view_if_contiguous()),
-            StorageRepr::C64(_) => Err(StorageError::ScalarKindMismatch {
-                expected: "f64",
-                actual: storage_scalar_kind(&self.0),
-                operation: "borrowing f64 payload",
-            }),
-        }
+        <f64 as StorageScalar>::payload_view(self)
+    }
+
+    /// Copies the compact `Complex32` payload in column-major payload order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::ScalarKindMismatch`] if the storage scalar type
+    /// is not `Complex32`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex32;
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let data = vec![Complex32::new(1.0, -2.0), Complex32::new(0.5, 0.0)];
+    /// let diag = Storage::from_diag_col_major(data.clone(), 2).unwrap();
+    /// assert_eq!(diag.payload_c32_col_major_vec().unwrap(), data);
+    /// ```
+    pub fn payload_c32_col_major_vec(&self) -> StorageResult<Vec<Complex32>> {
+        <Complex32 as StorageScalar>::payload_vec(self)
+    }
+
+    /// Borrows the compact `Complex32` payload when it is already contiguous in
+    /// column-major payload order.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::ScalarKindMismatch` when the storage is not
+    /// c32-backed (a dtype mismatch).
+    pub fn payload_c32_col_major_view_if_contiguous(&self) -> StorageResult<Option<&[Complex32]>> {
+        <Complex32 as StorageScalar>::payload_view(self)
     }
 
     /// Copies the compact `Complex64` payload in column-major payload order.
@@ -1602,14 +2065,7 @@ impl Storage {
     /// assert_eq!(diag.payload_c64_col_major_vec().unwrap(), data);
     /// ```
     pub fn payload_c64_col_major_vec(&self) -> StorageResult<Vec<Complex64>> {
-        match &self.0 {
-            StorageRepr::C64(value) => Ok(value.payload_col_major_vec()),
-            StorageRepr::F64(_) => Err(StorageError::ScalarKindMismatch {
-                expected: "Complex64",
-                actual: storage_scalar_kind(&self.0),
-                operation: "copying c64 payload",
-            }),
-        }
+        <Complex64 as StorageScalar>::payload_vec(self)
     }
 
     /// Borrows the compact `Complex64` payload when it is already contiguous in
@@ -1620,14 +2076,7 @@ impl Storage {
     /// Returns `StorageError::ScalarKindMismatch` when the storage is not
     /// c64-backed (a dtype mismatch).
     pub fn payload_c64_col_major_view_if_contiguous(&self) -> StorageResult<Option<&[Complex64]>> {
-        match &self.0 {
-            StorageRepr::C64(value) => Ok(value.payload_col_major_view_if_contiguous()),
-            StorageRepr::F64(_) => Err(StorageError::ScalarKindMismatch {
-                expected: "Complex64",
-                actual: storage_scalar_kind(&self.0),
-                operation: "borrowing c64 payload",
-            }),
-        }
+        <Complex64 as StorageScalar>::payload_view(self)
     }
 
     /// Check if this storage uses f64 scalar type.
@@ -1642,7 +2091,22 @@ impl Storage {
     /// assert!(!s.is_c64());
     /// ```
     pub fn is_f64(&self) -> bool {
-        matches!(&self.0, StorageRepr::F64(_))
+        self.dtype() == DType::F64
+    }
+
+    /// Check if this storage uses f32 scalar type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let s = Storage::from_dense_col_major(vec![1.0_f32], &[1]).unwrap();
+    /// assert!(s.is_f32());
+    /// assert!(!s.is_f64());
+    /// ```
+    pub fn is_f32(&self) -> bool {
+        self.dtype() == DType::F32
     }
 
     /// Check if this storage uses Complex64 scalar type.
@@ -1659,29 +2123,84 @@ impl Storage {
     /// assert!(s.is_c64());
     /// ```
     pub fn is_c64(&self) -> bool {
-        matches!(&self.0, StorageRepr::C64(_))
+        self.dtype() == DType::C64
     }
 
-    /// Check if this storage uses complex scalar type.
-    ///
-    /// This is an alias for [`is_c64()`](Self::is_c64).
+    /// Check if this storage uses Complex32 scalar type.
     ///
     /// # Examples
     ///
     /// ```
+    /// use num_complex::Complex32;
     /// use tensor4all_tensorbackend::Storage;
-    /// use num_complex::Complex64;
     ///
     /// let s = Storage::from_dense_col_major(
-    ///     vec![Complex64::new(1.0, 0.0)], &[1],
+    ///     vec![Complex32::new(1.0, -1.0)], &[1],
     /// ).unwrap();
+    /// assert!(s.is_c32());
+    /// assert!(s.is_complex());
+    /// ```
+    pub fn is_c32(&self) -> bool {
+        self.dtype() == DType::C32
+    }
+
+    /// Check if this storage uses complex scalar type.
+    ///
+    /// This is `Complex64` or `Complex32`; it is not an alias for
+    /// [`is_c64()`](Self::is_c64).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex32;
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let s = Storage::from_dense_col_major(vec![Complex32::new(1.0, 0.0)], &[1]).unwrap();
     /// assert!(s.is_complex());
     ///
     /// let r = Storage::from_dense_col_major(vec![1.0_f64], &[1]).unwrap();
     /// assert!(!r.is_complex());
     /// ```
     pub fn is_complex(&self) -> bool {
-        self.is_c64()
+        self.0.is_complex()
+    }
+
+    /// Returns the stored scalar dtype.
+    ///
+    /// The dtype is metadata only and never depends on payload contents. It is
+    /// the value a publication or conversion boundary should compare against
+    /// instead of assuming the payload is `f64` or `Complex64`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    /// use tenferro::DType;
+    ///
+    /// let dense = Storage::from_dense_col_major(vec![1.0_f32, 2.0], &[2]).unwrap();
+    /// assert_eq!(dense.dtype(), DType::F32);
+    ///
+    /// let complex = Storage::from_diag_col_major(
+    ///     vec![num_complex::Complex64::new(1.0, 0.0)], 2,
+    /// ).unwrap();
+    /// assert_eq!(complex.dtype(), DType::C64);
+    /// ```
+    pub fn dtype(&self) -> DType {
+        self.0.dtype()
+    }
+
+    /// Returns this storage's scalar-kind label used in diagnostics.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let s = Storage::from_dense_col_major(vec![1.0_f32], &[1]).unwrap();
+    /// assert_eq!(s.scalar_kind(), "f32");
+    /// ```
+    pub fn scalar_kind(&self) -> &'static str {
+        self.0.scalar_kind()
     }
 
     /// Get the length of the storage payload (number of stored elements).
@@ -1701,10 +2220,7 @@ impl Storage {
     /// assert_eq!(d.len(), 2);
     /// ```
     pub fn len(&self) -> usize {
-        match &self.0 {
-            StorageRepr::F64(v) => v.len(),
-            StorageRepr::C64(v) => v.len(),
-        }
+        storage_payload_dispatch!(&self.0, Payload => |value| value.len())
     }
 
     /// Check if the storage is empty.
@@ -1755,30 +2271,18 @@ impl Storage {
     /// assert!((s.max_abs() - 3.0).abs() < 1e-10);
     /// ```
     pub fn max_abs(&self) -> f64 {
-        fn fold_nan_propagating(values: impl IntoIterator<Item = f64>) -> f64 {
-            values.into_iter().fold(0.0_f64, |current, value| {
-                if current.is_nan() || value.is_nan() {
-                    f64::NAN
-                } else {
-                    current.max(value)
-                }
-            })
+        fn fold_nan_propagating(current: f64, value: f64) -> f64 {
+            if current.is_nan() || value.is_nan() {
+                f64::NAN
+            } else {
+                current.max(value)
+            }
         }
 
         let mut current = 0.0_f64;
-        let mut update = |value: f64| {
-            current = fold_nan_propagating([current, value]);
-        };
-        match &self.0 {
-            StorageRepr::F64(v) => v.for_each_payload_value(|value| update(value.abs())),
-            StorageRepr::C64(v) => v.for_each_payload_value(|z| {
-                update(if z.re.is_nan() || z.im.is_nan() {
-                    f64::NAN
-                } else {
-                    z.re.hypot(z.im)
-                });
-            }),
-        }
+        self.for_each_payload_magnitude(|magnitude| {
+            current = fold_nan_propagating(current, magnitude);
+        });
         current
     }
 
@@ -1799,24 +2303,15 @@ impl Storage {
     /// assert!(flags.has_infinity);
     /// ```
     pub fn payload_nonfinite_flags(&self) -> NonfiniteFlags {
-        match &self.0 {
-            StorageRepr::F64(value) => {
-                let mut flags = NonfiniteFlags::default();
-                value.for_each_payload_value(|value| {
-                    flags.has_nan |= value.is_nan();
-                    flags.has_infinity |= value.is_infinite();
-                });
-                flags
-            }
-            StorageRepr::C64(value) => {
-                let mut flags = NonfiniteFlags::default();
-                value.for_each_payload_value(|value| {
-                    flags.has_nan |= value.re.is_nan() || value.im.is_nan();
-                    flags.has_infinity |= value.re.is_infinite() || value.im.is_infinite();
-                });
-                flags
-            }
-        }
+        let mut flags = NonfiniteFlags::default();
+        storage_payload_dispatch!(&self.0, Payload => |payload| {
+            payload.for_each_payload_value(|value| {
+                let (re, im) = <Payload as StorageScalar>::widened_parts(value);
+                flags.has_nan |= re.is_nan() || im.is_nan();
+                flags.has_infinity |= re.is_infinite() || im.is_infinite();
+            })
+        });
+        flags
     }
 
     /// Return one compact payload value as a dynamic [`BackendScalar`].
@@ -1847,14 +2342,11 @@ impl Storage {
     ///     Some(Complex64::new(1.0, -2.0)));
     /// ```
     pub fn scalar_at(&self, payload_coords: &[usize]) -> StorageResult<BackendScalar> {
-        match &self.0 {
-            StorageRepr::F64(value) => value
+        storage_payload_dispatch!(&self.0, Payload => |payload| {
+            payload
                 .payload_scalar_at(payload_coords)
-                .map(BackendScalar::from_value),
-            StorageRepr::C64(value) => value
-                .payload_scalar_at(payload_coords)
-                .map(BackendScalar::from_value),
-        }
+                .map(<Payload as StorageScalar>::to_backend_scalar)
+        })
     }
 
     /// Materialize dense logical values as a column-major `f64` buffer.
@@ -1878,33 +2370,40 @@ impl Storage {
     /// assert_eq!(dense, vec![1.0, 2.0, 3.0, 4.0]);
     /// ```
     pub fn to_dense_f64_col_major_vec(&self, logical_dims: &[usize]) -> StorageResult<Vec<f64>> {
-        match &self.0 {
-            StorageRepr::F64(v) => {
-                let structured_dims = v.logical_dims();
-                if structured_dims != logical_dims {
-                    return Err(StorageError::InvalidStructuredStorage(format!(
-                        "logical dims {:?} do not match StructuredF64 logical dims {:?}",
-                        logical_dims, structured_dims
-                    )));
-                }
-                v.logical_dense_col_major_vec()
-            }
-            StorageRepr::C64(_) => Err(StorageError::ScalarKindMismatch {
-                expected: "f64",
-                actual: storage_scalar_kind(&self.0),
-                operation: "materializing dense f64 values",
-            }),
-        }
+        <f64 as StorageScalar>::dense_values(self, logical_dims)
+    }
+
+    /// Materialize dense logical values as a column-major `f32` buffer.
+    ///
+    /// For diagonal storage, off-diagonal entries are filled with zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::ScalarKindMismatch`] unless the storage is
+    /// `f32`-backed, and [`StorageError::InvalidStructuredStorage`] if
+    /// `logical_dims` does not match the stored logical dimensions or the
+    /// logical element count overflows `usize`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let diag = Storage::new_diag(vec![1.0_f32, 2.0]).unwrap();
+    /// assert_eq!(diag.to_dense_f32_col_major_vec(&[2, 2]).unwrap(), vec![1.0, 0.0, 0.0, 2.0]);
+    /// ```
+    pub fn to_dense_f32_col_major_vec(&self, logical_dims: &[usize]) -> StorageResult<Vec<f32>> {
+        <f32 as StorageScalar>::dense_values(self, logical_dims)
     }
 
     /// Materialize dense logical values as a column-major `Complex64` buffer.
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError::ScalarKindMismatch`] if the storage is real, and
-    /// [`StorageError::InvalidStructuredStorage`] if `logical_dims` does not
-    /// match the stored logical dimensions or the logical element count
-    /// overflows `usize`.
+    /// Returns [`StorageError::ScalarKindMismatch`] unless the storage is
+    /// `Complex64`-backed, and [`StorageError::InvalidStructuredStorage`] if
+    /// `logical_dims` does not match the stored logical dimensions or the
+    /// logical element count overflows `usize`.
     ///
     /// # Examples
     ///
@@ -1921,23 +2420,33 @@ impl Storage {
         &self,
         logical_dims: &[usize],
     ) -> StorageResult<Vec<Complex64>> {
-        match &self.0 {
-            StorageRepr::C64(v) => {
-                let structured_dims = v.logical_dims();
-                if structured_dims != logical_dims {
-                    return Err(StorageError::InvalidStructuredStorage(format!(
-                        "logical dims {:?} do not match StructuredC64 logical dims {:?}",
-                        logical_dims, structured_dims
-                    )));
-                }
-                v.logical_dense_col_major_vec()
-            }
-            StorageRepr::F64(_) => Err(StorageError::ScalarKindMismatch {
-                expected: "Complex64",
-                actual: storage_scalar_kind(&self.0),
-                operation: "materializing dense c64 values",
-            }),
-        }
+        <Complex64 as StorageScalar>::dense_values(self, logical_dims)
+    }
+
+    /// Materialize dense logical values as a column-major `Complex32` buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::ScalarKindMismatch`] unless the storage is
+    /// `Complex32`-backed, and [`StorageError::InvalidStructuredStorage`] if
+    /// `logical_dims` does not match the stored logical dimensions or the
+    /// logical element count overflows `usize`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex32;
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let data = vec![Complex32::new(1.0, -1.0), Complex32::new(2.0, 0.5)];
+    /// let s = Storage::from_dense_col_major(data.clone(), &[2]).unwrap();
+    /// assert_eq!(s.to_dense_c32_col_major_vec(&[2]).unwrap(), data);
+    /// ```
+    pub fn to_dense_c32_col_major_vec(
+        &self,
+        logical_dims: &[usize],
+    ) -> StorageResult<Vec<Complex32>> {
+        <Complex32 as StorageScalar>::dense_values(self, logical_dims)
     }
 
     /// Convert this storage to dense storage.
@@ -1962,13 +2471,10 @@ impl Storage {
     /// assert_eq!(vals, vec![1.0, 0.0, 0.0, 2.0]);
     /// ```
     pub fn to_dense_storage(&self, dims: &[usize]) -> StorageResult<Storage> {
-        if self.is_f64() {
-            let values = self.to_dense_f64_col_major_vec(dims)?;
+        storage_payload_dispatch!(&self.0, Payload => |payload| {
+            let values = checked_dense_payload(payload, dims)?;
             Storage::from_dense_col_major(values, dims).map_err(Self::invalid_storage_error)
-        } else {
-            let values = self.to_dense_c64_col_major_vec(dims)?;
-            Storage::from_dense_col_major(values, dims).map_err(Self::invalid_storage_error)
-        }
+        })
     }
 
     /// Permute the storage data according to the given permutation.
@@ -1991,14 +2497,9 @@ impl Storage {
     /// Returns [`StorageError::Operation`] when `perm` is not a permutation of
     /// the logical axes.
     pub fn permute_storage(&self, _dims: &[usize], perm: &[usize]) -> StorageResult<Storage> {
-        match &self.0 {
-            StorageRepr::F64(v) => Ok(Storage::from_repr(StorageRepr::F64(
-                v.permute_logical_axes(perm)?,
-            ))),
-            StorageRepr::C64(v) => Ok(Storage::from_repr(StorageRepr::C64(
-                v.permute_logical_axes(perm)?,
-            ))),
-        }
+        storage_payload_dispatch!(&self.0, Payload => |payload| {
+            Ok(payload.permute_logical_axes(perm)?.into_storage())
+        })
     }
 
     /// Extract real part from Complex64 storage as f64 storage.
@@ -2017,14 +2518,17 @@ impl Storage {
     /// assert_eq!(re.to_dense_f64_col_major_vec(&[2]).unwrap(), vec![1.0, 3.0]);
     /// ```
     pub fn extract_real_part(&self) -> Storage {
-        match &self.0 {
-            StorageRepr::F64(v) => Storage::from_repr(StorageRepr::F64(v.clone())),
-            StorageRepr::C64(v) => Storage::from_repr(StorageRepr::F64(v.map_copy(|z| z.re))),
-        }
+        storage_payload_dispatch!(&self.0, Payload => |payload| {
+            payload
+                .map_copy(<Payload as StorageScalar>::real_part)
+                .into_storage()
+        })
     }
 
-    /// Extract imaginary part from Complex64 storage as f64 storage.
-    /// For f64 storage, returns zero storage.
+    /// Extract imaginary part from complex storage as the matching real storage.
+    ///
+    /// `Complex64` yields `f64` storage and `Complex32` yields `f32` storage.
+    /// For real storage, returns zero storage of the same real dtype.
     ///
     /// # Examples
     ///
@@ -2039,14 +2543,17 @@ impl Storage {
     /// assert_eq!(im.to_dense_f64_col_major_vec(&[2]).unwrap(), vec![2.0, 4.0]);
     /// ```
     pub fn extract_imag_part(&self, _dims: &[usize]) -> Storage {
-        match &self.0 {
-            StorageRepr::F64(v) => Storage::from_repr(StorageRepr::F64(v.map_copy(|_| 0.0))),
-            StorageRepr::C64(v) => Storage::from_repr(StorageRepr::F64(v.map_copy(|z| z.im))),
-        }
+        storage_payload_dispatch!(&self.0, Payload => |payload| {
+            payload
+                .map_copy(<Payload as StorageScalar>::imag_part)
+                .into_storage()
+        })
     }
 
-    /// Convert f64 storage to Complex64 storage (real part only, imaginary part is zero).
-    /// For Complex64 storage, returns a clone.
+    /// Convert real storage to its complex counterpart (zero imaginary part).
+    ///
+    /// `f64` becomes `Complex64` and `f32` becomes `Complex32`; complex storage
+    /// returns a clone of the same dtype.
     ///
     /// # Examples
     ///
@@ -2056,20 +2563,22 @@ impl Storage {
     /// let s = Storage::from_dense_col_major(vec![1.0_f64, 2.0], &[2]).unwrap();
     /// let c = s.to_complex_storage();
     /// assert!(c.is_c64());
+    ///
+    /// let narrow = Storage::from_dense_col_major(vec![1.0_f32], &[1]).unwrap();
+    /// assert!(narrow.to_complex_storage().is_c32());
     /// ```
     pub fn to_complex_storage(&self) -> Storage {
-        match &self.0 {
-            StorageRepr::F64(v) => {
-                Storage::from_repr(StorageRepr::C64(v.map_copy(|x| Complex64::new(x, 0.0))))
-            }
-            StorageRepr::C64(v) => Storage::from_repr(StorageRepr::C64(v.clone())),
-        }
+        storage_payload_dispatch!(&self.0, Payload => |payload| {
+            payload
+                .map_copy(<Payload as StorageScalar>::into_complex)
+                .into_storage()
+        })
     }
 
     /// Complex conjugate of all elements.
     ///
-    /// For real (f64) storage, returns a clone (conjugate of real is identity).
-    /// For complex (Complex64) storage, conjugates each element.
+    /// For real storage, returns a clone (conjugate of a real number is itself).
+    /// For complex storage, conjugates each element without changing the dtype.
     ///
     /// This is inspired by the `conj` operation in ITensorMPS.jl.
     ///
@@ -2087,21 +2596,26 @@ impl Storage {
     /// assert_eq!(result[1], Complex64::new(3.0, 4.0));
     /// ```
     pub fn conj(&self) -> Self {
-        match &self.0 {
-            StorageRepr::F64(v) => Storage::from_repr(StorageRepr::F64(v.clone())),
-            StorageRepr::C64(v) => Storage::from_repr(StorageRepr::C64(v.map_copy(|z| z.conj()))),
-        }
+        storage_payload_dispatch!(&self.0, Payload => |payload| {
+            payload
+                .map_copy(<Payload as StorageScalar>::conjugate)
+                .into_storage()
+        })
     }
 
-    /// Combine two f64 storages into Complex64 storage.
+    /// Combine two real storages into their complex counterpart.
     ///
-    /// `real_storage` becomes the real part, `imag_storage` becomes the imaginary part.
-    /// Formula: `real + i * imag`.
+    /// `real_storage` becomes the real part and `imag_storage` the imaginary
+    /// part, so `f64 + f64` yields `Complex64` storage and `f32 + f32` yields
+    /// `Complex32` storage. Nothing is widened to a wider dtype.
     ///
     /// # Errors
     ///
-    /// Returns an error if either storage is not `f64`, if their payload lengths
-    /// differ, or if the result metadata is invalid.
+    /// Returns [`StorageError::LengthMismatch`] if the payload lengths differ,
+    /// [`StorageError::OperationNotSupported`] if the two storages do not share
+    /// one real scalar kind, and
+    /// [`StorageError::InvalidStructuredStorage`] if the result layout cannot
+    /// be built.
     ///
     /// # Examples
     ///
@@ -2116,47 +2630,40 @@ impl Storage {
     /// let vals = c.to_dense_c64_col_major_vec(&[2]).unwrap();
     /// assert_eq!(vals[0], Complex64::new(1.0, 2.0));
     /// assert_eq!(vals[1], Complex64::new(3.0, 4.0));
+    ///
+    /// let narrow_re = Storage::from_dense_col_major(vec![1.0_f32], &[1]).unwrap();
+    /// let narrow_im = Storage::from_dense_col_major(vec![2.0_f32], &[1]).unwrap();
+    /// assert!(Storage::combine_to_complex(&narrow_re, &narrow_im)
+    ///     .unwrap()
+    ///     .is_c32());
     /// ```
     pub fn combine_to_complex(
         real_storage: &Storage,
         imag_storage: &Storage,
     ) -> StorageResult<Storage> {
         match (&real_storage.0, &imag_storage.0) {
+            (StorageRepr::F32(real), StorageRepr::F32(imag)) => {
+                zip_payloads(real, imag, "combine_to_complex", |re, im| {
+                    Complex32::new(re, im)
+                })
+            }
             (StorageRepr::F64(real), StorageRepr::F64(imag)) => {
-                if real.len() != imag.len() {
-                    return Err(StorageError::LengthMismatch {
-                        operation: "combine_to_complex",
-                        left: real.len(),
-                        right: imag.len(),
-                    });
-                }
-                let complex_vec: Vec<Complex64> = real
-                    .data()
-                    .iter()
-                    .zip(imag.data().iter())
-                    .map(|(&r, &i)| Complex64::new(r, i))
-                    .collect();
-                Ok(Storage::from_repr(StorageRepr::C64(
-                    StructuredStorage::new(
-                        complex_vec,
-                        real.payload_dims().to_vec(),
-                        real.strides().to_vec(),
-                        real.axis_classes().to_vec(),
-                    )
-                    .map_err(Self::invalid_storage_error)?,
-                )))
+                zip_payloads(real, imag, "combine_to_complex", |re, im| {
+                    Complex64::new(re, im)
+                })
             }
             _ => Err(StorageError::OperationNotSupported {
                 operation: "combine_to_complex",
-                left: storage_scalar_kind(&real_storage.0),
-                right: storage_scalar_kind(&imag_storage.0),
+                left: real_storage.scalar_kind(),
+                right: imag_storage.scalar_kind(),
             }),
         }
     }
 
     /// Add two storages element-wise, returning `Result` on error instead of panicking.
     ///
-    /// Both storages must have the same type and length.
+    /// Both storages must have the same scalar type and payload length; mixed
+    /// scalar kinds are refused rather than promoted.
     ///
     /// # Errors
     ///
@@ -2174,66 +2681,27 @@ impl Storage {
     /// let b = Storage::from_dense_col_major(vec![3.0_f64, 4.0], &[2]).unwrap();
     /// let c = a.try_add(&b).unwrap();
     /// assert_eq!(c.to_dense_f64_col_major_vec(&[2]).unwrap(), vec![4.0, 6.0]);
+    ///
+    /// let narrow = Storage::from_dense_col_major(vec![0.5_f32, 0.5], &[2]).unwrap();
+    /// let sum = narrow.try_add(&narrow).unwrap();
+    /// assert!(sum.is_f32());
+    /// assert_eq!(sum.to_dense_f32_col_major_vec(&[2]).unwrap(), vec![1.0, 1.0]);
     /// ```
     pub fn try_add(&self, other: &Storage) -> StorageResult<Storage> {
-        match (&self.0, &other.0) {
-            (StorageRepr::F64(a), StorageRepr::F64(b)) => {
-                if a.len() != b.len() {
-                    return Err(StorageError::LengthMismatch {
-                        operation: "addition",
-                        left: a.len(),
-                        right: b.len(),
-                    });
-                }
-                let sum_vec: Vec<f64> = a
-                    .data()
-                    .iter()
-                    .zip(b.data().iter())
-                    .map(|(&x, &y)| x + y)
-                    .collect();
-                Ok(Storage::from_repr(StorageRepr::F64(
-                    StructuredStorage::new(
-                        sum_vec,
-                        a.payload_dims().to_vec(),
-                        a.strides().to_vec(),
-                        a.axis_classes().to_vec(),
-                    )
-                    .map_err(|err| StorageError::InvalidStructuredStorage(err.to_string()))?,
-                )))
-            }
-            (StorageRepr::C64(a), StorageRepr::C64(b)) => {
-                if a.len() != b.len() {
-                    return Err(StorageError::LengthMismatch {
-                        operation: "addition",
-                        left: a.len(),
-                        right: b.len(),
-                    });
-                }
-                let sum_vec: Vec<Complex64> = a
-                    .data()
-                    .iter()
-                    .zip(b.data().iter())
-                    .map(|(&x, &y)| x + y)
-                    .collect();
-                Ok(Storage::from_repr(StorageRepr::C64(
-                    StructuredStorage::new(
-                        sum_vec,
-                        a.payload_dims().to_vec(),
-                        a.strides().to_vec(),
-                        a.axis_classes().to_vec(),
-                    )
-                    .map_err(|err| StorageError::InvalidStructuredStorage(err.to_string()))?,
-                )))
-            }
-            _ => Err(StorageError::OperationNotSupported {
-                operation: "addition",
-                left: storage_scalar_kind(&self.0),
-                right: storage_scalar_kind(&other.0),
-            }),
-        }
+        storage_payload_same_dtype_dispatch!(&self.0, &other.0, Payload => |left, right| {
+            zip_payloads(left, right, "addition", |x, y| x + y)
+        },
+        else Err(StorageError::OperationNotSupported {
+            operation: "addition",
+            left: self.scalar_kind(),
+            right: other.scalar_kind(),
+        }))
     }
 
     /// Try to subtract two storages element-wise.
+    ///
+    /// Both storages must have the same scalar type and payload length; mixed
+    /// scalar kinds are refused rather than promoted.
     ///
     /// # Errors
     ///
@@ -2253,66 +2721,22 @@ impl Storage {
     /// assert_eq!(c.to_dense_f64_col_major_vec(&[2]).unwrap(), vec![4.0, 4.0]);
     /// ```
     pub fn try_sub(&self, other: &Storage) -> StorageResult<Storage> {
-        match (&self.0, &other.0) {
-            (StorageRepr::F64(a), StorageRepr::F64(b)) => {
-                if a.len() != b.len() {
-                    return Err(StorageError::LengthMismatch {
-                        operation: "subtraction",
-                        left: a.len(),
-                        right: b.len(),
-                    });
-                }
-                let diff_vec: Vec<f64> = a
-                    .data()
-                    .iter()
-                    .zip(b.data().iter())
-                    .map(|(&x, &y)| x - y)
-                    .collect();
-                Ok(Storage::from_repr(StorageRepr::F64(
-                    StructuredStorage::new(
-                        diff_vec,
-                        a.payload_dims().to_vec(),
-                        a.strides().to_vec(),
-                        a.axis_classes().to_vec(),
-                    )
-                    .map_err(|err| StorageError::InvalidStructuredStorage(err.to_string()))?,
-                )))
-            }
-            (StorageRepr::C64(a), StorageRepr::C64(b)) => {
-                if a.len() != b.len() {
-                    return Err(StorageError::LengthMismatch {
-                        operation: "subtraction",
-                        left: a.len(),
-                        right: b.len(),
-                    });
-                }
-                let diff_vec: Vec<Complex64> = a
-                    .data()
-                    .iter()
-                    .zip(b.data().iter())
-                    .map(|(&x, &y)| x - y)
-                    .collect();
-                Ok(Storage::from_repr(StorageRepr::C64(
-                    StructuredStorage::new(
-                        diff_vec,
-                        a.payload_dims().to_vec(),
-                        a.strides().to_vec(),
-                        a.axis_classes().to_vec(),
-                    )
-                    .map_err(|err| StorageError::InvalidStructuredStorage(err.to_string()))?,
-                )))
-            }
-            _ => Err(StorageError::OperationNotSupported {
-                operation: "subtraction",
-                left: storage_scalar_kind(&self.0),
-                right: storage_scalar_kind(&other.0),
-            }),
-        }
+        storage_payload_same_dtype_dispatch!(&self.0, &other.0, Payload => |left, right| {
+            zip_payloads(left, right, "subtraction", |x, y| x - y)
+        },
+        else Err(StorageError::OperationNotSupported {
+            operation: "subtraction",
+            left: self.scalar_kind(),
+            right: other.scalar_kind(),
+        }))
     }
 
-    /// Scale storage by a scalar value.
+    /// Scale storage by a dynamic scalar value.
     ///
-    /// If the scalar is complex but the storage is real, the storage is promoted to complex.
+    /// The payload keeps its width and gains a complex component when the
+    /// scalar is complex (`f64` -> `Complex64`, `f32` -> `Complex32`), which is
+    /// exactly [`scale_target_dtype`]. Real scalars never widen a narrow
+    /// payload.
     ///
     /// # Examples
     ///
@@ -2322,6 +2746,10 @@ impl Storage {
     /// let s = Storage::from_dense_col_major(vec![1.0_f64, 2.0, 3.0], &[3]).unwrap();
     /// let scaled = s.scale(&BackendScalar::new_real(2.0));
     /// assert_eq!(scaled.to_dense_f64_col_major_vec(&[3]).unwrap(), vec![2.0, 4.0, 6.0]);
+    ///
+    /// let narrow = Storage::from_dense_col_major(vec![1.0_f32, 2.0], &[2]).unwrap();
+    /// let complex = narrow.scale(&BackendScalar::new_complex(0.0, 1.0));
+    /// assert!(complex.is_c32());
     /// ```
     pub fn scale(&self, scalar: &crate::BackendScalar) -> Storage {
         self * scalar.clone()
@@ -2329,11 +2757,20 @@ impl Storage {
 
     /// Compute linear combination: `a * self + b * other`.
     ///
+    /// Promotion has one rule, shared with [`Storage::scale`]: the two payload
+    /// dtypes promote along the lattice `f32 < f64`, `Complex32 < Complex64`,
+    /// real `<` complex, while a scalar never widens the payload dtype - it only
+    /// adds a complex component at the promoted width. So `f32 + f32` with
+    /// `f64` scalars stays `f32`, `f32 + f64` becomes `f64`, and a complex
+    /// scalar turns an `f32` result into `Complex32`.
+    ///
     /// # Errors
     ///
-    /// Returns [`StorageError::LengthMismatch`] if the lengths differ, and
+    /// Returns [`StorageError::LengthMismatch`] if the lengths differ,
+    /// [`StorageError::OperationNotSupported`] when an operand dtype is not a
+    /// supported floating or complex floating dtype, and
     /// [`StorageError::InvalidStructuredStorage`] if the result layout cannot be
-    /// built. Mixed scalar types are promoted to complex rather than rejected.
+    /// built.
     ///
     /// # Examples
     ///
@@ -2347,6 +2784,25 @@ impl Storage {
     /// // result = 2*[1,2] + 3*[3,4] = [11, 16]
     /// let result = x.axpby(&a, &y, &b).unwrap();
     /// assert_eq!(result.to_dense_f64_col_major_vec(&[2]).unwrap(), vec![11.0, 16.0]);
+    ///
+    /// // Real scalars do not widen a narrow payload.
+    /// let narrow = Storage::from_dense_col_major(vec![1.0_f32], &[1]).unwrap();
+    /// assert!(narrow.axpby(&a, &narrow, &b).unwrap().is_f32());
+    ///
+    /// // A complex scalar adds complexity at the payload width.
+    /// use num_complex::Complex32;
+    /// let mixed = narrow
+    ///     .axpby(
+    ///         &BackendScalar::from(Complex32::new(0.0, 1.0)),
+    ///         &narrow,
+    ///         &BackendScalar::from(1.0_f32),
+    ///     )
+    ///     .unwrap();
+    /// assert!(mixed.is_c32());
+    /// assert_eq!(
+    ///     mixed.to_dense_c32_col_major_vec(&[1]).unwrap(),
+    ///     vec![Complex32::new(1.0, 1.0)],
+    /// );
     /// ```
     pub fn axpby(
         &self,
@@ -2354,7 +2810,6 @@ impl Storage {
         other: &Storage,
         b: &crate::BackendScalar,
     ) -> StorageResult<Storage> {
-        // First check lengths match
         if self.len() != other.len() {
             return Err(StorageError::LengthMismatch {
                 operation: "axpby",
@@ -2363,108 +2818,122 @@ impl Storage {
             });
         }
 
-        // Determine if we need complex output
-        let needs_complex = a.is_complex()
-            || b.is_complex()
-            || matches!(&self.0, StorageRepr::C64(_))
-            || matches!(&other.0, StorageRepr::C64(_));
-
-        if needs_complex {
-            // Promote everything to complex
-            let a_c: Complex64 = a.clone().into();
-            let b_c: Complex64 = b.clone().into();
-
-            let (result, payload_dims, strides, axis_classes): (
-                Vec<Complex64>,
-                Vec<usize>,
-                Vec<isize>,
-                Vec<usize>,
-            ) = match (&self.0, &other.0) {
-                (StorageRepr::F64(x), StorageRepr::F64(y)) => (
-                    x.data()
-                        .iter()
-                        .zip(y.data().iter())
-                        .map(|(&xi, &yi)| {
-                            a_c * Complex64::new(xi, 0.0) + b_c * Complex64::new(yi, 0.0)
-                        })
-                        .collect(),
-                    x.payload_dims().to_vec(),
-                    x.strides().to_vec(),
-                    x.axis_classes().to_vec(),
-                ),
-                (StorageRepr::F64(x), StorageRepr::C64(y)) => (
-                    x.data()
-                        .iter()
-                        .zip(y.data().iter())
-                        .map(|(&xi, &yi)| a_c * Complex64::new(xi, 0.0) + b_c * yi)
-                        .collect(),
-                    x.payload_dims().to_vec(),
-                    x.strides().to_vec(),
-                    x.axis_classes().to_vec(),
-                ),
-                (StorageRepr::C64(x), StorageRepr::F64(y)) => (
-                    x.data()
-                        .iter()
-                        .zip(y.data().iter())
-                        .map(|(&xi, &yi)| a_c * xi + b_c * Complex64::new(yi, 0.0))
-                        .collect(),
-                    x.payload_dims().to_vec(),
-                    x.strides().to_vec(),
-                    x.axis_classes().to_vec(),
-                ),
-                (StorageRepr::C64(x), StorageRepr::C64(y)) => (
-                    x.data()
-                        .iter()
-                        .zip(y.data().iter())
-                        .map(|(&xi, &yi)| a_c * xi + b_c * yi)
-                        .collect(),
-                    x.payload_dims().to_vec(),
-                    x.strides().to_vec(),
-                    x.axis_classes().to_vec(),
-                ),
-            };
-            Ok(Storage::from_repr(StorageRepr::C64(
-                StructuredStorage::new(result, payload_dims, strides, axis_classes)
-                    .map_err(|err| StorageError::InvalidStructuredStorage(err.to_string()))?,
-            )))
-        } else {
-            // All real
-            if !a.is_real() || !b.is_real() {
-                return Err(StorageError::RealScalarRequired {
-                    operation: "real axpby",
-                    a: a.to_string(),
-                    b: b.to_string(),
-                });
-            }
-            let a_f = a.real();
-            let b_f = b.real();
-
-            match (&self.0, &other.0) {
-                (StorageRepr::F64(x), StorageRepr::F64(y)) => {
-                    let result: Vec<f64> = x
-                        .data()
-                        .iter()
-                        .zip(y.data().iter())
-                        .map(|(&xi, &yi)| a_f * xi + b_f * yi)
-                        .collect();
-                    Ok(Storage::from_repr(StorageRepr::F64(
-                        StructuredStorage::new(
-                            result,
-                            x.payload_dims().to_vec(),
-                            x.strides().to_vec(),
-                            x.axis_classes().to_vec(),
-                        )
-                        .map_err(|err| StorageError::InvalidStructuredStorage(err.to_string()))?,
-                    )))
-                }
-                _ => Err(StorageError::OperationNotSupported {
+        // One promotion rule with `scale`: the payloads promote along the lattice, then the scalars may
+        // add a complex component at that width but never widen it.
+        let payload_dtype =
+            promote_float_dtypes([self.dtype(), other.dtype()]).ok_or_else(|| {
+                StorageError::OperationNotSupported {
                     operation: "axpby",
-                    left: storage_scalar_kind(&self.0),
-                    right: storage_scalar_kind(&other.0),
-                }),
-            }
-        }
+                    left: self.scalar_kind(),
+                    right: other.scalar_kind(),
+                }
+            })?;
+        let target = scale_target_dtype(payload_dtype, scalar_dtype(a))
+            .and_then(|dtype| scale_target_dtype(dtype, scalar_dtype(b)))
+            .map_err(|_| StorageError::OperationNotSupported {
+                operation: "axpby",
+                left: self.scalar_kind(),
+                right: other.scalar_kind(),
+            })?;
+        let (a_re, a_im) = (a.real(), a.imag());
+        let (b_re, b_im) = (b.real(), b.imag());
+
+        storage_dtype_dispatch!(target, Result => {
+            let values: Vec<Result> =
+                storage_payload_pair_dispatch!(&self.0, &other.0, Left, Right => |left, right| {
+                    left.data()
+                        .iter()
+                        .zip(right.data().iter())
+                        .map(|(x, y)| {
+                            let (x_re, x_im) = <Left as StorageScalar>::widened_parts(*x);
+                            let (y_re, y_im) = <Right as StorageScalar>::widened_parts(*y);
+                            <Result as StorageScalar>::from_widened_parts(
+                                a_re * x_re - a_im * x_im + b_re * y_re - b_im * y_im,
+                                a_re * x_im + a_im * x_re + b_re * y_im + b_im * y_re,
+                            )
+                        })
+                        .collect()
+                });
+            StructuredStorage::new(
+                values,
+                self.payload_dims().to_vec(),
+                self.payload_strides().to_vec(),
+                self.axis_classes().to_vec(),
+            )
+            .map(StructuredStorage::into_storage)
+            .map_err(StorageError::from)
+        }, else Err(StorageError::OperationNotSupported {
+            operation: "axpby",
+            left: self.scalar_kind(),
+            right: other.scalar_kind(),
+        }))
     }
+}
+
+/// Result dtype of scaling a compact payload by a dynamic scalar.
+///
+/// The payload keeps its width and gains a complex component only when the
+/// scalar is complex: `f64` scaled by a `Complex32` or `Complex64` scalar stays
+/// `Complex64`, and `f32` scaled by a complex scalar stays `Complex32`. This is
+/// the compact-storage counterpart of the eager scaling rule in
+/// `tensor4all-core`, which delegates here so both surfaces agree.
+///
+/// # Errors
+///
+/// Returns [`StorageError::OperationNotSupported`] when either dtype is not a
+/// supported floating or complex floating dtype.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::scale_target_dtype;
+/// use tenferro::DType;
+///
+/// assert_eq!(scale_target_dtype(DType::F64, DType::C32).unwrap(), DType::C64);
+/// assert_eq!(scale_target_dtype(DType::F32, DType::C64).unwrap(), DType::C32);
+/// assert_eq!(scale_target_dtype(DType::C32, DType::F64).unwrap(), DType::C32);
+/// assert_eq!(scale_target_dtype(DType::F64, DType::F64).unwrap(), DType::F64);
+/// assert!(scale_target_dtype(DType::I32, DType::F64).is_err());
+/// ```
+pub fn scale_target_dtype(payload: DType, scalar: DType) -> StorageResult<DType> {
+    let width =
+        float_lattice_width(payload).ok_or_else(|| StorageError::OperationNotSupported {
+            operation: "scaling",
+            left: dtype_label(payload),
+            right: dtype_label(scalar),
+        })?;
+    if float_lattice_width(scalar).is_none() {
+        return Err(StorageError::OperationNotSupported {
+            operation: "scaling",
+            left: dtype_label(payload),
+            right: dtype_label(scalar),
+        });
+    }
+    let complex =
+        matches!(payload, DType::C32 | DType::C64) || matches!(scalar, DType::C32 | DType::C64);
+    Ok(match (width, complex) {
+        (32, false) => DType::F32,
+        (64, false) => DType::F64,
+        (32, true) => DType::C32,
+        _ => DType::C64,
+    })
+}
+
+fn dtype_label(dtype: DType) -> &'static str {
+    match dtype {
+        DType::F32 => "f32",
+        DType::F64 => "f64",
+        DType::I32 => "i32",
+        DType::I64 => "i64",
+        DType::Bool => "bool",
+        DType::C32 => "Complex32",
+        DType::C64 => "Complex64",
+        DType::External(_) => "external",
+    }
+}
+
+fn scalar_dtype(scalar: &BackendScalar) -> DType {
+    scalar.as_native().dtype()
 }
 
 /// Helper to get a mutable reference to storage, cloning if needed (COW).
@@ -2615,47 +3084,102 @@ fn try_contract_storage(
     .map_err(|err| StorageError::InvalidStructuredStorage(err.to_string()))
 }
 
-/// Multiply storage by a scalar (f64).
-/// For Complex64 storage, multiplies each element by the scalar (treated as real).
+/// Multiply storage by a real `f64` scalar.
+///
+/// The payload keeps its dtype: a narrow payload is not widened, and complex
+/// payloads scale both components.
 impl Mul<f64> for &Storage {
     type Output = Storage;
 
     fn mul(self, scalar: f64) -> Self::Output {
-        match &self.0 {
-            StorageRepr::F64(v) => Storage::from_repr(StorageRepr::F64(v.map_copy(|x| x * scalar))),
-            StorageRepr::C64(v) => Storage::from_repr(StorageRepr::C64(
-                v.map_copy(|z| z * Complex64::new(scalar, 0.0)),
-            )),
-        }
+        storage_payload_dispatch!(&self.0, Payload => |payload| {
+            payload
+                .map_copy(|value| {
+                    let (re, im) = <Payload as StorageScalar>::widened_parts(value);
+                    <Payload as StorageScalar>::from_widened_parts(re * scalar, im * scalar)
+                })
+                .into_storage()
+        })
     }
 }
 
-/// Multiply storage by a scalar (Complex64).
+/// Multiply storage by a `Complex64` scalar.
+///
+/// A real payload is promoted to its complex counterpart of the same width
+/// (`f64` -> `Complex64`, `f32` -> `Complex32`); complex payloads keep their
+/// dtype.
 impl Mul<Complex64> for &Storage {
     type Output = Storage;
 
     fn mul(self, scalar: Complex64) -> Self::Output {
-        match &self.0 {
-            StorageRepr::F64(v) => Storage::from_repr(StorageRepr::C64(
-                v.map_copy(|x| Complex64::new(x, 0.0) * scalar),
-            )),
-            StorageRepr::C64(v) => Storage::from_repr(StorageRepr::C64(v.map_copy(|z| z * scalar))),
-        }
+        let target = if self.is_complex() {
+            self.dtype()
+        } else {
+            scale_target_dtype(self.dtype(), DType::C64)
+                .unwrap_or_else(|error| crate::invariant_violated("complex scaling", error))
+        };
+        storage_dtype_dispatch!(target, Result => {
+            let values: Vec<Result> = storage_payload_dispatch!(&self.0, Source => |payload| {
+                payload
+                    .data()
+                    .iter()
+                    .map(|value| {
+                        let (re, im) = <Source as StorageScalar>::widened_parts(*value);
+                        <Result as StorageScalar>::from_widened_parts(
+                            re * scalar.re - im * scalar.im,
+                            re * scalar.im + im * scalar.re,
+                        )
+                    })
+                    .collect()
+            });
+            rebuild_payload(
+                self.payload_dims(),
+                self.payload_strides(),
+                self.axis_classes(),
+                values,
+            )
+        }, else crate::invariant_violated(
+            "complex scaling",
+            anyhow!("unsupported storage dtype {:?}", self.dtype()),
+        ))
     }
 }
 
-/// Multiply storage by a scalar (BackendScalar).
-/// May promote f64 storage to Complex64 when scalar is complex.
+/// Multiply storage by a dynamic [`BackendScalar`].
+///
+/// The result dtype follows [`scale_target_dtype`]: the payload keeps its width
+/// and gains a complex component when the scalar is complex.
 impl Mul<BackendScalar> for &Storage {
     type Output = Storage;
 
     fn mul(self, scalar: BackendScalar) -> Self::Output {
-        if scalar.is_complex() {
-            let z: Complex64 = scalar.into();
-            self * z
-        } else {
-            self * scalar.real()
-        }
+        let target = scale_target_dtype(self.dtype(), scalar_dtype(&scalar))
+            .unwrap_or_else(|error| crate::invariant_violated("dynamic scaling", error));
+        let (scale_re, scale_im) = (scalar.real(), scalar.imag());
+        storage_dtype_dispatch!(target, Result => {
+            let values: Vec<Result> = storage_payload_dispatch!(&self.0, Source => |payload| {
+                payload
+                    .data()
+                    .iter()
+                    .map(|value| {
+                        let (re, im) = <Source as StorageScalar>::widened_parts(*value);
+                        <Result as StorageScalar>::from_widened_parts(
+                            re * scale_re - im * scale_im,
+                            re * scale_im + im * scale_re,
+                        )
+                    })
+                    .collect()
+            });
+            rebuild_payload(
+                self.payload_dims(),
+                self.payload_strides(),
+                self.axis_classes(),
+                values,
+            )
+        }, else crate::invariant_violated(
+            "dynamic scaling",
+            anyhow!("unsupported storage dtype {:?}", self.dtype()),
+        ))
     }
 }
 

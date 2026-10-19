@@ -156,14 +156,13 @@ fn evaluate_candidate_matrix_rejects_malformed_candidate_length() {
         &right_key,
         &right_candidates,
         &local_dims,
-        &mut crate::evaluation::Compatibility::new(&mut |batch: GlobalIndexBatch<
-            '_,
-        >|
-              -> Result<Vec<f64>> {
-            Ok(vec![
-                (batch.get(0, 0).unwrap() + batch.get(4, 0).unwrap()) as f64,
-            ])
-        }),
+        &mut crate::evaluation::Compatibility::new(
+            &mut |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+                Ok(vec![
+                    (batch.get(0, 0).unwrap() + batch.get(4, 0).unwrap()) as f64,
+                ])
+            },
+        ),
         EVALUATION_CHUNK_POINTS,
     );
     assert_eq!(result.unwrap(), vec![1.0]);

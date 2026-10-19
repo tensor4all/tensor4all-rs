@@ -1,10 +1,23 @@
 use super::*;
-use crate::storage::Storage;
+use crate::storage::{Storage, StorageRepr};
 use crate::tensor_element::TensorElement;
 use num_complex::{Complex32, Complex64};
+use tenferro::TensorView;
 
 fn assert_storage_eq(lhs: &Storage, rhs: &Storage) {
     match (lhs.repr(), rhs.repr()) {
+        (StorageRepr::F32(a), StorageRepr::F32(b)) => {
+            assert_eq!(a.payload_dims(), b.payload_dims());
+            assert_eq!(a.strides(), b.strides());
+            assert_eq!(a.axis_classes(), b.axis_classes());
+            assert_eq!(a.data(), b.data());
+        }
+        (StorageRepr::C32(a), StorageRepr::C32(b)) => {
+            assert_eq!(a.payload_dims(), b.payload_dims());
+            assert_eq!(a.strides(), b.strides());
+            assert_eq!(a.axis_classes(), b.axis_classes());
+            assert_eq!(a.data(), b.data());
+        }
         (StorageRepr::F64(a), StorageRepr::F64(b)) => {
             assert_eq!(a.payload_dims(), b.payload_dims());
             assert_eq!(a.strides(), b.strides());
@@ -84,6 +97,52 @@ fn storage_native_roundtrip_dense_f64() {
     let native = storage_to_native_tensor(&storage, &[2, 2]).unwrap();
     let roundtrip = native_tensor_primal_to_storage(&native).unwrap();
     assert_storage_eq(&roundtrip, &storage);
+}
+
+#[test]
+fn storage_native_roundtrip_keeps_the_narrow_dtypes() {
+    // The session route consumes compact storage through these bridges, so a narrow payload must reach
+    // the session as its own dtype instead of a widened one.
+    let f32_storage =
+        Storage::from_dense_col_major(vec![1.5_f32, -2.5, 3.25, 4.0], &[2, 2]).unwrap();
+    let native = storage_to_native_tensor(&f32_storage, &[2, 2]).unwrap();
+    assert_eq!(native.dtype(), tenferro::DType::F32);
+    assert_eq!(
+        native.as_slice::<f32>().unwrap(),
+        &[1.5_f32, -2.5, 3.25, 4.0]
+    );
+    assert_storage_eq(
+        &native_tensor_primal_to_storage(&native).unwrap(),
+        &f32_storage,
+    );
+
+    let c32_storage = Storage::from_dense_col_major(
+        vec![Complex32::new(1.0, -1.0), Complex32::new(0.5, 2.0)],
+        &[2],
+    )
+    .unwrap();
+    let native = storage_to_native_tensor(&c32_storage, &[2]).unwrap();
+    assert_eq!(native.dtype(), tenferro::DType::C32);
+    assert_storage_eq(
+        &native_tensor_primal_to_storage(&native).unwrap(),
+        &c32_storage,
+    );
+
+    // The payload bridge preserves the dtype and, for a contiguous payload, borrows it.
+    let payload = storage_payload_native(&f32_storage).unwrap();
+    assert_eq!(payload.dtype(), tenferro::DType::F32);
+    assert_eq!(payload.shape(), &[2, 2]);
+    match storage_payload_native_read_input(&f32_storage).unwrap() {
+        NativeTensorReadInput::Borrowed(read) => {
+            assert_eq!(read.dtype(), tenferro::DType::F32);
+        }
+        NativeTensorReadInput::Owned(_) => panic!("a contiguous f32 payload is borrowed"),
+    }
+
+    // Rebuilding storage from a narrow native payload keeps the dtype.
+    let rebuilt = storage_from_payload_native(payload, &[2, 2], vec![0, 1]).unwrap();
+    assert!(rebuilt.is_f32());
+    assert_storage_eq(&rebuilt, &f32_storage);
 }
 
 #[test]
@@ -251,9 +310,12 @@ fn dense_native_tensor_from_col_major_f32_roundtrip() {
         vec![1.25_f32, -2.5_f32]
     );
     let snapshot = native_tensor_primal_to_storage(&native).unwrap();
+    // Snapshot materialization is dtype preserving: the compact payload stays
+    // f32 instead of widening to f64.
+    assert!(snapshot.is_f32());
     assert_storage_eq(
         &snapshot,
-        &Storage::from_dense_col_major(vec![1.25, -2.5], &[2]).unwrap(),
+        &Storage::from_dense_col_major(vec![1.25_f32, -2.5], &[2]).unwrap(),
     );
 }
 
@@ -299,14 +361,17 @@ fn diag_native_tensor_from_col_major_c32_promotes_to_c64_values() {
         vec![Complex64::new(1.0, -0.5), Complex64::new(-2.0, 0.25)]
     );
 
+    // Snapshot materialization is dtype preserving: the compact payload stays
+    // Complex32 instead of widening to Complex64.
+    assert!(snapshot.is_c32());
     assert_storage_eq(
         &snapshot,
         &Storage::from_dense_col_major(
             vec![
-                Complex64::new(1.0, -0.5),
-                Complex64::new(0.0, 0.0),
-                Complex64::new(0.0, 0.0),
-                Complex64::new(-2.0, 0.25),
+                Complex32::new(1.0, -0.5),
+                Complex32::new(0.0, 0.0),
+                Complex32::new(0.0, 0.0),
+                Complex32::new(-2.0, 0.25),
             ],
             &[2, 2],
         )

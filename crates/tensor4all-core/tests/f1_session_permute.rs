@@ -200,8 +200,9 @@ fn the_identity_shortcut_and_the_dtype_domain_are_permutation_specific() {
     let i = Index::new_dyn(2);
     let k = Index::new_dyn(2);
 
-    // A narrower dtype: the compatibility route permutes it, the session route refuses a nonidentity
-    // permutation with its typed operation refusal and serves the identity one unchanged.
+    // Narrow dtypes used to be refused for a nonidentity permutation because publication could not hold
+    // them; compact storage holds `f32`/`c32` now, so both the identity shortcut and the real permutation
+    // serve them and keep their dtype.
     let f32_tensor =
         IdxTensor::from_dense(vec![i.clone(), k.clone()], vec![1.5_f32, 2.5, -1.0, 3.0]).unwrap();
     let c32_tensor = IdxTensor::from_dense(
@@ -215,29 +216,29 @@ fn the_identity_shortcut_and_the_dtype_domain_are_permutation_specific() {
     )
     .unwrap();
 
-    for (label, tensor) in [("f32", &f32_tensor), ("c32", &c32_tensor)] {
-        let compatibility = tensor.permute(&[1, 0]).expect("compatibility permute");
-        assert_eq!(compatibility.indices().len(), 2, "{label}");
-        context
-            .with_concrete_session(|session| {
-                let error = permute_on_session(session, tensor, &[1, 0])
-                    .expect_err("a narrower dtype is refused for a nonidentity permutation");
-                match error {
-                    tensor4all_core::IdxTensorError::Operation { operation, source } => {
-                        assert_eq!(operation, "permute_on_session", "{label}");
-                        assert!(
-                            source.to_string().contains("f64 and c64 operands"),
-                            "{label}: {source}"
-                        );
-                    }
-                    other => panic!("{label}: expected a typed operation refusal, got {other:?}"),
-                }
+    // The compatibility reference is taken outside the session scope, which a held session forbids.
+    let f32_compatibility = f32_tensor.permute(&[1, 0]).expect("compatibility permute");
+    let c32_compatibility = c32_tensor.permute(&[1, 0]).expect("compatibility permute");
+
+    context
+        .with_concrete_session(|session| {
+            for (label, tensor, compatibility) in [
+                ("f32", &f32_tensor, &f32_compatibility),
+                ("c32", &c32_tensor, &c32_compatibility),
+            ] {
+                let permuted = permute_on_session(session, tensor, &[1, 0])
+                    .expect("a narrow dtype is served for a nonidentity permutation");
+                assert_eq!(permuted.indices(), compatibility.indices(), "{label}");
+                assert_eq!(permuted.dims(), compatibility.dims(), "{label}");
+                assert_eq!(permuted.is_f32(), tensor.is_f32(), "{label}");
+                assert_eq!(permuted.is_c32(), tensor.is_c32(), "{label}");
+
                 let identity = permute_on_session(session, tensor, &[0, 1])
                     .expect("an identity permutation is served whatever the dtype");
                 assert_eq!(identity.indices(), tensor.indices(), "{label}");
-            })
-            .expect("session entry");
-    }
+            }
+        })
+        .expect("session entry");
 }
 
 #[test]

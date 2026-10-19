@@ -230,6 +230,14 @@ pub fn inner_product_on_session(
             let value = first_scalar::<f64>(&product)?;
             crate::AnyScalar::from_published(value, published)
         }
+        tenferro::DType::F32 => {
+            let value = first_scalar::<f32>(&product)?;
+            crate::AnyScalar::from_published(value, published)
+        }
+        tenferro::DType::C32 => {
+            let value = first_scalar::<num_complex::Complex32>(&product)?;
+            crate::AnyScalar::from_published(value, published)
+        }
         tenferro::DType::C64 => {
             let value = first_scalar::<num_complex::Complex64>(&product)?;
             crate::AnyScalar::from_published(value, published)
@@ -238,7 +246,7 @@ pub fn inner_product_on_session(
             return Err(IdxTensorError::operation(
                 OP,
                 anyhow::anyhow!(
-                    "the explicit-session route returns f64 and c64 scalars, not {other:?}"
+                    "the explicit-session route returns floating-point scalars, not {other:?}"
                 ),
             ));
         }
@@ -346,6 +354,13 @@ pub fn sum_on_session(
         tenferro::DType::F64 => {
             crate::AnyScalar::from_published(first_scalar::<f64>(&reduced)?, published)
         }
+        tenferro::DType::F32 => {
+            crate::AnyScalar::from_published(first_scalar::<f32>(&reduced)?, published)
+        }
+        tenferro::DType::C32 => crate::AnyScalar::from_published(
+            first_scalar::<num_complex::Complex32>(&reduced)?,
+            published,
+        ),
         tenferro::DType::C64 => crate::AnyScalar::from_published(
             first_scalar::<num_complex::Complex64>(&reduced)?,
             published,
@@ -354,7 +369,7 @@ pub fn sum_on_session(
             return Err(IdxTensorError::operation(
                 SUM_OP,
                 anyhow::anyhow!(
-                    "the explicit-session route reduces the dtypes this seam serves, not {other:?}"
+                    "the explicit-session route reduces floating-point dtypes, not {other:?}"
                 ),
             ));
         }

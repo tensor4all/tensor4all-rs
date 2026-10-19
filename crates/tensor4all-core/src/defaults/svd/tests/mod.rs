@@ -92,9 +92,29 @@ fn svd_options_accessors_roundtrip() {
 }
 
 #[test]
-fn singular_values_from_native_rejects_unsupported_scalar_types() {
+fn singular_values_from_native_reads_narrow_real_parts_and_rejects_integers() {
+    // A narrow real payload widens per value for the rank decision only.
     let tensor = NativeTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
-    let err = singular_values_from_native(&tensor).unwrap_err();
+    assert_eq!(
+        singular_values_from_native(&tensor).unwrap(),
+        vec![1.0, 2.0]
+    );
+
+    let narrow_complex = NativeTensor::from_vec_col_major(
+        vec![2],
+        vec![
+            num_complex::Complex32::new(1.0, 5.0),
+            num_complex::Complex32::new(2.0, -5.0),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        singular_values_from_native(&narrow_complex).unwrap(),
+        vec![1.0, 2.0]
+    );
+
+    let integer = NativeTensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
+    let err = singular_values_from_native(&integer).unwrap_err();
     assert!(err
         .to_string()
         .contains("unsupported singular-value scalar type"));

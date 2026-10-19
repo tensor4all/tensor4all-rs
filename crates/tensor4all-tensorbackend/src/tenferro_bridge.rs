@@ -13,7 +13,7 @@ use omeco::ScoreFunction;
 use tenferro::{
     program::CoreSemanticOp, DType, GraphCompiler, Runtime, ScopedExecutionOutcome,
     ScopedReadInputs, Tensor as NativeTensor, TensorRead, TensorScalar, TensorSessionOpsExt,
-    TensorView, TraceContext,
+    TraceContext,
 };
 use tenferro_einsum::{
     ConcreteEinsumPlan, ContractionOptimizerOptions, ContractionTree, EinsumSubscripts, Subscripts,
@@ -63,9 +63,7 @@ use crate::context::{
     with_default_graph_runtime, with_default_session,
 };
 use crate::memory::release_process_allocator_cached_memory;
-use crate::storage::Storage;
-#[cfg(test)]
-use crate::storage::StorageRepr;
+use crate::storage::{storage_dtype_dispatch, Storage, StorageScalar};
 use crate::tensor_element::TensorElement;
 use crate::BackendScalar;
 
@@ -922,83 +920,118 @@ pub fn diag_native_tensor_from_col_major<T: TensorElement>(
 }
 
 /// Convert storage to a dense native tensor.
+///
+/// The native tensor keeps the storage's own scalar dtype: a compact `f32` or
+/// `Complex32` payload becomes an `f32`/`c32` native tensor instead of being
+/// widened to `f64`/`Complex64`.
 /// # Errors
 ///
 /// Returns a [`BridgeError`] when materializing `storage` to the requested
-/// dense shape fails (for example a scalar-kind or shape mismatch) or when the
+/// dense shape fails (for example a shape mismatch) or when the
 /// dense-to-native conversion fails.
 pub fn storage_to_native_tensor(
     storage: &Storage,
     logical_dims: &[usize],
 ) -> std::result::Result<NativeTensor, BridgeError> {
-    if storage.is_c64() {
-        dense_native_tensor_from_col_major(
-            &storage
-                .to_dense_c64_col_major_vec(logical_dims)
-                .map_err(|e| anyhow!("dense c64 materialization failed: {e}"))?,
+    storage_dtype_dispatch!(storage.dtype(), Payload => {
+        let values = <Payload as StorageScalar>::dense_values(storage, logical_dims)
+            .map_err(|error| anyhow!("dense payload materialization failed: {error}"))?;
+        <Payload as TensorElement>::dense_native_tensor_from_col_major_owned(
+            values,
             logical_dims,
         )
         .map_err(BridgeError::from)
-    } else {
-        dense_native_tensor_from_col_major(
-            &storage
-                .to_dense_f64_col_major_vec(logical_dims)
-                .map_err(|e| anyhow!("dense f64 materialization failed: {e}"))?,
-            logical_dims,
+    },
+    else Err(anyhow!("unsupported storage scalar type").into()))
+}
+
+/// Copy the compact payload as a native tensor of the stored dtype.
+///
+/// This visits only referenced payload entries and preserves the stored scalar
+/// dtype, so it is the dtype-generic payload bridge for compact storage.
+/// # Errors
+///
+/// Returns a [`BridgeError`] when the payload cannot be copied or the
+/// backend rejects the native tensor.
+pub fn storage_payload_native(storage: &Storage) -> std::result::Result<NativeTensor, BridgeError> {
+    storage_dtype_dispatch!(storage.dtype(), Payload => {
+        let values = <Payload as StorageScalar>::payload_vec(storage)
+            .map_err(|error| anyhow!("compact payload copy failed: {error}"))?;
+        native_tensor_from_vec(storage.payload_dims().to_vec(), values)
+    },
+    else Err(anyhow!("unsupported storage scalar type").into()))
+}
+
+/// Build structured storage from a native payload, preserving its dtype.
+///
+/// `output_payload_dims` and `output_axis_classes` describe the planned compact
+/// layout. The compact payload keeps the native tensor's scalar dtype, so a
+/// narrow contraction result stays narrow.
+/// # Errors
+///
+/// Returns a [`BridgeError`] when the payload shape does not match
+/// `output_payload_dims`, when its dtype has no compact storage representation,
+/// or when the storage metadata or payload read fails.
+pub fn storage_from_payload_native(
+    payload: NativeTensor,
+    output_payload_dims: &[usize],
+    output_axis_classes: Vec<usize>,
+) -> std::result::Result<Storage, BridgeError> {
+    if payload.shape() != output_payload_dims {
+        return Err(anyhow!(
+            "payload shape {:?} does not match planned payload dims {:?}",
+            payload.shape(),
+            output_payload_dims
         )
-        .map_err(BridgeError::from)
+        .into());
     }
+    let strides = crate::storage::col_major_strides(output_payload_dims)?;
+    storage_dtype_dispatch!(payload.dtype(), Payload => {
+        let values = native_slice::<Payload>(&payload, "failed to read structured payload")?.to_vec();
+        Storage::new_structured(
+            values,
+            output_payload_dims.to_vec(),
+            strides,
+            output_axis_classes,
+        )
+        .map_err(|error| anyhow!("structured payload storage construction failed: {error}").into())
+    },
+    else Err(anyhow!(
+        "unsupported structured payload dtype {:?}; expected a floating or complex floating dtype",
+        payload.dtype()
+    )
+    .into()))
 }
 
 /// Build a read-only native tensor input over the compact storage payload.
 ///
 /// Contiguous payloads are borrowed without copying. Non-contiguous payloads
-/// are materialized into an owned native tensor.
+/// are materialized into an owned native tensor. Both paths preserve the stored
+/// scalar dtype, so `f32`/`Complex32` payloads are served without widening.
 /// # Errors
 ///
-/// Returns a [`BridgeError`] when the storage is neither `f64` nor `c64`, when
-/// the contiguous payload view cannot be built, or when the payload cannot be
-/// read into a native tensor.
+/// Returns a [`BridgeError`] when the storage dtype is not a floating or
+/// complex floating dtype, when the contiguous payload view cannot be built, or
+/// when the payload cannot be read into a native tensor.
 pub fn storage_payload_native_read_input(
     storage: &Storage,
 ) -> std::result::Result<NativeTensorReadInput<'_>, BridgeError> {
-    if storage.is_f64() {
-        if let Some(view) = storage
-            .payload_f64_col_major_view_if_contiguous()
+    storage_dtype_dispatch!(storage.dtype(), Payload => {
+        if let Some(view) = <Payload as StorageScalar>::payload_view(storage)
             .map_err(anyhow::Error::msg)?
         {
+            let typed = tenferro::TypedTensorView::from_col_major(storage.payload_dims(), view)
+                .map_err(|error| BridgeError::from(anyhow::Error::new(error)))?;
             return Ok(NativeTensorReadInput::Borrowed(TensorRead::from_view(
-                TensorView::f64(storage.payload_dims(), view)
-                    .map_err(|e| BridgeError::from(anyhow::Error::new(e)))?,
+                <Payload as TensorScalar>::tensor_view(typed),
             )));
         }
-        native_tensor_from_vec(
-            storage.payload_dims().to_vec(),
-            storage
-                .payload_f64_col_major_vec()
-                .map_err(anyhow::Error::msg)?,
-        )
-        .map(NativeTensorReadInput::Owned)
-    } else if storage.is_c64() {
-        if let Some(view) = storage
-            .payload_c64_col_major_view_if_contiguous()
-            .map_err(anyhow::Error::msg)?
-        {
-            return Ok(NativeTensorReadInput::Borrowed(TensorRead::from_view(
-                TensorView::c64(storage.payload_dims(), view)
-                    .map_err(|e| BridgeError::from(anyhow::Error::new(e)))?,
-            )));
-        }
-        native_tensor_from_vec(
-            storage.payload_dims().to_vec(),
-            storage
-                .payload_c64_col_major_vec()
-                .map_err(anyhow::Error::msg)?,
-        )
-        .map(NativeTensorReadInput::Owned)
-    } else {
-        Err(anyhow!("unsupported storage scalar type").into())
-    }
+        let values = <Payload as StorageScalar>::payload_vec(storage)
+            .map_err(|error| anyhow!("compact payload copy failed: {error}"))?;
+        native_tensor_from_vec(storage.payload_dims().to_vec(), values)
+            .map(NativeTensorReadInput::Owned)
+    },
+    else Err(anyhow!("unsupported storage scalar type").into()))
 }
 
 /// Materialize a native tensor into dense storage.
@@ -1012,10 +1045,7 @@ pub fn native_tensor_primal_to_storage(
 ) -> std::result::Result<Storage, BridgeError> {
     match tensor.dtype() {
         DType::F32 => Storage::from_dense_col_major(
-            native_slice::<f32>(tensor, "failed to read f32 native tensor")?
-                .iter()
-                .map(|&value| value as f64)
-                .collect::<Vec<_>>(),
+            native_slice::<f32>(tensor, "failed to read f32 native tensor")?.to_vec(),
             tensor.shape(),
         )
         .map_err(|e| {
@@ -1069,10 +1099,7 @@ pub fn native_tensor_primal_to_storage(
             ))
         }),
         DType::C32 => Storage::from_dense_col_major(
-            native_slice::<Complex32>(tensor, "failed to read c32 native tensor")?
-                .iter()
-                .map(|&value| Complex64::new(value.re as f64, value.im as f64))
-                .collect::<Vec<_>>(),
+            native_slice::<Complex32>(tensor, "failed to read c32 native tensor")?.to_vec(),
             tensor.shape(),
         )
         .map_err(|e| {

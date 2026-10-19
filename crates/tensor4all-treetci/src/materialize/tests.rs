@@ -14,7 +14,6 @@ use std::cell::RefCell;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
-
 /// The context-free materialization route, with the evaluator wrapped as the run's
 /// execution owner.
 fn materialize_compat(
@@ -39,7 +38,8 @@ fn materialize_in_context(
     context
         .with_concrete_session(|session| {
             let mut contextual =
-                |batch: GlobalIndexBatch<'_>, _ctx: &mut tensor4all_treetn::interpolation::EvalContext<'_>| {
+                |batch: GlobalIndexBatch<'_>,
+                 _ctx: &mut tensor4all_treetn::interpolation::EvalContext<'_>| {
                     evaluate(batch)
                 };
             let mut ctx = crate::evaluation::serial_context(session);
@@ -405,8 +405,8 @@ fn to_treetn_is_independent_of_chunk_size_on_chain_and_branched_tree() {
             let tn = to_treetn(&state, smooth_eval, Some(center)).unwrap();
             let reference_bits = tensor_bits(&tn, n_sites);
             for chunk_points in [1, 7] {
-                let chunked = materialize_compat(&state, smooth_eval, Some(center), chunk_points)
-                    .unwrap();
+                let chunked =
+                    materialize_compat(&state, smooth_eval, Some(center), chunk_points).unwrap();
                 assert_eq!(
                     tensor_bits(&chunked, n_sites),
                     reference_bits,
@@ -911,13 +911,7 @@ mod materialization_context {
 
         let error = pool
             .install(|| {
-                materialize_in_context(
-                    &state,
-                    smooth,
-                    Some(1),
-                    EVALUATION_CHUNK_POINTS,
-                    &context,
-                )
+                materialize_in_context(&state, smooth, Some(1), EVALUATION_CHUNK_POINTS, &context)
             })
             .expect_err("a worker may not enter the caller's concrete session");
 

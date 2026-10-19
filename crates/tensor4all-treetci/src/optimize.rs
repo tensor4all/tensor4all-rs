@@ -453,14 +453,7 @@ where
     let mut evaluate = evaluate;
     let mut execution = Compatibility::new(&mut evaluate);
     with_seeded_streams(options, proposer, |streams| {
-        optimize_memoized(
-            state,
-            &mut execution,
-            options,
-            proposer,
-            visitor,
-            streams,
-        )
+        optimize_memoized(state, &mut execution, options, proposer, visitor, streams)
     })
 }
 
@@ -479,19 +472,10 @@ where
     P: PivotCandidateProposer,
     V: EdgeVisitor,
 {
-    let mut cached = CachedExecution::new(
-        execution,
-        &state.local_dims,
-        options.evaluation_cache_bytes,
-    )?;
-    let mut result = optimize_with_streams(
-        state,
-        &mut cached,
-        options,
-        proposer,
-        visitor,
-        streams,
-    )?;
+    let mut cached =
+        CachedExecution::new(execution, &state.local_dims, options.evaluation_cache_bytes)?;
+    let mut result =
+        optimize_with_streams(state, &mut cached, options, proposer, visitor, streams)?;
     result.evaluation = cached.stats();
     Ok(result)
 }
@@ -534,14 +518,7 @@ where
             let mut context = crate::evaluation::serial_context(session);
             let mut execution = Explicit::new(&mut context, &mut contextual);
             with_seeded_streams(options, proposer, |streams| {
-                optimize_memoized(
-                    state,
-                    &mut execution,
-                    options,
-                    proposer,
-                    &AllEdges,
-                    streams,
-                )
+                optimize_memoized(state, &mut execution, options, proposer, &AllEdges, streams)
             })
         })
         .map_err(|error| crate::TreeTciError::from(anyhow::Error::new(error)))?

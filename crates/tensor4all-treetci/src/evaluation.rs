@@ -150,9 +150,9 @@ impl<'a, 'session, T, F> BatchExecution<T> for Explicit<'a, 'session, F>
 where
     T: FullPivLuScalar,
     F: for<'batch, 'value> FnMut(
-            GlobalIndexBatch<'batch>,
-            &'value mut EvalContext<'session>,
-        ) -> anyhow::Result<Vec<T>>,
+        GlobalIndexBatch<'batch>,
+        &'value mut EvalContext<'session>,
+    ) -> anyhow::Result<Vec<T>>,
 {
     fn call(&mut self, batch: GlobalIndexBatch<'_>) -> anyhow::Result<Vec<T>> {
         (self.evaluate)(batch, &mut *self.context)
@@ -251,7 +251,8 @@ where
         let evaluated = &mut self.evaluated;
         cache
             .evaluate_batched(ColMajorArrayRef::new(batch.data(), &shape)?, |misses| {
-                let batch = GlobalIndexBatch::new(misses.data(), misses.shape()[0], misses.shape()[1])?;
+                let batch =
+                    GlobalIndexBatch::new(misses.data(), misses.shape()[0], misses.shape()[1])?;
                 let values = source.call(batch)?;
                 anyhow::ensure!(
                     values.len() == batch.n_points(),

@@ -1,8 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, ensure, Result};
-use num_complex::Complex64;
-use tenferro::{DType, Tensor as NativeTensor};
+use tenferro::Tensor as NativeTensor;
 use tensor4all_tensorbackend::{einsum_native_tensors, NativeTensorReadInput, Storage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -337,79 +336,26 @@ pub(crate) fn normalize_payload_read_for_roots<'a>(
     Ok((NativeTensorReadInput::Owned(current_payload), current_roots))
 }
 
+/// Copy a compact payload as a native tensor of the stored dtype.
+///
+/// The dtype dispatch lives in `tensor4all-tensorbackend` so this crate has one
+/// storage-to-native seam instead of a per-dtype chain.
 pub(crate) fn storage_payload_native(storage: &Storage) -> Result<NativeTensor> {
-    if storage.is_f64() {
-        Ok(NativeTensor::from_vec_col_major(
-            storage.payload_dims().to_vec(),
-            storage
-                .payload_f64_col_major_vec()
-                .map_err(anyhow::Error::new)?,
-        )?)
-    } else if storage.is_c64() {
-        Ok(NativeTensor::from_vec_col_major(
-            storage.payload_dims().to_vec(),
-            storage
-                .payload_c64_col_major_vec()
-                .map_err(anyhow::Error::new)?,
-        )?)
-    } else {
-        Err(anyhow!("unsupported storage scalar type"))
-    }
+    tensor4all_tensorbackend::storage_payload_native(storage).map_err(anyhow::Error::from)
 }
 
+/// Build structured storage from a native payload, preserving its dtype.
 pub(crate) fn storage_from_payload_native(
     payload: NativeTensor,
     output_payload_dims: &[usize],
     output_axis_classes: Vec<usize>,
 ) -> Result<Storage> {
-    ensure!(
-        payload.shape() == output_payload_dims,
-        "payload shape {:?} does not match planned payload dims {:?}",
-        payload.shape(),
-        output_payload_dims
-    );
-    let strides = col_major_strides(output_payload_dims)?;
-    match payload.dtype() {
-        DType::F64 => {
-            let values = payload
-                .as_slice::<f64>()
-                .map_err(anyhow::Error::new)?
-                .to_vec();
-            Storage::new_structured(
-                values,
-                output_payload_dims.to_vec(),
-                strides,
-                output_axis_classes,
-            )
-        }
-        DType::C64 => {
-            let values = payload
-                .as_slice::<Complex64>()
-                .map_err(anyhow::Error::new)?
-                .to_vec();
-            Storage::new_structured(
-                values,
-                output_payload_dims.to_vec(),
-                strides,
-                output_axis_classes,
-            )
-        }
-        dtype => Err(anyhow!(
-            "unsupported structured payload dtype {dtype:?}; expected f64 or Complex64"
-        )),
-    }
-}
-
-fn col_major_strides(dims: &[usize]) -> Result<Vec<isize>> {
-    let mut stride = 1isize;
-    let mut strides = Vec::with_capacity(dims.len());
-    for &dim in dims {
-        strides.push(stride);
-        stride = stride
-            .checked_mul(dim as isize)
-            .ok_or_else(|| anyhow!("payload stride overflow for dims {dims:?}"))?;
-    }
-    Ok(strides)
+    tensor4all_tensorbackend::storage_from_payload_native(
+        payload,
+        output_payload_dims,
+        output_axis_classes,
+    )
+    .map_err(anyhow::Error::from)
 }
 
 fn first_duplicate_pair(values: &[usize]) -> Option<(usize, usize)> {

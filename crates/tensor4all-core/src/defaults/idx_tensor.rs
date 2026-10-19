@@ -679,11 +679,7 @@ impl IdxTensorStorage {
 
     fn dtype(&self) -> Option<DType> {
         match self {
-            Self::Materialized(storage) => Some(if storage.is_c64() {
-                DType::C64
-            } else {
-                DType::F64
-            }),
+            Self::Materialized(storage) => Some(storage.dtype()),
             Self::Eager { inner, .. } => Some(inner.dtype()),
             Self::Compact(payload) => Some(payload.payload.dtype()),
             Self::Deferred { source, .. } => source.dtype(),
@@ -740,6 +736,22 @@ impl IdxTensorStorage {
         }
     }
 
+    /// Reject a scalar kind that compact storage has no payload representation for.
+    ///
+    /// Every floating and integer eager dtype has a compact representation, so
+    /// only caller-registered external scalar kinds reach this check; they must
+    /// keep their eager payload instead of being guessed into a compact dtype.
+    fn refuse_unsupported_compact_dtype(
+        native: &NativeTensor,
+    ) -> std::result::Result<(), TensorStorageError> {
+        if matches!(native.dtype(), DType::External(_)) {
+            return Err(TensorStorageError::UnsupportedDtype {
+                dtype: IdxTensor::dtype_name(native.dtype()),
+            });
+        }
+        Ok(())
+    }
+
     fn materialize_eager_payload(inner: &EagerTensor) -> Result<NativeTensor> {
         let native = inner.duplicate_value()?;
         if native.is_col_major_contiguous()? {
@@ -766,12 +778,7 @@ impl IdxTensorStorage {
                         source: Arc::from(source.into_boxed_dyn_error()),
                     }
                 })?;
-                let dtype = native.dtype();
-                if matches!(dtype, DType::F32 | DType::C32) {
-                    return Err(TensorStorageError::UnsupportedDtype {
-                        dtype: IdxTensor::dtype_name(dtype),
-                    });
-                }
+                Self::refuse_unsupported_compact_dtype(&native)?;
                 IdxTensor::storage_from_native_with_axis_classes(
                     &native,
                     axis_classes,
@@ -789,12 +796,7 @@ impl IdxTensorStorage {
                             source: Arc::from(source.into_boxed_dyn_error()),
                         }
                     })?;
-                let dtype = native.dtype();
-                if matches!(dtype, DType::F32 | DType::C32) {
-                    return Err(TensorStorageError::UnsupportedDtype {
-                        dtype: IdxTensor::dtype_name(dtype),
-                    });
-                }
+                Self::refuse_unsupported_compact_dtype(&native)?;
                 IdxTensor::storage_from_native_with_axis_classes(
                     &native,
                     &payload.axis_classes,
@@ -812,17 +814,9 @@ impl IdxTensorStorage {
     fn scale_eager_payload(&self, scalar: &AnyScalar) -> Result<Self> {
         let (payload, payload_dims, axis_classes) = match self {
             Self::Materialized(storage) => {
-                let native = if storage.is_f64() {
-                    let values = storage
-                        .payload_f64_col_major_vec()
-                        .map_err(anyhow::Error::new)?;
-                    dense_native_tensor_from_col_major(&values, storage.payload_dims())?
-                } else {
-                    let values = storage
-                        .payload_c64_col_major_vec()
-                        .map_err(anyhow::Error::new)?;
-                    dense_native_tensor_from_col_major(&values, storage.payload_dims())?
-                };
+                // The payload tensor keeps the compact storage dtype, so a
+                // narrow payload is scaled without a widening round trip.
+                let native = storage_payload_native(storage)?;
                 (
                     IdxTensor::untracked_inner(native, default_eager_ctx()?)?,
                     storage.payload_dims().to_vec(),
@@ -1082,11 +1076,11 @@ pub enum StructuredSelectorError {
 /// of tensor4all.
 /// `IdxTensor` stores a logical multi-dimensional tensor of supported scalar
 /// values (`f32`, `f64`, `Complex32`, or `Complex64`) together with a list of
-/// [`DynIndex`] labels. `f64`/`Complex64` tensors may use compact [`Storage`]
-/// snapshots; `f32`/`Complex32` tensors retain an eager payload as the
-/// authoritative representation because compact storage supports only the
-/// 64-bit dtypes. The logical layout may be dense, diagonal, or explicitly
-/// structured. The indices carry unique
+/// [`DynIndex`] labels. Every floating dtype may use a compact [`Storage`]
+/// snapshot of its own dtype: storage never widens `f32`/`Complex32` payloads
+/// into the 64-bit dtypes. A value that needs eager AD metadata keeps an eager
+/// payload as the authoritative representation. The logical layout may be
+/// dense, diagonal, or explicitly structured. The indices carry unique
 /// identities (UUIDs) so that contraction, addition, and other binary
 /// operations can automatically match legs by identity rather than position.
 /// # Key Operations
@@ -1155,15 +1149,9 @@ impl IdxTensor {
         if let Some(inner) = self.storage.eager() {
             return Ok(inner.dtype());
         }
-        if self.storage.is_f64() {
-            Ok(DType::F64)
-        } else if self.storage.is_c64() {
-            Ok(DType::C64)
-        } else {
-            Err(anyhow::anyhow!(
-                "unable to determine IdxTensor scalar dtype"
-            ))
-        }
+        self.storage
+            .dtype()
+            .ok_or_else(|| anyhow::anyhow!("unable to determine IdxTensor scalar dtype"))
     }
 
     fn diag_axis_classes(rank: usize) -> Vec<usize> {
@@ -1433,48 +1421,8 @@ impl IdxTensor {
     }
 
     fn scale_target_dtype(payload: DType, scalar: DType) -> Result<DType> {
-        let target = match payload {
-            DType::F32 => match scalar {
-                DType::C32 | DType::C64 => DType::C32,
-                DType::F32 | DType::F64 => DType::F32,
-                dtype => {
-                    return Err(anyhow::anyhow!(
-                        "unsupported scalar dtype {dtype:?} for f32 scaling"
-                    ));
-                }
-            },
-            DType::C32 => match scalar {
-                DType::F32 | DType::F64 | DType::C32 | DType::C64 => DType::C32,
-                dtype => {
-                    return Err(anyhow::anyhow!(
-                        "unsupported scalar dtype {dtype:?} for c32 scaling"
-                    ));
-                }
-            },
-            DType::F64 => match scalar {
-                DType::C32 | DType::C64 => DType::C64,
-                DType::F32 | DType::F64 => DType::F64,
-                dtype => {
-                    return Err(anyhow::anyhow!(
-                        "unsupported scalar dtype {dtype:?} for f64 scaling"
-                    ));
-                }
-            },
-            DType::C64 => match scalar {
-                DType::F32 | DType::F64 | DType::C32 | DType::C64 => DType::C64,
-                dtype => {
-                    return Err(anyhow::anyhow!(
-                        "unsupported scalar dtype {dtype:?} for c64 scaling"
-                    ));
-                }
-            },
-            dtype => {
-                return Err(anyhow::anyhow!(
-                    "unsupported tensor dtype {dtype:?} for scaling"
-                ));
-            }
-        };
-        Ok(target)
+        // Compact storage owns the promotion lattice so both surfaces agree.
+        tensor4all_tensorbackend::scale_target_dtype(payload, scalar).map_err(anyhow::Error::new)
     }
 
     fn validate_indices(indices: &[DynIndex]) -> Result<()> {
@@ -2006,26 +1954,24 @@ impl IdxTensor {
         axis_classes: &[usize],
         logical_rank: usize,
     ) -> Result<Storage> {
-        if matches!(native.dtype(), DType::F32 | DType::C32) {
-            return Err(anyhow::anyhow!(
-                "compact IdxTensor storage does not support dtype {:?}; retain the eager payload",
-                native.dtype()
-            ));
-        }
         if Self::is_diag_axis_classes(axis_classes) {
             match native.dtype() {
+                DType::F32 => Storage::from_diag_col_major(
+                    native_tensor_primal_to_diag::<f32>(native)?,
+                    logical_rank,
+                ),
                 DType::F64 | DType::I32 | DType::I64 | DType::Bool => Storage::from_diag_col_major(
                     native_tensor_primal_to_diag::<f64>(native)?,
+                    logical_rank,
+                ),
+                DType::C32 => Storage::from_diag_col_major(
+                    native_tensor_primal_to_diag::<Complex32>(native)?,
                     logical_rank,
                 ),
                 DType::C64 => Storage::from_diag_col_major(
                     native_tensor_primal_to_diag::<Complex64>(native)?,
                     logical_rank,
                 ),
-                DType::F32 | DType::C32 => Err(anyhow::anyhow!(
-                    "compact IdxTensor storage does not support dtype {:?}",
-                    native.dtype()
-                )),
                 DType::External(_) => Err(anyhow::anyhow!(
                     "compact IdxTensor storage does not support external scalar kind {:?}",
                     native.dtype()
@@ -2098,19 +2044,17 @@ impl IdxTensor {
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions)?;
             Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.dtype() == Some(DType::F32) {
-            let inner = self
-                .storage
-                .eager()
-                .ok_or_else(|| anyhow::anyhow!("failed to read f32 diagonal payload"))?;
-            let payload = inner.value()?.as_slice::<f32>()?.to_vec();
+            let storage = self.storage.materialize(self.indices.len())?;
+            let payload = storage
+                .payload_f32_col_major_vec()
+                .map_err(anyhow::Error::new)?;
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions)?;
             Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else if self.storage.dtype() == Some(DType::C32) {
-            let inner = self
-                .storage
-                .eager()
-                .ok_or_else(|| anyhow::anyhow!("failed to read c32 diagonal payload"))?;
-            let payload = inner.value()?.as_slice::<Complex32>()?.to_vec();
+            let storage = self.storage.materialize(self.indices.len())?;
+            let payload = storage
+                .payload_c32_col_major_vec()
+                .map_err(anyhow::Error::new)?;
             let data = Self::dense_selected_diag_payload(payload, &kept_dims, positions)?;
             Self::from_dense(kept_indices, data).map_err(anyhow::Error::from)
         } else {
@@ -2354,11 +2298,10 @@ impl IdxTensor {
                 },
             )
         } else if self.storage.dtype() == Some(DType::F32) {
-            let inner = self
-                .storage
-                .eager()
-                .ok_or_else(|| anyhow::anyhow!("failed to read f32 structured payload"))?;
-            let payload = inner.value()?.as_slice::<f32>()?.to_vec();
+            let storage = self.storage.materialize(self.indices.len())?;
+            let payload = storage
+                .payload_f32_col_major_vec()
+                .map_err(anyhow::Error::new)?;
             let output_indices = kept_indices.clone();
             self.select_structured_indices_typed(
                 payload,
@@ -2373,11 +2316,10 @@ impl IdxTensor {
                 },
             )
         } else if self.storage.dtype() == Some(DType::C32) {
-            let inner = self
-                .storage
-                .eager()
-                .ok_or_else(|| anyhow::anyhow!("failed to read c32 structured payload"))?;
-            let payload = inner.value()?.as_slice::<Complex32>()?.to_vec();
+            let storage = self.storage.materialize(self.indices.len())?;
+            let payload = storage
+                .payload_c32_col_major_vec()
+                .map_err(anyhow::Error::new)?;
             let output_indices = kept_indices.clone();
             self.select_structured_indices_typed(
                 payload,
@@ -2935,10 +2877,9 @@ impl IdxTensor {
     ///
     /// # Returns
     ///
-    /// A structured tensor with axis classes `[0, 1, 0]`. For `f64` and
-    /// `Complex64`, compact storage is retained; `f32` and `Complex32` keep
-    /// an eager authoritative payload because compact storage has no 32-bit
-    /// scalar representation.
+    /// A structured tensor with axis classes `[0, 1, 0]`. Every floating dtype
+    /// keeps its own scalar kind in compact storage, including the narrow
+    /// `f32`/`Complex32` half of the lattice.
     ///
     /// # Errors
     ///
@@ -3381,8 +3322,9 @@ impl IdxTensor {
     ///
     pub fn enable_grad(self) -> std::result::Result<Self, IdxTensorError> {
         self.ensure_storage_ready()?;
-        // Keep the eager payload when available: compact Storage currently
-        // stores only f64/C64 and must not promote f32/C32 leaves before AD.
+        // Keep the eager payload when available: an eager tracked value carries
+        // its own dtype and AD metadata, so it must not be round-tripped through
+        // a compact snapshot before AD.
         let eager_payload = self
             .storage
             .eager()
@@ -3534,14 +3476,15 @@ impl IdxTensor {
 
     /// Materialize the primal payload as a compact storage snapshot.
     ///
-    /// The eager payload remains authoritative for `f32`/`c32` and tracked
-    /// structured tensors; this method is a fallible bridge to compact storage.
+    /// Every floating dtype keeps its own scalar kind in compact storage; the
+    /// eager payload remains authoritative for tracked structured tensors, and
+    /// this method is the fallible bridge that snapshots it.
     ///
     /// # Errors
     ///
     /// Returns [`TensorStorageError`] when an eager backend payload cannot be
-    /// converted to compact storage, when its dtype is `f32`/`c32`, or when a
-    /// deferred eager operation failed.
+    /// converted to compact storage, when its scalar kind has no compact
+    /// representation, or when a deferred eager operation failed.
     pub fn to_storage(&self) -> std::result::Result<Arc<Storage>, TensorStorageError> {
         self.storage.materialize(self.indices.len())
     }
@@ -3550,9 +3493,10 @@ impl IdxTensor {
     ///
     /// # Errors
     /// Returns [`TensorStorageError::Materialization`] when the eager payload
-    /// cannot be converted to compact storage, [`TensorStorageError::UnsupportedDtype`]
-    /// for an `f32`/`c32` payload compact storage cannot hold, or
-    /// [`TensorStorageError::Conjugation`] when a deferred conjugation failed.
+    /// cannot be converted to compact storage,
+    /// [`TensorStorageError::UnsupportedDtype`] for a scalar kind compact
+    /// storage cannot hold, or [`TensorStorageError::Conjugation`] when a
+    /// deferred conjugation failed.
     /// # Examples
     ///
     /// ```
@@ -3572,8 +3516,8 @@ impl IdxTensor {
 
     /// Return the logical storage layout without materializing compact storage.
     ///
-    /// For `f32` and `c32`, the eager representation is authoritative because
-    /// compact [`Storage`] supports only `f64` and `c64`.
+    /// The layout is metadata, so this works for an eager `f32`/`c32` payload
+    /// without materializing compact storage first.
     ///
     /// # Examples
     ///
@@ -5914,14 +5858,7 @@ pub(crate) fn unfold_split_inner(
         .runtime()
         .with_eager_session(|session| session.reshape(unfolded_inner, [m, n]))?;
 
-    Ok((
-        matrix_tensor,
-        left_len,
-        m,
-        n,
-        left_indices,
-        right_indices,
-    ))
+    Ok((matrix_tensor, left_len, m, n, left_indices, right_indices))
 }
 
 // ============================================================================
@@ -8613,9 +8550,9 @@ impl IdxTensor {
                     ));
                 }
                 match inner.dtype() {
-                    DType::F64 | DType::C64 | DType::F32 | DType::C32 => {
-                        Ok(SessionDenseOperand::Read(Box::new(inner.tensor_read()), rank))
-                    }
+                    DType::F64 | DType::C64 | DType::F32 | DType::C32 => Ok(
+                        SessionDenseOperand::Read(Box::new(inner.tensor_read()), rank),
+                    ),
                     other => Err(refuse(format!(
                         "this numerical route accepts floating-point operands, not {other:?}"
                     ))),
@@ -8655,9 +8592,10 @@ impl IdxTensor {
 
     /// Publish a host dense payload without entering a runtime.
     ///
-    /// Compact host storage holds `f64`/`c64`; a narrow payload is refused instead of being widened or
-    /// adopted into the eager runtime, so this stays a runtime-free publication boundary. The session
-    /// factorization routes publish their factors here.
+    /// Compact host storage holds every floating dtype, so a narrow `f32`/`c32` payload publishes as
+    /// compact storage of its own dtype without being widened and without being adopted into the eager
+    /// runtime; this stays a runtime-free publication boundary. The session factorization routes
+    /// publish their factors here.
     pub(crate) fn from_host_dense<T: tensor4all_tensorbackend::StorageScalar>(
         indices: Vec<DynIndex>,
         data: Vec<T>,
@@ -8672,47 +8610,41 @@ impl IdxTensor {
 
     /// Publish a concrete dense result as this crate's indexed tensor.
     ///
-    /// The result keeps the session's own dtype: `f64`/`c64` publish into compact dense storage, and
-    /// `f32`/`c32` publish as their own eager host values rather than being widened, which would
-    /// change their precision silently. Publication is runtime-free - the payload is the session's
-    /// own host readback, and no eager registration, adoption or process-global entry happens here.
+    /// The result keeps the session's own dtype: `f64`/`c64` publish into
+    /// compact dense storage, and `f32`/`c32` publish as compact storage of the
+    /// same narrow dtype instead of being widened, which would change their
+    /// precision silently. Publication is runtime-free - the payload is the
+    /// session's own host readback, and no eager registration, adoption or
+    /// process-global entry happens here.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError::Storage`] when the result dtype is not a
+    /// floating or complex floating dtype, or when the host payload cannot be
+    /// read or does not match the result shape.
     pub(crate) fn publish_dense_session_result(
         indices: Vec<DynIndex>,
         value: &NativeTensor,
     ) -> std::result::Result<Self, IdxTensorError> {
         let dims: Vec<usize> = value.shape().to_vec();
-        match value.dtype() {
-            DType::F32 | DType::C32 => {
-                return Err(IdxTensorError::operation(
-                    "contract_pair_on_session",
-                    anyhow::anyhow!(
-                        "compact host storage has no f32/c32 payload, so this route does not publish                          a narrow result rather than widening it"
-                    ),
-                ));
-            }
-            DType::F64 | DType::C64 => {}
+        let storage = match value.dtype() {
+            DType::F32 => value
+                .as_slice::<f32>()
+                .map(|data| Storage::from_dense_col_major(data.to_vec(), &dims)),
+            DType::F64 => value
+                .as_slice::<f64>()
+                .map(|data| Storage::from_dense_col_major(data.to_vec(), &dims)),
+            DType::C32 => value
+                .as_slice::<Complex32>()
+                .map(|data| Storage::from_dense_col_major(data.to_vec(), &dims)),
+            DType::C64 => value
+                .as_slice::<Complex64>()
+                .map(|data| Storage::from_dense_col_major(data.to_vec(), &dims)),
             other => {
                 return Err(IdxTensorError::operation(
                     "contract_pair_on_session",
                     anyhow::anyhow!(format!(
                         "the explicit-session route publishes floating-point results, not {other:?}"
-                    )),
-                ));
-            }
-        }
-        let storage = match value.dtype() {
-            DType::F64 => value
-                .as_slice::<f64>()
-                .map(|data| Storage::from_dense_col_major(data.to_vec(), &dims)),
-            DType::C64 => value
-                .as_slice::<Complex64>()
-                .map(|data| Storage::from_dense_col_major(data.to_vec(), &dims)),
-            // INVARIANT: the narrow dtypes returned above, and every other dtype was refused there.
-            other => {
-                return Err(IdxTensorError::operation(
-                    "contract_pair_on_session",
-                    anyhow::anyhow!(format!(
-                        "the explicit-session route publishes f64 and c64 compact results, not {other:?}"
                     )),
                 ));
             }

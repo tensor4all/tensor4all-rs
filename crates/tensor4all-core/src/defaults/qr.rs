@@ -447,7 +447,12 @@ fn qr_retained_rows(
 /// This is the one place the QR truncation policy is applied; the eager, context-scoped and
 /// explicit-session QR routes all funnel their `R` payload through it, so a policy change cannot
 /// diverge between the frontends.
-fn retain_rows_from_payload<T>(r_full: &[T], k: usize, n: usize, rtol: f64) -> Result<Vec<usize>, QrError>
+fn retain_rows_from_payload<T>(
+    r_full: &[T],
+    k: usize,
+    n: usize,
+    rtol: f64,
+) -> Result<Vec<usize>, QrError>
 where
     T: ComplexFloat,
     <T as ComplexFloat>::Real: Into<f64>,
@@ -511,8 +516,10 @@ where
     T: TensorElement + ComplexFloat + tensor4all_tensorbackend::StorageScalar,
     <T as ComplexFloat>::Real: Into<f64>,
 {
-    let (left_indices, right_indices, order) = unfold_index_sets(t, left_inds)
-        .map_err(|error| QrError::ComputationError(anyhow::anyhow!("Failed to unfold tensor: {error}")))?;
+    let (left_indices, right_indices, order) =
+        unfold_index_sets(t, left_inds).map_err(|error| {
+            QrError::ComputationError(anyhow::anyhow!("Failed to unfold tensor: {error}"))
+        })?;
     let unfolded = t
         .permute_indices(&order)
         .map_err(|error| QrError::ComputationError(anyhow::Error::new(error)))?;
@@ -547,18 +554,19 @@ where
     let r_payload = r_value
         .as_slice::<T>()
         .map_err(|error| QrError::ComputationError(anyhow::Error::new(error)))?;
-    let bond_index = DynIndex::new_bond(rank)
-        .map_err(|error| QrError::ComputationError(anyhow::anyhow!("Failed to create Link index: {error:?}")))?;
+    let bond_index = DynIndex::new_bond(rank).map_err(|error| {
+        QrError::ComputationError(anyhow::anyhow!("Failed to create Link index: {error:?}"))
+    })?;
 
     // `Q` is column-major `[m, k]`: kept columns are the bond axis of the left factor.
     let mut q_data = Vec::with_capacity(m * rank);
     for &column in &keep {
-        let start = column
-            .checked_mul(m)
-            .ok_or_else(|| QrError::ComputationError(anyhow::anyhow!("QR Q column offset overflows usize")))?;
-        let end = start
-            .checked_add(m)
-            .ok_or_else(|| QrError::ComputationError(anyhow::anyhow!("QR Q column end overflows usize")))?;
+        let start = column.checked_mul(m).ok_or_else(|| {
+            QrError::ComputationError(anyhow::anyhow!("QR Q column offset overflows usize"))
+        })?;
+        let end = start.checked_add(m).ok_or_else(|| {
+            QrError::ComputationError(anyhow::anyhow!("QR Q column end overflows usize"))
+        })?;
         q_data.extend_from_slice(q_payload.get(start..end).ok_or_else(|| {
             QrError::ComputationError(anyhow::anyhow!("QR Q column {column} is out of bounds"))
         })?);
@@ -566,9 +574,9 @@ where
     // `R` is column-major `[k, n]`: kept rows are gathered within every right column.
     let mut r_data = Vec::with_capacity(rank * n);
     for column in 0..n {
-        let base = column
-            .checked_mul(k)
-            .ok_or_else(|| QrError::ComputationError(anyhow::anyhow!("QR R column offset overflows usize")))?;
+        let base = column.checked_mul(k).ok_or_else(|| {
+            QrError::ComputationError(anyhow::anyhow!("QR R column offset overflows usize"))
+        })?;
         for &row in &keep {
             let value = r_payload.get(base + row).ok_or_else(|| {
                 QrError::ComputationError(anyhow::anyhow!("QR R row {row} is out of bounds"))

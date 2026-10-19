@@ -15,9 +15,9 @@ use crate::truncation::{
     SvdTruncationOptionsError, SvdTruncationPolicy, ThresholdScale, TruncationRule,
 };
 use crate::{ExecutionContext, IdxTensor, TensorElement};
-use num_complex::{Complex64, ComplexFloat};
+use num_complex::{Complex32, Complex64, ComplexFloat};
 use std::sync::Mutex;
-use tenferro::DType;
+use tenferro::{DType, TensorScalar};
 use tenferro_ad::EagerTensor;
 use tenferro_linalg::EagerSessionLinalgExt;
 #[cfg(test)]
@@ -212,7 +212,18 @@ pub(crate) fn compute_retained_rank(s_vec: &[f64], policy: &SvdTruncationPolicy)
 #[cfg(test)]
 fn singular_values_from_native(tensor: &tenferro::Tensor) -> Result<Vec<f64>, SvdError> {
     match tensor.dtype() {
+        DType::F32 => native_tensor_primal_to_dense_col_major::<f32>(tensor)
+            .map(|values| values.into_iter().map(f64::from).collect())
+            .map_err(|e| SvdError::ComputationError(e.source)),
         DType::F64 => native_tensor_primal_to_dense_col_major::<f64>(tensor)
+            .map_err(|e| SvdError::ComputationError(e.source)),
+        DType::C32 => native_tensor_primal_to_dense_col_major::<Complex32>(tensor)
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| f64::from(value.re))
+                    .collect()
+            })
             .map_err(|e| SvdError::ComputationError(e.source)),
         DType::C64 => native_tensor_primal_to_dense_col_major::<Complex64>(tensor)
             .map(|values| values.into_iter().map(|value| value.re).collect())
@@ -228,9 +239,17 @@ fn singular_values_from_eager(tensor: &EagerTensor) -> Result<Vec<f64>, SvdError
         .value()
         .map_err(|source| SvdError::ComputationError(anyhow::Error::new(source)))?;
     match tensor.dtype() {
+        DType::F32 => value
+            .as_slice::<f32>()
+            .map(|values| values.iter().map(|&value| f64::from(value)).collect())
+            .map_err(|source| SvdError::ComputationError(anyhow::Error::new(source))),
         DType::F64 => value
             .as_slice::<f64>()
             .map(|values| values.to_vec())
+            .map_err(|source| SvdError::ComputationError(anyhow::Error::new(source))),
+        DType::C32 => value
+            .as_slice::<Complex32>()
+            .map(|values| values.iter().map(|value| f64::from(value.re)).collect())
             .map_err(|source| SvdError::ComputationError(anyhow::Error::new(source))),
         DType::C64 => value
             .as_slice::<Complex64>()
@@ -634,10 +653,13 @@ pub(crate) fn svd_for_factorize_on_session<T>(
 where
     T: TensorElement + ComplexFloat + tensor4all_tensorbackend::StorageScalar,
     <T as ComplexFloat>::Real: Into<f64>,
+    <T as TensorScalar>::Real: Into<f64>,
     T: num_traits::NumCast,
 {
-    let (left_indices, right_indices, order) = unfold_index_sets(t, left_inds)
-        .map_err(|error| SvdError::ComputationError(anyhow::anyhow!("Failed to unfold tensor: {error}")))?;
+    let (left_indices, right_indices, order) =
+        unfold_index_sets(t, left_inds).map_err(|error| {
+            SvdError::ComputationError(anyhow::anyhow!("Failed to unfold tensor: {error}"))
+        })?;
     let unfolded = t
         .permute_indices(&order)
         .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))?;
@@ -656,10 +678,14 @@ where
     let (u_value, s_value, vt_value) = session
         .svd(&matrix)
         .map_err(|error| SvdError::ComputationError(anyhow::anyhow!("{error}")))?;
-    let s_full = s_value
-        .as_slice::<f64>()
+    // The session returns singular values in the operand's own real dtype, so a
+    // narrow operand must not be read as `f64`.
+    let s_full: Vec<f64> = s_value
+        .as_slice::<<T as TensorScalar>::Real>()
         .map_err(|error| SvdError::ComputationError(anyhow::Error::new(error)))?
-        .to_vec();
+        .iter()
+        .map(|&value| value.into())
+        .collect();
     let rank = retained_svd_rank(&s_full, k, options)?;
     let u_payload = u_value
         .as_slice::<T>()
@@ -671,12 +697,12 @@ where
     // `U` is column-major `[m, k]`: kept columns are the bond axis of the left factor.
     let mut u_data = Vec::with_capacity(m * rank);
     for column in 0..rank {
-        let start = column
-            .checked_mul(m)
-            .ok_or_else(|| SvdError::ComputationError(anyhow::anyhow!("SVD U column offset overflows usize")))?;
-        let end = start
-            .checked_add(m)
-            .ok_or_else(|| SvdError::ComputationError(anyhow::anyhow!("SVD U column end overflows usize")))?;
+        let start = column.checked_mul(m).ok_or_else(|| {
+            SvdError::ComputationError(anyhow::anyhow!("SVD U column offset overflows usize"))
+        })?;
+        let end = start.checked_add(m).ok_or_else(|| {
+            SvdError::ComputationError(anyhow::anyhow!("SVD U column end overflows usize"))
+        })?;
         u_data.extend_from_slice(u_payload.get(start..end).ok_or_else(|| {
             SvdError::ComputationError(anyhow::anyhow!("SVD U column {column} is out of bounds"))
         })?);
@@ -693,9 +719,9 @@ where
     // `V^H` is column-major `[k, n]`: kept rows are the bond axis of the right factor.
     let mut vt_data = Vec::with_capacity(rank * n);
     for column in 0..n {
-        let base = column
-            .checked_mul(k)
-            .ok_or_else(|| SvdError::ComputationError(anyhow::anyhow!("SVD V^H column offset overflows usize")))?;
+        let base = column.checked_mul(k).ok_or_else(|| {
+            SvdError::ComputationError(anyhow::anyhow!("SVD V^H column offset overflows usize"))
+        })?;
         for row in 0..rank {
             let value = vt_payload.get(base + row).ok_or_else(|| {
                 SvdError::ComputationError(anyhow::anyhow!("SVD V^H row {row} is out of bounds"))
@@ -704,8 +730,9 @@ where
         }
     }
 
-    let bond_index = DynIndex::new_bond(rank)
-        .map_err(|error| SvdError::ComputationError(anyhow::anyhow!("Failed to create Link index: {error:?}")))?;
+    let bond_index = DynIndex::new_bond(rank).map_err(|error| {
+        SvdError::ComputationError(anyhow::anyhow!("Failed to create Link index: {error:?}"))
+    })?;
     let mut u_indices = left_indices;
     u_indices.push(bond_index.clone());
     let u = IdxTensor::from_host_dense(u_indices, u_data)
@@ -713,9 +740,12 @@ where
     // The session route publishes S as a dense `[bond, sim]` diagonal matrix: the compact diagonal
     // representation is an eager construction, and the session contraction route serves dense host
     // operands only. The rank-squared payload is negligible next to the factors.
-    let mut s_dense = vec![<T as num_traits::Zero>::zero(); rank.checked_mul(rank).ok_or_else(|| {
-        SvdError::ComputationError(anyhow::anyhow!("SVD S payload size overflows usize"))
-    })?];
+    let mut s_dense = vec![
+        <T as num_traits::Zero>::zero();
+        rank.checked_mul(rank).ok_or_else(|| {
+            SvdError::ComputationError(anyhow::anyhow!("SVD S payload size overflows usize"))
+        })?
+    ];
     for (position, value) in s_data.iter().enumerate() {
         s_dense[position * (rank + 1)] = *value;
     }

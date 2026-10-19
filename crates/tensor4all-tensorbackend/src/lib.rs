@@ -91,8 +91,8 @@ pub use matrix::{
 pub use memory::{release_process_allocator_cached_memory, AllocatorPressureRelief};
 #[cfg(feature = "global-defaults")]
 pub use storage::{
-    contract_storage, make_mut_storage, min_dim, NonfiniteFlags, Storage, StorageError,
-    StorageKind, StorageResult, StorageScalar, StructuredStorage, SumFromStorage,
+    contract_storage, make_mut_storage, min_dim, scale_target_dtype, NonfiniteFlags, Storage,
+    StorageError, StorageKind, StorageResult, StorageScalar, StructuredStorage, SumFromStorage,
 };
 #[cfg(feature = "global-defaults")]
 pub use tenferro_bridge::{
@@ -105,8 +105,9 @@ pub use tenferro_bridge::{
     outer_product_storage_native, permute_native_tensor, permute_storage_native,
     print_and_reset_native_einsum_profile, qr_native_tensor, reset_native_einsum_profile,
     reshape_col_major_native_tensor, scale_native_tensor, scale_storage_native,
-    storage_payload_native_read_input, storage_to_native_tensor, sum_native_tensor,
-    svd_native_tensor, tangent_native_tensor, BridgeError, NativeTensorReadInput,
+    storage_from_payload_native, storage_payload_native, storage_payload_native_read_input,
+    storage_to_native_tensor, sum_native_tensor, svd_native_tensor, tangent_native_tensor,
+    BridgeError, NativeTensorReadInput,
 };
 #[cfg(feature = "global-defaults")]
 pub use tensor_element::TensorElement;

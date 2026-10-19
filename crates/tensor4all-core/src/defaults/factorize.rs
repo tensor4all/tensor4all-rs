@@ -44,8 +44,8 @@ use tenferro_ad::EagerTensor;
 use tensor4all_tensorbackend::{Matrix, TensorElement};
 
 use crate::defaults::svd::{
-    svd_for_factorize_on_session,
-    compute_retained_rank, svd_for_factorize, svd_for_factorize_in, SvdFactorizeResult,
+    compute_retained_rank, svd_for_factorize, svd_for_factorize_in, svd_for_factorize_on_session,
+    SvdFactorizeResult,
 };
 use crate::qr::{qr_with, qr_with_in, QrOptions};
 use crate::svd::SvdOptions;
@@ -667,7 +667,8 @@ fn global_svd_factor_contraction(
     lhs: &IdxTensor,
     rhs: &IdxTensor,
 ) -> Result<IdxTensor, FactorizeError> {
-    contract_pair(lhs, rhs).map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))
+    contract_pair(lhs, rhs)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))
 }
 
 /// Factorize a tensor on a caller-held explicit session.
@@ -743,17 +744,13 @@ pub fn factorize_on_session(
             } else {
                 QrOptions::new()
             };
-            let (q, r) = crate::qr::qr_with_on_session::<f64>(session, t, left_inds, &qr_options)
+            let (q, r) = qr_factors_on_session(session, t, left_inds, &qr_options)
                 .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
-            let bond_index = q
-                .indices
-                .last()
-                .cloned()
-                .ok_or_else(|| {
-                    FactorizeError::ComputationError(anyhow::anyhow!(
-                        "QR factorization returned a rank-0 Q tensor"
-                    ))
-                })?;
+            let bond_index = q.indices.last().cloned().ok_or_else(|| {
+                FactorizeError::ComputationError(anyhow::anyhow!(
+                    "QR factorization returned a rank-0 Q tensor"
+                ))
+            })?;
             let rank = *q.dims().last().ok_or_else(|| {
                 FactorizeError::ComputationError(anyhow::anyhow!(
                     "QR factorization returned Q with no dimensions"
@@ -764,6 +761,32 @@ pub fn factorize_on_session(
         FactorizeAlg::LU | FactorizeAlg::CI => Err(FactorizeError::UnsupportedStorage(
             "LU and CI factorization have no explicit-session path",
         )),
+    }
+}
+
+/// Thin QR factors on the caller's session, in the tensor's own scalar type.
+///
+/// The session route keeps the operand dtype instead of narrowing the
+/// factorization to `f64`, so `f32`/`c32` operands factorize without a widening
+/// round trip.
+fn qr_factors_on_session(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &QrOptions,
+) -> Result<(IdxTensor, IdxTensor), crate::qr::QrError> {
+    if t.is_f32() {
+        crate::qr::qr_with_on_session::<f32>(session, t, left_inds, options)
+    } else if t.is_f64() {
+        crate::qr::qr_with_on_session::<f64>(session, t, left_inds, options)
+    } else if t.is_c32() {
+        crate::qr::qr_with_on_session::<Complex32>(session, t, left_inds, options)
+    } else if t.is_c64() {
+        crate::qr::qr_with_on_session::<Complex64>(session, t, left_inds, options)
+    } else {
+        Err(crate::qr::QrError::ComputationError(anyhow::anyhow!(
+            "the explicit-session QR route serves floating-point tensors"
+        )))
     }
 }
 
@@ -780,23 +803,22 @@ fn factorize_svd_with_options_on_session(
     if let Some(max_bond_dim) = options.max_bond_dim {
         svd_options = svd_options.with_max_bond_dim(max_bond_dim);
     }
-    let result = if t.is_f64() {
+    let result = if t.is_f32() {
+        svd_for_factorize_on_session::<f32>(session, t, left_inds, &svd_options)
+    } else if t.is_f64() {
         svd_for_factorize_on_session::<f64>(session, t, left_inds, &svd_options)
+    } else if t.is_c32() {
+        svd_for_factorize_on_session::<Complex32>(session, t, left_inds, &svd_options)
     } else if t.is_c64() {
         svd_for_factorize_on_session::<Complex64>(session, t, left_inds, &svd_options)
     } else {
         Err(crate::svd::SvdError::ComputationError(anyhow::anyhow!(
-            "the explicit-session SVD route serves f64 and c64 tensors"
+            "the explicit-session SVD route serves floating-point tensors"
         )))
     }
     .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
     let mut contract = |lhs: &IdxTensor, rhs: &IdxTensor| -> Result<IdxTensor, FactorizeError> {
-        crate::contract_pair_on_session(
-            session,
-            lhs,
-            rhs,
-            crate::PairwiseContractionOptions::new(),
-        )
+        crate::contract_pair_on_session(session, lhs, rhs, crate::PairwiseContractionOptions::new())
             .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))
     };
     assemble_svd_factors(result, options.canonical, &mut contract)

@@ -14,6 +14,7 @@ mod cuda_transfer;
 mod error_paths;
 mod f1_session_contraction;
 mod f1_session_inner_product;
+mod f1_session_narrow_factors;
 mod f1_session_narrow_floats;
 mod f1_session_norm;
 mod f1_session_permute;

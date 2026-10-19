@@ -195,8 +195,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error for the same topology, index and option failures as
-/// [`factorize_tensor_to_treetn_with`], and when a leaf or the session rejects an operation.
+/// Returns [`TreeTNOperationError`] when the topology rejects the requested root or its physical
+/// index assignment, when an index is missing or repeated, when [`FactorizeOptions`] fails its own
+/// validation, when a leaf contraction or factorization fails on `session`, when a factorization
+/// truncates every bond to rank zero, or when the network cannot be constructed from the factors.
 ///
 /// # Examples
 ///

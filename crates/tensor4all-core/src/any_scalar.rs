@@ -29,9 +29,21 @@ impl From<f64> for ScalarValue {
     }
 }
 
+impl From<f32> for ScalarValue {
+    fn from(value: f32) -> Self {
+        Self::F32(value)
+    }
+}
+
 impl From<Complex64> for ScalarValue {
     fn from(value: Complex64) -> Self {
         Self::C64(value)
+    }
+}
+
+impl From<Complex32> for ScalarValue {
+    fn from(value: Complex32) -> Self {
+        Self::C32(value)
     }
 }
 

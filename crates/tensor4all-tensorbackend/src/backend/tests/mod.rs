@@ -698,17 +698,15 @@ fn the_session_solve_runs_on_a_lane_session() {
     let mut held = crate::explicit::HeldSession::open(&backend).expect("held session");
     held.phase(|_index, lane| {
         let mut view = lane.session();
-        let solution = f64::solve_right_full_piv_lu_on_session(
-            view.backend(),
-            &pi1,
-            3,
-            2,
-            &pivot,
-            2,
-            2,
-        )
-        .map_err(|error| tenferro_tensor::Error::runtime_state_source("lane solve", error))?;
-        lane_solutions.lock().expect("lane solutions").push(solution);
+        let solution =
+            f64::solve_right_full_piv_lu_on_session(view.backend(), &pi1, 3, 2, &pivot, 2, 2)
+                .map_err(|error| {
+                    tenferro_tensor::Error::runtime_state_source("lane solve", error)
+                })?;
+        lane_solutions
+            .lock()
+            .expect("lane solutions")
+            .push(solution);
         Ok::<(), tenferro_tensor::Error>(())
     })
     .expect("phase");
