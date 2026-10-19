@@ -15,7 +15,7 @@ use tensor4all_tensorbackend::{mat_mul, solve_matrix, Matrix};
 ///
 /// Selects pivots by computing residual blocks on demand, avoiding full
 /// matrix materialization. Suitable for large matrices accessed via
-/// [`LazyMatrixSource`](super::LazyMatrixSource).
+/// [`LazyMatrixSource`](super::source::LazyMatrixSource).
 /// An exactly zero starting residual column is skipped. Certifying an all-zero
 /// residual may inspect every remaining entry, one column at a time.
 #[derive(Default)]

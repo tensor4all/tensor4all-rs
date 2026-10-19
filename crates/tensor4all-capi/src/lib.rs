@@ -131,7 +131,7 @@ pub(crate) fn err_buffer_too_small(
 }
 
 /// Store an error and return a null pointer.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn err_null<T, E: std::fmt::Display>(err: E) -> *mut T {
     set_last_error(&err.to_string());
     std::ptr::null_mut()
@@ -242,7 +242,7 @@ pub(crate) fn unwrap_catch(result: std::thread::Result<t4a_status_code>) -> t4a_
 }
 
 /// Unwrap a `catch_unwind` pointer result, storing any panic message.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn unwrap_catch_ptr<T>(result: std::thread::Result<*mut T>) -> *mut T {
     match result {
         Ok(ptr) => ptr,

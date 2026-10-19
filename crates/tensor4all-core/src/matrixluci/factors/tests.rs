@@ -1,7 +1,8 @@
-use crate::matrixluci::{
-    CandidateMatrixSource, CrossFactors, DenseLuKernel, DenseMatrixSource, PivotKernel,
-    PivotKernelOptions,
-};
+use crate::matrixluci::dense::DenseLuKernel;
+use crate::matrixluci::factors::CrossFactors;
+use crate::matrixluci::kernel::PivotKernel;
+use crate::matrixluci::source::{CandidateMatrixSource, DenseMatrixSource};
+use crate::matrixluci::types::PivotKernelOptions;
 use approx::assert_abs_diff_eq;
 use tensor4all_tensorbackend::Matrix;
 

@@ -41,7 +41,6 @@ fn local_materialize_batching_enabled() -> bool {
 pub(crate) struct LocalBlockEvaluator<'a, T: AciScalar> {
     problem: &'a ElementwiseProblem<T>,
     operator: &'a LocalOperator<'a, T>,
-    bond: usize,
     nrows: usize,
     ncols: usize,
     input_factors: Vec<LocalInputFactors<T>>,
@@ -67,7 +66,6 @@ pub(crate) struct LocalInputFactors<T: AciScalar> {
     site_dim_left: usize,
     middle_dim: usize,
     site_dim_right: usize,
-    right_cols: usize,
     left_values: Vec<T>,
     right_values: Vec<T>,
 }
@@ -160,7 +158,6 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
         Ok(Self {
             problem,
             operator,
-            bond,
             nrows,
             ncols,
             input_factors,
@@ -193,7 +190,6 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
         Ok(Self {
             problem,
             operator,
-            bond,
             nrows,
             ncols,
             input_factors,
@@ -556,7 +552,6 @@ fn local_input_factors_from_values<T: AciScalar>(
         site_dim_left: dims.site_dim_left,
         middle_dim: dims.middle_dim,
         site_dim_right: dims.site_dim_right,
-        right_cols: dims.right_cols,
         left_values,
         right_values,
     })

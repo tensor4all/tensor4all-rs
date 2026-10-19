@@ -1,7 +1,8 @@
-use crate::matrixluci::{
-    DenseLuKernel, DenseMatrixSource, LazyBlockRookKernel, LazyMatrixSource, PivotKernel,
-    PivotKernelOptions,
-};
+use crate::matrixluci::block_rook::LazyBlockRookKernel;
+use crate::matrixluci::dense::DenseLuKernel;
+use crate::matrixluci::kernel::PivotKernel;
+use crate::matrixluci::source::{DenseMatrixSource, LazyMatrixSource};
+use crate::matrixluci::types::PivotKernelOptions;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 

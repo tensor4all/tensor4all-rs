@@ -268,7 +268,6 @@ impl Projector {
     }
 
     /// Compare projectors by a deterministic total order compatible with `Eq`.
-    #[allow(dead_code)]
     pub(crate) fn canonical_cmp(&self, other: &Self) -> Ordering {
         let left = self.canonical_entries();
         let right = other.canonical_entries();

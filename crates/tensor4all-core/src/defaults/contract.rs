@@ -1485,7 +1485,7 @@ fn has_contractable_indices(a: &IdxTensor, b: &IdxTensor) -> bool {
 /// Find connected components of tensors based on contractable indices.
 ///
 /// Uses petgraph for O(V+E) connected component detection.
-#[allow(dead_code)]
+#[cfg(test)]
 fn find_tensor_connected_components(tensors: &[&IdxTensor]) -> Vec<Vec<usize>> {
     find_tensor_connected_components_with_retained(tensors, &[])
 }

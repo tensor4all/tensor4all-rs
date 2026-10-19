@@ -37,7 +37,7 @@ impl<T: TTScalar> VidalMPO<T> {
     }
 
     /// Create a VidalMPO from tensors and lambdas without validation
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn from_parts_unchecked(gammas: Vec<Tensor4<T>>, lambdas: Vec<Vec<f64>>) -> Self {
         Self { gammas, lambdas }
     }

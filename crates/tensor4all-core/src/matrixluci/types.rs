@@ -15,7 +15,6 @@ pub(crate) struct PivotKernelOptions {
     /// Maximum rank.
     pub max_bond_dim: usize,
     /// Whether the left factor is unit-diagonal.
-    #[allow(dead_code)]
     pub left_orthogonal: bool,
 }
 

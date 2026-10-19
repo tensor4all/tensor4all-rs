@@ -228,11 +228,11 @@ pub fn inner_product_on_session(
     let scalar = match product.dtype() {
         tenferro::DType::F64 => {
             let value = first_scalar::<f64>(&product)?;
-            crate::AnyScalar::from_published_f64(value, published)
+            crate::AnyScalar::from_published(value, published)
         }
         tenferro::DType::C64 => {
             let value = first_scalar::<num_complex::Complex64>(&product)?;
-            crate::AnyScalar::from_published_c64(value, published)
+            crate::AnyScalar::from_published(value, published)
         }
         other => {
             return Err(IdxTensorError::operation(
@@ -344,9 +344,9 @@ pub fn sum_on_session(
     let published = IdxTensor::publish_dense_session_result(Vec::new(), &reduced)?;
     let scalar = match reduced.dtype() {
         tenferro::DType::F64 => {
-            crate::AnyScalar::from_published_f64(first_scalar::<f64>(&reduced)?, published)
+            crate::AnyScalar::from_published(first_scalar::<f64>(&reduced)?, published)
         }
-        tenferro::DType::C64 => crate::AnyScalar::from_published_c64(
+        tenferro::DType::C64 => crate::AnyScalar::from_published(
             first_scalar::<num_complex::Complex64>(&reduced)?,
             published,
         ),

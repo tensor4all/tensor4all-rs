@@ -78,17 +78,14 @@ pub fn direct_sum(
 }
 
 /// Setup data for direct sum computation
-#[allow(dead_code)]
 struct DirectSumSetup {
     common_a_positions: Vec<usize>,
     common_b_positions: Vec<usize>,
     paired_a_positions: Vec<usize>,
     paired_b_positions: Vec<usize>,
     paired_dims_a: Vec<usize>,
-    paired_dims_b: Vec<usize>,
     result_indices: Vec<DynIndex>,
     result_dims: Vec<usize>,
-    result_strides: Vec<usize>,
     result_total: usize,
     a_strides: Vec<usize>,
     b_strides: Vec<usize>,
@@ -210,7 +207,6 @@ fn setup_direct_sum(
 
     // Compute column-major strides (leftmost index fastest).
     let result_total = checked_product(&result_dims, "direct_sum result")?;
-    let result_strides = checked_strides(&result_dims, "direct_sum result")?;
 
     let a_dims = a.dims();
     let b_dims = b.dims();
@@ -225,10 +221,8 @@ fn setup_direct_sum(
         paired_a_positions,
         paired_b_positions,
         paired_dims_a,
-        paired_dims_b,
         result_indices,
         result_dims,
-        result_strides,
         result_total,
         a_strides,
         b_strides,

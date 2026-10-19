@@ -3,6 +3,7 @@
 //! This module provides common test helper functions to reduce duplication
 //! across test modules.
 
+// Shared test helpers expose more functions than any single test uses.
 #![allow(dead_code)]
 
 use num_complex::Complex64;

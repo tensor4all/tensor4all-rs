@@ -16,7 +16,6 @@ struct PartialContractionInputs {
     s_contract_b: DynIndex,
     s_multiply_a: DynIndex,
     s_multiply_b: DynIndex,
-    s_a_only: DynIndex,
     s_b_only: DynIndex,
 }
 
@@ -63,7 +62,6 @@ fn make_partial_contraction_inputs() -> PartialContractionInputs {
         s_contract_b,
         s_multiply_a,
         s_multiply_b,
-        s_a_only,
         s_b_only,
     }
 }

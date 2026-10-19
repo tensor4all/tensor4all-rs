@@ -97,20 +97,9 @@ impl CanonicalizationOptions {
 /// assert_eq!(options.max_bond_dim(), Some(50));
 /// assert_eq!(options.svd_policy(), Some(SvdTruncationPolicy::new(1e-10)));
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct TruncationOptions {
-    #[allow(dead_code)]
-    pub(crate) form: CanonicalForm,
     pub(crate) truncation: FactorizationToleranceOptions,
-}
-
-impl Default for TruncationOptions {
-    fn default() -> Self {
-        Self {
-            form: CanonicalForm::Unitary,
-            truncation: FactorizationToleranceOptions::default(),
-        }
-    }
 }
 
 impl TruncationOptions {

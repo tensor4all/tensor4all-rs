@@ -270,7 +270,7 @@ fn unique_first_appearance(values: &[usize]) -> Vec<usize> {
     result
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn normalize_payload_for_roots(
     payload: &NativeTensor,
     roots: &[usize],

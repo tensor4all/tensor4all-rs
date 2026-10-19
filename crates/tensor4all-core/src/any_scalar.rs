@@ -16,11 +16,23 @@ use crate::TensorElement;
 use tensor4all_tensorbackend::{Storage, SumFromStorage};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum ScalarValue {
+pub(crate) enum ScalarValue {
     F32(f32),
     F64(f64),
     C32(Complex32),
     C64(Complex64),
+}
+
+impl From<f64> for ScalarValue {
+    fn from(value: f64) -> Self {
+        Self::F64(value)
+    }
+}
+
+impl From<Complex64> for ScalarValue {
+    fn from(value: Complex64) -> Self {
+        Self::C64(value)
+    }
 }
 
 impl ScalarValue {
@@ -381,28 +393,16 @@ impl AnyScalar {
         Self::wrap_tensor(tensor)
     }
 
-    /// Wrap an `f64` scalar whose rank-0 value is already published as plain host storage.
+    /// Wrap a scalar whose rank-0 value is already published as plain host storage.
     ///
     /// [`AnyScalar::from_tensor`] extracts its value through the tensor's eager representation, which for a
     /// freshly materialized tensor populates an eager cache from the process-global eager runtime. An
     /// explicit-session route must not do that, so this constructor takes the value directly; the tensor is
     /// carried only so the scalar still behaves like one.
-    pub(crate) fn from_published_f64(value: f64, tensor: IdxTensor) -> Self {
+    pub(crate) fn from_published<T: Into<ScalarValue>>(value: T, tensor: IdxTensor) -> Self {
         Self {
             tensor: Ok(tensor),
-            value: ScalarValue::F64(value),
-            tracks_grad: false,
-        }
-    }
-
-    /// Wrap a `c64` scalar whose rank-0 value is already published as plain host storage.
-    ///
-    /// See [`AnyScalar::from_published_f64`] for why an explicit-session route cannot use
-    /// [`AnyScalar::from_tensor`].
-    pub(crate) fn from_published_c64(value: Complex64, tensor: IdxTensor) -> Self {
-        Self {
-            tensor: Ok(tensor),
-            value: ScalarValue::C64(value),
+            value: value.into(),
             tracks_grad: false,
         }
     }

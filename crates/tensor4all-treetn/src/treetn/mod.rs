@@ -3,8 +3,9 @@
 //! This module provides the [`TreeTN`] type, a tree-structured tensor network
 //! for efficient tensor operations with canonicalization and truncation support.
 
-// Some utility functions are WIP and not yet connected
-#![allow(dead_code)]
+// Test-only evaluator/contraction inspection helpers and WIP utilities live in
+// this module; keep their non-test dead-code warnings suppressed here.
+#![cfg_attr(not(test), allow(dead_code))]
 
 mod addition;
 mod cached_evaluator;
@@ -1601,11 +1602,6 @@ where
     /// The site index network contains both topology (graph structure) and site space (physical indices).
     pub fn site_index_network(&self) -> &SiteIndexNetwork<V, T::Index> {
         &self.site_index_network
-    }
-
-    /// Get a mutable reference to the site index network.
-    pub(crate) fn site_index_network_mut(&mut self) -> &mut SiteIndexNetwork<V, T::Index> {
-        &mut self.site_index_network
     }
 
     /// Get a reference to the site space (physical indices) for a node.

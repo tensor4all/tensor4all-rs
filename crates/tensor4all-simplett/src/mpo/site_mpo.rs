@@ -48,12 +48,6 @@ impl<T: TTScalar> SiteMPO<T> {
         Ok(result)
     }
 
-    /// Create a SiteMPO from tensors without validation
-    #[allow(dead_code)]
-    pub(crate) fn from_tensors_unchecked(tensors: Vec<Tensor4<T>>, center: usize) -> Self {
-        Self { tensors, center }
-    }
-
     /// Get the current orthogonality center position
     pub fn center(&self) -> usize {
         self.center

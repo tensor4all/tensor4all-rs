@@ -6,12 +6,14 @@ use crate::{
         convergence_criterion_like_julia, error_metric, max_error_metric, rank_is_saturated,
         ranks_are_stable,
     },
-    elementwise_batched, initial_guess,
+    elementwise_batched,
+    local::LocalBlockEvaluator,
     random_tt::{
-        initial_guess_core_entry_count, initial_guess_existing_entry_count,
+        initial_guess, initial_guess_core_entry_count, initial_guess_existing_entry_count,
         initial_guess_total_entry_count, MAX_INITIAL_GUESS_CORE_ENTRIES,
     },
-    AciError, AciOptions, ElementwiseBatch, ElementwiseProblem, LocalBlockEvaluator,
+    state::ElementwiseProblem,
+    AciError, AciOptions, ElementwiseBatch,
 };
 use num_complex::Complex64;
 use std::cell::RefCell;

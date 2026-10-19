@@ -485,7 +485,7 @@ impl AffineParams {
     }
 
     /// Get element A[i, j] (0-indexed).
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn get_a(&self, i: usize, j: usize) -> Rational64 {
         self.a[i + self.m * j]
     }

@@ -23,7 +23,6 @@ pub(crate) trait CandidateMatrixSource<T: MatrixLuciScalar> {
     fn get_block(&self, rows: &[usize], cols: &[usize], out: &mut [T]);
 
     /// Borrow the whole matrix in column-major layout when available.
-    #[allow(dead_code)]
     fn dense_column_major_slice(&self) -> Option<&[T]> {
         None
     }
@@ -40,7 +39,8 @@ pub(crate) trait CandidateMatrixSource<T: MatrixLuciScalar> {
 /// Borrowed dense matrix source with column-major layout.
 ///
 /// Wraps a column-major data slice for use with pivot kernels.
-#[allow(dead_code)]
+// Test-only fixture source; production kernels accept any `CandidateMatrixSource`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct DenseMatrixSource<'a, T: MatrixLuciScalar> {
     data: &'a [T],
     nrows: usize,
@@ -61,7 +61,7 @@ pub(crate) struct LazyMatrixSource<T: MatrixLuciScalar, F> {
 
 impl<'a, T: MatrixLuciScalar> DenseMatrixSource<'a, T> {
     /// Create a dense source from a column-major slice.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn from_column_major(data: &'a [T], nrows: usize, ncols: usize) -> Self {
         let expected = nrows.checked_mul(ncols);
         assert!(
@@ -142,7 +142,6 @@ where
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn materialize_source<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     source: &S,
 ) -> Matrix<T> {

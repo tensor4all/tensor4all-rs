@@ -1,6 +1,7 @@
-use crate::matrixluci::{
-    DenseLuKernel, DenseMatrixSource, LazyMatrixSource, PivotKernel, PivotKernelOptions,
-};
+use crate::matrixluci::dense::DenseLuKernel;
+use crate::matrixluci::kernel::PivotKernel;
+use crate::matrixluci::source::{DenseMatrixSource, LazyMatrixSource};
+use crate::matrixluci::types::PivotKernelOptions;
 use crate::{rrlu, RrLUOptions};
 use approx::assert_abs_diff_eq;
 use tensor4all_tensorbackend::from_vec2d;

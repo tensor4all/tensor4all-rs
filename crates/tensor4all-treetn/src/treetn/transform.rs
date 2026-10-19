@@ -668,7 +668,6 @@ where
             })?;
 
             let truncation_options = crate::TruncationOptions {
-                form: options.form,
                 truncation: options.truncation,
             };
 
