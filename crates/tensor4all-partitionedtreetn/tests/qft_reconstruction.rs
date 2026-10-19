@@ -1386,12 +1386,15 @@ fn merge_refine_schedule_keeps_exact_cancellation_with_a_rank_goal() {
 
     let result = schedule_rank_limited(&preimage, &operator, &[site], 0.5, 1);
     let report = result.report();
-    // Exact cancellation costs no accuracy budget: the retained superposition is
-    // the zero function even though its individual terms are not zero.
+    // Exact cancellation costs no accuracy budget. The stopped root keeps merging
+    // its input siblings, so the cancelling pair is consolidated and dropped as a
+    // zero contribution: the zero target has no retained region left.
     assert_eq!(report.error_bound, 0.0);
-    assert!(report.term_count > 0);
-    let (_, dense) = dense_of_regions(&result);
-    assert!(norm_of(&dense) < 1e-12, "residual {}", norm_of(&dense));
+    assert_eq!(report.stopped_regions, 1);
+    assert_eq!(report.term_count, 0);
+    assert_eq!(report.region_count, 0);
+    let partition = result.into_partition().expect("zero partition");
+    assert!(partition.norm().expect("norm") < 1e-12);
 }
 
 #[test]
@@ -1429,6 +1432,138 @@ fn merge_refine_schedule_stops_refinement_once_the_rank_goal_is_met() {
     assert!(
         residual <= report.error_bound + 1e-12,
         "residual {residual:e} exceeds the bound {:e}",
+        report.error_bound
+    );
+}
+
+#[test]
+fn merge_refine_schedule_without_a_goal_never_drops_a_small_contribution() {
+    // A generous allowance must not let the no-goal trajectory drop the small
+    // `0.01` leaves: without a rank goal nothing is truncated and the bound is zero.
+    let sites: Vec<DynIndex> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
+    let values = vec![
+        Complex64::new(0.01, 0.0),
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.01, 0.0),
+        Complex64::new(1.0, 0.0),
+    ];
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = identity_plus_scaled_x_tensor(&sites, 0.0);
+
+    let result = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance {
+            rtol: 0.0,
+            atol: 1.0,
+        },
+        &MergeRefineOptions {
+            output_depth: None,
+            max_work_items: 8,
+            ..Default::default()
+        },
+    )
+    .expect("schedule");
+    let report = result.report().clone();
+    assert_eq!(report.error_bound, 0.0, "{report:?}");
+    assert_eq!(report.dropped_terms, 0, "{report:?}");
+    let (indices, dense) = dense_of_regions(&result);
+    let (reference_indices, reference) = applied_dense(&operator, &tree, &sites);
+    let reference = reorder(&reference, &reference_indices, &indices);
+    assert!(max_error(&dense, &reference) < 1e-12);
+}
+
+#[test]
+fn merge_refine_schedule_keeps_merging_a_region_below_the_rank_goal() {
+    // Eight rank-one input leaves under an identity-like operator: the root region
+    // is already below the goal at level 0, so it never refines. It must still
+    // consolidate its input siblings on every later level instead of freezing at
+    // one term per leaf (the `regions 1, terms 8` adaptive-stop failure mode).
+    let r = 3usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| Complex64::new(1.0 + (m as f64 * 0.3).sin(), (m as f64 * 0.7).cos()))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = identity_plus_scaled_x_tensor(&sites, 0.0);
+
+    let result = schedule_rank_limited(&preimage, &operator, &sites, 1e-12, 32);
+    let report = result.report().clone();
+    assert_eq!(report.refined_regions, 0, "{report:?}");
+    assert_eq!(report.stopped_regions, 1, "{report:?}");
+    assert_eq!(report.region_count, 1, "{report:?}");
+    assert_eq!(
+        report.term_count, 1,
+        "a stopped region must still merge its input siblings: {report:?}"
+    );
+    assert!(
+        report.error_bound <= report.absolute_tolerance,
+        "bound {:e} exceeds the allowance {:e}",
+        report.error_bound,
+        report.absolute_tolerance
+    );
+    // Merging happened on the three later levels, not only in the discarded probe.
+    assert_eq!(report.work_items_per_level, vec![8, 4, 2, 1], "{report:?}");
+
+    // The consolidated superposition is the exact trajectory and the dense image.
+    let (indices, dense) = dense_of_regions(&result);
+    let exact = schedule_exact(&preimage, &operator, &sites, None, 64);
+    let (exact_indices, exact_dense) = dense_of(&exact.into_partition().expect("partition"));
+    let exact_dense = reorder(&exact_dense, &exact_indices, &indices);
+    let deviation = max_error(&dense, &exact_dense);
+    assert!(
+        deviation <= report.error_bound + 1e-12,
+        "deviation {deviation:e} exceeds the bound {:e}",
+        report.error_bound
+    );
+    let (reference_indices, reference) = applied_dense(&operator, &tree, &sites);
+    let reference = reorder(&reference, &reference_indices, &indices);
+    assert!(max_error(&dense, &reference) < 1e-12);
+}
+
+#[test]
+fn merge_refine_schedule_multi_term_merges_stay_within_the_allowance() {
+    // A tight rank goal with a rank-additive input keeps both operands of a merge
+    // as separate terms, so a level makes more share-sized charges than it has
+    // live items. The per-charge allocation must keep the measured bound inside
+    // the allowance without relying on the final clamp.
+    let r = 3usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| Complex64::new(1.0 + (m as f64).sin(), (m as f64).cos()))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = identity_plus_scaled_x_tensor(&sites, 0.0);
+
+    let result = schedule_rank_limited(&preimage, &operator, &sites, 0.25, 1);
+    let report = result.report().clone();
+    assert!(
+        report.term_count > report.region_count,
+        "the case must retain multi-term regions: {report:?}"
+    );
+    assert!(report.error_bound > 0.0, "{report:?}");
+    assert!(
+        report.error_bound <= report.absolute_tolerance,
+        "bound {:e} exceeds the allowance {:e}",
+        report.error_bound,
+        report.absolute_tolerance
+    );
+
+    // The reported bound covers the deviation from the exact trajectory.
+    let exact = schedule_exact(&preimage, &operator, &sites, None, 32);
+    let (indices, dense) = dense_of_regions(&result);
+    let (exact_indices, exact_dense) = dense_of(&exact.into_partition().expect("partition"));
+    let exact_dense = reorder(&exact_dense, &exact_indices, &indices);
+    let deviation = max_error(&dense, &exact_dense);
+    assert!(
+        deviation <= report.error_bound + 1e-12,
+        "deviation {deviation:e} exceeds the bound {:e}",
         report.error_bound
     );
 }

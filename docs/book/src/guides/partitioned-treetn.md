@@ -436,12 +436,15 @@ children and produces four output children. The default `None` treats `selection
 one axis with the documented reversed placement. `MergeRefineOptions::target_bond_dim` is a
 soft rank goal: `None` keeps the trajectory uniform and exact, while `Some(goal)`
 makes it adaptive. An output region is then refined only when its retained terms
-exceed the goal and refining lowers its maximum retained rank, a merged pair is
-combined into one term only when combining pays off (otherwise both operands stay
-as separate terms of the region's superposition), and every truncation candidate
-must fit the item's share of the global allowance. An unaffordable or gainless
-candidate is retained exactly rather than violating the accuracy contract, and
-exceeding `MergeRefineOptions::max_terms` returns a resource-limit error.
+exceed the goal and refining lowers its maximum retained rank. A region that stops
+refining keeps its output key and still merges its input siblings on every later
+level, so it consolidates the input prefixes it held instead of freezing them. A
+merged pair is combined into one term when it fits the goal or lowers the bond
+dimension (otherwise both operands stay as separate terms of the region's
+superposition), and every truncation candidate must fit the item's share of the
+global allowance. An unaffordable or gainless candidate is retained exactly rather
+than violating the accuracy contract, and exceeding `MergeRefineOptions::max_terms`
+returns a resource-limit error.
 
 `MergeRefineOptions::apply_options` opts into a truncating operator application.
 The schedule then applies the operator with those options *and* exactly, measures

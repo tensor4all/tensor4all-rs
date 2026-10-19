@@ -31,9 +31,12 @@
 //! and exact: every region is refined down to the requested depth and
 //! [`MergeRefineReport::error_bound`] stays zero. With a rank goal it becomes
 //! adaptive: a region is refined only when its retained terms exceed the goal and
-//! the refinement lowers its maximum retained rank, and a merged pair is combined
-//! only when the combination pays off, so a rank-one object is not forced into a
-//! preset output tiling. A merged or unpaired contribution is dropped only when
+//! the refinement lowers its maximum retained rank. A region that stops refining
+//! keeps its output key and continues merging its input siblings on every later
+//! level, so it still consolidates the input prefixes it held instead of freezing
+//! them. A merged pair is combined whenever the result fits the goal or lowers the
+//! bond dimension, so a rank-one object is not forced into a preset output tiling.
+//! A merged or unpaired contribution is dropped only when
 //! its measured norm fits its share of the global allowance, and that norm stays in
 //! the report. One or more coordinate axes may be transformed in one synchronized
 //! level, and the input and output of a selection are always the same indices: this
@@ -94,16 +97,17 @@ pub struct MergeRefineOptions<V> {
     /// `None` disables truncation and keeps the trajectory uniform and exact.
     /// `Some(goal)` enables adaptive refinement for every output region whose
     /// retained terms exceed the goal: a region is refined only when that lowers
-    /// its maximum retained term rank, and a merged pair is combined only when the
-    /// combination pays off, otherwise its operands stay separate terms. A
+    /// its maximum retained term rank. A region that stops refining keeps merging
+    /// its input siblings at its own output key on the remaining levels, and a
+    /// merged pair is combined whenever the candidate fits the goal or lowers the
+    /// bond dimension, otherwise its operands stay separate terms. A
     /// truncation candidate must also fit the item's share of the global
     /// allowance, so a soft rank goal never forces an accuracy violation.
     /// `Some(0)` is invalid.
     pub target_bond_dim: Option<usize>,
-    /// Maximum retained terms across live and finalized regions, default
-    /// `1 << 20`. The adaptive merge policy can keep operands separate, so this
-    /// bounds that growth and returns a resource-limit error instead of
-    /// exceeding the budget.
+    /// Maximum retained terms across live regions, default `1 << 20`. The
+    /// adaptive merge policy can keep operands separate, so this bounds that
+    /// growth and returns a resource-limit error instead of exceeding the budget.
     pub max_terms: usize,
     /// Explicit coordinate axes, default `None`.
     ///
@@ -253,12 +257,14 @@ pub struct MergeRefineReport {
     pub work_items_per_level: Vec<usize>,
     /// Largest number of live work items.
     pub peak_work_items: usize,
-    /// Output regions refined into child prefix regions.
+    /// Output regions refined into child prefix regions. Counted once per region
+    /// per refinement, because refining is a decision made at one level.
     pub refined_regions: usize,
-    /// Output regions kept unsplit because refinement would not lower their
-    /// retained rank. These regions report their terms through
-    /// [`MergeRefineResult::regions`], and their terms cover the input prefixes
-    /// that were still separate when they stopped.
+    /// Output regions that stopped refining because it would not lower their
+    /// retained rank. Counted once per region, not once per remaining level. Such
+    /// a region keeps its output key and continues merging its input siblings at
+    /// every later level, so its terms are not frozen at the stop level; they
+    /// report through [`MergeRefineResult::regions`].
     pub stopped_regions: usize,
     /// Disjoint output regions in the result.
     pub region_count: usize,
@@ -990,22 +996,17 @@ where
             .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
         kraft = checked_add(kraft, weight)?;
     }
-    // Prefix-free: a leaf whose per-axis prefixes are all prefixes of another
-    // leaf's would cover part of the same region, so the two would overlap.
+    // Prefix-free: two leaves whose prefixes nest on every axis would cover part
+    // of the same region, so they would overlap. Nesting may go either way on
+    // each axis independently, so the test is per axis in both directions.
     for key in &leaves {
         for other in &leaves {
             if key == other {
                 continue;
             }
-            let is_prefix =
-                key.iter()
-                    .zip(other)
-                    .all(|((depth, value), (other_depth, other_value))| {
-                        depth <= other_depth && *value == other_value >> (other_depth - depth)
-                    });
-            if is_prefix {
+            if input_prefixes_overlap(key, other) {
                 return Err(invalid(
-                    "input leaves must not overlap: a leaf whose prefixes are prefixes of another leaf's selected indices covers the same coordinates",
+                    "input leaves must not overlap: on every axis one leaf's prefix must not be a prefix of the other's selected indices, because the two would cover the same coordinates",
                 ));
             }
         }
@@ -1016,6 +1017,25 @@ where
         ));
     }
     Ok(leaves)
+}
+
+/// Whether two input-prefix keys overlap, in the sense that their per-axis
+/// prefixes nest on every axis.
+///
+/// Nesting is tested per axis in either direction: axis 0 may have `key` shorter
+/// than `other` while axis 1 has it longer. Two leaves overlap exactly when every
+/// axis overlaps, because then they share a sub-rectangle of the selected
+/// coordinates.
+fn input_prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
+    key.iter()
+        .zip(other)
+        .all(|((depth, value), (other_depth, other_value))| {
+            if depth <= other_depth {
+                *value == other_value >> (other_depth - depth)
+            } else {
+                *other_value == value >> (depth - other_depth)
+            }
+        })
 }
 
 /// Schedule `operator` on `selection` as a level-coupled merge-refine trajectory.
@@ -1044,9 +1064,11 @@ where
 /// [`MergeRefineOptions::apply_options`], nothing is truncated and the reported
 /// bound is exactly zero. With a goal the trajectory is adaptive: an
 /// output region is refined only when its terms exceed the goal and refining
-/// lowers its maximum retained rank, and a merged pair is combined into one term
-/// only when that strictly lowers the bond dimension, otherwise both operands stay
-/// as separate terms of the region's superposition.
+/// lowers its maximum retained rank. A region that stops refining keeps its output
+/// key and still merges its input siblings on every later level, and a merged pair
+/// is combined into one term whenever that fits the goal or lowers the bond
+/// dimension, otherwise both operands stay as separate terms of the region's
+/// superposition.
 ///
 /// Every approximation is measured where it happens and recorded once in the
 /// report: an application error belongs to level zero, and a truncation residual or
@@ -1245,10 +1267,12 @@ where
         ));
     }
     // Conservative l1 allocation, spent level by level: the measured application
-    // error is charged first, and one level can merge at most twice its live item
-    // count, so its share is `remaining / level_merges`. A restriction is
-    // nonexpansive and therefore carries no new cost, and a rejected probe costs
-    // nothing.
+    // error is charged first, and what is left is split over the levels that are
+    // still to come and over the share-sized charges the current level can make.
+    // A charge is one dropped norm or one accepted truncation residual, so it is
+    // bounded by the sum of the operand term counts of every merge that level
+    // performs. A restriction is nonexpansive and therefore carries no new cost,
+    // and a rejected probe costs nothing.
     let mut remaining = finite(allowance - application_error)?;
     // Measured components, grouped by the level and the region where they were
     // measured. A component is confined to the region that measured it, so two
@@ -1271,33 +1295,51 @@ where
     let mut work_items_per_level = Vec::with_capacity(output_depth + 1);
     work_items_per_level.push(first.len());
     level.insert(geometry.root_output(), first);
-    check_term_budget(&level, &[], options.max_terms)?;
-    // `finalized` keeps the regions that stopped refining, so their terms count
-    // against the same budget as the live ones.
-    let mut finalized: Vec<FinalRegion<V>> = Vec::new();
+    check_term_budget(&level, options.max_terms)?;
+    // A region that stops refining stays live at its own output key and keeps
+    // merging its input siblings. The set makes that decision one-way and keeps
+    // `stopped_regions` a count of regions rather than of region-levels.
+    let mut stopped: BTreeSet<OutputKey> = BTreeSet::new();
     for level_index in 1..=output_depth {
-        let live_before: usize = level.values().map(|items| items.len()).sum();
-        let level_merges = live_before
-            .checked_mul(2)
-            .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
-        let share = if level_merges == 0 {
+        let levels_left = output_depth - level_index + 1;
+        let charges = level_charge_bound(&level, &stopped, &geometry, level_index)?;
+        // Without a rank goal nothing is approximated: a zero share still drops an
+        // exactly cancelling contribution but never a small nonzero one, so the
+        // reported bound stays exactly zero as documented.
+        let share = if options.target_bond_dim.is_none() {
             0.0
         } else {
-            finite(remaining / level_merges as f64)?
+            level_share(remaining, levels_left, charges)?
         };
         let mut level_components: BTreeMap<OutputKey, f64> = BTreeMap::new();
         let mut spent = 0.0_f64;
         let mut next: BTreeMap<OutputKey, BTreeMap<InputKey, Item<V>>> = BTreeMap::new();
         for (region, items) in std::mem::take(&mut level) {
-            // Probe every child region: restrict first, then merge input siblings.
-            // One axis contributes two children, so several axes contribute the
-            // product of their choices in one synchronized level.
             let context = ProbeContext {
                 geometry: &geometry,
                 center,
                 options,
                 share,
             };
+            if stopped.contains(&region) {
+                // A stopped region no longer refines the output, but it keeps
+                // consolidating its input siblings at its own output key. The
+                // restriction to the region itself is a no-op, so this is the
+                // merge half of the level with the same ledger share.
+                let projector = geometry.output_projector(&region)?;
+                let mut incurred = 0.0_f64;
+                let merged =
+                    restrict_and_merge(&context, &items, &projector, &mut counters, &mut incurred)?;
+                spent = finite(spent + incurred)?;
+                if incurred > 0.0 {
+                    level_components.insert(region.clone(), incurred);
+                }
+                next.insert(region, merged);
+                continue;
+            }
+            // Probe every child region: restrict first, then merge input siblings.
+            // One axis contributes two children, so several axes contribute the
+            // product of their choices in one synchronized level.
             let child_keys = geometry.output_children(&region, level_index);
             let mut children = Vec::with_capacity(child_keys.len());
             for child in child_keys {
@@ -1332,9 +1374,20 @@ where
                 }
             } else {
                 counters.stopped_regions = checked_add(counters.stopped_regions, 1)?;
-                // The stopped region keeps the input prefixes it held before the
-                // discarded probe, so its terms stay smaller than the probe sum.
-                finalized.push((level_index - 1, region, items));
+                stopped.insert(region.clone());
+                // The discarded probe still costs its measured components. The
+                // region now keeps its own output key and consolidates its input
+                // siblings there for the remaining levels; that merge is a kept
+                // result, so its measured component belongs to this region.
+                let projector = geometry.output_projector(&region)?;
+                let mut incurred = 0.0_f64;
+                let merged =
+                    restrict_and_merge(&context, &items, &projector, &mut counters, &mut incurred)?;
+                spent = finite(spent + incurred)?;
+                if incurred > 0.0 {
+                    level_components.insert(region.clone(), incurred);
+                }
+                next.insert(region, merged);
             }
         }
         let live_items: usize = next.values().map(|items| items.len()).sum();
@@ -1351,21 +1404,16 @@ where
         counters.peak_work_items = counters.peak_work_items.max(live_items);
         work_items_per_level.push(live_items);
         level = next;
-        check_term_budget(&level, &finalized, options.max_terms)?;
+        check_term_budget(&level, options.max_terms)?;
         components.push(level_components);
-        // The level share bounds this spend by construction, so the difference is
-        // nonnegative and the clamp only absorbs floating-point rounding at the
-        // boundary instead of failing a run for it.
+        // The per-level share bounds this spend by construction; the clamp only
+        // absorbs floating-point rounding at the boundary rather than failing a
+        // run for it.
         remaining = finite((remaining - spent).max(0.0))?;
     }
     // Regions that survived the last level keep the input prefixes they hold at
-    // that depth; a stopped region keeps the prefixes it had before its discarded
-    // probe. Either way the caller consumes their terms through `regions()`.
-    finalized.extend(
-        level
-            .into_iter()
-            .map(|(region, items)| (output_depth, region, items)),
-    );
+    // that depth, including the regions that stopped refining early and kept
+    // merging their siblings. The caller consumes their terms through `regions()`.
 
     let mut max_bond_dim = 0usize;
     let mut logical_parameters = 0usize;
@@ -1373,7 +1421,7 @@ where
     // overlap, so they stay in one region entry that `regions()` exposes as a
     // superposition and `into_partition()` rejects.
     let mut grouped: BTreeMap<OutputKey, MergeRefineRegion<V>> = BTreeMap::new();
-    for (_, region, items) in finalized {
+    for (region, items) in level {
         let output = geometry.output_projector(&region)?;
         for (input_key, item) in items {
             let input = geometry.input_projector(&input_key)?;
@@ -1441,10 +1489,6 @@ where
     share: f64,
 }
 
-/// A finalized output region: its output level, its output region key, and its
-/// items keyed by their input prefix.
-type FinalRegion<V> = (usize, OutputKey, BTreeMap<InputKey, Item<V>>);
-
 /// One work item: the superposition of its terms for one input prefix region.
 #[derive(Debug, Clone)]
 struct Item<V>
@@ -1497,6 +1541,102 @@ where
     items.values().map(Item::max_rank).max().unwrap_or(0)
 }
 
+/// Split one level's share of the remaining allowance over the charges it can make.
+///
+/// `levels_left` levels still have to spend from `remaining`, and this level can
+/// make at most `charges` share-sized charges, so no amount allocated here can
+/// starve a later level (the old `remaining / (2 * live_items)` gave level `t` at
+/// most `remaining / 2^t`). Each charge is one dropped norm or one accepted
+/// truncation residual, both measured against `share`, so `charges * share` never
+/// exceeds `remaining / levels_left`.
+fn level_share(remaining: f64, levels_left: usize, charges: usize) -> Result<f64> {
+    if charges == 0 || levels_left == 0 {
+        return Ok(0.0);
+    }
+    let per_level = finite(remaining / levels_left as f64)?;
+    finite(per_level / charges as f64)
+}
+
+/// Upper bound on the share-sized charges this level's merges can make.
+///
+/// Each region's items are probed into one child per output prefix. A region that
+/// still refines keeps those children; a region that stops here pays the discarded
+/// probe and then merges its own items at its output key. Both are charged against
+/// this level, and a stopped region that already made that decision only merges.
+fn level_charge_bound<V>(
+    level: &BTreeMap<OutputKey, BTreeMap<InputKey, Item<V>>>,
+    stopped: &BTreeSet<OutputKey>,
+    geometry: &ScheduleGeometry,
+    level_index: usize,
+) -> Result<usize>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let mut charges = 0usize;
+    for (region, items) in level {
+        let own = merge_charge_bound(items, geometry)?;
+        if stopped.contains(region) {
+            charges = checked_add(charges, own)?;
+            continue;
+        }
+        let children = geometry.output_children(region, level_index).len();
+        let probes = own
+            .checked_mul(children)
+            .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
+        charges = checked_add(charges, checked_add(probes, own)?)?;
+    }
+    Ok(charges)
+}
+
+/// Upper bound on the charges of one `restrict_and_merge` call for `items`.
+///
+/// Items that ascend to the same parent key are merged in key order. A merge of
+/// two superpositions charges one share for `drop_negligible` and one for
+/// `compress_item` per paired term index, and one for every single-sided term,
+/// which is exactly the summed term count of its operands. A merged result never
+/// holds more terms than that sum.
+fn merge_charge_bound<V>(
+    items: &BTreeMap<InputKey, Item<V>>,
+    geometry: &ScheduleGeometry,
+) -> Result<usize>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let mut groups: BTreeMap<InputKey, Vec<usize>> = BTreeMap::new();
+    for (input_key, item) in items {
+        groups
+            .entry(geometry.input_parent(input_key))
+            .or_default()
+            .push(item.terms.len());
+    }
+    let mut charges = 0usize;
+    for term_counts in groups.values() {
+        charges = checked_add(charges, merge_group_charge_bound(term_counts)?)?;
+    }
+    Ok(charges)
+}
+
+/// Charges of merging one sibling group whose items hold these term counts.
+///
+/// The first item is inserted unchanged; every later item is merged into the
+/// accumulated superposition, charging the summed term count of the operands and
+/// growing the accumulator by at most that sum.
+fn merge_group_charge_bound(term_counts: &[usize]) -> Result<usize> {
+    let mut accumulated: Option<usize> = None;
+    let mut charges = 0usize;
+    for &terms in term_counts {
+        match accumulated {
+            None => accumulated = Some(terms),
+            Some(left) => {
+                let sum = checked_add(left, terms)?;
+                charges = checked_add(charges, sum)?;
+                accumulated = Some(sum);
+            }
+        }
+    }
+    Ok(charges)
+}
+
 /// Restrict a region's items to a child region and merge each input sibling pair.
 fn restrict_and_merge<V>(
     context: &ProbeContext<'_, V>,
@@ -1540,8 +1680,9 @@ where
 ///
 /// Without a rank goal the exact sum is kept as a single term. With a goal, each
 /// paired sum is compressed toward the goal first; the single combined term is
-/// kept only when it strictly lowers the bond dimension against the naive sum,
-/// otherwise the operands stay separate terms so the retained ranks stay small.
+/// kept when it already fits the goal or strictly lowers the bond dimension
+/// against the naive sum, otherwise the operands stay separate terms so the
+/// retained ranks stay small.
 fn merge_items<V>(
     left: &Item<V>,
     right: &Item<V>,
@@ -1570,7 +1711,12 @@ where
                         let (candidate, residual) =
                             compress_item(&sum, context.center, goal, context.share, counters)?;
                         let naive_rank = checked_add(left.max_bond_dim(), right.max_bond_dim())?;
-                        if candidate.max_bond_dim() < naive_rank {
+                        let candidate_rank = candidate.max_bond_dim();
+                        // `compress_item` returns an already-within-goal sum
+                        // unchanged, so the goal test is what consolidates those
+                        // pairs; the naive-rank test covers a compression that
+                        // lowered the rank. Otherwise keep both operands.
+                        if candidate_rank <= goal || candidate_rank < naive_rank {
                             if residual > 0.0 {
                                 *incurred = finite(*incurred + residual)?;
                             }
@@ -1620,17 +1766,13 @@ where
 /// Fail before the retained term count exceeds the caller's budget.
 fn check_term_budget<V>(
     live: &BTreeMap<OutputKey, BTreeMap<InputKey, Item<V>>>,
-    finalized: &[FinalRegion<V>],
     max_terms: usize,
 ) -> Result<()>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     let mut retained = 0usize;
-    for items in live
-        .values()
-        .chain(finalized.iter().map(|(_, _, items)| items))
-    {
+    for items in live.values() {
         for item in items.values() {
             retained = checked_add(retained, item.terms.len())?;
         }
@@ -1688,5 +1830,84 @@ where
         Ok((candidate, residual))
     } else {
         Ok((sum.clone(), 0.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{input_prefixes_overlap, level_share, merge_group_charge_bound};
+
+    /// Two axes: axis 0 nests `first` inside `second`, axis 1 nests `second`
+    /// inside `first`. Each axis overlaps, so the leaves overlap even though
+    /// neither key is a prefix of the other on every axis in the same direction.
+    #[test]
+    fn per_axis_prefixes_detect_two_way_nesting() {
+        let first = vec![(1usize, 0usize), (2, 0)];
+        let second = vec![(2usize, 0usize), (1, 0)];
+        assert!(input_prefixes_overlap(&first, &second));
+        assert!(input_prefixes_overlap(&second, &first));
+
+        // Same-direction nesting on every axis is also an overlap.
+        let nested = vec![(1usize, 0usize), (1, 0)];
+        let deeper = vec![(2usize, 0usize), (2, 0)];
+        assert!(input_prefixes_overlap(&nested, &deeper));
+        assert!(input_prefixes_overlap(&deeper, &nested));
+
+        // A disagreement on any axis makes the two disjoint.
+        let disjoint = vec![(1usize, 0usize), (1, 1)];
+        assert!(!input_prefixes_overlap(&nested, &disjoint));
+        assert!(!input_prefixes_overlap(&disjoint, &nested));
+
+        // One axis nests while the other is disjoint: still disjoint.
+        let split = vec![(2usize, 0usize), (1, 1)];
+        assert!(!input_prefixes_overlap(&first, &split));
+        assert!(!input_prefixes_overlap(&split, &first));
+
+        // Different depths on both axes without nesting are disjoint.
+        let sideways = vec![(1usize, 1usize), (1, 1)];
+        assert!(!input_prefixes_overlap(&first, &sideways));
+    }
+
+    /// A merge of two multi-term items charges the summed operand term count: two
+    /// shares per paired term (drop and compression) and one per single-sided
+    /// term. A three-item group accumulates those bounds in merge order.
+    #[test]
+    fn multi_term_merge_charge_bound_follows_the_operand_term_counts() {
+        assert_eq!(merge_group_charge_bound(&[3, 2]).expect("bound"), 5);
+        assert_eq!(merge_group_charge_bound(&[1, 1]).expect("bound"), 2);
+        assert_eq!(merge_group_charge_bound(&[4]).expect("bound"), 0);
+        assert_eq!(merge_group_charge_bound(&[]).expect("bound"), 0);
+        // (2 + 3) charges for the first merge, then (5 + 1) for the second.
+        assert_eq!(merge_group_charge_bound(&[2, 3, 1]).expect("bound"), 11);
+    }
+
+    /// A level that must merge multi-term items can make more charges than it has
+    /// live items, so the old `remaining / (2 * items)` share could overspend and
+    /// front-load the allowance. Spending every charge at the per-level share must
+    /// stay inside what is left before the nonnegative clamp at each level.
+    #[test]
+    fn multi_term_merges_do_not_overspend_the_remaining_allowance() {
+        let levels = 3usize;
+        let mut remaining = 1.0_f64;
+        // Charge counts larger than the live item count, as multi-term merges and
+        // a stopped region's discarded probe plus its own merge produce them.
+        for (level_index, charges) in [13usize, 7, 3].into_iter().enumerate() {
+            let levels_left = levels - level_index;
+            let share = level_share(remaining, levels_left, charges).expect("share");
+            let worst_case_spend = share * charges as f64;
+            assert!(
+                worst_case_spend <= remaining / levels_left as f64 + 1e-15,
+                "level spend {worst_case_spend:e} exceeds its slice of {remaining:e}"
+            );
+            assert!(
+                worst_case_spend <= remaining,
+                "level spend {worst_case_spend:e} exceeds the remaining {remaining:e} before the clamp"
+            );
+            remaining = (remaining - worst_case_spend).max(0.0);
+        }
+
+        // No charge means no allocation, and a zero allowance stays zero.
+        assert_eq!(level_share(1.0, 2, 0).expect("share"), 0.0);
+        assert_eq!(level_share(0.0, 2, 5).expect("share"), 0.0);
     }
 }

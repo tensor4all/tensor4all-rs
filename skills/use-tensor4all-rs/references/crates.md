@@ -261,10 +261,12 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   `MergeRefineOptions::output_depth` stops early; `None` refines every selected
   bit. `target_bond_dim` is a soft rank goal: `None` keeps the trajectory uniform
   and exact, and `Some(goal)` makes it adaptive, refining a region only when that
-  lowers its maximum retained rank and combining a merged pair only when combining
-  pays off (otherwise both operands stay as separate terms). A truncation is
+  lowers its maximum retained rank. A region that stops refining keeps its output
+  key and still merges its input siblings on the remaining levels, and a merged
+  pair is combined when it fits the goal or lowers the bond dimension (otherwise
+  both operands stay as separate terms). A truncation is
   accepted only when it strictly lowers the bond dimension and its measured
-  residual fits an equal share of the allowance, so the measured `error_bound`
+  residual fits its level's share of the allowance, so the measured `error_bound`
   never exceeds the allowance. A contribution is dropped only when its measured norm
   fits its share, reported through `dropped_terms`/`dropped_error`, and exceeding
   `max_terms` returns a resource-limit error. `coordinate_groups` supplies several
