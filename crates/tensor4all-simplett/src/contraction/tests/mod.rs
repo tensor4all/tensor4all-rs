@@ -203,6 +203,63 @@ fn test_einsum_tensors_reports_backend_error() {
     let err = einsum_tensors("ij,jk->ik", &[&a]).unwrap_err();
     assert!(err.to_string().contains("einsum failed"));
     assert!(err.to_string().contains("ij,jk->ik"));
+    // The shared entry rejects a missing operand before any contraction.
+    assert!(err.to_string().contains("2 input term(s)"));
+    assert!(err.to_string().contains("1 operand(s)"));
+}
+
+#[test]
+fn test_einsum_tensors_rejects_surplus_operand() {
+    let a = typed_tensor_from_col_major_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+
+    let err = einsum_tensors("ij->ji", &[&a, &a]).unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("einsum failed for 'ij->ji'"), "{message}");
+    assert!(message.contains("1 input term(s)"), "{message}");
+    assert!(message.contains("2 operand(s)"), "{message}");
+}
+
+#[test]
+fn test_einsum_tensors_complex_matmul_and_trace() {
+    use num_complex::Complex64;
+
+    let a = typed_tensor_from_col_major_slice(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, -1.0),
+        ],
+        &[2, 2],
+    )
+    .unwrap();
+    let identity = typed_tensor_from_col_major_slice(
+        &[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ],
+        &[2, 2],
+    )
+    .unwrap();
+
+    let product = einsum_tensors("ij,jk->ik", &[&a, &identity]).unwrap();
+    assert_eq!(
+        tensor_to_col_major_vec(&product).unwrap(),
+        vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, -1.0),
+        ]
+    );
+
+    let trace = einsum_tensors("ii->", &[&a]).unwrap();
+    assert_eq!(
+        tensor_to_col_major_vec(&trace).unwrap(),
+        vec![Complex64::new(2.0, 0.0)]
+    );
 }
 
 #[test]

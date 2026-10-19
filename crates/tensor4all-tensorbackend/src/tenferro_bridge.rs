@@ -1620,6 +1620,96 @@ pub fn einsum_native_tensors(
     Ok(result)
 }
 
+/// Execute a cached einsum over borrowed native tensors using string subscripts.
+///
+/// This is the shared string-notation entry: it parses `subscripts` into the
+/// numeric labels that [`einsum_native_tensors`] consumes, checks that the
+/// equation describes exactly the supplied operands, and then delegates the
+/// contraction. Use it instead of re-implementing the parsing plus label
+/// mapping in each crate; use [`einsum_native_tensors`] directly when the
+/// labels are already numeric.
+///
+/// # Arguments
+///
+/// * `subscripts` - NumPy/PyTorch-style einsum notation such as `"ij,jk->ik"`
+///   or `"ii->"` for a trace. Parenthesized contraction order is rejected; see
+///   [`tenferro_einsum::Subscripts::parse`].
+/// * `operands` - One native tensor per comma-separated input term, in term
+///   order. Ranks must match the term lengths and repeated labels must have
+///   equal extents.
+///
+/// # Returns
+///
+/// The contracted native tensor in the promoted common dtype of the operands.
+///
+/// # Errors
+///
+/// Returns an error when the notation parser rejects `subscripts` as invalid
+/// notation, when the operand count does not match the number of comma-separated
+/// input terms, when an input term's label count does not match its operand
+/// rank, when repeated or contracted labels have incompatible shapes, or when
+/// dtype promotion or the backend contraction fails.
+///
+/// # Compatibility frontend
+///
+/// Like [`einsum_native_tensors`], this runs on the retained process-global
+/// (compatibility) frontend of
+/// [tensor4all-rs#859](https://github.com/tensor4all/tensor4all-rs/issues/859):
+/// it selects the default execution context and pays one graph dispatch per
+/// call. It is meant for cold or per-stage paths, not per-element hot loops;
+/// use [`CpuExecutionContext`](crate::CpuExecutionContext) sessions for those.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::einsum_native_subscripts;
+/// use tenferro::Tensor as NativeTensor;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+///
+/// // Column-major A = [[1, 2], [3, 4]] and B = [[5, 6], [7, 8]].
+/// let lhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
+/// let rhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0])?;
+/// let product = einsum_native_subscripts("ij,jk->ik", &[&lhs, &rhs])?;
+/// assert_eq!(product.shape(), &[2, 2]);
+/// assert_eq!(product.as_slice::<f64>()?, &[19.0, 43.0, 22.0, 50.0]);
+///
+/// let trace = einsum_native_subscripts("ii->", &[&lhs])?;
+/// assert_eq!(trace.as_slice::<f64>()?, &[5.0]);
+/// # Ok(())
+/// # }
+/// ```
+pub fn einsum_native_subscripts(
+    subscripts: &str,
+    operands: &[&NativeTensor],
+) -> Result<NativeTensor> {
+    let parsed = Subscripts::parse(subscripts)
+        .map_err(|error| anyhow!("invalid einsum subscripts '{subscripts}': {error}"))?;
+    ensure!(
+        parsed.inputs.len() == operands.len(),
+        "einsum subscripts '{subscripts}' describe {} input term(s) but {} operand(s) were given",
+        parsed.inputs.len(),
+        operands.len()
+    );
+
+    let input_ids = parsed
+        .inputs
+        .iter()
+        .map(|ids| ids.iter().map(|&id| id as usize).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let output_ids = parsed
+        .output
+        .iter()
+        .map(|&id| id as usize)
+        .collect::<Vec<_>>();
+    let operand_refs = operands
+        .iter()
+        .zip(input_ids.iter())
+        .map(|(tensor, ids)| (*tensor, ids.as_slice()))
+        .collect::<Vec<_>>();
+
+    einsum_native_tensors(&operand_refs, &output_ids)
+}
+
 /// Execute a cached einsum over read-only native tensor inputs.
 ///
 /// Backends consume borrowed host views inside their execution session. Mixed

@@ -3,6 +3,40 @@ use num_complex::Complex64;
 use std::ops::Mul;
 use std::sync::Arc;
 
+/// Named result of a non-finite scan over stored scalar values.
+///
+/// The two flags are independent: a payload can contain both NaN and infinity,
+/// and `Default` is the all-finite result. Use it instead of a positional
+/// `(has_nan, has_infinity)` pair so call sites name the flag they read.
+///
+/// This reports what the scan found; it does not classify, replace, or mask the
+/// values. See [`Storage::payload_nonfinite_flags`] for the compact-payload
+/// scan and `tensor4all_core` for the native-tensor scan over a different
+/// representation.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::NonfiniteFlags;
+///
+/// let finite = NonfiniteFlags::default();
+/// assert!(!finite.has_nan && !finite.has_infinity);
+///
+/// let flags = NonfiniteFlags {
+///     has_nan: true,
+///     has_infinity: false,
+/// };
+/// assert!(flags.has_nan);
+/// assert_ne!(flags, finite);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NonfiniteFlags {
+    /// At least one scanned real or imaginary component is NaN.
+    pub has_nan: bool,
+    /// At least one scanned real or imaginary component is infinite.
+    pub has_infinity: bool,
+}
+
 /// Trait for scalar types that can be stored in [`Storage`].
 ///
 /// This enables generic constructors such as [`Storage::from_dense_col_major`]
@@ -1760,23 +1794,25 @@ impl Storage {
     /// use tensor4all_tensorbackend::Storage;
     ///
     /// let storage = Storage::from_dense_col_major(vec![1.0_f64, f64::INFINITY], &[2]).unwrap();
-    /// assert_eq!(storage.payload_nonfinite_flags(), (false, true));
+    /// let flags = storage.payload_nonfinite_flags();
+    /// assert!(!flags.has_nan);
+    /// assert!(flags.has_infinity);
     /// ```
-    pub fn payload_nonfinite_flags(&self) -> (bool, bool) {
+    pub fn payload_nonfinite_flags(&self) -> NonfiniteFlags {
         match &self.0 {
             StorageRepr::F64(value) => {
-                let mut flags = (false, false);
+                let mut flags = NonfiniteFlags::default();
                 value.for_each_payload_value(|value| {
-                    flags.0 |= value.is_nan();
-                    flags.1 |= value.is_infinite();
+                    flags.has_nan |= value.is_nan();
+                    flags.has_infinity |= value.is_infinite();
                 });
                 flags
             }
             StorageRepr::C64(value) => {
-                let mut flags = (false, false);
+                let mut flags = NonfiniteFlags::default();
                 value.for_each_payload_value(|value| {
-                    flags.0 |= value.re.is_nan() || value.im.is_nan();
-                    flags.1 |= value.re.is_infinite() || value.im.is_infinite();
+                    flags.has_nan |= value.re.is_nan() || value.im.is_nan();
+                    flags.has_infinity |= value.re.is_infinite() || value.im.is_infinite();
                 });
                 flags
             }

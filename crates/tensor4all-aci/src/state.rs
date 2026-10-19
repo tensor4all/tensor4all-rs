@@ -222,6 +222,9 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         let site_right = col % d_right;
         let right_pivot = col / d_right;
 
+        // Stays a direct loop: this is a per-element lookup (one scalar per
+        // call) on the pivot search path, so `einsum_native_subscripts` would
+        // spend a graph dispatch per element and dwarf the 4-factor sum.
         let mut sum = T::zero();
         for a in 0..context.left_core.left_dim() {
             for m in 0..context.left_core.right_dim() {

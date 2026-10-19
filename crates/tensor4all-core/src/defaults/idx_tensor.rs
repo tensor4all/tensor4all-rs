@@ -31,7 +31,7 @@ use tensor4all_tensorbackend::{
     src_error_estimate_general as backend_src_error_estimate_general, Matrix,
 };
 use tensor4all_tensorbackend::{IncrementalQr, IncrementalQrScalar};
-use tensor4all_tensorbackend::{Storage, StorageKind};
+use tensor4all_tensorbackend::{NonfiniteFlags, Storage, StorageKind};
 
 use super::contract::{ContractionOptions, PairwiseContractionOptions};
 use super::structured_contraction::{
@@ -935,7 +935,7 @@ impl IdxTensorStorage {
         }
     }
 
-    fn nonfinite_flags(&self) -> Result<(bool, bool)> {
+    fn nonfinite_flags(&self) -> Result<NonfiniteFlags> {
         match self {
             Self::Materialized(storage) => Ok(storage.payload_nonfinite_flags()),
             Self::Eager { inner, .. } => IdxTensor::native_nonfinite_flags(inner),
@@ -5073,10 +5073,10 @@ impl IdxTensor {
                 actual: Self::dtype_name(dtype).to_string(),
             });
         }
-        let (has_nan, _) = self
+        let flags = self
             .compact_nonfinite_flags()
             .map_err(IdxTensorError::materialization)?;
-        if has_nan {
+        if flags.has_nan {
             return Err(IdxTensorError::NaNInput {
                 operation: "norm_squared",
             });
@@ -5150,10 +5150,10 @@ impl IdxTensor {
                 actual: Self::dtype_name(dtype).to_string(),
             });
         }
-        let (has_nan, _) = self
+        let flags = self
             .compact_nonfinite_flags()
             .map_err(IdxTensorError::materialization)?;
-        if has_nan {
+        if flags.has_nan {
             return Err(IdxTensorError::NaNInput {
                 operation: "maxabs",
             });
@@ -5249,52 +5249,54 @@ impl IdxTensor {
 
     fn native_nonfinite_flags_typed<T: TensorElement>(
         native: &EagerTensor,
-        classify: impl Fn(T) -> (bool, bool),
-    ) -> Result<(bool, bool)> {
+        classify: impl Fn(T) -> NonfiniteFlags,
+    ) -> Result<NonfiniteFlags> {
+        let fold = |values: &[T]| {
+            values
+                .iter()
+                .copied()
+                .map(&classify)
+                .fold(NonfiniteFlags::default(), |flags, value| NonfiniteFlags {
+                    has_nan: flags.has_nan | value.has_nan,
+                    has_infinity: flags.has_infinity | value.has_infinity,
+                })
+        };
         let value = native.value()?;
         if let Ok(values) = value.as_slice::<T>() {
-            return Ok(values.iter().copied().map(&classify).fold(
-                (false, false),
-                |(has_nan, has_infinity), (is_nan, is_infinite)| {
-                    (has_nan | is_nan, has_infinity | is_infinite)
-                },
-            ));
+            return Ok(fold(values));
         }
         drop(value);
         let value = IdxTensorStorage::materialize_eager_payload(native)?;
-        Ok(value.as_slice::<T>()?.iter().copied().map(classify).fold(
-            (false, false),
-            |(has_nan, has_infinity), (is_nan, is_infinite)| {
-                (has_nan | is_nan, has_infinity | is_infinite)
-            },
-        ))
+        Ok(fold(value.as_slice::<T>()?))
     }
 
-    fn native_nonfinite_flags(native: &EagerTensor) -> Result<(bool, bool)> {
+    fn native_nonfinite_flags(native: &EagerTensor) -> Result<NonfiniteFlags> {
         match native.dtype() {
-            DType::F32 => Self::native_nonfinite_flags_typed(native, |value: f32| {
-                (value.is_nan(), value.is_infinite())
+            DType::F32 => Self::native_nonfinite_flags_typed(native, |value: f32| NonfiniteFlags {
+                has_nan: value.is_nan(),
+                has_infinity: value.is_infinite(),
             }),
-            DType::F64 => Self::native_nonfinite_flags_typed(native, |value: f64| {
-                (value.is_nan(), value.is_infinite())
+            DType::F64 => Self::native_nonfinite_flags_typed(native, |value: f64| NonfiniteFlags {
+                has_nan: value.is_nan(),
+                has_infinity: value.is_infinite(),
             }),
-            DType::C32 => Self::native_nonfinite_flags_typed(native, |value: Complex32| {
-                (
-                    value.re.is_nan() || value.im.is_nan(),
-                    value.re.is_infinite() || value.im.is_infinite(),
-                )
-            }),
-            DType::C64 => Self::native_nonfinite_flags_typed(native, |value: Complex64| {
-                (
-                    value.re.is_nan() || value.im.is_nan(),
-                    value.re.is_infinite() || value.im.is_infinite(),
-                )
-            }),
+            DType::C32 => {
+                Self::native_nonfinite_flags_typed(native, |value: Complex32| NonfiniteFlags {
+                    has_nan: value.re.is_nan() || value.im.is_nan(),
+                    has_infinity: value.re.is_infinite() || value.im.is_infinite(),
+                })
+            }
+            DType::C64 => {
+                Self::native_nonfinite_flags_typed(native, |value: Complex64| NonfiniteFlags {
+                    has_nan: value.re.is_nan() || value.im.is_nan(),
+                    has_infinity: value.re.is_infinite() || value.im.is_infinite(),
+                })
+            }
             dtype => Err(anyhow::anyhow!("unsupported dtype {dtype:?}")),
         }
     }
 
-    fn compact_nonfinite_flags(&self) -> Result<(bool, bool)> {
+    fn compact_nonfinite_flags(&self) -> Result<NonfiniteFlags> {
         self.storage.nonfinite_flags()
     }
 
@@ -5386,7 +5388,7 @@ impl IdxTensor {
             if tensor
                 .compact_nonfinite_flags()
                 .map_err(IdxTensorError::materialization)?
-                .0
+                .has_nan
             {
                 return Err(IdxTensorError::NaNInput {
                     operation: "isapprox",

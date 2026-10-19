@@ -36,8 +36,8 @@ TENSORBACKEND = "tensor4all-tensorbackend"
 #   full-piv-LU) and the DType/tensor interop used by the native eager path;
 #   the tensorbackend crate cannot host the AD layer.
 # - tensor4all-simplett: the tensor abstraction layer (tenferro-tensor
-#   Tensor/TypedTensor/TensorScalar) and einsum subscripts used by MPO/TT
-#   construction; routing every tensor op through tensorbackend would create a
+#   Tensor/TypedTensor/TensorScalar) used by MPO/TT construction; einsum
+#   subscripts go through tensorbackend's `einsum_native_subscripts`. Routing every tensor op through tensorbackend would create a
 #   circular dependency.
 # - tensor4all-treetci: tenferro-linalg LinalgBackend + tenferro-tensor for
 #   materializing TreeTN site tensors during cross-interpolation assembly.
@@ -47,7 +47,7 @@ TENFERRO_EXCEPTIONS: dict[str, frozenset[str]] = {
     "tensor4all-core": frozenset(
         {"tenferro-ad", "tenferro-einsum", "tenferro-linalg", "tenferro-tensor"}
     ),
-    "tensor4all-simplett": frozenset({"tenferro-einsum", "tenferro-tensor"}),
+    "tensor4all-simplett": frozenset({"tenferro-tensor"}),
     "tensor4all-treetci": frozenset({"tenferro-linalg", "tenferro-tensor"}),
 }
 

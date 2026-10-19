@@ -2,9 +2,8 @@ use std::error::Error;
 use std::fmt;
 
 use crate::traits::TTScalar;
-use tenferro_einsum::Subscripts;
 use tenferro_tensor::{Tensor, TensorScalar, TypedTensor};
-use tensor4all_tensorbackend::einsum_native_tensors;
+use tensor4all_tensorbackend::einsum_native_subscripts;
 
 pub(crate) type Result<T> = std::result::Result<T, EinsumHelperError>;
 
@@ -92,10 +91,9 @@ pub(crate) fn einsum_tensors<T: EinsumScalar>(
     subscripts: &str,
     operands: &[&TypedTensor<T>],
 ) -> Result<TypedTensor<T>> {
-    let parsed = Subscripts::parse(subscripts).map_err(|err| EinsumHelperError::Backend {
-        subscripts: subscripts.to_string(),
-        message: err.to_string(),
-    })?;
+    // Subscript parsing, operand-count validation, and label mapping live in
+    // `einsum_native_subscripts`; this adapter only converts typed operands in
+    // and the result back out.
     let tensors: Vec<Tensor> = operands
         .iter()
         .map(|tensor| {
@@ -108,23 +106,9 @@ pub(crate) fn einsum_tensors<T: EinsumScalar>(
             Ok(T::typed_tensor_into_tensor(tensor))
         })
         .collect::<Result<_>>()?;
-    let input_ids = parsed
-        .inputs
-        .iter()
-        .map(|ids| ids.iter().map(|&id| id as usize).collect::<Vec<_>>())
-        .collect::<Vec<_>>();
-    let operand_refs = tensors
-        .iter()
-        .zip(input_ids.iter())
-        .map(|(tensor, ids)| (tensor, ids.as_slice()))
-        .collect::<Vec<_>>();
-    let output_ids = parsed
-        .output
-        .iter()
-        .map(|&id| id as usize)
-        .collect::<Vec<_>>();
+    let operand_refs = tensors.iter().collect::<Vec<_>>();
 
-    let result = einsum_native_tensors(&operand_refs, &output_ids).map_err(|err| {
+    let result = einsum_native_subscripts(subscripts, &operand_refs).map_err(|err| {
         EinsumHelperError::Backend {
             subscripts: subscripts.to_string(),
             message: err.to_string(),

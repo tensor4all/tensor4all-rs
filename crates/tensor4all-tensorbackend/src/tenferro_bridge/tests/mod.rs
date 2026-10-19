@@ -442,6 +442,97 @@ fn einsum_native_tensors_supports_retained_shared_nary_label() {
 }
 
 #[test]
+fn einsum_native_subscripts_matches_known_matmul_trace_and_reduction() {
+    // Column-major A = [[1, 2], [3, 4]], B = [[5, 6], [7, 8]].
+    let lhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])
+        .expect("valid lhs");
+    let rhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0])
+        .expect("valid rhs");
+
+    let product = einsum_native_subscripts("ij,jk->ik", &[&lhs, &rhs])
+        .expect("string-subscript matmul should succeed");
+    assert_eq!(product.shape(), &[2, 2]);
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<f64>(&product).unwrap(),
+        vec![19.0, 43.0, 22.0, 50.0]
+    );
+
+    let trace =
+        einsum_native_subscripts("ii->", &[&lhs]).expect("string-subscript trace should succeed");
+    assert_eq!(trace.shape(), &[] as &[usize]);
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<f64>(&trace).unwrap(),
+        vec![5.0]
+    );
+
+    let column_sums = einsum_native_subscripts("ij->j", &[&lhs])
+        .expect("string-subscript reduction should succeed");
+    assert_eq!(column_sums.shape(), &[2]);
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<f64>(&column_sums).unwrap(),
+        vec![4.0, 6.0]
+    );
+}
+
+#[test]
+fn einsum_native_subscripts_matches_known_complex_matmul_and_trace() {
+    // Column-major A = [[1+2i, 0], [0, 1]], B = [[1, 1], [1, 1]].
+    let lhs = NativeTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(1.0, 2.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ],
+    )
+    .expect("valid complex lhs");
+    let rhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![Complex64::new(1.0, 0.0); 4])
+        .expect("valid complex rhs");
+
+    let product = einsum_native_subscripts("ij,jk->ik", &[&lhs, &rhs])
+        .expect("complex string-subscript matmul should succeed");
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<Complex64>(&product).unwrap(),
+        vec![
+            Complex64::new(1.0, 2.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 2.0),
+            Complex64::new(1.0, 0.0),
+        ]
+    );
+
+    let trace = einsum_native_subscripts("ii->", &[&lhs])
+        .expect("complex string-subscript trace should succeed");
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<Complex64>(&trace).unwrap(),
+        vec![Complex64::new(2.0, 2.0)]
+    );
+}
+
+#[test]
+fn einsum_native_subscripts_rejects_operand_count_mismatch_and_parse_errors() {
+    let lhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])
+        .expect("valid lhs");
+
+    let too_few = einsum_native_subscripts("ij,jk->ik", &[&lhs]).unwrap_err();
+    let message = too_few.to_string();
+    assert!(message.contains("2 input term(s)"), "unexpected: {message}");
+    assert!(message.contains("1 operand(s)"), "unexpected: {message}");
+
+    let too_many = einsum_native_subscripts("ij->ij", &[&lhs, &lhs]).unwrap_err();
+    let message = too_many.to_string();
+    assert!(message.contains("1 input term(s)"), "unexpected: {message}");
+    assert!(message.contains("2 operand(s)"), "unexpected: {message}");
+
+    let parse = einsum_native_subscripts("ij,jk", &[&lhs, &lhs]).unwrap_err();
+    assert!(
+        parse.to_string().contains("invalid einsum subscripts"),
+        "unexpected: {parse}"
+    );
+}
+
+#[test]
 fn einsum_native_tensor_reads_accepts_non_contiguous_borrowed_view() {
     reset_concrete_einsum_plan_cache();
     let backing = [1.0_f64, 2.0, 3.0, 4.0];

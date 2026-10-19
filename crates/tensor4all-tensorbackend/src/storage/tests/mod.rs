@@ -34,7 +34,7 @@ fn referenced_strided_entries_ignore_unreferenced_stride_gaps() {
     )
     .unwrap();
 
-    assert_eq!(storage.payload_nonfinite_flags(), (false, false));
+    assert_eq!(storage.payload_nonfinite_flags(), NonfiniteFlags::default());
     assert_eq!(storage.sum::<f64>(), 10.0);
     assert_eq!(storage.max_abs(), 4.0);
     assert_eq!(storage.scalar_at(&[1, 0]).unwrap().real(), 3.0);
@@ -53,7 +53,10 @@ fn referenced_strided_entries_ignore_unreferenced_stride_gaps() {
         vec![0, 1],
     )
     .unwrap();
-    assert_eq!(complex_storage.payload_nonfinite_flags(), (false, false));
+    assert_eq!(
+        complex_storage.payload_nonfinite_flags(),
+        NonfiniteFlags::default()
+    );
     assert_eq!(
         complex_storage.sum::<Complex64>(),
         Complex64::new(10.0, 0.0)
@@ -1137,4 +1140,44 @@ fn test_contract_storage_inner_product() {
         .expect("materialization failed");
     assert_eq!(data.len(), 1);
     assert!((data[0] - 32.0).abs() < 1e-10);
+}
+
+#[test]
+fn payload_nonfinite_flags_names_nan_and_infinity_per_component() {
+    let nan_only =
+        Storage::from_dense_col_major(vec![1.0_f64, f64::NAN], &[2]).expect("valid NaN storage");
+    assert_eq!(
+        nan_only.payload_nonfinite_flags(),
+        NonfiniteFlags {
+            has_nan: true,
+            has_infinity: false,
+        }
+    );
+
+    let infinity_only = Storage::from_dense_col_major(vec![f64::NEG_INFINITY, 2.0], &[2])
+        .expect("valid infinity storage");
+    assert_eq!(
+        infinity_only.payload_nonfinite_flags(),
+        NonfiniteFlags {
+            has_nan: false,
+            has_infinity: true,
+        }
+    );
+
+    // A complex payload counts a non-finite component as a non-finite value.
+    let complex = Storage::from_dense_col_major(
+        vec![
+            Complex64::new(0.0, f64::NAN),
+            Complex64::new(f64::INFINITY, 0.0),
+        ],
+        &[2],
+    )
+    .expect("valid complex storage");
+    assert_eq!(
+        complex.payload_nonfinite_flags(),
+        NonfiniteFlags {
+            has_nan: true,
+            has_infinity: true,
+        }
+    );
 }
