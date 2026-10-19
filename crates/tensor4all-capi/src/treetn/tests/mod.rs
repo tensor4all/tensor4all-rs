@@ -177,6 +177,15 @@ fn relative_policy(threshold: f64) -> t4a_svd_truncation_policy {
     }
 }
 
+fn absolute_squared_tail_policy(threshold: f64) -> t4a_svd_truncation_policy {
+    t4a_svd_truncation_policy {
+        threshold,
+        scale: t4a_threshold_scale::Absolute,
+        measure: t4a_singular_value_measure::SquaredValue,
+        rule: t4a_truncation_rule::DiscardedTailSum,
+    }
+}
+
 fn squared_tail_policy(threshold: f64) -> t4a_svd_truncation_policy {
     t4a_svd_truncation_policy {
         threshold,
@@ -774,16 +783,32 @@ fn test_treetn_split_to_splits_fused_vertex() {
 }
 
 #[test]
-fn build_swap_options_maps_rtol_to_relative_per_value_policy() {
-    let exact = build_swap_options(0, 0.0);
+fn build_swap_options_maps_a_policy_pointer_and_treats_null_as_exact() {
+    let exact = build_swap_options(0, std::ptr::null()).unwrap();
     assert_eq!(exact.max_bond_dim, None);
     assert_eq!(exact.svd_policy, None);
-    assert_eq!(build_swap_options(0, -1.0).svd_policy, None);
-    assert_eq!(build_swap_options(0, f64::NAN).svd_policy, None);
 
-    let truncated = build_swap_options(7, 1e-9);
+    let explicit = relative_policy(1e-9);
+    let truncated = build_swap_options(7, &explicit).unwrap();
     assert_eq!(truncated.max_bond_dim, Some(7));
+    assert_eq!(
+        truncated.svd_policy,
+        Some(SvdTruncationPolicy::from(explicit))
+    );
     assert_eq!(truncated.svd_policy, Some(SvdTruncationPolicy::new(1e-9)));
+}
+
+#[test]
+fn build_swap_options_rejects_invalid_thresholds() {
+    for threshold in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0e-3] {
+        let invalid = relative_policy(threshold);
+        let (code, message) = build_swap_options(0, &invalid).unwrap_err();
+        assert_eq!(code, T4A_INVALID_ARGUMENT, "threshold {threshold}");
+        assert!(
+            message.contains("threshold"),
+            "unexpected message for {threshold}: {message}"
+        );
+    }
 }
 
 #[test]
@@ -802,7 +827,7 @@ fn test_treetn_swap_site_indices_returns_reordered_copy() {
             assignment.target_vertices.as_ptr(),
             assignment.site_indices.len(),
             0,
-            0.0,
+            std::ptr::null(),
             &mut swapped,
         ),
         T4A_SUCCESS
@@ -823,6 +848,112 @@ fn test_treetn_swap_site_indices_returns_reordered_copy() {
 }
 
 #[test]
+fn test_treetn_swap_site_indices_applies_an_explicit_truncation_policy() {
+    // A relative per-value policy is what the removed `rtol` argument meant.
+    let (tt, tensors, indices) = make_two_site_treetn();
+    let assignment = flat_assignment(&[
+        (indices[0] as *const t4a_index, 1),
+        (indices[3] as *const t4a_index, 0),
+    ]);
+    let eval_indices = [
+        indices[0] as *const t4a_index,
+        indices[3] as *const t4a_index,
+    ];
+    let dense_expected = evaluate_real_on_full_grid(tt, &eval_indices);
+
+    let mut exact = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_swap_site_indices(
+            tt,
+            assignment.site_indices.as_ptr(),
+            assignment.target_vertices.as_ptr(),
+            assignment.site_indices.len(),
+            0,
+            std::ptr::null(),
+            &mut exact,
+        ),
+        T4A_SUCCESS
+    );
+    let dense_exact = evaluate_real_on_full_grid(exact, &eval_indices);
+    assert_vec_close(&dense_exact, &dense_expected, 1e-10);
+
+    // A threshold below the second Schmidt ratio keeps the swap exact...
+    let small = relative_policy(1e-9);
+    let mut nearly_exact = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_swap_site_indices(
+            tt,
+            assignment.site_indices.as_ptr(),
+            assignment.target_vertices.as_ptr(),
+            assignment.site_indices.len(),
+            0,
+            &small,
+            &mut nearly_exact,
+        ),
+        T4A_SUCCESS
+    );
+    assert_vec_close(
+        &evaluate_real_on_full_grid(nearly_exact, &eval_indices),
+        &dense_expected,
+        1e-8,
+    );
+
+    // ...while an absolute, squared, discarded-tail-sum threshold above the
+    // second squared Schmidt weight truncates the transported bond.
+    let coarse = absolute_squared_tail_policy(1.0);
+    let mut truncated = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_swap_site_indices(
+            tt,
+            assignment.site_indices.as_ptr(),
+            assignment.target_vertices.as_ptr(),
+            assignment.site_indices.len(),
+            0,
+            &coarse,
+            &mut truncated,
+        ),
+        T4A_SUCCESS
+    );
+    let dense_truncated = evaluate_real_on_full_grid(truncated, &eval_indices);
+    let max_error = dense_truncated
+        .iter()
+        .zip(&dense_expected)
+        .fold(0.0_f64, |max, (a, e)| max.max((a - e).abs()));
+    assert!(max_error > 1e-3, "policy did not truncate: {max_error}");
+
+    t4a_treetn_release(truncated);
+    t4a_treetn_release(nearly_exact);
+    t4a_treetn_release(exact);
+    cleanup(tt, tensors, indices);
+}
+
+#[test]
+fn test_treetn_swap_site_indices_rejects_invalid_policy_without_work() {
+    // An empty assignment has nothing to swap, so the policy must be validated
+    // before the no-op shortcut.
+    let (tt, tensors, indices) = make_two_site_treetn();
+    let assignment = flat_assignment(&[]);
+    let invalid = relative_policy(f64::NAN);
+    let mut swapped = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_swap_site_indices(
+            tt,
+            assignment.site_indices.as_ptr(),
+            assignment.target_vertices.as_ptr(),
+            0,
+            0,
+            &invalid,
+            &mut swapped,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("threshold"));
+    assert!(swapped.is_null());
+
+    cleanup(tt, tensors, indices);
+}
+
+#[test]
 fn test_treetn_swap_site_indices_rejects_duplicate_assignment() {
     let (tt, tensors, indices) = make_two_site_treetn();
     let assignment = flat_assignment(&[
@@ -838,7 +969,7 @@ fn test_treetn_swap_site_indices_rejects_duplicate_assignment() {
             assignment.target_vertices.as_ptr(),
             assignment.site_indices.len(),
             0,
-            0.0,
+            std::ptr::null(),
             &mut swapped,
         ),
         T4A_INVALID_ARGUMENT
@@ -879,7 +1010,7 @@ fn test_treetn_restructure_to_mixed_case() {
             0,
             0,
             0,
-            0.0,
+            std::ptr::null(),
             std::ptr::null(),
             0,
             &mut result,
@@ -901,6 +1032,177 @@ fn test_treetn_restructure_to_mixed_case() {
     assert_eq!(read_site_indices(result, 30).len(), 1);
 
     t4a_treetn_release(result);
+    cleanup(tt, tensors, indices);
+}
+
+/// Two-node chain `|0000> + t|1111>` with two site indices on each node, so a
+/// restructure that regroups the site indices needs a real swap phase.
+fn make_two_node_groups_ghz(t: f64) -> OwnedTreeTN {
+    let sites: Vec<*mut t4a_index> = (0..4).map(|_| new_index(2)).collect();
+    let bond = new_index(2);
+    let mut bond_clone = std::ptr::null_mut();
+    assert_eq!(
+        crate::index::t4a_index_clone(bond, &mut bond_clone),
+        T4A_SUCCESS
+    );
+    // node0(s0, s1, bond) = delta(s0, bond) * delta(s1, bond)
+    let mut node0_values = vec![0.0_f64; 8];
+    node0_values[0] = 1.0;
+    node0_values[7] = 1.0;
+    let node0 = new_tensor(
+        &[
+            sites[0] as *const t4a_index,
+            sites[1] as *const t4a_index,
+            bond as *const t4a_index,
+        ],
+        &node0_values,
+    );
+    // node1(bond, s2, s3) = delta(bond, s2) * delta(bond, s3) * t^bond
+    let mut node1_values = vec![0.0_f64; 8];
+    node1_values[0] = 1.0;
+    node1_values[7] = t;
+    let node1 = new_tensor(
+        &[
+            bond_clone as *const t4a_index,
+            sites[2] as *const t4a_index,
+            sites[3] as *const t4a_index,
+        ],
+        &node1_values,
+    );
+    let tt = new_treetn(&[node0 as *const t4a_tensor, node1 as *const t4a_tensor]);
+    let mut indices = sites;
+    indices.extend([bond, bond_clone]);
+    (tt, vec![node0, node1], indices)
+}
+
+#[test]
+fn test_treetn_restructure_to_swap_only_applies_the_swap_policy() {
+    let (tt, tensors, indices) = make_two_node_groups_ghz(0.3);
+    let sites = &indices[..4];
+    // Regroup the site indices so each current node contributes to both target
+    // vertices: the plan is a swap phase, not a split or a plain rename.
+    let target = flat_target_network(
+        &[10, 20],
+        &[
+            &[sites[0] as *const t4a_index, sites[2] as *const t4a_index],
+            &[sites[1] as *const t4a_index, sites[3] as *const t4a_index],
+        ],
+        &[(10, 20)],
+    );
+    let eval_indices: Vec<*const t4a_index> =
+        sites.iter().map(|&i| i as *const t4a_index).collect();
+    let dense_expected = evaluate_real_on_full_grid(tt, &eval_indices);
+
+    let mut exact = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_restructure_to(
+            tt,
+            target.vertices.as_ptr(),
+            target.vertices.len(),
+            target.site_indices.as_ptr(),
+            target.siteind_lens.as_ptr(),
+            target.edge_sources.as_ptr(),
+            target.edge_targets.as_ptr(),
+            target.edge_sources.len(),
+            std::ptr::null(),
+            0,
+            0,
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            &mut exact,
+        ),
+        T4A_SUCCESS
+    );
+    assert_vec_close(
+        &evaluate_real_on_full_grid(exact, &eval_indices),
+        &dense_expected,
+        1e-10,
+    );
+    assert_eq!(read_site_indices(exact, 10).len(), 2);
+    assert_eq!(read_site_indices(exact, 20).len(), 2);
+
+    // An absolute, squared, discarded-tail-sum policy replaces the removed
+    // `swap_rtol` argument: it is above the smaller squared Schmidt weight
+    // 0.3^2 but below the leading one, so the transported bond is truncated.
+    let swap_policy = absolute_squared_tail_policy(0.5);
+    let mut truncated = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_restructure_to(
+            tt,
+            target.vertices.as_ptr(),
+            target.vertices.len(),
+            target.site_indices.as_ptr(),
+            target.siteind_lens.as_ptr(),
+            target.edge_sources.as_ptr(),
+            target.edge_targets.as_ptr(),
+            target.edge_sources.len(),
+            std::ptr::null(),
+            0,
+            0,
+            0,
+            &swap_policy,
+            std::ptr::null(),
+            0,
+            &mut truncated,
+        ),
+        T4A_SUCCESS
+    );
+    let dense_truncated = evaluate_real_on_full_grid(truncated, &eval_indices);
+    let max_error = dense_truncated
+        .iter()
+        .zip(&dense_expected)
+        .fold(0.0_f64, |max, (a, e)| max.max((a - e).abs()));
+    assert!(
+        max_error > 1e-3,
+        "swap policy did not truncate: {max_error}"
+    );
+
+    t4a_treetn_release(truncated);
+    t4a_treetn_release(exact);
+    cleanup(tt, tensors, indices);
+}
+
+#[test]
+fn test_treetn_restructure_to_rejects_invalid_swap_policy_without_swap() {
+    // A fuse-only target has no swap phase, so the swap policy must be
+    // validated before the plan is executed.
+    let (tt, tensors, indices) = make_two_site_treetn();
+    let target = flat_target_network(
+        &[10],
+        &[&[
+            indices[0] as *const t4a_index,
+            indices[3] as *const t4a_index,
+        ]],
+        &[],
+    );
+    let invalid = relative_policy(f64::NAN);
+    let mut result = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_restructure_to(
+            tt,
+            target.vertices.as_ptr(),
+            target.vertices.len(),
+            target.site_indices.as_ptr(),
+            target.siteind_lens.as_ptr(),
+            target.edge_sources.as_ptr(),
+            target.edge_targets.as_ptr(),
+            target.edge_sources.len(),
+            std::ptr::null(),
+            0,
+            0,
+            0,
+            &invalid,
+            std::ptr::null(),
+            0,
+            &mut result,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("threshold"));
+    assert!(result.is_null());
+
     cleanup(tt, tensors, indices);
 }
 

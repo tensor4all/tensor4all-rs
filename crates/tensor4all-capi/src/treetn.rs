@@ -12,7 +12,9 @@ use crate::{
 };
 use num_complex::Complex64;
 use std::collections::{HashMap, HashSet};
-use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike, SvdTruncationPolicy};
+use tensor4all_core::{
+    validate_svd_truncation_options, AnyScalar, ColMajorArrayRef, IndexLike, SvdTruncationPolicy,
+};
 use tensor4all_treetn::contraction::{self, ContractionMethod, ContractionOptions};
 use tensor4all_treetn::{
     apply_linear_operator, partial_contract, square_linsolve, ApplyOptions, CachedEvaluatorOptions,
@@ -446,11 +448,26 @@ fn build_split_options(
     options
 }
 
-fn build_swap_options(maxdim: usize, rtol: f64) -> SwapOptions {
-    SwapOptions {
+/// Build the swap options, rejecting an invalid explicit policy up front.
+///
+/// The policy is validated before dispatch so a swap that has nothing to move
+/// (an empty assignment, or a restructure plan without a swap phase) still
+/// reports an invalid threshold instead of silently ignoring it.
+fn build_swap_options(
+    maxdim: usize,
+    policy: *const t4a_svd_truncation_policy,
+) -> CapiResult<SwapOptions> {
+    let policy = resolve_svd_policy(policy);
+    validate_svd_truncation_options(None, policy)
+        .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+    let mut options = SwapOptions {
         max_bond_dim: (maxdim > 0).then_some(maxdim),
-        svd_policy: (rtol > 0.0).then(|| SvdTruncationPolicy::new(rtol)),
+        svd_policy: None,
+    };
+    if let Some(policy) = policy {
+        options = options.with_svd_policy(policy);
     }
+    Ok(options)
 }
 
 fn build_final_truncation(
@@ -1236,14 +1253,16 @@ pub extern "C" fn t4a_treetn_split_to(
 
 /// Reassign site indices to target vertices using scheduled swap transport.
 ///
-/// `rtol` is the only singular-value threshold this C entry exposes: a positive
-/// value selects a relative, per-singular-value threshold; zero, negative, or
-/// NaN `rtol` disables threshold-based truncation. A positive `maxdim` still
-/// caps the bond rank, so a swap is exact only with `maxdim = 0` and a
-/// nonpositive `rtol`. The absolute scale,
-/// squared-value measure, and discarded-tail-sum rule of
-/// [`SvdTruncationPolicy`] are not reachable through the C ABI; use the Rust
-/// API when those settings are required.
+/// `policy` selects the singular-value truncation applied at every swap
+/// factorization: `NULL` means no threshold truncation, so the swap is exact
+/// apart from a positive `maxdim` cap. A `maxdim = 0` and a `NULL` policy
+/// therefore perform an exact swap. A non-`NULL` policy is interpreted as
+/// documented for [`SvdTruncationPolicy`]; the previous `rtol` argument is
+/// equivalent to `threshold = rtol`, relative scale, singular-value measure,
+/// and the per-value rule.
+///
+/// `NULL` is swap-specific: the tensor and TreeTN SVD entries treat a `NULL`
+/// policy as the global default policy instead.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_swap_site_indices(
     treetn: *const t4a_treetn,
@@ -1251,7 +1270,7 @@ pub extern "C" fn t4a_treetn_swap_site_indices(
     assignment_target_vertices: *const libc::size_t,
     n_assignments: libc::size_t,
     maxdim: libc::size_t,
-    rtol: libc::c_double,
+    policy: *const t4a_svd_truncation_policy,
     out: *mut *mut t4a_treetn,
 ) -> t4a_status_code {
     run_catching(out, || {
@@ -1262,7 +1281,7 @@ pub extern "C" fn t4a_treetn_swap_site_indices(
             n_assignments,
             "target_assignment",
         )?;
-        let options = build_swap_options(maxdim, rtol);
+        let options = build_swap_options(maxdim, policy)?;
         let mut result = tn.inner().clone();
         result
             .swap_site_indices(&target_assignment, &options)
@@ -1273,9 +1292,10 @@ pub extern "C" fn t4a_treetn_swap_site_indices(
 
 /// Restructure a TreeTN using split, swap, and optional final truncation phases.
 ///
-/// `swap_rtol` uses the same relative, per-singular-value swap policy as
-/// [`t4a_treetn_swap_site_indices`]; other [`SvdTruncationPolicy`] settings are
-/// not reachable through this C ABI.
+/// `swap_policy` is the swap policy of [`t4a_treetn_swap_site_indices`],
+/// including its swap-specific `NULL` meaning: no threshold truncation. The
+/// tensor and TreeTN SVD entries instead treat `NULL` as the global default
+/// policy.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_restructure_to(
     treetn: *const t4a_treetn,
@@ -1290,7 +1310,7 @@ pub extern "C" fn t4a_treetn_restructure_to(
     split_maxdim: libc::size_t,
     split_final_sweep: libc::c_int,
     swap_maxdim: libc::size_t,
-    swap_rtol: libc::c_double,
+    swap_policy: *const t4a_svd_truncation_policy,
     final_policy: *const t4a_svd_truncation_policy,
     final_maxdim: libc::size_t,
     out: *mut *mut t4a_treetn,
@@ -1313,7 +1333,7 @@ pub extern "C" fn t4a_treetn_restructure_to(
                 split_maxdim,
                 split_final_sweep,
             ))
-            .with_swap(build_swap_options(swap_maxdim, swap_rtol));
+            .with_swap(build_swap_options(swap_maxdim, swap_policy)?);
         if let Some(final_truncation) = build_final_truncation(final_policy, final_maxdim) {
             options = options.with_final_truncation(final_truncation);
         }

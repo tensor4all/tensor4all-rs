@@ -1261,9 +1261,10 @@ void t4a_treetn_release(struct t4a_treetn *obj);
 /**
  * Restructure a TreeTN using split, swap, and optional final truncation phases.
  *
- * `swap_rtol` uses the same relative, per-singular-value swap policy as
- * [`t4a_treetn_swap_site_indices`]; other [`SvdTruncationPolicy`] settings are
- * not reachable through this C ABI.
+ * `swap_policy` is the swap policy of [`t4a_treetn_swap_site_indices`],
+ * including its swap-specific `NULL` meaning: no threshold truncation. The
+ * tensor and TreeTN SVD entries instead treat `NULL` as the global default
+ * policy.
  */
 enum t4a_status_code t4a_treetn_restructure_to(const struct t4a_treetn *treetn,
                                                const size_t *target_vertices,
@@ -1277,7 +1278,7 @@ enum t4a_status_code t4a_treetn_restructure_to(const struct t4a_treetn *treetn,
                                                size_t split_maxdim,
                                                int split_final_sweep,
                                                size_t swap_maxdim,
-                                               double swap_rtol,
+                                               const struct t4a_svd_truncation_policy *swap_policy,
                                                const struct t4a_svd_truncation_policy *final_policy,
                                                size_t final_maxdim,
                                                struct t4a_treetn **out);
@@ -1325,21 +1326,23 @@ enum t4a_status_code t4a_treetn_split_to(const struct t4a_treetn *treetn,
 /**
  * Reassign site indices to target vertices using scheduled swap transport.
  *
- * `rtol` is the only singular-value threshold this C entry exposes: a positive
- * value selects a relative, per-singular-value threshold; zero, negative, or
- * NaN `rtol` disables threshold-based truncation. A positive `maxdim` still
- * caps the bond rank, so a swap is exact only with `maxdim = 0` and a
- * nonpositive `rtol`. The absolute scale,
- * squared-value measure, and discarded-tail-sum rule of
- * [`SvdTruncationPolicy`] are not reachable through the C ABI; use the Rust
- * API when those settings are required.
+ * `policy` selects the singular-value truncation applied at every swap
+ * factorization: `NULL` means no threshold truncation, so the swap is exact
+ * apart from a positive `maxdim` cap. A `maxdim = 0` and a `NULL` policy
+ * therefore perform an exact swap. A non-`NULL` policy is interpreted as
+ * documented for [`SvdTruncationPolicy`]; the previous `rtol` argument is
+ * equivalent to `threshold = rtol`, relative scale, singular-value measure,
+ * and the per-value rule.
+ *
+ * `NULL` is swap-specific: the tensor and TreeTN SVD entries treat a `NULL`
+ * policy as the global default policy instead.
  */
 enum t4a_status_code t4a_treetn_swap_site_indices(const struct t4a_treetn *treetn,
                                                   const struct t4a_index *const *assignment_site_indices,
                                                   const size_t *assignment_target_vertices,
                                                   size_t n_assignments,
                                                   size_t maxdim,
-                                                  double rtol,
+                                                  const struct t4a_svd_truncation_policy *policy,
                                                   struct t4a_treetn **out);
 
 /**
