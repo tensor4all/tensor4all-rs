@@ -293,7 +293,7 @@ where
     /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
     /// use tensor4all_treetn::{CanonicalizationOptions, TreeTN};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let left = DynIndex::new_dyn(2);
     /// let bond = DynIndex::new_dyn(2);

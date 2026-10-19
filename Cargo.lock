@@ -535,7 +535,6 @@ dependencies = [
  "rand 0.9.5",
  "rand_chacha 0.9.0",
  "tempfile",
- "tenferro-cpu",
  "tensor4all-core",
  "tensor4all-hdf5",
  "tensor4all-interpolativeqtt",

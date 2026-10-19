@@ -198,7 +198,7 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
     /// ```
     /// use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
     /// use tensor4all_tensorbackend::CpuExecutionContext;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let a = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     /// let b = SimpleTensorTrain::<f64>::constant(&[2, 3], 2.0);

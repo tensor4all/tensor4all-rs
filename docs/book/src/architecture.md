@@ -162,7 +162,7 @@ requirements onto unrelated generic code.
 
 | Crate | Description |
 |-------|-------------|
-| **tensorbackend** | Public low-level infrastructure: the dense `Matrix` container, the `CpuExecutionContext` execution context (built from a caller-configured `tenferro_cpu::CpuBackend`), compact `f64`/`Complex64` storage, and tenferro-backed primitives. Most users reach it through the higher-level crates; depend on it directly when you need these building blocks. Not every `pub` item is a stability promise. |
+| **tensorbackend** | Public low-level infrastructure: the dense `Matrix` container, the `CpuExecutionContext` execution context (built from a caller-configured `CpuBackend`, re-exported here), compact `f64`/`Complex64`/`f32`/`Complex32` storage, and tenferro-backed primitives. Most users reach it through the higher-level crates; depend on it directly when you need these building blocks. Not every `pub` item is a stability promise. |
 | **core** | Foundation for everything else. Owns the shared abstractions (`Index` system, dynamic-rank `Tensor`, contraction, SVD/QR/LU factorizations) and the matrix-CI substrate (rrLU/LUCI, `CachedFunction`, `MultiIndex`). |
 
 ### Network stack

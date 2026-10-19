@@ -1510,7 +1510,7 @@ where
     /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor, TensorConstructionLike};
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tensor4all_treetn::TreeTN;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = ExecutionContext::Cpu(Arc::new(
     ///     CpuExecutionContext::from_backend(CpuBackend::new()),

@@ -71,7 +71,7 @@ use crate::{
 ///     EvalContext, InterpolationProblem, InterpolationTermination, Parallelism, TreeInterpolator,
 /// };
 /// use tensor4all_treetn::NodeNameNetwork;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// // Node "x" carries two sites (fused into one vertex), node "y" one site.
 /// let (x0, x1, y) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2), DynIndex::new_dyn(3));
@@ -253,7 +253,7 @@ where
     ///     CpuExecutionContext,
     /// };
     /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let failing = |_: ColMajorArrayRef<'_, usize>, _: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///     anyhow::bail!("out of domain")

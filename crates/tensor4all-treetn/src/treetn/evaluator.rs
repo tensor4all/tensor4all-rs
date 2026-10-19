@@ -378,7 +378,7 @@ where
     /// use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
     /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
     /// use tensor4all_treetn::{TreeTN, TreeTNEvaluator};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let s = DynIndex::new_dyn(2);
     /// let tensor = IdxTensor::from_dense(vec![s.clone()], vec![4.0_f64, 9.0])?;

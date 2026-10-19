@@ -601,7 +601,7 @@ where
 /// ```
 /// use tensor4all_core::{matrix_luci_factors_from_matrix_owned_in, RrLUOptions};
 /// use tensor4all_tensorbackend::{from_vec2d, mat_mul, CpuExecutionContext};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::new());
 /// // Rank-1 matrix [1 2; 2 4].
@@ -657,7 +657,7 @@ where
 /// ```
 /// use tensor4all_core::{matrix_luci_factors_from_matrix_owned_on_session, RrLUOptions};
 /// use tensor4all_tensorbackend::{from_vec2d, mat_mul, CpuExecutionContext};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::new());
 /// let a = from_vec2d(vec![vec![1.0_f64, 2.0], vec![2.0, 4.0]]);

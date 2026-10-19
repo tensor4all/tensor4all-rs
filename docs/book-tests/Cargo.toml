@@ -16,7 +16,6 @@ tensor4all-simplett = { path = "../../crates/tensor4all-simplett" }
 tensor4all-tensorci = { path = "../../crates/tensor4all-tensorci" }
 tensor4all-treetn = { path = "../../crates/tensor4all-treetn" }
 tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend" }
-tenferro-cpu = { workspace = true }
 tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform" }
 tensor4all-quanticstci = { path = "../../crates/tensor4all-quanticstci" }
 tensor4all-interpolativeqtt = { path = "../../crates/tensor4all-interpolativeqtt" }

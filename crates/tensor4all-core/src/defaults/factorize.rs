@@ -465,7 +465,7 @@ pub fn factorize_full_rank(
 ///     factorize_in, Canonical, FactorizeAlg,
 /// };
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = ExecutionContext::Cpu(Arc::new(
 ///     CpuExecutionContext::from_backend(CpuBackend::new()),
@@ -695,7 +695,7 @@ fn global_svd_factor_contraction(
 ///     factorize_on_session, DynIndex, FactorizeOptions, IdxTensor, TensorContractionLike,
 /// };
 /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(2);
@@ -789,7 +789,7 @@ pub fn factorize_on_session(
 ///     TensorContractionLike,
 /// };
 /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(2);

@@ -35,7 +35,7 @@
 //! ```
 //! use tensor4all_tensorbackend::{CpuExecutionContext, explicit::Session};
 //! use tenferro::Tensor;
-//! use tenferro_cpu::CpuBackend;
+//! use tensor4all_tensorbackend::CpuBackend;
 //!
 //! let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 //! let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -72,7 +72,7 @@ use crate::einsum_ids::{
 /// ```
 /// use tensor4all_tensorbackend::CpuExecutionContext;
 /// use tenferro::Tensor;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -143,7 +143,7 @@ pub enum ConversionError {
 /// use tensor4all_tensorbackend::{explicit, CpuExecutionContext};
 /// use tenferro::Tensor;
 /// use tenferro_ad::EagerTensor;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let plain = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
@@ -175,7 +175,7 @@ pub fn detach(eager: &tenferro_ad::EagerTensor) -> Result<NativeTensor, Conversi
 /// ```
 /// use tensor4all_tensorbackend::{explicit, CpuExecutionContext};
 /// use tenferro::Tensor;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let plain = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
@@ -271,7 +271,7 @@ impl PhaseLane<'_, '_> {
 /// ```
 /// use tensor4all_tensorbackend::{explicit::HeldSession, CpuExecutionContext};
 /// use tenferro::Tensor;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
@@ -360,7 +360,7 @@ impl<'backend> HeldSession<'backend> {
     /// ```
     /// use tensor4all_tensorbackend::{explicit::HeldSession, CpuExecutionContext};
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(2)?);
     /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
@@ -424,7 +424,7 @@ impl<'backend> HeldSession<'backend> {
 /// ```
 /// use tensor4all_tensorbackend::{explicit::PreparedEinsum, CpuExecutionContext};
 /// use tenferro::Tensor;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use tenferro_tensor::{TensorRead, TensorWrite};
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
@@ -587,7 +587,7 @@ impl<'session> Session<'session> {
     /// use std::sync::Mutex;
     /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(2)?);
     /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
@@ -638,7 +638,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -667,7 +667,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -706,7 +706,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -765,7 +765,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -832,7 +832,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -865,7 +865,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     /// use num_complex::Complex64;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
@@ -902,7 +902,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     /// use tenferro_tensor::TensorRead;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
@@ -960,7 +960,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     /// use tenferro_tensor::TensorWrite;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
@@ -1013,7 +1013,7 @@ impl<'session> Session<'session> {
     ///
     /// ```
     /// use tensor4all_tensorbackend::{CpuExecutionContext, Matrix};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 0.0, 0.0, 4.0]);
@@ -1051,7 +1051,7 @@ impl<'session> Session<'session> {
     ///
     /// ```
     /// use tensor4all_tensorbackend::{CpuExecutionContext, Matrix};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 1.0, 0.0, 4.0]);
@@ -1103,7 +1103,7 @@ impl<'session> Session<'session> {
     ///
     /// ```
     /// use tensor4all_tensorbackend::{CpuExecutionContext, Matrix};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Matrix::from_col_major_vec(2, 2, vec![0.0_f64, 1.0, 2.0, 3.0]);
@@ -1138,7 +1138,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::TypedTensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])?;
@@ -1189,7 +1189,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::TypedTensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 2.0])?;
@@ -1241,7 +1241,7 @@ impl<'session> Session<'session> {
     ///
     /// ```
     /// use tensor4all_tensorbackend::{CpuExecutionContext, Matrix};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 2.0, 3.0, 4.0]);
@@ -1275,7 +1275,7 @@ impl<'session> Session<'session> {
     ///
     /// ```
     /// use tensor4all_tensorbackend::{CpuExecutionContext, GroupedGemmJob, GroupedGemmOptions};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
@@ -1317,7 +1317,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -1351,7 +1351,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 2.0])?;
@@ -1382,7 +1382,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
@@ -1418,7 +1418,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// // Lower triangular, column-major.
@@ -1463,7 +1463,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -1507,7 +1507,7 @@ impl CpuExecutionContext {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;

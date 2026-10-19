@@ -206,7 +206,7 @@ where
 /// use tensor4all_core::{DynIndex, FactorizeOptions, IdxTensor};
 /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
 /// use tensor4all_treetn::{factorize_tensor_to_treetn_with_on_session, TreeTopology};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let left = DynIndex::new_dyn(2);
 /// let right = DynIndex::new_dyn(2);

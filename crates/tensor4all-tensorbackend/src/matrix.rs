@@ -620,7 +620,7 @@ pub(crate) fn grouped_mat_mul_shared_in_session<T: MatrixScalar + TensorScalar>(
 ///
 /// ```
 /// use tensor4all_tensorbackend::{grouped_mat_mul_shared_in, GroupedGemmJob, GroupedGemmOptions};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use tenferro_tensor::BackendSessionHost;
 ///
 /// let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];

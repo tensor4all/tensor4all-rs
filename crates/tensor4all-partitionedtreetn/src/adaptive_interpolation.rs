@@ -276,7 +276,7 @@
 //! use tensor4all_treetci::TreeTciInterpolator;
 //! use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 //! use tensor4all_treetn::NodeNameNetwork;
-//! use tenferro_cpu::CpuBackend;
+//! use tensor4all_tensorbackend::CpuBackend;
 //!
 //! let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
 //! let mut topology = NodeNameNetwork::new();
@@ -400,7 +400,7 @@ pub use report::{
 ///     CpuExecutionContext,
 /// };
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -655,7 +655,7 @@ impl From<PartitionedTreeTNError> for PatchedInterpolationError {
 ///     CpuExecutionContext,
 /// };
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{

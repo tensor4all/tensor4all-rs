@@ -190,7 +190,7 @@ where
 /// ```
 /// use tensor4all_treetci::{crossinterpolate2_in, DefaultProposer, TreeTciGraph, TreeTciOptions};
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let result = crossinterpolate2_in::<f64, _, _>(
@@ -266,7 +266,7 @@ where
 /// use rand_chacha::ChaCha8Rng;
 /// use tensor4all_treetci::{crossinterpolate2_with_rng_in, DefaultProposer, TreeTciGraph, TreeTciOptions};
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let mut rng = ChaCha8Rng::seed_from_u64(0);

@@ -159,7 +159,7 @@ measures every accepted and zero patch itself.
 # use tensor4all_treetci::TreeTciInterpolator;
 # use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 # use tensor4all_treetn::NodeNameNetwork;
-# use tenferro_cpu::CpuBackend;
+# use tensor4all_tensorbackend::CpuBackend;
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 // A junction "c" of degree three without a site, and three leaves.
 let (x, y, z) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3), DynIndex::new_dyn(3));
@@ -292,7 +292,7 @@ capped acceptance exhaustively measured.
 # use tensor4all_treetci::TreeTciInterpolator;
 # use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 # use tensor4all_treetn::NodeNameNetwork;
-# use tenferro_cpu::CpuBackend;
+# use tensor4all_tensorbackend::CpuBackend;
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 // f(x, y) = 1 + [x == y] on two sites of dimension 3 has rank three, which
 // a cap of two cannot represent. A minimum of two bits retains the root.

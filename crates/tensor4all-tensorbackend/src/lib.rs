@@ -109,6 +109,23 @@ pub use tenferro_bridge::{
     storage_to_native_tensor, sum_native_tensor, svd_native_tensor, tangent_native_tensor,
     BridgeError, NativeTensorReadInput,
 };
+/// The tenferro CPU backend handle that explicit execution contexts and held sessions are built from.
+///
+/// Re-exported so applications build a [`CpuExecutionContext`] or an
+/// [`explicit::HeldSession`] without a direct tenferro dependency; dense tensor and
+/// linear-algebra work stays routed through this crate.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// assert_eq!(context.with_backend(|backend| backend.num_threads()), 1);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[cfg(feature = "explicit-context")]
+pub use tenferro_cpu::CpuBackend;
 #[cfg(feature = "global-defaults")]
 pub use tensor_element::TensorElement;
 

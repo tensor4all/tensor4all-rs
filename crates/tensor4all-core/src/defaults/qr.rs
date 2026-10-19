@@ -353,7 +353,7 @@ pub fn qr_with<T>(
 /// use tensor4all_core::qr::{QrOptions, qr_with_in};
 /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor, TensorContractionLike};
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = ExecutionContext::Cpu(Arc::new(
 ///     CpuExecutionContext::from_backend(CpuBackend::new()),
@@ -497,7 +497,7 @@ fn options_rtol_is_valid(rtol: f64) -> bool {
 /// use tensor4all_core::{qr::QrOptions, DynIndex, IdxTensor};
 /// use tensor4all_core::qr_with_on_session;
 /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let i = DynIndex::new_dyn(4);
 /// let j = DynIndex::new_dyn(3);

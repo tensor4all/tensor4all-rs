@@ -205,7 +205,7 @@ struct GraphState {
 ///
 /// ```
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let threads = context.with_backend(|backend| backend.num_threads());
@@ -424,7 +424,7 @@ impl CpuExecutionContext {
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::program::{CoreSemanticOp, ProgramInputSpec};
     /// use tenferro::{DType, Tensor, TraceContext};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
@@ -466,7 +466,7 @@ impl CpuExecutionContext {
     ///
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);

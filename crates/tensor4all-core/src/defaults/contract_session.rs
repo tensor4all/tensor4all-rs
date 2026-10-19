@@ -43,7 +43,7 @@ const OP: &str = "contract_pair_on_session";
 /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
 /// use tensor4all_core::{contract_pair_on_session, IdxTensor, PairwiseContractionOptions};
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let i = Index::new_dyn(2);
@@ -137,7 +137,7 @@ pub fn contract_pair_on_session(
 /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
 /// use tensor4all_core::{inner_product_on_session, IdxTensor};
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let i = Index::new_dyn(2);
@@ -325,7 +325,7 @@ const SUM_OP: &str = "sum_on_session";
 /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
 /// use tensor4all_core::{sum_on_session, IdxTensor};
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let i = Index::new_dyn(2);
@@ -406,7 +406,7 @@ pub fn sum_on_session(
 /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
 /// use tensor4all_core::{permute_on_session, IdxTensor};
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let i = Index::new_dyn(2);
@@ -484,7 +484,7 @@ pub fn permute_on_session(
 /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
 /// use tensor4all_core::{permute_indices_on_session, IdxTensor};
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let i = Index::new_dyn(2);
@@ -572,7 +572,7 @@ pub fn permute_indices_on_session(
 /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
 /// use tensor4all_core::{norm_squared_on_session, IdxTensor};
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let i = Index::new_dyn(2);
@@ -664,7 +664,7 @@ pub fn norm_squared_on_session(
 /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
 /// use tensor4all_core::{norm_on_session, IdxTensor};
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let i = Index::new_dyn(2);
@@ -722,7 +722,7 @@ fn compact_on_session(
 /// ```
 /// use tensor4all_core::{contract_with_options_on_session, ContractionOptions, DynIndex, IdxTensor};
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let i = DynIndex::new_dyn(2);
@@ -800,7 +800,7 @@ pub fn contract_with_options_on_session(
 /// ```
 /// use tensor4all_core::{select_indices_on_session, DynIndex, IdxTensor};
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let i = DynIndex::new_dyn(2);
@@ -844,7 +844,7 @@ pub fn select_indices_on_session(
 /// ```
 /// use tensor4all_core::{stack_along_new_index_on_session, DynIndex, IdxTensor};
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let i = DynIndex::new_dyn(2);
@@ -889,7 +889,7 @@ pub fn stack_along_new_index_on_session(
 /// ```
 /// use tensor4all_core::{index_select_on_session, DynIndex, IdxTensor};
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let source = DynIndex::new_dyn(3);

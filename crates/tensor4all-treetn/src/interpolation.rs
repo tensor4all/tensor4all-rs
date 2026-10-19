@@ -128,7 +128,7 @@ pub enum Parallelism<'a> {
 /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 /// use tenferro::Tensor;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
@@ -873,7 +873,7 @@ pub enum InterpolationError {
 ///     InterpolationTermination, Parallelism, TreeInterpolator,
 /// };
 /// use tensor4all_treetn::{NodeNameNetwork, TreeTN};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// struct DenseSingleNode;
 ///

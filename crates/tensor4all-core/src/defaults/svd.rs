@@ -513,7 +513,7 @@ pub fn svd_with<T>(
 /// use tensor4all_core::svd::{SvdOptions, svd_with_in};
 /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor, SvdTruncationPolicy};
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = ExecutionContext::Cpu(Arc::new(
 ///     CpuExecutionContext::from_backend(CpuBackend::new()),

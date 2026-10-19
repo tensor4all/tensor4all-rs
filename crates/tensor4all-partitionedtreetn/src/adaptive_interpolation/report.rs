@@ -97,7 +97,7 @@ pub enum MeasurementMethod {
 ///     CpuExecutionContext,
 /// };
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -175,7 +175,7 @@ impl L2Measurement {
     ///     CpuExecutionContext,
     /// };
     /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -253,7 +253,7 @@ impl L2Measurement {
 ///     CpuExecutionContext,
 /// };
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -316,7 +316,7 @@ pub enum PatchStatus {
 ///     CpuExecutionContext,
 /// };
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -413,7 +413,7 @@ pub struct PatchRecord {
 ///     CpuExecutionContext,
 /// };
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -545,7 +545,7 @@ pub enum MaxReferenceSource {
 ///     CpuExecutionContext,
 /// };
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -692,7 +692,7 @@ pub enum GlobalL2Error {
 ///     CpuExecutionContext,
 /// };
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -810,7 +810,7 @@ impl GlobalL2Error {
     ///     CpuExecutionContext,
     /// };
     /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -891,7 +891,7 @@ impl GlobalL2Error {
 ///     CpuExecutionContext,
 /// };
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -975,7 +975,7 @@ impl L2ErrorReport {
     ///     CpuExecutionContext,
     /// };
     /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1044,7 +1044,7 @@ impl L2ErrorReport {
     ///     CpuExecutionContext,
     /// };
     /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1103,7 +1103,7 @@ impl L2ErrorReport {
 ///     CpuExecutionContext,
 /// };
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1190,7 +1190,7 @@ impl NormReport {
     ///     CpuExecutionContext,
     /// };
     /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1259,7 +1259,7 @@ impl NormReport {
     ///     CpuExecutionContext,
     /// };
     /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1327,7 +1327,7 @@ impl NormReport {
     ///     CpuExecutionContext,
     /// };
     /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1405,7 +1405,7 @@ impl NormReport {
 ///     CpuExecutionContext,
 /// };
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1510,7 +1510,7 @@ impl PatchedInterpolationReport {
     ///     CpuExecutionContext,
     /// };
     /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1578,7 +1578,7 @@ impl PatchedInterpolationReport {
 ///     CpuExecutionContext,
 /// };
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{

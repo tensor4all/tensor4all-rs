@@ -8232,7 +8232,7 @@ impl IdxTensor {
     /// use std::sync::Arc;
     /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
     /// use tensor4all_tensorbackend::CpuExecutionContext;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = ExecutionContext::Cpu(Arc::new(
     ///     CpuExecutionContext::from_backend(CpuBackend::new()),
@@ -8313,7 +8313,7 @@ impl IdxTensor {
     /// use std::sync::Arc;
     /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
     /// use tensor4all_tensorbackend::CpuExecutionContext;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = ExecutionContext::Cpu(Arc::new(
     ///     CpuExecutionContext::from_backend(CpuBackend::new()),
@@ -8349,7 +8349,7 @@ impl IdxTensor {
     /// use std::sync::Arc;
     /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
     /// use tensor4all_tensorbackend::CpuExecutionContext;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = ExecutionContext::Cpu(Arc::new(
     ///     CpuExecutionContext::from_backend(CpuBackend::new()),
@@ -8430,7 +8430,7 @@ impl IdxTensor {
     /// use std::sync::Arc;
     /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
     /// use tensor4all_tensorbackend::CpuExecutionContext;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = ExecutionContext::Cpu(Arc::new(
     ///     CpuExecutionContext::from_backend(CpuBackend::new()),
@@ -8502,7 +8502,7 @@ impl IdxTensor {
     /// use std::sync::Arc;
     /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
     /// use tensor4all_tensorbackend::CpuExecutionContext;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = ExecutionContext::Cpu(Arc::new(
     ///     CpuExecutionContext::from_backend(CpuBackend::new()),

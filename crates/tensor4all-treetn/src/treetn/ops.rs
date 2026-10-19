@@ -876,7 +876,7 @@ where
     /// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
     /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
     /// use tensor4all_treetn::TreeTN;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let site = DynIndex::new_dyn(2);
     /// let tensor = IdxTensor::from_dense(vec![site], vec![3.0_f64, 4.0])?;
@@ -977,7 +977,7 @@ where
     /// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
     /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
     /// use tensor4all_treetn::TreeTN;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let site = DynIndex::new_dyn(2);
     /// let tensor = IdxTensor::from_dense(vec![site], vec![3.0_f64, 4.0])?;

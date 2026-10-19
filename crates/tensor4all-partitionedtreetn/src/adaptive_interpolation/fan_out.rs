@@ -180,7 +180,7 @@ where
 /// use tensor4all_treetn::interpolation::EvalContext;
 /// use tensor4all_treetn::NodeNameNetwork;
 /// use hataori_tenferro::TenferroLanes;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
 /// let mut topology = NodeNameNetwork::new();

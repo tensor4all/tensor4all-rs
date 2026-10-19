@@ -1880,7 +1880,7 @@ where
     /// use tensor4all_core::{DynIndex, IdxTensor};
     /// use tensor4all_tensorbackend::{CpuExecutionContext, ExecutionContext};
     /// use tensor4all_treetn::{CanonicalForm, TreeTN};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     /// let site = DynIndex::new_dyn(2);
     /// let context = ExecutionContext::Cpu(Arc::new(
     ///     CpuExecutionContext::from_backend(CpuBackend::new())));
@@ -2798,7 +2798,7 @@ where
 ///     contraction::{contract_src_with_rng_in, ContractionOptions, SrcOptions},
 ///     TreeTN,
 /// };
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = ExecutionContext::Cpu(Arc::new(
 ///     CpuExecutionContext::from_backend(CpuBackend::new()),
