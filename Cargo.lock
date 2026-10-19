@@ -5467,6 +5467,7 @@ dependencies = [
  "tensor4all-tensorbackend",
  "tensor4all-tensorci",
  "tensor4all-treeaci",
+ "tensor4all-treersi",
  "tensor4all-treetci",
  "tensor4all-treetn",
 ]
@@ -6126,20 +6127,6 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
-]
-
-[[package]]
-name = "tree-rsi-benchmark"
-version = "0.0.0"
-dependencies = [
- "rand 0.9.5",
- "rand_chacha 0.9.0",
- "serde_json",
- "tensor4all-core",
- "tensor4all-tensorbackend",
- "tensor4all-treeaci",
- "tensor4all-treersi",
- "tensor4all-treetn",
 ]
 
 [[package]]

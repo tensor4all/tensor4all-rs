@@ -30,6 +30,7 @@ tensor4all-simplett = { path = "../../crates/tensor4all-simplett" }
 tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend" }
 tensor4all-tensorci = { path = "../../crates/tensor4all-tensorci" }
 tensor4all-treeaci = { path = "../../crates/tensor4all-treeaci" }
+tensor4all-treersi = { path = "../../crates/tensor4all-treersi" }
 tensor4all-treetci = { path = "../../crates/tensor4all-treetci" }
 tensor4all-treetn = { path = "../../crates/tensor4all-treetn" }
 
@@ -114,3 +115,20 @@ path = "benchmark_tensor_ops.rs"
 name = "inspect_mps_inputs"
 path = "inspect_hdf5_mps_inputs.rs"
 required-features = ["hdf5"]
+
+# The tree-rsi harnesses keep their sources and Python drivers under
+# benchmarks/tree-rsi; only the Cargo targets live in this package.
+# `test = true` keeps their unit tests in `cargo test --tests` (hosted CI).
+[[example]]
+name = "tree_rsi"
+path = "../tree-rsi/src/main.rs"
+test = true
+
+[[example]]
+name = "rank_diagnostic"
+path = "../tree-rsi/examples/rank_diagnostic.rs"
+
+[[example]]
+name = "agreement_worker"
+path = "../tree-rsi/agreement/worker.rs"
+test = true

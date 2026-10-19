@@ -23,7 +23,9 @@ timing selection excludes failed cases, so use the current workflow for a
 complete comparison. It remains here to reproduce the earlier diagnosis.
 
 This private executable depends on both algorithms. The RSI library has no
-ACI dependency. Run from the repository root:
+ACI dependency. The Rust entry points are examples of the
+`tensor4all-benchmarks` package (`benchmarks/rust/Cargo.toml`); the Python
+drivers build them by example target. Run from the repository root:
 
 ```sh
 python3 benchmarks/tree-rsi/run.py
@@ -82,7 +84,7 @@ width fixed at 7 to isolate cap sensitivity. An additional cap-4 case raises
 TreeACI’s minimum sweeps from 2 to 4 to test early stopping:
 
 ```sh
-cargo run --release -p tree-rsi-benchmark --example rank_diagnostic
+cargo run --release -p tensor4all-benchmarks --example rank_diagnostic
 ```
 
 The protocol also records an untruncated SVD across cut `(0, 1)` of the exact

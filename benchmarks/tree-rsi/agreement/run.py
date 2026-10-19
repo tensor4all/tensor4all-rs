@@ -330,9 +330,9 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     seeds = [int(s) for s in args.seeds.split(",")]
 
-    subprocess.run(["cargo", "build", "--release", "-p", "tree-rsi-benchmark", "--bin", "agreement-worker"],
+    subprocess.run(["cargo", "build", "--release", "-p", "tensor4all-benchmarks", "--example", "agreement_worker"],
                    cwd=REPO, check=True)
-    worker_src = REPO / "target" / "release" / "agreement-worker"
+    worker_src = REPO / "target" / "release" / "examples" / "agreement_worker"
     worker = out / "agreement-worker"
     worker.write_bytes(worker_src.read_bytes())
     worker.chmod(0o755)

@@ -22,7 +22,6 @@ members = [
     "crates/tensor4all-capi",
     "crates/tensor4all-hdf5",
     "benchmarks/rust",
-    "benchmarks/tree-rsi",
     "tools/api-dump",
     "tools/library-panic-audit",
     "xtask",

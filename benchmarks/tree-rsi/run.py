@@ -12,6 +12,10 @@ import sys
 from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[2]
+PACKAGE = 'tensor4all-benchmarks'
+MAIN_EXAMPLE = 'tree_rsi'
+ROOT_FILES = ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'benchmarks/rust/Cargo.toml']
+SOURCE_DIRS = ['crates', '.cargo', 'benchmarks/tree-rsi']
 CASES = [('chain', 16, 2), ('chain', 32, 2), ('chain', 32, 4),
          ('chain', 64, 4), ('binary', 15, 2), ('star', 64, 1)]
 SEEDS = [1, 2, 3]
@@ -19,21 +23,32 @@ BLOCKS = 3
 TARGET = 1e-8
 
 
-def source_hash():
+def source_hash(root=ROOT):
     """Hash contents, including untracked source; exclude generated output."""
-    files = {ROOT / 'Cargo.toml', ROOT / 'Cargo.lock', ROOT / 'rust-toolchain.toml'}
-    for directory in ['crates', '.cargo', 'benchmarks/tree-rsi']:
-        files.update(p for p in (ROOT / directory).rglob('*')
+    root = Path(root)
+    files = {root / name for name in ROOT_FILES}
+    for directory in SOURCE_DIRS:
+        files.update(p for p in (root / directory).rglob('*')
                      if p.is_file() and p.suffix in {'.rs', '.toml', '.py'}
-                     and not {'target', 'results', 'scratch', '__pycache__'} & set(p.relative_to(ROOT).parts))
+                     and not {'target', 'results', 'scratch', '__pycache__'} & set(p.relative_to(root).parts))
     digest = hashlib.sha256()
     for path in sorted(files):
         if path.exists():
-            name = str(path.relative_to(ROOT)).encode()
+            name = str(path.relative_to(root)).encode()
             data = path.read_bytes()
             digest.update(len(name).to_bytes(8, 'little') + name)
             digest.update(len(data).to_bytes(8, 'little') + data)
     return digest.hexdigest()
+
+
+def build_command():
+    """Cargo argv for the main harness; it is an example of the benchmark package."""
+    return ['cargo', 'build', '--release', '-p', PACKAGE, '--example', MAIN_EXAMPLE]
+
+
+def binary_path(target):
+    """Release example binary path under Cargo's target directory."""
+    return Path(target) / 'release' / 'examples' / MAIN_EXAMPLE
 
 
 def validate(records):
@@ -125,10 +140,10 @@ def main():
     if output.exists():
         raise ValueError('output already exists')
     source = source_hash()
-    subprocess.run(['cargo', 'build', '--release', '-p', 'tree-rsi-benchmark'], cwd=ROOT, check=True)
+    subprocess.run(build_command(), cwd=ROOT, check=True)
     if source_hash() != source:
         raise ValueError('source changed while building; rerun')
-    binary = target / 'release/tree-rsi-benchmark'
+    binary = binary_path(target)
     binary_hash = hashlib.sha256(binary.read_bytes()).hexdigest()
     env = os.environ.copy()
     for key in ['OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'BLIS_NUM_THREADS', 'RAYON_NUM_THREADS']:

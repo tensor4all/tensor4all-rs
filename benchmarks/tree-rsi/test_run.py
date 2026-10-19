@@ -2,6 +2,8 @@
 import copy
 import unittest
 import subprocess
+import tempfile
+from pathlib import Path
 import run
 
 
@@ -86,6 +88,40 @@ class Validation(unittest.TestCase):
         for data in [original[:-1], original + [original[-1]], changed, []]:
             with self.assertRaises(ValueError):
                 run.validate(data)
+
+
+class Launch(unittest.TestCase):
+    def test_cargo_argv_and_example_binary_path(self):
+        self.assertEqual(
+            run.build_command(),
+            ['cargo', 'build', '--release', '-p', 'tensor4all-benchmarks',
+             '--example', 'tree_rsi'])
+        self.assertEqual(
+            run.binary_path('/tmp/target'),
+            Path('/tmp/target/release/examples/tree_rsi'))
+
+
+class SourceHash(unittest.TestCase):
+    def test_digest_tracks_manifest_and_tree_rsi_sources(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'benchmarks/rust').mkdir(parents=True)
+            (root / 'benchmarks/tree-rsi/src').mkdir(parents=True)
+            (root / 'Cargo.toml').write_text('[workspace]\n')
+            (root / 'Cargo.lock').write_text('')
+            (root / 'rust-toolchain.toml').write_text('[toolchain]\n')
+            manifest = root / 'benchmarks/rust/Cargo.toml'
+            manifest.write_text('[[example]]\nname = "tree_rsi"\n')
+            source = root / 'benchmarks/tree-rsi/src/main.rs'
+            source.write_text('fn main() {}\n')
+
+            digest = run.source_hash(root)
+            manifest.write_text('[[example]]\nname = "renamed"\n')
+            self.assertNotEqual(run.source_hash(root), digest)
+
+            digest = run.source_hash(root)
+            source.write_text('fn main() { println!("changed"); }\n')
+            self.assertNotEqual(run.source_hash(root), digest)
 
 
 if __name__ == '__main__':
