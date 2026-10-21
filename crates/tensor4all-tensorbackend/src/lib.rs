@@ -64,7 +64,7 @@ pub use backend::{
 #[cfg(feature = "global-defaults")]
 pub use context::{
     default_cpu_execution_context, default_eager_ctx, with_default_backend, with_runtime_engine,
-    EagerContextError,
+    EagerContextError, ExecutionContextEntryError,
 };
 #[cfg(feature = "explicit-context")]
 pub use context::{

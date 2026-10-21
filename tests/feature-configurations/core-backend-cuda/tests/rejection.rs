@@ -13,12 +13,11 @@
 use std::sync::Arc;
 
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{
     factorize_in, Canonical, DynIndex, ExecutionContext, FactorizeAlg, FactorizeOptions, IdxTensor,
     IdxTensorError, TensorContractionLike, TensorFactorizationLike,
 };
-use tensor4all_tensorbackend::{CpuExecutionContext, CudaExecutionContext, Storage};
+use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext, CudaExecutionContext, Storage};
 
 fn cuda_context() -> (Arc<CudaExecutionContext>, ExecutionContext) {
     let cuda = Arc::new(CudaExecutionContext::new().expect("a CUDA device and toolkit"));

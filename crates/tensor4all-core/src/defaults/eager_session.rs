@@ -16,15 +16,35 @@ use tensor4all_tensorbackend::{with_runtime_engine, ExecutionContext};
 
 use crate::IdxTensorError;
 
+/// Reject a context this build cannot execute in before resolving an engine.
+///
+/// In the mixed configuration of `tensor4all-rs#869` the backend exposes
+/// `ExecutionContext::Cuda` while core is built without CUDA support. The
+/// caller's `validate_context` normally rejects it first; this keeps an entry
+/// that reaches here from silently falling back to the implicit CPU engine.
+#[cfg(not(feature = "tenferro-cuda"))]
+fn ensure_supported_context(context: Option<&ExecutionContext>) -> Result<(), IdxTensorError> {
+    if context.is_some_and(|context| !matches!(context, ExecutionContext::Cpu(_))) {
+        return Err(super::idx_tensor::unsupported_execution_context_error());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "tenferro-cuda")]
+fn ensure_supported_context(_: Option<&ExecutionContext>) -> Result<(), IdxTensorError> {
+    Ok(())
+}
+
 /// Run one eager session on the engine selected by `context`.
 ///
-/// `None` selects the engine of the CPU context that owns `runtime`'s eager
-/// runtime (falling back to the process-global default CPU context when that
-/// runtime has no live owner; the transitional implicit route).
-/// `Some(ExecutionContext::Cpu(context))` selects that exact context's engine; a
-/// nested entry on the same thread is reported as the typed
+/// `None` selects the engine of the CPU or CUDA context that owns `runtime`'s
+/// eager runtime (falling back to the process-global default CPU context when
+/// that runtime has no live owner; the transitional implicit route).
+/// `Some(context)` selects that exact context's engine; a nested entry on the
+/// same thread is reported as the context's typed
 /// [`CpuExecutionContextError::Reentered`](tensor4all_tensorbackend::CpuExecutionContextError::Reentered)
-/// instead of waiting for the engine it already holds.
+/// or `CudaExecutionContextError::Reentered` instead of waiting for the engine it
+/// already holds.
 pub(crate) fn with_eager_session<T, E>(
     runtime: &Arc<EagerRuntime>,
     context: Option<&ExecutionContext>,
@@ -51,16 +71,21 @@ pub(crate) fn with_eager_session_typed<T, E>(
 where
     E: From<tenferro_ad::Error>,
 {
-    // ponytail: the CUDA context does not yet expose its engine through
-    // tensorbackend, so non-CPU contexts keep the transitional implicit route
-    // until that context is ported.
-    let result = match context {
-        Some(ExecutionContext::Cpu(context)) => {
-            context.with_session(|engine| runtime.with_eager_session(engine, f))
-        }
-        _ => with_runtime_engine(runtime, |engine| runtime.with_eager_session(engine, f)),
-    };
-    result.map_err(IdxTensorError::from)
+    ensure_supported_context(context)?;
+    match context {
+        Some(ExecutionContext::Cpu(context)) => context
+            .with_session(|engine| runtime.with_eager_session(engine, f))
+            .map_err(IdxTensorError::from),
+        #[cfg(feature = "tenferro-cuda")]
+        Some(ExecutionContext::Cuda(context)) => context
+            .with_session(|engine| runtime.with_eager_session(engine, f))
+            .map_err(IdxTensorError::from),
+        None => with_runtime_engine(runtime, |engine| runtime.with_eager_session(engine, f))
+            .map_err(IdxTensorError::from),
+        #[cfg(not(feature = "tenferro-cuda"))]
+        _ => with_runtime_engine(runtime, |engine| runtime.with_eager_session(engine, f))
+            .map_err(IdxTensorError::from),
+    }
 }
 
 /// Run one engine operation on the engine selected by `context`.
@@ -77,11 +102,20 @@ pub(crate) fn with_engine<T, E>(
 where
     E: std::error::Error + Send + Sync + 'static,
 {
+    ensure_supported_context(context)?;
     let result = match context {
-        Some(ExecutionContext::Cpu(context)) => context.with_session(|engine| f(engine)),
-        _ => with_runtime_engine(runtime, |engine| f(engine)),
+        Some(ExecutionContext::Cpu(context)) => context
+            .with_session(|engine| f(engine))
+            .map_err(IdxTensorError::from),
+        #[cfg(feature = "tenferro-cuda")]
+        Some(ExecutionContext::Cuda(context)) => context
+            .with_session(|engine| f(engine))
+            .map_err(IdxTensorError::from),
+        None => with_runtime_engine(runtime, |engine| f(engine)).map_err(IdxTensorError::from),
+        #[cfg(not(feature = "tenferro-cuda"))]
+        _ => with_runtime_engine(runtime, |engine| f(engine)).map_err(IdxTensorError::from),
     };
-    result.map_err(IdxTensorError::from)?.map_err(eager_error)
+    result?.map_err(eager_error)
 }
 
 /// Run one execution-engine operation on the engine selected by `context`.
@@ -98,11 +132,20 @@ pub(crate) fn with_execution_engine<T, E>(
 where
     E: std::error::Error + Send + Sync + 'static,
 {
+    ensure_supported_context(context)?;
     let result = match context {
-        Some(ExecutionContext::Cpu(context)) => context.with_session(|engine| f(engine)),
-        _ => with_runtime_engine(runtime, |engine| f(engine)),
+        Some(ExecutionContext::Cpu(context)) => context
+            .with_session(|engine| f(engine))
+            .map_err(IdxTensorError::from),
+        #[cfg(feature = "tenferro-cuda")]
+        Some(ExecutionContext::Cuda(context)) => context
+            .with_session(|engine| f(engine))
+            .map_err(IdxTensorError::from),
+        None => with_runtime_engine(runtime, |engine| f(engine)).map_err(IdxTensorError::from),
+        #[cfg(not(feature = "tenferro-cuda"))]
+        _ => with_runtime_engine(runtime, |engine| f(engine)).map_err(IdxTensorError::from),
     };
-    result.map_err(IdxTensorError::from)?.map_err(eager_error)
+    result?.map_err(eager_error)
 }
 
 fn eager_error(error: impl std::error::Error + Send + Sync + 'static) -> IdxTensorError {
@@ -123,7 +166,9 @@ mod tests {
         assert!(matches!(
             error,
             IdxTensorError::EngineEntry {
-                source: CpuExecutionContextError::Reentered
+                source: tensor4all_tensorbackend::ExecutionContextEntryError::Cpu(
+                    CpuExecutionContextError::Reentered
+                )
             }
         ));
         assert!(error.source().is_some());

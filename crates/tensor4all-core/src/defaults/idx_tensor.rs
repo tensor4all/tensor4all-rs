@@ -409,19 +409,21 @@ pub enum IdxTensorError {
         #[source]
         source: Arc<dyn std::error::Error + Send + Sync + 'static>,
     },
-    /// A CPU execution-context engine could not be entered.
+    /// An execution-context engine could not be entered.
     ///
     /// An implicit frontend entry resolves the engine from the eager runtime of
     /// the operand it acts on (falling back to the process-global default CPU
-    /// context when that runtime has no live owner); a nested entry made while
-    /// that engine is already borrowed on the calling thread reports the typed
+    /// context when that runtime has no live owner); the owner may be a CPU or a
+    /// CUDA context. A nested entry made while that engine is already borrowed on
+    /// the calling thread reports the typed
     /// [`CpuExecutionContextError::Reentered`](tensor4all_tensorbackend::CpuExecutionContextError::Reentered)
-    /// here instead of waiting for the engine.
+    /// or `CudaExecutionContextError::Reentered` here instead of waiting for the
+    /// engine.
     #[error("IdxTensor engine entry failed: {source}")]
     EngineEntry {
-        /// Original CPU execution-context diagnostic.
+        /// Original CPU or CUDA execution-context diagnostic.
         #[source]
-        source: tensor4all_tensorbackend::CpuExecutionContextError,
+        source: tensor4all_tensorbackend::ExecutionContextEntryError,
     },
     /// A rank-zero scalar could not be extracted from a reduction result.
     #[error("IdxTensor scalar extraction failed: {source}")]
@@ -527,6 +529,23 @@ impl From<tensor4all_tensorbackend::CpuExecutionContextError> for IdxTensorError
     fn from(source: tensor4all_tensorbackend::CpuExecutionContextError) -> Self {
         // Keep the typed context error in a concrete field (not `Arc<dyn
         // Error>`) so a caller can match a nested-entry refusal directly.
+        Self::EngineEntry {
+            source: source.into(),
+        }
+    }
+}
+
+#[cfg(feature = "tenferro-cuda")]
+impl From<tensor4all_tensorbackend::CudaExecutionContextError> for IdxTensorError {
+    fn from(source: tensor4all_tensorbackend::CudaExecutionContextError) -> Self {
+        Self::EngineEntry {
+            source: source.into(),
+        }
+    }
+}
+
+impl From<tensor4all_tensorbackend::ExecutionContextEntryError> for IdxTensorError {
+    fn from(source: tensor4all_tensorbackend::ExecutionContextEntryError) -> Self {
         Self::EngineEntry { source }
     }
 }
@@ -566,7 +585,7 @@ impl IdxTensorError {
 
 /// Typed rejection for an execution context this build cannot execute in.
 #[cfg(not(feature = "tenferro-cuda"))]
-fn unsupported_execution_context_error() -> IdxTensorError {
+pub(crate) fn unsupported_execution_context_error() -> IdxTensorError {
     IdxTensorError::UnsupportedExecutionContext {
         required_feature: "tensor4all-core/tenferro-cuda",
     }

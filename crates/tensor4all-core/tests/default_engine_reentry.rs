@@ -11,6 +11,7 @@ use tensor4all_core::{
 };
 use tensor4all_tensorbackend::{
     with_default_backend, CpuBackend, CpuExecutionContext, CpuExecutionContextError,
+    ExecutionContextEntryError,
 };
 
 #[test]
@@ -28,7 +29,7 @@ fn implicit_entry_inside_the_default_engine_borrow_reports_reentered() {
 
     match error {
         IdxTensorError::EngineEntry {
-            source: CpuExecutionContextError::Reentered,
+            source: ExecutionContextEntryError::Cpu(CpuExecutionContextError::Reentered),
         } => {}
         other => panic!("expected the typed re-entry refusal, got {other:?}"),
     }

@@ -334,7 +334,12 @@ fn runtime_engine_follows_the_owning_context_and_falls_back_after_drop() {
     let worker_runtime = Arc::clone(&runtime);
     let (result_tx, result_rx) = mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let result = with_runtime_engine(&worker_runtime, |engine| engine.num_threads());
+        let result = with_runtime_engine(&worker_runtime, |engine| {
+            engine
+                .as_any_mut()
+                .downcast_mut::<CpuEngine>()
+                .map(|engine| engine.num_threads())
+        });
         let _ = result_tx.send(result);
     });
     let resolved = result_rx.recv_timeout(Duration::from_secs(10));
@@ -345,14 +350,20 @@ fn runtime_engine_follows_the_owning_context_and_falls_back_after_drop() {
         .expect("the owning context's session entry");
     worker.join().unwrap();
     assert_eq!(
-        threads, context_threads,
+        threads,
+        Some(context_threads),
         "the owning context's engine is used"
     );
 
     // Keep the runtime but drop its owner: the dead entry falls back to the
     // process-global context's engine.
     drop(context);
-    let fallback = with_runtime_engine(&runtime, |engine| engine.num_threads())
-        .expect("the process-global fallback session entry");
-    assert_eq!(fallback, default_threads);
+    let fallback = with_runtime_engine(&runtime, |engine| {
+        engine
+            .as_any_mut()
+            .downcast_mut::<CpuEngine>()
+            .map(|engine| engine.num_threads())
+    })
+    .expect("the process-global fallback session entry");
+    assert_eq!(fallback, Some(default_threads));
 }

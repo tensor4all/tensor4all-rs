@@ -3,16 +3,18 @@
 use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use tenferro::Tensor;
+use tenferro::{ExecutionEngine, Tensor};
 use tenferro_ad::{ContextId, EagerRuntime};
 use tenferro_gpu::cuda::{
-    cuda_devices, download_pending, upload_pending, CompletionUnproven, CudaBackend,
+    cuda_devices, download_pending, upload_pending, CompletionUnproven, CudaEngine,
     PendingDownload, PendingUpload, PinnedHostBuffer,
 };
 use tenferro_tensor::{
-    AllocationDomainId, BackendSessionHost, DeviceId, DeviceKind, GpuBackendKind, MemoryKind,
-    Placement, TensorRead,
+    AllocationDomainId, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
+    TensorDeviceTransfer, TensorRead,
 };
+
+use crate::context::{next_context_id, CanonicalSessionGuard};
 
 /// The only CUDA ordinal selected by [`CudaExecutionContext`].
 pub const CUDA_ORDINAL: u32 = 0;
@@ -75,15 +77,14 @@ pub enum CudaExecutionContextError {
         /// Operation that observed the mismatch.
         operation: &'static str,
     },
-    /// The CUDA backend rejected entry into its execution session.
-    #[error("CUDA {operation} session entry failed: {source}; the backend rejects an entry it cannot admit")]
-    SessionEntry {
-        /// Operation that observed the rejection.
-        operation: &'static str,
-        /// Original backend admission diagnostic.
-        #[source]
-        source: Arc<dyn std::error::Error + Send + Sync + 'static>,
-    },
+    /// The calling thread is already inside a session of this context.
+    ///
+    /// One context owns one CUDA engine and lends it to one caller at a time. A
+    /// session entered from inside another session on the same thread would
+    /// wait for a lock that thread already holds, so it is reported as this
+    /// typed error before any lock is taken.
+    #[error("recursive CUDA execution-context session entry on one thread")]
+    Reentered,
     /// A resident allocation belongs to another CUDA allocation domain.
     #[error("CUDA {operation} received a foreign allocation domain; use one CudaExecutionContext for upload, computation, and download")]
     ForeignAllocation {
@@ -109,12 +110,72 @@ pub enum CudaExecutionContextError {
     },
 }
 
+/// The CUDA engine a [`CudaExecutionContext`] owns, plus its session identity.
+///
+/// The process-wide eager-runtime owner table holds this weakly, so an implicit
+/// eager entry on a context-owned runtime can reach the same engine the owning
+/// context lends to explicit calls. The engine is never cloned or replaced:
+/// opening the same ordinal again would create a different stream and
+/// allocation domain.
+pub(crate) struct CudaEngineOwner {
+    id: u64,
+    engine: Mutex<CudaEngine>,
+}
+
+impl CudaEngineOwner {
+    fn new(engine: CudaEngine) -> Self {
+        Self {
+            id: next_context_id(),
+            engine: Mutex::new(engine),
+        }
+    }
+
+    /// Lock the engine, recovering a lock poisoned by a panic.
+    ///
+    /// A panic leaves upstream's engine marked broken; there is no second engine
+    /// to substitute, so the broken engine stays and refuses later operations
+    /// with its own typed diagnostic.
+    fn lock_engine(&self) -> std::sync::MutexGuard<'_, CudaEngine> {
+        match self.engine.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    /// Run `f` in one session of this owner's engine.
+    pub(crate) fn with_session<R>(
+        &self,
+        f: impl FnOnce(&mut CudaEngine) -> R,
+    ) -> Result<R, CudaExecutionContextError> {
+        if CanonicalSessionGuard::is_active(self.id) {
+            return Err(CudaExecutionContextError::Reentered);
+        }
+        let _guard = CanonicalSessionGuard::enter(self.id);
+        let mut engine = self.lock_engine();
+        Ok(f(&mut engine))
+    }
+
+    /// Run `f` in one session of this owner's engine, seen as the engine trait.
+    ///
+    /// This is the entry used by the eager-runtime owner table. It uses the same
+    /// re-entry guard and the same single engine as [`Self::with_session`]; a
+    /// Rayon worker is never given a second engine.
+    pub(crate) fn with_execution_engine<R>(
+        &self,
+        f: impl FnOnce(&mut dyn ExecutionEngine) -> R,
+    ) -> Result<R, CudaExecutionContextError> {
+        self.with_session(|engine| f(engine))
+    }
+}
+
 /// Caller-owned CUDA execution domain for explicit ordinal-0 transfers.
 ///
-/// The context owns one [`CudaBackend`] and lazily creates one shared
-/// [`EagerRuntime`] from a clone of that backend. Cloning preserves the
-/// provider's runtime and allocation-domain identity. No CPU backend, global
-/// CUDA context, or implicit transfer is used.
+/// The context owns exactly one [`CudaEngine`] and lends it to one caller at a
+/// time through [`Self::with_session`]. The eager runtime is engine-independent:
+/// it is built once from an AD context with the linalg AD rules and the CUDA
+/// einsum/linalg extension modules installed for the context engine's runtime
+/// id, and every eager call takes the caller's engine. No CPU backend, second
+/// CUDA engine, global CUDA context, or implicit transfer is used.
 ///
 /// # Examples
 ///
@@ -135,8 +196,9 @@ pub enum CudaExecutionContextError {
 /// assert_eq!(std::mem::size_of_val(&eager), std::mem::size_of::<fn(&CudaExecutionContext) -> Result<Arc<EagerRuntime>, CudaExecutionContextError>>());
 /// ```
 pub struct CudaExecutionContext {
-    backend: Mutex<CudaBackend>,
+    owner: Arc<CudaEngineOwner>,
     eager: OnceLock<Result<Arc<EagerRuntime>, CudaExecutionContextError>>,
+    engine_id: tenferro::EngineId,
     device_name: String,
 }
 
@@ -146,6 +208,7 @@ impl fmt::Debug for CudaExecutionContext {
             .debug_struct("CudaExecutionContext")
             .field("ordinal", &CUDA_ORDINAL)
             .field("device_name", &self.device_name)
+            .field("engine_id", &self.engine_id)
             .field("eager_initialized", &self.eager.get().is_some())
             .finish_non_exhaustive()
     }
@@ -186,13 +249,13 @@ impl CudaPinnedBuffer {
 ///
 /// Dropping the handle moves the transfer into the runtime's retirement queue, where a later query releases it
 /// without waiting - provided the copy has completed and the queue can admit it, since the pinned implementation's
-/// queue is bounded and a transfer that cannot be admitted is retained rather than released. Reclamation also
-/// needs something that still owns the runtime, which is why the handle keeps a backend clone. Releasing the last
-/// runtime owner is a different event: that synchronizes initialized streams. Dropping never proves the copy;
-/// only [`PendingCudaDownload::wait`] hands back filled bytes.
+/// queue is bounded and a transfer that cannot be admitted is retained rather than released. Upstream's
+/// [`PendingDownload`] owns the runtime handle it was submitted on, which keeps that runtime alive for the
+/// retirement queue; no second engine is held. Releasing the last runtime owner is a different event: that
+/// synchronizes initialized streams. Dropping never proves the copy; only [`PendingCudaDownload::wait`] hands back
+/// filled bytes.
 pub struct PendingCudaDownload {
     inner: PendingDownload,
-    _keep_alive: CudaBackend,
 }
 
 impl std::fmt::Debug for PendingCudaDownload {
@@ -243,13 +306,13 @@ impl PendingCudaDownload {
 ///
 /// Dropping the handle moves the transfer into the runtime's retirement queue, where a later query releases it
 /// without waiting - provided the copy has completed and the queue can admit it, since the pinned implementation's
-/// queue is bounded and a transfer that cannot be admitted is retained rather than released. Reclamation also
-/// needs something that still owns the runtime, which is why the handle keeps a backend clone. Releasing the last
-/// runtime owner is a different event: that synchronizes initialized streams. Dropping never proves the copy;
-/// only [`PendingCudaUpload::wait`] hands back the written device tensor.
+/// queue is bounded and a transfer that cannot be admitted is retained rather than released. Upstream's
+/// [`PendingUpload`] owns the runtime handle it was submitted on, which keeps that runtime alive for the
+/// retirement queue; no second engine is held. Releasing the last runtime owner is a different event: that
+/// synchronizes initialized streams. Dropping never proves the copy; only [`PendingCudaUpload::wait`] hands back
+/// the written device tensor.
 pub struct PendingCudaUpload {
     inner: PendingUpload,
-    _keep_alive: CudaBackend,
 }
 
 impl std::fmt::Debug for PendingCudaUpload {
@@ -345,15 +408,17 @@ impl CudaExecutionContext {
                 )),
             })?;
         let device_name = device.name().to_owned();
-        let backend = CudaBackend::new(device.id()).map_err(|source| {
+        let engine = CudaEngine::open(device.id()).map_err(|source| {
             CudaExecutionContextError::Initialization {
-                component: "backend",
+                component: "engine",
                 source: Arc::new(source),
             }
         })?;
+        let engine_id = engine.runtime_engine_id().clone();
         Ok(Self {
-            backend: Mutex::new(backend),
+            owner: Arc::new(CudaEngineOwner::new(engine)),
             eager: OnceLock::new(),
+            engine_id,
             device_name,
         })
     }
@@ -404,8 +469,10 @@ impl CudaExecutionContext {
 
     /// Return the context-owned CUDA eager runtime.
     ///
-    /// Repeated calls return the same [`Arc`] and preserve the runtime and
-    /// allocation identity shared with the context-owned backend.
+    /// The runtime is engine-independent: it holds the AD rules and the CUDA
+    /// einsum/linalg execution modules for this context engine's runtime id, and
+    /// every eager call takes the caller's engine. Repeated calls return the
+    /// same [`Arc`], so they share the eager compilation cache.
     ///
     /// # Examples
     ///
@@ -418,22 +485,52 @@ impl CudaExecutionContext {
     ///
     /// # Errors
     ///
-    /// Returns [`CudaExecutionContextError::Initialization`] when eager
-    /// runtime registration fails.
+    /// Returns [`CudaExecutionContextError::Initialization`] when AD-rule or
+    /// eager-runtime registration fails.
     pub fn eager_runtime(&self) -> Result<Arc<EagerRuntime>, CudaExecutionContextError> {
-        self.eager
-            .get_or_init(|| {
-                let backend = self.backend_clone();
-                EagerRuntime::with_cuda_backend(backend).map_err(|source| {
-                    CudaExecutionContextError::Initialization {
-                        component: "eager runtime",
-                        source: Arc::new(source),
-                    }
-                })
-            })
+        let runtime = self
+            .eager
+            .get_or_init(|| build_eager_runtime(self.engine_id.clone()))
             .as_ref()
             .map(Arc::clone)
-            .map_err(Clone::clone)
+            .map_err(Clone::clone)?;
+        #[cfg(feature = "global-defaults")]
+        crate::context::register_eager_runtime_owner(
+            &runtime,
+            crate::context::RuntimeOwner::Cuda(Arc::downgrade(&self.owner)),
+        );
+        Ok(runtime)
+    }
+
+    /// Run `f` in one session of this context's engine.
+    ///
+    /// The context lends its single [`CudaEngine`] to one caller at a time for
+    /// the whole of `f`. A nested entry on the same thread is reported as
+    /// [`CudaExecutionContextError::Reentered`] instead of waiting for the
+    /// engine the session already holds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaExecutionContextError::Reentered`] when this thread is
+    /// already inside a session of this context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{CudaExecutionContext, CudaExecutionContextError};
+    /// use tenferro_gpu::cuda::CudaEngine;
+    ///
+    /// let session: fn(
+    ///     &CudaExecutionContext,
+    ///     fn(&mut CudaEngine) -> u32,
+    /// ) -> Result<u32, CudaExecutionContextError> = CudaExecutionContext::with_session;
+    /// assert!(std::mem::size_of_val(&session) > 0);
+    /// ```
+    pub fn with_session<R>(
+        &self,
+        f: impl FnOnce(&mut CudaEngine) -> R,
+    ) -> Result<R, CudaExecutionContextError> {
+        self.owner.with_session(f)
     }
 
     /// Upload a host tensor explicitly into this CUDA context.
@@ -458,11 +555,7 @@ impl CudaExecutionContext {
     pub fn upload_cuda(&self, tensor: &Tensor) -> Result<Tensor, CudaExecutionContextError> {
         let read = TensorRead::from_tensor(tensor);
         self.validate_host_placement_metadata(read.placement(), read.allocation_domain())?;
-        self.with_backend_session(|session| session.upload_host_tensor(read))
-            .map_err(|source| CudaExecutionContextError::SessionEntry {
-                operation: "upload",
-                source: Arc::new(source),
-            })?
+        self.with_session(|engine| engine.upload_host_tensor(read))?
             .map_err(|source| CudaExecutionContextError::Transfer {
                 operation: "upload",
                 source: Arc::new(source),
@@ -492,11 +585,7 @@ impl CudaExecutionContext {
     pub fn download(&self, tensor: &Tensor) -> Result<Tensor, CudaExecutionContextError> {
         self.validate_cuda_placement(tensor)?;
         let read = TensorRead::from_tensor(tensor);
-        self.with_backend_session(|session| session.download_to_host(read))
-            .map_err(|source| CudaExecutionContextError::SessionEntry {
-                operation: "download",
-                source: Arc::new(source),
-            })?
+        self.with_session(|engine| engine.download_to_host(read))?
             .map_err(|source| CudaExecutionContextError::Transfer {
                 operation: "download",
                 source: Arc::new(source),
@@ -522,7 +611,7 @@ impl CudaExecutionContext {
                 operation: "allocate pinned buffer",
             });
         }
-        self.with_backend(|backend| PinnedHostBuffer::new(backend.runtime(), bytes))
+        self.with_session(|engine| PinnedHostBuffer::new(engine.runtime(), bytes))?
             .map(|buffer| CudaPinnedBuffer { buffer })
             .map_err(|source| CudaExecutionContextError::Transfer {
                 operation: "allocate pinned buffer",
@@ -549,20 +638,16 @@ impl CudaExecutionContext {
         buffer: CudaPinnedBuffer,
     ) -> Result<PendingCudaDownload, CudaExecutionContextError> {
         self.validate_cuda_placement(&tensor)?;
-        // Keeps the runtime alive until the handle is gone: pinned buffers hold a weak runtime reference and leak
-        // if it cannot be upgraded when they are destroyed.
-        let keep_alive = self.with_backend(|backend| backend.clone());
+        // Upstream's pending handle owns the runtime it was submitted on, which keeps that runtime alive for the
+        // retirement queue; the engine itself is not cloned.
         let inner = self
-            .with_backend(|backend| download_pending(backend.runtime(), tensor, buffer.buffer))
+            .with_session(|engine| download_pending(engine.runtime(), tensor, buffer.buffer))?
             .map_err(|source| CudaExecutionContextError::Transfer {
                 operation: "download submit",
                 // The rejected package is not `Send`; only its diagnostic can be retained here.
                 source: Arc::new(std::io::Error::other(format!("{source:?}"))),
             })?;
-        Ok(PendingCudaDownload {
-            inner,
-            _keep_alive: keep_alive,
-        })
+        Ok(PendingCudaDownload { inner })
     }
 
     /// Submit a host-to-device copy without waiting for it.
@@ -601,20 +686,16 @@ impl CudaExecutionContext {
         destination: Tensor,
     ) -> Result<PendingCudaUpload, CudaExecutionContextError> {
         self.validate_cuda_placement(&destination)?;
-        // Keeps the runtime alive until the handle is gone: pinned buffers hold a weak runtime reference and leak
-        // if it cannot be upgraded when they are destroyed.
-        let keep_alive = self.with_backend(|backend| backend.clone());
+        // Upstream's pending handle owns the runtime it was submitted on, which keeps that runtime alive for the
+        // retirement queue; the engine itself is not cloned.
         let inner = self
-            .with_backend(|backend| upload_pending(backend.runtime(), source.buffer, destination))
+            .with_session(|engine| upload_pending(engine.runtime(), source.buffer, destination))?
             .map_err(|source| CudaExecutionContextError::Transfer {
                 operation: "upload submit",
                 // The rejected package is not `Send`; only its diagnostic can be retained here.
                 source: Arc::new(std::io::Error::other(format!("{source:?}"))),
             })?;
-        Ok(PendingCudaUpload {
-            inner,
-            _keep_alive: keep_alive,
-        })
+        Ok(PendingCudaUpload { inner })
     }
 
     /// Validate an owned tensor's placement without transferring or reading it.
@@ -677,7 +758,7 @@ impl CudaExecutionContext {
                 operation: "validate CUDA placement",
             });
         }
-        let expected = self.with_backend(|backend| backend.runtime().allocation_domain());
+        let expected = self.with_session(|engine| engine.runtime().allocation_domain())?;
         if allocation_domain != Some(expected) {
             return Err(CudaExecutionContextError::ForeignAllocation {
                 operation: "validate CUDA placement",
@@ -724,30 +805,53 @@ impl CudaExecutionContext {
     /// Returns [`CudaExecutionContextError::Synchronization`] when the CUDA
     /// stream cannot be synchronized.
     pub fn synchronize(&self) -> Result<(), CudaExecutionContextError> {
-        self.with_backend(|backend| backend.runtime().synchronize())
+        self.with_session(|engine| engine.synchronize())?
             .map_err(|source| CudaExecutionContextError::Synchronization {
                 source: Arc::new(source),
             })
     }
+}
 
-    fn with_backend<R>(&self, f: impl FnOnce(&mut CudaBackend) -> R) -> R {
-        let mut backend = match self.backend.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        f(&mut backend)
-    }
-
-    fn backend_clone(&self) -> CudaBackend {
-        self.with_backend(|backend| backend.clone())
-    }
-
-    fn with_backend_session<R: Send>(
-        &self,
-        f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R + Send,
-    ) -> Result<R, tenferro_tensor::SessionEntryError> {
-        self.with_backend(|backend| backend.with_backend_session(f))
-    }
+fn build_eager_runtime(
+    engine_id: tenferro::EngineId,
+) -> Result<Arc<EagerRuntime>, CudaExecutionContextError> {
+    let ad_context = crate::context::build_ad_context().map_err(|source| {
+        CudaExecutionContextError::Initialization {
+            component: "linalg AD rules",
+            source: Arc::new(source),
+        }
+    })?;
+    let runtime = EagerRuntime::with_ad_context(&ad_context).map_err(|source| {
+        CudaExecutionContextError::Initialization {
+            component: "eager runtime",
+            source: Arc::new(source),
+        }
+    })?;
+    let einsum_module = tenferro_einsum::extension_module::<CudaEngine>(engine_id.clone())
+        .map_err(|source| CudaExecutionContextError::Initialization {
+            component: "einsum extension",
+            source: Arc::new(source),
+        })?;
+    runtime
+        .install_extension_module(einsum_module)
+        .map_err(|source| CudaExecutionContextError::Initialization {
+            component: "einsum runtime",
+            source: Arc::new(source),
+        })?;
+    let linalg_module =
+        tenferro_linalg::extension_module::<CudaEngine>(engine_id).map_err(|source| {
+            CudaExecutionContextError::Initialization {
+                component: "linalg extension",
+                source: Arc::new(source),
+            }
+        })?;
+    runtime
+        .install_extension_module(linalg_module)
+        .map_err(|source| CudaExecutionContextError::Initialization {
+            component: "linalg runtime",
+            source: Arc::new(source),
+        })?;
+    Ok(runtime)
 }
 
 fn validate_host_placement_metadata(

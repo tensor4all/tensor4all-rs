@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use tenferro_ad::EagerTensor;
 use tenferro_tensor::{DType, Tensor as NativeTensor};
 use tensor4all_tensorbackend::{
     CudaExecutionContext, CudaExecutionContextError, CudaPinnedBuffer, PendingCudaDownload,
@@ -167,13 +166,17 @@ impl IdxTensor {
         let uploaded = context
             .upload_cuda(&native)
             .map_err(|source| context_error("upload", source))?;
-        let inner = EagerTensor::from_tensor_in(
-            uploaded,
-            context
-                .eager_runtime()
-                .map_err(|source| context_error("upload", source))?,
-        )
-        .map_err(|source| operation_error("upload eager wrapping", source))?;
+        let runtime = context
+            .eager_runtime()
+            .map_err(|source| context_error("upload", source))?;
+        // A device tensor needs the owning engine to become an eager leaf; the
+        // context lends the same engine it used for the upload.
+        let inner = context
+            .with_session(|engine| {
+                runtime.with_eager_session(engine, |session| session.constant_from(uploaded))
+            })
+            .map_err(|source| context_error("upload eager session", source))?
+            .map_err(|source| operation_error("upload eager wrapping", source))?;
         Self::from_inner(self.indices.clone(), inner)
             .map_err(|source| operation_error("upload tensor construction", source))
     }

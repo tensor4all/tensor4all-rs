@@ -386,7 +386,7 @@ pub enum CpuExecutionContextError {
 }
 
 thread_local! {
-    /// Identities of the CPU contexts whose engines this thread currently holds.
+    /// Identities of the execution contexts whose engines this thread holds.
     ///
     /// Re-entry is per context: holding one context's engine must not block an
     /// implicit entry that uses another context's engine.
@@ -395,21 +395,21 @@ thread_local! {
 
 static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-fn next_context_id() -> u64 {
+pub(crate) fn next_context_id() -> u64 {
     NEXT_CONTEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-struct CanonicalSessionGuard {
+pub(crate) struct CanonicalSessionGuard {
     context_id: u64,
 }
 
 impl CanonicalSessionGuard {
     /// Whether this context's engine is already held on this thread.
-    fn is_active(context_id: u64) -> bool {
+    pub(crate) fn is_active(context_id: u64) -> bool {
         ACTIVE_CONTEXTS.with(|active| active.borrow().contains(&context_id))
     }
 
-    fn enter(context_id: u64) -> Self {
+    pub(crate) fn enter(context_id: u64) -> Self {
         ACTIVE_CONTEXTS.with(|active| active.borrow_mut().push(context_id));
         Self { context_id }
     }
@@ -448,6 +448,38 @@ impl CpuExecutionContextError {
             source: Arc::new(source),
         }
     }
+}
+
+/// Failure entering the engine of the context that owns an eager runtime.
+///
+/// The implicit frontend resolves the engine from the runtime of the operand it
+/// acts on; the owner may be a CPU or a CUDA execution context, so this error
+/// keeps the owning context's typed diagnostic instead of flattening both into
+/// one string.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{
+///     CpuExecutionContextError, ExecutionContextEntryError,
+/// };
+///
+/// let error = ExecutionContextEntryError::from(CpuExecutionContextError::Reentered);
+/// assert!(matches!(
+///     error,
+///     ExecutionContextEntryError::Cpu(CpuExecutionContextError::Reentered)
+/// ));
+/// ```
+#[cfg(feature = "global-defaults")]
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum ExecutionContextEntryError {
+    /// The owning CPU context rejected the session entry.
+    #[error(transparent)]
+    Cpu(#[from] CpuExecutionContextError),
+    /// The owning CUDA context rejected the session entry.
+    #[cfg(feature = "tenferro-cuda")]
+    #[error(transparent)]
+    Cuda(#[from] crate::cuda::CudaExecutionContextError),
 }
 
 /// The engine a context owns, plus the graph runtime derived from it.
@@ -510,7 +542,7 @@ impl EngineState {
 /// A [`CpuExecutionContext`] holds this in an [`Arc`]; the process-wide owner
 /// table holds only a [`Weak`], so the entry dangles as soon as the context is
 /// dropped instead of keeping the engine alive.
-struct EngineOwner {
+pub(crate) struct EngineOwner {
     id: u64,
     engine: Mutex<EngineState>,
 }
@@ -557,6 +589,30 @@ impl EngineOwner {
         // engine's buffer pool, extension caches, batch policy or allocation
         // domain: an entry from a worker therefore allocates and batches
         // independently, and only while it runs.
+        if rayon::current_thread_index().is_some() {
+            let plans = self.lock_engine().backend.engine().plan_cache().clone();
+            let mut engine = CpuEngine::serial().with_plan_cache(plans);
+            return Ok(f(&mut engine));
+        }
+        let mut state = self.lock_engine();
+        Ok(f(state.backend.engine_mut()))
+    }
+
+    /// Run `f` in one session of this owner's engine, seen as the engine trait.
+    ///
+    /// This is the entry used when the engine is resolved through an eager
+    /// runtime rather than named by a context: the caller has an
+    /// [`ExecutionEngine`], not necessarily a [`CpuEngine`]. The per-context
+    /// re-entry guard and the inline-serial rule for Rayon workers are the same
+    /// as [`Self::with_session`].
+    fn with_execution_engine<R>(
+        &self,
+        f: impl FnOnce(&mut dyn ExecutionEngine) -> R,
+    ) -> Result<R, CpuExecutionContextError> {
+        if CanonicalSessionGuard::is_active(self.id) {
+            return Err(CpuExecutionContextError::Reentered);
+        }
+        let _guard = CanonicalSessionGuard::enter(self.id);
         if rayon::current_thread_index().is_some() {
             let plans = self.lock_engine().backend.engine().plan_cache().clone();
             let mut engine = CpuEngine::serial().with_plan_cache(plans);
@@ -787,7 +843,7 @@ impl CpuExecutionContext {
             .map(Arc::clone)
             .map_err(Clone::clone)?;
         #[cfg(feature = "global-defaults")]
-        register_eager_runtime_owner(&runtime, &self.owner);
+        register_eager_runtime_owner(&runtime, RuntimeOwner::Cpu(Arc::downgrade(&self.owner)));
         Ok(runtime)
     }
 
@@ -925,14 +981,24 @@ fn build_graph_runtime(backend: &CpuBackend) -> Result<Runtime, CpuExecutionCont
         .map_err(|source| CpuExecutionContextError::initialization("graph runtime", source))
 }
 
+/// Build an AD context with the built-in linalg semantic rules installed.
+///
+/// The context is backend-neutral: CPU and CUDA eager runtimes share the same
+/// rule set and differ only in the execution extension modules installed on the
+/// runtime.
+pub(crate) fn build_ad_context(
+) -> Result<AdContext, tenferro_ad::semantic_extension::SemanticExtensionRegistryError> {
+    let rules = tenferro_linalg::semantic_ad_rules()?;
+    let builder = AdContext::builder().with_semantic_extension_rules(rules)?;
+    Ok(match builder.build() {
+        Ok(context) => context,
+        Err(never) => match never {},
+    })
+}
+
 fn build_eager_runtime() -> Result<Arc<EagerRuntime>, CpuExecutionContextError> {
-    let ad_context = AdContext::builder()
-        .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().map_err(|source| {
-            CpuExecutionContextError::initialization("linalg AD rules", source)
-        })?)
-        .map_err(|source| CpuExecutionContextError::initialization("linalg AD rules", source))?
-        .build()
-        .map_err(|source| CpuExecutionContextError::initialization("AD context", source))?;
+    let ad_context = build_ad_context()
+        .map_err(|source| CpuExecutionContextError::initialization("linalg AD rules", source))?;
     let runtime = EagerRuntime::with_ad_context(&ad_context)
         .map_err(|source| CpuExecutionContextError::initialization("eager runtime", source))?;
     // [AI Supplied] Install the built-in extension modules before publishing
@@ -954,6 +1020,41 @@ fn build_eager_runtime() -> Result<Arc<EagerRuntime>, CpuExecutionContextError> 
     Ok(runtime)
 }
 
+/// A context that owns an eager runtime, held weakly by the process-wide table.
+#[cfg(feature = "global-defaults")]
+pub(crate) enum RuntimeOwner {
+    Cpu(Weak<EngineOwner>),
+    #[cfg(feature = "tenferro-cuda")]
+    Cuda(Weak<crate::cuda::CudaEngineOwner>),
+}
+
+#[cfg(feature = "global-defaults")]
+impl RuntimeOwner {
+    fn upgrade(&self) -> Option<LiveRuntimeOwner> {
+        match self {
+            Self::Cpu(owner) => owner.upgrade().map(LiveRuntimeOwner::Cpu),
+            #[cfg(feature = "tenferro-cuda")]
+            Self::Cuda(owner) => owner.upgrade().map(LiveRuntimeOwner::Cuda),
+        }
+    }
+
+    fn is_live(&self) -> bool {
+        match self {
+            Self::Cpu(owner) => owner.strong_count() > 0,
+            #[cfg(feature = "tenferro-cuda")]
+            Self::Cuda(owner) => owner.strong_count() > 0,
+        }
+    }
+}
+
+/// An upgraded [`RuntimeOwner`] that keeps its context alive for one session.
+#[cfg(feature = "global-defaults")]
+enum LiveRuntimeOwner {
+    Cpu(Arc<EngineOwner>),
+    #[cfg(feature = "tenferro-cuda")]
+    Cuda(Arc<crate::cuda::CudaEngineOwner>),
+}
+
 /// Process-wide map from an eager runtime's id to the context engine that owns it.
 ///
 /// The entry holds a [`Weak`] handle: a context registers its runtime when it
@@ -961,11 +1062,10 @@ fn build_eager_runtime() -> Result<Arc<EagerRuntime>, CpuExecutionContextError> 
 /// dropped. Lookups prune the dead entry and fall back to the process-global
 /// context, so no background cleanup is needed.
 #[cfg(feature = "global-defaults")]
-static EAGER_RUNTIME_OWNERS: OnceLock<Mutex<HashMap<ContextId, Weak<EngineOwner>>>> =
-    OnceLock::new();
+static EAGER_RUNTIME_OWNERS: OnceLock<Mutex<HashMap<ContextId, RuntimeOwner>>> = OnceLock::new();
 
 #[cfg(feature = "global-defaults")]
-fn eager_runtime_owners() -> std::sync::MutexGuard<'static, HashMap<ContextId, Weak<EngineOwner>>> {
+fn eager_runtime_owners() -> std::sync::MutexGuard<'static, HashMap<ContextId, RuntimeOwner>> {
     EAGER_RUNTIME_OWNERS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -973,62 +1073,80 @@ fn eager_runtime_owners() -> std::sync::MutexGuard<'static, HashMap<ContextId, W
 }
 
 #[cfg(feature = "global-defaults")]
-fn register_eager_runtime_owner(runtime: &EagerRuntime, owner: &Arc<EngineOwner>) {
+pub(crate) fn register_eager_runtime_owner(runtime: &EagerRuntime, owner: RuntimeOwner) {
     let mut owners = eager_runtime_owners();
-    owners.retain(|_, owner| owner.strong_count() > 0);
-    owners.insert(runtime.id(), Arc::downgrade(owner));
+    owners.retain(|_, owner| owner.is_live());
+    owners.insert(runtime.id(), owner);
 }
 
-/// Run `f` on the engine of the CPU context that owns `runtime`'s eager runtime.
+/// Run `f` on the engine of the context that owns `runtime`'s eager runtime.
 ///
 /// This is the transitional implicit route: an implicit (context-free) eager
 /// operation has no context argument, so it resolves the engine from the
 /// runtime of the tensor it acts on instead of always taking the
 /// process-global default context's engine. That keeps a caller-owned context's
-/// thread policy and engine serialization intact for context-free readouts and
-/// intermediate operations, including on a context that is not the global one.
+/// thread policy, device domain, and engine serialization intact for
+/// context-free readouts and intermediate operations, including on a context
+/// that is not the global one.
 ///
-/// The closure runs through the owning context's normal session entry: a nested
-/// entry on the same thread is reported as
-/// [`CpuExecutionContextError::Reentered`], and an entry from a Rayon worker runs
-/// inline on a serial engine that shares the context's prepared-plan cache.
+/// The closure receives the owning engine as [`ExecutionEngine`]: the owner may
+/// be a CPU context ([`CpuEngine`]) or, with the `tenferro-cuda` feature, a CUDA
+/// context (`tenferro_gpu::cuda::CudaEngine`). The closure runs through the
+/// owning context's normal session entry, so a nested entry on the same thread
+/// is reported as [`ExecutionContextEntryError`]'s typed CPU or CUDA re-entry
+/// variant instead of waiting for the engine. An entry from a Rayon worker runs
+/// inline on a serial CPU engine that shares the context's prepared-plan cache;
+/// a CUDA context keeps its single engine and never opens a second one.
 /// When no live context owns `runtime` (for example after the context was
 /// dropped), the entry falls back to the process-global CPU context; the global
-/// context's own runtime resolves to itself. CUDA contexts are not registered
-/// here and therefore keep the process-global fallback.
+/// context's own runtime resolves to itself.
 ///
 /// # Errors
 ///
-/// Returns [`CpuExecutionContextError`] when the owning context's eager runtime
-/// initialization failed earlier or the session entry is rejected.
+/// Returns [`ExecutionContextEntryError`] when the owning context's session
+/// entry is rejected.
 ///
 /// # Examples
 ///
 /// ```
 /// use tensor4all_tensorbackend::{with_runtime_engine, CpuBackend, CpuExecutionContext};
+/// use tenferro_cpu::CpuEngine;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let runtime = context.eager_runtime()?;
-/// let threads = with_runtime_engine(&runtime, |engine| engine.num_threads())?;
-/// assert_eq!(threads, 1);
+/// let threads = with_runtime_engine(&runtime, |engine| {
+///     engine
+///         .as_any_mut()
+///         .downcast_mut::<CpuEngine>()
+///         .map(|engine| engine.num_threads())
+/// })?;
+/// assert_eq!(threads, Some(1));
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[cfg(feature = "global-defaults")]
 pub fn with_runtime_engine<R>(
     runtime: &EagerRuntime,
-    f: impl FnOnce(&mut CpuEngine) -> R,
-) -> Result<R, CpuExecutionContextError> {
+    f: impl FnOnce(&mut dyn ExecutionEngine) -> R,
+) -> Result<R, ExecutionContextEntryError> {
     let owner = {
         let mut owners = eager_runtime_owners();
-        match owners.get(&runtime.id()).and_then(Weak::upgrade) {
+        match owners.get(&runtime.id()).and_then(RuntimeOwner::upgrade) {
             Some(owner) => owner,
             None => {
                 owners.remove(&runtime.id());
-                Arc::clone(&defaults::default_context().owner)
+                LiveRuntimeOwner::Cpu(Arc::clone(&defaults::default_context().owner))
             }
         }
     };
-    owner.with_session(f)
+    match owner {
+        LiveRuntimeOwner::Cpu(owner) => owner
+            .with_execution_engine(f)
+            .map_err(ExecutionContextEntryError::Cpu),
+        #[cfg(feature = "tenferro-cuda")]
+        LiveRuntimeOwner::Cuda(owner) => owner
+            .with_execution_engine(f)
+            .map_err(ExecutionContextEntryError::Cuda),
+    }
 }
 
 #[cfg(feature = "global-defaults")]

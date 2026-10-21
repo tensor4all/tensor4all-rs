@@ -26,5 +26,4 @@ tensor4all-core = { path = "../../../crates/tensor4all-core", default-features =
 tensor4all-tensorbackend = { path = "../../../crates/tensor4all-tensorbackend", default-features = false, features = [
     "tenferro-cuda",
 ] }
-tenferro-cpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "b3f47296244ff7b7c55ac0a75f782cb0835418c1", default-features = false }
 num-complex = "0.4"
