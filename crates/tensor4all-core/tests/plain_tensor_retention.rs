@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 
 struct CountingAllocator;

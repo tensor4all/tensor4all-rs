@@ -1,8 +1,9 @@
 //! Explicit and optional process-global tenferro CPU execution contexts.
 
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use tenferro::{
@@ -384,29 +385,45 @@ pub enum CpuExecutionContextError {
 }
 
 thread_local! {
-    static CANONICAL_SESSION_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    /// Identities of the CPU contexts whose engines this thread currently holds.
+    ///
+    /// Re-entry is per context: holding one context's engine must not block an
+    /// implicit entry that uses another context's engine.
+    static ACTIVE_CONTEXTS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+}
+
+static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_context_id() -> u64 {
+    NEXT_CONTEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 struct CanonicalSessionGuard {
-    previous: bool,
+    context_id: u64,
 }
 
 impl CanonicalSessionGuard {
-    /// Whether a canonical session is already active on this thread.
-    fn is_active() -> bool {
-        CANONICAL_SESSION_ACTIVE.with(Cell::get)
+    /// Whether this context's engine is already held on this thread.
+    fn is_active(context_id: u64) -> bool {
+        ACTIVE_CONTEXTS.with(|active| active.borrow().contains(&context_id))
     }
 
-    fn enter() -> Self {
-        CANONICAL_SESSION_ACTIVE.with(|active| Self {
-            previous: active.replace(true),
-        })
+    fn enter(context_id: u64) -> Self {
+        ACTIVE_CONTEXTS.with(|active| active.borrow_mut().push(context_id));
+        Self { context_id }
     }
 }
 
 impl Drop for CanonicalSessionGuard {
     fn drop(&mut self) {
-        CANONICAL_SESSION_ACTIVE.with(|active| active.set(self.previous));
+        ACTIVE_CONTEXTS.with(|active| {
+            let mut active = active.borrow_mut();
+            if active.last() == Some(&self.context_id) {
+                active.pop();
+            } else {
+                active.retain(|context_id| *context_id != self.context_id);
+            }
+        });
     }
 }
 
@@ -509,6 +526,7 @@ impl EngineState {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub struct CpuExecutionContext {
+    id: u64,
     engine: Mutex<EngineState>,
     compiler: Mutex<GraphCompiler>,
     eager: OnceLock<Result<Arc<EagerRuntime>, CpuExecutionContextError>>,
@@ -530,6 +548,7 @@ impl CpuExecutionContext {
     /// not allocate another executor or consult environment configuration.
     pub fn from_backend(backend: CpuBackend) -> Self {
         Self {
+            id: next_context_id(),
             engine: Mutex::new(EngineState::new(backend)),
             compiler: Mutex::new(GraphCompiler::new()),
             eager: OnceLock::new(),
@@ -583,27 +602,43 @@ impl CpuExecutionContext {
     /// caller's obligation not to do: this entry cannot report an error, so it
     /// would wait for the engine the session already holds.
     pub fn with_backend<R>(&self, f: impl FnOnce(&mut CpuBackend) -> R) -> R {
-        // The guard makes a nested session entry a typed error, not a wait.
-        let _guard = CanonicalSessionGuard::enter();
+        // The guard makes a nested session entry of this context a typed error,
+        // not a wait; another context's engine stays independently enterable.
+        let _guard = CanonicalSessionGuard::enter(self.id);
         f(&mut self.lock_engine().backend)
     }
 
     /// Run `f` in one session of this context's engine.
     ///
+    /// This is the engine-borrow entry for callers that need the concrete
+    /// engine (for example to hand it to an eager AD session). The context lends
+    /// its engine to one caller at a time for the whole of `f`.
+    ///
     /// # Errors
     ///
     /// Returns [`CpuExecutionContextError::Reentered`] when this thread is
     /// already inside a session of this context.
-    pub(crate) fn with_session<R>(
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let threads = context.with_session(|engine| engine.num_threads())?;
+    /// assert_eq!(threads, 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_session<R>(
         &self,
         f: impl FnOnce(&mut CpuEngine) -> R,
     ) -> Result<R, CpuExecutionContextError> {
         // Checked before any lock: a nested entry would wait for a lock this
         // thread already holds.
-        if CanonicalSessionGuard::is_active() {
+        if CanonicalSessionGuard::is_active(self.id) {
             return Err(CpuExecutionContextError::Reentered);
         }
-        let _guard = CanonicalSessionGuard::enter();
+        let _guard = CanonicalSessionGuard::enter(self.id);
         // A worker runs inline on its own serial engine instead of waiting for a
         // pool it belongs to (tensor4all-rs#830). The fresh engine shares the
         // plan cache, whose entries are immutable prepared plans, so a stage

@@ -492,7 +492,9 @@ fn probe_cuda_complex_rrqr_supports_adaptive_square_estimator() {
     assert!(residual < 1.0e-9, "CUDA complex RRQR residual {residual}");
     let estimate = factor.right.src_error_estimate_in(&context).unwrap();
     let cpu = ExecutionContext::Cpu(Arc::new(
-        tensor4all_tensorbackend::CpuExecutionContext::from_backend(tenferro_cpu::CpuBackend::new()),
+        tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+            tensor4all_tensorbackend::CpuBackend::new(),
+        ),
     ));
     let cpu_sketch =
         IdxTensor::from_dense_in(&cpu, vec![row.clone(), batch.clone()], values).unwrap();

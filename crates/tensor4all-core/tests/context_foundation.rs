@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use num_complex::Complex64;
 
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{
     contract_pair_with_operand_options, outer_product, tensordot, DynIndex, ExecutionContext,
     IdxTensor, PairwiseContractionOptions, TensorContractionLike,
 };
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 
 fn cpu_context() -> ExecutionContext {

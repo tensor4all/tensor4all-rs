@@ -5,19 +5,10 @@
 //! their dtype instead of being widened into `f64`/`Complex64`.
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{
     factorize_on_session, DynIndex, FactorizeOptions, IdxTensor, TensorContractionLike,
 };
-use tensor4all_tensorbackend::{
-    explicit::{HeldSession, Session},
-    CpuExecutionContext,
-};
-
-fn session_context() -> CpuExecutionContext {
-    let backend = CpuBackend::with_threads(1).expect("1T CPU backend");
-    CpuExecutionContext::from_backend(backend)
-}
+use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 
 /// Run one session factorization and return `(left, right, rank)`.
 fn factorize_in_session(
@@ -25,16 +16,10 @@ fn factorize_in_session(
     left: &DynIndex,
     options: &FactorizeOptions,
 ) -> (IdxTensor, IdxTensor, usize) {
-    let context = session_context();
-    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    let mut held = HeldSession::open(&backend).expect("held session");
-    let result = held
-        .with_session(|view| {
-            let mut session = Session::from_backend_session(view.backend());
-            factorize_on_session(&mut session, tensor, std::slice::from_ref(left), options)
-        })
-        .expect("session entry");
-    held.close().expect("close held session");
+    let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    let mut session = Session::new(backend.engine_mut());
+    let result = factorize_on_session(&mut session, tensor, std::slice::from_ref(left), options)
+        .expect("session factorization");
     (result.left, result.right, result.rank)
 }
 

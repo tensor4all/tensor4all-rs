@@ -7,7 +7,6 @@
 //!
 //! The refusals must not mutate the operand: it stays tracked and its payload stays readable.
 
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::qr_with_on_session;
 use tensor4all_core::{
     contract_pair_on_session, contract_with_options_on_session, factorize_full_rank_on_session,
@@ -17,12 +16,11 @@ use tensor4all_core::{
     ContractionOptions, DynIndex, FactorizeAlg, FactorizeError, FactorizeOptions, IdxTensor,
     IdxTensorError, PairwiseContractionOptions, QrError, QrOptions,
 };
-use tensor4all_tensorbackend::{explicit::HeldSession, CpuExecutionContext};
+use tensor4all_tensorbackend::explicit::Session;
+use tensor4all_tensorbackend::CpuBackend;
 
-fn session_context() -> CpuBackend {
-    let context =
-        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
-    context.with_backend(|backend| backend.clone())
+fn session_backend() -> CpuBackend {
+    CpuBackend::with_threads(1).expect("1T CPU backend")
 }
 
 /// A tracked dense operand on `[i = 2, k = 2]`, in a shape every indexed entry accepts.
@@ -62,12 +60,12 @@ fn assert_factorize_refusal(result: Result<impl std::fmt::Debug, FactorizeError>
 
 #[test]
 fn every_indexed_session_entry_refuses_a_tracked_operand() {
-    let backend = session_context();
+    let mut backend = session_backend();
     let i = DynIndex::new_dyn(2);
     let k = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(2);
-    // The operand is built before the held session opens: a held session owns this thread's eager
-    // entry, so a tracked operand is created outside it.
+    // The operand is built before the engine is borrowed: a tracked operand is
+    // created outside the session it will be refused by.
     let tracked = tracked_operand(&i, &k);
     let untracked = tracked.detach().expect("untracked sibling");
     // A second tracked operand whose index set differs, for the connected contraction.
@@ -75,12 +73,9 @@ fn every_indexed_session_entry_refuses_a_tracked_operand() {
         .expect("dense operand")
         .enable_grad()
         .expect("tracked operand");
-    let mut held = HeldSession::open(&backend).expect("held session");
+    let mut session = Session::new(backend.engine_mut());
 
-    held.with_session(|view| {
-        let mut session =
-            tensor4all_tensorbackend::explicit::Session::from_backend_session(view.backend());
-
+    {
         assert_indexed_refusal(
             contract_pair_on_session(
                 &mut session,
@@ -143,11 +138,7 @@ fn every_indexed_session_entry_refuses_a_tracked_operand() {
                 .expect_err("index_select_on_session"),
             "index_select_on_session",
         );
-
-        Ok::<(), IdxTensorError>(())
-    })
-    .expect("the refusals leave the held session usable");
-    held.close().expect("close held session");
+    }
 
     // No refusal detached the operand: both tracked values still hold their graph and payload.
     for operand in [&tracked, &right] {
@@ -164,18 +155,15 @@ fn every_indexed_session_entry_refuses_a_tracked_operand() {
 
 #[test]
 fn every_factorization_session_entry_refuses_a_tracked_operand() {
-    let backend = session_context();
+    let mut backend = session_backend();
     let i = DynIndex::new_dyn(2);
     let k = DynIndex::new_dyn(2);
     let tracked = tracked_operand(&i, &k);
     let untracked = tracked.detach().expect("untracked sibling");
     let left = [i.clone()];
-    let mut held = HeldSession::open(&backend).expect("held session");
+    let mut session = Session::new(backend.engine_mut());
 
-    held.with_session(|view| {
-        let mut session =
-            tensor4all_tensorbackend::explicit::Session::from_backend_session(view.backend());
-
+    {
         // The direct QR entry point: the public route a scheduler-owned lane calls.
         match qr_with_on_session::<f64>(&mut session, &tracked, &left, &QrOptions::new())
             .expect_err("qr_with_on_session")
@@ -208,11 +196,7 @@ fn every_factorization_session_entry_refuses_a_tracked_operand() {
         let (q, r) = qr_with_on_session::<f64>(&mut session, &untracked, &left, &QrOptions::new())
             .expect("untracked QR");
         assert_eq!(q.dims().last().copied(), r.dims().first().copied());
-
-        Ok::<(), IdxTensorError>(())
-    })
-    .expect("the refusals leave the held session usable");
-    held.close().expect("close held session");
+    }
 
     assert!(
         tracked.tracks_grad(),

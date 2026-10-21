@@ -41,6 +41,23 @@ fn recursive_session_entry_fails_before_lock_and_restores_guard() {
 }
 
 #[test]
+fn a_session_of_another_context_is_not_a_reentry() {
+    let first = context();
+    let second = context();
+
+    // Re-entry is per context: the second context's engine is independent even
+    // while this thread holds the first one.
+    let value = first
+        .with_session(|_| {
+            second
+                .with_session(|_| 7usize)
+                .expect("the second context's session")
+        })
+        .expect("the first context's session");
+    assert_eq!(value, 7);
+}
+
+#[test]
 fn a_session_inside_a_backend_borrow_is_rejected_typed() {
     let context = context();
     let error = context

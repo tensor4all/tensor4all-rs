@@ -377,7 +377,7 @@ where
     let input = matrix.clone();
     let actual = run_while_default_context_is_busy(move || {
         let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
-            tenferro_cpu::CpuBackend::new(),
+            tensor4all_tensorbackend::CpuBackend::new(),
         );
         matrix_luci_factors_from_matrix_owned_in(input, Some(options), &context).unwrap()
     });

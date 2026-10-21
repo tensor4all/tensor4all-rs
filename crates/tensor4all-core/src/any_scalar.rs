@@ -11,6 +11,9 @@ use num_traits::{One, Zero};
 use tenferro::DType;
 use tensor4all_tensorbackend::BackendScalar;
 
+use crate::defaults::eager_session::{
+    with_eager_session_typed, with_engine, with_execution_engine,
+};
 use crate::defaults::idx_tensor::IdxTensor;
 use crate::TensorElement;
 use tensor4all_tensorbackend::{Storage, SumFromStorage};
@@ -327,10 +330,11 @@ impl AnyScalar {
     {
         let lhs_inner = lhs.as_tensor()?.as_inner()?;
         let rhs_inner = rhs.as_tensor()?.as_inner()?;
-        let result = lhs_inner
-            .runtime()
-            .with_eager_session(|session| f(session, lhs_inner, rhs_inner))
-            .map_err(|error| operation_error(op, error))?;
+        let result = with_eager_session_typed(lhs_inner.runtime(), None, |session| {
+            f(session, lhs_inner, rhs_inner)
+        })
+        .map_err(|error| operation_error(op, error))?
+        .map_err(|error| operation_error(op, error))?;
         Self::from_tensor_result(IdxTensor::from_inner(vec![], result), op)
     }
 
@@ -346,9 +350,8 @@ impl AnyScalar {
         E: From<tenferro_ad::Error> + std::error::Error + Send + Sync + 'static,
     {
         let inner = input.as_tensor()?.as_inner()?;
-        let result = inner
-            .runtime()
-            .with_eager_session(|session| f(session, inner))
+        let result = with_eager_session_typed(inner.runtime(), None, |session| f(session, inner))
+            .map_err(|error| operation_error(op, error))?
             .map_err(|error| operation_error(op, error))?;
         Self::from_tensor_result(IdxTensor::from_inner(vec![], result), op)
     }
@@ -727,10 +730,10 @@ impl AnyScalar {
     /// assert_eq!(grad.real(), 4.0);
     /// ```
     pub fn backward(&self) -> std::result::Result<(), AnyScalarError> {
-        self.as_tensor()?
-            .backward()
-            .map_err(anyhow::Error::from)
-            .map_err(AnyScalarError::from)
+        let inner = self.as_tensor()?.as_inner()?;
+        with_execution_engine(None, |engine| inner.backward(engine))
+            .map(|_| ())
+            .map_err(|error| AnyScalarError::from(anyhow::Error::new(error)))
     }
 
     /// Returns a detached copy of this scalar.
@@ -758,8 +761,11 @@ impl AnyScalar {
     /// assert!(!detached.tracks_grad());
     /// ```
     pub fn detach(&self) -> std::result::Result<Self, AnyScalarError> {
-        Self::from_tensor(self.as_tensor()?.detach().map_err(anyhow::Error::from)?)
-            .map_err(AnyScalarError::from)
+        let tensor = self.as_tensor()?;
+        let inner = tensor.as_inner()?;
+        let detached = with_engine(None, |engine| inner.detach(engine))
+            .map_err(|error| AnyScalarError::from(anyhow::Error::new(error)))?;
+        Self::from_tensor(IdxTensor::from_inner(vec![], detached)?).map_err(AnyScalarError::from)
     }
 
     /// Returns the real part of this scalar.

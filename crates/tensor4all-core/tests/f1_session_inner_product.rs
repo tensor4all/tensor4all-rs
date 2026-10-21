@@ -7,9 +7,9 @@
 use std::sync::Arc;
 
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::index::{DefaultIndex as Index, DynIndex};
 use tensor4all_core::{inner_product_on_session, ExecutionContext, IdxTensor};
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 
 fn cpu_context() -> CpuExecutionContext {

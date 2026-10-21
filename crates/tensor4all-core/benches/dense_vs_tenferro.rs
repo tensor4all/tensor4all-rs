@@ -3,7 +3,7 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tenferro_linalg::TensorLinalgExt;
-use tenferro_tensor::{BackendSessionHost, Tensor};
+use tenferro_tensor::Tensor;
 use tensor4all_core::{matrix_luci_factors_from_matrix, RrLUOptions};
 use tensor4all_tensorbackend::{with_default_backend, Matrix};
 
@@ -49,11 +49,8 @@ fn bench_dense_vs_tenferro(c: &mut Criterion) {
                 b.iter(|| {
                     let mat = Tensor::from_vec_col_major(vec![n, n], data.clone()).unwrap();
                     black_box(
-                        with_default_backend(|backend| {
-                            backend.with_backend_session(|session| mat.full_piv_lu(session))
-                        })
-                        .unwrap()
-                        .unwrap(),
+                        with_default_backend(|backend| mat.full_piv_lu(backend.engine_mut()))
+                            .unwrap(),
                     );
                 });
             },

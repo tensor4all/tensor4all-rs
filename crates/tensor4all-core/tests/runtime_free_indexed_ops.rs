@@ -1,24 +1,13 @@
 //! Runtime-free `select_indices` and `stack_along_new_index` on compact storage.
 //!
-//! Both operations are host data movements on compact storage, so they must not
-//! enter any runtime. The tests run inside a held explicit session: a nested
-//! process-global session entry would be rejected there, so success proves the
-//! route is runtime-free for every compact scalar type.
+//! Both operations are host data movements on compact storage, so their results
+//! must stay compact host storage instead of entering the eager runtime for
+//! every compact scalar type.
 
 use std::sync::Arc;
 
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
-use tensor4all_tensorbackend::{
-    explicit::HeldSession, CpuExecutionContext, Storage, StorageScalar,
-};
-
-fn held_session() -> (CpuExecutionContext, CpuBackend) {
-    let context =
-        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
-    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    (context, backend)
-}
+use tensor4all_tensorbackend::{Storage, StorageScalar};
 
 /// Compact (host-storage) tensor over `[i = 2, j = 3]` from column-major data.
 fn compact_pair<T: StorageScalar>(i: DynIndex, j: DynIndex, data: Vec<T>) -> IdxTensor {
@@ -41,26 +30,29 @@ fn exercise_select_and_stack<T: StorageScalar + std::fmt::Debug>(
     let j = DynIndex::new_dyn(3);
     let tensor = compact_pair(i.clone(), j.clone(), data.clone());
 
-    let (_, backend) = held_session();
-    let mut held = HeldSession::open(&backend).expect("held session");
-    let (along_j, along_i, stacked_last, stacked_first) = held.with_session(|_view| {
-        // Fix j at 1: keep i, values are the second column.
-        let along_j = tensor
-            .select_indices(std::slice::from_ref(&j), &[1])
-            .expect("select along j");
-        // Fix i at 1: keep j, values are the second row.
-        let along_i = tensor
-            .select_indices(std::slice::from_ref(&i), &[1])
-            .expect("select along i");
+    // Fix j at 1: keep i, values are the second column.
+    let along_j = tensor
+        .select_indices(std::slice::from_ref(&j), &[1])
+        .expect("select along j");
+    // Fix i at 1: keep j, values are the second row.
+    let along_i = tensor
+        .select_indices(std::slice::from_ref(&i), &[1])
+        .expect("select along i");
 
-        let batch = DynIndex::new_dyn(2);
-        let stacked_last = IdxTensor::stack_along_new_index(&[&tensor, &tensor], batch.clone(), -1)
-            .expect("stack trailing batch axis");
-        let stacked_first = IdxTensor::stack_along_new_index(&[&tensor, &tensor], batch, 0)
-            .expect("stack leading axis");
-        (along_j, along_i, stacked_last, stacked_first)
-    });
-    held.close().expect("close held session");
+    let batch = DynIndex::new_dyn(2);
+    let stacked_last = IdxTensor::stack_along_new_index(&[&tensor, &tensor], batch.clone(), -1)
+        .expect("stack trailing batch axis");
+    let stacked_first = IdxTensor::stack_along_new_index(&[&tensor, &tensor], batch, 0)
+        .expect("stack leading axis");
+
+    // Host-storage inputs keep producing host-storage results: none of these
+    // movements enters the eager runtime.
+    for result in [&along_j, &along_i, &stacked_last, &stacked_first] {
+        assert!(
+            result.storage().is_ok(),
+            "compact select/stack must publish compact storage"
+        );
+    }
 
     assert_eq!(along_j.dims(), vec![2]);
     assert_eq!(along_j.to_vec::<T>().unwrap(), vec![data[2], data[3]]);

@@ -4,9 +4,9 @@
 //! algebraic shortcut, and must refuse what it does not serve instead of falling back.
 
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::{norm_on_session, norm_squared_on_session, IdxTensor};
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 
 fn session_context() -> CpuExecutionContext {

@@ -6,9 +6,9 @@
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::index::{DefaultIndex as Index, DynIndex};
 use tensor4all_core::{permute_on_session, IdxTensor};
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::{CpuExecutionContext, Storage};
 
 fn session_context() -> CpuExecutionContext {

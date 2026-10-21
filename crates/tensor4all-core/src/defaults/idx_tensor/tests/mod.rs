@@ -72,7 +72,7 @@ fn unsupported_context_error_survives_factorize_wrapping() {
 #[test]
 fn supported_cpu_context_check_does_not_initialize_runtime() {
     let cpu = Arc::new(tensor4all_tensorbackend::CpuExecutionContext::from_backend(
-        tenferro_cpu::CpuBackend::new(),
+        tensor4all_tensorbackend::CpuBackend::new(),
     ));
     let context = ExecutionContext::Cpu(Arc::clone(&cpu));
 
@@ -310,7 +310,7 @@ fn eager_cache_conjugation_failure_is_deferred_with_original_diagnostic() {
 fn session_identity_alignment_shares_storage_and_cache_for_every_representation() {
     use tensor4all_tensorbackend::CpuExecutionContext;
 
-    let backend = tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend");
+    let backend = tensor4all_tensorbackend::CpuBackend::with_threads(1).expect("1T CPU backend");
     let context = CpuExecutionContext::from_backend(backend);
     let i = DynIndex::new_dyn(2);
     let k = DynIndex::new_dyn(2);
@@ -508,7 +508,7 @@ use crate::index_like::IndexLike;
 /// Fresh, caller-scoped CPU eager runtime for the mixed-dtype gradient checks.
 fn scoped_eager_runtime() -> Arc<EagerRuntime> {
     tensor4all_tensorbackend::CpuExecutionContext::from_backend(
-        tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend"),
+        tensor4all_tensorbackend::CpuBackend::with_threads(1).expect("1T CPU backend"),
     )
     .eager_runtime()
     .expect("scoped eager runtime")

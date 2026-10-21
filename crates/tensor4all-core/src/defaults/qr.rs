@@ -2,7 +2,8 @@
 //!
 //! This module works with concrete types (`DynIndex`, `IdxTensor`) only.
 
-use crate::defaults::idx_tensor::{unfold_index_sets, unfold_split_inner};
+use super::eager_session::with_eager_session;
+use crate::defaults::idx_tensor::{unfold_index_sets, unfold_split_inner, unfold_split_inner_in};
 use crate::defaults::DynIndex;
 use crate::global_default::GlobalDefault;
 use crate::{ExecutionContext, IdxTensor, TensorElement};
@@ -189,14 +190,12 @@ fn resident_row_norms(
 ) -> Result<Vec<f64>, QrError> {
     // The resident factor's own runtime runs the reduction in one eager session, as the neighbouring CUDA-only
     // paths do; only the decision vector crosses back through `context`.
-    let sum_squares = r_inner
-        .runtime()
-        .with_eager_session(|session| {
-            let upper = session.triu(r_inner, 0)?;
-            let magnitudes = session.abs(&upper)?;
-            session.reduce_sum_squares(&magnitudes, Some(&[1]))
-        })
-        .map_err(|error| QrError::ComputationError(anyhow::Error::new(error)))?;
+    let sum_squares = with_eager_session(r_inner.runtime(), Some(context), |session| {
+        let upper = session.triu(r_inner, 0)?;
+        let magnitudes = session.abs(&upper)?;
+        session.reduce_sum_squares(&magnitudes, Some(&[1]))
+    })
+    .map_err(|error| QrError::ComputationError(anyhow::Error::new(error)))?;
     if sum_squares.shape() != [k] {
         return Err(QrError::ComputationError(anyhow::anyhow!(
             "device QR row-norm reduction returned shape {:?}, expected [{k}]",
@@ -323,13 +322,13 @@ pub fn qr_with<T>(
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
         .map_err(QrError::ComputationError)?;
     let k = m.min(n);
-    let (q_inner, r_inner) = matrix_inner
-        .runtime()
-        .with_eager_session(|session| session.qr(&matrix_inner))
-        .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
+    let (q_inner, r_inner) = with_eager_session(matrix_inner.runtime(), None, |session| {
+        session.qr(&matrix_inner)
+    })
+    .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
 
     let keep = qr_retained_rows(&r_inner, k, n, options, None)?;
-    qr_assemble(q_inner, r_inner, k, keep, left_indices, right_indices)
+    qr_assemble(q_inner, r_inner, k, keep, left_indices, right_indices, None)
 }
 
 /// Compute QR decomposition in a caller-owned execution context.
@@ -391,17 +390,26 @@ pub fn qr_with_in<T>(
 ) -> Result<(IdxTensor, IdxTensor), QrError> {
     t.validate_context(context)
         .map_err(|error| QrError::ComputationError(anyhow::Error::new(error)))?;
-    let (matrix_inner, _, m, n, left_indices, right_indices) = unfold_split_inner(t, left_inds)
-        .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
-        .map_err(QrError::ComputationError)?;
+    let (matrix_inner, _, m, n, left_indices, right_indices) =
+        unfold_split_inner_in(t, left_inds, context)
+            .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
+            .map_err(QrError::ComputationError)?;
     let k = m.min(n);
-    let (q_inner, r_inner) = matrix_inner
-        .runtime()
-        .with_eager_session(|session| session.qr(&matrix_inner))
-        .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
+    let (q_inner, r_inner) = with_eager_session(matrix_inner.runtime(), Some(context), |session| {
+        session.qr(&matrix_inner)
+    })
+    .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
 
     let keep = qr_retained_rows(&r_inner, k, n, options, Some(context))?;
-    qr_assemble(q_inner, r_inner, k, keep, left_indices, right_indices)
+    qr_assemble(
+        q_inner,
+        r_inner,
+        k,
+        keep,
+        left_indices,
+        right_indices,
+        Some(context),
+    )
 }
 
 /// Select the retained rows of `R`, reading the decision payload through `context`
@@ -496,22 +504,17 @@ fn options_rtol_is_valid(rtol: f64) -> bool {
 /// ```
 /// use tensor4all_core::{qr::QrOptions, DynIndex, IdxTensor};
 /// use tensor4all_core::qr_with_on_session;
-/// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
-/// use tensor4all_tensorbackend::CpuBackend;
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 ///
 /// let i = DynIndex::new_dyn(4);
 /// let j = DynIndex::new_dyn(3);
 /// let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
 /// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], data)?;
 ///
-/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-/// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-/// let mut held = HeldSession::open(&backend)?;
-/// let (q, r) = held.with_session(|view| {
-///     let mut session = Session::from_backend_session(view.backend());
-///     qr_with_on_session::<f64>(&mut session, &tensor, std::slice::from_ref(&i), &QrOptions::new())
-/// })?;
-/// held.close()?;
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let mut session = Session::new(backend.engine_mut());
+/// let (q, r) =
+///     qr_with_on_session::<f64>(&mut session, &tensor, std::slice::from_ref(&i), &QrOptions::new())?;
 /// assert_eq!(q.dims()[0], 4);
 /// assert_eq!(r.dims()[1], 3);
 /// assert_eq!(q.dims()[1], r.dims()[0], "the shared bond dimension");
@@ -619,17 +622,18 @@ fn qr_assemble(
     keep: Vec<usize>,
     left_indices: Vec<DynIndex>,
     right_indices: Vec<DynIndex>,
+    context: Option<&ExecutionContext>,
 ) -> Result<(IdxTensor, IdxTensor), QrError> {
     let r = keep.len();
     if r < k {
-        q_inner = q_inner
-            .runtime()
-            .with_eager_session(|session| session.take_axis(&q_inner, 1, &keep))
-            .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
-        r_inner = r_inner
-            .runtime()
-            .with_eager_session(|session| session.take_axis(&r_inner, 0, &keep))
-            .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
+        q_inner = with_eager_session(q_inner.runtime(), context, |session| {
+            session.take_axis(&q_inner, 1, &keep)
+        })
+        .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
+        r_inner = with_eager_session(r_inner.runtime(), context, |session| {
+            session.take_axis(&r_inner, 0, &keep)
+        })
+        .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
     }
 
     let bond_index = DynIndex::new_bond(r)
@@ -639,23 +643,19 @@ fn qr_assemble(
     let mut q_indices = left_indices.clone();
     q_indices.push(bond_index.clone());
     let q_dims: Vec<usize> = q_indices.iter().map(|idx| idx.dim).collect();
-    let q_reshaped = q_inner
-        .runtime()
-        .with_eager_session(|session| session.reshape(&q_inner, &q_dims))
-        .map_err(|e| {
-            QrError::ComputationError(anyhow::anyhow!("eager QR Q reshape failed: {e}"))
-        })?;
+    let q_reshaped = with_eager_session(q_inner.runtime(), context, |session| {
+        session.reshape(&q_inner, &q_dims)
+    })
+    .map_err(|e| QrError::ComputationError(anyhow::anyhow!("eager QR Q reshape failed: {e}")))?;
     let q = IdxTensor::from_inner(q_indices, q_reshaped).map_err(QrError::ComputationError)?;
 
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
     let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
-    let r_reshaped = r_inner
-        .runtime()
-        .with_eager_session(|session| session.reshape(&r_inner, &r_dims))
-        .map_err(|e| {
-            QrError::ComputationError(anyhow::anyhow!("eager QR R reshape failed: {e}"))
-        })?;
+    let r_reshaped = with_eager_session(r_inner.runtime(), context, |session| {
+        session.reshape(&r_inner, &r_dims)
+    })
+    .map_err(|e| QrError::ComputationError(anyhow::anyhow!("eager QR R reshape failed: {e}")))?;
     let r = IdxTensor::from_inner(r_indices, r_reshaped).map_err(QrError::ComputationError)?;
 
     Ok((q, r))

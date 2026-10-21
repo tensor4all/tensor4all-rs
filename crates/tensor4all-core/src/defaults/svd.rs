@@ -7,7 +7,8 @@
 //!
 //! This module works with concrete types (`DynIndex`, `IdxTensor`) only.
 
-use crate::defaults::idx_tensor::{unfold_index_sets, unfold_split_inner};
+use super::eager_session::with_eager_session;
+use crate::defaults::idx_tensor::{unfold_index_sets, unfold_split_inner, unfold_split_inner_in};
 use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
 use crate::truncation::{
@@ -343,14 +344,18 @@ fn svd_truncated_inner_scoped(
     options: &SvdOptions,
     context: Option<&ExecutionContext>,
 ) -> Result<SvdTruncatedEagerResult, SvdError> {
-    let (matrix_inner, _, m, n, left_indices, right_indices) = unfold_split_inner(t, left_inds)
-        .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
-        .map_err(SvdError::ComputationError)?;
+    let (matrix_inner, _, m, n, left_indices, right_indices) = match context {
+        Some(context) => unfold_split_inner_in(t, left_inds, context),
+        None => unfold_split_inner(t, left_inds),
+    }
+    .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
+    .map_err(SvdError::ComputationError)?;
     let k = m.min(n);
 
-    let (mut u_inner, mut s_inner, mut vt_inner) = matrix_inner
-        .runtime()
-        .with_eager_session(|session| session.svd(&matrix_inner))
+    let (mut u_inner, mut s_inner, mut vt_inner) =
+        with_eager_session(matrix_inner.runtime(), context, |session| {
+            session.svd(&matrix_inner)
+        })
         .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
     #[cfg(feature = "tenferro-cuda")]
     let s_full = if let Some(context) = context {
@@ -371,18 +376,18 @@ fn svd_truncated_inner_scoped(
     r = r.min(s_full.len());
     if r < k {
         let keep: Vec<usize> = (0..r).collect();
-        u_inner = u_inner
-            .runtime()
-            .with_eager_session(|session| session.take_axis(&u_inner, 1, &keep))
-            .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
-        s_inner = s_inner
-            .runtime()
-            .with_eager_session(|session| session.take_axis(&s_inner, 0, &keep))
-            .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
-        vt_inner = vt_inner
-            .runtime()
-            .with_eager_session(|session| session.take_axis(&vt_inner, 0, &keep))
-            .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
+        u_inner = with_eager_session(u_inner.runtime(), context, |session| {
+            session.take_axis(&u_inner, 1, &keep)
+        })
+        .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
+        s_inner = with_eager_session(s_inner.runtime(), context, |session| {
+            session.take_axis(&s_inner, 0, &keep)
+        })
+        .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
+        vt_inner = with_eager_session(vt_inner.runtime(), context, |session| {
+            session.take_axis(&vt_inner, 0, &keep)
+        })
+        .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
     }
 
     let bond_index = DynIndex::new_bond(r)
@@ -489,6 +494,7 @@ pub fn svd_with<T>(
         bond_index,
         left_indices,
         right_indices,
+        None,
     )
 }
 
@@ -554,6 +560,7 @@ pub fn svd_with_in<T>(
         bond_index,
         left_indices,
         right_indices,
+        Some(context),
     )
 }
 
@@ -565,16 +572,15 @@ fn svd_assemble(
     bond_index: DynIndex,
     left_indices: Vec<DynIndex>,
     right_indices: Vec<DynIndex>,
+    context: Option<&ExecutionContext>,
 ) -> Result<(IdxTensor, IdxTensor, IdxTensor), SvdError> {
     let mut u_indices = left_indices;
     u_indices.push(bond_index.clone());
     let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
-    let u_reshaped = u_inner
-        .runtime()
-        .with_eager_session(|session| session.reshape(&u_inner, &u_dims))
-        .map_err(|e| {
-            SvdError::ComputationError(anyhow::anyhow!("eager SVD U reshape failed: {e}"))
-        })?;
+    let u_reshaped = with_eager_session(u_inner.runtime(), context, |session| {
+        session.reshape(&u_inner, &u_dims)
+    })
+    .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("eager SVD U reshape failed: {e}")))?;
     let u = IdxTensor::from_inner(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
 
     // S carries a fresh `sim` leg (ITensors convention S: [l, l'], V: l');
@@ -588,12 +594,12 @@ fn svd_assemble(
     let mut vh_indices = vec![sim_bond_index];
     vh_indices.extend(right_indices);
     let vh_dims: Vec<usize> = vh_indices.iter().map(|idx| idx.dim).collect();
-    let vt_reshaped = vt_inner
-        .runtime()
-        .with_eager_session(|session| session.reshape(&vt_inner, &vh_dims))
-        .map_err(|e| {
-            SvdError::ComputationError(anyhow::anyhow!("eager SVD V^T reshape failed: {e}"))
-        })?;
+    let vt_reshaped = with_eager_session(vt_inner.runtime(), context, |session| {
+        session.reshape(&vt_inner, &vh_dims)
+    })
+    .map_err(|e| {
+        SvdError::ComputationError(anyhow::anyhow!("eager SVD V^T reshape failed: {e}"))
+    })?;
     let vh = IdxTensor::from_inner(vh_indices, vt_reshaped).map_err(SvdError::ComputationError)?;
     let perm: Vec<usize> = (1..vh.indices.len()).chain(std::iter::once(0)).collect();
     let v = vh
@@ -794,13 +800,16 @@ pub(crate) fn svd_for_factorize(
     let (u_inner, s_inner, vt_inner, singular_values, bond_index, left_indices, right_indices) =
         svd_truncated_inner(t, left_inds, options)?;
     svd_factorize_assemble(
-        u_inner,
-        s_inner,
-        vt_inner,
-        singular_values,
-        bond_index,
-        left_indices,
-        right_indices,
+        (
+            u_inner,
+            s_inner,
+            vt_inner,
+            singular_values,
+            bond_index,
+            left_indices,
+            right_indices,
+        ),
+        None,
     )
 }
 
@@ -824,6 +833,22 @@ pub(crate) fn svd_for_factorize_in(
     let (u_inner, s_inner, vt_inner, singular_values, bond_index, left_indices, right_indices) =
         svd_truncated_inner_in(t, left_inds, options, context)?;
     svd_factorize_assemble(
+        (
+            u_inner,
+            s_inner,
+            vt_inner,
+            singular_values,
+            bond_index,
+            left_indices,
+            right_indices,
+        ),
+        Some(context),
+    )
+}
+
+/// Wrap the truncated eager factors as [`IdxTensor`]s, returning `V^H` directly.
+fn svd_factorize_assemble(
+    (
         u_inner,
         s_inner,
         vt_inner,
@@ -831,29 +856,17 @@ pub(crate) fn svd_for_factorize_in(
         bond_index,
         left_indices,
         right_indices,
-    )
-}
-
-/// Wrap the truncated eager factors as [`IdxTensor`]s, returning `V^H` directly.
-fn svd_factorize_assemble(
-    u_inner: EagerTensor,
-    s_inner: EagerTensor,
-    vt_inner: EagerTensor,
-    singular_values: Vec<f64>,
-    bond_index: DynIndex,
-    left_indices: Vec<DynIndex>,
-    right_indices: Vec<DynIndex>,
+    ): SvdTruncatedEagerResult,
+    context: Option<&ExecutionContext>,
 ) -> Result<SvdFactorizeResult, SvdError> {
     let rank = singular_values.len();
     let mut u_indices = left_indices;
     u_indices.push(bond_index.clone());
     let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
-    let u_reshaped = u_inner
-        .runtime()
-        .with_eager_session(|session| session.reshape(&u_inner, &u_dims))
-        .map_err(|e| {
-            SvdError::ComputationError(anyhow::anyhow!("eager SVD U reshape failed: {e}"))
-        })?;
+    let u_reshaped = with_eager_session(u_inner.runtime(), context, |session| {
+        session.reshape(&u_inner, &u_dims)
+    })
+    .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("eager SVD U reshape failed: {e}")))?;
     let u = IdxTensor::from_inner(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
 
     // The singular values are real. Contracting a real `S` with a complex
@@ -861,29 +874,45 @@ fn svd_factorize_assemble(
     // which traces and compiles a program on every call; giving `S` the
     // factors' dtype keeps that contraction on the cached path.
     let s_inner = if s_inner.dtype() != vt_inner.dtype() {
-        s_inner
-            .runtime()
-            .with_eager_session(|session| session.convert(&s_inner, vt_inner.dtype()))
-            .map_err(|e| {
-                SvdError::ComputationError(anyhow::anyhow!(
-                    "eager SVD S dtype conversion failed: {e}"
-                ))
-            })?
+        with_eager_session(s_inner.runtime(), context, |session| {
+            session.convert(&s_inner, vt_inner.dtype())
+        })
+        .map_err(|e| {
+            SvdError::ComputationError(anyhow::anyhow!("eager SVD S dtype conversion failed: {e}"))
+        })?
     } else {
         s_inner
     };
     let s_indices = vec![bond_index.clone(), bond_index.sim()];
-    let s = IdxTensor::from_diag_inner(s_indices, s_inner).map_err(SvdError::ComputationError)?;
+    // The context-scoped factorization assembles its factors on the context's
+    // session, which serves dense operands. Build `S` as a dense diagonal on
+    // that engine; the implicit route keeps the compact diagonal storage.
+    let s = match context {
+        Some(context) => {
+            let dense = with_eager_session(s_inner.runtime(), Some(context), |session| {
+                session.embed_diag(&s_inner, 0, 1)
+            })
+            .map_err(|error| {
+                SvdError::ComputationError(
+                    anyhow::Error::new(error).context("eager SVD S diagonal embedding failed"),
+                )
+            })?;
+            IdxTensor::from_inner(s_indices, dense).map_err(SvdError::ComputationError)?
+        }
+        None => {
+            IdxTensor::from_diag_inner(s_indices, s_inner).map_err(SvdError::ComputationError)?
+        }
+    };
 
     let mut vh_indices = vec![bond_index.clone()];
     vh_indices.extend(right_indices);
     let vh_dims: Vec<usize> = vh_indices.iter().map(|idx| idx.dim).collect();
-    let vt_reshaped = vt_inner
-        .runtime()
-        .with_eager_session(|session| session.reshape(&vt_inner, &vh_dims))
-        .map_err(|e| {
-            SvdError::ComputationError(anyhow::anyhow!("eager SVD V^T reshape failed: {e}"))
-        })?;
+    let vt_reshaped = with_eager_session(vt_inner.runtime(), context, |session| {
+        session.reshape(&vt_inner, &vh_dims)
+    })
+    .map_err(|e| {
+        SvdError::ComputationError(anyhow::anyhow!("eager SVD V^T reshape failed: {e}"))
+    })?;
     let vh = IdxTensor::from_inner(vh_indices, vt_reshaped).map_err(SvdError::ComputationError)?;
 
     Ok(SvdFactorizeResult {

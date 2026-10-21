@@ -203,7 +203,7 @@ fn svd_with_rejects_zero_max_bond_dim_and_infinite_thresholds() {
 fn svd_with_in_matches_host_path_on_explicit_cpu_context() {
     use std::sync::Arc;
 
-    use tenferro_cpu::CpuBackend;
+    use tensor4all_tensorbackend::CpuBackend;
     use tensor4all_tensorbackend::CpuExecutionContext;
 
     use crate::ExecutionContext;
@@ -288,7 +288,7 @@ fn svd_for_factorize_on_session_refuses_a_tracked_operand() {
     use tensor4all_tensorbackend::CpuExecutionContext;
 
     let context = CpuExecutionContext::from_backend(
-        tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend"),
+        tensor4all_tensorbackend::CpuBackend::with_threads(1).expect("1T CPU backend"),
     );
     let (rows, cols) = (Index::new_dyn(2), Index::new_dyn(2));
     let tracked = IdxTensor::from_dense(vec![rows.clone(), cols], vec![1.0_f64, 2.0, 3.0, 4.0])

@@ -32,6 +32,7 @@
 //! # }
 //! ```
 
+use super::eager_session::with_eager_session;
 use crate::defaults::idx_tensor::unfold_split_inner;
 use crate::defaults::DynIndex;
 use crate::{contract_pair, unfold_split, AnyScalar, IdxTensor};
@@ -260,10 +261,10 @@ fn factorize_gram(
         .eigenvectors
         .as_inner()
         .map_err(FactorizeError::ComputationError)?;
-    let basis_inner = eigenvectors_inner
-        .runtime()
-        .with_eager_session(|session| session.take_cols(eigenvectors_inner, &retained_columns))
-        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    let basis_inner = with_eager_session(eigenvectors_inner.runtime(), None, |session| {
+        session.take_cols(eigenvectors_inner, &retained_columns)
+    })
+    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
     let bond_index = DynIndex::new_bond(rank)
         .map_err(|error| FactorizeError::ComputationError(anyhow::anyhow!(error)))?;
     let basis_index = if eigenvectors_left {
@@ -358,10 +359,10 @@ fn reshape_factor(tensor: IdxTensor, indices: Vec<DynIndex>) -> Result<IdxTensor
     let inner = tensor
         .as_inner()
         .map_err(FactorizeError::ComputationError)?;
-    let inner = inner
-        .runtime()
-        .with_eager_session(|session| session.reshape(inner, &dims))
-        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    let inner = with_eager_session(inner.runtime(), None, |session| {
+        session.reshape(inner, &dims)
+    })
+    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
     IdxTensor::from_inner(indices, inner).map_err(FactorizeError::ComputationError)
 }
 
@@ -601,7 +602,34 @@ fn factorize_svd_with_eager_options_in(
 ) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     let result = svd_for_factorize_in(t, left_inds, svd_options, context)
         .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
-    assemble_svd_factors(result, canonical, &mut global_svd_factor_contraction)
+    let mut contract =
+        |lhs: &IdxTensor, rhs: &IdxTensor| context_svd_factor_contraction(lhs, rhs, context);
+    assemble_svd_factors(result, canonical, &mut contract)
+}
+
+/// Contract two SVD factors through the caller-owned context's engine.
+///
+/// The context-scoped factorization assembles `S * V^H` (or `U * S`) after the
+/// decomposition returns, so the assembly must run on the same context engine
+/// instead of the process-global default one. A non-CPU context keeps the
+/// existing global contraction route.
+fn context_svd_factor_contraction(
+    lhs: &IdxTensor,
+    rhs: &IdxTensor,
+    context: &ExecutionContext,
+) -> Result<IdxTensor, FactorizeError> {
+    #[cfg(feature = "tenferro-cuda")]
+    let cpu = match context {
+        ExecutionContext::Cpu(cpu) => cpu,
+        ExecutionContext::Cuda(_) => return global_svd_factor_contraction(lhs, rhs),
+    };
+    #[cfg(not(feature = "tenferro-cuda"))]
+    let ExecutionContext::Cpu(cpu) = context;
+    cpu.with_concrete_session(|session| {
+        crate::contract_pair_on_session(session, lhs, rhs, crate::PairwiseContractionOptions::new())
+    })
+    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?
+    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))
 }
 
 fn factorize_qr_with_options_in(
@@ -694,21 +722,16 @@ fn global_svd_factor_contraction(
 /// use tensor4all_core::{
 ///     factorize_on_session, DynIndex, FactorizeOptions, IdxTensor, TensorContractionLike,
 /// };
-/// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
-/// use tensor4all_tensorbackend::CpuBackend;
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 ///
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(2);
 /// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64, 0.0, 0.0, 1.0])?;
 ///
-/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-/// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-/// let mut held = HeldSession::open(&backend)?;
-/// let result = held.with_session(|view| {
-///     let mut session = Session::from_backend_session(view.backend());
-///     factorize_on_session(&mut session, &tensor, std::slice::from_ref(&i), &FactorizeOptions::svd())
-/// })?;
-/// held.close()?;
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let mut session = Session::new(backend.engine_mut());
+/// let result =
+///     factorize_on_session(&mut session, &tensor, std::slice::from_ref(&i), &FactorizeOptions::svd())?;
 /// assert_eq!(result.rank, 2);
 /// let reconstructed = result.left.contract_pair(&result.right)?;
 /// assert!(tensor.sub(&reconstructed)?.maxabs()? < 1.0e-12);
@@ -788,27 +811,21 @@ pub fn factorize_on_session(
 ///     factorize_full_rank_on_session, Canonical, DynIndex, FactorizeAlg, IdxTensor,
 ///     TensorContractionLike,
 /// };
-/// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
-/// use tensor4all_tensorbackend::CpuBackend;
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 ///
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(2);
 /// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64, 0.0, 0.0, 1.0])?;
 ///
-/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-/// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-/// let mut held = HeldSession::open(&backend)?;
-/// let result = held.with_session(|view| {
-///     let mut session = Session::from_backend_session(view.backend());
-///     factorize_full_rank_on_session(
-///         &mut session,
-///         &tensor,
-///         std::slice::from_ref(&i),
-///         FactorizeAlg::QR,
-///         Canonical::Left,
-///     )
-/// })?;
-/// held.close()?;
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let mut session = Session::new(backend.engine_mut());
+/// let result = factorize_full_rank_on_session(
+///     &mut session,
+///     &tensor,
+///     std::slice::from_ref(&i),
+///     FactorizeAlg::QR,
+///     Canonical::Left,
+/// )?;
 /// assert_eq!(result.rank, 2);
 /// let reconstructed = result.left.contract_pair(&result.right)?;
 /// assert!(tensor.sub(&reconstructed)?.maxabs()? < 1e-12);

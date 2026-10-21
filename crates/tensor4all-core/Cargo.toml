@@ -112,3 +112,7 @@ path = "tests/plain_tensor_retention.rs"
 [[test]]
 name = "linalg_svd"
 path = "tests/linalg_svd.rs"
+
+[[test]]
+name = "default_engine_reentry"
+path = "tests/default_engine_reentry.rs"

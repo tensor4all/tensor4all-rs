@@ -6,13 +6,13 @@
 //! routes serve the narrow floats in their own dtype rather than widening them into `f64`.
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::{
     contract_pair_on_session, inner_product_on_session, norm_on_session, norm_squared_on_session,
     permute_indices_on_session, permute_on_session, sum_on_session, IdxTensor,
     PairwiseContractionOptions,
 };
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 
 fn session_context() -> CpuExecutionContext {

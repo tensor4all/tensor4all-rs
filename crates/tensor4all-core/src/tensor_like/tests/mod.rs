@@ -864,7 +864,7 @@ fn tensor_factorization_preserves_multi_axis_probe_row_order() {
 fn tensor_like_default_context_seam_reports_unsupported() {
     use std::sync::Arc;
 
-    use tenferro_cpu::CpuBackend;
+    use tensor4all_tensorbackend::CpuBackend;
     use tensor4all_tensorbackend::{CpuExecutionContext, ExecutionContext};
 
     let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(

@@ -1,10 +1,10 @@
 use num_complex::Complex64;
 use std::sync::Arc;
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{
     DynIndex, ExecutionContext, IdxTensor, IndexLike, TensorContractionLike,
     TensorFactorizationLike,
 };
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 
 #[test]

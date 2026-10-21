@@ -3,7 +3,7 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tenferro_linalg::TensorLinalgExt;
-use tenferro_tensor::{BackendSessionHost, Tensor};
+use tenferro_tensor::Tensor;
 use tensor4all_core::{matrix_luci_factors_from_matrix_owned, rrlu_mut, rrlu_pivots, RrLUOptions};
 use tensor4all_tensorbackend::{from_vec2d, with_default_backend, Matrix};
 
@@ -55,11 +55,8 @@ fn bench_rrlu(c: &mut Criterion) {
                 b.iter_batched(
                     || random_tenferro_matrix(n, n, 42),
                     |m| {
-                        with_default_backend(|backend| {
-                            backend.with_backend_session(|session| m.full_piv_lu(session))
-                        })
-                        .unwrap()
-                        .unwrap();
+                        with_default_backend(|backend| m.full_piv_lu(backend.engine_mut()))
+                            .unwrap();
                     },
                     criterion::BatchSize::SmallInput,
                 );

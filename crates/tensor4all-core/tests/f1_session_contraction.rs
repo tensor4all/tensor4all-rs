@@ -7,12 +7,12 @@ use std::sync::Arc;
 
 use num_complex::Complex64;
 
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::{
     contract_pair, contract_pair_on_session, ExecutionContext, IdxTensor,
     PairwiseContractionOptions,
 };
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::{CpuExecutionContext, Storage};
 
 fn cpu_context() -> CpuExecutionContext {

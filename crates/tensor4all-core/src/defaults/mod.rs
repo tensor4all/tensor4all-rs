@@ -19,6 +19,8 @@
 
 #[cfg(feature = "tenferro-cuda")]
 mod cuda;
+/// Engine selection for the implicit and context-scoped eager frontends.
+pub(crate) mod eager_session;
 /// Dynamic-length tensor implementation.
 pub mod idx_tensor;
 pub mod index;
