@@ -544,3 +544,185 @@ fn runtime_engine_follows_the_owning_context_and_falls_back_after_drop() {
     .expect("the process-global fallback session entry");
     assert_eq!(fallback, Some(default_threads));
 }
+
+/// A default pool built from a thread narrowed to one CPU is still sized and
+/// masked from the main thread's snapshot.
+///
+/// Its own test process: the first [`CpuBackend::new`] fixes the process-wide
+/// default, so another test in the same binary could legitimately resolve it
+/// first. The child re-execution keeps the first call in this test.
+#[cfg(target_os = "linux")]
+#[test]
+fn default_pool_from_a_narrowed_thread_uses_the_main_mask() {
+    const CHILD: &str = "T4A_TENSORBACKEND_AFFINITY_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let main_mask = affinity::main_thread_mask().unwrap();
+        let main_cpus = main_mask.cpus();
+        let mask_words = main_mask.words_len();
+        assert!(
+            !main_cpus.is_empty(),
+            "a running process has at least one CPU"
+        );
+        let expected = std::thread::available_parallelism().unwrap().get();
+        let first = main_cpus[0];
+        let second = *main_cpus.get(1).unwrap_or(&first);
+
+        let (threads, backend) = std::thread::spawn(move || {
+            let first_mask = affinity::CpuMask::single(first, mask_words);
+            affinity::set_current_thread_to(&first_mask).unwrap();
+            let backend = CpuBackend::new();
+            (backend.num_threads(), backend)
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            threads, expected,
+            "the construction thread's one-CPU mask must not size the pool"
+        );
+
+        // A second construction from another mask keeps the fixed count.
+        let second_threads = std::thread::spawn(move || {
+            let second_mask = affinity::CpuMask::single(second, mask_words);
+            affinity::set_current_thread_to(&second_mask).unwrap();
+            CpuBackend::new().num_threads()
+        })
+        .join()
+        .unwrap();
+        assert_eq!(second_threads, expected);
+        assert_eq!(
+            set_default_cpu_threads(NonZeroUsize::new(2).expect("two workers")),
+            Err(AlreadyInitialized)
+        );
+
+        if expected > 1 {
+            let pool = backend
+                .engine()
+                .pool()
+                .expect("a resolved count above one owns a pool");
+            let workers = pool.broadcast(|ctx| {
+                let own = affinity::current_thread_cpus().unwrap();
+                let spawned = std::thread::spawn(affinity::current_thread_cpus)
+                    .join()
+                    .unwrap()
+                    .unwrap();
+                (ctx.index(), own, spawned)
+            });
+            assert_eq!(workers.len(), expected);
+            for (index, own, spawned) in workers {
+                assert_eq!(
+                    own, main_cpus,
+                    "worker {index} must inherit the full main-thread mask"
+                );
+                assert_eq!(
+                    spawned, main_cpus,
+                    "a thread spawned by worker {index} must inherit the full mask"
+                );
+            }
+        }
+        return;
+    }
+
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "context::tests::default_pool_from_a_narrowed_thread_uses_the_main_mask",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .env_remove("RAYON_NUM_THREADS")
+        .env_remove("RAYON_RS_NUM_CPUS")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "the affinity child failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// An explicit-count pool built from a narrowed thread still covers the whole
+/// main-thread mask.
+#[cfg(target_os = "linux")]
+#[test]
+fn explicit_pool_from_a_narrowed_thread_covers_the_main_mask() {
+    let main_mask = affinity::main_thread_mask().unwrap();
+    let main_cpus = main_mask.cpus();
+    let mask_words = main_mask.words_len();
+    let first = main_cpus[0];
+    let backend = std::thread::spawn(move || {
+        let first_mask = affinity::CpuMask::single(first, mask_words);
+        affinity::set_current_thread_to(&first_mask).unwrap();
+        CpuBackend::with_threads(2).unwrap()
+    })
+    .join()
+    .unwrap();
+    let pool = backend.engine().pool().expect("two workers own a pool");
+    let workers = pool.broadcast(|_| affinity::current_thread_cpus().unwrap());
+    assert_eq!(workers.len(), 2);
+    for mask in workers {
+        assert_eq!(mask, main_cpus);
+    }
+}
+
+/// Every pinned worker runs on exactly its one listed CPU, including the
+/// one-element list that still builds a one-worker pool.
+#[cfg(target_os = "linux")]
+#[test]
+fn pinned_workers_run_on_exactly_their_cpu() {
+    let allowed = CpuBackend::allowed_cpus().unwrap();
+    let cpus = &allowed[..allowed.len().min(2)];
+    let backend = CpuBackend::pinned(cpus).unwrap();
+    assert_eq!(backend.num_threads(), cpus.len());
+    let pool = backend
+        .engine()
+        .pool()
+        .expect("pinned never takes the serial path");
+    let workers = pool.broadcast(|ctx| (ctx.index(), affinity::current_thread_cpus().unwrap()));
+    assert_eq!(workers.len(), cpus.len());
+    for (index, mask) in workers {
+        assert_eq!(mask, vec![cpus[index]], "worker {index}");
+    }
+}
+
+/// The pinned constructor reports each invalid CPU list as its typed error,
+/// including an id far outside the mask without indexing or allocating for it.
+#[cfg(target_os = "linux")]
+#[test]
+fn pinned_rejects_invalid_cpu_lists_typed() {
+    assert!(matches!(
+        CpuBackend::pinned(&[]),
+        Err(CpuThreadError::EmptyCpuList)
+    ));
+
+    let allowed = CpuBackend::allowed_cpus().unwrap();
+    let cpu = allowed[0];
+    assert!(matches!(
+        CpuBackend::pinned(&[cpu, cpu]),
+        Err(CpuThreadError::DuplicateCpu { cpu: repeated }) if repeated == cpu
+    ));
+
+    let outside = allowed.last().copied().unwrap() + 1;
+    assert!(matches!(
+        CpuBackend::pinned(&[outside]),
+        Err(CpuThreadError::CpuNotAllowed { cpu: rejected }) if rejected == outside
+    ));
+    assert!(matches!(
+        CpuBackend::pinned(&[usize::MAX]),
+        Err(CpuThreadError::CpuNotAllowed { cpu: rejected }) if rejected == usize::MAX
+    ));
+}
+
+/// Off Linux the two affinity entry points report the typed platform error.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn affinity_is_unsupported_off_linux() {
+    assert!(matches!(
+        CpuBackend::allowed_cpus(),
+        Err(CpuThreadError::UnsupportedPlatform)
+    ));
+    assert!(matches!(
+        CpuBackend::pinned(&[0]),
+        Err(CpuThreadError::UnsupportedPlatform)
+    ));
+}

@@ -74,6 +74,9 @@ tenferro-linalg.workspace = true
 tenferro-tensor.workspace = true
 tenferro-gpu = { workspace = true, optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 approx.workspace = true
 tenferro.workspace = true

@@ -451,3 +451,45 @@ fn a_failing_patch_keeps_its_typed_error() {
         other => panic!("expected an evaluator error, got {other:?}"),
     }
 }
+
+/// The advertised lane construction: split `allowed_cpus()` into disjoint
+/// lists, build one pinned backend per list, consume each backend into its
+/// engine, and run the adaptive driver on the resulting lanes.
+#[cfg(target_os = "linux")]
+#[test]
+fn allowed_cpus_split_into_pinned_backends_builds_lanes_and_runs() {
+    use tensor4all_tensorbackend::CpuBackend;
+
+    let allowed = CpuBackend::allowed_cpus().expect("the Linux affinity snapshot");
+    let groups: Vec<&[usize]> = if allowed.len() <= 1 {
+        vec![&allowed[..]]
+    } else {
+        let split = allowed.len().div_ceil(2);
+        allowed.chunks(split).collect()
+    };
+    let engines = groups
+        .iter()
+        .map(|cpus| {
+            CpuBackend::pinned(cpus)
+                .expect("a disjoint pinned backend")
+                .into_engine()
+        })
+        .collect();
+    let mut lanes = TenferroLanes::new(engines).expect("one engine per lane");
+    assert_eq!(lanes.lane_count(), groups.len());
+
+    let problem = chain();
+    let options = chain_options();
+    let result = patched_interpolate_on_lanes(
+        &mut lanes,
+        &DenseEngine::new(),
+        problem.topology.clone(),
+        problem.node_sites.clone(),
+        problem.pivots(&[]),
+        evaluator(&chain_f, problem.sites.len()),
+        &options,
+    )
+    .expect("the pinned lanes run the adaptive driver");
+    assert_eq!(result.partition.len(), 4);
+    assert_eq!(result.report.splits, 3);
+}

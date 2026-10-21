@@ -5699,6 +5699,7 @@ dependencies = [
  "anyhow",
  "approx 0.5.1",
  "criterion",
+ "libc",
  "num-complex 0.4.6",
  "num-traits",
  "omeco",

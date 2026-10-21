@@ -18,10 +18,196 @@ use tenferro_ad::ContextId;
 use tenferro_ad::{AdContext, EagerRuntime};
 use tenferro_cpu::{BufferPoolStats, CpuEngine};
 
-/// Failure reported when building a [`CpuBackend`] pool.
+/// Linux CPU-affinity FFI, kept in one place so every `unsafe` block has one
+/// auditable owner.
 ///
-/// A pool build is the only fallible step of a [`CpuBackend`]: tenferro itself
-/// never builds threads, so the caller's thread policy is the caller's error to
+/// The mask is a growable word buffer in the kernel's `sched_*affinity` layout.
+/// No fixed `cpu_set_t` is used: a mask larger than glibc's 1024-CPU set is
+/// retried with a larger buffer instead of failing, and CPU ids are validated
+/// before they index the buffer.
+#[cfg(target_os = "linux")]
+mod affinity {
+    use std::io;
+
+    use super::CpuThreadError;
+
+    // Declared here rather than through `libc`, whose Linux binding for
+    // `sched_getaffinity` is not present in every supported version. The
+    // signatures use the kernel's raw byte-buffer contract, not `cpu_set_t`.
+    unsafe extern "C" {
+        fn sched_getaffinity(
+            pid: libc::pid_t,
+            cpusetsize: libc::size_t,
+            cpuset: *mut libc::c_void,
+        ) -> libc::c_int;
+        fn sched_setaffinity(
+            pid: libc::pid_t,
+            cpusetsize: libc::size_t,
+            cpuset: *const libc::c_void,
+        ) -> libc::c_int;
+    }
+
+    const BITS_PER_WORD: usize = libc::c_ulong::BITS as usize;
+    const INITIAL_WORDS: usize = 1;
+    /// 512 KiB of mask on a 64-bit host, far beyond any current CPU count.
+    const MAX_WORDS: usize = 1 << 16;
+
+    /// One CPU set in the layout `sched_getaffinity` and `sched_setaffinity`
+    /// expect. The words are owned by the `Vec`, so the buffer is word-aligned.
+    #[derive(Clone, Debug)]
+    pub(super) struct CpuMask {
+        words: Vec<libc::c_ulong>,
+    }
+
+    impl CpuMask {
+        /// The mask holding exactly `cpu`, with at least `min_words` words.
+        ///
+        /// Callers validate `cpu` against the allowed set first, so the small
+        /// allocation is bounded by the current kernel mask. `min_words` keeps
+        /// the buffer at the kernel's mask size on hosts where the highest
+        /// allowed CPU is in a low word.
+        pub(super) fn single(cpu: usize, min_words: usize) -> Self {
+            let word = cpu / BITS_PER_WORD;
+            let bit = cpu % BITS_PER_WORD;
+            let mut words = vec![0; (word + 1).max(min_words)];
+            words[word] |= 1 << bit;
+            Self { words }
+        }
+
+        /// The number of words in this mask's kernel buffer.
+        pub(super) fn words_len(&self) -> usize {
+            self.words.len()
+        }
+
+        /// The CPU ids in this mask, in ascending order.
+        pub(super) fn cpus(&self) -> Vec<usize> {
+            let mut cpus = Vec::new();
+            for (index, &word) in self.words.iter().enumerate() {
+                let mut bits = word;
+                while bits != 0 {
+                    let bit = bits.trailing_zeros() as usize;
+                    cpus.push(index * BITS_PER_WORD + bit);
+                    bits &= bits - 1;
+                }
+            }
+            cpus
+        }
+
+        /// Whether this mask holds exactly the same CPUs as `other`.
+        pub(super) fn equals(&self, other: &Self) -> bool {
+            let len = self.words.len().max(other.words.len());
+            (0..len).all(|index| self.word(index) == other.word(index))
+        }
+
+        fn word(&self, index: usize) -> libc::c_ulong {
+            self.words.get(index).copied().unwrap_or(0)
+        }
+
+        fn as_bytes(&self) -> usize {
+            std::mem::size_of_val(self.words.as_slice())
+        }
+
+        fn as_ptr(&self) -> *const libc::c_void {
+            self.words.as_ptr().cast()
+        }
+    }
+
+    /// Read the mask of the thread identified by `pid` (`0` is the calling
+    /// thread).
+    fn get_mask(pid: libc::pid_t) -> io::Result<CpuMask> {
+        let mut words = vec![0 as libc::c_ulong; INITIAL_WORDS];
+        loop {
+            let bytes = std::mem::size_of_val(words.as_slice());
+            // SAFETY: `words` is an owned, word-aligned buffer and `bytes` is
+            // its exact byte length; the kernel writes at most that many bytes.
+            let result = unsafe { sched_getaffinity(pid, bytes, words.as_mut_ptr().cast()) };
+            if result == 0 {
+                // Keep the successful kernel buffer size: `sched_setaffinity`
+                // requires at least that many bytes even when the high words
+                // are empty.
+                return Ok(CpuMask { words });
+            }
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::EINVAL) {
+                return Err(error);
+            }
+            let next = words.len().checked_mul(2).filter(|&len| len <= MAX_WORDS);
+            let Some(next) = next else {
+                return Err(io::Error::other(
+                    "CPU affinity mask is larger than the supported buffer",
+                ));
+            };
+            words.resize(next, 0);
+        }
+    }
+
+    /// Replace the mask of the thread identified by `pid` (`0` is the calling
+    /// thread) with `mask`.
+    fn set_mask(pid: libc::pid_t, mask: &CpuMask) -> io::Result<()> {
+        // SAFETY: `mask` owns a word-aligned buffer and `as_bytes` is its exact
+        // byte length; the kernel reads at most that many bytes.
+        let result = unsafe { sched_setaffinity(pid, mask.as_bytes(), mask.as_ptr()) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    /// The main thread's mask at construction, a snapshot taken with
+    /// `sched_getaffinity(getpid())`.
+    ///
+    /// The process id names the thread-group leader, so a pool built lazily
+    /// from a worker of an already-pinned pool does not inherit that worker's
+    /// single CPU.
+    pub(super) fn main_thread_mask() -> Result<CpuMask, CpuThreadError> {
+        get_mask(std::process::id() as libc::pid_t).map_err(|source| CpuThreadError::Affinity {
+            operation: "sched_getaffinity",
+            source,
+        })
+    }
+
+    /// Set the calling thread's mask to `mask`.
+    pub(super) fn set_current_thread_to(mask: &CpuMask) -> Result<(), CpuThreadError> {
+        set_mask(0, mask).map_err(|source| CpuThreadError::Affinity {
+            operation: "sched_setaffinity",
+            source,
+        })
+    }
+
+    /// Pin the calling thread to exactly `cpu` and verify the effective mask.
+    pub(super) fn pin_current_thread(cpu: usize) -> io::Result<()> {
+        let min_words = get_mask(0)?.words_len();
+        let expected = CpuMask::single(cpu, min_words);
+        set_mask(0, &expected)?;
+        let actual = get_mask(0)?;
+        if actual.equals(&expected) {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "worker mask is not exactly CPU {cpu}"
+            )))
+        }
+    }
+
+    /// The calling thread's effective CPU ids; used by the affinity tests.
+    #[cfg(test)]
+    pub(super) fn current_thread_cpus() -> Result<Vec<usize>, CpuThreadError> {
+        get_mask(0)
+            .map(|mask| mask.cpus())
+            .map_err(|source| CpuThreadError::Affinity {
+                operation: "sched_getaffinity",
+                source,
+            })
+    }
+}
+
+/// Failure reported when building a [`CpuBackend`] pool or applying its
+/// affinity policy.
+///
+/// A pool build and, on Linux, the affinity snapshot are the fallible steps of a
+/// [`CpuBackend`]: tenferro itself never builds threads, so the caller's thread
+/// policy is the caller's error to
 /// carry.
 ///
 /// # Examples
@@ -43,6 +229,59 @@ pub enum CpuThreadError {
         /// Original Rayon diagnostic.
         #[source]
         source: Box<rayon::ThreadPoolBuildError>,
+    },
+    /// [`CpuBackend::pinned`] was given an empty CPU list.
+    #[error("a pinned CPU backend needs at least one CPU")]
+    EmptyCpuList,
+    /// [`CpuBackend::pinned`] was given the same CPU twice.
+    #[error("the pinned CPU list repeats CPU {cpu}")]
+    DuplicateCpu {
+        /// The repeated CPU id.
+        cpu: usize,
+    },
+    /// [`CpuBackend::pinned`] named a CPU outside the main thread's mask.
+    #[error("CPU {cpu} is outside the main thread's allowed CPU set")]
+    CpuNotAllowed {
+        /// The rejected CPU id.
+        cpu: usize,
+    },
+    /// CPU affinity is only implemented on Linux.
+    #[error("CPU affinity is not supported on this platform")]
+    UnsupportedPlatform,
+    /// An affinity system call failed.
+    #[error("{operation} failed: {source}")]
+    Affinity {
+        /// The system call that failed.
+        operation: &'static str,
+        /// Original operating-system diagnostic.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The short-lived thread that builds a pool could not be started.
+    #[error("failed to start the CPU pool construction thread: {source}")]
+    ConstructionThread {
+        /// Original thread-spawn diagnostic.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The CPU pool construction thread panicked before returning the pool.
+    #[error("the CPU pool construction thread panicked")]
+    ConstructionThreadPanic,
+    /// A pinned worker could not be confined to its CPU.
+    #[error("failed to pin CPU worker {worker} to its CPU: {source}")]
+    WorkerAffinity {
+        /// Rayon worker index.
+        worker: usize,
+        /// Original operating-system or verification diagnostic.
+        #[source]
+        source: std::io::Error,
+    },
+    /// A pinned worker terminated before reporting its affinity result.
+    #[error("a pinned CPU worker did not report its affinity: {source}")]
+    WorkerStartupClosed {
+        /// Channel receive failure from the worker startup handshake.
+        #[source]
+        source: std::sync::mpsc::RecvError,
     },
 }
 
@@ -97,13 +336,44 @@ pub fn set_default_cpu_threads(threads: NonZeroUsize) -> Result<(), AlreadyIniti
         .map_err(|_| AlreadyInitialized)
 }
 
-/// The worker count [`CpuBackend::new`] uses: the fixed default, or one per
-/// available core.
-fn default_cpu_threads() -> usize {
-    *DEFAULT_CPU_THREADS.get_or_init(|| {
-        std::thread::available_parallelism()
-            .map(NonZeroUsize::get)
-            .unwrap_or(1)
+/// Build one Rayon pool with `threads` (or Rayon's own default when `None`).
+///
+/// On Linux the build runs on a short-lived construction thread whose mask is
+/// first set to the main thread's mask snapshot. Rayon resolves its default
+/// worker count (`available_parallelism`) before the workers start, so this
+/// ordering keeps a pool built from a singly pinned worker from inheriting that
+/// worker's single CPU. The workers inherit the construction thread's mask.
+///
+/// Off Linux the pool is built on the calling thread and no affinity call is
+/// made.
+fn build_pool(threads: Option<usize>) -> Result<rayon::ThreadPool, CpuThreadError> {
+    #[cfg(target_os = "linux")]
+    {
+        let mask = affinity::main_thread_mask()?;
+        std::thread::Builder::new()
+            .name("tensor4all-cpu-pool".to_owned())
+            .spawn(move || {
+                affinity::set_current_thread_to(&mask)?;
+                build_pool_here(threads)
+            })
+            .map_err(|source| CpuThreadError::ConstructionThread { source })?
+            .join()
+            .map_err(|_| CpuThreadError::ConstructionThreadPanic)?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        build_pool_here(threads)
+    }
+}
+
+/// Build one Rayon pool on the calling thread.
+fn build_pool_here(threads: Option<usize>) -> Result<rayon::ThreadPool, CpuThreadError> {
+    let mut builder = tenferro_cpu::thread_pool_builder();
+    if let Some(threads) = threads {
+        builder = builder.num_threads(threads);
+    }
+    builder.build().map_err(|source| CpuThreadError::Pool {
+        source: Box::new(source),
     })
 }
 
@@ -121,13 +391,26 @@ fn default_cpu_threads() -> usize {
 /// caller owns it outright, and a second execution domain needs a second
 /// backend.
 ///
-/// [`CpuBackend::new`] uses [`set_default_cpu_threads`] when it was called, and
-/// otherwise one worker per available core. Upstream tenferro no longer reads
-/// `RAYON_NUM_THREADS`; the previous default came from
-/// `tenferro_cpu::CpuContext::from_env`, which read `RAYON_NUM_THREADS` (and fell
-/// back to a single-threaded context when it was malformed) and otherwise used
-/// the available parallelism. If the pool cannot be built, [`CpuBackend::new`]
-/// falls back to [`CpuEngine::serial`] instead of panicking.
+/// [`CpuBackend::new`] resolves its worker count in this order: the value
+/// [`set_default_cpu_threads`] fixed, else Rayon's own default (`RAYON_NUM_THREADS`,
+/// see Rayon's documentation), else the CPUs in the main thread's mask. A
+/// resolved count of one uses [`CpuEngine::serial`] and owns no pool. The count
+/// is fixed by the first [`CpuBackend::new`] of the process, or by the setter.
+/// If the pool cannot be built, [`CpuBackend::new`] falls back to
+/// [`CpuEngine::serial`] instead of panicking.
+///
+/// Every pool this type builds on Linux confines its workers to the main
+/// thread's allowed CPU set, captured as a snapshot when the pool is built.
+/// This applies to the pool's workers only: operations that run inline on the
+/// caller (small operations, Rayon-worker entries that use the serial inline
+/// engine, and hataori lane threads) are not moved. A cpuset or CPU-hotplug
+/// change needs a new backend, not a continuous watcher.
+///
+/// [`CpuBackend::pinned`] is an opt-in per-worker pinning mode whose benefit is
+/// unmeasured. Disjoint pinned backends confine their *pools'* workers; they do
+/// not isolate all execution of their engines, because an entry from any Rayon
+/// worker runs inline on that worker. A provider team created from a pinned
+/// worker inherits that worker's one CPU.
 ///
 /// # Examples
 ///
@@ -160,16 +443,24 @@ impl std::fmt::Debug for CpuBackend {
 impl CpuBackend {
     /// Build a backend with the default thread policy.
     ///
-    /// The worker count is the value [`set_default_cpu_threads`] fixed, or one
-    /// per available core. A worker stack of
+    /// The worker count is [`set_default_cpu_threads`] if it was called; else
+    /// Rayon's default (`RAYON_NUM_THREADS`, see Rayon's documentation), which
+    /// falls back to the CPUs in the main thread's mask; else one per CPU in
+    /// that mask. A worker stack of
     /// [`tenferro_cpu::DEFAULT_WORKER_STACK_BYTES`] is reserved for each worker,
-    /// as the CPU providers require.
+    /// as the CPU providers require. The count is fixed by the first call.
     ///
-    /// The pool build is the one fallible step, and this constructor does not
-    /// report it: if the pool cannot be built the backend is
-    /// [`CpuEngine::serial`] instead, which is correct but uses no worker
-    /// threads. Build the pool yourself and use [`CpuBackend::from`] when that
-    /// difference matters.
+    /// On Linux the pool is built on a short-lived construction thread whose
+    /// mask is first set to the main thread's mask snapshot, so building from a
+    /// worker of a pinned pool does not inherit that worker's single CPU. The
+    /// pool's workers inherit the snapshot; inline operations of the caller are
+    /// not moved.
+    ///
+    /// The pool build and the Linux affinity snapshot are the fallible steps,
+    /// and this constructor does not report them: if either cannot be used,
+    /// the backend is [`CpuEngine::serial`] instead, which is correct but uses
+    /// no worker threads. Use [`CpuBackend::with_threads`] or
+    /// [`CpuBackend::pinned`] when that difference matters.
     ///
     /// # Examples
     ///
@@ -180,7 +471,40 @@ impl CpuBackend {
     /// assert!(backend.num_threads() >= 1);
     /// ```
     pub fn new() -> Self {
-        let threads = default_cpu_threads();
+        if let Some(&threads) = DEFAULT_CPU_THREADS.get() {
+            return Self::with_threads_or_serial(threads);
+        }
+        match build_pool(None) {
+            Ok(pool) => {
+                let resolved = pool.current_num_threads();
+                let fixed = match DEFAULT_CPU_THREADS.set(resolved) {
+                    Ok(()) => resolved,
+                    Err(_) => *DEFAULT_CPU_THREADS.get().unwrap_or(&resolved),
+                };
+                if fixed != resolved {
+                    return Self::with_threads_or_serial(fixed);
+                }
+                if resolved == 1 {
+                    Self {
+                        engine: CpuEngine::serial(),
+                    }
+                } else {
+                    Self {
+                        engine: CpuEngine::new(pool),
+                    }
+                }
+            }
+            Err(_) => {
+                let _ = DEFAULT_CPU_THREADS.set(1);
+                Self {
+                    engine: CpuEngine::serial(),
+                }
+            }
+        }
+    }
+
+    /// Build a backend with `threads` workers, or serial for one.
+    fn with_threads_or_serial(threads: usize) -> Self {
         Self::with_threads(threads).unwrap_or_else(|_| Self {
             engine: CpuEngine::serial(),
         })
@@ -191,12 +515,16 @@ impl CpuBackend {
     /// One worker builds a [`CpuEngine::serial`] engine, which owns no pool, so
     /// it stays usable from inside another pool. Larger counts build a Rayon
     /// pool with [`tenferro_cpu::thread_pool_builder`], so provider code gets the
-    /// worker stack it needs.
+    /// worker stack it needs; the pool's workers are confined to the main
+    /// thread's allowed CPU set snapshot on Linux.
     ///
     /// # Errors
     ///
-    /// Returns [`CpuThreadError::ZeroThreads`] for zero, and
-    /// [`CpuThreadError::Pool`] when Rayon cannot build the pool.
+    /// Returns [`CpuThreadError::ZeroThreads`] for zero,
+    /// [`CpuThreadError::Affinity`] when the mask snapshot or its application
+    /// fails, [`CpuThreadError::ConstructionThread`] when the construction
+    /// thread cannot start, and [`CpuThreadError::Pool`] when Rayon cannot build
+    /// the pool.
     ///
     /// # Examples
     ///
@@ -220,15 +548,150 @@ impl CpuBackend {
                 engine: CpuEngine::serial(),
             });
         }
-        let pool = tenferro_cpu::thread_pool_builder()
-            .num_threads(threads)
-            .build()
-            .map_err(|source| CpuThreadError::Pool {
-                source: Box::new(source),
-            })?;
+        let pool = build_pool(Some(threads))?;
         Ok(Self {
             engine: CpuEngine::new(pool),
         })
+    }
+
+    /// Build a backend whose worker `i` is pinned to `cpus[i]`.
+    ///
+    /// This is opt-in per-worker pinning on Linux; its performance benefit is
+    /// unmeasured. Every listed CPU must be in the main thread's allowed set
+    /// ([`Self::allowed_cpus`]), which lets a caller split that set into
+    /// disjoint lists, one per engine. Each worker gets exactly its one CPU,
+    /// so a provider team created from a pinned worker inherits that one CPU.
+    /// A one-element list still builds a one-worker pool rather than a serial
+    /// engine; inline operations of a one-worker engine still run on the
+    /// caller.
+    ///
+    /// The mask is a snapshot: a cpuset or CPU-hotplug change needs a new
+    /// backend. Only the pool's workers are pinned; lane threads and inline
+    /// operations are not moved.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuThreadError::EmptyCpuList`] for an empty list,
+    /// [`CpuThreadError::DuplicateCpu`] for a repeated CPU,
+    /// [`CpuThreadError::CpuNotAllowed`] for a CPU outside the allowed set,
+    /// [`CpuThreadError::UnsupportedPlatform`] off Linux,
+    /// [`CpuThreadError::Affinity`] when the snapshot or a worker's mask fails,
+    /// [`CpuThreadError::WorkerAffinity`] when a worker cannot be pinned to
+    /// exactly its CPU, and [`CpuThreadError::Pool`] or
+    /// [`CpuThreadError::WorkerStartupClosed`] when the pool cannot be built or
+    /// a worker does not report.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{CpuBackend, CpuThreadError};
+    ///
+    /// assert!(matches!(
+    ///     CpuBackend::pinned(&[]),
+    ///     Err(CpuThreadError::EmptyCpuList)
+    /// ));
+    /// # #[cfg(target_os = "linux")]
+    /// # {
+    /// let allowed = CpuBackend::allowed_cpus()?;
+    /// let backend = CpuBackend::pinned(&allowed[..1])?;
+    /// assert_eq!(backend.num_threads(), 1);
+    /// assert!(backend.engine().pool().is_some());
+    /// # }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn pinned(cpus: &[usize]) -> Result<Self, CpuThreadError> {
+        if cpus.is_empty() {
+            return Err(CpuThreadError::EmptyCpuList);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = cpus;
+            Err(CpuThreadError::UnsupportedPlatform)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let allowed = affinity::main_thread_mask()?.cpus();
+            let mut seen = std::collections::HashSet::with_capacity(cpus.len());
+            for &cpu in cpus {
+                if !seen.insert(cpu) {
+                    return Err(CpuThreadError::DuplicateCpu { cpu });
+                }
+                if allowed.binary_search(&cpu).is_err() {
+                    return Err(CpuThreadError::CpuNotAllowed { cpu });
+                }
+            }
+
+            let workers = cpus.to_vec();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let pool = tenferro_cpu::thread_pool_builder()
+                .num_threads(workers.len())
+                .start_handler(move |worker| {
+                    let outcome = workers
+                        .get(worker)
+                        .copied()
+                        .ok_or_else(|| {
+                            std::io::Error::other("Rayon worker index outside the pinned CPU list")
+                        })
+                        .and_then(affinity::pin_current_thread);
+                    let _ = sender.send((worker, outcome));
+                })
+                .build()
+                .map_err(|source| CpuThreadError::Pool {
+                    source: Box::new(source),
+                })?;
+
+            for _ in 0..cpus.len() {
+                match receiver.recv() {
+                    Ok((_, Ok(()))) => {}
+                    Ok((worker, Err(source))) => {
+                        return Err(CpuThreadError::WorkerAffinity { worker, source });
+                    }
+                    Err(source) => {
+                        return Err(CpuThreadError::WorkerStartupClosed { source });
+                    }
+                }
+            }
+            Ok(Self {
+                engine: CpuEngine::new(pool),
+            })
+        }
+    }
+
+    /// The CPUs the main thread is allowed to run on right now, in ascending
+    /// order.
+    ///
+    /// This is a snapshot, read with `sched_getaffinity(getpid())` on Linux. A
+    /// caller can split it into disjoint lists and pass one list to each
+    /// [`CpuBackend::pinned`] engine. Off Linux this reports
+    /// [`CpuThreadError::UnsupportedPlatform`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuThreadError::UnsupportedPlatform`] off Linux and
+    /// [`CpuThreadError::Affinity`] when the affinity query fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuBackend;
+    ///
+    /// # #[cfg(target_os = "linux")]
+    /// # {
+    /// let allowed = CpuBackend::allowed_cpus()?;
+    /// assert!(!allowed.is_empty());
+    /// assert!(allowed.windows(2).all(|pair| pair[0] < pair[1]));
+    /// # }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn allowed_cpus() -> Result<Vec<usize>, CpuThreadError> {
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(CpuThreadError::UnsupportedPlatform)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Ok(affinity::main_thread_mask()?.cpus())
+        }
     }
 
     /// The number of workers operations on this backend may use.
@@ -274,6 +737,26 @@ impl CpuBackend {
     /// ```
     pub fn engine_mut(&mut self) -> &mut CpuEngine {
         &mut self.engine
+    }
+
+    /// Consume the backend and return the engine it owns.
+    ///
+    /// A caller that hands engines to another owner, such as a lane executor,
+    /// uses this instead of borrowing and cloning: [`CpuBackend`] deliberately
+    /// does not clone an execution domain.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuBackend;
+    ///
+    /// let engine = CpuBackend::with_threads(1)?.into_engine();
+    /// assert_eq!(engine.num_threads(), 1);
+    /// assert!(engine.pool().is_none());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn into_engine(self) -> CpuEngine {
+        self.engine
     }
 }
 
