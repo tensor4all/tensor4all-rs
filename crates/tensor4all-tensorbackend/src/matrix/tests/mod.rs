@@ -939,7 +939,7 @@ fn grouped_gemm_shared_validation_covers_bounds_overflow_and_shared_shapes() {
 
 #[test]
 fn grouped_gemm_shared_with_backend_uses_configured_thread_context() {
-    let mut backend = tenferro_cpu::CpuBackend::with_threads(1).unwrap();
+    let mut backend = crate::CpuBackend::with_threads(1).unwrap();
     let mut output = [0.0_f64];
     grouped_mat_mul_shared_with_backend(
         &mut backend,

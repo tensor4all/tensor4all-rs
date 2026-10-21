@@ -531,7 +531,7 @@ fn full_piv_lu_matrix_owned_preserves_shape_error() {
 // --- A caller-owned execution context for the full-pivot LU solve ---
 
 fn one_worker_context() -> crate::CpuExecutionContext {
-    let backend = tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend");
+    let backend = crate::CpuBackend::with_threads(1).expect("1T CPU backend");
     crate::CpuExecutionContext::from_backend(backend)
 }
 
@@ -652,7 +652,7 @@ fn the_session_solve_agrees_with_the_legacy_solve_on_one_entered_session() {
     let scoped = context
         .with_concrete_session(|session| {
             let f64_values = f64::solve_right_full_piv_lu_on_session(
-                session.backend(),
+                session.engine(),
                 &pi1,
                 3,
                 2,
@@ -662,7 +662,7 @@ fn the_session_solve_agrees_with_the_legacy_solve_on_one_entered_session() {
             )?;
             let f32_inputs = rectangular_operands::<f32>(|value| value as f32);
             let f32_values = f32::solve_right_full_piv_lu_on_session(
-                session.backend(),
+                session.engine(),
                 &f32_inputs.0,
                 3,
                 2,
@@ -682,41 +682,20 @@ fn the_session_solve_agrees_with_the_legacy_solve_on_one_entered_session() {
     assert_eq!(f32_legacy, scoped.1);
 }
 
-/// The session-taking solve is the entry a scheduler-owned lane uses: it runs on the
-/// lane's own session view and opens no other session.
+/// The session-taking solve runs on the engine the caller holds and opens no other
+/// session: the caller builds one [`crate::explicit::Session`] over its own backend.
 #[test]
-fn the_session_solve_runs_on_a_lane_session() {
-    use std::sync::Mutex;
-
-    // One worker keeps the fixture independent of the suite's parallel test threads,
-    // which observe the process CPU mask that a wider session narrows.
-    let backend = tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend");
+fn the_session_solve_runs_on_the_callers_engine() {
+    let mut backend = crate::CpuBackend::with_threads(1).expect("1T CPU backend");
     let (pi1, pivot) = rectangular_operands::<f64>(|value| value);
     let legacy = f64::solve_right_full_piv_lu(&pi1, 3, 2, &pivot, 2, 2).expect("legacy solve");
-    let lane_solutions = Mutex::new(Vec::new());
 
-    let mut held = crate::explicit::HeldSession::open(&backend).expect("held session");
-    held.phase(|_index, lane| {
-        let mut view = lane.session();
-        let solution =
-            f64::solve_right_full_piv_lu_on_session(view.backend(), &pi1, 3, 2, &pivot, 2, 2)
-                .map_err(|error| {
-                    tenferro_tensor::Error::runtime_state_source("lane solve", error)
-                })?;
-        lane_solutions
-            .lock()
-            .expect("lane solutions")
-            .push(solution);
-        Ok::<(), tenferro_tensor::Error>(())
-    })
-    .expect("phase");
-    held.close().expect("affinity restores");
-
-    let solutions = lane_solutions.into_inner().expect("lane solutions");
-    assert!(!solutions.is_empty(), "every lane solved on its own view");
-    for solution in solutions {
-        assert_eq!(solution, legacy);
-    }
+    let solution = {
+        let mut session = crate::explicit::Session::new(backend.engine_mut());
+        f64::solve_right_full_piv_lu_on_session(session.engine(), &pi1, 3, 2, &pivot, 2, 2)
+            .expect("session solve")
+    };
+    assert_eq!(solution, legacy);
 }
 
 #[test]
@@ -727,7 +706,7 @@ fn the_session_solve_keeps_the_shape_validation_and_its_precedence() {
 
     let scoped = context
         .with_concrete_session(|session| {
-            f64::solve_right_full_piv_lu_on_session(session.backend(), &pi1, 2, 2, &pivot, 2, 3)
+            f64::solve_right_full_piv_lu_on_session(session.engine(), &pi1, 2, 2, &pivot, 2, 3)
         })
         .expect("session entry")
         .expect_err("a non-square pivot must be refused");
@@ -736,7 +715,7 @@ fn the_session_solve_keeps_the_shape_validation_and_its_precedence() {
     let scoped = context
         .with_concrete_session(|session| {
             f64::solve_right_full_piv_lu_on_session(
-                session.backend(),
+                session.engine(),
                 &pi1,
                 2,
                 3,
@@ -750,30 +729,21 @@ fn the_session_solve_keeps_the_shape_validation_and_its_precedence() {
     assert!(scoped.source.to_string().contains("square pivot matrix"));
 }
 
+/// A worker entry runs inline on a serial engine instead of waiting for a pool it
+/// belongs to (tensor4all-rs#830), so the solve completes and matches the
+/// process-global one.
 #[test]
-fn a_context_solve_from_a_rayon_worker_is_refused_typed() {
+fn a_context_solve_from_a_rayon_worker_runs_inline() {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(1)
         .build()
         .expect("1-thread pool");
     let (pi1, pivot) = rectangular_operands::<f64>(|value| value);
+    let legacy = f64::solve_right_full_piv_lu(&pi1, 3, 2, &pivot, 2, 2).expect("legacy solve");
     let context = one_worker_context();
 
-    let error = pool
+    let solution = pool
         .install(|| f64::solve_right_full_piv_lu_in(&context, &pi1, 3, 2, &pivot, 2, 2))
-        .expect_err("a worker entry must be refused");
-    let rendered = format!("{error}");
-    assert!(
-        rendered.contains("explicit concrete session"),
-        "the refusal must stay visible as an entry refusal: {rendered}"
-    );
-    // The refusal keeps its own type as the source instead of being flattened
-    // into the message.
-    assert!(
-        error
-            .source
-            .downcast_ref::<crate::CpuExecutionContextError>()
-            .is_some(),
-        "the entry refusal must be the error's source: {rendered}"
-    );
+        .expect("a worker entry completes inline");
+    assert_eq!(solution, legacy);
 }

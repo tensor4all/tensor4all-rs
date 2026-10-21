@@ -6,7 +6,7 @@
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use tenferro_cpu::CpuBackend;
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::{
     grouped_mat_mul_shared_with_backend, GroupedGemmJob, GroupedGemmOptions,
 };

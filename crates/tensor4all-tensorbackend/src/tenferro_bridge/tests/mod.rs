@@ -51,19 +51,15 @@ fn recorded_native_einsum_call_count(path: NativeEinsumPath) -> usize {
 
 /// Whether the process-global graph runtime currently reports prepared plans.
 ///
-/// A tenferro CPU engine reports its cache statistics as unavailable while one of
-/// its sessions owns the engine's resources, and every session on this backend does,
-/// so a concurrently running test can make the aggregate report a busy owner. That
-/// is the documented "management does not wait on a session" behaviour, not a
-/// failure of this test, so a busy owner is retried briefly and only a persistent
-/// failure is reported.
+/// The context builds its graph runtime lazily, so this also pays the first
+/// initialization. The aggregate cache statistics can be unavailable while
+/// another test owns a cache owner, which is the documented "management does not
+/// wait on a run" behaviour rather than a failure here, so a busy owner is
+/// retried briefly.
 fn default_graph_runtime_has_prepared_plan_cache_entries() -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        let stats =
-            crate::context::with_default_graph_runtime(|_, runtime, _| runtime.cache_stats())
-                .expect("default graph runtime should be available");
-        match stats {
+        match crate::context::default_context().graph_cache_stats() {
             Ok(stats) => return stats.prepared_plans.entries > 0,
             Err(error) if std::time::Instant::now() < deadline => {
                 let _ = error;

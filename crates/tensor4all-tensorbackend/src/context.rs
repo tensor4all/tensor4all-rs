@@ -1,12 +1,299 @@
 //! Explicit and optional process-global tenferro CPU execution contexts.
 
 use std::cell::Cell;
+use std::num::NonZeroUsize;
+use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use tenferro::{CompiledGraph, GraphCompiler, Runtime, Tensor, TracedGraph};
+use tenferro::{
+    CompiledGraph, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead, TracedGraph,
+};
 use tenferro_ad::{AdContext, EagerRuntime};
-use tenferro_cpu::{BufferPoolStats, CpuBackend, CpuContext};
-use tenferro_tensor::{BackendSession, BackendSessionHost};
+use tenferro_cpu::{BufferPoolStats, CpuEngine};
+
+/// Failure reported when building a [`CpuBackend`] pool.
+///
+/// A pool build is the only fallible step of a [`CpuBackend`]: tenferro itself
+/// never builds threads, so the caller's thread policy is the caller's error to
+/// carry.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::CpuThreadError;
+///
+/// let error = CpuThreadError::ZeroThreads;
+/// assert!(error.to_string().contains("at least one"));
+/// ```
+#[derive(Debug, thiserror::Error)]
+pub enum CpuThreadError {
+    /// A [`CpuBackend`] was asked for zero workers.
+    #[error("a CPU backend needs at least one worker thread")]
+    ZeroThreads,
+    /// The Rayon pool for the requested worker count could not be built.
+    #[error("failed to build the CPU worker pool: {source}")]
+    Pool {
+        /// Original Rayon diagnostic.
+        #[source]
+        source: Box<rayon::ThreadPoolBuildError>,
+    },
+}
+
+/// Failure reported by [`set_default_cpu_threads`] when the default is fixed.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::AlreadyInitialized;
+///
+/// let error = AlreadyInitialized;
+/// assert_eq!(
+///     error.to_string(),
+///     "the process-wide default CPU thread count is already initialized"
+/// );
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the process-wide default CPU thread count is already initialized")]
+pub struct AlreadyInitialized;
+
+static DEFAULT_CPU_THREADS: OnceLock<usize> = OnceLock::new();
+
+/// Fix the worker count [`CpuBackend::new`] uses for the rest of the process.
+///
+/// The value is read once, by the first [`CpuBackend::new`] call; a backend
+/// built later keeps whatever policy it was built with. Call this before any
+/// other thread can construct a default backend.
+///
+/// # Errors
+///
+/// Returns [`AlreadyInitialized`] when the default was already fixed, either by
+/// an earlier call or by the first [`CpuBackend::new`].
+///
+/// # Examples
+///
+/// ```
+/// use std::num::NonZeroUsize;
+/// use tensor4all_tensorbackend::{set_default_cpu_threads, AlreadyInitialized};
+///
+/// // Whichever call sets the default first wins, and every later one is
+/// // rejected typed instead of panicking.
+/// let _ = set_default_cpu_threads(NonZeroUsize::new(3).unwrap());
+/// assert_eq!(
+///     set_default_cpu_threads(NonZeroUsize::MAX),
+///     Err(AlreadyInitialized)
+/// );
+/// ```
+pub fn set_default_cpu_threads(threads: NonZeroUsize) -> Result<(), AlreadyInitialized> {
+    DEFAULT_CPU_THREADS
+        .set(threads.get())
+        .map_err(|_| AlreadyInitialized)
+}
+
+/// The worker count [`CpuBackend::new`] uses: the fixed default, or one per
+/// available core.
+fn default_cpu_threads() -> usize {
+    *DEFAULT_CPU_THREADS.get_or_init(|| {
+        std::thread::available_parallelism()
+            .map(NonZeroUsize::get)
+            .unwrap_or(1)
+    })
+}
+
+/// tensor4all's owned CPU execution handle: one [`CpuEngine`].
+///
+/// tenferro no longer has a backend session or a `CpuContext`; a caller builds
+/// a Rayon pool, hands it to [`CpuEngine::new`], and keeps the engine for as
+/// long as it wants the thread policy, the buffer pool, the prepared-plan cache
+/// and the contraction scratch to stay warm. This type is that caller-held
+/// owner for tensor4all: the implicit frontend's resource owner during the
+/// transition to engine-explicit APIs, which will replace it later.
+///
+/// It is **not** [`Clone`]. Cloning an execution domain was how the previous
+/// session API shared one engine between callers; with a caller-held engine the
+/// caller owns it outright, and a second execution domain needs a second
+/// backend.
+///
+/// [`CpuBackend::new`] uses [`set_default_cpu_threads`] when it was called, and
+/// otherwise one worker per available core. Upstream tenferro no longer reads
+/// `RAYON_NUM_THREADS`; the previous default came from
+/// `tenferro_cpu::CpuContext::from_env`, which read `RAYON_NUM_THREADS` (and fell
+/// back to a single-threaded context when it was malformed) and otherwise used
+/// the available parallelism. If the pool cannot be built, [`CpuBackend::new`]
+/// falls back to [`CpuEngine::serial`] instead of panicking.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
+///
+/// // A serial backend owns no pool and runs every operation on the caller's thread.
+/// let backend = CpuBackend::with_threads(1)?;
+/// assert_eq!(backend.num_threads(), 1);
+/// assert!(backend.engine().pool().is_none());
+///
+/// // A caller that already owns an engine can hand it in unchanged.
+/// let backend = CpuBackend::from(CpuEngine::serial());
+/// assert_eq!(backend.num_threads(), 1);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub struct CpuBackend {
+    engine: CpuEngine,
+}
+
+impl std::fmt::Debug for CpuBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CpuBackend")
+            .field("engine", &self.engine)
+            .finish()
+    }
+}
+
+impl CpuBackend {
+    /// Build a backend with the default thread policy.
+    ///
+    /// The worker count is the value [`set_default_cpu_threads`] fixed, or one
+    /// per available core. A worker stack of
+    /// [`tenferro_cpu::DEFAULT_WORKER_STACK_BYTES`] is reserved for each worker,
+    /// as the CPU providers require.
+    ///
+    /// The pool build is the one fallible step, and this constructor does not
+    /// report it: if the pool cannot be built the backend is
+    /// [`CpuEngine::serial`] instead, which is correct but uses no worker
+    /// threads. Build the pool yourself and use [`CpuBackend::from`] when that
+    /// difference matters.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuBackend;
+    ///
+    /// let backend = CpuBackend::new();
+    /// assert!(backend.num_threads() >= 1);
+    /// ```
+    pub fn new() -> Self {
+        let threads = default_cpu_threads();
+        Self::with_threads(threads).unwrap_or_else(|_| Self {
+            engine: CpuEngine::serial(),
+        })
+    }
+
+    /// Build a backend that may use `threads` workers.
+    ///
+    /// One worker builds a [`CpuEngine::serial`] engine, which owns no pool, so
+    /// it stays usable from inside another pool. Larger counts build a Rayon
+    /// pool with [`tenferro_cpu::thread_pool_builder`], so provider code gets the
+    /// worker stack it needs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuThreadError::ZeroThreads`] for zero, and
+    /// [`CpuThreadError::Pool`] when Rayon cannot build the pool.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{CpuBackend, CpuThreadError};
+    ///
+    /// assert!(matches!(
+    ///     CpuBackend::with_threads(0),
+    ///     Err(CpuThreadError::ZeroThreads)
+    /// ));
+    /// let backend = CpuBackend::with_threads(2)?;
+    /// assert_eq!(backend.num_threads(), 2);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_threads(threads: usize) -> Result<Self, CpuThreadError> {
+        if threads == 0 {
+            return Err(CpuThreadError::ZeroThreads);
+        }
+        if threads == 1 {
+            return Ok(Self {
+                engine: CpuEngine::serial(),
+            });
+        }
+        let pool = tenferro_cpu::thread_pool_builder()
+            .num_threads(threads)
+            .build()
+            .map_err(|source| CpuThreadError::Pool {
+                source: Box::new(source),
+            })?;
+        Ok(Self {
+            engine: CpuEngine::new(pool),
+        })
+    }
+
+    /// The number of workers operations on this backend may use.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuBackend;
+    ///
+    /// assert_eq!(CpuBackend::with_threads(1)?.num_threads(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn num_threads(&self) -> usize {
+        self.engine.num_threads()
+    }
+
+    /// Borrow the engine this backend owns.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuBackend;
+    ///
+    /// let backend = CpuBackend::with_threads(1)?;
+    /// assert_eq!(backend.engine().buffer_pool_len(), 0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn engine(&self) -> &CpuEngine {
+        &self.engine
+    }
+
+    /// Borrow the engine mutably, for one operation or one session.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuBackend;
+    ///
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// backend.engine_mut().reset_buffer_pool();
+    /// assert_eq!(backend.engine().buffer_pool_len(), 0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn engine_mut(&mut self) -> &mut CpuEngine {
+        &mut self.engine
+    }
+}
+
+impl Default for CpuBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Deref for CpuBackend {
+    type Target = CpuEngine;
+
+    fn deref(&self) -> &Self::Target {
+        &self.engine
+    }
+}
+
+impl DerefMut for CpuBackend {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.engine
+    }
+}
+
+impl From<CpuEngine> for CpuBackend {
+    fn from(engine: CpuEngine) -> Self {
+        Self { engine }
+    }
+}
 
 /// Caller-owned execution domain used by context-aware tensor algorithms.
 ///
@@ -77,13 +364,14 @@ pub enum CpuExecutionContextError {
         #[source]
         source: Arc<dyn std::error::Error + Send + Sync + 'static>,
     },
-    /// tenferro rejected entry into the canonical CPU session.
-    #[error("CPU canonical session entry failed: {source}")]
-    SessionEntry {
-        /// Original tenferro diagnostic.
-        #[source]
-        source: Arc<dyn std::error::Error + Send + Sync + 'static>,
-    },
+    /// The calling thread is already inside a session of this context.
+    ///
+    /// One context owns one engine and lends it to one caller at a time. A
+    /// session entered from inside another session on the same thread would
+    /// wait for a lock that thread already holds, so it is reported as this
+    /// typed error before any lock is taken.
+    #[error("recursive CPU execution-context session entry on one thread")]
+    Reentered,
     /// Graph compilation or execution failed.
     #[error("CPU graph {operation} failed: {source}")]
     Graph {
@@ -94,11 +382,6 @@ pub enum CpuExecutionContextError {
         source: Arc<dyn std::error::Error + Send + Sync + 'static>,
     },
 }
-
-const CANONICAL_SESSION_REENTRY_MESSAGE: &str = "recursive tensorbackend canonical session entry";
-
-/// Backend name carried by a canonical-session reentry rejection.
-const CANONICAL_SESSION_BACKEND: &str = "CpuExecutionContext";
 
 thread_local! {
     static CANONICAL_SESSION_ACTIVE: Cell<bool> = const { Cell::new(false) };
@@ -114,20 +397,7 @@ impl CanonicalSessionGuard {
         CANONICAL_SESSION_ACTIVE.with(Cell::get)
     }
 
-    /// Report a nested canonical session as the typed entry rejection instead of
-    /// panicking, so a public entry point never aborts a caller.
-    fn reentry_error() -> CpuExecutionContextError {
-        CpuExecutionContextError::SessionEntry {
-            source: Arc::new(tenferro_tensor::SessionEntryError::Reentered {
-                backend: CANONICAL_SESSION_BACKEND,
-            }),
-        }
-    }
-
     fn enter() -> Self {
-        // The entry point rejected a nested session before this ran; reaching an
-        // active guard here would mean a caller bypassed the canonical entry.
-        debug_assert!(!Self::is_active(), "{CANONICAL_SESSION_REENTRY_MESSAGE}");
         CANONICAL_SESSION_ACTIVE.with(|active| Self {
             previous: active.replace(true),
         })
@@ -138,26 +408,6 @@ impl Drop for CanonicalSessionGuard {
     fn drop(&mut self) {
         CANONICAL_SESSION_ACTIVE.with(|active| active.set(self.previous));
     }
-}
-
-/// Run one concrete session on `backend` under the canonical session guard.
-///
-/// # Errors
-///
-/// Returns [`CpuExecutionContextError::SessionEntry`] when tenferro rejects the
-/// entry, for example because an execution is already active on this thread.
-fn run_canonical_session<R>(
-    backend: &mut CpuBackend,
-    f: impl FnOnce(&mut dyn BackendSession) -> R,
-) -> Result<R, CpuExecutionContextError> {
-    backend
-        .with_backend_session(|session| {
-            let _guard = CanonicalSessionGuard::enter();
-            f(session)
-        })
-        .map_err(|source| CpuExecutionContextError::SessionEntry {
-            source: Arc::new(source),
-        })
 }
 
 impl CpuExecutionContextError {
@@ -182,24 +432,70 @@ impl CpuExecutionContextError {
     }
 }
 
-struct GraphState {
-    compiler: GraphCompiler,
-    runtime: Runtime,
+/// The engine a context owns, plus the graph runtime derived from it.
+///
+/// The registration the graph runtime holds is derived from the engine, and
+/// `Runtime::run` needs `&mut engine`, so both live under one lock. The
+/// [`GraphCompiler`] is not here: it never touches the engine, so it has its own
+/// lock and a compile never waits for a running graph.
+struct EngineState {
     backend: CpuBackend,
+    runtime: Option<Runtime>,
+}
+
+impl EngineState {
+    fn new(backend: CpuBackend) -> Self {
+        Self {
+            backend,
+            runtime: None,
+        }
+    }
+
+    /// The graph runtime of this context, built from the engine on first use.
+    fn runtime(&mut self) -> Result<&mut Runtime, CpuExecutionContextError> {
+        let Self { backend, runtime } = self;
+        match runtime {
+            Some(runtime) => Ok(runtime),
+            None => {
+                let built = build_graph_runtime(backend)?;
+                Ok(runtime.insert(built))
+            }
+        }
+    }
+
+    /// Replace the engine if a panic left it broken.
+    ///
+    /// A poisoned lock means a previous holder panicked while it had the engine
+    /// borrowed. tenferro marks an engine broken when that happened during an
+    /// operation, and refuses later calls on it. The engine is then replaced by
+    /// a fresh one of the same thread count: this context owns the engine, so
+    /// there is nothing else to preserve. If the replacement pool cannot be
+    /// built the broken engine stays, and its operations report tenferro's typed
+    /// broken-engine refusal instead.
+    fn recover_from_panic(&mut self) {
+        if !self.backend.engine().is_broken() {
+            return;
+        }
+        let threads = self.backend.num_threads();
+        if let Ok(replacement) = CpuBackend::with_threads(threads) {
+            self.backend = replacement;
+            // The prepared plans were made for the replaced engine's workspace;
+            // rebuild the runtime against the new one.
+            self.runtime = None;
+        }
+    }
 }
 
 /// Caller-owned CPU execution domain for plain, graph, and eager-AD work.
 ///
-/// The supplied backend is the only source of CPU execution resources for every
-/// entry from a thread that is not a Rayon worker. A plain session entered from a
-/// Rayon worker runs inline and single-threaded on a context-local pool-less CPU
-/// backend instead: a worker that waits for a pool install is handed more of the
-/// enclosing pool's work, and that work may enter a session itself
-/// (tensor4all-rs#830). Backend clones preserve its runtime identity; this
-/// constructor never uses `CpuBackend::new`, `CpuContext::from_env`, or a
-/// process-global fallback.
-/// Graph preparation caches and the eager runtime are owned by this context and
-/// are released when it is dropped.
+/// The context owns one [`CpuBackend`] and lends its engine to one caller at a
+/// time. A session entered from a Rayon worker runs inline on a fresh serial
+/// engine that shares the context engine's prepared-plan cache instead of
+/// waiting for the context engine: a worker that waits for a pool install is
+/// handed more of the enclosing pool's work, and that work may enter a session
+/// itself (tensor4all-rs#830). Graph preparation caches, the engine's buffer
+/// pool and the eager runtime are owned by this context and are released when
+/// it is dropped.
 ///
 /// # Examples
 ///
@@ -213,16 +509,15 @@ struct GraphState {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub struct CpuExecutionContext {
-    backend: Mutex<CpuBackend>,
-    inline: OnceLock<CpuBackend>,
-    graph: OnceLock<Result<Mutex<GraphState>, CpuExecutionContextError>>,
+    engine: Mutex<EngineState>,
+    compiler: Mutex<GraphCompiler>,
     eager: OnceLock<Result<Arc<EagerRuntime>, CpuExecutionContextError>>,
 }
 
 impl std::fmt::Debug for CpuExecutionContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CpuExecutionContext")
-            .field("graph_initialized", &self.graph.get().is_some())
+            .field("graph_initialized", &self.engine_initialized())
             .field("eager_initialized", &self.eager.get().is_some())
             .finish_non_exhaustive()
     }
@@ -235,127 +530,107 @@ impl CpuExecutionContext {
     /// not allocate another executor or consult environment configuration.
     pub fn from_backend(backend: CpuBackend) -> Self {
         Self {
-            backend: Mutex::new(backend),
-            inline: OnceLock::new(),
-            graph: OnceLock::new(),
+            engine: Mutex::new(EngineState::new(backend)),
+            compiler: Mutex::new(GraphCompiler::new()),
             eager: OnceLock::new(),
         }
     }
 
-    /// Run a plain tensor operation with this context's backend.
-    ///
-    /// The closure runs while the context-local backend lock is held. A poisoned
-    /// lock is recovered because tenferro validates every new backend session.
-    pub fn with_backend<R>(&self, f: impl FnOnce(&mut CpuBackend) -> R) -> R {
-        let mut backend = match self.backend.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        f(&mut backend)
+    fn engine_initialized(&self) -> bool {
+        self.engine
+            .try_lock()
+            .is_ok_and(|state| state.runtime.is_some())
     }
 
-    /// Run `f` in one canonical session of this context.
+    /// Lock the engine state, recovering it from a panic that poisoned the lock.
+    fn lock_engine(&self) -> std::sync::MutexGuard<'_, EngineState> {
+        match self.engine.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                guard.recover_from_panic();
+                guard
+            }
+        }
+    }
+
+    /// Lock the compiler, discarding one a panic left behind.
+    ///
+    /// A `GraphCompiler` holds planning state that a panic may have left half
+    /// written; rebuilding it costs nothing a compile would not pay for the next
+    /// graph anyway.
+    fn lock_compiler(&self) -> std::sync::MutexGuard<'_, GraphCompiler> {
+        match self.compiler.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                *guard = GraphCompiler::new();
+                guard
+            }
+        }
+    }
+
+    /// Run a plain tensor operation with this context's engine.
+    ///
+    /// The closure runs while the context-local engine lock is held. A lock
+    /// poisoned by a panic is recovered: a broken engine is replaced by a fresh
+    /// one with the same thread count. The session entries recover the same way.
+    ///
+    /// This borrows the engine for the whole closure, so a session entry from
+    /// inside `f` on this thread is rejected with
+    /// [`CpuExecutionContextError::Reentered`] instead of waiting for the engine.
+    /// Calling `with_backend` from inside a session of this context is the
+    /// caller's obligation not to do: this entry cannot report an error, so it
+    /// would wait for the engine the session already holds.
+    pub fn with_backend<R>(&self, f: impl FnOnce(&mut CpuBackend) -> R) -> R {
+        // The guard makes a nested session entry a typed error, not a wait.
+        let _guard = CanonicalSessionGuard::enter();
+        f(&mut self.lock_engine().backend)
+    }
+
+    /// Run `f` in one session of this context's engine.
     ///
     /// # Errors
     ///
-    /// Returns [`CpuExecutionContextError::SessionEntry`] when tenferro rejects
-    /// the session entry.
+    /// Returns [`CpuExecutionContextError::Reentered`] when this thread is
+    /// already inside a session of this context.
     pub(crate) fn with_session<R>(
         &self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut CpuEngine) -> R,
     ) -> Result<R, CpuExecutionContextError> {
+        // Checked before any lock: a nested entry would wait for a lock this
+        // thread already holds.
         if CanonicalSessionGuard::is_active() {
-            return Err(CanonicalSessionGuard::reentry_error());
+            return Err(CpuExecutionContextError::Reentered);
         }
-        // A held session owns a CPU admission on this thread without setting the
-        // canonical guard. Reject before taking the backend mutex, because another
-        // thread may hold that mutex while it waits for this thread's admission:
-        // waiting here would close the cycle.
-        if tenferro_cpu::current_cpu_execution() == tenferro_cpu::CpuThreadExecution::Active {
-            return Err(CanonicalSessionGuard::reentry_error());
-        }
-        // A Rayon worker can be handed more of the enclosing pool's work while
-        // tenferro installs this session into the context's own pool. That stolen
-        // work may enter a session itself, on a thread whose tenferro execution is
-        // already active, which tenferro rejects. Entering from a worker therefore
-        // runs the session inline and single-threaded on that worker and leaves
-        // parallelism to the enclosing pool.
+        let _guard = CanonicalSessionGuard::enter();
+        // A worker runs inline on its own serial engine instead of waiting for a
+        // pool it belongs to (tensor4all-rs#830). The fresh engine shares the
+        // plan cache, whose entries are immutable prepared plans, so a stage
+        // entered per item does not re-plan. It does **not** share the context
+        // engine's buffer pool, extension caches, batch policy or allocation
+        // domain: an entry from a worker therefore allocates and batches
+        // independently, and only while it runs.
         if rayon::current_thread_index().is_some() {
-            let mut backend = self.inline_backend();
-            return run_canonical_session(&mut backend, f);
+            let plans = self.lock_engine().backend.engine().plan_cache().clone();
+            let mut engine = CpuEngine::serial().with_plan_cache(plans);
+            return Ok(f(&mut engine));
         }
-        let mut backend = match self.backend.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        run_canonical_session(&mut backend, f)
-    }
-
-    /// Backend used for one session entered from a Rayon worker.
-    ///
-    /// `CpuContext::with_threads(1)` owns no Rayon pool, so its executor runs
-    /// every operation on the calling thread and never installs a session into a
-    /// pool the caller does not belong to.
-    fn inline_backend(&self) -> CpuBackend {
-        self.inline
-            .get_or_init(|| match CpuContext::with_threads(1) {
-                Ok(context) => CpuBackend::from_context(Arc::new(context)),
-                // INVARIANT: `CpuContext::with_threads` rejects only a zero worker
-                // count, which this call never passes, so this arm is unreachable.
-                // Keeping the supplied backend is a last resort rather than a
-                // policy: it is the only remaining backend this context owns.
-                Err(_) => self.backend_clone(),
-            })
-            .clone()
-    }
-
-    fn backend_clone(&self) -> CpuBackend {
-        self.with_backend(|backend| backend.clone())
-    }
-
-    fn graph_state(&self) -> Result<&Mutex<GraphState>, CpuExecutionContextError> {
-        self.graph
-            .get_or_init(|| {
-                let backend = self.backend_clone();
-                build_graph_runtime(&backend).map(|runtime| {
-                    Mutex::new(GraphState {
-                        compiler: GraphCompiler::new(),
-                        runtime,
-                        backend,
-                    })
-                })
-            })
-            .as_ref()
-            .map_err(Clone::clone)
-    }
-
-    fn with_graph_state<R>(
-        &self,
-        f: impl FnOnce(&mut GraphCompiler, &mut Runtime, &mut CpuBackend) -> R,
-    ) -> Result<R, CpuExecutionContextError> {
-        let mut graph = match self.graph_state()?.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let GraphState {
-            compiler,
-            runtime,
-            backend,
-        } = &mut *graph;
-        Ok(f(compiler, runtime, backend))
+        let mut state = self.lock_engine();
+        Ok(f(state.backend.engine_mut()))
     }
 
     /// Compile a backend-neutral traced graph using this context's compiler cache.
     ///
     /// # Errors
     ///
-    /// Returns [`CpuExecutionContextError`] when graph-runtime initialization or
-    /// graph compilation fails.
+    /// Returns [`CpuExecutionContextError::Graph`] when graph compilation fails.
     pub fn compile_graph(
         &self,
         graph: &TracedGraph,
     ) -> Result<CompiledGraph, CpuExecutionContextError> {
-        self.with_graph_state(|compiler, _, _| compiler.compile_traced_graph(graph))?
+        self.lock_compiler()
+            .compile_traced_graph(graph)
             .map_err(|source| CpuExecutionContextError::graph("compilation", source))
     }
 
@@ -373,14 +648,60 @@ impl CpuExecutionContext {
         graph: &CompiledGraph,
         inputs: &[&Tensor],
     ) -> Result<Vec<Tensor>, CpuExecutionContextError> {
-        self.with_graph_state(|_, runtime, _| runtime.run_compiled(graph, inputs))?
-            .map_err(|source| CpuExecutionContextError::graph("execution", source))
+        let reads = inputs
+            .iter()
+            .map(|input| TensorRead::from_tensor(input))
+            .collect::<Vec<_>>();
+        self.run_graph_reads(graph, &reads)
+    }
+
+    /// Execute a compiled graph on borrowed tensor views.
+    ///
+    /// The read form is what the bridge uses: an operand that is already a
+    /// borrowed view stays borrowed instead of being copied into an owner first.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuExecutionContextError`] when runtime initialization,
+    /// preparation, or execution fails.
+    pub(crate) fn run_graph_reads(
+        &self,
+        graph: &CompiledGraph,
+        inputs: &[TensorRead<'_>],
+    ) -> Result<Vec<Tensor>, CpuExecutionContextError> {
+        let mut state = self.lock_engine();
+        let EngineState { backend, runtime } = &mut *state;
+        let runtime = match runtime {
+            Some(runtime) => &*runtime,
+            None => &*runtime.insert(build_graph_runtime(backend)?),
+        };
+        let target = backend.engine().target();
+        let prepared = runtime
+            .prepare(graph, inputs, std::slice::from_ref(&target))
+            .map_err(|source| CpuExecutionContextError::graph("preparation", source))?;
+        let outputs = {
+            let mut engines: [&mut dyn ExecutionEngine; 1] = [backend.engine_mut()];
+            runtime
+                .run(&mut engines, &prepared, inputs)
+                .map_err(|source| CpuExecutionContextError::graph("execution", source))?
+        };
+        outputs
+            .into_iter()
+            .map(|output| {
+                output
+                    .into_tensor(backend.engine_mut())
+                    .map_err(|source| CpuExecutionContextError::graph("output", source))
+            })
+            .collect()
     }
 
     /// Return this context's eager reverse-AD runtime.
     ///
-    /// Repeated calls return the same runtime and therefore the same eager
-    /// compilation cache.
+    /// The runtime is engine-independent: it is built once from an
+    /// [`AdContext`] with the linalg AD rules and the einsum/linalg extension
+    /// modules installed, and every call takes the caller's engine
+    /// ([`EagerRuntime::with_eager_session`]). Repeated calls return the same
+    /// runtime and therefore the same eager compilation cache.
     ///
     /// # Errors
     ///
@@ -388,7 +709,7 @@ impl CpuExecutionContext {
     /// registration fails.
     pub fn eager_runtime(&self) -> Result<Arc<EagerRuntime>, CpuExecutionContextError> {
         self.eager
-            .get_or_init(|| build_eager_runtime(self.backend_clone()))
+            .get_or_init(build_eager_runtime)
             .as_ref()
             .map(Arc::clone)
             .map_err(Clone::clone)
@@ -403,11 +724,14 @@ impl CpuExecutionContext {
     pub fn graph_cache_stats(
         &self,
     ) -> Result<tenferro::RuntimeCacheStats, CpuExecutionContextError> {
-        self.with_graph_state(|_, runtime, _| runtime.cache_stats())?
+        let mut state = self.lock_engine();
+        let runtime = state.runtime()?;
+        runtime
+            .cache_stats()
             .map_err(|source| CpuExecutionContextError::graph("cache statistics", source))
     }
 
-    /// Return retained-buffer statistics for this context's graph backend.
+    /// Return retained-buffer statistics for this context's engine.
     ///
     /// `buffers` counts the retained allocations and `capacity_bytes` their
     /// total element capacity. A context whose pool has just been released by
@@ -415,8 +739,8 @@ impl CpuExecutionContext {
     ///
     /// # Errors
     ///
-    /// Returns [`CpuExecutionContextError`] when graph initialization or the
-    /// backend statistics query fails.
+    /// Returns [`CpuExecutionContextError`] when the engine lock cannot be
+    /// recovered.
     ///
     /// # Examples
     ///
@@ -439,7 +763,6 @@ impl CpuExecutionContext {
     /// assert_eq!(output[0].as_slice::<f64>()?, &[-1.0, 2.0]);
     ///
     /// // Releasing the pool empties it.
-    /// let before = context.graph_buffer_pool_stats()?;
     /// context.reset_graph_buffer_pool()?;
     /// let after = context.graph_buffer_pool_stats()?;
     /// assert_eq!(after.buffers, 0);
@@ -448,19 +771,18 @@ impl CpuExecutionContext {
     /// # }
     /// ```
     pub fn graph_buffer_pool_stats(&self) -> Result<BufferPoolStats, CpuExecutionContextError> {
-        self.with_graph_state(|_, _, backend| backend.buffer_pool_stats())?
-            .map_err(|source| CpuExecutionContextError::graph("buffer-pool statistics", source))
+        Ok(self.lock_engine().backend.engine().buffer_pool_stats())
     }
 
-    /// Release retained buffers owned by this context's graph backend.
+    /// Release retained buffers owned by this context's engine.
     ///
     /// The graph runtime, its compiled plans and its prepared-plan cache are
     /// kept, so callers can keep running previously compiled graphs afterwards.
     ///
     /// # Errors
     ///
-    /// Returns [`CpuExecutionContextError`] when graph initialization or reset
-    /// fails.
+    /// Returns [`CpuExecutionContextError`] when the engine lock cannot be
+    /// recovered.
     ///
     /// # Examples
     ///
@@ -480,26 +802,23 @@ impl CpuExecutionContext {
     /// # }
     /// ```
     pub fn reset_graph_buffer_pool(&self) -> Result<(), CpuExecutionContextError> {
-        self.with_graph_state(|_, _, backend| backend.reset_buffer_pool())?
-            .map_err(|source| CpuExecutionContextError::graph("buffer-pool reset", source))
+        self.lock_engine().backend.engine_mut().reset_buffer_pool();
+        Ok(())
     }
 
     /// Recreate this context's graph runtime and release its prepared caches.
     ///
     /// # Errors
     ///
-    /// Returns [`CpuExecutionContextError`] when runtime reconstruction or
-    /// buffer release fails.
+    /// Returns [`CpuExecutionContextError`] when the engine lock cannot be
+    /// recovered.
     pub fn reset_graph_runtime(&self) -> Result<(), CpuExecutionContextError> {
-        self.with_graph_state(|compiler, runtime, backend| {
-            let replacement = build_graph_runtime(backend)?;
-            *compiler = GraphCompiler::new();
-            let old = std::mem::replace(runtime, replacement);
-            drop(old);
-            backend
-                .reset_buffer_pool()
-                .map_err(|source| CpuExecutionContextError::graph("buffer-pool reset", source))
-        })??;
+        {
+            let mut state = self.lock_engine();
+            state.runtime = None;
+            state.backend.engine_mut().reset_buffer_pool();
+        }
+        *self.lock_compiler() = GraphCompiler::new();
         Ok(())
     }
 }
@@ -508,14 +827,14 @@ fn build_graph_runtime(backend: &CpuBackend) -> Result<Runtime, CpuExecutionCont
     let mut builder = Runtime::builder();
     builder
         .register_engine(
-            tenferro_cpu::runtime_engine_registration(backend).map_err(|source| {
+            tenferro_cpu::runtime_engine_registration(backend.engine()).map_err(|source| {
                 CpuExecutionContextError::initialization("graph CPU engine", source)
             })?,
         )
         .map_err(|source| CpuExecutionContextError::initialization("graph CPU engine", source))?;
     builder
         .install_extension_module(
-            tenferro_einsum::extension_module::<CpuBackend>(
+            tenferro_einsum::extension_module::<CpuEngine>(
                 tenferro_cpu::runtime_engine_id().map_err(|source| {
                     CpuExecutionContextError::initialization("einsum extension", source)
                 })?,
@@ -530,7 +849,7 @@ fn build_graph_runtime(backend: &CpuBackend) -> Result<Runtime, CpuExecutionCont
         .map_err(|source| CpuExecutionContextError::initialization("graph runtime", source))
 }
 
-fn build_eager_runtime(backend: CpuBackend) -> Result<Arc<EagerRuntime>, CpuExecutionContextError> {
+fn build_eager_runtime() -> Result<Arc<EagerRuntime>, CpuExecutionContextError> {
     let ad_context = AdContext::builder()
         .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().map_err(|source| {
             CpuExecutionContextError::initialization("linalg AD rules", source)
@@ -538,7 +857,7 @@ fn build_eager_runtime(backend: CpuBackend) -> Result<Arc<EagerRuntime>, CpuExec
         .map_err(|source| CpuExecutionContextError::initialization("linalg AD rules", source))?
         .build()
         .map_err(|source| CpuExecutionContextError::initialization("AD context", source))?;
-    let runtime = EagerRuntime::with_cpu_backend_and_ad_context(backend, &ad_context)
+    let runtime = EagerRuntime::with_ad_context(&ad_context)
         .map_err(|source| CpuExecutionContextError::initialization("eager runtime", source))?;
     // [AI Supplied] Install the built-in extension modules before publishing
     // the shared context. Lazy first use reconfigures the runtime and advances
@@ -546,12 +865,12 @@ fn build_eager_runtime(backend: CpuBackend) -> Result<Arc<EagerRuntime>, CpuExec
     // invalidate those prepared programs under parallel first use.
     let engine_id = tenferro_cpu::runtime_engine_id()
         .map_err(|source| CpuExecutionContextError::initialization("CPU runtime engine", source))?;
-    let einsum_module = tenferro_einsum::extension_module::<CpuBackend>(engine_id.clone())
+    let einsum_module = tenferro_einsum::extension_module::<CpuEngine>(engine_id.clone())
         .map_err(|source| CpuExecutionContextError::initialization("einsum extension", source))?;
     runtime
         .install_extension_module(einsum_module)
         .map_err(|source| CpuExecutionContextError::initialization("einsum runtime", source))?;
-    let linalg_module = tenferro_linalg::extension_module::<CpuBackend>(engine_id)
+    let linalg_module = tenferro_linalg::extension_module::<CpuEngine>(engine_id)
         .map_err(|source| CpuExecutionContextError::initialization("linalg extension", source))?;
     runtime
         .install_extension_module(linalg_module)
@@ -562,7 +881,6 @@ fn build_eager_runtime(backend: CpuBackend) -> Result<Arc<EagerRuntime>, CpuExec
 #[cfg(feature = "global-defaults")]
 mod defaults {
     use super::*;
-    use tenferro_cpu::CpuContext;
 
     static DEFAULT_CONTEXT: OnceLock<Arc<CpuExecutionContext>> = OnceLock::new();
 
@@ -577,11 +895,8 @@ mod defaults {
     /// process-global convenience path and for callers that map the session-entry
     /// rejection into their own error type.
     pub(crate) fn default_context() -> &'static Arc<CpuExecutionContext> {
-        DEFAULT_CONTEXT.get_or_init(|| {
-            Arc::new(CpuExecutionContext::from_backend(CpuBackend::from_context(
-                Arc::new(CpuContext::from_env()),
-            )))
-        })
+        DEFAULT_CONTEXT
+            .get_or_init(|| Arc::new(CpuExecutionContext::from_backend(CpuBackend::new())))
     }
 
     /// Error returned when the process-global eager AD runtime cannot be initialized.
@@ -614,19 +929,18 @@ mod defaults {
         default_context().with_backend(f)
     }
 
-    /// Run `f` in one canonical session of the process-global context.
+    /// Run `f` in one session of the process-global context's engine.
     ///
     /// The entry rejection stays inside tenferro's error type: it is reported as
     /// a `tenferro_tensor::Error` classified as runtime state, so callers keep
-    /// one error type for session work while the source chain keeps tenferro's
-    /// admission diagnostic.
+    /// one error type for session work.
     ///
     /// # Errors
     ///
-    /// Returns the tenferro diagnostic when the session entry is rejected or
-    /// when `f` fails.
+    /// Returns the tenferro diagnostic when the entry is rejected or when `f`
+    /// fails.
     pub(crate) fn with_default_session<T: Send>(
-        f: impl FnOnce(&mut dyn BackendSession) -> Result<T, tenferro_tensor::Error> + Send,
+        f: impl FnOnce(&mut CpuEngine) -> Result<T, tenferro_tensor::Error> + Send,
     ) -> Result<T, tenferro_tensor::Error> {
         default_context()
             .with_session(f)
@@ -636,12 +950,12 @@ mod defaults {
             .and_then(std::convert::identity)
     }
 
-    pub(crate) fn with_default_graph_runtime<R>(
-        f: impl FnOnce(&mut GraphCompiler, &Runtime, &mut CpuBackend) -> R,
-    ) -> anyhow::Result<R> {
-        default_context()
-            .with_graph_state(|compiler, runtime, backend| f(compiler, runtime, backend))
-            .map_err(anyhow::Error::new)
+    /// Run `f` against the process-global graph compiler.
+    ///
+    /// The compiler lock is released before the caller runs the compiled graph,
+    /// so a compile never waits for a context engine that is busy running one.
+    pub(crate) fn with_default_graph_compiler<R>(f: impl FnOnce(&mut GraphCompiler) -> R) -> R {
+        f(&mut default_context().lock_compiler())
     }
 
     pub(crate) fn default_engine_buffer_pool_stats() -> anyhow::Result<BufferPoolStats> {
@@ -734,7 +1048,7 @@ pub use defaults::{
 #[cfg(feature = "global-defaults")]
 pub(crate) use defaults::{
     default_engine_buffer_pool_stats, reset_default_engine, reset_default_engine_buffer_pool,
-    with_default_graph_runtime, with_default_session,
+    with_default_graph_compiler, with_default_session,
 };
 
 #[cfg(test)]

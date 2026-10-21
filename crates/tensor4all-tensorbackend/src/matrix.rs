@@ -298,8 +298,8 @@ impl Default for GroupedGemmOptions {
 
 /// Validation or backend error from a shared-buffer grouped GEMM.
 ///
-/// Validation is completed before the configured backend session is entered,
-/// so these errors leave the caller's output unchanged.
+/// Validation is completed before the engine is entered, so these errors leave
+/// the caller's output unchanged.
 ///
 /// # Examples
 ///
@@ -463,7 +463,7 @@ fn grouped_gemm_validate<T>(
 ) -> std::result::Result<(), GroupedGemmError> {
     let descriptor_bytes = jobs
         .len()
-        .checked_mul(std::mem::size_of::<tenferro_tensor::backend::GroupedGemmJob>())
+        .checked_mul(std::mem::size_of::<GroupedGemmJob>())
         .ok_or(GroupedGemmError::WorkingMemoryExceeded {
             required: usize::MAX,
             limit: options.max_working_bytes,
@@ -530,61 +530,54 @@ pub(crate) fn grouped_mat_mul_shared_in_session<T: MatrixScalar + TensorScalar>(
     rhs: &[T],
     output: &mut [T],
     jobs: &[GroupedGemmJob],
-    session: &mut dyn tenferro_tensor::BackendSession,
+    engine: &mut dyn tenferro_tensor::Engine,
 ) -> std::result::Result<(), GroupedGemmError> {
-    // Reference: tenferro-rs commit 007e3bb6c1187a2569d237b2bc6e6ad486f2b4f4,
-    // crates/tenferro-cpu/benches/grouped_gemm.rs lines 1--165. The upstream
-    // descriptor is translated here so it never becomes tensorbackend's
-    // downstream public API.
-    let native_jobs: Vec<_> = jobs
-        .iter()
-        .map(|job| {
-            tenferro_tensor::backend::GroupedGemmJob::new(
-                job.out_offset,
-                job.lhs_offset,
-                job.rhs_offset,
-                job.rows,
-                job.contracted,
-                job.cols,
-            )
-        })
-        .collect();
-    let config = tenferro_tensor::backend::GroupedGemmConfig::new(
-        &native_jobs,
-        tenferro_tensor::DotGeneralAccumulation::overwrite(T::dtype()).map_err(|source| {
-            GroupedGemmError::Backend {
-                source: anyhow::Error::new(source),
-            }
-        })?,
-    );
-    let lhs_view = tenferro_tensor::TypedTensorView::from_slice([lhs.len()], [1], 0, lhs).map_err(
-        |source| GroupedGemmError::Backend {
+    // ponytail: one engine contraction per job. tenferro #2209 deleted the
+    // grouped-GEMM provider the descriptor translation used, so a batch is no
+    // longer one provider call and the jobs are not parallel across each other;
+    // each job still contracts the caller's own slices, so no payload is copied.
+    // Revisit if a batched contraction reaches the engine again.
+    let config = tenferro_tensor::DotGeneralConfig {
+        lhs_contracting_dims: [1usize].as_slice().into(),
+        rhs_contracting_dims: [0usize].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
+    };
+    for job in jobs {
+        let backend = |source: tenferro_tensor::Error| GroupedGemmError::Backend {
             source: anyhow::Error::new(source),
-        },
-    )?;
-    let rhs_view = tenferro_tensor::TypedTensorView::from_slice([rhs.len()], [1], 0, rhs).map_err(
-        |source| GroupedGemmError::Backend {
-            source: anyhow::Error::new(source),
-        },
-    )?;
-    let output_view =
-        tenferro_tensor::TypedTensorViewMut::from_slice([output.len()], [1], 0, output).map_err(
-            |source| GroupedGemmError::Backend {
-                source: anyhow::Error::new(source),
-            },
-        )?;
-    use tenferro_tensor::{TensorRead, TensorWrite};
-    session
-        .grouped_gemm_cached(
-            Some(0),
-            TensorRead::from_view(T::tensor_view(lhs_view)),
-            TensorRead::from_view(T::tensor_view(rhs_view)),
-            &config,
-            TensorWrite::from_view(T::tensor_view_mut(output_view)),
+        };
+        let lhs_view = tenferro_tensor::TypedTensorView::from_slice(
+            [job.rows, job.contracted],
+            [1isize, job.rows as isize],
+            job.lhs_offset as isize,
+            lhs,
         )
-        .map_err(|source| GroupedGemmError::Backend {
-            source: anyhow::Error::new(source),
-        })
+        .map_err(backend)?;
+        let rhs_view = tenferro_tensor::TypedTensorView::from_slice(
+            [job.contracted, job.cols],
+            [1isize, job.contracted as isize],
+            job.rhs_offset as isize,
+            rhs,
+        )
+        .map_err(backend)?;
+        let output_view = tenferro_tensor::TypedTensorViewMut::from_slice(
+            [job.rows, job.cols],
+            [1isize, job.rows as isize],
+            job.out_offset as isize,
+            output,
+        )
+        .map_err(backend)?;
+        engine
+            .dot_general_read_into(
+                tenferro_tensor::TensorRead::from_view(T::tensor_view(lhs_view)),
+                tenferro_tensor::TensorRead::from_view(T::tensor_view(rhs_view)),
+                &config,
+                tenferro_tensor::TensorWrite::from_view(T::tensor_view_mut(output_view)),
+            )
+            .map_err(backend)?;
+    }
+    Ok(())
 }
 
 /// Execute grouped column-major GEMMs over shared caller-owned buffers.
@@ -604,11 +597,11 @@ pub(crate) fn grouped_mat_mul_shared_in_session<T: MatrixScalar + TensorScalar>(
 /// configured-provider failures. Invalid requests are rejected before backend
 /// execution and leave `output` unchanged.
 ///
-/// Execute grouped GEMMs on shared column-major slices of a caller-supplied session.
+/// Execute grouped GEMMs on shared column-major slices of a caller-held engine.
 ///
 /// Same validation, job translation and provider rules as
-/// [`grouped_mat_mul_shared`], entered through the given session instead of the
-/// process-global one. The explicit frontend reaches it as
+/// [`grouped_mat_mul_shared`], entered through the given engine instead of the
+/// process-global context. The explicit frontend reaches it as
 /// [`explicit::Session::grouped_mat_mul_shared`](crate::explicit::Session::grouped_mat_mul_shared).
 ///
 /// # Errors
@@ -621,21 +614,18 @@ pub(crate) fn grouped_mat_mul_shared_in_session<T: MatrixScalar + TensorScalar>(
 /// ```
 /// use tensor4all_tensorbackend::{grouped_mat_mul_shared_in, GroupedGemmJob, GroupedGemmOptions};
 /// use tensor4all_tensorbackend::CpuBackend;
-/// use tenferro_tensor::BackendSessionHost;
 ///
 /// let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
 /// let mut output = [0.0_f64];
 /// let mut backend = CpuBackend::with_threads(1)?;
-/// backend.with_backend_session(|session| {
-///     grouped_mat_mul_shared_in(
-///         session, &[3.0], &[4.0], &mut output, &jobs, GroupedGemmOptions::default(),
-///     )
-/// })??;
+/// grouped_mat_mul_shared_in(
+///     backend.engine_mut(), &[3.0], &[4.0], &mut output, &jobs, GroupedGemmOptions::default(),
+/// )?;
 /// assert_eq!(output, [12.0]);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn grouped_mat_mul_shared_in<T: MatrixScalar + TensorScalar>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    engine: &mut dyn tenferro_tensor::Engine,
     lhs: &[T],
     rhs: &[T],
     output: &mut [T],
@@ -646,7 +636,7 @@ pub fn grouped_mat_mul_shared_in<T: MatrixScalar + TensorScalar>(
     if jobs.is_empty() {
         return Ok(());
     }
-    grouped_mat_mul_shared_in_session(lhs, rhs, output, jobs, session)
+    grouped_mat_mul_shared_in_session(lhs, rhs, output, jobs, engine)
 }
 
 /// Execute grouped GEMMs on shared column-major slices.
@@ -691,7 +681,7 @@ pub fn grouped_mat_mul_shared<T: MatrixScalar + TensorScalar>(
     // The operation keeps its own error type, so the session-entry rejection is
     // mapped here instead of through the tenferro-typed session helper.
     match crate::context::default_context()
-        .with_session(|session| grouped_mat_mul_shared_in_session(lhs, rhs, output, jobs, session))
+        .with_session(|engine| grouped_mat_mul_shared_in_session(lhs, rhs, output, jobs, engine))
     {
         Ok(result) => result,
         Err(source) => Err(GroupedGemmError::Backend {
@@ -718,11 +708,27 @@ pub fn grouped_mat_mul_shared<T: MatrixScalar + TensorScalar>(
 /// offset disagree on its shape, and
 /// [`GroupedGemmError::WorkingMemoryExceeded`] when the batch exceeds
 /// `options.max_working_bytes`. Returns [`GroupedGemmError::Backend`] when
-/// building a view over a buffer fails or when `backend`'s configured
-/// provider fails to execute the batch; `output` may then be partially
-/// written.
+/// building a view over a buffer fails or when `backend`'s engine fails to
+/// execute a job; `output` may then be partially written.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{
+///     grouped_mat_mul_shared_with_backend, CpuBackend, GroupedGemmJob, GroupedGemmOptions,
+/// };
+///
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
+/// let mut output = [0.0_f64];
+/// grouped_mat_mul_shared_with_backend(
+///     &mut backend, &[3.0], &[4.0], &mut output, &jobs, GroupedGemmOptions::default(),
+/// )?;
+/// assert_eq!(output, [12.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn grouped_mat_mul_shared_with_backend<T: MatrixScalar + TensorScalar>(
-    backend: &mut tenferro_cpu::CpuBackend,
+    backend: &mut crate::CpuBackend,
     lhs: &[T],
     rhs: &[T],
     output: &mut [T],
@@ -733,14 +739,7 @@ pub fn grouped_mat_mul_shared_with_backend<T: MatrixScalar + TensorScalar>(
     if jobs.is_empty() {
         return Ok(());
     }
-    use tenferro_tensor::BackendSessionHost;
-    backend
-        .with_backend_session(|session| {
-            grouped_mat_mul_shared_in_session(lhs, rhs, output, jobs, session)
-        })
-        .map_err(|source| GroupedGemmError::Backend {
-            source: anyhow::Error::new(source),
-        })?
+    grouped_mat_mul_shared_in_session(lhs, rhs, output, jobs, backend.engine_mut())
 }
 
 /// Execute grouped GEMMs while consuming all three flat buffers.
@@ -1397,18 +1396,17 @@ where
             source: Box::new(source),
         }
     })?;
-    let (values, vectors) = eager_ctx
-        .with_eager_session(|session| session.eigh(&input))
+    // One entry on the process-global engine: the eager session runs the
+    // decomposition and the same engine materializes both results.
+    let (values, vectors) = crate::context::default_context()
+        .with_session(|engine| {
+            let (values, vectors) =
+                eager_ctx.with_eager_session(engine, |session| session.eigh(&input))?;
+            Ok::<_, tenferro_ad::Error>((values.to_tensor(engine)?, vectors.to_tensor(engine)?))
+        })
         .map_err(|source| HermitianEigenError::Backend {
             source: Box::new(source),
-        })?;
-    let values = values
-        .to_tensor()
-        .map_err(|source| HermitianEigenError::Backend {
-            source: Box::new(source),
-        })?;
-    let vectors = vectors
-        .to_tensor()
+        })?
         .map_err(|source| HermitianEigenError::Backend {
             source: Box::new(source),
         })?;
@@ -2115,13 +2113,13 @@ pub trait BlasMul: Sized {
     #[doc(hidden)]
     fn blas_mat_mul_owned(a: Matrix<Self>, b: Matrix<Self>) -> Result<Matrix<Self>>;
 
-    /// Matrix multiplication `A * B` on a caller-supplied session.
+    /// Matrix multiplication `A * B` on a caller-held engine.
     ///
     /// Same kernel, validation and result container as [`BlasMul::blas_mat_mul`],
-    /// entered through the given session instead of the process-global one.
+    /// entered through the given engine instead of the process-global context.
     #[doc(hidden)]
     fn blas_mat_mul_in(
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
         a: &Matrix<Self>,
         b: &Matrix<Self>,
     ) -> Result<Matrix<Self>>;
@@ -2149,10 +2147,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the multiplication fails on the session, returns the wrong
+/// Returns an error when the multiplication fails on the engine, returns the wrong
 /// dtype, or has a shape other than `m x n`.
 fn dot_general_matrices_in<T>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    session: &mut dyn tenferro_tensor::Engine,
     a_tensor: Tensor,
     b_tensor: Tensor,
     m: usize,
@@ -2254,7 +2252,7 @@ macro_rules! impl_blas_mul {
             }
 
             fn blas_mat_mul_in(
-                session: &mut dyn tenferro_tensor::BackendSession,
+                session: &mut dyn tenferro_tensor::Engine,
                 a: &Matrix<Self>,
                 b: &Matrix<Self>,
             ) -> Result<Matrix<Self>> {
@@ -2387,14 +2385,14 @@ pub fn mat_mul_owned<T: BlasMul>(a: Matrix<T>, b: Matrix<T>) -> Result<Matrix<T>
     T::blas_mat_mul_owned(a, b).map_err(MatrixMulError::from)
 }
 
-/// Matrix multiplication `A * B` on a caller-supplied session.
+/// Matrix multiplication `A * B` on a caller-held engine.
 ///
 /// Same kernel, shape validation and result container as [`mat_mul`], entered through
 /// the given session instead of the process-global one.
 ///
 /// # Errors
 ///
-/// Returns [`MatrixMulError`] when the shapes disagree or the session operation fails.
+/// Returns [`MatrixMulError`] when the shapes disagree or the engine operation fails.
 ///
 /// # Examples
 ///
@@ -2402,7 +2400,7 @@ pub fn mat_mul_owned<T: BlasMul>(a: Matrix<T>, b: Matrix<T>) -> Result<Matrix<T>
 /// [`explicit::Session::mat_mul`](crate::explicit::Session::mat_mul), which holds the
 /// session for the whole stage.
 pub fn mat_mul_in<T: BlasMul>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    session: &mut dyn tenferro_tensor::Engine,
     a: &Matrix<T>,
     b: &Matrix<T>,
 ) -> Result<Matrix<T>, MatrixMulError> {

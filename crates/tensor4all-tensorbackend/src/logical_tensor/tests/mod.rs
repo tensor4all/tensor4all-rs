@@ -1,5 +1,5 @@
 use super::*;
-use tenferro_cpu::CpuBackend;
+use crate::CpuBackend;
 
 #[test]
 fn round_trip_preserves_all_host_dtypes_in_target_context() {

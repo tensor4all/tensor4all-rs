@@ -11,9 +11,8 @@ use anyhow::{anyhow, ensure, Result};
 use num_complex::{Complex32, Complex64};
 use omeco::ScoreFunction;
 use tenferro::{
-    program::CoreSemanticOp, DType, GraphCompiler, Runtime, ScopedExecutionOutcome,
-    ScopedReadInputs, Tensor as NativeTensor, TensorRead, TensorScalar, TensorSessionOpsExt,
-    TraceContext,
+    program::CoreSemanticOp, CompiledGraph, DType, GraphCompiler, Tensor as NativeTensor,
+    TensorRead, TensorScalar, TensorSessionOpsExt, TraceContext,
 };
 use tenferro_einsum::{
     ConcreteEinsumPlan, ContractionOptimizerOptions, ContractionTree, EinsumSubscripts, Subscripts,
@@ -59,8 +58,8 @@ fn native_tensor_from_vec<T: TensorScalar>(
 }
 
 use crate::context::{
-    default_engine_buffer_pool_stats, reset_default_engine, reset_default_engine_buffer_pool,
-    with_default_graph_runtime, with_default_session,
+    default_context, default_engine_buffer_pool_stats, reset_default_engine,
+    reset_default_engine_buffer_pool, with_default_graph_compiler, with_default_session,
 };
 use crate::memory::release_process_allocator_cached_memory;
 use crate::storage::{storage_dtype_dispatch, Storage, StorageScalar};
@@ -703,14 +702,18 @@ fn compile_native_einsum_program(
 
 fn run_cached_native_einsum(
     subscripts: &EinsumSubscripts,
-    execute: impl FnOnce(&mut GraphCompiler, &Runtime) -> Result<NativeTensor>,
+    build: impl FnOnce(&mut GraphCompiler) -> Result<CompiledGraph>,
+    execute: impl FnOnce(&crate::context::CpuExecutionContext, &CompiledGraph) -> Result<NativeTensor>,
 ) -> Result<NativeTensor> {
     let trace_pool = native_einsum_pool_trace_enabled();
     let pool_before = trace_pool
         .then(default_engine_buffer_pool_stats)
         .transpose()?;
-    let result =
-        with_default_graph_runtime(|compiler, runtime, _backend| execute(compiler, runtime))??;
+    // Compile under the compiler lock only; the graph then runs under the
+    // context's engine lock. Holding both would make a compile wait for a graph
+    // that is running.
+    let program = with_default_graph_compiler(build)?;
+    let result = execute(default_context(), &program)?;
     if trace_pool {
         let pool_after = default_engine_buffer_pool_stats()?;
         let output_bytes = native_tensor_bytes(&result);
@@ -788,30 +791,22 @@ fn cached_einsum_native_tensors(
     inputs: &[&NativeTensor],
     subscripts: &EinsumSubscripts,
 ) -> Result<NativeTensor> {
-    run_cached_native_einsum(subscripts, |compiler, runtime| {
-        let program = compile_native_einsum_program(
-            compiler,
-            inputs.iter().map(|tensor| {
-                tenferro::program::ProgramInputSpec::new(
-                    tensor.dtype(),
-                    tensor.shape().iter().copied().map(Into::into),
-                )
-            }),
-            subscripts,
-        )?;
-        let mut outputs = runtime
-            .run_compiled(&program, inputs)
-            .map_err(|e| anyhow!("native einsum failed: {e}"))?;
-        if outputs.len() != 1 {
-            return Err(anyhow!(
-                "native einsum returned {} outputs instead of one",
-                outputs.len()
-            ));
-        }
-        outputs
-            .pop()
-            .ok_or_else(|| anyhow!("native einsum returned no output"))
-    })
+    run_cached_native_einsum(
+        subscripts,
+        |compiler| {
+            compile_native_einsum_program(
+                compiler,
+                inputs.iter().map(|tensor| {
+                    tenferro::program::ProgramInputSpec::new(
+                        tensor.dtype(),
+                        tensor.shape().iter().copied().map(Into::into),
+                    )
+                }),
+                subscripts,
+            )
+        },
+        |context, program| single_output(context.run_graph(program, inputs)),
+    )
 }
 
 fn cached_einsum_native_reads(
@@ -827,46 +822,47 @@ fn cached_einsum_native_reads(
         // The plan reports `tenferro_einsum::Error`, so the session-entry
         // rejection is mapped here rather than through the tenferro-tensor-typed
         // session helper.
-        return crate::context::default_context()
-            .with_session(|session| plan.execute_read(inputs, session))
+        return default_context()
+            .with_session(|engine| plan.execute_read(inputs, engine))
             .map_err(|entry| {
                 anyhow::Error::new(entry).context("native einsum session entry failed")
             })?
             .map_err(|error| anyhow!("native einsum session execution failed: {error}"));
     }
 
-    let views = inputs
-        .iter()
-        .map(|input| input.clone().tensor_view())
-        .collect::<Vec<_>>();
-    run_cached_native_einsum(&einsum_subscripts, |compiler, runtime| {
-        let program = compile_native_einsum_program(
-            compiler,
-            views.iter().map(|tensor| {
-                tenferro::program::ProgramInputSpec::new(
-                    tensor.dtype(),
-                    tensor.shape().iter().copied().map(Into::into),
-                )
-            }),
-            &einsum_subscripts,
-        )?;
-        let outcome = runtime
-            .execute_scoped_read_only(&program, ScopedReadInputs::new(views))
-            .map_err(|rejected| {
-                let (error, _inputs) = rejected.into_parts();
-                anyhow!("native einsum submission rejected: {error}")
-            })?;
-        let bundle = match outcome {
-            ScopedExecutionOutcome::Completed(bundle) => bundle,
-            ScopedExecutionOutcome::RetiredFailed { error, .. } => {
-                return Err(anyhow!("native einsum failed: {error}"));
-            }
-        };
-        bundle
-            .into_owned_output(0)
-            .map_err(|(_, error)| anyhow!("native einsum output extraction failed: {error}"))
-    })
+    run_cached_native_einsum(
+        &einsum_subscripts,
+        |compiler| {
+            compile_native_einsum_program(
+                compiler,
+                inputs.iter().map(|tensor| {
+                    tenferro::program::ProgramInputSpec::new(
+                        tensor.dtype(),
+                        tensor.shape().iter().copied().map(Into::into),
+                    )
+                }),
+                &einsum_subscripts,
+            )
+        },
+        |context, program| single_output(context.run_graph_reads(program, inputs)),
+    )
     .map_err(|e| anyhow!("native read einsum failed: {e}"))
+}
+
+/// Reduce a graph's output list to the single tensor an einsum produces.
+fn single_output(
+    outputs: std::result::Result<Vec<NativeTensor>, crate::context::CpuExecutionContextError>,
+) -> Result<NativeTensor> {
+    let mut outputs = outputs.map_err(|e| anyhow!("native einsum failed: {e}"))?;
+    if outputs.len() != 1 {
+        return Err(anyhow!(
+            "native einsum returned {} outputs instead of one",
+            outputs.len()
+        ));
+    }
+    outputs
+        .pop()
+        .ok_or_else(|| anyhow!("native einsum returned no output"))
 }
 
 /// Build a dense native tensor from column-major data.
@@ -1203,7 +1199,7 @@ pub fn native_tensor_primal_to_diag<T: TensorElement>(
 /// Reshape a native tensor without changing its column-major linearization.
 /// # Errors
 ///
-/// Returns an error when the backend session is unavailable or when
+/// Returns an error when the context rejects the entry or when
 /// `logical_dims` has a different element count than `tensor` or is otherwise
 /// rejected by the backend reshape.
 pub fn reshape_col_major_native_tensor(
@@ -1217,7 +1213,7 @@ pub fn reshape_col_major_native_tensor(
 /// Compute a QR decomposition on a native tensor.
 /// # Errors
 ///
-/// Returns a [`BridgeError`] when the backend session is unavailable or when
+/// Returns a [`BridgeError`] when the context rejects the entry or when
 /// the QR factorization fails.
 pub fn qr_native_tensor(
     tensor: &NativeTensor,
@@ -1230,7 +1226,7 @@ pub fn qr_native_tensor(
 /// Compute an SVD on a native tensor.
 /// # Errors
 ///
-/// Returns an error when the backend session is unavailable or when the SVD
+/// Returns an error when the context rejects the entry or when the SVD
 /// fails.
 pub fn svd_native_tensor(
     tensor: &NativeTensor,

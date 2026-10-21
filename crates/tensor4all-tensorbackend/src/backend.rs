@@ -191,22 +191,21 @@ pub trait FullPivLuScalar: BackendLinalgScalar {
     /// Same solve, in a caller-owned execution context.
     ///
     /// The shapes and values are interpreted exactly as in
-    /// [`Self::solve_right_full_piv_lu`]; only the session that performs the
+    /// [`Self::solve_right_full_piv_lu`]; only the engine that performs the
     /// solve is the caller's, so the work runs on the caller's backend instead
-    /// of the process-global canonical session. The context is entered after
-    /// the operands are prepared and validated; a caller that must avoid
-    /// entering a session for a degenerate input decides that before calling
-    /// this method (the materialization layer's all-zero pivot shortcut is one
-    /// such caller).
+    /// of the process-global one. The context is entered after the operands are
+    /// prepared and validated; a caller that must avoid an entry for a
+    /// degenerate input decides that before calling this method (the
+    /// materialization layer's all-zero pivot shortcut is one such caller).
     ///
     /// # Errors
     ///
     /// Returns a [`BackendLinalgError`] when the pivot matrix is not square
     /// (a shape mismatch), when the shapes are incompatible (`lhs_cols !=
-    /// pivot_rows`, a shape mismatch), when entering the caller's context is
-    /// rejected - a Rayon worker is refused typed rather than rerouted, with
-    /// the original entry error kept as the source - or when the backend
-    /// full-pivot LU solve fails (a backend failure).
+    /// pivot_rows`, a shape mismatch), when the context rejects the entry (a
+    /// nested session on this thread, with the original entry error kept as the
+    /// source), or when the backend full-pivot LU solve fails (a backend
+    /// failure).
     fn solve_right_full_piv_lu_in(
         context: &CpuExecutionContext,
         lhs_values: &[Self],
@@ -217,23 +216,21 @@ pub trait FullPivLuScalar: BackendLinalgScalar {
         pivot_cols: usize,
     ) -> std::result::Result<Vec<Self>, BackendLinalgError>;
 
-    /// Same solve, on a tenferro session the caller has already entered.
+    /// Same solve, on an engine the caller already holds.
     ///
-    /// This is the entry a scheduler-owned worker uses: the phase that owns the
-    /// worker enters the session, so neither this method nor the backend enters
-    /// another one, and nothing consults the process-global session. The shapes
-    /// and values are interpreted exactly as in
-    /// [`Self::solve_right_full_piv_lu`], and they are validated before the
-    /// session is used.
+    /// Neither this method nor the backend enters a context, and nothing
+    /// consults the process-global one. The shapes and values are interpreted
+    /// exactly as in [`Self::solve_right_full_piv_lu`], and they are validated
+    /// before the engine is used.
     ///
     /// # Errors
     ///
     /// Returns a [`BackendLinalgError`] when the pivot matrix is not square
     /// (a shape mismatch), when the shapes are incompatible (`lhs_cols !=
     /// pivot_rows`, a shape mismatch), or when the backend full-pivot LU solve
-    /// fails on the supplied session (a backend failure).
+    /// fails on the supplied engine (a backend failure).
     fn solve_right_full_piv_lu_on_session(
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
         lhs_values: &[Self],
         lhs_rows: usize,
         lhs_cols: usize,
@@ -290,9 +287,9 @@ macro_rules! impl_full_piv_lu_scalar {
                 // caller asked for its context, so a worker refusal must stay
                 // visible as a refusal rather than as text. Validation stays
                 // before the entry: a malformed operand must fail without
-                // waiting for the caller's session.
+                // waiting for the caller's engine.
                 let solved_t = context
-                    .with_concrete_session(|session| inputs.solve(session.backend()))
+                    .with_concrete_session(|session| inputs.solve(session.engine()))
                     .map_err(|error| BackendLinalgError::from(anyhow::Error::new(error)))?
                     .map_err(|error| {
                         BackendLinalgError::from(anyhow::anyhow!(
@@ -303,7 +300,7 @@ macro_rules! impl_full_piv_lu_scalar {
             }
 
             fn solve_right_full_piv_lu_on_session(
-                session: &mut dyn tenferro_tensor::BackendSession,
+                session: &mut dyn tenferro_tensor::Engine,
                 lhs_values: &[Self],
                 lhs_rows: usize,
                 lhs_cols: usize,
@@ -330,7 +327,7 @@ macro_rules! impl_full_piv_lu_scalar {
 
 /// Validated, transposed operands for a right full-pivot LU solve.
 ///
-/// Preparing them is session-free on purpose: an invalid shape must fail
+/// Preparing them is engine-free on purpose: an invalid shape must fail
 /// before any context is entered.
 struct FullPivLuSolveInputs {
     pivot_tensor: tenferro_tensor::Tensor,
@@ -383,7 +380,7 @@ impl FullPivLuSolveInputs {
 
     fn solve(
         &self,
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
     ) -> tenferro_tensor::Result<tenferro_tensor::Tensor> {
         self.pivot_tensor
             .full_piv_lu_solve(&self.lhs_tensor, session)
@@ -450,19 +447,20 @@ pub trait MatrixSolveScalar: BackendLinalgScalar + crate::matrix::MatrixScalar {
         Self::solve_matrix_impl(&a, &b)
     }
 
-    /// Solve `a * x = b` on a session the caller already entered.
+    /// Solve `a * x = b` on an engine the caller already holds.
     ///
-    /// The session-taking counterpart of [`Self::solve_matrix_impl`], for callers that own their execution - a
-    /// worker lane entered by the phase that owns it, for example - rather than a context they may enter
-    /// themselves.
+    /// The engine-taking counterpart of [`Self::solve_matrix_impl`], for
+    /// callers that own their execution domain rather than a context they may
+    /// enter themselves.
     ///
     /// # Errors
     ///
-    /// Returns the backend's solve failure: a non-square factor, an incompatible right-hand side, a singular
-    /// factor, or a session-level execution failure.
+    /// Returns the backend's solve failure: a non-square factor, an
+    /// incompatible right-hand side, a singular factor, or an engine-level
+    /// execution failure.
     #[doc(hidden)]
     fn solve_matrix_in_impl(
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
         a: &Matrix<Self>,
         b: &Matrix<Self>,
     ) -> Result<Matrix<Self>>;
@@ -797,7 +795,7 @@ where
 }
 
 fn solve_matrix_direct_in<T>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    session: &mut dyn tenferro_tensor::Engine,
     a: &Matrix<T>,
     b: &Matrix<T>,
 ) -> Result<Matrix<T>>
@@ -818,7 +816,7 @@ where
 }
 
 fn solve_matrix_direct_owned_in<T>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    session: &mut dyn tenferro_tensor::Engine,
     a: Matrix<T>,
     b: Matrix<T>,
 ) -> Result<Matrix<T>>
@@ -837,7 +835,7 @@ where
     typed_tensor_to_matrix("solve", x)
 }
 
-/// Solve `A X = B` on a caller-supplied session.
+/// Solve `A X = B` on a caller-held engine.
 ///
 /// Same kernel, conversion and validation as [`solve_matrix`], entered through the
 /// given session instead of the process-global one.
@@ -846,7 +844,7 @@ where
 ///
 /// Returns [`BackendLinalgError`] under the same conditions as [`solve_matrix`].
 pub fn solve_matrix_in<T>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    session: &mut dyn tenferro_tensor::Engine,
     a: &Matrix<T>,
     b: &Matrix<T>,
 ) -> std::result::Result<Matrix<T>, BackendLinalgError>
@@ -885,7 +883,7 @@ where
 
 #[allow(clippy::too_many_arguments)]
 fn triangular_solve_matrix_direct_in<T>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    session: &mut dyn tenferro_tensor::Engine,
     a: &Matrix<T>,
     b: &Matrix<T>,
     left_side: bool,
@@ -936,7 +934,7 @@ where
 
 #[allow(clippy::too_many_arguments)]
 fn triangular_solve_matrix_direct_owned_in<T>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    session: &mut dyn tenferro_tensor::Engine,
     a: Matrix<T>,
     b: Matrix<T>,
     left_side: bool,
@@ -966,10 +964,10 @@ where
     typed_tensor_to_matrix("triangular_solve", x)
 }
 
-/// Solve a triangular system on a caller-supplied session.
+/// Solve a triangular system on a caller-held engine.
 ///
 /// Same kernel, conversion and validation as [`triangular_solve_matrix`], entered
-/// through the given session instead of the process-global one.
+/// through the given engine instead of the process-global context.
 ///
 /// # Errors
 ///
@@ -977,7 +975,7 @@ where
 /// [`triangular_solve_matrix`].
 #[allow(clippy::too_many_arguments)]
 pub fn triangular_solve_matrix_in<T>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    session: &mut dyn tenferro_tensor::Engine,
     a: &Matrix<T>,
     b: &Matrix<T>,
     left_side: bool,
@@ -999,7 +997,7 @@ impl MatrixSolveScalar for f64 {
     }
 
     fn solve_matrix_in_impl(
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
         a: &Matrix<Self>,
         b: &Matrix<Self>,
     ) -> Result<Matrix<Self>> {
@@ -1041,7 +1039,7 @@ impl MatrixSolveScalar for Complex64 {
     }
 
     fn solve_matrix_in_impl(
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
         a: &Matrix<Self>,
         b: &Matrix<Self>,
     ) -> Result<Matrix<Self>> {
@@ -1107,7 +1105,7 @@ impl MatrixSolveScalar for f32 {
     }
 
     fn solve_matrix_in_impl(
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
         a: &Matrix<Self>,
         b: &Matrix<Self>,
     ) -> Result<Matrix<Self>> {
@@ -1215,7 +1213,7 @@ impl MatrixSolveScalar for Complex32 {
     }
 
     fn solve_matrix_in_impl(
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
         a: &Matrix<Self>,
         b: &Matrix<Self>,
     ) -> Result<Matrix<Self>> {
@@ -1355,7 +1353,7 @@ fn require_host_linalg_tensor<T: TensorScalar>(
 /// # Errors
 ///
 /// Returns a [`BackendLinalgError`] when `a` is not host-backed, when the
-/// backend session is unavailable, or when the backend SVD fails.
+/// context rejects the entry, or when the backend SVD fails.
 ///
 pub fn svd_backend<T>(a: &TypedTensor<T>) -> std::result::Result<SvdResult<T>, BackendLinalgError>
 where
@@ -1372,13 +1370,13 @@ where
         .map_err(|e| anyhow!("SVD computation failed via tenferro-tensor: {e}"))?
 }
 
-/// SVD of a typed tensor on a caller-supplied session.
+/// SVD of a typed tensor on a caller-held engine.
 ///
 /// # Errors
 ///
 /// Returns [`BackendLinalgError`] under the same conditions as [`svd_backend`].
 pub fn svd_backend_in<T>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    session: &mut dyn tenferro_tensor::Engine,
     tensor: Tensor,
 ) -> std::result::Result<SvdResult<T>, BackendLinalgError>
 where
@@ -1401,7 +1399,7 @@ where
 /// # Errors
 ///
 /// Returns a [`BackendLinalgError`] when `a` is not host-backed, when the
-/// backend session is unavailable, or when the backend QR fails.
+/// context rejects the entry, or when the backend QR fails.
 ///
 pub fn qr_backend<T>(
     a: TypedTensor<T>,
@@ -1418,13 +1416,13 @@ where
         .map_err(|e| anyhow!("QR computation failed via tenferro-tensor: {e}"))?
 }
 
-/// QR of a typed tensor on a caller-supplied session.
+/// QR of a typed tensor on a caller-held engine.
 ///
 /// # Errors
 ///
 /// Returns [`BackendLinalgError`] under the same conditions as [`qr_backend`].
 pub fn qr_backend_in<T>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    session: &mut dyn tenferro_tensor::Engine,
     tensor: Tensor,
 ) -> std::result::Result<(TypedTensor<T>, TypedTensor<T>), BackendLinalgError>
 where
@@ -1444,7 +1442,7 @@ where
 /// Solve `A X = B` with the configured tenferro backend.
 /// # Errors
 /// Returns a [`BackendLinalgError`] when `a` or `b` is not host-backed, when
-/// the backend session is unavailable, or when the solve fails (for example a
+/// the context rejects the entry, or when the solve fails (for example a
 /// singular `a`).
 pub fn solve_backend<T>(
     a: &TypedTensor<T>,
@@ -1479,7 +1477,7 @@ where
 /// # Errors
 ///
 /// Returns a [`BackendLinalgError`] when `a` or `b` is not host-backed, when
-/// the backend session is unavailable, or when the triangular solve fails
+/// the context rejects the entry, or when the triangular solve fails
 /// (for example a singular `a` or inconsistent triangular flags).
 ///
 pub fn triangular_solve_backend<T>(
@@ -1526,7 +1524,7 @@ where
 /// matrix-to-tensor conversion centralized in `tensor4all-tensorbackend`.
 /// # Errors
 ///
-/// Returns a [`BackendLinalgError`] when the backend session is unavailable
+/// Returns a [`BackendLinalgError`] when the context rejects the entry
 /// or the solve fails (for example a singular `a`).
 ///
 /// # Examples
@@ -1554,7 +1552,7 @@ where
 /// scalar types.
 /// # Errors
 ///
-/// Returns a [`BackendLinalgError`] when the backend session is unavailable
+/// Returns a [`BackendLinalgError`] when the context rejects the entry
 /// or the solve fails (for example a singular `a`).
 ///
 /// # Examples
@@ -1582,7 +1580,7 @@ where
 /// a transpose to `A`, and `unit_diagonal` treats the diagonal of `A` as ones.
 /// # Errors
 ///
-/// Returns a [`BackendLinalgError`] when the backend session is unavailable
+/// Returns a [`BackendLinalgError`] when the context rejects the entry
 /// or the triangular solve fails (for example a singular `a` or inconsistent
 /// triangular flags).
 ///
@@ -1616,7 +1614,7 @@ where
 /// a transpose to `A`, and `unit_diagonal` treats the diagonal of `A` as ones.
 /// # Errors
 ///
-/// Returns a [`BackendLinalgError`] when the backend session is unavailable
+/// Returns a [`BackendLinalgError`] when the context rejects the entry
 /// or the triangular solve fails (for example a singular `a` or inconsistent
 /// triangular flags).
 ///
@@ -1654,9 +1652,9 @@ where
         .map_err(|e| anyhow!("complete-pivoting LU failed via tenferro-tensor: {e}"))?
 }
 
-/// Complete-pivoting LU on a caller-supplied session.
+/// Complete-pivoting LU on a caller-held engine.
 fn full_piv_lu_tensor_in<T>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    session: &mut dyn tenferro_tensor::Engine,
     tensor: Tensor,
 ) -> std::result::Result<FullPivLuResult<T>, BackendLinalgError>
 where
@@ -1679,7 +1677,7 @@ where
 /// # Errors
 ///
 /// Returns a [`BackendLinalgError`] when `a` is not host-backed, when the
-/// backend session is unavailable, or when the factorization fails.
+/// context rejects the entry, or when the factorization fails.
 ///
 pub fn full_piv_lu_backend<T>(
     a: &TypedTensor<T>,
@@ -1697,7 +1695,7 @@ where
     full_piv_lu_tensor(tensor)
 }
 
-/// Complete-pivoting LU of a typed tensor on a caller-supplied session.
+/// Complete-pivoting LU of a typed tensor on a caller-held engine.
 ///
 /// Same kernel and conversion as [`full_piv_lu_backend`], entered through the given
 /// session instead of the process-global one.
@@ -1707,7 +1705,7 @@ where
 /// Returns [`BackendLinalgError`] under the same conditions as
 /// [`full_piv_lu_backend`].
 pub fn full_piv_lu_backend_in<T>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    session: &mut dyn tenferro_tensor::Engine,
     a: &TypedTensor<T>,
 ) -> std::result::Result<FullPivLuResult<T>, BackendLinalgError>
 where
@@ -1728,7 +1726,7 @@ where
 /// use [`Matrix`] as their dense boundary type.
 /// # Errors
 ///
-/// Returns a [`BackendLinalgError`] when the backend session is unavailable
+/// Returns a [`BackendLinalgError`] when the context rejects the entry
 /// or the full-pivoting LU factorization fails.
 ///
 /// # Examples
@@ -1755,7 +1753,7 @@ where
     })
 }
 
-/// Complete-pivoting LU for a column-major [`Matrix`] on a caller-supplied session.
+/// Complete-pivoting LU for a column-major [`Matrix`] on a caller-held engine.
 ///
 /// Same kernel and conversion as [`full_piv_lu_matrix`], entered through the given
 /// session instead of the process-global one.
@@ -1765,7 +1763,7 @@ where
 /// Returns [`BackendLinalgError`] under the same conditions as
 /// [`full_piv_lu_matrix`].
 pub fn full_piv_lu_matrix_in<T>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    session: &mut dyn tenferro_tensor::Engine,
     a: &Matrix<T>,
 ) -> std::result::Result<FullPivLuMatrixResult<T>, BackendLinalgError>
 where
