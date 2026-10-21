@@ -16,25 +16,6 @@ use tensor4all_tensorbackend::{with_runtime_engine, ExecutionContext};
 
 use crate::IdxTensorError;
 
-/// Reject a context this build cannot execute in before resolving an engine.
-///
-/// In the mixed configuration of `tensor4all-rs#869` the backend exposes
-/// `ExecutionContext::Cuda` while core is built without CUDA support. The
-/// caller's `validate_context` normally rejects it first; this keeps an entry
-/// that reaches here from silently falling back to the implicit CPU engine.
-#[cfg(not(feature = "tenferro-cuda"))]
-fn ensure_supported_context(context: Option<&ExecutionContext>) -> Result<(), IdxTensorError> {
-    if context.is_some_and(|context| !matches!(context, ExecutionContext::Cpu(_))) {
-        return Err(super::idx_tensor::unsupported_execution_context_error());
-    }
-    Ok(())
-}
-
-#[cfg(feature = "tenferro-cuda")]
-fn ensure_supported_context(_: Option<&ExecutionContext>) -> Result<(), IdxTensorError> {
-    Ok(())
-}
-
 /// Run one eager session on the engine selected by `context`.
 ///
 /// `None` selects the engine of the CPU or CUDA context that owns `runtime`'s
@@ -71,7 +52,6 @@ pub(crate) fn with_eager_session_typed<T, E>(
 where
     E: From<tenferro_ad::Error>,
 {
-    ensure_supported_context(context)?;
     match context {
         Some(ExecutionContext::Cpu(context)) => context
             .with_session(|engine| runtime.with_eager_session(engine, f))
@@ -82,9 +62,13 @@ where
             .map_err(IdxTensorError::from),
         None => with_runtime_engine(runtime, |engine| runtime.with_eager_session(engine, f))
             .map_err(IdxTensorError::from),
+        // INVARIANT: reachable only in the mixed configuration of
+        // tensor4all-rs#869 (tensorbackend built with CUDA, core without), where
+        // `ExecutionContext::Cuda` exists but this build cannot execute in it; in
+        // every other configuration `Cpu` is the only variant.
         #[cfg(not(feature = "tenferro-cuda"))]
-        _ => with_runtime_engine(runtime, |engine| runtime.with_eager_session(engine, f))
-            .map_err(IdxTensorError::from),
+        #[allow(unreachable_patterns)]
+        Some(_) => Err(super::idx_tensor::unsupported_execution_context_error()),
     }
 }
 
@@ -102,7 +86,6 @@ pub(crate) fn with_engine<T, E>(
 where
     E: std::error::Error + Send + Sync + 'static,
 {
-    ensure_supported_context(context)?;
     let result = match context {
         Some(ExecutionContext::Cpu(context)) => context
             .with_session(|engine| f(engine))
@@ -112,8 +95,13 @@ where
             .with_session(|engine| f(engine))
             .map_err(IdxTensorError::from),
         None => with_runtime_engine(runtime, |engine| f(engine)).map_err(IdxTensorError::from),
+        // INVARIANT: reachable only in the mixed configuration of
+        // tensor4all-rs#869 (tensorbackend built with CUDA, core without), where
+        // `ExecutionContext::Cuda` exists but this build cannot execute in it; in
+        // every other configuration `Cpu` is the only variant.
         #[cfg(not(feature = "tenferro-cuda"))]
-        _ => with_runtime_engine(runtime, |engine| f(engine)).map_err(IdxTensorError::from),
+        #[allow(unreachable_patterns)]
+        Some(_) => Err(super::idx_tensor::unsupported_execution_context_error()),
     };
     result?.map_err(eager_error)
 }
@@ -132,7 +120,6 @@ pub(crate) fn with_execution_engine<T, E>(
 where
     E: std::error::Error + Send + Sync + 'static,
 {
-    ensure_supported_context(context)?;
     let result = match context {
         Some(ExecutionContext::Cpu(context)) => context
             .with_session(|engine| f(engine))
@@ -142,8 +129,13 @@ where
             .with_session(|engine| f(engine))
             .map_err(IdxTensorError::from),
         None => with_runtime_engine(runtime, |engine| f(engine)).map_err(IdxTensorError::from),
+        // INVARIANT: reachable only in the mixed configuration of
+        // tensor4all-rs#869 (tensorbackend built with CUDA, core without), where
+        // `ExecutionContext::Cuda` exists but this build cannot execute in it; in
+        // every other configuration `Cpu` is the only variant.
         #[cfg(not(feature = "tenferro-cuda"))]
-        _ => with_runtime_engine(runtime, |engine| f(engine)).map_err(IdxTensorError::from),
+        #[allow(unreachable_patterns)]
+        Some(_) => Err(super::idx_tensor::unsupported_execution_context_error()),
     };
     result?.map_err(eager_error)
 }
