@@ -1,16 +1,21 @@
 //! Explicit and optional process-global tenferro CPU execution contexts.
 
 use std::cell::RefCell;
+#[cfg(feature = "global-defaults")]
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+#[cfg(feature = "global-defaults")]
+use std::sync::Weak;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use tenferro::{
     CompiledGraph, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead, TracedGraph,
 };
-use tenferro_ad::{AdContext, ContextId, EagerRuntime};
+#[cfg(feature = "global-defaults")]
+use tenferro_ad::ContextId;
+use tenferro_ad::{AdContext, EagerRuntime};
 use tenferro_cpu::{BufferPoolStats, CpuEngine};
 
 /// Failure reported when building a [`CpuBackend`] pool.
@@ -528,7 +533,7 @@ fn engine_runtime_id(engine: &CpuEngine) -> tenferro::EngineId {
 /// through the eager-runtime owner table.
 ///
 /// A [`CpuExecutionContext`] holds this in an [`Arc`]; the process-wide owner
-/// table holds only a [`Weak`], so the entry dangles as soon as the context is
+/// table holds only a [`Weak`](std::sync::Weak), so the entry dangles as soon as the context is
 /// dropped instead of keeping the engine alive.
 pub(crate) struct EngineOwner {
     id: u64,
@@ -629,20 +634,6 @@ impl EngineOwner {
         }
         let mut entry = self.begin_session()?;
         Ok(f(entry.backend.engine_mut()))
-    }
-
-    /// Run `f` in one session of this owner's engine, seen as the engine trait.
-    ///
-    /// This is the entry used when the engine is resolved through an eager
-    /// runtime rather than named by a context: the caller has an
-    /// [`ExecutionEngine`], not necessarily a [`CpuEngine`]. It delegates to
-    /// [`Self::with_session`], so the re-entry guard and the inline-serial rule
-    /// for Rayon workers are the same entry.
-    fn with_execution_engine<R>(
-        &self,
-        f: impl FnOnce(&mut dyn ExecutionEngine) -> R,
-    ) -> Result<R, CpuExecutionContextError> {
-        self.with_session(|engine| f(engine))
     }
 }
 
@@ -1212,7 +1203,7 @@ pub fn with_runtime_engine<R>(
     };
     match owner {
         LiveRuntimeOwner::Cpu(owner) => owner
-            .with_execution_engine(f)
+            .with_session(|engine| f(engine))
             .map_err(ExecutionContextEntryError::Cpu),
         #[cfg(feature = "tenferro-cuda")]
         LiveRuntimeOwner::Cuda(owner) => owner
