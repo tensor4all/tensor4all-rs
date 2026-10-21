@@ -1,5 +1,8 @@
 # F4: the adaptive-interpolation worker path on the phase/lane execution seam (#857 / #859 Phase 4)
 
+Status: superseded 2026-10-21 by tenferro's caller-held engine model (tenferro-rs #2206); the session/held-session APIs described here were deleted. See explicit-cpu-execution-context.md for the current ownership model.
+
+
 `#857` is closed as *not planned*, superseded by `#859` Phase 4: "child sessions from tenferro-rs `#2044` plus a
 phase scheduler on the context's own pool". This is revision 2 of the design; revision 1 proposed a new
 `with_child_context` bridge over `CpuExecSession::child_execution()` and an external-domain fan-out, and an

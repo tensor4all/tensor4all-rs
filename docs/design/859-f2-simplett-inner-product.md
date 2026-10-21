@@ -1,5 +1,8 @@
 # F2 — the first measured non-AD workload: simplett's TT inner product on a held session
 
+Status: superseded 2026-10-21 by tenferro's caller-held engine model (tenferro-rs #2206); the session/held-session APIs described here were deleted. See explicit-cpu-execution-context.md for the current ownership model.
+
+
 Design for the F2 package of [tensor4all-rs#859](https://github.com/tensor4all/tensor4all-rs/issues/859)
 (paired with [#510](https://github.com/tensor4all/tensor4all-rs/issues/510)). It is the first app-track
 package after F1 slices 1 and 2 (#902, #903), and it exists to show what holding one explicit session across

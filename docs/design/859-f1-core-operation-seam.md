@@ -1,5 +1,8 @@
 # F1 slice 1 — the core operation seam: pairwise contraction on an explicit session
 
+Status: superseded 2026-10-21 by tenferro's caller-held engine model (tenferro-rs #2206); the session/held-session APIs described here were deleted. See explicit-cpu-execution-context.md for the current ownership model.
+
+
 Short design for the first F1 package of [tensor4all-rs#859](https://github.com/tensor4all/tensor4all-rs/issues/859)
 ("core operation/value seam"). **Revision 9**, adding slice 7. **Revision 8**, adding slice 6. **Revision 7**, adding slice 5. **Revision 6**, adding slice 4. **Revision 5**, adding slice 3. **Revision 4**, after an independent pre-review rejected revision 1 (the
 operand bridge it proposed - `try_materialized_inner` + `explicit::detach` - can enter the operand's owning

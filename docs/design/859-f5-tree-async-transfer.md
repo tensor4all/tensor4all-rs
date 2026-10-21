@@ -1,5 +1,8 @@
 # F5 slice 3: the TreeTN-level pending download surface (#553 / #859 F5)
 
+Status: superseded 2026-10-21 by tenferro's caller-held engine model (tenferro-rs #2206); the session/held-session APIs described here were deleted. See explicit-cpu-execution-context.md for the current ownership model. The clone-based CUDA backend handle described here is likewise gone: `CudaExecutionContext` owns one `CudaEngine`.
+
+
 F5's row asks for component-wise network transfer **and** separated upload/download/wait/overlap measurements.
 Slice 1 gave the TreeTN the component-wise *synchronous* upload with its per-node readiness validator
 (`docs/design/859-f5-component-transfer.md`, merged in #929). Slice 2 gave the *tensor* level its pending routes

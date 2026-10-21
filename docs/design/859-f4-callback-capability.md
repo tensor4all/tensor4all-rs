@@ -1,5 +1,8 @@
 # F4 residual: a callback capability for the phase entry (#857 / #859 Phase 4)
 
+Status: superseded 2026-10-21 by tenferro's caller-held engine model (tenferro-rs #2206); the session/held-session APIs described here were deleted. See explicit-cpu-execution-context.md for the current ownership model.
+
+
 `#859`'s F4 row asks to "connect scalar/batch callbacks, TCI factor/solve/output routes and the phase
 scheduler". The routes (#923) and the scheduler (#924) are in; what is missing is the callbacks: the user's
 scalar and batch functions still receive only indices, so a caller whose *evaluation* wants to run numerical work

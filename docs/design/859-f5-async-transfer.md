@@ -1,5 +1,8 @@
 # F5 slice 2: an asynchronous transfer surface, so wait and overlap become measurable (#553 / #859 F5)
 
+Status: superseded 2026-10-21 by tenferro's caller-held engine model (tenferro-rs #2206); the session/held-session APIs described here were deleted. See explicit-cpu-execution-context.md for the current ownership model. The clone-based CUDA backend handle described here is likewise gone: `CudaExecutionContext` owns one `CudaEngine`.
+
+
 F5's row asks for "separate compute/upload/download/**wait**/**overlap** measurements". Until now every transfer on
 this route was synchronous, so wait could not be told apart from work and overlap could not be measured at all
 (`docs/book/src/tutorials/gpu/cuda-tree-contraction.md` says so). The substrate for this is now pinned: tenferro-rs

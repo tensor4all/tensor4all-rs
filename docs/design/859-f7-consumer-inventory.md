@@ -1,5 +1,8 @@
 # Consumer and feature inventory for the #859 migration (F7)
 
+Status: superseded 2026-10-21 by tenferro's caller-held engine model (tenferro-rs #2206); the session/held-session APIs described here were deleted. See explicit-cpu-execution-context.md for the current ownership model.
+
+
 `#859`'s F7 row asks to "inventory the current crate/feature map, not only this historical list" before migrating
 the remaining consumers. This is that inventory, taken from the checkout at `6b006188` (the merge of #926). Every
 table below names the command that produced it, so the next reader can re-derive it instead of trusting it.
