@@ -513,28 +513,15 @@ impl EngineState {
             }
         }
     }
+}
 
-    /// Replace the engine if a panic left it broken.
-    ///
-    /// A poisoned lock means a previous holder panicked while it had the engine
-    /// borrowed. tenferro marks an engine broken when that happened during an
-    /// operation, and refuses later calls on it. The engine is then replaced by
-    /// a fresh one of the same thread count: this context owns the engine, so
-    /// there is nothing else to preserve. If the replacement pool cannot be
-    /// built the broken engine stays, and its operations report tenferro's typed
-    /// broken-engine refusal instead.
-    fn recover_from_panic(&mut self) {
-        if !self.backend.engine().is_broken() {
-            return;
-        }
-        let threads = self.backend.num_threads();
-        if let Ok(replacement) = CpuBackend::with_threads(threads) {
-            self.backend = replacement;
-            // The prepared plans were made for the replaced engine's workspace;
-            // rebuild the runtime against the new one.
-            self.runtime = None;
-        }
-    }
+/// The runtime engine id `engine` is registered under.
+///
+/// An engine built by [`CpuEngine::with_runtime_engine_id`] runs under its own
+/// id, so every registration and extension module installed on its behalf must
+/// use that id rather than the canonical [`tenferro_cpu::runtime_engine_id`].
+fn engine_runtime_id(engine: &CpuEngine) -> tenferro::EngineId {
+    ExecutionEngine::target(engine).engine_id().clone()
 }
 
 /// The engine state one context owns, behind a handle that can also be reached
@@ -545,6 +532,19 @@ impl EngineState {
 /// dropped instead of keeping the engine alive.
 pub(crate) struct EngineOwner {
     id: u64,
+    /// The engine's registered runtime id, captured once at construction.
+    ///
+    /// The eager runtime installs its extension modules under this id, and it is
+    /// read without taking the engine lock so building the eager runtime can
+    /// never wait for a running session.
+    engine_id: tenferro::EngineId,
+    /// The engine's prepared-plan cache, captured once at construction.
+    ///
+    /// A session entered from a Rayon worker runs inline on a fresh serial
+    /// engine that shares this cache (tensor4all-rs#830). Holding the handle
+    /// here keeps that entry off the engine lock: the worker never waits for an
+    /// engine its own pool may be holding.
+    plans: tenferro_cpu::CpuPlanCache,
     engine: Mutex<EngineState>,
 }
 
@@ -552,20 +552,58 @@ impl EngineOwner {
     fn new(backend: CpuBackend) -> Self {
         Self {
             id: next_context_id(),
+            engine_id: engine_runtime_id(backend.engine()),
+            plans: backend.engine().plan_cache().clone(),
             engine: Mutex::new(EngineState::new(backend)),
         }
     }
 
-    /// Lock the engine state, recovering it from a panic that poisoned the lock.
+    /// Lock the engine state, recovering a lock poisoned by a panic.
+    ///
+    /// A panic while the engine was borrowed leaves tenferro's engine marked
+    /// broken, and the lock poisoned. The engine is kept: it carries the
+    /// caller's pool, allocation domain, batch policy and runtime engine id, so
+    /// replacing it with a default engine would silently change the caller's
+    /// execution policy. Recovering the poison only makes the lock usable again;
+    /// operations on the broken engine are refused with tenferro's typed
+    /// `CpuEngineError::Broken`, and the caller builds a new context for a new
+    /// engine.
     fn lock_engine(&self) -> std::sync::MutexGuard<'_, EngineState> {
         match self.engine.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
-                let mut guard = poisoned.into_inner();
-                guard.recover_from_panic();
+                let guard = poisoned.into_inner();
+                self.engine.clear_poison();
                 guard
             }
         }
+    }
+
+    /// Check the per-context re-entry guard and install it for one entry.
+    ///
+    /// Every fallible entry checks before it locks: a nested entry would wait
+    /// for an engine lock this thread already holds, so it is reported as
+    /// [`CpuExecutionContextError::Reentered`] instead.
+    fn enter_session(&self) -> Result<CanonicalSessionGuard, CpuExecutionContextError> {
+        if CanonicalSessionGuard::is_active(self.id) {
+            return Err(CpuExecutionContextError::Reentered);
+        }
+        Ok(CanonicalSessionGuard::enter(self.id))
+    }
+
+    /// The single guarded entry that locks this owner's engine.
+    ///
+    /// This is the only way to lock the engine from a fallible entry: the
+    /// re-entry guard is checked and installed here, so no caller can hold the
+    /// lock without holding the guard too. [`CpuExecutionContext::with_backend`]
+    /// is the one remaining locking entry, and it installs the same guard
+    /// without being able to report the rejection.
+    fn begin_session(&self) -> Result<EngineEntry<'_>, CpuExecutionContextError> {
+        let guard = self.enter_session()?;
+        Ok(EngineEntry {
+            state: self.lock_engine(),
+            _guard: guard,
+        })
     }
 
     /// Run `f` in one session of this owner's engine.
@@ -577,12 +615,6 @@ impl EngineOwner {
         &self,
         f: impl FnOnce(&mut CpuEngine) -> R,
     ) -> Result<R, CpuExecutionContextError> {
-        // Checked before any lock: a nested entry would wait for a lock this
-        // thread already holds.
-        if CanonicalSessionGuard::is_active(self.id) {
-            return Err(CpuExecutionContextError::Reentered);
-        }
-        let _guard = CanonicalSessionGuard::enter(self.id);
         // A worker runs inline on its own serial engine instead of waiting for a
         // pool it belongs to (tensor4all-rs#830). The fresh engine shares the
         // plan cache, whose entries are immutable prepared plans, so a stage
@@ -591,36 +623,49 @@ impl EngineOwner {
         // domain: an entry from a worker therefore allocates and batches
         // independently, and only while it runs.
         if rayon::current_thread_index().is_some() {
-            let plans = self.lock_engine().backend.engine().plan_cache().clone();
-            let mut engine = CpuEngine::serial().with_plan_cache(plans);
+            let _guard = self.enter_session()?;
+            let mut engine = CpuEngine::serial().with_plan_cache(self.plans.clone());
             return Ok(f(&mut engine));
         }
-        let mut state = self.lock_engine();
-        Ok(f(state.backend.engine_mut()))
+        let mut entry = self.begin_session()?;
+        Ok(f(entry.backend.engine_mut()))
     }
 
     /// Run `f` in one session of this owner's engine, seen as the engine trait.
     ///
     /// This is the entry used when the engine is resolved through an eager
     /// runtime rather than named by a context: the caller has an
-    /// [`ExecutionEngine`], not necessarily a [`CpuEngine`]. The per-context
-    /// re-entry guard and the inline-serial rule for Rayon workers are the same
-    /// as [`Self::with_session`].
+    /// [`ExecutionEngine`], not necessarily a [`CpuEngine`]. It delegates to
+    /// [`Self::with_session`], so the re-entry guard and the inline-serial rule
+    /// for Rayon workers are the same entry.
     fn with_execution_engine<R>(
         &self,
         f: impl FnOnce(&mut dyn ExecutionEngine) -> R,
     ) -> Result<R, CpuExecutionContextError> {
-        if CanonicalSessionGuard::is_active(self.id) {
-            return Err(CpuExecutionContextError::Reentered);
-        }
-        let _guard = CanonicalSessionGuard::enter(self.id);
-        if rayon::current_thread_index().is_some() {
-            let plans = self.lock_engine().backend.engine().plan_cache().clone();
-            let mut engine = CpuEngine::serial().with_plan_cache(plans);
-            return Ok(f(&mut engine));
-        }
-        let mut state = self.lock_engine();
-        Ok(f(state.backend.engine_mut()))
+        self.with_session(|engine| f(engine))
+    }
+}
+
+/// One held engine session: the re-entry guard and the locked engine state.
+///
+/// The guard lives exactly as long as the lock it makes safe, so dropping the
+/// entry releases the engine before the thread is allowed to enter again.
+struct EngineEntry<'a> {
+    state: std::sync::MutexGuard<'a, EngineState>,
+    _guard: CanonicalSessionGuard,
+}
+
+impl Deref for EngineEntry<'_> {
+    type Target = EngineState;
+
+    fn deref(&self) -> &EngineState {
+        &self.state
+    }
+}
+
+impl DerefMut for EngineEntry<'_> {
+    fn deref_mut(&mut self) -> &mut EngineState {
+        &mut self.state
     }
 }
 
@@ -681,22 +726,19 @@ impl CpuExecutionContext {
             .is_ok_and(|state| state.runtime.is_some())
     }
 
-    /// Lock the engine state, recovering it from a panic that poisoned the lock.
-    fn lock_engine(&self) -> std::sync::MutexGuard<'_, EngineState> {
-        self.owner.lock_engine()
-    }
-
     /// Lock the compiler, discarding one a panic left behind.
     ///
     /// A `GraphCompiler` holds planning state that a panic may have left half
     /// written; rebuilding it costs nothing a compile would not pay for the next
-    /// graph anyway.
+    /// graph anyway. The poison is cleared after the rebuild so later compiles
+    /// reuse the fresh compiler instead of rebuilding it on every access.
     fn lock_compiler(&self) -> std::sync::MutexGuard<'_, GraphCompiler> {
         match self.compiler.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
                 let mut guard = poisoned.into_inner();
                 *guard = GraphCompiler::new();
+                self.compiler.clear_poison();
                 guard
             }
         }
@@ -705,8 +747,12 @@ impl CpuExecutionContext {
     /// Run a plain tensor operation with this context's engine.
     ///
     /// The closure runs while the context-local engine lock is held. A lock
-    /// poisoned by a panic is recovered: a broken engine is replaced by a fresh
-    /// one with the same thread count. The session entries recover the same way.
+    /// poisoned by a panic is recovered, and the engine is kept: it carries the
+    /// caller's pool, allocation domain, batch policy and runtime engine id, so
+    /// a broken engine keeps refusing operations with tenferro's typed
+    /// `CpuEngineError::Broken` instead of being silently replaced by a default
+    /// one. The caller builds a new context when it needs a new engine. The
+    /// session entries recover the same way.
     ///
     /// This borrows the engine for the whole closure, so a session entry from
     /// inside `f` on this thread is rejected with
@@ -718,7 +764,7 @@ impl CpuExecutionContext {
         // The guard makes a nested session entry of this context a typed error,
         // not a wait; another context's engine stays independently enterable.
         let _guard = CanonicalSessionGuard::enter(self.owner.id);
-        f(&mut self.lock_engine().backend)
+        f(&mut self.owner.lock_engine().backend)
     }
 
     /// Run `f` in one session of this context's engine.
@@ -770,8 +816,10 @@ impl CpuExecutionContext {
     ///
     /// # Errors
     ///
-    /// Returns [`CpuExecutionContextError`] when runtime initialization,
-    /// preparation, or execution fails.
+    /// Returns [`CpuExecutionContextError::Reentered`] when this thread is
+    /// already inside a session of this context, and
+    /// [`CpuExecutionContextError::Initialization`], [`CpuExecutionContextError::Graph`]
+    /// when runtime initialization, preparation, or execution fails.
     pub fn run_graph(
         &self,
         graph: &CompiledGraph,
@@ -791,14 +839,16 @@ impl CpuExecutionContext {
     ///
     /// # Errors
     ///
-    /// Returns [`CpuExecutionContextError`] when runtime initialization,
-    /// preparation, or execution fails.
+    /// Returns [`CpuExecutionContextError::Reentered`] when this thread is
+    /// already inside a session of this context, and
+    /// [`CpuExecutionContextError::Initialization`], [`CpuExecutionContextError::Graph`]
+    /// when runtime initialization, preparation, or execution fails.
     pub(crate) fn run_graph_reads(
         &self,
         graph: &CompiledGraph,
         inputs: &[TensorRead<'_>],
     ) -> Result<Vec<Tensor>, CpuExecutionContextError> {
-        let mut state = self.lock_engine();
+        let mut state = self.owner.begin_session()?;
         let EngineState { backend, runtime } = &mut *state;
         let runtime = match runtime {
             Some(runtime) => &*runtime,
@@ -828,36 +878,44 @@ impl CpuExecutionContext {
     ///
     /// The runtime is engine-independent: it is built once from an
     /// [`AdContext`] with the linalg AD rules and the einsum/linalg extension
-    /// modules installed, and every call takes the caller's engine
-    /// ([`EagerRuntime::with_eager_session`]). Repeated calls return the same
-    /// runtime and therefore the same eager compilation cache.
+    /// modules installed under this context engine's runtime id, and every call
+    /// takes the caller's engine ([`EagerRuntime::with_eager_session`]). Repeated
+    /// calls return the same runtime and therefore the same eager compilation
+    /// cache. The runtime registers itself with the eager-runtime owner table once,
+    /// when it is built.
     ///
     /// # Errors
     ///
     /// Returns [`CpuExecutionContextError`] when linalg AD-rule or eager-runtime
     /// registration fails.
     pub fn eager_runtime(&self) -> Result<Arc<EagerRuntime>, CpuExecutionContextError> {
-        let runtime = self
-            .eager
-            .get_or_init(build_eager_runtime)
+        self.eager
+            .get_or_init(|| {
+                let runtime = build_eager_runtime(&self.owner.engine_id)?;
+                #[cfg(feature = "global-defaults")]
+                register_eager_runtime_owner(
+                    &runtime,
+                    RuntimeOwner::Cpu(Arc::downgrade(&self.owner)),
+                );
+                Ok(runtime)
+            })
             .as_ref()
             .map(Arc::clone)
-            .map_err(Clone::clone)?;
-        #[cfg(feature = "global-defaults")]
-        register_eager_runtime_owner(&runtime, RuntimeOwner::Cpu(Arc::downgrade(&self.owner)));
-        Ok(runtime)
+            .map_err(Clone::clone)
     }
 
     /// Return statistics for this context's runtime-owned graph caches.
     ///
     /// # Errors
     ///
-    /// Returns [`CpuExecutionContextError`] when graph initialization or the
-    /// cache statistics query fails.
+    /// Returns [`CpuExecutionContextError::Reentered`] when this thread is
+    /// already inside a session of this context, and
+    /// [`CpuExecutionContextError`] when graph initialization or the cache
+    /// statistics query fails.
     pub fn graph_cache_stats(
         &self,
     ) -> Result<tenferro::RuntimeCacheStats, CpuExecutionContextError> {
-        let mut state = self.lock_engine();
+        let mut state = self.owner.begin_session()?;
         let runtime = state.runtime()?;
         runtime
             .cache_stats()
@@ -872,8 +930,8 @@ impl CpuExecutionContext {
     ///
     /// # Errors
     ///
-    /// Returns [`CpuExecutionContextError`] when the engine lock cannot be
-    /// recovered.
+    /// Returns [`CpuExecutionContextError::Reentered`] when this thread is
+    /// already inside a session of this context.
     ///
     /// # Examples
     ///
@@ -904,7 +962,12 @@ impl CpuExecutionContext {
     /// # }
     /// ```
     pub fn graph_buffer_pool_stats(&self) -> Result<BufferPoolStats, CpuExecutionContextError> {
-        Ok(self.lock_engine().backend.engine().buffer_pool_stats())
+        Ok(self
+            .owner
+            .begin_session()?
+            .backend
+            .engine()
+            .buffer_pool_stats())
     }
 
     /// Release retained buffers owned by this context's engine.
@@ -914,8 +977,8 @@ impl CpuExecutionContext {
     ///
     /// # Errors
     ///
-    /// Returns [`CpuExecutionContextError`] when the engine lock cannot be
-    /// recovered.
+    /// Returns [`CpuExecutionContextError::Reentered`] when this thread is
+    /// already inside a session of this context.
     ///
     /// # Examples
     ///
@@ -935,7 +998,11 @@ impl CpuExecutionContext {
     /// # }
     /// ```
     pub fn reset_graph_buffer_pool(&self) -> Result<(), CpuExecutionContextError> {
-        self.lock_engine().backend.engine_mut().reset_buffer_pool();
+        self.owner
+            .begin_session()?
+            .backend
+            .engine_mut()
+            .reset_buffer_pool();
         Ok(())
     }
 
@@ -943,11 +1010,11 @@ impl CpuExecutionContext {
     ///
     /// # Errors
     ///
-    /// Returns [`CpuExecutionContextError`] when the engine lock cannot be
-    /// recovered.
+    /// Returns [`CpuExecutionContextError::Reentered`] when this thread is
+    /// already inside a session of this context.
     pub fn reset_graph_runtime(&self) -> Result<(), CpuExecutionContextError> {
         {
-            let mut state = self.lock_engine();
+            let mut state = self.owner.begin_session()?;
             state.runtime = None;
             state.backend.engine_mut().reset_buffer_pool();
         }
@@ -957,22 +1024,22 @@ impl CpuExecutionContext {
 }
 
 fn build_graph_runtime(backend: &CpuBackend) -> Result<Runtime, CpuExecutionContextError> {
+    // Register and extend the runtime under the engine's *own* runtime id: an
+    // engine built with `CpuEngine::with_runtime_engine_id` would not be found
+    // by a preparation targeting the canonical CPU id.
+    let engine_id = engine_runtime_id(backend.engine());
     let mut builder = Runtime::builder();
     builder
         .register_engine(
-            tenferro_cpu::runtime_engine_registration(backend.engine()).map_err(|source| {
-                CpuExecutionContextError::initialization("graph CPU engine", source)
-            })?,
+            tenferro_cpu::runtime_engine_registration_with_id(backend.engine(), engine_id.clone())
+                .map_err(|source| {
+                    CpuExecutionContextError::initialization("graph CPU engine", source)
+                })?,
         )
         .map_err(|source| CpuExecutionContextError::initialization("graph CPU engine", source))?;
     builder
         .install_extension_module(
-            tenferro_einsum::extension_module::<CpuEngine>(
-                tenferro_cpu::runtime_engine_id().map_err(|source| {
-                    CpuExecutionContextError::initialization("einsum extension", source)
-                })?,
-            )
-            .map_err(|source| {
+            tenferro_einsum::extension_module::<CpuEngine>(engine_id).map_err(|source| {
                 CpuExecutionContextError::initialization("einsum extension", source)
             })?,
         )
@@ -997,7 +1064,9 @@ pub(crate) fn build_ad_context(
     })
 }
 
-fn build_eager_runtime() -> Result<Arc<EagerRuntime>, CpuExecutionContextError> {
+fn build_eager_runtime(
+    engine_id: &tenferro::EngineId,
+) -> Result<Arc<EagerRuntime>, CpuExecutionContextError> {
     let ad_context = build_ad_context()
         .map_err(|source| CpuExecutionContextError::initialization("linalg AD rules", source))?;
     let runtime = EagerRuntime::with_ad_context(&ad_context)
@@ -1006,14 +1075,16 @@ fn build_eager_runtime() -> Result<Arc<EagerRuntime>, CpuExecutionContextError> 
     // the shared context. Lazy first use reconfigures the runtime and advances
     // its epoch; doing that after tensors have prepared AD derivatives can
     // invalidate those prepared programs under parallel first use.
-    let engine_id = tenferro_cpu::runtime_engine_id()
-        .map_err(|source| CpuExecutionContextError::initialization("CPU runtime engine", source))?;
+    //
+    // The modules are installed under the *engine's own* runtime id: an engine
+    // built with `CpuEngine::with_runtime_engine_id` would otherwise not find
+    // its einsum/linalg extensions.
     let einsum_module = tenferro_einsum::extension_module::<CpuEngine>(engine_id.clone())
         .map_err(|source| CpuExecutionContextError::initialization("einsum extension", source))?;
     runtime
         .install_extension_module(einsum_module)
         .map_err(|source| CpuExecutionContextError::initialization("einsum runtime", source))?;
-    let linalg_module = tenferro_linalg::extension_module::<CpuEngine>(engine_id)
+    let linalg_module = tenferro_linalg::extension_module::<CpuEngine>(engine_id.clone())
         .map_err(|source| CpuExecutionContextError::initialization("linalg extension", source))?;
     runtime
         .install_extension_module(linalg_module)

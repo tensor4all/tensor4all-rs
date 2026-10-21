@@ -87,9 +87,9 @@ pub use matrix::{
     grouped_mat_mul_shared_with_backend, hermitian_eigendecomposition,
     hermitian_exponential_first_column, lowest_hermitian_eigenpair, mat_mul, mat_mul_in,
     mat_mul_owned, submatrix, submatrix_argmax, swap_cols, swap_rows, transpose, try_from_vec2d,
-    BlasMul, GroupedGemmError, GroupedGemmJob, GroupedGemmOptions, HermitianEigenError,
-    HermitianEigenScalar, HermitianEigendecomposition, HermitianEigenpair, Matrix, MatrixMulError,
-    MatrixScalar, MatrixShapeError, MatrixTensorConversionError,
+    BlasMul, GroupedGemmError, GroupedGemmJob, HermitianEigenError, HermitianEigenScalar,
+    HermitianEigendecomposition, HermitianEigenpair, Matrix, MatrixMulError, MatrixScalar,
+    MatrixShapeError, MatrixTensorConversionError,
 };
 #[cfg(feature = "global-defaults")]
 pub use memory::{release_process_allocator_cached_memory, AllocatorPressureRelief};

@@ -1,6 +1,6 @@
 //! Column-major layout adapters around context-scoped backend matrix products.
 
-use tensor4all_tensorbackend::{CpuExecutionContext, GroupedGemmJob, GroupedGemmOptions, Matrix};
+use tensor4all_tensorbackend::{CpuExecutionContext, GroupedGemmJob, Matrix};
 
 use crate::{
     scalar::{component_product_underflows, min_nonzero_component_magnitude},
@@ -246,13 +246,7 @@ pub(crate) fn contract_axis_diag_probe<T: TreeRsiScalar>(
     let mut data = vec![T::zero(); rows * k];
     context
         .with_concrete_session(|session| {
-            session.grouped_mat_mul_shared(
-                &input.data,
-                weights,
-                &mut data,
-                &jobs,
-                GroupedGemmOptions::default(),
-            )
+            session.grouped_mat_mul_shared(&input.data, weights, &mut data, &jobs)
         })
         .map_err(TreeRsiError::numerical)?
         .map_err(TreeRsiError::numerical)?;

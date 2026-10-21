@@ -7,9 +7,7 @@ use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use tensor4all_tensorbackend::CpuBackend;
-use tensor4all_tensorbackend::{
-    grouped_mat_mul_shared_with_backend, GroupedGemmJob, GroupedGemmOptions,
-};
+use tensor4all_tensorbackend::{grouped_mat_mul_shared_with_backend, GroupedGemmJob};
 
 const ROWS: usize = 16;
 const CONTRACTED: usize = 16;
@@ -92,7 +90,6 @@ fn run_shared(fixture: &Fixture, backend: &mut CpuBackend) -> Vec<f64> {
         &fixture.rhs,
         &mut output,
         &fixture.jobs,
-        GroupedGemmOptions::default(),
     )
     .unwrap();
     output
@@ -123,15 +120,7 @@ fn run_duplicated(fixture: &Fixture, backend: &mut CpuBackend) -> Vec<f64> {
         ));
     }
     let mut output = vec![0.0; fixture.output_len];
-    grouped_mat_mul_shared_with_backend(
-        backend,
-        &lhs,
-        &rhs,
-        &mut output,
-        &jobs,
-        GroupedGemmOptions::default(),
-    )
-    .unwrap();
+    grouped_mat_mul_shared_with_backend(backend, &lhs, &rhs, &mut output, &jobs).unwrap();
     output
 }
 

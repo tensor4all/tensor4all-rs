@@ -884,25 +884,12 @@ fn svd_factorize_assemble(
         s_inner
     };
     let s_indices = vec![bond_index.clone(), bond_index.sim()];
-    // The context-scoped factorization assembles its factors on the context's
-    // session, which serves dense operands. Build `S` as a dense diagonal on
-    // that engine; the implicit route keeps the compact diagonal storage.
-    let s = match context {
-        Some(context) => {
-            let dense = with_eager_session(s_inner.runtime(), Some(context), |session| {
-                session.embed_diag(&s_inner, 0, 1)
-            })
-            .map_err(|error| {
-                SvdError::ComputationError(
-                    anyhow::Error::new(error).context("eager SVD S diagonal embedding failed"),
-                )
-            })?;
-            IdxTensor::from_inner(s_indices, dense).map_err(SvdError::ComputationError)?
-        }
-        None => {
-            IdxTensor::from_diag_inner(s_indices, s_inner).map_err(SvdError::ComputationError)?
-        }
-    };
+    // `S` stays diagonal in its compact payload on both routes: absorbing it into
+    // a factor is then a structured diagonal scaling instead of a dense rank-by-
+    // rank matrix (which would cost quadratic storage and a general GEMM for a
+    // diagonal multiply). `assemble_svd_factors` contracts it through the
+    // selected engine; see `context_svd_factor_contraction`.
+    let s = IdxTensor::from_diag_inner(s_indices, s_inner).map_err(SvdError::ComputationError)?;
 
     let mut vh_indices = vec![bond_index.clone()];
     vh_indices.extend(right_indices);

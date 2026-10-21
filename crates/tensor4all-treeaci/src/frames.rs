@@ -3624,7 +3624,6 @@ fn generalized_incoming_batch<T: TreeAciScalar>(
                 frame_matrices[axis_index].as_col_major_slice(),
                 &mut next,
                 &jobs,
-                tensor4all_tensorbackend::GroupedGemmOptions::default(),
             )
             .map_err(|error| TreeAciError::Numerical {
                 message: error.to_string(),

@@ -681,23 +681,14 @@ fn grouped_gemm_shared_buffers_matches_individual_column_major_gemms() {
     ];
     let mut output = vec![0.0_f64; 8];
 
-    grouped_mat_mul_shared(
-        &lhs,
-        &rhs,
-        &mut output,
-        &jobs,
-        GroupedGemmOptions {
-            max_working_bytes: usize::MAX,
-        },
-    )
-    .unwrap();
+    grouped_mat_mul_shared(&lhs, &rhs, &mut output, &jobs).unwrap();
 
     assert_eq!(&output[0..4], &[19.0, 43.0, 22.0, 50.0]);
     assert_eq!(&output[4..8], &[17.0, 21.0, 20.0, 24.0]);
 }
 
 #[test]
-fn grouped_gemm_shared_validation_rejects_overlap_and_budget_before_mutation() {
+fn grouped_gemm_shared_validation_rejects_overlap_before_mutation() {
     let lhs = vec![1.0_f64; 4];
     let rhs = vec![1.0_f64; 4];
     let jobs = [
@@ -706,60 +697,20 @@ fn grouped_gemm_shared_validation_rejects_overlap_and_budget_before_mutation() {
     ];
     let mut output = vec![9.0_f64; 3];
 
-    let error = grouped_mat_mul_shared(
-        &lhs,
-        &rhs,
-        &mut output,
-        &jobs,
-        GroupedGemmOptions {
-            max_working_bytes: usize::MAX,
-        },
-    )
-    .unwrap_err();
+    let error = grouped_mat_mul_shared(&lhs, &rhs, &mut output, &jobs).unwrap_err();
     assert!(matches!(error, GroupedGemmError::OverlappingOutputs { .. }));
-    assert_eq!(output, vec![9.0; 3]);
-
-    let error = grouped_mat_mul_shared(
-        &lhs,
-        &rhs,
-        &mut output,
-        &[GroupedGemmJob::new(0, 0, 0, 2, 2, 1)],
-        GroupedGemmOptions {
-            max_working_bytes: 0,
-        },
-    )
-    .unwrap_err();
-    assert!(matches!(
-        error,
-        GroupedGemmError::WorkingMemoryExceeded { .. }
-    ));
     assert_eq!(output, vec![9.0; 3]);
 }
 
 #[test]
 fn grouped_gemm_shared_owned_preserves_output_owner_and_empty_is_noop() {
     let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
-    let output = grouped_mat_mul_shared_owned(
-        vec![3.0_f64],
-        vec![4.0_f64],
-        vec![0.0_f64],
-        &jobs,
-        GroupedGemmOptions::default(),
-    )
-    .unwrap();
+    let output =
+        grouped_mat_mul_shared_owned(vec![3.0_f64], vec![4.0_f64], vec![0.0_f64], &jobs).unwrap();
     assert_eq!(output, vec![12.0]);
 
     let mut empty_output = vec![7.0_f64];
-    grouped_mat_mul_shared(
-        &[],
-        &[],
-        &mut empty_output,
-        &[],
-        GroupedGemmOptions {
-            max_working_bytes: 0,
-        },
-    )
-    .unwrap();
+    grouped_mat_mul_shared(&[], &[], &mut empty_output, &[]).unwrap();
     assert_eq!(empty_output, vec![7.0]);
 }
 
@@ -770,7 +721,7 @@ fn assert_grouped_matches_individual<T: MatrixScalar + tenferro::TensorScalar>(
     tolerance: f64,
 ) {
     let mut output = vec![T::zero(); 16];
-    grouped_mat_mul_shared(lhs, rhs, &mut output, jobs, GroupedGemmOptions::default()).unwrap();
+    grouped_mat_mul_shared(lhs, rhs, &mut output, jobs).unwrap();
 
     for job in jobs {
         let lhs_end = job.lhs_offset() + job.rows() * job.contracted();
@@ -878,7 +829,6 @@ fn grouped_gemm_shared_validation_covers_bounds_overflow_and_shared_shapes() {
         &[1.0],
         &mut output,
         &[GroupedGemmJob::new(0, 0, 0, 2, 1, 1)],
-        GroupedGemmOptions::default(),
     )
     .unwrap_err();
     assert!(matches!(error, GroupedGemmError::BufferOutOfBounds { .. }));
@@ -889,7 +839,6 @@ fn grouped_gemm_shared_validation_covers_bounds_overflow_and_shared_shapes() {
         &[1.0_f64],
         &mut [0.0_f64],
         &[GroupedGemmJob::new(0, usize::MAX, 0, 1, 1, 1)],
-        GroupedGemmOptions::default(),
     )
     .unwrap_err();
     assert!(matches!(error, GroupedGemmError::SpanOverflow { .. }));
@@ -899,7 +848,6 @@ fn grouped_gemm_shared_validation_covers_bounds_overflow_and_shared_shapes() {
         &[],
         &mut [] as &mut [f64],
         &[GroupedGemmJob::new(0, 0, 0, usize::MAX, 2, 1)],
-        GroupedGemmOptions::default(),
     )
     .unwrap_err();
     assert!(matches!(error, GroupedGemmError::DimensionOverflow { .. }));
@@ -912,7 +860,6 @@ fn grouped_gemm_shared_validation_covers_bounds_overflow_and_shared_shapes() {
             GroupedGemmJob::new(0, 0, 0, 2, 2, 1),
             GroupedGemmJob::new(2, 0, 0, 1, 2, 2),
         ],
-        GroupedGemmOptions::default(),
     )
     .unwrap_err();
     assert!(matches!(
@@ -928,7 +875,6 @@ fn grouped_gemm_shared_validation_covers_bounds_overflow_and_shared_shapes() {
             GroupedGemmJob::new(0, 0, 0, 1, 2, 2),
             GroupedGemmJob::new(4, 2, 0, 2, 1, 2),
         ],
-        GroupedGemmOptions::default(),
     )
     .unwrap_err();
     assert!(matches!(
@@ -947,7 +893,6 @@ fn grouped_gemm_shared_with_backend_uses_configured_thread_context() {
         &[4.0],
         &mut output,
         &[GroupedGemmJob::new(0, 0, 0, 1, 1, 1)],
-        GroupedGemmOptions::default(),
     )
     .unwrap();
     assert_eq!(output, [12.0]);

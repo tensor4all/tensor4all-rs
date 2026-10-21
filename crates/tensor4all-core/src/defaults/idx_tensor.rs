@@ -1698,6 +1698,7 @@ impl IdxTensor {
     fn normalize_eager_payload_for_roots(
         payload: &EagerTensor,
         roots: &[usize],
+        context: Option<&ExecutionContext>,
     ) -> Result<(Option<EagerTensor>, Vec<usize>)> {
         if !(payload.shape().len() == roots.len()) {
             return Err(anyhow::anyhow!(
@@ -1711,7 +1712,7 @@ impl IdxTensor {
         let mut current_roots = roots.to_vec();
         while let Some((axis_a, axis_b)) = Self::first_duplicate_pair(&current_roots) {
             let source = current_payload.as_ref().unwrap_or(payload);
-            current_payload = Some(with_eager_session(source.runtime(), None, |session| {
+            current_payload = Some(with_eager_session(source.runtime(), context, |session| {
                 session.extract_diag(source, axis_a, axis_b)
             })?);
             current_roots.remove(axis_b);
@@ -1760,12 +1761,14 @@ impl IdxTensor {
         })
     }
 
+    /// Contract structured/diagonal payloads, on `context`'s engine when one is given.
     fn contract_structured_payloads(
         &self,
         other: &Self,
         result_indices: Vec<DynIndex>,
         axes_a: &[usize],
         axes_b: &[usize],
+        context: Option<&ExecutionContext>,
     ) -> Result<Self> {
         let (lhs_labels, rhs_labels, output_labels) = Self::build_binary_contraction_labels(
             self.indices.len(),
@@ -1773,11 +1776,12 @@ impl IdxTensor {
             other.indices.len(),
             axes_b,
         )?;
-        Self::contract_structured_payloads_nary(
+        Self::contract_structured_payloads_nary_in(
             &[self, other],
             result_indices,
             vec![lhs_labels, rhs_labels],
             output_labels,
+            context,
         )
     }
 
@@ -1786,6 +1790,30 @@ impl IdxTensor {
         result_indices: Vec<DynIndex>,
         input_labels: Vec<Vec<usize>>,
         output_labels: Vec<usize>,
+    ) -> Result<Self> {
+        Self::contract_structured_payloads_nary_in(
+            operands,
+            result_indices,
+            input_labels,
+            output_labels,
+            None,
+        )
+    }
+
+    /// Contract structured/diagonal payloads on the engine selected by `context`.
+    ///
+    /// Operands that live in an eager runtime (a diagonal operand built from a
+    /// compact payload, a tracked operand, or any operand of a caller-owned
+    /// context) contract their compact payloads through one eager einsum on that
+    /// engine. A diagonal scaling therefore stays a scaling on the caller's
+    /// engine instead of expanding into a dense operand. Host-only operands keep
+    /// the native bridge route.
+    pub(crate) fn contract_structured_payloads_nary_in(
+        operands: &[&Self],
+        result_indices: Vec<DynIndex>,
+        input_labels: Vec<Vec<usize>>,
+        output_labels: Vec<usize>,
+        context: Option<&ExecutionContext>,
     ) -> Result<Self> {
         if !(!operands.is_empty()) {
             return Err(anyhow::anyhow!("structured contraction needs operands"));
@@ -1806,8 +1834,16 @@ impl IdxTensor {
         };
         let plan = StructuredContractionPlan::new(&layouts, &spec)?;
         let any_grad = operands.iter().any(|operand| operand.tracks_grad());
+        // A context-scoped contraction runs the payload einsum on the context's
+        // engine. It needs eager payloads to do that, which every operand of an
+        // explicit context has; host-only operands stay on the native route.
+        let eager_payloads = any_grad
+            || (context.is_some()
+                && operands
+                    .iter()
+                    .all(|operand| operand.storage.eager().is_some()));
 
-        if any_grad {
+        if eager_payloads {
             let dtypes = operands
                 .iter()
                 .map(|operand| {
@@ -1823,7 +1859,7 @@ impl IdxTensor {
                 payloads.push(if payload.dtype() == target {
                     payload
                 } else {
-                    with_eager_session(payload.runtime(), None, |session| {
+                    with_eager_session(payload.runtime(), context, |session| {
                         session.cast(&payload, target)
                     })?
                 });
@@ -1834,8 +1870,11 @@ impl IdxTensor {
             for (operand_idx, (payload, operand_plan)) in
                 payloads.iter().zip(plan.operand_plans.iter()).enumerate()
             {
-                let (payload, roots) =
-                    Self::normalize_eager_payload_for_roots(payload, &operand_plan.class_roots)?;
+                let (payload, roots) = Self::normalize_eager_payload_for_roots(
+                    payload,
+                    &operand_plan.class_roots,
+                    context,
+                )?;
                 normalized.push(payload.unwrap_or_else(|| payloads[operand_idx].clone()));
                 labels.push(roots);
             }
@@ -1848,7 +1887,7 @@ impl IdxTensor {
                 .ok_or_else(|| {
                     anyhow::anyhow!("structured einsum requires at least one operand")
                 })?;
-            let payload = with_eager_session(runtime, None, |session| {
+            let payload = with_eager_session(runtime, context, |session| {
                 session.einsum_subscripts(&refs, &subscripts)
             })?;
             return Self::from_structured_payload_inner(
@@ -4241,6 +4280,7 @@ impl IdxTensor {
                     spec.result_indices,
                     &spec.axes_a,
                     &spec.axes_b,
+                    context,
                 )
             });
         }
@@ -4540,6 +4580,7 @@ impl IdxTensor {
                 spec.result_indices,
                 &spec.axes_a,
                 &spec.axes_b,
+                None,
             );
         }
 
@@ -4611,7 +4652,7 @@ impl IdxTensor {
             &[],
         )?;
         if self.should_use_structured_payload_contract(other) {
-            return self.contract_structured_payloads(other, result_indices, &[], &[]);
+            return self.contract_structured_payloads(other, result_indices, &[], &[], None);
         }
         let self_inner = self.try_materialized_inner()?;
         let other_inner = other.try_materialized_inner()?;
@@ -8622,12 +8663,16 @@ impl IdxTensor {
     }
 
     fn decision_values(host: &Self) -> std::result::Result<Vec<f64>, IdxTensorError> {
+        // The readback is already host data (a CPU operand or an explicit
+        // download), so it is read from the host payload directly: materializing
+        // through [`IdxTensor::to_vec`] would enter the implicit engine route for
+        // no numerical work.
         if host.is_f64() {
-            host.to_vec::<f64>().map_err(|error| {
+            host.dense_host_values::<f64>().map_err(|error| {
                 IdxTensorError::operation("decision readback", anyhow::Error::new(error))
             })
         } else if host.is_c64() {
-            host.to_vec::<Complex64>()
+            host.dense_host_values::<Complex64>()
                 .map(|values| values.into_iter().map(|value| value.re).collect())
                 .map_err(|error| {
                     IdxTensorError::operation("decision readback", anyhow::Error::new(error))
@@ -8711,17 +8756,21 @@ impl IdxTensor {
     }
 
     /// Adopt host storage into a context through explicit construction.
+    ///
+    /// The payload is read from the host storage directly and re-published in
+    /// `context`. Reading it through [`IdxTensor::to_vec`] would borrow the
+    /// implicit engine while this route must stay on the caller's context.
     fn adopt_host_into_context(
         tensor: &Self,
         context: &ExecutionContext,
     ) -> std::result::Result<Self, IdxTensorError> {
         if tensor.is_f64() {
-            let values = tensor.to_vec::<f64>().map_err(|error| {
+            let values = tensor.dense_host_values::<f64>().map_err(|error| {
                 IdxTensorError::operation("context adoption", anyhow::Error::new(error))
             })?;
             Self::from_dense_in(context, tensor.indices.clone(), values)
         } else if tensor.is_c64() {
-            let values = tensor.to_vec::<Complex64>().map_err(|error| {
+            let values = tensor.dense_host_values::<Complex64>().map_err(|error| {
                 IdxTensorError::operation("context adoption", anyhow::Error::new(error))
             })?;
             Self::from_dense_in(context, tensor.indices.clone(), values)

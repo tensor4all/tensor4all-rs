@@ -611,8 +611,10 @@ fn factorize_svd_with_eager_options_in(
 ///
 /// The context-scoped factorization assembles `S * V^H` (or `U * S`) after the
 /// decomposition returns, so the assembly must run on the same context engine
-/// instead of the process-global default one. The result keeps the factors' own
-/// eager runtime; only the executing engine is selected by `context`.
+/// instead of the process-global default one. `S` stays a compact diagonal, so
+/// the contraction is the structured diagonal scaling of the other factor, run
+/// as one payload einsum on `context`'s engine. The result keeps the factors'
+/// own eager runtime; only the executing engine is selected by `context`.
 fn context_svd_factor_contraction(
     lhs: &IdxTensor,
     rhs: &IdxTensor,

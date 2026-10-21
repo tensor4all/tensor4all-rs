@@ -1047,20 +1047,14 @@ impl<'session> Session<'session> {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_tensorbackend::{CpuExecutionContext, GroupedGemmJob, GroupedGemmOptions};
+    /// use tensor4all_tensorbackend::{CpuExecutionContext, GroupedGemmJob};
     /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
     /// let mut output = [0.0_f64];
     /// context.with_concrete_session(|session| {
-    ///     session.grouped_mat_mul_shared(
-    ///         &[3.0],
-    ///         &[4.0],
-    ///         &mut output,
-    ///         &jobs,
-    ///         GroupedGemmOptions::default(),
-    ///     )
+    ///     session.grouped_mat_mul_shared(&[3.0], &[4.0], &mut output, &jobs)
     /// })??;
     /// assert_eq!(output, [12.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -1072,9 +1066,8 @@ impl<'session> Session<'session> {
         rhs: &[T],
         output: &mut [T],
         jobs: &[crate::matrix::GroupedGemmJob],
-        options: crate::matrix::GroupedGemmOptions,
     ) -> Result<(), crate::matrix::GroupedGemmError> {
-        crate::grouped_mat_mul_shared_in(self.engine, lhs, rhs, output, jobs, options)
+        crate::grouped_mat_mul_shared_in(self.engine, lhs, rhs, output, jobs)
     }
 
     /// Thin/economy QR decomposition.

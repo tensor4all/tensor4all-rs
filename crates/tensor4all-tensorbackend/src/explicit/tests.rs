@@ -615,7 +615,7 @@ fn prepared_einsum_runs_on_another_contexts_session() {
 #[cfg(feature = "global-defaults")]
 #[test]
 fn session_grouped_mat_mul_shared_runs_on_the_session() {
-    use crate::{GroupedGemmJob, GroupedGemmOptions};
+    use crate::GroupedGemmJob;
 
     let context = context(1);
     let jobs = [GroupedGemmJob::new(0, 0, 0, 2, 2, 2)];
@@ -624,13 +624,7 @@ fn session_grouped_mat_mul_shared_runs_on_the_session() {
     let mut output = [0.0_f64; 4];
     context
         .with_concrete_session(|session| {
-            session.grouped_mat_mul_shared(
-                &lhs,
-                &rhs,
-                &mut output,
-                &jobs,
-                GroupedGemmOptions::default(),
-            )
+            session.grouped_mat_mul_shared(&lhs, &rhs, &mut output, &jobs)
         })
         .expect("session entry")
         .expect("grouped GEMM");
@@ -640,13 +634,7 @@ fn session_grouped_mat_mul_shared_runs_on_the_session() {
     let mut untouched = [7.0_f64; 4];
     context
         .with_concrete_session(|session| {
-            session.grouped_mat_mul_shared(
-                &lhs,
-                &rhs,
-                &mut untouched,
-                &[],
-                GroupedGemmOptions::default(),
-            )
+            session.grouped_mat_mul_shared(&lhs, &rhs, &mut untouched, &[])
         })
         .expect("session entry")
         .expect("empty job list");
