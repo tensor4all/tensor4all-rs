@@ -1,13 +1,15 @@
 //! F3 step 3d: the caller's execution context reaches **both** materializations on the TCI path.
 //!
-//! The factorization and the materialization solve must run in the caller's context. Value parity does not
-//! show that (it holds with the global route too), so these tests hold the process-global backend while a run
-//! completes: a run that resolved either materialization through the global session would block instead.
+//! The factorization and the materialization solve must run in the caller's context. `with_default_backend`
+//! is an exclusive borrow of the process-global engine, and value parity alone does not show which engine a
+//! route used (it holds with the global route too), so these tests hold that borrow while a complete
+//! context-scoped run executes: a run that resolved either materialization through the global engine would
+//! block instead. The run's result is runtime-free compact storage, so reading it densely is a separate
+//! implicit operation and happens after the borrow ends.
 
 use std::time::Duration;
 
-use tensor4all_tensorbackend::CpuBackend;
-use tensor4all_tensorbackend::{with_default_backend, CpuExecutionContext};
+use tensor4all_tensorbackend::{with_default_backend, CpuBackend, CpuExecutionContext};
 use tensor4all_treetci::{
     crossinterpolate2, crossinterpolate2_in, DefaultProposer, GlobalIndexBatch, TreeTciGraph,
     TreeTciOptions, TreeTciRunResult,
@@ -74,8 +76,10 @@ fn run_in_context(context: &CpuExecutionContext) -> TreeTciRunResult {
     result
 }
 
-/// The dense maximum of a run's tensor train. Readout uses the implicit route, so it runs after
-/// the process-global backend is released.
+/// The dense maximum of a run's tensor train.
+///
+/// Materialization publishes runtime-free compact storage, so this readout is an implicit operation on the
+/// process-global engine. It therefore runs after that engine's exclusive borrow ends.
 fn dense_maxabs(result: &TreeTciRunResult) -> f64 {
     result
         .treetn
@@ -89,8 +93,8 @@ fn dense_maxabs(result: &TreeTciRunResult) -> f64 {
 fn a_run_completes_with_the_process_global_backend_held() {
     let context = context_with_workers(1);
 
-    // Warm the process-global eager runtime: physical tensor publication adopts into it, and its cold
-    // initialization takes the global context's backend lock, which this test holds.
+    // Warm the process-global eager runtime outside the borrow: the dense readout is an implicit operation,
+    // and its cold initialization would itself need the global engine.
     let warm = dense_maxabs(&run_in_context(&context));
     assert!(warm > 0.0);
 
@@ -106,7 +110,9 @@ fn a_run_completes_with_the_process_global_backend_held() {
     .expect("plain run");
 
     // The worker thread lets a wrong route fail this test instead of hanging the suite; the panic releases
-    // the lock. Both materializations (search-time and final) are inside the run.
+    // the lock. Both materializations (search-time and final) are inside the run. The run's result is
+    // runtime-free compact storage, so its readout is not: it is an implicit operation on the global engine
+    // and runs after this borrow ends.
     let scoped = with_default_backend(|_global| {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
@@ -118,8 +124,8 @@ fn a_run_completes_with_the_process_global_backend_held() {
         match done_rx.recv_timeout(Duration::from_secs(180)) {
             Ok(()) => worker.join().expect("worker thread"),
             Err(_) => panic!(
-                "the run did not finish while the process-global backend was held: a materialization on the \
-                 path still resolved its solve through the global session"
+                "the run did not finish while the process-global engine was borrowed: a materialization on \
+                 the path still resolved its solve through the global engine"
             ),
         }
     });

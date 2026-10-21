@@ -736,7 +736,9 @@ fn contract_owned_with_options_impl(
                     Ok((
                         {
                             let inner = tensor.as_inner()?;
-                            with_engine(None, |engine| inner.duplicate_value(engine))?
+                            with_engine(inner.runtime(), None, |engine| {
+                                inner.duplicate_value(engine)
+                            })?
                         },
                         plan.input_ids[tensor_idx].clone(),
                     ))

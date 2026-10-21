@@ -411,9 +411,10 @@ pub enum IdxTensorError {
     },
     /// A CPU execution-context engine could not be entered.
     ///
-    /// The implicit frontend uses the process-global default CPU context's
-    /// engine; a nested entry made while that engine is already borrowed on the
-    /// calling thread reports the typed
+    /// An implicit frontend entry resolves the engine from the eager runtime of
+    /// the operand it acts on (falling back to the process-global default CPU
+    /// context when that runtime has no live owner); a nested entry made while
+    /// that engine is already borrowed on the calling thread reports the typed
     /// [`CpuExecutionContextError::Reentered`](tensor4all_tensorbackend::CpuExecutionContextError::Reentered)
     /// here instead of waiting for the engine.
     #[error("IdxTensor engine entry failed: {source}")]
@@ -773,12 +774,14 @@ impl IdxTensorStorage {
     }
 
     fn materialize_eager_payload(inner: &EagerTensor) -> Result<NativeTensor> {
-        let native = with_engine(None, |engine| inner.duplicate_value(engine))?;
+        let native = with_engine(inner.runtime(), None, |engine| {
+            inner.duplicate_value(engine)
+        })?;
         if native.is_col_major_contiguous()? {
             return Ok(native);
         }
         let read = inner.tensor_read();
-        with_engine(None, |engine| {
+        with_engine(inner.runtime(), None, |engine| {
             engine.to_contiguous_read(TensorRead::from_view(read.tensor_view()))
         })
         .map_err(anyhow::Error::new)
@@ -3670,7 +3673,10 @@ impl IdxTensor {
     #[cfg(feature = "tenferro-cuda")]
     pub(crate) fn cuda_duplicate_native(&self) -> Result<NativeTensor> {
         let inner = self.try_materialized_inner()?;
-        with_engine(None, |engine| inner.duplicate_value(engine)).map_err(anyhow::Error::new)
+        with_engine(inner.runtime(), None, |engine| {
+            inner.duplicate_value(engine)
+        })
+        .map_err(anyhow::Error::new)
     }
 
     /// Enable reverse-mode AD tracking on this tensor by creating a tracked leaf.
@@ -3690,7 +3696,9 @@ impl IdxTensor {
             .or_else(|| self.eager_cache.get().map(AsRef::as_ref))
             .filter(|inner| inner.shape() == self.storage.payload_dims());
         let payload = match eager_payload {
-            Some(inner) => with_engine(None, |engine| inner.duplicate_value(engine))?,
+            Some(inner) => with_engine(inner.runtime(), None, |engine| {
+                inner.duplicate_value(engine)
+            })?,
             None => {
                 let materialized = self.storage.materialize(self.indices.len())?;
                 storage_payload_native(materialized.as_ref())
@@ -3733,9 +3741,10 @@ impl IdxTensor {
 
     /// Return the accumulated gradient, if one has been stored.
     ///
-    /// This implicit entry uses the engine of the process-global default CPU
-    /// context (the transitional implicit route); the engine-explicit API will
-    /// replace it.
+    /// This implicit entry uses the engine of the CPU context that owns the
+    /// gradient's eager runtime, falling back to the process-global default CPU
+    /// context when that runtime has no live owner (the transitional implicit
+    /// route); the engine-explicit API will replace it.
     ///
     /// # Errors
     /// Returns an [`IdxTensorError`] when the AD backend cannot read or
@@ -3748,7 +3757,9 @@ impl IdxTensor {
                 return Ok(None);
             };
             let gradient_shape = gradient.shape().to_vec();
-            let gradient_tensor = with_engine(None, |engine| gradient.to_tensor(engine))?;
+            let gradient_tensor = with_engine(value.payload.runtime(), None, |engine| {
+                gradient.to_tensor(engine)
+            })?;
             if self.compact_payload_is_logical_dense(&value.payload_dims) {
                 return Ok(Some(Self::from_native_with_axis_classes(
                     self.indices.clone(),
@@ -3773,12 +3784,13 @@ impl IdxTensor {
             )?));
         }
 
-        let Some(gradient) = self.try_materialized_inner()?.grad()? else {
+        let inner = self.try_materialized_inner()?;
+        let Some(gradient) = inner.grad()? else {
             return Ok(None);
         };
         Ok(Some(Self::from_native_with_axis_classes(
             self.indices.clone(),
-            with_engine(None, |engine| gradient.to_tensor(engine))?,
+            with_engine(inner.runtime(), None, |engine| gradient.to_tensor(engine))?,
             self.storage.axis_classes().to_vec(),
         )?))
     }
@@ -3804,9 +3816,10 @@ impl IdxTensor {
 
     /// Run reverse-mode autodiff from this scalar tensor.
     ///
-    /// This implicit entry uses the engine of the process-global default CPU
-    /// context (the transitional implicit route); the engine-explicit API will
-    /// replace it.
+    /// This implicit entry uses the engine of the CPU context that owns the
+    /// tensor's eager runtime, falling back to the process-global default CPU
+    /// context when that runtime has no live owner (the transitional implicit
+    /// route); the engine-explicit API will replace it.
     ///
     /// # Errors
     /// Returns an [`IdxTensorError`] when the reverse pass fails; a non-scalar
@@ -3814,18 +3827,21 @@ impl IdxTensor {
     ///
     pub fn backward(&self) -> std::result::Result<(), IdxTensorError> {
         if let Some(value) = self.tracked_compact_payload_value() {
-            return with_execution_engine(None, |engine| value.payload.backward(engine))
-                .map(|_| ());
+            return with_execution_engine(value.payload.runtime(), None, |engine| {
+                value.payload.backward(engine)
+            })
+            .map(|_| ());
         }
         let inner = self.try_materialized_inner()?;
-        with_execution_engine(None, |engine| inner.backward(engine)).map(|_| ())
+        with_execution_engine(inner.runtime(), None, |engine| inner.backward(engine)).map(|_| ())
     }
 
     /// Detach this tensor from the reverse graph.
     ///
-    /// This implicit entry uses the engine of the process-global default CPU
-    /// context (the transitional implicit route); the engine-explicit API will
-    /// replace it.
+    /// This implicit entry uses the engine of the CPU context that owns the
+    /// tensor's eager runtime, falling back to the process-global default CPU
+    /// context when that runtime has no live owner (the transitional implicit
+    /// route); the engine-explicit API will replace it.
     ///
     /// # Errors
     /// Returns an [`IdxTensorError`] when the eager payload cannot be
@@ -3833,7 +3849,7 @@ impl IdxTensor {
     ///
     pub fn detach(&self) -> std::result::Result<Self, IdxTensorError> {
         let inner = self.try_materialized_inner()?;
-        let detached = with_engine(None, |engine| inner.detach(engine))?;
+        let detached = with_engine(inner.runtime(), None, |engine| inner.detach(engine))?;
         Self::from_inner_with_axis_classes(
             self.indices.clone(),
             detached,
@@ -6168,7 +6184,9 @@ pub fn unfold_split(
         unfold_split_inner(t, left_inds)?;
 
     Ok((
-        with_engine(None, |engine| matrix_inner.duplicate_value(engine))?,
+        with_engine(matrix_inner.runtime(), None, |engine| {
+            matrix_inner.duplicate_value(engine)
+        })?,
         left_len,
         m,
         n,
@@ -6808,8 +6826,10 @@ impl IdxTensor {
         // The pinned eager API offers no general solve, so this estimator reads the resident factor back once and
         // reuses the host estimator: it returns scalars either way, and the round-trip sits on an error estimate
         // rather than in a sweep.
-        let native = with_engine(Some(context), |engine| inner.to_tensor(engine))
-            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        let native = with_engine(inner.runtime(), Some(context), |engine| {
+            inner.to_tensor(engine)
+        })
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
         let host_native = cuda
             .download(&native)
             .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
@@ -6832,12 +6852,14 @@ impl IdxTensor {
         #[cfg(not(feature = "tenferro-cuda"))]
         ensure_supported_execution_context(context)
             .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
-        let resident =
-            with_engine(Some(context), |engine| rank.to_tensor(engine)).map_err(|error| {
-                FactorizeError::ComputationError(
-                    anyhow::Error::new(error).context("resident RRQR rank materialization failed"),
-                )
-            })?;
+        let resident = with_engine(rank.runtime(), Some(context), |engine| {
+            rank.to_tensor(engine)
+        })
+        .map_err(|error| {
+            FactorizeError::ComputationError(
+                anyhow::Error::new(error).context("resident RRQR rank materialization failed"),
+            )
+        })?;
         #[cfg(feature = "tenferro-cuda")]
         let host = match context {
             ExecutionContext::Cpu(_) => resident,
@@ -8093,11 +8115,14 @@ impl IdxTensor {
     /// ```
     ///
     /// Materialising an eager payload is an implicit entry: it uses the engine
-    /// of the process-global default CPU context (the transitional implicit
-    /// route) when no context is supplied.
+    /// of the CPU context that owns the payload's eager runtime, falling back to
+    /// the process-global default CPU context when that runtime has no live
+    /// owner (the transitional implicit route).
     pub fn to_vec<T: TensorElement>(&self) -> std::result::Result<Vec<T>, IdxTensorError> {
         let inner = self.as_inner()?;
-        let values = with_engine(None, |engine| inner.duplicate_value(engine))?;
+        let values = with_engine(inner.runtime(), None, |engine| {
+            inner.duplicate_value(engine)
+        })?;
         values
             .as_slice::<T>()
             .map(|values| values.to_vec())
@@ -8157,7 +8182,9 @@ impl IdxTensor {
         // cases while avoiding a full payload copy for the ordinary
         // host-contiguous path above.
         drop(value);
-        let values = with_engine(None, |engine| inner.duplicate_value(engine))?;
+        let values = with_engine(inner.runtime(), None, |engine| {
+            inner.duplicate_value(engine)
+        })?;
         let values = values
             .as_slice::<T>()
             .map_err(|source| IdxTensorError::materialization(anyhow::Error::new(source)))?;

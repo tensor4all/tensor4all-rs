@@ -38,7 +38,6 @@ tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-featu
 tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 
 [dev-dependencies]
-tenferro-cpu.workspace = true
 
 [[test]]
 name = "integration"

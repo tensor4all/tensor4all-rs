@@ -731,7 +731,7 @@ impl AnyScalar {
     /// ```
     pub fn backward(&self) -> std::result::Result<(), AnyScalarError> {
         let inner = self.as_tensor()?.as_inner()?;
-        with_execution_engine(None, |engine| inner.backward(engine))
+        with_execution_engine(inner.runtime(), None, |engine| inner.backward(engine))
             .map(|_| ())
             .map_err(|error| AnyScalarError::from(anyhow::Error::new(error)))
     }
@@ -763,7 +763,7 @@ impl AnyScalar {
     pub fn detach(&self) -> std::result::Result<Self, AnyScalarError> {
         let tensor = self.as_tensor()?;
         let inner = tensor.as_inner()?;
-        let detached = with_engine(None, |engine| inner.detach(engine))
+        let detached = with_engine(inner.runtime(), None, |engine| inner.detach(engine))
             .map_err(|error| AnyScalarError::from(anyhow::Error::new(error)))?;
         Self::from_tensor(IdxTensor::from_inner(vec![], detached)?).map_err(AnyScalarError::from)
     }

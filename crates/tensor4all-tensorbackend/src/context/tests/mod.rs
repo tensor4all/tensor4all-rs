@@ -302,3 +302,57 @@ fn explicit_paths_stay_independent_of_the_default_context() {
     assert!(!Arc::ptr_eq(&eager, &global));
     assert!(!ExecutionContext::Cpu(Arc::new(context)).is_global_default_cpu());
 }
+
+/// An implicit entry on a context-owned runtime runs on that context's engine, not
+/// on the process-global one, and falls back to the global context once the owner
+/// is gone.
+#[cfg(feature = "global-defaults")]
+#[test]
+fn runtime_engine_follows_the_owning_context_and_falls_back_after_drop() {
+    let default_threads = default_context().with_backend(|backend| backend.num_threads());
+    let context_threads = if default_threads == 1 { 2 } else { 1 };
+    let context = CpuExecutionContext::from_backend(
+        CpuBackend::with_threads(context_threads).expect("CPU backend"),
+    );
+    let runtime = context.eager_runtime().unwrap();
+
+    // Hold the process-global engine on another thread. A runtime entry that fell
+    // back to the global context would block here instead of resolving the owning
+    // context's engine.
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        with_default_backend(|_| {
+            held_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+    });
+    held_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the holder thread enters the process-global engine");
+
+    let worker_runtime = Arc::clone(&runtime);
+    let (result_tx, result_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let result = with_runtime_engine(&worker_runtime, |engine| engine.num_threads());
+        let _ = result_tx.send(result);
+    });
+    let resolved = result_rx.recv_timeout(Duration::from_secs(10));
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+    let threads = resolved
+        .expect("a context-owned runtime must not wait for the process-global engine")
+        .expect("the owning context's session entry");
+    worker.join().unwrap();
+    assert_eq!(
+        threads, context_threads,
+        "the owning context's engine is used"
+    );
+
+    // Keep the runtime but drop its owner: the dead entry falls back to the
+    // process-global context's engine.
+    drop(context);
+    let fallback = with_runtime_engine(&runtime, |engine| engine.num_threads())
+        .expect("the process-global fallback session entry");
+    assert_eq!(fallback, default_threads);
+}

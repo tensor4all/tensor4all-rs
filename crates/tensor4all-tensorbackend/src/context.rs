@@ -1,15 +1,16 @@
 //! Explicit and optional process-global tenferro CPU execution contexts.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use tenferro::{
     CompiledGraph, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead, TracedGraph,
 };
-use tenferro_ad::{AdContext, EagerRuntime};
+use tenferro_ad::{AdContext, ContextId, EagerRuntime};
 use tenferro_cpu::{BufferPoolStats, CpuEngine};
 
 /// Failure reported when building a [`CpuBackend`] pool.
@@ -503,6 +504,69 @@ impl EngineState {
     }
 }
 
+/// The engine state one context owns, behind a handle that can also be reached
+/// through the eager-runtime owner table.
+///
+/// A [`CpuExecutionContext`] holds this in an [`Arc`]; the process-wide owner
+/// table holds only a [`Weak`], so the entry dangles as soon as the context is
+/// dropped instead of keeping the engine alive.
+struct EngineOwner {
+    id: u64,
+    engine: Mutex<EngineState>,
+}
+
+impl EngineOwner {
+    fn new(backend: CpuBackend) -> Self {
+        Self {
+            id: next_context_id(),
+            engine: Mutex::new(EngineState::new(backend)),
+        }
+    }
+
+    /// Lock the engine state, recovering it from a panic that poisoned the lock.
+    fn lock_engine(&self) -> std::sync::MutexGuard<'_, EngineState> {
+        match self.engine.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                guard.recover_from_panic();
+                guard
+            }
+        }
+    }
+
+    /// Run `f` in one session of this owner's engine.
+    ///
+    /// This is the single session-entry implementation shared by the owning
+    /// context and the eager-runtime route: the same per-context re-entry guard
+    /// and the same inline-serial rule for Rayon workers apply either way.
+    fn with_session<R>(
+        &self,
+        f: impl FnOnce(&mut CpuEngine) -> R,
+    ) -> Result<R, CpuExecutionContextError> {
+        // Checked before any lock: a nested entry would wait for a lock this
+        // thread already holds.
+        if CanonicalSessionGuard::is_active(self.id) {
+            return Err(CpuExecutionContextError::Reentered);
+        }
+        let _guard = CanonicalSessionGuard::enter(self.id);
+        // A worker runs inline on its own serial engine instead of waiting for a
+        // pool it belongs to (tensor4all-rs#830). The fresh engine shares the
+        // plan cache, whose entries are immutable prepared plans, so a stage
+        // entered per item does not re-plan. It does **not** share the context
+        // engine's buffer pool, extension caches, batch policy or allocation
+        // domain: an entry from a worker therefore allocates and batches
+        // independently, and only while it runs.
+        if rayon::current_thread_index().is_some() {
+            let plans = self.lock_engine().backend.engine().plan_cache().clone();
+            let mut engine = CpuEngine::serial().with_plan_cache(plans);
+            return Ok(f(&mut engine));
+        }
+        let mut state = self.lock_engine();
+        Ok(f(state.backend.engine_mut()))
+    }
+}
+
 /// Caller-owned CPU execution domain for plain, graph, and eager-AD work.
 ///
 /// The context owns one [`CpuBackend`] and lends its engine to one caller at a
@@ -526,8 +590,7 @@ impl EngineState {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub struct CpuExecutionContext {
-    id: u64,
-    engine: Mutex<EngineState>,
+    owner: Arc<EngineOwner>,
     compiler: Mutex<GraphCompiler>,
     eager: OnceLock<Result<Arc<EagerRuntime>, CpuExecutionContextError>>,
 }
@@ -548,29 +611,22 @@ impl CpuExecutionContext {
     /// not allocate another executor or consult environment configuration.
     pub fn from_backend(backend: CpuBackend) -> Self {
         Self {
-            id: next_context_id(),
-            engine: Mutex::new(EngineState::new(backend)),
+            owner: Arc::new(EngineOwner::new(backend)),
             compiler: Mutex::new(GraphCompiler::new()),
             eager: OnceLock::new(),
         }
     }
 
     fn engine_initialized(&self) -> bool {
-        self.engine
+        self.owner
+            .engine
             .try_lock()
             .is_ok_and(|state| state.runtime.is_some())
     }
 
     /// Lock the engine state, recovering it from a panic that poisoned the lock.
     fn lock_engine(&self) -> std::sync::MutexGuard<'_, EngineState> {
-        match self.engine.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                let mut guard = poisoned.into_inner();
-                guard.recover_from_panic();
-                guard
-            }
-        }
+        self.owner.lock_engine()
     }
 
     /// Lock the compiler, discarding one a panic left behind.
@@ -604,7 +660,7 @@ impl CpuExecutionContext {
     pub fn with_backend<R>(&self, f: impl FnOnce(&mut CpuBackend) -> R) -> R {
         // The guard makes a nested session entry of this context a typed error,
         // not a wait; another context's engine stays independently enterable.
-        let _guard = CanonicalSessionGuard::enter(self.id);
+        let _guard = CanonicalSessionGuard::enter(self.owner.id);
         f(&mut self.lock_engine().backend)
     }
 
@@ -633,26 +689,7 @@ impl CpuExecutionContext {
         &self,
         f: impl FnOnce(&mut CpuEngine) -> R,
     ) -> Result<R, CpuExecutionContextError> {
-        // Checked before any lock: a nested entry would wait for a lock this
-        // thread already holds.
-        if CanonicalSessionGuard::is_active(self.id) {
-            return Err(CpuExecutionContextError::Reentered);
-        }
-        let _guard = CanonicalSessionGuard::enter(self.id);
-        // A worker runs inline on its own serial engine instead of waiting for a
-        // pool it belongs to (tensor4all-rs#830). The fresh engine shares the
-        // plan cache, whose entries are immutable prepared plans, so a stage
-        // entered per item does not re-plan. It does **not** share the context
-        // engine's buffer pool, extension caches, batch policy or allocation
-        // domain: an entry from a worker therefore allocates and batches
-        // independently, and only while it runs.
-        if rayon::current_thread_index().is_some() {
-            let plans = self.lock_engine().backend.engine().plan_cache().clone();
-            let mut engine = CpuEngine::serial().with_plan_cache(plans);
-            return Ok(f(&mut engine));
-        }
-        let mut state = self.lock_engine();
-        Ok(f(state.backend.engine_mut()))
+        self.owner.with_session(f)
     }
 
     /// Compile a backend-neutral traced graph using this context's compiler cache.
@@ -743,11 +780,15 @@ impl CpuExecutionContext {
     /// Returns [`CpuExecutionContextError`] when linalg AD-rule or eager-runtime
     /// registration fails.
     pub fn eager_runtime(&self) -> Result<Arc<EagerRuntime>, CpuExecutionContextError> {
-        self.eager
+        let runtime = self
+            .eager
             .get_or_init(build_eager_runtime)
             .as_ref()
             .map(Arc::clone)
-            .map_err(Clone::clone)
+            .map_err(Clone::clone)?;
+        #[cfg(feature = "global-defaults")]
+        register_eager_runtime_owner(&runtime, &self.owner);
+        Ok(runtime)
     }
 
     /// Return statistics for this context's runtime-owned graph caches.
@@ -911,6 +952,83 @@ fn build_eager_runtime() -> Result<Arc<EagerRuntime>, CpuExecutionContextError> 
         .install_extension_module(linalg_module)
         .map_err(|source| CpuExecutionContextError::initialization("linalg runtime", source))?;
     Ok(runtime)
+}
+
+/// Process-wide map from an eager runtime's id to the context engine that owns it.
+///
+/// The entry holds a [`Weak`] handle: a context registers its runtime when it
+/// builds it, and the entry dangles when the context (the only strong owner) is
+/// dropped. Lookups prune the dead entry and fall back to the process-global
+/// context, so no background cleanup is needed.
+#[cfg(feature = "global-defaults")]
+static EAGER_RUNTIME_OWNERS: OnceLock<Mutex<HashMap<ContextId, Weak<EngineOwner>>>> =
+    OnceLock::new();
+
+#[cfg(feature = "global-defaults")]
+fn eager_runtime_owners() -> std::sync::MutexGuard<'static, HashMap<ContextId, Weak<EngineOwner>>> {
+    EAGER_RUNTIME_OWNERS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(feature = "global-defaults")]
+fn register_eager_runtime_owner(runtime: &EagerRuntime, owner: &Arc<EngineOwner>) {
+    let mut owners = eager_runtime_owners();
+    owners.retain(|_, owner| owner.strong_count() > 0);
+    owners.insert(runtime.id(), Arc::downgrade(owner));
+}
+
+/// Run `f` on the engine of the CPU context that owns `runtime`'s eager runtime.
+///
+/// This is the transitional implicit route: an implicit (context-free) eager
+/// operation has no context argument, so it resolves the engine from the
+/// runtime of the tensor it acts on instead of always taking the
+/// process-global default context's engine. That keeps a caller-owned context's
+/// thread policy and engine serialization intact for context-free readouts and
+/// intermediate operations, including on a context that is not the global one.
+///
+/// The closure runs through the owning context's normal session entry: a nested
+/// entry on the same thread is reported as
+/// [`CpuExecutionContextError::Reentered`], and an entry from a Rayon worker runs
+/// inline on a serial engine that shares the context's prepared-plan cache.
+/// When no live context owns `runtime` (for example after the context was
+/// dropped), the entry falls back to the process-global CPU context; the global
+/// context's own runtime resolves to itself. CUDA contexts are not registered
+/// here and therefore keep the process-global fallback.
+///
+/// # Errors
+///
+/// Returns [`CpuExecutionContextError`] when the owning context's eager runtime
+/// initialization failed earlier or the session entry is rejected.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{with_runtime_engine, CpuBackend, CpuExecutionContext};
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let runtime = context.eager_runtime()?;
+/// let threads = with_runtime_engine(&runtime, |engine| engine.num_threads())?;
+/// assert_eq!(threads, 1);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[cfg(feature = "global-defaults")]
+pub fn with_runtime_engine<R>(
+    runtime: &EagerRuntime,
+    f: impl FnOnce(&mut CpuEngine) -> R,
+) -> Result<R, CpuExecutionContextError> {
+    let owner = {
+        let mut owners = eager_runtime_owners();
+        match owners.get(&runtime.id()).and_then(Weak::upgrade) {
+            Some(owner) => owner,
+            None => {
+                owners.remove(&runtime.id());
+                Arc::clone(&defaults::default_context().owner)
+            }
+        }
+    };
+    owner.with_session(f)
 }
 
 #[cfg(feature = "global-defaults")]
